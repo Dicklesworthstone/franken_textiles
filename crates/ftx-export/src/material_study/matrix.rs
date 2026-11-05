@@ -289,6 +289,13 @@ impl Request {
         if self
             .design_adaptive
             .as_ref()
+            .is_some_and(|policy| policy.multiple_materials())
+        {
+            notes.push("Adaptive discovery retains an independent frontier for each explicitly nominated material and polls the union of their design coordinates. Every named case must admit that material's trial; another material's refusal or source protocol cannot discard an admitted alternative. Selected geometries retain every nominated material's exact complete case outputs, including refusals, without repeating their callbacks. Materials do not dominate one another during discovery; the final matrix still reports ordinary design/material tradeoffs.".into());
+        }
+        if self
+            .design_adaptive
+            .as_ref()
             .is_some_and(|policy| policy.worst_case())
         {
             notes.push("Adaptive polling improves the worst admitted reading of one shared objective across all named cases under the declared nominal or reported-range basis. Every case retains its own constraints and source-protocol admission. No case weights, cross-unit score, unrestricted optimum or physical fit is inferred.".into());
@@ -308,13 +315,17 @@ impl Request {
                 ))
             });
             notes.push(if let Some((guidance, trial, case, reading, objective)) = incumbent {
+                let material = guidance
+                    .material_key
+                    .as_deref()
+                    .expect("worst-case guidance nominates one material");
                 if let (Some([lo, hi]), Some([lower_case, upper_case])) = (
                     reading.reported_bounds,
                     guidance.best_reported_bound_case_keys.as_ref(),
                 ) {
                     format!(
                         "Worst-case retained trial '{trial}' on material '{}': nominal limiting case '{case}', {} = {} {}; reported worst-case range [{lo}, {hi}] {}, with lower endpoint from '{lower_case}' and upper endpoint from '{upper_case}'. Endpoints aggregate the same metric across all admitted cases, not a single case's interval or an average. Only strictly separated ranges establish improvement; overlaps and touching endpoints remain unresolved. Source ranges are conditional enclosures, not statistical confidence or uncertain geometry. Inspect consumer_cases for all original readings and refusals.",
-                        guidance.material_key,
+                        material,
                         serde_json::to_string(&objective.metric)
                             .map_err(|error| invalid(error.to_string()))?,
                         reading.value,
@@ -324,7 +335,7 @@ impl Request {
                 } else {
                     format!(
                     "Worst-case retained trial '{trial}' on material '{}': limiting case '{case}', {} = {} {}. This is the original admitted case reading, not an average. Every named case admitted this trial; the limiting case can change between trials. Inspect consumer_cases for all readings and refusals.",
-                    guidance.material_key,
+                    material,
                     serde_json::to_string(&objective.metric)
                         .map_err(|error| invalid(error.to_string()))?,
                     reading.value,
@@ -404,16 +415,19 @@ impl Request {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let minimum_objectives = if adaptive.multiple_materials() { 1 } else { 2 };
         if adaptive.matrix_pareto()
             && policies
                 .iter()
                 .map(|policy| policy.objectives.len())
                 .sum::<usize>()
-                < 2
+                < minimum_objectives
         {
-            return Err(invalid(
-                "consumer_matrix_pareto requires at least two case/objective coordinates",
-            ));
+            return Err(invalid(if adaptive.multiple_materials() {
+                "multi-material consumer_matrix_pareto requires at least one case/objective coordinate"
+            } else {
+                "consumer_matrix_pareto requires at least two case/objective coordinates"
+            }));
         }
         if adaptive.worst_case() {
             let first = policies[0].objectives.first();
@@ -438,6 +452,7 @@ impl Request {
         let materials = guided.material_variants(pattern, true)?;
         let slots = adaptive
             .max_evaluations
+            .saturating_mul(adaptive.guidance_material_count())
             .saturating_add((adaptive.max_designs + 1).saturating_mul(materials.variants.len()));
         let planned_evaluations = slots.saturating_mul(cases.len());
         if planned_evaluations > max_evaluations {
@@ -463,13 +478,29 @@ impl Request {
             .collect();
         let mut work = ManufacturingWork::new();
         let mut evaluations = 0;
-        let mut protocols: Option<Vec<Option<String>>> = None;
+        // The legacy single-material request retains one anchor under None. Explicit material
+        // lists anchor each material independently while keeping every case's protocol distinct.
+        let mut protocols = BTreeMap::<Option<String>, Vec<Option<String>>>::new();
         let (mut variants, receipt, mut retained) = adaptive.expand_with(
             &guided,
             pattern,
             materials.variants,
             fit,
             Some(&mut |variant| {
+                let material_key = if adaptive.multiple_materials() {
+                    Some(
+                        variant
+                            .design
+                            .as_ref()
+                            .and_then(design::Prepared::material_key)
+                            .ok_or_else(|| {
+                                invalid("adaptive material probe is missing its original material identity")
+                            })?
+                            .to_owned(),
+                    )
+                } else {
+                    None
+                };
                 let row = self.evaluate_charged(pattern, variant, fit, &mut work)?;
                 let simulations = evaluate_cases(&row, cases.len(), &mut evaluations, evaluate);
                 let decisions = cases
@@ -520,7 +551,7 @@ impl Request {
                         .iter()
                         .map(|decision| decision.comparison.input_protocol_sha256.clone())
                         .collect();
-                    if let Some(first) = &protocols {
+                    if let Some(first) = protocols.get(&material_key) {
                         if let Some(index) = (0..cases.len()).find(|&index| {
                             !policies[index].allow_mixed_protocols && current[index] != first[index]
                         }) {
@@ -530,7 +561,7 @@ impl Request {
                             )));
                         }
                     } else {
-                        protocols = Some(current);
+                        protocols.insert(material_key, current);
                     }
                 }
                 Ok(design::adaptive::ConsumerEvaluation {

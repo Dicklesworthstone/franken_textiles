@@ -5530,6 +5530,21 @@ Bounded dispatch retains complete incumbents and independently reconstructs capa
 undispatched releases remain conservative open tails. This advances `ftx-pb2.2` without claiming
 unrestricted scheduling completeness, measured factory timing, physical access or seam quality.
 
+### 25.186 Discover useful garment designs for several qualified materials
+
+Adaptive Pareto discovery can explicitly nominate several materials. Each coordinate receives one
+canonical geometry/body-fit qualification, followed by the ordinary independently admitted material
+probes. Each material retains its own source protocols and Pareto frontier; their union guides
+bounded polling. A refusal or unavailable range for one material cannot erase another material's
+useful design, and no cross-material scalar score is introduced.
+
+Retained geometries cache every nominated material's exact outputs, including refusals and complete
+named-case results. Final design/material evaluation reuses those outputs. Geometry, document,
+callback and consumer budgets remain explicit; all nominated probes are reserved before execution.
+The workbench can author the selected frozen material set and display the separate and union
+frontiers. This advances `ftx-ds2` and `ftx-ms2`; global optimality, exhaustive frontiers and measured
+garment or material validation remain outside this numerical discovery contract.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -241,10 +241,13 @@ pub(super) fn validate_request(request: &Request) -> Result<(), Refusal> {
                     ));
                 }
             } else if adaptive.pareto() {
-                if count.is_none_or(|count| !(2..=16).contains(&count)) {
-                    return Err(invalid(
-                        "consumer_pareto requires 2..16 ordinary comparison objectives with explicit constraints and required consumers",
-                    ));
+                let minimum = if adaptive.multiple_materials() { 1 } else { 2 };
+                if count.is_none_or(|count| !(minimum..=16).contains(&count)) {
+                    return Err(invalid(if adaptive.multiple_materials() {
+                        "multi-material consumer_pareto requires 1..16 ordinary comparison objectives with explicit constraints and required consumers"
+                    } else {
+                        "consumer_pareto requires 2..16 ordinary comparison objectives with explicit constraints and required consumers"
+                    }));
                 }
             } else if count != Some(1) {
                 return Err(invalid(
@@ -608,6 +611,10 @@ pub(super) fn expand(
 }
 
 impl Prepared {
+    pub(in crate::material_study) fn material_key(&self) -> Option<&str> {
+        self.material_key.as_deref()
+    }
+
     pub(super) fn apply(
         self,
         source: &Pattern,

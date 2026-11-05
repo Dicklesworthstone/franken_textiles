@@ -901,3 +901,513 @@ fn explicit_mode_validation_preflights_work_and_preserves_scalar_wire_fields() {
         scalar["design_search"]["evaluations"].as_u64().unwrap() as usize
     );
 }
+
+fn material_request(evaluations: usize, retained: usize) -> Value {
+    let mut value = request(evaluations, retained);
+    value["design_adaptive"]
+        .as_object_mut()
+        .unwrap()
+        .remove("material_key");
+    value["design_adaptive"]["material_keys"] = json!(["light-sheet", "heavy-sheet"]);
+    value["comparison"]["objectives"] =
+        json!([{"metric":"simulated_cloth_mass_kg","direction":"minimize"}]);
+    // Deliberately different observation protocols remain comparable only within each material.
+    // A shared protocol anchor would incorrectly exclude the second nominated material entirely.
+    value["variants"][1]["changes"]["default"]["record"]["properties"]["areal_density"]["method"] =
+        json!("Independent synthetic heavy-sheet observation protocol");
+    value
+}
+
+fn material_decision<'a>(trial: &'a Value, key: &str) -> &'a Value {
+    trial["consumer_materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["material_key"] == key)
+        .unwrap()
+}
+
+fn material_frontier<'a>(guidance: &'a Value, key: &str) -> &'a Value {
+    guidance["material_frontiers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["material_key"] == key)
+        .unwrap()
+}
+
+#[test]
+fn material_frontier_union_discovers_opposing_optima_and_reuses_each_selected_probe() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let scenario = scenario("independent-material-frontiers");
+    for reverse in [false, true] {
+        let mut value = material_request(16, 2);
+        if reverse {
+            value["design_adaptive"]["material_keys"]
+                .as_array_mut()
+                .unwrap()
+                .reverse();
+        }
+        let request: Request = serde_json::from_value(value.clone()).unwrap();
+        let mut calls = BTreeMap::new();
+        let mut outputs = BTreeMap::new();
+        let report = request
+            .evaluate_with_fit(
+                &pattern,
+                &scenario,
+                Some(&Context {
+                    body: &body,
+                    identity: &json!({"source":"test:material-frontier-fit"}),
+                }),
+                |key, bound| {
+                    *calls.entry(key.to_owned()).or_insert(0) += 1;
+                    let (_, material): (String, String) = serde_json::from_str(key).unwrap();
+                    let x = bound.raw()["pieces"][0]["vertices"]["d"][1]
+                        .as_f64()
+                        .unwrap()
+                        - 100.0;
+                    // Artificial opposite responses isolate discovery behavior; they are not
+                    // predictions from a measured textile or evidence of physical garment fit.
+                    let mass = 1.0
+                        + if material == "light-sheet" {
+                            x
+                        } else {
+                            60.0 - x
+                        };
+                    let mut result = output(bound, &scenario, mass);
+                    result["test_probe_identity"] = json!(outputs.len());
+                    outputs.insert(key.to_owned(), result.clone());
+                    Ok(result)
+                },
+            )
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        let search = &report["manufacturing"]["design_search"];
+        let guidance = &search["consumer_guidance"];
+        let selected: Vec<_> = rows(search)
+            .iter()
+            .filter(|trial| trial["selected"] == true)
+            .collect();
+        assert_eq!(
+            rows(search).iter().map(spread).collect::<Vec<_>>(),
+            [20., 0., 40., 60.]
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .map(|trial| spread(trial))
+                .collect::<Vec<_>>(),
+            [0., 60.]
+        );
+        assert_eq!(
+            guidance["material_keys"],
+            value["design_adaptive"]["material_keys"]
+        );
+        assert_eq!(
+            guidance["material_aggregation"],
+            "union_of_material_frontiers/1"
+        );
+        assert!(guidance.get("material_key").is_none());
+        assert_eq!(
+            guidance["pareto_frontier"]["evaluated_trial_keys"],
+            keys(selected.iter().copied())
+        );
+        assert_eq!(
+            guidance["pareto_frontier"]["retained_trial_keys"],
+            keys(selected.iter().copied())
+        );
+        assert_ne!(
+            material_frontier(guidance, "light-sheet")["input_protocol_sha256"],
+            material_frontier(guidance, "heavy-sheet")["input_protocol_sha256"]
+        );
+        for (material, trial) in [("light-sheet", selected[0]), ("heavy-sheet", selected[1])] {
+            let frontier = material_frontier(guidance, material);
+            assert_eq!(frontier["evaluations"], 4);
+            assert!(frontier["input_protocol_sha256"].is_string());
+            assert_eq!(
+                frontier["pareto_frontier"]["evaluated_trial_keys"],
+                keys([trial])
+            );
+        }
+        for trial in selected {
+            assert!(trial.get("consumer_comparison").is_none());
+            for material in ["light-sheet", "heavy-sheet"] {
+                let key =
+                    serde_json::to_string(&(trial["design"]["key"].as_str().unwrap(), material))
+                        .unwrap();
+                let retained = report["simulations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["key"] == key)
+                    .unwrap();
+                assert_eq!(retained["evaluation"]["result"], outputs[&key]);
+                assert_eq!(calls[&key], 1);
+                let decision = material_decision(trial, material);
+                assert_eq!(decision["eligible"], true);
+                let final_decision = report["comparison"]["alternatives"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["key"] == key)
+                    .unwrap();
+                for field in [
+                    "readings",
+                    "eligible",
+                    "exclusions",
+                    "input_protocol_sha256",
+                ] {
+                    assert_eq!(decision["comparison"][field], final_decision[field]);
+                }
+            }
+        }
+        assert!(calls.values().all(|&count| count == 1));
+        assert_eq!(search["complete_search"], false);
+        assert_eq!(search["global_optimum_claim"], false);
+    }
+}
+
+#[test]
+fn one_refused_material_preserves_the_other_frontier_and_its_exact_cached_failure() {
+    let request: Request = serde_json::from_value(material_request(8, 2)).unwrap();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let scenario = scenario("independent-material-refusals");
+    let mut calls = BTreeMap::new();
+    let mut failures = BTreeMap::new();
+    let report = request
+        .evaluate_with_fit(
+            &pattern,
+            &scenario,
+            Some(&Context {
+                body: &body,
+                identity: &json!({"source":"test:material-refusal-fit"}),
+            }),
+            |key, bound| {
+                let count = calls.entry(key.to_owned()).or_insert(0);
+                *count += 1;
+                let (_, material): (String, String) = serde_json::from_str(key).unwrap();
+                if material == "heavy-sheet" && *count == 1 {
+                    let refusal = Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        "synthetic heavy response unavailable",
+                    );
+                    failures.insert(key.to_owned(), serde_json::to_value(&refusal).unwrap());
+                    return Err(refusal);
+                }
+                let length = bound.raw()["pieces"][0]["vertices"]["d"][1]
+                    .as_f64()
+                    .unwrap();
+                Ok(output(bound, &scenario, length))
+            },
+        )
+        .unwrap();
+    let report = serde_json::to_value(report).unwrap();
+    let search = &report["manufacturing"]["design_search"];
+    let selected = rows(search)
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(spread(selected), 0.0);
+    assert!(selected.get("refusal").is_none());
+    assert_eq!(material_decision(selected, "light-sheet")["eligible"], true);
+    assert_eq!(
+        material_decision(selected, "heavy-sheet")["eligible"],
+        false
+    );
+    assert_eq!(
+        material_frontier(&search["consumer_guidance"], "heavy-sheet")["pareto_frontier"]["evaluated_trial_keys"],
+        json!([])
+    );
+    let key = serde_json::to_string(&(selected["design"]["key"].as_str().unwrap(), "heavy-sheet"))
+        .unwrap();
+    let retained = report["simulations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == key)
+        .unwrap();
+    assert_eq!(retained["evaluation"]["status"], "refused");
+    assert_eq!(retained["evaluation"]["refusal"], failures[&key]);
+    assert_eq!(
+        material_decision(selected, "heavy-sheet")["refusal"],
+        failures[&key]
+    );
+    let manufacturing = report["manufacturing"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == key)
+        .unwrap();
+    assert_eq!(manufacturing["cutting"]["status"], "available");
+    assert_eq!(manufacturing["sewing"]["status"], "available");
+    assert!(calls.values().all(|&count| count == 1));
+}
+
+#[test]
+fn material_matrix_reserves_all_probes_and_preserves_case_protocols_and_cached_failures() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:material-matrix-fit"});
+    let context = Context {
+        body: &body,
+        identity: &identity,
+    };
+    for fail_guard in [false, true] {
+        for reverse in [false, true] {
+            let mut value = material_request(3, 1);
+            value["design_adaptive"]["objective"] = json!("consumer_matrix_pareto");
+            value["comparison"]["objectives"] =
+                json!([{"metric":"assembly_mass_kg","direction":"minimize"}]);
+            value["comparison"]["required_consumers"] = json!(["cutting", "sewing", "drape"]);
+            let mut cases: Vec<_> = ["guard", "independent"]
+                .into_iter()
+                .map(|key| Case {
+                    key: key.into(),
+                    scenario: scenario(key),
+                    comparison: None,
+                })
+                .collect();
+            if reverse {
+                cases.reverse();
+                value["design_adaptive"]["material_keys"]
+                    .as_array_mut()
+                    .unwrap()
+                    .reverse();
+            }
+            let request: Request = serde_json::from_value(value).unwrap();
+            let mut rejected_calls = 0;
+            assert_eq!(
+                request
+                    .evaluate_matrix_with_fit(&pattern, &cases, 19, Some(&context), |_, _, _| {
+                        rejected_calls += 1;
+                        Ok(json!({}))
+                    })
+                    .unwrap_err()
+                    .code,
+                RefusalCode::BudgetExceeded
+            );
+            assert_eq!(rejected_calls, 0);
+            let mut calls = BTreeMap::new();
+            let mut outputs = BTreeMap::new();
+            let mut failures = BTreeMap::new();
+            let report = request
+                .evaluate_matrix_with_fit(
+                    &pattern,
+                    &cases,
+                    20,
+                    Some(&context),
+                    |index, key, bound| {
+                        let call_key = (cases[index].key.clone(), key.to_owned());
+                        let count = calls.entry(call_key.clone()).or_insert(0);
+                        *count += 1;
+                        let (_, material): (String, String) = serde_json::from_str(key).unwrap();
+                        if fail_guard
+                            && material == "heavy-sheet"
+                            && cases[index].key == "guard"
+                            && *count == 1
+                        {
+                            let refusal = Refusal::new(
+                                RefusalCode::BudgetExceeded,
+                                "synthetic independent guard source unavailable",
+                            );
+                            failures.insert(call_key, serde_json::to_value(&refusal).unwrap());
+                            return Err(refusal);
+                        }
+                        let mut result = output(bound, &cases[index].scenario, 1.0);
+                        result["test_probe_identity"] = json!(outputs.len());
+                        outputs.insert(call_key, result.clone());
+                        Ok(result)
+                    },
+                )
+                .unwrap();
+            let report = serde_json::to_value(report).unwrap();
+            let search = &report["manufacturing"]["design_search"];
+            let guidance = &search["consumer_guidance"];
+            assert_eq!(report["planned_evaluations"], 20);
+            assert_eq!(guidance["reserved_evaluations"], 20);
+            assert_eq!(search["evaluations"], 3);
+            let selected = rows(search)
+                .iter()
+                .find(|trial| trial["selected"] == true)
+                .unwrap();
+            assert_eq!(spread(selected), 0.0);
+            for material in ["light-sheet", "heavy-sheet"] {
+                let decision = material_decision(selected, material);
+                assert_eq!(
+                    decision["eligible"],
+                    !fail_guard || material == "light-sheet"
+                );
+                assert!(decision.get("comparison").is_none());
+                let key =
+                    serde_json::to_string(&(selected["design"]["key"].as_str().unwrap(), material))
+                        .unwrap();
+                for (index, case) in cases.iter().enumerate() {
+                    let call_key = (case.key.clone(), key.clone());
+                    let retained = report["cases"][index]["simulations"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|row| row["key"] == key)
+                        .unwrap();
+                    let case_decision = &decision["cases"][index];
+                    assert_eq!(case_decision["key"], case.key);
+                    if let Some(refusal) = failures.get(&call_key) {
+                        assert_eq!(retained["evaluation"]["refusal"], *refusal);
+                        assert_eq!(case_decision["refusal"], *refusal);
+                        assert_eq!(case_decision["comparison"]["eligible"], false);
+                    } else {
+                        assert_eq!(retained["evaluation"]["result"], outputs[&call_key]);
+                        assert_eq!(case_decision["comparison"]["eligible"], true);
+                    }
+                    assert_eq!(calls[&call_key], 1);
+                }
+            }
+            assert!(calls.values().all(|&count| count == 1));
+            assert_eq!(
+                report["evaluations"].as_u64().unwrap() as usize,
+                calls.len()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_material_list_also_admits_one_named_case_without_collapsing_its_material_frontiers() {
+    let mut value = material_request(3, 1);
+    value["design_adaptive"]["objective"] = json!("consumer_matrix_pareto");
+    value["comparison"]["objectives"] =
+        json!([{"metric":"assembly_mass_kg","direction":"minimize"}]);
+    let request: Request = serde_json::from_value(value).unwrap();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let cases = [Case {
+        key: "single".into(),
+        scenario: scenario("single"),
+        comparison: None,
+    }];
+    let mut calls = BTreeMap::new();
+    let report = request
+        .evaluate_matrix_with_fit(
+            &pattern,
+            &cases,
+            10,
+            Some(&Context {
+                body: &body,
+                identity: &json!({"source":"test:single-case-material-list"}),
+            }),
+            |index, key, bound| {
+                *calls.entry((index, key.to_owned())).or_insert(0) += 1;
+                Ok(output(bound, &cases[index].scenario, 1.0))
+            },
+        )
+        .unwrap();
+    let report = serde_json::to_value(report).unwrap();
+    let search = &report["manufacturing"]["design_search"];
+    assert_eq!(report["planned_evaluations"], 10);
+    assert_eq!(search["consumer_guidance"]["case_order"], json!(["single"]));
+    assert_eq!(
+        search["consumer_guidance"]["material_frontiers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(search["selected_designs"], 1);
+    assert_eq!(calls.len(), 8);
+    assert!(calls.values().all(|&count| count == 1));
+}
+
+#[test]
+fn missing_reported_ranges_exclude_only_the_affected_material_frontier() {
+    let mut value = bounded_request([2.0, 2.0]);
+    value["design_adaptive"]
+        .as_object_mut()
+        .unwrap()
+        .remove("material_key");
+    value["design_adaptive"]["material_keys"] = json!(["light-sheet", "heavy-sheet"]);
+    value["variants"][1]["changes"]["default"]["record"]["properties"]["areal_density"]
+        .as_object_mut()
+        .unwrap()
+        .remove("bounds");
+    let report = run(value);
+    let search = &report["design_search"];
+    let selected = rows(search)
+        .iter()
+        .find(|trial| trial["selected"] == true)
+        .unwrap();
+    assert_eq!(spread(selected), 0.0);
+    assert_eq!(material_decision(selected, "light-sheet")["eligible"], true);
+    let excluded = material_decision(selected, "heavy-sheet");
+    assert_eq!(excluded["eligible"], false);
+    assert!(excluded["comparison"]["readings"]["assembly_mass_kg"]["value"].is_number());
+    assert!(excluded["comparison"]["readings"]["assembly_mass_kg"]["reported_bounds"].is_null());
+    assert_eq!(
+        material_frontier(&search["consumer_guidance"], "heavy-sheet")["pareto_frontier"]["evaluated_trial_keys"],
+        json!([])
+    );
+}
+
+#[test]
+fn material_selector_validation_precedes_callbacks_and_legacy_wire_fields_stay_omitted() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:material-selector-preflight"});
+    let context = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let mut invalids = Vec::new();
+    for keys in [
+        json!([]),
+        json!(["light-sheet"]),
+        json!(["light-sheet", "light-sheet"]),
+        json!(["light-sheet", "absent"]),
+        json!(["light-sheet", " "]),
+    ] {
+        let mut value = material_request(3, 1);
+        value["design_adaptive"]["material_keys"] = keys;
+        invalids.push(value);
+    }
+    let mut both = material_request(3, 1);
+    both["design_adaptive"]["material_key"] = json!("light-sheet");
+    invalids.push(both);
+    let mut scalar = material_request(3, 1);
+    scalar["design_adaptive"]["objective"] = json!("consumer_comparison");
+    invalids.push(scalar);
+    let mut calls = 0;
+    for value in invalids {
+        let request: Request = serde_json::from_value(value).unwrap();
+        assert!(
+            request
+                .evaluate_with_fit(
+                    &pattern,
+                    &scenario("invalid-material-list"),
+                    Some(&context),
+                    |_, _| {
+                        calls += 1;
+                        Ok(json!({}))
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(calls, 0);
+    }
+    let legacy = run(request(3, 1));
+    let search = &legacy["design_search"];
+    let guidance = &search["consumer_guidance"];
+    assert_eq!(guidance["material_key"], "light-sheet");
+    for field in [
+        "material_keys",
+        "material_aggregation",
+        "material_frontiers",
+    ] {
+        assert!(guidance.get(field).is_none());
+    }
+    assert!(
+        rows(search)
+            .iter()
+            .all(|trial| trial.get("consumer_materials").is_none())
+    );
+}

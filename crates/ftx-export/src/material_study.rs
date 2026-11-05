@@ -830,6 +830,7 @@ impl Request {
         // manufacturing or callback. Cache reuse can reduce work, never increase this allowance.
         let slots = adaptive
             .max_evaluations
+            .saturating_mul(adaptive.guidance_material_count())
             .saturating_add((adaptive.max_designs + 1).saturating_mul(materials.variants.len()));
         self.reserve_consumers(pattern, slots)?;
         let policy = self.comparison.as_ref().expect("validated comparison");
@@ -1212,7 +1213,9 @@ impl Request {
             notes.push("Explicit fit targets use the fixed caller-supplied body authority through canonical flat validation before binding or any production consumer. Model-derived measurements retain MODEL_FIT provenance; missing points or out-of-band raw values refuse the design even when a rounded residual is zero. Passing a declared ease band is not empirical garment fit or a safe-fit certification.");
         }
         if self.design_adaptive.is_some() {
-            notes.push(if self.design_adaptive.as_ref().is_some_and(|request| request.pareto()) {
+            notes.push(if self.design_adaptive.as_ref().is_some_and(|request| request.multiple_materials()) {
+                "Multi-material adaptive discovery qualifies each geometry once, then evaluates every explicitly nominated material independently. Each material's own admitted Pareto frontier guides polling through their union of coordinates; one material's refusal or protocol never excludes another material's candidate. All nominated outputs, including refusals, are reused exactly for retained geometries in the final material cross-product. Material-specific and union frontiers distinguish evaluated coordinates from bounded retained outputs. Every probe shares the declared geometry, callback and cumulative work limits; no cross-material scalar score, exhaustive frontier, global optimum or empirical garment fit is inferred."
+            } else if self.design_adaptive.as_ref().is_some_and(|request| request.pareto()) {
                 "Pareto-guided adaptive alterations use one nominated material and every declared comparison objective with its original direction and nominal or reported-range basis. Ordinary geometry, body-fit, required-consumer, constraint and protocol gates admit each trial. All currently observed nondominated coordinates can guide bounded polling even when their full outputs do not fit the retention capacity. The receipt distinguishes evaluated, retained and unretained tradeoffs; no weighted score or single best design is inferred. Retained complete outputs are reused exactly in the final material cross-product. Search, callback and cumulative work limits remain shared, and the observed frontier is not an exhaustive frontier, a global optimum or empirical garment fit."
             } else if self.consumer_guided() {
                 "Consumer-guided adaptive alterations use one nominated material and one existing comparison objective with its declared nominal or reported-range basis after canonical flat/body-fit admission. Ordinary constraints, required consumers and protocol compatibility govern every probe. Polling continues within its declared evaluation/step limits, retaining a bounded set of admitted designs and reusing their exact production results in the final material cross-product. Other material alternatives do not steer discovery. Callback slots are reserved conservatively; the caller's shared scenario session still admits each probe's actual numerical work. Neither the continuous domain nor other material/design optima are proven."

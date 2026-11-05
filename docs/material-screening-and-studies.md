@@ -1533,9 +1533,9 @@ above are illustrative software inputs, not wearer-ease or manufacturing recomme
 Manufacturing-only and single-scenario studies use the same mode without `case_key`. A
 manufacturing-only policy must use available manufacturing metrics, such as assembly mass and
 feed or qualified production time; a scenario-only metric cannot be evaluated on that route.
-Exactly one `material_key` guides discovery. Selected geometries still cross all authored material
-alternatives afterward, but those other materials do not steer this search. A design best suited
-to an unnominated material can remain undiscovered.
+With `material_key`, exactly one material guides discovery. Selected geometries still cross all
+authored material alternatives afterward, but those other materials do not steer that search.
+Use the explicit `material_keys` mode below to explore designs useful to several materials.
 
 **Admission precedes every tradeoff decision.** Each coordinate starts from the original pattern,
 applies its linked canonical operations, and passes complete geometry, seam, truing, outline and
@@ -1631,6 +1631,57 @@ from that discovery frontier. A minimum-step stop, exhausted evaluation allowanc
 or empty frontier establishes neither full-domain infeasibility nor an exhaustive Pareto set.
 `complete_search` and `global_optimum_claim` remain false. These numerical decisions do not establish
 measured garment fit, comfort, material calibration or physical sewing performance.
+
+### Let several materials guide adaptive discovery
+
+For `consumer_pareto` or `consumer_matrix_pareto`, replace `material_key` with an explicit ordered
+`material_keys` array containing **2–16 distinct admitted material keys**. Do not provide both fields.
+For example, `"material_keys": ["light-sheet", "heavy-sheet"]` lets both alternatives guide the same
+geometry search. Each material can have a different useful design: the engine keeps an independent
+Pareto frontier for each nominee and polls the union of their coordinates. Materials never dominate
+one another during discovery, and their outcomes are not combined into a synthetic score.
+
+Geometry, canonical seams and selected-body fit are evaluated once per coordinate. Every fully
+qualified coordinate then receives one ordinary consumer probe per nominated material, in authored
+order. Each material keeps its own source-protocol anchors and ordinary constraints. In a named
+matrix, every case must admit that material/design pair under its own effective policy; a refused
+material or missing reported range does not remove another material's admitted design. Explicit
+mixed-protocol permission retains its existing meaning within each material and case.
+
+List mode permits **1–16 objectives** for `consumer_pareto`, or at least one case/objective coordinate
+for `consumer_matrix_pareto`. A one-dimensional frontier for each of two materials can still lead to
+different useful geometries. The existing single-material minimums and scalar/worst-case modes
+are unchanged. `case_key` retains its existing nominated-case meaning and is absent in all-case mode.
+
+`max_evaluations` still limits unique geometry trials, and `max_designs` still limits retained unique
+geometries. A cached design is displaced only after it leaves every nominated material's frontier.
+Capacity-omitted frontier coordinates continue to guide polling. When a geometry is retained, all
+nominated materials' exact outputs are cached under their canonical `[design, material] identities,
+including refused outputs and complete named-case vectors. Final evaluation reuses those results;
+it does not retry a refusal after other probes have consumed more work. The original baseline and
+unnominated material combinations receive their ordinary evaluations.
+
+The conservative callback reservation becomes
+`(max_evaluations * nominated_materials + (max_designs + 1) * material_alternatives) * cases`.
+Source/document work also includes every nominated probe. Existing 32-row final-cross-product,
+64-slot matrix and cumulative consumer budgets still apply. For three geometry trials, two nominees,
+one retained altered design, two total materials and two cases, the reservation is **20 slots**;
+a 19-slot allowance refuses before any callback. Nomination order is explicit and can affect
+available numerical work under shared budgets; it is not an implicit material preference.
+
+In `consumer_guidance`, list mode emits `material_keys`,
+`material_aggregation: "union_of_material_frontiers/1"`, and `material_frontiers`. Each material row
+retains its probe count, applicable protocol anchor, and evaluated/retained/capacity-omitted frontier
+keys. The common `pareto_frontier` is the union. Each trial's `consumer_materials` retains every
+material's eligibility, original comparison or case decisions, callback refusal and admission refusal.
+The legacy `material_key` and single comparison fields are omitted in list mode; single-material
+requests keep their existing wire fields. Neither frontier completeness nor a global optimum is
+claimed. Final comparison still concerns the actual retained design/material rows.
+
+In the guided workbench, choose a tradeoff discovery mode, enable **Let several materials guide
+tradeoff discovery**, and explicitly select the current frozen materials. Removing or replacing a
+selected source requires a new explicit selection. The result shows both the union frontier and
+each material's frontier and refusals, using native results without browser ranking.
 
 ## Constrain material-direction strain on selected garment regions
 

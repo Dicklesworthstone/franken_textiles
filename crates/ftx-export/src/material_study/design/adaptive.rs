@@ -58,6 +58,10 @@ pub struct Request {
     /// selected geometries still cross every authored material alternative after discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_key: Option<String>,
+    /// Ordered material alternatives whose independent Pareto frontiers jointly guide discovery.
+    /// Exclusive with material_key; each geometry is qualified once before these actual probes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_keys: Option<Vec<String>>,
     /// Named scenario whose comparison objectives guide matrix polling. Every case must still
     /// admit the trial. Forbidden for worst-case and all-case Pareto guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -126,6 +130,10 @@ pub struct Trial {
     /// cannot select a trial that another case excludes; independent callback refusals stay visible.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub consumer_cases: Vec<CaseDecision>,
+    /// Original decisions for every nominated material, in authored order. Present only for
+    /// material_keys guidance; one unavailable material cannot erase another's admitted design.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub consumer_materials: Vec<MaterialDecision>,
     /// Case supplying the actual worst-case reading, absent when case admission failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_case_key: Option<String>,
@@ -154,6 +162,27 @@ pub struct CaseDecision {
     /// Original binding or scenario callback refusal, even when the policy does not require it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
+}
+
+/// One material's complete ordinary comparison admission at a shared geometry coordinate.
+#[derive(Clone, Debug, Serialize)]
+pub struct MaterialDecision {
+    /// Exact authored material identity, independent of the canonical design/material pair key.
+    pub material_key: String,
+    /// True only after this material's ordinary policy and all requested cases admit the probe.
+    pub eligible: bool,
+    /// Original comparison for single/nominated-case Pareto guidance; absent in all-case mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<comparison::Candidate>,
+    /// All original named-case decisions, without a synthetic aggregate material score.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cases: Vec<CaseDecision>,
+    /// Original binding or callback refusal, including independent consumers not used for ranking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
+    /// Ordinary policy or this material's protocol admission refusal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_refusal: Option<Refusal>,
 }
 
 /// Conditional interval enclosing the worst case of a single metric over the named case set.
@@ -208,11 +237,21 @@ pub struct Receipt {
     pub rows: Vec<Trial>,
 }
 
-/// One nominated material and the existing comparison authority used for local polling.
+/// Explicit nominated materials and the existing comparison authority used for local polling.
 #[derive(Clone, Debug, Serialize)]
 pub struct ConsumerGuidance {
     /// Exact authored material key; other material alternatives do not silently steer discovery.
-    pub material_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material_key: Option<String>,
+    /// Ordered nominees for joint discovery. Absent for the original single-material policy.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub material_keys: Vec<String>,
+    /// Explicit union of independently admitted material frontiers, without cross-material scores.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material_aggregation: Option<&'static str>,
+    /// Each material's own frontier and source protocol; the common frontier contains their union.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub material_frontiers: Vec<MaterialFrontier>,
     /// Explicit nominated case for matrix guidance; absent for single-case/manufacturing studies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub case_key: Option<String>,
@@ -240,7 +279,7 @@ pub struct ConsumerGuidance {
     /// Conservative upper bound on probe plus final consumer slots. Scenario work is still
     /// admitted per callback by the caller's shared production-session budgets.
     pub reserved_evaluations: usize,
-    /// Actual nominated-material probes, after full canonical geometry and fit admission.
+    /// Actual design/material probes, after full canonical geometry and fit admission.
     pub evaluations: usize,
     /// Best admitted retained scalar discovery trial, excluding baseline; none for Pareto mode.
     pub best_trial_key: Option<String>,
@@ -272,6 +311,19 @@ pub struct ParetoFrontier {
     pub retention_capacity: usize,
 }
 
+/// One nominee's lightweight decision frontier; retained geometries cache all nominated outputs.
+#[derive(Clone, Debug, Serialize)]
+pub struct MaterialFrontier {
+    /// Exact nominee identity, in the original material_keys order.
+    pub material_key: String,
+    /// Actual probes for this material, excluding cached final-row reuse.
+    pub evaluations: usize,
+    /// Single-case protocol anchor; named cases retain their independent anchors in their decisions.
+    pub input_protocol_sha256: Option<String>,
+    /// This material's evaluated frontier and its subset with complete retained outputs.
+    pub pareto_frontier: ParetoFrontier,
+}
+
 impl Request {
     pub(in crate::material_study) fn consumer_guided(&self) -> bool {
         matches!(
@@ -298,16 +350,49 @@ impl Request {
         matches!(self.objective, Objective::ConsumerWorstCase)
     }
 
+    pub(in crate::material_study) fn multiple_materials(&self) -> bool {
+        self.material_keys.is_some()
+    }
+
+    pub(in crate::material_study) fn guidance_material_count(&self) -> usize {
+        self.material_keys
+            .as_ref()
+            .map_or(usize::from(self.material_key.is_some()), Vec::len)
+    }
+
+    fn guides_material(&self, key: &str) -> bool {
+        self.material_keys.as_ref().map_or_else(
+            || self.material_key.as_deref() == Some(key),
+            |keys| keys.iter().any(|candidate| candidate == key),
+        )
+    }
+
     pub(super) fn validate(&self) -> Result<(), Refusal> {
-        if self.consumer_guided() != self.material_key.is_some()
+        if self.consumer_guided() != (self.material_key.is_some() || self.material_keys.is_some())
+            || (self.material_key.is_some() && self.material_keys.is_some())
             || self
                 .material_key
                 .as_ref()
                 .is_some_and(|key| key.trim().is_empty())
         {
-            return Err(invalid(
-                "consumer guidance needs one nonempty material_key; fit_band_violation_mm does not accept material_key",
-            ));
+            return Err(invalid(if self.material_keys.is_some() {
+                "consumer guidance needs one nonempty material_key or an exclusive material_keys list; fit_band_violation_mm accepts neither"
+            } else {
+                "consumer guidance needs one nonempty material_key; fit_band_violation_mm does not accept material_key"
+            }));
+        }
+        if let Some(keys) = &self.material_keys {
+            let mut unique = BTreeSet::new();
+            if !self.pareto()
+                || !(2..=16).contains(&keys.len())
+                || keys
+                    .iter()
+                    .any(|key| key.trim().is_empty() || !unique.insert(key))
+            {
+                return Err(invalid(
+                    "material_keys needs 2..16 unique nonempty nominees and consumer_pareto or consumer_matrix_pareto guidance",
+                ));
+            }
         }
         if self.case_key.as_ref().is_some_and(|key| {
             !matches!(
@@ -546,11 +631,13 @@ impl Request {
         let probe_material_bytes = if self.consumer_guided() {
             materials
                 .iter()
-                .find(|material| Some(&material.variant.key) == self.material_key.as_ref())
-                .map(|material| serde_json::to_vec(&material.variant))
-                .transpose()
-                .map_err(|e| invalid(e.to_string()))?
-                .map_or(0, |bytes| bytes.len().saturating_mul(self.max_evaluations))
+                .filter(|material| self.guides_material(&material.variant.key))
+                .try_fold(0usize, |count, material| {
+                    let bytes = serde_json::to_vec(&material.variant)
+                        .map_err(|e| invalid(e.to_string()))?;
+                    Ok::<_, Refusal>(count.saturating_add(bytes.len()))
+                })?
+                .saturating_mul(self.max_evaluations)
         } else {
             0
         };
@@ -561,7 +648,9 @@ impl Request {
                     .saturating_add(trials.saturating_mul(4))
                     .saturating_add(rows.saturating_mul(3))
                     .saturating_add(if self.consumer_guided() {
-                        self.max_evaluations.saturating_mul(3)
+                        self.max_evaluations
+                            .saturating_mul(self.guidance_material_count())
+                            .saturating_mul(3)
                     } else {
                         0
                     }),
@@ -626,24 +715,39 @@ impl Request {
         }
         self.reserve(study, pattern, &materials, context)?;
         let guidance = if self.consumer_guided() {
-            let material_key = self.material_key.as_ref().expect("validated material key");
-            let material = materials
+            let keys = self.material_keys.as_deref().unwrap_or_else(|| {
+                std::slice::from_ref(self.material_key.as_ref().expect("validated material key"))
+            });
+            let nominees = keys
                 .iter()
-                .find(|material| material.variant.key == *material_key)
-                .ok_or_else(|| {
-                    invalid("adaptive material_key must identify an admitted material alternative")
-                })?;
+                .map(|key| {
+                    let source = materials
+                        .iter()
+                        .find(|material| material.variant.key == *key)
+                        .ok_or_else(|| {
+                            invalid(if self.multiple_materials() {
+                                "every adaptive material nominee must identify an admitted material alternative"
+                            } else {
+                                "adaptive material_key must identify an admitted material alternative"
+                            })
+                        })?;
+                    Ok(GuidedMaterial {
+                        source,
+                        protocol: None,
+                        evaluations: 0,
+                    })
+                })
+                .collect::<Result<Vec<_>, Refusal>>()?;
             let policy = study
                 .comparison
                 .as_ref()
                 .expect("validated consumer comparison");
             Some(Guidance {
-                material,
+                materials: nominees,
                 policy,
                 evaluate: evaluate.ok_or_else(|| {
                     invalid("consumer-guided adaptive discovery needs its production evaluator")
                 })?,
-                protocol: None,
                 evaluations: 0,
                 case_order: cases.iter().map(|(key, _)| key.clone()).collect(),
                 case_policies: if self.matrix_pareto() {
@@ -653,6 +757,7 @@ impl Request {
                 },
                 reserved_evaluations: self
                     .max_evaluations
+                    .saturating_mul(self.guidance_material_count())
                     .saturating_add((self.max_designs + 1).saturating_mul(materials.len()))
                     .saturating_mul(cases.len().max(1)),
             })
@@ -683,11 +788,12 @@ impl Request {
                 values: None,
                 evaluated,
                 index: None,
-                consumer: None,
+                consumers: BTreeMap::new(),
             }],
             seen: BTreeMap::new(),
             coordinates: Vec::new(),
             pareto_frontier: Vec::new(),
+            material_frontiers: vec![Vec::new(); self.guidance_material_count()],
         };
         let mut current = discovery
             .inspect(
@@ -845,7 +951,26 @@ impl Request {
             search_starts,
             consumer_guidance: discovery.guidance.as_ref().map(|guidance| {
                 Box::new(ConsumerGuidance {
-                    material_key: guidance.material.variant.key.clone(),
+                    material_key: self.material_key.clone(),
+                    material_keys: self.material_keys.clone().unwrap_or_default(),
+                    material_aggregation: self
+                        .multiple_materials()
+                        .then_some("union_of_material_frontiers/1"),
+                    material_frontiers: if self.multiple_materials() {
+                        guidance
+                            .materials
+                            .iter()
+                            .zip(&discovery.material_frontiers)
+                            .map(|(material, indices)| MaterialFrontier {
+                                material_key: material.source.variant.key.clone(),
+                                evaluations: material.evaluations,
+                                input_protocol_sha256: material.protocol.clone().flatten(),
+                                pareto_frontier: discovery.frontier_receipt(indices),
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                     case_key: self.case_key.clone(),
                     case_order: guidance.case_order.clone(),
                     case_policies: guidance
@@ -865,24 +990,9 @@ impl Request {
                     } else {
                         Vec::new()
                     },
-                    pareto_frontier: self.pareto().then(|| {
-                        let mut frontier = ParetoFrontier {
-                            evaluated_trial_keys: Vec::new(),
-                            retained_trial_keys: Vec::new(),
-                            unretained_trial_keys: Vec::new(),
-                            retention_capacity: self.max_designs,
-                        };
-                        for &index in &discovery.pareto_frontier {
-                            let row = &discovery.rows[index];
-                            frontier.evaluated_trial_keys.push(row.design.key.clone());
-                            if row.selected {
-                                frontier.retained_trial_keys.push(row.design.key.clone());
-                            } else {
-                                frontier.unretained_trial_keys.push(row.design.key.clone());
-                            }
-                        }
-                        frontier
-                    }),
+                    pareto_frontier: self
+                        .pareto()
+                        .then(|| discovery.frontier_receipt(&discovery.pareto_frontier)),
                     basis: (!self.matrix_pareto()
                         && matches!(guidance.policy.basis, comparison::Basis::ReportedBounds))
                     .then_some(guidance.policy.basis),
@@ -900,7 +1010,11 @@ impl Request {
                     best_reported_bound_case_keys: best
                         .and_then(|index| discovery.rows[index].consumer_worst_case.as_ref())
                         .map(|range| range.reported_bound_case_keys.clone()),
-                    input_protocol_sha256: guidance.protocol.clone().flatten(),
+                    input_protocol_sha256: if self.multiple_materials() {
+                        None
+                    } else {
+                        guidance.materials[0].protocol.clone().flatten()
+                    },
                 })
             }),
             rows: discovery.rows,
@@ -908,12 +1022,9 @@ impl Request {
         let mut expanded = Vec::new();
         let mut retained = BTreeMap::new();
         for chosen in discovery.chosen {
-            if let Some(consumer) = chosen.consumer {
-                let key = serde_json::to_string(&(
-                    &chosen.variant.key,
-                    self.material_key.as_ref().expect("consumer material"),
-                ))
-                .map_err(|e| invalid(e.to_string()))?;
+            for (material_key, consumer) in chosen.consumers {
+                let key = serde_json::to_string(&(&chosen.variant.key, material_key))
+                    .map_err(|e| invalid(e.to_string()))?;
                 retained.insert(key, consumer);
             }
             for material in &materials {
@@ -1024,14 +1135,74 @@ type ConsumerEvaluator<'a, T> =
 type Expansion<T> = (Vec<PreparedVariant>, Receipt, BTreeMap<String, T>);
 
 struct Guidance<'a, T> {
-    material: &'a PreparedVariant,
+    materials: Vec<GuidedMaterial<'a>>,
     policy: &'a comparison::Policy,
     evaluate: &'a mut ConsumerEvaluator<'a, T>,
-    protocol: Option<Option<String>>,
     evaluations: usize,
     case_order: Vec<String>,
     case_policies: Vec<comparison::Policy>,
     reserved_evaluations: usize,
+}
+
+struct GuidedMaterial<'a> {
+    source: &'a PreparedVariant,
+    protocol: Option<Option<String>>,
+    evaluations: usize,
+}
+
+impl<T> Guidance<'_, T> {
+    fn probe(
+        &mut self,
+        material_index: usize,
+        request: &Request,
+        mut design: Prepared,
+    ) -> Result<(MaterialDecision, T), Refusal> {
+        let material = &mut self.materials[material_index];
+        let key = material.source.variant.key.clone();
+        let mut variant = material.source.variant.clone();
+        variant.key = serde_json::to_string(&(&design.variant.key, &key))
+            .map_err(|e| invalid(e.to_string()))?;
+        design.material_key = Some(key.clone());
+        self.evaluations += 1;
+        material.evaluations += 1;
+        let evaluation = (self.evaluate)(PreparedVariant {
+            variant,
+            choices: material.source.choices.clone(),
+            design: Some(design),
+        })?;
+        let candidate = evaluation.comparison;
+        let mut refusal = evaluation.admission_refusal;
+        let mut eligible = refusal.is_none() && candidate.eligible;
+        if eligible && !request.worst_case() && !request.matrix_pareto() {
+            if material.protocol.as_ref().is_some_and(|protocol| {
+                !self.policy.allow_mixed_protocols && *protocol != candidate.input_protocol_sha256
+            }) {
+                eligible = false;
+                refusal = Some(invalid(if request.multiple_materials() {
+                    "adaptive consumer protocols differ from this material's first admitted incumbent; no ordering inferred"
+                } else {
+                    "adaptive consumer protocols differ from the first admitted incumbent; no ordering inferred"
+                }));
+            } else {
+                material
+                    .protocol
+                    .get_or_insert_with(|| candidate.input_protocol_sha256.clone());
+            }
+        } else if refusal.is_none() && !candidate.eligible {
+            refusal = candidate.exclusions.first().cloned();
+        }
+        Ok((
+            MaterialDecision {
+                material_key: key,
+                eligible,
+                comparison: (!request.matrix_pareto()).then_some(candidate),
+                cases: evaluation.cases,
+                refusal: evaluation.refusal,
+                admission_refusal: refusal,
+            },
+            evaluation.output,
+        ))
+    }
 }
 
 struct Chosen<T> {
@@ -1039,7 +1210,7 @@ struct Chosen<T> {
     values: Option<BTreeMap<String, f64>>,
     evaluated: (super::Receipt, Result<Pattern, Refusal>),
     index: Option<usize>,
-    consumer: Option<T>,
+    consumers: BTreeMap<String, T>,
 }
 
 struct Evaluator<'request, 'body> {
@@ -1136,6 +1307,7 @@ impl Evaluator<'_, '_> {
                 consumer_comparison: None,
                 consumer_refusal: None,
                 consumer_cases: Vec::new(),
+                consumer_materials: Vec::new(),
                 consumer_case_key: None,
                 consumer_worst_case: None,
                 raw_fit,
@@ -1158,9 +1330,30 @@ struct Discovery<'request, 'body, 'consumer, T> {
     coordinates: Vec<Vec<f64>>,
     // Lightweight decisions remain available even when their full outputs exceed retention.
     pareto_frontier: Vec<usize>,
+    // Each nominee's own decision frontier. The common polling centers are their stable union.
+    material_frontiers: Vec<Vec<usize>>,
 }
 
 impl<T> Discovery<'_, '_, '_, T> {
+    fn frontier_receipt(&self, indices: &[usize]) -> ParetoFrontier {
+        let mut frontier = ParetoFrontier {
+            evaluated_trial_keys: Vec::new(),
+            retained_trial_keys: Vec::new(),
+            unretained_trial_keys: Vec::new(),
+            retention_capacity: self.request.max_designs,
+        };
+        for &index in indices {
+            let row = &self.rows[index];
+            frontier.evaluated_trial_keys.push(row.design.key.clone());
+            if row.selected {
+                frontier.retained_trial_keys.push(row.design.key.clone());
+            } else {
+                frontier.unretained_trial_keys.push(row.design.key.clone());
+            }
+        }
+        frontier
+    }
+
     fn record_start(
         &self,
         start_index: usize,
@@ -1293,34 +1486,87 @@ impl<T> Discovery<'_, '_, '_, T> {
         row.selected = self.chosen.len() <= self.request.max_designs;
     }
 
+    fn material_improves(&self, candidate: &MaterialDecision, current: &MaterialDecision) -> bool {
+        if !candidate.eligible
+            || !current.eligible
+            || candidate.material_key != current.material_key
+        {
+            return false;
+        }
+        let guidance = self.guidance.as_ref().expect("material guidance");
+        if self.request.matrix_pareto() {
+            cases_prefer(
+                &guidance.case_policies,
+                &guidance.case_order,
+                &candidate.cases,
+                &current.cases,
+            )
+        } else {
+            candidate
+                .comparison
+                .as_ref()
+                .zip(current.comparison.as_ref())
+                .is_some_and(|(candidate, current)| guidance.policy.prefers(candidate, current))
+        }
+    }
+
+    fn retain_material_pareto(&mut self, index: usize, row: &mut Trial) {
+        let mut nominated = false;
+        for material_index in 0..row.consumer_materials.len() {
+            let decision = &row.consumer_materials[material_index];
+            if !decision.eligible
+                || self.material_frontiers[material_index]
+                    .iter()
+                    .any(|&previous| {
+                        self.material_improves(
+                            &self.rows[previous].consumer_materials[material_index],
+                            decision,
+                        )
+                    })
+            {
+                continue;
+            }
+            let displaced: BTreeSet<_> = self.material_frontiers[material_index]
+                .iter()
+                .copied()
+                .filter(|&previous| {
+                    self.material_improves(
+                        decision,
+                        &self.rows[previous].consumer_materials[material_index],
+                    )
+                })
+                .collect();
+            self.material_frontiers[material_index]
+                .retain(|previous| !displaced.contains(previous));
+            self.material_frontiers[material_index].push(index);
+            nominated = true;
+        }
+        // Remove a retained design only after every material has displaced it. The ordered union
+        // also keeps capacity-omitted coordinates available to guide subsequent polling.
+        let union: BTreeSet<_> = self.material_frontiers.iter().flatten().copied().collect();
+        for &previous in &self.pareto_frontier {
+            if !union.contains(&previous) {
+                self.rows[previous].selected = false;
+            }
+        }
+        self.chosen
+            .retain(|chosen| chosen.index.is_none_or(|index| union.contains(&index)));
+        self.pareto_frontier = union.into_iter().collect();
+        row.selected = nominated && self.chosen.len() <= self.request.max_designs;
+    }
+
     fn improves(&self, candidate: &Trial, current: &Trial) -> bool {
         let Some(guidance) = &self.guidance else {
             return improves(candidate, current);
         };
         match (candidate.consumer_admitted(), current.consumer_admitted()) {
             (true, false) => true,
-            (true, true) if self.request.matrix_pareto() => {
-                let cases = &guidance.case_policies;
-                if candidate.consumer_cases.len() != cases.len()
-                    || current.consumer_cases.len() != cases.len()
-                    || cases.is_empty()
-                    || candidate
-                        .consumer_cases
-                        .iter()
-                        .zip(&current.consumer_cases)
-                        .zip(&guidance.case_order)
-                        .any(|((a, b), key)| a.key != *key || b.key != *key)
-                {
-                    return false;
-                }
-                comparison::Policy::prefers_cases(
-                    cases
-                        .iter()
-                        .zip(&candidate.consumer_cases)
-                        .zip(&current.consumer_cases)
-                        .map(|((policy, a), b)| (policy, &a.comparison, &b.comparison)),
-                )
-            }
+            (true, true) if self.request.matrix_pareto() => cases_prefer(
+                &guidance.case_policies,
+                &guidance.case_order,
+                &candidate.consumer_cases,
+                &current.consumer_cases,
+            ),
             (true, true) if self.request.worst_case() => {
                 // The matrix already checked each case against its own anchored protocol.
                 // A change of limiting case must not compare unrelated case protocol hashes.
@@ -1374,70 +1620,67 @@ impl<T> Discovery<'_, '_, '_, T> {
         let index = self.rows.len();
         let (variant, values) = self.request.design(index, &point)?;
         let (mut row, result) = self.evaluator.trial(&variant, &values)?;
-        let mut consumer = None;
+        let mut consumers = BTreeMap::new();
         if let Some(guidance) = &mut self.guidance {
             row.selected = false;
             if result.is_ok() {
-                let mut material = guidance.material.variant.clone();
-                material.key = serde_json::to_string(&(&variant.key, &material.key))
-                    .map_err(|e| invalid(e.to_string()))?;
-                guidance.evaluations += 1;
-                let evaluation = (guidance.evaluate)(PreparedVariant {
-                    variant: material,
-                    choices: guidance.material.choices.clone(),
-                    design: Some(Prepared {
-                        variant: variant.clone(),
-                        material_key: Some(guidance.material.variant.key.clone()),
-                        variables_mm: Some(values.clone()),
-                        evaluated: Some((row.design.clone(), result.clone())),
-                    }),
-                })?;
-                let candidate = evaluation.comparison;
-                row.consumer_refusal = evaluation.refusal;
-                row.consumer_cases = evaluation.cases;
-                if let Some(refusal) = evaluation.admission_refusal {
-                    row.refusal = Some(refusal);
-                } else if candidate.eligible {
-                    if self.request.worst_case() {
-                        let index =
-                            worst_case_index(&row.consumer_cases, &guidance.policy.objectives[0])?;
-                        row.consumer_case_key = Some(row.consumer_cases[index].key.clone());
-                        if matches!(guidance.policy.basis, comparison::Basis::ReportedBounds) {
-                            row.consumer_worst_case = Some(worst_case_range(
-                                &row.consumer_cases,
-                                &guidance.policy.objectives[0],
-                            )?);
-                        }
-                        row.selected = true;
-                        consumer = Some(evaluation.output);
-                    } else if self.request.matrix_pareto() {
-                        // Every case was independently admitted and protocol-anchored by the
-                        // matrix. No first-case or synthetic aggregate protocol replaces that.
-                        row.selected = true;
-                        consumer = Some(evaluation.output);
-                    } else if guidance.protocol.as_ref().is_some_and(|protocol| {
-                        !guidance.policy.allow_mixed_protocols
-                            && *protocol != candidate.input_protocol_sha256
-                    }) {
-                        row.refusal = Some(invalid(
-                            "adaptive consumer protocols differ from the first admitted incumbent; no ordering inferred",
-                        ));
+                for material_index in 0..guidance.materials.len() {
+                    let (decision, output) = guidance.probe(
+                        material_index,
+                        self.request,
+                        Prepared {
+                            variant: variant.clone(),
+                            material_key: None,
+                            variables_mm: Some(values.clone()),
+                            evaluated: Some((row.design.clone(), result.clone())),
+                        },
+                    )?;
+                    if self.request.multiple_materials() {
+                        row.selected |= decision.eligible;
+                        // A different nominee may retain this geometry. Preserve even a refused
+                        // output so final rows never rerun it with a differently consumed budget.
+                        consumers.insert(decision.material_key.clone(), output);
+                        row.consumer_materials.push(decision);
                     } else {
-                        guidance
-                            .protocol
-                            .get_or_insert_with(|| candidate.input_protocol_sha256.clone());
-                        row.selected = true;
-                        consumer = Some(evaluation.output);
+                        row.selected = decision.eligible;
+                        row.refusal = decision.admission_refusal;
+                        row.consumer_refusal = decision.refusal;
+                        row.consumer_cases = decision.cases;
+                        row.consumer_comparison = decision.comparison;
+                        if row.selected {
+                            consumers.insert(decision.material_key, output);
+                        }
                     }
-                } else {
-                    row.refusal = candidate.exclusions.first().cloned();
                 }
-                // All-case mode has no nominated decision. Original decisions remain in cases.
-                row.consumer_comparison = (!self.request.matrix_pareto()).then_some(candidate);
+                if self.request.multiple_materials() {
+                    if !row.selected {
+                        row.refusal = row
+                            .consumer_materials
+                            .iter()
+                            .find_map(|material| material.admission_refusal.clone())
+                            .or_else(|| {
+                                Some(invalid("no nominated material admitted this design"))
+                            });
+                    }
+                } else if row.selected && self.request.worst_case() {
+                    let index =
+                        worst_case_index(&row.consumer_cases, &guidance.policy.objectives[0])?;
+                    row.consumer_case_key = Some(row.consumer_cases[index].key.clone());
+                    if matches!(guidance.policy.basis, comparison::Basis::ReportedBounds) {
+                        row.consumer_worst_case = Some(worst_case_range(
+                            &row.consumer_cases,
+                            &guidance.policy.objectives[0],
+                        )?);
+                    }
+                }
             }
         }
         if self.request.pareto() && row.consumer_admitted() {
-            self.retain_pareto(index, &mut row);
+            if self.request.multiple_materials() {
+                self.retain_material_pareto(index, &mut row);
+            } else {
+                self.retain_pareto(index, &mut row);
+            }
         }
         if row.selected
             && self.guidance.is_some()
@@ -1486,7 +1729,7 @@ impl<T> Discovery<'_, '_, '_, T> {
                 values: Some(values),
                 evaluated: (row.design.clone(), result),
                 index: Some(index),
-                consumer,
+                consumers,
             });
         }
         self.seen.insert(identity, index);
@@ -1516,9 +1759,13 @@ impl Trial {
     fn consumer_admitted(&self) -> bool {
         self.refusal.is_none()
             && (self
-                .consumer_comparison
-                .as_ref()
-                .is_some_and(|candidate| candidate.eligible)
+                .consumer_materials
+                .iter()
+                .any(|material| material.eligible)
+                || self
+                    .consumer_comparison
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.eligible)
                 || (!self.consumer_cases.is_empty()
                     && self
                         .consumer_cases
@@ -1538,6 +1785,33 @@ fn improves(candidate: &Trial, current: &Trial) -> bool {
         (Some(a), Some(b)) => a.0 < b.0 || (a.0 == b.0 && a.1 < b.1),
         _ => false,
     }
+}
+
+fn cases_prefer(
+    policies: &[comparison::Policy],
+    order: &[String],
+    candidate: &[CaseDecision],
+    current: &[CaseDecision],
+) -> bool {
+    if policies.is_empty()
+        || candidate.len() != policies.len()
+        || current.len() != policies.len()
+        || order.len() != policies.len()
+        || candidate
+            .iter()
+            .zip(current)
+            .zip(order)
+            .any(|((a, b), key)| a.key != *key || b.key != *key)
+    {
+        return false;
+    }
+    comparison::Policy::prefers_cases(
+        policies
+            .iter()
+            .zip(candidate)
+            .zip(current)
+            .map(|((policy, a), b)| (policy, &a.comparison, &b.comparison)),
+    )
 }
 
 fn coordinate_identity(point: &[f64]) -> Vec<u64> {
