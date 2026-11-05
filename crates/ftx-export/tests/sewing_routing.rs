@@ -13,6 +13,8 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::materials::Catalog;
 use serde_json::{Value, json};
 
+#[path = "sewing_routing/bounded_staging.rs"]
+mod bounded_staging;
 #[path = "sewing_routing/selection_cost.rs"]
 mod selection_cost;
 

@@ -18,6 +18,7 @@ use crate::sewing::{
 pub mod calendars;
 pub mod fixtures;
 pub mod labor;
+pub mod staging;
 
 const MAX_CELLS: usize = 8;
 const MAX_OPERATIONS: usize = 63;
@@ -45,8 +46,13 @@ pub struct Policy {
     pub independence: String,
     /// Maximum examined dispatch extensions, including the complete copy-major seed attempt.
     pub max_search_nodes: usize,
-    /// Qualified unloaded staging slots at each cell, at least the complete garment quantity.
+    /// Qualified unloaded staging slots at each cell. Without `bounded_staging`, this must hold
+    /// the complete garment quantity; the explicit bounded policy instead schedules reservations.
     pub staging_capacity: usize,
+    /// Optional qualified finite buffers, with direct first-loading entry and final-unloading exit.
+    /// Omission retains the complete-batch staging convention and its existing timing arithmetic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounded_staging: Option<staging::Policy>,
     /// One to eight configured specialist cells. Every cell must own at least one route operation.
     pub cells: Vec<parallel::Cell>,
     /// Full cell/effective-template locks, using [`parallel::operator::cell_sha256`].
@@ -257,7 +263,8 @@ pub struct Timeline {
 /// Source-qualified fixed routing with an exact complete incumbent and bounded dispatch search.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars; `/7` cost.
+    /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars;
+    /// `/7` cost; `/8` retained fixtures; `/9` explicit finite staging reservations.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -270,6 +277,9 @@ pub struct Report {
     /// Optional complete local/shared fixture capacities and independently swept physical holds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workholding: Option<fixtures::Report>,
+    /// Independently reconstructed finite slot reservations and the qualified entry/exit boundary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounded_staging: Option<staging::Report>,
     /// Explicit worker availability, travel and complete attended-operation replay, when requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attending_labor: Option<labor::Report>,
@@ -416,7 +426,8 @@ impl Policy {
             || !(self.protocol == "unloaded_between_operations/1" || self.retained_fixtures())
             || self.independence != independence
             || (owned_transfer && self.attending_labor.is_none())
-            || self.staging_capacity < copies
+            || self.staging_capacity == 0
+            || (self.bounded_staging.is_none() && self.staging_capacity < copies)
             || self.staging_capacity > 4096
             || !source_valid(&self.source, &self.method, &self.conditions)
         {
@@ -639,6 +650,7 @@ struct Prepared<'a> {
     copies: usize,
     fixtures: Option<fixtures::Compiled>,
     labor: Option<labor::Compiled>,
+    staging: Option<staging::Compiled>,
 }
 
 #[derive(Clone)]
@@ -652,6 +664,7 @@ struct State {
     makespan: u64,
     reservations: Vec<fixtures::Reservation>,
     labor: Option<labor::State>,
+    staging: Vec<staging::Reservation>,
 }
 
 #[derive(Clone, Copy)]
@@ -688,6 +701,7 @@ impl Prepared<'_> {
             makespan: 0,
             reservations: Vec::new(),
             labor: self.labor.as_ref().map(labor::Compiled::initial),
+            staging: Vec::new(),
         }
     }
 
@@ -768,6 +782,70 @@ impl Prepared<'_> {
         state: &State,
         dispatch: Dispatch,
     ) -> Result<Option<(State, Event)>, Refusal> {
+        let Some(staging) = &self.staging else {
+            return self.advance_at(state, dispatch, 0, 0);
+        };
+        let mut handoff_start = 0;
+        let mut loading_start = 0;
+        // A retry crosses a retained slot/fixture release or a finite resource-window boundary.
+        // Both timing floors only advance; every trial starts from the unchanged prefix so a
+        // rejected transfer cannot consume a worker, fixture, cell or staging reservation.
+        let windows = self
+            .policy
+            .availability_calendars
+            .as_ref()
+            .map_or(0, |_| calendars::MAX_WINDOWS);
+        let attempts = 4 * (state.staging.len() + state.reservations.len() + windows + 1);
+        for _ in 0..attempts {
+            let Some((mut next, event)) =
+                self.advance_at(state, dispatch, handoff_start, loading_start)?
+            else {
+                return Ok(None);
+            };
+            let task = &self.tasks[event.task];
+            match staging.align(
+                &state.staging,
+                dispatch.copy,
+                task.route,
+                task.cell,
+                task.route + 1 == self.choices.len(),
+                event.load_start,
+                event.finish,
+                event.handoff,
+            )? {
+                staging::Alignment::Ready(reservations) => {
+                    next.staging = reservations;
+                    return Ok(Some((next, event)));
+                }
+                staging::Alignment::Delay {
+                    handoff_start: handoff,
+                    loading_start: loading,
+                } => {
+                    let handoff = handoff_start.max(handoff);
+                    let loading = loading_start.max(loading);
+                    if handoff == handoff_start && loading == loading_start {
+                        return Err(bad(
+                            "finite staging alignment did not advance its timing floors",
+                        ));
+                    }
+                    handoff_start = handoff;
+                    loading_start = loading;
+                }
+                staging::Alignment::Blocked => return Ok(None),
+            }
+        }
+        Err(budget(
+            "finite staging alignment exceeded its bounded slot, fixture and calendar events",
+        ))
+    }
+
+    fn advance_at(
+        &self,
+        state: &State,
+        dispatch: Dispatch,
+        handoff_start_floor: u64,
+        loading_start_floor: u64,
+    ) -> Result<Option<(State, Event)>, Refusal> {
         let Dispatch { copy, task: index } = dispatch;
         let task = &self.tasks[index];
         if state.next[copy] != task.route {
@@ -798,6 +876,7 @@ impl Prepared<'_> {
             }
             let earliest = ready
                 .max(state.transfer_ready)
+                .max(handoff_start_floor)
                 .max(arrival.map_or(0, |arrival| arrival.time));
             let Some((start, arrival)) = self.earliest_interval(
                 state,
@@ -859,6 +938,7 @@ impl Prepared<'_> {
         }
         let earliest = ready
             .max(state.cell_ready[task.cell])
+            .max(loading_start_floor)
             .max(arrival.map_or(0, |arrival| arrival.time));
         let Some((load_start, arrival)) = self.earliest_interval(
             state,
@@ -1363,6 +1443,8 @@ pub(in crate::sewing) fn build(
         .production_copies
         .expect("resolved production count");
     let global = policy.validate(options, copies)?;
+    let staging = staging::Compiled::compile(policy)?;
+    let uses_staging = staging.is_some();
     let source_seams: BTreeSet<_> = pattern
         .seams()
         .iter()
@@ -1448,7 +1530,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.retained_fixtures() {
+        schema: if uses_staging {
+            "ftx-sewing-plan/26"
+        } else if policy.retained_fixtures() {
             "ftx-sewing-plan/25"
         } else if policy.cost_directed() {
             "ftx-sewing-plan/24"
@@ -1606,6 +1690,7 @@ pub(in crate::sewing) fn build(
         copies,
         fixtures,
         labor,
+        staging,
     };
     let lower = prepared.lower_bound()?.max(
         prepared
@@ -1789,8 +1874,15 @@ pub(in crate::sewing) fn build(
         .as_ref()
         .map(|labor| labor.report(&baseline, &selected))
         .transpose()?;
+    let bounded_staging = prepared
+        .staging
+        .as_ref()
+        .map(|staging| staging.report(&baseline, &selected))
+        .transpose()?;
     let report = Report {
-        schema: if policy.retained_fixtures() {
+        schema: if uses_staging {
+            "ftx-sewing-routing/9"
+        } else if policy.retained_fixtures() {
             "ftx-sewing-routing/8"
         } else if policy.cost_directed() {
             "ftx-sewing-routing/7"
@@ -1811,6 +1903,7 @@ pub(in crate::sewing) fn build(
         reference_scope: policy.eligible().then_some("seed_route_one_garment/1"),
         cell_plans,
         workholding,
+        bounded_staging,
         attending_labor,
         availability_calendars: policy.availability_calendars.clone(),
         thread_order_search,
@@ -1822,7 +1915,9 @@ pub(in crate::sewing) fn build(
         optimality_proven: proven,
         budget_exhausted: !search_complete,
         lower_bound_makespan_milliseconds: lower,
-        search_scope: if policy.retained_fixtures() {
+        search_scope: if uses_staging {
+            "coupled_bounded_staging_append_dispatch/1"
+        } else if policy.retained_fixtures() {
             "coupled_cell_retained_fixture_append_dispatch/1"
         } else if owned_transfer && policy.eligible() {
             "coupled_eligible_worker_owned_handoff_cell_append_dispatch/1"
@@ -1842,7 +1937,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.retained_fixtures() {
+        schema: if uses_staging {
+            "ftx-sewing-production/14"
+        } else if policy.retained_fixtures() {
             "ftx-sewing-production/13"
         } else if policy.cost_directed() {
             "ftx-sewing-production/12"
