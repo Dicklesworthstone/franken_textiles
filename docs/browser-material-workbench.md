@@ -1341,6 +1341,43 @@ independently inspected material intact. An explicitly assigned frozen material 
 interface remains an independent pending choice. Loading a pattern preserves completed characterization downloads.
 Cancellation, newer selection edits and failed replacement fits cannot republish a previous result.
 
+## Save and reopen complete studies
+
+Use **Save manufacturing study inputs** or **Save scenario study inputs** to download
+`workbench-study.json` before running a comparison. Saving uses the same request assembly as the
+corresponding Run action, including guided material alternatives, linked design searches and named
+scenario cases. It needs complete inputs but does not run the engine, so an authored study can also
+be saved when the local engine has not loaded. Saving a request does not establish that its physical
+sources, operating domains or numerical work limits will be admitted.
+
+The file retains the exact original pattern, study and scenario JSON text. Body-dependent studies
+also retain their selected body-input text and, where used, the original primary and supplemental
+measurement sources, same-wearer consent, accepted body-fit report and pose choices. Outfit studies
+retain the original outfit request and composition correspondence. Source-bound numbers,
+whitespace, Unicode and signed zero are not reserialized inside these source documents. Results,
+browser request counters and the body model itself are not embedded.
+
+For a body-dependent study, the file records the SHA-256 and byte length of the actual selected
+model bytes. Select the saved file to reopen its pattern and inspect the separate original-source
+downloads. Then choose **Run saved study** to send the retained request through the ordinary worker
+and native consumers. Select the original model again when needed: a different model refuses before
+dispatch, including a different file of the same length. Matching a model identifies the input; it
+does not qualify body fitting, draping or physical garment fit.
+
+The reopened request is a frozen snapshot. Editing ordinary form drafts does not rewrite it; use
+the original-source downloads in the ordinary authoring workflow to prepare a changed study.
+Selecting a different pattern clears the saved snapshot, and changing the model withdraws affected
+results. **Clear saved study** removes the retained snapshot and its temporary download links.
+Cancelling or superseding a file read prevents it from replacing later work. A malformed saved file
+leaves the existing pattern and previously opened snapshot intact.
+
+The format is `ftx-workbench-study/1`. Its encoded file is limited to 128 MiB and the retained source
+text to 64 MiB combined. Guided authoring keeps its existing 16 MiB request limit; supplemental
+measurements keep their eight-file/16 MiB combined allowance. Import checks the file's advertised and actual size,
+strict UTF-8, source schemas and transport-field consistency before installing the snapshot. The
+ordinary Rust admission remains authoritative when it runs. Files remain local and may contain
+personal measurements or accepted body-fit evidence; choose their storage and recipients accordingly.
+
 ## State, privacy and failure behavior
 
 The original pattern is retained separately from pending assignments and the bound result. Assigning

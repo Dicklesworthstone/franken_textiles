@@ -2,7 +2,8 @@
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
   buildGuidedDesignAfterOperations, hasTextileWaterPolicy, buildMaterialSurfaceConditions,
   buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
-  buildMaterialExteriorExchange } from "./materials-study-builder.js";
+  buildMaterialExteriorExchange, buildWorkbenchStudyBundle, parseWorkbenchStudyBundle,
+  MAX_WORKBENCH_STUDY_BYTES } from "./materials-study-builder.js";
 import { buildMaterialScreenRequest } from "./materials-screen-builder.js";
 
 const $ = id => document.getElementById(id);
@@ -21,6 +22,7 @@ const originRationaleFields = ["originReference", "originAccessedOn", "originNot
 let preparedTreatment = null;
 let preparedImport = null, adoptedImport = false, selectedImportFit = null;
 let sourceText = null, outfit = null;
+let savedStudy = null, savedStudyRead = 0, studySavedFor = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
 const sourceQuery = new URL(window.location.href).searchParams;
@@ -229,7 +231,7 @@ function bodyDependentStudies(id) {
     (id === "measurements" && ["measurements", "accepted", "preview"].includes(mode)) ||
     (["bodyArmDeg", "drapeLegs", "drapeLegFraction"].includes(id) && mode === "preview") ||
     (["bodyFitFile", "bodyFitConsent", "bodyArmDeg"].includes(id) && mode === "accepted");
-  return used ? ["scenario", ...(studyUsesBody() ? ["study"] : [])] : [];
+  return used ? ["scenario", ...(studyUsesBody() || (id === "body" && savedStudy?.request.onBody) ? ["study"] : [])] : [];
 }
 function guidedSourceStudies(id) {
   const scenarioSource = guidedScenarioMode() &&
@@ -432,14 +434,18 @@ function controls() {
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
   for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
   const studyReady = guided ? studyCandidates.length > 0 && (!$("guidedDesign").checked || has("fit")) : has("studyRequest");
-  $("study").disabled ||= !source || !studyReady;
-  if (studyUsesBody()) $("study").disabled ||= !has("body") || !studyBodyReady();
-  $("scenario").disabled ||= !source || !studyReady || (!guidedScenarioMode() && !has("scenarioRequest")) || !has("body") || !studyBodyReady();
-  $("scenario").disabled ||= guidedMatrixMode() && !guidedScenarioDrafts.length;
-  $("scenario").disabled ||= guidedScenarioMode() && !guidedMatrixMode() && motionMode === "form" && !guidedMotionKeyframes.length;
-  if (!guided && $("combinationMode").checked && !combinationGroups.size) {
-    $("study").disabled = true; $("scenario").disabled = true;
-  }
+  const combinationsReady = guided || !$("combinationMode").checked || combinationGroups.size > 0;
+  const studyInputsReady = !!source && studyReady && combinationsReady &&
+    (!studyUsesBody() || (has("body") && studyBodyReady()));
+  const scenarioInputsReady = !!source && studyReady && combinationsReady && has("body") && studyBodyReady() &&
+    (guidedScenarioMode() || has("scenarioRequest")) && (!guidedMatrixMode() || guidedScenarioDrafts.length > 0) &&
+    (!guidedScenarioMode() || guidedMatrixMode() || motionMode !== "form" || guidedMotionKeyframes.length > 0);
+  $("study").disabled ||= !studyInputsReady;
+  $("scenario").disabled ||= !scenarioInputsReady;
+  $("saveStudy").disabled = !!pending || !studyInputsReady;
+  $("saveScenario").disabled = !!pending || !scenarioInputsReady;
+  $("runSavedStudy").disabled = !ready || !!pending || !savedStudy || (!!savedStudy.body_model && !has("body"));
+  $("clearSavedStudy").disabled = !savedStudy && pending?.op !== "studyImport";
   $("exports").disabled ||= !has("measurements") || !has("fit");
   $("bodyCheck").disabled ||= !has("body") || (!has("measurements") && !has("bodyFitFile")) ||
     (has("bodyFitFile") && !$("bodyFitConsent").checked);
@@ -478,6 +484,7 @@ function controls() {
   $("cancel").disabled = !pending;
 }
 function clear(keys) {
+  if (studySavedFor && keys.includes(studySavedFor)) keys = [...keys, "studySave"];
   if (keys.includes("bind") && !keys.includes("treatment")) keys = [...keys, "treatment"];
   if (keys.includes("sew") && !keys.includes("sewPreview")) keys = [...keys, "sewPreview"];
   for (const key of keys) {
@@ -501,6 +508,10 @@ function clear(keys) {
       bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren();
     }
     if (key === "treatment") preparedTreatment = null;
+    if (key === "studySave") {
+      studySavedFor = null; $("studySaveFiles").replaceChildren(); $("studySaveStatus").textContent = "";
+    }
+    if (key === "savedStudy") $("savedStudyFiles").replaceChildren();
     if (key === "garmentcode") { preparedImport = null; $("useGarmentcodeFit").checked = false; }
     if (key === "calibrate") {
       calibratedPair = null;
@@ -544,7 +555,7 @@ function start() {
 }
 function invalidate(keys, dependentOnly = false) {
   if (keys.includes("sew") && !keys.includes("sewPreview")) keys = [...keys, "sewPreview"];
-  if (pending && (!dependentOnly || keys.includes(pending.op))) start(); // terminate affected Rust work; never wait for its stale success
+  if (pending && (pending.op === "studyImport" || !dependentOnly || keys.includes(pending.op))) start(); // terminate affected Rust work; never wait for its stale success
   clear(keys); $("error").hidden = true; $("progress").textContent = ""; controls();
 }
 function selectStockRequest(raw) {
@@ -5160,6 +5171,140 @@ function resetInterfaces() {
   $("interfacesFile").value = "";
   $("interfacesSummary").textContent = "Keep the original pattern's interface evidence.";
 }
+async function prepareStudyMessage(msg, id) {
+  if (!sourceText) throw Error("Load the original pattern first.");
+  // Saving and running share one request assembly; alternatives start at the original pattern.
+  msg.pattern = sourceText;
+  if (outfit) msg.outfit = { ...outfit };
+  const onBody = msg.type === "study" && studyUsesBody();
+  const scenarioRead = msg.type === "scenario" ? scenarioInput() : undefined;
+  const [study, scenario] = await Promise.all([studyInput(scenarioRead), scenarioRead]);
+  if (pending?.id !== id) return;
+  msg.studyRequest = study;
+  if (msg.type === "study") msg.onBody = onBody;
+  if (msg.type === "scenario" || onBody) {
+    if (msg.type === "scenario") msg.scenarioRequest = scenario.request;
+    msg.measurements = await studyBodyInput(msg);
+    if (pending?.id !== id) return;
+    msg.bytes = await read("body", true);
+  }
+}
+async function studyModelIdentity(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return { sha256: Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join(""),
+    byte_length: bytes.byteLength };
+}
+async function saveStudyInputs(op) {
+  if (pending) return;
+  clear(["studySave"]);
+  const id = ++sequence; pending = { id, op }; $("error").hidden = true;
+  $("status").textContent = "Preparing complete study inputs…"; controls();
+  try {
+    const msg = { type: op };
+    await prepareStudyMessage(msg, id);
+    if (pending?.id !== id) return;
+    const model = msg.bytes ? await studyModelIdentity(msg.bytes) : undefined;
+    if (pending?.id !== id) return;
+    delete msg.bytes;
+    const raw = buildWorkbenchStudyBundle(msg, model);
+    link("studySave", $("studySaveFiles"), { name: "workbench-study.json", text: raw, mime: "application/json" });
+    studySavedFor = op; pending = null;
+    $("studySaveStatus").textContent = "Complete inputs are ready to download. No evaluation was run. Keep the matching body model separately when one is required.";
+    $("status").textContent = "Study inputs prepared; download workbench-study.json to keep them."; controls();
+  } catch (e) {
+    if (pending?.id !== id) return;
+    pending = null; error(String(e.message || e)); $("status").textContent = "Study inputs could not be saved."; controls();
+  }
+}
+function forgetSavedStudy() {
+  ++savedStudyRead; savedStudy = null;
+  $("savedStudyFile").value = "";
+  clear(["savedStudy"]); $("savedStudySummary").textContent = "No saved study loaded.";
+}
+function showSavedStudy() {
+  clear(["savedStudy"]);
+  const request = savedStudy.request, parent = $("savedStudyFiles");
+  const sourceFile = (name, raw) => {
+    if (raw !== undefined) link("savedStudy", parent, { name, text: raw, mime: "application/json" });
+  };
+  sourceFile("pattern.json", request.pattern); sourceFile("study-request.json", request.studyRequest);
+  sourceFile("scenario-request.json", request.scenarioRequest); sourceFile("body-input.json", request.measurements);
+  sourceFile("primary-measurements.json", request.measurementPrimary);
+  sourceFile("accepted-body-fit.json", request.measurementAcceptedFit);
+  if (request.measurementSources !== undefined) JSON.parse(request.measurementSources).forEach((raw, index) =>
+    sourceFile(`additional-measurements-${index + 1}.json`, raw));
+  if (request.outfit) {
+    sourceFile("outfit-request.json", request.outfit.request_json);
+    sourceFile("outfit-composition.json", request.outfit.composition_json);
+  }
+  $("savedStudySummary").textContent = `Frozen ${request.type === "scenario" ? "scenario" : "manufacturing"} study loaded. ` +
+    "Run saved study uses these exact inputs independently of the form drafts. " + (savedStudy.body_model ?
+      `Select the original body model (${savedStudy.body_model.byte_length} bytes; SHA-256 ${savedStudy.body_model.sha256}) before running.` :
+      "No body model is required.");
+}
+async function reopenStudy() {
+  const file = $("savedStudyFile").files[0];
+  if (!file) return;
+  invalidate(["study", "scenario"]);
+  const revision = ++savedStudyRead, id = ++sequence;
+  pending = { id, op: "studyImport" }; $("status").textContent = "Reading saved study inputs…"; controls();
+  try {
+    if (file.size > MAX_WORKBENCH_STUDY_BYTES) throw Error("Saved study exceeds 128 MiB.");
+    const bytes = await file.arrayBuffer();
+    if (pending?.id !== id || revision !== savedStudyRead) return;
+    if (bytes.byteLength > MAX_WORKBENCH_STUDY_BYTES) throw Error("Saved study exceeds 128 MiB.");
+    const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    const bundle = parseWorkbenchStudyBundle(raw), data = parsePattern(bundle.request.pattern);
+    const ids = new Set();
+    for (const piece of data.pieces) {
+      if (!piece || typeof piece.id !== "string" || !piece.id.trim() || ids.has(piece.id)) {
+        throw Error("Saved pattern needs unique, nonempty source piece identifiers.");
+      }
+      ids.add(piece.id);
+    }
+    const garments = bundle.request.outfit ? JSON.parse(bundle.request.outfit.composition_json).garments : [];
+    if (!Array.isArray(garments) || (bundle.request.outfit && (garments.length < 2 || garments.length > 16)) ||
+        garments.some(garment => !garment || typeof garment.id !== "string" ||
+        !garment.id.trim() || !garment.pieces || typeof garment.pieces !== "object" || Array.isArray(garment.pieces) ||
+        Object.values(garment.pieces).some(piece => typeof piece !== "string" || !ids.has(piece)))) {
+      throw Error("Saved outfit composition needs 2–16 garments referring to the retained pattern's source pieces.");
+    }
+    // Validate everything needed by the UI before replacing any working pattern or saved snapshot.
+    pending = null; clearRoundSources(); resetPatternInput(); $("patternFile").value = "";
+    installPattern(bundle.request.pattern, file.name || "Saved study pattern", garments, data);
+    outfit = bundle.request.outfit || null;
+    if (outfit) $("selfContact").checked = true;
+    $("studyMode").value = "file"; $("combinationMode").checked = false;
+    for (const name of ["studyRequest", "scenarioRequest", "scenarioBody"]) $(name).value = "";
+    savedStudy = bundle; showSavedStudy();
+    $("status").textContent = "Saved study opened. Review its original sources, then choose Run saved study."; controls();
+  } catch (e) {
+    if (pending?.id !== id || revision !== savedStudyRead) return;
+    pending = null; error(String(e.message || e)); $("status").textContent = "Saved study refused; the current pattern and saved study were retained."; controls();
+  }
+}
+async function runSavedStudy() {
+  if (!ready || pending || !savedStudy) return;
+  const bundle = savedStudy, op = bundle.request.type, id = ++sequence;
+  clear([op]); pending = { id, op, savedReplay: true }; $("error").hidden = true;
+  $("status").textContent = "Checking saved study inputs…"; controls();
+  try {
+    const msg = { ...bundle.request, request: id };
+    if (bundle.body_model) {
+      msg.bytes = await read("body", true);
+      if (pending?.id !== id || savedStudy !== bundle) return;
+      if (msg.bytes.byteLength !== bundle.body_model.byte_length) throw Error("Choose the original body model: its byte length differs from the saved study.");
+      const model = await studyModelIdentity(msg.bytes);
+      if (pending?.id !== id || savedStudy !== bundle) return;
+      if (model.sha256 !== bundle.body_model.sha256) throw Error("Choose the original body model: its SHA-256 differs from the saved study.");
+    }
+    worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
+    $("status").textContent = "Running the saved study with its exact original inputs…";
+  } catch (e) {
+    if (pending?.id !== id) return;
+    pending = null; error(String(e.message || e)); $("status").textContent = "Saved study refused; no current result published."; controls();
+  }
+}
 async function execute(op) {
   if (!ready || pending) return;
   if (op === "bind") clear(["bind", ...boundOperations]);
@@ -5224,20 +5369,7 @@ async function execute(op) {
     else if (op === "screen") msg.screenRequest = guidedScreenMode() ?
       buildMaterialScreenRequest(guidedScreenInput()) : await read("screenRequest");
     else if (op === "study" || op === "scenario") {
-      if (!sourceText) throw Error("Load the original pattern first.");
-      // Alternatives always start at the original, never the currently bound single-material preview.
-      msg.pattern = sourceText;
-      const onBody = op === "study" && studyUsesBody();
-      const scenarioRead = op === "scenario" ? scenarioInput() : undefined;
-      const [study, scenario] = await Promise.all([studyInput(scenarioRead), scenarioRead]);
-      if (pending?.id !== id) return;
-      msg.studyRequest = study;
-      if (op === "study") msg.onBody = onBody;
-      if (op === "scenario" || msg.onBody) {
-        if (op === "scenario") msg.scenarioRequest = scenario.request;
-        msg.measurements = await studyBodyInput(msg);
-        msg.bytes = await read("body", true);
-      }
+      await prepareStudyMessage(msg, id);
     }
     else {
       if (!bound) throw Error("Bind the current materials first.");
@@ -5290,7 +5422,7 @@ async function execute(op) {
         if (cell.cell !== null) msg.cell = cell.cell;
       }
     }
-    if (outfit && (op === "bind" || boundOperations.includes(op) || op === "study" || op === "scenario")) msg.outfit = outfit;
+    if (outfit && (op === "bind" || boundOperations.includes(op))) msg.outfit = outfit;
     if (pending?.id !== id) return;
     if (op === "sew") pending.sewingInputs = { pattern: msg.pattern, options: msg.options };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
@@ -5300,6 +5432,15 @@ async function execute(op) {
   }
 }
 for (const el of commands) el.onclick = () => execute(el.dataset.command);
+$("saveStudy").onclick = () => saveStudyInputs("study");
+$("saveScenario").onclick = () => saveStudyInputs("scenario");
+$("savedStudyFile").onchange = reopenStudy;
+$("runSavedStudy").onclick = runSavedStudy;
+$("clearSavedStudy").onclick = () => {
+  if (pending?.savedReplay || pending?.op === "studyImport") start();
+  if (savedStudy) clear([savedStudy.request.type]);
+  forgetSavedStudy(); controls();
+};
 $("addScreenAttribute").onclick = addGuidedScreenAttribute;
 $("clearScreenAttributes").onclick = () => {
   guidedScreenAttributes.length = 0; showGuidedScreenAttributes();
@@ -5904,6 +6045,7 @@ function installDerivedPattern(raw, label) {
 }
 function resetPatternInput(keepImport = false) {
   cancelPhotoReturn();
+  forgetSavedStudy();
   ++patternRead; source = null; sourceText = null; outfit = null; adoptedImport = false;
   $("bodyFitConsent").checked = false;
   defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
@@ -6298,5 +6440,6 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
   });
   sender.postMessage({ type: `${handoffType}-ready`, token: roundToken }, roundOrigin);
 } else roundToken = null;
-window.addEventListener("pagehide", () => { clearPhotoEvidence(); clearRoundSources(); ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
+window.addEventListener("pagehide", () => { clearPhotoEvidence(); clearRoundSources(); ++savedStudyRead;
+  pending = null; ++epoch; worker?.terminate(); clear(["bind", ...operations, "studySave", "savedStudy"]); });
 start();

@@ -2087,6 +2087,19 @@ they are not pressure or comfort limits. Missing source data or exhausted work a
 including synchronous simulation. Raw reports and exact input JSON are downloadable; keep the source-identified body model locally for replay.</p>
 </div></div>
 </section>
+<section aria-labelledby="studySaveHeading"><h2 id="studySaveHeading">Save and reopen a complete study</h2>
+<p>Keep the exact pattern, material or design choices, policies and scenario inputs before running an evaluation.
+A saved study contains original inputs; keep its matching body model separately when one is required.</p>
+<div class="actions"><button id="saveStudy" disabled>Save manufacturing study inputs</button>
+<button id="saveScenario" disabled>Save scenario study inputs</button></div>
+<p id="studySaveStatus" aria-live="polite"></p><div id="studySaveFiles" class="links"></div>
+<label>Reopen a saved study <input id="savedStudyFile" type="file" accept=".json,application/json"></label>
+<p id="savedStudySummary" aria-live="polite">No saved study loaded.</p><div id="savedStudyFiles" class="links"></div>
+<div class="actions"><button id="runSavedStudy" disabled>Run saved study</button>
+<button id="clearSavedStudy" disabled>Clear saved study</button></div>
+<p class="note">Run saved study uses the frozen inputs independently of the form drafts and checks the body model's actual bytes.
+Download the original source files to revise a study. Saved files stay on your device and may contain personal measurement evidence.</p>
+</section>
 <section><h2>Current results</h2><pre id="progress" aria-live="polite"></pre>
 <div id="outputs"></div><iframe id="viewer" title="Current material drape" sandbox="allow-scripts" hidden></iframe>
 <img id="marker" alt="First material roll preview" hidden>

@@ -5960,8 +5960,10 @@ async function addGuidedSelection(p, raw = guidedSelection(), key = '') {
   p.emit({selection,selection_json:raw,snapshot:selection.record,capabilities:{}});
   p.e.studyCandidateName.value=key;p.e.addStudyCandidate.onclick();
 }
-async function guidedScenarioSetup(heat = false) {
-  const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+async function guidedScenarioSetup(heat = false, pattern) {
+  const p=await pageModule();
+  if(pattern){p.select('patternFile',pattern);await p.e.patternFile.onchange();}else await p.load();
+  guidedControls(p);await addGuidedSelection(p);
   p.e.guidedCutting.checked=false;p.e.guidedCutting.handlers.change();
   // Explicit DOM defaults and transport fixtures; this helper makes no numerical admission claim.
   for(const [id,value] of Object.entries({scenarioMode:'guided',guidedScenarioFitSource:'file',
@@ -18535,4 +18537,153 @@ test('guided stock limits only inspect the selected route and grid allowances re
   await design.e.study.onclick();
   assert.equal(design.current().messages.length, before);
   assert.match(design.e.error.textContent, /incomplete grid screening/);
+});
+
+
+// Exact input transport and page lifecycle, not a numerical or physical qualification.
+const workbenchSavedPattern=' {"schema":"fabric-pattern/1","pieces":[{"id":"front"},{"id":"lining"}],"source":{"note":"café 🧵 <literal>","large":18446744073709551615,"coefficient":1.0,"signed":-0.0}}\r\n';
+const workbenchSavedRequest=' {"schema":"ftx-material-study/1","variants":[{"key":"unchanged","changes":{"schema":"ftx-material-bindings/1"}}],"source":{"value":1.0,"signed":-0.0}}\r\n';
+const workbenchSavedFile=(pattern=workbenchSavedPattern)=>JSON.stringify({schema:'ftx-workbench-study/1',
+  request:{type:'study',pattern,studyRequest:workbenchSavedRequest,onBody:false}});
+async function savedStudyDownload(p,op='study') {
+  const button=p.e[op==='scenario'?'saveScenario':'saveStudy'],before=p.current().messages.length;
+  assert.equal(button.disabled,false);await button.onclick();
+  assert.equal(p.current().messages.length,before,'Saving complete inputs must not start an evaluation');
+  const link=descendants(p.e.studySaveFiles).find(n=>n.download==='workbench-study.json');
+  assert.ok(link,p.e.error.textContent||p.e.studySaveStatus.textContent);
+  const raw=await p.blobs.get(link.href).text();return {raw,bundle:JSON.parse(raw),link};
+}
+async function reopenSavedStudy(p,raw) {
+  p.select('savedStudyFile',raw);p.e.savedStudyFile.value='C:\\fakepath\\workbench-study.json';await p.e.savedStudyFile.onchange();
+}
+function savedMessageInputs(message) {
+  const result={...message};delete result.request;delete result.bytes;return plain(result);
+}
+
+test('complete manufacturing studies save before evaluation and reopen exact independent sources',async()=>{
+  const p=await pageModule();p.select('patternFile',workbenchSavedPattern);await p.e.patternFile.onchange();
+  guidedControls(p);await addGuidedSelection(p);
+  p.current().emit({type:'loadError',message:'synthetic unavailable engine'});
+  assert.equal(p.e.study.disabled,true);
+  const {raw,bundle,link}=await savedStudyDownload(p);
+  assert.equal(bundle.schema,'ftx-workbench-study/1');assert.equal(bundle.request.type,'study');
+  assert.equal(bundle.request.pattern,workbenchSavedPattern);assert.ok(bundle.request.studyRequest.includes(guidedSelection()));
+  assert.equal(bundle.body_model,undefined);
+  for(const key of ['request','bytes','result','files'])assert.equal(key in bundle.request,false,key);
+  p.e.guidedGap.value='3';p.e.guidedGap.handlers.input();
+  assert.equal(p.live.has(link.href),false,'Editing consumed inputs withdraws the obsolete save');
+  const q=await pageModule();await reopenSavedStudy(q,raw);
+  assert.equal(q.e.runSavedStudy.disabled,false,q.e.error.textContent);
+  assert.deepEqual(q.e.studyPieces.children.map(n=>n.value),['front','lining']);
+  const sources=await Promise.all(descendants(q.e.savedStudyFiles).filter(n=>n.href).map(n=>q.blobs.get(n.href).text()));
+  assert.ok(sources.includes(workbenchSavedPattern));assert.ok(sources.includes(bundle.request.studyRequest));
+  guidedControls(q);q.e.guidedGap.value='not a number';q.e.guidedGap.handlers.input();await q.e.runSavedStudy.onclick();
+  assert.deepEqual(savedMessageInputs(q.current().messages.at(-1)),bundle.request,
+    'An unrelated form draft cannot change the frozen request');
+});
+
+test('selected-body design saves preserve the live request and unfused measurement evidence',async()=>{
+  const {p}=await guidedDesignSetup(workbenchSavedPattern);
+  const primary=' {"schema":"fabric-measurements/1","records":[],"source":{"sample":18446744073709551615,"value":1.0}}\r\n',
+    supplemental=' {"schema":"fabric-measurements/1","records":[],"note":"café 🧵","signed":-0.0}\r\n';
+  p.select('measurements',primary);p.e.measurements.handlers.change();
+  p.e.studyBodySource.value='preview';p.e.studyBodySource.handlers.change();
+  p.e.bodyArmDeg.value='50';p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';
+  p.e.supplementalFiles.files=[new Blob([supplemental])];p.e.supplementalFiles.handlers.change();
+  p.e.supplementalConsent.checked=true;p.e.supplementalConsent.handlers.change();
+  const {bundle}=await savedStudyDownload(p);
+  assert.equal(JSON.parse(bundle.request.studyRequest).schema,'ftx-design-study/1');assert.equal(bundle.request.onBody,true);
+  assert.equal(bundle.request.measurementPrimary,primary);
+  assert.equal(bundle.request.measurementSources,JSON.stringify([supplemental]));assert.equal(bundle.request.measurementConsent,true);
+  assert.deepEqual(bundle.request.measurementPose,{arm_abduction_deg:50,legs:'seated',leg_fraction:0.25});
+  assert.deepEqual(bundle.body_model,{sha256:require('node:crypto').createHash('sha256').update(Buffer.from([1,3,5])).digest('hex'),byte_length:3});
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);
+  assert.deepEqual(savedMessageInputs(sent),bundle.request,'Save and Run must assemble identical sources');
+  assert.deepEqual([...new Uint8Array(sent.bytes)],[1,3,5]);
+});
+
+test('saved named scenarios verify actual model bytes before ordinary comparison dispatch',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true,workbenchSavedPattern);guidedNamedCases(p);
+  await saveGuidedCase(p,'first café 🧵');
+  p.select('heatConditions',sources.heatConditions.replace('35.0','5.0'));p.e.heatConditions.handlers.change();
+  await saveGuidedCase(p,'second <literal>');
+  const {raw,bundle}=await savedStudyDownload(p,'scenario'),matrix=JSON.parse(bundle.request.scenarioRequest);
+  assert.deepEqual(matrix.cases.map(row=>row.key),['first café 🧵','second <literal>']);
+  assert.ok(bundle.request.scenarioRequest.includes(sources.fit));assert.equal(bundle.request.measurements,sources.scenarioBody);
+  const q=await pageModule();await reopenSavedStudy(q,raw);assert.equal(q.e.runSavedStudy.disabled,true);
+  q.e.body.files=[new Blob([new Uint8Array([6,4,2])])];q.e.body.handlers.change();
+  assert.equal(q.e.runSavedStudy.disabled,false);await q.e.runSavedStudy.onclick();
+  assert.equal(q.current().messages.length,0,'Same-length but different model bytes must refuse before dispatch');
+  assert.match(q.e.error.textContent,/model|SHA|match/i);
+  q.e.body.files=[new Blob([new Uint8Array([2,4,6])])];q.e.body.handlers.change();
+  await q.e.runSavedStudy.onclick();const sent=q.current().messages.at(-1);
+  assert.deepEqual(savedMessageInputs(sent),bundle.request);assert.deepEqual([...new Uint8Array(sent.bytes)],[2,4,6]);
+  const calls=[],report=scenarioMatrixReport(),w=await workerModule({bindings:{default:async()=>{},
+    WebBody:class{constructor(bytes){calls.push(['body',[...bytes]]);}free(){calls.push(['free']);}},
+    material_scenario_study:(_body,...args)=>{calls.push(['scenario',...args]);return JSON.stringify(report);}}});
+  const response=await w.send(sent);assert.equal(response.type,'result',response.message);
+  assert.deepEqual(calls,[['body',[2,4,6]],['scenario',sent.pattern,sent.studyRequest,sent.scenarioRequest,sent.measurements],['free']]);
+  q.current().emit(response);const result=section(q,'Fresh drape and heat alternatives');assert.equal(result.hidden,false);
+  const downloads=descendants(result).filter(n=>n.href).map(n=>n.href);
+  q.e.body.handlers.change();assert.equal(result.hidden,true);assert.ok(downloads.every(url=>!q.live.has(url)));
+});
+
+test('invalid saved files preserve the working pattern and prior frozen study atomically',async()=>{
+  const p=await pageModule(),raw=workbenchSavedFile();await reopenSavedStudy(p,raw);
+  assert.equal(p.e.runSavedStudy.disabled,false,p.e.error.textContent);
+  const name=p.e.patternName.textContent,summary=p.e.savedStudySummary.textContent,urls=new Set(p.live),bundle=JSON.parse(raw);
+  const oversizedOutfit={request_json:'{"schema":"ftx-outfit-drape/1"}',composition_json:JSON.stringify({schema:'ftx-outfit-composition/1',
+    garments:Array.from({length:17},(_,i)=>({id:'garment-'+i,pieces:{front:'front'}}))})};
+  const invalid=['{','\ufeff'+raw,JSON.stringify({...bundle,schema:'ftx-workbench-study/2'}),
+    JSON.stringify({...bundle,request:{...bundle.request,pattern:'{"schema":"fabric-pattern/1","pieces":[null]}'}}),
+    JSON.stringify({...bundle,request:{...bundle.request,outfit:oversizedOutfit}})];
+  for(const input of invalid) {
+    await reopenSavedStudy(p,input);
+    assert.equal(p.e.patternName.textContent,name);assert.equal(p.e.savedStudySummary.textContent,summary);
+    assert.equal(p.e.runSavedStudy.disabled,false);assert.deepEqual(p.live,urls);assert.equal(p.e.error.hidden,false);
+  }
+  let reads=0;p.e.savedStudyFile.files=[{size:128*1024*1024+1,arrayBuffer:async()=>{reads++;return utf8Buffer(raw);}}];
+  await p.e.savedStudyFile.onchange();assert.equal(reads,0);assert.equal(p.e.runSavedStudy.disabled,false);
+  p.e.savedStudyFile.files=[new Blob([new Uint8Array([0xff])])];await p.e.savedStudyFile.onchange();
+  assert.equal(p.e.patternName.textContent,name);assert.equal(p.e.savedStudySummary.textContent,summary);assert.deepEqual(p.live,urls);
+  await p.e.runSavedStudy.onclick();assert.deepEqual(savedMessageInputs(p.current().messages.at(-1)),bundle.request);
+});
+
+test('cancelled and superseded saved-file reads cannot replace later work',async()=>{
+  const laterPattern='{"schema":"fabric-pattern/1","pieces":[{"id":"later"}]}',raw=workbenchSavedFile();
+  for(const edit of ['cancel','pattern','replacement','control','clear']) {
+    const p=await pageModule();await p.load();if(edit==='control')guidedControls(p);const delay=deferred(),reading=deferred();
+    p.e.savedStudyFile.files=[{size:raw.length,arrayBuffer:()=>{reading.resolve();return delay.promise;}}];
+    const importing=p.e.savedStudyFile.onchange();await reading.promise;
+    if(edit==='cancel')p.e.cancel.onclick();
+    else if(edit==='pattern'){p.select('patternFile',laterPattern);await p.e.patternFile.onchange();}
+    else if(edit==='replacement')await reopenSavedStudy(p,workbenchSavedFile(laterPattern));
+    else if(edit==='control')p.e.guidedGap.handlers.input();
+    else p.e.clearSavedStudy.onclick();
+    const urls=new Set(p.live);delay.resolve(utf8Buffer(raw));await importing;p.ready();assert.deepEqual(p.live,urls,edit);
+    assert.deepEqual(p.e.studyPieces.children.map(n=>n.value),edit==='pattern'||edit==='replacement'?['later']:['front','lining'],edit);
+    assert.equal(p.e.runSavedStudy.disabled,edit!=='replacement',edit);
+    if(edit==='replacement'){await p.e.runSavedStudy.onclick();assert.equal(p.current().messages.at(-1).pattern,laterPattern);}
+    else assert.equal(p.e.savedStudyFiles.children.length,0,edit);
+  }
+});
+
+test('pre-run saving cancels obsolete reads and pattern replacement clears saved replay',async()=>{
+  for(const edit of ['cancel','source']) {
+    const p=await pageModule();p.select('patternFile',workbenchSavedPattern);await p.e.patternFile.onchange();
+    p.select('studyRequest',workbenchSavedRequest);p.e.studyRequest.handlers.change();
+    const delay=deferred(),reading=deferred();p.e.studyRequest.files[0].arrayBuffer=()=>{reading.resolve();return delay.promise;};
+    const before=p.current().messages.length,saving=p.e.saveStudy.onclick();await reading.promise;
+    if(edit==='cancel')p.e.cancel.onclick();
+    else {p.select('studyRequest',workbenchSavedRequest);p.e.studyRequest.handlers.change();}
+    delay.resolve(utf8Buffer(workbenchSavedRequest));await saving;
+    assert.equal(p.e.studySaveFiles.children.length,0,edit);assert.equal(p.live.size,0,edit);
+    assert.equal(p.workers.reduce((count,w)=>count+w.messages.length,0),before,edit);
+  }
+  const p=await pageModule();await reopenSavedStudy(p,workbenchSavedFile());const urls=[...p.live];
+  p.e.savedStudyFile.value='C:\\fakepath\\workbench-study.json';
+  p.select('patternFile','{"schema":"fabric-pattern/1","pieces":[{"id":"replacement"}]}');await p.e.patternFile.onchange();
+  assert.equal(p.e.runSavedStudy.disabled,true);assert.equal(p.e.savedStudyFiles.children.length,0);assert.equal(p.e.savedStudyFile.value,'');
+  assert.ok(urls.every(url=>!p.live.has(url)));assert.deepEqual(p.e.studyPieces.children.map(n=>n.value),['replacement']);
+  await reopenSavedStudy(p,workbenchSavedFile());assert.ok(p.live.size>0);p.windowEvents.pagehide();assert.equal(p.live.size,0);
 });
