@@ -717,6 +717,7 @@ fn heat_descriptor() -> Value {
     }
     d["scenario"]["motion"]["transient_surface"]["cells_per_layer"] = json!(2);
     d["scenario"]["motion"]["transient_coverage"]["exposed_boundaries"] = json!([null, null]);
+    d["scenario"]["motion"]["transient_coverage"]["settings"] = json!({"cells_per_layer":2});
     d
 }
 
@@ -1530,6 +1531,56 @@ fn synthetic_plastic_heat(p: &Pattern, d: &Value) -> Value {
     synthetic_plastic_heat_for(p, d, "transient_surface")
 }
 
+// Retain the one-band source used by the synthetic dissipation ledgers in both heat domains.
+// The source model uses the requested cells; ordinary drape keeps its independent discretization.
+fn synthetic_dissipation_source(material: &ResolvedMaterial, d: &Value, s: &mut Value) {
+    let positions = s["motion"]["result"]["samples"][0]["positions_m"].clone();
+    let triangles = json!([[0, 1, 2]]);
+    let law = ftx_pattern::material_thermal::ThermalLaw::from_material(
+        material.material(),
+        material.allows_estimates(),
+    )
+    .unwrap();
+    let model = |cells: usize| {
+        let mut model = json!({"schema":"ftx-thermal-surface/1","vertex_count":3,
+            "patches":[{"vertices":[0,1,2],"reference_area_m2":0.5,"column":0}],
+            "columns":[{"schema":"ftx-dry-thermal-model/1","layers":[material],
+                "cells_per_layer":cells,"interface_resistance_m2_k_w":[],
+                "cell_capacity_j_m2_k":vec![law.capacity_at(20.).unwrap()/cells as f64;cells],
+                "cell_resistance_m2_k_w":vec![material.thermal_resistance().unwrap()/cells as f64;cells]}]});
+        model["sha256"] = json!(digest(&model));
+        model
+    };
+    s["positions_m"] = positions.clone();
+    s["positions_sha256"] = json!(digest(&positions));
+    s["triangles"] = triangles.clone();
+    s["drape"]["material"] = json!({"basis":"characterized_record",
+        "record_sha256":material.sha256(),"record":material});
+    let mut frame = json!({"schema":"ftx-drape-thermal-surface/1","available":true,
+        "model":model(4),"positions_m":positions,"instances":["band"],"triangle_instance":[0],
+        "material_report_sha256":digest(&s["drape"]["material"])});
+    frame["sha256"] = json!(digest(&frame));
+    s["drape"]["thermal_surface"] = frame;
+    let motion = &mut s["motion"]["result"];
+    motion["triangles"] = triangles;
+    for name in ["transient_surface", "transient_coverage"] {
+        let request = &d["scenario"]["motion"][name];
+        let cells = if name == "transient_coverage" {
+            &request["settings"]["cells_per_layer"]
+        } else {
+            &request["cells_per_layer"]
+        };
+        let source = model(usize::try_from(cells.as_u64().unwrap()).unwrap());
+        let heat = &mut motion[name]["result"];
+        if name == "transient_coverage" {
+            heat["checkpoint"] = json!({"frame":{"source":source}});
+        } else {
+            heat["model"] = source;
+            heat["initial_temperature_c"] = request["initial_temperature_c"].clone();
+        }
+    }
+}
+
 fn synthetic_plastic_heat_for(p: &Pattern, d: &Value, name: &str) -> Value {
     use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog};
     let selection = serde_json::from_value(p.raw()["fabric"]["material"].clone()).unwrap();
@@ -1546,8 +1597,8 @@ fn synthetic_plastic_heat_for(p: &Pattern, d: &Value, name: &str) -> Value {
         .unwrap()
         .fingerprint();
     let mut s = synthetic_heat(p, -8., 0.);
+    synthetic_dissipation_source(&material, d, &mut s);
     let m = &mut s["motion"]["result"];
-    m["triangles"] = json!([[0, 1, 2]]);
     m["initial_sample"] = json!({"time_s":0.,"membrane_plastic_dissipation_j":[2.]});
     m["initial_membrane_plasticity_history"] = json!({"plastic_dissipation_j":2.,
         "elements":[{"triangle":0,"vertices":[0,1,2],"law_sha256":law,"plastic_dissipation_j":2.}]});

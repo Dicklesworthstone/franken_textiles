@@ -1,7 +1,8 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
   buildGuidedDesignAfterOperations, hasTextileWaterPolicy, buildMaterialSurfaceConditions,
-  buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology } from "./materials-study-builder.js";
+  buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
+  buildMaterialExteriorExchange } from "./materials-study-builder.js";
 import { buildMaterialScreenRequest } from "./materials-screen-builder.js";
 
 const $ = id => document.getElementById(id);
@@ -58,6 +59,9 @@ const guidedCoverageLayers = new Map(), guidedCoverageInterfaces = new Map(), gu
 const guidedCoverageTopologyFields = ["guidedCoverageTriangles", "guidedCoverageDistance", "guidedCoverageCosine", "guidedCoverageSeparation", "guidedCoverageCells"];
 const guidedCoverageBoundaryFields = ["guidedCoverageInside", "guidedCoverageOutside", "guidedCoverageInsideFilm", "guidedCoverageOutsideFilm"];
 const guidedCoverageFields = [...guidedCoverageTopologyFields, ...guidedCoverageBoundaryFields];
+const filmSuffixes = ["Inside", "Outside", "InsideFilm", "OutsideFilm"];
+const exteriorSuffixes = ["Enabled", "Air", "Coefficient", "Min", "Max", "Reference", "Date", "Note", "Conditions",
+  "Evidence", "AllowEstimates", "Radiation", "Radiant", "Property", "Face", "GrayConsent"];
 const guidedCoverageDraftFields = ["guidedCoverageInstance", "guidedCoverageLayer", "guidedCoverageInner", "guidedCoverageOuter",
   "guidedCoverageResistance", "guidedCoverageBasis"];
 let guidedScenarioDraftSource = {};
@@ -436,6 +440,9 @@ function controls() {
     for (const [field] of form.fields) $(field).disabled = !authored;
     $(form.operation).disabled ||= !drape || (!authored && !has(id));
   }
+  exteriorControls("heatExterior", sheetConditionsMode("heatConditions") === "form", "heat");
+  exteriorControls("guidedCoverageExterior", !!source && guidedScenarioMode() && steadyCoverageForm,
+    "guidedCoverage", "guidedCoverageBare");
   $("coverage").disabled ||= !drape || !has("map") || !has("coverageConditions");
   $("clearCoverageBridges").disabled = !has("coverageBridges");
   $("cancel").disabled = !pending;
@@ -4085,12 +4092,61 @@ function sheetConditionsSource(id) {
   const mode = sheetConditionsMode(id);
   if (mode === "file") return roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
   if (mode !== "form") throw Error("Choose authored uniform conditions or an original conditions file.");
+  if (id === "heatConditions") {
+    const exterior = exteriorInput("heatExterior", finiteField);
+    return buildMaterialSurfaceConditions(filmInput("heat", finiteField, exterior), exterior);
+  }
   const form = sheetConditionForms[id];
   return form.build(Object.fromEntries(form.fields.map(([field, key, label]) => {
     const raw = $(field).value.trim();
     if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
     return [key, Number(raw)];
   })));
+}
+function finiteField(id, label) {
+  const raw = $(id).value.trim();
+  if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
+  return Number(raw);
+}
+function exteriorControls(prefix, active, filmPrefix, barePrefix = null) {
+  const enabled = $(prefix + "Enabled").checked, radiation = $(prefix + "Radiation").value;
+  $(prefix + "Controls").hidden = !enabled;
+  $(prefix + "RadiationFields").hidden = radiation === "none";
+  $(prefix + "ExplicitFields").hidden = radiation !== "explicit";
+  for (const suffix of exteriorSuffixes) {
+    $(prefix + suffix).disabled = !active || (suffix !== "Enabled" && !enabled) ||
+      (["Radiant", "GrayConsent"].includes(suffix) && radiation === "none") ||
+      (["Property", "Face"].includes(suffix) && radiation !== "explicit");
+  }
+  for (const suffix of ["Outside", "OutsideFilm"]) $(filmPrefix + suffix).disabled = !active || enabled;
+  if (barePrefix) {
+    $(barePrefix + "Controls").hidden = !enabled;
+    for (const suffix of filmSuffixes) $(barePrefix + suffix).disabled = !active || !enabled;
+  }
+}
+function exteriorInput(prefix, number) {
+  if (!$(prefix + "Enabled").checked) return null;
+  const mode = $(prefix + "Radiation").value;
+  if (!["none", "explicit", "automatic"].includes(mode)) throw Error("Choose convection alone, an exact optical face, or a qualified material face mapping.");
+  const exterior = { air_c: number(prefix + "Air", "exterior air temperature"),
+    convection_w_m2_k: number(prefix + "Coefficient", "prescribed convection coefficient"),
+    surface_temperature_range_c: [number(prefix + "Min", "minimum qualified surface temperature"),
+      number(prefix + "Max", "maximum qualified surface temperature")],
+    convection_source: { reference: $(prefix + "Reference").value, accessed_on: $(prefix + "Date").value,
+      note: $(prefix + "Note").value },
+    convection_evidence: $(prefix + "Evidence").value, convection_conditions: $(prefix + "Conditions").value,
+    allow_estimates: $(prefix + "AllowEstimates").checked };
+  if (mode !== "none") exterior.radiation = { ambient_c: number(prefix + "Radiant", "radiant enclosure temperature"),
+    ...(mode === "automatic" ? { automatic_material_face: true } : {
+      emissivity_property: $(prefix + "Property").value, exposed_face: $(prefix + "Face").value }),
+    allow_opaque_gray_approximation: $(prefix + "GrayConsent").checked };
+  return buildMaterialExteriorExchange(exterior);
+}
+function filmInput(prefix, number, exterior = null) {
+  return { inside_c: number(prefix + "Inside", "inside reservoir temperature"),
+    outside_c: exterior ? exterior.air_c : number(prefix + "Outside", "outside reservoir temperature"),
+    inside_resistance_m2_k_w: number(prefix + "InsideFilm", "inside film resistance"),
+    outside_resistance_m2_k_w: exterior ? 0 : number(prefix + "OutsideFilm", "outside film resistance") };
 }
 function drapeArmAngle() {
   const angle = $("bodyArmDeg").value.trim();
@@ -4577,11 +4633,10 @@ function guidedCoverageTopologyInput(number) {
       interfaces: [...guidedCoverageInterfaces.values()].map(entry => ({ ...entry })) } };
 }
 function guidedCoverageInput(number) {
+  const exterior = exteriorInput("guidedCoverageExterior", number);
   return buildMaterialCoverageRequest({ ...guidedCoverageTopologyInput(number),
-    boundary: { inside_c: number("guidedCoverageInside", "coverage inside reservoir temperature"),
-      outside_c: number("guidedCoverageOutside", "coverage outside reservoir temperature"),
-      inside_resistance_m2_k_w: number("guidedCoverageInsideFilm", "coverage inside film resistance"),
-      outside_resistance_m2_k_w: number("guidedCoverageOutsideFilm", "coverage outside film resistance") },
+    boundary: filmInput("guidedCoverage", number, exterior),
+    ...(exterior ? { exterior, bareBoundary: filmInput("guidedCoverageBare", number) } : {}),
   });
 }
 function guidedMatrixAllowance() {
@@ -5223,6 +5278,7 @@ $("guidedCoverageSource").addEventListener("change", () => {
 });
 for (const id of guidedCoverageFields) {
   const changed = () => {
+    if ($(id).disabled) { controls(); return; }
     const used = guidedCoverageTopologyFields.includes(id) ? guidedCoverageTopologyActive() :
       $("guidedCoverage").checked && guidedCoverageMode() === "form";
     if (used) changedGuidedScenarioDraft(); else controls();
@@ -5242,11 +5298,34 @@ for (const [id, form] of Object.entries(sheetConditionForms)) {
   $(id + "Source").addEventListener("change", () => invalidate([form.operation, ...guidedSourceStudies(id)], true));
   for (const [field] of form.fields) {
     const changed = () => {
+      if ($(field).disabled) { controls(); return; }
       if (sheetConditionsMode(id) === "form") invalidate([form.operation, ...guidedSourceStudies(id)], true);
       else controls();
     };
     $(field).addEventListener("change", changed); $(field).addEventListener("input", changed);
   }
+}
+for (const prefix of ["heatExterior", "guidedCoverageExterior"]) {
+  for (const suffix of exteriorSuffixes) {
+    const changed = () => {
+      if ($(prefix + suffix).disabled) { controls(); return; }
+      if (prefix === "heatExterior" && sheetConditionsMode("heatConditions") === "form") {
+        invalidate(["heat", ...guidedSourceStudies("heatConditions")], true);
+      } else if (prefix === "guidedCoverageExterior" && guidedScenarioMode() && $("guidedCoverage").checked && guidedCoverageMode() === "form") {
+        changedGuidedScenarioDraft();
+      } else controls();
+    };
+    $(prefix + suffix).addEventListener("change", changed);
+    $(prefix + suffix).addEventListener("input", changed);
+  }
+}
+for (const suffix of filmSuffixes) {
+  const changed = () => {
+    if ($("guidedCoverageBare" + suffix).disabled) { controls(); return; }
+    changedGuidedScenarioDraft();
+  };
+  $("guidedCoverageBare" + suffix).addEventListener("change", changed);
+  $("guidedCoverageBare" + suffix).addEventListener("input", changed);
 }
 $("guidedMotionSource").addEventListener("change", () => {
   if ($("guidedScenarioMotion").checked) changedGuidedScenarioDraft(); else controls();
@@ -5653,6 +5732,12 @@ function resetGuidedScenarios() {
   $("guidedContactLoadsInstances").value = "";
   guidedCoverageLayers.clear(); guidedCoverageInterfaces.clear(); showGuidedCoverageTopology();
   for (const id of [...guidedCoverageFields, ...guidedCoverageDraftFields]) $(id).value = "";
+  for (const prefix of ["heatExterior", "guidedCoverageExterior"]) for (const suffix of exteriorSuffixes) {
+    const field = $(prefix + suffix);
+    if (["Enabled", "AllowEstimates", "GrayConsent"].includes(suffix)) field.checked = false;
+    else field.value = suffix === "Radiation" ? "none" : "";
+  }
+  for (const suffix of filmSuffixes) $("guidedCoverageBare" + suffix).value = "";
   $("guidedCoverageCells").value = "1"; $("guidedCoverageSource").value = "file";
   for (const [, id] of guidedTransportSources) $(id).checked = false;
 }

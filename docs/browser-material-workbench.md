@@ -8,6 +8,33 @@ has no Python or native-library runtime dependency. It does not install or opera
 
 ## Select once, reuse the existing consumers
 
+### Author convection and ambient radiation
+
+For steady independent-sheet heat, choose **Author uniform conditions** in section 3 and enable
+**Replace the outside film with qualified convection and optional radiation**. For body/layer
+comparisons, enable the corresponding exterior choice in the authored coverage conditions. Supply
+the prescribed coefficient, air temperature, qualified surface-temperature range, source reference,
+date, note, applicability conditions and evidence class. Estimated coefficients require explicit
+consent. The outside reservoir becomes the declared air temperature and its film resistance becomes
+zero; the old film fields remain saved and return when exterior mode is disabled. Wind speed does
+not supply a coefficient automatically.
+
+Radiation is an explicit choice. Name the exact emissivity property and physical face in each
+selected material, or select its qualified optical face mapping. Declare the enclosure temperature
+and consent to opaque, diffuse, gray full-enclosure exchange. The native material resolver obtains
+emissivity and checks its source, conditioning, face and temperature domain. A missing observation
+refuses that consumer; the browser supplies no optical defaults. For covered body regions, declare
+separate bare-body reservoir films even when full coverage is expected.
+
+The same controls feed standalone sheet evaluation, single material/design scenarios and saved named
+cases. Saved cases keep their original declarations; draft edits change them only after replacement.
+Edits cancel dependent work and withdraw stale downloads. Original JSON modes preserve complete
+advanced policies and source numbers. Supported positive-convection steady comparisons retain
+conditional source-reported heat bounds; radiation retains nominal output without implying a
+bounded ranking, empirical garment validation or wearer comfort.
+
+### Retain source identity across consumers
+
 After drafting or checking a round in Pattern Workbench, **Choose materials** opens this
 workbench with the round's exact pattern, measurements and fit-specification files. Inspect
 material sources, **Freeze selections and bind**, then explicitly validate/regenerate exports

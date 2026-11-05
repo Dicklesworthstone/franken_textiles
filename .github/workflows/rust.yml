@@ -9,6 +9,22 @@ permissions:
   contents: read
 
 jobs:
+  material_heat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Check coupled motion and material heating
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p ftx-export --lib --locked material_study::comparison::surface_water::tests
+          cargo test -p ftx-export --lib --locked material_study::comparison::heating_tests
+          cargo test -p ftx-export --test scenario_comparison --locked
+          cargo test -p ftx-wasm --test material_scenario --locked relaxation_heating::distinct_material_heat_fractions_share_one_maxwell_law_in_comparison -- --exact
+          cargo test -p ftx-wasm --test material_scenario --locked surface_water::distinct_initial_temperatures_reach_heated_sheet_and_coverage_decisions -- --exact
+          cargo test -p ftx-drape --test thermal_coverage_exterior --locked
   native:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -56,8 +72,6 @@ jobs:
           cargo test -p ftx-pattern --test material_catalog --locked
           cargo test -p ftx-export --test cutting_program --test finite_cutting_program --test sewing --test sewing_assembly --test sewing_pressure --locked
           cargo test -p ftx-export --lib --locked material_study::cutting_effort::tests
-          cargo test -p ftx-export --lib --locked material_study::comparison::surface_water::tests
-          cargo test -p ftx-drape --test thermal_coverage_exterior --locked
           FTX_FINITE_KNIFE_REPLAY="$RUNNER_TEMP/ftx-finite-knife-replay" cargo test -p ftx-cli --test finite_stock_workflow --locked qualified_finite_and_mixed_knife_programs_replay_through_both_binaries
       - name: Test
         if: ${{ !cancelled() }}

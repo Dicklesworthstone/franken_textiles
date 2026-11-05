@@ -406,9 +406,38 @@ The same section-3 conditions can also be used in material comparisons below. No
 <label>Inside film resistance (m² K/W) <input id="heatInsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
 <label>Outside film resistance (m² K/W) <input id="heatOutsideFilm" type="number" min="0" step="any" placeholder="Explicit resistance"></label>
 </div>
-<p class="note">All four values are required. Zero film resistance prescribes the corresponding face temperature.
+<p class="note">Film mode requires all four values. Zero film resistance prescribes the corresponding face temperature.
 Reservoirs may be equal or reversed; heat power keeps its sign. One boundary applies uniformly to every retained sheet.
-Original JSON supports nonuniform model-bound conditions and qualified exterior exchange.</p>
+Original JSON also supports nonuniform model-bound conditions.</p>
+<label><input id="heatExteriorEnabled" type="checkbox"> Replace the outside film with qualified convection and optional radiation</label>
+<fieldset id="heatExteriorControls" hidden><legend>Independent-sheet exterior exchange</legend>
+<p class="note">The air temperature below replaces the outside reservoir and the outside film becomes zero. Film-mode entries stay saved for return.
+The coefficient is prescribed from its source; wind speed is not converted into a coefficient.</p>
+<div class="study-fields">
+<label>Air temperature (°C) <input id="heatExteriorAir" type="number" min="-273.15" step="any"></label>
+<label>Convection coefficient (W/m² K) <input id="heatExteriorCoefficient" type="number" min="0" step="any"></label>
+<label>Lowest qualified surface temperature (°C) <input id="heatExteriorMin" type="number" min="-273.15" step="any"></label>
+<label>Highest qualified surface temperature (°C) <input id="heatExteriorMax" type="number" min="-273.15" step="any"></label>
+<label>Coefficient evidence <select id="heatExteriorEvidence"><option value="">Choose evidence</option><option value="measured">Measured</option><option value="published">Published</option><option value="estimate">Estimate</option></select></label>
+<label>Source reference <input id="heatExteriorReference" type="text" maxlength="4096"></label>
+<label>Source access or measurement date <input id="heatExteriorDate" type="date"></label>
+</div>
+<label>Source note <textarea id="heatExteriorNote" rows="2" maxlength="4096"></textarea></label>
+<label>Applicable air, geometry, orientation and movement conditions <textarea id="heatExteriorConditions" rows="2" maxlength="4096"></textarea></label>
+<label><input id="heatExteriorAllowEstimates" type="checkbox"> I explicitly allow this estimated convection coefficient</label>
+<label>Ambient radiation <select id="heatExteriorRadiation"><option value="none">Omit radiation</option><option value="explicit">Use an exact material face and property</option><option value="automatic">Use each material's qualified optical face mapping</option></select></label>
+<div id="heatExteriorRadiationFields" hidden>
+<label>Radiant enclosure temperature (°C) <input id="heatExteriorRadiant" type="number" min="-273.15" step="any"></label>
+<div id="heatExteriorExplicitFields" class="study-fields" hidden>
+<label>Exact emissivity property key <input id="heatExteriorProperty" type="text" maxlength="4096"></label>
+<label>Exact exposed material face <input id="heatExteriorFace" type="text" maxlength="4096"></label>
+</div>
+<label><input id="heatExteriorGrayConsent" type="checkbox"> I accept opaque, diffuse, gray exchange with one full enclosure and unit view factor</label>
+<p class="note">The selected material supplies its qualified emissivity. Missing optical evidence refuses; no emissivity value is inferred.</p>
+</div>
+<p class="note">Source-reported steady heat bounds support positive convection without radiation. Radiation retains a nominal result;
+it does not acquire a source-bounded comparison or a whole-wearer comfort claim.</p>
+</fieldset>
 </fieldset>
 <button id="heat" data-command="heat" disabled>Evaluate independent sheet heat</button>
 <label>Sheet vapor conditions <select id="vaporSurfaceConditionsSource"><option value="file">Retain original JSON</option><option value="form">Author uniform conditions</option></select></label>
@@ -1048,9 +1077,46 @@ The fields above are drafts until saved; each name or basis is limited to 4,096 
 <label>Inside film resistance (m² K/W) <input id="guidedCoverageInsideFilm" type="number" min="0" step="any"></label>
 <label>Outside film resistance (m² K/W) <input id="guidedCoverageOutsideFilm" type="number" min="0" step="any"></label>
 </div>
-<p class="note">These uniform reservoir and film conditions apply over the declared body domain, including bare paths.
-Use the original-policy option for nonuniform boundaries, qualified convection/radiation, stagnant-gas interfaces or seam/closure heat paths.
+<p class="note">In film mode these uniform conditions apply over the declared body domain, including bare paths.
+Use the original-policy option for nonuniform boundaries, stagnant-gas interfaces or seam/closure heat paths.
 Saving a named case retains its complete current topology and conditions; later draft edits do not change it.</p>
+<label><input id="guidedCoverageExteriorEnabled" type="checkbox"> Use qualified convection and optional radiation on the outer covered cloth</label>
+<fieldset id="guidedCoverageExteriorControls" hidden><legend>Covered-cloth exterior exchange</legend>
+<p class="note">Air temperature replaces the covered outside reservoir and its outside film becomes zero. The saved film-mode entries remain available.
+The coefficient applies per current outer cloth area, using the actual layered geometry.</p>
+<div class="study-fields">
+<label>Air temperature (°C) <input id="guidedCoverageExteriorAir" type="number" min="-273.15" step="any"></label>
+<label>Convection coefficient (W/m² K) <input id="guidedCoverageExteriorCoefficient" type="number" min="0" step="any"></label>
+<label>Lowest qualified surface temperature (°C) <input id="guidedCoverageExteriorMin" type="number" min="-273.15" step="any"></label>
+<label>Highest qualified surface temperature (°C) <input id="guidedCoverageExteriorMax" type="number" min="-273.15" step="any"></label>
+<label>Coefficient evidence <select id="guidedCoverageExteriorEvidence"><option value="">Choose evidence</option><option value="measured">Measured</option><option value="published">Published</option><option value="estimate">Estimate</option></select></label>
+<label>Source reference <input id="guidedCoverageExteriorReference" type="text" maxlength="4096"></label>
+<label>Source access or measurement date <input id="guidedCoverageExteriorDate" type="date"></label>
+</div>
+<label>Source note <textarea id="guidedCoverageExteriorNote" rows="2" maxlength="4096"></textarea></label>
+<label>Applicable air, geometry, orientation and movement conditions <textarea id="guidedCoverageExteriorConditions" rows="2" maxlength="4096"></textarea></label>
+<label><input id="guidedCoverageExteriorAllowEstimates" type="checkbox"> I explicitly allow this estimated convection coefficient</label>
+<label>Ambient radiation <select id="guidedCoverageExteriorRadiation"><option value="none">Omit radiation</option><option value="explicit">Use an exact material face and property</option><option value="automatic">Use each material's qualified optical face mapping</option></select></label>
+<div id="guidedCoverageExteriorRadiationFields" hidden>
+<label>Radiant enclosure temperature (°C) <input id="guidedCoverageExteriorRadiant" type="number" min="-273.15" step="any"></label>
+<div id="guidedCoverageExteriorExplicitFields" class="study-fields" hidden>
+<label>Exact emissivity property key <input id="guidedCoverageExteriorProperty" type="text" maxlength="4096"></label>
+<label>Exact exposed material face <input id="guidedCoverageExteriorFace" type="text" maxlength="4096"></label>
+</div>
+<label><input id="guidedCoverageExteriorGrayConsent" type="checkbox"> I accept opaque, diffuse, gray exchange with one full enclosure and unit view factor</label>
+<p class="note">The current outer material and its qualified face provide emissivity; missing source evidence refuses.</p>
+</div>
+<p class="note">Positive convection without radiation can retain supported source-reported heat bounds. The coefficient is prescribed, never inferred from wind.</p>
+</fieldset>
+<fieldset id="guidedCoverageBareControls" hidden><legend>Separate films on bare body paths</legend>
+<p class="note">Declare these independently even when full coverage is expected. Cloth optical properties do not describe bare skin.</p>
+<div class="study-fields">
+<label>Bare inside reservoir (°C) <input id="guidedCoverageBareInside" type="number" min="-273.15" step="any"></label>
+<label>Bare outside reservoir (°C) <input id="guidedCoverageBareOutside" type="number" min="-273.15" step="any"></label>
+<label>Bare inside film resistance (m² K/W) <input id="guidedCoverageBareInsideFilm" type="number" min="0" step="any"></label>
+<label>Bare outside film resistance (m² K/W) <input id="guidedCoverageBareOutsideFilm" type="number" min="0" step="any"></label>
+</div>
+</fieldset>
 </fieldset>
 </div>
 <label><input id="guidedVaporSurface" type="checkbox"> Evaluate independent-sheet vapor potential</label>

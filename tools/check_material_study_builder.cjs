@@ -500,6 +500,86 @@ const motionState = () => ({keyframes:[{time_s:0.25,arm_abduction_deg:30}],max_s
 const dryMotionHeat = () => ({schema:'ftx-motion-surface-heat/1',initial_temperature_c:18,cells_per_layer:4,
   boundaries:[{inside_c:35,outside_c:-5,inside_resistance_m2_k_w:0.1,outside_resistance_m2_k_w:0}],
   max_step_s:0.01,max_cell_steps:100000});
+const exteriorPolicy = (changes={}) => ({air_c:-5,convection_w_m2_k:8,surface_temperature_range_c:[-40,80],
+  convection_source:{reference:'test:guided-exterior',accessed_on:'2026-11-05',note:'Synthetic prescribed boundary; no measured garment claim.'},
+  convection_evidence:'estimate',convection_conditions:'Declared test geometry, air state and coefficient; no wind correlation.',
+  allow_estimates:true,...changes});
+
+test('qualified exterior authoring copies source evidence and optical choices without inventing defaults', async () => {
+  const {buildMaterialExteriorExchange:build}=await modulePromise;
+  for(const radiation of [undefined,null,{ambient_c:-15,emissivity_property:'infrared_emissivity',exposed_face:'public',allow_opaque_gray_approximation:true},
+    {ambient_c:25,automatic_material_face:true,allow_opaque_gray_approximation:true},
+    {ambient_c:25,automatic_material_face:true,emissivity_property:'',exposed_face:'',allow_opaque_gray_approximation:true}]) {
+    const input=exteriorPolicy();if(radiation!==undefined)input.radiation=radiation;
+    const before=JSON.stringify(input),result=build(input);
+    assert.deepEqual(result,input);assert.equal(JSON.stringify(input),before);
+    assert.notEqual(result,input);assert.notEqual(result.convection_source,input.convection_source);
+    assert.notEqual(result.surface_temperature_range_c,input.surface_temperature_range_c);
+    if(radiation)assert.notEqual(result.radiation,radiation);
+    result.convection_source.note='Changed draft';result.surface_temperature_range_c[0]=-25;
+    if(radiation)result.radiation.ambient_c=30;
+    assert.equal(JSON.stringify(input),before,'Saved source, domain and radiation choices must not share mutable draft objects');
+  }
+  for(const convection_evidence of ['measured','published']) {
+    const input=exteriorPolicy({convection_evidence});delete input.allow_estimates;
+    assert.deepEqual(build(input),input);assert.equal(Object.hasOwn(build(input),'allow_estimates'),false);
+  }
+  for(const accessed_on of ['0001-01-01','2024-02-29','2000-02-29','9999-12-31']) {
+    const input=exteriorPolicy();input.convection_source.accessed_on=accessed_on;
+    assert.equal(build(input).convection_source.accessed_on,accessed_on);
+  }
+  const narrow=exteriorPolicy({air_c:100,convection_w_m2_k:0,surface_temperature_range_c:[12,12]});
+  assert.deepEqual(build(narrow),narrow,'Zero convection is a nominal input; actual surface-domain and source-bound admission remain native');
+  assert.equal(build(exteriorPolicy({air_c:-273.15,surface_temperature_range_c:[-273.15,0]})).air_c,-273.15);
+});
+
+test('qualified convection refuses incomplete sources, estimates without consent and invalid physical or calendar values', async () => {
+  const {buildMaterialExteriorExchange:build}=await modulePromise,valid=exteriorPolicy();
+  for(const value of [null,undefined,[],{},'{}'])assert.throws(()=>build(value));
+  for(const key of Object.keys(valid).filter(key=>key!=='allow_estimates')) {
+    const missing={...valid};delete missing[key];assert.throws(()=>build(missing),key);
+  }
+  for(const key of ['air_c','convection_w_m2_k'])for(const value of [null,undefined,'1',NaN,Infinity,-Infinity]) {
+    assert.throws(()=>build({...valid,[key]:value}),key);
+  }
+  for(const extra of [{air_c:-273.151},{convection_w_m2_k:-0.1},{convection_evidence:'inferred'},
+    {allow_estimates:false},{allow_estimates:'true'},{allow_estimates:null},{allow_estimates:undefined},
+    {schema:'ftx-exterior/1'},{emissivity:0.9},{convection_conditions:' '},{convection_conditions:'é'.repeat(2049)}]) {
+    assert.throws(()=>build({...valid,...extra}));
+  }
+  const missingConsent={...valid};delete missingConsent.allow_estimates;
+  assert.throws(()=>build(missingConsent),/estimate consent/);
+  assert.throws(()=>build(Object.assign(Object.create({allow_estimates:true}),missingConsent)),/estimate consent/);
+  for(const range of [null,[],[0],[0,1,2],[20,10],[-274,20],['0',20],[0,NaN],[0,Infinity]]) {
+    assert.throws(()=>build({...valid,surface_temperature_range_c:range}));
+  }
+  for(const key of ['reference','accessed_on','note']) {
+    const source={...valid.convection_source};delete source[key];assert.throws(()=>build({...valid,convection_source:source}));
+    for(const value of ['',null,1,'é'.repeat(2049)])assert.throws(()=>build({...valid,convection_source:{...valid.convection_source,[key]:value}}));
+  }
+  for(const accessed_on of ['2026-2-03','2026-02-30','2026-02-29','1900-02-29','0000-01-01','2026-13-01','2026-01-00','2026-04-31','abcdefghij']) {
+    assert.throws(()=>build({...valid,convection_source:{...valid.convection_source,accessed_on}}),/calendar date/);
+  }
+  assert.throws(()=>build({...valid,convection_source:{...valid.convection_source,doi:'extra'}}),/unsupported/);
+});
+
+test('radiation requires qualified optical names or automatic material faces and explicit enclosure consent', async () => {
+  const {buildMaterialExteriorExchange:build}=await modulePromise;
+  const radiation={ambient_c:10,emissivity_property:'emissivity',exposed_face:'public',allow_opaque_gray_approximation:true};
+  for(const value of [undefined,[],{},'{}'])assert.throws(()=>build(exteriorPolicy({radiation:value})));
+  for(const key of Object.keys(radiation)) {
+    const missing={...radiation};delete missing[key];assert.throws(()=>build(exteriorPolicy({radiation:missing})),key);
+  }
+  for(const extra of [{ambient_c:-274},{ambient_c:NaN},{ambient_c:'10'},{emissivity_property:''},{exposed_face:' '},
+    {emissivity_property:0.9},{exposed_face:'é'.repeat(2049)},{allow_opaque_gray_approximation:false},
+    {allow_opaque_gray_approximation:'true'},{automatic_material_face:true},{automatic_material_face:'false'},
+    {emissivity:0.9},{view_factor:1}])assert.throws(()=>build(exteriorPolicy({radiation:{...radiation,...extra}})));
+  const explicit=exteriorPolicy({radiation:{...radiation,automatic_material_face:false}});
+  assert.deepEqual(build(explicit),explicit);
+  for(const key of ['emissivity_property','exposed_face'])for(const value of [null,' ',1]) {
+    assert.throws(()=>build(exteriorPolicy({radiation:{ambient_c:10,automatic_material_face:true,allow_opaque_gray_approximation:true,[key]:value}})));
+  }
+});
 
 test('uniform sheet heat and vapor builders author independent explicit boundaries without material or model defaults', async () => {
   const {buildMaterialSurfaceConditions:heat,buildMaterialVaporSurfaceConditions:vapor,buildMaterialScenarioRequest:scenario}=await modulePromise;
@@ -543,6 +623,22 @@ test('uniform sheet boundary builders refuse missing values, coercion and unsupp
   for(const key of ['inside_film_resistance_m2_pa_w','outside_film_resistance_m2_pa_w','latent_heat_j_kg']) {
     for(const value of [0,-1])assert.throws(()=>vapor({...vaporInput,[key]:value}),/positive/);
   }
+});
+
+test('guided sheet exteriors replace only the declared outside film and preserve source-qualified scenario inputs', async () => {
+  const {buildMaterialSurfaceConditions:build,buildMaterialScenarioRequest:scenario}=await modulePromise;
+  const boundary=dryMotionHeat().boundaries[0],exterior=exteriorPolicy(),before=JSON.stringify({boundary,exterior});
+  const raw=build(boundary,exterior),result=JSON.parse(raw);
+  assert.deepEqual(result,{schema:'ftx-steady-surface-conditions/1',boundaries:[boundary],exterior_exchange:[exterior]});
+  assert.equal(JSON.stringify({boundary,exterior}),before);assert.ok(scenario({...scenarioState(),surface:raw}).includes(raw));
+  assert.equal(build(boundary),JSON.stringify({schema:'ftx-steady-surface-conditions/1',boundaries:[boundary]}));
+  assert.equal(build(boundary,null),build(boundary));
+  for(const changes of [{outside_c:exterior.air_c+1},{outside_resistance_m2_k_w:0.2}]) {
+    assert.throws(()=>build({...boundary,...changes},exterior),/zero outside film resistance and outside_c equal to air_c/);
+  }
+  for(const convection_w_m2_k of [0,8])assert.equal(JSON.parse(build(boundary,{...exterior,convection_w_m2_k})).exterior_exchange[0].convection_w_m2_k,convection_w_m2_k);
+  const radiation={ambient_c:-10,automatic_material_face:true,allow_opaque_gray_approximation:true};
+  assert.deepEqual(JSON.parse(build(boundary,{...exterior,radiation})).exterior_exchange[0].radiation,radiation);
 });
 
 test('guided scenarios preserve exact fit and heat sources and only author declared numerical controls', async () => {
@@ -647,6 +743,35 @@ test('guided dry heat rejects missing conditions and invalid physical or work li
   for(const max_step_s of [0,5e-10,1.001,NaN,Infinity,'0.01'])assert.throws(()=>run({...dryMotionHeat(),max_step_s}));
   assert.equal(JSON.parse(run({...dryMotionHeat(),initial_temperature_c:-273.15,cells_per_layer:64,max_step_s:1,max_cell_steps:10000000}))
     .transient_surface.initial_temperature_c,-273.15);
+});
+
+test('guided moving sheet exterior schedules retain each qualified interval through single and named cases', async () => {
+  const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const heat=dryMotionHeat(),first=exteriorPolicy(),second=exteriorPolicy({air_c:15,
+    radiation:{ambient_c:10,automatic_material_face:true,allow_opaque_gray_approximation:true}});
+  heat.boundaries.push({...heat.boundaries[0],outside_c:15});heat.exterior_exchange=[first,second];
+  heat.initial_instance_temperatures_c={'front.R':10,'lining.R':30};
+  const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30},{time_s:0.5,arm_abduction_deg:40}],transient_surface:heat};
+  const before=JSON.stringify(input),raw=build(input);
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(JSON.parse(raw).transient_surface,heat);
+  const scenario=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});assert.ok(scenario.includes(raw));
+  const saved=JSON.parse(matrix({maxEvaluations:2,cases:[{key:'changing environment',scenario}]})).cases[0].scenario;
+  assert.deepEqual(saved.motion.transient_surface.exterior_exchange,[first,second]);assert.equal(Object.hasOwn(saved,'surface'),false);
+  const legacy={...motionState(),transient_surface:dryMotionHeat()};
+  assert.equal(build(legacy),JSON.stringify({schema:'ftx-drape-motion/1',...legacy}));
+  legacy.transient_surface.exterior_exchange=null;
+  assert.equal(JSON.parse(build(legacy)).transient_surface.exterior_exchange,null,'Native optional null remains distinct from an authored schedule');
+});
+
+test('moving sheet exterior schedules require every endpoint and refuse null entries or mismatched films', async () => {
+  const {buildMaterialMotionRequest:build}=await modulePromise;
+  const run=changes=>build({...motionState(),transient_surface:{...dryMotionHeat(),...changes}}),exterior=exteriorPolicy();
+  for(const schedule of [undefined,{},[],[null],[undefined],[exterior,exterior]])assert.throws(()=>run({exterior_exchange:schedule}));
+  for(const changes of [{outside_c:0},{outside_resistance_m2_k_w:0.1}]) {
+    assert.throws(()=>run({boundaries:[{...dryMotionHeat().boundaries[0],...changes}],exterior_exchange:[exterior]}),/zero outside film/);
+  }
+  for(const extra of [{bare_boundaries:[null]},{exposed_exterior_exchange:[null]}])assert.throws(()=>run(extra),/unsupported/);
+  assert.throws(()=>run({exterior_exchange:[{...exterior,allow_estimates:false}]}),/estimate consent/);
 });
 
 test('guided dry instance temperatures retain exact physical names, explicit fallback and immutable single and named requests', async () => {
@@ -962,6 +1087,26 @@ test('authored coverage expands bounded body ranges and preserves exact physical
   assert.deepEqual(cases.map(c=>c.scenario.coverage.settings.interfaces[0].resistance_m2_k_w),[0,0.05]);
 });
 
+test('guided steady coverage keeps qualified cloth exchange separate from explicitly authored bare-body films', async () => {
+  const {buildMaterialCoverageRequest:build,buildMaterialScenarioRequest:scenario,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const legacy=authoredCoverage(),input={...legacy,boundary:{...legacy.boundary,outside_resistance_m2_k_w:0},
+    exterior:exteriorPolicy({air_c:5}),bareBoundary:{...legacy.boundary,outside_c:10}};
+  const before=JSON.stringify(input),raw=build(input),conditions=JSON.parse(raw).conditions;
+  assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(conditions,{boundaries:[input.boundary],exterior_exchange:[input.exterior],bare_boundaries:[input.bareBoundary]});
+  const first=scenario({...scenarioState(),coverage:raw,maxVertexFrames:32000000});
+  input.exterior.convection_w_m2_k=12;input.bareBoundary.outside_c=15;
+  const second=scenario({...scenarioState(),coverage:build(input),maxVertexFrames:32000000});
+  const cases=JSON.parse(matrix({maxEvaluations:4,cases:[{key:'first',scenario:first},{key:'second',scenario:second}]})).cases;
+  assert.deepEqual(cases.map(c=>c.scenario.coverage.conditions.exterior_exchange[0].convection_w_m2_k),[8,12]);
+  assert.deepEqual(cases.map(c=>c.scenario.coverage.conditions.bare_boundaries[0].outside_c),[10,15]);
+  assert.equal(build({...legacy,exterior:null,bareBoundary:null}),build(legacy));
+  const missing={...input};delete missing.bareBoundary;assert.throws(()=>build(missing),/explicit bare-body/);
+  for(const bareBoundary of [null,undefined,{},[],{...input.bareBoundary,inside_c:-274}])assert.throws(()=>build({...input,bareBoundary}));
+  for(const exterior of [null,undefined])assert.throws(()=>build({...input,exterior}),/require covered exterior/);
+  for(const boundary of [legacy.boundary,{...input.boundary,outside_c:0}])assert.throws(()=>build({...input,boundary}),/zero outside film/);
+});
+
 test('authored coverage refuses ambiguous or oversized body ranges before expansion', async () => {
   const {buildMaterialCoverageRequest:build}=await modulePromise;
   for(const bodyTriangleIds of ['',null,[],[1],'-1','1.5','1e2','1--2','3-1','1 - 2','1,1','1-3 3-5',
@@ -1045,6 +1190,49 @@ test('guided moving coverage keeps independent temperatures and covered or adiab
   assert.deepEqual(cases.map(c=>c.scenario.motion.transient_surface.initial_instance_temperatures_c['front.R']),[25,25]);
 });
 
+test('guided moving coverage preserves independent covered, bare and exposed exterior interval choices', async () => {
+  const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const coverage=await guidedMovingCoverageHeat(),film=coverage.boundaries[0],covered=exteriorPolicy({air_c:film.outside_c});
+  const exposed=exteriorPolicy({radiation:{ambient_c:-15,automatic_material_face:true,allow_opaque_gray_approximation:true}});
+  coverage.boundaries=[{...film,outside_resistance_m2_k_w:0},film];
+  coverage.exterior_exchange=[covered,null];coverage.bare_boundaries=[{...film,outside_c:12},null];
+  coverage.exposed_boundaries=[null,dryMotionHeat().boundaries[0]];coverage.exposed_exterior_exchange=[null,exposed];
+  const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30},{time_s:0.5,arm_abduction_deg:40}],transient_coverage:coverage};
+  const before=JSON.stringify(input),raw=build(input);assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(JSON.parse(raw).transient_coverage,coverage);
+  const scenario=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});assert.ok(scenario.includes(raw));
+  const saved=JSON.parse(matrix({maxEvaluations:2,cases:[{key:'exposed after movement',scenario}]})).cases[0].scenario;
+  assert.deepEqual(saved.motion.transient_coverage,coverage);assert.equal(Object.hasOwn(saved,'coverage'),false);
+  const onlyExposed={...await guidedMovingCoverageHeat(),exposed_boundaries:[dryMotionHeat().boundaries[0]],exposed_exterior_exchange:[exposed]};
+  assert.deepEqual(JSON.parse(build({...motionState(),transient_coverage:onlyExposed})).transient_coverage,onlyExposed);
+  for(const value of [null,[null]]) {
+    const filmOnly={...await guidedMovingCoverageHeat(),exterior_exchange:value,bare_boundaries:value,exposed_exterior_exchange:value};
+    assert.deepEqual(JSON.parse(build({...motionState(),transient_coverage:filmOnly})).transient_coverage,filmOnly);
+  }
+});
+
+test('moving coverage exterior schedules refuse missing bare films, misplaced exposed heat and mismatched interval counts', async () => {
+  const {buildMaterialMotionRequest:build}=await modulePromise,coverage=await guidedMovingCoverageHeat(),film=coverage.boundaries[0];
+  const exterior=exteriorPolicy({air_c:film.outside_c}),active={...coverage,
+    boundaries:[{...film,outside_resistance_m2_k_w:0}],exterior_exchange:[exterior],bare_boundaries:[film]};
+  const run=changes=>build({...motionState(),transient_coverage:{...coverage,...changes}});
+  for(const field of ['exterior_exchange','bare_boundaries','exposed_exterior_exchange']) {
+    for(const value of [undefined,{},[],[undefined],[null,null]])assert.throws(()=>run({[field]:value}),field);
+  }
+  const missingBare={...active};delete missingBare.bare_boundaries;assert.throws(()=>run(missingBare),/explicit bare-body/);
+  for(const changes of [{bare_boundaries:null},{bare_boundaries:[null]},{exterior_exchange:null},{exterior_exchange:[null]}]) {
+    assert.throws(()=>run({...active,...changes}),/explicit bare-body/);
+  }
+  assert.throws(()=>run({bare_boundaries:[film]}),/explicit bare-body/);
+  assert.throws(()=>run({...active,bare_boundaries:[{...film,inside_c:-274}]}),/finite and at least/);
+  for(const boundaries of [[film],[{...active.boundaries[0],outside_c:0}]])assert.throws(()=>run({...active,boundaries}),/zero outside film/);
+  assert.throws(()=>run({exposed_exterior_exchange:[exterior]}),/explicit exposed film/);
+  for(const exposed_boundaries of [[film],[{...active.boundaries[0],outside_c:0}]]) {
+    assert.throws(()=>run({exposed_boundaries,exposed_exterior_exchange:[exterior]}),/zero outside film/);
+  }
+  assert.throws(()=>run({...active,exterior_exchange:[{...exterior,allow_estimates:false}]}),/estimate consent/);
+});
+
 test('guided moving coverage requires complete saved topology and independent explicit interval choices', async () => {
   const {buildMaterialMotionRequest:build}=await modulePromise,coverage=await guidedMovingCoverageHeat();
   const run=transient_coverage=>build({...motionState(),transient_coverage});
@@ -1084,7 +1272,7 @@ test('guided moving coverage retains its actual consumer capability and leaves a
     assert.throws(()=>study({...state(),objectives},context),/transient/i);
   }
   for(const extra of [{cells_per_layer:2},{conditions:{}},{surface_water:{}},{thermal_bridges:null},
-    {exterior_exchange:[null]},{plastic_dissipation_heat:'uniform_reference_thickness'}]) {
+    {plastic_dissipation_heat:'uniform_reference_thickness'}]) {
     assert.throws(()=>motion({...input,transient_coverage:{...coverage,...extra}}),/unsupported/);
   }
   const advanced={...coverage,exterior_exchange:[null],bare_boundaries:[null],thermal_bridges:null};

@@ -11,6 +11,8 @@ use ftx_pattern::Pattern;
 use ftx_wasm::materials::scenario::on_body;
 use serde_json::{Value, json};
 
+#[path = "material_scenario/relaxation_heating.rs"]
+mod relaxation_heating;
 #[path = "material_scenario/steady_heat_bounds.rs"]
 mod steady_heat_bounds;
 #[path = "material_scenario/surface_water.rs"]

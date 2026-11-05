@@ -6,7 +6,7 @@ fn case() -> (Alternative, Value, Value, Value) {
 }
 
 fn case_with_variable_heat(variable: bool) -> (Alternative, Value, Value, Value) {
-    let (mut alternative, mut descriptor, mut motion) = super::super::heating_tests::case(false);
+    let (mut alternative, mut descriptor, _, mut motion) = super::super::heating_tests::case(false);
     let mut raw = serde_json::to_value(
         alternative
             .frozen_changes
@@ -92,7 +92,8 @@ fn case_with_variable_heat(variable: bool) -> (Alternative, Value, Value, Value)
         "model":model,"instances":["front","back"],"triangle_instance":[0,1],
         "positions_m":positions,"material_report_sha256":hash(&material_report).unwrap()});
     frame["sha256"] = json!(hash(&frame).unwrap());
-    let simulation = json!({"positions_m":positions,"triangles":motion["triangles"],
+    let simulation = json!({"positions_m":positions,"positions_sha256":hash(&positions).unwrap(),
+        "triangles":motion["triangles"],
         "drape":{"material":material_report,"thermal_surface":frame}});
     let policy = json!({"schema":"ftx-textile-surface-water/1",
         "model":"inner_cell_equilibrium_free_film_frozen_properties/1",
