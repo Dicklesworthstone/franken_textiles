@@ -4148,6 +4148,11 @@ function sheetConditionsSource(id) {
     return [key, Number(raw)];
   })));
 }
+function optionalNumberPresent(id, label) {
+  // Number inputs expose incomplete exponents/signs as empty values. They are not omitted policies.
+  if ($(id).validity?.badInput) throw Error(`Correct the incomplete ${label} before continuing.`);
+  return $(id).value.trim() !== "";
+}
 function finiteField(id, label) {
   const raw = $(id).value.trim();
   if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
@@ -4457,6 +4462,11 @@ async function loadGuidedScenarioCases() {
 }
 function guidedComparisonInput(number, stockMode = guidedStockMode()) {
   if (!["roll", "finite", "job"].includes(stockMode)) throw Error("Choose roll, finite stock or a complete cutting job.");
+  const metrics = guidedMetrics.filter(([, , scope]) => guidedStockScope(scope, stockMode));
+  for (const [id, metric] of [...metrics, ...guidedDirectionalMetrics]) {
+    optionalNumberPresent(`${id}Limit`, `limit for ${metric}`);
+  }
+  optionalNumberPresent("guidedHeatMinimumLimit", "minimum signed sheet heat");
   for (const id of ["guidedContactResultant", "guidedContactVertex", "guidedMotionContactResultant", "guidedMotionContactVertex"]) {
     if ($(`${id}Limit`).value.trim() && number(`${id}Limit`, "body contact force limit in newtons") < 0) {
       throw Error("Body contact force limits must be nonnegative newtons.");
@@ -4473,7 +4483,6 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
       }
     }
   }
-  const metrics = guidedMetrics.filter(([, , scope]) => guidedStockScope(scope, stockMode));
   const objectives = metrics.filter(([id]) => $(`${id}Goal`).checked).map(([id, metric]) => ({ metric,
     direction: id === "guidedHeatPower" ? $("guidedHeatDirection").value : "minimize" }));
   objectives.push(...guidedDirectionalMetrics.filter(([id]) => $(`${id}Goal`).checked)
@@ -4514,7 +4523,7 @@ async function guidedStudyInput(scenarioRead) {
     { scope: "pieces", ids: source.pieces.map(p => p.id) } : scope === "pieces" ?
       { scope: "pieces", ids: Array.from($("studyPieces").selectedOptions, option => option.value) } : null;
   if (needsTarget && !target) throw Error("Choose the pattern assignment to compare.");
-  const allowance = $("guidedAllowance").value.trim() ?
+  const allowance = optionalNumberPresent("guidedAllowance", "seam allowance in millimetres") ?
     { seam_allowance_mm: number("guidedAllowance", "seam allowance in millimetres") } : {};
   const stockMode = guidedStockMode();
   if (!["roll", "finite", "job"].includes(stockMode)) throw Error("Choose roll, finite stock or a complete cutting job.");
@@ -5797,7 +5806,7 @@ function guidedDesignInput(number, inScenario) {
     ...(guidedDesignAfter.length ? { after: guidedDesignAfter.map(operation => ({ ...operation,
       ...(operation.seams ? { seams: [...operation.seams] } : {}) })) } : {}) };
   if (mode === "grid") return { ...common,
-    ...($("guidedDesignGridBudget").value.trim() ? { maxCandidates: number("guidedDesignGridBudget", "grid screening allowance") } : {}) };
+    ...(optionalNumberPresent("guidedDesignGridBudget", "grid screening allowance") ? { maxCandidates: number("guidedDesignGridBudget", "grid screening allowance") } : {}) };
   const objective = $("guidedDesignObjective").value;
   const materialKey = $("guidedDesignMaterial").value;
   if (objective !== "fit_band_violation_mm" && (!guidedDesignNomination || guidedDesignNomination.invalidated ||

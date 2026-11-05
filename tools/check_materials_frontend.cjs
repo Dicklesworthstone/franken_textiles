@@ -18505,3 +18505,34 @@ test('compiled WASM guided contact constraints retain nonzero native loads and i
     assert.deepEqual(output.result.comparison.frontier,[]);
     t.diagnostic('All four nonzero load metrics and explicit force guard match native, public WASM and worker; each case independently admits its first40m reservation and refuses the later optional loads while preserving identical motion, strain and signed heat. Synthetic numerical evidence only. Replay: '+work);
   });
+
+test('guided comparisons refuse incomplete browser number fields instead of dropping their limits', async () => {
+  for (const id of ['guidedAreaLimit', 'guidedStockMassLimit', 'guidedCutTimeLimit', 'guidedSewTimeLimit',
+    'guidedContactResultantLimit', 'guidedWarpMinLimit', 'guidedMotionShearMaxLimit',
+    'guidedHeatMinimumLimit', 'guidedHeatPowerLimit', 'guidedAllowance']) {
+    const p = await pageModule(); await p.load(); guidedControls(p); await addGuidedSelection(p);
+    p.e[id].value = ''; p.e[id].validity = {badInput:true};
+    const before = p.current().messages.length;
+    await p.e.study.onclick();
+    assert.equal(p.current().messages.length, before, id);
+    assert.match(p.e.error.textContent, /incomplete/, id);
+    p.e[id].validity.badInput = false;
+    await p.e.study.onclick();
+    assert.equal(p.current().messages.at(-1).type, 'study', p.e.error.textContent);
+  }
+});
+
+test('guided stock limits only inspect the selected route and grid allowances refuse incomplete input', async () => {
+  const p = await pageModule(); await p.load(); guidedControls(p); await addGuidedSelection(p);
+  for (const id of ['guidedFiniteAreaLimit', 'guidedJobCostLimit']) {
+    p.e[id].value = ''; p.e[id].validity = {badInput:true};
+  }
+  await p.e.study.onclick();
+  assert.equal(p.current().messages.at(-1).type, 'study', p.e.error.textContent);
+  const {p:design} = await guidedDesignSetup();
+  design.e.guidedDesignGridBudget.value = ''; design.e.guidedDesignGridBudget.validity = {badInput:true};
+  const before = design.current().messages.length;
+  await design.e.study.onclick();
+  assert.equal(design.current().messages.length, before);
+  assert.match(design.e.error.textContent, /incomplete grid screening/);
+});
