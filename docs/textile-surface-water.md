@@ -397,9 +397,40 @@ authorize the existing mechanical/interface laws over a declared liquid/temperat
 they do not supply missing measurements, infer wet constitutive changes, or establish physical
 garment agreement.
 
+### Different initial temperatures for wet garment pieces
+
+The containing `motion.transient_surface` policy can supply the existing
+`initial_instance_temperatures_c` map together with either `surface_water` or
+`surface_water_alternatives`. This applies to all five uncoupled water versions: initial liquid,
+prescribed supply, qualified condensation, drainage and a finite shared vapor reservoir. The scalar
+`initial_temperature_c` remains the explicit fallback for retained instances missing from the map.
+
+Names identify exact retained physical instances. The thermal initialization receipt binds their
+resolved temperatures to the source model and every retained triangle. Shared material columns do
+not merge different starts. Every applied temperature must lie in its dry thermal law's domain and
+the selected water-pressure table, including initially dry pieces that can later receive liquid.
+A fallback used by no retained instance does not enter these domain checks or reported extrema.
+
+Each instance initially has a uniform through-thickness textile temperature; its liquid shares the
+inner-cell temperature. Initial liquid sensible enthalpy is the sum of each patch's initial mass
+times `liquid_specific_heat_j_kg_k * (initial_patch_temperature - enthalpy_reference_c)`. Final liquid
+storage subtracts this original patch-specific energy. Evaporation, incoming liquid/vapor mixing,
+drainage and reservoir exchange then use the same existing transport and thermal solvers.
+
+Material/scenario comparison independently reconstructs the exact initial ownership and liquid
+enthalpy. Dry storage uses each source material's enthalpy integral from that patch's own starting
+temperature. Sample bounds aggregate initial enthalpy by material column, keeping admission work
+linear in patches plus material columns times retained samples; no per-sample scan of all starting
+patch states is needed. A forged map, owner, domain or initial-energy balance refuses admission.
+
+Direct `mechanical_coupling` and `coupled_water_alternatives` still exclude this initial-temperature
+map. This extension does not supply wet constitutive laws, arbitrary initial depth profiles or
+empirical garment qualification. It composes existing thermal and water contracts without changing
+their schemas, source authority or transactional failure behavior.
+
 ### Temperature-dependent textile storage and transport
 
-All three water versions use the existing nonlinear dry thermal authority when the selected material
+All five water versions use the existing nonlinear dry thermal authority when the selected material
 has a tabulated or polynomial temperature law. No extra conductivity or heat-capacity fit is created.
 The coupling qualification must support retaining those exact profiles over the declared liquid
 loading range; dry characterization alone does not establish wet-property invariance.

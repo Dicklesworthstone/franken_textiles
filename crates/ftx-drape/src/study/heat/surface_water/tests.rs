@@ -50,10 +50,275 @@ fn fixture(loading: f64, step: f64) -> SurfaceHistory {
             "inside_resistance_m2_k_w":1.,"outside_resistance_m2_k_w":1.}]}))
         .unwrap();
     let bound =
-        Water::from_materials(water, &model, &[record], &["sheet".into()], &[0], 20.).unwrap();
+        Water::from_materials(water, &model, &[record], &["sheet".into()], &[0], &[20.]).unwrap();
     let mut history = SurfaceHistory::new(policy, model).unwrap();
     history.water = Some(bound);
     history
+}
+
+fn water_material(history: &SurfaceHistory) -> ResolvedMaterial {
+    let source = history.model.snapshot()["columns"][0]["layers"][0].clone();
+    let selection: Selection = serde_json::from_value(json!({
+        "id":source["authored"]["id"], "record":source["authored"],
+        "allow_estimates":source["allow_estimates"], "expected_sha256":source["sha256"]
+    }))
+    .unwrap();
+    Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    }
+    .resolve(&selection)
+    .unwrap()
+}
+
+fn conditioned_fixture(base: SurfaceHistory) -> (SurfaceHistory, [Vec3; 6]) {
+    let record = water_material(&base);
+    let model = Surface::new(
+        vec![
+            DryThermalModel::new(vec![record.clone()], vec![], base.request.cells_per_layer)
+                .unwrap(),
+        ],
+        6,
+        vec![
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [3, 4, 5],
+                reference_area_m2: 1.,
+                column: 0,
+            },
+        ],
+    )
+    .unwrap();
+    let instances = ["warm:0".to_owned(), "cold:0".to_owned()];
+    let owners = [1, 0];
+    let mut request = base.request;
+    request.initial_temperature_c = 999.; // Unused, outside both water and variable dry domains.
+    request.initial_instance_temperatures_c = Some(BTreeMap::from([
+        (instances[0].clone(), 35.),
+        (instances[1].clone(), 10.),
+    ]));
+    let water = request.surface_water.as_mut().unwrap();
+    let binding = water.bindings.remove("sheet").unwrap();
+    water.bindings = instances
+        .iter()
+        .map(|id| (id.clone(), binding.clone()))
+        .collect();
+    if let Some(supply) = &mut water.supply {
+        let binding = supply.bindings.remove("sheet").unwrap();
+        supply.bindings = instances
+            .iter()
+            .map(|id| (id.clone(), binding.clone()))
+            .collect();
+    }
+    if let Some(drainage) = &mut water.drainage {
+        let binding = drainage.bindings.remove("sheet").unwrap();
+        drainage.bindings = instances
+            .iter()
+            .map(|id| (id.clone(), binding.clone()))
+            .collect();
+    }
+    request.validate(1).unwrap();
+    let water = request.surface_water.clone().unwrap();
+    let mut history = SurfaceHistory::with_instances(request, model, &instances, &owners).unwrap();
+    let initial: Vec<_> = history
+        .state
+        .temperature_c()
+        .iter()
+        .map(|cells| cells[0])
+        .collect();
+    history.water = Some(
+        Water::from_materials(
+            water,
+            &history.model,
+            &[record],
+            &instances,
+            &owners,
+            &initial,
+        )
+        .unwrap(),
+    );
+    let positions = [
+        Vec3::ZERO,
+        Vec3::new(1., 0., 0.),
+        Vec3::new(0., 1., 0.),
+        Vec3::new(2., 0., 0.),
+        Vec3::new(4., 0., 0.),
+        Vec3::new(2., 1., 0.),
+    ];
+    (history, positions)
+}
+
+#[test]
+fn instance_temperatures_preserve_liquid_enthalpy_in_every_uncoupled_phase_model() {
+    for base in [
+        fixture(0.01, 0.05),
+        supplied_fixture(0.01, 0.05, vec![0.01], vec![25.]),
+        condensing_fixture(0.01, 0.05, vec![4000.], vec![25.]),
+        with_drainage(
+            supplied_fixture(0.01, 0.05, vec![0.01], vec![25.]),
+            vec![0.02],
+        ),
+        finite_fixture(0.01, 0.05, 1e-5, 4010.),
+    ] {
+        let (mut history, positions) = conditioned_fixture(base);
+        assert_eq!(history.state.temperature_c(), &[vec![10.], vec![35.]]);
+        near(
+            finite_snapshot(&history)["liquid_stored_change_j"]
+                .as_f64()
+                .unwrap(),
+            0.,
+        );
+        history
+            .advance(&positions, 0.2, 0, 0, None, None, None)
+            .unwrap();
+        let report = finite_snapshot(&history);
+        let water = history.water.as_ref().unwrap();
+        let expected: f64 = [0.5, 1.]
+            .iter()
+            .zip([10., 35.])
+            .enumerate()
+            .map(|(i, (&area, initial))| {
+                1000.
+                    * (water.remaining[i] * history.state.temperature_c()[i][0]
+                        - area * 0.01 * initial)
+            })
+            .sum();
+        near(report["liquid_stored_change_j"].as_f64().unwrap(), expected);
+        near(history.balance_error_j(), 0.);
+        near(report["mass_balance_error_kg"].as_f64().unwrap(), 0.);
+        if water.request.condensation.is_some() {
+            assert!(water.condensed[0] > 0.);
+            assert!(water.evaporated[1] > 0.);
+        } else {
+            assert!(water.evaporated[1] > 2. * water.evaporated[0]);
+        }
+        if water.vapor_reservoir.is_some() {
+            finite_energy_balance(&history);
+        }
+    }
+}
+
+#[test]
+fn mapped_wet_starts_retain_variable_dry_enthalpy_and_source_order() {
+    let base = variable_fixture(fixture(0.05, 0.05), 2, [0.0025; 2], [0., 60.]);
+    let (mut history, positions) = conditioned_fixture(base);
+    assert_eq!(history.state.temperature_c(), &[vec![10.; 2], vec![35.; 2]]);
+    history
+        .advance(&positions, 0.2, 0, 0, None, None, None)
+        .unwrap();
+    // Independently integrate the authored Cp(T)=1000+20*T, with reference dry mass .2*A.
+    let expected: f64 = history
+        .state
+        .temperature_c()
+        .iter()
+        .zip([10., 35.])
+        .zip([0.5, 1.])
+        .map(|((cells, initial), area)| {
+            0.2 * area / 2.
+                * cells
+                    .iter()
+                    .map(|&t| 1000. * (t - initial) + 10. * (t * t - initial * initial))
+                    .sum::<f64>()
+        })
+        .sum();
+    near(history.stored_j, expected);
+    let result = history.finish("path", "initial", 0.2).unwrap();
+    assert_eq!(result["initial_temperature_c"], 999.);
+    assert_eq!(
+        result["initial_condition"]["instance_temperature_c"],
+        json!([35., 10.])
+    );
+    assert_eq!(
+        result["initial_condition"]["triangle_instance"],
+        json!([1, 0])
+    );
+    assert_eq!(
+        result["initial_condition"]["temperature_range_c"],
+        json!([10., 35.])
+    );
+    near(
+        result["surface_water"]["mass_balance_error_kg"]
+            .as_f64()
+            .unwrap(),
+        0.,
+    );
+}
+
+#[test]
+fn water_initial_temperatures_require_every_patch_and_the_qualified_domain() {
+    let history = fixture(0., 0.1);
+    let record = water_material(&history);
+    let request = history.request.surface_water.as_ref().unwrap();
+    for temperatures in [
+        vec![],
+        vec![20., 20.],
+        vec![-20.01],
+        vec![80.01],
+        vec![f64::NAN],
+    ] {
+        assert!(
+            Water::from_materials(
+                request.clone(),
+                &history.model,
+                std::slice::from_ref(&record),
+                &["sheet".into()],
+                &[0],
+                &temperatures,
+            )
+            .is_err()
+        );
+    }
+    for temperature in [-20., 80.] {
+        Water::from_materials(
+            request.clone(),
+            &history.model,
+            std::slice::from_ref(&record),
+            &["sheet".into()],
+            &[0],
+            &[temperature],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn mapped_water_starts_admit_qualifications_but_keep_mechanical_coupling_excluded() {
+    let mut request = fixture(0.01, 0.1).request;
+    request.initial_instance_temperatures_c = Some(BTreeMap::from([("sheet".into(), 35.)]));
+    request.validate(1).unwrap();
+    let water = request.surface_water.take().unwrap();
+    request.surface_water_alternatives = Some(vec![water.clone()]);
+    request.validate(1).unwrap();
+    request.surface_water_alternatives = None;
+    request.surface_water = Some(water);
+    let paired = coupled_alternatives_fixture(request);
+    assert!(
+        paired
+            .validate(1)
+            .unwrap_err()
+            .message
+            .contains("uncoupled liquid only")
+    );
+    let mut direct = paired.clone();
+    let pair = direct
+        .coupled_water_alternatives
+        .take()
+        .unwrap()
+        .pop()
+        .unwrap();
+    direct.surface_water = Some(pair.surface_water);
+    direct.mechanical_coupling = Some(pair.mechanical_coupling);
+    assert!(
+        direct
+            .validate(1)
+            .unwrap_err()
+            .message
+            .contains("uncoupled liquid only")
+    );
 }
 
 fn coupled_alternatives_fixture(mut surface: SurfaceRequest) -> SurfaceRequest {
@@ -515,7 +780,7 @@ fn variable_fixture(
         &[record],
         &["sheet".into()],
         &[0],
-        policy.initial_temperature_c,
+        &[policy.initial_temperature_c],
     )
     .unwrap();
     let mut history = SurfaceHistory::new(policy, model).unwrap();
@@ -1048,8 +1313,15 @@ fn finite_vapor_joins_hot_and_cold_textile_patches_through_one_inventory() {
         Vec3::new(2., 1., 0.),
     ];
     let request = base.request.surface_water.as_ref().unwrap().clone();
-    let water =
-        Water::from_materials(request, &model, &[record], &["sheet".into()], &[0, 0], 20.).unwrap();
+    let water = Water::from_materials(
+        request,
+        &model,
+        &[record],
+        &["sheet".into()],
+        &[0, 0],
+        &[20.; 2],
+    )
+    .unwrap();
     let mut history = SurfaceHistory::new(base.request, model).unwrap();
     history.water = Some(water);
     let boundary = super::super::boundary(history.request.boundaries[0]).unwrap();
@@ -1183,7 +1455,7 @@ fn finite_vapor_selects_early_cold_patch_dryout_before_a_later_rewetting_root() 
         &[record],
         &["hot".into(), "cold".into()],
         &[0, 1],
-        20.,
+        &[20.; 2],
     )
     .unwrap();
 

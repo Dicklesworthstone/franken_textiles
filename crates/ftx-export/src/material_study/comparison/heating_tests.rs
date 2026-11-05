@@ -102,7 +102,10 @@ pub(super) fn case(combined: bool) -> (Alternative, Value, Value, Value) {
         if !combined {
             let other = json!({"triangle":1,"law_sha256":law,
                 "vertices":motion["triangles"][1],"plastic_dissipation_j":0.});
-            motion[initial]["elements"].as_array_mut().unwrap().push(other);
+            motion[initial]["elements"]
+                .as_array_mut()
+                .unwrap()
+                .push(other);
         }
         motion[final_history] = json!({history_total:6.});
         let work = json!({"distribution":"uniform_reference_thickness",
@@ -278,15 +281,9 @@ fn incomplete_surface_water_cannot_pass_the_dry_history_comparison_ledger() {
             1 => motion["transient_surface"]["result"]["surface_water"] = json!({}),
             _ => motion["transient_surface"]["result"]["trace"][0]["surface_water"] = json!({}),
         }
-        let refusal = admit_heat(
-            &a,
-            &descriptor,
-            &s,
-            &motion,
-            Consumer::TransientSurface,
-        )
-        .err()
-        .unwrap();
+        let refusal = admit_heat(&a, &descriptor, &s, &motion, Consumer::TransientSurface)
+            .err()
+            .unwrap();
         assert!(refusal.message.contains("liquid and vapor enthalpy ledger"));
         assert_eq!(motion["transient_surface"]["status"], "available");
     }
@@ -414,13 +411,7 @@ fn coverage_maxwell_and_mixed_sources_use_the_same_accepted_work_admission() {
 
 fn same_law_case(second_work: f64) -> (Alternative, Value, Value, Value) {
     let (mut a, d, _, mut m) = coverage_case(false);
-    let original = a
-        .frozen_changes
-        .as_ref()
-        .unwrap()
-        .default
-        .as_ref()
-        .unwrap();
+    let original = a.frozen_changes.as_ref().unwrap().default.as_ref().unwrap();
     let mut materials = Vec::new();
     for fraction in [0.25, 0.75] {
         let mut selection = serde_json::to_value(original).unwrap();
@@ -438,7 +429,11 @@ fn same_law_case(second_work: f64) -> (Alternative, Value, Value, Value) {
     let law = materials[0].membrane_relaxation().unwrap().unwrap();
     assert_eq!(
         law.fingerprint(),
-        materials[1].membrane_relaxation().unwrap().unwrap().fingerprint()
+        materials[1]
+            .membrane_relaxation()
+            .unwrap()
+            .unwrap()
+            .fingerprint()
     );
     let changes = a.frozen_changes.as_mut().unwrap();
     changes.default = Some(materials[0].frozen_selection());
@@ -543,7 +538,13 @@ fn same_law_sources_cannot_borrow_another_materials_qualification() {
             Consumer::TransientSurface,
         ),
     ] {
-        for fault in ["missing", "duplicate", "fraction", "foreign", "swapped_heat"] {
+        for fault in [
+            "missing",
+            "duplicate",
+            "fraction",
+            "foreign",
+            "swapped_heat",
+        ] {
             let (a, d, s, mut m) = same_law_case(10.);
             let heat = &mut m[name]["result"];
             let receipts = &mut heat["relaxation_dissipation_heat"]["material_fractions"];
@@ -568,7 +569,10 @@ fn same_law_sources_cannot_borrow_another_materials_qualification() {
                 }
                 _ => unreachable!(),
             }
-            assert!(admit_heat(&a, &d, &s, &m, consumer).is_err(), "{name}/{fault}");
+            assert!(
+                admit_heat(&a, &d, &s, &m, consumer).is_err(),
+                "{name}/{fault}"
+            );
             assert!(admit_heat(&a, &d, &s, &m, other).is_ok(), "{name}/{fault}");
         }
     }

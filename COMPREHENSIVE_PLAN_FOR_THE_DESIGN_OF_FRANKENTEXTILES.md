@@ -5436,6 +5436,31 @@ intervals retain no active exterior policy. Sheet histories require exterior exc
 interval or none; coverage retains explicit nullable interval schedules without borrowing conditions
 from another consumer or interval. Original motion text and immutable named cases remain authoritative.
 
+### 25.179 Author independently qualified deformation heat in guided motion studies
+
+Ordinary motion studies can request permanent-membrane, Maxwell and irreversible-bending heat
+independently for sheet and moving body/layer histories. The controls use the existing native
+distribution policy and each actual material's sourced conversion observations; they supply no
+fractions or constitutive laws. Mapped starting temperatures, immutable named cases, independent
+disabled drafts and original motion bytes retain their existing behavior. `ftx-ms2.26` records
+software authoring and lifecycle validation; numerical qualification remains with the native
+consumers and their source-bound ledgers.
+
+### 25.180 Preserve different starting temperatures in qualified wet textile histories
+
+Independent-sheet heat can combine exact physical-instance starting temperatures with direct or
+material-selected uncoupled water policies, including supply, condensation, drainage and a shared
+finite vapor reservoir. Each patch retains its original liquid sensible enthalpy and actual dry
+material state even when pieces share a material column. Unused scalar fallbacks cannot distort
+domain admission or extrema. The existing transport, nonlinear thermal integration and rollback
+remain authoritative.
+
+Material/design comparison independently reconciles initial owners, applied domains, final dry
+and liquid storage, and conservative trace bounds. Initial enthalpy is preaggregated by material
+column so complete-history admission does not rescan every patch for every sample. `ftx-ms2.27`
+tracks this composition. Mapped starts with mechanical liquid coupling, arbitrary initial depth
+profiles and empirical garment qualification remain separate.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

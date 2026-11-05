@@ -493,7 +493,7 @@ pub(super) struct Water {
     supplied_sensible_j: Vec<f64>,
     condensed: Vec<f64>,
     incoming_vapor_sensible_j: Vec<f64>,
-    initial_temperature_c: f64,
+    initial_temperatures_c: Vec<f64>,
     latent_j: f64,
     condensation_latent_j: f64,
     exported_sensible_j: f64,
@@ -588,7 +588,7 @@ impl Water {
         requests: I,
         model: &Surface,
         run: &DrapeRun,
-        initial_c: f64,
+        initial_temperatures_c: &[f64],
     ) -> Result<(Self, usize), Refusal>
     where
         I: IntoIterator<Item = &'a Request>,
@@ -628,7 +628,7 @@ impl Water {
                 &records,
                 instances,
                 owners,
-                initial_c,
+                initial_temperatures_c,
             )?,
             index,
         ))
@@ -651,7 +651,7 @@ impl Water {
         request: Request,
         model: &Surface,
         run: &DrapeRun,
-        initial_c: f64,
+        initial_temperatures_c: &[f64],
     ) -> Result<Self, Refusal> {
         let (records, _) = retained_materials(
             &run.report["material"],
@@ -664,7 +664,7 @@ impl Water {
             &records,
             &run.scene.mesh.instances,
             &run.scene.triangle_owner,
-            initial_c,
+            initial_temperatures_c,
         )
     }
 
@@ -674,7 +674,7 @@ impl Water {
         records: &[ResolvedMaterial],
         instances: &[String],
         owners: &[usize],
-        initial_c: f64,
+        initial_temperatures_c: &[f64],
     ) -> Result<Self, Refusal> {
         let intervals = request.vapor_reservoir.as_ref().map_or_else(
             || request.outside_vapor_pressure_pa.len(),
@@ -686,17 +686,23 @@ impl Water {
             },
         );
         request.validate(intervals)?;
-        request.pressure(initial_c)?;
         if instances.len() != request.bindings.len()
             || instances
                 .iter()
                 .any(|id| !request.bindings.contains_key(id))
             || owners.len() != model.patches().len()
+            || initial_temperatures_c.len() != owners.len()
             || records.len() != model.column_count()
         {
             return Err(invalid(
-                "surface water must bind every retained instance and source triangle exactly once",
+                "surface water must bind every retained instance, source triangle and initial temperature exactly once",
             ));
+        }
+        // Source triangles can share a material column while starting at different temperatures.
+        // Qualify their applied states, including initially dry patches that can receive liquid;
+        // an unused authored fallback is not part of this material/water state.
+        for &temperature in initial_temperatures_c {
+            request.pressure(temperature)?;
         }
         let catalog = Catalog {
             schema: CATALOG_SCHEMA.into(),
@@ -765,7 +771,7 @@ impl Water {
             condensed: vec![0.; initial.len()],
             incoming_vapor_sensible_j: vec![0.; initial.len()],
             initial,
-            initial_temperature_c: initial_c,
+            initial_temperatures_c: initial_temperatures_c.to_vec(),
             latent_j: 0.,
             condensation_latent_j: 0.,
             exported_sensible_j: 0.,
@@ -1303,12 +1309,12 @@ impl Water {
             .initial
             .iter()
             .zip(&self.remaining)
+            .zip(&self.initial_temperatures_c)
             .zip(temperatures)
-            .map(|((&initial, &remaining), t)| {
+            .map(|(((&initial, &remaining), &initial_c), t)| {
                 self.request.liquid_specific_heat_j_kg_k
                     * (remaining * (t[0] - self.request.enthalpy_reference_c)
-                        - initial
-                            * (self.initial_temperature_c - self.request.enthalpy_reference_c))
+                        - initial * (initial_c - self.request.enthalpy_reference_c))
             })
             .sum();
         if [
