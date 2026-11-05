@@ -14853,6 +14853,98 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
     }
   });
 
+test('compiled WASM paired wet qualifications preserve native selection, changed motion and guided frozen cases',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_COUPLED_WATER_ALTERNATIVES_REPLAY||!process.env.FTX_GUIDED_SCENARIO_NATIVE},async t=>{
+    const source=path.resolve(process.env.FTX_COUPLED_WATER_ALTERNATIVES_REPLAY),load=name=>fs.readFileSync(path.join(source,name),'utf8');
+    const pattern=load('pattern.json'),study=load('study.json'),body=load('body-input.json'),single=JSON.parse(load('single-scenario.json'));
+    const modelBytes=fs.readFileSync(path.join(source,'model.ftxbody')),pairs=single.motion.transient_surface.coupled_water_alternatives;
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:{...ftx,default:async()=>{}}}),{p}=await guidedScenarioSetup();
+    p.select('patternFile',pattern);await p.e.patternFile.onchange();p.e.clearStudyCandidates.onclick();
+    p.select('scenarioBody',body);p.e.scenarioBody.handlers.change();p.e.body.files=[new Blob([modelBytes])];p.e.body.handlers.change();
+    p.select('studyRequest',study);p.e.studyRequest.handlers.change();
+    const work=process.env.FTX_PAIRED_WATER_OUTPUT?path.resolve(process.env.FTX_PAIRED_WATER_OUTPUT):
+      fs.mkdtempSync(path.join(require('node:os').tmpdir(),'ftx-paired-water-'));
+    fs.mkdirSync(work,{recursive:true});const retain=(name,raw)=>fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+    const simulation=(report,key)=>report.simulations.find(row=>row.key===key).evaluation.result;
+    const check=report=>{
+      const results=['qualified','slower'].map((key,index)=>{
+        const simulated=simulation(report,key);assert.equal(simulated.motion.status,'available');
+        const motion=simulated.motion.result,heat=motion.transient_surface.result,water=heat.surface_water,mechanics=motion.liquid_mechanics;
+        assert.equal(motion.transient_surface.status,'available');assert.deepEqual(mechanics,heat.mechanical_coupling);
+        assert.deepEqual(mechanics.qualification,pairs[index].mechanical_coupling);assert.deepEqual(water.request,pairs[index].surface_water);
+        assert.equal(heat.coupled_water_selection.index,index);assert.match(heat.coupled_water_selection.pair_sha256,/^[a-f0-9]{64}$/);
+        assert.ok(report.comparison.alternatives.find(row=>row.key===key).eligible);
+        for(const [thermal,mechanical] of [['remaining_liquid_kg','remaining_liquid_mass_kg'],
+          ['evaporated_liquid_kg','evaporated_liquid_mass_kg'],['drained_liquid_kg','drained_liquid_mass_kg']]) {
+          assert.ok(water[thermal]>0);assert.ok(Math.abs(water[thermal]-mechanics[mechanical])<1e-14);
+        }
+        assert.ok(Math.abs(heat.balance_error_j)<1e-8);assert.ok(Math.abs(mechanics.mass_balance_residual_kg)<1e-14);
+        assert.ok(mechanics.exchange.outgoing_separation_work_j>0);return {motion,heat,water,mechanics};
+      });
+      assert.ok(results[0].water.evaporated_liquid_kg>results[1].water.evaporated_liquid_kg);
+      assert.ok(results[0].heat.final.temperature_c[0][0]<results[1].heat.final.temperature_c[0][0]);
+      assert.notEqual(results[0].motion.final_positions_sha256,results[1].motion.final_positions_sha256);
+      assert.notDeepEqual(results[0].mechanics.exported_momentum_kg_m_s,results[1].mechanics.exported_momentum_kg_m_s);
+      const stale=simulation(report,'stale');assert.equal(stale.motion.status,'refused');assert.ok(stale.motion.result==null);
+      assert.equal(stale.surface.status,'available');assert.equal(report.comparison.alternatives.find(row=>row.key==='stale').eligible,false);
+      for(const row of report.manufacturing.alternatives)assert.equal(row.cutting.status,'available');
+    };
+    const evaluate=async(label,expected)=>{
+      await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',label+': '+p.e.error.textContent);
+      const result=await w.send(sent);assert.equal(result.type,'result',label+': '+result.message);p.current().emit(result);
+      for(const [name,raw] of [['study-request.json',sent.studyRequest],['scenario-request.json',sent.scenarioRequest],['original-pattern.json',pattern],['body-input.json',body]]) {
+        assert.equal(result.files.find(file=>file.name===name).text,raw);
+        const link=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.download===name);assert.ok(link,name);
+        assert.equal(await p.blobs.get(link.href).text(),raw);
+      }
+      retain(label+'-study.json',sent.studyRequest);retain(label+'-scenario.json',sent.scenarioRequest);
+      const native=require('node:child_process').execFileSync(path.resolve(process.env.FTX_GUIDED_SCENARIO_NATIVE),
+        ['scenario-study',path.join(source,'pattern.json'),path.join(work,label+'-study.json'),path.join(work,label+'-scenario.json'),
+          path.join(source,'body-input.json'),path.join(source,'model.ftxbody')],{encoding:'utf8',stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
+      assert.deepEqual(result.result,JSON.parse(native),label+' complete native/WASM/page-worker equality');retain(label+'-report.json',native);
+      if(expected)assert.deepEqual(result.result,JSON.parse(load(expected)));
+      for(const report of result.result.cases||[result.result])check(report);
+      return {sent,report:result.result};
+    };
+    for(const name of ['single','matrix']) {
+      const scenario=load(name+'-scenario.json');p.select('scenarioRequest',scenario);p.e.scenarioRequest.handlers.change();
+      p.e.scenarioMode.value='file';p.e.scenarioMode.handlers.change();
+      const result=await evaluate('retained-'+name,name+'-report.json');assert.equal(result.sent.studyRequest,study);assert.equal(result.sent.scenarioRequest,scenario);
+    }
+    p.e.studyMode.value='guided';p.e.studyMode.handlers.change();
+    for(const variant of JSON.parse(study).variants) {
+      p.e.selection.value=JSON.stringify(variant.changes.default);p.e.selection.handlers.input();await p.e.inspect.onclick();
+      const inspected=await w.send(p.current().messages.at(-1));assert.equal(inspected.type,'result',inspected.message);p.current().emit(inspected);
+      p.e.studyCandidateName.value=variant.key;p.e.addStudyCandidate.onclick();
+    }
+    p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();p.e.guidedScenarioFitSource.value='none';p.e.guidedScenarioFitSource.handlers.change();
+    for(const [id,value] of Object.entries({guidedScenarioSpacing:single.options.spacing,guidedScenarioSewSteps:single.options.sew_steps,
+      guidedScenarioDrapeSteps:single.options.drape_steps,guidedScenarioStep:single.options.step,guidedScenarioSettle:single.options.max_settle_steps??0,
+      guidedScenarioMeshBudget:single.max_mesh_points,guidedScenarioFrameBudget:single.max_vertex_frames}))p.e[id].value=String(value);
+    p.e.guidedScenarioHeat.checked=true;p.e.guidedScenarioHeat.handlers.change();
+    p.select('heatConditions',JSON.stringify(single.surface));p.e.heatConditions.handlers.change();
+    p.e.guidedCutting.checked=true;p.e.guidedAreaGoal.checked=false;p.e.guidedDrapeMassGoal.checked=false;
+    p.e.guidedCopies.value='1';p.e.guidedGap.value='1';p.e.guidedEdge.value='0';p.e.guidedEnd.value='0';
+    p.e.guidedTextileWaterEvaporatedGoal.checked=true;p.e.guidedTextileWaterEvaporatedDirection.value='maximize';p.e.guidedRequireTransientSurface.checked=true;
+    const motionRaw=' \r\n'+JSON.stringify(single.motion)+'\r\n';guidedTextileWaterSource(p,motionRaw);
+    const guided=await evaluate('guided-single');assert.ok(guided.sent.scenarioRequest.includes(motionRaw));
+    const table=descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.tag==='table'&&
+      node.children[0].textContent==='qualified: selected water and mechanics qualification');assert.ok(table);
+    const heat=simulation(guided.report,'qualified').motion.result.transient_surface.result;
+    assert.deepEqual(plain(table.children.slice(2).map(row=>row.children.map(cell=>cell.textContent))),
+      [['1',pairs[0].surface_water.source.reference,pairs[0].mechanical_coupling.source.reference,heat.coupled_water_selection.pair_sha256]]);
+    guidedNamedCases(p);await saveGuidedCase(p,'paired sources');
+    const changed=structuredClone(single.motion);changed.transient_surface.boundaries[0].outside_c=25;
+    const changedRaw=' \r\n'+JSON.stringify(changed)+'\r\n';guidedTextileWaterSource(p,changedRaw);await saveGuidedCase(p,'warm outside');
+    guidedTextileWaterSource(p,'{}');const named=await evaluate('guided-named');
+    assert.ok(named.sent.scenarioRequest.includes(motionRaw));assert.ok(named.sent.scenarioRequest.includes(changedRaw));
+    assert.deepEqual(named.report.cases[0].simulations,guided.report.simulations);
+    t.diagnostic('Actual captured single/matrix and guided single/frozen named paired-source reports match native. Ret-only alternatives change cooling, evaporation, recoil and actual motion; same-ID stale sources refuse the whole motion while cutting and steady heat survive. Synthetic software evidence only. Replay: '+work);
+  });
+
 test('compiled WASM textile-water objectives, moving mass, scheduled phase momentum and outgoing recoil replay native commands and named scenarios',
   {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY || process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY || process.env.FTX_SCHEDULED_PHASE_SUPPLY_REPLAY || process.env.FTX_SCHEDULED_PHASE_CONDENSING_REPLAY || process.env.FTX_OUTGOING_RECOIL_REPLAY || process.env.FTX_CONDENSING_OUTGOING_RECOIL_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
