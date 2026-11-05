@@ -64,9 +64,12 @@ To revise completed choices, reopen the original setup page and select the saved
 `capture-choices.json` under **Reopen saved choices for this setup**. The file must retain that
 setup's exact path and hash. The local loader checks the existing choices format and restores
 the explicit frames, controls, tape observations and evidence for review; choose **Check choices
-and prepare download** again to save revisions. It accepts UTF-8 files up to 256 KiB. Invalid or
-different-setup files leave the current form intact, and later edits, cancellation, reset or a
-replacement file cancel pending reads. **Cancel pending edits** returns to the last choices
+and prepare download** again to save revisions. It accepts UTF-8 files up to 256 KiB. Opening the
+file chooser or beginning a replacement read withdraws the previous download. Cancelled,
+unreadable, invalid or different-setup files leave the current form intact; the download stays
+withdrawn until the form is checked again or pending edits are cancelled. Later edits,
+cancellation, reset, a replacement file or leaving the page cancel pending reads.
+**Cancel pending edits** returns to the last choices
 applied in this page, or to its original incomplete setup. Native `capture-init` still rechecks
 the original sources, model and camera admission before constructing an input.
 

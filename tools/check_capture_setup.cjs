@@ -213,8 +213,9 @@ async function saveDownload(page, name) {
       const before = await form(), oldUrl = await page.locator('#setupDownload').getAttribute('href');
       await load(bytes);
       assert.match(await page.locator('#setupStatus').innerText(), /were not loaded/);
-      assert.deepEqual(await form(), before); await visible(page);
-      assert.equal(await page.locator('#setupDownload').getAttribute('href'), oldUrl);
+      assert.deepEqual(await form(), before); await hidden(page); await revoked(page, oldUrl);
+      assert(await page.locator('#cancelSetup').isEnabled());
+      await page.locator('#cancelSetup').click(); await visible(page);
     }
     // A failed load also preserves incomplete edits, not just the last applied snapshot.
     await page.locator('#setupAge').fill(''); const incomplete = await form();
@@ -231,14 +232,36 @@ async function saveDownload(page, name) {
         return new Promise((resolve, reject) => { globalThis.__choiceRead = {resolve, reject}; });
       };
     });
-    for (const reject of [false, true]) for (const action of ['edit', 'apply', 'cancel', 'reset', 'replace']) {
+    // A read error without a later action must retain the form without leaving an old download.
+    await load(JSON.stringify(expected)); await page.locator('#applySetup').click();
+    const unreadableForm = await form(), unreadableUrl = await page.locator('#setupDownload').getAttribute('href');
+    await page.evaluate(() => { globalThis.__holdChoices = true; globalThis.__choiceRead = null; });
+    await page.locator('#setupChoices').setInputFiles({name: 'unreadable.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(expected))});
+    await page.waitForFunction(() => globalThis.__choiceRead !== null);
+    await hidden(page); await revoked(page, unreadableUrl);
+    await page.evaluate(() => globalThis.__choiceRead.reject(new Error('synthetic file read failure')));
+    await page.waitForFunction(() => document.getElementById('setupStatus').textContent.includes('were not loaded'));
+    assert.deepEqual(await form(), unreadableForm); await hidden(page);
+    await page.locator('#cancelSetup').click(); await visible(page);
+
+    for (const reject of [false, true]) for (const action of ['edit', 'apply', 'cancel', 'reset', 'replace', 'chooser_cancel', 'empty', 'pagehide']) {
       await load(JSON.stringify(expected)); await page.locator('#applySetup').click();
+      const appliedUrl = await page.locator('#setupDownload').getAttribute('href'), appliedForm = await form();
       await page.evaluate(() => { globalThis.__holdChoices = true; globalThis.__choiceRead = null; });
       await page.locator('#setupChoices').setInputFiles({name: 'delayed.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(expected))});
       await page.waitForFunction(() => globalThis.__choiceRead !== null);
+      await hidden(page); await revoked(page, appliedUrl);
+      assert.deepEqual(await form(), appliedForm);
+      assert(await page.locator('#cancelSetup').isEnabled());
       if (action === 'edit') await page.locator('#setupAge').fill('4.25');
       else if (action === 'replace') {
         const replacement = {...expected, age_years: 5.25}; await load(JSON.stringify(replacement));
+      } else if (action === 'chooser_cancel') {
+        await page.locator('#setupChoices').dispatchEvent('cancel');
+      } else if (action === 'empty') {
+        await page.locator('#setupChoices').setInputFiles([]);
+      } else if (action === 'pagehide') {
+        await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true})));
       } else await page.locator('#' + {apply: 'applySetup', cancel: 'cancelSetup', reset: 'resetSetup'}[action]).click();
       const before = await form(), oldUrl = await page.locator('#setupDownload').getAttribute('href');
       const oldStatus = await page.locator('#setupStatus').innerText();
@@ -250,6 +273,15 @@ async function saveDownload(page, name) {
       assert.deepEqual(await form(), before);
       assert.equal(await page.locator('#setupDownload').getAttribute('href'), oldUrl);
       assert.equal(await page.locator('#setupStatus').innerText(), oldStatus);
+    }
+    // Opening and cancelling the native chooser also withdraws applied links before any read.
+    for (const event of ['focus', 'click', 'cancel']) {
+      await load(JSON.stringify(expected)); await page.locator('#applySetup').click();
+      const before = await form(), oldUrl = await page.locator('#setupDownload').getAttribute('href');
+      await page.locator('#setupChoices').dispatchEvent(event);
+      assert.deepEqual(await form(), before); await hidden(page); await revoked(page, oldUrl);
+      await page.locator('#cancelSetup').click(); await visible(page);
+      assert.deepEqual(await form(), before);
     }
     await load(JSON.stringify(expected)); await page.locator('#setupAge').fill('4.25');
     await hidden(page); await page.locator('#applySetup').click(); await visible(page);
@@ -306,6 +338,7 @@ async function saveDownload(page, name) {
       chosen_frames: expected.frame_indices.length, browser_errors: errors.length, local_requests: requests.length,
       exercised: ['source photographs', 'explicit defaults', 'blank choices', 'frame count', 'bounds', 'root choices and rotation-vector limit', 'joint axes', 'tape role', 'UTF-8 evidence budget',
         'duplicate prevention', 'remove', 'fixed controls', 'stale URL withdrawal', 'cancel', 'reset', 'saved file reload/edit', 'invalid files preserve work',
-        'late reads versus edit/apply/cancel/reset/replacement', 'byte-exact native construction', 'complete fit report equality']}));
+        'pending/invalid import withdrawal', 'chooser cancellation preserves work', 'late reads versus edits/imports/pagehide',
+        'byte-exact native construction', 'complete fit report equality']}));
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

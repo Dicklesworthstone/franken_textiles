@@ -346,20 +346,31 @@
     }
     return { ...choices, measurements };
   }
-  byId('setupChoices').addEventListener('change', async () => {
-    const ticket = ++revision, file = byId('setupChoices').files[0];
-    byId('setupChoices').value = '';
+  const savedChoices = byId('setupChoices');
+  for (const event of ['focus', 'click', 'cancel']) savedChoices.addEventListener(event, () => {
+    ++revision;
+    pending = true;
+    withdraw();
+    byId('cancelSetup').disabled = false;
+    status.textContent = 'Current choices retained. Choose a saved file, or check the form or cancel pending edits to restore its download.';
+  });
+  savedChoices.addEventListener('change', async () => {
+    const ticket = ++revision, file = savedChoices.files[0];
+    savedChoices.value = '';
+    // An unresolved replacement cannot leave the previous applied download available.
+    pending = true;
+    withdraw();
+    byId('cancelSetup').disabled = false;
     if (!file) {
-      byId('cancelSetup').disabled = !pending;
       status.textContent = 'No saved choices selected; current choices retained.';
       return;
     }
-    byId('cancelSetup').disabled = false;
     status.textContent = 'Reading saved choices; your current form remains unchanged until the file is checked.';
     try {
       if (file.size > 256 * 1024) throw new Error('Saved choices exceed the 256 KiB limit.');
       const bytes = await file.arrayBuffer();
       if (ticket !== revision) return;
+      if (bytes.byteLength > 256 * 1024) throw new Error('Saved choices exceed the 256 KiB limit.');
       const choices = checkedChoices(JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)));
       pending = true;
       render(choices);
