@@ -54,7 +54,8 @@ pub struct SurfaceRequest {
     pub initial_temperature_c: f64,
     /// Optional dry initial temperatures for exact retained physical instance IDs. Unlisted
     /// instances use the explicit scalar above; each patch starts uniform through thickness.
-    /// A present map must be nonempty. Water, liquid mechanics and dissipation heat are excluded.
+    /// A present map must be nonempty. Each enabled dissipation law qualifies the actual initial
+    /// temperature of its source triangle; water and liquid mechanics are excluded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_instance_temperatures_c: Option<BTreeMap<String, f64>>,
     /// Through-thickness cells per retained material sheet, in 1..=64.
@@ -193,24 +194,37 @@ impl SurfaceRequest {
             &run.scene.mesh.instances,
             &run.scene.triangle_owner,
         )?;
+        let initial_patch_temperatures = if self.plastic_dissipation_heat.is_some()
+            || self.relaxation_dissipation_heat.is_some()
+            || self.bending_plastic_dissipation_heat.is_some()
+        {
+            history
+                .state
+                .temperature_c()
+                .iter()
+                .map(|cells| cells[0])
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         if self.plastic_dissipation_heat.is_some() {
             history.plastic = Some(plastic::Heating::new_kind(
                 run,
-                self.initial_temperature_c,
+                &initial_patch_temperatures,
                 plastic::Kind::Plastic,
             )?);
         }
         if self.relaxation_dissipation_heat.is_some() {
             history.relaxation = Some(plastic::Heating::new_kind(
                 run,
-                self.initial_temperature_c,
+                &initial_patch_temperatures,
                 plastic::Kind::Relaxation,
             )?);
         }
         if self.bending_plastic_dissipation_heat.is_some() {
             history.bending = Some(plastic::Heating::new_kind(
                 run,
-                self.initial_temperature_c,
+                &initial_patch_temperatures,
                 plastic::Kind::Bending,
             )?);
         }
@@ -279,12 +293,9 @@ impl SurfaceRequest {
             if self.surface_water.is_some()
                 || self.surface_water_alternatives.is_some()
                 || self.has_mechanical_coupling()
-                || self.plastic_dissipation_heat.is_some()
-                || self.relaxation_dissipation_heat.is_some()
-                || self.bending_plastic_dissipation_heat.is_some()
             {
                 return Err(invalid(
-                    "initial instance temperatures support dry sheet heat without liquid coupling or dissipation heating",
+                    "initial instance temperatures support dry sheet heat without liquid coupling",
                 ));
             }
         }
@@ -1394,13 +1405,13 @@ mod tests {
             "relaxation_dissipation_heat",
             "bending_plastic_dissipation_heat",
         ] {
-            let mut bad = json!(request);
-            bad[channel] = json!("uniform_reference_thickness");
+            let mut heated = json!(request);
+            heated[channel] = json!("uniform_reference_thickness");
             assert!(
-                serde_json::from_value::<SurfaceRequest>(bad)
+                serde_json::from_value::<SurfaceRequest>(heated)
                     .unwrap()
                     .validate(1)
-                    .is_err()
+                    .is_ok()
             );
         }
     }

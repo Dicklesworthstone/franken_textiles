@@ -170,7 +170,7 @@ fn coverage_instance_initial_temperatures_keep_shared_material_owners_and_refere
     ]));
     history.request.validate_initial_temperatures().unwrap();
     let instances = ["hot:0".into(), "cold:0".into(), "unused:0".into()];
-    (history.state, history.initial_condition) = history
+    (history.state, history.initial_condition, _) = history
         .request
         .initial_state(&history.frame, &history.source, &instances, &[1, 0])
         .unwrap();
@@ -207,17 +207,18 @@ fn coverage_instance_initial_temperatures_keep_shared_material_owners_and_refere
 }
 
 #[test]
-fn coverage_instance_initial_temperatures_require_retained_owners_and_supported_heating() {
+fn coverage_instance_initial_temperatures_require_retained_owners_and_admit_heating_policies() {
     let (history, _) = two_instance_history();
     let instances = ["hot:0".into(), "cold:0".into(), "unused:0".into()];
     let mut request = history.request.clone();
     request.initial_instance_temperatures_c = Some(BTreeMap::from([("hot:0".into(), 35.)]));
     request.validate_initial_temperatures().unwrap();
-    let (state, receipt) = request
+    let (state, receipt, patch_temperatures) = request
         .initial_state(&history.frame, &history.source, &instances, &[1, 0])
         .unwrap();
     assert_eq!(state.temperature_c(), &[vec![10., 35.]]);
     assert_eq!(receipt.unwrap()["temperature_range_c"], json!([10., 35.]));
+    assert_eq!(patch_temperatures.unwrap(), vec![10., 35.]);
     for name in ["missing:0", "unused:0"] {
         let mut bad = request.clone();
         bad.initial_instance_temperatures_c = Some(BTreeMap::from([(name.into(), 20.)]));
@@ -254,14 +255,12 @@ fn coverage_instance_initial_temperatures_require_retained_owners_and_supported_
         "relaxation_dissipation_heat",
         "bending_plastic_dissipation_heat",
     ] {
-        let mut bad = json!(request);
-        bad[channel] = json!("uniform_reference_thickness");
-        assert!(
-            serde_json::from_value::<Request>(bad)
-                .unwrap()
-                .validate_initial_temperatures()
-                .is_err()
-        );
+        let mut heated = json!(request);
+        heated[channel] = json!("uniform_reference_thickness");
+        serde_json::from_value::<Request>(heated)
+            .unwrap()
+            .validate_initial_temperatures()
+            .unwrap();
     }
     assert!(
         !json!(history.request)
@@ -269,11 +268,12 @@ fn coverage_instance_initial_temperatures_require_retained_owners_and_supported_
             .unwrap()
             .contains_key("initial_instance_temperatures_c")
     );
-    let (_, receipt) = history
+    let (_, receipt, patch_temperatures) = history
         .request
         .initial_state(&history.frame, &history.source, &[], &[])
         .unwrap();
     assert!(receipt.is_none());
+    assert!(patch_temperatures.is_none());
 }
 
 #[test]
@@ -306,12 +306,13 @@ fn coverage_initial_temperatures_qualify_applied_values_without_using_an_unused_
         ("hot:0".into(), 35.),
     ]));
     let instances = ["hot:0".into(), "cold:0".into()];
-    let (state, receipt) = history
+    let (state, receipt, patch_temperatures) = history
         .request
         .initial_state(&history.frame, &history.source, &instances, &[1, 0])
         .unwrap();
     assert_eq!(state.temperature_c(), &[vec![5., 35.]]);
     assert_eq!(receipt.unwrap()["temperature_range_c"], json!([5., 35.]));
+    assert_eq!(patch_temperatures.unwrap(), vec![5., 35.]);
     history
         .request
         .initial_instance_temperatures_c

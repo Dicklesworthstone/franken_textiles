@@ -5394,6 +5394,20 @@ stagnant gaps still withhold affected ranges while preserving nominal results. A
 domain does not consume textile convection. This closes the software gap tracked by `ftx-ms2.23`;
 geometry, interface films and convection inputs remain fixed, with no statistical or empirical claim.
 
+### 25.177 Preserve independent starting temperatures during material dissipation heating
+
+Independent sheet and moving body-coverage histories can combine exact physical-instance starting
+temperatures with source-qualified permanent-membrane, Maxwell and irreversible-bending heat
+conversion. Each active conversion checks the actual temperature of its source triangles; an
+unused fallback cannot reject a valid state or conceal an unsupported one. Covered portions and
+exposed remainders keep the same initial material state and reference-mass enthalpy accounting.
+
+Ordinary material/design comparisons retain those source/owner/initial-condition receipts and
+independently check conversion domains. Accepted work, heat fractions, initial-drape exclusions,
+remapping and independent-consumer failure behavior retain their existing authorities. This
+composition advances `ftx-ms2` through `ftx-ms2.24`; it adds no material coefficients, temperature
+feedback into dry constitutive laws or empirical garment-heat claim.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -28,6 +28,8 @@ use crate::{
 
 pub mod bridges;
 
+type InitialState = (State, Option<Value>, Option<Vec<f64>>);
+
 /// One explicit, source-locked body domain followed through every accepted mechanical sample.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,7 +47,7 @@ pub struct Request {
     /// Optional dry initial temperatures for exact retained physical instances, uniform through
     /// each sheet's thickness. Unlisted instances use the explicit scalar fallback above.
     /// Covered portions and exposed remainders retain the same source value. A present map must
-    /// be nonempty; irreversible-material heating remains outside this initial-state contract.
+    /// be nonempty; active dissipation conversions qualify each source triangle's applied value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_instance_temperatures_c: Option<BTreeMap<String, f64>>,
     /// One spatially uniform pair of body-side/exterior films for each keyframe interval.
@@ -223,22 +225,31 @@ impl Request {
             ));
         }
         let initial_frame_sha256 = frame.sha256().to_owned();
-        let (state, initial_condition) = self.initial_state(
+        let (state, initial_condition, initial_patch_temperatures) = self.initial_state(
             &frame,
             &source,
             &run.scene.mesh.instances,
             &run.scene.triangle_owner,
         )?;
+        let initial_patch_temperatures = if self.plastic_dissipation_heat.is_some()
+            || self.relaxation_dissipation_heat.is_some()
+            || self.bending_plastic_dissipation_heat.is_some()
+        {
+            initial_patch_temperatures
+                .unwrap_or_else(|| vec![self.initial_temperature_c; source.patches().len()])
+        } else {
+            Vec::new()
+        };
         let plastic = self
             .plastic_dissipation_heat
-            .map(|_| plastic::Heating::new(run, self.initial_temperature_c))
+            .map(|_| plastic::Heating::new(run, &initial_patch_temperatures))
             .transpose()?;
         let relaxation = self
             .relaxation_dissipation_heat
             .map(|_| {
                 plastic::Heating::new_kind(
                     run,
-                    self.initial_temperature_c,
+                    &initial_patch_temperatures,
                     plastic::Kind::Relaxation,
                 )
             })
@@ -246,7 +257,7 @@ impl Request {
         let bending = self
             .bending_plastic_dissipation_heat
             .map(|_| {
-                plastic::Heating::new_kind(run, self.initial_temperature_c, plastic::Kind::Bending)
+                plastic::Heating::new_kind(run, &initial_patch_temperatures, plastic::Kind::Bending)
             })
             .transpose()?;
         let bridge_authority = self
@@ -290,25 +301,16 @@ impl Request {
     }
 
     fn validate_initial_temperatures(&self) -> Result<(), Refusal> {
-        if let Some(temperatures) = &self.initial_instance_temperatures_c {
-            if temperatures.is_empty()
+        if let Some(temperatures) = &self.initial_instance_temperatures_c
+            && (temperatures.is_empty()
                 || temperatures.len() > 65_536
                 || temperatures
                     .iter()
-                    .any(|(id, value)| id.is_empty() || !value.is_finite() || *value < -273.15)
-            {
-                return Err(invalid(
-                    "initial coverage temperatures need 1..=65536 exact instance names and finite physical values",
-                ));
-            }
-            if self.plastic_dissipation_heat.is_some()
-                || self.relaxation_dissipation_heat.is_some()
-                || self.bending_plastic_dissipation_heat.is_some()
-            {
-                return Err(invalid(
-                    "initial instance temperatures support dry coverage heat without dissipation heating",
-                ));
-            }
+                    .any(|(id, value)| id.is_empty() || !value.is_finite() || *value < -273.15))
+        {
+            return Err(invalid(
+                "initial coverage temperatures need 1..=65536 exact instance names and finite physical values",
+            ));
         }
         Ok(())
     }
@@ -319,9 +321,9 @@ impl Request {
         source: &Surface,
         instances: &[String],
         owners: &[usize],
-    ) -> Result<(State, Option<Value>), Refusal> {
+    ) -> Result<InitialState, Refusal> {
         let Some(overrides) = &self.initial_instance_temperatures_c else {
-            return Ok((frame.initial(self.initial_temperature_c)?, None));
+            return Ok((frame.initial(self.initial_temperature_c)?, None, None));
         };
         let retained = owners.iter().copied().collect::<BTreeSet<_>>();
         if instances.is_empty()
@@ -367,7 +369,7 @@ impl Request {
             "model_sha256":source.snapshot()["sha256"],"frame_sha256":frame.sha256(),
             "instances":instances,"triangle_instance":owners,
             "instance_temperature_c":temperatures,"temperature_range_c":range});
-        Ok((state, Some(receipt)))
+        Ok((state, Some(receipt), Some(patch_temperatures)))
     }
 }
 
