@@ -1143,15 +1143,21 @@ impl Solver {
                 let p = self.newton_direction(&a, &g, false, linear_tolerance, &mut rep)?;
                 (g, p)
             };
+            let mut newton_correction = true;
             if p.is_none() {
                 projecting = true;
                 rep.projected_iterations += 1;
                 let (g2, a2) = self.assemble(&self.x, inertia, true);
                 g = g2;
                 p = self.newton_direction(&a2, &g, true, linear_tolerance, &mut rep)?;
+                if p.is_none() {
+                    newton_correction = false;
+                    if inertia.is_none() {
+                        p = self.static_search_direction(&a2, &g, &mut rep)?;
+                    }
+                }
             }
-            // Singular even after projection: steepest descent.
-            let mut newton_correction = p.is_some();
+            // If neither bounded linear path succeeds, retain steepest descent.
             let mut p = p.unwrap_or_else(|| g.iter().map(|v| -v).collect());
             if g.iter().chain(&p).any(|v| !v.is_finite()) {
                 return Err(Refusal::new(
@@ -1246,6 +1252,42 @@ impl Solver {
             .repair("check the material domain and the garment start state"));
         }
         Ok(rep)
+    }
+
+    // A free static garment can carry a gravity load in a rigid null mode before reaching its
+    // support. Raw gradient descent couples that motion to the stiffest elastic mode's line-search
+    // scale. A shifted projected system provides a descent direction without changing the energy,
+    // pinning a vertex or advancing time. It is never a Newton displacement convergence certificate.
+    fn static_search_direction(
+        &mut self,
+        a: &Csr,
+        g: &[f64],
+        rep: &mut SolveReport,
+    ) -> Result<Option<Vec<f64>>, Refusal> {
+        let scale = (0..self.nfree)
+            .map(|i| a.get(i, i).abs())
+            .fold(0.0_f64, f64::max);
+        let shift = f64::EPSILON.sqrt() * scale;
+        if !shift.is_finite() || shift <= 0.0 {
+            return Ok(None);
+        }
+        let mut shifted = a.clone();
+        let mut offset = 0;
+        for i in 0..self.nfree {
+            let (cols, _) = a.row(i);
+            if let Ok(diagonal) = cols.binary_search(&i) {
+                shifted.values_mut()[offset + diagonal] += shift;
+            }
+            offset += cols.len();
+        }
+        let sym = self.symbolic(&shifted)?;
+        rep.factorizations += 1;
+        Ok(match sym.factor(&shifted, &LdltOptions::default()) {
+            Ok(f) if f.inertia().negative == 0 => {
+                Some(f.solve(&g.iter().map(|v| -v).collect::<Vec<_>>()))
+            }
+            _ => None,
+        })
     }
 
     /// A Newton direction, or `None` when the bounded linear solves cannot produce one. With
@@ -1846,6 +1888,52 @@ mod line_search_tests {
             assert_eq!(sheet.x[2], initial[2]);
             let forces = sheet.checked_elastic_forces().unwrap();
             assert!((forces[1].x + sheet.model.mass[1] * sheet.gravity.x).abs() < 1e-11);
+            assert!(sheet.v.iter().all(|v| *v == Vec3::ZERO));
+        }
+    }
+
+    #[test]
+    fn light_free_sheet_reaches_contact_support_without_pinning_rigid_modes() {
+        for pcg_iters in [0, 20] {
+            let body = Body::new(
+                vec![
+                    Vec3::new(-0.01, -0.01, -0.01),
+                    Vec3::new(0.02, -0.01, -0.01),
+                    Vec3::new(-0.01, 0.02, -0.01),
+                ],
+                vec![[0, 1, 2]],
+                0.01,
+            )
+            .unwrap();
+            let params = ContactParams {
+                dhat: 1e-3,
+                thickness: 1e-4,
+                kappa: 10.0,
+                mu: 0.0,
+                eps_v: 1e-3,
+            };
+            let mut sheet = light_sheet(&[[false; 3]; 3], Vec3::new(0.0, 0.0, -9.81))
+                .with_contact(body, params)
+                .unwrap();
+            sheet.pcg_iters = pcg_iters;
+            sheet.tol = 1e-10;
+            if pcg_iters > 0 {
+                sheet.step(1e-3).unwrap();
+                assert!(sheet.precond.is_some());
+            }
+            let initial = sheet.x.clone();
+            let report = sheet.static_solve().unwrap();
+            assert!(report.converged && report.last_step < sheet.tol);
+            assert!(report.energy_end < report.energy_start);
+            let (gradient, _) = sheet.assemble(&sheet.x, None, false);
+            assert!(gradient.iter().all(|v| v.abs() < 1e-10), "{gradient:?}");
+            for (before, after) in initial.iter().zip(&sheet.x) {
+                assert!(after.z < before.z - 0.005);
+                let gap = after.z + 0.01 - params.thickness;
+                assert!(gap > 0.0 && gap < params.dhat);
+                assert!((after.x - before.x).abs() < 1e-12);
+                assert!((after.y - before.y).abs() < 1e-12);
+            }
             assert!(sheet.v.iter().all(|v| *v == Vec3::ZERO));
         }
     }

@@ -51,9 +51,11 @@ bands, fold-up animation, metrics and flags), `ftx-export` (every deliverable an
 
 **Qualification remains open (2026-11-06).** The garment runs without flags described above are historical
 observations. In the current checks, the 80 cm bolero reaches 1.414 mm of its requested 1.5 mm body offset
-under the fixed schedule, the chart trousers refuse an intersecting cloth start with self-contact, and
-the optional static-equilibrium positive regression exhausts its 1,000-iteration Newton cap. These remain
-failed cells; the [parity status](FEATURE_PARITY.md) and [drape contract](crates/ftx-drape/CONTRACT.md)
+under the fixed schedule, and the chart trousers refuse an intersecting cloth start with self-contact.
+Those remain failed cells. The optional static-equilibrium sewn cone-band regression now passes its
+original tolerance and 1,000-iteration cap: a static-only search direction lets free cloth reach its
+support without treating a regularized step as convergence. Unsupported loads still refuse.
+The [parity status](FEATURE_PARITY.md) and [drape contract](crates/ftx-drape/CONTRACT.md)
 separate numerical evidence from physical qualification and real-person fit.
 
 The plan is written to be falsifiable: it names kill gates that can stop the body port or the drape solver

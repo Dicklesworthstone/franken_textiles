@@ -136,6 +136,14 @@ may recover a compatible Newton direction through at most 32 unpreconditioned CG
 the recomputed residual checked at the direct solver's relative rank tolerance. No rigid mode is pinned.
 Static solves apply that strict residual check to cached preconditioners too, so a dynamic factor
 cannot hide an unsupported rigid load behind the looser inexact dynamic Newton policy.
+If those unshifted solves fail, a static-only search may factor the projected Hessian with a
+diagonal shift of `sqrt(EPSILON) * max(abs(diagonal))`. This lets a free garment reach its support
+without coupling rigid travel to the stiffest elastic mode's gradient-descent step. The shift
+changes only the search direction, never the potential, physical stiffness, constraints or time;
+the existing CCD and Armijo checks still govern every trial. A shifted direction cannot satisfy
+the Newton-distance convergence criterion. Free-sheet contact-support and unsupported-load
+controls include both cold solves and a prior dynamic factorization; the actual sewn cone-band
+comparison retains its original tolerance, cap and exact dynamic-state/continuation checks.
 Native drape reports expose these diagnostics under `numerical`; gravity draping additionally requires
 three consecutive accepted steps at at most 1 mm/s, otherwise a numerical-settling gating flag propagates
 to CLI, round and browser consumers.
