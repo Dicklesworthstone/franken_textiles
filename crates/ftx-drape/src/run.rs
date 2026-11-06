@@ -97,7 +97,8 @@ pub struct DrapeOptions {
     /// Steps under gravity.
     pub drape_steps: usize,
     /// Optional additional gravity steps, at the same time step, until the existing numerical
-    /// quiet window is reached. Zero preserves the fixed schedule; history laws refuse this tail.
+    /// quiet window and completed body-contact offset are reached. Zero preserves the fixed schedule;
+    /// history laws refuse this tail.
     pub max_settle_steps: usize,
     /// Report-only hold window: last N accepted gravity steps; zero means not requested.
     pub elastic_hold_steps: usize,
@@ -426,7 +427,13 @@ pub fn drape(
     let (sew, mut drape) = (phases[0].clone(), phases[1].clone());
     if opts.max_settle_steps > 0 {
         for _ in 0..opts.max_settle_steps {
-            if consecutive_quiet_steps(&drape) >= SETTLE_QUIET_STEPS {
+            if consecutive_quiet_steps(&drape) >= SETTLE_QUIET_STEPS
+                && scene
+                    .solver
+                    .contact
+                    .as_ref()
+                    .is_none_or(|c| c.params.thickness >= scene.target_thickness)
+            {
                 break;
             }
             let step = run_phase(&mut scene, 1, opts.step, GRAVITY, |_, x| {
@@ -747,11 +754,13 @@ fn add_numerical_report(
     });
     if opts.max_settle_steps > 0 {
         let steps = drape.steps - opts.drape_steps;
+        let complete = settled == Some(true)
+            && body_thickness.is_none_or(|achieved| achieved >= target_thickness);
         report["numerical"]["settling"] = json!({
             "max_steps":opts.max_settle_steps,"steps":steps,"duration_s":steps as f64 * opts.step,
             "gravity_steps":drape.steps,"gravity_duration_s":drape.steps as f64 * opts.step,
-            "stop_reason":if settled == Some(true) { "quiet_window" } else { "step_limit" },
-            "cap_exhausted":settled != Some(true) && steps == opts.max_settle_steps,
+            "stop_reason":if complete { "quiet_window" } else { "step_limit" },
+            "cap_exhausted":!complete && steps == opts.max_settle_steps,
         });
     }
     if settled == Some(false) {

@@ -20,6 +20,9 @@ dynamic state. **This comparison excludes Coulomb friction and advances no simul
 It cannot establish a friction-supported waistband hold, material-history relaxation, a unique
 equilibrium or physical fit. Maxwell/permanent-set history laws retain the solver's explicit
 refusal. An incomplete physical contact-thickness ramp also refuses the comparison.
+An explicitly requested `--max-settle-steps` tail continues until both the ordinary quiet window and
+the requested body offset are complete, or its step cap is exhausted. A quiet garment with an
+unfinished offset retains the offset gate; its tail reports `step_limit` when the cap is used up.
 
 Inspect `sim_report.json` → `static_equilibrium`. An `available` result retains the numerical solve
 report, initial and solved welded positions, triangles, mesh/weld and instance mappings,

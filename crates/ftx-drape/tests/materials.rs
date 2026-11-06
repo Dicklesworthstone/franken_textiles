@@ -218,6 +218,96 @@ fn bounded_settling_stops_at_the_first_quiet_window_on_a_supporting_cone() {
 }
 
 #[test]
+fn bounded_settling_finishes_the_body_offset_even_when_the_garment_is_quiet() {
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    // A loose synthetic band has room for this declared offset. The short explicit time step
+    // keeps its endpoint speeds quiet while the bounded offset continuation is still running.
+    let pattern = band(json!({}));
+    let options = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 1e-12,
+        contact: ftx_drape::ContactParams {
+            thickness: 8e-3,
+            ..DrapeOptions::default().contact
+        },
+        ..DrapeOptions::default()
+    };
+    let simulate = |options| drape(&pattern, &json!({}), &body, &options, |_| {}).unwrap();
+    let baseline = simulate(options);
+    assert_eq!(baseline.report["numerical"]["settled"], true);
+    assert!(baseline.drape.thickness < options.contact.thickness);
+
+    let limited = simulate(DrapeOptions {
+        max_settle_steps: 1,
+        ..options
+    });
+    assert_eq!(limited.report["numerical"]["settled"], true);
+    assert_eq!(limited.report["numerical"]["settling"]["steps"], 1);
+    assert_eq!(
+        limited.report["numerical"]["settling"]["stop_reason"],
+        "step_limit"
+    );
+    assert_eq!(
+        limited.report["numerical"]["settling"]["cap_exhausted"],
+        true
+    );
+    assert!(limited.drape.thickness < options.contact.thickness);
+    assert!(
+        limited
+            .gating()
+            .iter()
+            .any(|flag| flag == "body thickness ramp did not reach its target")
+    );
+
+    let completed = simulate(DrapeOptions {
+        max_settle_steps: 64,
+        ..options
+    });
+    assert_eq!(completed.drape.thickness, options.contact.thickness);
+    assert_eq!(completed.report["numerical"]["settled"], true);
+    assert_eq!(
+        completed.report["numerical"]["settling"]["stop_reason"],
+        "quiet_window"
+    );
+    assert_eq!(
+        completed.report["numerical"]["settling"]["cap_exhausted"],
+        false
+    );
+    assert!(completed.drape.steps > options.drape_steps + 1);
+    assert!(completed.drape.steps < options.drape_steps + 64);
+    assert!(
+        !completed
+            .gating()
+            .iter()
+            .any(|flag| flag == "body thickness ramp did not reach its target")
+    );
+
+    for run in [&limited, &completed] {
+        let fixed = simulate(DrapeOptions {
+            drape_steps: run.drape.steps,
+            ..options
+        });
+        assert_eq!(fixed.fold.frames, run.fold.frames);
+        assert_eq!(fixed.scene.solver.x, run.scene.solver.x);
+        assert_eq!(fixed.scene.solver.v, run.scene.solver.v);
+        let mut report = run.report.clone();
+        report["numerical"]
+            .as_object_mut()
+            .unwrap()
+            .remove("settling");
+        assert_eq!(report, fixed.report);
+    }
+}
+
+#[test]
 fn independent_static_equilibrium_preserves_the_dynamic_garment_and_continuation() {
     let mut surface = body();
     for (i, point) in surface.vertices.iter_mut().enumerate() {

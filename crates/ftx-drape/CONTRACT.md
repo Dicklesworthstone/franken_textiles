@@ -137,13 +137,15 @@ also gates an ordinary quiet run; paired checks retain that failure without dupl
 Accepted phase reports retain the achieved offset, separately from the requested contact offset.
 The fixed phase schedule remains unchanged unless `max_settle_steps` explicitly requests up to
 256 additional gravity steps. The tail continues the same sewn solver, source material, inertia,
-contact state and fixed time step; it stops at the existing three-endpoint quiet window or its cap.
-Already-quiet runs add no steps. Material relaxation and permanent membrane/bending histories refuse
+contact state and fixed time step; it stops when the existing three-endpoint quiet window and the
+requested body offset are both complete, or at its cap. Already-quiet runs add no steps only when
+their body offset is complete. Material relaxation and permanent membrane/bending histories refuse
 automatic stopping before sewing, using the same admission as `Solver::settle`; a speed threshold
 cannot choose their constitutive duration or loading path. The accepted tail remains part of the
 gravity phase in diagnostics, contact samples, animation, thermal source geometry and casing windows.
 `numerical.settling` retains the requested cap, accepted extra steps, extra/total gravity durations,
-`quiet_window` or `step_limit` stop reason and cap exhaustion. Exhaustion retains the unsettled gate.
+`quiet_window` or `step_limit` stop reason and cap exhaustion. Exhaustion retains each unmet gate:
+speed-only numerical settledness and body-offset completion remain separate report decisions.
 Scenario work reserves the full tail before starting, within the existing 256-step total limit;
 two-start comparisons apply the same cap independently and retain both actual schedules. Zero omits
 the new option and report block, preserving existing schedules and wire output. Sewing-only
