@@ -209,6 +209,9 @@ pub struct Operation {
     pub operation_id: String,
     /// Physical specialist cell.
     pub cell: String,
+    /// Actual qualified person chosen for this operation, present only in eligible-labor mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attending_worker: Option<String>,
     /// Index in this cell's retained source plan, not the outer merged seam table.
     pub seam_index: usize,
     /// Index in the fixed complete route.
@@ -273,7 +276,7 @@ pub struct Timeline {
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
     /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars;
-    /// `/7` cost; `/8` retained fixtures; `/9` finite staging; `/10` independent transfer pools.
+    /// `/7` cost; `/8` retained fixtures; `/9` finite staging; `/10` transfer pools; `/11` eligible labor.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -368,6 +371,12 @@ impl Policy {
 
     fn retained_fixtures(&self) -> bool {
         self.protocol == "unloaded_operations_with_cell_retained_fixtures/1"
+    }
+
+    fn eligible_labor(&self) -> bool {
+        self.attending_labor
+            .as_ref()
+            .is_some_and(labor::Policy::eligible)
     }
 
     pub(crate) fn eligible(&self) -> bool {
@@ -717,9 +726,18 @@ struct Dispatch {
     task: usize,
     /// Primary is index zero. First/same-cell operations use zero without occupying a carrier.
     carrier: usize,
+    /// Qualified attending-worker index; zero is a placeholder when labor is implicit.
+    worker: usize,
 }
 
 impl Prepared<'_> {
+    fn workers_for(&self, cell: usize) -> &[usize] {
+        match &self.labor {
+            Some(labor) => labor.workers_for(cell),
+            None => &[0],
+        }
+    }
+
     fn initial(&self) -> State {
         State {
             next: vec![0; self.copies],
@@ -889,10 +907,14 @@ impl Prepared<'_> {
             copy,
             task: index,
             carrier: carrier_index,
+            worker,
         } = dispatch;
         let task = &self.tasks[index];
         if state.next[copy] != task.route {
             return Err(bad("routed dispatch changed its original operation order"));
+        }
+        if self.labor.is_none() && worker != 0 {
+            return Err(bad("routed dispatch selects undeclared attending labor"));
         }
         if self.fixtures.as_ref().is_some_and(|fixtures| {
             !fixtures.can_dispatch(&state.reservations, copy, task.route, task.cell)
@@ -978,6 +1000,7 @@ impl Prepared<'_> {
                 labor.arrival(
                     next.labor.as_ref().expect("admitted attending labor"),
                     task.cell,
+                    worker,
                 )
             })
             .transpose()?
@@ -1088,6 +1111,13 @@ impl Prepared<'_> {
                 copy,
                 operation_id: step.operation.clone(),
                 cell: cell.clone(),
+                attending_worker: self.policy.eligible_labor().then(|| {
+                    self.labor
+                        .as_ref()
+                        .expect("admitted eligible labor")
+                        .worker_id(dispatch.worker)
+                        .to_string()
+                }),
                 seam_index: task.seam_index,
                 route_index: task.route,
                 loading_start_milliseconds: event.load_start,
@@ -1426,31 +1456,34 @@ impl Search<'_, '_> {
                     }) {
                         continue;
                     }
-                    if self.used == self.prepared.policy.max_search_nodes {
-                        self.complete = false;
-                        return Ok(());
-                    }
-                    self.used += 1;
-                    let dispatch = Dispatch {
-                        copy,
-                        task,
-                        carrier,
-                    };
-                    if let Some((next, _)) = self.prepared.advance(state, dispatch)? {
-                        path.push(dispatch);
-                        self.visit(&next, path)?;
-                        path.pop();
-                    }
-                    if self.cost.as_ref().is_some_and(|cost| cost.exhausted) {
-                        return Ok(());
-                    }
-                    if self.cost.is_none()
-                        && self
-                            .best
-                            .as_ref()
-                            .is_some_and(|(finish, _)| *finish == self.lower)
-                    {
-                        return Ok(());
+                    for &worker in self.prepared.workers_for(cell) {
+                        if self.used == self.prepared.policy.max_search_nodes {
+                            self.complete = false;
+                            return Ok(());
+                        }
+                        self.used += 1;
+                        let dispatch = Dispatch {
+                            copy,
+                            task,
+                            carrier,
+                            worker,
+                        };
+                        if let Some((next, _)) = self.prepared.advance(state, dispatch)? {
+                            path.push(dispatch);
+                            self.visit(&next, path)?;
+                            path.pop();
+                        }
+                        if self.cost.as_ref().is_some_and(|cost| cost.exhausted) {
+                            return Ok(());
+                        }
+                        if self.cost.is_none()
+                            && self
+                                .best
+                                .as_ref()
+                                .is_some_and(|(finish, _)| *finish == self.lower)
+                        {
+                            return Ok(());
+                        }
                     }
                 }
             }
@@ -1605,7 +1638,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.transfer_pool.is_some() {
+        schema: if policy.eligible_labor() {
+            "ftx-sewing-plan/28"
+        } else if policy.transfer_pool.is_some() {
             "ftx-sewing-plan/27"
         } else if uses_staging {
             "ftx-sewing-plan/26"
@@ -1799,10 +1834,12 @@ pub(in crate::sewing) fn build(
     'seed: for copy in 0..copies {
         for _ in 0..count {
             seed_used += 1;
+            let task = prepared.choices[seed.next[copy]][0];
             let dispatch = Dispatch {
                 copy,
-                task: prepared.choices[seed.next[copy]][0],
+                task,
                 carrier: 0,
+                worker: prepared.workers_for(prepared.tasks[task].cell)[0],
             };
             let Some((next, _)) = prepared.advance(&seed, dispatch)? else {
                 break 'seed;
@@ -1972,7 +2009,9 @@ pub(in crate::sewing) fn build(
         .map(|pool| pool.report(policy, &baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if transfer_pool.is_some() {
+        schema: if policy.eligible_labor() {
+            "ftx-sewing-routing/11"
+        } else if transfer_pool.is_some() {
             "ftx-sewing-routing/10"
         } else if uses_staging {
             "ftx-sewing-routing/9"
@@ -2010,7 +2049,13 @@ pub(in crate::sewing) fn build(
         optimality_proven: proven,
         budget_exhausted: !search_complete,
         lower_bound_makespan_milliseconds: lower,
-        search_scope: if policy.transfer_pool.is_some() && uses_staging {
+        search_scope: if policy.eligible_labor() && uses_staging {
+            "coupled_eligible_labor_bounded_staging_append_dispatch/1"
+        } else if policy.eligible_labor() && policy.retained_fixtures() {
+            "coupled_eligible_labor_cell_retained_fixture_append_dispatch/1"
+        } else if policy.eligible_labor() {
+            "coupled_eligible_labor_handoff_cell_append_dispatch/1"
+        } else if policy.transfer_pool.is_some() && uses_staging {
             "coupled_transfer_pool_bounded_staging_append_dispatch/1"
         } else if policy.transfer_pool.is_some() && policy.retained_fixtures() {
             "coupled_transfer_pool_cell_retained_fixture_append_dispatch/1"
@@ -2038,7 +2083,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.transfer_pool.is_some() {
+        schema: if policy.eligible_labor() {
+            "ftx-sewing-production/16"
+        } else if policy.transfer_pool.is_some() {
             "ftx-sewing-production/15"
         } else if uses_staging {
             "ftx-sewing-production/14"

@@ -1194,8 +1194,9 @@ selected cell for every actual operation; retained lifecycles pair their actual 
 
 ## Several specialist cells with fewer attending workers
 
-Optional `production.routing.attending_labor` assigns every configured cell to exactly one
-explicit physical worker. Multiple cells may share one person; separate workers can operate
+With model `exclusive_full_operation_attendance/1`, optional
+`production.routing.attending_labor` assigns every configured cell to exactly one explicit
+physical worker. Multiple cells may share one person; separate workers can operate
 concurrently. This protocol attends **every phase**, including feed. It does not infer the
 autonomous-feed qualification used by whole-garment `parallel.shared_operator`.
 
@@ -1249,8 +1250,59 @@ Absent labor retains existing report versions and dedicated-attendant timing.
 
 Synthetic routing regressions and actual native/portable replay cover the software contract.
 They do not qualify measured labor, seam quality, unrestricted factory optimization or hardware
-execution. Cooperative handling, worker reassignment between cells during a job and breaks require
-separate protocols.
+execution. The explicit eligibility model below permits different qualified people to attend a
+cell during the job; qualified calendars specify breaks. Cooperative handling remains outside
+these full-attendance models.
+
+### Choose among qualified attending workers
+
+Set `attending_labor.model` to `eligible_full_operation_attendance/1` to let each operation choose
+one qualified attending worker. Each `workers[].cells` list becomes that person's explicit
+nonempty qualification domain. Domains may overlap, every configured cell must be covered, and
+**1–8 workers** are admitted even when there are fewer cells. A person can attend several cells,
+and different qualified people can attend the same cell at different times. The existing labor
+source must qualify those complete domains against the exact cell/recipe/timing locks; names or
+similar machines do not establish interchangeable skills or different worker-specific feed rates.
+
+Every person retains their own initial location, complete directed travel domain, outer shift and
+optional nonpreemptive availability windows. The chosen worker is occupied from departure through
+travel, waiting, loading, setup, feed and complete unloading. A different worker cannot take over
+an operation midway through a break. Initial and directed travel are never borrowed from another
+worker or inferred from cell names.
+
+The copy-major seed chooses the first authored eligible worker for each cell. Search considers
+eligible workers in authored order together with actual cell and transfer-carrier choices. Every
+combined dispatch attempt consumes the existing node budget. A closed or unavailable seed worker
+can be replaced by a complete feasible searched schedule; a work limit retains a complete
+incumbent. All worker domains and travel tables are compiled once, and worker clock/location
+state is bounded by eight people.
+
+This model composes with finite staging, local/shared retained fixtures, independent transfer
+carriers and qualified calendars. Buffer or fixture delays refit the chosen worker's complete
+interval. Explicit worker-owned handoffs still occupy their named owner through approach,
+waiting, pickup, carriage and deposit before machine attendance is considered. The operation
+may then use that owner or another eligible person. Ownership never creates a second clock for
+the same worker, and independent carrier pools retain their existing ownership restriction.
+
+Lower bounds charge work to an individual only when every eligible assignment forces that work
+onto that person. A separate total-attendance capacity relaxation uses the actual worker count.
+Unused workers, optional travel and late availability cannot become fictitious mandatory work.
+Bound equality governs makespan-optimality claims; exhaustive append dispatch remains scoped to
+its declared scheduling model.
+
+Eligible labor uses plan `/28`, production `/16`, routing `/11` and
+`ftx-sewing-attending-labor/3`. Every routed operation adds its exact `attending_worker` ID, and
+independent labor reconstruction uses that choice to verify qualified attendance, travel, windows
+and nonoverlap. Baseline and selected labor histories include `worker_usage` for every declared
+person, with operation/handoff counts, separate travel/waiting/attendance/carrying totals and
+optional first-departure/last-finish clocks. A person used only for garment handoffs remains
+visible as active; wholly unused people have no occupied endpoints. Existing fixed ownership
+retains its schemas and omits the new fields. Ordinary selected stitch geometry, purchasing and
+material-study consumers continue to use the same complete routed schedule.
+
+These source-qualified scheduling inputs do not establish measured worker skill, physical labor
+performance, safe cooperative handling or hardware authorization. `physical_labor_validated`
+remains false.
 
 ## An attending worker can also carry garments
 

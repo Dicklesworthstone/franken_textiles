@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 
 #[path = "sewing_routing/bounded_staging.rs"]
 mod bounded_staging;
+#[path = "sewing_routing/eligible_labor.rs"]
+mod eligible_labor;
 #[path = "sewing_routing/selection_cost.rs"]
 mod selection_cost;
 #[path = "sewing_routing/transfer_pool.rs"]

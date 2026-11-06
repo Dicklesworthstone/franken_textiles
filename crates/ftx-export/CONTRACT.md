@@ -501,6 +501,23 @@ work and qualification limits apply. Tests cover reentrant local/shared capacity
 calendar gaps, eligible ownership, seed recovery, source locks and exact 200-stitch replay. Retained
 inventory does not authorize occupied-fixture transport, continuous clamping or physical execution.
 
+**Eligible routed attending workers** (`routing.attending_labor`, `ftx-pb2.2`). Explicit
+`eligible_full_operation_attendance/1` admits overlapping qualified cell domains for 1–8 workers,
+with every configured cell covered and complete per-worker initial/directed travel. Actual
+dispatch selects one eligible person through complete travel, waiting, loading, setup, feed and
+unloading; source locks, individual shifts and calendars remain authoritative. The first authored
+eligible worker supplies the copy-major seed, while all worker/cell/carrier attempts share the
+existing bounded search. Clock/location state uses fixed-size arrays and compiled domains.
+Shared fixtures, finite staging and owned garment handoffs preserve their existing identities and
+exclusive state; another qualified attendant cannot duplicate a transfer owner's person.
+Bounds use only individually forced work and conservative total-attendance capacity. Plan `/28`,
+production `/16`, routing `/11` and labor `/3` retain the selected worker on every operation and
+native per-worker baseline/selected usage, including idle and handoff-only people. Independent
+labor replay verifies the authored worker choice and complete occupancy. Legacy fixed ownership
+omits the new fields and preserves its schemas and arithmetic. Tests: `sewing_routing/eligible_labor`;
+synthetic schedules do not establish measured skills, empirical labor performance or hardware
+authorization.
+
 **Worker-owned routed handoffs** (`routing.transfer.attending_worker`). An explicit existing
 worker owns source pickup through destination deposit under the separately qualified
 `attended_source_to_destination_handoffs/1` law. Legacy ready-state transfer observations cannot

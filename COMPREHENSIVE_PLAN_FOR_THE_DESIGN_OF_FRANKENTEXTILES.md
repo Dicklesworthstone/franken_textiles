@@ -5561,6 +5561,22 @@ exclusive occupancy and windows. Ordinary stitches, purchasing, studies and work
 the same schedule. This advances `ftx-pb2.2`; physical carrier independence, factory timing,
 unrestricted scheduling completeness, access and hardware authorization remain separate gates.
 
+### 25.188 Select an available qualified attending worker for each operation
+
+An explicit eligibility model extends fixed cell-to-worker ownership into authored, possibly
+overlapping worker qualification domains. Every cell remains covered, and every chosen person
+retains their own complete travel, shift and calendar constraints. Bounded dispatch selects the
+actual worker alongside the cell and garment carrier, with full attendance through unloading.
+Finite staging, retained fixtures and explicitly owned handoffs share the same exclusive state;
+worker substitution never duplicates a person or implies autonomous feed.
+
+The first authored eligible worker supplies the seed. Combined choices share the existing work
+cap, complete incumbents remain usable, and lower bounds exclude optional-worker assumptions.
+Exact selected identities and independently reconstructed per-worker activity accompany both
+schedules, ordinary stitches, purchasing, studies and workbench views. This advances `ftx-pb2.2`;
+measured worker qualification, physical labor performance, cooperative handling and hardware
+authorization remain separate gates.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

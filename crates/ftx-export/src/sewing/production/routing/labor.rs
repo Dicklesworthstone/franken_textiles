@@ -13,15 +13,19 @@ use super::{
 };
 use crate::sewing::{bad, production::parallel::operator::Transfer, qualified_text};
 
+const MAX_WORKERS: usize = 8;
+
 /// A source-qualified assignment of complete attended operations to explicit physical workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// `exclusive_full_operation_attendance/1`; feed occupies the worker through full unloading.
+    /// `exclusive_full_operation_attendance/1`, or `eligible_full_operation_attendance/1` for
+    /// explicitly interchangeable qualified workers. Feed occupies the worker through unloading.
     pub model: String,
     /// Full effective cell/recipe/timing locks, including every eligible but unused alternative.
     pub cells: BTreeMap<String, String>,
-    /// One to eight physical workers, each owning a nonempty disjoint set of configured cells.
+    /// One to eight physical workers with nonempty qualified cell domains. Domains are disjoint
+    /// in the exclusive model; the eligible model admits overlapping alternatives per operation.
     pub workers: Vec<Worker>,
     /// Evidence for the complete worker assignment, availability and travel protocol.
     pub source: Source,
@@ -43,14 +47,15 @@ pub struct Policy {
 pub struct Worker {
     /// Stable physical identity, distinct from cells, other workers and the garment handoff resource.
     pub id: String,
-    /// Exactly the configured cells this person may attend; each cell has one worker in this model.
+    /// Exactly the configured cells this person may attend. Exclusive mode assigns each cell to
+    /// one worker; eligible mode selects one qualified worker for every complete operation.
     pub cells: Vec<String>,
     /// Availability from the common job origin, at most one day.
     pub available_at_milliseconds: u32,
     /// Optional inclusive end, covering travel, waiting, owned handoffs and complete machine attendance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_until_milliseconds: Option<u64>,
-    /// Explicit travel to every owned cell, or every configured cell for the transfer owner.
+    /// Explicit travel to every qualified cell, or every configured cell for the transfer owner.
     pub initial_arrival_milliseconds: BTreeMap<String, u32>,
     /// Every directed pair in that travel domain; remaining at a cell requires no travel.
     pub transfers: Vec<Transfer>,
@@ -132,12 +137,38 @@ pub struct Timeline {
     /// Complete pickup/carry/deposit occupancy, excluding the separately counted empty approach.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transfer_milliseconds: Option<u64>,
+    /// Per-person use in authored worker order, including idle alternatives; eligible mode only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_usage: Option<Vec<Usage>>,
+}
+
+/// Source-replayed use of one eligible person, separate from aggregate cell work and completion.
+#[derive(Clone, Debug, Serialize)]
+pub struct Usage {
+    /// Exact qualified worker identity.
+    pub worker: String,
+    /// Complete machine operations assigned to this person.
+    pub operations: usize,
+    /// Explicitly owned garment handoffs, including supplied zero-duration carrying work.
+    pub handoffs: usize,
+    /// Initial and directed empty travel, including approach for explicitly owned handoffs.
+    pub travel_milliseconds: u64,
+    /// Occupied waiting before machine loading or owned pickup.
+    pub waiting_milliseconds: u64,
+    /// Complete loading, setup, feed and unloading work.
+    pub attended_milliseconds: u64,
+    /// Explicitly owned pickup/carry/deposit work; zero for an independent handoff resource.
+    pub transfer_milliseconds: u64,
+    /// First occupied departure, absent only when this person performs no activity.
+    pub first_departure_milliseconds: Option<u64>,
+    /// Latest complete unloading or deposit, absent only for an idle person.
+    pub last_finish_milliseconds: Option<u64>,
 }
 
 /// Exact source policy and complete retained baseline/selected worker replay.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` independent handoffs; `/2` explicit worker-owned handoffs and their exact replay.
+    /// `/1` independent handoffs; `/2` worker-owned handoffs; `/3` eligible attending workers.
     pub schema: &'static str,
     /// Complete admitted worker identities, cell locks, travel evidence and availability windows.
     pub policy: Policy,
@@ -154,8 +185,8 @@ pub struct Report {
 
 #[derive(Clone)]
 pub(super) struct State {
-    ready: Vec<u64>,
-    last: Vec<Option<usize>>,
+    ready: [u64; MAX_WORKERS],
+    last: [Option<usize>; MAX_WORKERS],
 }
 
 #[derive(Clone, Copy)]
@@ -169,12 +200,48 @@ pub(super) struct Arrival {
 pub(super) struct Compiled {
     policy: Policy,
     cell_ids: Vec<String>,
-    cell_worker: Vec<usize>,
+    /// Authored worker order within each admitted cell domain; compiled once before search.
+    cell_workers: Vec<Vec<usize>>,
     transfer: Option<TransferPolicy>,
     transfer_worker: Option<usize>,
     initial: Vec<Vec<u64>>,
     travel: Vec<Vec<Vec<u64>>>,
     calendars: Vec<Option<Vec<calendars::Window>>>,
+}
+
+impl Policy {
+    pub(super) fn eligible(&self) -> bool {
+        self.model == "eligible_full_operation_attendance/1"
+    }
+}
+
+impl Usage {
+    fn record(
+        &mut self,
+        arrival: Arrival,
+        start: u64,
+        finish: u64,
+        handoff: bool,
+    ) -> Result<(), Refusal> {
+        self.travel_milliseconds = add(self.travel_milliseconds, arrival.time - arrival.departure)?;
+        self.waiting_milliseconds = add(self.waiting_milliseconds, start - arrival.time)?;
+        if handoff {
+            self.handoffs += 1;
+            self.transfer_milliseconds = add(self.transfer_milliseconds, finish - start)?;
+        } else {
+            self.operations += 1;
+            self.attended_milliseconds = add(self.attended_milliseconds, finish - start)?;
+        }
+        self.first_departure_milliseconds = Some(
+            self.first_departure_milliseconds
+                .map_or(arrival.departure, |first| first.min(arrival.departure)),
+        );
+        self.last_finish_milliseconds = Some(
+            self.last_finish_milliseconds
+                .map_or(finish, |last| last.max(finish)),
+        );
+        Ok(())
+    }
 }
 
 impl Compiled {
@@ -185,9 +252,10 @@ impl Compiled {
             }
             return Ok(None);
         };
-        if policy.model != "exclusive_full_operation_attendance/1"
+        if !(policy.model == "exclusive_full_operation_attendance/1" || policy.eligible())
             || policy.workers.is_empty()
-            || policy.workers.len() > route.cells.len()
+            || policy.workers.len() > MAX_WORKERS
+            || (!policy.eligible() && policy.workers.len() > route.cells.len())
             || policy.cells != route.cell_locks
             || !source_valid(&policy.source, &policy.method, &policy.conditions)
         {
@@ -223,7 +291,7 @@ impl Compiled {
         let mut compiled = Self {
             policy: policy.clone(),
             cell_ids: route.cells.iter().map(|cell| cell.id.clone()).collect(),
-            cell_worker: vec![0; cells.len()],
+            cell_workers: vec![Vec::new(); cells.len()],
             transfer: transfer_worker.map(|_| route.transfer.clone()),
             transfer_worker,
             initial: vec![vec![0; cells.len()]; policy.workers.len()],
@@ -269,10 +337,10 @@ impl Compiled {
                 let Some(&cell) = cells.get(id) else {
                     return Err(bad("routed worker names an unknown physical cell"));
                 };
-                if !assigned.insert(id) {
+                if !assigned.insert(id) && !policy.eligible() {
                     return Err(bad("routed cells need exactly one attending worker"));
                 }
-                compiled.cell_worker[cell] = index;
+                compiled.cell_workers[cell].push(index);
             }
             for &id in &visited {
                 let Some(&arrival) = worker.initial_arrival_milliseconds.get(id) else {
@@ -309,18 +377,36 @@ impl Compiled {
 
     pub(super) fn initial(&self) -> State {
         State {
-            ready: self
-                .policy
-                .workers
-                .iter()
-                .map(|worker| u64::from(worker.available_at_milliseconds))
-                .collect(),
-            last: vec![None; self.policy.workers.len()],
+            ready: std::array::from_fn(|index| {
+                self.policy
+                    .workers
+                    .get(index)
+                    .map_or(0, |worker| u64::from(worker.available_at_milliseconds))
+            }),
+            last: [None; MAX_WORKERS],
         }
     }
 
-    pub(super) fn arrival(&self, state: &State, cell: usize) -> Result<Option<Arrival>, Refusal> {
-        self.worker_arrival(state, self.cell_worker[cell], cell)
+    pub(super) fn workers_for(&self, cell: usize) -> &[usize] {
+        &self.cell_workers[cell]
+    }
+
+    pub(super) fn worker_id(&self, worker: usize) -> &str {
+        &self.policy.workers[worker].id
+    }
+
+    pub(super) fn arrival(
+        &self,
+        state: &State,
+        cell: usize,
+        worker: usize,
+    ) -> Result<Option<Arrival>, Refusal> {
+        if !self.cell_workers[cell].contains(&worker) {
+            return Err(bad(
+                "routed operation selects an unqualified attending worker",
+            ));
+        }
+        self.worker_arrival(state, worker, cell)
     }
 
     pub(super) fn transfer_arrival(
@@ -412,6 +498,24 @@ impl Compiled {
         state.last[arrival.worker] = Some(cell);
     }
 
+    fn first_arrival(&self, worker: usize) -> Result<u64, Refusal> {
+        // A transfer owner may first visit an unowned source. Other workers may first visit any
+        // qualified cell, including an unused alternative; this is only a relaxed work bound.
+        let travel = self.initial[worker]
+            .iter()
+            .enumerate()
+            .filter(|&(cell, _)| {
+                self.transfer_worker == Some(worker) || self.cell_workers[cell].contains(&worker)
+            })
+            .map(|(_, &arrival)| arrival)
+            .min()
+            .expect("nonempty worker visit domain");
+        add(
+            u64::from(self.policy.workers[worker].available_at_milliseconds),
+            travel,
+        )
+    }
+
     pub(super) fn lower_bound(
         &self,
         tasks: &[Task],
@@ -420,23 +524,28 @@ impl Compiled {
         copies: usize,
     ) -> Result<u64, Refusal> {
         let mut forced = vec![0; self.policy.workers.len()];
+        let mut total = 0;
         for domain in choices {
-            let worker = self.cell_worker[tasks[domain[0]].cell];
-            if domain
+            let minimum = domain
                 .iter()
-                .all(|&task| self.cell_worker[tasks[task].cell] == worker)
-            {
-                let minimum = domain
-                    .iter()
-                    .map(|&task| {
-                        let task = &tasks[task];
-                        add(add(task.load, task.feed)?, task.unload)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .min()
-                    .expect("nonempty admitted eligible domain");
-                forced[worker] = add(forced[worker], minimum * copies as u64)?;
+                .map(|&task| {
+                    let task = &tasks[task];
+                    add(add(task.load, task.feed)?, task.unload)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .min()
+                .expect("nonempty admitted eligible domain")
+                * copies as u64;
+            if self.policy.eligible() {
+                total = add(total, minimum)?;
+            }
+            let worker = self.cell_workers[tasks[domain[0]].cell][0];
+            if domain.iter().all(|&task| {
+                let workers = &self.cell_workers[tasks[task].cell];
+                workers.len() == 1 && workers[0] == worker
+            }) {
+                forced[worker] = add(forced[worker], minimum)?;
             }
         }
         if let Some(worker) = self.transfer_worker {
@@ -455,27 +564,21 @@ impl Compiled {
                 forced[worker] = add(forced[worker], minimum * copies as u64)?;
             }
         }
-        let mut lower = 0;
-        for (index, work) in forced.into_iter().enumerate().filter(|&(_, work)| work > 0) {
-            // Ignore optional work, all setup and between-cell travel. The first cell may be any
-            // visited cell, even one not selected. A transfer owner can begin at an unowned
-            // source; considering only their machine cells could overstate required travel.
-            let first = self.initial[index]
-                .iter()
-                .enumerate()
-                .filter(|&(cell, _)| {
-                    self.transfer_worker == Some(index) || self.cell_worker[cell] == index
-                })
-                .map(|(_, &arrival)| arrival)
+        // Alternative workers need not be used. Relax every domain to the complete pool and
+        // every opening to the earliest possible arrival; an idle late worker cannot raise it.
+        let mut lower = if self.policy.eligible() && total > 0 {
+            let first = (0..self.policy.workers.len())
+                .map(|worker| self.first_arrival(worker))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
                 .min()
-                .expect("nonempty worker ownership");
-            lower = lower.max(add(
-                add(
-                    u64::from(self.policy.workers[index].available_at_milliseconds),
-                    first,
-                )?,
-                work,
-            )?);
+                .expect("admitted attending workers");
+            add(first, total.div_ceil(self.policy.workers.len() as u64))?
+        } else {
+            0
+        };
+        for (index, work) in forced.into_iter().enumerate().filter(|&(_, work)| work > 0) {
+            lower = lower.max(add(self.first_arrival(index)?, work)?);
         }
         Ok(lower)
     }
@@ -489,6 +592,23 @@ impl Compiled {
             waiting_milliseconds: 0,
             attended_milliseconds: 0,
             transfer_milliseconds: self.transfer.as_ref().map(|_| 0),
+            worker_usage: self.policy.eligible().then(|| {
+                self.policy
+                    .workers
+                    .iter()
+                    .map(|worker| Usage {
+                        worker: worker.id.clone(),
+                        operations: 0,
+                        handoffs: 0,
+                        travel_milliseconds: 0,
+                        waiting_milliseconds: 0,
+                        attended_milliseconds: 0,
+                        transfer_milliseconds: 0,
+                        first_departure_milliseconds: None,
+                        last_finish_milliseconds: None,
+                    })
+                    .collect()
+            }),
         };
         let mut transfers = route.transfers.iter().peekable();
         let mut transfer_ready = self
@@ -594,11 +714,37 @@ impl Compiled {
                         start_milliseconds: transfer.start_milliseconds,
                         finish_milliseconds: transfer.finish_milliseconds,
                     });
+                if let Some(usage) = &mut out.worker_usage {
+                    usage[arrival.worker].record(
+                        arrival,
+                        transfer.start_milliseconds,
+                        transfer.finish_milliseconds,
+                        true,
+                    )?;
+                }
                 self.finish(&mut state, arrival, cell, transfer.finish_milliseconds);
                 transfer_ready = transfer.finish_milliseconds;
             }
+            let worker = if self.policy.eligible() {
+                self.workers_for(cell)
+                    .iter()
+                    .copied()
+                    .find(|&worker| {
+                        operation.attending_worker.as_deref() == Some(self.worker_id(worker))
+                    })
+                    .ok_or_else(|| {
+                        bad("routed labor replay omits or changes its qualified chosen worker")
+                    })?
+            } else {
+                if operation.attending_worker.is_some() {
+                    return Err(bad(
+                        "exclusive routed labor cannot change its cell ownership",
+                    ));
+                }
+                self.workers_for(cell)[0]
+            };
             let initial_arrival = self
-                .arrival(&state, cell)?
+                .arrival(&state, cell, worker)?
                 .ok_or_else(|| bad("retained routed operation has no available worker approach"))?;
             let duration = operation
                 .finish_milliseconds
@@ -654,6 +800,14 @@ impl Compiled {
                 feed_finish_milliseconds: operation.feed_finish_milliseconds,
                 finish_milliseconds: operation.finish_milliseconds,
             });
+            if let Some(usage) = &mut out.worker_usage {
+                usage[arrival.worker].record(
+                    arrival,
+                    operation.loading_start_milliseconds,
+                    operation.finish_milliseconds,
+                    false,
+                )?;
+            }
             self.finish(&mut state, arrival, cell, operation.finish_milliseconds);
         }
         if transfers.next().is_some() {
@@ -668,7 +822,9 @@ impl Compiled {
         selected: &RouteTimeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: if self.transfer.is_some() {
+            schema: if self.policy.eligible() {
+                "ftx-sewing-attending-labor/3"
+            } else if self.transfer.is_some() {
                 "ftx-sewing-attending-labor/2"
             } else {
                 "ftx-sewing-attending-labor/1"
