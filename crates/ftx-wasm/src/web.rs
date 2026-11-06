@@ -90,6 +90,23 @@ pub fn bundle_adjust(input: &str, iterations: &str) -> Result<String, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Fit prepared multi-frame observations and local model bytes with native acceptance gates.
+/// Work limits are strings so the boundary cannot truncate a JavaScript number into a valid limit.
+///
+/// # Errors
+/// Invalid prepared input, model identity/arrays, work controls or canonical fitting admission.
+#[wasm_bindgen]
+pub fn fit_body(
+    model_bytes: &[u8],
+    input: &str,
+    iterations: &str,
+    max_evaluations: &str,
+) -> Result<String, JsError> {
+    crate::body_fit::fit_body(model_bytes, input, iterations, max_evaluations)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Assess a sparse still-window candidate without creating reviewed capture evidence.
 ///
 /// # Errors

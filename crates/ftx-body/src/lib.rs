@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod accepted_shape;
+pub mod correspondence;
 pub mod data;
 pub mod drape;
 pub mod fit;

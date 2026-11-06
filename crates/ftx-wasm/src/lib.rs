@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod alteration;
+pub mod body_fit;
 pub mod fold;
 pub mod manufacturing;
 pub mod materials;

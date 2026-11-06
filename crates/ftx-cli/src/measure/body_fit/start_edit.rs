@@ -105,7 +105,7 @@ pub(super) fn attach(
             .ok_or_else(|| bad_input("source input path must be UTF-8"))?
             .into(),
         source_input_sha256: sha256_hex(input_bytes),
-        model_sha256: adapter.config.model_sha256.clone(),
+        model_sha256: adapter.configuration().model_sha256.clone(),
         capture_sources_sha256: capture_receipt
             .and_then(|r| r["sources_sha256"].as_str())
             .map(str::to_owned),
