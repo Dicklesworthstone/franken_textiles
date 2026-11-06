@@ -572,6 +572,16 @@ produces coefficients, not an additional independent measurement. This browser c
 establish physical capture accuracy, anatomical validity, full multi-frame body fitting or garment fit;
 see `docs/section-girth.md` and `docs/photo-measurement.md`.
 
+Separately, the local photo page runs prepared articulated multi-frame Anny fitting through the
+same model evaluator and `ftx-measure` solver as the native command. Native capture review can
+export its already-checked cameras, observations and inline silhouette samples as an immutable
+`ftx-anny-body-fit-input/1` snapshot. Exact model identity, authored shape/pose controls, multistart
+agreement, held-out checks and bounded work remain authoritative; failures publish diagnostics
+without an accepted shape. The original input and full report retain native integer identities.
+Accepted reports feed existing body/garment consumers with explicit wearer association, without
+becoming measurement records or READY evidence. Source acquisition and independent physical
+qualification remain distinct from this portable fitting capability; see `docs/multi-frame-body-fit.md`.
+
 ---
 
 ## 16. Workspace crates, budgets, dependency direction and dependency policy

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>Local photo measurements — FrankenTextiles</title>
+<title>Local photo measurements and body fitting — FrankenTextiles</title>
 <style>
 body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:24px auto;padding:0 18px;color:#17252d;background:#fafbfc}
 section{background:white;border:1px solid #ccd5db;border-radius:8px;padding:16px;margin:18px 0}
@@ -12,12 +12,12 @@ input[type=file]{max-width:100%;box-sizing:border-box}
 button{cursor:pointer}button:disabled{cursor:default;opacity:.5}textarea{width:100%;box-sizing:border-box;font:14px monospace}
 canvas{display:block;width:100%;height:auto;cursor:crosshair}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px;border-bottom:1px solid #ddd}
-a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError,#sectionError{color:#a02020}small{color:#42515a}
+a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError,#sectionError,#bodyFitError{color:#a02020}small{color:#42515a}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
-<h1>Photo measurements</h1>
+<h1>Photo measurements and body fitting</h1>
 <p>Measure lengths or angles using a flat reference sheet in the photo: blank US Letter/A4
   or a printed ChArUco calibration board, with optional lens calibration created here or retained from an earlier session.
   Photos and clicks stay in this browser; nothing is uploaded or saved in browser storage.
@@ -259,6 +259,46 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <div id="triangulationDownloads" class="files"></div>
     <details><summary>Complete native geometry, source identities and conditional uncertainty</summary>
       <pre id="triangulationReport"></pre></details>
+  </div>
+</section>
+<section>
+  <h2>6. Fit one body shape across changing poses</h2>
+  <p>Fit the same Anny shape to prepared, calibrated observations from several frames, with a separate
+    pose for each frame and optional tape constraints. Load your converted body model and the original
+    <code>ftx-anny-body-fit-input/1</code> request. This runs the same bounded fitter as
+    <code>ftx measure fit-body</code>, locally in a cancellable worker.</p>
+  <label>Converted Anny model <input id="bodyFitModel" type="file" accept=".ftxbody,application/octet-stream"></label>
+  <label>Prepared observations <input id="bodyFitInput" type="file" accept=".json,application/json"></label>
+  <p><small>The request declares the exact model hash, calibrated cameras, anatomical correspondences,
+    FIT/CHECK roles, parameter bounds and every initialization. Reviewed inline silhouette slices are
+    supported. A path-based capture input or mask manifest must first be prepared with the native tools;
+    this page does not read local paths or infer landmarks from a video. Input limit: 16 MiB; model limit: 512 MiB.</small></p>
+  <details><summary>Numerical work limits</summary>
+    <label>Maximum accepted steps per start <input id="bodyFitIterations" type="number" min="1" max="100" step="1" value="50"></label>
+    <label>Total model evaluations <input id="bodyFitEvaluations" type="number" min="1" max="1000000" step="1" value="100000"></label>
+    <p><small>Every start and failed evaluation counts toward the shared budget. Stopping early publishes
+      diagnostics without an accepted shape. These controls do not change residual or ambiguity gates.</small></p>
+  </details>
+  <p><button id="bodyFitRun" disabled>Fit body from all frames</button>
+    <button id="bodyFitCancel" disabled>Cancel body fit</button></p>
+  <p id="bodyFitStatus" role="status" aria-live="polite">Choose the model and prepared observations.</p>
+  <pre id="bodyFitError" role="alert"></pre>
+  <div id="bodyFitResult" hidden>
+    <h3>Body-fit result</h3>
+    <p id="bodyFitSummary"></p><p id="bodyFitUse"></p>
+    <div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Outcome</th><th>Model calls</th><th>Initial / final objective</th></tr></thead>
+      <tbody id="bodyFitAttempts"></tbody></table></div>
+    <h4>Every residual check</h4>
+    <p><small>Image residuals are in pixels; tape residuals are in metres. Exact frame identities and
+      timestamps remain in the complete report. A missing residual is unavailable, never zero.</small></p>
+    <div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Source</th><th>Target</th><th>Role</th><th>Residual / limit</th><th>Result</th></tr></thead>
+      <tbody id="bodyFitChecks"></tbody></table></div>
+    <p id="bodyFitPredictions" style="white-space:pre-line"></p>
+    <p id="bodyFitFlags" style="white-space:pre-line"></p>
+    <p>Model predictions remain MODEL_FIT. They do not become measured records or READY evidence.
+      Acceptance is conditional on the supplied camera, correspondences and tape evidence; it does not establish anatomical accuracy or physical garment fit.</p>
+    <div id="bodyFitDownloads" class="files"></div>
+    <details><summary>Complete body fit, original evidence and source identities</summary><pre id="bodyFitReport"></pre></details>
   </div>
 </section>
 <script type="module" src="photo-page.js"></script>

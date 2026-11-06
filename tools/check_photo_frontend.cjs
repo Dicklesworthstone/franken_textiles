@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -36,14 +36,16 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function triangulate(input,noise){calls.push({kind:'triangulate',input,noise});if(failTriangulation)throw Error('capture evidence refused');return JSON.stringify(triangulationReport());}
   function bundle_adjust(input,iterations){calls.push({kind:'bundle-adjust',input,iterations});if(failBundle)throw Error('metric controls refused');return JSON.stringify(bundleReport());}
   function still_window(input,source){calls.push({kind:'still-window',input,source});if(failStill)throw Error('track evidence refused');return JSON.stringify(stillReport());}
-  const context=vm.createContext({Uint8Array,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section','triangulate','bundle_adjust','still_window'],function(){
+  function fit_body(model,input,iterations,maxEvaluations){calls.push({kind:'fit-body',model:[...model],input,iterations,maxEvaluations});if(failBodyFit)throw Error('model SHA-256 mismatch');return JSON.stringify(bodyFitReport());}
+  const context=vm.createContext({Uint8Array,ArrayBuffer,TextEncoder,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('photo_section',photo_section);
     this.setExport('triangulate',triangulate);
     this.setExport('bundle_adjust',bundle_adjust);
     this.setExport('still_window',still_window);
+    this.setExport('fit_body',fit_body);
   },{context});
   await imports.link(()=>{}); await imports.evaluate();
   const module=new vm.SourceTextModule(read('photo-worker.js'),{
@@ -88,9 +90,10 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise'])if(e[id])e[id].type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','bodyFitModel','bodyFitInput'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images',geometryOperation:'triangulate',bundleIterations:'50'}))e[id].value=value;
   for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
+  e.bodyFitIterations.value='50';e.bodyFitEvaluations.value='100000';
   const workers=[],urls=new Map(),closed=[],windowEvents={},popups=[]; let serial=0;
   class Worker {
     constructor(){this.messages=[];workers.push(this);}
@@ -878,6 +881,85 @@ function stillReport(overrides={}) {
     flags:[],advisories:[],no_claim:'Human review required',...overrides};
 }
 
+function bodyFitReport(overrides={}) {
+  return {schema:'ftx-body-fit/1',status:'ACCEPTED',input:{frames:[{frame:{stream:'synthetic',timestamp_us:1}}]},
+    model:{measurements:['stature']},model_evaluations:42,flags:[],advisories:['Conditional on supplied cameras'],
+    attempts:[{status:'CONVERGED',model_evaluations:42,cost_history:[8,0.01],flags:[],checks:[
+      {frame:{stream:'synthetic',timestamp_us:1},name:'shoulder',partition:'held_out',unit:'px',residual:0.5,limit:3,passed:true},
+      {frame:null,name:'stature',partition:'fit',unit:'m',residual:0.001,limit:0.006,passed:true}]}],
+    solution:{shape:[0.6],poses:[],predicted_measurements_m:[1.3]},no_claim:'Not measured anatomy or physical fit.',...overrides};
+}
+function selectBodyFit(p,input=' {"timestamp_us":18446744073709551615,"evidence":"λ"}\r\n') {
+  p.e.bodyFitModel.files=[file('original model','model.ftxbody')];p.e.bodyFitInput.files=[file(input)];
+  p.e.bodyFitInput.handlers.change();return input;
+}
+test('body-fit worker preserves the model and exact observations and refuses invalid work limits',async()=>{
+  const source={request:51,op:'fit-body',model:new Uint8Array([1,3,7]).buffer,
+    input:' {"timestamp_us":18446744073709551615,"evidence":"λ"}\r\n',iterations:50,maxEvaluations:100000};
+  const w=await photoWorker();assert.equal((await w.send(source)).type,'result');
+  assert.deepEqual(w.calls,[{kind:'fit-body',model:[1,3,7],input:source.input,iterations:'50',maxEvaluations:'100000'}]);
+  assert.equal(w.instances.length,0);
+  for(const change of [{iterations:0},{iterations:1.5},{iterations:4294967346},{maxEvaluations:Infinity},
+    {maxEvaluations:1000001},{model:new ArrayBuffer(0)},{model:[1,3,7]},{input:' '.repeat(16*1024*1024+1)}]) {
+    const refused=await photoWorker();assert.equal((await refused.send({...source,...change})).type,'error');
+    assert.equal(refused.calls.length,0);
+  }
+  const failed=await photoWorker({failBodyFit:true});assert.match((await failed.send(source)).message,/SHA-256 mismatch/);
+  assert.equal(failed.calls.length,1,'No substitute fit is attempted');
+});
+test('body-fit page shows every native outcome and retains original reports without promoting predictions',async()=>{
+  const p=await photoPage(),input=selectBodyFit(p);
+  for(const status of ['ACCEPTED','REJECTED','AMBIGUOUS','UNOBSERVABLE','NOT_CONVERGED','BUDGET_STOP']) {
+    await p.e.bodyFitRun.onclick();const w=p.current(),m=w.messages[0];
+    assert.equal(m.op,'fit-body');assert.equal(m.input,input);assert.equal(new TextDecoder().decode(m.model),'original model');
+    assert.equal(m.iterations,50);assert.equal(m.maxEvaluations,100000);
+    const value=bodyFitReport({status,solution:status==='ACCEPTED'?bodyFitReport().solution:null});
+    if(status!=='ACCEPTED') {value.attempts[0].status=status;value.attempts[0].flags=['held-out observation failed'];
+      value.attempts[0].checks[0].residual=null;value.attempts[0].checks[0].passed=false;}
+    const raw=JSON.stringify(value).replace('"timestamp_us":1','"timestamp_us":18446744073709551615');
+    await w.emit({type:'result',request:m.request,report:raw});
+    assert.equal(w.dead,true);assert.equal(p.e.bodyFitResult.hidden,false);assert.match(p.e.bodyFitSummary.textContent,new RegExp(status));
+    assert.equal(p.e.bodyFitAttempts.children.length,1);assert.equal(p.e.bodyFitChecks.children.length,2);
+    const links=p.e.bodyFitDownloads.children;assert.deepEqual(links.map(a=>a.download),['body-fit-report.json','body-fit-input.json','body-fit-options.json']);
+    assert.equal(await p.urls.get(links[0].href).text(),raw);assert.equal(await p.urls.get(links[1].href).text(),input);
+    assert.deepEqual(JSON.parse(await p.urls.get(links[2].href).text()),{iterations:50,max_model_evaluations:100000});
+    if(status==='ACCEPTED') {assert.match(p.e.bodyFitPredictions.textContent,/MODEL_FIT.*\n.*1300/);assert.match(p.e.bodyFitUse.textContent,/confirm the wearer/);}
+    else {assert.equal(p.e.bodyFitPredictions.textContent,'');assert.match(p.e.bodyFitUse.textContent,/No accepted shape/);
+      assert.match(p.e.bodyFitChecks.children[0].children[4].textContent,/Unavailable/);assert.match(p.e.bodyFitFlags.textContent,/held-out observation failed/);}
+    assert.equal(p.e.openWorkbench.disabled,true);assert.equal(p.e.returnMaterials.disabled,true);
+    assert.equal(p.e.downloads.children.length,0,'Predictions do not enter measurement evidence');
+  }
+});
+test('body-fit source edits, cancellation and page exit withdraw results and discard delayed reads and workers',async()=>{
+  for(const invalidate of [p=>p.e.bodyFitCancel.onclick(),p=>p.e.bodyFitInput.handlers.change(),p=>p.e.bodyFitModel.handlers.click(),
+    p=>p.e.bodyFitInput.handlers.cancel(),p=>p.e.bodyFitIterations.handlers.input(),p=>p.e.bodyFitEvaluations.handlers.input(),p=>p.windowEvents.pagehide()]) {
+    const p=await photoPage();selectBodyFit(p);await p.e.bodyFitRun.onclick();const old=p.current();invalidate(p);
+    await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify(bodyFitReport())});
+    assert.equal(old.dead,true);assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.urls.size,0);
+    selectBodyFit(p);await p.e.bodyFitRun.onclick();const next=p.current();await next.emit({type:'result',request:next.messages[0].request,report:JSON.stringify(bodyFitReport())});
+    assert.equal(p.urls.size,3);invalidate(p);assert.equal(p.urls.size,0);assert.equal(p.e.bodyFitResult.hidden,true);
+  }
+  for(const which of ['bodyFitInput','bodyFitModel']) {
+    const p=await photoPage();selectBodyFit(p);let release,entered;
+    const reading=new Promise(resolve=>{entered=resolve;});
+    p.e[which].files=[{size:2,arrayBuffer:()=>new Promise(resolve=>{release=resolve;entered();})}];
+    const pending=p.e.bodyFitRun.onclick();await reading;
+    p.e.bodyFitCancel.onclick();release(new TextEncoder().encode('{}').buffer);await pending;
+    assert.equal(p.workers.length,0);assert.equal(p.e.bodyFitRun.disabled,false);
+  }
+});
+test('body-fit page refuses malformed sources and budgets before dispatch and clears malformed engine output',async()=>{
+  for(const change of [p=>p.e.bodyFitModel.files=[],p=>p.e.bodyFitModel.files=[{size:512*1024*1024+1}],
+    p=>p.e.bodyFitInput.files=[{size:16*1024*1024+1}],p=>p.e.bodyFitInput.files=[{size:1,arrayBuffer:async()=>new Uint8Array([255]).buffer}],
+    p=>p.e.bodyFitIterations.value='',p=>p.e.bodyFitIterations.value='101',p=>p.e.bodyFitEvaluations.value='1.5']) {
+    const p=await photoPage();selectBodyFit(p);change(p);await p.e.bodyFitRun.onclick();
+    assert.equal(p.workers.length,0);assert.ok(p.e.bodyFitError.textContent);assert.equal(p.urls.size,0);
+  }
+  const p=await photoPage();selectBodyFit(p);await p.e.bodyFitRun.onclick();const w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bodyFitReport({solution:null}))});
+  assert.match(p.e.bodyFitError.textContent,/consistent body-fit/);assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.urls.size,0);
+});
+
 test('still-window worker calls only the original assessor with exact source text',async()=>{
   const input=' \r\n{"timestamp_us":18446744073709551615,"evidence":"λ"}\r\n';
   const source='original λ.json';
@@ -928,6 +1010,26 @@ test('still-window cancellation and mode/source edits discard late workers, read
   const pending=p.e.triangulationRun.onclick();p.e.geometryOperation.value='triangulate';p.e.geometryOperation.handlers.change();
   finish(new TextEncoder().encode('{}').buffer);await pending;assert.equal(p.workers.length,count);
 });
+
+test('compiled body fitting reproduces complete native multistart reports and preserves exact source identities',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_BODY_FIT_PORTABLE_DIR},async()=>{
+    const ftx=await compiledPhotoBindings(),dir=process.env.FTX_BODY_FIT_PORTABLE_DIR;
+    const model=fs.readFileSync(path.join(dir,'model.ftxbody'));
+    const parse=text=>JSON.parse(text,(key,value,meta)=>key==='timestamp_us'?meta.source:value);
+    for(const item of JSON.parse(fs.readFileSync(path.join(dir,'cases.json'),'utf8')).cases) {
+      const input=fs.readFileSync(path.join(dir,item.input),'utf8');
+      const actual=ftx.fit_body(model,input,item.iterations,item.max_evaluations);
+      assert.deepEqual(parse(actual),parse(fs.readFileSync(path.join(dir,item.report),'utf8')),item.name+' complete original native body-fit report');
+      assert.equal(JSON.parse(actual).status,item.status);
+    }
+    const input=fs.readFileSync(path.join(dir,'accepted-input.json'),'utf8');
+    for(const value of ['','0','101','1.5','4294967346','9007199254740993','NaN']) assert.throws(()=>ftx.fit_body(model,input,value,'100000'),/iterations/);
+    for(const value of ['','0','1000001','1.5','4295067296','9007199254740993','NaN']) assert.throws(()=>ftx.fit_body(model,input,'50',value),/evaluations/);
+    assert.throws(()=>ftx.fit_body(model,'\ufeff'+input,'50','100000'));
+    assert.throws(()=>ftx.fit_body(model,' '.repeat(16*1024*1024+1),'50','100000'),/16 MiB/);
+    const changed=Buffer.from(model);changed[changed.length-1]^=1;
+    assert.throws(()=>ftx.fit_body(changed,input,'50','100000'),/SHA-256 mismatch/);
+  });
 
 test('compiled still-window assessment matches complete original native reports and input refusals',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_STILL_FIXTURES},async()=>{

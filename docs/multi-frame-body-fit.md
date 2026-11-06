@@ -16,6 +16,46 @@ photo URL, runs an external detector or uploads data. `model.model_sha256` must 
 SHA-256 of the exact converted file. The reader also verifies the file's individual array
 hashes. Keep private photos, measurements and fitted bodies outside the repository.
 
+## Fit prepared observations in the local browser
+
+The local photo page (`web/photo.html`), under **Fit one body shape across changing poses**, runs
+this same articulated fitter through WebAssembly. Select the converted `.ftxbody` model and an
+original `ftx-anny-body-fit-input/1` JSON file, then choose **Fit body from all frames**. The model
+hash and array checks, authored shape/pose controls, multistart agreement, held-out residuals and
+observability gates are shared with the native command. Sampled inline silhouettes are supported.
+The browser does not fit cameras again or infer anatomical correspondences.
+
+For an existing reviewed capture, `ftx measure capture-review ... --out NEW_DIRECTORY` now also
+writes **`prepared-input.json`**. This is the immutable calibrated-observation snapshot already
+checked while creating that review. Its byte count and hash are retained under `prepared_input`
+in `review.json`; original path-bound `capture.json`, source receipts and copied images remain
+available. Load the prepared snapshot in the photo page with the same model. Imported mask
+constraints have already become inline sampled silhouettes. There is no browser filesystem-path
+access or source-image recheck: after changing an image, camera, mask or annotation, generate a
+fresh native capture review and use its new prepared snapshot. Downloading `capture-edited.json`
+does not change the earlier `prepared-input.json`.
+
+The form exposes the same limits as the CLI: 1–100 accepted steps per start (default 50) and
+1–1,000,000 model evaluations across all starts (default 100,000). Input text is limited to
+16 MiB and converted model data to 512 MiB. Invalid UTF-8, unknown input fields, wrong model
+identity and unsupported path-based capture requests refuse. Limits do not relax residual or
+ambiguity thresholds. Cancel terminates the fitting worker; changing either source or a limit
+withdraws the previous result and prevents an obsolete read or worker from publishing.
+
+The result lists every initialization and residual check, including unsuccessful starts, and
+retains the complete original Rust report. Download `body-fit-report.json`, `body-fit-input.json`
+and the explicit work limits in `body-fit-options.json`. Inputs and reports are downloaded
+without a JavaScript parse/serialize round trip, preserving full-width frame timestamps.
+`REJECTED`, `AMBIGUOUS`, `UNOBSERVABLE`, `NOT_CONVERGED` and `BUDGET_STOP` outcomes remain
+diagnostic reports with no accepted shape.
+
+An accepted report can be selected under **Accepted body-fit report** in the Pattern or Material
+Workbench, with the same converted model and the existing explicit wearer association. The
+ordinary accepted-shape checks apply before body inspection or draping. Predicted measurements
+remain `MODEL_FIT`; this route does not add photo measurement records, promote readiness,
+establish anatomical accuracy or qualify physical garment fit. Model bytes, observations and
+results stay in the local browser, with no uploads or browser storage.
+
 ## Construct the first capture input
 
 The first-capture constructor starts from an ordinary decoded-frame manifest, a saved accepted

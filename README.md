@@ -85,6 +85,9 @@ Photo/video body fitting requires prepared, calibrated frames and reviewed corre
 The [decoded-frame selection](docs/video-frame-selection.md), [multi-frame fitting](docs/multi-frame-body-fit.md)
 and [accepted-shape reuse](docs/reuse-body-fit.md) guides document those stages. An arbitrary phone clip
 is not yet a complete capture-to-body input; an accepted image fit does not promote measurement readiness.
+The local photo page can now fit prepared multi-frame observations with the same Anny adapter and
+solver as the CLI. Native capture review exports a calibrated `prepared-input.json` snapshot for this
+route; accepted reports can be reused in ordinary body checks and drapes with the same model.
 
 ### Material substitutions and heat
 

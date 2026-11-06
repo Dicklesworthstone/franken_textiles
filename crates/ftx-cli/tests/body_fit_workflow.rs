@@ -409,12 +409,14 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
         ("-1", "100000"),
         ("1.5", "100000"),
         ("4294967346", "100000"),
+        ("9007199254740993", "100000"),
         ("NaN", "100000"),
         ("50", "0"),
         ("50", "1000001"),
         ("50", "-1"),
         ("50", "1.5"),
         ("50", "4295067296"),
+        ("50", "9007199254740993"),
         ("50", "NaN"),
     ] {
         assert!(ftx_wasm::body_fit::fit_body(&model, &text, iterations, evaluations).is_err());
