@@ -218,8 +218,16 @@ fn kat8_armpit_wedge_at_three_sizes() {
     for (id, rep) in ids.iter().zip(&reports) {
         let rise = numbers(&rep["hem_rise_mm"]);
         println!(
-            "{id}: gating {}, advisory {}, settled {}, hem rise {rise:?}",
-            rep["gating"], rep["flags"], rep["settled"]
+            "{id}: gating {}, advisory {}, settled {}, offset {} m / {} mm, final body gap {:?} m, hem rise {rise:?}",
+            rep["gating"],
+            rep["flags"],
+            rep["settled"],
+            rep["numerical"]["drape"]["thickness"],
+            rep["cloth_offset_mm"],
+            rep["numerical"]["drape"]["samples"]
+                .as_array()
+                .and_then(|s| s.last())
+                .map(|s| &s["contact"]["body"]["minimum_active_gap_m"])
         );
         if rep["gating"].as_array().is_none_or(|g| !g.is_empty()) {
             fails.push(format!("{id}: gating {}", rep["gating"]));

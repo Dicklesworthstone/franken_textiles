@@ -643,15 +643,17 @@ original KAT body recipe, before production fitting began honoring reported sigm
 The chart's broad uncertainty defines a different inferred body: at 92 cm honoring its sigmas gives
 a 21.0 mm maximum hem rise, while the restored nominal KAT has 10.5 mm. The KAT fixes its
 body-conditioning inputs; production fitting retains supplied uncertainty and its residual reports.
-These synthetic controls establish no measured-body accuracy. KAT 8 armpit wedge, the drafted bolero
-at 80, 92 and 116 cm with the arms at 35°: no
-gating flag, settled, every hem within ±15 mm of its drafted level (the 80 cm front hangs 13 mm higher than
-its back, an advisory: the belly lifts it); KAT 10 two starts, the 92 cm bolero sewn in 12 and in 18 steps:
+These synthetic controls establish no measured-body accuracy. The current KAT 8 armpit-wedge run
+passes the 92 and 116 cm cases, but the 80 cm bolero fails offset completion: it achieves 1.413734 mm
+against 1.5 mm, with a final body gap of 0.100138 mm against the unchanged 0.1 mm continuation guard.
+Its quiet window and ±15 mm hem checks pass (the front/back 13 mm imbalance remains advisory), but
+those do not clear the offset gate. KAT 8 retains its original no-gating assertion; G2 remains open.
+KAT 10 two starts, the 92 cm bolero sewn in 12 and in 18 steps:
 the same minimum, every hem, clearance and seam strain equal at the report's precision; KAT 9 the whole
 pipeline (tape fit, scene, three sewing and three draping steps at the shipped settings) by one SHA-256,
 identical native debug, release and wasm32-wasip1 (re-pinned when `ftx_core::np::interp` became a fused
 multiply-add, as the reference's numpy computes it: the garment mesh moved to 99.9 % bit-exact). 79 s
-release for KATs 8 and 10.
+release for the historical KATs 8 and 10 run, before offset completion gated KAT 8.
 
 **Lifted code** (frankensim `93fc9b26`, MIT + rider, provenance headers): `sparse/` (CSR assembly and the
 multifrontal LDLᵀ with AMD and inertia; adds `analyze_with_permutation`; assembly orders triplets by a
