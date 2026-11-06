@@ -1238,7 +1238,7 @@ impl Solver {
             return Err(Refusal::new(
                 RefusalCode::NotConverged,
                 format!(
-                    "Newton did not converge after {} iterations (residual {} N, last correction {} m, {} failed line searches)",
+                    "Newton did not converge after {} iterations (residual {} N, last correction {} m, {} failed line searches); diagnostics {rep:?}",
                     rep.iterations, rep.residual, rep.last_step, rep.line_search_failures
                 ),
             )
