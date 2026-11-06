@@ -128,9 +128,17 @@ and the native CLI tests; none establishes physical fit.
 iteration exhaustion or a failed line search returns `not_converged` with the residual (N), last
 correction (m), iteration count and repair suggestions. A refused step or static solve preserves
 positions, velocities, contact lag and linear-solver caches. `PhaseReport.samples` retains the accepted
-steps' Newton diagnostics and instantaneous maximum vertex speeds. Native drape reports expose these
-under `numerical`; gravity draping additionally requires three consecutive accepted steps at at most
-1 mm/s, otherwise a numerical-settling gating flag propagates to CLI, round and browser consumers.
+steps' Newton diagnostics and instantaneous maximum vertex speeds. A gradient descent fallback after
+failed Newton factorization cannot satisfy the Newton distance criterion by having a small force;
+an exactly zero free gradient still permits stationarity with a singular Hessian. Direct unsupported
+and supported light-sheet regressions live in `cloth::line_search_tests`. A singular projected system
+may recover a compatible Newton direction through at most 32 unpreconditioned CG iterations, with
+the recomputed residual checked at the direct solver's relative rank tolerance. No rigid mode is pinned.
+Static solves apply that strict residual check to cached preconditioners too, so a dynamic factor
+cannot hide an unsupported rigid load behind the looser inexact dynamic Newton policy.
+Native drape reports expose these diagnostics under `numerical`; gravity draping additionally requires
+three consecutive accepted steps at at most 1 mm/s, otherwise a numerical-settling gating flag propagates
+to CLI, round and browser consumers.
 Body-offset continuation tries up to eight successively smaller increments, bounded by 0.25 mm per
 accepted step and the existing one-tenth barrier-band gap guard. An unfinished requested body offset
 also gates an ordinary quiet run; paired checks retain that failure without duplicating its flag.

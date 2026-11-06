@@ -551,6 +551,7 @@ pub struct Solver {
     pub friction_rounds: usize,
     /// Inexact Newton: the iteration cap of conjugate gradients preconditioned by the last
     /// positive-definite factorization, tried before factorizing anew (0: factorize every iteration).
+    /// A singular projected factorization can additionally use the bounded, unpreconditioned fallback.
     pub pcg_iters: usize,
     free: Vec<Option<usize>>,
     nfree: usize,
@@ -573,7 +574,7 @@ pub struct Solver {
     pub(crate) liquid_mass: Option<crate::liquid_mass::Binding>,
 }
 
-/// The relative residual an inexact Newton direction is solved to.
+/// The relative residual an inexact dynamic Newton direction is solved to.
 const PCG_TOL: f64 = 1e-4;
 
 /// Where an assembly's entries go: straight into the fixed pattern once it is known, else a triplet
@@ -1126,6 +1127,9 @@ impl Solver {
             return Ok(rep);
         }
         let scale = inertia.map_or(1.0, |(_, h)| h);
+        // A static Hessian can retain free rigid modes. A loose linear residual could hide an
+        // unsupported load in those modes, even when a cached dynamic factor is positive definite.
+        let linear_tolerance = inertia.map_or(LdltOptions::default().zero_pivot_rel, |_| PCG_TOL);
         // Once a solve has met negative inertia it keeps projecting: retrying the exact Hessian first
         // cost a second assembly and factorization on almost every iteration of a garment.
         let mut projecting = false;
@@ -1136,7 +1140,7 @@ impl Solver {
                 (Vec::new(), None)
             } else {
                 let (g, a) = self.assemble(&self.x, inertia, false);
-                let p = self.newton_direction(&a, &g, false, &mut rep)?;
+                let p = self.newton_direction(&a, &g, false, linear_tolerance, &mut rep)?;
                 (g, p)
             };
             if p.is_none() {
@@ -1144,9 +1148,10 @@ impl Solver {
                 rep.projected_iterations += 1;
                 let (g2, a2) = self.assemble(&self.x, inertia, true);
                 g = g2;
-                p = self.newton_direction(&a2, &g, true, &mut rep)?;
+                p = self.newton_direction(&a2, &g, true, linear_tolerance, &mut rep)?;
             }
             // Singular even after projection: steepest descent.
+            let mut newton_correction = p.is_some();
             let mut p = p.unwrap_or_else(|| g.iter().map(|v| -v).collect());
             if g.iter().chain(&p).any(|v| !v.is_finite()) {
                 return Err(Refusal::new(
@@ -1156,6 +1161,7 @@ impl Solver {
             }
             let mut slope: f64 = g.iter().zip(&p).map(|(a, b)| a * b).sum();
             if slope.is_nan() || slope >= 0.0 {
+                newton_correction = false;
                 p = g.iter().map(|v| -v).collect();
                 slope = -g.iter().map(|v| v * v).sum::<f64>();
             }
@@ -1163,7 +1169,9 @@ impl Solver {
             rep.iterations = it + 1;
             rep.last_step = step;
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-            if step / scale < self.tol {
+            // A gradient fallback can descend, but its norm is not a displacement error bound.
+            // Exact zero gradient still certifies stationarity when the Hessian is singular.
+            if (newton_correction || rep.residual == 0.0) && step / scale < self.tol {
                 rep.converged = true;
                 break;
             }
@@ -1240,23 +1248,33 @@ impl Solver {
         Ok(rep)
     }
 
-    /// The Newton direction `−A⁻¹g`, or `None` when `A` is singular or not positive definite. With
+    /// A Newton direction, or `None` when the bounded linear solves cannot produce one. With
     /// [`Solver::pcg_iters`], conjugate gradients preconditioned by the last positive-definite factor go
     /// first (Newton-CG): a direction of negative curvature in an exact Hessian is `None` without a
     /// factorization, since the caller then projects; a converged one is a descent direction even where
-    /// the Hessian is indefinite elsewhere; anything else falls back to factorizing `A`.
+    /// the Hessian is indefinite elsewhere; anything else falls back to factorizing `A`. A singular
+    /// projected system gets at most 32 unpreconditioned CG iterations, admitted only at the direct
+    /// solver's relative rank tolerance. This can resolve a compatible gradient without pinning free
+    /// rigid modes or treating force magnitude as a displacement.
     fn newton_direction(
         &mut self,
         a: &Csr,
         g: &[f64],
         projected: bool,
+        linear_tolerance: f64,
         rep: &mut SolveReport,
     ) -> Result<Option<Vec<f64>>, Refusal> {
         let b: Vec<f64> = g.iter().map(|v| -v).collect();
         if self.pcg_iters > 0
             && let Some(f) = &self.precond
         {
-            match pcg(a, &b, |r: &[f64]| f.solve(r), PCG_TOL, self.pcg_iters) {
+            match pcg(
+                a,
+                &b,
+                |r: &[f64]| f.solve(r),
+                linear_tolerance,
+                self.pcg_iters,
+            ) {
                 Ok((p, r)) => {
                     rep.pcg_iterations += r.iters;
                     return Ok(Some(p));
@@ -1279,6 +1297,24 @@ impl Solver {
                     self.precond = Some(f);
                 }
                 Some(p)
+            }
+            Err(_) if projected => {
+                match pcg(
+                    a,
+                    &b,
+                    |r: &[f64]| r.to_vec(),
+                    LdltOptions::default().zero_pivot_rel,
+                    self.nfree.min(32),
+                ) {
+                    Ok((p, r)) => {
+                        rep.pcg_iterations += r.iters;
+                        Some(p)
+                    }
+                    Err(PcgFailure::NegativeCurvature(k) | PcgFailure::NotConverged(k)) => {
+                        rep.pcg_iterations += k;
+                        None
+                    }
+                }
             }
             _ => None,
         })
@@ -1738,7 +1774,81 @@ pub fn grid(w: f64, h: f64, nx: usize, ny: usize, origin: Vec2) -> (Vec<Vec2>, V
 
 #[cfg(test)]
 mod line_search_tests {
-    use super::roundoff_step;
+    use super::*;
+
+    fn light_sheet(fixed: &[[bool; 3]], gravity: Vec3) -> Solver {
+        let rest = vec![Vec2::ZERO, Vec2::new(1e-3, 0.0), Vec2::new(0.0, 1e-3)];
+        let x = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(100.0, 100.0, 0.0, 10.0, 1.0),
+            0.0,
+            0.2,
+        )
+        .unwrap();
+        Solver::new(model, x, fixed, gravity)
+    }
+
+    #[test]
+    fn light_free_sheets_have_no_static_gravity_equilibrium() {
+        let mut unloaded = light_sheet(&[[false; 3]; 3], Vec3::ZERO);
+        let initial = unloaded.x.clone();
+        let report = unloaded.static_solve().unwrap();
+        assert!(report.converged);
+        assert!(report.last_step < unloaded.tol);
+        assert_eq!(unloaded.x, initial);
+
+        // A rigid translation leaves elastic storage unchanged. Under nonzero gravity the
+        // potential is unbounded below, even when the nodal force is numerically below tol.
+        for pcg_iters in [0, 20] {
+            for gravity in [9.81, 9.81e-6] {
+                for strain in [0.0, 0.1] {
+                    let mut falling = light_sheet(&[[false; 3]; 3], Vec3::new(0.0, 0.0, -gravity));
+                    falling.pcg_iters = pcg_iters;
+                    if pcg_iters > 0 {
+                        falling.step(1e-3).unwrap();
+                        assert!(falling.precond.is_some());
+                    }
+                    assert!(falling.model.mass[0] * falling.gravity.norm() < falling.tol);
+                    falling.x[1].x *= 1.0 + strain;
+                    falling.v[0].z = 0.1;
+                    let before = format!("{falling:?}");
+                    let refusal = falling
+                        .static_solve()
+                        .expect_err("an unsupported sheet cannot equilibrate");
+                    assert_eq!(refusal.code, RefusalCode::NotConverged);
+                    assert_eq!(format!("{falling:?}"), before);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn light_supported_sheet_reaches_static_force_balance() {
+        for pcg_iters in [0, 20] {
+            let mut sheet = light_sheet(
+                &[[true; 3], [false, true, true], [true; 3]],
+                Vec3::new(9.81, 0.0, 0.0),
+            );
+            sheet.pcg_iters = pcg_iters;
+            sheet.tol = 1e-12;
+            if pcg_iters > 0 {
+                sheet.step(1e-3).unwrap();
+                assert!(sheet.precond.is_some());
+            }
+            let initial = sheet.x.clone();
+            let report = sheet.static_solve().unwrap();
+            assert!(report.converged);
+            assert!(report.last_step < sheet.tol);
+            assert!(sheet.x[1].x > initial[1].x);
+            assert_eq!(sheet.x[0], initial[0]);
+            assert_eq!(sheet.x[2], initial[2]);
+            let forces = sheet.checked_elastic_forces().unwrap();
+            assert!((forces[1].x + sheet.model.mass[1] * sheet.gravity.x).abs() < 1e-11);
+            assert!(sheet.v.iter().all(|v| *v == Vec3::ZERO));
+        }
+    }
 
     #[test]
     fn unresolved_energy_requires_full_step_curvature_and_actual_gradient_progress() {
