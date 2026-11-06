@@ -3270,6 +3270,8 @@ test('routed specialist cells show actual operations, serialized garment transfe
       ['one-mover','0','10.3']);
     assert.equal(table('finite unloaded-garment staging'),undefined);
     assert.equal(table('selected staging reservations'),undefined);
+    assert.equal(table('independent transfer resource usage'),undefined);
+    assert.equal(table('source-qualified transfer resource edges'),undefined);
     assert.match(visibleText(s),/Minimum completion time proved within the declared fixed-route dispatch search/);
     assert.match(visibleText(s),/Each specialist cell qualifies only its assigned operations/);
     assert.doesNotMatch(visibleText(s),/Every garment stays in one physical cell|Minimum declared setup|Selected cross-garment sewing order/);
@@ -3283,6 +3285,7 @@ test('routed specialist cells show actual operations, serialized garment transfe
       assert.equal(summary.routed_makespan_seconds,12.6); assert.equal(summary.routed_optimality_proven,true);
       assert.equal(summary.garment_transfers,2); assert.equal(summary.transfer_seconds,1.4);
       assert.equal(Object.hasOwn(summary,'bounded_staging_enforced'),false);
+      assert.equal(Object.hasOwn(summary,'independent_transfer_resources'),false);
       assert.equal(Object.hasOwn(summary,'ordering_optimality_proven'),false);
       assert.equal(Object.hasOwn(summary,'modeled_production_seconds'),false);
       routing.optimality_proven=false; routing.budget_exhausted=true; routing.baseline_replaced=true;
@@ -3505,6 +3508,97 @@ test('routed specialist cells show actual operations, serialized garment transfe
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
+test('independent transfer pools preserve concurrent handoffs, unused resources and exact qualification in every result view', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
+  const source=(cell,operation)=>({cell,machine_sha256:`${cell}-lock`,qualifications:{},
+    plan:{options:{machine:{id:`${cell}-machine`},qualifications:[]},
+      seams:[{pass:{id:operation,seam:'side',needle:'N',thread:'Y',max_stitch_mm:5,stitches_per_minute:600,after:[]}}]}});
+  const carrier=(id,milliseconds,available_at_milliseconds=0,available_until_milliseconds)=>({id,
+    model:'serialized_unloaded_handoffs/1',available_at_milliseconds,
+    ...(available_until_milliseconds===undefined?{}:{available_until_milliseconds}),
+    transfers:[{from:'straight',to:'finish',milliseconds}],source:{reference:'local:synthetic-ui-transfer',accessed_on:'2026-11-05',note:`<${id} source>`},
+    method:'Complete qualified positioning, pickup, deposit and return',conditions:{scope:'synthetic UI example'},
+    evidence:'estimate',allow_estimates:true});
+  const primary=carrier('primary-mover',10000,0,30000),second=carrier('<second mover café 🧵>',10000,9000,19600),
+    idle=carrier('late-reserve',5000,60000);
+  const policy={model:'independent_unloaded_transfer_resources/1',additional_resources:[second,idle],
+    source:{reference:'local:synthetic-ui-pool',accessed_on:'2026-11-05',note:'<qualified independent resources café 🧵>'},
+    method:'Synthetic independent transport qualification',conditions:{scope:'No measured throughput claim'},evidence:'estimate',allow_estimates:true};
+  const step=(copy,operation_id,cell,start,feed,finish)=>({id:`${copy}/${operation_id}`,copy,operation_id,cell,seam_index:0,
+    loading_start_milliseconds:start,setup_start_milliseconds:start+100,feed_start_milliseconds:feed,
+    feed_finish_milliseconds:finish-200,finish_milliseconds:finish});
+  const handoff=(copy,resource,start)=>({copy,resource,from_operation:'join',to_operation:'reinforce',
+    from:'straight',to:'finish',start_milliseconds:start,finish_milliseconds:start+10000});
+  const usage=(resource,handoffs,occupied_milliseconds,first_start_milliseconds=null,last_finish_milliseconds=null)=>
+    ({resource,handoffs,occupied_milliseconds,first_start_milliseconds,last_finish_milliseconds});
+  const selected={makespan_milliseconds:21900,feed_seconds:12,scheduled_feed_milliseconds:12000,
+    setup_milliseconds:1500,handling_milliseconds:1200,transfer_milliseconds:20000,
+    operations:[step(0,'join','straight',0,1100,5300),step(0,'reinforce','finish',15300,15900,18100),
+      step(1,'join','straight',5300,5400,9600),step(1,'reinforce','finish',19600,19700,21900)],
+    transfers:[handoff(0,primary.id,5300),handoff(1,second.id,9600)]};
+  const baseline={...selected,makespan_milliseconds:27600,operations:[...selected.operations.slice(0,3),
+    step(1,'reinforce','finish',25300,25400,27600)],transfers:[handoff(0,primary.id,5300),handoff(1,primary.id,15300)]};
+  const transferPool={schema:'ftx-sewing-transfer-pool/1',policy,primary,physical_pool_validated:false,
+    baseline:[usage(primary.id,2,20000,5300,25300),usage(second.id,0,0),usage(idle.id,0,0)],
+    selected:[usage(primary.id,1,10000,5300,15300),usage(second.id,1,10000,9600,19600),usage(idle.id,0,0)]};
+  const calendars={model:'nonpreemptive_resource_windows/1',resources:{
+    [second.id]:[{start_milliseconds:9000,end_milliseconds:19600}]},source:{note:'<carrier-specific operating window>'}};
+  const a=source('straight','join'),b=source('finish','reinforce');
+  const routing={schema:'ftx-sewing-routing/10',route:[{operation:'join',cell:'straight'},{operation:'reinforce',cell:'finish'}],
+    cell_plans:[a,b],baseline,selected,transfer_pool:transferPool,availability_calendars:calendars,
+    lower_bound_makespan_milliseconds:17600,search_nodes:15,search_complete:false,optimality_proven:false,budget_exhausted:true};
+  const plan={schema:'ftx-sewing-plan/27',hardware_execution_authorized:false,seams:[...a.plan.seams,...b.plan.seams],
+    options:{production:{routing:{source:{note:'<source-qualified route>'},staging_capacity:2,
+      cells:[{id:'straight',available_at_milliseconds:0},{id:'finish',available_at_milliseconds:0}],
+      transfer:primary,transfer_pool:policy,availability_calendars:calendars}}},
+    production:{schema:'ftx-sewing-production/15',production_copies:2,feed_seconds:12,ordering:{optimality_proven:false},routing}};
+  const options=' \r\n'+JSON.stringify(plan.options)+'\r\n';p.select('sewOptions',options);
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('pooled');row.sewing=outcome(plan);row.metrics.sewing_parallel_makespan_seconds=21.9;
+    const study=studyReport([row]),report=op==='sew'?{schema:'ftx-sewing-program/7',stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=' '+JSON.stringify(report)+'\n';await p.e[op].onclick();
+    if(op==='sew') {
+      const request=p.current().messages.at(-1),calls=[];
+      assert.equal(request.options,options);
+      const w=await workerModule({bindings:{default:async()=>{},sew_stitches:(pattern,input)=>{calls.push([pattern,input]);return raw;}}});
+      const response=await w.send(request);assert.equal(response.type,'result',response.message);
+      assert.deepEqual(calls,[[request.pattern,options]]);p.current().emit(response);
+    } else p.emit(report,[{name:'transfer-pool-report.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    assert.deepEqual(plain(table('selected garment transfers').children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      [primary.id,'0','join','reinforce','straight','finish','5.3','15.3'],
+      [second.id,'1','join','reinforce','straight','finish','9.6','19.6']]);
+    assert.deepEqual(plain(table('independent transfer resource usage').children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      ['Baseline',primary.id,'2','20','5.3','25.3'],['Baseline',second.id,'0','0','Unused','Unused'],
+      ['Baseline',idle.id,'0','0','Unused','Unused'],['Selected',primary.id,'1','10','5.3','15.3'],
+      ['Selected',second.id,'1','10','9.6','19.6'],['Selected',idle.id,'0','0','Unused','Unused']]);
+    assert.deepEqual(plain(table('source-qualified transfer resource edges').children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      [primary.id,'straight','finish','10'],[second.id,'straight','finish','10'],[idle.id,'straight','finish','5']]);
+    assert.deepEqual(plain(table('qualified routing availability').children.slice(4).map(row=>row.children.map(n=>n.textContent))),[
+      [primary.id,'0','30'],[second.id,'9','19.6'],[idle.id,'60','Open ended']]);
+    assert.deepEqual(plain(table('nonpreemptive operating windows').children[2].children.map(n=>n.textContent)),
+      [second.id,'1','9','19.6']);
+    assert.deepEqual(plain(table('routed completion and aggregate work').children[3].children.map(n=>n.textContent)),
+      ['Selected route dispatch','21.9','12','12','1.5','1.2','20']);
+    assert.match(visibleText(s),/Different resources can overlap while cell, worker, fixture, staging and calendar constraints still apply/);
+    assert.match(visibleText(s),/Summed resource work is distinct from elapsed completion/);
+    assert.match(visibleText(s),/minimum completion time is not proved/);
+    assert.match(visibleText(s),/The dispatch search reached its work limit/);
+    assert.doesNotMatch(visibleText(s),/One separately qualified transfer resource serializes/);
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('transfer pool independence, resource sources and complete usage'));
+    detail.open=true;detail.handlers.toggle();assert.deepEqual(JSON.parse(detail.children[1].textContent),transferPool);
+    assert.match(visibleText(detail),/<qualified independent resources café 🧵>/);
+    const download=descendants(s).find(n=>n.download===(op==='sew'?'sewing-program.json':'transfer-pool-report.json'));
+    assert.equal(await p.blobs.get(download.href).text(),raw);assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    if(op==='sew')assert.equal(JSON.parse(s.children[1].textContent).independent_transfer_resources,3);
+  }
+  p.e.sewOptions.handlers.change();p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true);assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
@@ -15172,7 +15266,7 @@ test('compiled WASM routed calendars replay complete native operations and hando
     assert.deepEqual(route.availability_calendars,JSON.parse(options).production.routing.availability_calendars);
   });
 
-test('compiled WASM routed shared fixtures and attending workers replay exact native sewing reports',
+test('compiled WASM routed shared fixtures, attending workers and transfer pools replay exact native sewing reports',
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_ROUTED_FIXTURE_REPLAY},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
@@ -15254,6 +15348,20 @@ test('compiled WASM routed shared fixtures and attending workers replay exact na
       assert.equal(refused.type,'error');
       assert.equal(w.sent.some(message=>message.type==='result'&&message.request===240+index),false);
     }
+    const poolPattern=input('transfer-pool-pattern.json'),poolOptions=input('transfer-pool-options.json');
+    const expectedPool=input('transfer-pool-program.json');
+    assert.equal(ftx.sew_stitches(poolPattern,poolOptions),expectedPool);
+    const pooled=await w.send({type:'sew',request:252,pattern:poolPattern,options:poolOptions});
+    assert.equal(pooled.type,'result',pooled.message);
+    assert.equal(pooled.files.find(file=>file.name==='sewing-program.json').text,expectedPool);
+    assert.deepEqual(pooled.result,JSON.parse(expectedPool));
+    const poolRoute=pooled.result.plan.production.routing,handoffs=poolRoute.selected.transfers;
+    assert.equal(poolRoute.schema,'ftx-sewing-routing/10');
+    assert.equal(poolRoute.transfer_pool.physical_pool_validated,false);
+    assert.equal(pooled.result.plan.hardware_execution_authorized,false);
+    assert.equal(handoffs.length,2);
+    assert.deepEqual(new Set(handoffs.map(row=>row.resource)),new Set(['handoff-worker','second-mover']));
+    assert.ok(Math.max(...handoffs.map(row=>row.start_milliseconds))<Math.min(...handoffs.map(row=>row.finish_milliseconds)));
   });
 
 test('compiled WASM paired wet qualifications preserve native selection, changed motion and guided frozen cases',

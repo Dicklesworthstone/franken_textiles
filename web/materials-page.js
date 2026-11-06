@@ -2966,6 +2966,33 @@ function sewingSharedWorkholding(parent, plan, label) {
   detail(parent, `${label}: shared pool source, exact cell locks and both reservation histories`, {
     policy: plan.options?.production?.parallel?.shared_workholding, report });
 }
+function sewingRoutedTransferPool(parent, routing, label) {
+  const report = routing.transfer_pool;
+  if (!report) return;
+  const seconds = value => typeof value === "number" ? value / 1000 : null;
+  const usage = table(parent, `${label}: independent transfer resource usage`,
+    ["Schedule", "Resource", "Handoffs", "Occupied work (s)", "First start (s)", "Last finish (s)"]);
+  for (const [name, schedule] of [["Baseline", report.baseline], ["Selected", report.selected]]) {
+    for (const row of schedule || []) cells(usage, [name, row.resource, metric(row.handoffs),
+      metric(seconds(row.occupied_milliseconds)),
+      row.handoffs === 0 ? "Unused" : metric(seconds(row.first_start_milliseconds)),
+      row.handoffs === 0 ? "Unused" : metric(seconds(row.last_finish_milliseconds))]);
+  }
+  const edges = table(parent, `${label}: source-qualified transfer resource edges`,
+    ["Resource", "From cell", "To cell", "Complete handoff work (s)"]);
+  for (const resource of [report.primary, ...(report.policy?.additional_resources || [])]) {
+    for (const edge of resource?.transfers || []) cells(edges, [resource.id, edge.from, edge.to,
+      metric(seconds(edge.milliseconds))]);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Each independent transfer resource is occupied for its complete qualified positioning, pickup, movement, deposit and return interval. " +
+    "Different resources can overlap while cell, worker, fixture, staging and calendar constraints still apply. " +
+    "The handoff table preserves native dispatch order, including overlapping intervals; no browser rescheduling is applied. " +
+    "Unused resources retain their qualifications without adding work. Summed resource work is distinct from elapsed completion. " +
+    "Physical independence, factory performance and hardware execution require separate qualification.";
+  parent.append(note);
+  detail(parent, `${label}: transfer pool independence, resource sources and complete usage`, report);
+}
 function sewingRoutedStaging(parent, routing, label) {
   const report = routing.bounded_staging;
   if (!report) return;
@@ -2984,7 +3011,8 @@ function sewingRoutedStaging(parent, routing, label) {
   note.textContent = "Each garment enters the modeled route at its first loading and leaves for external storage at its final unloading. " +
     "No inbound or outbound transport time is inferred. " +
     (report.handoff_reservations === "source_until_handoff_finish_destination_from_handoff_start/1" ?
-      "The independent mover conservatively reserves a source slot until the handoff finishes and a destination slot from the handoff's start. " :
+      (routing.transfer_pool ? "Each independent mover" : "The independent mover") +
+        " conservatively reserves a source slot until the handoff finishes and a destination slot from the handoff's start. " :
       report.handoff_reservations === "source_until_pickup_destination_from_deposit/1" ?
         "Worker-owned handoffs release the source slot at pickup and reserve a destination slot from deposit. " : "") +
     ((report.selected?.reservations || []).length ? "" : "No positive-duration staging reservations are reported for the selected schedule. ") +
@@ -3063,7 +3091,8 @@ function sewingRoutedLabor(parent, routing, label) {
     "Travel and waiting also occupy that worker; cells assigned to the same person cannot use them concurrently. " +
     (transfer ? `Worker ${transfer.attending_worker} performs the garment handoffs using resource ${transfer.id}. ` +
       "Empty approach is charged to worker travel; pickup, carrying and deposit occupy the same worker and end at the destination cell. " +
-      "The worker's machine attendance and handoffs cannot overlap. " : "Garment handoffs retain their separate qualified resource. ") +
+      "The worker's machine attendance and handoffs cannot overlap. " : routing.transfer_pool ?
+        "Garment handoffs use the independently qualified transfer pool. " : "Garment handoffs retain their separate qualified resource. ") +
     "These source-qualified modeled times do not establish measured labor performance or hardware authorization.";
   parent.append(note);
   detail(parent, `${label}: attending worker sources, cell locks and complete replay`, report);
@@ -3124,15 +3153,19 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     metric(seconds(step.feed_start_milliseconds)), metric(seconds(step.feed_finish_milliseconds)),
     metric(seconds(step.finish_milliseconds))]);
   const transfers = table(parent, `${label}: selected garment transfers`,
-    ["Global garment copy", "After operation", "Before operation", "From cell", "To cell", "Starts (s)", "Arrives (s)"]);
-  for (const step of report.selected?.transfers || []) cells(transfers, [metric(step.copy), step.from_operation,
+    [...(report.transfer_pool ? ["Resource"] : []), "Global garment copy", "After operation", "Before operation", "From cell", "To cell", "Starts (s)", "Arrives (s)"]);
+  for (const step of report.selected?.transfers || []) cells(transfers, [...(report.transfer_pool ? [step.resource || "Unavailable"] : []),
+    metric(step.copy), step.from_operation,
     step.to_operation, step.from, step.to, metric(seconds(step.start_milliseconds)), metric(seconds(step.finish_milliseconds))]);
   const resources = table(parent, `${label}: qualified routing availability`,
     ["Resource", "Available (s)", "Inclusive finish limit (s)"]);
   for (const cell of policy?.cells || []) cells(resources, [cell.id, metric(seconds(cell.available_at_milliseconds)),
     typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended"]);
-  if (policy?.transfer) cells(resources, [policy.transfer.id, metric(seconds(policy.transfer.available_at_milliseconds)),
-    typeof policy.transfer.available_until_milliseconds === "number" ? metric(seconds(policy.transfer.available_until_milliseconds)) : "Open ended"]);
+  for (const resource of report.transfer_pool ?
+      [report.transfer_pool.primary, ...(report.transfer_pool.policy?.additional_resources || [])] : [policy?.transfer]) {
+    if (resource) cells(resources, [resource.id, metric(seconds(resource.available_at_milliseconds)),
+      typeof resource.available_until_milliseconds === "number" ? metric(seconds(resource.available_until_milliseconds)) : "Open ended"]);
+  }
   if (report.availability_calendars) {
     const calendars = report.availability_calendars;
     const windows = table(parent, `${label}: nonpreemptive operating windows`,
@@ -3149,6 +3182,7 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     parent.append(scope);
     detail(parent, `${label}: operating calendar source and exact windows`, calendars);
   }
+  sewingRoutedTransferPool(parent, report, label);
   sewingRoutedStaging(parent, report, label);
   sewingRoutedWorkholding(parent, report, label);
   sewingRoutedLabor(parent, report, label);
@@ -3174,7 +3208,8 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     (policy?.transfer?.attending_worker ?
       `Worker ${policy.transfer.attending_worker} and the qualified transfer resource are both reserved from pickup through deposit; ` +
       "empty approach uses the worker's travel qualification. " :
-      "One separately qualified transfer resource serializes unloaded garment handoffs; its source duration includes positioning, pickup, movement and deposit. ") +
+      report.transfer_pool ? "The declared independent transfer pool permits concurrent unloaded garment handoffs on different qualified resources. " :
+        "One separately qualified transfer resource serializes unloaded garment handoffs; its source duration includes positioning, pickup, movement and deposit. ") +
     (report.bounded_staging ? `Finite unloaded staging is enforced at ${metric(report.bounded_staging.capacity)} garment slots per cell. ` :
       `Qualified staging has ${metric(policy?.staging_capacity)} garment slots. `) +
     "Stitch geometry and thread demand come from the actual assigned cell. Elapsed completion is distinct from summed machine and transfer work. " +
@@ -3469,6 +3504,7 @@ function sewingResult(parent, r) {
     routed_optimality_proven: routing?.optimality_proven,
     routed_search_work: routing?.search_nodes,
     routed_calendar_resources: routing?.availability_calendars ? Object.keys(routing.availability_calendars.resources).length : undefined,
+    independent_transfer_resources: routing?.transfer_pool ? routing.transfer_pool.selected.length : undefined,
     bounded_staging_enforced: routing?.bounded_staging ? true : undefined,
     garment_transfers: routing?.selected?.transfers?.length,
     transfer_seconds: routing ? routing.selected.transfer_milliseconds / 1000 : undefined,

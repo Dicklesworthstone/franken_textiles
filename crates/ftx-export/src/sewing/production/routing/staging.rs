@@ -113,7 +113,7 @@ pub(super) struct Compiled {
     capacity: usize,
     cells: Vec<String>,
     route: Vec<RouteStep>,
-    handoffs: Vec<Handoff>,
+    handoffs: BTreeMap<Option<String>, Vec<Handoff>>,
     owned: bool,
 }
 
@@ -136,7 +136,15 @@ impl Compiled {
             capacity: route.staging_capacity,
             cells: route.cells.iter().map(|cell| cell.id.clone()).collect(),
             route: route.route.clone(),
-            handoffs: route.transfer.transfers.clone(),
+            handoffs: route
+                .transfer_resources()
+                .map(|carrier| {
+                    (
+                        route.transfer_pool.as_ref().map(|_| carrier.id.clone()),
+                        carrier.transfers.clone(),
+                    )
+                })
+                .collect(),
             owned: route.transfer.attending_worker.is_some(),
         }))
     }
@@ -372,11 +380,13 @@ impl Compiled {
                     || transfer.start_milliseconds < previous.finish_milliseconds
                     || transfer.start_milliseconds > transfer.finish_milliseconds
                     || transfer.finish_milliseconds > operation.loading_start_milliseconds
-                    || !self.handoffs.iter().any(|edge| {
-                        edge.from == transfer.from
-                            && edge.to == transfer.to
-                            && u64::from(edge.milliseconds)
-                                == transfer.finish_milliseconds - transfer.start_milliseconds
+                    || !self.handoffs.get(&transfer.resource).is_some_and(|edges| {
+                        edges.iter().any(|edge| {
+                            edge.from == transfer.from
+                                && edge.to == transfer.to
+                                && u64::from(edge.milliseconds)
+                                    == transfer.finish_milliseconds - transfer.start_milliseconds
+                        })
                     })
                 {
                     return Err(bad("finite staging replay changed its qualified handoff"));
