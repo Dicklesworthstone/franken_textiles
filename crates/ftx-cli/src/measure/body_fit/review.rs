@@ -332,7 +332,7 @@ pub(super) fn prepare_capture(
          <title>Review capture before fitting</title>\
          <style>body{font:16px system-ui;max-width:1100px;margin:2em auto;padding:0 1em}svg{width:100%;max-height:75vh;border:1px solid #888}\
          section{margin:2em 0}td,th{padding:.4em;text-align:left;overflow-wrap:anywhere}table{width:100%;table-layout:fixed}p{line-height:1.5}\
-         button,input,select,textarea{font:inherit;padding:.3em}input{width:9em}input[type=checkbox]{width:auto}textarea{width:95%;max-width:45em}\
+         button,input,select,textarea{font:inherit;padding:.3em}input{width:9em}input[type=checkbox]{width:auto}input[type=file]{width:100%;box-sizing:border-box}textarea{width:95%;max-width:45em}\
          label{margin-right:1em}fieldset{margin:1em 0}tr[data-changed=true]{background:#fff2cf}\
          button[aria-pressed=true]{outline:3px solid #0369a1}svg[data-editing=true]{cursor:crosshair}[hidden]{display:none!important}</style>\
          <h1>Review capture before fitting</h1>\
@@ -345,7 +345,12 @@ pub(super) fn prepare_capture(
          <p><a href=\"capture.json\">Original input for fit-body (requires original source files)</a> · \
          <a href=\"original-input.json\">Original input bytes</a> · <a href=\"review.json\">Complete preparation evidence</a></p>",
     );
-    page.push_str("<div id=\"captureEditor\" hidden><h2>Correct point coordinates</h2>\
+    page.push_str("<div id=\"captureEditor\" hidden><fieldset><legend>Resume saved annotations</legend>\
+        <p>Load a previously downloaded capture-edited.json from this same review. Its points and editable \
+        silhouettes replace the current annotations after validation; images, cameras, model targets and fit settings must match. \
+        Review all restored observations and FIT/CHECK roles before fitting. A failed or cancelled load keeps current edits.</p>\
+        <label>Saved capture input (JSON, at most 16 MiB) <input id=\"captureDraftFile\" type=\"file\" accept=\".json,application/json\" disabled></label>\
+        <button id=\"cancelCaptureImport\" type=\"button\" disabled>Cancel loading</button></fieldset><h2>Correct point coordinates</h2>\
         <p>Select a point in a table, then click its image or enter stored-pixel coordinates. Names, targets, \
         uncertainty and FIT/CHECK assignments stay fixed. Changes affect only your downloaded input; the original \
         images, SVGs and preparation evidence on disk stay unchanged. Correct points before fitting, not to tune a CHECK result.</p>\
