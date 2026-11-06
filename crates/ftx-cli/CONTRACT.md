@@ -16,6 +16,14 @@ duration, including both starts when requested. Invalid settings refuse before f
 laws that require a declared duration refuse automatic settling through the shared solver guard.
 The fixed chest-band qualification schedule remains unchanged.
 
+`--static-equilibrium` optionally requests a separate frictionless conservative comparison after
+the ordinary dynamic run, also forwarded by `round --sim|--stills`. `--static-tol-mm` (default
+0.001) is a distance tolerance; `--static-max-newton` (default 300) is bounded to 1..=1000.
+Explicit controls require the opt-in flag. Successful results write `static_equilibrium.obj` and
+an independent report; refusals preserve the dynamic output and publish no trial mesh. Ordinary
+trajectory, time, metrics, gates and exit status keep their dynamic basis. See
+`docs/fold-inspection.md` for material-history and no-friction limits.
+
 **Commands.**
 - `ftx measure fit-start-review INPUT --model MODEL --out NEW_DIR [--silhouettes MANIFEST] [--json]`:
   inspect every declared shared shape and frame pose through the ordinary native model before

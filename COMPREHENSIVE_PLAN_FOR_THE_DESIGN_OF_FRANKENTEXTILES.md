@@ -423,6 +423,13 @@ Sew (seams welded, zero gravity, small h, until start strain relaxes) → drape 
 from 1/30 s to 0.25 s until the maximum speed stays below a threshold for K steps) → optional static solve
 reporting the equilibrium itself.
 
+The ordinary-run static option is an independent conservative comparison from a cloned dynamic
+endpoint. It includes elastic/gravity energy and normal contact, excludes Coulomb friction and
+material-history evolution, and advances no simulated time. Its available/refused receipt and
+optional mesh never replace the dynamic trajectory, gates or subsequent motion state. Explicit
+distance tolerance and iteration limits bound the solve; convergence remains distinct from a
+friction-supported hold, uniqueness or physical fit. See `docs/fold-inspection.md`.
+
 ### 11.4 The garment scene
 
 - **Meshing**: piece outlines to triangles (boundary samples at the reference's spacing, hex interior,

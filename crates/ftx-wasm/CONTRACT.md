@@ -45,6 +45,12 @@ the original time step, retains its actual duration, and obeys the shared histor
 Legacy fold exports retain their signatures and default behavior. Browser callers require the new
 export for nondefault leg/settling settings, so older bundles cannot silently discard them.
 
+Configured settings also accept optional `static_equilibrium` with explicit
+`correction_tolerance_m` and `max_newton_iterations`. The same native independent conservative
+solve adds an available/refused report and exact static geometry, without changing the dynamic
+fold, elapsed time, flags or subsequent motion. Friction and material-history evolution are not
+part of this static comparison. Omission preserves the existing settings serialization.
+
 **Purpose.** FrankenTextiles in the browser (plan §15): the page's round behind a thin `wasm-bindgen`
 boundary, replacing the skill's Pyodide page. `page` is the reference's `webapp.py` (`program_info`,
 `form_fields`, `body_file`, `run`): a body from a size chart, tape readings or a measurements file; a

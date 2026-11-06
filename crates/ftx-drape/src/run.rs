@@ -4,8 +4,9 @@
 
 use ftx_core::np::percentile;
 use ftx_core::py::round;
-use ftx_core::{Refusal, RefusalCode, Vec3};
+use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_pattern::{Pattern, Side, instance::physical_side};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::animation::{
@@ -26,6 +27,53 @@ pub const GRAVITY: f64 = 9.81;
 
 const SETTLE_SPEED_M_S: f64 = 1e-3;
 const SETTLE_QUIET_STEPS: usize = 3;
+
+/// An independent, frictionless static comparison from the final dynamic garment state.
+/// It never changes the recorded trajectory, its elapsed time, metrics or subsequent motion.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StaticEquilibriumOptions {
+    /// Stop when the maximum free Newton correction is below this distance in metres.
+    /// This is distinct from the dynamic solver's correction-per-time tolerance in m/s.
+    pub correction_tolerance_m: f64,
+    /// Maximum Newton iterations, in 1..=1000; a refused solve publishes no trial geometry.
+    pub max_newton_iterations: usize,
+}
+
+impl Default for StaticEquilibriumOptions {
+    fn default() -> Self {
+        Self {
+            correction_tolerance_m: 1e-6,
+            max_newton_iterations: 300,
+        }
+    }
+}
+
+impl StaticEquilibriumOptions {
+    /// Validate the independent solve's explicit distance tolerance and work cap.
+    ///
+    /// # Errors
+    /// Non-finite/nonpositive tolerance or a Newton cap outside 1..=1000.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        Refusal::finite(
+            "static-equilibrium correction tolerance",
+            self.correction_tolerance_m,
+        )?;
+        if self.correction_tolerance_m <= 0.0 || !(1..=1000).contains(&self.max_newton_iterations) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "static equilibrium needs a positive correction tolerance in metres and 1..=1000 Newton iterations",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Conservative point-frame reservation for retained geometry, copied state and bounded
+    /// solves, using the ordinary solver's 300-iteration cap as one solve-equivalent.
+    pub(crate) fn vertex_frames(&self) -> usize {
+        8 + self.max_newton_iterations.div_ceil(300)
+    }
+}
 
 /// The body a run drapes on.
 pub struct DrapeBody<'a> {
@@ -53,6 +101,10 @@ pub struct DrapeOptions {
     pub max_settle_steps: usize,
     /// Report-only hold window: last N accepted gravity steps; zero means not requested.
     pub elastic_hold_steps: usize,
+    /// Optional conservative equilibrium comparison after the dynamic schedule. Normal contact
+    /// is retained; friction and time-dependent/irreversible laws are not a static equilibrium law.
+    /// A numerical or material refusal is reported independently and preserves the dynamic run.
+    pub static_equilibrium: Option<StaticEquilibriumOptions>,
     /// Time step (s).
     pub step: f64,
     /// Newton tolerance on ‖Δx‖∞/h (m/s). The default, 1e-3 (each step converged to 42 µm), halves the
@@ -96,6 +148,7 @@ impl Default for DrapeOptions {
             drape_steps: 36,
             max_settle_steps: 0,
             elastic_hold_steps: 0,
+            static_equilibrium: None,
             step: 1.0 / 24.0,
             tol: 1e-3,
             compression: 1.0,
@@ -121,6 +174,9 @@ impl DrapeOptions {
     /// Non-finite or out-of-range numerical settings, insufficient frames for metrics, or a frame
     /// count that overflows the animation budget.
     pub fn validate(&self) -> Result<(), Refusal> {
+        if let Some(policy) = &self.static_equilibrium {
+            policy.validate()?;
+        }
         self.contact.validate()?;
         if let Some(p) = self.self_contact {
             p.validate()?;
@@ -551,6 +607,14 @@ pub fn drape(
             crate::thermal::steady::surface::for_drape(&scene, &report["material"]);
         report["vapor_surface"] = crate::thermal::vapor::for_drape(&scene, &report["material"]);
     }
+    if let Some(policy) = &opts.static_equilibrium {
+        let equilibrium = static_equilibrium(&scene, policy, &report["material"]);
+        progress(&format!(
+            "static equilibrium: {} (independent frictionless comparison; dynamic trajectory retained)",
+            equilibrium["status"].as_str().unwrap_or("refused")
+        ));
+        report["static_equilibrium"] = equilibrium;
+    }
     Ok(DrapeRun {
         scene,
         fold,
@@ -559,6 +623,92 @@ pub fn drape(
         drape,
         fabric,
     })
+}
+
+// Keep this optional comparison downstream of all dynamic metrics and source-geometry receipts.
+// The existing static solver omits friction, uses no duration and refuses material history laws.
+fn static_equilibrium(scene: &Scene, policy: &StaticEquilibriumOptions, material: &Value) -> Value {
+    let mut report = json!({
+        "schema":"ftx-static-equilibrium/1", "request":policy,
+        "basis":"independent_frictionless_equilibrium_from_dynamic_endpoint",
+        "gravity_m_s2":scene.solver.gravity,
+        "friction_included":false, "advances_simulated_time":false,
+        "changes_dynamic_trajectory":false, "physical_validation_claim":false,
+        "body_contact_simulated":scene.solver.contact.as_ref().is_some_and(|c| !c.body.triangles.is_empty()),
+        "self_contact_simulated":scene.solver.contact.as_ref().is_some_and(|c| c.self_contact_params().is_some()),
+        "no_claim":"A bounded conservative solve from one dynamic endpoint. Normal contact and elastic storage are retained; Coulomb friction, material history evolution and elapsed time are excluded. Dynamic geometry, velocities, frames, metrics, flags and subsequent motion remain authoritative. Convergence does not prove a unique equilibrium, friction-supported hold, physical garment fit or empirical validation."
+    });
+    let result = (|| -> Result<Value, Refusal> {
+        policy.validate()?;
+        if scene
+            .solver
+            .contact
+            .as_ref()
+            .is_some_and(|c| c.params.thickness < scene.target_thickness)
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "static equilibrium requires the completed physical contact-thickness ramp",
+            )
+            .repair("run more explicit draping steps before requesting the static comparison"));
+        }
+        let mut trial = scene.solver.clone();
+        trial.tol = policy.correction_tolerance_m;
+        trial.max_newton = policy.max_newton_iterations;
+        let solve = trial.static_solve().map_err(|mut refusal| {
+            if refusal.code == RefusalCode::NotConverged {
+                refusal.repairs = vec![
+                    "increase the explicit static Newton cap or review its distance tolerance".into(),
+                    "check whether this garment has a supported frictionless equilibrium and remains in its material domain".into(),
+                ];
+            }
+            refusal
+        })?;
+        let mut max_displacement_m = 0.0_f64;
+        let mut sum_squared_displacement_m2 = 0.0;
+        for (start, finish) in scene.solver.x.iter().zip(&trial.x) {
+            let distance = (*finish - *start).norm();
+            max_displacement_m = max_displacement_m.max(distance);
+            sum_squared_displacement_m2 += distance * distance;
+        }
+        Refusal::finite(
+            "static-equilibrium displacement",
+            sum_squared_displacement_m2,
+        )?;
+        let digest = |value: &Value| {
+            serde_json::to_vec(value)
+                .map(|bytes| sha256_hex(&bytes))
+                .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+        };
+        let body_geometry_sha256 = scene
+            .solver
+            .contact
+            .as_ref()
+            .map(|c| digest(&json!([c.body.vertices, c.body.triangles])))
+            .transpose()?;
+        Ok(json!({
+            "solve":solve, "vertex_basis":"welded solver vertices in the unchanged body frame",
+            "initial_positions_m":scene.solver.x, "positions_m":trial.x,
+            "triangles":trial.model.membranes.iter().map(|t| t.v).collect::<Vec<_>>(),
+            "mesh_vertex_to_solver":scene.weld,
+            "instances":scene.mesh.instances, "triangle_instance":scene.triangle_owner,
+            "material_sha256":digest(material)?, "body_geometry_sha256":body_geometry_sha256,
+            "max_displacement_m":max_displacement_m,
+            "rms_displacement_m":(sum_squared_displacement_m2 / trial.x.len() as f64).sqrt(),
+            "contact_thickness_m":trial.contact.as_ref().map(|c| c.params.thickness),
+        }))
+    })();
+    match result {
+        Ok(result) => {
+            report["status"] = json!("available");
+            report["result"] = result;
+        }
+        Err(refusal) => {
+            report["status"] = json!("refused");
+            report["refusal"] = json!(refusal);
+        }
+    }
+    report
 }
 
 /// Preserve reference metrics; native acceptance additionally requires a quiet instantaneous tail.
@@ -1288,6 +1438,33 @@ mod self_contact_tests {
             },
         ] {
             assert!(opts.validate().is_err(), "{opts:?}");
+        }
+        for policy in [
+            StaticEquilibriumOptions {
+                correction_tolerance_m: f64::NAN,
+                ..Default::default()
+            },
+            StaticEquilibriumOptions {
+                correction_tolerance_m: 0.0,
+                ..Default::default()
+            },
+            StaticEquilibriumOptions {
+                max_newton_iterations: 0,
+                ..Default::default()
+            },
+            StaticEquilibriumOptions {
+                max_newton_iterations: 1001,
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                DrapeOptions {
+                    static_equilibrium: Some(policy),
+                    ..default
+                }
+                .validate()
+                .is_err()
+            );
         }
     }
 
