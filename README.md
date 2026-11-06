@@ -51,9 +51,11 @@ bands, fold-up animation, metrics and flags), `ftx-export` (every deliverable an
 
 **Qualification remains open (2026-11-06).** The garment runs without flags described above are historical
 observations. In the current checks, the 80 cm bolero reaches 1.414 mm of its requested 1.5 mm body offset
-under the fixed schedule, the chart trousers refuse an intersecting cloth start with self-contact, and
-the optional static-equilibrium positive regression exhausts its 1,000-iteration Newton cap. These remain
-failed cells; the [parity status](FEATURE_PARITY.md) and [drape contract](crates/ftx-drape/CONTRACT.md)
+under the fixed schedule, and the chart trousers refuse an intersecting cloth start with self-contact.
+Those remain failed cells. The optional static-equilibrium sewn cone-band regression now passes its
+original tolerance and 1,000-iteration cap: a static-only search direction lets free cloth reach its
+support without treating a regularized step as convergence. Unsupported loads still refuse.
+The [parity status](FEATURE_PARITY.md) and [drape contract](crates/ftx-drape/CONTRACT.md)
 separate numerical evidence from physical qualification and real-person fit.
 
 The plan is written to be falsifiable: it names kill gates that can stop the body port or the drape solver
@@ -83,6 +85,9 @@ Photo/video body fitting requires prepared, calibrated frames and reviewed corre
 The [decoded-frame selection](docs/video-frame-selection.md), [multi-frame fitting](docs/multi-frame-body-fit.md)
 and [accepted-shape reuse](docs/reuse-body-fit.md) guides document those stages. An arbitrary phone clip
 is not yet a complete capture-to-body input; an accepted image fit does not promote measurement readiness.
+The local photo page can now fit prepared multi-frame observations with the same Anny adapter and
+solver as the CLI. Native capture review exports a calibrated `prepared-input.json` snapshot for this
+route; accepted reports can be reused in ordinary body checks and drapes with the same model.
 
 ### Material substitutions and heat
 

@@ -5,10 +5,10 @@ use std::{
     path::Path,
 };
 
-use ftx_body::{AnnyData, AnnyModel, TAPE_FIELDS};
+use ftx_body::{AnnyData, AnnyModel, TAPE_FIELDS, correspondence::Parameter};
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::{
-    body_fit::{BodyModel, MetricObservation, Parameter, prepare_capture_authoring},
+    body_fit::{BodyModel, MetricObservation, prepare_capture_authoring},
     photo::intrinsics::checked_calibration,
     video::FrameMetadata,
 };

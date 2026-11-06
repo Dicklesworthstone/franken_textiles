@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::{PlannedSeam, bad, qualified_text};
 
 const MAX_PASSES: usize = 20;
-const MAX_PRODUCTION_PASSES: usize = 63;
+pub(super) const MAX_PRODUCTION_PASSES: usize = 256;
 const MAX_SEARCH_NODES: usize = 200_000;
 
 mod timing;
@@ -43,7 +43,7 @@ impl Setup {
     }
 }
 
-/// Bounded scheduling policy. One-garment ordering admits 20 operations; explicit production admits 63.
+/// Bounded scheduling policy. One-garment ordering admits 20 operations; explicit production admits 256.
 /// Larger legacy jobs remain supported without ordering.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -179,8 +179,50 @@ pub(super) struct ResourceLimits {
 pub(super) struct ResourceHold {
     pub(super) resource: usize,
     pub(super) units: u32,
-    pub(super) acquire: u64,
-    pub(super) release: u64,
+    pub(super) acquire: usize,
+    pub(super) release: usize,
+}
+
+// Exact, allocation-free state for the admitted production graph. The fixed four words bound
+// every search frame and avoid native/wasm word-size differences at indices 63, 127, 191 and 255.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct OperationSet([u64; MAX_PRODUCTION_PASSES.div_ceil(64)]);
+
+impl OperationSet {
+    pub(super) fn all(count: usize) -> Self {
+        debug_assert!(count <= MAX_PRODUCTION_PASSES);
+        let mut result = Self::default();
+        for index in 0..count {
+            result.insert(index);
+        }
+        result
+    }
+
+    pub(super) fn contains(self, index: usize) -> bool {
+        self.0
+            .get(index / 64)
+            .is_some_and(|word| word & (1_u64 << (index % 64)) != 0)
+    }
+
+    pub(super) fn insert(&mut self, index: usize) {
+        self.0[index / 64] |= 1_u64 << (index % 64);
+    }
+
+    fn with(mut self, index: usize) -> Self {
+        self.insert(index);
+        self
+    }
+
+    fn contains_all(self, other: Self) -> bool {
+        self.0
+            .iter()
+            .zip(other.0)
+            .all(|(&have, need)| have & need == need)
+    }
+
+    fn count(self) -> usize {
+        self.0.iter().map(|word| word.count_ones() as usize).sum()
+    }
 }
 
 /// Qualified operation/copy-aware handling costs in the same sorted operation order as search.
@@ -192,10 +234,10 @@ pub(super) struct HandlingCosts {
 }
 
 impl ResourceLimits {
-    pub(super) fn occupied(&self, mask: u64) -> Vec<u32> {
+    pub(super) fn occupied(&self, mask: OperationSet) -> Vec<u32> {
         let mut occupied = vec![0; self.capacity.len()];
         for hold in &self.holds {
-            if mask & hold.acquire != 0 && mask & hold.release == 0 {
+            if mask.contains(hold.acquire) && !mask.contains(hold.release) {
                 occupied[hold.resource] += hold.units;
             }
         }
@@ -213,22 +255,22 @@ impl ResourceLimits {
 
 struct Task<'a> {
     id: &'a str,
-    predecessors: u64,
-    needle: u64,
-    thread: u64,
+    predecessors: OperationSet,
+    needle: usize,
+    thread: usize,
 }
 
 struct Search<'a> {
     tasks: Vec<Task<'a>>,
-    initial: Option<(u64, u64)>,
-    all: u64,
+    initial: Option<(usize, usize)>,
+    all: OperationSet,
     times: Option<Vec<Vec<u64>>>,
     resources: Option<&'a ResourceLimits>,
     final_milliseconds: Option<&'a [u64]>,
 }
 
 struct Frame {
-    mask: u64,
+    mask: OperationSet,
     last: Option<usize>,
     cost: u64,
     candidates: Vec<usize>,
@@ -237,23 +279,23 @@ struct Frame {
 
 impl Search<'_> {
     fn feasible(&self, order: &[usize]) -> bool {
-        let mut mask = 0_u64;
+        let mut mask = OperationSet::default();
         for &next in order {
             let task = &self.tasks[next];
-            if mask & (1_u64 << next) != 0
-                || task.predecessors & mask != task.predecessors
+            if mask.contains(next)
+                || !mask.contains_all(task.predecessors)
                 || self
                     .resources
                     .is_some_and(|resources| !resources.admits(&resources.occupied(mask), next))
             {
                 return false;
             }
-            mask |= 1_u64 << next;
+            mask.insert(next);
         }
         mask == self.all
     }
 
-    fn setup(&self, last: Option<usize>) -> Option<(u64, u64)> {
+    fn setup(&self, last: Option<usize>) -> Option<(usize, usize)> {
         last.map(|i| (self.tasks[i].needle, self.tasks[i].thread))
             .or(self.initial)
     }
@@ -287,17 +329,17 @@ impl Search<'_> {
     // Each still-needed identity requires at least one transition, except the currently installed
     // identity. With unknown initial setup the first identity in each component is uncharged.
     // Ignoring prerequisites only weakens this bound; summing the component bounds stays valid.
-    fn count_lower_bound(&self, mask: u64, last: Option<usize>) -> usize {
-        let (mut needles, mut threads) = (0_u64, 0_u64);
+    fn count_lower_bound(&self, mask: OperationSet, last: Option<usize>) -> usize {
+        let (mut needles, mut threads) = (OperationSet::default(), OperationSet::default());
         for (i, task) in self.tasks.iter().enumerate() {
-            if mask & (1 << i) == 0 {
-                needles |= task.needle;
-                threads |= task.thread;
+            if !mask.contains(i) {
+                needles.insert(task.needle);
+                threads.insert(task.thread);
             }
         }
-        let component = |remaining: u64, current: Option<u64>| {
-            remaining.count_ones() as usize
-                - usize::from(remaining != 0 && current.is_none_or(|v| remaining & v != 0))
+        let component = |remaining: OperationSet, current: Option<usize>| {
+            let count = remaining.count();
+            count - usize::from(count != 0 && current.is_none_or(|v| remaining.contains(v)))
         };
         let setup = self.setup(last);
         component(needles, setup.map(|v| v.0)) + component(threads, setup.map(|v| v.1))
@@ -328,7 +370,7 @@ impl Search<'_> {
             .unwrap_or(0)
     }
 
-    fn lower_bound(&self, mask: u64, last: Option<usize>) -> u64 {
+    fn lower_bound(&self, mask: OperationSet, last: Option<usize>) -> u64 {
         if mask == self.all {
             return self.final_cost(last);
         }
@@ -339,10 +381,10 @@ impl Search<'_> {
         // another remaining operation. Independent minima relax order/degree/dependency constraints,
         // so their sum is a lower bound even for asymmetric, nonmetric durations and repeated setups.
         let incoming: u64 = (0..self.tasks.len())
-            .filter(|&j| mask & (1 << j) == 0)
+            .filter(|&j| !mask.contains(j))
             .map(|j| {
                 (0..self.tasks.len())
-                    .filter(|&i| i != j && mask & (1 << i) == 0)
+                    .filter(|&i| i != j && !mask.contains(i))
                     .map(|i| self.cost(Some(i), j))
                     .fold(self.cost(last, j), u64::min)
             })
@@ -351,22 +393,22 @@ impl Search<'_> {
         incoming
             + self.final_milliseconds.map_or(0, |times| {
                 (0..self.tasks.len())
-                    .filter(|&i| mask & (1 << i) == 0)
+                    .filter(|&i| !mask.contains(i))
                     .map(|i| times[i])
                     .min()
                     .unwrap_or(0)
             })
     }
 
-    fn frame(&self, mask: u64, last: Option<usize>, cost: u64) -> Frame {
+    fn frame(&self, mask: OperationSet, last: Option<usize>, cost: u64) -> Frame {
         let occupied = self.resources.map(|resources| resources.occupied(mask));
         let mut candidates: Vec<_> = self
             .tasks
             .iter()
             .enumerate()
             .filter(|(i, task)| {
-                mask & (1 << i) == 0
-                    && task.predecessors & mask == task.predecessors
+                !mask.contains(*i)
+                    && mask.contains_all(task.predecessors)
                     && self.resources.is_none_or(|resources| {
                         resources.admits(occupied.as_ref().expect("resource state"), *i)
                     })
@@ -492,14 +534,13 @@ pub(super) fn optimize_operations_with_resources(
     let mut threads = BTreeMap::new();
     let mut tasks = Vec::with_capacity(passes.len());
     for pass in passes {
-        let next_needle = 1_u64 << needles.len();
+        let next_needle = needles.len();
         let needle = *needles.entry(pass.needle).or_insert(next_needle);
-        let next_thread = 1_u64 << threads.len();
+        let next_thread = threads.len();
         let thread = *threads.entry(pass.thread).or_insert(next_thread);
-        let predecessors = pass
-            .after
-            .iter()
-            .fold(0, |mask, id| mask | (1 << ids[id.as_str()]));
+        let predecessors = pass.after.iter().fold(OperationSet::default(), |mask, id| {
+            mask.with(ids[id.as_str()])
+        });
         tasks.push(Task {
             id: pass.id,
             predecessors,
@@ -508,17 +549,23 @@ pub(super) fn optimize_operations_with_resources(
         });
     }
     let search = Search {
-        all: (1_u64 << tasks.len()) - 1,
+        all: OperationSet::all(tasks.len()),
         tasks,
         times,
         resources,
         final_milliseconds: handling.map(|handling| handling.final_milliseconds.as_slice()),
-        // An explicitly installed identity absent from the job is a known different setup (zero),
+        // An explicitly installed identity absent from the job is a known different setup,
         // not the omitted/unknown setup represented by None.
         initial: policy.initial_setup.as_ref().map(|s| {
             (
-                needles.get(s.needle.as_str()).copied().unwrap_or(0),
-                threads.get(s.thread.as_str()).copied().unwrap_or(0),
+                needles
+                    .get(s.needle.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX),
+                threads
+                    .get(s.thread.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX),
             )
         }),
     };
@@ -527,12 +574,12 @@ pub(super) fn optimize_operations_with_resources(
     let mut baseline = (!baseline_replaced).then_some(original);
     let mut best = baseline.clone();
     let mut best_cost = best.as_deref().map(|order| search.total_cost(order));
-    let root_bound = search.lower_bound(0, None);
+    let root_bound = search.lower_bound(OperationSet::default(), None);
     let mut search_nodes = 0;
     let mut budget_exhausted = false;
-    let mut stack = vec![search.frame(0, None, 0)];
+    let mut stack = vec![search.frame(OperationSet::default(), None, 0)];
     let mut path = Vec::with_capacity(baseline_passes.len());
-    // Iterative depth-first branch-and-bound: at most 63 frames, each with at most 63 candidates.
+    // Iterative depth-first branch-and-bound: at most 256 frames, each with at most 256 candidates.
     // Feasibility discovery and objective improvement share one prefix budget. An invalid original
     // seed supplies no cost upper bound, even when all operations have identical zero-change setups.
     // A budget stop cannot replace the incumbent with an unfinished prefix.
@@ -550,7 +597,7 @@ pub(super) fn optimize_operations_with_resources(
         let next = frame.candidates[frame.next];
         frame.next += 1;
         search_nodes += 1;
-        let mask = frame.mask | (1 << next);
+        let mask = frame.mask.with(next);
         let cost = frame.cost + search.cost(frame.last, next);
         if best_cost.is_some_and(|best| cost + search.lower_bound(mask, Some(next)) >= best) {
             continue;
@@ -621,7 +668,7 @@ pub(super) fn optimize_operations_with_resources(
         optimality_proven: !budget_exhausted,
         budget_exhausted,
         lower_bound_total_changes: if search.times.is_some() {
-            search.count_lower_bound(0, None)
+            search.count_lower_bound(OperationSet::default(), None)
         } else if budget_exhausted {
             root_bound as usize
         } else {

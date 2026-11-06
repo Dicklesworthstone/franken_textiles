@@ -110,24 +110,24 @@ pub(super) fn review(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     let adapter = Adapter::for_target_review(model, config, &annotations.model_sha256)?;
     let shape: Vec<_> = adapter
-        .config
+        .configuration()
         .shape_parameters
         .iter()
         .map(|p| p.lower + 0.5 * (p.upper - p.lower))
         .collect();
-    let rest = adapter.model.rest(&adapter.parameters(&shape))?;
+    let rest = adapter.model().rest(&adapter.parameters(&shape)?)?;
     if rest.vertices.iter().any(|p| !p.is_finite()) {
         return Err(bad_input("model target review needs finite rest vertices"));
     }
     let preview = json!({"status":"UNFITTED", "pose":"unposed_rest", "units":"m",
         "coordinates":"model_rest_z_up_faces_negative_y",
-        "age_years":adapter.config.age_years,"gender":adapter.config.gender,
-        "fixed_shape":adapter.config.fixed_shape,
-        "shape_values":adapter.config.shape_parameters.iter().zip(&shape).map(|(p,v)|
+        "age_years":adapter.configuration().age_years,"gender":adapter.configuration().gender,
+        "fixed_shape":adapter.configuration().fixed_shape,
+        "shape_values":adapter.configuration().shape_parameters.iter().zip(&shape).map(|(p,v)|
             json!({"name":p.name,"value":v,"lower":p.lower,"upper":p.upper})).collect::<Vec<_>>(),
         "basis":"Free shape parameters are at the midpoint of their declared bounds. No observation, start, fitted shape, root transform or articulated pose was used."});
     let bones: Vec<_> = adapter
-        .model
+        .model()
         .data()
         .header
         .labels
@@ -137,7 +137,7 @@ pub(super) fn review(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .map(|(i, bone)| json!({"name":bone,"head_m":rest.bone_heads[i],"tail_m":rest.bone_tails[i]}))
         .collect();
     let geometry = json!({"model_sha256":annotations.model_sha256,"preview":preview,
-        "mesh":{"vertices_m":rest.vertices,"triangles":adapter.model.data().faces},"bones":bones});
+        "mesh":{"vertices_m":rest.vertices,"triangles":adapter.model().data().faces},"bones":bones});
     let editor_data = json!({"annotations":annotations,"observed_names":names,
         "mesh":geometry["mesh"],"bones":geometry["bones"],"preview":preview});
     let mut bundle = Bundle::new();
@@ -249,7 +249,7 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
     config.keypoints = annotations.keypoints;
     let model = model(required(args, "model")?, &config.model_sha256)?;
     let adapter = Adapter::new(model, config, &annotations.model_sha256)?;
-    input["model"]["keypoints"] = json!(adapter.config.keypoints);
+    input["model"]["keypoints"] = json!(adapter.configuration().keypoints);
     rebase_capture(&mut input, Path::new(&annotations.source_input))?;
     let mut bundle = Bundle::new();
     let original = bundle.push("source-input.json".into(), original_bytes)?;
@@ -258,7 +258,7 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let result = json!({"schema":"ftx-body-target-materialization/1","status":"TARGETS_APPLIED",
         "body_fitted":false,"source_input":annotations.source_input,
         "input_sha256":annotations.source_input_sha256,"model_sha256":annotations.model_sha256,
-        "keypoint_count":adapter.config.keypoints.len(),"original_input":original,
+        "keypoint_count":adapter.configuration().keypoints.len(),"original_input":original,
         "annotations":annotation,"replay_input":replay,
         "no_claim":"Model target definitions passed native validation. Observation names, values, FIT/CHECK roles and source bindings are preserved. Source cameras, observability, anatomy, physical accuracy and real-wearer fit have not been qualified."});
     bundle.publish_report(output, &result, "targets.json")?;
@@ -267,7 +267,7 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
         0,
         format!(
             "MODEL TARGETS: APPLIED ({} correspondences)\nReview or fit {}/input.json with the ordinary capture/body-fit commands",
-            adapter.config.keypoints.len(),
+            adapter.configuration().keypoints.len(),
             output.display()
         ),
     ))

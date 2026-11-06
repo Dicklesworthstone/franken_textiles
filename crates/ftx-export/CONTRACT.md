@@ -289,7 +289,7 @@ through ordinary plan, stitch-program and study consumers. Tests: `sewing` and
 
 **Cross-copy sewing production** (`sewing::production`, `ftx-pb2`). Optional
 `SewOptions.production` expands each already admitted operation and its predecessors within each
-physical garment copy, then reuses the same count/directed-time scheduler over at most 63 operations
+physical garment copy, then reuses the same count/directed-time scheduler over at most 256 operations
 and 200000 examined prefixes. Explicit production and thread quantities must agree; studies also
 resolve their common cutting count before admission. The effective quantity is frozen into options.
 Source station geometry stays once in `seams`; `production.operations` retains copy/pass/qualification
@@ -298,6 +298,12 @@ totals use u64 on native and WASM. Per-garment plan totals remain unchanged; sha
 select the explicit batch scope for consumers. The version-4 stitch program emits every selected
 copy's real runs, charging the complete 250000-interval cap before expansion. Missing timing or stale
 material qualification refuses; a search stop preserves a complete incumbent with no optimality claim.
+Four fixed 64-bit words retain exact dependencies, completed operations and fixture lifecycles across
+the full graph on native and WASM; setup identities are not limited to one machine word. The node cap,
+traversal, objective bounds and proofs are unchanged. Independent handling/workholding source limits,
+parallel allocation reservations and routed replay budgets still apply. Direct production, parallel
+and routing tests cover complete 256-operation batches, boundary refusal, actual stitches and bounded
+incumbents; synthetic arithmetic does not qualify factory throughput.
 Existing absent-policy output is unchanged. This single-configuration slice infers no undeclared
 fixture changes, handling, seam access, machine execution or physical quality. Tests:
 `sewing_production`, existing `sewing` and `sewing_program`; see `docs/sewing-production.md`.
@@ -327,7 +333,7 @@ the final unload; a work limit retains a complete source-bound incumbent. Plan `
 `/3` and handling `/1` preserve every baseline/selected scoped transition. Setup/feed/handling totals
 stay separate, and joint proof never becomes setup-only optimality. Missing handling evidence is
 `NotConverged`, keeping recipe selection unresolved. Selection `/4` minimizes the actual complete
-modeled total across explicit qualified recipes. Limits remain 63 expanded operations/200000 search
+modeled total across explicit qualified recipes. Limits remain 256 expanded operations/200000 search
 nodes, with at most 8192 timing rows/256 qualification locks and one-day per-phase durations. Tests
 in `sewing_production` compare independent exhaustive optima under finite fixtures, final unloading,
 source changes, complete bounded replay and a handling-dependent recipe winner. No physical timing,
@@ -344,7 +350,7 @@ The required `ceil_cell_feed_milliseconds/1` policy ceiling-schedules generated 
 cell and retains raw feed and sub-millisecond padding. This is an explicit planning-resolution
 objective. Setup/handling work is summed separately from elapsed makespan. Unused cells incur no
 availability/setup/loading/unloading costs. The outer serial-reference cap plus one global parallel
-cap (all cell/count searches and both DPs) is at most 200000; at most eight cells and 63 expanded
+cap (all cell/count searches and both DPs) is at most 200000; at most eight cells and 256 expanded
 operations are supported. `SewOptions::scheduling_work_bound` reserves the complete cross-product
 work. Plan `/16`, production `/4`, parallel `/1` and stitch `/5` retain complete per-cell schedules
 with local-to-global physical-copy maps; every output stitch identifies its cell/global copy.

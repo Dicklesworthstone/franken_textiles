@@ -378,7 +378,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let viewer = bundle.push("index.html".into(), page.into_bytes())?;
     let report = json!({"schema":"ftx-body-start-review/1","status":"INITIALIZATION_REVIEW",
         "body_fitted":false,"input_sha256":sha256_hex(&bytes),"input_source":source,
-        "model_sha256":hash,"model":adapter.layout,"anny_configuration":adapter.config,
+        "model_sha256":hash,"model":adapter.layout,"anny_configuration":adapter.configuration(),
         "canonical_input":input,"original_input":original,"viewer":viewer,"starts":starts,"start_editor":editor,
         "capture_input":capture_input,"silhouette_input":masks,
         "no_claim":"Declared initializations evaluated without optimization. No accepted body, observability, uniqueness, anatomical correctness, collision-skin admission, READY measurement or real-wearer fit claim."});

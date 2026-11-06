@@ -5,12 +5,13 @@
 // Use --triangulate NATIVE_DIR for exact prepared inputs and original native geometry reports.
 // Use --bundle NATIVE_DIR for anchored refinement and transitions through the shared geometry tool.
 // Use --still-window NATIVE_DIR for sparse stationarity candidates and original native report replay.
+// Use --fit-body NATIVE_DIR for prepared multi-frame Anny fits and original native reports.
 const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
 const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
-const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", triangulationOnly=process.argv[2]==="--triangulate", bundleOnly=process.argv[2]==="--bundle", stillOnly=process.argv[2]==="--still-window", native=sectionOnly?null:process.argv[charucoOnly||triangulationOnly||bundleOnly||stillOnly?3:2];
+const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", triangulationOnly=process.argv[2]==="--triangulate", bundleOnly=process.argv[2]==="--bundle", stillOnly=process.argv[2]==="--still-window", bodyFitOnly=process.argv[2]==="--fit-body", native=sectionOnly?null:process.argv[charucoOnly||triangulationOnly||bundleOnly||stillOnly||bodyFitOnly?3:2];
 const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(web,"pkg");
-if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, --triangulate NATIVE_DIR, --bundle NATIVE_DIR, --still-window NATIVE_DIR, or --section");
+if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, --triangulate NATIVE_DIR, --bundle NATIVE_DIR, --still-window NATIVE_DIR, --fit-body NATIVE_DIR, or --section");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
 async function photoHandoff(browser,origin) {
   const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
@@ -351,6 +352,65 @@ async function triangulationWorkflow(browser,origin) {
     console.log("PASS triangulation: six complete native/WASM reports, exact source/noise/report downloads, full-u64 frames, accepted and unavailable precision, weak/held-out/noise/encoding/budget refusals, cancellation, desktop/mobile controls, no measurement promotion/uploads/storage/page errors.");
   } finally {await context.close();}
 }
+async function bodyFitWorkflow(browser,origin) {
+  const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
+  const page=await context.newPage();page.setDefaultTimeout(60000);
+  page.on('pageerror',e=>errors.push(String(e)));context.on('request',r=>requests.push({url:r.url(),method:r.method()}));
+  const parse=text=>JSON.parse(text,(key,value,meta)=>key==='timestamp_us'?meta.source:value);
+  const download=async name=>{
+    const event=page.waitForEvent('download');await page.click(`a[download="${name}"]`);const result=await event;
+    assert.equal(await result.failure(),null);return fs.readFileSync(await result.path(),'utf8');
+  };
+  const run=async()=>{
+    await page.click('#bodyFitRun');
+    await page.waitForFunction(()=>/Body fit accepted|Body fit finished|Body fit refused|No body-fit report|Body-fit worker stopped/.test(document.getElementById('bodyFitStatus').textContent),null,{timeout:120000});
+  };
+  const absent=async()=>{
+    assert.equal(await page.locator('#bodyFitResult').isVisible(),false);
+    assert.equal(await page.locator('#bodyFitDownloads a').count(),0);
+  };
+  try {
+    await page.goto(origin+'/photo.html');
+    await page.setInputFiles('#bodyFitModel',path.join(native,'model.ftxbody'));
+    await page.locator('#bodyFitIterations').evaluate(e=>{e.closest('details').open=true;});
+    for(const item of JSON.parse(fs.readFileSync(path.join(native,'cases.json'),'utf8')).cases) {
+      await page.setInputFiles('#bodyFitInput',path.join(native,item.input));await absent();
+      await page.fill('#bodyFitIterations',item.iterations);await page.fill('#bodyFitEvaluations',item.max_evaluations);
+      await run();assert.equal(await page.textContent('#bodyFitError'),'');
+      const report=await download('body-fit-report.json');
+      assert.deepEqual(parse(report),parse(fs.readFileSync(path.join(native,item.report),'utf8')),item.name+' actual page/worker/WASM/native equality');
+      assert.equal(await download('body-fit-input.json'),fs.readFileSync(path.join(native,item.input),'utf8'));
+      assert.equal(await page.locator('#bodyFitAttempts tr').count(),JSON.parse(report).attempts.length);
+      assert.equal(await page.locator('#bodyFitChecks tr').count(),JSON.parse(report).attempts.reduce((n,a)=>n+a.checks.length,0));
+      assert.match(await page.textContent('#bodyFitSummary'),new RegExp(item.status));
+      assert.equal(await page.isDisabled('#openWorkbench'),true,'Model predictions are never photo measurement records');
+      if(item.status!=='ACCEPTED')assert.match(await page.textContent('#bodyFitUse'),/No accepted shape/);
+      if(item.name==='accepted') {
+        await page.screenshot({path:path.join(work,'body-fit-accepted.png'),fullPage:true});
+        await page.setViewportSize({width:390,height:844});
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Accepted report stays within the narrow viewport');
+        await page.screenshot({path:path.join(work,'body-fit-mobile.png'),fullPage:true});
+        await page.setViewportSize({width:1280,height:720});
+      }
+    }
+    // Cancel a real worker while its module is loading, then finish a fresh request.
+    let parked,release;const arrived=new Promise(resolve=>{parked=resolve;});
+    await context.route('**/ftx_wasm_bg.wasm',route=>{release=route;parked();});
+    await page.setInputFiles('#bodyFitInput',path.join(native,'accepted-input.json'));
+    await page.fill('#bodyFitIterations','50');await page.fill('#bodyFitEvaluations','100000');
+    await page.click('#bodyFitRun');await arrived;await page.click('#bodyFitCancel');await absent();
+    await release.continue().catch(()=>{});await context.unroute('**/ftx_wasm_bg.wasm');
+    await run();assert.match(await page.textContent('#bodyFitSummary'),/ACCEPTED/);
+    await page.fill('#bodyFitIterations','49');await absent();
+    await page.setInputFiles('#bodyFitModel',{name:'wrong.ftxbody',mimeType:'application/octet-stream',buffer:Buffer.from('wrong model')});
+    await run();assert.match(await page.textContent('#bodyFitError'),/SHA-256 mismatch/);await absent();
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Narrow layout stays within the viewport');
+    assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+    assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+'/')&&r.method==='GET'));
+    console.log('PASS actual browser body fit: complete native equality, all starts/checks, exact downloads, cancellation, source replacement, no measurement promotion, no uploads or stored evidence. Artifacts:',work);
+  } finally {await context.close();}
+}
 const server=http.createServer((req,res)=>{
   let file,base=web;
   try {
@@ -390,6 +450,7 @@ const server=http.createServer((req,res)=>{
   };
   try {
     if(sectionOnly) {await sectionWorkflow(browser,origin);return;}
+    if(bodyFitOnly) {await bodyFitWorkflow(browser,origin);return;}
     if(triangulationOnly||bundleOnly||stillOnly) {await triangulationWorkflow(browser,origin);return;}
     await page.goto(origin+"/photo.html");
     if(charucoOnly) {

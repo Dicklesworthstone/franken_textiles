@@ -282,6 +282,166 @@ fn run(dir: &Path, extra: &[&str], code: i32) -> Value {
 }
 
 #[test]
+fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engine() {
+    let dir = setup();
+    let (model, mut base) = fixture();
+    let first_timestamp = (1_u64 << 54) + 1;
+    for i in 0..2 {
+        let timestamp = first_timestamp + i as u64 * 200_000;
+        base["fit"]["frames"][i]["frame"]["timestamp_us"] = json!(timestamp);
+        for start in base["fit"]["starts"].as_array_mut().unwrap() {
+            start["poses"][i]["frame"]["timestamp_us"] = json!(timestamp);
+        }
+    }
+    base["fit"]["frames"].as_array_mut().unwrap().reverse();
+    let mut held_out = base.clone();
+    let point = &mut held_out["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0];
+    *point = json!(point.as_f64().unwrap() + 10.0);
+    let mut unobservable = base.clone();
+    for frame in unobservable["fit"]["frames"].as_array_mut().unwrap() {
+        frame["keypoints"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|p| p["name"] != "p8" && p["name"] != "p9");
+    }
+    // Independent pixel rasters become the same ordinary inline observations used by the CLI.
+    save(&dir, &base);
+    let _masks = mask_manifest_for(&dir, &base);
+    let sampled = run(&dir, &["--silhouettes", "masks/manifest.json"], 0);
+    let mut silhouette = base.clone();
+    for frame in silhouette["fit"]["frames"].as_array_mut().unwrap() {
+        let source = sampled["result"]["input"]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["frame"] == frame["frame"])
+            .unwrap();
+        frame["silhouette"] = source["silhouette"].clone();
+    }
+    let export = std::env::var_os("FTX_BODY_FIT_PORTABLE_DIR").map(PathBuf::from);
+    if let Some(destination) = &export {
+        std::fs::create_dir(destination).unwrap();
+        std::fs::write(destination.join("model.ftxbody"), &model).unwrap();
+    }
+    let mut cases = Vec::new();
+    let mut accepted: Option<Value> = None;
+    for (name, input, iterations, evaluations, code, status) in [
+        ("accepted", base.clone(), "50", "100000", 0, "ACCEPTED"),
+        ("held-out", held_out, "50", "100000", 2, "REJECTED"),
+        (
+            "unobservable",
+            unobservable,
+            "50",
+            "100000",
+            2,
+            "UNOBSERVABLE",
+        ),
+        ("budget", base.clone(), "50", "1", 4, "BUDGET_STOP"),
+        ("iterations", base.clone(), "1", "100000", 4, "BUDGET_STOP"),
+        ("silhouette", silhouette, "50", "100000", 0, "ACCEPTED"),
+    ] {
+        save(&dir, &input);
+        let text = std::fs::read_to_string(dir.join("input.json")).unwrap();
+        let native = run(
+            &dir,
+            &["--iterations", iterations, "--max-evaluations", evaluations],
+            code,
+        )["result"]
+            .clone();
+        let portable =
+            ftx_wasm::body_fit::fit_body(&model, &text, iterations, evaluations).unwrap();
+        assert_eq!(portable, native, "{name}");
+        assert_eq!(portable["status"], status, "{name}");
+        assert_eq!(portable["input_sha256"], sha256_hex(text.as_bytes()));
+        assert_eq!(
+            portable["input"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+            Some(first_timestamp)
+        );
+        if status == "ACCEPTED" {
+            let reused = ftx_body::accepted_shape::AcceptedShape::read(
+                &portable,
+                &sha256_hex(&model),
+                &[],
+            )
+            .unwrap();
+            let tolerance = if name == "silhouette" { 0.02 } else { 1e-5 };
+            assert!((reused.params.phenotype.height - 0.6).abs() < tolerance);
+            assert!((reused.params.phenotype.weight - 0.45).abs() < tolerance);
+        } else {
+            assert!(portable["solution"].is_null());
+        }
+        if name == "accepted" {
+            accepted = Some(native.clone());
+        } else if name == "held-out" {
+            for (a, b) in accepted.as_ref().unwrap()["attempts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(native["attempts"].as_array().unwrap())
+            {
+                assert_eq!(a["cost_history"], b["cost_history"]);
+            }
+        }
+        if let Some(destination) = &export {
+            let input_file = format!("{name}-input.json");
+            let report_file = format!("{name}-report.json");
+            std::fs::write(destination.join(&input_file), text.as_bytes()).unwrap();
+            std::fs::write(
+                destination.join(&report_file),
+                serde_json::to_vec_pretty(&native).unwrap(),
+            )
+            .unwrap();
+            cases.push(json!({"name":name,"input":input_file,"report":report_file,
+                "iterations":iterations,"max_evaluations":evaluations,"status":status}));
+        }
+    }
+    if let Some(destination) = export {
+        std::fs::write(
+            destination.join("cases.json"),
+            serde_json::to_vec_pretty(&json!({"model":"model.ftxbody","cases":cases})).unwrap(),
+        )
+        .unwrap();
+    }
+    let text = serde_json::to_string(&base).unwrap();
+    for (iterations, evaluations) in [
+        ("0", "100000"),
+        ("101", "100000"),
+        ("-1", "100000"),
+        ("1.5", "100000"),
+        ("4294967346", "100000"),
+        ("9007199254740993", "100000"),
+        ("NaN", "100000"),
+        ("50", "0"),
+        ("50", "1000001"),
+        ("50", "-1"),
+        ("50", "1.5"),
+        ("50", "4295067296"),
+        ("50", "9007199254740993"),
+        ("50", "NaN"),
+    ] {
+        assert!(ftx_wasm::body_fit::fit_body(&model, &text, iterations, evaluations).is_err());
+    }
+    let mut changed_model = model.clone();
+    *changed_model.last_mut().unwrap() ^= 1;
+    assert!(ftx_wasm::body_fit::fit_body(&changed_model, &text, "50", "100000").is_err());
+    let mut wrong_schema = base.clone();
+    wrong_schema["schema"] = json!("ftx-anny-capture-input/1");
+    assert!(
+        ftx_wasm::body_fit::fit_body(&model, &wrong_schema.to_string(), "50", "100000").is_err()
+    );
+    let mut unknown_camera = base;
+    unknown_camera["fit"]["frames"][0]["camera"]["unknown"] = json!(true);
+    assert!(
+        ftx_wasm::body_fit::fit_body(&model, &unknown_camera.to_string(), "50", "100000")
+            .is_err()
+    );
+    assert!(
+        ftx_wasm::body_fit::fit_body(&model, &" ".repeat(16 * 1024 * 1024 + 1), "50", "100000")
+            .is_err()
+    );
+}
+
+#[test]
 fn actual_forward_model_adapter_recovers_shape_root_and_joint_motion() {
     let dir = setup();
     let r = run(&dir, &["--out", "fit.json"], 0);
@@ -792,6 +952,14 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
         serde_json::from_slice(&std::fs::read(dir.join("before-fit/review.json")).unwrap())
             .unwrap();
     assert_eq!(saved, report);
+    let prepared_bytes = std::fs::read(dir.join("before-fit/prepared-input.json")).unwrap();
+    let prepared: Value = serde_json::from_slice(&prepared_bytes).unwrap();
+    assert_eq!(prepared["schema"], "ftx-anny-body-fit-input/1");
+    assert_eq!(report["prepared_input"]["file"], "prepared-input.json");
+    assert_eq!(report["prepared_input"]["bytes"], prepared_bytes.len());
+    assert_eq!(report["prepared_input"]["sha256"], sha256_hex(&prepared_bytes));
+    assert!(prepared.get("video_manifest").is_none());
+    assert!(prepared.get("silhouettes").is_none());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -896,6 +1064,20 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
     );
     std::fs::rename(dir.join("unused-model.ftxbody"), dir.join("model.ftxbody")).unwrap();
     let original_fit = run(&dir, &[], 0)["result"].clone();
+    assert_eq!(prepared["model"], original_fit["anny_configuration"]);
+    assert_eq!(prepared["fit"], original_fit["input"]);
+    let portable = ftx_wasm::body_fit::fit_body(
+        &std::fs::read(dir.join("model.ftxbody")).unwrap(),
+        std::str::from_utf8(&prepared_bytes).unwrap(),
+        "50",
+        "100000",
+    )
+    .unwrap();
+    assert_eq!(portable["input_sha256"], sha256_hex(&prepared_bytes));
+    let mut expected_portable = original_fit.clone();
+    expected_portable.as_object_mut().unwrap().remove("capture_input");
+    expected_portable["input_sha256"] = portable["input_sha256"].clone();
+    assert_eq!(portable, expected_portable);
     // A different cwd exposes accidental dependence on the review output's relative paths.
     let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(dir.join("before-fit"))
@@ -1344,6 +1526,18 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
         .clone();
     assert_eq!(masked["body_model_loaded"], false);
     assert_eq!(masked["body_fitted"], false);
+    let prepared: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("mask-review/prepared-input.json")).unwrap())
+            .unwrap();
+    assert!(prepared.get("silhouettes").is_none());
+    for (frame, reviewed) in prepared["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(masked["frames"].as_array().unwrap())
+    {
+        assert_eq!(frame["silhouette"], reviewed["silhouette"]);
+    }
     assert_eq!(masked["capture_input"]["input"], bad);
     assert_eq!(
         std::fs::read(dir.join("mask-review/original-input.json")).unwrap(),
@@ -2042,6 +2236,14 @@ fn surface_landmarks_fit_the_posed_triangle_not_a_blended_rest_point() {
     );
     let again = run(&dir, &[], 0);
     assert_eq!(v, again);
+    let portable = ftx_wasm::body_fit::fit_body(
+        &std::fs::read(dir.join("model.ftxbody")).unwrap(),
+        &std::fs::read_to_string(dir.join("input.json")).unwrap(),
+        "50",
+        "100000",
+    )
+    .unwrap();
+    assert_eq!(portable, v["result"]);
     let review = run(&dir, &["--mesh-out", "surface-review"], 0);
     for frame in review["result"]["mesh_review"]["frames"]
         .as_array()

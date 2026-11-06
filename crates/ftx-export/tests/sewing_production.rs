@@ -507,45 +507,51 @@ fn handling_changes_recipe_selection_and_unknown_handling_never_proves_a_recipe_
 }
 
 #[test]
-fn handling_totals_remain_exact_above_wasm_u32_with_sixty_three_operations() {
-    let (pattern, mut options) = fixture();
-    options["passes"].as_array_mut().unwrap().pop();
-    batch(&mut options, 63);
-    timed(&mut options);
-    options["production"]["ordering"]["initial_setup"]["thread"] = json!("thread-a");
-    handling(&pattern, &mut options, 86400000);
-    options["production"]["handling"]["initial_milliseconds"] = json!({"a":86400000});
-    options["production"]["handling"]["final_milliseconds"] = json!({"a":86400000});
-    options["production"]["handling"]["transitions"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|row| row["from"] == "a" && row["to"] == "a");
-    let plan = build(pattern, options).unwrap();
-    let timing = plan
-        .ordering_report()
-        .unwrap()
-        .handling_timing
-        .as_ref()
-        .unwrap();
-    assert_eq!(timing.selected_handling_milliseconds, 64_u64 * 86400000);
-    assert!(timing.selected_handling_milliseconds > u64::from(u32::MAX));
-    assert_eq!(
-        timing.lower_bound_setup_and_handling_milliseconds,
-        timing.selected_handling_milliseconds
-    );
-    assert!(plan.ordering_report().unwrap().optimality_proven);
-    assert_eq!(
-        plan.production
-            .as_ref()
+fn handling_totals_remain_exact_above_wasm_u32_through_256_operations() {
+    for copies in [63, 64, 128, 192, 256] {
+        let (pattern, mut options) = fixture();
+        options["passes"].as_array_mut().unwrap().pop();
+        batch(&mut options, copies);
+        timed(&mut options);
+        options["production"]["ordering"]["initial_setup"]["thread"] = json!("thread-a");
+        handling(&pattern, &mut options, 86400000);
+        options["production"]["handling"]["initial_milliseconds"] = json!({"a":86400000});
+        options["production"]["handling"]["final_milliseconds"] = json!({"a":86400000});
+        options["production"]["handling"]["transitions"]
+            .as_array_mut()
             .unwrap()
-            .handling
-            .as_ref()
+            .retain(|row| row["from"] == "a" && row["to"] == "a");
+        let plan = build(pattern, options).unwrap();
+        complete(&plan);
+        let timing = plan
+            .ordering_report()
             .unwrap()
-            .selected
-            .steps
-            .len(),
-        64
-    );
+            .handling_timing
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            timing.selected_handling_milliseconds,
+            (copies as u64 + 1) * 86400000
+        );
+        assert!(timing.selected_handling_milliseconds > u64::from(u32::MAX));
+        assert_eq!(
+            timing.lower_bound_setup_and_handling_milliseconds,
+            timing.selected_handling_milliseconds
+        );
+        assert!(plan.ordering_report().unwrap().optimality_proven);
+        assert_eq!(
+            plan.production
+                .as_ref()
+                .unwrap()
+                .handling
+                .as_ref()
+                .unwrap()
+                .selected
+                .steps
+                .len(),
+            copies + 1
+        );
+    }
 }
 
 // Independent full enumeration of the small two-operation garment example. This uses explicit
@@ -1359,7 +1365,7 @@ fn counts_are_shared_with_thread_inventory_and_conflicts_never_change_legacy_sco
 #[test]
 fn invalid_quantity_graph_budget_and_material_revision_refuse_before_scheduling() {
     let (pattern, options) = fixture();
-    for copies in [0, 4097, 32] {
+    for copies in [0, 4097, 129] {
         let mut bad = options.clone();
         batch(&mut bad, copies);
         assert!(build(pattern.clone(), bad).is_err());
@@ -1500,6 +1506,163 @@ fn masks_and_time_totals_cover_sixty_three_operations_without_wasm_sized_overflo
             .baseline_setup_milliseconds,
         63_u64 * 86_400_000
     );
+}
+
+#[test]
+fn production_keeps_256_distinct_setups_and_predecessors_without_truncating_masks() {
+    let (pattern, mut options) = fixture();
+    let template = options["passes"][0].clone();
+    options["passes"] = json!(
+        (0..256)
+            .map(|index| {
+                let mut pass = template.clone();
+                pass["id"] = json!(format!("pass-{index:03}"));
+                pass["needle"] = json!(format!("needle-{index:03}"));
+                pass["thread"] = json!(format!("thread-{index:03}"));
+                // Reverse lexicographic precedence crosses every word boundary in the sorted graph.
+                pass["after"] = if index == 255 {
+                    json!([])
+                } else {
+                    json!([format!("pass-{:03}", index + 1)])
+                };
+                pass
+            })
+            .collect::<Vec<_>>()
+    );
+    options["require_qualification"] = json!(false);
+    options["qualifications"] = json!([]);
+    batch(&mut options, 1);
+    let program = SewProgram::build(
+        &Pattern::new(pattern.clone()),
+        &serde_json::from_value(options.clone()).unwrap(),
+    )
+    .unwrap();
+    complete(&program.plan);
+    let report = program.plan.ordering_report().unwrap();
+    assert_eq!(report.selected_order.len(), 256);
+    assert_eq!(report.selected_order.first().unwrap(), "0/pass-255");
+    assert_eq!(report.selected_order.last().unwrap(), "0/pass-000");
+    assert_eq!(report.selected_changes.needle_changes, 255);
+    assert_eq!(report.selected_changes.thread_changes, 255);
+    assert_eq!(report.lower_bound_total_changes, 510);
+    assert!(report.optimality_proven && report.search_complete && !report.budget_exhausted);
+    assert_eq!(program.stitches.len(), 256 * 40);
+
+    let mut installed = options.clone();
+    installed["production"]["ordering"]["initial_setup"] =
+        json!({"needle":"unlisted-needle", "thread":"unlisted-thread"});
+    let installed = build(pattern.clone(), installed).unwrap();
+    assert_eq!(
+        installed
+            .ordering_report()
+            .unwrap()
+            .lower_bound_total_changes,
+        512
+    );
+    assert_eq!(
+        installed
+            .ordering_report()
+            .unwrap()
+            .selected_changes
+            .total_changes,
+        512
+    );
+
+    let mut extra = template;
+    extra["id"] = json!("pass-256");
+    options["passes"].as_array_mut().unwrap().push(extra);
+    let refused = build(pattern, options).unwrap_err();
+    assert_eq!(refused.code, RefusalCode::BudgetExceeded);
+    assert!(refused.message.contains("at most 256"));
+}
+
+#[test]
+fn large_production_replays_fixture_holds_dependencies_and_complete_bounded_stitches() {
+    let (pattern, mut options) = fixture();
+    let mut finish = options["passes"][1].clone();
+    finish["id"] = json!("c");
+    finish["after"] = json!(["b"]);
+    options["passes"].as_array_mut().unwrap().push(finish);
+    batch(&mut options, 85);
+    options["production"]["ordering"]["max_search_nodes"] = json!(1);
+    fixtures(
+        &pattern,
+        &mut options,
+        1,
+        json!([{"id":"held-garment","resource":"jig","units":1,
+            "acquire":"a","release":"c"}]),
+    );
+    let options: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&Pattern::new(pattern), &options).unwrap();
+    complete(&program.plan);
+    let production = program.plan.production.as_ref().unwrap();
+    let order = &production.ordering;
+    assert_eq!(production.operations.len(), 255);
+    assert_eq!(order.search_nodes, 1);
+    assert!(order.budget_exhausted && !order.search_complete && !order.optimality_proven);
+    assert_eq!(order.selected_order, order.baseline_order);
+    let holding = production.workholding.as_ref().unwrap();
+    assert_eq!(holding.holds.len(), 85);
+    assert_eq!(holding.selected.operations.len(), 255);
+    assert_eq!(holding.selected.peak_occupancy["jig"], 1);
+    for steps in holding.selected.operations.chunks_exact(3) {
+        assert_eq!(steps[0].occupied_before["jig"], 0);
+        assert_eq!(steps[0].occupied_after["jig"], 1);
+        assert_eq!(steps[1].occupied_before["jig"], 1);
+        assert_eq!(steps[1].occupied_after["jig"], 1);
+        assert_eq!(steps[2].occupied_before["jig"], 1);
+        assert_eq!(steps[2].occupied_after["jig"], 0);
+    }
+    let actual: Vec<_> = program
+        .stitches
+        .iter()
+        .filter(|step| step.begins_run)
+        .map(|step| {
+            format!(
+                "{}/{}",
+                step.copy.unwrap(),
+                program.plan.seams[step.operation].pass.operation_id()
+            )
+        })
+        .collect();
+    assert_eq!(actual, order.selected_order);
+    assert_eq!(program.stitches.len(), 255 * 40);
+}
+
+#[test]
+fn large_batch_search_reaches_a_complete_improvement_across_every_operation_word() {
+    let (pattern, mut options) = fixture();
+    batch(&mut options, 128);
+    options["production"]["ordering"]["max_search_nodes"] = json!(255);
+    let limited = build(pattern.clone(), options.clone()).unwrap();
+    complete(&limited);
+    let limited = limited.ordering_report().unwrap();
+    assert_eq!(limited.search_nodes, 255);
+    assert!(limited.budget_exhausted && !limited.optimality_proven);
+    assert_eq!(limited.selected_order, limited.baseline_order);
+    assert_eq!(limited.selected_changes.total_changes, 255);
+
+    options["production"]["ordering"]["max_search_nodes"] = json!(256);
+    let options: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&Pattern::new(pattern), &options).unwrap();
+    complete(&program.plan);
+    let order = program.plan.ordering_report().unwrap();
+    assert_eq!(order.search_nodes, 256);
+    assert!(order.search_complete && order.optimality_proven && !order.budget_exhausted);
+    assert_eq!(order.baseline_changes.total_changes, 255);
+    assert_eq!(order.selected_changes.total_changes, 1);
+    assert_eq!(order.lower_bound_total_changes, 1);
+    assert!(
+        order.selected_order[..128]
+            .iter()
+            .all(|id| id.ends_with("/a"))
+    );
+    assert!(
+        order.selected_order[128..]
+            .iter()
+            .all(|id| id.ends_with("/b"))
+    );
+    assert_eq!(program.stitches.len(), 256 * 40);
 }
 
 #[test]

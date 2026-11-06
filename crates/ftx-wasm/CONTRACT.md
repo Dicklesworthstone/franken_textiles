@@ -1,5 +1,21 @@
 # ftx-wasm
 
+**Local multi-frame Anny fitting.** `body_fit::fit_body(model_bytes, input, iterations,
+max_evaluations)` and wasm32 `fit_body` accept the original prepared
+`ftx-anny-body-fit-input/1` text and exact converted model bytes. Inputs are bounded to 16 MiB
+and models to 512 MiB; SHA-256 identity and every converted array are checked before fitting.
+The two work controls are strings parsed as native integers (1..=100 iterations and
+1..=1,000,000 evaluations), avoiding JavaScript ABI truncation. The shared
+`ftx-body::correspondence` evaluator and existing `ftx-measure` solver preserve all shape/pose
+bounds, calibration, evidence, observability, multistart, held-out and budget behavior.
+The ordinary `ftx-body-fit/1` report retains exact full-width frame identities, original input
+hash, every attempt, residual and refusal; only accepted solutions contain reusable Anny
+parameters. Inline reviewed silhouette slices use the same native rules. File-backed capture
+inputs and separate mask paths are not followed; their acquisition remains native. No source
+photos are loaded, anatomy inferred, MODEL_FIT predictions promoted to evidence or physical-fit
+acceptance added. Native/portable integration uses independently authored articulated synthetic
+observations, held-out mutations, unobservable motion, capped solves and raster silhouettes.
+
 **Still-window candidates.** `photo::still_window(input, source)` and the matching wasm32 export delegate to
 `ftx-measure::still::assess_still_window`, with the existing 256 KiB browser JSON limit. The shared
 photo geometry worker preserves exact source/report text, the original filename and source-byte hash,

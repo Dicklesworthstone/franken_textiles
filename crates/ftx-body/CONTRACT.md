@@ -180,6 +180,17 @@ uncertainty. A reused accepted shape has no new fitting weights or normalized fi
 Measurements must already be validated and fused by the caller. Missing anatomy
 remains unavailable. Report consistency is not authenticity or real-person fit.
 
+**Calibrated image correspondences.** `correspondence::CorrespondenceModel` is the shared
+Anny evaluator behind native and portable multi-frame fitting. It checks the existing authored
+configuration against the exact array-verified model, resolves explicit vertex/surface/bone targets,
+and evaluates shared shape, independent root/joint poses and requested rest-body tape functionals.
+Surface points interpolate the individually skinned triangle vertices; skeleton endpoints use the
+same posed rig. The sparse target path and complete-mesh export checks retain identical arithmetic.
+The module has no camera, fitting solver, filesystem or measurement-crate dependency. Native and
+portable adapters implement the existing `ftx-measure::body_fit::BodyModel` trait; that engine retains
+all observability, multistart, held-out and work-budget gates. Configurations do not establish
+anatomical correctness, calibrated scale, uncertainty, measured dimensions or physical fit.
+
 `partial_tape_readings` retains each independently available positive finite reading in
 `TAPE_FIELDS` order. A missing neck, shoulder or limb section cannot erase valid torso
 circumferences, heights or stature. A failed dependency still withdraws every reading that

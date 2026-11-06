@@ -6,6 +6,20 @@ self.onmessage = async ({data: m}) => {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
+    if(m.op==="fit-body") {
+      if(typeof m.input!=="string" || new TextEncoder().encode(m.input).length>16*1024*1024 ||
+          !(m.model instanceof ArrayBuffer) || m.model.byteLength===0 || m.model.byteLength>512*1024*1024) {
+        throw Error("Body fitting requires prepared JSON up to 16 MiB and a converted model up to 512 MiB.");
+      }
+      if(!Number.isSafeInteger(m.iterations) || m.iterations<1 || m.iterations>100 ||
+          !Number.isSafeInteger(m.maxEvaluations) || m.maxEvaluations<1 || m.maxEvaluations>1000000) {
+        throw Error("Body-fit limits must be 1..100 steps and 1..1000000 model evaluations.");
+      }
+      self.postMessage({type:"progress",request:m.request,text:"Checking the model identity and fitting every declared start, frame and held-out observation…"});
+      const report=ftx.fit_body(new Uint8Array(m.model),m.input,String(m.iterations),String(m.maxEvaluations));
+      self.postMessage({type:"result",request:m.request,report});
+      return;
+    }
     if(m.op==="still-window") {
       self.postMessage({type:"progress",request:m.request,text:"Checking early/late motion and calibrated geometry for every tracked landmark…"});
       const report=ftx.still_window(m.input,m.source);

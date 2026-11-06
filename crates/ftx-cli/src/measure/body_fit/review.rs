@@ -9,7 +9,7 @@ use ftx_measure::body_fit::{BodyFitReport, FitFrame};
 use ftx_measure::silhouette::{self, Axis, SurfaceMesh};
 use serde_json::{Value, json};
 
-use super::{Adapter, ResolvedTarget};
+use super::Adapter;
 use crate::{bad_input, workspace};
 
 const MAX_VERTICES: usize = 100_000;
@@ -321,6 +321,11 @@ pub(super) fn prepare_capture(
     };
     let original_entry = bundle.push("original-input.json".into(), original.to_vec())?;
     let replay_entry = bundle.push("capture.json".into(), workspace::json_bytes(replay)?)?;
+    let prepared_entry = bundle.push(
+        "prepared-input.json".into(),
+        workspace::json_bytes(&json!({"schema":request.schema,"model":request.model,
+            "fit":request.fit}))?,
+    )?;
     let editor = bundle.push(
         "review.js".into(),
         include_bytes!("capture_review.js").to_vec(),
@@ -343,8 +348,13 @@ pub(super) fn prepare_capture(
          <p>This does not establish anatomical correspondence, observability, physical accuracy, READY measurements or garment fit. \
          Sampled silhouettes are caller-reviewed constraints. Inline samples can be authored on checked rectified frames; imported masks remain read-only.</p>\
          <p><a href=\"capture.json\">Original input for fit-body (requires original source files)</a> · \
+         <a href=\"prepared-input.json\">Original calibrated observation snapshot for local browser fitting</a> · \
          <a href=\"original-input.json\">Original input bytes</a> · <a href=\"review.json\">Complete preparation evidence</a></p>",
     );
+    page.push_str("<p>The prepared-input.json snapshot keeps this review's checked cameras, observations, inline mask samples, \
+        targets and starts without file paths. It remains the original snapshot while annotations are edited here. \
+        Generate a fresh native capture-review from edited input before exporting it again. Browser fitting checks \
+        the supplied model and numerical evidence; it does not reread the original photos, masks or calibration files.</p>");
     page.push_str("<div id=\"captureEditor\" hidden><fieldset><legend>Resume saved annotations</legend>\
         <p>Load a previously downloaded capture-edited.json from this same review. Its points and editable \
         silhouettes replace the current annotations after validation; images, cameras, model targets and fit settings must match. \
@@ -494,7 +504,7 @@ pub(super) fn prepare_capture(
     bundle.manifest = json!({"schema":"ftx-capture-review/1","status":"PREPARED",
         "body_model_loaded":false,"body_fitted":false,"input_sha256":sha256_hex(original),
         "model_sha256":request.model.model_sha256,"original_input":original_entry,
-        "replay_input":replay_entry,"viewer":viewer,"editor":editor,"frames":frames,"capture_input":capture,
+        "replay_input":replay_entry,"prepared_input":prepared_entry,"viewer":viewer,"editor":editor,"frames":frames,"capture_input":capture,
         "no_claim":"Source/camera preparation and supplied keypoint/sampled silhouette visualization only. No anatomy, segmentation, full-mask, observability, physical camera, READY measurement or real-wearer fit approval."});
     Ok(bundle)
 }
@@ -638,6 +648,7 @@ fn projections(
          <g font-family=\"sans-serif\" font-size=\"12\">"
     );
     let mut points = Vec::new();
+    let targets = adapter.points_on_body(rest, body)?;
     for observation in &frame.keypoints {
         let index = adapter
             .layout
@@ -645,18 +656,7 @@ fn projections(
             .iter()
             .position(|n| n == &observation.name)
             .ok_or_else(|| bad_input("unknown accepted mesh correspondence"))?;
-        // Surface target indices address the sparse selection, not the full model's vertex array.
-        let vertex = |i: usize| body.vertices[adapter.selected_vertices[i]];
-        let point = match &adapter.targets[index] {
-            ResolvedTarget::Vertex(i) => vertex(*i),
-            ResolvedTarget::Surface(ids, weights) => {
-                vertex(ids[0]) * weights[0]
-                    + vertex(ids[1]) * weights[1]
-                    + vertex(ids[2]) * weights[2]
-            }
-            ResolvedTarget::Head(i) => body.bone_poses[*i].t,
-            ResolvedTarget::Tail(i) => body.transforms[*i].apply(rest.bone_tails[*i]),
-        };
+        let point = targets[index];
         let projected = frame.camera.project(point)?;
         let error = (projected - observation.pixel_px).norm();
         if !error.is_finite() || error > 3.0 {
@@ -705,7 +705,7 @@ fn projections(
         let mesh = SurfaceMesh {
             vertices_m: body.vertices.clone(),
             triangles: adapter
-                .model
+                .model()
                 .data()
                 .faces
                 .iter()
@@ -733,7 +733,7 @@ pub(super) fn prepare(
         .as_ref()
         .filter(|_| report.status == "ACCEPTED")
         .ok_or_else(|| bad_input("only an accepted body fit can produce fitted frame meshes"))?;
-    let counts = &adapter.model.data().header.counts;
+    let counts = &adapter.model().data().header.counts;
     if counts.vertices == 0 || counts.faces == 0 {
         return Err(bad_input("mesh review needs a nonempty triangle mesh"));
     }
@@ -749,7 +749,9 @@ pub(super) fn prepare(
     if solution.poses.len() != report.input.frames.len() {
         return Err(bad_input("accepted frame/pose counts disagree"));
     }
-    let rest = adapter.model.rest(&adapter.parameters(&solution.shape))?;
+    let rest = adapter
+        .model()
+        .rest(&adapter.parameters(&solution.shape)?)?;
     let mut bundle = Bundle {
         manifest: Value::Null,
         files: Vec::new(),
@@ -788,10 +790,12 @@ pub(super) fn prepare(
                 "accepted mesh pose does not belong to this decoded frame",
             ));
         }
-        let body = adapter.model.pose(&rest, &adapter.deltas(&pose.values))?;
+        let body = adapter
+            .model()
+            .pose(&rest, &adapter.deltas(&pose.values)?)?;
         let entry = bundle.push(
             format!("frame-{i:04}.obj"),
-            obj(&body.vertices, &adapter.model.data().faces)?,
+            obj(&body.vertices, &adapter.model().data().faces)?,
         )?;
         let photograph = capture
             .map(|capture| source_image(&mut bundle, capture, frame, i))
@@ -823,7 +827,7 @@ pub(super) fn prepare(
     let viewer = bundle.push("index.html".to_string(), page.into_bytes())?;
     bundle.manifest = json!({
         "schema":"ftx-body-mesh-review/1",
-        "model_sha256":adapter.config.model_sha256,
+        "model_sha256":adapter.configuration().model_sha256,
         "units":"m",
         "coordinates":"common_calibrated_world_z_up",
         "export_pose_evaluations":frames.len(),

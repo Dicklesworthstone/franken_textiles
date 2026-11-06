@@ -317,14 +317,14 @@ impl Compiled {
                 .map(|(resource, &value)| (resource.id.clone(), value))
                 .collect()
         };
-        let mut mask = 0;
+        let mut mask = ordering::OperationSet::default();
         let mut peaks = vec![0; self.policy.resources.len()];
         let mut steps = Vec::with_capacity(order.len());
         for operation in order {
             let next = *ids
                 .get(operation.as_str())
                 .ok_or_else(|| bad("unknown workholding timeline operation"))?;
-            if mask & (1_u64 << next) != 0 {
+            if mask.contains(next) {
                 return Err(bad("repeated workholding timeline operation"));
             }
             let before = self.limits.occupied(mask);
@@ -341,7 +341,7 @@ impl Compiled {
             for (peak, &held) in peaks.iter_mut().zip(&during) {
                 *peak = (*peak).max(held);
             }
-            mask |= 1_u64 << next;
+            mask.insert(next);
             steps.push(Step {
                 operation: operation.clone(),
                 occupied_before: named(&before),
@@ -361,7 +361,7 @@ impl Compiled {
                 occupied_after: named(&self.limits.occupied(mask)),
             });
         }
-        if mask != (1_u64 << self.limits.ids.len()) - 1
+        if mask != ordering::OperationSet::all(self.limits.ids.len())
             || self.limits.occupied(mask).iter().any(|&units| units != 0)
         {
             return Err(bad(
@@ -435,8 +435,8 @@ pub(super) fn compile(
             occupancy.push(ordering::ResourceHold {
                 resource,
                 units: hold.units,
-                acquire: 1_u64 << start_index,
-                release: 1_u64 << indices[end.as_str()],
+                acquire: start_index,
+                release: indices[end.as_str()],
             });
             if start != end {
                 let release = operations

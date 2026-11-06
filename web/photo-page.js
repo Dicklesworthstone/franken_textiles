@@ -15,6 +15,8 @@ let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = nu
 const cameraUrls = [];
 let triangulationWorker = null, triangulationTicket = 0, triangulationBusy = false;
 const triangulationUrls = [];
+let bodyFitWorker = null, bodyFitTicket = 0, bodyFitBusy = false;
+const bodyFitUrls = [];
 const status = text => {$("status").textContent=text;};
 function pointText() {
   const displayed=$("points").value;
@@ -44,6 +46,8 @@ function checkedOptions(text) {
   }
 }
 function controls() {
+  $("bodyFitRun").disabled=bodyFitBusy || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
+  $("bodyFitCancel").disabled=!bodyFitBusy;
   const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate";
   $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
   $("geometryStillControls").hidden=!still;
@@ -148,6 +152,95 @@ async function readJsonFile(file) {
   // Preserve the exact UTF-8 source, including a BOM (which the Rust JSON parser will reject).
   // Replacing invalid bytes or stripping a BOM would change the source identity before hashing.
   return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
+}
+function stopBodyFit() {
+  bodyFitWorker?.terminate(); bodyFitWorker=null; bodyFitBusy=false; controls();
+}
+function withdrawBodyFit() {
+  ++bodyFitTicket; stopBodyFit(); revoke(bodyFitUrls);
+  $("bodyFitDownloads").replaceChildren(); $("bodyFitResult").hidden=true;
+  $("bodyFitAttempts").replaceChildren(); $("bodyFitChecks").replaceChildren();
+  for(const id of ["bodyFitError","bodyFitReport","bodyFitSummary","bodyFitUse","bodyFitPredictions","bodyFitFlags"]) $(id).textContent="";
+}
+function publishBodyFit(text,input,iterations,maxEvaluations) {
+  // Only presentation parses JSON. Downloads retain the original Rust bytes, including full-u64
+  // source identities; no model prediction is passed to the measurement-fusion handoff.
+  const report=JSON.parse(text), accepted=report.status==="ACCEPTED";
+  if(report.schema!=="ftx-body-fit/1" || !Array.isArray(report.input?.frames) ||
+      !Array.isArray(report.attempts) || !Array.isArray(report.flags) ||
+      !Array.isArray(report.model?.measurements) || accepted!==(report.solution!=null)) {
+    throw Error("The engine did not return a consistent body-fit report.");
+  }
+  const row=(parent,values)=>{
+    const tr=document.createElement("tr");
+    for(const value of values) {const td=document.createElement("td");td.textContent=String(value);tr.append(td);}
+    parent.append(tr);
+  };
+  const flags=[...report.flags,...(report.advisories || [])];
+  for(const [i,attempt] of report.attempts.entries()) {
+    const costs=attempt.cost_history;
+    row($("bodyFitAttempts"),[i+1,attempt.status,attempt.model_evaluations,
+      costs.length?`${costs[0]} / ${costs.at(-1)}`:"Unavailable"]);
+    for(const check of attempt.checks) row($("bodyFitChecks"),[i+1,check.frame?.stream ?? "Tape",
+      check.name,check.partition,`${check.residual ?? "Unavailable"} / ${check.limit} ${check.unit}`,check.passed?"Pass":"Fail"]);
+    for(const flag of attempt.flags) flags.push(`Start ${i+1}: ${flag}`);
+  }
+  $("bodyFitSummary").textContent=`${report.status}: ${report.input.frames.length} frames, ${report.attempts.length} starts, ${report.model_evaluations} model evaluations.`;
+  $("bodyFitUse").textContent=accepted?
+    "Accepted shape available. Download body-fit-report.json, choose it under Accepted body-fit report in the Pattern or Material Workbench, load the same model, and confirm the wearer there before body checks or draping.":
+    "No accepted shape was published. Keep the diagnostic report and resolve the reported evidence or numerical failures before trying again.";
+  $("bodyFitPredictions").textContent=accepted && report.solution.predicted_measurements_m.length?
+    "MODEL_FIT predictions (mm):\n"+report.model.measurements.map((name,i)=>`${name}: ${report.solution.predicted_measurements_m[i]*1000}`).join("\n"):"";
+  $("bodyFitFlags").textContent=[...flags,report.no_claim].filter(Boolean).join("\n");
+  $("bodyFitReport").textContent=text;
+  link($("bodyFitDownloads"),text,"body-fit-report.json","application/json",bodyFitUrls);
+  link($("bodyFitDownloads"),input,"body-fit-input.json","application/json",bodyFitUrls);
+  link($("bodyFitDownloads"),JSON.stringify({iterations,max_model_evaluations:maxEvaluations}),"body-fit-options.json","application/json",bodyFitUrls);
+  $("bodyFitResult").hidden=false;
+  $("bodyFitStatus").textContent=accepted?"Body fit accepted; review every start and held-out residual before reuse.":
+    "Body fit finished without an accepted shape. Review all diagnostics.";
+}
+async function runBodyFit() {
+  if(bodyFitBusy) return;
+  const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
+  const iterationsText=$("bodyFitIterations").value, evaluationsText=$("bodyFitEvaluations").value;
+  const iterations=Number(iterationsText), maxEvaluations=Number(evaluationsText);
+  withdrawBodyFit(); const id=bodyFitTicket;
+  try {
+    if(!inputFile || inputFile.size>16*1024*1024 || !modelFile || modelFile.size===0 || modelFile.size>512*1024*1024) {
+      throw Error("Choose prepared observations up to 16 MiB and a converted body model up to 512 MiB.");
+    }
+    if(!iterationsText.trim() || !Number.isSafeInteger(iterations) || iterations<1 || iterations>100 ||
+        !evaluationsText.trim() || !Number.isSafeInteger(maxEvaluations) || maxEvaluations<1 || maxEvaluations>1000000) {
+      throw Error("Enter 1..100 steps per start and 1..1000000 total model evaluations.");
+    }
+    bodyFitBusy=true; controls(); $("bodyFitStatus").textContent="Reading the local observations and body model…";
+    const input=await readJsonFile(inputFile);
+    if(id!==bodyFitTicket) return;
+    const model=await modelFile.arrayBuffer();
+    if(id!==bodyFitTicket) return;
+    const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); bodyFitWorker=current;
+    current.onmessage=({data:m})=>{
+      if(current!==bodyFitWorker || m.request!==bodyFitTicket) return;
+      if(m.type==="progress") {$("bodyFitStatus").textContent=m.text; return;}
+      stopBodyFit();
+      if(m.type==="error") {$("bodyFitError").textContent=m.message; $("bodyFitStatus").textContent="Body fit refused; no report published."; return;}
+      try {publishBodyFit(m.report,input,iterations,maxEvaluations);} catch(error) {
+        withdrawBodyFit(); $("bodyFitError").textContent=String(error.message || error);
+        $("bodyFitStatus").textContent="No body-fit report published.";
+      }
+    };
+    current.onerror=error=>{
+      if(current!==bodyFitWorker) return;
+      withdrawBodyFit(); $("bodyFitError").textContent=error.message;
+      $("bodyFitStatus").textContent="Body-fit worker stopped; run the current input again.";
+    };
+    current.postMessage({request:id,op:"fit-body",input,model,iterations,maxEvaluations},[model]);
+  } catch(error) {
+    if(id!==bodyFitTicket) return;
+    withdrawBodyFit(); $("bodyFitError").textContent=String(error.message || error);
+    $("bodyFitStatus").textContent="No body-fit report published.";
+  }
 }
 function stopTriangulation() {
   triangulationWorker?.terminate(); triangulationWorker=null; triangulationBusy=false; controls();
@@ -582,6 +675,14 @@ for(const id of ["photo","paper","referenceMode","sheet","calibration","rotation
 for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{withdraw(true); status("Capture evidence changed; analyze the current photo.");});
 $("clearCalibration").onclick=()=>{generatedCalibration=null; $("calibration").value=""; $("lensId").value=""; $("rotation").value=""; $("independence").value=""; withdraw(true); status("Calibration removed; analyze the current photo.");};
 $("cameraRun").onclick=runCamera;
+$("bodyFitRun").onclick=runBodyFit;
+$("bodyFitCancel").onclick=()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Body fit cancelled; no report published.";};
+for(const id of ["bodyFitInput","bodyFitModel"]) for(const event of ["change","click","cancel"]) {
+  $(id).addEventListener(event,()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Review the selected model and observations, then run the body fit.";});
+}
+for(const id of ["bodyFitIterations","bodyFitEvaluations"]) $(id).addEventListener("input",()=>{
+  withdrawBodyFit(); $("bodyFitStatus").textContent="Work limit changed; run the current observations again.";
+});
 $("triangulationRun").onclick=runTriangulation;
 $("geometryOperation").addEventListener("change",()=>{
   if($("geometryOperation").value!=="triangulate") $("triangulationNoise").value="";
@@ -721,6 +822,6 @@ window.addEventListener("pagehide",()=>{
     materialsTarget.postMessage({type:"ftx-photo-records-cancelled",token:materialsToken},materialsOrigin);
     materialsTarget=null;materialsToken=null;window.opener=null;
   }
-  withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
+  withdrawBodyFit(); withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
 });
 controls();

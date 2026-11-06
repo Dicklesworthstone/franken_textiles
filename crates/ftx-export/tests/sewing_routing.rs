@@ -817,6 +817,77 @@ fn specialist_cells_jointly_sew_copies_with_exact_geometry_and_independent_timin
 }
 
 #[test]
+fn routed_256_operation_batch_preserves_complete_handoffs_and_bounded_stitch_replay() {
+    let (pattern, mut options) = fixture(128);
+    options["production"]["routing"]["max_search_nodes"] = json!(256);
+    let options: SewOptions = serde_json::from_value(options).unwrap();
+    assert_eq!(options.scheduling_work_bound().unwrap(), 768);
+    let program = SewProgram::build(&pattern, &options).unwrap();
+    let production = program.plan.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    assert_eq!(production.operations.len(), 256);
+    assert_eq!(route.selected.operations.len(), 256);
+    assert_eq!(route.selected.transfers.len(), 128);
+    assert_eq!(route.search_nodes, 256);
+    assert_eq!(route.replay_operations, 512);
+    assert_eq!(route.work_used, 768);
+    assert!(route.budget_exhausted && !route.search_complete && !route.optimality_proven);
+    assert_eq!(program.stitches.len(), 128 * 60);
+    let rows: BTreeMap<_, _> = route
+        .selected
+        .operations
+        .iter()
+        .map(|row| ((row.copy, row.operation_id.as_str()), row))
+        .collect();
+    let transfers: BTreeMap<_, _> = route
+        .selected
+        .transfers
+        .iter()
+        .map(|transfer| (transfer.copy, transfer))
+        .collect();
+    assert_eq!(rows.len(), 256);
+    assert_eq!(transfers.len(), 128);
+    for copy in 0..128 {
+        let join = rows[&(copy, "join")];
+        let finish = rows[&(copy, "reinforce")];
+        let transfer = transfers[&copy];
+        assert_eq!(join.cell, "cell-a");
+        assert_eq!(finish.cell, "cell-b");
+        assert!(join.finish_milliseconds <= transfer.start_milliseconds);
+        assert_eq!(
+            transfer.finish_milliseconds - transfer.start_milliseconds,
+            700
+        );
+        assert!(transfer.finish_milliseconds <= finish.loading_start_milliseconds);
+    }
+    let mut counts = BTreeMap::new();
+    for step in &program.stitches {
+        let cell = step.cell.as_deref().unwrap();
+        let source = &route
+            .cell_plans
+            .iter()
+            .find(|source| source.cell == cell)
+            .unwrap()
+            .plan;
+        assert_eq!(
+            step.a_mm,
+            source.seams[step.operation].stations.a[step.to_station]
+        );
+        assert_eq!(
+            step.b_mm,
+            source.seams[step.operation].stations.b[step.to_station]
+        );
+        *counts.entry((step.copy.unwrap(), cell)).or_insert(0usize) += 1;
+    }
+    assert_eq!(
+        counts,
+        (0..128)
+            .flat_map(|copy| [((copy, "cell-a"), 40), ((copy, "cell-b"), 20)])
+            .collect()
+    );
+}
+
+#[test]
 fn worker_owned_handoffs_share_attendance_without_double_counting_carriage() {
     let (pattern, raw) = fixture(2);
     let independent = attending_labor(raw, &[&["cell-a", "cell-b"]], 500);
