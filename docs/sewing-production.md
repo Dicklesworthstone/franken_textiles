@@ -903,6 +903,12 @@ count, occupied milliseconds and optional first-start/last-finish clocks. Routed
 selected `resource` ID and remain in operation-dispatch order. Summed occupied carrier time is
 resource work, separate from elapsed job completion.
 
+The workbench's existing sewing, study and scenario result views show each carrier's baseline
+and selected usage, all qualified directed timings, carrier availability and the actual resource
+beside every selected handoff. Unused resources stay visible. The display preserves native
+dispatch order and overlapping clocks; it does not reschedule or rank carriers. Exact policies,
+source details and complete downloadable reports remain available for replay.
+
 An independent replay verifies every reported carrier, qualified edge duration, outer/calendar
 window, nonoverlapping use and usage total. Staging replay verifies the selected carrier's exact
 duration as well. Omission preserves existing schemas and wire output. These are software
