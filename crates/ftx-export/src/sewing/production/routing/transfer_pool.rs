@@ -1,5 +1,5 @@
-//! Independently qualified unloaded carriers share a route without sharing an exclusive clock.
-//! Source durations include positioning/return; no worker ownership or implicit travel is inferred.
+//! Qualified unloaded carriers share a route with explicit independent or attending-worker ownership.
+//! Each carrier retains its own phase law; a named owner shares the ordinary exclusive labor clock.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,16 +14,18 @@ use crate::sewing::bad;
 
 pub(super) const MAX_RESOURCES: usize = 8;
 
-/// Explicit simultaneous independence of the primary carrier and up to seven additional carriers.
+/// Qualified ownership of the primary carrier and up to seven additional carriers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// `independent_unloaded_transfer_resources/1`.
+    /// `independent_unloaded_transfer_resources/1`, or
+    /// `qualified_unloaded_transfer_resources/1` with explicit attending-worker ownership.
     pub model: String,
     /// Authored carrier order breaks equal-score ties after the primary resource. Each carrier
     /// qualifies a nonempty subset of the route's directed edges and its own complete occupancy.
     pub additional_resources: Vec<TransferPolicy>,
-    /// Evidence for simultaneous independence, distinct physical identities and unloaded access.
+    /// Evidence for distinct physical identities, explicit ownership and unloaded access.
+    /// Unowned carriers are independent of attending workers; owned carriers share their owner.
     pub source: Source,
     /// Qualification method, separate from each carrier's observed complete handoff durations.
     pub method: String,
@@ -55,7 +57,7 @@ pub struct Usage {
 /// Original qualifications and complete per-carrier replay, without a physical factory claim.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-sewing-transfer-pool/1`.
+    /// `/1` independent carriers; `/2` explicit independent and attending-worker carrier choices.
     pub schema: &'static str,
     /// Exact additional carrier policies and their common independence qualification.
     pub policy: Policy,
@@ -70,19 +72,28 @@ pub struct Report {
 }
 
 impl Policy {
+    pub(super) fn qualified_ownership(&self) -> bool {
+        self.model == "qualified_unloaded_transfer_resources/1"
+    }
+
     pub(super) fn validate(
         &self,
         route: &RoutePolicy,
         cells: &BTreeSet<&str>,
         required: &BTreeSet<(&str, &str)>,
     ) -> Result<(), Refusal> {
-        if self.model != "independent_unloaded_transfer_resources/1"
+        let owned = route
+            .transfer_resources()
+            .any(|carrier| carrier.attending_worker.is_some());
+        if !(self.model == "independent_unloaded_transfer_resources/1"
+            || self.qualified_ownership())
             || !(1..MAX_RESOURCES).contains(&self.additional_resources.len())
-            || route.transfer.attending_worker.is_some()
+            || (self.qualified_ownership() && (!owned || route.attending_labor.is_none()))
+            || (!self.qualified_ownership() && owned)
             || !source_valid(&self.source, &self.method, &self.conditions)
         {
             return Err(bad(
-                "transfer pools need a qualified independent model and one to seven additional unloaded carriers; worker ownership is not admitted",
+                "transfer pools need one to seven additional carriers and a qualified independent or explicitly attended ownership model",
             ));
         }
         if self.evidence == Evidence::Estimate && !self.allow_estimates {
@@ -99,9 +110,17 @@ impl Policy {
                 .map(|worker| worker.id.as_str()),
         );
         for carrier in route.transfer_resources() {
-            if carrier.attending_worker.is_some() || !identities.insert(carrier.id.as_str()) {
+            if !identities.insert(carrier.id.as_str())
+                || carrier.attending_worker.as_ref().is_some_and(|id| {
+                    !route
+                        .attending_labor
+                        .iter()
+                        .flat_map(|labor| &labor.workers)
+                        .any(|worker| worker.id == *id)
+                })
+            {
                 return Err(bad(
-                    "independent transfer carriers need distinct cell, worker and resource identities without shared worker ownership",
+                    "transfer carriers need distinct resource identities and explicitly declared attending owners",
                 ));
             }
         }
@@ -239,7 +258,11 @@ impl Policy {
         selected: &Timeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: "ftx-sewing-transfer-pool/1",
+            schema: if self.qualified_ownership() {
+                "ftx-sewing-transfer-pool/2"
+            } else {
+                "ftx-sewing-transfer-pool/1"
+            },
             policy: self.clone(),
             primary: route.transfer.clone(),
             baseline: self.usage(route, baseline)?,

@@ -194,6 +194,158 @@ fn refresh_routed_locks(options: &mut Value) {
     options["production"]["routing"]["cell_locks"] = json!(locks);
 }
 
+#[test]
+fn qualified_carrier_pools_replay_actual_stitches_and_material_studies_through_both_commands() {
+    let directory = workspace();
+    let mut options = routed_specialist_options();
+    let source = json!({"reference":"test:portable-qualified-carrier-pool","accessed_on":"2026-11-06",
+        "note":"Invented source-qualified ownership, travel and carrier phases; no measured factory claim"});
+    let route = &mut options["production"]["routing"];
+    route["independence"] = json!("shared_attending_workers_and_qualified_transfer_resources/1");
+    route["attending_labor"] = json!({
+        "model":"exclusive_full_operation_attendance/1", "cells":route["cell_locks"],
+        "workers":[{"id":"attendant", "cells":["cell-a","cell-b"], "available_at_milliseconds":0,
+            "initial_arrival_milliseconds":{"cell-a":0,"cell-b":0},
+            "transfers":[{"from":"cell-a","to":"cell-b","milliseconds":500},
+                {"from":"cell-b","to":"cell-a","milliseconds":500}]}],
+        "source":source, "method":"Synthetic whole-operation attendance and named carriage share one person's exclusive clock, location and complete empty travel",
+        "evidence":"estimate", "allow_estimates":true
+    });
+    let mut carrier = route["transfer"].clone();
+    carrier["id"] = json!("attended-carrier");
+    carrier["model"] = json!("attended_source_to_destination_handoffs/1");
+    carrier["attending_worker"] = json!("attendant");
+    carrier["source"] = source.clone();
+    carrier["method"] = json!(
+        "Synthetic unloaded pickup through complete destination deposit; empty approach is separate and no return is included"
+    );
+    route["transfer"]["available_until_milliseconds"] = json!(0);
+    route["transfer_pool"] = json!({
+        "model":"qualified_unloaded_transfer_resources/1", "additional_resources":[carrier],
+        "source":source, "method":"Synthetic independently staffed primary carrier and explicitly attending-owned alternative; the named owner remains the same physical worker",
+        "evidence":"estimate", "allow_estimates":true
+    });
+    route["staging_capacity"] = json!(1);
+    route["bounded_staging"] = json!({
+        "model":"finite_unloaded_cell_buffers/1", "source":source,
+        "method":"Synthetic full independent-handoff buffer reservations and actual named-owner pickup/deposit boundaries; first loading enters and final unloading exits",
+        "evidence":"estimate", "allow_estimates":true
+    });
+    let text = options.to_string();
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap());
+    let plan = &program["plan"];
+    let routing = &plan["production"]["routing"];
+    assert_eq!(plan["schema"], "ftx-sewing-plan/29");
+    assert_eq!(routing["baseline_replaced"], true);
+    assert_eq!(
+        routing["selected"]["operations"].as_array().unwrap().len(),
+        4
+    );
+    assert_eq!(
+        routing["selected"]["transfers"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        routing["selected"]["transfers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["resource"] == "attended-carrier")
+    );
+    assert_eq!(
+        routing["attending_labor"]["selected"]["transfer_milliseconds"],
+        1400
+    );
+    assert_eq!(
+        routing["attending_labor"]["selected"]["worker_usage"][0]["handoffs"],
+        2
+    );
+    assert_eq!(
+        routing["bounded_staging"]["handoff_reservations"],
+        "selected_carrier_source_boundaries/1"
+    );
+    assert_eq!(plan["hardware_execution_authorized"], false);
+    let replay = plan["options"].to_string();
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &replay).unwrap()),
+        *plan
+    );
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &replay).unwrap()),
+        program
+    );
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"qualified-carriers","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}], "sewing":options,
+        "comparison":{"basis":"nominal", "required_consumers":["sewing","sewing_consumables","sewing_purchasing"],
+            "objectives":[{"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+    let report = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    let alternative = &report["alternatives"][0];
+    let bound = alternative["binding"]["result"]["pattern_json"]
+        .as_str()
+        .unwrap();
+    let bound_plan = portable(ftx_wasm::manufacturing::sew_plan(bound, &text).unwrap());
+    assert_eq!(alternative["sewing"]["result"], bound_plan);
+    assert_eq!(
+        alternative["metrics"]["sewing_parallel_makespan_seconds"],
+        routing["selected"]["makespan_milliseconds"]
+            .as_u64()
+            .unwrap() as f64
+            / 1000.0
+    );
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!(["qualified-carriers"])
+    );
+    for (name, content) in [
+        ("pattern.json", PATTERN.to_string()),
+        ("options.json", text.clone()),
+        ("replay.json", replay),
+        ("study.json", study.to_string()),
+    ] {
+        fs::write(directory.join(name), content).unwrap();
+    }
+    for main in [false, true] {
+        assert_eq!(
+            run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+            *plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "replay.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            report
+        );
+    }
+    let mut invalid = options;
+    invalid["production"]["routing"]["transfer_pool"]["additional_resources"][0]["attending_worker"] =
+        json!("unqualified-person");
+    assert!(ftx_wasm::manufacturing::sew_plan(PATTERN, &invalid.to_string()).is_err());
+    assert!(ftx_wasm::manufacturing::sew_stitches(PATTERN, &invalid.to_string()).is_err());
+    if let Some(capture) = std::env::var_os("FTX_ROUTED_FIXTURE_REPLAY") {
+        let capture = PathBuf::from(capture).join("qualified-carrier-pool");
+        fs::create_dir_all(&capture).unwrap();
+        for (name, content) in [
+            ("pattern.json", PATTERN.to_string()),
+            ("options.json", text),
+            ("program.json", program.to_string()),
+            ("study-request.json", study.to_string()),
+            ("study-result.json", report.to_string()),
+        ] {
+            fs::write(capture.join(name), content).unwrap();
+        }
+    }
+}
+
 fn eligible_route_options(windowed: bool) -> Value {
     let mut options = routed_specialist_options();
     let original: Value = serde_json::from_str(HETEROGENEOUS).unwrap();

@@ -3604,6 +3604,94 @@ test('independent transfer pools preserve concurrent handoffs, unused resources 
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('mixed transfer pools expose actual worker ownership, shared labor and carrier-specific staging in every result view', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
+  const worker='<sewer and mover café 🧵>';
+  const source=(cell,operation)=>({cell,machine_sha256:`${cell}-lock`,qualifications:{},
+    plan:{options:{machine:{id:`${cell}-machine`},qualifications:[]},
+      seams:[{pass:{id:operation,seam:'side',needle:'N',thread:'Y',max_stitch_mm:5,stitches_per_minute:600,after:[]}}]}});
+  const a=source('straight','join'),b=source('finish','reinforce');
+  const carrier=(id,owned)=>({id,model:owned?'attended_source_to_destination_handoffs/1':'serialized_unloaded_handoffs/1',
+    ...(owned?{attending_worker:worker}:{}),available_at_milliseconds:0,
+    transfers:[{from:'straight',to:'finish',milliseconds:7000}],source:{note:`<${id} qualification>`}});
+  const primary=carrier('independent-mover',false),owned=carrier('worker-cart',true),idle=carrier('worker-backup',true);
+  const policy={model:'qualified_unloaded_transfer_resources/1',additional_resources:[owned,idle],
+    source:{note:'<source-qualified mixed pool>'}};
+  const usage=(resource,handoffs,start=null,finish=null)=>({resource,handoffs,occupied_milliseconds:handoffs*7000,
+    first_start_milliseconds:start,last_finish_milliseconds:finish});
+  const pool={schema:'ftx-sewing-transfer-pool/2',primary,policy,physical_pool_validated:false,
+    baseline:[usage(primary.id,2,5300,19300),usage(owned.id,0),usage(idle.id,0)],
+    selected:[usage(primary.id,1,5300,12300),usage(owned.id,1,9600,16600),usage(idle.id,0)]};
+  const operation=(copy,operation_id,cell,start,finish)=>({id:`${copy}/${operation_id}`,copy,operation_id,cell,seam_index:0,
+    loading_start_milliseconds:start,setup_start_milliseconds:start+100,feed_start_milliseconds:start+200,
+    feed_finish_milliseconds:finish-200,finish_milliseconds:finish});
+  const selected={makespan_milliseconds:19400,feed_seconds:12,scheduled_feed_milliseconds:12000,
+    setup_milliseconds:1500,handling_milliseconds:1200,transfer_milliseconds:14000,
+    operations:[operation(0,'join','straight',0,5300),operation(1,'join','straight',5300,9600),
+      operation(0,'reinforce','finish',12300,15100),operation(1,'reinforce','finish',16600,19400)],
+    transfers:[{copy:0,resource:primary.id,from_operation:'join',to_operation:'reinforce',from:'straight',to:'finish',
+      start_milliseconds:5300,finish_milliseconds:12300},
+    {copy:1,resource:owned.id,from_operation:'join',to_operation:'reinforce',from:'straight',to:'finish',
+      start_milliseconds:9600,finish_milliseconds:16600}]};
+  const workerUse={worker,operations:2,handoffs:1,travel_milliseconds:0,waiting_milliseconds:0,attended_milliseconds:9600,
+    transfer_milliseconds:7000,first_departure_milliseconds:0,last_finish_milliseconds:16600};
+  const timeline={travel_milliseconds:0,waiting_milliseconds:0,attended_milliseconds:9600,transfer_milliseconds:7000,
+    steps:[],worker_usage:[workerUse],transfers:[{worker,resource:owned.id,copy:1,from_operation:'join',to_operation:'reinforce',
+      from_cell:'straight',source_cell:'straight',destination_cell:'finish',departure_milliseconds:9600,
+      arrival_milliseconds:9600,start_milliseconds:9600,finish_milliseconds:16600}]};
+  const labor={schema:'ftx-sewing-attending-labor/4',owned_transfers:[owned,idle],
+    policy:{model:'exclusive_full_operation_attendance/1',workers:[{id:worker,cells:['straight'],available_at_milliseconds:0}]},
+    baseline:{...timeline,transfer_milliseconds:0,transfers:[],worker_usage:[{...workerUse,handoffs:0,transfer_milliseconds:0,
+      last_finish_milliseconds:9600}]},selected:timeline};
+  const staging={schema:'ftx-sewing-routing-staging/2',capacity:2,handoff_reservations:'selected_carrier_source_boundaries/1',
+    baseline:{peak_reserved_slots:{straight:1,finish:1},final_reserved_slots:{straight:0,finish:0}},
+    selected:{peak_reserved_slots:{straight:1,finish:1},final_reserved_slots:{straight:0,finish:0},
+      reservations:[{cell:'straight',copy:0,operation:'join',kind:'after_unloading',start_milliseconds:5300,finish_milliseconds:12300}]}};
+  const routing={schema:'ftx-sewing-routing/12',route:[{operation:'join',cell:'straight'},{operation:'reinforce',cell:'finish'}],
+    cell_plans:[a,b],baseline:selected,selected,transfer_pool:pool,attending_labor:labor,bounded_staging:staging,
+    lower_bound_makespan_milliseconds:17000,search_nodes:20,search_complete:false,optimality_proven:false,budget_exhausted:true};
+  const plan={schema:'ftx-sewing-plan/29',hardware_execution_authorized:false,seams:[...a.plan.seams,...b.plan.seams],
+    options:{production:{routing:{cells:[{id:'straight',available_at_milliseconds:0},{id:'finish',available_at_milliseconds:0}],
+      transfer:primary,transfer_pool:policy,attending_labor:labor.policy,staging_capacity:2}}},
+    production:{schema:'ftx-sewing-production/17',production_copies:2,feed_seconds:12,ordering:{optimality_proven:false},routing}};
+  const options=' \r\n'+JSON.stringify(plan.options)+'\n';p.select('sewOptions',options);
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('mixed');row.sewing=outcome(plan);row.metrics.sewing_parallel_makespan_seconds=19.4;
+    const study=studyReport([row]),report=op==='sew'?{schema:'ftx-sewing-program/7',stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=' '+JSON.stringify(report)+'\n';await p.e[op].onclick();
+    if(op==='sew')assert.equal(p.current().messages.at(-1).options,options);
+    p.emit(report,[{name:'mixed-carriers.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    const rows=ending=>plain(table(ending).children.slice(2).map(row=>row.children.map(n=>n.textContent)));
+    assert.deepEqual(rows('selected garment transfers'),[
+      [primary.id,'Independent resource','0','join','reinforce','straight','finish','5.3','12.3'],
+      [owned.id,worker,'1','join','reinforce','straight','finish','9.6','16.6']]);
+    assert.deepEqual(rows('qualified transfer resource usage').slice(3),[
+      ['Selected',primary.id,'Independent resource','1','7','5.3','12.3'],
+      ['Selected',owned.id,worker,'1','7','9.6','16.6'],['Selected',idle.id,worker,'0','0','Unused','Unused']]);
+    assert.deepEqual(rows('routed attending labor')[1],['Selected','0','0','9.6','7']);
+    assert.deepEqual(rows('qualified worker usage')[1],['Selected',worker,'2','1','0','0','9.6','7','0','16.6']);
+    assert.deepEqual(rows('selected worker-owned garment transfers')[0],
+      [worker,owned.id,'1','join','reinforce','straight','straight','finish','9.6','9.6','9.6','16.6']);
+    assert.match(visibleText(s),/Multiple resources owned by one worker cannot overlap that person's other duties/);
+    assert.match(visibleText(s),/Reservations follow the selected carrier/);
+    assert.doesNotMatch(visibleText(s),/independent transfer resource usage|declared independent transfer pool|handoffs use the independently qualified transfer pool/);
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('transfer pool ownership, resource sources and complete usage'));
+    detail.open=true;detail.handlers.toggle();assert.deepEqual(JSON.parse(detail.children[1].textContent),pool);
+    const download=descendants(s).find(n=>n.download==='mixed-carriers.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    if(op==='sew') {
+      const summary=JSON.parse(s.children[1].textContent);
+      assert.equal(summary.independent_transfer_resources,1);assert.equal(summary.worker_owned_transfer_resources,2);
+    }
+  }
+  p.e.sewOptions.handlers.change();p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true);assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('eligible attending workers preserve qualified domains, actual assignments and handoff-only use in every result view', async () => {
   const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
   const primary='worker-0',alternate='<worker café 🧵>',idle='late-qualified-worker';

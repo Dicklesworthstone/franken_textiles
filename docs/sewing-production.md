@@ -866,8 +866,8 @@ Each additional carrier uses `serialized_unloaded_handoffs/1`, its own unique `i
 availability and source-bearing directed `transfers`. Its nonempty edge list may cover a subset of
 the route's admitted directed edges. The primary still covers the complete existing edge domain,
 so it remains the explicit seed carrier. A carrier ID must differ from every cell, worker and other
-carrier. Worker-owned transfers cannot be combined with this independent pool; using the same
-person for several nominal resources would require a separately qualified shared-resource model.
+carrier. This independent model refuses worker-owned transfers. To combine independent carriers
+with attending-worker resources, use the qualified ownership model below.
 
 Every supplied duration includes complete positioning, pickup, carriage, deposit and return to
 that carrier's qualified ready state. The scheduler never infers location-dependent travel or
@@ -914,6 +914,47 @@ window, nonoverlapping use and usage total. Staging replay verifies the selected
 duration as well. Omission preserves existing schemas and wire output. These are software
 scheduling capabilities; `physical_pool_validated` remains false, and measured carrier
 independence, factory throughput, physical access and hardware authorization remain separate.
+
+### Combine independent and worker-owned carriers
+
+Set `routing.transfer_pool.model` to `qualified_unloaded_transfer_resources/1` to choose between
+independent carriers and resources operated by named attending workers in the same route. Set
+`routing.independence` to `shared_attending_workers_and_qualified_transfer_resources/1`, or
+`shared_attending_workers_workholding_and_qualified_transfer_resources/1` when using shared
+fixture pools. The pool must include at least one explicitly owned carrier and an ordinary
+`attending_labor` policy. The primary still supplies the seed route and complete directed edge
+domain; additional carriers can qualify subsets. The existing eight-carrier limit applies.
+
+Each independent carrier retains `serialized_unloaded_handoffs/1` and its complete ready-state
+duration. Each owned carrier uses `attended_source_to_destination_handoffs/1` with its exact
+`attending_worker` ID and independently qualified pickup/carry/deposit durations. Pool evidence
+must qualify these physical resource identities and ownership relationships. Every owner needs
+the existing complete initial-arrival and directed empty-travel domain, including cells where
+they do not attend machines. Missing owners, travel, source evidence or estimate consent refuse.
+
+A worker can own several carriers. Their machine duties and every owned handoff share one
+exclusive clock and actual location; naming another cart cannot create another worker. Empty
+approach and waiting occupy that person, and deposit updates their location before later work.
+Independent carriers and different workers can overlap when all other resources allow it.
+Worker and carrier calendars are checked separately over their respective occupied intervals.
+
+Finite staging follows the carrier actually selected for each handoff. Independent transfers
+reserve the source until handoff completion and the destination from handoff start. Owned
+transfers release the source at pickup and reserve the destination from deposit. Fixture,
+buffer or calendar delays recheck the complete coupled assignment. The existing bounded search
+can replace an unavailable primary seed; only complete garment schedules become incumbents.
+The labor lower bound relaxes optional carrying work rather than charging every move to the
+primary owner. Equality with the independent lower bound retains its existing proof scope.
+
+These requests use plan `/29`, production `/17`, routing `/12`, transfer-pool `/2`, attending-labor
+`/4`, and, when requested, staging `/2`. Labor `owned_transfers` retains every owned policy,
+including unused resources; `transfer` still identifies an owned primary when present. Actual
+owned handoffs appear in labor timelines and per-worker usage, while all handoffs retain their
+selected carrier in the route timeline. The workbench displays ownership, actual worker work,
+unused alternatives and carrier-specific staging in ordinary sewing and material-study results.
+Exact requests and reports remain downloadable. Existing independent-only pools and single
+owned carriers keep their original schemas and behavior. Physical resource qualification,
+factory throughput and hardware execution remain separate from this software scheduling model.
 
 ### Finite staging buffers and explicit batch entry/exit
 
