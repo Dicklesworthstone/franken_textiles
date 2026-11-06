@@ -1,5 +1,5 @@
 //! Source-qualified specialist cells execute a complete operation route. Every operation is
-//! loaded, attended and unloaded at its cell; a qualified serialized resource moves unloaded garments.
+//! loaded, attended and unloaded at its cell; qualified exclusive resources move unloaded garments.
 //! Geometry and process admission remain with the ordinary sewing planner on the original pattern.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +19,7 @@ pub mod calendars;
 pub mod fixtures;
 pub mod labor;
 pub mod staging;
+pub mod transfer_pool;
 
 const MAX_CELLS: usize = 8;
 const MAX_OPERATIONS: usize = 63;
@@ -71,8 +72,12 @@ pub struct Policy {
     pub availability_calendars: Option<calendars::Policy>,
     /// Every original operation exactly once, in an order respecting every original predecessor.
     pub route: Vec<RouteStep>,
-    /// One qualified resource for all unloaded inter-cell handoffs, optionally owned by a worker.
+    /// Primary qualified resource for all unloaded inter-cell handoffs, optionally owned by a worker.
     pub transfer: TransferPolicy,
+    /// Optional independently qualified extra carriers. The primary resource remains the seed;
+    /// bounded dispatch can choose another qualified carrier for each actual inter-cell move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer_pool: Option<transfer_pool::Policy>,
     /// Evidence for this complete route, dedicated cell labor, staging and handoff independence.
     pub source: Source,
     /// Applicability and phase protocol; no live factory state is inferred.
@@ -164,8 +169,8 @@ pub struct TransferPolicy {
     /// Optional inclusive end; every complete handoff must finish inside this window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_until_milliseconds: Option<u64>,
-    /// Exactly every directed inter-cell edge between adjacent eligible domains; same-cell steps
-    /// need no handoff. Fixed routing has one cell per domain.
+    /// The primary covers exactly every directed inter-cell edge between adjacent eligible domains.
+    /// Additional independent carriers cover a nonempty subset; same-cell steps need no handoff.
     pub transfers: Vec<Handoff>,
     /// Evidence for complete handoffs and the declared independent or shared worker ownership.
     pub source: Source,
@@ -233,18 +238,22 @@ pub struct Transfer {
     pub from: String,
     /// Destination physical cell.
     pub to: String,
+    /// Actual independent carrier, present only when an explicit transfer pool is admitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
     /// Begins after source unloading, the previous handoff and any explicitly assigned worker arrival.
     pub start_milliseconds: u64,
     /// The garment is staged and the transfer resource is free; an explicit owner ends at destination.
     pub finish_milliseconds: u64,
 }
 
-/// A complete feasible batch execution, with qualified cells and one exclusive transfer resource.
+/// A complete feasible batch execution with qualified cells and exclusive transfer resources.
 #[derive(Clone, Debug, Serialize)]
 pub struct Timeline {
     /// Dispatch order; independent cell phases may overlap and need not start in this list's order.
     pub operations: Vec<Operation>,
-    /// Serialized handoffs in transfer-resource order.
+    /// Handoffs in operation-dispatch order. Different pool resources may overlap or start earlier
+    /// than a preceding row; each individual resource remains exclusive.
     pub transfers: Vec<Transfer>,
     /// Final unloaded garment completion from the common job origin.
     pub makespan_milliseconds: u64,
@@ -256,7 +265,7 @@ pub struct Timeline {
     pub setup_milliseconds: u64,
     /// Sum of every operation's source-qualified loading and unloading.
     pub handling_milliseconds: u64,
-    /// Complete occupancy of the one independently qualified handoff resource.
+    /// Summed complete occupancy of all independently qualified handoff resources, not elapsed time.
     pub transfer_milliseconds: u64,
 }
 
@@ -264,7 +273,7 @@ pub struct Timeline {
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
     /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars;
-    /// `/7` cost; `/8` retained fixtures; `/9` explicit finite staging reservations.
+    /// `/7` cost; `/8` retained fixtures; `/9` finite staging; `/10` independent transfer pools.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -280,6 +289,9 @@ pub struct Report {
     /// Independently reconstructed finite slot reservations and the qualified entry/exit boundary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounded_staging: Option<staging::Report>,
+    /// Source-qualified independent carriers and separately verified use of each physical resource.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transfer_pool: Option<transfer_pool::Report>,
     /// Explicit worker availability, travel and complete attended-operation replay, when requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attending_labor: Option<labor::Report>,
@@ -346,6 +358,14 @@ fn add(a: u64, b: u64) -> Result<u64, Refusal> {
 }
 
 impl Policy {
+    fn transfer_resources(&self) -> impl Iterator<Item = &TransferPolicy> {
+        std::iter::once(&self.transfer).chain(
+            self.transfer_pool
+                .iter()
+                .flat_map(|pool| &pool.additional_resources),
+        )
+    }
+
     fn retained_fixtures(&self) -> bool {
         self.protocol == "unloaded_operations_with_cell_retained_fixtures/1"
     }
@@ -527,35 +547,7 @@ impl Policy {
                 "fixed route must cover every operation and every configured specialist cell",
             ));
         }
-        let transfer = &self.transfer;
-        let transfer_model = if owned_transfer {
-            "attended_source_to_destination_handoffs/1"
-        } else {
-            "serialized_unloaded_handoffs/1"
-        };
-        if !qualified_text(&transfer.id)
-            || cells.contains(transfer.id.as_str())
-            || transfer.model != transfer_model
-            || transfer
-                .attending_worker
-                .as_ref()
-                .is_some_and(|worker| !qualified_text(worker))
-            || !window_valid(
-                transfer.available_at_milliseconds,
-                transfer.available_until_milliseconds,
-            )
-            || !source_valid(&transfer.source, &transfer.method, &transfer.conditions)
-            || transfer.transfers.len() > MAX_OPERATIONS
-        {
-            return Err(bad(
-                "invalid serialized handoff resource, ownership model, source or availability",
-            ));
-        }
-        if transfer.evidence == Evidence::Estimate && !transfer.allow_estimates {
-            return Err(bad(
-                "estimated unloaded handoffs need their own explicit consent",
-            ));
-        }
+        let supplied = self.transfer.validate_resource(&cells)?;
         let required: BTreeSet<_> = self
             .route
             .windows(2)
@@ -568,8 +560,54 @@ impl Policy {
                 })
             })
             .collect();
+        if supplied != required {
+            return Err(Refusal::new(
+                RefusalCode::NotConverged,
+                "source-qualified handoffs must cover exactly the inter-cell edges of every adjacent route domain",
+            ));
+        }
+        if let Some(pool) = &self.transfer_pool {
+            pool.validate(self, &cells, &required)?;
+        }
+        if let Some(calendars) = &self.availability_calendars {
+            calendars.validate(self)?;
+        }
+        Ok(done)
+    }
+}
+
+impl TransferPolicy {
+    fn validate_resource(&self, cells: &BTreeSet<&str>) -> Result<BTreeSet<(&str, &str)>, Refusal> {
+        let model = if self.attending_worker.is_some() {
+            "attended_source_to_destination_handoffs/1"
+        } else {
+            "serialized_unloaded_handoffs/1"
+        };
+        if !qualified_text(&self.id)
+            || cells.contains(self.id.as_str())
+            || self.model != model
+            || self
+                .attending_worker
+                .as_ref()
+                .is_some_and(|worker| !qualified_text(worker))
+            || !window_valid(
+                self.available_at_milliseconds,
+                self.available_until_milliseconds,
+            )
+            || !source_valid(&self.source, &self.method, &self.conditions)
+            || self.transfers.len() > MAX_OPERATIONS
+        {
+            return Err(bad(
+                "invalid serialized handoff resource, ownership model, source or availability",
+            ));
+        }
+        if self.evidence == Evidence::Estimate && !self.allow_estimates {
+            return Err(bad(
+                "estimated unloaded handoffs need their own explicit consent",
+            ));
+        }
         let mut supplied = BTreeSet::new();
-        for row in &transfer.transfers {
+        for row in &self.transfers {
             if row.from == row.to
                 || row.milliseconds > 86_400_000
                 || !supplied.insert((row.from.as_str(), row.to.as_str()))
@@ -577,16 +615,7 @@ impl Policy {
                 return Err(bad("invalid or duplicate directed unloaded handoff"));
             }
         }
-        if supplied != required {
-            return Err(Refusal::new(
-                RefusalCode::NotConverged,
-                "source-qualified handoffs must cover exactly the inter-cell edges of every adjacent route domain",
-            ));
-        }
-        if let Some(calendars) = &self.availability_calendars {
-            calendars.validate(self)?;
-        }
-        Ok(done)
+        Ok(supplied)
     }
 }
 
@@ -646,7 +675,11 @@ struct Prepared<'a> {
     choices: Vec<Vec<usize>>,
     /// Task-index transition costs; the last row represents each cell's own initial setup.
     setup: Vec<Vec<u64>>,
+    /// Minimum source-qualified duration per edge, relaxing carrier choice for lower bounds.
     handoffs: Vec<Vec<Option<u64>>>,
+    /// Primary first, then authored extra carriers. Every table preserves that carrier's domain.
+    carriers: Vec<&'a TransferPolicy>,
+    carrier_handoffs: Vec<Vec<Vec<Option<u64>>>>,
     copies: usize,
     fixtures: Option<fixtures::Compiled>,
     labor: Option<labor::Compiled>,
@@ -660,7 +693,7 @@ struct State {
     copy_cell: Vec<Option<usize>>,
     cell_ready: Vec<u64>,
     last: Vec<Option<usize>>,
-    transfer_ready: u64,
+    transfer_ready: [u64; transfer_pool::MAX_RESOURCES],
     makespan: u64,
     reservations: Vec<fixtures::Reservation>,
     labor: Option<labor::State>,
@@ -682,6 +715,8 @@ struct Event {
 struct Dispatch {
     copy: usize,
     task: usize,
+    /// Primary is index zero. First/same-cell operations use zero without occupying a carrier.
+    carrier: usize,
 }
 
 impl Prepared<'_> {
@@ -697,7 +732,11 @@ impl Prepared<'_> {
                 .map(|cell| u64::from(cell.available_at_milliseconds))
                 .collect(),
             last: vec![None; self.policy.cells.len()],
-            transfer_ready: u64::from(self.policy.transfer.available_at_milliseconds),
+            transfer_ready: std::array::from_fn(|index| {
+                self.carriers
+                    .get(index)
+                    .map_or(0, |carrier| u64::from(carrier.available_at_milliseconds))
+            }),
             makespan: 0,
             reservations: Vec::new(),
             labor: self.labor.as_ref().map(labor::Compiled::initial),
@@ -846,7 +885,11 @@ impl Prepared<'_> {
         handoff_start_floor: u64,
         loading_start_floor: u64,
     ) -> Result<Option<(State, Event)>, Refusal> {
-        let Dispatch { copy, task: index } = dispatch;
+        let Dispatch {
+            copy,
+            task: index,
+            carrier: carrier_index,
+        } = dispatch;
         let task = &self.tasks[index];
         if state.next[copy] != task.route {
             return Err(bad("routed dispatch changed its original operation order"));
@@ -858,7 +901,21 @@ impl Prepared<'_> {
         }
         let mut next = state.clone();
         let mut ready = state.copy_ready[copy];
-        let duration = state.copy_cell[copy].and_then(|from| self.handoffs[from][task.cell]);
+        let carrier = self
+            .carriers
+            .get(carrier_index)
+            .ok_or_else(|| bad("routed dispatch names an unknown handoff resource"))?;
+        let handoff_from = state.copy_cell[copy].filter(|&from| from != task.cell);
+        let duration = if let Some(from) = handoff_from {
+            let duration = self.carrier_handoffs[carrier_index][from][task.cell]
+                .ok_or_else(|| bad("routed carrier does not qualify the actual directed edge"))?;
+            Some(duration)
+        } else {
+            if carrier_index != 0 {
+                return Err(bad("routed dispatch selects an unused handoff resource"));
+            }
+            None
+        };
         let handoff = if let Some(duration) = duration {
             let arrival = self
                 .labor
@@ -871,28 +928,20 @@ impl Prepared<'_> {
                 })
                 .transpose()?
                 .flatten();
-            if self.policy.transfer.attending_worker.is_some() && arrival.is_none() {
+            if carrier.attending_worker.is_some() && arrival.is_none() {
                 return Ok(None);
             }
             let earliest = ready
-                .max(state.transfer_ready)
+                .max(state.transfer_ready[carrier_index])
                 .max(handoff_start_floor)
                 .max(arrival.map_or(0, |arrival| arrival.time));
-            let Some((start, arrival)) = self.earliest_interval(
-                state,
-                &self.policy.transfer.id,
-                earliest,
-                duration,
-                arrival,
-                None,
-            )?
+            let Some((start, arrival)) =
+                self.earliest_interval(state, &carrier.id, earliest, duration, arrival, None)?
             else {
                 return Ok(None);
             };
             let finish = add(start, duration)?;
-            if self
-                .policy
-                .transfer
+            if carrier
                 .available_until_milliseconds
                 .is_some_and(|end| finish > end)
             {
@@ -976,7 +1025,7 @@ impl Prepared<'_> {
         next.cell_ready[task.cell] = finish;
         next.last[task.cell] = Some(index);
         if let Some([_, finish]) = handoff {
-            next.transfer_ready = finish;
+            next.transfer_ready[carrier_index] = finish;
         }
         next.makespan = next.makespan.max(finish);
         if let Some(arrival) = arrival {
@@ -1058,6 +1107,11 @@ impl Prepared<'_> {
                     .id
                     .clone(),
                     to: cell.clone(),
+                    resource: self
+                        .policy
+                        .transfer_pool
+                        .as_ref()
+                        .map(|_| self.carriers[dispatch.carrier].id.clone()),
                     start_milliseconds: start,
                     finish_milliseconds: finish,
                 });
@@ -1112,10 +1166,7 @@ impl Prepared<'_> {
             .windows(2)
             .any(|pair| pair[0].cell != pair[1].cell)
         {
-            lower = lower.max(add(
-                transfer,
-                u64::from(self.policy.transfer.available_at_milliseconds),
-            )?);
+            lower = lower.max(self.transfer_lower_bound(transfer)?);
         }
         for (cell, work) in cell_work.into_iter().enumerate() {
             let mut unique = BTreeMap::new();
@@ -1150,6 +1201,19 @@ impl Prepared<'_> {
             )?);
         }
         Ok(lower)
+    }
+
+    fn transfer_lower_bound(&self, minimum_work: u64) -> Result<u64, Refusal> {
+        // Relax edge eligibility, calendars and unequal carrier openings. Dividing independently
+        // minimized work by all admitted carriers can only weaken this bound. An unused late
+        // carrier must never raise a mandatory completion time.
+        let first = self
+            .carriers
+            .iter()
+            .map(|carrier| u64::from(carrier.available_at_milliseconds))
+            .min()
+            .expect("admitted primary carrier");
+        add(minimum_work.div_ceil(self.carriers.len() as u64), first)
     }
 
     fn eligible_lower_bound(&self) -> Result<u64, Refusal> {
@@ -1197,10 +1261,7 @@ impl Prepared<'_> {
             .expect("nonempty initial domain");
         let mut lower = add(first, path)?.max(total_work.div_ceil(self.policy.cells.len() as u64));
         if transfer > 0 {
-            lower = lower.max(add(
-                transfer,
-                u64::from(self.policy.transfer.available_at_milliseconds),
-            )?);
+            lower = lower.max(self.transfer_lower_bound(transfer)?);
         }
         for (cell, work) in forced_work
             .into_iter()
@@ -1356,27 +1417,41 @@ impl Search<'_, '_> {
                 continue;
             }
             for &task in &self.prepared.choices[state.next[copy]] {
-                if self.used == self.prepared.policy.max_search_nodes {
-                    self.complete = false;
-                    return Ok(());
-                }
-                self.used += 1;
-                let dispatch = Dispatch { copy, task };
-                if let Some((next, _)) = self.prepared.advance(state, dispatch)? {
-                    path.push(dispatch);
-                    self.visit(&next, path)?;
-                    path.pop();
-                }
-                if self.cost.as_ref().is_some_and(|cost| cost.exhausted) {
-                    return Ok(());
-                }
-                if self.cost.is_none()
-                    && self
-                        .best
-                        .as_ref()
-                        .is_some_and(|(finish, _)| *finish == self.lower)
-                {
-                    return Ok(());
+                let cell = self.prepared.tasks[task].cell;
+                let from = state.copy_cell[copy].filter(|&from| from != cell);
+                let carrier_count = from.map_or(1, |_| self.prepared.carriers.len());
+                for carrier in 0..carrier_count {
+                    if from.is_some_and(|from| {
+                        self.prepared.carrier_handoffs[carrier][from][cell].is_none()
+                    }) {
+                        continue;
+                    }
+                    if self.used == self.prepared.policy.max_search_nodes {
+                        self.complete = false;
+                        return Ok(());
+                    }
+                    self.used += 1;
+                    let dispatch = Dispatch {
+                        copy,
+                        task,
+                        carrier,
+                    };
+                    if let Some((next, _)) = self.prepared.advance(state, dispatch)? {
+                        path.push(dispatch);
+                        self.visit(&next, path)?;
+                        path.pop();
+                    }
+                    if self.cost.as_ref().is_some_and(|cost| cost.exhausted) {
+                        return Ok(());
+                    }
+                    if self.cost.is_none()
+                        && self
+                            .best
+                            .as_ref()
+                            .is_some_and(|(finish, _)| *finish == self.lower)
+                    {
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -1530,7 +1605,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if uses_staging {
+        schema: if policy.transfer_pool.is_some() {
+            "ftx-sewing-plan/27"
+        } else if uses_staging {
             "ftx-sewing-plan/26"
         } else if policy.retained_fixtures() {
             "ftx-sewing-plan/25"
@@ -1667,19 +1744,26 @@ pub(in crate::sewing) fn build(
             setup[from][to] = setup_duration(times, &previous.setup, &task.setup);
         }
     }
-    let mut handoffs = vec![vec![None; policy.cells.len()]; policy.cells.len()];
-    for row in &policy.transfer.transfers {
-        let from = policy
-            .cells
-            .iter()
-            .position(|cell| cell.id == row.from)
-            .expect("admitted source cell");
-        let to = policy
-            .cells
-            .iter()
-            .position(|cell| cell.id == row.to)
-            .expect("admitted receiving cell");
-        handoffs[from][to] = Some(u64::from(row.milliseconds));
+    let carriers: Vec<_> = policy.transfer_resources().collect();
+    let mut handoffs: Vec<Vec<Option<u64>>> =
+        vec![vec![None; policy.cells.len()]; policy.cells.len()];
+    let mut carrier_handoffs = vec![handoffs.clone(); carriers.len()];
+    for (index, carrier) in carriers.iter().enumerate() {
+        for row in &carrier.transfers {
+            let from = policy
+                .cells
+                .iter()
+                .position(|cell| cell.id == row.from)
+                .expect("admitted source cell");
+            let to = policy
+                .cells
+                .iter()
+                .position(|cell| cell.id == row.to)
+                .expect("admitted receiving cell");
+            let duration = u64::from(row.milliseconds);
+            carrier_handoffs[index][from][to] = Some(duration);
+            handoffs[from][to] = Some(handoffs[from][to].map_or(duration, |old| old.min(duration)));
+        }
     }
     let prepared = Prepared {
         policy,
@@ -1687,6 +1771,8 @@ pub(in crate::sewing) fn build(
         choices,
         setup,
         handoffs,
+        carriers,
+        carrier_handoffs,
         copies,
         fixtures,
         labor,
@@ -1716,6 +1802,7 @@ pub(in crate::sewing) fn build(
             let dispatch = Dispatch {
                 copy,
                 task: prepared.choices[seed.next[copy]][0],
+                carrier: 0,
             };
             let Some((next, _)) = prepared.advance(&seed, dispatch)? else {
                 break 'seed;
@@ -1879,8 +1966,15 @@ pub(in crate::sewing) fn build(
         .as_ref()
         .map(|staging| staging.report(&baseline, &selected))
         .transpose()?;
+    let transfer_pool = policy
+        .transfer_pool
+        .as_ref()
+        .map(|pool| pool.report(policy, &baseline, &selected))
+        .transpose()?;
     let report = Report {
-        schema: if uses_staging {
+        schema: if transfer_pool.is_some() {
+            "ftx-sewing-routing/10"
+        } else if uses_staging {
             "ftx-sewing-routing/9"
         } else if policy.retained_fixtures() {
             "ftx-sewing-routing/8"
@@ -1904,6 +1998,7 @@ pub(in crate::sewing) fn build(
         cell_plans,
         workholding,
         bounded_staging,
+        transfer_pool,
         attending_labor,
         availability_calendars: policy.availability_calendars.clone(),
         thread_order_search,
@@ -1915,7 +2010,13 @@ pub(in crate::sewing) fn build(
         optimality_proven: proven,
         budget_exhausted: !search_complete,
         lower_bound_makespan_milliseconds: lower,
-        search_scope: if uses_staging {
+        search_scope: if policy.transfer_pool.is_some() && uses_staging {
+            "coupled_transfer_pool_bounded_staging_append_dispatch/1"
+        } else if policy.transfer_pool.is_some() && policy.retained_fixtures() {
+            "coupled_transfer_pool_cell_retained_fixture_append_dispatch/1"
+        } else if policy.transfer_pool.is_some() {
+            "coupled_independent_transfer_pool_append_dispatch/1"
+        } else if uses_staging {
             "coupled_bounded_staging_append_dispatch/1"
         } else if policy.retained_fixtures() {
             "coupled_cell_retained_fixture_append_dispatch/1"
@@ -1937,7 +2038,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if uses_staging {
+        schema: if policy.transfer_pool.is_some() {
+            "ftx-sewing-production/15"
+        } else if uses_staging {
             "ftx-sewing-production/14"
         } else if policy.retained_fixtures() {
             "ftx-sewing-production/13"

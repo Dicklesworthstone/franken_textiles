@@ -49,7 +49,7 @@ impl Policy {
     pub(super) fn validate(&self, route: &RoutePolicy) -> Result<(), Refusal> {
         if self.model != "nonpreemptive_resource_windows/1"
             || self.resources.is_empty()
-            || self.resources.len() > 17
+            || self.resources.len() > 16 + route.transfer_resources().count()
             || !source_valid(&self.source, &self.method, &self.conditions)
         {
             return Err(bad(
@@ -74,13 +74,22 @@ impl Policy {
                 )
             })
             .collect();
-        bounds.insert(
-            route.transfer.id.as_str(),
-            (
-                u64::from(route.transfer.available_at_milliseconds),
-                route.transfer.available_until_milliseconds,
-            ),
-        );
+        for carrier in route.transfer_resources() {
+            if bounds
+                .insert(
+                    carrier.id.as_str(),
+                    (
+                        u64::from(carrier.available_at_milliseconds),
+                        carrier.available_until_milliseconds,
+                    ),
+                )
+                .is_some()
+            {
+                return Err(bad(
+                    "routed calendar resources need distinct physical identities",
+                ));
+            }
+        }
         for worker in route
             .attending_labor
             .iter()

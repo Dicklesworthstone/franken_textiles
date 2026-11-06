@@ -804,8 +804,9 @@ the cell's next operation. Without `bounded_staging`, all copies start in the fi
 staging, and the declared `staging_capacity` applies at **every used cell** and must be at least the
 complete copy count. The explicit finite-buffer policy below changes that entry/exit boundary.
 
-Without explicit worker ownership, one separately qualified resource performs all inter-cell handoffs
-without overlap. Each directed row includes complete positioning, pickup, movement and deposit work
+Without explicit worker ownership or the transfer pool below, one separately qualified resource
+performs all inter-cell handoffs without overlap. Each directed row includes complete positioning,
+pickup, movement and deposit work
 and return to its qualified
 ready state before another handoff. Its duration is additional to source unloading and destination
 loading; neither empty travel nor carrying time is inferred from a cell name. Supply exactly the
@@ -851,6 +852,62 @@ windows, bounded incumbents, actual stitches, purchasing, selection and study re
 Rust regressions pass. The separate real-command workflow and current compiled-WASM
 acceptance remain distinct checks. No measured factory timing, physical seam quality or hardware
 permission is established.
+
+### Independently qualified parallel transfer carriers
+
+Optional `routing.transfer_pool` lets the scheduler choose among several independent carriers for
+each actual inter-cell handoff. It uses model `independent_unloaded_transfer_resources/1` and
+`additional_resources`, an authored list of **1–7** ordinary transfer policies alongside the
+existing primary `routing.transfer`. The pool requires its own `source`, `method`, optional
+`conditions`, `evidence` and separate `allow_estimates` consent: individual carrier timings do not
+establish that the carriers can operate simultaneously.
+
+Each additional carrier uses `serialized_unloaded_handoffs/1`, its own unique `id`, outer
+availability and source-bearing directed `transfers`. Its nonempty edge list may cover a subset of
+the route's admitted directed edges. The primary still covers the complete existing edge domain,
+so it remains the explicit seed carrier. A carrier ID must differ from every cell, worker and other
+carrier. Worker-owned transfers cannot be combined with this independent pool; using the same
+person for several nominal resources would require a separately qualified shared-resource model.
+
+Every supplied duration includes complete positioning, pickup, carriage, deposit and return to
+that carrier's qualified ready state. The scheduler never infers location-dependent travel or
+substitutes another carrier's duration. Optional `availability_calendars.resources` can name any
+carrier, and the complete handoff must fit its own outer availability and one of its windows.
+Different carriers can move different garments concurrently; each carrier remains exclusive.
+
+Search considers eligible carriers in authored order, after the primary, for the actual selected
+source and destination cells. Same-cell successors consume no carrier. Carrier choices share the
+existing dispatch-node allowance and complete-incumbent rules; adding carriers does not multiply
+the declared search budget. The copy-major baseline uses the primary. If that seed misses a
+window, bounded search can retain a complete feasible replacement using an additional carrier.
+The complete selected schedule continues through ordinary specialist stitch, thread-order,
+recipe-selection and material-study consumers.
+
+Finite staging, attending labor and local/shared fixtures retain their existing constraints.
+An independent carrier reserves both source and destination staging slots throughout its complete
+handoff under `bounded_staging`; a second carrier cannot bypass a full buffer. Any buffer-induced
+delay rechecks the chosen carrier's clock and calendar along with the complete destination
+operation. Independent movement never releases a machine's attending worker during its feed.
+
+The lower bound uses the minimum qualified duration among carriers eligible for each directed
+edge. Its parallel transfer-work relaxation divides unavoidable minimum work by the number of
+declared carriers and uses the earliest carrier availability. It does not serialize all movement
+through the primary or treat a late unused carrier as mandatory work. Bound equality remains the
+only makespan-optimality proof; exhausted append dispatch does not establish unrestricted factory
+optimality or infeasibility.
+
+Pool requests use plan `/27`, production `/15` and routing `/10`. The nested
+`ftx-sewing-transfer-pool/1` report retains the exact pool and primary policies plus baseline and
+selected usage for every carrier, including unused alternatives. Each usage row reports handoff
+count, occupied milliseconds and optional first-start/last-finish clocks. Routed handoffs add the
+selected `resource` ID and remain in operation-dispatch order. Summed occupied carrier time is
+resource work, separate from elapsed job completion.
+
+An independent replay verifies every reported carrier, qualified edge duration, outer/calendar
+window, nonoverlapping use and usage total. Staging replay verifies the selected carrier's exact
+duration as well. Omission preserves existing schemas and wire output. These are software
+scheduling capabilities; `physical_pool_validated` remains false, and measured carrier
+independence, factory throughput, physical access and hardware authorization remain separate.
 
 ### Finite staging buffers and explicit batch entry/exit
 

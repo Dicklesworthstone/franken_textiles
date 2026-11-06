@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 mod bounded_staging;
 #[path = "sewing_routing/selection_cost.rs"]
 mod selection_cost;
+#[path = "sewing_routing/transfer_pool.rs"]
+mod transfer_pool;
 
 fn source(id: &str) -> Value {
     json!({"reference":format!("test:routing-{id}"),"accessed_on":"2026-10-27",

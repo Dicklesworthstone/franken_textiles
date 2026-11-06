@@ -445,6 +445,23 @@ consumer uses routing. Tests: `sewing_routing`.
 Measured factory qualification, occupied-fixture transport and hardware authorization remain open. See
 `docs/sewing-production.md`.
 
+**Independent routed transfer pools** (`production.routing.transfer_pool`, `ftx-pb2.2`).
+An optional source-qualified `independent_unloaded_transfer_resources/1` policy adds 1–7
+independent ready-state carriers to the primary complete-edge seed resource. Each additional
+carrier qualifies its own nonempty subset of admitted directed edges, exact durations and
+availability; shared attending-worker ownership is refused. Bounded append dispatch chooses the
+actual carrier with each eligible-cell handoff, retaining separate clocks and calendar windows
+inside the existing node allowance. Finite buffers, fixtures, complete cell attendance and
+source-window constraints remain joint admission gates. Minimum per-edge durations and relaxed
+parallel carrier work preserve sound lower bounds; an unused late carrier cannot raise them.
+Plan `/27`, production `/15`, routing `/10` and nested transfer-pool `/1` retain original policies,
+per-carrier baseline/selected usage and the selected resource on every handoff. Independent replay
+checks complete carrier occupancy, edge durations and windows; finite-buffer replay uses that same
+carrier identity. Absent pooling preserves legacy serialization, including omitted resource IDs.
+Actual selected cell geometry, stitches and combined yarn orders remain the ordinary authorities.
+Tests: `sewing_routing/transfer_pool`. Synthetic schedules do not establish measured simultaneous
+carrier independence, physical access, factory throughput or hardware authorization.
+
 **Routed finite fixtures** (`production.routing.workholding` report). Optional existing
 cell-local workholding policies qualify each specialist's exact machine/material/process and
 single-operation holds. Optional `routing.shared_workholding` reuses the existing pool authority

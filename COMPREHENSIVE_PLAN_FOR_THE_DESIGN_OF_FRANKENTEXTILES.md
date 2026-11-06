@@ -5545,6 +5545,22 @@ The workbench can author the selected frozen material set and display the separa
 frontiers. This advances `ftx-ds2` and `ftx-ms2`; global optimality, exhaustive frontiers and measured
 garment or material validation remain outside this numerical discovery contract.
 
+### 25.187 Schedule independent garment-transfer carriers together
+
+An explicit source-qualified carrier pool extends specialist sewing routes beyond one serialized
+handoff resource. Each additional carrier supplies its own admitted directed edges, ready-state
+durations and availability. Bounded dispatch selects the actual carrier with each handoff while
+preserving complete cell attendance, finite staging, fixture capacity and calendar constraints.
+Independent carriers can overlap; a nominally separate resource never duplicates a shared worker.
+
+The primary remains the copy-major seed. Additional choices share the existing bounded search,
+retain complete feasible incumbents and use relaxed parallel-work bounds rather than falsely
+serializing all movement. Baseline and selected histories retain the chosen carrier and every
+carrier's usage, including unused alternatives; independent replay verifies exact edge duration,
+exclusive occupancy and windows. Ordinary stitches, purchasing, studies and workbench views use
+the same schedule. This advances `ftx-pb2.2`; physical carrier independence, factory timing,
+unrestricted scheduling completeness, access and hardware authorization remain separate gates.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
