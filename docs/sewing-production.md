@@ -1300,6 +1300,14 @@ visible as active; wholly unused people have no occupied endpoints. Existing fix
 retains its schemas and omits the new fields. Ordinary selected stitch geometry, purchasing and
 material-study consumers continue to use the same complete routed schedule.
 
+The workbench's sewing, study and scenario views show each operation's actual attending worker,
+the declared qualification domains and baseline/selected per-person usage. A handoff-only worker
+remains active even with zero machine operations; an unused worker has no occupied endpoints.
+Travel, waiting, attendance and carrying remain separate native totals. Exact report downloads,
+source provenance and stale-input invalidation retain the existing worker/report authorities;
+the browser does not reassign people or recompute schedules. The compiled native/Wasm replay
+lane includes an eligible-worker capture with exact report-byte and download comparisons.
+
 These source-qualified scheduling inputs do not establish measured worker skill, physical labor
 performance, safe cooperative handling or hardware authorization. `physical_labor_validated`
 remains false.
