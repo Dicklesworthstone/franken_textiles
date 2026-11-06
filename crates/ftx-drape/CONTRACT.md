@@ -148,7 +148,11 @@ Native drape reports expose these diagnostics under `numerical`; gravity draping
 three consecutive accepted steps at at most 1 mm/s, otherwise a numerical-settling gating flag propagates
 to CLI, round and browser consumers.
 Body-offset continuation tries up to eight successively smaller increments, bounded by 0.25 mm per
-accepted step and the existing one-tenth barrier-band gap guard. An unfinished requested body offset
+accepted step and the existing one-tenth barrier-band gap guard. If those trials fail, a final increment
+of at most 0.25 mm may complete the exact requested offset when every body gap retains more than a tenth
+of its pre-increment value, the same relative clearance rule as CCD. This avoids stalling below a target
+that the geometry already clears, without permitting a nonpositive gap. All other continuation trials,
+solver acceptance and full-offset gating remain unchanged. An unfinished requested body offset
 also gates an ordinary quiet run; paired checks retain that failure without duplicating its flag.
 Accepted phase reports retain the achieved offset, separately from the requested contact offset.
 The fixed phase schedule remains unchanged unless `max_settle_steps` explicitly requests up to
@@ -437,8 +441,10 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
   cloth edge's ends (or the pierced cloth triangle) 2 mm above the crossed body triangle (or ridge), in
   rounds of up to 50; a piece wholly inside the body is refused.
 - Offset ramp: when an edge of the start passes closer to the body than the cloth offset ξ, contact
-  starts at half the smallest distance and `run_phase` raises ξ by 0.25 mm a step while every gap stays
-  above ĝ/10.
+  starts at half the smallest distance and `run_phase` raises ξ by at most 0.25 mm a step while every gap
+  stays above ĝ/10. It backtracks up to eight times; if none succeeds, completing the exact target within
+  that step cap may instead retain more than a tenth of each previous gap. Penetrating or overly large
+  final increments wait for the barrier to move the cloth out.
 - Elastic casing: a drafted casing (the one-instance `waistband` piece) is simulated at its cut length
   (`sim_scale` 1, gathered: compression at 3 %) and drawn up by two rings of `ElasticSegment`s, along its
   fold (`top`) and along its seam line, each with half of EA = `ELASTIC_EA` (15 N,

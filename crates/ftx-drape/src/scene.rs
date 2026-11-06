@@ -1075,7 +1075,8 @@ fn untangle(
 pub const THICKNESS_RAMP: f64 = 0.25e-3;
 
 /// Raises the contact offset toward its target by at most [`THICKNESS_RAMP`], unless that would leave a
-/// gap below a tenth of ĝ (then it waits for the barrier to push the cloth out).
+/// gap below a tenth of ĝ. A final increment may instead retain a tenth of each current gap, as CCD
+/// does, so the absolute conditioning margin cannot prevent an already-clear target from completing.
 fn ramp_thickness(c: &mut Contact, x: &[Vec3], target: f64) {
     if c.params.thickness < target {
         let old = c.params.thickness;
@@ -1093,6 +1094,19 @@ fn ramp_thickness(c: &mut Contact, x: &[Vec3], target: f64) {
                 return;
             }
             increment *= 0.5;
+        }
+        let remaining = target - old;
+        if remaining <= THICKNESS_RAMP {
+            c.params.thickness = target;
+            // g_new = g_old - remaining, so g_new > g_old/10 iff g_new > remaining/9.
+            // Per-material offsets grow by at most this global increment, so this is conservative
+            // there too. Query beyond the guard even when the activation band is narrower.
+            let guard = remaining / 9.0;
+            if c.min_gap(x, c.params.dhat.max(guard))
+                .is_none_or(|g| g > guard)
+            {
+                return;
+            }
         }
         c.params.thickness = old;
     }
@@ -1266,6 +1280,54 @@ mod grain_tests {
         let close = x.map(|p| Vec3::new(p.x, p.y, 7e-4));
         ramp_thickness(&mut contact, &close, 1.5e-3);
         assert_eq!(contact.params.thickness, 6.5e-4);
+    }
+
+    #[test]
+    fn body_offset_ramp_finishes_only_with_relative_clearance() {
+        for (name, old, target, distance, finishes) in [
+            ("safe final step", 1.413734e-3, 1.5e-3, 1.513872e-3, true),
+            ("too little clearance", 1.41e-3, 1.5e-3, 1.509e-3, false),
+            ("touching", 1.41e-3, 1.5e-3, 1.5e-3, false),
+            ("penetrating", 1.41e-3, 1.5e-3, 1.499e-3, false),
+            ("large remaining offset", 6.5e-4, 1.5e-3, 7e-4, false),
+        ] {
+            let body = Body::new(
+                vec![
+                    Vec3::new(-0.01, -0.01, 0.0),
+                    Vec3::new(0.02, -0.01, 0.0),
+                    Vec3::new(-0.01, 0.02, 0.0),
+                ],
+                vec![[0, 1, 2]],
+                0.01,
+            )
+            .unwrap();
+            let x = [
+                Vec3::new(0.0, 0.0, distance),
+                Vec3::new(1e-3, 0.0, distance),
+                Vec3::new(0.0, 1e-3, distance),
+            ];
+            let mut contact = Contact::new(
+                body,
+                ContactParams {
+                    dhat: 1e-3,
+                    thickness: old,
+                    kappa: 100.0,
+                    mu: 0.4,
+                    eps_v: 1e-3,
+                },
+                vec![[0, 1, 2]],
+                |a, b| (x[a] - x[b]).norm(),
+            );
+            let old_gap = contact.min_gap(&x, 1e-3).unwrap();
+            assert!(old_gap > 0.0, "{name}");
+            ramp_thickness(&mut contact, &x, target);
+            assert_eq!(
+                contact.params.thickness,
+                if finishes { target } else { old },
+                "{name}"
+            );
+            assert!(contact.min_gap(&x, 1e-3).unwrap() > 0.1 * old_gap, "{name}");
+        }
     }
 
     fn physical_panel(id: &str, part: &str, side: Option<&str>) -> Value {
