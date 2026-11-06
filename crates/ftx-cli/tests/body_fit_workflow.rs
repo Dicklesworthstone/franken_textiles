@@ -358,12 +358,9 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
             Some(first_timestamp)
         );
         if status == "ACCEPTED" {
-            let reused = ftx_body::accepted_shape::AcceptedShape::read(
-                &portable,
-                &sha256_hex(&model),
-                &[],
-            )
-            .unwrap();
+            let reused =
+                ftx_body::accepted_shape::AcceptedShape::read(&portable, &sha256_hex(&model), &[])
+                    .unwrap();
             let tolerance = if name == "silhouette" { 0.02 } else { 1e-5 };
             assert!((reused.params.phenotype.height - 0.6).abs() < tolerance);
             assert!((reused.params.phenotype.weight - 0.45).abs() < tolerance);
@@ -432,8 +429,7 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
     let mut unknown_camera = base;
     unknown_camera["fit"]["frames"][0]["camera"]["unknown"] = json!(true);
     assert!(
-        ftx_wasm::body_fit::fit_body(&model, &unknown_camera.to_string(), "50", "100000")
-            .is_err()
+        ftx_wasm::body_fit::fit_body(&model, &unknown_camera.to_string(), "50", "100000").is_err()
     );
     assert!(
         ftx_wasm::body_fit::fit_body(&model, &" ".repeat(16 * 1024 * 1024 + 1), "50", "100000")
@@ -957,7 +953,10 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
     assert_eq!(prepared["schema"], "ftx-anny-body-fit-input/1");
     assert_eq!(report["prepared_input"]["file"], "prepared-input.json");
     assert_eq!(report["prepared_input"]["bytes"], prepared_bytes.len());
-    assert_eq!(report["prepared_input"]["sha256"], sha256_hex(&prepared_bytes));
+    assert_eq!(
+        report["prepared_input"]["sha256"],
+        sha256_hex(&prepared_bytes)
+    );
     assert!(prepared.get("video_manifest").is_none());
     assert!(prepared.get("silhouettes").is_none());
     #[cfg(unix)]
@@ -1075,7 +1074,10 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
     .unwrap();
     assert_eq!(portable["input_sha256"], sha256_hex(&prepared_bytes));
     let mut expected_portable = original_fit.clone();
-    expected_portable.as_object_mut().unwrap().remove("capture_input");
+    expected_portable
+        .as_object_mut()
+        .unwrap()
+        .remove("capture_input");
     expected_portable["input_sha256"] = portable["input_sha256"].clone();
     assert_eq!(portable, expected_portable);
     // A different cwd exposes accidental dependence on the review output's relative paths.
@@ -1526,9 +1528,10 @@ fn capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_referenc
         .clone();
     assert_eq!(masked["body_model_loaded"], false);
     assert_eq!(masked["body_fitted"], false);
-    let prepared: Value =
-        serde_json::from_slice(&std::fs::read(dir.join("mask-review/prepared-input.json")).unwrap())
-            .unwrap();
+    let prepared: Value = serde_json::from_slice(
+        &std::fs::read(dir.join("mask-review/prepared-input.json")).unwrap(),
+    )
+    .unwrap();
     assert!(prepared.get("silhouettes").is_none());
     for (frame, reviewed) in prepared["fit"]["frames"]
         .as_array()

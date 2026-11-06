@@ -1605,7 +1605,7 @@ fn large_production_replays_fixture_holds_dependencies_and_complete_bounded_stit
     assert_eq!(holding.holds.len(), 85);
     assert_eq!(holding.selected.operations.len(), 255);
     assert_eq!(holding.selected.peak_occupancy["jig"], 1);
-    for steps in holding.selected.operations.chunks_exact(3) {
+    for steps in holding.selected.operations.as_chunks::<3>().0 {
         assert_eq!(steps[0].occupied_before["jig"], 0);
         assert_eq!(steps[0].occupied_after["jig"], 1);
         assert_eq!(steps[1].occupied_before["jig"], 1);

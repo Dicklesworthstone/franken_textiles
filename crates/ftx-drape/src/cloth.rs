@@ -1248,7 +1248,11 @@ impl Solver {
                     rep.iterations, rep.residual, rep.last_step, rep.line_search_failures
                 ),
             )
-            .repair("increase the Newton iteration budget or reduce the time step")
+            .repair(if inertia.is_some() {
+                "increase the Newton iteration budget or reduce the time step"
+            } else {
+                "check that the external loads have static support or increase the Newton iteration budget"
+            })
             .repair("check the material domain and the garment start state"));
         }
         Ok(rep)
