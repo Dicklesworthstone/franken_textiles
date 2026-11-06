@@ -8,7 +8,7 @@
     download = null; link.hidden = true; link.removeAttribute("href");
   }
   try {
-    const original = JSON.parse(byId("captureInput").textContent, (_key, value, context) => {
+    const parse = text => JSON.parse(text, (_key, value, context) => {
       if (typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) &&
           typeof JSON.rawJSON === "function" && context?.source && /^-?\d+$/.test(context.source)) {
         return BigInt(context.source);
@@ -17,6 +17,7 @@
     });
     const json = (value, space) => JSON.stringify(value, (_key, item) =>
       typeof item === "bigint" ? JSON.rawJSON(item.toString()) : item, space);
+    const original = parse(byId("captureInput").textContent);
     // Opaque integer identities survive clones as BigInt and serialize from exact decimal tokens.
     // If the browser lacks either JSON capability, retain the original unsafe-number refusal.
     function requireSafeNumbers(value) {
@@ -29,6 +30,8 @@
     requireSafeNumbers(original);
     let edited = structuredClone(original), selected = null, pending = false, draft = null;
     let silhouettePending = false, silhouetteDrawing = null;
+    let revision = 0, importPending = false;
+    const savedFile = byId("captureDraftFile"), cancelImport = byId("cancelCaptureImport");
     const sections = [...document.querySelectorAll("section")];
     const silhouetteEditable = sections.map(section => section.dataset.silhouetteEditable === "true");
     const buttons = () => [...document.querySelectorAll(".edit-point")];
@@ -110,7 +113,7 @@
         if (json(frame.silhouette) !== json(original.fit.frames[i].silhouette)) ++changed;
         if (silhouetteEditable[i]) renderSilhouette(i);
       });
-      if (changed && !pending && !silhouettePending) {
+      if (changed && !pending && !silhouettePending && !importPending) {
         download = URL.createObjectURL(new Blob([json(edited, 2) + "\n"], {type: "application/json"}));
         link.href = download; link.hidden = false;
       }
@@ -158,7 +161,8 @@
         // Existing observations permit coordinates only; their roles and uncertainties stay fixed.
         edited.fit.frames[i].keypoints[j].pixel_px = [x, y];
       }
-      pending = false; byId("editX").value = x; byId("editY").value = y;
+      pending = false; importPending = false; cancelImport.disabled = true;
+      byId("editX").value = x; byId("editY").value = y;
       const count = render();
       status.textContent = silhouettePending ? "Point updated. Apply or cancel the pending silhouette edit before downloading." :
         count + " changed point(s) or silhouette frame(s). Download the current input and create a new review before fitting. Original preparation files stay unchanged.";
@@ -263,8 +267,9 @@
       });
     }
     function validateIntervals(intervals, size) {
-      if (intervals.length > 8 || intervals.some(([lo, hi], j) => !Number.isFinite(lo) || !Number.isFinite(hi) ||
-          lo < 0 || hi > size - 1 || lo >= hi || j > 0 && intervals[j - 1][1] >= lo)) {
+      if (!Array.isArray(intervals) || intervals.length > 8 || intervals.some((pair, j) =>
+          !Array.isArray(pair) || pair.length !== 2 || !pair.every(Number.isFinite) ||
+          pair[0] < 0 || pair[1] > size - 1 || pair[0] >= pair[1] || j > 0 && intervals[j - 1][1] >= pair[0])) {
         throw Error("Use at most eight increasing, disjoint intervals inside the image; touching or overlapping intervals refuse.");
       }
     }
@@ -292,10 +297,74 @@
       return {i, index, line, evidence};
     }
     function validateSilhouette(value, size) {
-      if (!value.lines.length || !value.lines.some(line => line.intervals_px.length)) {
+      fields(value, ["evidence", "lines"], "Silhouette");
+      if (typeof value.evidence !== "string" || !value.evidence.trim() ||
+          new TextEncoder().encode(value.evidence).length > 4096 || !Array.isArray(value.lines) ||
+          !value.lines.length || value.lines.length > 64) {
+        throw Error("A silhouette needs clothing/occlusion evidence (1..4096 bytes) and 1..64 unique slices.");
+      }
+      value.lines.forEach((line, index) => {
+        fields(line, ["axis", "at_px", "intervals_px", "sigma_px", "partition"], "Silhouette slice");
+        if (!["horizontal", "vertical"].includes(line.axis) || !["fit", "held_out"].includes(line.partition) ||
+            !Number.isFinite(line.at_px) || line.at_px < 0 || line.at_px > size[line.axis === "horizontal" ? 1 : 0] - 1 ||
+            !Number.isFinite(line.sigma_px) || line.sigma_px < 1e-6 || line.sigma_px > 1e6 ||
+            value.lines.slice(0, index).some(other => other.axis === line.axis && other.at_px === line.at_px)) {
+          throw Error("Silhouette slices need unique in-image locations, explicit FIT/CHECK and sigma in 1e-6..1e6 px.");
+        }
+        validateIntervals(line.intervals_px, size[line.axis === "horizontal" ? 0 : 1]);
+      });
+      if (!value.lines.some(line => line.intervals_px.length)) {
         throw Error("A silhouette needs foreground on at least one slice. Add a foreground slice before empty/background slices.");
       }
-      value.lines.forEach(line => validateIntervals(line.intervals_px, size[line.axis === "horizontal" ? 0 : 1]));
+    }
+    function fields(value, expected, label) {
+      if (!value || typeof value !== "object" || Array.isArray(value) ||
+          Object.keys(value).length !== expected.length || expected.some(key => !Object.hasOwn(value, key))) {
+        throw Error(label + " has missing or unsupported fields.");
+      }
+    }
+    function same(a, b) {
+      if (a === b) return true;
+      if (!a || !b || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) !== Array.isArray(b)) return false;
+      const keys = Object.keys(a);
+      return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && same(a[key], b[key]));
+    }
+    function unchanged(value, before, editable, label) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw Error(label + " must be an object.");
+      const fixed = Object.keys(before).filter(key => !editable.includes(key));
+      if (Object.keys(value).filter(key => !editable.includes(key)).length !== fixed.length ||
+          fixed.some(key => !Object.hasOwn(value, key) || !same(value[key], before[key]))) {
+        throw Error(label + " belongs to different source evidence or changes fixed settings. Reopen its own native review.");
+      }
+    }
+    function checkedCapture(value) {
+      requireSafeNumbers(value);
+      unchanged(value, original, ["fit"], "Capture");
+      unchanged(value.fit, original.fit, ["frames"], "Fit configuration");
+      if (!Array.isArray(value.fit.frames) || value.fit.frames.length !== original.fit.frames.length) {
+        throw Error("Every original capture frame must remain in its original order.");
+      }
+      value.fit.frames.forEach((frame, i) => {
+        // Only ordinary annotations vary. Imported masks and unrectified cameras never gain
+        // an inline silhouette through a saved file, even when their DOM controls are changed.
+        unchanged(frame, original.fit.frames[i], silhouetteEditable[i] ? ["keypoints", "silhouette"] : ["keypoints"], "Frame " + (i + 1));
+        const size = original.fit.frames[i].source.image_size_px, seen = new Set();
+        if (!Array.isArray(frame.keypoints) || frame.keypoints.length > 128) throw Error("A frame supports at most 128 observations.");
+        frame.keypoints.forEach(point => {
+          fields(point, ["name", "pixel_px", "sigma_px", "partition"], "Observation");
+          if (typeof point.name !== "string" || !point.name.trim() || new TextEncoder().encode(point.name).length > 4096 ||
+              !Object.hasOwn(original.model.keypoints, point.name) || seen.has(point.name) ||
+              !Array.isArray(point.pixel_px) || point.pixel_px.length !== 2 ||
+              !point.pixel_px.every((p, axis) => Number.isFinite(p) && p >= 0 && p <= size[axis] - 1) ||
+              !Number.isFinite(point.sigma_px) || point.sigma_px < 1e-6 || point.sigma_px > 1e6 ||
+              !["fit", "held_out"].includes(point.partition)) {
+            throw Error("Observations need unique declared targets, in-image pixels, explicit FIT/CHECK and sigma in 1e-6..1e6 px.");
+          }
+          seen.add(point.name);
+        });
+        if (silhouetteEditable[i] && frame.silhouette != null) validateSilhouette(frame.silhouette, size);
+      });
+      return value;
     }
     function silhouetteFailure(error) {
       silhouettePending = true; withdraw();
@@ -357,6 +426,7 @@
         if (index === -1) value.lines.push(line); else value.lines[index] = line;
         validateSilhouette(value, frame.source.image_size_px);
         frame.silhouette = value; clearSilhouetteDrawing(); silhouettePending = false;
+        importPending = false; cancelImport.disabled = true;
         byId("silhouetteLine").value = ""; loadSilhouetteForm();
         status.textContent = render() + " changed point(s) or silhouette frame(s). Download the current input and create a new native review before fitting.";
       } catch (error) { silhouetteFailure(error); }
@@ -372,6 +442,7 @@
         if (value.lines.length) { validateSilhouette(value, frame.source.image_size_px); frame.silhouette = value; }
         else delete frame.silhouette;
         clearSilhouetteDrawing(); silhouettePending = false;
+        importPending = false; cancelImport.disabled = true;
         byId("silhouetteLine").value = ""; loadSilhouetteForm();
         status.textContent = "Slice removed. " + render() + " changed point(s) or silhouette frame(s). Native review and fit gates still apply.";
       } catch (error) { silhouetteFailure(error); }
@@ -420,6 +491,7 @@
       // Row buttons and marker indices must follow the remaining observations, including
       // their names, roles, uncertainties and targets. No other observation is reassigned.
       clearPointDisplay(i); stopPlacement(); pending = false; targetOptions();
+      importPending = false; cancelImport.disabled = true;
       const count = render();
       status.textContent = "Removed " + point.name + ". " + count +
         " changed point(s) or silhouette frame(s). Create a new native review before fitting; missing evidence can refuse. Do not remove CHECKs to tune a fit result.";
@@ -445,20 +517,64 @@
       const values = ["editX", "editY"].map(id => byId(id).value.trim());
       apply(...values.map(value => value === "" ? NaN : Number(value)));
     });
-    byId("resetPoints").addEventListener("click", () => {
-      edited = structuredClone(original); selected = null; pending = false; draft = null;
+    function restore(value) {
+      edited = value; selected = null; pending = false; draft = null;
+      importPending = false; cancelImport.disabled = true;
       sections.forEach((_, i) => clearPointDisplay(i));
-      silhouettePending = false; clearSilhouetteDrawing(); render();
+      silhouettePending = false; clearSilhouetteDrawing();
       byId("newFrame").value = ""; byId("newTarget").value = "";
       byId("newPartition").value = ""; byId("newSigma").value = ""; targetOptions();
       byId("silhouetteFrame").value = ""; byId("silhouetteLine").value = ""; loadSilhouetteForm();
       ["editX", "editY", "applyPoint"].forEach(id => byId(id).disabled = true);
       byId("editX").value = ""; byId("editY").value = "";
+      return render();
+    }
+    byId("resetPoints").addEventListener("click", () => {
+      restore(structuredClone(original)); savedFile.value = "";
       status.textContent = "All point and silhouette corrections removed. Original observations restored; no corrected input is available.";
     });
-    window.addEventListener("pagehide", withdraw);
+    for (const event of ["focus", "click", "cancel"]) savedFile.addEventListener(event, () => {
+      ++revision; importPending = true; cancelImport.disabled = false; withdraw();
+      status.textContent = "Choose a saved capture input, or cancel loading to keep current annotations. No download is available while the choice is unresolved.";
+    });
+    savedFile.addEventListener("change", async () => {
+      const ticket = ++revision, file = savedFile.files[0];
+      savedFile.value = ""; importPending = true; cancelImport.disabled = false; withdraw();
+      if (!file) { status.textContent = "No saved input selected. Current annotations are retained; cancel loading to continue."; return; }
+      status.textContent = "Reading saved capture input. Current annotations and pending edits remain unchanged until validation finishes.";
+      try {
+        if (file.size > 16 * 1024 * 1024) throw Error("Saved capture input exceeds the 16 MiB limit.");
+        const bytes = await file.arrayBuffer();
+        if (ticket !== revision) return;
+        const value = checkedCapture(parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(bytes)));
+        const changed = restore(value);
+        status.textContent = "Saved capture input restored: " + changed + " changed point(s) or silhouette frame(s). Review every observation and FIT/CHECK role, then create a new native review before fitting.";
+      } catch (error) {
+        if (ticket === revision) status.textContent = "Saved input not loaded: " + error.message + " Current annotations and pending edits are retained; no download published.";
+      }
+    });
+    cancelImport.addEventListener("click", () => {
+      ++revision; importPending = false; cancelImport.disabled = true; withdraw();
+      status.textContent = "Saved input loading cancelled. Current annotations and pending edits are retained. Select a point or apply an edit to continue.";
+    });
+    // A delayed read cannot replace any subsequent edit, selection, application or reset.
+    // Capture phase also covers dynamically added row buttons and clicks on body images.
+    for (const event of ["input", "change", "click", "submit"]) document.addEventListener(event, e => {
+      if (e.target === savedFile || e.target === link) return;
+      if (byId("captureEditor").contains(e.target) || e.target.closest?.(".edit-point") ||
+          sections.some(section => section.querySelector("svg").contains(e.target))) {
+        ++revision;
+        if (status.textContent.startsWith("Reading saved capture input.")) {
+          status.textContent = "Saved input read cancelled by a later editor action. Current annotations are retained.";
+        }
+      }
+    }, true);
+    window.addEventListener("pagehide", () => {
+      ++revision; importPending = true; cancelImport.disabled = false; withdraw();
+      status.textContent = "Saved input reads cancelled when leaving the page. Current annotations and pending edits are retained; cancel loading or apply an edit after returning.";
+    });
     render(); loadSilhouetteForm(); byId("newPointFields").disabled = false;
-    byId("silhouetteFields").disabled = false; byId("captureEditor").hidden = false;
+    byId("silhouetteFields").disabled = false; savedFile.disabled = false; byId("captureEditor").hidden = false;
     status.textContent = "Select a point, declare a new observation, or author sampled silhouettes on a checked rectified frame.";
   } catch (error) {
     withdraw();

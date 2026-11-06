@@ -163,6 +163,16 @@ and actual energy values remain visible. Scalar rejection tests, nominal-density
 regressions and existing contact/history rollback tests cover the correction. See
 `docs/material-parallel-memory.md` for the primary reference and limitations.
 
+**Optional static comparison** (`run::StaticEquilibriumOptions`). An explicitly requested
+`static_equilibrium` solves a clone of the final dynamic garment using the existing conservative
+static solver: normal contact and elastic/gravity energy, no friction or simulated duration.
+The report retains an independent available/refused outcome, bounded distance tolerance/iteration
+policy, exact initial/solved welded geometry and source identities. History laws and incomplete
+physical contact offsets refuse without changing the completed dynamic state, metrics, frames,
+flags or subsequent motion. Scenario reservations include the additional bounded work. This is
+not a friction-supported hold, uniqueness or physical-fit claim. Usage and output semantics:
+`docs/fold-inspection.md`; regressions: `materials`, `material_scenario`, `relaxation`.
+
 **Accepted contact observations** (`ftx-onn.17`). Every accepted phase endpoint retains separate
 body/self primitive-pair counts, the minimum active thickness-offset gap with its pair and effective
 offset (m), and frozen friction-lag counts. Disabled domains and absent active gaps remain unavailable.

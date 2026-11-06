@@ -55,7 +55,7 @@ pub struct Worker {
     /// Optional inclusive end, covering travel, waiting, owned handoffs and complete machine attendance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_until_milliseconds: Option<u64>,
-    /// Explicit travel to every qualified cell, or every configured cell for the transfer owner.
+    /// Explicit travel to every qualified cell, or every configured cell for any carrier owner.
     pub initial_arrival_milliseconds: BTreeMap<String, u32>,
     /// Every directed pair in that travel domain; remaining at a cell requires no travel.
     pub transfers: Vec<Transfer>,
@@ -137,7 +137,7 @@ pub struct Timeline {
     /// Complete pickup/carry/deposit occupancy, excluding the separately counted empty approach.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transfer_milliseconds: Option<u64>,
-    /// Per-person use in authored worker order, including idle alternatives; eligible mode only.
+    /// Per-person use in authored order, including idle alternatives; eligible or qualified-pool mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worker_usage: Option<Vec<Usage>>,
 }
@@ -168,13 +168,18 @@ pub struct Usage {
 /// Exact source policy and complete retained baseline/selected worker replay.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` independent handoffs; `/2` worker-owned handoffs; `/3` eligible attending workers.
+    /// `/1` independent handoffs; `/2` one worker-owned carrier; `/3` eligible attending workers;
+    /// `/4` explicitly qualified carrier choices sharing attending-worker identities.
     pub schema: &'static str,
     /// Complete admitted worker identities, cell locks, travel evidence and availability windows.
     pub policy: Policy,
     /// Exact source-qualified ownership, phase law, directed durations and resource windows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transfer: Option<TransferPolicy>,
+    /// Every explicitly owned carrier in a qualified pool, including unused alternatives.
+    /// Each retains its own pickup/deposit law while sharing the named worker's clock and location.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owned_transfers: Option<Vec<TransferPolicy>>,
     /// Labor occupancy for the complete baseline, including a searched replacement when necessary.
     pub baseline: Timeline,
     /// Labor occupancy for the selected complete routed execution.
@@ -202,11 +207,18 @@ pub(super) struct Compiled {
     cell_ids: Vec<String>,
     /// Authored worker order within each admitted cell domain; compiled once before search.
     cell_workers: Vec<Vec<usize>>,
-    transfer: Option<TransferPolicy>,
-    transfer_worker: Option<usize>,
+    carrier_ids: Vec<String>,
+    transfers: Vec<Option<OwnedTransfer>>,
+    pooled: bool,
+    qualified_pool: bool,
     initial: Vec<Vec<u64>>,
     travel: Vec<Vec<Vec<u64>>>,
     calendars: Vec<Option<Vec<calendars::Window>>>,
+}
+
+struct OwnedTransfer {
+    policy: TransferPolicy,
+    worker: usize,
 }
 
 impl Policy {
@@ -247,7 +259,10 @@ impl Usage {
 impl Compiled {
     pub(super) fn compile(route: &RoutePolicy) -> Result<Option<Self>, Refusal> {
         let Some(policy) = &route.attending_labor else {
-            if route.transfer.attending_worker.is_some() {
+            if route
+                .transfer_resources()
+                .any(|carrier| carrier.attending_worker.is_some())
+            {
                 return Err(bad("handoff ownership requires explicit attending labor"));
             }
             return Ok(None);
@@ -276,24 +291,39 @@ impl Compiled {
             .collect();
         let mut assigned = BTreeSet::new();
         let mut workers = BTreeSet::new();
-        let transfer_worker = route
-            .transfer
-            .attending_worker
-            .as_ref()
-            .map(|id| {
-                policy
-                    .workers
-                    .iter()
-                    .position(|worker| worker.id == *id)
-                    .ok_or_else(|| bad("handoff ownership names an unknown attending worker"))
+        let transfers = route
+            .transfer_resources()
+            .map(|carrier| {
+                carrier
+                    .attending_worker
+                    .as_ref()
+                    .map(|id| {
+                        let worker = policy
+                            .workers
+                            .iter()
+                            .position(|worker| worker.id == *id)
+                            .ok_or_else(|| {
+                                bad("handoff ownership names an unknown attending worker")
+                            })?;
+                        Ok(OwnedTransfer {
+                            policy: carrier.clone(),
+                            worker,
+                        })
+                    })
+                    .transpose()
             })
-            .transpose()?;
+            .collect::<Result<Vec<_>, Refusal>>()?;
         let mut compiled = Self {
             policy: policy.clone(),
             cell_ids: route.cells.iter().map(|cell| cell.id.clone()).collect(),
             cell_workers: vec![Vec::new(); cells.len()],
-            transfer: transfer_worker.map(|_| route.transfer.clone()),
-            transfer_worker,
+            carrier_ids: route
+                .transfer_resources()
+                .map(|carrier| carrier.id.clone())
+                .collect(),
+            transfers,
+            pooled: route.transfer_pool.is_some(),
+            qualified_pool: route.qualified_transfer_pool(),
             initial: vec![vec![0; cells.len()]; policy.workers.len()],
             travel: vec![vec![vec![0; cells.len()]; cells.len()]; policy.workers.len()],
             calendars: policy
@@ -310,7 +340,7 @@ impl Compiled {
         };
         for (index, worker) in policy.workers.iter().enumerate() {
             let owned: BTreeSet<_> = worker.cells.iter().map(String::as_str).collect();
-            let visited = if transfer_worker == Some(index) {
+            let visited = if compiled.owns_transfer(index) {
                 cells.keys().copied().collect::<BTreeSet<_>>()
             } else {
                 owned.clone()
@@ -318,7 +348,9 @@ impl Compiled {
             if !qualified_text(&worker.id)
                 || !workers.insert(worker.id.as_str())
                 || cells.contains_key(worker.id.as_str())
-                || worker.id == route.transfer.id
+                || route
+                    .transfer_resources()
+                    .any(|carrier| worker.id == carrier.id)
                 || !window_valid(
                     worker.available_at_milliseconds,
                     worker.available_until_milliseconds,
@@ -395,6 +427,13 @@ impl Compiled {
         &self.policy.workers[worker].id
     }
 
+    fn owns_transfer(&self, worker: usize) -> bool {
+        self.transfers
+            .iter()
+            .flatten()
+            .any(|owner| owner.worker == worker)
+    }
+
     pub(super) fn arrival(
         &self,
         state: &State,
@@ -413,9 +452,13 @@ impl Compiled {
         &self,
         state: &State,
         source: usize,
+        carrier: usize,
     ) -> Result<Option<Arrival>, Refusal> {
-        self.transfer_worker
-            .map(|worker| self.worker_arrival(state, worker, source))
+        self.transfers
+            .get(carrier)
+            .ok_or_else(|| bad("routed labor names an undeclared carrier"))?
+            .as_ref()
+            .map(|owner| self.worker_arrival(state, owner.worker, source))
             .transpose()
             .map(Option::flatten)
     }
@@ -505,7 +548,7 @@ impl Compiled {
             .iter()
             .enumerate()
             .filter(|&(cell, _)| {
-                self.transfer_worker == Some(worker) || self.cell_workers[cell].contains(&worker)
+                self.owns_transfer(worker) || self.cell_workers[cell].contains(&worker)
             })
             .map(|(_, &arrival)| arrival)
             .min()
@@ -548,7 +591,12 @@ impl Compiled {
                 forced[worker] = add(forced[worker], minimum)?;
             }
         }
-        if let Some(worker) = self.transfer_worker {
+        // With carrier alternatives, carrying need not occupy the primary owner at all. Relax
+        // their worker contribution to zero; the separate carrier/path bounds still apply.
+        if !self.pooled
+            && let Some(owner) = self.transfers[0].as_ref()
+        {
+            let worker = owner.worker;
             for pair in choices.windows(2) {
                 // Independent adjacent minima may not form a feasible route. They only relax
                 // mandatory carrying work; same-cell alternatives contribute zero.
@@ -585,14 +633,15 @@ impl Compiled {
 
     fn timeline(&self, route: &RouteTimeline) -> Result<Timeline, Refusal> {
         let mut state = self.initial();
+        let owned = self.transfers.iter().any(Option::is_some);
         let mut out = Timeline {
             steps: Vec::with_capacity(route.operations.len()),
-            transfers: self.transfer.as_ref().map(|_| Vec::new()),
+            transfers: owned.then(Vec::new),
             travel_milliseconds: 0,
             waiting_milliseconds: 0,
             attended_milliseconds: 0,
-            transfer_milliseconds: self.transfer.as_ref().map(|_| 0),
-            worker_usage: self.policy.eligible().then(|| {
+            transfer_milliseconds: owned.then_some(0),
+            worker_usage: (self.policy.eligible() || self.qualified_pool).then(|| {
                 self.policy
                     .workers
                     .iter()
@@ -611,10 +660,15 @@ impl Compiled {
             }),
         };
         let mut transfers = route.transfers.iter().peekable();
-        let mut transfer_ready = self
-            .transfer
-            .as_ref()
-            .map_or(0, |policy| u64::from(policy.available_at_milliseconds));
+        let mut transfer_ready: Vec<_> = self
+            .transfers
+            .iter()
+            .map(|owner| {
+                owner
+                    .as_ref()
+                    .map_or(0, |owner| u64::from(owner.policy.available_at_milliseconds))
+            })
+            .collect();
         for operation in &route.operations {
             let cell = self
                 .cell_ids
@@ -628,102 +682,120 @@ impl Compiled {
             } else {
                 None
             };
-            if let (Some(policy), Some(transfer)) = (&self.transfer, transfer) {
-                let source = self
-                    .cell_ids
-                    .iter()
-                    .position(|id| *id == transfer.from)
-                    .ok_or_else(|| bad("worker handoff names an unknown source cell"))?;
-                let previous = route
-                    .operations
-                    .iter()
-                    .find(|previous| {
-                        previous.copy == operation.copy
-                            && previous.operation_id == transfer.from_operation
-                    })
-                    .ok_or_else(|| bad("worker handoff omits its completed source operation"))?;
-                let duration = policy
-                    .transfers
-                    .iter()
-                    .find(|row| row.from == transfer.from && row.to == transfer.to)
-                    .ok_or_else(|| bad("worker handoff omits its qualified carrying duration"))?;
-                let initial_arrival = self
-                    .transfer_arrival(&state, source)?
-                    .ok_or_else(|| bad("retained handoff has no available worker approach"))?;
-                let Some((arrival, start)) = self.fit_arrival(
-                    initial_arrival,
-                    transfer.start_milliseconds,
-                    u64::from(duration.milliseconds),
-                )?
-                else {
-                    return Err(bad(
-                        "worker handoff cannot fit its retained availability calendar",
-                    ));
+            if let Some(transfer) = transfer {
+                let carrier = if self.pooled {
+                    self.carrier_ids
+                        .iter()
+                        .position(|id| transfer.resource.as_deref() == Some(id.as_str()))
+                        .ok_or_else(|| bad("routed labor replay changes its selected carrier"))?
+                } else {
+                    if transfer.resource.is_some() {
+                        return Err(bad("single-carrier labor replay adds a pooled identity"));
+                    }
+                    0
                 };
-                if transfer.from != previous.cell
-                    || transfer.to != operation.cell
-                    || transfer.start_milliseconds
-                        < arrival
-                            .time
-                            .max(previous.finish_milliseconds)
-                            .max(transfer_ready)
-                    || transfer.finish_milliseconds
-                        != add(
-                            transfer.start_milliseconds,
-                            u64::from(duration.milliseconds),
-                        )?
-                    || operation.loading_start_milliseconds < transfer.finish_milliseconds
-                    || start != transfer.start_milliseconds
-                    || !self.available(arrival, transfer.finish_milliseconds)
-                    || policy
-                        .available_until_milliseconds
-                        .is_some_and(|end| transfer.finish_milliseconds > end)
-                {
-                    return Err(bad(
-                        "worker handoff violates source, exclusive occupancy or availability",
-                    ));
-                }
-                out.travel_milliseconds =
-                    add(out.travel_milliseconds, arrival.time - arrival.departure)?;
-                out.waiting_milliseconds = add(
-                    out.waiting_milliseconds,
-                    transfer.start_milliseconds - arrival.time,
-                )?;
-                let total = out
-                    .transfer_milliseconds
-                    .as_mut()
-                    .expect("owned transfer total");
-                *total = add(
-                    *total,
-                    transfer.finish_milliseconds - transfer.start_milliseconds,
-                )?;
-                out.transfers
-                    .as_mut()
-                    .expect("owned transfer replay")
-                    .push(TransferStep {
-                        worker: self.policy.workers[arrival.worker].id.clone(),
-                        resource: policy.id.clone(),
-                        copy: operation.copy,
-                        from_operation: previous.id.clone(),
-                        to_operation: operation.id.clone(),
-                        from_cell: arrival.from.map(|cell| self.cell_ids[cell].clone()),
-                        source_cell: transfer.from.clone(),
-                        destination_cell: transfer.to.clone(),
-                        departure_milliseconds: arrival.departure,
-                        arrival_milliseconds: arrival.time,
-                        start_milliseconds: transfer.start_milliseconds,
-                        finish_milliseconds: transfer.finish_milliseconds,
-                    });
-                if let Some(usage) = &mut out.worker_usage {
-                    usage[arrival.worker].record(
-                        arrival,
+                if let Some(owner) = &self.transfers[carrier] {
+                    let policy = &owner.policy;
+                    let source = self
+                        .cell_ids
+                        .iter()
+                        .position(|id| *id == transfer.from)
+                        .ok_or_else(|| bad("worker handoff names an unknown source cell"))?;
+                    let previous = route
+                        .operations
+                        .iter()
+                        .find(|previous| {
+                            previous.copy == operation.copy
+                                && previous.operation_id == transfer.from_operation
+                        })
+                        .ok_or_else(|| {
+                            bad("worker handoff omits its completed source operation")
+                        })?;
+                    let duration = policy
+                        .transfers
+                        .iter()
+                        .find(|row| row.from == transfer.from && row.to == transfer.to)
+                        .ok_or_else(|| {
+                            bad("worker handoff omits its qualified carrying duration")
+                        })?;
+                    let initial_arrival = self
+                        .transfer_arrival(&state, source, carrier)?
+                        .ok_or_else(|| bad("retained handoff has no available worker approach"))?;
+                    let Some((arrival, start)) = self.fit_arrival(
+                        initial_arrival,
                         transfer.start_milliseconds,
-                        transfer.finish_milliseconds,
-                        true,
+                        u64::from(duration.milliseconds),
+                    )?
+                    else {
+                        return Err(bad(
+                            "worker handoff cannot fit its retained availability calendar",
+                        ));
+                    };
+                    if transfer.from != previous.cell
+                        || transfer.to != operation.cell
+                        || transfer.start_milliseconds
+                            < arrival
+                                .time
+                                .max(previous.finish_milliseconds)
+                                .max(transfer_ready[carrier])
+                        || transfer.finish_milliseconds
+                            != add(
+                                transfer.start_milliseconds,
+                                u64::from(duration.milliseconds),
+                            )?
+                        || operation.loading_start_milliseconds < transfer.finish_milliseconds
+                        || start != transfer.start_milliseconds
+                        || !self.available(arrival, transfer.finish_milliseconds)
+                        || policy
+                            .available_until_milliseconds
+                            .is_some_and(|end| transfer.finish_milliseconds > end)
+                    {
+                        return Err(bad(
+                            "worker handoff violates source, exclusive occupancy or availability",
+                        ));
+                    }
+                    out.travel_milliseconds =
+                        add(out.travel_milliseconds, arrival.time - arrival.departure)?;
+                    out.waiting_milliseconds = add(
+                        out.waiting_milliseconds,
+                        transfer.start_milliseconds - arrival.time,
                     )?;
+                    let total = out
+                        .transfer_milliseconds
+                        .as_mut()
+                        .expect("owned transfer total");
+                    *total = add(
+                        *total,
+                        transfer.finish_milliseconds - transfer.start_milliseconds,
+                    )?;
+                    out.transfers
+                        .as_mut()
+                        .expect("owned transfer replay")
+                        .push(TransferStep {
+                            worker: self.policy.workers[arrival.worker].id.clone(),
+                            resource: policy.id.clone(),
+                            copy: operation.copy,
+                            from_operation: previous.id.clone(),
+                            to_operation: operation.id.clone(),
+                            from_cell: arrival.from.map(|cell| self.cell_ids[cell].clone()),
+                            source_cell: transfer.from.clone(),
+                            destination_cell: transfer.to.clone(),
+                            departure_milliseconds: arrival.departure,
+                            arrival_milliseconds: arrival.time,
+                            start_milliseconds: transfer.start_milliseconds,
+                            finish_milliseconds: transfer.finish_milliseconds,
+                        });
+                    if let Some(usage) = &mut out.worker_usage {
+                        usage[arrival.worker].record(
+                            arrival,
+                            transfer.start_milliseconds,
+                            transfer.finish_milliseconds,
+                            true,
+                        )?;
+                    }
+                    self.finish(&mut state, arrival, cell, transfer.finish_milliseconds);
+                    transfer_ready[carrier] = transfer.finish_milliseconds;
                 }
-                self.finish(&mut state, arrival, cell, transfer.finish_milliseconds);
-                transfer_ready = transfer.finish_milliseconds;
             }
             let worker = if self.policy.eligible() {
                 self.workers_for(cell)
@@ -822,15 +894,24 @@ impl Compiled {
         selected: &RouteTimeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: if self.policy.eligible() {
+            schema: if self.qualified_pool {
+                "ftx-sewing-attending-labor/4"
+            } else if self.policy.eligible() {
                 "ftx-sewing-attending-labor/3"
-            } else if self.transfer.is_some() {
+            } else if self.transfers[0].is_some() {
                 "ftx-sewing-attending-labor/2"
             } else {
                 "ftx-sewing-attending-labor/1"
             },
             policy: self.policy.clone(),
-            transfer: self.transfer.clone(),
+            transfer: self.transfers[0].as_ref().map(|owner| owner.policy.clone()),
+            owned_transfers: self.qualified_pool.then(|| {
+                self.transfers
+                    .iter()
+                    .flatten()
+                    .map(|owner| owner.policy.clone())
+                    .collect()
+            }),
             baseline: self.timeline(baseline)?,
             selected: self.timeline(selected)?,
             physical_labor_validated: false,

@@ -12,6 +12,9 @@ const read = name => JSON.parse(fs.readFileSync(path.join(root, name)));
 const exact = bytes => JSON.parse(bytes.toString(), (_key, value, context) =>
   typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) && /^-?\d+$/.test(context.source)
     ? BigInt(context.source) : value);
+const encoded = value => JSON.stringify(value, (_key, item) =>
+  typeof item === "bigint" ? JSON.rawJSON(item.toString()) : item);
+const savedInput = value => ({name: "capture-edited.json", mimeType: "application/json", buffer: Buffer.from(encoded(value))});
 const report = read("edit-review/review.json"), replay = read("edit-review/capture.json"), good = read("good.json");
 const hash = b => crypto.createHash("sha256").update(b).digest("hex");
 const frame = 0, point = 3;
@@ -41,6 +44,33 @@ async function download(page, name, expected) {
 async function hidden(page) {
   assert(await page.locator("#correctedInput").isHidden());
   assert.equal(await page.locator("#correctedInput").getAttribute("href"), null);
+}
+async function restoreCapture(page, file, prefix = "Saved capture input restored:") {
+  await page.locator("#captureDraftFile").setInputFiles(file);
+  await page.waitForFunction(prefix => document.getElementById("editStatus").textContent.startsWith(prefix), prefix);
+}
+async function deferCaptureRead(page, file) {
+  await page.evaluate(() => {
+    const read = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function () {
+      File.prototype.arrayBuffer = read;
+      const file = this;
+      return new Promise((resolve, reject) => {
+        globalThis.__captureRead = fail => fail ? reject(Error("Unreadable saved input")) : read.call(file).then(resolve, reject);
+      });
+    };
+  });
+  await page.locator("#captureDraftFile").setInputFiles(file);
+  await page.waitForFunction(() => typeof globalThis.__captureRead === "function");
+  await hidden(page);
+}
+async function finishCaptureRead(page, fail = false) {
+  await page.evaluate(async fail => {
+    const finish = globalThis.__captureRead;
+    delete globalThis.__captureRead;
+    await finish(fail);
+  }, fail);
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
 }
 async function displayed(page, i, j) {
   const g = page.locator("section").nth(i).locator('g[data-point="' + j + '"]');
@@ -183,9 +213,9 @@ async function sheetReview(page, records = report) {
     await page.screenshot({path: path.join(out, "corrected.png"), fullPage: true});
     // Removing an observation must preserve every remaining correspondence, including the
     // row/marker indices used by later corrections. Reset restores names and roles as well.
-    async function pointDisplays(expected) {
+    async function pointDisplays(expected, view = page) {
       for (let i = 0; i < expected.fit.frames.length; ++i) {
-        const section = page.locator("section").nth(i), points = expected.fit.frames[i].keypoints;
+        const section = view.locator("section").nth(i), points = expected.fit.frames[i].keypoints;
         assert.equal(await section.locator("tbody tr").count(), points.length);
         assert.equal(await section.locator("g[data-point]").count(), points.length);
         for (const [j, p] of points.entries()) {
@@ -198,7 +228,7 @@ async function sheetReview(page, records = report) {
           assert.equal(await cells.nth(0).locator("button").getAttribute("data-point"), String(j));
           assert.equal(await section.locator('g[data-point="' + j + '"]').getAttribute("data-partition"), role);
           assert.equal(await section.locator('g[data-point="' + j + '"] text').textContent(), p.name + " (" + role + ")");
-          assert.deepEqual(await displayed(page, i, j), p.pixel_px);
+          assert.deepEqual(await displayed(view, i, j), p.pixel_px);
         }
       }
     }
@@ -633,6 +663,178 @@ async function sheetReview(page, records = report) {
       await page.locator("#resetPoints").click(); await hidden(page);
     }
     verifyFiles(inlineDir, inlineReport);
+    // Reopen actual downloaded annotations in their original generated review, including
+    // removals, explicit role/sigma replacements, incomplete work and inline silhouettes.
+    await restoreCapture(page, final);
+    await pointDisplays(corrected);
+    const resumedFile = await download(page, "capture-resumed.json", corrected);
+    await restoreCapture(page, removedFile);
+    await pointDisplays(removed);
+    await download(page, "capture-resumed-removal.json", removed);
+    await restoreCapture(page, path.join(out, "capture-replaced-metadata.json"));
+    await pointDisplays(replaced);
+    await download(page, "capture-resumed-metadata.json", replaced);
+    await restoreCapture(page, path.join(out, "capture-empty-points.json"));
+    await pointDisplays(noCheck);
+    await download(page, "capture-resumed-empty.json", noCheck);
+    await restoreCapture(placing, path.join(out, "partial-placement.json"));
+    await pointDisplays(partial, placing);
+    await download(placing, "capture-resumed-partial.json", partial);
+    await restoreCapture(contour, inlineFile);
+    assert.equal(await contour.locator("g[data-silhouette]").count(), 10);
+    const combined = structuredClone(authoredContour);
+    combined.fit.frames[0].keypoints[0].pixel_px[0] += .125;
+    await contour.locator('.edit-point[data-frame="0"][data-point="0"]').click();
+    await contour.locator("#editX").fill(String(combined.fit.frames[0].keypoints[0].pixel_px[0]));
+    await contour.locator("#applyPoint").click();
+    const combinedFile = await download(contour, "capture-combined.json", combined);
+    const combinedMarkup = await contour.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML));
+    await contour.locator("#resetPoints").click();
+    await restoreCapture(contour, combinedFile);
+    await pointDisplays(combined, contour);
+    assert.deepEqual(await contour.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML)), combinedMarkup);
+    const resumedInlineFile = await download(contour, "capture-resumed-inline.json", combined);
+    await restoreCapture(maskedPage, maskedFile);
+    await pointDisplays(maskedExpected, maskedPage);
+    assert.deepEqual(await maskedPage.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML)), observedMarkup);
+    const changedMask = structuredClone(maskedExpected);
+    changedMask.fit.frames[0].silhouette = structuredClone(disjoint);
+    await restoreCapture(maskedPage, savedInput(changedMask), "Saved input not loaded:");
+    await hidden(maskedPage);
+    await pointDisplays(maskedExpected, maskedPage);
+    assert.deepEqual(await maskedPage.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML)), observedMarkup);
+
+    // File field order is immaterial; every immutable value and ordered frame is still exact.
+    await restoreCapture(page, savedInput(Object.fromEntries(Object.entries(corrected).reverse())));
+    await pointDisplays(corrected);
+    const invalidCaptures = [
+      ["source hash", v => v.reviewed_sources_sha256 = "0".repeat(64)],
+      ["manifest", v => v.video_manifest += ".changed"],
+      ["model", v => v.model.model_sha256 = "0".repeat(64)],
+      ["targets", v => delete v.model.keypoints.p0],
+      ["reference", v => v.reference_id += "-changed"],
+      ["fit settings", v => v.fit.observation_evidence += "-changed"],
+      ["starts", v => v.fit.starts = []],
+      ["tape evidence", v => v.fit.measurements.push({name: "unauthorized-tape"})],
+      ["frame order", v => v.fit.frames.reverse()],
+      ["timestamp", v => v.fit.frames[0].source.metadata.frame.timestamp_us += 1],
+      ["calibration", v => v.fit.frames[0].calibration_sha256 = "0".repeat(64)],
+      ["unknown frame field", v => v.fit.frames[0].unknown = true],
+      ["missing keypoints", v => delete v.fit.frames[0].keypoints],
+      ["duplicate point", v => v.fit.frames[0].keypoints.push(v.fit.frames[0].keypoints[0])],
+      ["unknown target", v => v.fit.frames[0].keypoints[0].name = "not-a-model-target"],
+      ["point budget", v => v.fit.frames[0].keypoints = Array(129).fill(v.fit.frames[0].keypoints[0])],
+      ["pixel outside image", v => v.fit.frames[0].keypoints[0].pixel_px[0] = 1280],
+      ["pixel dimensions", v => v.fit.frames[0].keypoints[0].pixel_px.push(1)],
+      ["pixel type", v => v.fit.frames[0].keypoints[0].pixel_px[0] = "1"],
+      ["point sigma", v => v.fit.frames[0].keypoints[0].sigma_px = 0],
+      ["point role", v => v.fit.frames[0].keypoints[0].partition = "check"],
+      ["unknown point field", v => v.fit.frames[0].keypoints[0].unknown = true],
+    ];
+    await page.locator('.edit-point[data-frame="0"][data-point="0"]').click();
+    await page.locator("#editX").fill("123.25");
+    for (const [label, mutate] of invalidCaptures) {
+      const value = structuredClone(corrected); mutate(value);
+      await restoreCapture(page, savedInput(value), "Saved input not loaded:");
+      await hidden(page);
+      assert.equal(await page.locator("#editX").inputValue(), "123.25", label + " must preserve the pending form");
+      await pointDisplays(corrected);
+    }
+    const invalidSilhouettes = [
+      ["no evidence", s => s.evidence = " "],
+      ["evidence budget", s => s.evidence = "x".repeat(4097)],
+      ["slice budget", s => s.lines = Array(65).fill(s.lines[0])],
+      ["duplicate location", s => s.lines.push({...s.lines[0], partition: "held_out"})],
+      ["slice axis", s => s.lines[0].axis = "diagonal"],
+      ["slice position", s => s.lines[0].at_px = -1],
+      ["slice sigma", s => s.lines[0].sigma_px = 1000001],
+      ["slice role", s => s.lines[0].partition = "check"],
+      ["interval dimensions", s => s.lines[0].intervals_px = [[100, 200, 300]]],
+      ["interval overlap", s => s.lines[0].intervals_px = [[100, 200], [200, 250]]],
+      ["interval type", s => s.lines[0].intervals_px = [[100, "200"]]],
+      ["foreground missing", s => s.lines.forEach(line => line.intervals_px = [])],
+    ];
+    for (const [label, mutate] of invalidSilhouettes) {
+      const value = structuredClone(combined); mutate(value.fit.frames[0].silhouette);
+      await restoreCapture(contour, savedInput(value), "Saved input not loaded:");
+      await hidden(contour);
+      assert.deepEqual(await contour.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML)), combinedMarkup, label);
+      await pointDisplays(combined, contour);
+    }
+    for (const [name, buffer] of [["invalid.json", Buffer.from("{")], ["utf8.json", Buffer.from([0xff])],
+      ["oversized.json", Buffer.alloc(16 * 1024 * 1024 + 1)]]) {
+      await restoreCapture(page, {name, mimeType: "application/json", buffer}, "Saved input not loaded:");
+      await hidden(page);
+      assert.equal(await page.locator("#editX").inputValue(), "123.25");
+      await pointDisplays(corrected);
+    }
+    // Failed/cancelled choices cannot republish the previous input by merely selecting a row.
+    await page.locator('.edit-point[data-frame="0"][data-point="0"]').click(); await hidden(page);
+    await page.locator("#cancelCaptureImport").click(); await hidden(page);
+    await pointDisplays(corrected);
+    for (const event of ["focus", "click", "cancel"]) {
+      await restoreCapture(page, final);
+      const previous = await page.locator("#correctedInput").getAttribute("href");
+      await page.locator("#captureDraftFile").dispatchEvent(event);
+      await hidden(page);
+      assert(await page.evaluate(url => globalThis.__revoked.includes(url), previous));
+      await pointDisplays(corrected);
+      await page.locator("#cancelCaptureImport").click(); await hidden(page);
+    }
+    await restoreCapture(page, [], "No saved input selected."); await hidden(page);
+    await page.locator("#cancelCaptureImport").click();
+    await restoreCapture(page, final);
+    await page.locator('.edit-point[data-frame="0"][data-point="0"]').click();
+    await page.locator("#editX").fill("123.25");
+    await deferCaptureRead(page, removedFile);
+    await finishCaptureRead(page, true);
+    assert.match(await page.locator("#editStatus").innerText(), /Saved input not loaded: Unreadable/);
+    await hidden(page);
+    assert.equal(await page.locator("#editX").inputValue(), "123.25");
+    await pointDisplays(corrected);
+
+    // Actual File reads are deferred only to exercise response ordering. Neither imported
+    // values nor production validators/handlers are replaced by the checker.
+    const delayedCases = ["edit", "apply", "select", "cancel", "reset", "newer", "pagehide"];
+    for (const action of delayedCases) {
+      await restoreCapture(page, final);
+      await page.locator('.edit-point[data-frame="0"][data-point="0"]').click();
+      await deferCaptureRead(page, removedFile);
+      let expected = corrected;
+      if (action === "edit" || action === "apply") {
+        await page.locator("#editX").fill("123.25");
+        if (action === "apply") {
+          await page.locator("#applyPoint").click();
+          expected = structuredClone(corrected); expected.fit.frames[0].keypoints[0].pixel_px[0] = 123.25;
+        }
+      } else if (action === "select") await page.locator('.edit-point[data-frame="1"][data-point="0"]').click();
+      else if (action === "cancel") await page.locator("#cancelCaptureImport").click();
+      else if (action === "reset") { await page.locator("#resetPoints").click(); expected = replay; }
+      else if (action === "newer") {
+        await restoreCapture(page, path.join(out, "capture-replaced-metadata.json")); expected = replaced;
+      } else await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+      const retainedUrl = await page.locator("#correctedInput").getAttribute("href");
+      await finishCaptureRead(page);
+      await pointDisplays(expected);
+      assert.equal(await page.locator("#correctedInput").getAttribute("href"), retainedUrl, action);
+      if (action === "apply" || action === "newer") await download(page, "capture-import-race-" + action + ".json", expected);
+      else await hidden(page);
+      if (action === "edit") assert.equal(await page.locator("#editX").inputValue(), "123.25");
+    }
+    // A cached page can be resumed without reloading or losing annotations, while its old
+    // read and download remain invalid until the operator explicitly continues.
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true})));
+    await hidden(page);
+    assert.match(await page.locator("#editStatus").innerText(), /cancelled.*page/);
+    await page.locator('.edit-point[data-frame="0"][data-point="0"]').click(); await hidden(page);
+    await page.locator("#cancelCaptureImport").click(); await hidden(page);
+    await page.locator('.edit-point[data-frame="0"][data-point="0"]').click();
+    await download(page, "capture-cached-page-resumed.json", corrected);
+    await page.reload();
+    await page.waitForFunction(() => !document.getElementById("captureDraftFile").disabled);
+    await restoreCapture(page, savedInput(replay)); await hidden(page);
+    await pointDisplays(replay);
+    assert(await page.locator("#cancelCaptureImport").isDisabled());
     const staticContext = await browser.newContext({javaScriptEnabled: false, userAgent});
     observe(staticContext);
     const staticPage = await staticContext.newPage();
@@ -678,6 +880,16 @@ async function sheetReview(page, records = report) {
       assert(bytes.includes(String(first)) && bytes.includes(String(last)));
       integerFiles.push(file);
       await integerPage.locator("#resetPoints").click(); await hidden(integerPage);
+      await restoreCapture(integerPage, file);
+      await pointDisplays(expected, integerPage);
+      const resumed = await download(integerPage, name + "-resumed.json", expected);
+      assert(fs.readFileSync(resumed, "utf8").includes(String(first)));
+      const changedIdentity = structuredClone(expected);
+      changedIdentity.fit.frames[0].source.metadata.frame.timestamp_us += 1n;
+      await restoreCapture(integerPage, savedInput(changedIdentity), "Saved input not loaded:");
+      await hidden(integerPage);
+      await pointDisplays(expected, integerPage);
+      integerFiles.push(resumed);
       verifyFiles(directory, records);
     }
     // Capability-disabled modes exercise the original refusal, not an approximation fallback.
@@ -710,6 +922,9 @@ async function sheetReview(page, records = report) {
       await safePage.locator("#editX").fill(String(expected.fit.frames[0].keypoints[3].pixel_px[0]));
       await safePage.locator("#applyPoint").click();
       await download(safePage, "legacy-" + missing + "-safe.json", expected);
+      await restoreCapture(safePage, integerFiles[0], "Saved input not loaded:");
+      assert.match(await safePage.locator("#editStatus").innerText(), /safe browser numeric precision/);
+      await hidden(safePage);
       await legacy.close();
     }
     assert.deepEqual(errors, []);
@@ -724,6 +939,8 @@ async function sheetReview(page, records = report) {
       observedSlices: 10, sheetPoints, maskedFile, maskedSha256: hash(fs.readFileSync(maskedFile)),
       authoredSlices: 10, inlineFile, inlineSha256: hash(fs.readFileSync(inlineFile)),
       crossEditorPendingCases: 4,
+      resumedFile, resumedInlineFile, rejectedCaptureImports: invalidCaptures.length,
+      rejectedSilhouetteImports: invalidSilhouettes.length, delayedImportCases: delayedCases,
       integerFiles, maximumCodec, integerFallbacks: ["raw-json", "numeric-source"],
       removedFile, noCheckFile,
       boundary: "Synthetic actual page and data only; fit acceptance is a separate ordinary CLI run"}, null, 2));

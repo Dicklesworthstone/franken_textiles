@@ -324,7 +324,13 @@ impl<'a, 'body> Session<'a, 'body> {
             + self.scenario.options.max_settle_steps
             + FOLD_FRAMES
             + ZIP_FRAMES
-            + 4;
+            + 4
+            + self
+                .scenario
+                .options
+                .static_equilibrium
+                .as_ref()
+                .map_or(0, crate::run::StaticEquilibriumOptions::vertex_frames);
         let charge = points
             .checked_mul(frames)
             .ok_or_else(|| budget("scenario work overflow"))?;

@@ -162,6 +162,21 @@ Download `capture-edited.json`, then make a new immutable review before fitting:
 ftx measure capture-review /path/to/capture-edited.json --out capture-review-002 --json
 ```
 
+To continue annotation in the same local review page, use **Resume saved annotations** to load
+its previously downloaded `capture-edited.json` (at most 16 MiB). The editor restores point lists
+and editable inline silhouettes, including incomplete work, added or removed observations, and
+their explicitly authored FIT/CHECK roles and uncertainties. It requires the same complete source
+bindings, ordered frames, cameras, model targets, measurements, starts and other fit settings.
+Imported mask constraints and frames without a checked rectified camera remain read-only for
+silhouettes. Review restored labels, coordinates and roles before generating a new native review;
+loading a draft does not run the fitter or qualify its evidence.
+
+Opening the saved-file chooser, cancelling it, or starting a read withdraws the earlier download.
+Invalid, oversized, unreadable or different-capture files leave both applied annotations and
+pending form edits intact. **Cancel loading** retains those edits; select a point or apply an edit
+to continue. Any later editor action, reset, newer import or page exit prevents a delayed read
+from replacing newer work. A successful load replaces pending edits with the checked saved input.
+
 Pending/invalid edits or **Cancel placement** withdraw the old download. **Reset all corrections**
 restores the original point lists and inline silhouettes, removing in-memory additions, and revokes the corrected input.
 Original files and preparation evidence stay unchanged;

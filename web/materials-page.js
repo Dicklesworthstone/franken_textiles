@@ -2969,29 +2969,38 @@ function sewingSharedWorkholding(parent, plan, label) {
 function sewingRoutedTransferPool(parent, routing, label) {
   const report = routing.transfer_pool;
   if (!report) return;
+  const mixed = report.policy?.model === "qualified_unloaded_transfer_resources/1";
+  const resources = [report.primary, ...(report.policy?.additional_resources || [])];
+  const owners = new Map(resources.filter(Boolean).map(resource => [resource.id, resource.attending_worker]));
   const seconds = value => typeof value === "number" ? value / 1000 : null;
-  const usage = table(parent, `${label}: independent transfer resource usage`,
-    ["Schedule", "Resource", "Handoffs", "Occupied work (s)", "First start (s)", "Last finish (s)"]);
+  const usage = table(parent, `${label}: ${mixed ? "qualified" : "independent"} transfer resource usage`,
+    ["Schedule", "Resource", ...(mixed ? ["Attending worker"] : []), "Handoffs", "Occupied work (s)", "First start (s)", "Last finish (s)"]);
   for (const [name, schedule] of [["Baseline", report.baseline], ["Selected", report.selected]]) {
-    for (const row of schedule || []) cells(usage, [name, row.resource, metric(row.handoffs),
+    for (const row of schedule || []) cells(usage, [name, row.resource,
+      ...(mixed ? [owners.get(row.resource) ?? "Independent resource"] : []), metric(row.handoffs),
       metric(seconds(row.occupied_milliseconds)),
       row.handoffs === 0 ? "Unused" : metric(seconds(row.first_start_milliseconds)),
       row.handoffs === 0 ? "Unused" : metric(seconds(row.last_finish_milliseconds))]);
   }
   const edges = table(parent, `${label}: source-qualified transfer resource edges`,
-    ["Resource", "From cell", "To cell", "Complete handoff work (s)"]);
-  for (const resource of [report.primary, ...(report.policy?.additional_resources || [])]) {
-    for (const edge of resource?.transfers || []) cells(edges, [resource.id, edge.from, edge.to,
+    ["Resource", ...(mixed ? ["Attending worker"] : []), "From cell", "To cell", "Complete handoff work (s)"]);
+  for (const resource of resources) {
+    for (const edge of resource?.transfers || []) cells(edges, [resource.id,
+      ...(mixed ? [resource.attending_worker ?? "Independent resource"] : []), edge.from, edge.to,
       metric(seconds(edge.milliseconds))]);
   }
   const note = document.createElement("p");
-  note.textContent = "Each independent transfer resource is occupied for its complete qualified positioning, pickup, movement, deposit and return interval. " +
-    "Different resources can overlap while cell, worker, fixture, staging and calendar constraints still apply. " +
+  note.textContent = (mixed ?
+    "Each handoff uses its selected qualified carrier. Independent resources occupy their complete positioning, pickup, movement, deposit and return interval. " +
+    "Worker-owned resources share the named person's clock and location with machine attendance and other owned resources; empty approach uses that worker's travel qualification. " +
+    "Different resources can overlap only when their worker, cell, fixture, staging and calendar constraints allow it. " :
+    "Each independent transfer resource is occupied for its complete qualified positioning, pickup, movement, deposit and return interval. " +
+    "Different resources can overlap while cell, worker, fixture, staging and calendar constraints still apply. ") +
     "The handoff table preserves native dispatch order, including overlapping intervals; no browser rescheduling is applied. " +
     "Unused resources retain their qualifications without adding work. Summed resource work is distinct from elapsed completion. " +
     "Physical independence, factory performance and hardware execution require separate qualification.";
   parent.append(note);
-  detail(parent, `${label}: transfer pool independence, resource sources and complete usage`, report);
+  detail(parent, `${label}: ${mixed ? "transfer pool ownership" : "transfer pool independence"}, resource sources and complete usage`, report);
 }
 function sewingRoutedStaging(parent, routing, label) {
   const report = routing.bounded_staging;
@@ -3014,7 +3023,10 @@ function sewingRoutedStaging(parent, routing, label) {
       (routing.transfer_pool ? "Each independent mover" : "The independent mover") +
         " conservatively reserves a source slot until the handoff finishes and a destination slot from the handoff's start. " :
       report.handoff_reservations === "source_until_pickup_destination_from_deposit/1" ?
-        "Worker-owned handoffs release the source slot at pickup and reserve a destination slot from deposit. " : "") +
+        "Worker-owned handoffs release the source slot at pickup and reserve a destination slot from deposit. " :
+      report.handoff_reservations === "selected_carrier_source_boundaries/1" ?
+        "Reservations follow the selected carrier: independent handoffs reserve the source until handoff completion and the destination from handoff start; " +
+        "worker-owned handoffs release the source at pickup and reserve the destination from deposit. " : "") +
     ((report.selected?.reservations || []).length ? "" : "No positive-duration staging reservations are reported for the selected schedule. ") +
     "Physical staging access, factory performance, seam quality and hardware execution require separate qualification.";
   parent.append(note);
@@ -3059,27 +3071,30 @@ function sewingRoutedLabor(parent, routing, label) {
   const report = routing.attending_labor;
   if (!report) return;
   const transfer = report.transfer;
+  const ownedTransfers = report.owned_transfers ?? (transfer ? [transfer] : []);
+  const carries = ownedTransfers.length > 0;
+  const mixed = routing.transfer_pool?.policy?.model === "qualified_unloaded_transfer_resources/1";
   const eligible = report.policy?.model === "eligible_full_operation_attendance/1";
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: routed attending labor`,
-    ["Schedule", "Travel (s)", "Waiting (s)", "Full attendance (s)", ...(transfer ? ["Garment carry (s)"] : [])]);
+    ["Schedule", "Travel (s)", "Waiting (s)", "Full attendance (s)", ...(carries ? ["Garment carry (s)"] : [])]);
   for (const [name, timeline] of [["Baseline", report.baseline], ["Selected", report.selected]]) cells(totals, [name,
     metric(seconds(timeline?.travel_milliseconds)), metric(seconds(timeline?.waiting_milliseconds)),
-    metric(seconds(timeline?.attended_milliseconds)), ...(transfer ? [metric(seconds(timeline?.transfer_milliseconds))] : [])]);
+    metric(seconds(timeline?.attended_milliseconds)), ...(carries ? [metric(seconds(timeline?.transfer_milliseconds))] : [])]);
   const workers = table(parent, `${label}: qualified attending workers`,
     ["Worker", eligible ? "Qualified cells" : "Cells", "Available (s)", "Inclusive finish limit (s)"]);
   for (const worker of report.policy?.workers || []) cells(workers, [worker.id, (worker.cells || []).join(", "),
     metric(seconds(worker.available_at_milliseconds)), typeof worker.available_until_milliseconds === "number" ?
       metric(seconds(worker.available_until_milliseconds)) : "Open ended"]);
-  if (eligible) {
+  if (eligible || mixed) {
     const usage = table(parent, `${label}: qualified worker usage`,
-      ["Schedule", "Worker", "Operations", ...(transfer ? ["Garment handoffs"] : []), "Travel (s)", "Waiting (s)", "Full attendance (s)",
-        ...(transfer ? ["Garment carry (s)"] : []), "First departure (s)", "Last finish (s)"]);
+      ["Schedule", "Worker", "Operations", ...(carries ? ["Garment handoffs"] : []), "Travel (s)", "Waiting (s)", "Full attendance (s)",
+        ...(carries ? ["Garment carry (s)"] : []), "First departure (s)", "Last finish (s)"]);
     for (const [name, timeline] of [["Baseline", report.baseline], ["Selected", report.selected]]) {
       for (const row of timeline?.worker_usage || []) cells(usage, [name, row.worker, metric(row.operations),
-        ...(transfer ? [metric(row.handoffs)] : []),
+        ...(carries ? [metric(row.handoffs)] : []),
         metric(seconds(row.travel_milliseconds)), metric(seconds(row.waiting_milliseconds)),
-        metric(seconds(row.attended_milliseconds)), ...(transfer ? [metric(seconds(row.transfer_milliseconds))] : []),
+        metric(seconds(row.attended_milliseconds)), ...(carries ? [metric(seconds(row.transfer_milliseconds))] : []),
         row.first_departure_milliseconds === null ? "Unused" : metric(seconds(row.first_departure_milliseconds)),
         row.last_finish_milliseconds === null ? "Unused" : metric(seconds(row.last_finish_milliseconds))]);
     }
@@ -3091,7 +3106,7 @@ function sewingRoutedLabor(parent, routing, label) {
     step.from_cell ?? "Declared initial location", step.cell, metric(seconds(step.departure_milliseconds)),
     metric(seconds(step.arrival_milliseconds)), metric(seconds(step.loading_start_milliseconds)),
     metric(seconds(step.feed_start_milliseconds)), metric(seconds(step.finish_milliseconds))]);
-  if (transfer) {
+  if (carries) {
     const transfers = table(parent, `${label}: selected worker-owned garment transfers`,
       ["Worker", "Resource", "Garment copy", "After operation", "Before operation", "Worker from", "Pickup cell", "Deposit cell",
         "Approach starts (s)", "At pickup cell (s)", "Pickup and carry starts (s)", "Deposit complete (s)"]);
@@ -3106,7 +3121,10 @@ function sewingRoutedLabor(parent, routing, label) {
       "travel, waiting and every machine phase remain exclusive on the selected person. Unused qualified workers remain visible. " +
       "The first and last clocks span that worker's use; summed work excludes idle gaps. " :
       "Travel and waiting also occupy that worker; cells assigned to the same person cannot use them concurrently. ") +
-    (transfer ? `Worker ${transfer.attending_worker} performs the garment handoffs using resource ${transfer.id}. ` +
+    (mixed ? "Worker-owned carriers: " + ownedTransfers.map(resource => `${resource.id} — ${resource.attending_worker}`).join("; ") + ". " +
+      "Actual owned handoffs appear on the same worker timeline as machine attendance, including empty approach and pickup through deposit. " +
+      "Multiple resources owned by one worker cannot overlap that person's other duties. Independent carriers retain their separate clocks. " :
+    transfer ? `Worker ${transfer.attending_worker} performs the garment handoffs using resource ${transfer.id}. ` +
       "Empty approach is charged to worker travel; pickup, carrying and deposit occupy the same worker and end at the destination cell. " +
       "The worker's machine attendance and handoffs cannot overlap. " : routing.transfer_pool ?
         "Garment handoffs use the independently qualified transfer pool. " : "Garment handoffs retain their separate qualified resource. ") +
@@ -3120,6 +3138,10 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
   const policy = plan.options?.production?.routing;
   const eligible = policy?.model === "eligible_operation_route/1";
   const eligibleLabor = report.attending_labor?.policy?.model === "eligible_full_operation_attendance/1";
+  const mixedTransfers = report.transfer_pool?.policy?.model === "qualified_unloaded_transfer_resources/1";
+  const transferOwners = new Map(mixedTransfers ?
+    [report.transfer_pool.primary, ...(report.transfer_pool.policy.additional_resources || [])]
+      .filter(Boolean).map(resource => [resource.id, resource.attending_worker]) : []);
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: routed completion and aggregate work`,
     ["Schedule", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)",
@@ -3172,8 +3194,10 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     metric(seconds(step.feed_start_milliseconds)), metric(seconds(step.feed_finish_milliseconds)),
     metric(seconds(step.finish_milliseconds))]);
   const transfers = table(parent, `${label}: selected garment transfers`,
-    [...(report.transfer_pool ? ["Resource"] : []), "Global garment copy", "After operation", "Before operation", "From cell", "To cell", "Starts (s)", "Arrives (s)"]);
+    [...(report.transfer_pool ? ["Resource"] : []), ...(mixedTransfers ? ["Attending worker"] : []),
+      "Global garment copy", "After operation", "Before operation", "From cell", "To cell", "Starts (s)", "Arrives (s)"]);
   for (const step of report.selected?.transfers || []) cells(transfers, [...(report.transfer_pool ? [step.resource || "Unavailable"] : []),
+    ...(mixedTransfers ? [transferOwners.get(step.resource) ?? "Independent resource"] : []),
     metric(step.copy), step.from_operation,
     step.to_operation, step.from, step.to, metric(seconds(step.start_milliseconds)), metric(seconds(step.finish_milliseconds))]);
   const resources = table(parent, `${label}: qualified routing availability`,
@@ -3225,7 +3249,8 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     (eligibleLabor ? "Qualified worker selection, individual travel and availability constrain each complete loading, setup, feed and unloading interval. " :
       report.attending_labor ? "Explicit worker ownership and availability constrain the complete loading, setup, feed and unloading interval. " :
       "Each dedicated worker attends loading, setup, feed and unloading before the cell becomes free. ") +
-    (policy?.transfer?.attending_worker ?
+    (mixedTransfers ? "The qualified transfer pool selects independent or worker-owned carriers for each handoff, preserving shared worker duties and resource availability. " :
+    policy?.transfer?.attending_worker ?
       `Worker ${policy.transfer.attending_worker} and the qualified transfer resource are both reserved from pickup through deposit; ` +
       "empty approach uses the worker's travel qualification. " :
       report.transfer_pool ? "The declared independent transfer pool permits concurrent unloaded garment handoffs on different qualified resources. " :
@@ -3524,7 +3549,12 @@ function sewingResult(parent, r) {
     routed_optimality_proven: routing?.optimality_proven,
     routed_search_work: routing?.search_nodes,
     routed_calendar_resources: routing?.availability_calendars ? Object.keys(routing.availability_calendars.resources).length : undefined,
-    independent_transfer_resources: routing?.transfer_pool ? routing.transfer_pool.selected.length : undefined,
+    independent_transfer_resources: routing?.transfer_pool ?
+      [routing.transfer_pool.primary, ...(routing.transfer_pool.policy?.additional_resources || [])]
+        .filter(resource => resource && !resource.attending_worker).length : undefined,
+    worker_owned_transfer_resources: routing?.transfer_pool?.policy?.model === "qualified_unloaded_transfer_resources/1" ?
+      [routing.transfer_pool.primary, ...(routing.transfer_pool.policy.additional_resources || [])]
+        .filter(resource => resource?.attending_worker).length : undefined,
     eligible_attending_workers: routing?.attending_labor?.policy?.model === "eligible_full_operation_attendance/1" ?
       routing.attending_labor.policy.workers.length : undefined,
     bounded_staging_enforced: routing?.bounded_staging ? true : undefined,

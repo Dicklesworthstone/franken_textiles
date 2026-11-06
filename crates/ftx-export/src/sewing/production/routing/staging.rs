@@ -65,7 +65,7 @@ pub struct Timeline {
 /// Explicit capacity and independent baseline/selected reservation evidence.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-sewing-routing-staging/1`.
+    /// `/1` one shared handoff boundary law; `/2` each selected carrier's qualified phase law.
     pub schema: &'static str,
     /// Exact admitted capacity/boundary qualification.
     pub policy: Policy,
@@ -113,8 +113,9 @@ pub(super) struct Compiled {
     capacity: usize,
     cells: Vec<String>,
     route: Vec<RouteStep>,
-    handoffs: BTreeMap<Option<String>, Vec<Handoff>>,
-    owned: bool,
+    handoffs: BTreeMap<Option<String>, (Vec<Handoff>, bool)>,
+    owned: Vec<bool>,
+    qualified_pool: bool,
 }
 
 impl Compiled {
@@ -141,11 +142,18 @@ impl Compiled {
                 .map(|carrier| {
                     (
                         route.transfer_pool.as_ref().map(|_| carrier.id.clone()),
-                        carrier.transfers.clone(),
+                        (
+                            carrier.transfers.clone(),
+                            carrier.attending_worker.is_some(),
+                        ),
                     )
                 })
                 .collect(),
-            owned: route.transfer.attending_worker.is_some(),
+            owned: route
+                .transfer_resources()
+                .map(|carrier| carrier.attending_worker.is_some())
+                .collect(),
+            qualified_pool: route.qualified_transfer_pool(),
         }))
     }
 
@@ -160,6 +168,7 @@ impl Compiled {
         load_start: u64,
         finish: u64,
         handoff: Option<[u64; 2]>,
+        carrier: usize,
     ) -> Result<Alignment, Refusal> {
         if route >= self.route.len()
             || cell >= self.cells.len()
@@ -171,6 +180,10 @@ impl Compiled {
         {
             return Err(bad("finite staging has an invalid operation interval"));
         }
+        let owned = *self
+            .owned
+            .get(carrier)
+            .ok_or_else(|| bad("finite staging names an unknown carrier"))?;
         let mut next = reservations.to_vec();
         let mut open = next
             .iter_mut()
@@ -186,10 +199,8 @@ impl Compiled {
             {
                 return Err(bad("finite staging changed a copy's route or handoff cell"));
             }
-            let release = handoff.map_or(
-                load_start,
-                |[start, end]| if self.owned { start } else { end },
-            );
+            let release =
+                handoff.map_or(load_start, |[start, end]| if owned { start } else { end });
             if handoff.map_or(load_start, |times| times[0]) < previous.start {
                 return Err(bad("finite staging releases before complete unloading"));
             }
@@ -213,7 +224,7 @@ impl Compiled {
             }
         }
         if let Some([start, end]) = handoff {
-            let arrival = if self.owned { end } else { start };
+            let arrival = if owned { end } else { start };
             if arrival < load_start {
                 for &(blocked_start, blocked_end) in &saturated {
                     if blocked_start >= load_start || blocked_end.is_some_and(|end| end <= arrival)
@@ -222,14 +233,14 @@ impl Compiled {
                     }
                     // Exact pickup/deposit permits a zero-length stay at loading. A positive
                     // independent handoff reserves its destination for the entire mover interval.
-                    let can_load_directly = self.owned || start == end;
+                    let can_load_directly = owned || start == end;
                     let next_arrival = match blocked_end {
                         Some(end) if can_load_directly => end.min(load_start),
                         Some(end) => end,
                         None if can_load_directly => load_start,
                         None => return Ok(Alignment::Blocked),
                     };
-                    handoff_start = handoff_start.max(next_arrival.saturating_sub(if self.owned {
+                    handoff_start = handoff_start.max(next_arrival.saturating_sub(if owned {
                         end - start
                     } else {
                         0
@@ -374,19 +385,21 @@ impl Compiled {
             } else {
                 let transfer =
                     transfer.ok_or_else(|| bad("finite staging replay omits a handoff"))?;
+                let (edges, owned) = self
+                    .handoffs
+                    .get(&transfer.resource)
+                    .ok_or_else(|| bad("finite staging replay changes its selected carrier"))?;
                 if transfer.from != previous.cell
                     || transfer.to != operation.cell
                     || transfer.from_operation != previous.operation_id
                     || transfer.start_milliseconds < previous.finish_milliseconds
                     || transfer.start_milliseconds > transfer.finish_milliseconds
                     || transfer.finish_milliseconds > operation.loading_start_milliseconds
-                    || !self.handoffs.get(&transfer.resource).is_some_and(|edges| {
-                        edges.iter().any(|edge| {
-                            edge.from == transfer.from
-                                && edge.to == transfer.to
-                                && u64::from(edge.milliseconds)
-                                    == transfer.finish_milliseconds - transfer.start_milliseconds
-                        })
+                    || !edges.iter().any(|edge| {
+                        edge.from == transfer.from
+                            && edge.to == transfer.to
+                            && u64::from(edge.milliseconds)
+                                == transfer.finish_milliseconds - transfer.start_milliseconds
                     })
                 {
                     return Err(bad("finite staging replay changed its qualified handoff"));
@@ -395,14 +408,14 @@ impl Compiled {
                     &mut reservations,
                     operation,
                     "before_loading",
-                    if self.owned {
+                    if *owned {
                         transfer.finish_milliseconds
                     } else {
                         transfer.start_milliseconds
                     },
                     operation.loading_start_milliseconds,
                 )?;
-                if self.owned {
+                if *owned {
                     transfer.start_milliseconds
                 } else {
                     transfer.finish_milliseconds
@@ -471,11 +484,17 @@ impl Compiled {
         selected: &RouteTimeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: "ftx-sewing-routing-staging/1",
+            schema: if self.qualified_pool {
+                "ftx-sewing-routing-staging/2"
+            } else {
+                "ftx-sewing-routing-staging/1"
+            },
             policy: self.policy.clone(),
             capacity: self.capacity,
             entry_exit_protocol: "first_loading_entry_final_unloading_exit/1",
-            handoff_reservations: if self.owned {
+            handoff_reservations: if self.qualified_pool {
+                "selected_carrier_source_boundaries/1"
+            } else if self.owned[0] {
                 "source_until_pickup_destination_from_deposit/1"
             } else {
                 "source_until_handoff_finish_destination_from_handoff_start/1"

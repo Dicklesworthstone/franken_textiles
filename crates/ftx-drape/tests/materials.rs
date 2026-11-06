@@ -2,7 +2,7 @@
 
 use ftx_core::{Vec2, Vec3};
 use ftx_drape::material::{Fabric, resolve};
-use ftx_drape::run::{DrapeBody, DrapeOptions, drape};
+use ftx_drape::run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape};
 use ftx_drape::scene::PartFrames;
 use ftx_drape::{Body, ClothModel, MembraneElement, PartFrame};
 use ftx_pattern::Pattern;
@@ -215,6 +215,145 @@ fn bounded_settling_stops_at_the_first_quiet_window_on_a_supporting_cone() {
     .unwrap();
     assert_eq!(already_quiet.report["numerical"]["settling"]["steps"], 0);
     assert_eq!(already_quiet.fold.frames, fixed.fold.frames);
+}
+
+#[test]
+fn independent_static_equilibrium_preserves_the_dynamic_garment_and_continuation() {
+    let mut surface = body();
+    for (i, point) in surface.vertices.iter_mut().enumerate() {
+        let (radius, z) = if i < 16 { (0.06, -0.2) } else { (0.02, 0.12) };
+        point.x *= radius / 0.03;
+        point.y *= radius / 0.03;
+        point.z = z;
+    }
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    let pattern = band(json!({"material":record(1.)}));
+    let options = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 0.001,
+        ..DrapeOptions::default()
+    };
+    let baseline = drape(&pattern, &json!({}), &body, &options, |_| {}).unwrap();
+    assert!(baseline.report.get("static_equilibrium").is_none());
+    let policy = StaticEquilibriumOptions {
+        correction_tolerance_m: 1e-5,
+        max_newton_iterations: 1000,
+    };
+    let mut checked = drape(
+        &pattern,
+        &json!({}),
+        &body,
+        &DrapeOptions {
+            static_equilibrium: Some(policy),
+            ..options
+        },
+        |_| {},
+    )
+    .unwrap();
+    let comparison = checked.report["static_equilibrium"].clone();
+    assert_eq!(comparison["status"], "available", "{comparison}");
+    assert_eq!(comparison["friction_included"], false);
+    assert_eq!(comparison["advances_simulated_time"], false);
+    assert_eq!(comparison["changes_dynamic_trajectory"], false);
+    assert_eq!(comparison["physical_validation_claim"], false);
+    assert_eq!(comparison["request"], json!(policy));
+    assert_eq!(
+        comparison["result"]["initial_positions_m"],
+        json!(baseline.scene.solver.x)
+    );
+    assert_eq!(
+        comparison["result"]["mesh_vertex_to_solver"],
+        json!(baseline.scene.weld)
+    );
+    assert_eq!(comparison["result"]["solve"]["converged"], true);
+    assert!(
+        comparison["result"]["solve"]["last_step"].as_f64().unwrap()
+            < policy.correction_tolerance_m
+    );
+    assert!(comparison["result"]["max_displacement_m"].as_f64().unwrap() > 0.0);
+
+    let mut direct = baseline.scene.solver.clone();
+    direct.tol = policy.correction_tolerance_m;
+    direct.max_newton = policy.max_newton_iterations;
+    let solve = direct.static_solve().unwrap();
+    assert_eq!(comparison["result"]["positions_m"], json!(direct.x));
+    assert_eq!(comparison["result"]["solve"], json!(solve));
+    assert_eq!(checked.fold.frames, baseline.fold.frames);
+    assert_eq!(json!(checked.sew), json!(baseline.sew));
+    assert_eq!(json!(checked.drape), json!(baseline.drape));
+    assert_eq!(
+        format!("{:?}", checked.scene.solver),
+        format!("{:?}", baseline.scene.solver)
+    );
+    checked
+        .report
+        .as_object_mut()
+        .unwrap()
+        .remove("static_equilibrium");
+    assert_eq!(checked.report, baseline.report);
+    let mut continued = baseline.scene.solver.clone();
+    assert_eq!(
+        checked.scene.solver.step(0.001).unwrap(),
+        continued.step(0.001).unwrap()
+    );
+    assert_eq!(checked.scene.solver.x, continued.x);
+    assert_eq!(checked.scene.solver.v, continued.v);
+}
+
+#[test]
+fn refused_static_equilibrium_publishes_no_trial_and_keeps_the_complete_dynamic_run() {
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    let pattern = band(json!({"material":record(1.)}));
+    let options = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 0.001,
+        ..DrapeOptions::default()
+    };
+    let baseline = drape(&pattern, &json!({}), &body, &options, |_| {}).unwrap();
+    let mut checked = drape(
+        &pattern,
+        &json!({}),
+        &body,
+        &DrapeOptions {
+            static_equilibrium: Some(StaticEquilibriumOptions {
+                correction_tolerance_m: 1e-15,
+                max_newton_iterations: 1,
+            }),
+            ..options
+        },
+        |_| {},
+    )
+    .unwrap();
+    let comparison = &checked.report["static_equilibrium"];
+    assert_eq!(comparison["status"], "refused");
+    assert_eq!(comparison["refusal"]["code"], "not_converged");
+    assert!(comparison.get("result").is_none());
+    assert_eq!(checked.fold.frames, baseline.fold.frames);
+    assert_eq!(
+        format!("{:?}", checked.scene.solver),
+        format!("{:?}", baseline.scene.solver)
+    );
+    checked
+        .report
+        .as_object_mut()
+        .unwrap()
+        .remove("static_equilibrium");
+    assert_eq!(checked.report, baseline.report);
 }
 
 #[test]

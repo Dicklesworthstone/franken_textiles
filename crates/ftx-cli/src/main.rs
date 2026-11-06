@@ -45,7 +45,7 @@ use ftx_core::Vec3;
 use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
-use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
+use ftx_drape::run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape, viewer};
 use ftx_pattern::{Measurements, Pattern, alter, format_table, validate};
 use serde_json::{Value, json};
 
@@ -58,12 +58,14 @@ const USAGE: &str = "usage:
   ftx validate PATTERN --measurements M [--fit F] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
             [--sim|--stills] [--body-fit REPORT] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N] [--res WIDTHxHEIGHT]
+            [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--self-contact-mm MM] [--self-mu MU] [--json]
             [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N]
+            [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
@@ -170,6 +172,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 continue;
             }
             if name == "allow-estimates"
+                || name == "static-equilibrium"
                 || measure::BOOLEAN_OPTIONS.contains(&name)
                 || export::BOOLEAN_OPTIONS.contains(&name)
                 || round::BOOLEAN_OPTIONS.contains(&name)
@@ -672,6 +675,25 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
                 .map_err(|_| bad_input(format!("--{name} must be a whole number")))?;
         }
     }
+    if args.options.contains_key("static-equilibrium") {
+        let mut policy = StaticEquilibriumOptions::default();
+        if let Some(value) = args.options.get("static-tol-mm") {
+            policy.correction_tolerance_m = value.parse::<f64>().map_err(|_| {
+                bad_input("--static-tol-mm must be a positive distance in millimetres")
+            })? * 1e-3;
+        }
+        if let Some(value) = args.options.get("static-max-newton") {
+            policy.max_newton_iterations = value
+                .parse()
+                .map_err(|_| bad_input("--static-max-newton must be a whole number in 1..=1000"))?;
+        }
+        opts.static_equilibrium = Some(policy);
+    } else if let Some(name) = ["static-tol-mm", "static-max-newton"]
+        .into_iter()
+        .find(|key| args.options.contains_key(*key))
+    {
+        return Err(bad_input(format!("--{name} requires --static-equilibrium")));
+    }
     if let Some(mm) = args.options.get("self-contact-mm") {
         let mut p = opts.contact;
         p.thickness = mm
@@ -775,6 +797,9 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "sew",
             "drape",
             "max-settle-steps",
+            "static-equilibrium",
+            "static-tol-mm",
+            "static-max-newton",
             "model",
             "self-contact-mm",
             "spacing-mm",
@@ -921,6 +946,17 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if let Some(source) = source_bytes {
         files.push(("body_fit.json", source));
     }
+    if report["static_equilibrium"]["status"] == "available" {
+        let equilibrium = &report["static_equilibrium"]["result"];
+        let vertices: Vec<Vec3> = serde_json::from_value(equilibrium["positions_m"].clone())
+            .map_err(|e| bad_input(e.to_string()))?;
+        let triangles: Vec<[usize; 3]> = serde_json::from_value(equilibrium["triangles"].clone())
+            .map_err(|e| bad_input(e.to_string()))?;
+        files.push((
+            "static_equilibrium.obj",
+            obj(&vertices, &triangles, None).into_bytes(),
+        ));
+    }
     if outfit.is_some() {
         files.push((
             "outfit_pattern.json",
@@ -956,6 +992,23 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         "self-contact: not simulated\n"
     });
+    if let Some(equilibrium) = report.get("static_equilibrium") {
+        if equilibrium["status"] == "available" {
+            text.push_str(&format!(
+                "static equilibrium: independent frictionless comparison converged in {} Newton iterations; correction {} m, residual {} N; dynamic run unchanged\n",
+                equilibrium["result"]["solve"]["iterations"],
+                equilibrium["result"]["solve"]["last_step"],
+                equilibrium["result"]["solve"]["residual"],
+            ));
+        } else {
+            text.push_str(&format!(
+                "static equilibrium: refused ({}); dynamic run retained\n",
+                equilibrium["refusal"]["message"]
+                    .as_str()
+                    .unwrap_or("unavailable"),
+            ));
+        }
+    }
     text.push_str(&format!("wrote {}", out.display()));
     let pair_summary = two_start::summary(&report);
     if !pair_summary.is_empty() {
@@ -974,6 +1027,9 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     });
     if let Some(pair) = report.get("two_start") {
         result["two_start"] = pair.clone();
+    }
+    if let Some(equilibrium) = report.get("static_equilibrium") {
+        result["static_equilibrium"] = equilibrium.clone();
     }
     if let Some(composition) = report.get("outfit") {
         result["outfit"] = composition.clone();
@@ -1355,6 +1411,53 @@ mod tests {
                 value.into(),
             ])
             .unwrap();
+            assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        }
+    }
+
+    #[test]
+    fn static_equilibrium_controls_are_explicit_and_validate_before_io() {
+        let args = parse(
+            &[
+                "drape",
+                "--static-equilibrium",
+                "--static-tol-mm",
+                "0.002",
+                "--static-max-newton",
+                "120",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let options = drape_options(&args).unwrap();
+        assert_eq!(
+            options.static_equilibrium,
+            Some(StaticEquilibriumOptions {
+                correction_tolerance_m: 2e-6,
+                max_newton_iterations: 120,
+            })
+        );
+        assert_eq!(options.step, DrapeOptions::default().step);
+        assert_eq!(options.tol, DrapeOptions::default().tol);
+        assert!(
+            drape_options(&parse(&["drape".into()]).unwrap())
+                .unwrap()
+                .static_equilibrium
+                .is_none()
+        );
+        for extra in [
+            vec!["--static-tol-mm", "0.1"],
+            vec!["--static-max-newton", "10"],
+            vec!["--static-equilibrium", "--static-tol-mm", "0"],
+            vec!["--static-equilibrium", "--static-tol-mm", "NaN"],
+            vec!["--static-equilibrium", "--static-tol-mm", "-1"],
+            vec!["--static-equilibrium", "--static-max-newton", "0"],
+            vec!["--static-equilibrium", "--static-max-newton", "1001"],
+            vec!["--static-equilibrium", "--static-max-newton", "1.5"],
+        ] {
+            let mut argv = vec!["drape", "absent.json"];
+            argv.extend(extra);
+            let args = parse(&argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
             assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
         }
     }

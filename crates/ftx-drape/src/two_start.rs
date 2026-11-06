@@ -297,6 +297,9 @@ fn attach(
     if opts.max_settle_steps > 0 {
         comparison["shared_settings"]["max_settle_steps"] = json!(opts.max_settle_steps);
     }
+    if let Some(policy) = opts.static_equilibrium {
+        comparison["shared_settings"]["static_equilibrium"] = json!(policy);
+    }
     for f in &flags {
         flag(&mut primary.report, f)?;
     }

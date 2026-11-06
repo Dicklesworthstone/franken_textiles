@@ -7,7 +7,7 @@ use ftx_body::{
     fit_tape, pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_drape::{
-    run::{DrapeBody, DrapeOptions, drape, viewer},
+    run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape, viewer},
     two_start::TwoStartOptions,
 };
 use ftx_pattern::Pattern;
@@ -192,6 +192,9 @@ pub struct FoldSettings {
     pub leg_fraction: f64,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
     pub max_settle_steps: usize,
+    /// Independent frictionless static comparison, with no change to the dynamic fold or its time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub static_equilibrium: Option<StaticEquilibriumOptions>,
 }
 
 impl Default for FoldSettings {
@@ -203,6 +206,7 @@ impl Default for FoldSettings {
             legs: Legs::Standing,
             leg_fraction: 1.0,
             max_settle_steps: 0,
+            static_equilibrium: None,
         }
     }
 }
@@ -282,6 +286,7 @@ fn fold_on_source(
         legs,
         leg_fraction,
         max_settle_steps,
+        static_equilibrium,
     } = options;
     let m = |r: ftx_core::Refusal| r.message;
     let mut pose = Pose::drape();
@@ -299,6 +304,7 @@ fn fold_on_source(
     }
     let mut opts = DrapeOptions {
         max_settle_steps,
+        static_equilibrium,
         ..DrapeOptions::default()
     };
     if self_contact_mm > 0.0 {
@@ -407,6 +413,27 @@ fn fold_on_source(
 mod tests {
     use super::*;
     use ftx_body::{BodyParams, TapeResidual};
+
+    #[test]
+    fn configured_fold_preserves_explicit_static_distance_tolerance_without_changing_time() {
+        let default = serde_json::to_value(FoldSettings::default()).unwrap();
+        assert!(default.get("static_equilibrium").is_none());
+        let mut configured = default.clone();
+        configured["static_equilibrium"] = json!({
+            "correction_tolerance_m":2e-6, "max_newton_iterations":120,
+        });
+        let settings: FoldSettings = serde_json::from_value(configured.clone()).unwrap();
+        settings.static_equilibrium.unwrap().validate().unwrap();
+        assert_eq!(serde_json::to_value(settings).unwrap(), configured);
+        configured["static_equilibrium"]["time_s"] = json!(1.0);
+        assert!(serde_json::from_value::<FoldSettings>(configured).is_err());
+        assert!(
+            serde_json::from_value::<FoldSettings>(default)
+                .unwrap()
+                .static_equilibrium
+                .is_none()
+        );
+    }
 
     #[test]
     fn body_diagnostics_keep_raw_signed_residuals_and_unmeasured_predictions() {

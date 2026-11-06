@@ -245,6 +245,10 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
         legs: Legs::Seated,
         leg_fraction: 0.001,
         max_settle_steps: 2,
+        static_equilibrium: Some(ftx_drape::run::StaticEquilibriumOptions {
+            correction_tolerance_m: 1e-15,
+            max_newton_iterations: 1,
+        }),
         ..ftx_wasm::fold::FoldSettings::default()
     };
     let source = ftx_wasm::fold::BodyFitSource {
@@ -279,6 +283,11 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
             "0.001",
             "--max-settle-steps",
             "2",
+            "--static-equilibrium",
+            "--static-tol-mm",
+            "0.000000000001",
+            "--static-max-newton",
+            "1",
             "--out",
             "leg-fold",
             "--json",
@@ -299,6 +308,22 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
     assert_eq!(native["body"]["legs"], "seated");
     assert_eq!(native["body"]["leg_fraction"], 0.001);
     assert_eq!(native["numerical"]["settling"]["max_steps"], 2);
+    assert_eq!(native["static_equilibrium"]["status"], "refused");
+    assert_eq!(native["static_equilibrium"]["friction_included"], false);
+    assert_eq!(
+        native["static_equilibrium"]["advances_simulated_time"],
+        false
+    );
+    assert_eq!(
+        native["static_equilibrium"]["changes_dynamic_trajectory"],
+        false
+    );
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        envelope["result"]["static_equilibrium"],
+        native["static_equilibrium"]
+    );
+    assert!(!dir.join("leg-fold/static_equilibrium.obj").exists());
     assert_eq!(
         std::fs::read_to_string(dir.join("leg-fold/fold_viewer.html")).unwrap(),
         folded.viewer

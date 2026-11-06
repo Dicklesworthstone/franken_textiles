@@ -366,6 +366,40 @@ fn check_sewn_selection(selected: Selection) {
         "history admission precedes sewing and gravity steps"
     );
     let run = drape(&Pattern::new(p.clone()), &json!({}), &body, &opts, |_| {}).unwrap();
+    let mut checked = drape(
+        &Pattern::new(p.clone()),
+        &json!({}),
+        &body,
+        &DrapeOptions {
+            static_equilibrium: Some(ftx_drape::run::StaticEquilibriumOptions::default()),
+            ..opts
+        },
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(checked.report["static_equilibrium"]["status"], "refused");
+    assert_eq!(
+        checked.report["static_equilibrium"]["refusal"]["code"],
+        "out_of_range"
+    );
+    assert!(
+        checked.report["static_equilibrium"]["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("material-history")
+    );
+    assert!(checked.report["static_equilibrium"].get("result").is_none());
+    assert_eq!(checked.fold.frames, run.fold.frames);
+    assert_eq!(
+        format!("{:?}", checked.scene.solver),
+        format!("{:?}", run.scene.solver)
+    );
+    checked
+        .report
+        .as_object_mut()
+        .unwrap()
+        .remove("static_equilibrium");
+    assert_eq!(checked.report, run.report);
     let history = &run.report["membrane_history"];
     assert_eq!(history["accepted_steps"], 6);
     assert!(!history["elements"].as_array().unwrap().is_empty());

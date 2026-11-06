@@ -74,8 +74,8 @@ pub struct Policy {
     pub route: Vec<RouteStep>,
     /// Primary qualified resource for all unloaded inter-cell handoffs, optionally owned by a worker.
     pub transfer: TransferPolicy,
-    /// Optional independently qualified extra carriers. The primary resource remains the seed;
-    /// bounded dispatch can choose another qualified carrier for each actual inter-cell move.
+    /// Optional qualified extra carriers with explicit independent or attending-worker ownership.
+    /// The primary remains the seed; dispatch can select another carrier for each inter-cell move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transfer_pool: Option<transfer_pool::Policy>,
     /// Evidence for this complete route, dedicated cell labor, staging and handoff independence.
@@ -379,6 +379,12 @@ impl Policy {
             .is_some_and(labor::Policy::eligible)
     }
 
+    fn qualified_transfer_pool(&self) -> bool {
+        self.transfer_pool
+            .as_ref()
+            .is_some_and(transfer_pool::Policy::qualified_ownership)
+    }
+
     pub(crate) fn eligible(&self) -> bool {
         self.model == "eligible_operation_route/1"
     }
@@ -426,8 +432,16 @@ impl Policy {
 
     fn validate(&self, options: &SewOptions, copies: usize) -> Result<BTreeSet<String>, Refusal> {
         self.work_bound(copies, options.passes.len())?;
-        let owned_transfer = self.transfer.attending_worker.is_some();
-        let independence = if owned_transfer {
+        let owned_transfer = self
+            .transfer_resources()
+            .any(|carrier| carrier.attending_worker.is_some());
+        let independence = if self.qualified_transfer_pool() {
+            if self.shared_workholding.is_some() {
+                "shared_attending_workers_workholding_and_qualified_transfer_resources/1"
+            } else {
+                "shared_attending_workers_and_qualified_transfer_resources/1"
+            }
+        } else if owned_transfer {
             if self.shared_workholding.is_some() {
                 "shared_attending_workers_workholding_and_worker_owned_transfer_resource/1"
             } else {
@@ -869,6 +883,7 @@ impl Prepared<'_> {
                 event.load_start,
                 event.finish,
                 event.handoff,
+                dispatch.carrier,
             )? {
                 staging::Alignment::Ready(reservations) => {
                     next.staging = reservations;
@@ -946,6 +961,7 @@ impl Prepared<'_> {
                     labor.transfer_arrival(
                         next.labor.as_ref().expect("admitted attending labor"),
                         state.copy_cell[copy].expect("handoff source cell"),
+                        carrier_index,
                     )
                 })
                 .transpose()?
@@ -1638,7 +1654,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.eligible_labor() {
+        schema: if policy.qualified_transfer_pool() {
+            "ftx-sewing-plan/29"
+        } else if policy.eligible_labor() {
             "ftx-sewing-plan/28"
         } else if policy.transfer_pool.is_some() {
             "ftx-sewing-plan/27"
@@ -2009,7 +2027,9 @@ pub(in crate::sewing) fn build(
         .map(|pool| pool.report(policy, &baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if policy.eligible_labor() {
+        schema: if policy.qualified_transfer_pool() {
+            "ftx-sewing-routing/12"
+        } else if policy.eligible_labor() {
             "ftx-sewing-routing/11"
         } else if transfer_pool.is_some() {
             "ftx-sewing-routing/10"
@@ -2049,7 +2069,13 @@ pub(in crate::sewing) fn build(
         optimality_proven: proven,
         budget_exhausted: !search_complete,
         lower_bound_makespan_milliseconds: lower,
-        search_scope: if policy.eligible_labor() && uses_staging {
+        search_scope: if policy.qualified_transfer_pool() && uses_staging {
+            "coupled_qualified_transfer_pool_bounded_staging_append_dispatch/1"
+        } else if policy.qualified_transfer_pool() && policy.retained_fixtures() {
+            "coupled_qualified_transfer_pool_cell_retained_fixture_append_dispatch/1"
+        } else if policy.qualified_transfer_pool() {
+            "coupled_qualified_transfer_pool_worker_cell_append_dispatch/1"
+        } else if policy.eligible_labor() && uses_staging {
             "coupled_eligible_labor_bounded_staging_append_dispatch/1"
         } else if policy.eligible_labor() && policy.retained_fixtures() {
             "coupled_eligible_labor_cell_retained_fixture_append_dispatch/1"
@@ -2083,7 +2109,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.eligible_labor() {
+        schema: if policy.qualified_transfer_pool() {
+            "ftx-sewing-production/17"
+        } else if policy.eligible_labor() {
             "ftx-sewing-production/16"
         } else if policy.transfer_pool.is_some() {
             "ftx-sewing-production/15"

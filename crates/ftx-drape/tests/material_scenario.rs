@@ -945,6 +945,64 @@ fn settling_reserves_its_full_cap_and_reuses_the_production_result() {
     );
 }
 
+#[test]
+fn static_equilibrium_reserves_its_bounded_work_and_keeps_dynamic_consumers_independent() {
+    let form = form();
+    let body = body(&form);
+    let pattern = pattern();
+    let ordinary = scenario();
+    let baseline = Session::new(&ordinary, &body)
+        .unwrap()
+        .evaluate(&pattern, |_| {})
+        .unwrap();
+    let base_frames = ordinary.options.sew_steps
+        + ordinary.options.drape_steps
+        + ftx_drape::animation::FOLD_FRAMES
+        + ftx_drape::animation::ZIP_FRAMES
+        + 4;
+    let base_charge = baseline["charged_vertex_frames"].as_u64().unwrap() as usize;
+    let points = base_charge / base_frames;
+    let mut requested = ordinary.clone();
+    requested.options.static_equilibrium = Some(ftx_drape::run::StaticEquilibriumOptions {
+        correction_tolerance_m: 1e-15,
+        max_newton_iterations: 1,
+    });
+    // Eight geometry/state equivalents plus one bounded 300-iteration solve reservation.
+    requested.max_vertex_frames = base_charge + 9 * points - 1;
+    let mut started = false;
+    assert_eq!(
+        Session::new(&requested, &body)
+            .unwrap()
+            .evaluate(&pattern, |_| started = true)
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+    assert!(!started);
+    requested.max_vertex_frames += 1;
+    let result = Session::new(&requested, &body)
+        .unwrap()
+        .evaluate(&pattern, |_| {})
+        .unwrap();
+    assert_eq!(result["charged_vertex_frames"], base_charge + 9 * points);
+    assert_eq!(result["drape"]["static_equilibrium"]["status"], "refused");
+    assert_eq!(
+        result["drape"]["static_equilibrium"]["refusal"]["code"],
+        "not_converged"
+    );
+    assert_ne!(result["scenario_sha256"], baseline["scenario_sha256"]);
+    for key in [
+        "positions_m",
+        "positions_sha256",
+        "triangles",
+        "metrics",
+        "surface",
+        "coverage",
+    ] {
+        assert_eq!(result[key], baseline[key], "independent consumer {key}");
+    }
+}
+
 fn motion_scenario() -> Scenario {
     let mut s = scenario();
     s.max_vertex_frames = 2_000_000;

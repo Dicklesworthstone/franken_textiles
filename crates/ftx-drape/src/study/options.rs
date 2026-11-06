@@ -1,5 +1,8 @@
 //! Serialization at the scenario boundary, leaving numerical option definitions unchanged.
-use crate::{contact::ContactParams, run::DrapeOptions};
+use crate::{
+    contact::ContactParams,
+    run::{DrapeOptions, StaticEquilibriumOptions},
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 fn is_zero(value: &usize) -> bool {
@@ -41,6 +44,8 @@ struct Options {
     max_settle_steps: usize,
     #[serde(skip_serializing_if = "is_zero")]
     elastic_hold_steps: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    static_equilibrium: Option<StaticEquilibriumOptions>,
     step: f64,
     tol: f64,
     compression: f64,
@@ -97,6 +102,27 @@ mod tests {
                 .unwrap()
                 .max_settle_steps,
             0
+        );
+    }
+
+    #[test]
+    fn static_equilibrium_preserves_the_ordinary_wire_and_exact_explicit_settings() {
+        let ordinary = serde_json::to_value(DrapeOptions::default()).unwrap();
+        assert!(ordinary.get("static_equilibrium").is_none());
+        let mut declared = ordinary.clone();
+        declared["static_equilibrium"] = serde_json::json!({
+            "correction_tolerance_m":2e-6, "max_newton_iterations":120
+        });
+        let options: DrapeOptions = serde_json::from_value(declared.clone()).unwrap();
+        options.validate().unwrap();
+        assert_eq!(serde_json::to_value(options).unwrap(), declared);
+        declared["static_equilibrium"]["time_s"] = serde_json::json!(1.0);
+        assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
+        assert!(
+            serde_json::from_value::<DrapeOptions>(ordinary)
+                .unwrap()
+                .static_equilibrium
+                .is_none()
         );
     }
 }
