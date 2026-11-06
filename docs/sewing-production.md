@@ -241,7 +241,7 @@ unmeasured transfer from becoming zero. Unused rows are allowed for a reusable s
 
 Every duration is an integer from 0 through 86400000 milliseconds. Zero must be explicit. There
 are at most 63 original operations, 8192 transition rows and 256 qualification references; the
-existing 63 expanded-operation and 200000 search-node limits still apply. Integer accumulated
+256 expanded-operation and 200000 search-node limits still apply. Integer accumulated
 durations use u64 on native and WASM, including the complete final unload. The search lower bound
 includes a valid minimum possible final unloading duration, so an expensive final operation can
 change which operation is scheduled last.
@@ -362,7 +362,7 @@ two-cell job at **25.5 modeled seconds**. Aggregate feed remains 24 seconds, sel
 distinct from the 25.5-second elapsed span. These are synthetic arithmetic checks, not measured
 factory throughput or a claim that an actual operator or fixture can perform concurrent work.
 
-There are at most eight cells and 63 total copy/operation pairs. The complete batch must also fit
+There are at most eight cells and 256 total copy/operation pairs. The complete batch must also fit
 the ordinary 250000 expanded stitch-interval limit before any cell/count search begins, so an
 accepted parallel plan cannot exceed the ordinary stitch program's output bound.
 `parallel.max_search_nodes` is one global cap covering every nested serial search, reconstruction
@@ -509,7 +509,7 @@ are conditional outputs of that assignment. Heterogeneous recipe searches theref
 `minimize_parallel_makespan`; they do not claim that its selected allocation also minimizes feed or
 thread cost. Joint time/cost allocation remains a separate future objective.
 
-The same eight-cell, 63-expanded-operation and aggregate 200000 scheduling-work bounds apply.
+The same eight-cell, 256-expanded-operation and aggregate 200000 scheduling-work bounds apply.
 The retained outer and all configured cell source plans additionally share a 250000-station bound.
 Before count search, every cell's all-copy possibility must also fit the ordinary 250000-interval
 stitch-program bound; this conservatively bounds every mixed allocation. Material/design studies
@@ -831,7 +831,7 @@ the result is `not_converged`, not proof that the factory job is impossible.
 `search_complete` concerns `coupled_handoff_cell_append_dispatch/1`. `optimality_proven` is stronger:
 the selected completion must equal an independent lower bound from mandatory cell work, relaxed
 directed setup entries, garment paths and transfer-resource work. Restricted search exhaustion alone
-does not prove an unrestricted optimum. Up to 63 expanded operations and eight used cells are
+does not prove an unrestricted optimum. Up to 256 expanded operations and eight used cells are
 admitted. `max_search_nodes` reserves at least a complete seed; two full baseline/selected replays
 are reserved separately, and search plus replay cannot exceed 200000 work units.
 
@@ -1193,7 +1193,7 @@ The search visits the seed cell first and other eligible cells in authored order
 copy operation. Its actual preceding cell determines the handoff, and each selected cell supplies
 its own feed duration, setup, loading, unloading and inclusive operating window. An infeasible seed
 can be replaced by a complete feasible mixed assignment. The existing search-and-replay budget,
-63 expanded-operation limit and eight-cell limit apply. All eligible source plans share the station
+256 expanded-operation limit and eight-cell limit apply. All eligible source plans share the station
 reservation, and the largest eligible stitch count at each stage bounds the complete output before
 search. A work limit never publishes a partially manufactured garment.
 
@@ -1495,9 +1495,19 @@ authorization.
 
 ## Bounds and remaining scope
 
-The expanded graph supports at most **63 copy/operation pairs** and 1–200000 examined search nodes.
-For example, three copies with eight source operations use 24 pairs. Existing one-garment ordering
-keeps its 20-operation limit. A search limit returns a complete feasible incumbent and a sound lower
+The expanded graph supports at most **256 copy/operation pairs** and 1–200000 examined search nodes.
+For example, 32 copies with eight source operations use all 256 pairs. Every dependency, fixture
+acquisition/release and completed operation remains exact across the full graph on native and WASM.
+Search state uses four fixed 64-bit words; increasing the batch does not increase the node cap or
+change the traversal, objective or proof rules. Existing one-garment ordering keeps its 20-operation
+limit. Handling and workholding retain their independent 63-source-operation qualification limits;
+many physical copies reuse those source policies and geometry.
+
+Parallel count-allocation work and routed complete replays must still fit their original aggregate
+200000-work bounds. For example, 256 one-operation copies on two independent cells require more
+allocation work than the small example budget provides; an insufficient reservation refuses before
+search. The expanded stitch budget and resource/source limits remain in force. A search limit returns
+a complete feasible incumbent and a sound lower
 bound with `budget_exhausted: true` and `optimality_proven: false`; it never returns a partial garment
 or proves unvisited schedules infeasible. Full search proves only the declared count/time objective
 under the declared predecessor graph and source table.
@@ -1515,7 +1525,10 @@ authorization remains false.
 
 The focused `sewing_production` tests cover shared setups, directed timing, complete incumbents,
 quantity conflicts, unchanged legacy output, source-material refusal, actual repeated stitch travel,
-allocation limits and 63-operation arithmetic. Workholding cases additionally compare constrained
+allocation limits and 63/64/128/192/256-operation arithmetic. Large-batch regressions retain every
+actual stitch, copy-scoped predecessor and fixture lifecycle, distinguish a 255-node unfinished
+search from a complete 256-node improvement, and verify parallel allocation and specialist handoffs.
+Workholding cases additionally compare constrained
 count/time optima to independent exhaustive enumeration, verify finite integer demands, lifecycle
 precedence, complete bounded incumbents, source invalidation and exact stitch replay. Existing
 `sewing` and `sewing_program` tests preserve the original numerical and geometric behavior.

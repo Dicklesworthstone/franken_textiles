@@ -401,7 +401,7 @@ fn attended_bound(cells: &[&Cell], trials: &[Vec<Trial>], copies: usize) -> (u64
                 {
                     continue;
                 }
-                // Every constituent is at most 63 one-day setup/handling durations. This addition
+                // Every constituent is at most 256 one-day setup/handling durations. This addition
                 // cannot reach u64 or the exact JSON bound under the ordinary production limits.
                 let candidate = costs[total - count]
                     + if count == 0 {

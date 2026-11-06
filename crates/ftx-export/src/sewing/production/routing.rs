@@ -22,7 +22,7 @@ pub mod staging;
 pub mod transfer_pool;
 
 const MAX_CELLS: usize = 8;
-const MAX_OPERATIONS: usize = 63;
+const MAX_OPERATIONS: usize = ordering::MAX_PRODUCTION_PASSES;
 const MAX_WORK: usize = 200_000;
 const MAX_EXACT_MILLISECONDS: u64 = 9_007_199_254_740_991;
 
@@ -401,7 +401,7 @@ impl Policy {
         let expanded = copies
             .checked_mul(operations)
             .filter(|&count| count > 0 && count <= MAX_OPERATIONS)
-            .ok_or_else(|| budget("routing supports 1..63 expanded garment operations"))?;
+            .ok_or_else(|| budget("routing supports 1..256 expanded garment operations"))?;
         if !(1..=MAX_CELLS).contains(&self.cells.len())
             || self.route.len() != operations
             || self

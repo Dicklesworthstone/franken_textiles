@@ -334,11 +334,11 @@ fn budget(message: &str) -> Refusal {
 impl Policy {
     fn budget(&self, copies: usize, serial_nodes: usize) -> Result<Budget, Refusal> {
         if !(1..=MAX_CELLS).contains(&self.cells.len())
-            || !(1..=63).contains(&copies)
+            || !(1..=ordering::MAX_PRODUCTION_PASSES).contains(&copies)
             || !(1..=MAX_WORK).contains(&self.max_search_nodes)
         {
             return Err(budget(
-                "parallel production supports 1..8 cells, 1..63 copies and at most 200000 total scheduling work units",
+                "parallel production supports 1..8 cells, 1..256 copies and at most 200000 total scheduling work units",
             ));
         }
         // Two count DPs; shared labor also needs a complete attended-work lower-bound DP.

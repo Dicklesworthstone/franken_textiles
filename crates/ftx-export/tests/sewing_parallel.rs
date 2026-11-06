@@ -834,6 +834,75 @@ fn independent_cells_reduce_elapsed_span_without_losing_aggregate_work() {
 }
 
 #[test]
+fn parallel_256_copy_batch_keeps_global_inventory_stitches_and_reserved_work() {
+    let (pattern, mut options) = one_operation(256);
+    let initial_setup = json!({"needle":options["passes"][0]["needle"],
+        "thread":options["passes"][0]["thread"]});
+    options["production"]["ordering"]["initial_setup"] = initial_setup.clone();
+    options["production"]["handling"]["initial_milliseconds"]["join"] = json!(5000);
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["ordering"]["initial_setup"] = initial_setup.clone();
+        cell["handling"]["initial_milliseconds"]["join"] = json!(5000);
+    }
+    options["production"]["ordering"]["max_search_nodes"] = json!(1);
+    // The two complete count-allocation DPs exceed the old example's small budget. Their work
+    // must still be reserved rather than admitting the larger batch under a fictitious cheap cap.
+    assert_eq!(
+        build(&pattern, options.clone()).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    options["production"]["parallel"]["max_search_nodes"] = json!(199000);
+    let options: SewOptions = serde_json::from_value(options).unwrap();
+    assert_eq!(options.scheduling_work_bound().unwrap(), 199001);
+    let program = SewProgram::build(&pattern, &options).unwrap();
+    let production = program.plan.production.as_ref().unwrap();
+    let parallel = production.parallel.as_ref().unwrap();
+    assert_eq!(production.operations.len(), 256);
+    assert_eq!(production.ordering.selected_order.len(), 256);
+    assert_eq!(program.stitches.len(), 256 * 40);
+    assert!(parallel.search_nodes <= 199000);
+    assert!(parallel.optimality_proven && parallel.search_complete && !parallel.budget_exhausted);
+    // With the recipe already installed, each occupied cell takes 4000 ms feed and 5000 ms
+    // loading/transition per garment, then 200 ms final unloading. Equal cells split 128/128.
+    let expected = 128 * (4000 + 5000) + 200;
+    assert_eq!(parallel.selected.makespan_milliseconds, expected);
+    assert_eq!(parallel.lower_bound_makespan_milliseconds, expected);
+    let copies: BTreeSet<_> = parallel
+        .selected
+        .cells
+        .iter()
+        .flat_map(|cell| {
+            assert_eq!(cell.copies.len(), 128);
+            let schedule = cell.schedule.as_ref().unwrap();
+            assert_eq!(schedule.operations.len(), 128);
+            assert_eq!(schedule.ordering.selected_order.len(), 128);
+            cell.copies.iter().copied()
+        })
+        .collect();
+    assert_eq!(copies, (0..256).collect());
+    let mut stitches = BTreeMap::new();
+    for step in &program.stitches {
+        let copy = step.copy.unwrap();
+        let cell = parallel
+            .selected
+            .cells
+            .iter()
+            .find(|cell| cell.copies.contains(&copy))
+            .unwrap();
+        assert_eq!(step.cell.as_deref(), Some(cell.cell.as_str()));
+        assert_eq!(
+            step.a_mm,
+            program.plan.seams[step.operation].stations.a[step.to_station]
+        );
+        *stitches.entry(copy).or_insert(0usize) += 1;
+    }
+    assert_eq!(stitches, (0..256).map(|copy| (copy, 40)).collect());
+}
+
+#[test]
 fn complete_published_example_replays_its_independent_inventory_and_stitch_streams() {
     let (pattern, _) = fixture(3);
     let options: SewOptions = serde_json::from_str(include_str!(

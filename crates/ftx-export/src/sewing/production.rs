@@ -14,7 +14,7 @@ pub mod parallel;
 pub mod routing;
 pub mod workholding;
 
-/// Optional production schedule. The expanded graph has at most 63 operations; explicit parallel
+/// Optional production schedule. The expanded graph has at most 256 operations; explicit parallel
 /// assignment or specialist routing supplies separately qualified physical machines and resources.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
