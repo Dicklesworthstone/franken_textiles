@@ -435,7 +435,14 @@ pub fn drape(
         pattern,
         &casing_mu,
     );
-    add_numerical_report(&mut report, &sew, &drape, opts);
+    add_numerical_report(
+        &mut report,
+        &sew,
+        &drape,
+        opts,
+        scene.solver.contact.as_ref().map(|c| c.params.thickness),
+        scene.target_thickness,
+    );
     add_simulation_scope(&mut report, scope);
     report["material"] = material.report;
     add_casing_windows(
@@ -569,6 +576,8 @@ fn add_numerical_report(
     sew: &PhaseReport,
     drape: &PhaseReport,
     opts: &DrapeOptions,
+    body_thickness: Option<f64>,
+    target_thickness: f64,
 ) {
     let quiet = consecutive_quiet_steps(drape);
     let gravity_simulated = drape.steps > 0;
@@ -603,6 +612,13 @@ fn add_numerical_report(
         for key in ["flags", "gating"] {
             if let Some(flags) = report[key].as_array_mut() {
                 flags.push(json!(flag));
+            }
+        }
+    }
+    if body_thickness.is_some_and(|achieved| achieved < target_thickness) {
+        for key in ["flags", "gating"] {
+            if let Some(flags) = report[key].as_array_mut() {
+                flags.push(json!("body thickness ramp did not reach its target"));
             }
         }
     }
@@ -1141,7 +1157,14 @@ mod self_contact_tests {
             phase.max_speed = speed;
         }
         let mut report = json!({"settled":true,"flags":[],"gating":[]});
-        add_numerical_report(&mut report, &PhaseReport::default(), &phase, &options);
+        add_numerical_report(
+            &mut report,
+            &PhaseReport::default(),
+            &phase,
+            &options,
+            None,
+            0.0,
+        );
         assert_eq!(report["settled"], true, "reference metric is preserved");
         assert_eq!(report["numerical"]["settled"], false);
         assert_eq!(report["numerical"]["consecutive_quiet_steps"], 0);
@@ -1168,10 +1191,40 @@ mod self_contact_tests {
         }
         phase.max_speed = 0.0;
         let mut quiet = json!({"settled":true,"flags":[],"gating":[]});
-        add_numerical_report(&mut quiet, &PhaseReport::default(), &phase, &options);
+        add_numerical_report(
+            &mut quiet,
+            &PhaseReport::default(),
+            &phase,
+            &options,
+            None,
+            0.0,
+        );
         assert_eq!(quiet["numerical"]["settled"], true);
         assert_eq!(quiet["numerical"]["consecutive_quiet_steps"], 3);
         assert_eq!(quiet["gating"], json!([]));
+
+        for (achieved, incomplete) in [
+            (Some(0.0007366308626266741), true),
+            (Some(options.contact.thickness), false),
+            (Some(2e-3), false),
+            (None, false),
+        ] {
+            let mut offset = json!({"settled":true,"flags":[],"gating":[]});
+            add_numerical_report(
+                &mut offset,
+                &PhaseReport::default(),
+                &phase,
+                &options,
+                achieved,
+                options.contact.thickness,
+            );
+            assert_eq!(offset["numerical"]["settled"], true);
+            assert_eq!(
+                offset["gating"].as_array().unwrap().len(),
+                usize::from(incomplete)
+            );
+            assert_eq!(offset["flags"], offset["gating"]);
+        }
     }
 
     #[test]
@@ -1182,6 +1235,8 @@ mod self_contact_tests {
             &PhaseReport::default(),
             &PhaseReport::default(),
             &DrapeOptions::default(),
+            None,
+            0.0,
         );
         assert_eq!(report["numerical"]["gravity_simulated"], false);
         assert!(report["numerical"]["settled"].is_null());

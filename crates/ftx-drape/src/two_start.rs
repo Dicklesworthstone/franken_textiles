@@ -231,10 +231,9 @@ fn run_health(name: &str, run: &DrapeRun, flags: &mut Vec<String>) -> Result<(),
         .contact
         .as_ref()
         .map_or(0.0, |c| c.params.thickness);
-    if achieved < run.scene.target_thickness {
-        flags.push(format!(
-            "two-start {name}: body thickness ramp did not reach its target"
-        ));
+    let flag = format!("two-start {name}: body thickness ramp did not reach its target");
+    if achieved < run.scene.target_thickness && !flags.contains(&flag) {
+        flags.push(flag);
     }
     Ok(())
 }

@@ -75,7 +75,7 @@ embedded optional-adapter annotations are checked separately; no real-camera acc
 Native numerical acceptance deliberately goes beyond the reference metrics (`ftx-6en`): a stalled
 Newton solve is refused transactionally, and gravity drapes require three consecutive instantaneous
 maximum speeds at most 1 mm/s. `sim_report.json.numerical` reports the basis and accepted-step
-diagnostics; a failed quiet window adds a gating flag. The oracle `metrics()` values and texts remain
+diagnostics; a failed quiet window or unfinished requested body-offset ramp adds a gating flag. The oracle `metrics()` values and texts remain
 unchanged. Direct rollback/replay, quiet-window and oscillatory mean-cancellation regressions are in
 `cloth.rs` and `run.rs`. Historical fitted-garment timings/verdicts below are not fresh proof of this
 stricter boundary, nor evidence of physical fit.
@@ -177,6 +177,7 @@ evidence that the authored catalog garment is complete or fits a person.
 
 | Behaviour | Reference | Port | Reason |
 |---|---|---|---|
+| `body-offset-completion`: requested contact clearance | legacy settledness metrics do not qualify the IPC offset continuation | ordinary and paired runs gate an incomplete requested body offset; bounded smaller continuation increments retain the existing maximum step and minimum-gap guard | A real chart-body run stopped at 0.737 mm against a 1.5 mm request while reporting no ordinary gate. `scene::grain_tests::body_offset_ramp_backtracks_without_dropping_its_safety_margin` and `run::self_contact_tests::numerical_settledness_rejects_motion_hidden_by_window_means` cover safe partial growth and quiet-but-incomplete rejection; oracle inputs and static metric calculations are unchanged |
 | Production simulation coverage | unplaced instances and their seams are silently omitted | canonical draping requires placement on every active instance; explicit `sim: false` exclusions are reported with an advisory | Prevent a partial garment from appearing complete; low-level meshing retains reference selection. `garment::tests`, `run::self_contact_tests`, CLI drape regression |
 | JSON integer range | Python preserves arbitrarily large integer literals | `PyJson` preserves the full signed `i64` and unsigned `u64` ranges; larger integer literals refuse rather than become rounded floats | Native bounded representation, not arbitrary-precision arithmetic; `pyjson::tests::integer_overflow_refuses_instead_of_becoming_a_float` and full-width photo/round regression in `ftx-wasm/tests/page.rs` |
 | Girth contributor completeness | missing instances/levels/samples are skipped, possibly scoring the remaining arc | each requested contributor is required; incomplete rings are `UNMEASURABLE` and gated independently of tightness | Partial rings cannot stand in for the requested circumference. `metrics::girth_coverage_tests`; complete-ring oracle arithmetic retained |

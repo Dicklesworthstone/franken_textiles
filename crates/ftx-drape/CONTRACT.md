@@ -131,6 +131,10 @@ positions, velocities, contact lag and linear-solver caches. `PhaseReport.sample
 steps' Newton diagnostics and instantaneous maximum vertex speeds. Native drape reports expose these
 under `numerical`; gravity draping additionally requires three consecutive accepted steps at at most
 1 mm/s, otherwise a numerical-settling gating flag propagates to CLI, round and browser consumers.
+Body-offset continuation tries up to eight successively smaller increments, bounded by 0.25 mm per
+accepted step and the existing one-tenth barrier-band gap guard. An unfinished requested body offset
+also gates an ordinary quiet run; paired checks retain that failure without duplicating its flag.
+Accepted phase reports retain the achieved offset, separately from the requested contact offset.
 The fixed phase schedule remains unchanged unless `max_settle_steps` explicitly requests up to
 256 additional gravity steps. The tail continues the same sewn solver, source material, inertia,
 contact state and fixed time step; it stops at the existing three-endpoint quiet window or its cap.

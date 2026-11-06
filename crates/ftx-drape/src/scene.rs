@@ -1076,18 +1076,25 @@ pub const THICKNESS_RAMP: f64 = 0.25e-3;
 
 /// Raises the contact offset toward its target by at most [`THICKNESS_RAMP`], unless that would leave a
 /// gap below a tenth of ĝ (then it waits for the barrier to push the cloth out).
-fn ramp_thickness(scene: &mut Scene) {
-    let x = &scene.solver.x;
-    if let Some(c) = scene.solver.contact.as_mut()
-        && c.params.thickness < scene.target_thickness
-    {
+fn ramp_thickness(c: &mut Contact, x: &[Vec3], target: f64) {
+    if c.params.thickness < target {
         let old = c.params.thickness;
-        c.params.thickness = (old + THICKNESS_RAMP).min(scene.target_thickness);
-        if c.min_gap(x, c.params.dhat)
-            .is_some_and(|g| g <= 0.1 * c.params.dhat)
-        {
-            c.params.thickness = old;
+        let mut increment = THICKNESS_RAMP.min(target - old);
+        // A blocked maximum increment must not trap a safe smaller continuation step.
+        for _ in 0..8 {
+            let next = (old + increment).min(target);
+            if next == old {
+                break;
+            }
+            c.params.thickness = next;
+            if c.min_gap(x, c.params.dhat)
+                .is_none_or(|g| g > 0.1 * c.params.dhat)
+            {
+                return;
+            }
+            increment *= 0.5;
         }
+        c.params.thickness = old;
     }
 }
 
@@ -1163,7 +1170,9 @@ pub fn run_phase(
     let mut rep = PhaseReport::default();
     for k in 0..steps {
         let thickness = scene.solver.contact.as_ref().map(|c| c.params.thickness);
-        ramp_thickness(scene);
+        if let Some(contact) = scene.solver.contact.as_mut() {
+            ramp_thickness(contact, &scene.solver.x, scene.target_thickness);
+        }
         let r: SolveReport = match scene.solver.step(h) {
             Ok(r) => r,
             Err(e) => {
@@ -1217,6 +1226,47 @@ mod grain_tests {
     use crate::garment::build_garment;
     use crate::start::roll_points;
     use serde_json::json;
+
+    #[test]
+    fn body_offset_ramp_backtracks_without_dropping_its_safety_margin() {
+        let body = Body::new(
+            vec![
+                Vec3::new(-0.01, -0.01, 0.0),
+                Vec3::new(0.02, -0.01, 0.0),
+                Vec3::new(-0.01, 0.02, 0.0),
+            ],
+            vec![[0, 1, 2]],
+            0.01,
+        )
+        .unwrap();
+        let x = [
+            Vec3::new(0.0, 0.0, 8e-4),
+            Vec3::new(1e-3, 0.0, 8e-4),
+            Vec3::new(0.0, 1e-3, 8e-4),
+        ];
+        let mut contact = Contact::new(
+            body,
+            ContactParams {
+                dhat: 1e-3,
+                thickness: 5e-4,
+                kappa: 100.0,
+                mu: 0.4,
+                eps_v: 1e-3,
+            },
+            vec![[0, 1, 2]],
+            |a, b| (x[a] - x[b]).norm(),
+        );
+        // The 0.25 mm trial leaves only 0.05 mm; half that trial preserves the 0.1 mm guard.
+        ramp_thickness(&mut contact, &x, 1.5e-3);
+        assert!((contact.params.thickness - 6.25e-4).abs() < 1e-15);
+        assert!(contact.min_gap(&x, 1e-3).unwrap() > 1e-4);
+        ramp_thickness(&mut contact, &x, 6.5e-4);
+        assert_eq!(contact.params.thickness, 6.5e-4);
+
+        let close = x.map(|p| Vec3::new(p.x, p.y, 7e-4));
+        ramp_thickness(&mut contact, &close, 1.5e-3);
+        assert_eq!(contact.params.thickness, 6.5e-4);
+    }
 
     fn physical_panel(id: &str, part: &str, side: Option<&str>) -> Value {
         let mut piece = json!({"id":id,"cut":{"qty":1},

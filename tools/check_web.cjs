@@ -1029,10 +1029,17 @@ async function offlineViewer(browser, file) {
           && /MODEL_FIT/.test(await page.textContent("#foldSummary")), `${program} shows the actual body residual rows`);
         check((await page.textContent("#resStatus")) === "CONVERGED", `${program} fold diagnostics preserve the separate round verdict`);
         await offlineViewer(browser, viewerFile);
-        execFileSync(ftx, ["drape", "pattern.json", "--measurements", "measurements.json", "--fit", "fit_spec.json",
+        const nativeRun = spawnSync(ftx, ["drape", "pattern.json", "--measurements", "measurements.json", "--fit", "fit_spec.json",
           "--self-contact-mm", "2", "--model", model, "--out", "native"], { cwd: dir, stdio: ["ignore", "pipe", "inherit"] });
+        if (nativeRun.error) throw nativeRun.error;
+        if (![0, 2].includes(nativeRun.status)) throw Error(`native drape exited ${nativeRun.status}: ${nativeRun.stdout}`);
+        // Exit 2 still publishes a report. Preserve the zero-gating expectation while comparing it.
+        check(nativeRun.status === 0, `${program} native drape has no gating flags`);
         const native = fs.readFileSync(path.join(dir, "native/fold_viewer.html"));
-        const nativeBody = JSON.parse(fs.readFileSync(path.join(dir, "native/sim_report.json"))).body;
+        const nativeReport = JSON.parse(fs.readFileSync(path.join(dir, "native/sim_report.json")));
+        const nativeBody = nativeReport.body;
+        check(Array.isArray(report.gating) && JSON.stringify(report.gating) === JSON.stringify(nativeReport.gating)
+          && JSON.stringify(report.flags) === JSON.stringify(nativeReport.flags), `${program} browser/native gating and advisory flags agree`);
         check(tape.every(([name, r]) => r.target_mm === nativeBody.fit.tape[name].target_mm
           && Math.round(r.body_mm * 10) / 10 === nativeBody.fit.tape[name].body_mm),
           `${program} fitted targets/readings agree with native at its documented 0.1mm report rounding`);
@@ -1044,16 +1051,25 @@ async function offlineViewer(browser, file) {
           const pairErr = await settle("#foldGo", 900000);
           check(!pairErr, "browser two-path sensitivity completes");
           if (!pairErr) {
-            const pairedReport = JSON.parse(await bytes("a[download='sim_report.json']"));
+            const pairedReportBytes = await bytes("a[download='sim_report.json']");
+            const pairedReport = JSON.parse(pairedReportBytes);
             check(pairedReport.two_start?.schema === "ftx-two-start/1"
               && pairedReport.two_start.sampled_paths === 2
               && pairedReport.two_start.primary.sew_steps === 12
               && pairedReport.two_start.alternate.sew_steps === 18,
               "browser two-path report retains the shared 12-vs-18 policy");
             const pairedViewer = await bytes("a[download='fold_viewer.html']");
-            execFileSync(ftx, ["drape", "pattern.json", "--measurements", "measurements.json", "--fit", "fit_spec.json",
+            fs.writeFileSync(path.join(dir, "browser_paired_sim_report.json"), pairedReportBytes, {flag:"wx"});
+            fs.writeFileSync(path.join(dir, "browser_paired_fold_viewer.html"), pairedViewer, {flag:"wx"});
+            const pairedNative = spawnSync(ftx, ["drape", "pattern.json", "--measurements", "measurements.json", "--fit", "fit_spec.json",
               "--self-contact-mm", "2", "--two-start-sew", "18", "--model", model, "--out", "native-paired"],
               { cwd: dir, stdio: ["ignore", "pipe", "inherit"] });
+            if (pairedNative.error) throw pairedNative.error;
+            if (![0, 2].includes(pairedNative.status)) throw Error(`native paired drape exited ${pairedNative.status}: ${pairedNative.stdout}`);
+            check(pairedNative.status === 0, "native two-path drape has no gating flags");
+            const nativePairedReport = JSON.parse(fs.readFileSync(path.join(dir, "native-paired/sim_report.json")));
+            check(Array.isArray(pairedReport.gating) && JSON.stringify(pairedReport.gating) === JSON.stringify(nativePairedReport.gating)
+              && JSON.stringify(pairedReport.flags) === JSON.stringify(nativePairedReport.flags), "browser/native two-path gating and advisory flags agree");
             check(sha(pairedViewer) === sha(fs.readFileSync(path.join(dir, "native-paired/fold_viewer.html"))),
               "browser two-path fold equals native paired drape byte for byte");
             check(/Two sewing paths:/.test(await page.textContent("#foldSummary")),
