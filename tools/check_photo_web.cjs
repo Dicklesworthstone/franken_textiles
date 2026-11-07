@@ -380,7 +380,10 @@ async function manualBodyModelHandoff(browser,origin) {
     const event=receiver.waitForEvent('download');
     await receiver.click('#receivedBodyFiles a[download="body-model.ftxbody"]');const file=await event;
     assert.equal(await file.failure(),null);assert.deepEqual(fs.readFileSync(await file.path()),original);
-    assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+'/')&&r.method==='GET'));
+    assert.deepEqual(errors,[]);assert.deepEqual(requests.filter(r=>{
+      const url=new URL(r.url);
+      return !['http:','blob:'].includes(url.protocol)||url.origin!==origin||r.method!=='GET';
+    }),[],'Model requests and Blob downloads stay on the exact local origin and are read-only');
     console.log('PASS manual model handoff: selected File changed after load; Materials retained the exact evaluated bytes.');
   } finally {await context.close();}
 }
