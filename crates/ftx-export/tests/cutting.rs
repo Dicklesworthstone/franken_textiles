@@ -750,6 +750,365 @@ fn concave_pair() -> Pattern {
     pattern(vec![a, piece("pocket", 40.0, 50.0)])
 }
 
+fn consolidation_pattern() -> Pattern {
+    let mut raw = concave_pair().raw().clone();
+    raw["pieces"][0]["vertices"]["b"] = json!([100, 0]);
+    raw["pieces"][0]["vertices"]["c"] = json!([100, 20]);
+    raw["pieces"][1] = piece("pocket", 75.0, 75.0);
+    raw["pieces"][1]["internal"] = json!([{"kind":"cut","pts":[[5,8],[10,8]]}]);
+    raw["pieces"][1]["drills"] = json!([{"p":[8,12],"d":2}]);
+    Pattern::new(raw)
+}
+
+fn consolidation_options(work_limit: usize) -> CutOptions {
+    let mut result = options();
+    result.edge_margin_mm = 0.0;
+    result.end_margin_mm = 0.0;
+    result.maximum_marker_length_m = Some(0.1);
+    result.nesting = Some(ftx_export::cutting::nesting::NestingOptions {
+        consolidate_markers: Some(ftx_export::cutting::nesting::ConsolidationOptions {
+            work_limit,
+        }),
+        ..Default::default()
+    });
+    result
+}
+
+fn cut_inventory(plan: &CutPlan) -> Vec<(String, String, usize)> {
+    let mut inventory: Vec<_> = plan
+        .rolls
+        .iter()
+        .flat_map(|roll| {
+            roll.placements.iter().map(|placement| {
+                (
+                    roll.material.sha256().to_owned(),
+                    placement.instance.clone(),
+                    placement.copy,
+                )
+            })
+        })
+        .collect();
+    inventory.sort();
+    inventory
+}
+
+#[test]
+fn whole_marker_consolidation_fills_a_recess_and_reprices_complete_stock() {
+    use ftx_export::cutting::procurement::{Market, evaluate};
+    let p = consolidation_pattern();
+    let original = p.raw().clone();
+    let opts = consolidation_options(100_000);
+    let mut plain = opts.clone();
+    plain.nesting.as_mut().unwrap().consolidate_markers = None;
+    let baseline = CutPlan::build(&p, &plain).unwrap();
+    let result = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(baseline.rolls.len(), 2);
+    assert_eq!(result.rolls.len(), 1);
+    assert_eq!(cut_inventory(&result), cut_inventory(&baseline));
+    let report = result.marker_consolidation.as_ref().unwrap();
+    assert_eq!((report.baseline_marker_count, report.marker_count), (2, 1));
+    assert!((report.baseline_length_m - 0.175).abs() < 1e-14);
+    assert_eq!(report.length_m, 0.1);
+    assert!((report.saved_length_m - 0.075).abs() < 1e-14);
+    assert_eq!(
+        (report.accepted_merges, report.transferred_placements),
+        (1, 1)
+    );
+    assert!(!report.budget_exhausted && !report.optimality_claim);
+    assert!(report.work_used > 0 && report.work_used <= report.work_limit);
+    let roll = &result.rolls[0];
+    assert_eq!(roll.length_m, baseline.rolls[0].length_m);
+    assert_eq!(roll.stock_area_m2, baseline.rolls[0].stock_area_m2);
+    assert_eq!(roll.stock_mass_kg, baseline.rolls[0].stock_mass_kg);
+    assert!((roll.external_cut_area_m2 - 0.009225).abs() < 1e-14);
+    assert!((roll.utilization - 0.9225).abs() < 1e-14);
+    assert!(roll.nesting.is_none());
+    // Independent analytic geometry: the L occupies x<=20 OR y<=20. The square needs both gaps.
+    let pocket = roll
+        .placements
+        .iter()
+        .find(|part| part.instance == "pocket")
+        .unwrap();
+    assert_eq!(pocket.bounds_mm, [25.0, 25.0, 100.0, 100.0]);
+    assert_eq!(
+        pocket.internal_cut_mm[0].0,
+        vec![Vec2::new(30.0, 33.0), Vec2::new(35.0, 33.0)]
+    );
+    assert_eq!(pocket.drills_mm[0], (Vec2::new(33.0, 37.0), 2.0));
+    assert_eq!(pocket.transform, [[1.0, 0.0, 25.0], [0.0, 1.0, 25.0]]);
+    assert!(
+        roll.placements
+            .iter()
+            .all(|part| !part.grain_reversed && part.grain_mm[1].y > part.grain_mm[0].y)
+    );
+    assert_eq!(p.raw(), &original);
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        serde_json::to_value(CutPlan::build(&p, &opts).unwrap()).unwrap()
+    );
+    let mut reordered = original;
+    reordered["pieces"].as_array_mut().unwrap().reverse();
+    assert_eq!(
+        serde_json::to_value(&result.rolls).unwrap(),
+        serde_json::to_value(
+            CutPlan::build(&Pattern::new(reordered), &opts)
+                .unwrap()
+                .rolls
+        )
+        .unwrap()
+    );
+    let svg = ftx_export::cutting::preview::svg(&result, 0).unwrap();
+    assert!(svg.contains("pocket") && svg.contains("elbow"));
+    assert!(ftx_export::cutting::preview::svg(&result, 1).is_err());
+
+    let book = split_quote_book(vec![json!({
+        "offer_id":"consolidated-stock","material_id":"shell","material_sha256":roll.material.sha256(),
+        "supplier":"Synthetic supplier","sku":"shell","price":10.0,"quantity":1.0,
+        "unit":"linear_meter","minimum_quantity":0.05,"order_increment":0.05,
+        "currency":"USD","region":"US","quality":"test","terms":"ex-tax-shipping",
+        "observed_on":"2026-10-18","available":true,"source":"test:marker-consolidation",
+        "source_sha256":"0".repeat(64)
+    })]);
+    let market: Market =
+        serde_json::from_value(json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-18","max_age_days":3}))
+        .unwrap();
+    let before = evaluate(&baseline, &book, &market).unwrap();
+    let after = evaluate(&result, &book, &market).unwrap();
+    assert_eq!(before["least_observed_independent_order_total"], 2.0);
+    assert_eq!(after["least_observed_independent_order_total"], 1.0);
+    assert_eq!(after["cut_plan"], serde_json::to_value(&result).unwrap());
+}
+
+#[test]
+fn whole_marker_consolidation_respects_gap_material_identity_and_opt_in() {
+    let p = consolidation_pattern();
+    let mut opts = consolidation_options(100_000);
+    opts.gap_mm = 6.0;
+    let mut plain = opts.clone();
+    plain.nesting.as_mut().unwrap().consolidate_markers = None;
+    let baseline = CutPlan::build(&p, &plain).unwrap();
+    let result = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(
+        serde_json::to_value(&result.rolls).unwrap(),
+        serde_json::to_value(&baseline.rolls).unwrap()
+    );
+    assert_eq!(
+        result
+            .marker_consolidation
+            .as_ref()
+            .unwrap()
+            .accepted_merges,
+        0
+    );
+    assert!(
+        !result
+            .marker_consolidation
+            .as_ref()
+            .unwrap()
+            .budget_exhausted
+    );
+    assert!(
+        serde_json::to_value(&baseline)
+            .unwrap()
+            .get("marker_consolidation")
+            .is_none()
+    );
+    assert!(
+        serde_json::to_value(&plain.nesting)
+            .unwrap()
+            .get("consolidate_markers")
+            .is_none()
+    );
+
+    let mut raw = p.raw().clone();
+    raw["pieces"][1]["fabric"] = raw["fabric"].clone();
+    raw["pieces"][1]["fabric"]["material"]["record"]["name"] =
+        json!("Different source revision, same material id");
+    opts.gap_mm = 5.0;
+    let split = CutPlan::build(&Pattern::new(raw), &opts).unwrap();
+    assert_eq!(split.rolls.len(), 2);
+    assert_ne!(
+        split.rolls[0].material.sha256(),
+        split.rolls[1].material.sha256()
+    );
+    assert_eq!(
+        split.marker_consolidation.as_ref().unwrap().accepted_merges,
+        0
+    );
+
+    opts.maximum_marker_length_m = None;
+    assert!(
+        CutPlan::build(&p, &opts)
+            .unwrap_err()
+            .message
+            .contains("maximum_marker_length_m")
+    );
+    opts.maximum_marker_length_m = Some(0.1);
+    for work_limit in [0, 20_000_001] {
+        opts.nesting
+            .as_mut()
+            .unwrap()
+            .consolidate_markers
+            .as_mut()
+            .unwrap()
+            .work_limit = work_limit;
+        assert!(
+            CutPlan::build(&p, &opts)
+                .unwrap_err()
+                .message
+                .contains("shared work_limit")
+        );
+    }
+}
+
+#[test]
+fn whole_marker_consolidation_requires_exact_grain_reversal_permission() {
+    let p = triangular_pair();
+    let mut opts = options();
+    opts.maximum_marker_length_m = Some(0.12);
+    opts.nesting = consolidation_options(100_000).nesting;
+    let one_way = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(one_way.rolls.len(), 2);
+    assert_eq!(
+        one_way
+            .marker_consolidation
+            .as_ref()
+            .unwrap()
+            .accepted_merges,
+        0
+    );
+    opts.nesting.as_mut().unwrap().grain_reversal_materials =
+        vec![one_way.rolls[0].material.sha256().to_owned()];
+    let reversed = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(reversed.rolls.len(), 1);
+    assert_eq!(cut_inventory(&reversed), cut_inventory(&one_way));
+    let placed = reversed.rolls[0]
+        .placements
+        .iter()
+        .find(|part| part.grain_reversed)
+        .unwrap();
+    assert!(placed.grain_mm[1].y < placed.grain_mm[0].y);
+    let t = placed.transform;
+    assert!((t[0][0] * t[1][1] - t[0][1] * t[1][0] - 1.0).abs() < 1e-12);
+    let ctx = Ctx::new(&p, ExportOptions::default()).unwrap();
+    let geometry = ctx
+        .geom(Source::Instance(p.instance(&placed.instance).unwrap()), 6.0)
+        .unwrap();
+    let map = |v: Vec2| {
+        Vec2::new(
+            t[0][0] * v.x + t[0][1] * v.y + t[0][2],
+            t[1][0] * v.x + t[1][1] * v.y + t[1][2],
+        )
+    };
+    for (source, actual) in cutter_ring(&geometry).unwrap().iter().zip(&placed.cut_mm) {
+        assert!((map(*source) - *actual).norm() < 1e-10);
+    }
+    for ((source, diameter), (actual, d)) in geometry.drills.iter().zip(&placed.drills_mm) {
+        assert_eq!(diameter, d);
+        assert!((map(*source) - *actual).norm() < 1e-10);
+    }
+    let mut raw = p.raw().clone();
+    raw["fabric"]["material"]["record"]["name"] = json!("Changed grain qualification");
+    assert!(
+        CutPlan::build(&Pattern::new(raw), &opts)
+            .unwrap_err()
+            .message
+            .contains("grain_reversal_materials")
+    );
+}
+
+#[test]
+fn whole_marker_consolidation_discards_partial_inventory_on_late_budget_exhaustion() {
+    let mut raw = consolidation_pattern().raw().clone();
+    raw["pieces"][1] = piece("first-pocket", 35.0, 35.0);
+    raw["pieces"]
+        .as_array_mut()
+        .unwrap()
+        .push(piece("second-pocket", 35.0, 35.0));
+    let p = Pattern::new(raw);
+    let mut opts = consolidation_options(100_000);
+    let complete = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(complete.rolls.len(), 1);
+    assert_eq!(
+        complete
+            .marker_consolidation
+            .as_ref()
+            .unwrap()
+            .transferred_placements,
+        2
+    );
+    let mut plain = opts.clone();
+    plain.nesting.as_mut().unwrap().consolidate_markers = None;
+    let baseline = CutPlan::build(&p, &plain).unwrap();
+    assert_eq!(baseline.rolls.len(), 2);
+    for budget in [
+        1,
+        complete.marker_consolidation.as_ref().unwrap().work_used - 1,
+    ] {
+        opts.nesting
+            .as_mut()
+            .unwrap()
+            .consolidate_markers
+            .as_mut()
+            .unwrap()
+            .work_limit = budget;
+        let limited = CutPlan::build(&p, &opts).unwrap();
+        assert_eq!(
+            serde_json::to_value(&limited.rolls).unwrap(),
+            serde_json::to_value(&baseline.rolls).unwrap()
+        );
+        assert_eq!(cut_inventory(&limited), cut_inventory(&baseline));
+        let report = limited.marker_consolidation.unwrap();
+        assert!(report.budget_exhausted);
+        assert_eq!(
+            (
+                report.work_used,
+                report.accepted_merges,
+                report.transferred_placements
+            ),
+            (budget, 0, 0)
+        );
+        assert_eq!(report.saved_length_m, 0.0);
+    }
+}
+
+#[test]
+fn whole_marker_consolidation_retains_prior_complete_merges_under_one_shared_budget() {
+    let p = consolidation_pattern();
+    let mut opts = consolidation_options(100_000);
+    opts.copies = 2;
+    let complete = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(complete.rolls.len(), 2);
+    let full = complete.marker_consolidation.as_ref().unwrap();
+    assert_eq!((full.baseline_marker_count, full.accepted_merges), (4, 2));
+    opts.nesting
+        .as_mut()
+        .unwrap()
+        .consolidate_markers
+        .as_mut()
+        .unwrap()
+        .work_limit = full.work_used - 1;
+    let limited = CutPlan::build(&p, &opts).unwrap();
+    let report = limited.marker_consolidation.as_ref().unwrap();
+    assert!(report.budget_exhausted);
+    assert_eq!(
+        (
+            report.marker_count,
+            report.accepted_merges,
+            report.transferred_placements
+        ),
+        (3, 1, 1)
+    );
+    assert_eq!(cut_inventory(&limited), cut_inventory(&complete));
+    assert!(
+        limited
+            .rolls
+            .iter()
+            .all(|roll| !roll.placements.is_empty() && roll.length_m <= 0.1)
+    );
+}
+
 fn triangular_pair() -> Pattern {
     let mut a = piece("a", 80., 100.);
     a["vertices"] = json!({"a":[0,0],"b":[80,0],"c":[0,100]});

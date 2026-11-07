@@ -129,7 +129,7 @@ pub struct RollMarker {
     pub mass_unavailable: Option<Refusal>,
     /// Placements in deterministic instance/copy order (not sewing or machine traversal order).
     pub placements: Vec<CutPlacement>,
-    /// Bounded search outcome against this marker's complete shelf baseline, when requested.
+    /// Bounded compaction against the same assigned shelf pieces; absent after whole-marker absorption.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nesting: Option<nesting::NestingReport>,
 }
@@ -149,6 +149,9 @@ pub struct CutPlan {
     pub options: CutOptions,
     /// Hash-ordered material-specific markers; one material may occupy several bounded markers.
     pub rolls: Vec<RollMarker>,
+    /// Optional job-wide whole-marker absorption; all downstream consumers use the final rolls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker_consolidation: Option<nesting::MarkerConsolidationReport>,
     /// Complete material-qualified knife paths, referencing the exact final marker coordinates.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub program: Option<program::Report>,
@@ -215,6 +218,11 @@ impl CutOptions {
     fn validate(&self) -> Result<(), Refusal> {
         if let Some(nesting) = &self.nesting {
             nesting.validate()?;
+            if nesting.consolidate_markers.is_some() && self.maximum_marker_length_m.is_none() {
+                return Err(bad(
+                    "marker consolidation requires an explicit maximum_marker_length_m",
+                ));
+            }
         }
         if !(1..=4096).contains(&self.copies) {
             return Err(bad("copies must be in 1..4096"));
@@ -473,6 +481,17 @@ impl CutPlan {
         for (_, (material, shapes)) in groups {
             rolls.extend(pack(material, &shapes, options)?);
         }
+        let marker_consolidation = options
+            .nesting
+            .as_ref()
+            .and_then(|search| {
+                search
+                    .consolidate_markers
+                    .as_ref()
+                    .map(|policy| (search, policy))
+            })
+            .map(|(search, policy)| nesting::consolidate(&mut rolls, options, search, policy))
+            .transpose()?;
         let pattern_sha256 = sha256_hex(&serde_json::to_vec(raw).map_err(|e| bad(e.to_string()))?);
         let mut plan = Self {
             schema: if options.maximum_marker_length_m.is_some() {
@@ -484,6 +503,7 @@ impl CutPlan {
             source_piece_ids: scope.map(|_| scope_names(pattern, &indices)),
             options: options.clone(),
             rolls,
+            marker_consolidation,
             program: None,
             program_refusal: None,
             limitations: {
@@ -499,7 +519,11 @@ impl CutPlan {
                     limits[4] = "Placement uses the admitted source-reported lower width with fixed geometry and margins. Gross area, mass and invoice conversions retain nominal source width; no area/mass/cost uncertainty is propagated.";
                 }
                 if options.maximum_marker_length_m.is_some() {
-                    limits.push("Whole cut instances are assigned by bounded first-fit shelves; marker count and total length are heuristic, not globally optimal. Compaction stays within each assigned marker.");
+                    limits.push(if options.nesting.as_ref().is_some_and(|search| search.consolidate_markers.is_some()) {
+                        "Whole cut instances start in first-fit shelves with independent compaction; bounded whole-marker absorption may remove later same-material markers without extending retained stock. Incomplete attempts preserve the complete incumbent; no globally optimal partition is claimed."
+                    } else {
+                        "Whole cut instances are assigned by bounded first-fit shelves; marker count and total length are heuristic, not globally optimal. Compaction stays within each assigned marker."
+                    });
                     limits.push("The requested marker-length limit is a planning constraint, not observed continuous stock or a supplier fulfillment guarantee.");
                 }
                 limits

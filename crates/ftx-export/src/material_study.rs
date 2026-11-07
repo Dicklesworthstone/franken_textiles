@@ -967,6 +967,22 @@ impl Request {
                 "material study exceeds 20000000 aggregate finite-stock work units; reduce alternatives or the per-plan work limit",
             ));
         }
+        let marker_consolidation_work = [
+            self.cutting.as_ref(),
+            self.cutting_job.as_ref().and_then(|job| job.roll.as_ref()),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|options| options.nesting.as_ref())
+        .filter_map(|nesting| nesting.consolidate_markers.as_ref())
+        .fold(0usize, |work, consolidation| {
+            work.saturating_add(consolidation.work_limit.saturating_mul(alternatives))
+        });
+        if marker_consolidation_work > 20_000_000 {
+            return Err(budget(
+                "material study exceeds 20000000 aggregate marker-consolidation work units; reduce alternatives or the per-plan work limit",
+            ));
+        }
         let (knife_search, knife_geometry) = [
             self.cutting
                 .as_ref()

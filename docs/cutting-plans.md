@@ -508,14 +508,79 @@ The planner assigns **whole physical cut instances** to deterministic first-fit 
 separate markers. Copies, mirrors, on-fold expansion, notches, internal cuts, drills and material hashes
 retain their ordinary meaning. A piece whose cutter height plus both end margins exceeds the limit
 refuses; the planner does not split the piece, insert a seam or divide its area into nominal purchases.
-Every new marker has its own end margins, so splitting can increase total required stock. Optional
+Every new marker has its own end margins, so splitting can increase total required stock. Ordinary
 polygon compaction runs within each assigned marker and preserves its limit. Marker count and total
-length are heuristic; the search does not claim a globally optimal partition or move pieces between
-markers during compaction. The existing 4,096-instance job limit still applies.
+length are heuristic; the search does not claim a globally optimal partition. Moving complete donor
+markers into earlier markers requires the separate consolidation option below. The existing
+4,096-instance job limit still applies.
 
 Supplying the option produces `ftx-roll-cut-plan/2`, even if everything fits on one marker. Omitting
 it preserves `ftx-roll-cut-plan/1`, one unbounded marker per exact material, and the previous options
 serialization.
+
+### Consolidating complete markers
+
+First-fit shelves can leave usable space inside a concave piece while assigning another piece to a
+separate marker. Add `nesting.consolidate_markers` to search that remaining space after each marker's
+ordinary polygon compaction:
+
+```json
+{
+  "copies": 3,
+  "gap_mm": 5,
+  "edge_margin_mm": 10,
+  "end_margin_mm": 20,
+  "seam_allowance_mm": 8,
+  "maximum_marker_length_m": 2.5,
+  "nesting": {
+    "passes": 3,
+    "work_limit": 1000000,
+    "consolidate_markers": {"work_limit": 500000}
+  }
+}
+```
+
+An explicit `maximum_marker_length_m` is required. Consolidation visits earlier destination markers
+and later donor markers in deterministic order. Both must have the same exact material hash. It tries
+to fit **every placement from one donor** inside the destination's existing width and length, retaining
+edge margins, end margins and the requested polygon gap. Existing destination pieces stay in place.
+A transfer is accepted only when the whole donor fits and removing it strictly reduces total stock
+length. The search never grows a destination or splits a donor across several markers.
+
+Every candidate uses the same full exterior polygon checks as ordinary compaction. A rectangular
+bounding box is only an early rejection test. Internal cut paths, drills, source-piece identity,
+instance, copy, grain and source transform travel together. Half-turns require the destination
+material's exact hash in `nesting.grain_reversal_materials`; names and changed source revisions do
+not inherit permission. Source-reported lower-width planning uses that same admitted narrower
+envelope. It never makes holes available as free stock.
+
+The new `work_limit` accepts 1 through 20,000,000 units and is **one shared allowance for the whole
+roll plan**, including all materials and marker pairs. It charges attempted destinations, copied
+geometry, anchors and full polygon checks. This is separate from the existing per-marker compaction
+allowance. A non-fitting donor or a budget exhausted partway through its placements discards that
+entire attempted transfer. Earlier complete accepted merges remain usable; no piece is omitted or
+duplicated. Material studies also reserve consolidation work across every alternative and all
+admitted adaptive probe slots, with a 20,000,000-unit aggregate cap. This applies to ordinary cutting
+and the roll route inside `cutting_job`.
+
+The optional top-level `marker_consolidation` report records baseline and final marker counts and
+total lengths, saved length, accepted whole merges, transferred placements, candidates, declared and
+used work, and whether the budget ran out. Its baseline is the complete inventory **after independent
+compaction and before consolidation**. `optimality_claim` is always false. A destination that absorbs
+another marker drops its old per-marker `nesting` receipt because that receipt described a different
+piece assignment. Omitting consolidation preserves existing output and options serialization.
+
+In the synthetic numerical regression, a 100 × 100 mm L with 20 mm arms and a 75 × 75 mm square use
+175 mm of 100 mm-wide stock under a 100 mm marker limit, a 5 mm gap and zero margins/allowance.
+Consolidation places the square at (25, 25) mm in the L's recess and removes its entire 75 mm marker,
+leaving one 100 mm marker. Internal cuts and a drill move by the same translation. The stock-area,
+mass and purchasing consumers use the resulting complete inventory; this example establishes
+software behavior, not a physical cutting qualification or global packing optimum.
+
+Final markers retain deterministic array order after empty donors are removed. SVG indices,
+qualified knife programs and purchasing all refer to this final sequence. Explicit
+`program.stock_loading[].marker` values therefore name the final markers. The native CLI, portable
+worker and material-workbench options-file flow use this same policy and report.
 
 ### One purchasing order for all markers of the same material
 

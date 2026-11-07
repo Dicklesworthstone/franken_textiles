@@ -1045,6 +1045,23 @@ whole/split supplier orders, mixed-job roll routes and material studies consume 
 markers; finite-stock polygons remain independent. Omission or explicit `nominal` preserves existing
 schemas and nominal serialization. See `docs/cutting-plans.md` and `tests/{cutting,cutting_job}.rs`.
 
+**Bounded whole-marker consolidation.** Optional `nesting.consolidate_markers` requires an explicit
+maximum marker length and adds one declared work allowance shared across the complete roll plan.
+After independent compaction, the deterministic search tries to absorb every physical placement of
+a later marker into an unchanged earlier marker of the same exact material. Full polygon clearance,
+layout-width and margin bounds, exact-hash grain-reversal permission and coherent relocation of all
+source features remain authoritative. Only a complete transfer with strictly shorter aggregate stock
+is accepted; failed or budget-exhausted partial attempts cannot alter the incumbent inventory.
+The top-level receipt records before/after counts and lengths, complete transfers and charged work,
+with no optimality claim. Changed destinations omit obsolete per-marker compaction receipts. Final
+stock area, mass, SVG indices, knife programs and purchasing use the complete consolidated markers.
+Omission preserves existing serialization. Material studies reserve the declared work across all
+alternatives and adaptive probe slots, including `cutting_job.roll`, with a 20,000,000-unit aggregate
+cap. Native numerical regressions cover independent concave packing/stock savings, exact relocated
+features, material/grain/gap restrictions, late rollback, retained complete merges and admission
+before callbacks. See `docs/cutting-plans.md` and `tests/{cutting,material_study}.rs`; this adds no
+physical machine qualification or global partition proof.
+
 **Material-qualified cold-knife paths.** Optional `CutOptions.program` supplies exact material and
 complete machine/source qualifications for the final ordinary roll markers. The full admitted
 thickness interval, physical stock width and marker length fit the process/bed envelope. Strict raw

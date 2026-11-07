@@ -425,6 +425,81 @@ fn malformed_targets_duplicate_keys_and_aggregate_work_are_refused() {
 }
 
 #[test]
+fn marker_consolidation_reserves_all_study_alternatives_and_mixed_job_roll_routes() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    for mixed_job in [false, true] {
+        let mut raw = serde_json::to_value(request()).unwrap();
+        raw["variants"].as_array_mut().unwrap().truncate(2);
+        raw.as_object_mut().unwrap().remove("sewing");
+        raw.as_object_mut().unwrap().remove("purchasing");
+        raw["cutting"]["maximum_marker_length_m"] = json!(0.2);
+        raw["cutting"]["nesting"] = json!({
+            "consolidate_markers":{"work_limit":10_000_001}
+        });
+        if mixed_job {
+            let roll = raw.as_object_mut().unwrap().remove("cutting").unwrap();
+            raw["cutting_job"] = json!({
+                "schema":"ftx-cutting-job/1",
+                "routes":[{"piece":"front","stock":"roll"},{"piece":"back","stock":"roll"}],
+                "roll":roll
+            });
+        }
+        let mut request: Request = serde_json::from_value(raw).unwrap();
+        let mut calls = 0;
+        let refusal = request
+            .evaluate_with(
+                &source,
+                &json!({"test":"consolidation admission"}),
+                |_, _| {
+                    calls += 1;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert_eq!(refusal.code, ftx_core::RefusalCode::BudgetExceeded);
+        assert!(refusal.message.contains("marker-consolidation work"));
+        assert_eq!(
+            calls, 0,
+            "all work must be reserved before any consumer callback"
+        );
+        let roll = if mixed_job {
+            request.cutting_job.as_mut().unwrap().roll.as_mut().unwrap()
+        } else {
+            request.cutting.as_mut().unwrap()
+        };
+        roll.nesting
+            .as_mut()
+            .unwrap()
+            .consolidate_markers
+            .as_mut()
+            .unwrap()
+            .work_limit = 10_000_000;
+        let result = request
+            .evaluate_with(
+                &source,
+                &json!({"test":"consolidation admission"}),
+                |_, _| {
+                    calls += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(calls, 2, "the exact aggregate allowance remains admissible");
+        let result = serde_json::to_value(result).unwrap();
+        for alternative in result["manufacturing"]["alternatives"].as_array().unwrap() {
+            let plan = if mixed_job {
+                assert_eq!(alternative["cutting_job"]["status"], "available");
+                &alternative["cutting_job"]["result"]["roll"]
+            } else {
+                assert_eq!(alternative["cutting"]["status"], "available");
+                &alternative["cutting"]["result"]
+            };
+            assert_eq!(plan["marker_consolidation"]["work_limit"], 10_000_000);
+        }
+    }
+}
+
+#[test]
 fn additional_production_consumer_uses_frozen_bindings_and_preserves_independent_failures() {
     let source = Pattern::from_json(PATTERN).unwrap();
     let request = request();
