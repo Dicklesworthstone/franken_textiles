@@ -766,7 +766,11 @@ fn joint_polling_keeps_independent_controls_along_a_nonlinear_seam_relation() {
         "key":"back","bounds_mm":[0,120],"initial_mm":0,
         "initial_step_mm":66.332,"minimum_step_mm":8.2915,
         "sites":[{"op":"move","piece":"back","vertex":"a",
-            "dx_multiplier":-1,"dy_multiplier":0}]});
+            "dx_multiplier":-1,"dy_multiplier":0},
+            {"op":"move","piece":"back","vertex":"b",
+                "dx_multiplier":-1,"dy_multiplier":-0.2},
+            {"op":"move","piece":"back","vertex":"c",
+                "dx_multiplier":0,"dy_multiplier":-0.2}]});
     input["sewing"]["seam_tolerance_mm"] = json!(3);
     for variant in input["variants"].as_array_mut().unwrap() {
         variant["changes"]["default"]["record"]["properties"]["width"]["value"] = json!(0.2);
@@ -774,17 +778,35 @@ fn joint_polling_keeps_independent_controls_along_a_nonlinear_seam_relation() {
     let old = run(&serde_json::from_value(input.clone()).unwrap());
     assert_eq!(old["design_search"]["selected_designs"], 0);
     input["design_adaptive"]["polling"] = json!("axis_and_joint");
+    let mut corner_only = input.clone();
+    corner_only["design_adaptive"]["variables"][1]["sites"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    let refused = run(&serde_json::from_value(corner_only).unwrap());
+    assert_eq!(refused["design_search"]["selected_designs"], 0);
+    assert!(
+        refused["design_search"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |row| row["design"]["validation"]["flat"]["summary"]["truing_failing"]
+                    .as_u64()
+                    .is_some_and(|n| n > 0)
+            )
+    );
     let request: Request = serde_json::from_value(input).unwrap();
     let report = run(&request);
     let chosen = selected(&report);
     let front = chosen["design"]["variables_mm"]["front"].as_f64().unwrap();
-    let altered: Value = serde_json::from_str(
-        chosen["design"]["altered_pattern_json"].as_str().unwrap(),
-    )
-    .unwrap();
+    let altered: Value =
+        serde_json::from_str(chosen["design"]["altered_pattern_json"].as_str().unwrap()).unwrap();
     let back = -altered["pieces"][1]["vertices"]["a"][0].as_f64().unwrap();
     // The front seam is 100 + front; moving the back's bottom vertex makes its seam
     // sqrt(100^2 + back^2). A fixed 66.332/20 linked ratio cannot retain this curve.
+    // Its continuation (20, -0.2 * back) stays perpendicular to (back, 100),
+    // so this positive corridor also satisfies the unchanged corner-truing gate.
     assert_eq!(front, 40.0);
     assert!(((10000.0 + back * back).sqrt() - 140.0).abs() <= 3.0);
     assert!((back - front * 66.332 / 20.0).abs() > 20.0);
@@ -792,9 +814,12 @@ fn joint_polling_keeps_independent_controls_along_a_nonlinear_seam_relation() {
         chosen["design"]["validation"]["flat"]["summary"]["seams_failing"],
         0
     );
+    assert_eq!(
+        chosen["design"]["validation"]["flat"]["summary"]["truing_failing"],
+        0
+    );
     let key =
-        serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), "light-sheet"))
-            .unwrap();
+        serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), "light-sheet")).unwrap();
     let row = report["alternatives"]
         .as_array()
         .unwrap()
@@ -803,10 +828,10 @@ fn joint_polling_keeps_independent_controls_along_a_nonlinear_seam_relation() {
         .unwrap();
     assert_eq!(row["cutting"]["status"], "available");
     assert_eq!(row["sewing"]["status"], "available");
-    let independent_area = 20.0 * 140.0 + 100.0 * (20.0 + back / 2.0);
+    let bottom_y = altered["pieces"][1]["vertices"]["b"][1].as_f64().unwrap();
+    let independent_area = 20.0 * 140.0 + 20.0 * 100.0 - back * bottom_y;
     assert!(
-        (row["metrics"]["assembly_mass_kg"].as_f64().unwrap()
-            - independent_area * 1e-6 * 0.18)
+        (row["metrics"]["assembly_mass_kg"].as_f64().unwrap() - independent_area * 1e-6 * 0.18)
             .abs()
             < 1e-12
     );
