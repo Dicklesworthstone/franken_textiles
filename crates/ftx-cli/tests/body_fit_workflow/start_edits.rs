@@ -140,8 +140,23 @@ fn start_edits_bootstrap_and_ordinals_preserve_exact_native_frame_identities() {
 
     annotation["starts"] = desired;
     write(&dir, "annotations.json", &annotation);
-    apply(&dir, "authored", 0);
+    let applied = apply(&dir, "authored", 0)["result"].clone();
     let authored = read(&dir, "authored/input.json");
+    let prepared_bytes = std::fs::read(dir.join("authored/prepared-input.json")).unwrap();
+    let prepared: Value = serde_json::from_slice(&prepared_bytes).unwrap();
+    assert_eq!(prepared["schema"], "ftx-anny-body-fit-input/1");
+    assert_eq!(prepared["fit"]["starts"], authored["fit"]["starts"]);
+    assert_eq!(prepared["fit"]["frames"], authored["fit"]["frames"]);
+    assert_eq!(
+        prepared["model"]["model_sha256"],
+        authored["model"]["model_sha256"]
+    );
+    assert_eq!(applied["prepared_input"]["file"], "prepared-input.json");
+    assert_eq!(applied["prepared_input"]["bytes"], prepared_bytes.len());
+    assert_eq!(
+        applied["prepared_input"]["sha256"],
+        sha256_hex(&prepared_bytes)
+    );
     let mut remaining = authored.clone();
     remaining["fit"]["starts"] = json!([]);
     assert_eq!(remaining, empty);
@@ -274,6 +289,30 @@ fn start_edits_editor_fixture_replays_the_complete_capture_through_the_fitter() 
         .clone();
     assert_eq!(fit["status"], "ACCEPTED");
     assert_eq!(fit["capture_input"]["input"], authored);
+    let prepared_text = std::fs::read_to_string(dir.join("authored/prepared-input.json")).unwrap();
+    let prepared: Value = serde_json::from_str(&prepared_text).unwrap();
+    assert_eq!(prepared["schema"], "ftx-anny-body-fit-input/1");
+    assert!(prepared.get("video_manifest").is_none());
+    assert!(prepared.get("silhouettes").is_none());
+    assert_eq!(prepared["fit"]["starts"], authored["fit"]["starts"]);
+    assert_eq!(
+        prepared["fit"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+        Some(9_007_199_254_740_993)
+    );
+    let portable = ftx_wasm::body_fit::fit_body(
+        &std::fs::read(dir.join("model.ftxbody")).unwrap(),
+        &prepared_text,
+        "50",
+        "100000",
+    )
+    .unwrap();
+    let mut expected_portable = fit.clone();
+    expected_portable
+        .as_object_mut()
+        .unwrap()
+        .remove("capture_input");
+    expected_portable["input_sha256"] = json!(sha256_hex(prepared_text.as_bytes()));
+    assert_eq!(portable, expected_portable);
     for (value, expected) in fit["solution"]["shape"]
         .as_array()
         .unwrap()
@@ -324,6 +363,7 @@ fn start_edits_editor_fixture_replays_the_complete_capture_through_the_fitter() 
         );
         for name in [
             "input.json",
+            "prepared-input.json",
             "original-input.json",
             "body-starts.json",
             "starts.json",
@@ -526,6 +566,25 @@ fn start_edits_preserve_mixed_inline_and_imported_masks_and_refuse_stale_evidenc
         .remove("silhouette_input");
     reference_fit["input_sha256"] = fitted["input_sha256"].clone();
     assert_eq!(fitted, reference_fit);
+    let prepared_text = std::fs::read_to_string(dir.join("authored/prepared-input.json")).unwrap();
+    let prepared: Value = serde_json::from_str(&prepared_text).unwrap();
+    assert_eq!(prepared["fit"]["starts"], authored["fit"]["starts"]);
+    for index in 0..2 {
+        assert_eq!(
+            prepared["fit"]["frames"][index]["silhouette"],
+            authored["fit"]["frames"][index]["silhouette"]
+        );
+    }
+    let portable = ftx_wasm::body_fit::fit_body(
+        &std::fs::read(dir.join("model.ftxbody")).unwrap(),
+        &prepared_text,
+        "50",
+        "100000",
+    )
+    .unwrap();
+    let mut expected_portable = fitted;
+    expected_portable["input_sha256"] = json!(sha256_hex(prepared_text.as_bytes()));
+    assert_eq!(portable, expected_portable);
 
     let original_manifest = std::fs::read(dir.join("masks/manifest.json")).unwrap();
     let mut changed_manifest = original_manifest.clone();
