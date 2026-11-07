@@ -237,8 +237,13 @@ partial calibration. New outputs never overwrite earlier evidence or input alias
 
 Run the synthetic image-to-calibration-to-pose workflow, including optional OpenCV tests:
 
+First create the pinned `.venv-charuco` described in [photo measurement](photo-measurement.md).
+The optional camera tests use `python3` for both synthetic renders and the default CLI adapter,
+so put that environment on the test command's `PATH`.
+
 ```sh
-cargo test -p ftx-cli --test camera_image_workflow -- --include-ignored
+PATH="$PWD/.venv-charuco/bin:$PATH" \
+  cargo test -p ftx-cli --test camera_image_workflow -- --include-ignored
 cargo test -p ftx-measure calibration_images
 cargo test -p ftx-wasm --test photo
 cargo test -p ftx-measure --test camera_brown
