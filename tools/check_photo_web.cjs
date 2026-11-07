@@ -407,8 +407,51 @@ async function bodyFitWorkflow(browser,origin) {
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Narrow layout stays within the viewport');
     assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+    await page.setInputFiles('#bodyFitModel',path.join(native,'model.ftxbody'));
+    await page.fill('#bodyFitIterations','50');await run();
+    assert.match(await page.textContent('#bodyFitSummary'),/ACCEPTED/);
+    const originalReport=await download('body-fit-report.json');
+    const [receiver]=await Promise.all([page.waitForEvent('popup'),page.click('#bodyFitWorkbench')]);
+    receiver.on('pageerror',e=>errors.push(String(e)));
+    const received=async name=>{
+      const event=receiver.waitForEvent('download');await receiver.click(`#bodyFitImportFiles a[download="${name}"]`);
+      const file=await event;assert.equal(await file.failure(),null);return fs.readFileSync(await file.path());
+    };
+    try {
+      await receiver.waitForFunction(()=>document.getElementById('status').textContent==='Body model loaded.');
+      assert.equal(await receiver.evaluate(()=>window.opener),null);
+      assert.equal(await receiver.locator('#results').isVisible(),false);
+      assert.equal(await receiver.isChecked('#bodyFitConsent'),false);
+      assert.equal((await received('body-fit-report.json')).toString(),originalReport);
+      assert.deepEqual(await received('body-model.ftxbody'),fs.readFileSync(path.join(native,'model.ftxbody')));
+      await page.fill('#bodyFitIterations','49');await absent();
+      assert.equal((await received('body-fit-report.json')).toString(),originalReport,'Received evidence remains an immutable snapshot');
+      await receiver.click('#clearBodyFitImport');
+      assert.equal(await receiver.locator('#bodyFitImportFiles a').count(),0);
+      assert.equal(await receiver.isChecked('#bodyFitConsent'),false);
+    } finally {await receiver.close();}
+    await page.fill('#bodyFitIterations','50');await run();
+    let pendingRoute,handoffArrived;const handoffParked=new Promise(resolve=>{handoffArrived=resolve;});
+    const importRoute='**/index.html?bodyFitImport=*';
+    await context.route(importRoute,route=>{pendingRoute=route;handoffArrived();});
+    const opening=page.waitForEvent('popup');await page.click('#bodyFitWorkbench');
+    let handoffTimeout;
+    try {await Promise.race([handoffParked,new Promise((_,reject)=>{handoffTimeout=setTimeout(()=>reject(Error('Body handoff did not reach its receiver')),30000);})]);}
+    finally {clearTimeout(handoffTimeout);}
+    await page.fill('#bodyFitIterations','49');await absent();await pendingRoute.continue();
+    const stale=await opening;stale.on('pageerror',e=>errors.push(String(e)));
+    try {
+      await stale.waitForFunction(()=>document.getElementById('bodyFitImportText').textContent.includes('Body fit changed before transfer'));
+      assert.equal(await stale.evaluate(()=>window.opener),null);
+      assert.equal(await stale.locator('#bodyFitImportFiles a').count(),0);
+      assert.equal(await stale.locator('#results').isVisible(),false);
+      assert.equal(await stale.isChecked('#bodyFitConsent'),false);
+    } finally {await stale.close();await context.unroute(importRoute);}
+    assert.deepEqual(await page.evaluate(()=>Object.fromEntries(Object.entries(localStorage))),
+      {'fab-wb-program':'"zouave_bolero"','fab-wb-bodyMode':'"chart"'},'Only ordinary workbench preferences are stored');
+    assert.equal(await page.evaluate(()=>sessionStorage.length),0);
     assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+'/')&&r.method==='GET'));
-    console.log('PASS actual browser body fit: complete native equality, all starts/checks, exact downloads, cancellation, source replacement, no measurement promotion, no uploads or stored evidence. Artifacts:',work);
+    console.log('PASS actual browser body fit: complete native equality, all starts/checks, exact downloads and accepted-body popup sources, immutable received evidence, stale-transfer cancellation, explicit wearer consent, no measurement promotion, no uploads or stored evidence. Artifacts:',work);
   } finally {await context.close();}
 }
 const server=http.createServer((req,res)=>{
