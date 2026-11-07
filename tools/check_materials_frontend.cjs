@@ -15774,6 +15774,51 @@ test('compiled WASM joint material memory preserves both histories and exact fro
     assert.equal(w.sent.some(message=>message.type==='result'&&message.request===201),false);
   });
 
+test('compiled WASM independent joint polling preserves native seam, budget and manufacturing decisions',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_JOINT_DESIGN_REPLAY}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const dir=process.env.FTX_JOINT_DESIGN_REPLAY,input=name=>fs.readFileSync(path.join(dir,name),'utf8');
+    const bytes=fs.readFileSync(path.join(dir,'model.ftxbody')),w=await workerModule({bindings:ftx});
+    for(const [index,name] of ['axis','joint','budget'].entries()) {
+      const studyRequest=input(`${name}-study.json`);
+      const result=await w.send({type:'study',request:380+index,onBody:true,pattern:input('pattern.json'),studyRequest,
+        measurements:input('body-input.json'),bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+      assert.equal(result.type,'result',result.message);
+      assert.deepEqual(result.result,JSON.parse(input(`${name}-native.json`)));
+      assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+      const search=result.result.design_search;
+      assert.equal(search.complete_search,false);assert.equal(search.global_optimum_claim,false);
+      assert.equal(search.selected_designs,name==='joint'?1:0);
+      assert.equal(search.evaluations,name==='joint'?9:3);
+      if(name==='joint') {
+        const chosen=search.rows.find(row=>row.selected);
+        assert.deepEqual(chosen.design.variables_mm,{back:40,front:40});
+        assert.equal(chosen.max_fit_band_violation_mm,0);
+        const altered=JSON.parse(chosen.design.altered_pattern_json);
+        for(const piece of altered.pieces)assert.equal(piece.vertices.d[1]-piece.vertices.a[1],140);
+        const variants=JSON.parse(studyRequest).variants;
+        const outputs=result.result.alternatives.filter(row=>JSON.parse(row.key)[0]===chosen.design.key);
+        assert.equal(outputs.length,variants.length);
+        for(const row of outputs) {
+          const material=variants.find(variant=>variant.key===JSON.parse(row.key)[1]);
+          const density=material.changes.default.record.properties.areal_density.value;
+          // Two independently altered 20 x 140 mm panels, with no allowance or extra inventory.
+          assert.ok(Math.abs(row.metrics.assembly_mass_kg-2*20*140*1e-6*density)<1e-14);
+        }
+      }else if(name==='axis') {
+        assert.equal(search.stop_reason,'minimum_steps');
+        for(const row of search.rows.slice(1)) {
+          assert.equal(row.design.validation.flat.summary.seams_failing,1);
+          assert.equal(row.max_fit_band_violation_mm,null);
+        }
+      }else {
+        assert.equal(search.stop_reason,'evaluation_budget');assert.equal(search.budget_exhausted,true);
+      }
+    }
+  });
+
 test('compiled WASM adaptive synthesis replays both native selected-body scenarios and exact intermediate patterns',
   {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_DESIGN_ADAPTIVE_REPLAY}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
