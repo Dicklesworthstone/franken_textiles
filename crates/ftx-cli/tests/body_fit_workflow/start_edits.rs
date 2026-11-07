@@ -124,6 +124,49 @@ fn start_edits_bootstrap_and_ordinals_preserve_exact_native_frame_identities() {
     assert_eq!(report["starts"], json!([]));
     let page = std::fs::read_to_string(dir.join("empty-review/index.html")).unwrap();
     assert!(!page.contains("<script>globalThis.startInjection"));
+    let review_prepared_bytes =
+        std::fs::read(dir.join("empty-review/prepared-input.json")).unwrap();
+    let review_prepared: Value = serde_json::from_slice(&review_prepared_bytes).unwrap();
+    assert_eq!(review_prepared["schema"], "ftx-anny-body-fit-input/1");
+    let original_fit: ftx_measure::body_fit::BodyFitInput =
+        serde_json::from_value(empty["fit"].clone()).unwrap();
+    assert_eq!(
+        review_prepared["fit"],
+        serde_json::to_value(original_fit).unwrap()
+    );
+    let entry = &report["start_editor"]["prepared_input"];
+    assert_eq!(entry["file"], "prepared-input.json");
+    assert_eq!(entry["bytes"], review_prepared_bytes.len());
+    assert_eq!(entry["sha256"], sha256_hex(&review_prepared_bytes));
+    let embedded = page
+        .split_once("id=\"startPreparedInput\">")
+        .unwrap()
+        .1
+        .split_once("</script>")
+        .unwrap()
+        .0;
+    assert_eq!(
+        serde_json::from_str::<Value>(embedded).unwrap(),
+        review_prepared
+    );
+    for (index, frame) in empty["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let descriptor = &report["start_editor"]["frames"][index];
+        assert_eq!(descriptor["frame_index"], index);
+        assert_eq!(descriptor["identity"]["stream"], frame["frame"]["stream"]);
+        assert_eq!(
+            descriptor["identity"]["timestamp_us"],
+            frame["frame"]["timestamp_us"].as_u64().unwrap().to_string()
+        );
+    }
+    assert_eq!(
+        review_prepared["fit"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
     let mut annotation = read(&dir, "empty-review/body-starts.json");
     assert_eq!(annotation["schema"], "ftx-body-starts/1");
     assert_eq!(annotation["source_input"], json!(dir.join("input.json")));
@@ -147,6 +190,7 @@ fn start_edits_bootstrap_and_ordinals_preserve_exact_native_frame_identities() {
     assert_eq!(prepared["schema"], "ftx-anny-body-fit-input/1");
     assert_eq!(prepared["fit"]["starts"], authored["fit"]["starts"]);
     assert_eq!(prepared["fit"]["frames"], authored["fit"]["frames"]);
+    assert_eq!(prepared["model"], review_prepared["model"]);
     assert_eq!(
         prepared["model"]["model_sha256"],
         authored["model"]["model_sha256"]
@@ -506,6 +550,17 @@ fn start_edits_preserve_mixed_inline_and_imported_masks_and_refuse_stale_evidenc
         annotation["silhouettes"]["sha256"].as_str().unwrap().len(),
         64
     );
+    let review_prepared = read(&dir, "review/prepared-input.json");
+    for frame in review_prepared["fit"]["frames"].as_array().unwrap() {
+        let expected = reviewed["canonical_input"]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["frame"] == frame["frame"])
+            .unwrap();
+        assert_eq!(frame["silhouette"], expected["silhouette"]);
+        assert!(!frame["silhouette"].is_null());
+    }
     annotation["starts"][0]["shape"][0] = json!(0.62);
     write(&dir, "annotations.json", &annotation);
     apply(&dir, "authored", 0);
@@ -569,6 +624,9 @@ fn start_edits_preserve_mixed_inline_and_imported_masks_and_refuse_stale_evidenc
     let prepared_text = std::fs::read_to_string(dir.join("authored/prepared-input.json")).unwrap();
     let prepared: Value = serde_json::from_str(&prepared_text).unwrap();
     assert_eq!(prepared["fit"]["starts"], authored["fit"]["starts"]);
+    let mut expected_prepared = review_prepared;
+    expected_prepared["fit"]["starts"] = prepared["fit"]["starts"].clone();
+    assert_eq!(prepared, expected_prepared);
     for index in 0..2 {
         assert_eq!(
             prepared["fit"]["frames"][index]["silhouette"],
