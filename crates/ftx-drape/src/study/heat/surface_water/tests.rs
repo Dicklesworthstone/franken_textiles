@@ -830,6 +830,67 @@ fn variable_dry_enthalpy_and_evaporating_liquid_match_an_independent_quadratic()
 }
 
 #[test]
+fn depth_profiles_keep_nonlinear_dry_enthalpy_and_inner_cell_liquid_storage() {
+    let base = variable_fixture(fixture(0.05, 0.01), 2, [0.0025; 2], [0., 60.]);
+    let record = water_material(&base);
+    let mut request = base.request;
+    request.initial_temperature_c = 999.;
+    request.initial_instance_temperature_profiles_c =
+        Some(BTreeMap::from([("sheet".into(), vec![10., 40.])]));
+    request.validate(1).unwrap();
+    let water = request.surface_water.clone().unwrap();
+    let mut history =
+        SurfaceHistory::with_instances(request, base.model, &["sheet".into()], &[0]).unwrap();
+    history.water = Some(
+        Water::from_materials(
+            water,
+            &history.model,
+            &[record],
+            &["sheet".into()],
+            &[0],
+            &[10.],
+        )
+        .unwrap(),
+    );
+    history
+        .water
+        .as_ref()
+        .unwrap()
+        .check_initial_profiles(history.state.temperature_c())
+        .unwrap();
+    assert!(
+        history
+            .water
+            .as_ref()
+            .unwrap()
+            .check_initial_profiles(&[vec![10., 81.]])
+            .is_err()
+    );
+    advance(&mut history, 0.5, 0.01).unwrap();
+    let temperatures = &history.state.temperature_c()[0];
+    let dry: f64 = temperatures
+        .iter()
+        .zip([10_f64, 40.])
+        .map(|(&t, initial)| 0.05 * (1000. * (t - initial) + 10. * (t.powi(2) - initial.powi(2))))
+        .sum();
+    let water = history.water.as_ref().unwrap();
+    let liquid = 1000. * (water.remaining[0] * temperatures[0] - 0.025 * 10.);
+    near(history.stored_j, dry);
+    near(water.liquid_stored_j, liquid);
+    near(history.balance_error_j(), 0.);
+    assert!(water.evaporated[0] > 0.);
+    assert!(water.remaining[0] > 0.);
+    let state = history.state.temperature_c().to_vec();
+    let inventory = water.remaining.clone();
+    let mut invalid = history.request.boundaries[0];
+    invalid.outside_c = 1e6;
+    history.request.boundaries[0] = invalid;
+    assert!(advance(&mut history, 0.5, 1.).is_err());
+    assert_eq!(history.state.temperature_c(), state);
+    assert_eq!(history.water.as_ref().unwrap().remaining, inventory);
+}
+
+#[test]
 fn variable_enthalpy_condensation_and_hot_supply_share_the_same_conserved_state() {
     let mut base = condensing_fixture(0., 1., vec![6000.], vec![40.]);
     let supply = base

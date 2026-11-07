@@ -411,7 +411,7 @@ not merge different starts. Every applied temperature must lie in its dry therma
 the selected water-pressure table, including initially dry pieces that can later receive liquid.
 A fallback used by no retained instance does not enter these domain checks or reported extrema.
 
-Each instance initially has a uniform through-thickness textile temperature; its liquid shares the
+Each scalar instance value initially gives a uniform through-thickness textile temperature; its liquid shares the
 inner-cell temperature. Initial liquid sensible enthalpy is the sum of each patch's initial mass
 times `liquid_specific_heat_j_kg_k * (initial_patch_temperature - enthalpy_reference_c)`. Final liquid
 storage subtracts this original patch-specific energy. Evaporation, incoming liquid/vapor mixing,
@@ -423,6 +423,37 @@ temperature. Sample bounds aggregate initial enthalpy by material column once: o
 patches, then one pass over material columns for each retained sample. The enthalpy audit therefore
 avoids a per-sample scan of all starting patch states. A forged map, owner, domain or initial-energy
 balance refuses admission.
+
+For a nonuniform starting state, `motion.transient_surface` instead accepts
+`initial_instance_temperature_profiles_c`. This is a complete map from every retained physical
+instance to exactly `cells_per_layer` temperatures, ordered from the declared inside boundary to
+the outside boundary. It cannot be combined with `initial_instance_temperatures_c`. The required
+legacy `initial_temperature_c` remains finite but is unused in this mode; missing instances or cells
+refuse rather than acquiring a fallback, interpolation or averaged temperature.
+
+```json
+{
+  "initial_temperature_c": 20.0,
+  "cells_per_layer": 2,
+  "initial_instance_temperature_profiles_c": {
+    "lining.front": [30.0, 20.0],
+    "shell.front": [15.0, 5.0]
+  }
+}
+```
+
+These illustrative values are authored initial conditions. Every cell must qualify against its
+material, water and any requested dissipation-conversion domains. Initial dry storage integrates
+each cell's original source enthalpy; liquid begins at the first, inside cell's temperature. The
+outer-cell temperature and the profile average cannot replace that liquid temperature. Subsequent
+heat conduction, phase exchange and optional liquid mechanics use the existing full cell state.
+
+The result binds these profiles in `ftx-motion-surface-initial-condition/2`, with the exact model,
+instance and triangle-owner identities, `cell_order: "inside_to_outside"`, the keyed
+`instance_temperature_profiles_c` object and extrema over all actual initial cells. Comparison
+admission reconstructs both the initial profile and the dry initial-to-final enthalpy independently,
+then reconciles the complete liquid sensible/latent ledger. Existing scalar requests retain their
+original receipt shape and numerical path.
 
 Direct `mechanical_coupling` and `coupled_water_alternatives` can use the same initial-temperature
 map. The mechanical binder checks every actual source cell against its exact owner's independently
@@ -438,8 +469,9 @@ or contact. A late coupled failure restores the whole original solver and publis
 trajectory or uncoupled fallback. Independent static and manufacturing results remain available.
 
 Moving body-coverage heat retains its dry contract. This sheet extension does not supply wet
-constitutive laws, arbitrary initial depth profiles or empirical garment qualification. It composes
-existing thermal, water and mechanical contracts without changing their schemas or source authority.
+constitutive laws, profile remapping onto moving body coverage or empirical garment qualification.
+Explicit independent-sheet profiles use the existing thermal, water and mechanical authorities;
+they do not infer a measured preparation state or a thermal restart.
 
 ### Temperature-dependent textile storage and transport
 

@@ -647,6 +647,18 @@ impl Water {
         &self.remaining
     }
 
+    pub(super) fn check_initial_profiles(&self, profiles: &[Vec<f64>]) -> Result<(), Refusal> {
+        if profiles.len() != self.initial.len() || profiles.iter().any(Vec::is_empty) {
+            return Err(invalid(
+                "surface water needs every initial thermal cell profile",
+            ));
+        }
+        for &temperature in profiles.iter().flatten() {
+            self.request.pressure(temperature)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn new(
         request: Request,
         model: &Surface,

@@ -1413,26 +1413,27 @@ pub(super) fn admit(
     }
     hashed(frame)?;
     hashed(model)?;
-    let initial_temperatures = initial_heat_temperatures(heat_request, instances)?;
+    let cells = vapor_index(&heat_request["cells_per_layer"])?;
+    let initial_profiles = initial_heat_profiles(heat_request, instances, cells)?;
     let mut anchors = vec![None; columns.len()];
     for (patch, owner) in patches.iter().zip(owners) {
-        let initial = *initial_temperatures
+        let profile = initial_profiles
             .get(vapor_index(owner)?)
+            .filter(|values| !values.is_empty())
             .ok_or_else(fail)?;
-        if initial < domain[0] || initial > domain[1] {
+        if profile.iter().any(|t| *t < domain[0] || *t > domain[1]) {
             return Err(fail());
         }
         anchors
             .get_mut(vapor_index(&patch["column"])?)
             .ok_or_else(fail)?
-            .get_or_insert(initial);
+            .get_or_insert(profile[0]);
     }
     let catalog = Catalog {
         schema: CATALOG_SCHEMA.into(),
         materials: vec![],
     };
     let networks = array(water, "unit_pressure_networks")?;
-    let cells = vapor_index(&heat_request["cells_per_layer"])?;
     if cells == 0 || cells > 4096 || networks.len() != columns.len() {
         return Err(fail());
     }
@@ -1533,7 +1534,11 @@ pub(super) fn admit(
     let mut final_range = [f64::INFINITY, f64::NEG_INFINITY];
     for (i, patch) in patches.iter().enumerate() {
         let owner = vapor_index(&owners[i])?;
-        let initial_temperature = *initial_temperatures.get(owner).ok_or_else(fail)?;
+        let initial_profile = initial_profiles
+            .get(owner)
+            .filter(|p| p.len() == cells)
+            .ok_or_else(fail)?;
+        let initial_temperature = initial_profile[0];
         let instance = instances
             .get(owner)
             .and_then(Value::as_str)
@@ -1645,8 +1650,17 @@ pub(super) fn admit(
         *areas.entry(instance).or_insert(0.) += area;
         let dry_column = &mut dry_initial[column];
         dry_column.area_m2 += area;
-        dry_column.offset_j +=
-            area * laws[column].sensible_change(dry_column.anchor_c, initial_temperature)?;
+        if initial_profile.iter().all(|&t| t == initial_temperature) {
+            // Retain the exact arithmetic of legacy uniform initial conditions.
+            dry_column.offset_j +=
+                area * laws[column].sensible_change(dry_column.anchor_c, initial_temperature)?;
+        } else {
+            for &temperature in initial_profile {
+                dry_column.offset_j += area
+                    * laws[column].sensible_change(dry_column.anchor_c, temperature)?
+                    / cells as f64;
+            }
+        }
         initial_liquid_sensible_j += initial * cp * (initial_temperature - reference);
         dryouts += u64::from(initial > 0. && remaining == 0.);
         for (total, value) in totals.iter_mut().zip([
@@ -1680,14 +1694,13 @@ pub(super) fn admit(
         }
         liquid_storage +=
             cp * (remaining * (inner - reference) - initial * (initial_temperature - reference));
-        for t in ts {
+        for (t, &initial_cell) in ts.iter().zip(initial_profile) {
             let t = finite(t)
                 .filter(|t| *t >= domain[0] && *t <= domain[1])
                 .ok_or_else(fail)?;
             final_range[0] = final_range[0].min(t);
             final_range[1] = final_range[1].max(t);
-            dry_storage +=
-                area * laws[column].sensible_change(initial_temperature, t)? / cells as f64;
+            dry_storage += area * laws[column].sensible_change(initial_cell, t)? / cells as f64;
         }
     }
     if used.len() != bindings.len()

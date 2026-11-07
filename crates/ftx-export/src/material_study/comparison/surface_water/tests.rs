@@ -304,6 +304,113 @@ fn independent_wet_starts_preserve_physical_owners_and_integrated_enthalpy() {
     }
 }
 
+fn depth_profile_case(variable: bool) -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = instance_initial_case(variable, [10., 30.]);
+    let h = &mut m["transient_surface"]["result"];
+    let profiles = json!({"front":[10.,40.],"back":[30.,20.]});
+    h["request"]
+        .as_object_mut()
+        .unwrap()
+        .remove("initial_instance_temperatures_c");
+    h["request"]["initial_instance_temperature_profiles_c"] = profiles.clone();
+    h["initial_condition"] = json!({"schema":"ftx-motion-surface-initial-condition/2",
+        "model_sha256":h["model"]["sha256"],"instances":s["drape"]["thermal_surface"]["instances"],
+        "triangle_instance":s["drape"]["thermal_surface"]["triangle_instance"],
+        "cell_order":"inside_to_outside","instance_temperature_profiles_c":profiles,
+        "temperature_range_c":[10.,40.]});
+    let storage: f64 = if variable {
+        [10_f64, 40., 30., 20.]
+            .into_iter()
+            .map(|t| 0.001 * 0.2 / 2. * (1000. * (21. - t) + 10. * (21_f64.powi(2) - t.powi(2))))
+            .sum()
+    } else {
+        let capacity = h["model"]["columns"][0]["cell_capacity_j_m2_k"][0]
+            .as_f64()
+            .unwrap();
+        [10., 40., 30., 20.]
+            .into_iter()
+            .map(|t| 0.001 * capacity * (21. - t))
+            .sum()
+    };
+    let net = storage + h["surface_water"]["latent_energy_j"].as_f64().unwrap() - 3.;
+    for (field, value) in [
+        ("stored_change_j", storage),
+        ("outside_energy_j", -net),
+        ("net_boundary_energy_j", net),
+    ] {
+        h[field] = json!(value);
+        h["trace"][0][field] = json!(value);
+    }
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    (a, d, s, m)
+}
+
+#[test]
+fn depth_profiles_admit_cellwise_dry_enthalpy_and_only_inner_cell_liquid_energy() {
+    for variable in [false, true] {
+        for alternative in [false, true] {
+            let (a, mut d, s, mut m) = depth_profile_case(variable);
+            if alternative {
+                with_alternative_qualifications(&mut d, &mut m);
+            }
+            let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface)
+                .unwrap_or_else(|r| panic!("{r:?}"));
+            assert_eq!(heat.range_c, [10., 40.]);
+            assert_eq!(heat.final_range_c, [21., 21.]);
+            if variable {
+                assert!((heat.result["stored_change_j"].as_f64().unwrap() + 2.836).abs() < 1e-13);
+            }
+            assert!(
+                (heat.result["surface_water"]["liquid_stored_change_j"]
+                    .as_f64()
+                    .unwrap()
+                    + 0.00105)
+                    .abs()
+                    < 1e-16
+            );
+        }
+    }
+    for fault in 0..9 {
+        let (a, mut d, s, mut m) = depth_profile_case(true);
+        let h = &mut m["transient_surface"]["result"];
+        match fault {
+            0 => {
+                h["request"]["initial_instance_temperature_profiles_c"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("back");
+            }
+            1 => {
+                h["request"]["initial_instance_temperature_profiles_c"]["unused"] =
+                    json!([20., 20.])
+            }
+            2 => h["request"]["initial_instance_temperature_profiles_c"]["front"] = json!([10.]),
+            3 => {
+                h["request"]["initial_instance_temperature_profiles_c"]["front"] =
+                    json!([10., 40., 20.])
+            }
+            4 => {
+                h["request"]["initial_instance_temperature_profiles_c"]["front"] = json!([10., 61.])
+            }
+            5 => h["request"]["initial_instance_temperatures_c"] = json!({"front":10.}),
+            6 => h["initial_condition"]["cell_order"] = json!("outside_to_inside"),
+            7 => {
+                h["initial_condition"]["instance_temperature_profiles_c"]["front"] =
+                    json!([40., 10.])
+            }
+            _ => {
+                h["request"]["initial_instance_temperature_profiles_c"]["front"] =
+                    json!([10., null])
+            }
+        }
+        d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
 #[test]
 fn wet_starts_follow_retained_names_and_apply_partial_fallbacks() {
     let (a, mut d, mut s, mut m) = instance_initial_case(true, [10., 30.]);

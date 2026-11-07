@@ -10,6 +10,9 @@ use ftx_pattern::materials::Catalog;
 use serde_json::json;
 
 fn column(id: &str, r: f64, capacity: f64) -> DryThermalModel {
+    column_cells(id, r, capacity, 1)
+}
+fn column_cells(id: &str, r: f64, capacity: f64, cells: usize) -> DryThermalModel {
     let s: Selection = serde_json::from_value(json!({
         "id":id,"allow_estimates":true,"record":{
             "id":id,"name":"Synthetic sheet","form":"woven",
@@ -25,7 +28,7 @@ fn column(id: &str, r: f64, capacity: f64) -> DryThermalModel {
     DryThermalModel::new(
         vec![Catalog::builtin().unwrap().resolve(&s).unwrap()],
         vec![],
-        1,
+        cells,
     )
     .unwrap()
 }
@@ -82,6 +85,50 @@ fn deformed_one_cell_matches_reference_mass_backward_euler() {
 }
 
 #[test]
+fn depth_profiles_relax_by_the_two_cell_known_answer_without_changing_reference_mass() {
+    let surface = Surface::new(
+        vec![column_cells("profile", 0.4, 200., 2)],
+        3,
+        vec![patch()],
+    )
+    .unwrap();
+    let original = surface.snapshot();
+    let old = surface.initial_profiles(&[vec![10., 30.]]).unwrap();
+    let boundary = Boundary {
+        inside_c: 20.,
+        outside_c: 20.,
+        inside_resistance: 0.1,
+        outside_resistance: 0.1,
+    };
+    for stretch in [0.5, 1., 2.] {
+        let dt = 2.;
+        let area = 0.5 * stretch;
+        // Each cell retains 50 J/K. Interior and boundary resistances are both 0.2 m2 K/W.
+        let delta = 10. / (1. + dt * area * (2. / 0.2 + 1. / 0.2) / 50.);
+        let result = surface
+            .advance(&old, &mesh(stretch), dt, &[boundary])
+            .unwrap();
+        near(result.state.temperature_c()[0][0], 20. - delta, 1e-12);
+        near(result.state.temperature_c()[0][1], 20. + delta, 1e-12);
+        near(result.stored_change_j, 0., 1e-10);
+        near(result.inside_heat_w, result.outside_heat_w, 1e-12);
+        near(result.balance_error_j, 0., 1e-10);
+        let uniform = surface.initial_profiles(&[vec![20., 20.]]).unwrap();
+        let legacy = surface.initial(20.).unwrap();
+        let a = surface
+            .advance(&uniform, &mesh(stretch), dt, &[boundary])
+            .unwrap();
+        let b = surface
+            .advance(&legacy, &mesh(stretch), dt, &[boundary])
+            .unwrap();
+        assert_eq!(a.state.temperature_c(), b.state.temperature_c());
+        assert_eq!(a.stored_change_j, b.stored_change_j);
+    }
+    assert_eq!(surface.snapshot(), original);
+    assert_eq!(old.temperature_c(), &[vec![10., 30.]]);
+}
+
+#[test]
 fn patch_initial_temperatures_use_only_their_own_material_domain() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/materials/synthetic-variable-thermal.json"
@@ -110,6 +157,21 @@ fn patch_initial_temperatures_use_only_their_own_material_domain() {
     assert!(surface.initial(-20.).is_err());
     let initial = surface.initial_patches(&[-20., 40.]).unwrap();
     assert_eq!(initial.temperature_c(), &[vec![-20.], vec![40.; 3]]);
+    let profiles = surface
+        .initial_profiles(&[vec![-20.], vec![0., 20., 60.]])
+        .unwrap();
+    assert_eq!(profiles.temperature_c(), &[vec![-20.], vec![0., 20., 60.]]);
+    for values in [
+        vec![],
+        vec![vec![20.]],
+        vec![vec![20.], vec![20.; 2]],
+        vec![vec![20.], vec![20.; 4]],
+        vec![vec![20.], vec![0., 20., 61.]],
+        vec![vec![20.], vec![f64::NAN, 20., 30.]],
+        vec![vec![-274.], vec![20.; 3]],
+    ] {
+        assert!(surface.initial_profiles(&values).is_err());
+    }
     for values in [
         vec![],
         vec![20.],

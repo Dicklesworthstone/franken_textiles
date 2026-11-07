@@ -191,7 +191,11 @@ pub fn review_body_fit_frame(
     let model = AnnyModel::from_data(AnnyData::from_bytes(model_bytes, true)?)?;
     let accepted = AcceptedShape::read(&report, &hash, &model.data().header.labels.local_changes)?;
     let counts = &model.data().header.counts;
-    if counts.vertices == 0 || counts.vertices > 100_000 || counts.faces == 0 || counts.faces > 200_000 {
+    if counts.vertices == 0
+        || counts.vertices > 100_000
+        || counts.faces == 0
+        || counts.faces > 200_000
+    {
         return Err(Refusal::new(
             RefusalCode::BudgetExceeded,
             "body-frame review needs 1..100000 vertices and 1..200000 faces",
@@ -200,7 +204,8 @@ pub fn review_body_fit_frame(
     let config = serde_json::from_value(report["anny_configuration"].clone())
         .map_err(|e| invalid(format!("invalid accepted Anny configuration: {e}")))?;
     let adapter = Adapter::new(CorrespondenceModel::new(model, config, &hash)?);
-    if serde_json::to_value(&adapter.layout).map_err(|e| invalid(e.to_string()))? != report["model"] {
+    if serde_json::to_value(&adapter.layout).map_err(|e| invalid(e.to_string()))? != report["model"]
+    {
         return Err(invalid(
             "accepted body-fit model layout disagrees with its configuration",
         ));
@@ -234,10 +239,8 @@ pub fn review_body_fit_frame(
                 .any(|(v, p)| !(*v > p.lower && *v < p.upper))
             || fractions.is_none_or(|v| {
                 v.len() != adapter.layout.pose.len()
-                    || v.iter().any(|f| {
-                        f.as_f64()
-                            .is_none_or(|n| !(0.0..=limit).contains(&n))
-                    })
+                    || v.iter()
+                        .any(|f| f.as_f64().is_none_or(|n| !(0.0..=limit).contains(&n)))
             })
         {
             return Err(invalid(
@@ -275,9 +278,7 @@ pub fn review_body_fit_frame(
                     let observation = source
                         .lines
                         .iter()
-                        .find(|line| {
-                            line.axis == comparison.axis && line.at_px == comparison.at_px
-                        })
+                        .find(|line| line.axis == comparison.axis && line.at_px == comparison.at_px)
                         .ok_or_else(|| invalid("missing source silhouette scanline"))?;
                     Ok(json!({"observation":observation,"comparison":comparison}))
                 })
@@ -313,7 +314,8 @@ pub fn review_body_fit_frame(
         .iter()
         .map(|&point| frame.camera.project(point).ok())
         .collect();
-    Ok(json!({"schema":"ftx-body-frame-review/1","report_sha256":sha256_hex(report_text.as_bytes()),
+    Ok(
+        json!({"schema":"ftx-body-frame-review/1","report_sha256":sha256_hex(report_text.as_bytes()),
         "model_sha256":hash,"frame_index":index,"frame":frame.frame,
         "frame_label":format!("{} @ {} us",frame.frame.stream,frame.frame.timestamp_us),
         "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,"camera":frame.camera,
@@ -321,5 +323,6 @@ pub fn review_body_fit_frame(
         "unprojectable_vertices":pixels.iter().filter(|p|p.is_none()).count(),
         "projection_kind":if silhouette::require_rectified(&frame.camera).is_ok(){"straight_edges"}else{"distorted_vertices"},
         "export_pose_evaluations":1,
-        "no_claim":"Accepted MODEL_FIT pose reviewed without refitting. Complete topology, not a collision skin. Supplied keypoints and scanlines are rechecked, not full-mask, visibility, occlusion, anatomy or real-wearer fit. No source photograph was loaded."}))
+        "no_claim":"Accepted MODEL_FIT pose reviewed without refitting. Complete topology, not a collision skin. Supplied keypoints and scanlines are rechecked, not full-mask, visibility, occlusion, anatomy or real-wearer fit. No source photograph was loaded."}),
+    )
 }

@@ -271,6 +271,35 @@ impl Surface {
         })
     }
 
+    /// Initialize every patch from its complete inside-to-outside cell temperature profile.
+    /// Reference mass, cell ordering and source identity are those of this immutable model.
+    ///
+    /// # Errors
+    /// Missing or extra patches/cells, nonphysical temperatures, or any cell outside its own
+    /// column's characterized temperature domain. Profiles are never resized or averaged.
+    pub fn initial_profiles(&self, temperature_c: &[Vec<f64>]) -> Result<SurfaceState, Refusal> {
+        if temperature_c.len() != self.patches.len() {
+            return Err(invalid(
+                "initial profiles must cover every retained thermal patch",
+            ));
+        }
+        for (patch, profile) in self.patches.iter().zip(temperature_c) {
+            let column = &self.columns[patch.column];
+            if profile.len() != column.cells() {
+                return Err(invalid(
+                    "initial profile must contain every inside-to-outside thermal cell",
+                ));
+            }
+            for &value in profile {
+                column.check_temperature(value)?;
+            }
+        }
+        Ok(SurfaceState {
+            temperature_c: temperature_c.to_vec(),
+            sha256: self.sha256.clone(),
+        })
+    }
+
     /// Steady heat flow and per-triangle cell temperatures at explicit column-specific boundaries.
     ///
     /// # Errors

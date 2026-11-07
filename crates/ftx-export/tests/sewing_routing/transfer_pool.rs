@@ -151,7 +151,10 @@ fn partitioned_carriers_jointly_cover_three_specialists_without_a_universal_move
         serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
     );
     capture_routed_fixture("partitioned-transfer-pool-pattern.json", pattern.raw());
-    capture_routed_fixture("partitioned-transfer-pool-options.json", &program.plan.options);
+    capture_routed_fixture(
+        "partitioned-transfer-pool-options.json",
+        &program.plan.options,
+    );
     capture_routed_fixture("partitioned-transfer-pool-program.json", &program);
 }
 
@@ -198,7 +201,8 @@ fn partitioned_carrier_seed_is_complete_and_uses_authored_order_on_equal_edges()
         );
         assert_eq!(
             serde_json::to_value(&program).unwrap(),
-            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap())
+                .unwrap()
         );
         raw["production"]["routing"]["transfer_pool"]["additional_resources"]
             .as_array_mut()
@@ -236,8 +240,8 @@ fn partitioned_carrier_pools_require_the_exact_complete_edge_union() {
         );
     }
     let mut short = raw;
-    short["production"]["routing"]["transfer_pool"]["additional_resources"][0]
-        ["available_until_milliseconds"] = json!(9699);
+    short["production"]["routing"]["transfer_pool"]["additional_resources"][0]["available_until_milliseconds"] =
+        json!(9699);
     assert_eq!(
         build(&pattern, short).unwrap_err().code,
         RefusalCode::NotConverged

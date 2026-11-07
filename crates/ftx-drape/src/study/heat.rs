@@ -59,6 +59,11 @@ pub struct SurfaceRequest {
     /// temperature; any mechanical coupling separately qualifies the complete water domain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_instance_temperatures_c: Option<BTreeMap<String, f64>>,
+    /// Complete inside-to-outside cell profiles for every retained physical instance. Each vector
+    /// has exactly `cells_per_layer` entries. Mutually exclusive with scalar instance overrides;
+    /// the legacy scalar is unused in this mode. Unretained names and missing owners refuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_instance_temperature_profiles_c: Option<BTreeMap<String, Vec<f64>>>,
     /// Through-thickness cells per retained material sheet, in 1..=64.
     pub cells_per_layer: usize,
     /// One spatially uniform reservoir/film pair per mechanical keyframe interval. Values apply
@@ -232,6 +237,12 @@ impl SurfaceRequest {
                 plastic::Kind::Bending,
             )?);
         }
+        for heating in [&history.plastic, &history.relaxation, &history.bending]
+            .into_iter()
+            .flatten()
+        {
+            heating.check_temperatures(history.state.temperature_c())?;
+        }
         if let Some(request) = &self.surface_water {
             history.water = Some(surface_water::Water::new(
                 request.clone(),
@@ -260,6 +271,9 @@ impl SurfaceRequest {
             )?;
             history.coupled_water_index = Some(index);
             history.water = Some(water);
+        }
+        if let Some(water) = &history.water {
+            water.check_initial_profiles(history.state.temperature_c())?;
         }
         Ok(history)
     }
@@ -292,6 +306,22 @@ impl SurfaceRequest {
         {
             return Err(invalid(
                 "initial instance temperatures need 1..=65536 exact names and finite physical values",
+            ));
+        }
+        if let Some(profiles) = &self.initial_instance_temperature_profiles_c
+            && (self.initial_instance_temperatures_c.is_some()
+                || profiles.is_empty()
+                || profiles.len() > 65_536
+                || profiles.iter().any(|(id, cells)| {
+                    id.is_empty()
+                        || cells.len() != self.cells_per_layer
+                        || cells
+                            .iter()
+                            .any(|value| !value.is_finite() || *value < -273.15)
+                }))
+        {
+            return Err(invalid(
+                "initial profiles need complete inside-to-outside cells, finite physical temperatures and no scalar instance overrides",
             ));
         }
         for &film in &self.boundaries {
@@ -498,57 +528,104 @@ impl SurfaceHistory {
                 "motion heat initial cells exceed the whole-history budget",
             ));
         }
-        let (state, initial_condition) =
-            if let Some(overrides) = &request.initial_instance_temperatures_c {
-                let retained = owners.iter().copied().collect::<BTreeSet<_>>();
-                if instances.is_empty()
-                    || instances.len() > 196_608
-                    || owners.len() != model.patches().len()
-                    || instances.iter().any(String::is_empty)
-                    || instances.iter().collect::<BTreeSet<_>>().len() != instances.len()
-                    || retained.iter().any(|&owner| owner >= instances.len())
-                {
-                    return Err(invalid(
-                        "initial temperatures need exact retained instance ownership",
-                    ));
-                }
-                let retained_names = retained
-                    .iter()
-                    .map(|&owner| instances[owner].as_str())
-                    .collect::<BTreeSet<_>>();
-                if overrides
-                    .keys()
-                    .any(|id| !retained_names.contains(id.as_str()))
-                {
-                    return Err(invalid(
-                        "initial temperature names an unknown or unretained physical instance",
-                    ));
-                }
-                let temperatures: Vec<_> = instances
-                    .iter()
-                    .map(|id| {
-                        overrides
-                            .get(id)
-                            .copied()
-                            .unwrap_or(request.initial_temperature_c)
-                    })
-                    .collect();
-                let patch_temperatures: Vec<_> =
-                    owners.iter().map(|&owner| temperatures[owner]).collect();
-                let state = model.initial_patches(&patch_temperatures)?;
-                let range = patch_temperatures
-                    .iter()
-                    .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], &value| {
-                        [lo.min(value), hi.max(value)]
-                    });
-                let receipt = json!({"schema":"ftx-motion-surface-initial-condition/1",
+        let (state, initial_condition) = if let Some(profiles) =
+            &request.initial_instance_temperature_profiles_c
+        {
+            let retained = owners.iter().copied().collect::<BTreeSet<_>>();
+            if request.initial_instance_temperatures_c.is_some()
+                || instances.is_empty()
+                || instances.len() > 196_608
+                || owners.len() != model.patches().len()
+                || instances.iter().any(String::is_empty)
+                || instances.iter().collect::<BTreeSet<_>>().len() != instances.len()
+                || retained.iter().any(|&owner| owner >= instances.len())
+                || profiles.len() != retained.len()
+                || profiles
+                    .values()
+                    .any(|cells| cells.len() != request.cells_per_layer)
+            {
+                return Err(invalid(
+                    "initial profiles need complete exact retained instance ownership and cell counts",
+                ));
+            }
+            let retained_names = retained
+                .iter()
+                .map(|&owner| instances[owner].as_str())
+                .collect::<BTreeSet<_>>();
+            if profiles
+                .keys()
+                .any(|id| !retained_names.contains(id.as_str()))
+            {
+                return Err(invalid(
+                    "initial profile names an unknown or unretained physical instance",
+                ));
+            }
+            let patch_profiles: Vec<_> = owners
+                .iter()
+                .map(|&owner| profiles[&instances[owner]].clone())
+                .collect();
+            let state = model.initial_profiles(&patch_profiles)?;
+            let range = patch_profiles
+                .iter()
+                .flatten()
+                .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], &value| {
+                    [lo.min(value), hi.max(value)]
+                });
+            let receipt = json!({"schema":"ftx-motion-surface-initial-condition/2",
+                    "model_sha256":model.snapshot()["sha256"],"instances":instances,
+                    "triangle_instance":owners,"cell_order":"inside_to_outside",
+                    "instance_temperature_profiles_c":profiles,"temperature_range_c":range});
+            (state, Some(receipt))
+        } else if let Some(overrides) = &request.initial_instance_temperatures_c {
+            let retained = owners.iter().copied().collect::<BTreeSet<_>>();
+            if instances.is_empty()
+                || instances.len() > 196_608
+                || owners.len() != model.patches().len()
+                || instances.iter().any(String::is_empty)
+                || instances.iter().collect::<BTreeSet<_>>().len() != instances.len()
+                || retained.iter().any(|&owner| owner >= instances.len())
+            {
+                return Err(invalid(
+                    "initial temperatures need exact retained instance ownership",
+                ));
+            }
+            let retained_names = retained
+                .iter()
+                .map(|&owner| instances[owner].as_str())
+                .collect::<BTreeSet<_>>();
+            if overrides
+                .keys()
+                .any(|id| !retained_names.contains(id.as_str()))
+            {
+                return Err(invalid(
+                    "initial temperature names an unknown or unretained physical instance",
+                ));
+            }
+            let temperatures: Vec<_> = instances
+                .iter()
+                .map(|id| {
+                    overrides
+                        .get(id)
+                        .copied()
+                        .unwrap_or(request.initial_temperature_c)
+                })
+                .collect();
+            let patch_temperatures: Vec<_> =
+                owners.iter().map(|&owner| temperatures[owner]).collect();
+            let state = model.initial_patches(&patch_temperatures)?;
+            let range = patch_temperatures
+                .iter()
+                .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], &value| {
+                    [lo.min(value), hi.max(value)]
+                });
+            let receipt = json!({"schema":"ftx-motion-surface-initial-condition/1",
                 "model_sha256":model.snapshot()["sha256"],"instances":instances,
                 "triangle_instance":owners,"instance_temperature_c":temperatures,
                 "temperature_range_c":range});
-                (state, Some(receipt))
-            } else {
-                (model.initial(request.initial_temperature_c)?, None)
-            };
+            (state, Some(receipt))
+        } else {
+            (model.initial(request.initial_temperature_c)?, None)
+        };
         Ok(Self {
             request,
             model,
@@ -1261,6 +1338,10 @@ mod tests {
     }
 
     fn model_with_emissivity(emissivity: Option<f64>) -> Surface {
+        model_with_cells(emissivity, 1)
+    }
+
+    fn model_with_cells(emissivity: Option<f64>, cells: usize) -> Surface {
         let mut selection = json!({"id":"test-heat","allow_estimates":true,
         "record":{"id":"test-heat","name":"Synthetic heat test","form":"woven",
             "sources":{"test":{"reference":"test:heat-history","accessed_on":"2026-10-17",
@@ -1280,7 +1361,7 @@ mod tests {
         let selection: Selection = serde_json::from_value(selection).unwrap();
         let m = Catalog::builtin().unwrap().resolve(&selection).unwrap();
         Surface::new(
-            vec![DryThermalModel::new(vec![m], vec![], 1).unwrap()],
+            vec![DryThermalModel::new(vec![m], vec![], cells).unwrap()],
             3,
             vec![Patch {
                 vertices: [0, 1, 2],
@@ -1306,7 +1387,11 @@ mod tests {
     }
 
     fn two_patch_model() -> Surface {
-        let mut snapshot = model().snapshot();
+        two_patch_model_with_cells(1)
+    }
+
+    fn two_patch_model_with_cells(cells: usize) -> Surface {
+        let mut snapshot = model_with_cells(None, cells).snapshot();
         snapshot["vertex_count"] = json!(4);
         snapshot["patches"].as_array_mut().unwrap().push(json!({
             "vertices":[1,3,2],"reference_area_m2":0.5,"column":0}));
@@ -1409,6 +1494,102 @@ mod tests {
                     .is_ok()
             );
         }
+    }
+
+    #[test]
+    fn instance_depth_profiles_preserve_owner_order_enthalpy_and_exact_admission() {
+        let mut request = policy();
+        request.cells_per_layer = 2;
+        request.initial_temperature_c = 999.;
+        request.initial_instance_temperature_profiles_c = Some(BTreeMap::from([
+            ("cold:0".into(), vec![5., 15.]),
+            ("hot:0".into(), vec![30., 40.]),
+        ]));
+        request.validate(1).unwrap();
+        let instances = ["hot:0".into(), "cold:0".into(), "unused:0".into()];
+        let mut history = SurfaceHistory::with_instances(
+            request.clone(),
+            two_patch_model_with_cells(2),
+            &instances,
+            &[1, 0],
+        )
+        .unwrap();
+        assert_eq!(
+            history.state.temperature_c(),
+            &[vec![5., 15.], vec![30., 40.]]
+        );
+        let positions = [
+            Vec3::ZERO,
+            Vec3::new(2., 0., 0.),
+            Vec3::new(0., 1., 0.),
+            Vec3::new(2., 1., 0.),
+        ];
+        history
+            .advance(&positions, 1., 0, 0, None, None, None)
+            .unwrap();
+        let stored: f64 = history
+            .state
+            .temperature_c()
+            .iter()
+            .flatten()
+            .zip([5., 15., 30., 40.])
+            .map(|(&t, initial)| 50. * (t - initial))
+            .sum();
+        let result = history.finish("path", "initial", 1.).unwrap();
+        let initial = &result["initial_condition"];
+        assert_eq!(initial["schema"], "ftx-motion-surface-initial-condition/2");
+        assert_eq!(initial["cell_order"], "inside_to_outside");
+        assert_eq!(initial["model_sha256"], result["model"]["sha256"]);
+        assert_eq!(initial["triangle_instance"], json!([1, 0]));
+        assert_eq!(
+            initial["instance_temperature_profiles_c"],
+            json!(request.initial_instance_temperature_profiles_c)
+        );
+        assert_eq!(initial["temperature_range_c"], json!([5., 40.]));
+        assert!((result["stored_change_j"].as_f64().unwrap() - stored).abs() < 1e-9);
+        assert!(result["balance_error_j"].as_f64().unwrap().abs() < 1e-9);
+        for profiles in [
+            BTreeMap::from([("hot:0".into(), vec![20., 20.])]),
+            BTreeMap::from([
+                ("hot:0".into(), vec![20., 20.]),
+                ("unknown:0".into(), vec![20., 20.]),
+            ]),
+            BTreeMap::from([
+                ("hot:0".into(), vec![20., 20.]),
+                ("unused:0".into(), vec![20., 20.]),
+            ]),
+            BTreeMap::from([
+                ("hot:0".into(), vec![20.]),
+                ("cold:0".into(), vec![20., 20.]),
+            ]),
+            BTreeMap::from([
+                ("hot:0".into(), vec![20., f64::NAN]),
+                ("cold:0".into(), vec![20., 20.]),
+            ]),
+        ] {
+            let mut bad = request.clone();
+            bad.initial_instance_temperature_profiles_c = Some(profiles);
+            assert!(
+                SurfaceHistory::with_instances(
+                    bad,
+                    two_patch_model_with_cells(2),
+                    &instances,
+                    &[1, 0]
+                )
+                .is_err()
+            );
+        }
+        request.initial_instance_temperatures_c = Some(BTreeMap::from([("hot:0".into(), 20.)]));
+        assert!(request.validate(1).is_err());
+        assert!(
+            SurfaceHistory::with_instances(
+                request,
+                two_patch_model_with_cells(2),
+                &instances,
+                &[1, 0]
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -1030,6 +1030,15 @@ fn replay_incoming_mechanical_water(version: u8) {
 
 #[test]
 fn variable_textile_water_replays_native_portable_and_named_case_enthalpy_decisions() {
+    replay_variable_textile_water(false);
+}
+
+#[test]
+fn depth_profile_water_replays_native_portable_and_coupled_enthalpy_decisions() {
+    replay_variable_textile_water(true);
+}
+
+fn replay_variable_textile_water(profiles: bool) {
     let (pattern, mut study, mut single) = inputs();
     for variant in study["variants"].as_array_mut().unwrap() {
         let record = &mut variant["changes"]["default"]["record"];
@@ -1075,16 +1084,28 @@ fn variable_textile_water_replays_native_portable_and_named_case_enthalpy_decisi
     );
     let heat = &mut single["motion"]["transient_surface"];
     heat["cells_per_layer"] = json!(2);
+    let initial_cells = if profiles { [10., 30.] } else { [20., 20.] };
+    if profiles {
+        heat["initial_temperature_c"] = json!(999.);
+        heat["initial_instance_temperature_profiles_c"] = json!({"band":initial_cells});
+    }
     heat["max_cell_steps"] = json!(work);
     heat["surface_water"]["bindings"]["band"]["material_sha256"] = json!(material.sha256());
     heat["surface_water"]["qualification"] = json!(
         "Synthetic exact dry k(T)/Cp(T) profiles and fixed Ret retained over the declared water-loading domain; both dry laws restricted to [0,60] C"
     );
+    if profiles {
+        qualify_mechanics(&pattern, &study, &mut single, false);
+    }
     replay(
         &pattern,
         &study,
         single,
-        "FTX_VARIABLE_WATER_REPLAY",
+        if profiles {
+            "FTX_DEPTH_PROFILE_WATER_REPLAY"
+        } else {
+            "FTX_VARIABLE_WATER_REPLAY"
+        },
         |report| {
             let result = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
             let outcome = &result["motion"]["result"]["transient_surface"];
@@ -1100,10 +1121,10 @@ fn variable_textile_water_replays_native_portable_and_named_case_enthalpy_decisi
                 .zip(temperatures)
             {
                 let area = patch["reference_area_m2"].as_f64().unwrap();
-                for t in ts.as_array().unwrap() {
+                for (t, initial) in ts.as_array().unwrap().iter().zip(initial_cells) {
                     let t = t.as_f64().unwrap();
                     // Independent integral of .2 kg/m² * Cp(T), divided between two cells.
-                    dry_enthalpy += area * 0.1 * (1000. + 10. * (t + 20.)) * (t - 20.);
+                    dry_enthalpy += area * 0.1 * (1000. + 10. * (t + initial)) * (t - initial);
                 }
             }
             assert!((dry_enthalpy - heat["stored_change_j"].as_f64().unwrap()).abs() < 1e-8);
@@ -1115,6 +1136,31 @@ fn variable_textile_water_replays_native_portable_and_named_case_enthalpy_decisi
             }
             assert_eq!(water["remaining_liquid_kg"], 0.);
             let initial = water["initial_liquid_kg"].as_f64().unwrap();
+            assert!(
+                (water["liquid_stored_change_j"].as_f64().unwrap()
+                    + initial * 4200. * initial_cells[0])
+                    .abs()
+                    < 1e-8
+            );
+            if profiles {
+                assert_eq!(
+                    heat["initial_condition"]["schema"],
+                    "ftx-motion-surface-initial-condition/2"
+                );
+                assert_eq!(heat["initial_condition"]["cell_order"], "inside_to_outside");
+                assert_eq!(
+                    heat["initial_condition"]["instance_temperature_profiles_c"],
+                    json!({"band":initial_cells})
+                );
+                assert_eq!(
+                    heat["initial_condition"]["temperature_range_c"],
+                    json!([10., 30.])
+                );
+                assert_eq!(
+                    result["motion"]["result"]["liquid_mechanics"],
+                    heat["mechanical_coupling"]
+                );
+            }
             assert!(
                 (initial - water["evaporated_liquid_kg"].as_f64().unwrap()).abs()
                     <= 1e-12 * initial
@@ -1147,9 +1193,14 @@ fn variable_textile_water_replays_native_portable_and_named_case_enthalpy_decisi
                     .unwrap()
                     < 20.
             );
+            let missing =
+                &keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"];
             assert_eq!(
-                keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["result"]
-                    ["transient_surface"]["status"],
+                if profiles {
+                    &missing["status"]
+                } else {
+                    &missing["result"]["transient_surface"]["status"]
+                },
                 "refused"
             );
         },

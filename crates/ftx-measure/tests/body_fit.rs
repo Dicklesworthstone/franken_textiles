@@ -158,15 +158,30 @@ fn full_mesh_review_preserves_observation_roles_and_refuses_failed_projections()
         assert_eq!(projected.observed_px, observed.pixel_px);
         assert_eq!(projected.predicted_px, observed.pixel_px);
         assert_eq!(projected.residual_px, 0.0);
-        let index = model.layout.keypoints.iter().position(|n| n == &observed.name).unwrap();
+        let index = model
+            .layout
+            .keypoints
+            .iter()
+            .position(|n| n == &observed.name)
+            .unwrap();
         assert_eq!(projected.world_m, points[index]);
     }
     for role in [Partition::Fit, Partition::HeldOut] {
         let mut changed = frame.clone();
-        let observation = changed.keypoints.iter_mut().find(|p| p.partition == role).unwrap();
+        let observation = changed
+            .keypoints
+            .iter_mut()
+            .find(|p| p.partition == role)
+            .unwrap();
         observation.pixel_px.x += 3.0;
         assert!(review_keypoints(&changed, &model.layout.keypoints, &points).is_ok());
-        changed.keypoints.iter_mut().find(|p| p.partition == role).unwrap().pixel_px.x += 0.01;
+        changed
+            .keypoints
+            .iter_mut()
+            .find(|p| p.partition == role)
+            .unwrap()
+            .pixel_px
+            .x += 0.01;
         assert!(review_keypoints(&changed, &model.layout.keypoints, &points).is_err());
     }
     assert!(review_keypoints(&frame, &model.layout.keypoints, &points[..9]).is_err());

@@ -4183,6 +4183,63 @@ fn initial_heat_temperatures(request: &Value, instances: &[Value]) -> Result<Vec
         .collect()
 }
 
+// Preserve each physical owner's inside-to-outside profile. Empty entries are permitted only
+// for unretained source instances; callers verify every actual triangle owner and exact map keys.
+fn initial_heat_profiles(
+    request: &Value,
+    instances: &[Value],
+    cells: usize,
+) -> Result<Vec<Vec<f64>>, Refusal> {
+    let fail = || {
+        invalid(
+            "initial cell profiles need exact instances, complete cells and no scalar overrides",
+        )
+    };
+    if !(1..=64).contains(&cells) {
+        return Err(fail());
+    }
+    let Some(profiles) = request
+        .get("initial_instance_temperature_profiles_c")
+        .filter(|value| !value.is_null())
+    else {
+        return initial_heat_temperatures(request, instances)
+            .map(|values| values.into_iter().map(|value| vec![value; cells]).collect());
+    };
+    let profiles = profiles.as_object().ok_or_else(fail)?;
+    if !request["initial_instance_temperatures_c"].is_null()
+        || profiles.is_empty()
+        || profiles.len() > 65_536
+    {
+        return Err(fail());
+    }
+    let mut ids = BTreeSet::new();
+    let result = instances
+        .iter()
+        .map(|value| {
+            let id = value
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(fail)?;
+            if !ids.insert(id) {
+                return Err(fail());
+            }
+            profiles.get(id).map_or(Ok(Vec::new()), |profile| {
+                profile
+                    .as_array()
+                    .filter(|values| values.len() == cells)
+                    .ok_or_else(fail)?
+                    .iter()
+                    .map(|value| finite(value).filter(|t| *t >= -273.15).ok_or_else(fail))
+                    .collect()
+            })
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    if profiles.keys().any(|id| !ids.contains(id.as_str())) {
+        return Err(fail());
+    }
+    Ok(result)
+}
+
 // Reconstruct authored initial temperatures from the retained physical owners. Material columns
 // can be shared by differently conditioned pieces; neither their order nor an unused fallback
 // temperature defines the initial extrema. The production thermal solver still owns evolution.
@@ -4202,10 +4259,16 @@ fn initial_heat_range(
     let initial = finite(&request["initial_temperature_c"])
         .filter(|t| *t >= -273.15)
         .ok_or_else(fail)?;
-    let Some(overrides) = request
+    let profiles = request
+        .get("initial_instance_temperature_profiles_c")
+        .filter(|v| !v.is_null());
+    let scalar_overrides = request
         .get("initial_instance_temperatures_c")
-        .filter(|v| !v.is_null())
-    else {
+        .filter(|v| !v.is_null());
+    if profiles.is_some() && (coverage || scalar_overrides.is_some()) {
+        return Err(fail());
+    }
+    let Some(overrides) = profiles.or(scalar_overrides) else {
         if !heat["initial_condition"].is_null() {
             return Err(fail());
         }
@@ -4268,32 +4331,87 @@ fn initial_heat_range(
         }
         heating_domains.push(domain);
     }
-    let temperatures = initial_heat_temperatures(request, instances)?;
+    let cells = if profiles.is_some() {
+        vapor_index(&request["cells_per_layer"])?
+    } else {
+        1
+    };
+    let temperatures = initial_heat_profiles(request, instances, cells)?;
+    let final_profiles = profiles
+        .map(|_| {
+            heat["final"]["temperature_c"]
+                .as_array()
+                .filter(|values| values.len() == patches.len())
+                .ok_or_else(fail)
+        })
+        .transpose()?;
+    let mut profile_storage_j = 0.;
     let mut used = BTreeSet::new();
     let mut range = [f64::INFINITY, f64::NEG_INFINITY];
-    for ((owner, patch), triangle) in owners.iter().zip(patches).zip(triangles) {
+    for (index, ((owner, patch), triangle)) in owners.iter().zip(patches).zip(triangles).enumerate()
+    {
         let owner = vapor_index(owner)?;
-        let t = *temperatures.get(owner).ok_or_else(fail)?;
+        let profile = temperatures
+            .get(owner)
+            .filter(|p| !p.is_empty())
+            .ok_or_else(fail)?;
         if patch["vertices"] != *triangle
             || finite(&patch["reference_area_m2"]).is_none_or(|a| a <= 0.)
         {
             return Err(fail());
         }
         let column = vapor_index(&patch["column"])?;
-        laws.get(column).ok_or_else(fail)?.check_temperature(t)?;
         let [lo, hi] = *heating_domains.get(column).ok_or_else(fail)?;
-        if t < lo || t > hi {
-            return Err(fail());
+        for &t in profile {
+            laws.get(column).ok_or_else(fail)?.check_temperature(t)?;
+            if t < lo || t > hi {
+                return Err(fail());
+            }
+            range[0] = range[0].min(t);
+            range[1] = range[1].max(t);
+        }
+        if let Some(final_profiles) = final_profiles {
+            let final_cells = final_profiles[index]
+                .as_array()
+                .filter(|values| values.len() == cells)
+                .ok_or_else(fail)?;
+            let area = finite(&patch["reference_area_m2"]).ok_or_else(fail)?;
+            let law = laws.get(column).ok_or_else(fail)?;
+            for (&initial, final_cell) in profile.iter().zip(final_cells) {
+                profile_storage_j += area
+                    * law.sensible_change(initial, finite(final_cell).ok_or_else(fail)?)?
+                    / cells as f64;
+            }
         }
         used.insert(instances[owner].as_str().ok_or_else(fail)?);
-        range[0] = range[0].min(t);
-        range[1] = range[1].max(t);
     }
+    let scalar_temperatures: Vec<_> = temperatures
+        .iter()
+        .map(|cells| cells.first().copied())
+        .collect();
     let mut receipt = json!({
         "schema":if coverage {"ftx-motion-coverage-initial-condition/1"}
             else {"ftx-motion-surface-initial-condition/1"},
         "model_sha256":model["sha256"], "instances":instances, "triangle_instance":owners,
-        "instance_temperature_c":temperatures, "temperature_range_c":range});
+        "instance_temperature_c":scalar_temperatures, "temperature_range_c":range});
+    if let Some(profiles) = profiles {
+        if used.len() != overrides.len()
+            || !profile_storage_j.is_finite()
+            || !heat_near(
+                profile_storage_j,
+                finite(&heat["stored_change_j"]).ok_or_else(fail)?,
+            )
+        {
+            return Err(fail());
+        }
+        receipt["schema"] = json!("ftx-motion-surface-initial-condition/2");
+        receipt
+            .as_object_mut()
+            .ok_or_else(fail)?
+            .remove("instance_temperature_c");
+        receipt["cell_order"] = json!("inside_to_outside");
+        receipt["instance_temperature_profiles_c"] = profiles.clone();
+    }
     if coverage {
         if !same_identity(
             &heat["initial_condition"]["frame_sha256"],

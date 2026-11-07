@@ -732,9 +732,22 @@ Coverage uses the original source model retained in `checkpoint.frame.source` an
 initial-state receipt to `initial_frame_sha256`, independently of the final overlap partition.
 Missing/stale receipts and unknown or unretained overrides refuse only the affected heat consumer;
 independent heat and manufacturing remain available. Requested dissipation heating qualifies the
-actual initial temperatures against each source material's conversion domain; water does not support
-these overrides. Regressions: `scenario_comparison` initial-sheet and coverage extrema and
+actual initial temperatures against each source material's conversion domain. Source-qualified
+independent-sheet water and liquid/mechanical histories also admit these scalar overrides; coverage
+water remains unsupported. Regressions: `scenario_comparison` initial-sheet and coverage extrema and
 source/receipt refusal groups.
+
+Independent-sheet initial depth profiles use `initial_instance_temperature_profiles_c`, a complete
+map of exact retained physical instances to `cells_per_layer` values ordered inside to outside.
+Admission reconstructs `ftx-motion-surface-initial-condition/2` against the source model,
+instance/triangle owners, keyed profiles and actual extrema, refusing scalar-map coexistence,
+missing/extra owners or cells and unqualified temperatures. Dry initial-to-final storage independently
+integrates each cell's source enthalpy law; water's initial sensible storage uses the inside cell,
+while its full phase/energy audit remains authoritative. The profiles also support independently
+qualified water and liquid/mechanical histories. Existing uniform and scalar per-instance routes
+retain their original semantics. This extends independent-sheet initialization only, without
+coverage profile remapping, a new material law or empirical garment evidence.
+
 Radiative comparisons retain the methods, conditions, units and evidence of the actual requested
 emissivity observations by source piece, including arbitrary property names and source-bearing
 automatic optical mappings. Independent sheets use only their positive mapped face; steady
