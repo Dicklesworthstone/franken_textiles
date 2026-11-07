@@ -858,6 +858,30 @@ function adaptiveDomain(variable) {
   return [low, high, variable.initialMm];
 }
 
+/** Validate explicitly authored additional starts against the same complete variable domains. */
+export function buildGuidedDesignRestartPoints(points, variables) {
+  if (!Array.isArray(points) || points.length > 31) throw Error("Choose at most 31 additional adaptive starting points.");
+  if (!Array.isArray(variables) || !variables.length || variables.length > 3) throw Error("Additional starts need 1–3 declared variables.");
+  const keys = [...uniqueNames(variables.map(variable => variable?.key), "Adaptive variable names", 3)];
+  for (const variable of variables) adaptiveDomain(variable);
+  // JSON uses the same identity for -0 and +0, matching the native coordinate cache.
+  const seen = new Set([JSON.stringify(variables.map(variable => variable.initialMm))]);
+  return Array.from(points, point => {
+    object(point, keys, keys, "Additional adaptive start");
+    const values = variables.map(variable => {
+      const value = point[variable.key];
+      if (typeof value !== "number" || !Number.isFinite(value) || value < variable.boundsMm[0] || value > variable.boundsMm[1]) {
+        throw Error(`Additional start for ${variable.key} must be finite and inside its declared bounds.`);
+      }
+      return value;
+    });
+    const identity = JSON.stringify(values);
+    if (seen.has(identity)) throw Error("Additional adaptive starts must be distinct from one another and the initial point.");
+    seen.add(identity);
+    return Object.fromEntries(keys.map((key, index) => [key, values[index]]));
+  });
+}
+
 function adaptiveGuidance(design, candidates, comparison, matrix) {
   if (!["fit_band_violation_mm", "consumer_comparison", "consumer_pareto", "consumer_worst_case", "consumer_matrix_pareto"].includes(design.objective)) {
     throw Error("Choose fit-band, nominated-case, worst-case or Pareto adaptive guidance.");
@@ -958,7 +982,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
   const fields = multiple ? ["variables", "maxDesigns", "fitSpec"] :
     ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
   const required = adaptive ? [...fields, "mode", "objective", "maxEvaluations"] : fields;
-  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
+  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey", "restartPointsMm"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
   const design = object(value, [...allowed, "after"], required, "Linked design");
   const after = own(design, "after") ? buildGuidedDesignAfterOperations(design.after, [...pieces], seamIds) : undefined;
   if (adaptive) {
@@ -975,6 +999,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
       sites: design.pieceIds.map(piece => ({ piece, axis: design.axis, at_mm: design.atMm, multiplier: design.multiplier })) }];
   }
   if (!Array.isArray(authored) || !authored.length || authored.length > 3) throw Error("Linked design needs 1–3 variables.");
+  const restartPoints = adaptive && own(design, "restartPointsMm") ? buildGuidedDesignRestartPoints(design.restartPointsMm, authored) : [];
   const keys = new Set();
   let totalPoints = 1, totalSites = after?.length ?? 0;
   const variables = Array.from(authored, value => {
@@ -984,6 +1009,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
     if (keys.has(variable.key)) throw Error("Linked variable keys must be unique.");
     keys.add(variable.key);
     const values = adaptive ? adaptiveDomain(variable) : linkedValues(variable.values);
+    if (adaptive) values.push(...restartPoints.map(point => point[variable.key]));
     if (!Array.isArray(variable.sites) || !variable.sites.length) throw Error("Each linked variable needs alteration sites.");
     totalSites += variable.sites.length;
     if (totalSites > 16) throw Error("Linked design exceeds 16 ordered alteration operations including variable sites and seam adjustments.");
@@ -1020,6 +1046,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
     ...(own(design, "materialKey") ? { material_key: design.materialKey } : {}),
     ...(own(design, "materialKeys") ? { material_keys: [...design.materialKeys] } : {}),
     ...(own(design, "caseKey") ? { case_key: design.caseKey } : {}), variables,
+    ...(restartPoints.length ? { restart_points_mm: restartPoints } : {}),
     ...(after === undefined ? {} : { after }),
     max_evaluations: design.maxEvaluations, max_designs: design.maxDesigns } :
     { variables, ...(after === undefined ? {} : { after }), max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } });

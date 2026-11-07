@@ -5366,7 +5366,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 
 // The original inline workshop script, using a small DOM transport double. These tests inspect
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
-function draftingPage({traceToken=null,materialToken=null,photoToken=null,audit=false}={}) {
+function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyToken=null,initialize=true,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
@@ -5385,7 +5385,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,audit=
   class LocalURL extends URL {}
   LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
-  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:materialToken?'?materialImport='+materialToken:photoToken?'?photoImport='+photoToken:'')},
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:materialToken?'?materialImport='+materialToken:photoToken?'?photoImport='+photoToken:bodyToken?'?bodyFitImport='+bodyToken:'')},
     window:{opener,open:(url,target)=>{const popup={url,target,closed:false,messages:[],postMessage(data,origin){this.messages.push({data,origin});}};popups.push(popup);return popup;},
       addEventListener:(name,fn)=>{const previous=windowEvents[name];windowEvents[name]=(...args)=>{previous?.(...args);return fn(...args);};}},
     localStorage:{getItem:key=>audit&&key==='fab-wb-program'?'"audit"':null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
@@ -5398,14 +5398,14 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,audit=
     return m?.type==='run'&&typeof m.req==='string'?{...m,req:JSON.parse(m.req)}:m;
   };
   const sheetDictionaries=['DICT_4X4_50','DICT_5X5_50'];
-  emit({type:'ready',info:{zouave_bolero:{style:{}}},sheetDictionaries,version:'test',dxf:'test'});
-  assert.deepEqual(e.sheetDictionaries.children.map(option=>option.value),sheetDictionaries);
+  const engineReady=()=>emit({type:'ready',info:{zouave_bolero:{style:{}}},sheetDictionaries,version:'test',dxf:'test'});
+  if(initialize) {engineReady();assert.deepEqual(e.sheetDictionaries.children.map(option=>option.value),sheetDictionaries);}
   const result=(request,extra={})=>emit({type:'result',request:request??last('run').request,foldable:true,bodyCheckable:true,
     res:{title:'current',status:'CONVERGED',basis:{},zip:'round.zip',files:[],validation:{}},blobs:{zip:new Uint8Array([1])},...extra});
   const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
     emit({type:'bodyReady',request:last('body').request});};
   const dispatch=(id,event)=>e[id].handlers[event]?.();
-  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents,popups,hasOpener:()=>!!context.window.opener};
+  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,engineReady,opener,openerMessages,windowEvents,popups,hasOpener:()=>!!context.window.opener};
 }
 const alterationTargets = {
   pieces:[{id:'front',vertices:['a','b'],edges:['hem','armhole']},{id:'sleeve',vertices:['ua','top'],edges:['cap','hem']}],
@@ -5609,6 +5609,150 @@ test('drafting handoff snapshots the loaded model and exact accepted fit and can
     assert.equal(cancelled.files,undefined);assert.equal(cancelled.bodySource,undefined);
   }
 });
+
+test('body-fit handoff waits for the engine and preserves exact sources through garment and material consumers',async()=>{
+  const token='a'.repeat(32),p=draftingPage({bodyToken:token,initialize:false});
+  const raw=' {"schema":"ftx-body-fit/1","sequence":18446744073709551615,"probe":-0.0}\r\n';
+  const fit=new Blob([raw]),model=new Blob([new Uint8Array([1,2,3])]);
+  const data={type:'ftx-body-fit-sources',token,fit,model};
+  assert.equal(p.openerMessages.length,0);
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+  assert.equal(p.last('body'),undefined);
+  p.engineReady();assert.equal(p.openerMessages[0].data.type,'ftx-body-fit-sources-ready');
+  for(const [origin,source,m] of [['https://foreign.invalid',p.opener,data],['https://unit.invalid',{},data],
+    ['https://unit.invalid',p.opener,{...data,token:'wrong'}]]) await p.windowEvents.message({origin,source,data:m});
+  assert.equal(p.last('body'),undefined);
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+  assert.equal(p.hasOpener(),false);assert.equal(p.e.bodyFitConsent.checked,false);
+  assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[1,2,3]);
+  const links=p.e.bodyFitImportFiles.children;
+  assert.deepEqual(links.map(a=>a.download),['body-model.ftxbody','body-fit-report.json']);
+  assert.equal(await p.live.get(links[1].href).text(),raw);
+  p.emit({type:'bodyReady',request:p.last('body').request});
+  await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+  const readiness=p.e.resStatus.textContent;assert.equal(p.e.bodyCheckGo.disabled,true);
+  assert.equal(p.e.supplementalFiles.files.length,0,'Body predictions never enter added measurement evidence');
+  assert.equal(p.e.supplementalConsent.checked,false);
+  p.e.bodyFitConsent.checked=true;await p.e.bodyFitConsent.handlers.change();
+  p.e.bodyCheckGo.handlers.click();assert.equal(p.last('inspectBody').bodyFit,raw);
+  p.emit({type:'error',op:'inspectBody',request:p.last('inspectBody').request,message:'synthetic test refusal'});
+  assert.equal(p.e.resStatus.textContent,readiness);
+  await p.e.chooseMaterials.handlers.click();const popup=p.popups[0];
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup,data:{type:'ftx-round-sources-ready',token:new URL(popup.url).searchParams.get('roundImport')}});
+  assert.equal(await popup.messages[0].data.bodySource.fit.text(),raw);
+  assert.deepEqual([...new Uint8Array(await popup.messages[0].data.bodySource.model.arrayBuffer())],[1,2,3]);
+  const count=p.messages.length;
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{...data,fit:new Blob(['replacement'])}});
+  assert.equal(p.messages.length,count,'One-use transfer cannot replace an installed snapshot');
+});
+test('body-fit receiver refuses invalid transfers and clears cancelled pending reads without tape fallback',async()=>{
+  const token='b'.repeat(32),raw='{"original":18446744073709551615}',model=new Blob([new Uint8Array([4,5])]);
+  class LargeFit extends Blob {get size(){return 16*1024*1024+1;}}
+  class LargeModel extends Blob {get size(){return 512*1024*1024+1;}}
+  for(const patch of [{type:'ftx-body-fit-sources-cancelled'},{fit:null},{fit:new Blob([])},
+    {fit:new LargeFit(['{}'])},{fit:new Blob([new Uint8Array([255])])},{model:new Blob([])},{model:new LargeModel(['x'])}]) {
+    const p=draftingPage({bodyToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-body-fit-sources',token,fit:new Blob([raw]),model,...patch}});
+    assert.equal(p.last('body'),undefined);assert.equal(p.e.bodyCheckGo.disabled,true);
+    assert.equal(p.e.bodyFitImportFiles.children.length,0);assert.ok(p.e.errorText.textContent);
+    await p.e.clearBodyFitImport.handlers.click();assert.equal(p.e.bodyFitImportNote.hidden,true);
+  }
+  for(const action of ['clear','pagehide','fit','model']) {
+    const p=draftingPage({bodyToken:token}),pending=deferred();
+    class WaitingFit extends Blob {arrayBuffer(){return pending.promise;}}
+    const reading=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-body-fit-sources',token,fit:new WaitingFit([raw]),model}});
+    if(action==='clear')await p.e.clearBodyFitImport.handlers.click();
+    if(action==='pagehide')p.windowEvents.pagehide();
+    if(action==='fit'){p.e.bodyFitFile.files=[new Blob(['manual fit'])];await p.e.bodyFitFile.handlers.change();}
+    if(action==='model'){p.e.bodyFile.files=[new Blob([new Uint8Array([9])])];await p.e.bodyFile.handlers.change();}
+    pending.resolve(new TextEncoder().encode(raw).buffer);await reading;
+    assert.equal(p.e.bodyFitImportFiles.children.length,0);assert.equal(p.e.bodyFitConsent.checked,false);
+    if(action==='model')assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[9]);
+    else assert.equal(p.last('body'),undefined);
+  }
+});
+
+test('failed or interrupted body imports stay blocked after model replacement until a report or explicit clear repairs them',async()=>{
+  const token='e'.repeat(32),raw=' {"schema":"ftx-body-fit/1","sequence":18446744073709551615,"probe":-0.0}\r\n';
+  const prepare=async interrupted=>{
+    const p=draftingPage({bodyToken:token}),pending=deferred();
+    class WaitingFit extends Blob {arrayBuffer(){return pending.promise;}}
+    const reading=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-body-fit-sources',token,fit:interrupted?new WaitingFit([raw]):new Blob([new Uint8Array([255])]),
+        model:new Blob([new Uint8Array([1,2])])}});
+    if(!interrupted)await reading;
+    p.e.bodyFile.files=[new Blob([new Uint8Array([9])])];await p.e.bodyFile.handlers.change();
+    p.emit({type:'bodyReady',request:p.last('body').request});
+    if(interrupted){pending.resolve(new TextEncoder().encode(raw).buffer);await reading;}
+    assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[9],'A late import cannot replace the manual model');
+    assert.equal(p.messages.filter(m=>m.type==='body').length,1);
+    assert.equal(p.e.bodyFitImportFiles.children.length,0);
+    assert.equal(p.e.bodyFitImportNote.hidden,false,'The unresolved report remains visible after model-only replacement');
+    assert.ok(p.e.bodyFitImportText.textContent);
+    await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+    assert.equal(p.e.bodyCheckGo.disabled,true);assert.equal(p.e.foldGo.disabled,true);
+    await p.e.chooseMaterials.handlers.click();assert.equal(p.popups.length,0);
+    assert.equal(p.e.bodyFitConsent.checked,false);
+    return p;
+  };
+  for(const interrupted of [false,true]) {
+    const p=await prepare(interrupted);
+    await p.e.clearBodyFitImport.handlers.click();
+    assert.equal(p.e.bodyFitImportNote.hidden,true);assert.equal(p.e.bodyCheckGo.disabled,false);
+    p.e.bodyCheckGo.handlers.click();assert.equal(p.last('inspectBody').bodyFit,null,'Explicit clearing permits tape fitting');
+    const q=await prepare(interrupted),replacement=deferred();
+    class ReplacementFit extends Blob {arrayBuffer(){return replacement.promise;}}
+    q.e.bodyFitConsent.checked=true;q.e.bodyFitFile.files=[new ReplacementFit([raw])];
+    const reading=q.e.bodyFitFile.handlers.change();
+    assert.equal(q.e.bodyFitImportNote.hidden,true,'A manual report replaces the failed import before its read completes');
+    assert.equal(q.e.bodyFitConsent.checked,false);assert.equal(q.e.bodyCheckGo.disabled,true);
+    replacement.resolve(new TextEncoder().encode(raw).buffer);await reading;
+    assert.equal(q.e.bodyCheckGo.disabled,true,'Completed report reads still require wearer association');
+    q.e.bodyFitConsent.checked=true;await q.e.bodyFitConsent.handlers.change();
+    assert.equal(q.e.bodyCheckGo.disabled,false);q.e.bodyCheckGo.handlers.click();
+    assert.equal(q.last('inspectBody').bodyFit,raw,'Replacement reports retain exact original text');
+  }
+});
+
+test('received body association must follow completed source reads and current wearer selection',async()=>{
+  const token='d'.repeat(32),p=draftingPage({bodyToken:token}),pending=deferred();
+  class WaitingModel extends Blob {arrayBuffer(){return pending.promise;}}
+  const reading=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+    data:{type:'ftx-body-fit-sources',token,fit:new Blob(['{"accepted":true}']),model:new WaitingModel(['m'])}});
+  await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+  p.e.bodyFitConsent.checked=true;await p.e.bodyFitConsent.handlers.change();
+  p.e.age.value='36';await p.e.age.handlers.input();
+  pending.resolve(new Uint8Array([4]).buffer);await reading;
+  p.emit({type:'bodyReady',request:p.last('body').request});
+  assert.equal(p.e.bodyFitConsent.checked,false);
+  await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+  assert.equal(p.e.bodyCheckGo.disabled,true);assert.equal(p.e.foldGo.disabled,true);
+  await p.e.chooseMaterials.handlers.click();assert.equal(p.popups.length,0);
+});
+
+test('received body sources can be independently replaced and clearing them preserves manual selections',async()=>{
+  const token='c'.repeat(32),raw=' {"sequence":18446744073709551615}\n';
+  const prepare=async()=>{
+    const p=draftingPage({bodyToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-body-fit-sources',token,fit:new Blob([raw]),model:new Blob([new Uint8Array([2,3])])}});
+    p.emit({type:'bodyReady',request:p.last('body').request});return p;
+  };
+  const p=await prepare();p.e.bodyFile.files=[new Blob([new Uint8Array([7])])];await p.e.bodyFile.handlers.change();
+  p.emit({type:'bodyReady',request:p.last('body').request});
+  assert.deepEqual(p.e.bodyFitImportFiles.children.map(a=>a.download),['body-fit-report.json']);
+  await p.e.clearBodyFitImport.handlers.click();await p.e.go.handlers.click();p.result();
+  assert.equal(p.e.bodyCheckGo.disabled,false,'Explicitly cleared received report returns the manual model to tape fitting');
+  p.e.bodyCheckGo.handlers.click();assert.equal(p.last('inspectBody').bodyFit,null);
+  const q=await prepare();q.e.bodyFitFile.files=[new Blob(['manual report'])];await q.e.bodyFitFile.handlers.change();
+  assert.deepEqual(q.e.bodyFitImportFiles.children.map(a=>a.download),['body-model.ftxbody']);
+  await q.e.clearBodyFitImport.handlers.click();assert.equal(q.e.bodyCheckGo.disabled,true);
+  await q.body();await q.e.go.handlers.click();q.result();q.e.bodyFitConsent.checked=true;await q.e.bodyFitConsent.handlers.change();
+  q.e.bodyCheckGo.handlers.click();assert.equal(q.last('inspectBody').bodyFit,'manual report');
+});
+
 test('drafting round handoff snapshots all drape controls, rejects invalid values and cancels pending setting edits', async () => {
   const prepare=async()=>{
     const p=draftingPage();await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{"pieces":[]}',measurements:'{}',fit:'{}'}});return p;
@@ -9095,6 +9239,103 @@ async function adaptiveDesignSetup(coupled=true) {
   } else guidedAdaptiveDomain(p,[0,40,10,10,0.5]);
   guidedDesignField(p,'guidedDesignEvaluations','24');return setup;
 }
+
+function guidedRestartDraft(p,values) {
+  for(const [key,value] of Object.entries(values)) {
+    const input=descendants(p.e.guidedDesignRestartFields).find(n=>n.tag==='input'&&n.ariaLabel===`Additional start: ${key} (mm)`);
+    assert.ok(input,key);input.value=String(value);input.handlers.input();
+  }
+}
+function guidedRestartAction(p,label) {
+  const button=descendants(p.e.guidedDesignRestartList).find(n=>n.tag==='button'&&n.textContent===label);
+  assert.ok(button,label);assert.equal(button.disabled,false,label);button.onclick();
+}
+
+test('guided additional starts preserve complete points and order across variable navigation and grid mode',async()=>{
+  const {p}=await adaptiveDesignSetup();
+  guidedRestartDraft(p,{length:30,taper:1});p.e.guidedDesignRestartAdd.onclick();
+  guidedRestartDraft(p,{length:40,taper:-1});p.e.guidedDesignRestartAdd.onclick();
+  assert.equal(p.e.guidedDesignRestartList.children.length,2,p.e.error.textContent);
+  guidedRestartDraft(p,{length:25,taper:0.5}); // An unsaved draft is independent of the active points.
+  await p.e.study.onclick();let sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_adaptive.restart_points_mm,[{length:30,taper:1},{length:40,taper:-1}]);
+  assert.equal(JSON.parse(sent.studyRequest).design_adaptive.max_evaluations,24);p.emit(studyReport());
+  guidedDesignAction(p,'Move taper earlier');
+  guidedRestartAction(p,'Move additional start 2 earlier');
+  guidedDesignField(p,'guidedDesignMode','grid','change');assert.equal(p.e.guidedDesignRestartControls.hidden,true);
+  await p.e.study.onclick();sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.equal(Object.hasOwn(JSON.parse(sent.studyRequest).design_grid,'restart_points_mm'),false);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMode','adaptive','change');
+  guidedRestartAction(p,'Edit additional start 2');guidedRestartDraft(p,{length:35});
+  guidedRestartAction(p,'Replace additional start 2 from current controls');
+  await p.e.study.onclick();sent=p.current().messages.at(-1);
+  const adaptive=JSON.parse(sent.studyRequest).design_adaptive;
+  assert.deepEqual(adaptive.variables.map(variable=>variable.key),['taper','length']);
+  assert.deepEqual(adaptive.restart_points_mm,[{length:40,taper:-1},{length:35,taper:1}]);
+  p.emit(studyReport());p.e.guidedDesignRestartClear.onclick();await p.e.study.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).studyRequest).design_adaptive,'restart_points_mm'),false);
+});
+
+test('guided additional starts retain stale coordinates until each changed variable point is explicitly repaired',async()=>{
+  const {p}=await adaptiveDesignSetup();
+  guidedRestartDraft(p,{length:30,taper:1});p.e.guidedDesignRestartAdd.onclick();
+  guidedRestartDraft(p,{length:40,taper:-1});p.e.guidedDesignRestartAdd.onclick();
+  guidedDesignField(p,'guidedDesignKey','shape');
+  assert.match(visibleText(p.e.guidedDesignRestartList),/taper = 1/);
+  let before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/missing|unsupported/);
+  guidedRestartDraft(p,{length:30,shape:1});guidedRestartAction(p,'Replace additional start 1 from current controls');
+  assert.match(visibleText(p.e.guidedDesignRestartList),/shape = 1/);
+  before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  guidedRestartDraft(p,{length:40,shape:-1});guidedRestartAction(p,'Replace additional start 2 from current controls');
+  await p.e.study.onclick();assert.equal(p.current().messages.at(-1).type,'study',p.e.error.textContent);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignUpper','0.5');before=p.current().messages.length;
+  await p.e.study.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/inside.*bounds/);
+  guidedRestartDraft(p,{length:30,shape:0.25});guidedRestartAction(p,'Replace additional start 1 from current controls');
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_adaptive.restart_points_mm,[{length:30,shape:0.25},{length:40,shape:-1}]);
+  p.emit(studyReport());p.select('patternFile',coupledDesignPattern);await p.e.patternFile.onchange();
+  assert.equal(p.e.guidedDesignRestartList.children.length,0);assert.equal(p.e.guidedDesign.checked,false);
+  assert.ok(descendants(p.e.guidedDesignRestartFields).filter(n=>n.tag==='input').every(input=>input.value===''));
+});
+
+test('guided additional starts reject blank duplicate out-of-domain and excessive saved points',async()=>{
+  const {p}=await adaptiveDesignSetup(false),key='linked_adjustment';
+  p.e.guidedDesignRestartAdd.onclick();assert.match(p.e.error.textContent,/starting value/);
+  for(const [value,reason] of [[10,/initial point/],[41,/bounds/],['Infinity',/finite/]]) {
+    guidedRestartDraft(p,{[key]:value});p.e.guidedDesignRestartAdd.onclick();
+    assert.equal(p.e.guidedDesignRestartList.children.length,0);assert.match(p.e.error.textContent,reason);
+  }
+  guidedRestartDraft(p,{[key]:0});p.e.guidedDesignRestartAdd.onclick();
+  guidedRestartDraft(p,{[key]:'-0'});p.e.guidedDesignRestartAdd.onclick();
+  assert.equal(p.e.guidedDesignRestartList.children.length,1);assert.match(p.e.error.textContent,/distinct/);
+  for(let i=11;i<=40;i++){guidedRestartDraft(p,{[key]:i});p.e.guidedDesignRestartAdd.onclick();}
+  assert.equal(p.e.guidedDesignRestartList.children.length,31);assert.equal(p.e.guidedDesignRestartAdd.disabled,true);
+  guidedRestartDraft(p,{[key]:1});p.e.guidedDesignRestartAdd.onclick();
+  assert.equal(p.e.guidedDesignRestartList.children.length,31);assert.match(p.e.error.textContent,/31/);
+  guidedRestartAction(p,'Remove additional start 31');assert.equal(p.e.guidedDesignRestartAdd.disabled,false);
+});
+
+test('guided additional start edits cancel stale work while coordinate drafts leave submitted starts unchanged',async()=>{
+  for(const change of ['draft','replace','remove','clear']) {
+    const {p,fit}=await adaptiveDesignSetup(false),delay=deferred();let reading=false;
+    guidedRestartDraft(p,{linked_adjustment:30});p.e.guidedDesignRestartAdd.onclick();
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true);
+    guidedRestartDraft(p,{linked_adjustment:35});assert.equal(old.dead,false);
+    if(change==='replace')guidedRestartAction(p,'Replace additional start 1 from current controls');
+    if(change==='remove')guidedRestartAction(p,'Remove additional start 1');
+    if(change==='clear')p.e.guidedDesignRestartClear.onclick();
+    assert.equal(old.dead,change!=='draft');if(old.dead)p.ready();
+    delay.resolve(fit);await running;
+    if(change==='draft')assert.deepEqual(JSON.parse(old.messages.at(-1).studyRequest).design_adaptive.restart_points_mm,[{linked_adjustment:30}]);
+    else {
+      assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+      old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
+    }
+  }
+});
 
 test('guided adaptive discovery preserves coupled domains, source identity and complete retention reservations',async()=>{
   const {p,fit,body}=await adaptiveDesignSetup();guidedDesignField(p,'guidedDesignMax','2');
@@ -14633,6 +14874,27 @@ test('adaptive design search displays raw violations and exact trials without de
   await p.e.study.onclick(); p.emit(report);
   assert.match(visibleText(s),/evaluation budget/);
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('adaptive starting point reports distinguish attempted cached and unreached local searches',async()=>{
+  const p=await pageModule();await p.load();p.select('studyRequest','{}');const report=designReport();
+  report.design_search={schema:'ftx-design-adaptive-search/1',evaluations:4,qualified_designs:1,selected_designs:1,
+    stop_reason:'evaluation_budget',request:{variables:[{key:'<length>',initial_mm:0}],
+      restart_points_mm:[{'<length>':60},{'<length>':40},{'<length>':20}]},
+    search_starts:[{start_index:0,initial_trial_key:'adaptive:0',final_trial_key:'adaptive:1',evaluations:2,
+      stop_reason:'minimum_steps',final_steps_mm:{'<length>':20}},
+      {start_index:1,initial_trial_key:'adaptive:2',final_trial_key:'adaptive:3',evaluations:2,
+        stop_reason:'minimum_steps',final_steps_mm:{'<length>':20}},
+      {start_index:2,initial_trial_key:'adaptive:3',final_trial_key:'adaptive:3',evaluations:0,
+        stop_reason:'evaluation_budget',final_steps_mm:{'<length>':20}}],rows:[]};
+  await p.e.study.onclick();p.emit(report);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  const starts=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Adaptive starting points');
+  assert.ok(starts);const rows=starts.children.slice(2).map(row=>row.children.map(cell=>cell.textContent));
+  assert.deepEqual(plain(rows[0]),['Initial point','<length>: 0','2','minimum steps','adaptive:0','adaptive:1','<length>: 20']);
+  assert.deepEqual(plain(rows[2]),['Additional start 2','<length>: 40','0','evaluation budget','adaptive:3','adaptive:3','<length>: 20']);
+  assert.deepEqual(plain(rows[3]),['Additional start 3','<length>: 20','Not reached','Not reached','—','—','—']);
+  assert.match(visibleText(s),/cached start may add no new trials/);assert.match(visibleText(s),/Unreached starts remain unknown/);
 });
 
 test('multi-material adaptive results preserve independent frontiers refusals ranges and exact geometry downloads',async()=>{

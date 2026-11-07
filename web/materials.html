@@ -609,6 +609,21 @@ this is not a total garment circumference adjustment. Linked sites and the optio
 than the initial step and the initial step no larger than the domain span. Values are millimetres before each site's multipliers.
 Grid lists and adaptive domains remain separate when switching methods.</p>
 </div>
+<fieldset id="guidedDesignRestartControls" hidden><legend>Explore additional starting points</legend>
+<p>After one local search reaches its minimum polling steps, start from another declared combination of values.
+This can reach a useful region separated by infeasible designs. Enter one value for every variable below.</p>
+<div id="guidedDesignRestartFields" class="study-fields"></div>
+<button id="guidedDesignRestartAdd" type="button" disabled>Add starting point</button>
+<p id="guidedDesignRestartSummary" class="note" role="status">No additional starts. Discovery begins at the variables' initial values.</p>
+<div id="guidedDesignRestartList"></div>
+<button id="guidedDesignRestartClear" type="button" disabled>Clear additional starts</button>
+<p class="note">Add or Replace saves the complete point; editing the coordinate fields alone changes no saved start.
+Keep up to 31 distinct points within the current bounds, different from the initial point. Renaming, adding or removing variables
+requires reviewing the saved points; their original coordinates stay visible until you replace or remove them.</p>
+<p class="note">All starts share the same unique-trial and consumer budgets. Extra starts do not increase these allowances,
+and an earlier budget or retained-design stop can leave later points unvisited. Grid mode retains these points without using them.
+Multiple local searches do not prove a global optimum.</p>
+</fieldset>
 <fieldset><legend>Adjust seams after the linked alterations</legend>
 <p>Each candidate first applies every variable's linked sites, then runs these adjustments in their displayed order.
 Use the original pattern's seam contracts and source pieces. No adjustment runs unless you add it.</p>

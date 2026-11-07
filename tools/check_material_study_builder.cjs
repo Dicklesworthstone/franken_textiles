@@ -1984,6 +1984,45 @@ const adaptiveDesignInput = (changes = {}) => ({mode:'adaptive',objective:'fit_b
     initialStepMm:10,minimumStepMm:0.001,sites:v.sites})),maxEvaluations:96,maxDesigns:2,
   fitSpec:linkedFitSource(),...changes});
 
+test('adaptive additional starts retain complete authored coordinates without increasing trial reservations', async () => {
+  const {buildMaterialStudyRequest:build,buildGuidedDesignRestartPoints:points}=await modulePromise;
+  const design=adaptiveDesignInput({restartPointsMm:[
+    {'local shape':-2,length:20,ease:10},{ease:0,length:0,'local shape':0}]});
+  const before=JSON.stringify(design),result=JSON.parse(build({...state(),design}));
+  assert.equal(JSON.stringify(design),before);
+  assert.deepEqual(result.design_adaptive.restart_points_mm,design.restartPointsMm);
+  assert.equal(result.design_adaptive.max_evaluations,96);
+  const reversed={...design,variables:[...design.variables].reverse()};
+  assert.deepEqual(JSON.parse(build({...state(),design:reversed})).design_adaptive.restart_points_mm,design.restartPointsMm);
+  for(const starts of [undefined,[]]) {
+    const input=adaptiveDesignInput();if(starts)input.restartPointsMm=starts;
+    assert.equal(Object.hasOwn(JSON.parse(build({...state(),design:input})).design_adaptive,'restart_points_mm'),false);
+  }
+  const maximum=Array.from({length:31},(_,i)=>({ease:i,length:0,'local shape':0}));
+  assert.equal(points(maximum,design.variables).length,31);
+  const single=adaptiveDesignInput({objective:'consumer_pareto',materialKeys:['baseline','alternative'],caseKey:'cold',
+    maxEvaluations:3,maxDesigns:1,restartPointsMm:design.restartPointsMm});
+  const matrix=JSON.parse(build({...state(),design:single},namedContext(undefined,20)));
+  assert.deepEqual(matrix.design_adaptive.restart_points_mm,design.restartPointsMm);
+});
+
+test('adaptive additional starts refuse incomplete stale repeated and out-of-domain coordinates', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const valid={ease:3,length:4,'local shape':5},initial={ease:-0,length:1,'local shape':2};
+  for(const starts of [null,{},[{}],[{ease:3,length:4}],[{...valid,obsolete:1}],
+    [{...valid,ease:41}],[{...valid,ease:NaN}],[{...valid,ease:Infinity}],
+    [{...valid,ease:'3'}],[initial],[valid,{...valid}],[{...valid,ease:0},{...valid,ease:-0}],
+    Array.from({length:32},(_,i)=>({...valid,ease:i}))]) {
+    assert.throws(()=>build({...state(),design:adaptiveDesignInput({restartPointsMm:starts})}));
+  }
+  const design=multiDesignInput({restartPointsMm:[valid]});
+  assert.throws(()=>build({...state(),design}),/unsupported/,'Grid mode must not consume adaptive starts');
+  const variable={key:'tiny',boundsMm:[0,1],initialMm:1,initialStepMm:1,minimumStepMm:0.1,
+    sites:[{piece:'front',axis:'x',at_mm:1,multiplier:Number.MIN_VALUE}]};
+  assert.throws(()=>build({...state(),design:adaptiveDesignInput({variables:[variable],
+    restartPointsMm:[{tiny:0.25}]})}),/underflows/,'Actual restart displacements must be representable');
+});
+
 test('adaptive authoring preserves ordered mixed sites, original fit bytes and native discovery controls', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),target:{scope:'pieces',ids:['lining']},
@@ -2027,9 +2066,9 @@ test('grid and adaptive inputs never mix policies and explicit grid mode preserv
   const grid=multiDesignInput(),adaptive=adaptiveDesignInput(),check=design=>build({...state(),design});
   assert.equal(check({...grid,mode:'grid'}),check(grid));
   for(const mode of ['',null,undefined,'adaptive_grid'])assert.throws(()=>check({...grid,mode}),/grid or adaptive/);
-  for(const extra of [{maxCandidates:2},{values:[0,1]},{caseKey:'winter'},{restartPointsMm:[]},
+  for(const extra of [{maxCandidates:2},{values:[0,1]},{caseKey:'winter'},
     {after:null},{maxEvaluations:undefined}])assert.throws(()=>check({...adaptive,...extra}));
-  for(const extra of [{objective:'fit_band_violation_mm'},{materialKey:'baseline'},{maxEvaluations:8}]) {
+  for(const extra of [{objective:'fit_band_violation_mm'},{materialKey:'baseline'},{maxEvaluations:8},{restartPointsMm:[]}]) {
     assert.throws(()=>check({...grid,...extra}),/unsupported/);
   }
   assert.throws(()=>check({...adaptive,variables:[{...adaptive.variables[0],values:[0,1]}]}),/unsupported/);

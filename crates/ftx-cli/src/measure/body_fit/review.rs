@@ -321,10 +321,10 @@ pub(super) fn prepare_capture(
     };
     let original_entry = bundle.push("original-input.json".into(), original.to_vec())?;
     let replay_entry = bundle.push("capture.json".into(), workspace::json_bytes(replay)?)?;
+    let prepared = json!({"schema":request.schema,"model":request.model,"fit":request.fit});
     let prepared_entry = bundle.push(
         "prepared-input.json".into(),
-        workspace::json_bytes(&json!({"schema":request.schema,"model":request.model,
-            "fit":request.fit}))?,
+        workspace::json_bytes(&prepared)?,
     )?;
     let editor = bundle.push(
         "review.js".into(),
@@ -343,7 +343,8 @@ pub(super) fn prepare_capture(
          <h1>Review capture before fitting</h1>\
          <p>PREPARED means current source selection and sheet cameras passed their checks. No body model was loaded or fitted. \
          Orange points are FIT; blue points are CHECK (held out). Review names, target definitions, visibility and coordinates \
-         on each original image. Correct coordinates below, then generate a new review directory from the downloaded input. \
+         on each original image. Correct observations below, then download prepared input for the local browser fitter, \
+         or use the corrected capture input to recheck original source files in a new native review. \
          No points or partitions were inferred. Pixels retain their stored orientation and lens distortion.</p>\
          <p>This does not establish anatomical correspondence, observability, physical accuracy, READY measurements or garment fit. \
          Sampled silhouettes are caller-reviewed constraints. Inline samples can be authored on checked rectified frames; imported masks remain read-only.</p>\
@@ -351,10 +352,11 @@ pub(super) fn prepare_capture(
          <a href=\"prepared-input.json\">Original calibrated observation snapshot for local browser fitting</a> · \
          <a href=\"original-input.json\">Original input bytes</a> · <a href=\"review.json\">Complete preparation evidence</a></p>",
     );
-    page.push_str("<p>The prepared-input.json snapshot keeps this review's checked cameras, observations, inline mask samples, \
-        targets and starts without file paths. It remains the original snapshot while annotations are edited here. \
-        Generate a fresh native capture-review from edited input before exporting it again. Browser fitting checks \
-        the supplied model and numerical evidence; it does not reread the original photos, masks or calibration files.</p>");
+    page.push_str("<p>The original prepared-input.json keeps this review's checked cameras, observations, imported mask samples, \
+        targets and starts without file paths. After applying annotations, download prepared-input-edited.json to fit the current \
+        points and editable inline silhouettes with those same fixed cameras and model settings. Original preparation files stay unchanged. \
+        Neither snapshot rereads source files: if photos, masks or calibration changed, generate a fresh native capture-review. \
+        Browser fitting checks the supplied model and numerical evidence; it does not establish current source-file identity.</p>");
     page.push_str("<div id=\"captureEditor\" hidden><fieldset><legend>Resume saved annotations</legend>\
         <p>Load a previously downloaded capture-edited.json from this same review. Its points and editable \
         silhouettes replace the current annotations after validation; images, cameras, model targets and fit settings must match. \
@@ -408,7 +410,8 @@ pub(super) fn prepare_capture(
         <button id=\"removeSilhouette\" type=\"button\" disabled>Remove selected slice</button></fieldset>\
         <button id=\"cancelSilhouette\" type=\"button\">Cancel pending silhouette edit</button></fieldset>\
         <p><button id=\"resetPoints\" type=\"button\">Reset all corrections</button> · \
-        <a id=\"correctedInput\" download=\"capture-edited.json\" hidden>Download corrected input</a></p></div>\
+        <a id=\"correctedInput\" download=\"capture-edited.json\" hidden>Download corrected capture input</a> · \
+        <a id=\"correctedPreparedInput\" download=\"prepared-input-edited.json\" hidden>Download prepared input for browser fitting</a></p></div>\
         <noscript><p>Annotation editing needs the supplied local script. The original review and input remain usable.</p></noscript>");
     let mut frames = Vec::new();
     for (i, frame) in request.fit.frames.iter().enumerate() {
@@ -494,9 +497,13 @@ pub(super) fn prepare_capture(
     let payload = serde_json::to_string(replay)
         .map_err(|e| bad_input(e.to_string()))?
         .replace('<', "\\u003c");
+    let prepared_payload = serde_json::to_string(&prepared)
+        .map_err(|e| bad_input(e.to_string()))?
+        .replace('<', "\\u003c");
     writeln!(
         page,
         "<script type=\"application/json\" id=\"captureInput\">{payload}</script>\
+        <script type=\"application/json\" id=\"preparedInput\">{prepared_payload}</script>\
         <script src=\"review.js\" defer></script></html>"
     )
     .unwrap();

@@ -890,7 +890,7 @@ function bodyFitReport(overrides={}) {
     solution:{shape:[0.6],poses:[],predicted_measurements_m:[1.3]},no_claim:'Not measured anatomy or physical fit.',...overrides};
 }
 function selectBodyFit(p,input=' {"timestamp_us":18446744073709551615,"evidence":"λ"}\r\n') {
-  p.e.bodyFitModel.files=[file('original model','model.ftxbody')];p.e.bodyFitInput.files=[file(input)];
+  p.e.bodyFitModel.files=[Object.assign(new Blob(['original model']),{name:'model.ftxbody'})];p.e.bodyFitInput.files=[file(input)];
   p.e.bodyFitInput.handlers.change();return input;
 }
 test('body-fit worker preserves the model and exact observations and refuses invalid work limits',async()=>{
@@ -930,6 +930,78 @@ test('body-fit page shows every native outcome and retains original reports with
     assert.equal(p.e.downloads.children.length,0,'Predictions do not enter measurement evidence');
   }
 });
+
+test('accepted body handoff sends the original report and selected model once to the expected local tab',async()=>{
+  const p=await photoPage();selectBodyFit(p);
+  assert.equal(p.e.bodyFitWorkbench.disabled,true);
+  await p.e.bodyFitRun.onclick();const w=p.current();
+  const raw=JSON.stringify(bodyFitReport()).replace('"timestamp_us":1','"timestamp_us":18446744073709551615');
+  await w.emit({type:'result',request:w.messages[0].request,report:raw});
+  assert.equal(p.e.bodyFitWorkbench.disabled,false);
+  p.e.bodyFitWorkbench.onclick();p.e.bodyFitWorkbench.onclick();assert.equal(p.popups.length,1);
+  const popup=p.popups[0],token=new URL(popup.url).searchParams.get('bodyFitImport');
+  assert.equal(new URL(popup.url).pathname,'/index.html');assert.match(token,/^[0-9a-f]{32}$/);
+  const ready={type:'ftx-body-fit-sources-ready',token};
+  for(const [origin,source,data] of [['https://foreign.invalid',popup.target,ready],
+    ['https://unit.invalid',{},ready],['https://unit.invalid',popup.target,{...ready,token:'wrong'}]]) {
+    p.windowEvents.message({origin,source,data});
+  }
+  assert.equal(popup.messages.length,0);
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:ready});
+  const packet=popup.messages[0];
+  assert.equal(packet.origin,'https://unit.invalid');assert.equal(packet.data.type,'ftx-body-fit-sources');
+  assert.equal(await packet.data.fit.text(),raw);assert.equal(await packet.data.model.text(),'original model');
+  assert.equal(p.e.openWorkbench.disabled,true,'Accepted predictions never enter the measurement handoff');
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:ready});
+  assert.equal(popup.messages.length,1);
+  p.e.bodyFitInput.handlers.change();assert.equal(p.e.bodyFitWorkbench.disabled,true);
+  assert.equal(await packet.data.fit.text(),raw,'An already received snapshot is immutable');
+});
+test('accepted body handoff retains evaluated model bytes independently of later file reads and worker buffers',async()=>{
+  const p=await photoPage();selectBodyFit(p);let reads=0;
+  class ReadOnceModel extends Blob {
+    async arrayBuffer() {
+      assert.equal(++reads,1,'The evaluated model must not be read from the selected file again');
+      return super.arrayBuffer();
+    }
+  }
+  const source=new ReadOnceModel(['original model']);p.e.bodyFitModel.files=[source];
+  await p.e.bodyFitRun.onclick();const w=p.current();
+  assert.equal(new TextDecoder().decode(w.messages[0].model),'original model');
+  // The worker owns the transferred buffer; later mutations must not alter the retained snapshot.
+  new Uint8Array(w.messages[0].model).fill(0);
+  const raw=' \r\n'+JSON.stringify(bodyFitReport())
+    .replace('"timestamp_us":1','"timestamp_us":18446744073709551615')
+    .replace('"shape":[0.6]','"shape":[-0.0]')+'\r\n';
+  await w.emit({type:'result',request:w.messages[0].request,report:raw});
+  p.e.bodyFitWorkbench.onclick();const popup=p.popups[0],token=new URL(popup.url).searchParams.get('bodyFitImport');
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-body-fit-sources-ready',token}});
+  const packet=popup.messages[0].data;
+  assert.notEqual(packet.model,source,'The handoff owns a byte snapshot, not the selected file');
+  assert.equal(new TextDecoder().decode(await packet.model.arrayBuffer()),'original model');
+  assert.equal(await packet.fit.text(),raw);assert.equal(reads,1);
+});
+
+test('pending accepted-body transfers are cancelled by source edits, work-limit changes and page exit',async()=>{
+  for(const invalidate of [p=>p.e.bodyFitInput.handlers.change(),p=>p.e.bodyFitModel.handlers.click(),
+    p=>p.e.bodyFitInput.handlers.cancel(),p=>p.e.bodyFitIterations.handlers.input(),
+    p=>p.e.bodyFitEvaluations.handlers.input(),p=>p.windowEvents.pagehide()]) {
+    const p=await photoPage();selectBodyFit(p);await p.e.bodyFitRun.onclick();const w=p.current();
+    await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bodyFitReport())});
+    p.e.bodyFitWorkbench.onclick();const popup=p.popups[0];
+    const token=new URL(popup.url).searchParams.get('bodyFitImport');invalidate(p);
+    p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-body-fit-sources-ready',token}});
+    assert.equal(popup.messages[0].data.type,'ftx-body-fit-sources-cancelled');
+    assert.equal(popup.messages[0].data.fit,undefined);assert.equal(popup.messages[0].data.model,undefined);
+    assert.equal(p.e.bodyFitWorkbench.disabled,true);
+  }
+  for(const status of ['REJECTED','AMBIGUOUS','UNOBSERVABLE','NOT_CONVERGED','BUDGET_STOP']) {
+    const p=await photoPage();selectBodyFit(p);await p.e.bodyFitRun.onclick();const w=p.current();
+    await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bodyFitReport({status,solution:null}))});
+    assert.equal(p.e.bodyFitWorkbench.disabled,true);p.e.bodyFitWorkbench.onclick();assert.equal(p.popups.length,0);
+  }
+});
+
 test('body-fit source edits, cancellation and page exit withdraw results and discard delayed reads and workers',async()=>{
   for(const invalidate of [p=>p.e.bodyFitCancel.onclick(),p=>p.e.bodyFitInput.handlers.change(),p=>p.e.bodyFitModel.handlers.click(),
     p=>p.e.bodyFitInput.handlers.cancel(),p=>p.e.bodyFitIterations.handlers.input(),p=>p.e.bodyFitEvaluations.handlers.input(),p=>p.windowEvents.pagehide()]) {
