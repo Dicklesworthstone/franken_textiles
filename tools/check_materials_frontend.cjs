@@ -9096,6 +9096,103 @@ async function adaptiveDesignSetup(coupled=true) {
   guidedDesignField(p,'guidedDesignEvaluations','24');return setup;
 }
 
+function guidedRestartDraft(p,values) {
+  for(const [key,value] of Object.entries(values)) {
+    const input=descendants(p.e.guidedDesignRestartFields).find(n=>n.tag==='input'&&n.ariaLabel===`Additional start: ${key} (mm)`);
+    assert.ok(input,key);input.value=String(value);input.handlers.input();
+  }
+}
+function guidedRestartAction(p,label) {
+  const button=descendants(p.e.guidedDesignRestartList).find(n=>n.tag==='button'&&n.textContent===label);
+  assert.ok(button,label);assert.equal(button.disabled,false,label);button.onclick();
+}
+
+test('guided additional starts preserve complete points and order across variable navigation and grid mode',async()=>{
+  const {p}=await adaptiveDesignSetup();
+  guidedRestartDraft(p,{length:30,taper:1});p.e.guidedDesignRestartAdd.onclick();
+  guidedRestartDraft(p,{length:40,taper:-1});p.e.guidedDesignRestartAdd.onclick();
+  assert.equal(p.e.guidedDesignRestartList.children.length,2,p.e.error.textContent);
+  guidedRestartDraft(p,{length:25,taper:0.5}); // An unsaved draft is independent of the active points.
+  await p.e.study.onclick();let sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_adaptive.restart_points_mm,[{length:30,taper:1},{length:40,taper:-1}]);
+  assert.equal(JSON.parse(sent.studyRequest).design_adaptive.max_evaluations,24);p.emit(studyReport());
+  guidedDesignAction(p,'Move taper earlier');
+  guidedRestartAction(p,'Move additional start 2 earlier');
+  guidedDesignField(p,'guidedDesignMode','grid','change');assert.equal(p.e.guidedDesignRestartControls.hidden,true);
+  await p.e.study.onclick();sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.equal(Object.hasOwn(JSON.parse(sent.studyRequest).design_grid,'restart_points_mm'),false);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMode','adaptive','change');
+  guidedRestartAction(p,'Edit additional start 2');guidedRestartDraft(p,{length:35});
+  guidedRestartAction(p,'Replace additional start 2 from current controls');
+  await p.e.study.onclick();sent=p.current().messages.at(-1);
+  const adaptive=JSON.parse(sent.studyRequest).design_adaptive;
+  assert.deepEqual(adaptive.variables.map(variable=>variable.key),['taper','length']);
+  assert.deepEqual(adaptive.restart_points_mm,[{length:40,taper:-1},{length:35,taper:1}]);
+  p.emit(studyReport());p.e.guidedDesignRestartClear.onclick();await p.e.study.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).studyRequest).design_adaptive,'restart_points_mm'),false);
+});
+
+test('guided additional starts retain stale coordinates until each changed variable point is explicitly repaired',async()=>{
+  const {p}=await adaptiveDesignSetup();
+  guidedRestartDraft(p,{length:30,taper:1});p.e.guidedDesignRestartAdd.onclick();
+  guidedRestartDraft(p,{length:40,taper:-1});p.e.guidedDesignRestartAdd.onclick();
+  guidedDesignField(p,'guidedDesignKey','shape');
+  assert.match(visibleText(p.e.guidedDesignRestartList),/taper = 1/);
+  let before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/missing|unsupported/);
+  guidedRestartDraft(p,{length:30,shape:1});guidedRestartAction(p,'Replace additional start 1 from current controls');
+  assert.match(visibleText(p.e.guidedDesignRestartList),/shape = 1/);
+  before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+  guidedRestartDraft(p,{length:40,shape:-1});guidedRestartAction(p,'Replace additional start 2 from current controls');
+  await p.e.study.onclick();assert.equal(p.current().messages.at(-1).type,'study',p.e.error.textContent);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignUpper','0.5');before=p.current().messages.length;
+  await p.e.study.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/inside.*bounds/);
+  guidedRestartDraft(p,{length:30,shape:0.25});guidedRestartAction(p,'Replace additional start 1 from current controls');
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_adaptive.restart_points_mm,[{length:30,shape:0.25},{length:40,shape:-1}]);
+  p.emit(studyReport());p.select('patternFile',coupledDesignPattern);await p.e.patternFile.onchange();
+  assert.equal(p.e.guidedDesignRestartList.children.length,0);assert.equal(p.e.guidedDesign.checked,false);
+  assert.ok(descendants(p.e.guidedDesignRestartFields).filter(n=>n.tag==='input').every(input=>input.value===''));
+});
+
+test('guided additional starts reject blank duplicate out-of-domain and excessive saved points',async()=>{
+  const {p}=await adaptiveDesignSetup(false),key='linked_adjustment';
+  p.e.guidedDesignRestartAdd.onclick();assert.match(p.e.error.textContent,/starting value/);
+  for(const [value,reason] of [[10,/initial point/],[41,/bounds/],['Infinity',/finite/]]) {
+    guidedRestartDraft(p,{[key]:value});p.e.guidedDesignRestartAdd.onclick();
+    assert.equal(p.e.guidedDesignRestartList.children.length,0);assert.match(p.e.error.textContent,reason);
+  }
+  guidedRestartDraft(p,{[key]:0});p.e.guidedDesignRestartAdd.onclick();
+  guidedRestartDraft(p,{[key]:'-0'});p.e.guidedDesignRestartAdd.onclick();
+  assert.equal(p.e.guidedDesignRestartList.children.length,1);assert.match(p.e.error.textContent,/distinct/);
+  for(let i=11;i<=40;i++){guidedRestartDraft(p,{[key]:i});p.e.guidedDesignRestartAdd.onclick();}
+  assert.equal(p.e.guidedDesignRestartList.children.length,31);assert.equal(p.e.guidedDesignRestartAdd.disabled,true);
+  guidedRestartDraft(p,{[key]:1});p.e.guidedDesignRestartAdd.onclick();
+  assert.equal(p.e.guidedDesignRestartList.children.length,31);assert.match(p.e.error.textContent,/31/);
+  guidedRestartAction(p,'Remove additional start 31');assert.equal(p.e.guidedDesignRestartAdd.disabled,false);
+});
+
+test('guided additional start edits cancel stale work while coordinate drafts leave submitted starts unchanged',async()=>{
+  for(const change of ['draft','replace','remove','clear']) {
+    const {p,fit}=await adaptiveDesignSetup(false),delay=deferred();let reading=false;
+    guidedRestartDraft(p,{linked_adjustment:30});p.e.guidedDesignRestartAdd.onclick();
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();assert.equal(reading,true);
+    guidedRestartDraft(p,{linked_adjustment:35});assert.equal(old.dead,false);
+    if(change==='replace')guidedRestartAction(p,'Replace additional start 1 from current controls');
+    if(change==='remove')guidedRestartAction(p,'Remove additional start 1');
+    if(change==='clear')p.e.guidedDesignRestartClear.onclick();
+    assert.equal(old.dead,change!=='draft');if(old.dead)p.ready();
+    delay.resolve(fit);await running;
+    if(change==='draft')assert.deepEqual(JSON.parse(old.messages.at(-1).studyRequest).design_adaptive.restart_points_mm,[{linked_adjustment:30}]);
+    else {
+      assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+      old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
+    }
+  }
+});
+
 test('guided adaptive discovery preserves coupled domains, source identity and complete retention reservations',async()=>{
   const {p,fit,body}=await adaptiveDesignSetup();guidedDesignField(p,'guidedDesignMax','2');
   guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
@@ -14633,6 +14730,27 @@ test('adaptive design search displays raw violations and exact trials without de
   await p.e.study.onclick(); p.emit(report);
   assert.match(visibleText(s),/evaluation budget/);
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('adaptive starting point reports distinguish attempted cached and unreached local searches',async()=>{
+  const p=await pageModule();await p.load();p.select('studyRequest','{}');const report=designReport();
+  report.design_search={schema:'ftx-design-adaptive-search/1',evaluations:4,qualified_designs:1,selected_designs:1,
+    stop_reason:'evaluation_budget',request:{variables:[{key:'<length>',initial_mm:0}],
+      restart_points_mm:[{'<length>':60},{'<length>':40},{'<length>':20}]},
+    search_starts:[{start_index:0,initial_trial_key:'adaptive:0',final_trial_key:'adaptive:1',evaluations:2,
+      stop_reason:'minimum_steps',final_steps_mm:{'<length>':20}},
+      {start_index:1,initial_trial_key:'adaptive:2',final_trial_key:'adaptive:3',evaluations:2,
+        stop_reason:'minimum_steps',final_steps_mm:{'<length>':20}},
+      {start_index:2,initial_trial_key:'adaptive:3',final_trial_key:'adaptive:3',evaluations:0,
+        stop_reason:'evaluation_budget',final_steps_mm:{'<length>':20}}],rows:[]};
+  await p.e.study.onclick();p.emit(report);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  const starts=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Adaptive starting points');
+  assert.ok(starts);const rows=starts.children.slice(2).map(row=>row.children.map(cell=>cell.textContent));
+  assert.deepEqual(plain(rows[0]),['Initial point','<length>: 0','2','minimum steps','adaptive:0','adaptive:1','<length>: 20']);
+  assert.deepEqual(plain(rows[2]),['Additional start 2','<length>: 40','0','evaluation budget','adaptive:3','adaptive:3','<length>: 20']);
+  assert.deepEqual(plain(rows[3]),['Additional start 3','<length>: 20','Not reached','Not reached','—','—','—']);
+  assert.match(visibleText(s),/cached start may add no new trials/);assert.match(visibleText(s),/Unreached starts remain unknown/);
 });
 
 test('multi-material adaptive results preserve independent frontiers refusals ranges and exact geometry downloads',async()=>{

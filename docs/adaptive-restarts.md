@@ -18,6 +18,26 @@ poll order and restart order are exactly the authored orders. Unknown names, par
 nonfinite values, out-of-domain values and duplicate starts refuse before consumer execution.
 The same canonical linked-site displacement checks apply to restart coordinates.
 
+## Author starts in the browser
+
+In the Materials Workbench, enable **Fit-driven linked alterations**, select **Discover values
+within declared bounds**, and define the variables and their domains. **Explore additional
+starting points** provides one labelled coordinate field per variable. **Add starting point**
+saves the complete combination; changing those fields alone leaves saved points unchanged.
+Use **Edit** to load a saved point, **Replace** to save its revised coordinates, and the ordering
+or removal controls to change the sequence.
+
+Saved points keep their original variable names when a variable is renamed, added or removed.
+Review and replace each affected point before running; incomplete or out-of-domain points refuse
+instead of being filled or clamped. Switching to a listed grid preserves the saved points without
+using them. Loading or adopting another source pattern clears them.
+
+The same controls work with fit-only, consumer, Pareto, multiple-material and named-case discovery.
+All starts share the displayed trial and consumer allowances. The result's **Adaptive starting
+points** table shows each attempted start's new trial count and stop reason, including cached
+starts with zero new trials, and marks any later authored points **Not reached**. The downloaded
+study request retains the exact native `restart_points_mm` list for replay.
+
 ## When a restart runs
 
 A restart runs only after the current local search stops at `minimum_steps`. It resets polling
