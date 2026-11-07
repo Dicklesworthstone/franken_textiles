@@ -17,7 +17,23 @@ must be reconciled with the paper's CAD conversion table before use in a solver.
 units and KES load normalization also need clarification. AI-derived CAD parameters are not imported
 as measured physics. The three characterization methods do not create three independent fabrics.
 
+A primary-source recheck (2026-11-07 UTC) makes the Table 2 bending discrepancy explicit:
+
+| KES column | Literal KES conversion | Literal CAD conversion in the same column |
+|---|---|---|
+| B-1 (warp) | 0.356 cN cm = 3.56 × 10⁻⁵ N m | 3560 g mm²/s² = 3.56 × 10⁻⁶ N m |
+| B-2 (weft) | 0.093 cN cm = 9.3 × 10⁻⁶ N m | 930 g mm²/s² = 9.3 × 10⁻⁷ N m |
+
+The printed pairs differ by a factor of ten under these literal unit conversions. Both CAD bending
+columns are labelled `Bend Warp`; this comparison preserves column order without resolving the
+second direction. Intended units and width normalization remain unresolved; neither column is a
+qualified sheet coefficient. Table 2's 490.35 cN load also lacks an explicit width basis. Section
+2.1.2 gives 270 × 30 mm Fabric Kit strips and a 120 mm grip separation, but Table 3 in the examined
+PMC XML does not state the force unit for its five readings. Those dimensions and the method's
+force thresholds do not resolve that omission. Raw measurements or an explicit source clarification
+remain necessary.
+
 The record immediately participates in canonical discovery, unit normalization, source-locked replay
-and condition-qualified screening. Missing modulus, sheet bending law, pair friction, width, thermal
+and condition-qualified screening. Missing modulus, sheet bending law, pair friction, usable fabric width, thermal
 transport and price remain missing. No mechanical/thermal readiness, manufacturing qualification,
 independent garment validation or applicability to another similarly named retail blend is inferred.
