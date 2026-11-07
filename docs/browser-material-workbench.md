@@ -123,6 +123,22 @@ readiness or cutting approval is transferred. Source/assignment edits, re-bindin
 before receipt cancel the handoff; an already received pattern is an immutable snapshot. A manual
 pattern file or **Clear material handoff** replaces it. Blocked popups can use `pattern.json` instead.
 
+After a successful current **Validate & regenerate exports** or **Re-drape on this body**, the result's
+**Continue checked garment in Pattern Workbench** action also carries the exact fit contract
+and effective measurement document consumed by that evaluation. This includes supplemental/photo
+evidence already fused by the native engine. The selected primary file alone cannot substitute for
+that document. Fit targets authored above travel through the same route as imported fit files.
+
+A successful drape additionally carries the evaluated model, the original accepted-body report when
+used, and every explicit arm, leg, self-contact, second-path and settling setting. Those inputs are
+frozen before evaluation and model-buffer transfer; later form edits cannot be attached to earlier
+geometry. Changing saved targets, evidence, body sources or pose cancels an unsent checked handoff.
+The receiving workbench waits for its engine, provides source downloads, resets wearer consent and
+requires a new **Draft and check**. It carries no previous verdict or readiness result. Manual file
+choices replace their respective received sources; **Clear material handoff** removes the remaining
+received inputs. To continue a study winner, first adopt its pattern, then explicitly regenerate
+exports or drape with the intended current evidence before continuing the checked garment.
+
 The bridge retains a `pattern_json` string and original Rust drape/report JSON. JavaScript parses
 copies for display but does **not** reserialize source-bound numeric data for subsequent consumers or
 downloads. Otherwise values such as `1.0` and `-0.0` change representation and invalidate the existing

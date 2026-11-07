@@ -529,7 +529,9 @@ function clear(keys) {
     for (const url of urls.get(key) || []) URL.revokeObjectURL(url);
     urls.delete(key);
     if (sections.has(key)) {
-      const s = sections.get(key); s.section.hidden = true; s.links.replaceChildren();
+      const s = sections.get(key); s.checkedGarment = null;
+      if (patternTransfer?.evaluatedOp === key) { patternTransfer.pattern = null; patternTransfer.evaluatedInputs = null; }
+      s.section.hidden = true; s.links.replaceChildren();
       s.comparison.replaceChildren(); s.summary.textContent = ""; s.study = null; s.adoptions = [];
     }
     if (key === "fold") { drape = null; $("viewer").hidden = true; $("viewer").removeAttribute("src"); }
@@ -542,7 +544,7 @@ function clear(keys) {
       $("sewPreviewSummary").textContent = "";
     }
     if (key === "bind") {
-      if (patternTransfer) patternTransfer.pattern = null;
+      if (patternTransfer) { patternTransfer.pattern = null; patternTransfer.evaluatedInputs = null; }
       bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren();
     }
     if (key === "treatment") preparedTreatment = null;
@@ -4330,6 +4332,7 @@ function show(op, msg, request) {
     }
     // The parsed result is for display only: JSON.stringify changes 1.0/-0.0 and breaks locks.
     if (op === "fold") drape = msg.reportText;
+    if (["exports", "fold"].includes(op)) offerCheckedGarment(op, msg, request);
     if (op === "sew") retainSewingPreview(r, request);
     if (op === "stock") {
       const residual = msg.files.find(f => f.name === "residual-stock-request.json")?.text;
@@ -5748,6 +5751,11 @@ async function execute(op) {
     if (outfit && (op === "bind" || boundOperations.includes(op))) msg.outfit = outfit;
     if (pending?.id !== id) return;
     if (op === "sew") pending.sewingInputs = { pattern: msg.pattern, options: msg.options };
+    if (["exports", "fold"].includes(op)) pending.garmentInputs = {
+      pattern: msg.pattern, fit: msg.fit, sourceSha: bound.pattern_sha256,
+      ...(op === "fold" ? { model: new Blob([msg.bytes]), bodyFit: msg.bodyFit ?? null,
+        drapeSettings: { self_contact_mm: msg.selfContactMm, two_start: msg.twoStart,
+          arm_abduction_deg: msg.armDeg, legs: msg.legs, leg_fraction: msg.legFraction, max_settle_steps: msg.maxSettleSteps } } : {}) };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
     if (pending?.id !== id) return;
@@ -6044,7 +6052,7 @@ $("sewPreviewCell").addEventListener("change", () => {
 $("sewPreviewOperation").addEventListener("change", () => {
   invalidate(["sewPreview"], true); describeSewingPreviewSelection(); controls();
 });
-$("cancel").onclick = () => { cancelPhotoReturn(); if (patternTransfer) patternTransfer.pattern = null;
+$("cancel").onclick = () => { cancelPhotoReturn(); if (patternTransfer) { patternTransfer.pattern = null; patternTransfer.evaluatedInputs = null; }
   clear(["sewPreview"]); start(); $("status").textContent = "Cancelled; reloading local engine."; };
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;
@@ -6753,24 +6761,51 @@ function clearRoundSources() {
 }
 $("clearRoundImport").onclick = () => { clearRoundSources(); resetPatternInput(); controls(); };
 const roundOrigin = new URL(window.location.href).origin;
-$("openPatternWorkbench").onclick = () => {
-  if (!ready || pending || !bound || typeof bound.pattern_json !== "string" || !/^[0-9a-f]{64}$/.test(bound.pattern_sha256)) return;
+function offerCheckedGarment(op, msg, request) {
+  const input = request.garmentInputs, effective = msg.evaluatedInputs, section = sections.get(op);
+  if (!input || !effective || effective.pattern !== input.pattern || effective.fit !== input.fit ||
+      typeof effective.measurements !== "string" || !/^[0-9a-f]{64}$/.test(input.sourceSha)) return;
+  const context = { fit: new Blob([effective.fit], { type: "application/json" }),
+    measurements: new Blob([effective.measurements], { type: "application/json" }),
+    ...(op === "fold" ? { model: input.model, bodyFit: input.bodyFit === null ? null :
+      new Blob([input.bodyFit], { type: "application/json" }), drapeSettings: input.drapeSettings } : {}) };
+  section.checkedGarment = context;
+  const button = document.createElement("button"); button.type = "button"; button.textContent = "Continue checked garment in Pattern Workbench";
+  button.onclick = () => {
+    if (!ready || pending || section.checkedGarment !== context || !section.adoptions.includes(button)) return;
+    openPatternWorkbench(input.pattern, input.sourceSha, context, op);
+  };
+  const note = document.createElement("p");
+  note.textContent = "Continue with this evaluation's exact garment, fit targets and effective measurement evidence" +
+    (op === "fold" ? ", plus its evaluated model, accepted body source when used, and drape settings." : ".") +
+    " Review and check again in Pattern Workbench; no verdict or wearer consent is transferred.";
+  section.adoptions.push(button); section.links.append(button); section.comparison.append(note);
+}
+function openPatternWorkbench(pattern, sourceSha, evaluatedInputs = null, evaluatedOp = null) {
   if (patternTransfer && !patternTransfer.target.closed) {
     $("status").textContent = "A Pattern Workbench handoff is still opening. Finish or close that tab before opening another."; return;
   }
   const token = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,"0")).join("");
   const url = new URL("index.html", import.meta.url); url.searchParams.set("materialImport", token);
   const target = window.open(url.href, "_blank");
-  if (!target) { $("status").textContent = "Pattern Workbench popup blocked. Download pattern.json and select it there instead."; return; }
-  patternTransfer = { target, token, pattern: new Blob([bound.pattern_json], { type: "application/json" }), source_sha256: bound.pattern_sha256 };
-  $("status").textContent = "Pattern Workbench opened. Select wearer and fit evidence there, then explicitly check before altering the pattern.";
+  if (!target) { $("status").textContent = "Pattern Workbench popup blocked. Download the source files and select them there instead."; return; }
+  patternTransfer = { target, token, pattern: new Blob([pattern], { type: "application/json" }),
+    source_sha256: sourceSha, evaluatedInputs, evaluatedOp };
+  $("status").textContent = evaluatedInputs ?
+    "Pattern Workbench opened with the checked garment's frozen inputs. Review its measurement evidence and confirm any accepted body for this wearer, then explicitly check again." :
+    "Pattern Workbench opened. Select wearer and fit evidence there, then explicitly check before altering the pattern.";
+}
+$("openPatternWorkbench").onclick = () => {
+  if (!ready || pending || !bound || typeof bound.pattern_json !== "string" || !/^[0-9a-f]{64}$/.test(bound.pattern_sha256)) return;
+  openPatternWorkbench(bound.pattern_json, bound.pattern_sha256);
 };
 window.addEventListener("message", event => {
   const transfer = patternTransfer, m = event.data;
   if (!transfer || event.origin !== roundOrigin || event.source !== transfer.target ||
       m?.type !== "ftx-material-pattern-ready" || m.token !== transfer.token) return;
   transfer.target.postMessage(transfer.pattern ? { type: "ftx-material-pattern", token: transfer.token,
-    pattern: transfer.pattern, source_sha256: transfer.source_sha256 } :
+    pattern: transfer.pattern, source_sha256: transfer.source_sha256,
+    ...(transfer.evaluatedInputs ? { evaluatedInputs: transfer.evaluatedInputs } : {}) } :
     { type: "ftx-material-pattern-cancelled", token: transfer.token }, roundOrigin);
   patternTransfer = null;
 });

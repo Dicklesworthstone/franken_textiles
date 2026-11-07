@@ -19704,3 +19704,203 @@ test('authored fit targets survive evaluated design adoption but clear on an unr
   stale.onclick();assert.equal(p.e.guidedFitTargets.children.length,0,'An old row cannot republish a target after source replacement');
   authoredFitControls(p);p.e.guidedFitAdd.onclick();assert.ok(p.live.size);p.windowEvents.pagehide();assert.equal(p.live.size,0);
 });
+
+
+const checkedPattern=' {"schema":"fabric-pattern/1","pieces":[{"id":"front"}],"source_sequence":18446744073709551615,"probe":-0.0}\r\n';
+const checkedFit=' {"schema":"fabric-fit/1","points":[],"source_sequence":18446744073709551615,"probe":1.0}\r\n';
+const checkedPrimary=' {"schema":"fabric-measurements/1","records":[],"primary":true,"source_sequence":18446744073709551615}\r\n';
+const checkedEffective=' {"schema":"fabric-measurements/1","records":[],"measurement_imports":["original photo evidence"],"probe":-0.0,"source_sequence":18446744073709551615}\r\n';
+const checkedBodyFit=' {"schema":"ftx-body-fit/1","source_sequence":18446744073709551615,"probe":-0.0}\r\n';
+const checkedSettings={self_contact_mm:2,two_start:true,arm_abduction_deg:50,legs:'seated',leg_fraction:0.25,max_settle_steps:8};
+const checkedAction=p=>descendants(p.e.outputs).find(n=>n.tag==='button'&&n.textContent==='Continue checked garment in Pattern Workbench');
+function checkedPacket(token,body=false) {
+  return {type:'ftx-material-pattern',token,pattern:new Blob([checkedPattern]),source_sha256:'ac'.repeat(32),
+    evaluatedInputs:{fit:new Blob([checkedFit]),measurements:new Blob([checkedEffective]),
+      ...(body?{model:new Blob([new Uint8Array([1,3,5])]),bodyFit:new Blob([checkedBodyFit]),drapeSettings:{...checkedSettings}}:{})}};
+}
+async function checkedMaterialPage(op='exports',authored=false,accepted=false) {
+  const p=await pageModule();await p.load();
+  await p.e.bind.onclick();p.emit({pattern:{pieces:[{id:'front'}]},pattern_json:checkedPattern,pieces:[],pattern_sha256:'ac'.repeat(32)});
+  p.select('measurements',checkedPrimary);p.e.measurements.handlers.change();p.select('fit',checkedFit);p.e.fit.handlers.change();
+  if(authored){authoredFitControls(p);p.e.guidedFitAdd.onclick();}
+  if(op==='fold'){
+    p.e.body.files=[new Blob([new Uint8Array([1,3,5])])];p.e.body.handlers.change();
+    if(accepted){p.e.bodyFitFile.files=[new Blob([checkedBodyFit])];p.e.bodyFitFile.handlers.change();}
+    p.e.bodyArmDeg.value='50';p.e.selfContact.checked=true;p.e.twoStart.checked=true;
+    p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';p.e.maxSettleSteps.value='8';
+    p.e.bodyFitConsent.checked=accepted;p.e.bodyFitConsent.handlers.change();
+  }
+  await p.e[op].onclick();const request=p.current().messages.at(-1);
+  assert.equal(request.type,op,p.e.error.textContent);
+  return {p,request,publish:(patch={})=>p.current().emit({type:'result',request:request.request,result:{status:'REVIEW'},files:[],reportText:'{}',
+    evaluatedInputs:{pattern:request.pattern,fit:request.fit,measurements:checkedEffective},...patch})};
+}
+test('checked garment worker returns exactly the evidence consumed after fusion and no context on refusal or unrelated operations',async()=>{
+  const calls=[];let blocked=false;
+  const w=await workerModule({bindings:{default:async()=>{},measurement_file:raw=>{calls.push(['fusion',raw]);return checkedEffective;},
+    run:raw=>{calls.push(['exports',raw]);return{page:()=>blocked?'{"status":"BLOCKED"}':'{"status":"REVIEW"}',
+      zip:()=>new Uint8Array([1]),zip_name:()=>'round.zip',free(){}};},
+    WebBody:class{free(){}},fold_up:(_body,pattern,measurements,fit)=>{calls.push(['fold',pattern,measurements,fit]);
+      return{report:()=>'{}',viewer:()=>'<html/>',free(){}};},material_catalog:()=>'{"materials":[]}'}});
+  for(const fused of [false,true])for(const type of ['exports','fold']){
+    const request={type,request:70,pattern:checkedPattern,fit:checkedFit,measurements:checkedPrimary,bytes:new ArrayBuffer(1),
+      selfContactMm:0,twoStart:false,...(fused?{measurementSources:'["original photo"]',measurementConsent:true}:{})};
+    const response=await w.send(request),effective=fused?checkedEffective:checkedPrimary;
+    assert.equal(response.type,'result',response.message);
+    assert.deepEqual(plain(response.evaluatedInputs),{pattern:checkedPattern,fit:checkedFit,measurements:effective});
+    const consumed=calls.at(-1);
+    if(type==='exports')assert.equal(consumed[1],'{"pattern":'+checkedPattern+',"fit_spec":'+checkedFit+',"body":{"mode":"file","measurements":'+effective+'}}');
+    else assert.deepEqual(consumed,['fold',checkedPattern,effective,checkedFit]);
+  }
+  blocked=true;
+  for(const request of [
+    {type:'exports',pattern:checkedPattern,fit:checkedFit,measurements:checkedPrimary},
+    {type:'exports',pattern:checkedPattern,fit:checkedFit,measurements:checkedPrimary,measurementSources:'["photo"]',measurementConsent:false},
+    {type:'catalog',query:'{}'}
+  ]){
+    const response=await w.send(request);assert.equal(response.evaluatedInputs,undefined);
+    assert.equal(response.type,request.type==='catalog'?'result':'error');
+  }
+});
+test('checked garment sender freezes evaluated sources and model before transfer without exporting later form edits',async()=>{
+  for(const op of ['exports','fold']){
+    const {p,request,publish}=await checkedMaterialPage(op,false,op==='fold');
+    assert.equal(checkedAction(p),undefined);publish();const button=checkedAction(p);assert.ok(button);assert.equal(button.disabled,false);
+    if(op==='fold')new Uint8Array(request.bytes).fill(9);
+    button.onclick();const popup=p.popups[0],token=new URL(popup.url).searchParams.get('materialImport');
+    const ready={type:'ftx-material-pattern-ready',token};
+    for(const [origin,source,data]of [['https://foreign.invalid',popup.target,ready],['https://unit.invalid',{},ready],
+      ['https://unit.invalid',popup.target,{...ready,token:'wrong'}]]){
+      await p.windowEvents.message({origin,source,data});assert.equal(popup.messages.length,0);
+    }
+    await p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:ready});
+    const data=popup.messages[0].data,context=data.evaluatedInputs;
+    assert.equal(await data.pattern.text(),checkedPattern);assert.equal(await context.fit.text(),checkedFit);
+    assert.equal(await context.measurements.text(),checkedEffective);assert.notEqual(await context.measurements.text(),checkedPrimary);
+    if(op==='fold'){
+      assert.deepEqual([...new Uint8Array(await context.model.arrayBuffer())],[1,3,5]);
+      assert.equal(await context.bodyFit.text(),checkedBodyFit);assert.deepEqual(plain(context.drapeSettings),checkedSettings);
+    }else{assert.equal(context.model,undefined);assert.equal(context.bodyFit,undefined);assert.equal(context.drapeSettings,undefined);}
+    assert.equal(data.result,undefined);assert.equal(context.bodyFitConsent,undefined);
+    p.e.fit.handlers.change();assert.equal(await context.fit.text(),checkedFit,'Already received snapshots stay immutable');
+    await p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:ready});assert.equal(popup.messages.length,1);
+  }
+  for(const patch of [{evaluatedInputs:undefined},{evaluatedInputs:{pattern:'{}',fit:checkedFit,measurements:checkedEffective}},
+    {type:'error',message:'evaluation refused'}]){
+    const {p,publish}=await checkedMaterialPage();publish(patch);assert.equal(checkedAction(p),undefined);
+  }
+});
+test('checked garment sender revokes unsent context on saved fit changes and every evaluated body or evidence replacement',async()=>{
+  for(const change of ['saved-fit','measurements','fit','model','accepted-fit','consent','pose','supplemental','rebind','cancel','pagehide']){
+    const {p,publish}=await checkedMaterialPage('fold',change==='saved-fit',true);publish();const button=checkedAction(p);assert.ok(button,change);
+    button.onclick();const popup=p.popups[0],token=new URL(popup.url).searchParams.get('materialImport');
+    if(change==='saved-fit'){
+      p.e.guidedFitMinimum.value='-2';p.e.guidedFitMinimum.handlers.input();
+      assert.equal(section(p,'fold').hidden,false,'Unsaved drafts do not replace evaluated targets');
+      authoredFitAction(p,'Replace length');
+    }else if(change==='measurements')p.e.measurements.handlers.change();
+    else if(change==='fit')p.e.fit.handlers.change();
+    else if(change==='model')p.e.body.handlers.change();
+    else if(change==='accepted-fit')p.e.bodyFitFile.handlers.change();
+    else if(change==='consent')p.e.bodyFitConsent.handlers.change();
+    else if(change==='pose')p.e.drapeLegFraction.handlers.input();
+    else if(change==='supplemental')p.e.supplementalFiles.handlers.change();
+    else if(change==='rebind')await p.e.bind.onclick();
+    else if(change==='cancel')p.e.cancel.onclick();
+    else p.windowEvents.pagehide();
+    await p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-material-pattern-ready',token}});
+    assert.equal(popup.messages[0].data.type,'ftx-material-pattern-cancelled',change);assert.equal(popup.messages[0].data.evaluatedInputs,undefined);
+    button.onclick();assert.equal(p.popups.length,1,'An obsolete button cannot open a new transfer');
+  }
+});
+test('checked garment receiver waits for engine readiness and rechecks raw evaluated sources with fresh body consent',async()=>{
+  const token='c'.repeat(32),p=draftingPage({materialToken:token,initialize:false}),data=checkedPacket(token,true);
+  assert.equal(p.openerMessages.length,0);await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+  assert.equal(p.last('body'),undefined);p.engineReady();assert.equal(p.openerMessages[0].data.type,'ftx-material-pattern-ready');
+  for(const [origin,source,m]of [['https://foreign.invalid',p.opener,data],['https://unit.invalid',{},data],
+    ['https://unit.invalid',p.opener,{...data,token:'wrong'}]])await p.windowEvents.message({origin,source,data:m});
+  assert.equal(p.last('body'),undefined);
+  p.e.bodyFitConsent.checked=true;await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+  assert.equal(p.last('run'),undefined,'Receiving sources never publishes a check or verdict');assert.equal(p.hasOpener(),false);
+  assert.equal(p.e.bodyFitConsent.checked,false);assert.equal(p.e.supplementalConsent.checked,false);
+  assert.equal(p.modes.find(m=>m.checked).value,'file');assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[1,3,5]);
+  assert.deepEqual(p.e.materialImportFiles.children.map(a=>a.download),['fit_spec.json','measurements.json']);
+  for(const [i,raw]of [checkedFit,checkedEffective].entries())assert.equal(await p.live.get(p.e.materialImportFiles.children[i].href).text(),raw);
+  p.emit({type:'bodyReady',request:p.last('body').request});await p.e.go.handlers.click();
+  const request=p.messages.findLast(m=>m.type==='run').req;assert.ok(request.includes(checkedPattern));assert.ok(request.includes(checkedFit));assert.ok(request.includes(checkedEffective));
+  p.result();assert.equal(p.e.foldGo.disabled,true);p.e.bodyFitConsent.checked=true;await p.e.bodyFitConsent.handlers.change();
+  assert.equal(p.e.foldGo.disabled,false);await p.e.foldGo.handlers.click();const fold=p.last('fold');
+  assert.equal(fold.bodyFit,checkedBodyFit);assert.equal(fold.bodyFitConsent,true);
+  assert.deepEqual({self_contact_mm:fold.selfContactMm,two_start:fold.twoStart,arm_abduction_deg:fold.armDeg,
+    legs:fold.legs,leg_fraction:fold.legFraction,max_settle_steps:fold.maxSettleSteps},checkedSettings);
+  const bodyLink=p.e.bodyFitImportFiles.children.find(a=>a.download==='body-model.ftxbody');
+  new Uint8Array(p.last('body').bytes).fill(9);
+  assert.deepEqual([...new Uint8Array(await p.live.get(bodyLink.href).arrayBuffer())],[1,3,5],'Received model snapshot precedes transfer');
+  const count=p.messages.length;await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});assert.equal(p.messages.length,count);
+});
+test('checked garment receiver preserves manual source replacements and clearing removes only received evidence',async()=>{
+  for(const replace of ['model','report']){
+    const token='d'.repeat(32),p=draftingPage({materialToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:checkedPacket(token,true)});
+    const manualFit=' {"manual_fit":18446744073709551615}\n',manualMeasurements=' {"manual_measurements":-0.0}\n';
+    p.e.fitFile.files=[new Blob([manualFit])];await p.e.fitFile.handlers.change();
+    p.e.measFile.files=[new Blob([manualMeasurements])];await p.e.measFile.handlers.change();
+    assert.equal(p.e.materialImportFiles.children.length,0);
+    if(replace==='model'){p.e.bodyFile.files=[new Blob([new Uint8Array([7])])];await p.e.bodyFile.handlers.change();}
+    else{p.e.bodyFitFile.files=[new Blob([checkedBodyFit+' '])];await p.e.bodyFitFile.handlers.change();}
+    await p.e.go.handlers.click();const request=p.messages.findLast(m=>m.type==='run').req;
+    assert.ok(request.includes(manualFit));assert.ok(request.includes(manualMeasurements));assert.ok(request.includes(checkedPattern));
+    await p.e.clearTraceImport.handlers.click();
+    assert.equal(p.e.traceImportNote.hidden,true);assert.equal(p.e.bodyFitImportFiles.children.length,0);assert.equal(p.e.bodyFitConsent.checked,false);
+    assert.equal(p.e.fitFile.files.length,1);assert.equal(p.e.measFile.files.length,1);
+    if(replace==='model')assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[7]);
+    else assert.equal(p.e.bodyFitFile.files.length,1);
+  }
+});
+test('checked garment receiver refuses incomplete sources and cancels delayed installation without fallback or inherited consent',async()=>{
+  const token='e'.repeat(32);
+  for(const patch of [{fit:null},{measurements:new Blob(['{'])},{model:new Blob([]),drapeSettings:checkedSettings},
+    {model:new Blob(['x']),bodyFit:new Blob([checkedBodyFit]),drapeSettings:{...checkedSettings,arm_abduction_deg:181}},
+    {bodyFit:new Blob([checkedBodyFit])}]){
+    const p=draftingPage({materialToken:token}),data=checkedPacket(token);Object.assign(data.evaluatedInputs,patch);
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+    assert.equal(p.e.materialImportFiles.children.length,0);assert.equal(p.last('body'),undefined);
+    await p.e.go.handlers.click();assert.equal(p.last('run'),undefined);assert.ok(p.e.errorText.textContent);
+    await p.e.clearTraceImport.handlers.click();assert.equal(p.e.traceImportNote.hidden,true);
+  }
+  for(const action of ['consent','clear','fit','measurements','pose','model','pagehide']){
+    const p=draftingPage({materialToken:token}),pending=deferred(),started=deferred(),data=checkedPacket(token,true);
+    class WaitingFit extends Blob {arrayBuffer(){started.resolve();return pending.promise;}}
+    data.evaluatedInputs.fit=new WaitingFit([checkedFit]);
+    const reading=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});await started.promise;
+    if(action==='consent'){p.e.bodyFitConsent.checked=true;await p.e.bodyFitConsent.handlers.change();}
+    if(action==='clear')await p.e.clearTraceImport.handlers.click();
+    if(action==='fit'){p.e.fitFile.files=[new Blob(['{"manual":true}'])];await p.e.fitFile.handlers.change();}
+    if(action==='measurements'){p.e.measFile.files=[new Blob(['{"manual":true}'])];await p.e.measFile.handlers.change();}
+    if(action==='pose'){p.e.bodyArmDeg.value='0';await p.e.bodyArmDeg.handlers.change();}
+    if(action==='model'){p.e.bodyFile.files=[new Blob([new Uint8Array([7])])];await p.e.bodyFile.handlers.change();}
+    if(action==='pagehide')p.windowEvents.pagehide();
+    pending.resolve(new TextEncoder().encode(checkedFit).buffer);await reading;
+    assert.equal(p.e.bodyFitConsent.checked,false,action);
+    if(action==='consent'){assert.equal(p.e.materialImportFiles.children.length,2);assert.ok(p.last('body'));}
+    else{assert.equal(p.e.materialImportFiles.children.length,0,action);if(action==='model')assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[7]);else assert.equal(p.last('body'),undefined);}
+    if(['fit','measurements','pose','model'].includes(action)){await p.e.go.handlers.click();assert.equal(p.last('run'),undefined,'Interrupted checked inputs cannot borrow chart/tape fallbacks');}
+  }
+});
+
+
+test('checked garment receiver keeps export-only evidence and ordinary drape models distinct from accepted body sources',async()=>{
+  for(const body of [false,true]){
+    const token='f'.repeat(32),p=draftingPage({materialToken:token}),data=checkedPacket(token,body);
+    if(body)data.evaluatedInputs.bodyFit=null;
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+    assert.equal(p.e.bodyFitConsent.checked,false);assert.equal(p.last('run'),undefined);
+    if(body){
+      assert.deepEqual(p.e.bodyFitImportFiles.children.map(a=>a.download),['body-model.ftxbody']);
+      p.emit({type:'bodyReady',request:p.last('body').request});
+    }else{assert.equal(p.last('body'),undefined);assert.equal(p.e.bodyFitImportFiles.children.length,0);}
+    await p.e.go.handlers.click();assert.ok(p.messages.findLast(m=>m.type==='run').req.includes(checkedEffective));p.result();
+    if(body){assert.equal(p.e.foldGo.disabled,false);await p.e.foldGo.handlers.click();assert.equal(p.last('fold').bodyFit,null);assert.equal(p.last('fold').armDeg,50);}
+    else assert.equal(p.e.foldGo.disabled,true,'Exports carry no model that was not evaluated');
+  }
+});

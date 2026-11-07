@@ -695,7 +695,11 @@ self.onmessage = async ({ data: msg }) => {
         file("outfit-composition.json", msg.outfit.composition_json),
         file("outfit-pattern.json", msg.type === "bind" ? result.pattern_json : msg.pattern));
     }
-    postMessage({ type: "result", request: msg.request, op: msg.type, result, files, viewer, picture, reportText },
+    // Retain the exact evidence consumed above, after any supplemental measurement fusion.
+    const evaluatedInputs = ["exports", "fold"].includes(msg.type) ?
+      { pattern: msg.pattern, fit: msg.fit, measurements: msg.measurements } : null;
+    postMessage({ type: "result", request: msg.request, op: msg.type, result, files, viewer, picture, reportText,
+      ...(evaluatedInputs ? { evaluatedInputs } : {}) },
       files.filter(f => f.bytes).map(f => f.bytes.buffer));
   } catch (e) {
     const fatal = e instanceof WebAssembly.RuntimeError;

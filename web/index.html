@@ -85,6 +85,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       </div>
       <p id="traceImportNote" class="mut" hidden><span id="traceImportText"></span>
         <button id="clearTraceImport" type="button">Clear tracing handoff</button></p>
+      <div id="materialImportFiles" class="links"></div>
       <p id="alterImportNote" class="mut" hidden><span id="alterImportText"></span>
         <a id="alterDownload" download="altered-pattern.json">Download current pattern</a>
         <button id="undoAlter" type="button" disabled>Undo last alteration and check</button></p>
@@ -312,7 +313,28 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   const materialImport = !patternQuery.has("traceImport") && patternQuery.has("materialImport");
   const patternMessage = materialImport ? "ftx-material-pattern" : "ftx-trace-pattern";
   let tracedPattern = null, traceToken = patternQuery.get(materialImport ? "materialImport" : "traceImport");
-  function clearTraceImport() {if(traceToken)window.opener=null;tracedPattern=traceToken=null;$("traceImportNote").hidden=true;}
+  let materialImportRead = 0, materialImportBusy = false, materialImportProblem = null, requestMaterialImport = null;
+  let receivedMaterialFit = null, receivedMaterialMeasurements = null, materialBodySources = false;
+  const materialInputUrls = [];
+  function showMaterialInputs() {
+    materialInputUrls.forEach(u=>URL.revokeObjectURL(u));materialInputUrls.length=0;$("materialImportFiles").replaceChildren();
+    for(const [name,raw] of [["fit_spec.json",receivedMaterialFit],["measurements.json",receivedMaterialMeasurements]]) {
+      if(raw===null)continue;
+      const a=document.createElement("a");a.download=a.textContent=name;a.href=URL.createObjectURL(new Blob([raw],{type:"application/json"}));
+      materialInputUrls.push(a.href);$("materialImportFiles").append(a);
+    }
+  }
+  function cancelMaterialImport(refuse = true) {
+    if(!materialImport || (!traceToken && !materialImportBusy))return;
+    ++materialImportRead;materialImportBusy=false;requestMaterialImport=null;traceToken=null;window.opener=null;
+    if(refuse) {materialImportProblem="Checked garment import was interrupted. Clear the material handoff, then select the intended sources.";
+      $("traceImportText").textContent=materialImportProblem;}
+  }
+  function clearTraceImport() {
+    cancelMaterialImport(false);if(traceToken)window.opener=null;tracedPattern=traceToken=null;$("traceImportNote").hidden=true;
+    receivedMaterialFit=receivedMaterialMeasurements=null;materialImportProblem=null;showMaterialInputs();
+    if(materialBodySources){materialBodySources=false;clearBodyImport();}
+  }
   let editedPattern = null, editedFit = null, editedBodyProgram = null, previousAlteration = null, editedUrl = null;
   let alterationBase = null, alterationRequest = 0, alterationBusy = false;
   let alterationSource = null, alterationSourceTargets = null, alterationSourceRequest = 0, alterationSourceBusy = false;
@@ -388,10 +410,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     } catch (e) { throw new Error(what + ": not valid UTF-8 JSON (" + e.message + ")"); }
   }
   async function buildRequest() {
+    if(materialImportBusy || materialImportProblem) throw Error(materialImportProblem || "Wait for the checked garment sources to finish loading.");
     const m = bodyMode();
     const body = { mode: m };
     let measurements = null;
-    if (m === "file") measurements = await readJson($("measFile"), "measurements.json");
+    if (m === "file") measurements = receivedMaterialMeasurements ?? await readJson($("measFile"), "measurements.json");
     else {
       body.stature_cm = +$("stature").value;
       if ($("age").value) body.age_months = +$("age").value;
@@ -425,7 +448,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const bodyText = JSON.stringify(body).slice(0, -1) + (measurements === null ? "" : ',"measurements":' + measurements) + "}";
     if (program === "audit") {
       const pattern = editedPattern ?? await readJson(tracedPattern ? {files:[tracedPattern]} : $("patternFile"), "pattern.json");
-      const fitText = editedFit ?? ($("fitFile").files.length ? await readJson($("fitFile"), "fit_spec.json") : null);
+      const fitText = editedFit ?? receivedMaterialFit ?? ($("fitFile").files.length ? await readJson($("fitFile"), "fit_spec.json") : null);
       const fit = fitText === null ? "" : ',"fit_spec":' + fitText;
       return '{"body":' + bodyText + ',"pattern":' + pattern + fit + '}';
     }
@@ -620,6 +643,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (ready && !dead) status("Inputs changed; draft and check again.");
   }
   function invalidateEvidence() {
+    cancelMaterialImport();
     $("supplementalConsent").checked = false;
     invalidateRound();
   }
@@ -758,7 +782,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       renderPrograms(); onProgram();
       $("go").disabled = false; $("go").textContent = "Draft and check";
       status(`Ready (${msg.version}; ${msg.dxf}).`);
-      requestBodyImport?.();
+      requestBodyImport?.();requestMaterialImport?.();
     } else if (msg.type === "fields") { if (msg.program === bodyProgram()) { fields = msg.rows; renderFields(); } }
     else if (msg.type === "result") {
       $("go").disabled = false; status("Done.");
@@ -897,7 +921,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         clearTraceImport();clearEditedPattern();
         if (resetBody) {showBodyMode();requestFields();}
       }
-      if(id==="fitFile") editedFit = null;
+      if(id==="fitFile") {cancelMaterialImport();editedFit = null;receivedMaterialFit=null;showMaterialInputs();}
       invalidateRound();
     });
   }
@@ -905,12 +929,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   for (const id of ["stature", "age", "sex", "nappies", "measFile", "supplementalFiles"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateEvidence);
   }
+  $("measFile").addEventListener("change",()=>{receivedMaterialMeasurements=null;showMaterialInputs();});
   $("supplementalConsent").addEventListener("change", invalidateRound);
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
-  $("selfContact").addEventListener("change", invalidateFold);
-  $("twoStart").addEventListener("change", invalidateFold);
+  $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
+  $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   for (const id of ["drapeLegs", "drapeLegFraction", "maxSettleSteps"]) {
-    for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateFold);
+    for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("resetStyle").addEventListener("click", () => {
     $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); invalidateRound();
@@ -970,10 +995,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     showBodyImport(); invalidateFold();
   }
   $("clearBodyFitImport").addEventListener("click", clearBodyImport);
-  window.addEventListener("pagehide", clearBodyImport);
+  window.addEventListener("pagehide", () => {clearTraceImport();clearBodyImport();});
   $("bodyFile").addEventListener("change", async () => {
     if (dead) return;
-    cancelBodyImport(); receivedBodyModel = null; showBodyImport();
+    cancelMaterialImport();cancelBodyImport(); receivedBodyModel = null; showBodyImport();
     if (materialTransfer) materialTransfer.files = null;
     $("bodyFitConsent").checked = false;
     const request = bodyRequest = ++nextRequest;
@@ -993,7 +1018,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   });
   $("bodyFitFile").addEventListener("change", async () => {
     if (dead) return;
-    cancelBodyImport(); receivedBodyFit = null; bodyImportProblem = null; showBodyImport();
+    cancelMaterialImport();cancelBodyImport(); receivedBodyFit = null; bodyImportProblem = null; showBodyImport();
     if (materialTransfer) materialTransfer.files = null;
     const request = ++bodyFitRead;
     bodyFitText = null; bodyFitReady = false; $("bodyFitConsent").checked = false;
@@ -1017,8 +1042,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (materialTransfer) materialTransfer.files = null;
     invalidateFold();
   }
-  for (const id of ["bodyFitConsent", "bodyArmDeg"]) $(id).addEventListener("change", bodySourceChanged);
-  $("bodyArmDeg").addEventListener("input", bodySourceChanged);
+  for (const id of ["bodyFitConsent", "bodyArmDeg"]) $(id).addEventListener("change",()=>{if(id==="bodyArmDeg")cancelMaterialImport();bodySourceChanged();});
+  $("bodyArmDeg").addEventListener("input",()=>{cancelMaterialImport();bodySourceChanged();});
   $("bodyCheckGo").addEventListener("click", () => {
     if ($("bodyCheckGo").disabled) return;
     dropBodyCheck(); bodyChecking = true; foldButton();
@@ -1089,9 +1114,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     program="audit";$("traceImportNote").hidden=false;
     if(materialImport) $("clearTraceImport").textContent="Clear material handoff";
     $("traceImportText").textContent=materialImport ? "Waiting for the current local material-bound pattern…" : "Waiting for the current local tracing review…";
-    window.addEventListener("message",event=>{
+    window.addEventListener("message",async event=>{
       const m=event.data;
-      if(!traceToken || event.origin!==traceOrigin || event.source!==source || m?.token!==traceToken) return;
+      if(!traceToken || (materialImport && !ready) || dead || event.origin!==traceOrigin || event.source!==source || m?.token!==traceToken) return;
       if(m.type===`${patternMessage}-cancelled`) {
         traceToken=null;window.opener=null;$("traceImportText").textContent=materialImport ?
           "Material binding changed before transfer. Bind the current sources again or choose a pattern.json file." :
@@ -1099,9 +1124,58 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       }
       if(m.type!==patternMessage) return;
       // The opener is needed only for this one-use handshake.
-      traceToken=null;window.opener=null;
+      traceToken=null;requestMaterialImport=null;window.opener=null;
       if(!(m.pattern instanceof Blob) || m.pattern.size>64*1024*1024 || !/^[0-9a-f]{64}$/.test(m.source_sha256)) {
         $("traceImportText").textContent=`${materialImport ? "Material" : "Tracing"} handoff refused. Choose a pattern.json file.`;return;
+      }
+      if(materialImport && m.evaluatedInputs !== undefined) {
+        const revision=++materialImportRead, context=m.evaluatedInputs;
+        materialImportBusy=true;materialImportProblem=null;invalidateRound();$("go").disabled=true;$("bodyFitConsent").checked=false;
+        try {
+          if(!context || typeof context!=="object" || Array.isArray(context))throw Error("Checked garment inputs are incomplete.");
+          const [fit,measurements]=await Promise.all([readJson({files:[context.fit]},"fit_spec.json"),
+            readJson({files:[context.measurements]},"measurements.json")]);
+          let modelBytes=null,bodyFit=null;
+          if(context.model !== undefined) {
+            const settings=context.drapeSettings;
+            if(!(context.model instanceof Blob) || !context.model.size || context.model.size>256*1024*1024 ||
+                !settings || ![0,2].includes(settings.self_contact_mm) || typeof settings.two_start!=="boolean" ||
+                !Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg<0 || settings.arm_abduction_deg>180 ||
+                !["standing","seated","squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
+                settings.leg_fraction<0 || settings.leg_fraction>1 || !Number.isSafeInteger(settings.max_settle_steps) ||
+                settings.max_settle_steps<0 || settings.max_settle_steps>256)throw Error("Checked drape model or settings are incomplete.");
+            if(context.bodyFit !== null && context.bodyFit !== undefined) {
+              if(!(context.bodyFit instanceof Blob) || !context.bodyFit.size || context.bodyFit.size>16*1024*1024)throw Error("Accepted body report exceeds 16 MiB.");
+              bodyFit=await readJson({files:[context.bodyFit]},"body-fit-report.json");
+              if(new Blob([bodyFit]).size>16*1024*1024)throw Error("Accepted body report exceeds 16 MiB.");
+            }
+            modelBytes=await context.model.arrayBuffer();
+            if(!modelBytes.byteLength || modelBytes.byteLength>256*1024*1024)throw Error("Checked body model exceeds 256 MiB.");
+          } else if(context.bodyFit != null || context.drapeSettings !== undefined)throw Error("Checked body sources require their evaluated model.");
+          if(revision!==materialImportRead || dead)return;
+          tracedPattern=m.pattern;receivedMaterialFit=fit;receivedMaterialMeasurements=measurements;
+          document.querySelectorAll("input[name=bodyMode]").forEach(el=>{el.checked=el.value==="file";});
+          $("measFile").value=$("fitFile").value="";$("supplementalConsent").checked=false;$("bodyFitConsent").checked=false;
+          if(modelBytes!==null) {
+            const settings=context.drapeSettings;
+            receivedBodyModel=new Blob([modelBytes]);receivedBodyFit=bodyFit;bodyFitText=bodyFit;bodyFitReady=true;bodyLoaded=false;
+            bodyImportProblem=null;materialBodySources=true;++bodyFitRead;const request=bodyRequest=++nextRequest;
+            $("bodyArmDeg").value=String(settings.arm_abduction_deg);$("selfContact").checked=settings.self_contact_mm===2;
+            $("twoStart").checked=settings.two_start;$("drapeLegs").value=settings.legs;
+            $("drapeLegFraction").value=String(settings.leg_fraction);$("maxSettleSteps").value=String(settings.max_settle_steps);
+            showBodyImport();worker.postMessage({type:"clearBody"});worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
+          }
+          materialImportBusy=false;showMaterialInputs();renderPrograms();onProgram(true);
+          $("traceImportText").textContent="Loaded the checked garment's exact pattern, fit targets and effective measurement evidence"+
+            (modelBytes!==null?", with its evaluated body sources and drape settings.":".")+
+            " Review the source downloads, confirm any accepted body for this wearer, and Draft and check again. No previous verdict or consent is carried forward.";
+        } catch(error) {
+          if(revision!==materialImportRead || dead)return;
+          materialImportBusy=false;materialImportProblem=String(error.message||error);
+          $("traceImportText").textContent="Checked garment handoff refused: "+materialImportProblem+". Clear the handoff before selecting replacement sources.";
+          $("go").disabled=!ready;showError(materialImportProblem);
+        }
+        return;
       }
       tracedPattern=m.pattern;
       $("traceImportText").textContent=materialImport ?
@@ -1109,7 +1183,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         `Loaded the local tracing review for image ${m.source_sha256}. Choose measurement evidence and a fit contract, then Draft and check. Tracing remains REVIEW_ONLY.`;
       if(ready) {renderPrograms();onProgram();}
     });
-    source.postMessage({type:`${patternMessage}-ready`,token:traceToken},traceOrigin);
+    if(materialImport) {
+      requestMaterialImport=()=>{if(traceToken)source.postMessage({type:`${patternMessage}-ready`,token:traceToken},traceOrigin);};
+      if(ready)requestMaterialImport();
+    } else source.postMessage({type:`${patternMessage}-ready`,token:traceToken},traceOrigin);
   }
   if(photoToken && !traceToken && /^[0-9a-f]{32}$/.test(photoToken) && traceOrigin!=="null" && window.opener) {
     const source=window.opener;
