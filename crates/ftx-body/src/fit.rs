@@ -638,8 +638,9 @@ pub fn partial_tape_readings(
         Some(back)
     })();
     let neck = crate::tape::neck_base(&mm, faces, frames);
-    let shoulders =
-        neck.and_then(|(_, snp)| crate::tape::shoulder_and_back(&mm, faces, &torso, frames, snp));
+    let shoulders = neck.and_then(|(_, snp)| {
+        crate::tape::shoulder_and_optional_back(&mm, faces, &torso, frames, snp)
+    });
     [
         Some(rest_height_m * 1000.0),
         lm("chest").and_then(|h| g(h - CHEST_BELOW_ARMPIT_MM)),
@@ -659,7 +660,7 @@ pub fn partial_tape_readings(
         neck.map(|(girth, _)| girth),
         crate::tape::head_girth(&torso, frames),
         shoulders.map(|(length, _)| length),
-        shoulders.map(|(_, back)| back),
+        shoulders.and_then(|(_, back)| back),
         crate::tape::crotch_length(&mm, faces, frames),
         crate::tape::outseam(&torso, frames),
     ]

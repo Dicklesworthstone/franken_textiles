@@ -34,7 +34,9 @@ C7), shoulder length (along the top of the shoulder in the coronal section throu
 from the side neck point to the shoulder point, taken as the top of the shoulder above the joint).
 Shoulder crossings belong to the outermost coronal section containing that joint; detached upper
 sections and nested shells cannot replace the shoulder surface. A missing joint-containing section
-yields no reading. Analytic flat-shoulder controls check this geometric rule under translation and
+yields no reading. A missing across-back section does not erase an independently available shoulder
+path; both still require the declared side-neck evidence and shoulder height. Analytic flat-shoulder
+controls check this geometric rule under translation and
 triangle order; they do not qualify the anatomical joint or side-neck placement. Across
 back (the back of the outermost horizontal section containing the torso axis 15 mm below the shoulder
 points, between them, as a hull; disconnected arm sections are excluded and a missing torso section

@@ -291,6 +291,13 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let original = bundle.push("original-input.json".into(), original_bytes)?;
     let annotation = bundle.push("body-starts.json".into(), annotation_bytes)?;
     let replay = bundle.push("input.json".into(), workspace::json_bytes(&input)?)?;
+    // The portable fitter must receive the starts just applied, not an earlier capture-review
+    // snapshot. Cameras and inline masks come from this invocation's checked preparation.
+    let prepared = bundle.push(
+        "prepared-input.json".into(),
+        workspace::json_bytes(&json!({"schema":request.schema,
+            "model":adapter.configuration(),"fit":request.fit}))?,
+    )?;
     let report = json!({"schema":"ftx-body-start-materialization/1","status":"STARTS_APPLIED",
         "body_fitted":false,"source_input":annotations.source_input,
         "input_sha256":annotations.source_input_sha256,"model_sha256":hash,
@@ -298,13 +305,14 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "materialized_silhouette_frame_indices":imported,
         "start_count":request.fit.starts.len(),"frame_count":request.fit.frames.len(),
         "original_input":original,"annotations":annotation,"replay_input":replay,
+        "prepared_input":prepared,
         "no_claim":"Explicit initializations passed ordinary native validation. Only starts, rebased local capture paths and separately requested silhouette imports were materialized. No optimization, anatomy, observability, accepted body or real-wearer fit claim."});
     bundle.publish_report(output, &report, "starts.json")?;
     Ok((
         report,
         0,
         format!(
-            "BODY FIT INITIALIZATIONS: APPLIED ({} starts, {} frames; no fitting)\nReview {}/input.json with measure fit-start-review, then use ordinary body-fit",
+            "BODY FIT INITIALIZATIONS: APPLIED ({} starts, {} frames; no fitting)\nReview {}/input.json with measure fit-start-review, then use measure fit-body or load prepared-input.json in the local photo page",
             request.fit.starts.len(),
             request.fit.frames.len(),
             output.display()

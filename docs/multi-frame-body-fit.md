@@ -373,6 +373,16 @@ reviewed constraints without requiring the old command-line option. Existing con
 intact. The new private directory contains `input.json`, the exact annotations and original input,
 and a final `starts.json` receipt.
 
+It also writes **`prepared-input.json`** for the local photo page's body fitter. This snapshot
+contains the starts just applied, the cameras checked in this invocation, the exact native frame
+identities and all inline or imported silhouette samples. `starts.json` retains its byte count
+and SHA-256. After reviewing the updated starts, select this new snapshot and the same model in
+the photo page; no additional capture-review round is needed merely to prepare browser input.
+The earlier capture review's snapshot still contains its original starts. Keep `input.json` for
+the native route, which rechecks original capture sources on use. The portable snapshot does not
+follow file paths or recheck source images: changing photographs, masks, calibration, observations
+or starts requires a fresh checked snapshot. Publishing it does not run the fitter or accept a shape.
+
 Keep predeclared CHECK observations fixed; this preview does not authorize fitting to their residuals.
 The original input download retains its original relative paths and belongs at its original
 location. Source images are copied privately for review, but the directory is not a portable
