@@ -2,6 +2,136 @@
 use super::*;
 
 #[test]
+fn independent_joint_polling_reaches_both_commands_and_exports_browser_replay() {
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let body = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":receipt(&digest),
+        "arm_abduction_deg":35.0,"measurements":{"wearer":{"stature_mm":1111.0}}});
+    let pattern =
+        include_str!("../../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let mut study: Value =
+        serde_json::from_str(include_str!("../../../../examples/design-study.json")).unwrap();
+    study.as_object_mut().unwrap().remove("designs");
+    let variables = ["front", "back"].map(|piece| {
+        json!({"key":piece,"bounds_mm":[0,60],
+            "initial_mm":0,"initial_step_mm":20,"minimum_step_mm":20,
+            "sites":[{"piece":piece,"axis":"y","at_mm":50,"multiplier":1}]})
+    });
+    study["design_adaptive"] = json!({"objective":"fit_band_violation_mm","variables":variables,
+        "after":[],"max_evaluations":24,"max_designs":1});
+    study["design_fit"] = json!({"fit_spec":{"schema":"fabric-fit/1","points":[{
+        "id":"synthetic-selected-stature-length","kind":"vertical","instance":"front",
+        "from":"a","to":"d","body":"stature","body_scale":0.1,"target_mm":[9.999,10,10.001]}]}});
+    study["assembly_mass"] = json!({"schema":"ftx-assembly-mass/1","inventory_complete":true,
+        "seam_allowance_mm":0,"extras":[]});
+    study["cutting"]["seam_allowance_mm"] = json!(0);
+    study["comparison"] = json!({"basis":"nominal","required_consumers":["cutting","sewing"],
+        "objectives":[{"metric":"assembly_mass_kg","direction":"minimize"}]});
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    std::fs::write(dir.join("pattern.json"), pattern).unwrap();
+    save(&dir.join("body-input.json"), &body);
+    let export = std::env::var_os("FTX_JOINT_DESIGN_CAPTURE_DIR").map(PathBuf::from);
+    if let Some(export) = &export {
+        // A capture is a new directory; an existing user's replay must never be overwritten.
+        std::fs::create_dir(export).unwrap();
+        for name in ["model.ftxbody", "pattern.json", "body-input.json"] {
+            std::fs::copy(dir.join(name), export.join(name)).unwrap();
+        }
+    }
+    for (name, joint, limit) in [
+        ("axis", false, 24),
+        ("joint", true, 24),
+        ("budget", true, 3),
+    ] {
+        let mut request = study.clone();
+        request["design_adaptive"]["max_evaluations"] = json!(limit);
+        if joint {
+            request["design_adaptive"]["polling"] = json!("axis_and_joint");
+        }
+        let study_name = format!("{name}-study.json");
+        save(&dir.join(&study_name), &request);
+        let portable: Value = serde_json::from_str(
+            &ftx_wasm::materials::scenario::manufacturing_on_model(
+                &model,
+                &digest,
+                pattern,
+                &request.to_string(),
+                &body.to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let search = &portable["design_search"];
+        assert_eq!(search["selected_designs"], usize::from(name == "joint"));
+        assert_eq!(search["evaluations"], if name == "joint" { 9 } else { 3 });
+        assert_eq!(search["complete_search"], false);
+        assert_eq!(search["global_optimum_claim"], false);
+        if name == "joint" {
+            let chosen = search["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["selected"] == true)
+                .unwrap();
+            assert_eq!(
+                chosen["design"]["variables_mm"],
+                json!({"front":40.0,"back":40.0})
+            );
+            assert_eq!(chosen["max_fit_band_violation_mm"], 0.0);
+            assert_eq!(
+                chosen["design"]["fit"]["result"]["validation"]["points"][0]["body_mm"],
+                130.0
+            );
+        } else {
+            assert_eq!(
+                search["stop_reason"],
+                if joint {
+                    "evaluation_budget"
+                } else {
+                    "minimum_steps"
+                }
+            );
+        }
+        for (binary, prefix) in [
+            (
+                env!("CARGO_BIN_EXE_ftx"),
+                &["--json", "materials", "study-on-body"][..],
+            ),
+            (env!("CARGO_BIN_EXE_ftx-materials"), &["study-on-body"][..]),
+        ] {
+            let output = Command::new(binary)
+                .current_dir(&dir)
+                .args(prefix)
+                .args([
+                    "pattern.json",
+                    &study_name,
+                    "body-input.json",
+                    "model.ftxbody",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{} / {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let native = native.get("result").unwrap_or(&native);
+            assert_eq!(native, &portable);
+            if prefix.len() == 1
+                && let Some(export) = &export
+            {
+                save(&export.join(&study_name), &request);
+                save(&export.join(format!("{name}-native.json")), native);
+            }
+        }
+    }
+}
+
+#[test]
 fn adaptive_linked_vertex_moves_reach_native_and_portable_selected_body_workflows() {
     linked_vertex_workflow(true);
 }

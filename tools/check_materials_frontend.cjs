@@ -15774,6 +15774,11 @@ test('compiled WASM joint material memory preserves both histories and exact fro
     assert.equal(w.sent.some(message=>message.type==='result'&&message.request===201),false);
   });
 
+// Recreate inputs without external model assets; the capture directory must not exist:
+// FTX_JOINT_DESIGN_CAPTURE_DIR=/absolute/new/capture cargo test -p ftx-cli --test accepted_body_workflow \
+//   adaptive::independent_joint_polling_reaches_both_commands_and_exports_browser_replay -- --exact
+// FTX_REAL_WASM=1 FTX_JOINT_DESIGN_REPLAY=/absolute/new/capture FTX_WASM_PKG=web/pkg \
+//   node --experimental-vm-modules --test --test-name-pattern '^compiled WASM independent joint polling' tools/check_materials_frontend.cjs
 test('compiled WASM independent joint polling preserves native seam, budget and manufacturing decisions',
   {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_JOINT_DESIGN_REPLAY}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
