@@ -2,7 +2,7 @@
 
 use super::{
     attending_labor, availability_calendars, build, capture_routed_fixture, eligible_fixture,
-    fixture, retained_fixtures, source, worker_owned_transfer,
+    fixture, refresh_locks, retained_fixtures, source, worker_owned_transfer,
 };
 use ftx_core::RefusalCode;
 use ftx_export::sewing::{SewPlan, program::SewProgram};
@@ -70,6 +70,242 @@ fn additional_owned(options: Value, owner: usize, travel: u32, duration: u32) ->
         "conditions":{}, "evidence":"estimate", "allow_estimates":true
     });
     qualified(options)
+}
+
+fn partitioned_pool(copies: usize) -> (ftx_pattern::Pattern, Value) {
+    let (pattern, mut raw) = fixture(copies);
+    let mut pass = raw["passes"][1].clone();
+    pass["id"] = json!("finish");
+    pass["after"] = json!(["reinforce"]);
+    raw["passes"].as_array_mut().unwrap().push(pass);
+    let route = &mut raw["production"]["routing"];
+    let mut third = route["cells"][1].clone();
+    third["id"] = json!("cell-c");
+    third["configuration"]["recipes"] =
+        json!({"finish":third["configuration"]["recipes"]["reinforce"].clone()});
+    third["handling"]["initial_milliseconds"] = json!({"finish":100});
+    third["handling"]["final_milliseconds"] = json!({"finish":200});
+    third["handling"]["source"] = source("cell-c-handling");
+    third["ordering"]["setup_times"]["source"] = source("cell-c-setup");
+    route["cells"].as_array_mut().unwrap().push(third);
+    route["route"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"operation":"finish","cell":"cell-c"}));
+    refresh_locks(&mut raw);
+    let mut raw = pooled(raw, 900);
+    raw["production"]["routing"]["transfer_pool"]["additional_resources"][0]["transfers"] =
+        json!([{"from":"cell-b","to":"cell-c","milliseconds":900}]);
+    (pattern, raw)
+}
+
+#[test]
+fn partitioned_carriers_jointly_cover_three_specialists_without_a_universal_mover() {
+    let (pattern, raw) = partitioned_pool(1);
+    let program = SewProgram::build(&pattern, &serde_json::from_value(raw.clone()).unwrap())
+        .expect("the two independently qualified carrier domains cover the entire route");
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    // A: 5300 ms; A->B: 700; B: 2800; B->C: 900; C: 2800. Each cell includes
+    // its own initial setup, loading and unloading; no carrier qualifies both edges.
+    assert_eq!(route.baseline.makespan_milliseconds, 12500);
+    assert_eq!(route.selected.makespan_milliseconds, 12500);
+    assert_eq!(route.selected.transfer_milliseconds, 1600);
+    assert_eq!(program.stitches.len(), 80);
+    assert!(!route.baseline_replaced);
+    assert_eq!(
+        route
+            .selected
+            .transfers
+            .iter()
+            .map(|row| (
+                row.from.as_str(),
+                row.to.as_str(),
+                row.resource.as_deref().unwrap(),
+                row.start_milliseconds,
+                row.finish_milliseconds
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("cell-a", "cell-b", "handoff-worker", 5300, 6000),
+            ("cell-b", "cell-c", "second-mover", 8800, 9700)
+        ]
+    );
+    let pool = route.transfer_pool.as_ref().unwrap();
+    assert_eq!(pool.primary.transfers.len(), 1);
+    assert_eq!(
+        pool.selected
+            .iter()
+            .map(|usage| usage.handoffs)
+            .collect::<Vec<_>>(),
+        [1, 1]
+    );
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+    capture_routed_fixture("partitioned-transfer-pool-pattern.json", pattern.raw());
+    capture_routed_fixture("partitioned-transfer-pool-options.json", &program.plan.options);
+    capture_routed_fixture("partitioned-transfer-pool-program.json", &program);
+}
+
+#[test]
+fn partitioned_carrier_seed_is_complete_and_uses_authored_order_on_equal_edges() {
+    let (pattern, mut raw) = partitioned_pool(2);
+    raw["production"]["routing"]["max_search_nodes"] = json!(6);
+    let extras = raw["production"]["routing"]["transfer_pool"]["additional_resources"]
+        .as_array_mut()
+        .unwrap();
+    let mut equal = extras[0].clone();
+    equal["id"] = json!("equal-second-zone-mover");
+    equal["source"] = source("equal-second-zone-mover");
+    extras.push(equal);
+    for first in ["second-mover", "equal-second-zone-mover"] {
+        let program =
+            SewProgram::build(&pattern, &serde_json::from_value(raw.clone()).unwrap()).unwrap();
+        let route = program
+            .plan
+            .production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap();
+        assert_eq!(route.selected.makespan_milliseconds, 15800);
+        assert_eq!(route.selected.operations.len(), 6);
+        assert_eq!(program.stitches.len(), 160);
+        assert_eq!((route.search_nodes, route.work_used), (6, 18));
+        assert!(route.budget_exhausted && !route.baseline_replaced && !route.optimality_proven);
+        for transfer in &route.selected.transfers {
+            assert_eq!(
+                transfer.resource.as_deref(),
+                Some(if transfer.from == "cell-a" {
+                    "handoff-worker"
+                } else {
+                    first
+                })
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&route.baseline).unwrap(),
+            serde_json::to_value(&route.selected).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+        );
+        raw["production"]["routing"]["transfer_pool"]["additional_resources"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+    }
+}
+
+#[test]
+fn partitioned_carrier_pools_require_the_exact_complete_edge_union() {
+    let (pattern, raw) = partitioned_pool(1);
+    let mut uncovered = raw.clone();
+    uncovered["production"]["routing"]["transfer_pool"]["additional_resources"][0]["transfers"] =
+        json!([{"from":"cell-a","to":"cell-b","milliseconds":900}]);
+    assert_eq!(
+        build(&pattern, uncovered).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    let mut unpooled = raw.clone();
+    unpooled["production"]["routing"]["transfer_pool"] = Value::Null;
+    assert_eq!(
+        build(&pattern, unpooled).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    for edges in [
+        json!([]),
+        json!([{"from":"cell-a","to":"cell-c","milliseconds":700}]),
+        json!([{"from":"cell-a","to":"unknown-cell","milliseconds":700}]),
+    ] {
+        let mut invalid = raw.clone();
+        invalid["production"]["routing"]["transfer"]["transfers"] = edges;
+        assert_eq!(
+            build(&pattern, invalid).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+    }
+    let mut short = raw;
+    short["production"]["routing"]["transfer_pool"]["additional_resources"][0]
+        ["available_until_milliseconds"] = json!(9699);
+    assert_eq!(
+        build(&pattern, short).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn partitioned_owned_carriers_share_labor_and_preserve_finite_buffers() {
+    let (pattern, raw) = partitioned_pool(2);
+    let mut raw = worker_owned_transfer(
+        attending_labor(raw, &[&["cell-a", "cell-b", "cell-c"]], 0),
+        0,
+        0,
+    );
+    let extra = &mut raw["production"]["routing"]["transfer_pool"]["additional_resources"][0];
+    extra["model"] = json!("attended_source_to_destination_handoffs/1");
+    extra["attending_worker"] = json!("worker-0");
+    extra["method"] = json!(
+        "Synthetic source pickup through destination deposit, with separately qualified empty travel"
+    );
+    let raw = bounded(qualified(raw), 1);
+    let program = SewProgram::build(&pattern, &serde_json::from_value(raw).unwrap()).unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    let labor = route.attending_labor.as_ref().unwrap();
+    assert_eq!(route.selected.makespan_milliseconds, 23000);
+    assert_eq!(labor.selected.attended_milliseconds, 19800);
+    assert_eq!(labor.selected.transfer_milliseconds, Some(3200));
+    let mut occupied: Vec<_> = labor
+        .selected
+        .steps
+        .iter()
+        .map(|row| (row.departure_milliseconds, row.finish_milliseconds))
+        .chain(
+            labor
+                .selected
+                .transfers
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|row| (row.departure_milliseconds, row.finish_milliseconds)),
+        )
+        .collect();
+    occupied.sort_unstable();
+    assert!(occupied.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+    for transfer in &route.selected.transfers {
+        assert_eq!(
+            transfer.resource.as_deref(),
+            Some(if transfer.from == "cell-a" {
+                "handoff-worker"
+            } else {
+                "second-mover"
+            })
+        );
+    }
+    let staging = &route.bounded_staging.as_ref().unwrap().selected;
+    for cell in ["cell-a", "cell-b", "cell-c"] {
+        assert!(staging.peak_reserved_slots[cell] <= 1);
+        assert_eq!(staging.final_reserved_slots[cell], 0);
+    }
+    assert_eq!(program.stitches.len(), 160);
+    assert!(!program.plan.hardware_execution_authorized);
 }
 
 #[test]
@@ -665,6 +901,10 @@ fn eligible_routes_use_only_each_carriers_qualified_directed_edges() {
     let mut raw = pooled(raw, 100);
     raw["production"]["routing"]["transfer_pool"]["additional_resources"][0]["transfers"] =
         json!([{"from":"cell-c", "to":"cell-b", "milliseconds":100}]);
+    raw["production"]["routing"]["transfer"]["transfers"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
     let program = SewProgram::build(&pattern, &serde_json::from_value(raw).unwrap()).unwrap();
     let route = program
         .plan

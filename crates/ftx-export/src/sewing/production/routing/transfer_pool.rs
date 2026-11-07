@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::Refusal;
+use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
@@ -61,7 +61,7 @@ pub struct Report {
     pub schema: &'static str,
     /// Exact additional carrier policies and their common independence qualification.
     pub policy: Policy,
-    /// Exact full-domain primary policy used by the copy-major seed.
+    /// Exact primary policy, preferred by the copy-major seed on edges it independently qualifies.
     pub primary: TransferPolicy,
     /// Complete retained baseline, which may be a searched replacement of an unavailable seed.
     pub baseline: Vec<Usage>,
@@ -109,6 +109,7 @@ impl Policy {
                 .flat_map(|labor| &labor.workers)
                 .map(|worker| worker.id.as_str()),
         );
+        let mut covered = BTreeSet::new();
         for carrier in route.transfer_resources() {
             if !identities.insert(carrier.id.as_str())
                 || carrier.attending_worker.as_ref().is_some_and(|id| {
@@ -123,14 +124,19 @@ impl Policy {
                     "transfer carriers need distinct resource identities and explicitly declared attending owners",
                 ));
             }
-        }
-        for carrier in &self.additional_resources {
             let supplied = carrier.validate_resource(cells)?;
             if supplied.is_empty() || !supplied.is_subset(required) {
                 return Err(bad(
-                    "each additional carrier must qualify a nonempty subset of the route's directed handoff edges",
+                    "each carrier must qualify a nonempty subset of the route's directed handoff edges",
                 ));
             }
+            covered.extend(supplied);
+        }
+        if covered != *required {
+            return Err(Refusal::new(
+                RefusalCode::NotConverged,
+                "source-qualified carriers must jointly cover every inter-cell edge of every adjacent route domain",
+            ));
         }
         Ok(())
     }

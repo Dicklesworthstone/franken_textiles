@@ -72,10 +72,10 @@ pub struct Policy {
     pub availability_calendars: Option<calendars::Policy>,
     /// Every original operation exactly once, in an order respecting every original predecessor.
     pub route: Vec<RouteStep>,
-    /// Primary qualified resource for all unloaded inter-cell handoffs, optionally owned by a worker.
+    /// First qualified carrier, optionally owned by a worker. Without a pool it covers every edge.
     pub transfer: TransferPolicy,
     /// Optional qualified extra carriers with explicit independent or attending-worker ownership.
-    /// The primary remains the seed; dispatch can select another carrier for each inter-cell move.
+    /// The complete pool covers every edge; the seed uses the first eligible carrier for each move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transfer_pool: Option<transfer_pool::Policy>,
     /// Evidence for this complete route, dedicated cell labor, staging and handoff independence.
@@ -169,8 +169,8 @@ pub struct TransferPolicy {
     /// Optional inclusive end; every complete handoff must finish inside this window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_until_milliseconds: Option<u64>,
-    /// The primary covers exactly every directed inter-cell edge between adjacent eligible domains.
-    /// Additional independent carriers cover a nonempty subset; same-cell steps need no handoff.
+    /// Qualified directed inter-cell edges between adjacent eligible domains. With a pool, each
+    /// carrier covers a nonempty subset and their union is complete; same-cell steps need no handoff.
     pub transfers: Vec<Handoff>,
     /// Evidence for complete handoffs and the declared independent or shared worker ownership.
     pub source: Source,
@@ -570,7 +570,6 @@ impl Policy {
                 "fixed route must cover every operation and every configured specialist cell",
             ));
         }
-        let supplied = self.transfer.validate_resource(&cells)?;
         let required: BTreeSet<_> = self
             .route
             .windows(2)
@@ -583,14 +582,13 @@ impl Policy {
                 })
             })
             .collect();
-        if supplied != required {
+        if let Some(pool) = &self.transfer_pool {
+            pool.validate(self, &cells, &required)?;
+        } else if self.transfer.validate_resource(&cells)? != required {
             return Err(Refusal::new(
                 RefusalCode::NotConverged,
                 "source-qualified handoffs must cover exactly the inter-cell edges of every adjacent route domain",
             ));
-        }
-        if let Some(pool) = &self.transfer_pool {
-            pool.validate(self, &cells, &required)?;
         }
         if let Some(calendars) = &self.availability_calendars {
             calendars.validate(self)?;
@@ -1853,11 +1851,21 @@ pub(in crate::sewing) fn build(
         for _ in 0..count {
             seed_used += 1;
             let task = prepared.choices[seed.next[copy]][0];
+            let cell = prepared.tasks[task].cell;
+            let carrier = seed.copy_cell[copy]
+                .filter(|&from| from != cell)
+                .map_or(0, |from| {
+                    prepared
+                        .carrier_handoffs
+                        .iter()
+                        .position(|edges| edges[from][cell].is_some())
+                        .expect("admitted complete carrier edge union")
+                });
             let dispatch = Dispatch {
                 copy,
                 task,
-                carrier: 0,
-                worker: prepared.workers_for(prepared.tasks[task].cell)[0],
+                carrier,
+                worker: prepared.workers_for(cell)[0],
             };
             let Some((next, _)) = prepared.advance(&seed, dispatch)? else {
                 break 'seed;

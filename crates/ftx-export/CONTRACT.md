@@ -453,9 +453,13 @@ Measured factory qualification, occupied-fixture transport and hardware authoriz
 
 **Independent routed transfer pools** (`production.routing.transfer_pool`, `ftx-pb2.2`).
 An optional source-qualified `independent_unloaded_transfer_resources/1` policy adds 1–7
-independent ready-state carriers to the primary complete-edge seed resource. Each additional
-carrier qualifies its own nonempty subset of admitted directed edges, exact durations and
-availability; shared attending-worker ownership is refused. Bounded append dispatch chooses the
+independent ready-state carriers to the primary resource. Every carrier, including the primary,
+qualifies its own nonempty subset of admitted directed edges; their exact union covers every
+adjacent eligible-cell edge. No fictitious all-route carrier is required for qualified specialist
+zones. The copy-major seed chooses the first eligible carrier per edge in primary/additional
+authored order; a complete primary preserves its original seed. Each carrier retains its own
+qualified durations and availability; this independent model refuses worker ownership.
+Bounded append dispatch chooses the
 actual carrier with each eligible-cell handoff, retaining separate clocks and calendar windows
 inside the existing node allowance. Finite buffers, fixtures, complete cell attendance and
 source-window constraints remain joint admission gates. Minimum per-edge durations and relaxed
@@ -465,8 +469,13 @@ per-carrier baseline/selected usage and the selected resource on every handoff. 
 checks complete carrier occupancy, edge durations and windows; finite-buffer replay uses that same
 carrier identity. Absent pooling preserves legacy serialization, including omitted resource IDs.
 Actual selected cell geometry, stitches and combined yarn orders remain the ordinary authorities.
-Tests: `sewing_routing/transfer_pool`. Synthetic schedules do not establish measured simultaneous
-carrier independence, physical access, factory throughput or hardware authorization.
+Without a pool, the original complete-primary admission is unchanged. The same edge-union rule
+applies to explicitly worker-owned `qualified_unloaded_transfer_resources/1` pools, preserving
+each owner's exclusive clock, qualified phase boundaries, calendars, buffers and independent
+replay. Tests: `sewing_routing/transfer_pool`, including a three-specialist partitioned route,
+bounded deterministic seeds, uncovered-edge refusal and shared-worker exclusivity. Synthetic
+schedules do not establish measured simultaneous carrier independence, physical access, factory
+throughput or hardware authorization.
 
 **Routed finite fixtures** (`production.routing.workholding` report). Optional existing
 cell-local workholding policies qualify each specialist's exact machine/material/process and

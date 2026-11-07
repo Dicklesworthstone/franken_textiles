@@ -862,12 +862,16 @@ existing primary `routing.transfer`. The pool requires its own `source`, `method
 `conditions`, `evidence` and separate `allow_estimates` consent: individual carrier timings do not
 establish that the carriers can operate simultaneously.
 
-Each additional carrier uses `serialized_unloaded_handoffs/1`, its own unique `id`, outer
+Each independent carrier uses `serialized_unloaded_handoffs/1`, its own unique `id`, outer
 availability and source-bearing directed `transfers`. Its nonempty edge list may cover a subset of
-the route's admitted directed edges. The primary still covers the complete existing edge domain,
-so it remains the explicit seed carrier. A carrier ID must differ from every cell, worker and other
-carrier. This independent model refuses worker-owned transfers. To combine independent carriers
-with attending-worker resources, use the qualified ownership model below.
+the route's admitted directed edges. The primary and additional carriers must **jointly cover every
+required edge**, including all adjacent eligible-cell combinations; none must be a universal mover.
+For example, a route A → B → C can use a primary qualified only for A → B and another carrier
+qualified only for B → C. An uncovered, extraneous or unknown edge refuses; a duration from another
+carrier cannot fill missing qualification. Without a pool, the primary still covers the complete
+edge domain. A carrier ID must differ from every cell, worker and other carrier. This independent
+model refuses worker-owned transfers. To combine independent carriers with attending-worker
+resources, use the qualified ownership model below.
 
 Every supplied duration includes complete positioning, pickup, carriage, deposit and return to
 that carrier's qualified ready state. The scheduler never infers location-dependent travel or
@@ -878,8 +882,11 @@ Different carriers can move different garments concurrently; each carrier remain
 Search considers eligible carriers in authored order, after the primary, for the actual selected
 source and destination cells. Same-cell successors consume no carrier. Carrier choices share the
 existing dispatch-node allowance and complete-incumbent rules; adding carriers does not multiply
-the declared search budget. The copy-major baseline uses the primary. If that seed misses a
-window, bounded search can retain a complete feasible replacement using an additional carrier.
+the declared search budget. For each move, the copy-major baseline uses the first carrier that
+qualifies its directed edge, considering the primary first and then the authored additional order.
+It retains the primary everywhere when that resource covers the full domain. If the chosen seed
+misses a window, bounded search can retain a complete feasible replacement using another qualified
+carrier; seed selection does not silently borrow another resource's timing or availability.
 The complete selected schedule continues through ordinary specialist stitch, thread-order,
 recipe-selection and material-study consumers.
 
@@ -922,8 +929,9 @@ independent carriers and resources operated by named attending workers in the sa
 `routing.independence` to `shared_attending_workers_and_qualified_transfer_resources/1`, or
 `shared_attending_workers_workholding_and_qualified_transfer_resources/1` when using shared
 fixture pools. The pool must include at least one explicitly owned carrier and an ordinary
-`attending_labor` policy. The primary still supplies the seed route and complete directed edge
-domain; additional carriers can qualify subsets. The existing eight-carrier limit applies.
+`attending_labor` policy. Each carrier, including the primary, may qualify a nonempty subset of
+directed edges; their union must cover the complete domain. The seed uses the first qualified
+carrier per edge as described above. The existing eight-carrier limit applies.
 
 Each independent carrier retains `serialized_unloaded_handoffs/1` and its complete ready-state
 duration. Each owned carrier uses `attended_source_to_destination_handoffs/1` with its exact
@@ -942,7 +950,7 @@ Finite staging follows the carrier actually selected for each handoff. Independe
 reserve the source until handoff completion and the destination from handoff start. Owned
 transfers release the source at pickup and reserve the destination from deposit. Fixture,
 buffer or calendar delays recheck the complete coupled assignment. The existing bounded search
-can replace an unavailable primary seed; only complete garment schedules become incumbents.
+can replace an unavailable seed; only complete garment schedules become incumbents.
 The labor lower bound relaxes optional carrying work rather than charging every move to the
 primary owner. Equality with the independent lower bound retains its existing proof scope.
 
