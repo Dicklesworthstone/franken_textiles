@@ -5618,6 +5618,21 @@ and retained-output replay remain authoritative. The guided workbench can author
 inspect each trial's original-unit violations. This advances `ftx-ds2`; bounded discovery still
 establishes neither global optimality nor independent measured garment qualification.
 
+### 25.190 Explore coordinated changes to independent alteration controls
+
+Optional joint-variable polling expands bounded adaptive discovery beyond one-coordinate neighbors.
+After the original axis order, the same engine tries signed pairs and triples using each independent
+variable's current declared step. This can cross a narrow seam-compatible region when isolated
+alterations are invalid, while retaining independently bounded controls for changing geometric
+relationships. The workbench exposes the choice for both fit and consumer-guided discovery.
+
+All proposed points pass through the existing coordinate cache, canonical geometry, seam, fit and
+consumer authorities. At most 26 directions exist for the current three-variable limit; unique-trial,
+restart, material/case and retained-output budgets remain unchanged. Constraint restoration and
+ordinary Pareto/eligibility rules remain separate from neighborhood generation. This advances
+`ftx-ds2`; a successful numerical alteration still establishes neither exhaustive feasibility nor
+independent measured garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

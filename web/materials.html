@@ -716,6 +716,9 @@ placeholder="All combinations, up to 256"></label>
 An explicit allowance screens a deterministic prefix; unvisited combinations remain unknown. The retained-design cap takes the first
 qualified combinations in grid order before downstream comparison.</p>
 <div id="guidedDesignAdaptivePolicy" hidden>
+<label><input id="guidedDesignJoint" type="checkbox">Explore combined changes to independent variables</label>
+<p class="note">Useful when panels must change together to keep seams compatible. After individual changes, the search can try
+two or three variables together using each variable's declared step. These trials share the same allowance and all existing checks.</p>
 <label>Guide discovery by <select id="guidedDesignObjective">
 <option value="fit_band_violation_mm">Satisfying the declared fit bands</option>
 <option value="consumer_comparison">Improving one comparison goal</option>

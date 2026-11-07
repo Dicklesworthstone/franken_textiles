@@ -1333,6 +1333,36 @@ operations, 256 MiB of document-processing reservation, and 40 million measureme
 work units each. Missing selected-body context refuses the request. Failed trials remain
 inspectable without invoking their production or simulation callbacks.
 
+### Explore coordinated changes to independent variables
+
+Set `design_adaptive.polling: "axis_and_joint"` when separately authored controls may need to
+move together before a seam, fit band or production guard admits the resulting garment. Omission
+preserves the original coordinate polling and its trial order. Existing linked sites remain useful
+when a single explicit scalar and fixed multipliers already express the intended alteration; joint
+polling keeps independent bounds and controls instead of inventing such a relationship.
+
+At each center, the search first tries the ordinary negative and positive move for each variable in
+authored order. It then tries every signed pair of variables, followed by the signed triple when
+three variables exist. Pairs follow authored axis order; within a group, signs are lexicographic
+with negative before positive. Each participating variable uses its own current step and declared
+bounds. A direction with a participating coordinate already at that directional bound is omitted,
+so it cannot collapse into a duplicate axis move. There are at most eight neighbors for two
+variables or twenty-six for three; with one variable, enabling this option adds no neighbors.
+
+All moves still apply the existing canonical alteration sequence to the original pattern. Only the
+completed trial's actual geometry, seam/outline checks, raw fit and requested consumer evidence
+can qualify it. Invalid intermediate neighbors remain visible as refused trials, cannot receive a
+fabricated score and do not invoke production callbacks. The same option works for fit discovery,
+all consumer guidance modes, several nominated materials, named cases and componentwise constraint
+restoration. Objective comparison, protocol admission and final retention remain unchanged.
+
+Coordinated directions share the original unique-coordinate cache, explicit restart points and
+global evaluation allowance. Additional directions can reach a narrow admissible region that
+axis-only polling misses, but also spend more of the allowance before step refinement. A bounded
+stop preserves retained results and does not prove that the continuous domain is infeasible or
+optimal. The exact option is retained in the search request for replay. Synthetic seam and
+manufacturing regressions establish numerical behavior; they do not establish measured garment fit.
+
 ### Guide adaptive designs with actual manufacturing or scenario outcomes
 
 Use `objective: "consumer_comparison"` when a passing flat target is only the admission gate and

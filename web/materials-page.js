@@ -385,7 +385,7 @@ function controls() {
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
   for (const id of ["guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-    "guidedDesignMode", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) {
+    "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) {
     $(id).disabled = !source || !$("guidedDesign").checked;
   }
   const adaptiveDesign = $("guidedDesignMode").value === "adaptive";
@@ -400,7 +400,7 @@ function controls() {
   for (const { button, unavailable } of guidedDesignRestartButtons) button.disabled = !restartActive || unavailable;
   for (const id of ["guidedDesignValues", "guidedDesignGridBudget"]) $(id).disabled ||= adaptiveDesign;
   for (const id of ["guidedDesignLower", "guidedDesignUpper", "guidedDesignInitial", "guidedDesignInitialStep", "guidedDesignMinimumStep",
-    "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
+    "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
   const objective = $("guidedDesignObjective").value;
   const consumerDesign = ["consumer_comparison", "consumer_pareto", "consumer_worst_case", "consumer_matrix_pareto"].includes(objective);
   $("guidedDesignRestoreField").hidden = !consumerDesign; $("guidedDesignRestore").disabled ||= !consumerDesign;
@@ -1826,6 +1826,13 @@ function designComparison(op, parent, study, casePolicies = {}) {
   const grid = study.design_search;
   if (grid) {
     if (grid.schema === "ftx-design-adaptive-search/1") {
+      if (grid.request?.polling === "axis_and_joint") {
+        const polling = document.createElement("p");
+        polling.textContent = "The search also tries changing two or three independent variables together after individual-variable steps. " +
+          "Joint trials use the same geometry, seam, fit and consumer checks and the existing unique-trial allowance. " +
+          "Only native results determine which designs qualify; a bounded search can still leave feasible combinations unexplored.";
+        parent.append(polling);
+      }
       const guidance = grid.consumer_guidance;
       const pareto = guidance?.pareto_frontier;
       const severalMaterials = guidance?.material_aggregation === "union_of_material_frontiers/1";
@@ -6085,7 +6092,7 @@ $("clearGuidedInventory").onclick = () => {
 $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
   "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-  "guidedDesignMode", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations",
+  "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...[...guidedMetrics, ...guidedDirectionalMetrics].flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]),
@@ -6477,6 +6484,7 @@ function guidedDesignInput(number, inScenario) {
     throw Error("Choose a current named scenario explicitly to guide adaptive discovery.");
   }
   return { ...common, mode, objective, maxEvaluations: number("guidedDesignEvaluations", "unique discovery trial allowance"),
+    ...($("guidedDesignJoint").checked ? { polling: "axis_and_joint" } : {}),
     ...(objective !== "fit_band_violation_mm" && $("guidedDesignRestore").checked ? { constraintRestoration: "componentwise" } : {}),
     ...(guidedDesignRestarts.length ? { restartPointsMm: guidedDesignRestarts.map(point => ({ ...point })) } : {}),
     ...(objective === "fit_band_violation_mm" ? {} : severalMaterials ? { materialKeys } : { materialKey }), ...(caseKey ? { caseKey } : {}) };
@@ -6494,6 +6502,7 @@ function resetGuidedDesign() {
   guidedDesignRestarts.length = 0; guidedDesignRestartNames = []; guidedDesignRestartInputs.length = 0; showGuidedDesignRestarts();
   guidedDesignVariables.length = 0; guidedDesignVariables.push(newGuidedDesignVariable()); guidedDesignCurrent = 0;
   $("guidedDesignMode").value = "grid"; $("guidedDesignObjective").value = "fit_band_violation_mm";
+  $("guidedDesignJoint").checked = false;
   $("guidedDesignRestore").checked = false;
   guidedDesignNomination = null;
   guidedDesignNominations.clear(); $("guidedDesignMultiple").checked = false;

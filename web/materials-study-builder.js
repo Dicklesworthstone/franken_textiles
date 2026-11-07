@@ -1065,10 +1065,13 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
   const fields = multiple ? ["variables", "maxDesigns", "fitSpec"] :
     ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
   const required = adaptive ? [...fields, "mode", "objective", "maxEvaluations"] : fields;
-  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey", "restartPointsMm", "constraintRestoration"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
+  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey", "restartPointsMm", "constraintRestoration", "polling"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
   const design = object(value, [...allowed, "after"], required, "Linked design");
   const after = own(design, "after") ? buildGuidedDesignAfterOperations(design.after, [...pieces], seamIds) : undefined;
   if (adaptive) {
+    if (own(design, "polling") && design.polling !== "axis_and_joint") {
+      throw Error("Combined adaptive changes require the axis_and_joint polling policy.");
+    }
     if (!Number.isSafeInteger(design.maxEvaluations) || design.maxEvaluations < 1 || design.maxEvaluations > 256) {
       throw Error("The adaptive evaluation allowance must be an integer from 1 to 256.");
     }
@@ -1126,6 +1129,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
     throw Error("Design fit needs 1–32 explicit points and fabric-fit/1 when a schema is supplied.");
   }
   const search = JSON.stringify(adaptive ? { objective: design.objective,
+    ...(own(design, "polling") ? { polling: design.polling } : {}),
     ...(own(design, "constraintRestoration") ? { constraint_restoration: design.constraintRestoration } : {}),
     ...(own(design, "materialKey") ? { material_key: design.materialKey } : {}),
     ...(own(design, "materialKeys") ? { material_keys: [...design.materialKeys] } : {}),

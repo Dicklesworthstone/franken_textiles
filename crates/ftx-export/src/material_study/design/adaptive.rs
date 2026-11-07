@@ -38,6 +38,14 @@ pub enum ConstraintRestoration {
     Componentwise,
 }
 
+/// Optional expansion of the ordinary coordinate directions, using the same declared step sizes.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Polling {
+    /// Poll axes first, then every signed pair and triple of independently authored variables.
+    AxisAndJoint,
+}
+
 /// One bounded scalar, applied to its authored linked alteration sites in order.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +74,10 @@ pub struct Request {
     /// never supply residuals, and failed constraints never enter the retained eligible designs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constraint_restoration: Option<ConstraintRestoration>,
+    /// Omission preserves axis-only discovery. Joint steps still require complete canonical
+    /// qualification and consume the same unique-trial allowance; no intermediate is admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polling: Option<Polling>,
     /// Exact material variant used to guide consumer polling. Required only for consumer guidance;
     /// selected geometries still cross every authored material alternative after discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,7 +90,7 @@ pub struct Request {
     /// admit the trial. Forbidden for worst-case and all-case Pareto guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_key: Option<String>,
-    /// One to three variables, polled in authored order and negative then positive direction.
+    /// One to three variables; axis polls retain authored order and negative then positive direction.
     pub variables: Vec<Variable>,
     /// Optional additional starts after local minimum-step stops. Each point names every variable.
     /// All starts share the same unique-trial, consumer, protocol and retention allowances.
@@ -554,6 +566,63 @@ impl Request {
         ))
     }
 
+    fn neighbors(&self, center: &[f64], steps: &[f64]) -> Vec<Vec<f64>> {
+        let endpoints: Vec<_> = self
+            .variables
+            .iter()
+            .enumerate()
+            .map(|(axis, variable)| {
+                [false, true].map(|positive| {
+                    let bound = variable.bounds_mm[usize::from(positive)];
+                    let distance = (bound - center[axis]).abs();
+                    // A reached boundary is an authored coordinate, not a repaired input.
+                    let next = if steps[axis] >= distance {
+                        bound
+                    } else if positive {
+                        center[axis] + steps[axis]
+                    } else {
+                        center[axis] - steps[axis]
+                    };
+                    (next != center[axis]).then_some(next)
+                })
+            })
+            .collect();
+        let dimensions = self.variables.len();
+        let largest_group = if self.polling.is_some() { dimensions } else { 1 };
+        let mut neighbors = Vec::new();
+        // At most 3^3 - 1 = 26 points. Cardinality first preserves every old axis poll;
+        // authored axis subsets and lexicographic signs make the added work reproducible.
+        for count in 1..=largest_group {
+            for mask in 1usize..(1 << dimensions) {
+                if mask.count_ones() as usize != count {
+                    continue;
+                }
+                let axes: Vec<_> = (0..dimensions)
+                    .filter(|&axis| mask & (1 << axis) != 0)
+                    .collect();
+                for signs in 0..(1usize << count) {
+                    let mut point = center.to_vec();
+                    let mut moved = true;
+                    for (position, &axis) in axes.iter().enumerate() {
+                        let positive = (signs >> (count - 1 - position)) & 1;
+                        if let Some(next) = endpoints[axis][positive] {
+                            point[axis] = next;
+                        } else {
+                            // A joint direction must move every participating variable; otherwise
+                            // it duplicates an axis or smaller group already polled this round.
+                            moved = false;
+                            break;
+                        }
+                    }
+                    if moved {
+                        neighbors.push(point);
+                    }
+                }
+            }
+        }
+        neighbors
+    }
+
     fn reserve(
         &self,
         study: &StudyRequest,
@@ -875,33 +944,15 @@ impl Request {
                     }
                     let center = discovery.coordinates[current].clone();
                     let mut best = current;
-                    for (axis, variable) in self.variables.iter().enumerate() {
-                        for positive in [false, true] {
-                            let bound = variable.bounds_mm[usize::from(positive)];
-                            let distance = (bound - center[axis]).abs();
-                            // Boundary points are actual declared coordinates, not repaired user inputs.
-                            let next = if steps[axis] >= distance {
-                                bound
-                            } else if positive {
-                                center[axis] + steps[axis]
-                            } else {
-                                center[axis] - steps[axis]
-                            };
-                            if next == center[axis] {
-                                continue;
-                            }
-                            let mut point = center.clone();
-                            point[axis] = next;
-                            let Some(index) = discovery.inspect(point)? else {
-                                break 'search StopReason::EvaluationBudget;
-                            };
-                            if discovery.improves(&discovery.rows[index], &discovery.rows[best]) {
-                                best = index;
-                            }
-                            if !self.consumer_guided() && discovery.chosen.len() > self.max_designs
-                            {
-                                break 'search StopReason::QualifiedDesignLimit;
-                            }
+                    for point in self.neighbors(&center, &steps) {
+                        let Some(index) = discovery.inspect(point)? else {
+                            break 'search StopReason::EvaluationBudget;
+                        };
+                        if discovery.improves(&discovery.rows[index], &discovery.rows[best]) {
+                            best = index;
+                        }
+                        if !self.consumer_guided() && discovery.chosen.len() > self.max_designs {
+                            break 'search StopReason::QualifiedDesignLimit;
                         }
                     }
                     if best != current {
@@ -1493,38 +1544,22 @@ impl<T> Discovery<'_, '_, '_, T> {
             *current = center_index;
             let center = self.coordinates[center_index].clone();
             let mut best_fit = fit_center;
-            for (axis, variable) in request.variables.iter().enumerate() {
-                for positive in [false, true] {
-                    let bound = variable.bounds_mm[usize::from(positive)];
-                    let distance = (bound - center[axis]).abs();
-                    let next = if steps[axis] >= distance {
-                        bound
-                    } else if positive {
-                        center[axis] + steps[axis]
-                    } else {
-                        center[axis] - steps[axis]
-                    };
-                    if next == center[axis] {
-                        continue;
-                    }
-                    let mut point = center.clone();
-                    point[axis] = next;
-                    let Some(index) = self.inspect(point)? else {
-                        return Ok(StopReason::EvaluationBudget);
-                    };
-                    let candidate = &self.rows[index];
-                    let previous = &self.rows[best_fit];
-                    let improved = if request.constraint_restoration.is_some()
-                        && !candidate.consumer_admitted()
-                        && !previous.consumer_admitted()
-                    {
-                        self.improves(candidate, previous)
-                    } else {
-                        improves(candidate, previous)
-                    };
-                    if improved {
-                        best_fit = index;
-                    }
+            for point in request.neighbors(&center, steps) {
+                let Some(index) = self.inspect(point)? else {
+                    return Ok(StopReason::EvaluationBudget);
+                };
+                let candidate = &self.rows[index];
+                let previous = &self.rows[best_fit];
+                let improved = if request.constraint_restoration.is_some()
+                    && !candidate.consumer_admitted()
+                    && !previous.consumer_admitted()
+                {
+                    self.improves(candidate, previous)
+                } else {
+                    improves(candidate, previous)
+                };
+                if improved {
+                    best_fit = index;
                 }
             }
             // Each start can approach the admissible region through its own raw fit readings.

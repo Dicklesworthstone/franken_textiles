@@ -9430,6 +9430,59 @@ function selectAdaptiveMaterials(p, keys) {
   p.e.guidedDesignMaterials.handlers.change();
 }
 
+test('guided joint polling is explicit across fit and consumer modes, inactive in grids and reset by new sources',async()=>{
+  const {p}=await adaptiveDesignSetup();
+  assert.equal(p.e.guidedDesignJoint.checked,false);assert.equal(p.e.guidedDesignJoint.disabled,false);
+  p.e.guidedDesignJoint.checked=true;p.e.guidedDesignJoint.handlers.change();
+  await p.e.study.onclick();let request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(request.design_adaptive.polling,'axis_and_joint');assert.equal(request.design_adaptive.objective,'fit_band_violation_mm');
+  assert.equal(request.design_adaptive.variables.length,2);assert.equal(request.design_adaptive.max_evaluations,24);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+  guidedDesignField(p,'guidedDesignMaterial','baseline','change');guidedDesignField(p,'guidedAreaLimit','0.25');
+  p.e.guidedDesignRestore.checked=true;p.e.guidedDesignRestore.handlers.change();
+  await p.e.study.onclick();request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(request.design_adaptive.polling,'axis_and_joint');assert.equal(request.design_adaptive.constraint_restoration,'componentwise');p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMode','grid','change');assert.equal(p.e.guidedDesignJoint.disabled,true);
+  await p.e.study.onclick();request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(request.design_adaptive,undefined);assert.equal(Object.hasOwn(request.design_grid,'polling'),false);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMode','adaptive','change');assert.equal(p.e.guidedDesignJoint.checked,true);
+  p.select('patternFile',coupledDesignPattern);await p.e.patternFile.onchange();
+  assert.equal(p.e.guidedDesignJoint.checked,false);
+});
+
+test('guided joint polling edits cancel stale reads and preserve the submitted policy snapshot',async()=>{
+  for(const notify of [true,false]) {
+    const {p,fit}=await adaptiveDesignSetup(),delay=deferred();
+    p.e.guidedDesignJoint.checked=true;p.e.guidedDesignJoint.handlers.change();
+    p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();
+    p.e.guidedDesignJoint.checked=false;
+    if(notify){p.e.guidedDesignJoint.handlers.change();assert.equal(old.dead,true);p.ready();}
+    delay.resolve(fit);await running;
+    if(notify){
+      assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+      old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
+    }else assert.equal(JSON.parse(old.messages.at(-1).studyRequest).design_adaptive.polling,'axis_and_joint');
+  }
+});
+
+test('joint polling results display native policy and preserve excluded trial decisions without browser enumeration',async()=>{
+  const p=await pageModule();await p.load();p.select('studyRequest','{}');const report=designReport();
+  report.design_search={schema:'ftx-design-adaptive-search/1',request:{polling:'axis_and_joint'},
+    evaluations:2,qualified_designs:1,selected_designs:1,stop_reason:'evaluation_budget',
+    rows:[{selected:false,refusal:{message:'Original seam tolerance exceeded'},design:{key:'single',variables_mm:{length:20,taper:0},validation:{passed:false}}},
+      {selected:true,max_fit_band_violation_mm:0,total_fit_band_violation_mm:0,
+        design:{key:'joint',variables_mm:{length:20,taper:1},validation:{passed:true},fit:outcome({passed:true})}}]};
+  const before=JSON.stringify(report);await p.e.study.onclick();p.emit(report);
+  assert.equal(JSON.stringify(report),before);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  assert.match(visibleText(s),/changing two or three independent variables together/);
+  assert.match(visibleText(s),/existing unique-trial allowance/);assert.match(visibleText(s),/Original seam tolerance exceeded/);
+  const trials=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Adaptive alteration trials').children.slice(2);
+  assert.equal(trials[0].children[5].textContent,'Not selected');assert.equal(trials[1].children[5].textContent,'Selected');
+  p.e.studyRequest.handlers.change();assert.equal(s.hidden,true);
+});
+
 test('guided constraint restoration is explicit, requires limits and stays inactive in grid and fit-only modes',async()=>{
   const {p}=await adaptiveDesignSetup(false);
   guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');

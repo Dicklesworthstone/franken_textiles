@@ -488,6 +488,15 @@ complete default, piece and interface changes, so replacing just a lining or a c
 requires a fresh nomination. Removing or replacing that nominated source clears its selection and
 requires an explicit new choice, even if the same name or default material is reused.
 
+Enable **Explore combined changes to independent variables** when a valid alteration requires
+several independently controlled dimensions to change together. Native discovery keeps its original
+individual-variable order, then tries pairs and triples with the current declared steps. Every point
+uses canonical geometry, seam and fit validation and the original consumer policy. Trials, cached
+coordinates and explicit restarts share the same allowances; the browser never expands or scores
+the neighborhood. This option works with fit-only and all consumer-guided adaptive modes, including
+constraint restoration. Grid mode retains the draft but leaves it inactive; new pattern sources reset it.
+The result explanation follows the exact native request and does not imply exhaustive feasibility.
+
 Enable **Approach declared comparison limits before optimizing** when the starting design fails
 an explicit comparison limit. The native search can then follow a sequence of qualified alterations
 that reduce at least one limit violation without increasing another. Minimum shortfalls and maximum

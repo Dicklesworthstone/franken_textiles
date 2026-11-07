@@ -2161,6 +2161,47 @@ test('adaptive consumer guidance nominates an exact material and retains ordinar
   assert.equal(JSON.parse(build({...pareto,design:fitOnly})).comparison.objectives.length,2,'Fit discovery keeps independent downstream objectives');
 });
 
+test('adaptive joint polling preserves independent domains, exact sources and shared reservations', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const count of [1,2,3]) {
+    const design=adaptiveDesignInput({polling:'axis_and_joint',maxEvaluations:3,maxDesigns:1});
+    design.variables=design.variables.slice(0,count);
+    const input={...state(),design},before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+    const ordinary={...design};delete ordinary.polling;
+    const prior=JSON.parse(build({...input,design:ordinary}));
+    assert.equal(result.design_adaptive.polling,'axis_and_joint');
+    delete result.design_adaptive.polling;
+    assert.deepEqual(result,prior,'The option does not expand, rewrite or reserve extra browser trials');
+    assert.equal(JSON.stringify(input),before);
+    assert.ok(raw.includes(input.design.fitSpec));assert.ok(raw.includes(input.candidates[0].selection));
+  }
+  const context=namedContext([{key:'cold',surface:false},{key:'warm',surface:false}],20);
+  for(const objective of ['consumer_comparison','consumer_worst_case','consumer_pareto','consumer_matrix_pareto']) {
+    const several=objective==='consumer_pareto'||objective==='consumer_matrix_pareto';
+    const design=adaptiveDesignInput({objective,polling:'axis_and_joint',constraintRestoration:'componentwise',
+      maxEvaluations:3,maxDesigns:1,...(several?{materialKeys:['baseline','alternative']}:{materialKey:'baseline'}),
+      ...(objective==='consumer_comparison'||objective==='consumer_pareto'?{caseKey:'cold'}:{})});
+    const input={...state(),constraints:[{metric:'stock_area_m2',maximum:0.25}],design};
+    const before=JSON.stringify(context),request=JSON.parse(build(input,context));
+    assert.equal(request.design_adaptive.polling,'axis_and_joint');
+    assert.equal(request.design_adaptive.constraint_restoration,'componentwise');
+    assert.equal(request.design_adaptive.max_evaluations,3);
+    assert.equal(JSON.stringify(context),before);
+  }
+});
+
+test('adaptive joint polling rejects unsupported options before reading sources and stays absent by default', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  let reads=0;const candidates=[{key:'alternative',get selection(){reads++;throw Error('Must not read source');}}];
+  for(const polling of [undefined,null,false,true,'axis','weighted',[],{}]) {
+    assert.throws(()=>build({...state(),candidates,design:adaptiveDesignInput({polling})}),/axis_and_joint/);
+    assert.equal(reads,0);
+  }
+  assert.throws(()=>build({...state(),design:multiDesignInput({polling:'axis_and_joint'})}),/unsupported/);
+  const request=JSON.parse(build({...state(),design:adaptiveDesignInput()}));
+  assert.equal(Object.hasOwn(request.design_adaptive,'polling'),false);
+});
+
 test('adaptive constraint restoration preserves explicit guard bases and original study inputs without changing budgets', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),constraints:[{metric:'stock_mass_kg',minimum:0.1,maximum:0.3,basis:'nominal'}],

@@ -139,6 +139,18 @@ and search. The guided workbench authors the opt-in and displays original-unit t
 Six regression groups in `tests/design_restarts.rs` cover actual manufacturing feasibility, independent
 guard sides and units, budgets/refusals, named cases, all material nominees and early admission.
 
+**Joint-variable polling** (`design_adaptive.polling: axis_and_joint`). The shared scalar/Pareto
+neighbor generator keeps authored negative/positive axis order, then polls signed pairs and triples
+of independently controlled variables. At most three variables yield at most 26 directions per
+center. Reached directional bounds skip the corresponding joint direction; the existing coordinate
+cache owns all duplicates across centers and starts. Every actual point uses unchanged canonical
+geometry, seam and fit qualification before any consumer work. Original comparison, componentwise
+restoration, material/case frontiers, unique-trial limits and retained-output caches remain authoritative.
+Omission preserves axis-only behavior and serialization; one variable adds no directions. The workbench
+authors the opt-in without expanding the neighborhood. Six groups in `tests/design_restarts.rs`
+cover coupled/nonlinear seam corridors, real manufacturing replay, signed triples, bounds/cache/budgets,
+consumer-mode composition and admission. A bounded poll does not prove general feasibility or optimality.
+
 **Pareto-guided adaptive discovery** (`design_adaptive.objective: consumer_pareto`, `ftx-ds2.6`).
 Two to sixteen existing comparison objectives guide one nominated material and, for a named matrix,
 one explicit case. Every case still admits geometry, fit, required consumers, constraints and its own
