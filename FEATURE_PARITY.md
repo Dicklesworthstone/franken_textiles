@@ -80,13 +80,17 @@ oracle `metrics()` values and texts remain unchanged. Direct rollback/replay, qu
 `cloth.rs` and `run.rs`. Historical fitted-garment timings/verdicts below are not fresh proof of this
 stricter boundary, nor evidence of physical fit.
 
-Fresh offset-qualified release execution (`ftx-onn.9`) passes 14 of the 15 physics tests: KAT 8 fails
-because the 80 cm bolero reaches only 1.413734 mm of its requested 1.5 mm offset in the default schedule.
-Its final body gap is 0.100138 mm against the unchanged 0.1 mm continuation guard. The 92/116 cm cases
-and all three pinned digests pass. Actual Chromium/native ordinary and paired 92 cm bolero viewers
-agree byte for byte, but the chart-body trousers refuse an intersecting start with 2 mm self-contact
-in both the retained pre-repair and current executables. These are failed qualification cells; G2/G4
-remain open, with their original assertions and intersection audits intact.
+Fresh release execution passes all 15 existing KAT/contact/fitted-body tests with the pinned converted
+Anny model. The earlier offset-qualified run (`ftx-onn.9`) failed KAT 8 at 80 cm with only 1.413734 mm
+of its requested 1.5 mm offset. KAT 8 now passes unchanged on the
+pinned model's nominal fitted bodies: the 80/92/116 cm boleros reach 1.5 mm, settle and have no gating
+flags under the default schedule. The 80 cm case retains its hem-balance advisory; its largest hem rise is 13.4 mm, within the
+original 15 mm limit. The final-only continuation rule below fixes the numerical offset stall.
+All three pinned native digests pass unchanged. Retained Chromium/native ordinary and paired 92 cm
+bolero viewers agreed byte for byte; that browser comparison has not been rerun for this increment.
+Retained chart-body trouser runs refused an intersecting start with 2 mm self-contact. That startup
+defect remains unresolved and is a failed qualification cell; G2/G4 remain open,
+with their original assertions and intersection audits intact.
 
 Production admission now refuses intended simulation instances without explicit placement before
 meshing. Deliberate `sim: false` omissions remain supported and are listed with excluded seams in
@@ -185,7 +189,7 @@ evidence that the authored catalog garment is complete or fits a person.
 
 | Behaviour | Reference | Port | Reason |
 |---|---|---|---|
-| `body-offset-completion`: requested contact clearance | legacy settledness metrics do not qualify the IPC offset continuation | ordinary and paired runs gate an incomplete requested body offset; bounded smaller continuation increments retain the existing maximum step and minimum-gap guard | A real chart-body run stopped at 0.737 mm against a 1.5 mm request while reporting no ordinary gate. `scene::grain_tests::body_offset_ramp_backtracks_without_dropping_its_safety_margin` and `run::self_contact_tests::numerical_settledness_rejects_motion_hidden_by_window_means` cover safe partial growth and quiet-but-incomplete rejection; oracle inputs and static metric calculations are unchanged |
+| `body-offset-completion`: requested contact clearance | legacy settledness metrics do not qualify the IPC offset continuation | ordinary and paired runs gate an incomplete requested body offset; bounded smaller increments retain the 0.25 mm cap and absolute gap guard; only a final target increment after all eight trials fail may instead retain more than a tenth of each prior gap, as CCD does | A real chart-body run stopped at 0.737 mm against a 1.5 mm request while reporting no ordinary gate. `scene::grain_tests::body_offset_ramp_backtracks_without_dropping_its_safety_margin`, `body_offset_ramp_finishes_only_with_relative_clearance` and `run::self_contact_tests::numerical_settledness_rejects_motion_hidden_by_window_means` cover partial growth, safe/unsafe completion and quiet-but-incomplete rejection. Original pinned-model KAT 8 now passes at all three sizes; oracle inputs and static metric calculations are unchanged |
 | Production simulation coverage | unplaced instances and their seams are silently omitted | canonical draping requires placement on every active instance; explicit `sim: false` exclusions are reported with an advisory | Prevent a partial garment from appearing complete; low-level meshing retains reference selection. `garment::tests`, `run::self_contact_tests`, CLI drape regression |
 | JSON integer range | Python preserves arbitrarily large integer literals | `PyJson` preserves the full signed `i64` and unsigned `u64` ranges; larger integer literals refuse rather than become rounded floats | Native bounded representation, not arbitrary-precision arithmetic; `pyjson::tests::integer_overflow_refuses_instead_of_becoming_a_float` and full-width photo/round regression in `ftx-wasm/tests/page.rs` |
 | Girth contributor completeness | missing instances/levels/samples are skipped, possibly scoring the remaining arc | each requested contributor is required; incomplete rings are `UNMEASURABLE` and gated independently of tightness | Partial rings cannot stand in for the requested circumference. `metrics::girth_coverage_tests`; complete-ring oracle arithmetic retained |

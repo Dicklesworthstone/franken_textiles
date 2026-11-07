@@ -1284,12 +1284,27 @@ mod grain_tests {
 
     #[test]
     fn body_offset_ramp_finishes_only_with_relative_clearance() {
-        for (name, old, target, distance, finishes) in [
-            ("safe final step", 1.413734e-3, 1.5e-3, 1.513872e-3, true),
-            ("too little clearance", 1.41e-3, 1.5e-3, 1.509e-3, false),
-            ("touching", 1.41e-3, 1.5e-3, 1.5e-3, false),
-            ("penetrating", 1.41e-3, 1.5e-3, 1.499e-3, false),
-            ("large remaining offset", 6.5e-4, 1.5e-3, 7e-4, false),
+        for (name, old, target, distance, dhat, finishes) in [
+            (
+                "safe final step",
+                1.413734e-3,
+                1.5e-3,
+                1.513872e-3,
+                1e-3,
+                true,
+            ),
+            (
+                "too little clearance",
+                1.41e-3,
+                1.5e-3,
+                1.509e-3,
+                1e-3,
+                false,
+            ),
+            ("touching", 1.41e-3, 1.5e-3, 1.5e-3, 1e-3, false),
+            ("penetrating", 1.41e-3, 1.5e-3, 1.499e-3, 1e-3, false),
+            // The target is clear and preserves >10% of the old gap, but exceeds the step cap.
+            ("large remaining offset", 5e-4, 1.5e-3, 1.7e-3, 20e-3, false),
         ] {
             let body = Body::new(
                 vec![
@@ -1309,7 +1324,7 @@ mod grain_tests {
             let mut contact = Contact::new(
                 body,
                 ContactParams {
-                    dhat: 1e-3,
+                    dhat,
                     thickness: old,
                     kappa: 100.0,
                     mu: 0.4,
@@ -1318,7 +1333,7 @@ mod grain_tests {
                 vec![[0, 1, 2]],
                 |a, b| (x[a] - x[b]).norm(),
             );
-            let old_gap = contact.min_gap(&x, 1e-3).unwrap();
+            let old_gap = contact.min_gap(&x, dhat).unwrap();
             assert!(old_gap > 0.0, "{name}");
             ramp_thickness(&mut contact, &x, target);
             assert_eq!(
@@ -1326,7 +1341,7 @@ mod grain_tests {
                 if finishes { target } else { old },
                 "{name}"
             );
-            assert!(contact.min_gap(&x, 1e-3).unwrap() > 0.1 * old_gap, "{name}");
+            assert!(contact.min_gap(&x, dhat).unwrap() > 0.1 * old_gap, "{name}");
         }
     }
 

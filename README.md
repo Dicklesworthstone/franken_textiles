@@ -50,11 +50,12 @@ bands, fold-up animation, metrics and flags), `ftx-export` (every deliverable an
 | Has anything been benchmarked? | **A bounded browser release workload**: 20 retained runs each, after three warmups, on an Apple M5 Ultra give bolero p50/p95 **16.66/17.43 s** and trousers **45.96/46.80 s**, with 2 mm self-contact and every Newton step converged. These are warm fold-click-to-result latencies on a shared desktop, not M4 native timings or a general speed comparison. Inputs, artifact hashes, spread and limits are in the [reality check](docs/reality-check-2026-10-20.md). Other historical timings above remain single observations; the plan's unmeasured numbers remain targets |
 
 **Qualification remains open (2026-11-06).** The garment runs without flags described above are historical
-observations. In the current checks, the 80 cm bolero reaches 1.414 mm of its requested 1.5 mm body offset
-under the fixed schedule, and the chart trousers refuse an intersecting cloth start with self-contact.
-Those remain failed cells. The optional static-equilibrium sewn cone-band regression now passes its
-original tolerance and 1,000-iteration cap: a static-only search direction lets free cloth reach its
-support without treating a regularized step as convergence. Unsupported loads still refuse.
+observations. The original bolero test on nominal fitted bodies now passes under its fixed schedule.
+The 80, 92 and 116 cm cases reach the requested 1.5 mm body offset, settle and have no gating flags. The 80 cm case
+retains its hem-balance advisory. The chart trousers still refuse an intersecting cloth start with
+self-contact; that remains a failed cell. The optional static-equilibrium sewn cone-band regression
+passes its original tolerance and 1,000-iteration cap: a static-only search direction lets free cloth
+reach its support without treating a regularized step as convergence. Unsupported loads still refuse.
 The [parity status](FEATURE_PARITY.md) and [drape contract](crates/ftx-drape/CONTRACT.md)
 separate numerical evidence from physical qualification and real-person fit.
 
