@@ -371,6 +371,19 @@ pub fn shoulder_and_back(
     frames: &BodyFrames,
     snp: Vec3,
 ) -> Option<(f64, f64)> {
+    let (shoulder, back) = shoulder_and_optional_back(mm, faces, torso, frames, snp)?;
+    Some((shoulder, back?))
+}
+
+/// Retain the shoulder path if only the across-back section is unavailable. Both definitions still
+/// use the same side-neck point and acromion height; missing shoulder evidence withdraws both.
+pub(crate) fn shoulder_and_optional_back(
+    mm: &[Vec3],
+    faces: &[[usize; 3]],
+    torso: &Slicer,
+    frames: &BodyFrames,
+    snp: Vec3,
+) -> Option<(f64, Option<f64>)> {
     let j = frames.shoulder_joint_r;
     // coronal section through the joint: (x, z) in world millimetres
     let coronal = in_frame(
@@ -400,33 +413,36 @@ pub fn shoulder_and_back(
     line.push([j.x, acromion_z]);
     let shoulder = path_length(&line);
     // across the back
-    let sections = torso.loops(acromion_z - 15.0);
-    let axis = [frames.torso.origin.x, frames.torso.origin.y];
-    let hull = convex_hull(outermost_around(&sections, axis)?);
-    if hull.len() < 3 {
-        return None;
-    }
-    // The opposite shoulder is mirrored about the torso axis; +y is the back.
-    let at = |x: f64| -> Option<[f64; 2]> {
-        crossings(&hull, 0, x)
-            .into_iter()
-            .max_by(|a, b| a[1].total_cmp(&b[1]))
-    };
-    // a on the wearer's right (−x), b on the left; the hull's back chain between them is its vertices left
-    // of a → b (larger y), in order of x
-    let opposite_x = 2.0 * frames.torso.origin.x - j.x;
-    let (a, b) = (at(j.x.min(opposite_x))?, at(j.x.max(opposite_x))?);
-    let left_of_ab =
-        |p: [f64; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) > 0.0;
-    let mut arc: Vec<[f64; 2]> = hull
-        .iter()
-        .copied()
-        .filter(|&p| p[0] > a[0] && p[0] < b[0] && left_of_ab(p))
-        .collect();
-    arc.sort_by(|p, q| p[0].total_cmp(&q[0]));
-    arc.insert(0, a);
-    arc.push(b);
-    Some((shoulder, path_length(&arc)))
+    let back = (|| {
+        let sections = torso.loops(acromion_z - 15.0);
+        let axis = [frames.torso.origin.x, frames.torso.origin.y];
+        let hull = convex_hull(outermost_around(&sections, axis)?);
+        if hull.len() < 3 {
+            return None;
+        }
+        // The opposite shoulder is mirrored about the torso axis; +y is the back.
+        let at = |x: f64| -> Option<[f64; 2]> {
+            crossings(&hull, 0, x)
+                .into_iter()
+                .max_by(|a, b| a[1].total_cmp(&b[1]))
+        };
+        // a on the wearer's right (−x), b on the left; the hull's back chain between them is its vertices left
+        // of a → b (larger y), in order of x
+        let opposite_x = 2.0 * frames.torso.origin.x - j.x;
+        let (a, b) = (at(j.x.min(opposite_x))?, at(j.x.max(opposite_x))?);
+        let left_of_ab =
+            |p: [f64; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) > 0.0;
+        let mut arc: Vec<[f64; 2]> = hull
+            .iter()
+            .copied()
+            .filter(|&p| p[0] > a[0] && p[0] < b[0] && left_of_ab(p))
+            .collect();
+        arc.sort_by(|p, q| p[0].total_cmp(&q[0]));
+        arc.insert(0, a);
+        arc.push(b);
+        Some(path_length(&arc))
+    })();
+    Some((shoulder, back))
 }
 
 /// Total crotch length (ISO 8559-1 5.4.18): from the centre-front waist down between the legs to the
@@ -826,6 +842,61 @@ mod tests {
                     );
                     faces.reverse();
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn partial_readings_retain_shoulder_without_an_across_back_section() {
+        for shift in [
+            Vec3::ZERO,
+            Vec3::new(37.0, -100.0, 60.0),
+            Vec3::new(-140.0, 90.0, -50.0),
+        ] {
+            // Independent rectangular sections: the shoulder is flat at z=100 mm, but all
+            // geometry ends above its z=85 mm across-back slice. The separate neck section
+            // supplies the declared side-neck point x=-20, z=100 without inventing anatomy.
+            let (mut vertices, mut faces) =
+                prism(&[[-80.0, -40.0], [80.0, -40.0], [80.0, 40.0], [-80.0, 40.0]]);
+            for p in &mut vertices {
+                p.z = 90.0 + 10.0 * p.z;
+            }
+            let (mut neck, neck_faces) =
+                prism(&[[-20.0, 180.0], [20.0, 180.0], [20.0, 220.0], [-20.0, 220.0]]);
+            for p in &mut neck {
+                p.z = 90.0 + 20.0 * p.z;
+            }
+            let offset = vertices.len();
+            vertices.extend(neck);
+            faces.extend(neck_faces.iter().map(|f| f.map(|i| i + offset)));
+            for p in &mut vertices {
+                *p += shift;
+            }
+            let mut frames = waist_frames();
+            frames.torso.origin = shift;
+            frames.floor_z = shift.z;
+            frames.neck.origin = Vec3::new(0.0, 200.0, 100.0) + shift;
+            frames.shoulder_joint_r = Vec3::new(-50.0, 0.0, 95.0) + shift;
+            let posed = crate::model::PosedBody {
+                vertices: vertices.iter().map(|p| *p / 1000.0).collect(),
+                bone_poses: Vec::new(),
+                transforms: Vec::new(),
+            };
+            for _ in 0..2 {
+                let readings = crate::fit::partial_tape_readings(&faces, 0.02, &posed, &frames);
+                let shoulder =
+                    readings[17].expect("the independent shoulder path remains available");
+                assert!((shoulder - 30.0).abs() < 1e-9, "{shoulder}, {shift:?}");
+                assert_eq!(readings[18], None);
+                assert!(readings[15].is_some(), "side-neck evidence is retained");
+
+                let mut missing_shoulder = frames.clone();
+                missing_shoulder.shoulder_joint_r.z += 1000.0;
+                let absent =
+                    crate::fit::partial_tape_readings(&faces, 0.02, &posed, &missing_shoulder);
+                assert_eq!((absent[17], absent[18]), (None, None));
+                assert_eq!(absent[15], readings[15]);
+                faces.reverse();
             }
         }
     }
