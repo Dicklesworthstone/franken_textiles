@@ -5610,6 +5610,60 @@ test('drafting handoff snapshots the loaded model and exact accepted fit and can
   }
 });
 
+test('manual body models retain evaluated bytes independently of later file reads and worker buffers',async()=>{
+  const p=draftingPage();await p.e.go.handlers.click();
+  p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+  let reads=0;
+  class ReadOnceModel extends Blob {
+    async arrayBuffer(){assert.equal(++reads,1,'The evaluated model must not be read from the selected file again');return super.arrayBuffer();}
+  }
+  const source=new ReadOnceModel([new Uint8Array([1,2,3])]);
+  p.e.bodyFile.files=[source];await p.e.bodyFile.handlers.change();
+  const load=p.last('body');assert.deepEqual([...new Uint8Array(load.bytes)],[1,2,3]);
+  new Uint8Array(load.bytes).fill(0);
+  await p.e.chooseMaterials.handlers.click();assert.equal(p.popups.length,0,'Unvalidated model bytes cannot be forwarded');
+  p.emit({type:'bodyReady',request:load.request});await p.e.chooseMaterials.handlers.click();
+  const popup=p.popups[0],token=new URL(popup.url).searchParams.get('roundImport');
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup,data:{type:'ftx-round-sources-ready',token}});
+  const snapshot=popup.messages[0].data.bodySource.model;
+  assert.notEqual(snapshot,source,'Material handoff owns the bytes loaded before transfer');
+  assert.deepEqual([...new Uint8Array(await snapshot.arrayBuffer())],[1,2,3]);
+  assert.equal(reads,1);
+});
+
+test('manual model snapshots discard obsolete reads and clearing cannot reuse a loaded source',async()=>{
+  for(const reject of [false,true]) {
+    const p=draftingPage();await p.e.go.handlers.click();
+    p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+    const pending=deferred();
+    class WaitingModel extends Blob {arrayBuffer(){return pending.promise;}}
+    p.e.bodyFile.files=[new WaitingModel(['old'])];const reading=p.e.bodyFile.handlers.change();
+    p.e.bodyFile.files=[new Blob([new Uint8Array([9,8])])];await p.e.bodyFile.handlers.change();
+    const load=p.last('body');p.emit({type:'bodyReady',request:load.request});
+    if(reject)pending.resolve(Promise.reject(Error('obsolete file read')));else pending.resolve(new Uint8Array([1]).buffer);
+    await reading;await p.e.chooseMaterials.handlers.click();
+    const popup=p.popups[0],token=new URL(popup.url).searchParams.get('roundImport');
+    p.windowEvents.message({origin:'https://unit.invalid',source:popup,data:{type:'ftx-round-sources-ready',token}});
+    const received=popup.messages[0].data.bodySource.model;
+    assert.deepEqual([...new Uint8Array(await received.arrayBuffer())],[9,8]);
+    p.e.bodyFile.files=[];await p.e.bodyFile.handlers.change();await p.e.chooseMaterials.handlers.click();
+    const cleared=p.popups.at(-1),clearToken=new URL(cleared.url).searchParams.get('roundImport');
+    p.windowEvents.message({origin:'https://unit.invalid',source:cleared,data:{type:'ftx-round-sources-ready',token:clearToken}});
+    assert.equal(cleared.messages[0].data.bodySource,null);
+    assert.deepEqual([...new Uint8Array(await received.arrayBuffer())],[9,8],'Received snapshots remain immutable after clearing');
+  }
+});
+
+test('manual body model reads enforce the existing 512 MiB admission bound before retaining a snapshot',async()=>{
+  class OversizedModel extends Blob {get size(){return 512*1024*1024+1;}arrayBuffer(){throw Error('oversized model was read');}}
+  class EmptyRead extends Blob {async arrayBuffer(){return new ArrayBuffer(0);}}
+  for(const source of [new OversizedModel(['x']),new Blob([]),new EmptyRead(['x'])]) {
+    const p=draftingPage();p.e.bodyFile.files=[source];await p.e.bodyFile.handlers.change();
+    assert.equal(p.last('body'),undefined);assert.match(p.e.errorText.textContent,/nonempty.*512 MiB/);
+    assert.equal(p.e.bodyCheckGo.disabled,true);assert.equal(p.e.foldGo.disabled,true);
+  }
+});
+
 test('body-fit handoff waits for the engine and preserves exact sources through garment and material consumers',async()=>{
   const token='a'.repeat(32),p=draftingPage({bodyToken:token,initialize:false});
   const raw=' {"schema":"ftx-body-fit/1","sequence":18446744073709551615,"probe":-0.0}\r\n';

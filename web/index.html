@@ -307,9 +307,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
   const patternQuery = new URL(location.href).searchParams;
   let bodyFitToken = patternQuery.get("bodyFitImport"), bodyImportRead = 0, requestBodyImport = null;
-  let receivedBodyModel = null, receivedBodyFit = null, bodyImportProblem = null;
+  let receivedBodyModel = null, manualBodyModel = null, receivedBodyFit = null, bodyImportProblem = null;
   const bodyImportUrls = [];
-  const selectedBodyModel = () => receivedBodyModel || $("bodyFile").files[0];
+  const selectedBodyModel = () => receivedBodyModel || manualBodyModel || $("bodyFile").files[0];
   const materialImport = !patternQuery.has("traceImport") && patternQuery.has("materialImport");
   const patternMessage = materialImport ? "ftx-material-pattern" : "ftx-trace-pattern";
   let tracedPattern = null, traceToken = patternQuery.get(materialImport ? "materialImport" : "traceImport");
@@ -985,7 +985,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const pending = bodyFitToken !== null || requestBodyImport !== null || bodyImportProblem !== null;
     cancelBodyImport(); bodyImportProblem = null;
     if (receivedBodyModel) {
-      receivedBodyModel = null; bodyLoaded = false; bodyRequest = ++nextRequest;
+      receivedBodyModel = manualBodyModel = null; bodyLoaded = false; bodyRequest = ++nextRequest;
       if (!dead) worker.postMessage({ type: "clearBody" });
     }
     if (receivedBodyFit !== null || pending) {
@@ -998,7 +998,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   window.addEventListener("pagehide", () => {clearTraceImport();clearBodyImport();});
   $("bodyFile").addEventListener("change", async () => {
     if (dead) return;
-    cancelMaterialImport();cancelBodyImport(); receivedBodyModel = null; showBodyImport();
+    cancelMaterialImport();cancelBodyImport(); receivedBodyModel = manualBodyModel = null; showBodyImport();
     if (materialTransfer) materialTransfer.files = null;
     $("bodyFitConsent").checked = false;
     const request = bodyRequest = ++nextRequest;
@@ -1008,11 +1008,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (!f) { status("Choose a body model to check or fold."); return; }
     status("Reading the body model…");
     try {
+      if (f.size === 0 || f.size > 512 * 1024 * 1024) throw new Error("body model must be nonempty and at most 512 MiB");
       const buf = await f.arrayBuffer();
       if (request !== bodyRequest || dead) return;
+      if (!buf.byteLength || buf.byteLength > 512 * 1024 * 1024) throw new Error("body model must be nonempty and at most 512 MiB");
+      // Retain the evaluated bytes before transfer; a later File read need not return them.
+      manualBodyModel = new Blob([buf], { type: "application/octet-stream" });
       worker.postMessage({ type: "body", request, bytes: buf }, [buf]);
     } catch (e) {
       if (request !== bodyRequest || dead) return;
+      manualBodyModel = null;
       status(""); showError(e.message);
     }
   });
@@ -1097,7 +1102,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         const [fitBytes,modelBytes]=await Promise.all([m.fit.arrayBuffer(),m.model.arrayBuffer()]);
         if(revision!==bodyImportRead || dead) return;
         const text=new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(fitBytes);
-        receivedBodyModel=m.model;receivedBodyFit=bodyFitText=text;bodyFitReady=true;requestBodyImport=null;
+        manualBodyModel=null;receivedBodyModel=m.model;receivedBodyFit=bodyFitText=text;bodyFitReady=true;requestBodyImport=null;
         $("bodyFitConsent").checked=false;
         showBodyImport();foldButton();
         worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
@@ -1158,7 +1163,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
           $("measFile").value=$("fitFile").value="";$("supplementalConsent").checked=false;$("bodyFitConsent").checked=false;
           if(modelBytes!==null) {
             const settings=context.drapeSettings;
-            receivedBodyModel=new Blob([modelBytes]);receivedBodyFit=bodyFit;bodyFitText=bodyFit;bodyFitReady=true;bodyLoaded=false;
+            manualBodyModel=null;receivedBodyModel=new Blob([modelBytes]);receivedBodyFit=bodyFit;bodyFitText=bodyFit;bodyFitReady=true;bodyLoaded=false;
             bodyImportProblem=null;materialBodySources=true;++bodyFitRead;const request=bodyRequest=++nextRequest;
             $("bodyArmDeg").value=String(settings.arm_abduction_deg);$("selfContact").checked=settings.self_contact_mm===2;
             $("twoStart").checked=settings.two_start;$("drapeLegs").value=settings.legs;
