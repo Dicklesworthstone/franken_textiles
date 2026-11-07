@@ -5667,7 +5667,11 @@ test('manual body model reads enforce the existing 512 MiB admission bound befor
 test('body-fit handoff waits for the engine and preserves exact sources through garment and material consumers',async()=>{
   const token='a'.repeat(32),p=draftingPage({bodyToken:token,initialize:false});
   const raw=' {"schema":"ftx-body-fit/1","sequence":18446744073709551615,"probe":-0.0}\r\n';
-  const fit=new Blob([raw]),model=new Blob([new Uint8Array([1,2,3])]);
+  let reads=0;
+  class ReadOnceModel extends Blob {
+    async arrayBuffer(){assert.equal(++reads,1,'The received model must not be read again');return super.arrayBuffer();}
+  }
+  const fit=new Blob([raw]),model=new ReadOnceModel([new Uint8Array([1,2,3])]);
   const data={type:'ftx-body-fit-sources',token,fit,model};
   assert.equal(p.openerMessages.length,0);
   await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
@@ -5681,6 +5685,8 @@ test('body-fit handoff waits for the engine and preserves exact sources through 
   assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[1,2,3]);
   const links=p.e.bodyFitImportFiles.children;
   assert.deepEqual(links.map(a=>a.download),['body-model.ftxbody','body-fit-report.json']);
+  new Uint8Array(p.last('body').bytes).fill(0);
+  assert.deepEqual([...new Uint8Array(await p.live.get(links[0].href).arrayBuffer())],[1,2,3]);
   assert.equal(await p.live.get(links[1].href).text(),raw);
   p.emit({type:'bodyReady',request:p.last('body').request});
   await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
@@ -5695,6 +5701,7 @@ test('body-fit handoff waits for the engine and preserves exact sources through 
   p.windowEvents.message({origin:'https://unit.invalid',source:popup,data:{type:'ftx-round-sources-ready',token:new URL(popup.url).searchParams.get('roundImport')}});
   assert.equal(await popup.messages[0].data.bodySource.fit.text(),raw);
   assert.deepEqual([...new Uint8Array(await popup.messages[0].data.bodySource.model.arrayBuffer())],[1,2,3]);
+  assert.equal(reads,1);
   const count=p.messages.length;
   await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{...data,fit:new Blob(['replacement'])}});
   assert.equal(p.messages.length,count,'One-use transfer cannot replace an installed snapshot');

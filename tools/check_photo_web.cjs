@@ -352,26 +352,52 @@ async function triangulationWorkflow(browser,origin) {
     console.log("PASS triangulation: six complete native/WASM reports, exact source/noise/report downloads, full-u64 frames, accepted and unavailable precision, weak/held-out/noise/encoding/budget refusals, cancellation, desktop/mobile controls, no measurement promotion/uploads/storage/page errors.");
   } finally {await context.close();}
 }
-async function manualBodyModelHandoff(browser,origin) {
+async function bodyModelFileHandoff(browser,origin,received=false) {
   const context=await browser.newContext({userAgent:'OpenAI File Downloader, XaiImageApiFetch/1.0'}),errors=[],requests=[];
   context.on('page',p=>p.on('pageerror',e=>errors.push(String(e))));
   context.on('request',r=>requests.push({url:r.url(),method:r.method()}));
-  const original=fs.readFileSync(path.join(native,'model.ftxbody')),model=path.join(work,'manual-model.ftxbody');
+  const original=fs.readFileSync(path.join(native,'model.ftxbody')),model=path.join(work,received?'received-model.ftxbody':'manual-model.ftxbody');
   fs.writeFileSync(model,original,{flag:'wx'});
   try {
-    const page=await context.newPage();await page.goto(origin+'/index.html');
+    let page=await context.newPage();await page.goto(origin+'/index.html');
     await page.waitForFunction(()=>/^Ready/.test(document.getElementById('status').textContent));
     await page.click('#go');
     await page.waitForFunction(()=>!document.getElementById('results').classList.contains('hidden') || !document.getElementById('errorBox').classList.contains('hidden'));
     assert.equal(await page.locator('#errorBox').isVisible(),false,await page.textContent('#errorText'));
     await page.setInputFiles('#bodyFile',model);
     await page.waitForFunction(()=>document.getElementById('status').textContent==='Body model loaded.');
+    const source=page;
+    if(received) {
+      const popup=source.waitForEvent('popup');
+      await source.evaluate(({token,report})=>{
+        let target;
+        const send=event=>{
+          if(event.origin!==location.origin || event.source!==target || event.data?.type!=='ftx-body-fit-sources-ready' || event.data.token!==token)return;
+          window.removeEventListener('message',send);
+          target.postMessage({type:'ftx-body-fit-sources',token,fit:new Blob([report],{type:'application/json'}),
+            model:document.getElementById('bodyFile').files[0]},location.origin);
+        };
+        window.addEventListener('message',send);
+        target=window.open('index.html?bodyFitImport='+token,'_blank');
+      },{token:'f'.repeat(32),report:fs.readFileSync(path.join(native,'accepted-report.json'),'utf8')});
+      page=await popup;
+      await page.waitForFunction(()=>document.getElementById('status').textContent==='Body model loaded.');
+      await page.click('#go');
+      await page.waitForFunction(()=>!document.getElementById('results').classList.contains('hidden'));
+      await page.locator('#bodyFitConsent').evaluate(e=>{e.closest('details').open=true;});
+      await page.check('#bodyFitConsent');
+    }
     fs.writeFileSync(model,Buffer.from('changed after the worker loaded the model'));
-    const reread=await page.evaluate(async()=>{
+    const reread=await source.evaluate(async()=>{
       try {return [...new Uint8Array(await document.getElementById('bodyFile').files[0].arrayBuffer())];}
       catch {return null;}
     });
     assert.notDeepEqual(reread,[...original],'The selected File no longer supplies the evaluated bytes');
+    if(received) {
+      const event=page.waitForEvent('download');
+      await page.click('#bodyFitImportFiles a[download="body-model.ftxbody"]');const file=await event;
+      assert.equal(await file.failure(),null);assert.deepEqual(fs.readFileSync(await file.path()),original);
+    }
     const [receiver]=await Promise.all([page.waitForEvent('popup'),page.click('#chooseMaterials')]);
     await receiver.waitForFunction(()=>/Received pattern.json|handoff refused/.test(document.getElementById('roundImportText').textContent));
     assert.match(await receiver.textContent('#roundImportText'),/^Received pattern.json/);
@@ -384,7 +410,7 @@ async function manualBodyModelHandoff(browser,origin) {
       const url=new URL(r.url);
       return !['http:','blob:'].includes(url.protocol)||url.origin!==origin||r.method!=='GET';
     }),[],'Model requests and Blob downloads stay on the exact local origin and are read-only');
-    console.log('PASS manual model handoff: selected File changed after load; Materials retained the exact evaluated bytes.');
+    console.log(`PASS ${received?'received':'manual'} model handoff: selected File changed after load; source downloads and Materials retained the exact evaluated bytes.`);
   } finally {await context.close();}
 }
 async function bodyFitWorkflow(browser,origin) {
@@ -537,7 +563,7 @@ const server=http.createServer((req,res)=>{
   };
   try {
     if(sectionOnly) {await sectionWorkflow(browser,origin);return;}
-    if(bodyFitOnly) {await bodyFitWorkflow(browser,origin);await manualBodyModelHandoff(browser,origin);return;}
+    if(bodyFitOnly) {await bodyFitWorkflow(browser,origin);await bodyModelFileHandoff(browser,origin);await bodyModelFileHandoff(browser,origin,true);return;}
     if(triangulationOnly||bundleOnly||stillOnly) {await triangulationWorkflow(browser,origin);return;}
     await page.goto(origin+"/photo.html");
     if(charucoOnly) {
