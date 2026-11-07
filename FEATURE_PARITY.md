@@ -80,8 +80,9 @@ oracle `metrics()` values and texts remain unchanged. Direct rollback/replay, qu
 `cloth.rs` and `run.rs`. Historical fitted-garment timings/verdicts below are not fresh proof of this
 stricter boundary, nor evidence of physical fit.
 
-Fresh release execution passes all 15 existing KAT/contact/fitted-body tests with the pinned converted
-Anny model. The earlier offset-qualified run (`ftx-onn.9`) failed KAT 8 at 80 cm with only 1.413734 mm
+Fresh release execution passes all 16 KAT/contact/fitted-body tests with the pinned converted Anny
+model: the original 15 and the added chart-trouser start regression. The earlier offset-qualified run
+(`ftx-onn.9`) failed KAT 8 at 80 cm with only 1.413734 mm
 of its requested 1.5 mm offset. KAT 8 now passes unchanged on the
 pinned model's nominal fitted bodies: the 80/92/116 cm boleros reach 1.5 mm, settle and have no gating
 flags under the default schedule. The 80 cm case retains its hem-balance advisory; its largest hem rise is 13.4 mm, within the
