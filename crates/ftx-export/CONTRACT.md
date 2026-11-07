@@ -533,6 +533,20 @@ omits the new fields and preserves its schemas and arithmetic. Tests: `sewing_ro
 synthetic schedules do not establish measured skills, empirical labor performance or hardware
 authorization.
 
+**Operation-specific attending skills** (`workers[].operation_cells`, `ftx-pb2.2`).
+Eligible workers may restrict their declared cells to exact original operation/cell pairs. Explicit
+maps must be nonempty, use unique admitted pairs, cover every cell listed by that worker, and
+collectively cover every permitted route choice. Source/machine locks and estimate permission
+remain the existing authority. Compiled operation/cell domains drive seed dispatch, search,
+attendance admission, independent replay and mandatory-worker lower bounds; the physical cell
+retains its one setup/availability state. Worker travel, calendars, owned carriers, staging and
+retained fixtures share the same original exclusive clocks. Omission preserves cell-wide skills
+and earlier wire schemas. Explicit maps select plan `/30`, production `/18`, routing `/13` and
+labor `/5`, retaining the exact domains. Tests in `sewing_routing/eligible_labor` cover reentrant
+specialists, bounded seeds, alternative cells, invalid domains, source locks and owned-carrier
+calendar boundaries. Numerical schedules do not independently qualify real worker skills or
+authorize hardware execution.
+
 **Worker-owned routed handoffs** (`routing.transfer.attending_worker`). An explicit existing
 worker owns source pickup through destination deposit under the separately qualified
 `attended_source_to_destination_handoffs/1` law. Legacy ready-state transfer observations cannot

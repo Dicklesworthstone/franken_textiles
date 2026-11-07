@@ -5594,6 +5594,14 @@ schedules, ordinary stitches, purchasing, studies and workbench views. This adva
 measured worker qualification, physical labor performance, cooperative handling and hardware
 authorization remain separate gates.
 
+Optional per-worker `operation_cells` maps narrow cell-wide attendance to exact original
+operation/cell pairs. Joining and finishing specialists can therefore share one physical machine
+without receiving each other's qualifications or duplicating machine setup state. Every admitted
+route choice must retain a qualified worker. The same compiled domains drive seed selection,
+bounded search, attendance replay and conservative forced-worker bounds; travel and owned-carrier
+work continue to share each person's existing clock. Missing maps retain the prior cell-wide
+contract. This extends `ftx-pb2.2`; independent measured skill and process qualification remains open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

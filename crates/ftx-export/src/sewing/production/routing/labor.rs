@@ -50,6 +50,11 @@ pub struct Worker {
     /// Exactly the configured cells this person may attend. Exclusive mode assigns each cell to
     /// one worker; eligible mode selects one qualified worker for every complete operation.
     pub cells: Vec<String>,
+    /// Optional exact original-operation/cell qualification domain for eligible attendance.
+    /// Omission qualifies every admitted operation at the listed cells. Explicit maps cover every
+    /// listed cell but may restrict which operations this person can perform there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_cells: Option<BTreeMap<String, Vec<String>>>,
     /// Availability from the common job origin, at most one day.
     pub available_at_milliseconds: u32,
     /// Optional inclusive end, covering travel, waiting, owned handoffs and complete machine attendance.
@@ -169,7 +174,8 @@ pub struct Usage {
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
     /// `/1` independent handoffs; `/2` one worker-owned carrier; `/3` eligible attending workers;
-    /// `/4` explicitly qualified carrier choices sharing attending-worker identities.
+    /// `/4` explicitly qualified carrier choices sharing attending-worker identities;
+    /// `/5` explicit operation/cell qualifications within eligible worker domains.
     pub schema: &'static str,
     /// Complete admitted worker identities, cell locks, travel evidence and availability windows.
     pub policy: Policy,
@@ -207,6 +213,10 @@ pub(super) struct Compiled {
     cell_ids: Vec<String>,
     /// Authored worker order within each admitted cell domain; compiled once before search.
     cell_workers: Vec<Vec<usize>>,
+    /// Original operation identities, independent of copy-scoped execution IDs.
+    operation_indices: BTreeMap<String, usize>,
+    /// Authored workers for each exact route-operation/cell pair, including unused alternatives.
+    operation_workers: Vec<Vec<Vec<usize>>>,
     carrier_ids: Vec<String>,
     transfers: Vec<Option<OwnedTransfer>>,
     pooled: bool,
@@ -224,6 +234,12 @@ struct OwnedTransfer {
 impl Policy {
     pub(super) fn eligible(&self) -> bool {
         self.model == "eligible_full_operation_attendance/1"
+    }
+
+    pub(super) fn operation_qualified(&self) -> bool {
+        self.workers
+            .iter()
+            .any(|worker| worker.operation_cells.is_some())
     }
 }
 
@@ -317,6 +333,13 @@ impl Compiled {
             policy: policy.clone(),
             cell_ids: route.cells.iter().map(|cell| cell.id.clone()).collect(),
             cell_workers: vec![Vec::new(); cells.len()],
+            operation_indices: route
+                .route
+                .iter()
+                .enumerate()
+                .map(|(index, step)| (step.operation.clone(), index))
+                .collect(),
+            operation_workers: vec![vec![Vec::new(); cells.len()]; route.route.len()],
             carrier_ids: route
                 .transfer_resources()
                 .map(|carrier| carrier.id.clone())
@@ -374,6 +397,51 @@ impl Compiled {
                 }
                 compiled.cell_workers[cell].push(index);
             }
+            if let Some(operations) = &worker.operation_cells {
+                if !policy.eligible()
+                    || operations.is_empty()
+                    || operations.len() > route.route.len()
+                {
+                    return Err(bad(
+                        "operation-qualified attendance needs an eligible worker and a nonempty original-operation domain",
+                    ));
+                }
+                let mut qualified_cells = BTreeSet::new();
+                for (id, domain) in operations {
+                    let Some(&operation) = compiled.operation_indices.get(id) else {
+                        return Err(bad("routed worker qualifies an unknown original operation"));
+                    };
+                    let mut seen = BTreeSet::new();
+                    if domain.is_empty() || domain.len() > owned.len() {
+                        return Err(bad(
+                            "worker operation qualifications need a nonempty cell domain",
+                        ));
+                    }
+                    for cell in domain {
+                        if !owned.contains(cell.as_str())
+                            || !seen.insert(cell.as_str())
+                            || !route.route[operation].cells().any(|id| id == cell)
+                        {
+                            return Err(bad(
+                                "worker operation qualifications must name unique admitted operation/cell pairs within their cell domain",
+                            ));
+                        }
+                        qualified_cells.insert(cell.as_str());
+                        compiled.operation_workers[operation][cells[cell.as_str()]].push(index);
+                    }
+                }
+                if qualified_cells != owned {
+                    return Err(bad(
+                        "worker operation qualifications must cover every declared worker cell",
+                    ));
+                }
+            } else {
+                for (operation, step) in route.route.iter().enumerate() {
+                    for cell in step.cells().filter(|cell| owned.contains(cell)) {
+                        compiled.operation_workers[operation][cells[cell]].push(index);
+                    }
+                }
+            }
             for &id in &visited {
                 let Some(&arrival) = worker.initial_arrival_milliseconds.get(id) else {
                     return Err(bad("routed worker omits an explicit initial cell arrival"));
@@ -404,6 +472,16 @@ impl Compiled {
                 "routed attending labor must cover every configured cell",
             ));
         }
+        for (operation, step) in route.route.iter().enumerate() {
+            if step
+                .cells()
+                .any(|cell| compiled.operation_workers[operation][cells[cell]].is_empty())
+            {
+                return Err(bad(
+                    "routed attending labor must qualify every admitted operation/cell pair",
+                ));
+            }
+        }
         Ok(Some(compiled))
     }
 
@@ -419,8 +497,8 @@ impl Compiled {
         }
     }
 
-    pub(super) fn workers_for(&self, cell: usize) -> &[usize] {
-        &self.cell_workers[cell]
+    pub(super) fn workers_for(&self, operation: usize, cell: usize) -> &[usize] {
+        &self.operation_workers[operation][cell]
     }
 
     pub(super) fn worker_id(&self, worker: usize) -> &str {
@@ -437,10 +515,11 @@ impl Compiled {
     pub(super) fn arrival(
         &self,
         state: &State,
+        operation: usize,
         cell: usize,
         worker: usize,
     ) -> Result<Option<Arrival>, Refusal> {
-        if !self.cell_workers[cell].contains(&worker) {
+        if !self.workers_for(operation, cell).contains(&worker) {
             return Err(bad(
                 "routed operation selects an unqualified attending worker",
             ));
@@ -583,9 +662,11 @@ impl Compiled {
             if self.policy.eligible() {
                 total = add(total, minimum)?;
             }
-            let worker = self.cell_workers[tasks[domain[0]].cell][0];
+            let first = &tasks[domain[0]];
+            let worker = self.workers_for(first.route, first.cell)[0];
             if domain.iter().all(|&task| {
-                let workers = &self.cell_workers[tasks[task].cell];
+                let task = &tasks[task];
+                let workers = self.workers_for(task.route, task.cell);
                 workers.len() == 1 && workers[0] == worker
             }) {
                 forced[worker] = add(forced[worker], minimum)?;
@@ -670,6 +751,10 @@ impl Compiled {
             })
             .collect();
         for operation in &route.operations {
+            let route_index = *self
+                .operation_indices
+                .get(&operation.operation_id)
+                .ok_or_else(|| bad("routed labor replay names an unknown original operation"))?;
             let cell = self
                 .cell_ids
                 .iter()
@@ -798,7 +883,7 @@ impl Compiled {
                 }
             }
             let worker = if self.policy.eligible() {
-                self.workers_for(cell)
+                self.workers_for(route_index, cell)
                     .iter()
                     .copied()
                     .find(|&worker| {
@@ -813,10 +898,10 @@ impl Compiled {
                         "exclusive routed labor cannot change its cell ownership",
                     ));
                 }
-                self.workers_for(cell)[0]
+                self.workers_for(route_index, cell)[0]
             };
             let initial_arrival = self
-                .arrival(&state, cell, worker)?
+                .arrival(&state, route_index, cell, worker)?
                 .ok_or_else(|| bad("retained routed operation has no available worker approach"))?;
             let duration = operation
                 .finish_milliseconds
@@ -894,7 +979,9 @@ impl Compiled {
         selected: &RouteTimeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: if self.qualified_pool {
+            schema: if self.policy.operation_qualified() {
+                "ftx-sewing-attending-labor/5"
+            } else if self.qualified_pool {
                 "ftx-sewing-attending-labor/4"
             } else if self.policy.eligible() {
                 "ftx-sewing-attending-labor/3"

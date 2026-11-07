@@ -1361,6 +1361,48 @@ These source-qualified scheduling inputs do not establish measured worker skill,
 performance, safe cooperative handling or hardware authorization. `physical_labor_validated`
 remains false.
 
+### Qualify different operations on the same machine
+
+An eligible worker can optionally supply `operation_cells`, mapping original operation IDs to the
+exact cells where that person may perform each operation. This permits, for example, one person
+qualified to join at cell A and another qualified to finish at that same physical cell after the
+garment returns from cell B. The machine, its setup state and its availability remain shared.
+The existing labor source must qualify these operation-specific skills against the same complete
+cell/recipe/timing locks; different worker-specific feed rates are not inferred.
+
+```json
+{
+  "id": "joining-specialist",
+  "cells": ["cell-a"],
+  "operation_cells": {"join": ["cell-a"]},
+  "available_at_milliseconds": 0,
+  "initial_arrival_milliseconds": {"cell-a": 0},
+  "transfers": []
+}
+```
+
+This is a structural worker excerpt; the enclosing eligible labor policy still requires its source,
+exact cell locks and every other qualified worker. An explicit map must be nonempty, each cell list
+must be nonempty and unique, and every pair must be an actual admitted route operation/cell choice
+within that person's `cells`. Its cell union must equal that worker's declared cell domain. The
+collective workers must cover **every** admitted operation/cell pair, including unused eligible
+machine alternatives. Unknown operations, seam names in place of operation IDs, copy-scoped IDs,
+unsupported pairs, missing coverage and stale cell locks are refused. Exclusive fixed ownership does
+not accept operation restrictions.
+
+Omitting `operation_cells` preserves that person's qualification for all admitted operations at their
+listed cells and omits the field from serialized output. Maps may be supplied for some or all eligible
+workers. The seed chooses the first authored worker qualified for the actual operation and cell;
+bounded search considers only that same domain. The independent labor replay checks both identities,
+and forced-worker lower bounds use each operation's complete cell/worker alternatives. No qualification
+is borrowed from a different operation performed on the same machine.
+
+Travel, shift windows, nonpreemptive calendars, finite staging, fixture reservations and owned garment
+handoffs retain the existing full-attendance protocol and the same per-person clock. Owning a carrier
+does not qualify its worker to sew at either endpoint. Explicit operation qualifications produce plan
+`/30`, production `/18`, routing `/13` and nested labor `/5`; the exact maps remain in the retained policy.
+Inputs without maps retain their existing report versions, timing and qualification behavior.
+
 ## An attending worker can also carry garments
 
 An explicit `routing.transfer.attending_worker` names one existing `attending_labor.workers[].id`.

@@ -379,6 +379,12 @@ impl Policy {
             .is_some_and(labor::Policy::eligible)
     }
 
+    fn operation_qualified_labor(&self) -> bool {
+        self.attending_labor
+            .as_ref()
+            .is_some_and(labor::Policy::operation_qualified)
+    }
+
     fn qualified_transfer_pool(&self) -> bool {
         self.transfer_pool
             .as_ref()
@@ -743,9 +749,9 @@ struct Dispatch {
 }
 
 impl Prepared<'_> {
-    fn workers_for(&self, cell: usize) -> &[usize] {
+    fn workers_for(&self, task: usize) -> &[usize] {
         match &self.labor {
-            Some(labor) => labor.workers_for(cell),
+            Some(labor) => labor.workers_for(self.tasks[task].route, self.tasks[task].cell),
             None => &[0],
         }
     }
@@ -1013,6 +1019,7 @@ impl Prepared<'_> {
             .map(|labor| {
                 labor.arrival(
                     next.labor.as_ref().expect("admitted attending labor"),
+                    task.route,
                     task.cell,
                     worker,
                 )
@@ -1470,7 +1477,7 @@ impl Search<'_, '_> {
                     }) {
                         continue;
                     }
-                    for &worker in self.prepared.workers_for(cell) {
+                    for &worker in self.prepared.workers_for(task) {
                         if self.used == self.prepared.policy.max_search_nodes {
                             self.complete = false;
                             return Ok(());
@@ -1652,7 +1659,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.qualified_transfer_pool() {
+        schema: if policy.operation_qualified_labor() {
+            "ftx-sewing-plan/30"
+        } else if policy.qualified_transfer_pool() {
             "ftx-sewing-plan/29"
         } else if policy.eligible_labor() {
             "ftx-sewing-plan/28"
@@ -1865,7 +1874,7 @@ pub(in crate::sewing) fn build(
                 copy,
                 task,
                 carrier,
-                worker: prepared.workers_for(cell)[0],
+                worker: prepared.workers_for(task)[0],
             };
             let Some((next, _)) = prepared.advance(&seed, dispatch)? else {
                 break 'seed;
@@ -2035,7 +2044,9 @@ pub(in crate::sewing) fn build(
         .map(|pool| pool.report(policy, &baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if policy.qualified_transfer_pool() {
+        schema: if policy.operation_qualified_labor() {
+            "ftx-sewing-routing/13"
+        } else if policy.qualified_transfer_pool() {
             "ftx-sewing-routing/12"
         } else if policy.eligible_labor() {
             "ftx-sewing-routing/11"
@@ -2117,7 +2128,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.qualified_transfer_pool() {
+        schema: if policy.operation_qualified_labor() {
+            "ftx-sewing-production/18"
+        } else if policy.qualified_transfer_pool() {
             "ftx-sewing-production/17"
         } else if policy.eligible_labor() {
             "ftx-sewing-production/16"
