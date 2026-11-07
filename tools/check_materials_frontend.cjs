@@ -5366,7 +5366,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 
 // The original inline workshop script, using a small DOM transport double. These tests inspect
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
-function draftingPage({traceToken=null,materialToken=null,photoToken=null,audit=false}={}) {
+function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyToken=null,initialize=true,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
@@ -5385,7 +5385,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,audit=
   class LocalURL extends URL {}
   LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
-  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:materialToken?'?materialImport='+materialToken:photoToken?'?photoImport='+photoToken:'')},
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:materialToken?'?materialImport='+materialToken:photoToken?'?photoImport='+photoToken:bodyToken?'?bodyFitImport='+bodyToken:'')},
     window:{opener,open:(url,target)=>{const popup={url,target,closed:false,messages:[],postMessage(data,origin){this.messages.push({data,origin});}};popups.push(popup);return popup;},
       addEventListener:(name,fn)=>{const previous=windowEvents[name];windowEvents[name]=(...args)=>{previous?.(...args);return fn(...args);};}},
     localStorage:{getItem:key=>audit&&key==='fab-wb-program'?'"audit"':null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
@@ -5398,14 +5398,14 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,audit=
     return m?.type==='run'&&typeof m.req==='string'?{...m,req:JSON.parse(m.req)}:m;
   };
   const sheetDictionaries=['DICT_4X4_50','DICT_5X5_50'];
-  emit({type:'ready',info:{zouave_bolero:{style:{}}},sheetDictionaries,version:'test',dxf:'test'});
-  assert.deepEqual(e.sheetDictionaries.children.map(option=>option.value),sheetDictionaries);
+  const engineReady=()=>emit({type:'ready',info:{zouave_bolero:{style:{}}},sheetDictionaries,version:'test',dxf:'test'});
+  if(initialize) {engineReady();assert.deepEqual(e.sheetDictionaries.children.map(option=>option.value),sheetDictionaries);}
   const result=(request,extra={})=>emit({type:'result',request:request??last('run').request,foldable:true,bodyCheckable:true,
     res:{title:'current',status:'CONVERGED',basis:{},zip:'round.zip',files:[],validation:{}},blobs:{zip:new Uint8Array([1])},...extra});
   const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
     emit({type:'bodyReady',request:last('body').request});};
   const dispatch=(id,event)=>e[id].handlers[event]?.();
-  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,opener,openerMessages,windowEvents,popups,hasOpener:()=>!!context.window.opener};
+  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,engineReady,opener,openerMessages,windowEvents,popups,hasOpener:()=>!!context.window.opener};
 }
 const alterationTargets = {
   pieces:[{id:'front',vertices:['a','b'],edges:['hem','armhole']},{id:'sleeve',vertices:['ua','top'],edges:['cap','hem']}],
@@ -5609,6 +5609,108 @@ test('drafting handoff snapshots the loaded model and exact accepted fit and can
     assert.equal(cancelled.files,undefined);assert.equal(cancelled.bodySource,undefined);
   }
 });
+
+test('body-fit handoff waits for the engine and preserves exact sources through garment and material consumers',async()=>{
+  const token='a'.repeat(32),p=draftingPage({bodyToken:token,initialize:false});
+  const raw=' {"schema":"ftx-body-fit/1","sequence":18446744073709551615,"probe":-0.0}\r\n';
+  const fit=new Blob([raw]),model=new Blob([new Uint8Array([1,2,3])]);
+  const data={type:'ftx-body-fit-sources',token,fit,model};
+  assert.equal(p.openerMessages.length,0);
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+  assert.equal(p.last('body'),undefined);
+  p.engineReady();assert.equal(p.openerMessages[0].data.type,'ftx-body-fit-sources-ready');
+  for(const [origin,source,m] of [['https://foreign.invalid',p.opener,data],['https://unit.invalid',{},data],
+    ['https://unit.invalid',p.opener,{...data,token:'wrong'}]]) await p.windowEvents.message({origin,source,data:m});
+  assert.equal(p.last('body'),undefined);
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+  assert.equal(p.hasOpener(),false);assert.equal(p.e.bodyFitConsent.checked,false);
+  assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[1,2,3]);
+  const links=p.e.bodyFitImportFiles.children;
+  assert.deepEqual(links.map(a=>a.download),['body-model.ftxbody','body-fit-report.json']);
+  assert.equal(await p.live.get(links[1].href).text(),raw);
+  p.emit({type:'bodyReady',request:p.last('body').request});
+  await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+  const readiness=p.e.resStatus.textContent;assert.equal(p.e.bodyCheckGo.disabled,true);
+  assert.equal(p.e.supplementalFiles.files.length,0,'Body predictions never enter added measurement evidence');
+  assert.equal(p.e.supplementalConsent.checked,false);
+  p.e.bodyFitConsent.checked=true;await p.e.bodyFitConsent.handlers.change();
+  p.e.bodyCheckGo.handlers.click();assert.equal(p.last('inspectBody').bodyFit,raw);
+  p.emit({type:'error',op:'inspectBody',request:p.last('inspectBody').request,message:'synthetic test refusal'});
+  assert.equal(p.e.resStatus.textContent,readiness);
+  await p.e.chooseMaterials.handlers.click();const popup=p.popups[0];
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup,data:{type:'ftx-round-sources-ready',token:new URL(popup.url).searchParams.get('roundImport')}});
+  assert.equal(await popup.messages[0].data.bodySource.fit.text(),raw);
+  assert.deepEqual([...new Uint8Array(await popup.messages[0].data.bodySource.model.arrayBuffer())],[1,2,3]);
+  const count=p.messages.length;
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:{...data,fit:new Blob(['replacement'])}});
+  assert.equal(p.messages.length,count,'One-use transfer cannot replace an installed snapshot');
+});
+test('body-fit receiver refuses invalid transfers and clears cancelled pending reads without tape fallback',async()=>{
+  const token='b'.repeat(32),raw='{"original":18446744073709551615}',model=new Blob([new Uint8Array([4,5])]);
+  class LargeFit extends Blob {get size(){return 16*1024*1024+1;}}
+  class LargeModel extends Blob {get size(){return 512*1024*1024+1;}}
+  for(const patch of [{type:'ftx-body-fit-sources-cancelled'},{fit:null},{fit:new Blob([])},
+    {fit:new LargeFit(['{}'])},{fit:new Blob([new Uint8Array([255])])},{model:new Blob([])},{model:new LargeModel(['x'])}]) {
+    const p=draftingPage({bodyToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-body-fit-sources',token,fit:new Blob([raw]),model,...patch}});
+    assert.equal(p.last('body'),undefined);assert.equal(p.e.bodyCheckGo.disabled,true);
+    assert.equal(p.e.bodyFitImportFiles.children.length,0);assert.ok(p.e.errorText.textContent);
+    await p.e.clearBodyFitImport.handlers.click();assert.equal(p.e.bodyFitImportNote.hidden,true);
+  }
+  for(const action of ['clear','pagehide','fit','model']) {
+    const p=draftingPage({bodyToken:token}),pending=deferred();
+    class WaitingFit extends Blob {arrayBuffer(){return pending.promise;}}
+    const reading=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-body-fit-sources',token,fit:new WaitingFit([raw]),model}});
+    if(action==='clear')await p.e.clearBodyFitImport.handlers.click();
+    if(action==='pagehide')p.windowEvents.pagehide();
+    if(action==='fit'){p.e.bodyFitFile.files=[new Blob(['manual fit'])];await p.e.bodyFitFile.handlers.change();}
+    if(action==='model'){p.e.bodyFile.files=[new Blob([new Uint8Array([9])])];await p.e.bodyFile.handlers.change();}
+    pending.resolve(new TextEncoder().encode(raw).buffer);await reading;
+    assert.equal(p.e.bodyFitImportFiles.children.length,0);assert.equal(p.e.bodyFitConsent.checked,false);
+    if(action==='model')assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[9]);
+    else assert.equal(p.last('body'),undefined);
+  }
+});
+
+test('received body association must follow completed source reads and current wearer selection',async()=>{
+  const token='d'.repeat(32),p=draftingPage({bodyToken:token}),pending=deferred();
+  class WaitingModel extends Blob {arrayBuffer(){return pending.promise;}}
+  const reading=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+    data:{type:'ftx-body-fit-sources',token,fit:new Blob(['{"accepted":true}']),model:new WaitingModel(['m'])}});
+  await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+  p.e.bodyFitConsent.checked=true;await p.e.bodyFitConsent.handlers.change();
+  p.e.age.value='36';await p.e.age.handlers.input();
+  pending.resolve(new Uint8Array([4]).buffer);await reading;
+  p.emit({type:'bodyReady',request:p.last('body').request});
+  assert.equal(p.e.bodyFitConsent.checked,false);
+  await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+  assert.equal(p.e.bodyCheckGo.disabled,true);assert.equal(p.e.foldGo.disabled,true);
+  await p.e.chooseMaterials.handlers.click();assert.equal(p.popups.length,0);
+});
+
+test('received body sources can be independently replaced and clearing them preserves manual selections',async()=>{
+  const token='c'.repeat(32),raw=' {"sequence":18446744073709551615}\n';
+  const prepare=async()=>{
+    const p=draftingPage({bodyToken:token});
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-body-fit-sources',token,fit:new Blob([raw]),model:new Blob([new Uint8Array([2,3])])}});
+    p.emit({type:'bodyReady',request:p.last('body').request});return p;
+  };
+  const p=await prepare();p.e.bodyFile.files=[new Blob([new Uint8Array([7])])];await p.e.bodyFile.handlers.change();
+  p.emit({type:'bodyReady',request:p.last('body').request});
+  assert.deepEqual(p.e.bodyFitImportFiles.children.map(a=>a.download),['body-fit-report.json']);
+  await p.e.clearBodyFitImport.handlers.click();await p.e.go.handlers.click();p.result();
+  assert.equal(p.e.bodyCheckGo.disabled,false,'Explicitly cleared received report returns the manual model to tape fitting');
+  p.e.bodyCheckGo.handlers.click();assert.equal(p.last('inspectBody').bodyFit,null);
+  const q=await prepare();q.e.bodyFitFile.files=[new Blob(['manual report'])];await q.e.bodyFitFile.handlers.change();
+  assert.deepEqual(q.e.bodyFitImportFiles.children.map(a=>a.download),['body-model.ftxbody']);
+  await q.e.clearBodyFitImport.handlers.click();assert.equal(q.e.bodyCheckGo.disabled,true);
+  await q.body();await q.e.go.handlers.click();q.result();q.e.bodyFitConsent.checked=true;await q.e.bodyFitConsent.handlers.change();
+  q.e.bodyCheckGo.handlers.click();assert.equal(q.last('inspectBody').bodyFit,'manual report');
+});
+
 test('drafting round handoff snapshots all drape controls, rejects invalid values and cancels pending setting edits', async () => {
   const prepare=async()=>{
     const p=draftingPage();await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{"pieces":[]}',measurements:'{}',fit:'{}'}});return p;

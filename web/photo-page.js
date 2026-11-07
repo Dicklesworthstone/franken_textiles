@@ -16,6 +16,7 @@ const cameraUrls = [];
 let triangulationWorker = null, triangulationTicket = 0, triangulationBusy = false;
 const triangulationUrls = [];
 let bodyFitWorker = null, bodyFitTicket = 0, bodyFitBusy = false;
+let bodyFitSources = null, bodyFitTransfer = null;
 const bodyFitUrls = [];
 const status = text => {$("status").textContent=text;};
 function pointText() {
@@ -48,6 +49,7 @@ function checkedOptions(text) {
 function controls() {
   $("bodyFitRun").disabled=bodyFitBusy || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
   $("bodyFitCancel").disabled=!bodyFitBusy;
+  $("bodyFitWorkbench").disabled=bodyFitBusy || !bodyFitSources;
   const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate";
   $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
   $("geometryStillControls").hidden=!still;
@@ -157,12 +159,14 @@ function stopBodyFit() {
   bodyFitWorker?.terminate(); bodyFitWorker=null; bodyFitBusy=false; controls();
 }
 function withdrawBodyFit() {
+  bodyFitSources=null;
+  if(bodyFitTransfer) bodyFitTransfer.sources=null;
   ++bodyFitTicket; stopBodyFit(); revoke(bodyFitUrls);
   $("bodyFitDownloads").replaceChildren(); $("bodyFitResult").hidden=true;
   $("bodyFitAttempts").replaceChildren(); $("bodyFitChecks").replaceChildren();
   for(const id of ["bodyFitError","bodyFitReport","bodyFitSummary","bodyFitUse","bodyFitPredictions","bodyFitFlags"]) $(id).textContent="";
 }
-function publishBodyFit(text,input,iterations,maxEvaluations) {
+function publishBodyFit(text,input,iterations,maxEvaluations,modelFile) {
   // Only presentation parses JSON. Downloads retain the original Rust bytes, including full-u64
   // source identities; no model prediction is passed to the measurement-fusion handoff.
   const report=JSON.parse(text), accepted=report.status==="ACCEPTED";
@@ -187,7 +191,7 @@ function publishBodyFit(text,input,iterations,maxEvaluations) {
   }
   $("bodyFitSummary").textContent=`${report.status}: ${report.input.frames.length} frames, ${report.attempts.length} starts, ${report.model_evaluations} model evaluations.`;
   $("bodyFitUse").textContent=accepted?
-    "Accepted shape available. Download body-fit-report.json, choose it under Accepted body-fit report in the Pattern or Material Workbench, load the same model, and confirm the wearer there before body checks or draping.":
+    "Accepted shape available. Continue in Pattern Workbench with this exact report and model, then choose garment and measurement evidence and confirm the wearer before body checks or draping. The downloads also work in either workbench.":
     "No accepted shape was published. Keep the diagnostic report and resolve the reported evidence or numerical failures before trying again.";
   $("bodyFitPredictions").textContent=accepted && report.solution.predicted_measurements_m.length?
     "MODEL_FIT predictions (mm):\n"+report.model.measurements.map((name,i)=>`${name}: ${report.solution.predicted_measurements_m[i]*1000}`).join("\n"):"";
@@ -199,6 +203,8 @@ function publishBodyFit(text,input,iterations,maxEvaluations) {
   $("bodyFitResult").hidden=false;
   $("bodyFitStatus").textContent=accepted?"Body fit accepted; review every start and held-out residual before reuse.":
     "Body fit finished without an accepted shape. Review all diagnostics.";
+  bodyFitSources=accepted?{fit:new Blob([text],{type:"application/json"}),model:modelFile}:null;
+  controls();
 }
 async function runBodyFit() {
   if(bodyFitBusy) return;
@@ -225,7 +231,7 @@ async function runBodyFit() {
       if(m.type==="progress") {$("bodyFitStatus").textContent=m.text; return;}
       stopBodyFit();
       if(m.type==="error") {$("bodyFitError").textContent=m.message; $("bodyFitStatus").textContent="Body fit refused; no report published."; return;}
-      try {publishBodyFit(m.report,input,iterations,maxEvaluations);} catch(error) {
+      try {publishBodyFit(m.report,input,iterations,maxEvaluations,modelFile);} catch(error) {
         withdrawBodyFit(); $("bodyFitError").textContent=String(error.message || error);
         $("bodyFitStatus").textContent="No body-fit report published.";
       }
@@ -676,6 +682,25 @@ for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{w
 $("clearCalibration").onclick=()=>{generatedCalibration=null; $("calibration").value=""; $("lensId").value=""; $("rotation").value=""; $("independence").value=""; withdraw(true); status("Calibration removed; analyze the current photo.");};
 $("cameraRun").onclick=runCamera;
 $("bodyFitRun").onclick=runBodyFit;
+$("bodyFitWorkbench").onclick=()=>{
+  if(bodyFitBusy || !bodyFitSources) return;
+  const notify=text=>{$("bodyFitStatus").textContent=text;};
+  if(new URL(import.meta.url).origin==="null") {
+    notify("Open the local HTTP workbench to transfer this body, or use the original downloads.");return;
+  }
+  if(bodyFitSources.fit.size>16*1024*1024) {
+    notify("This report exceeds the workbench's 16 MiB limit. Keep the original diagnostic download.");return;
+  }
+  if(bodyFitTransfer && !bodyFitTransfer.target.closed) {
+    notify("A body handoff is still opening. Finish or close that Workbench tab first.");return;
+  }
+  const token=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
+  const url=new URL("index.html",import.meta.url);url.searchParams.set("bodyFitImport",token);
+  const target=window.open(url.href,"_blank");
+  if(!target) {notify("Workbench popup blocked. Download the fit report and choose it with the same model there.");return;}
+  bodyFitTransfer={target,token,sources:bodyFitSources};
+  notify("Workbench opened with the accepted body. Choose garment and measurement evidence there, then confirm the wearer.");
+};
 $("bodyFitCancel").onclick=()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Body fit cancelled; no report published.";};
 for(const id of ["bodyFitInput","bodyFitModel"]) for(const event of ["change","click","cancel"]) {
   $(id).addEventListener(event,()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Review the selected model and observations, then run the body fit.";});
@@ -803,6 +828,14 @@ $("returnMaterials").onclick=()=>returnMaterials(photoRecords,"photo",status);
 $("sectionMaterials").onclick=()=>returnMaterials(sectionRecords,"section",sectionStatus);
 window.addEventListener("message",event=>{
   const m=event.data;
+  const bodyTransfer=bodyFitTransfer;
+  if(bodyTransfer && event.origin===new URL(import.meta.url).origin && event.source===bodyTransfer.target &&
+      m?.type==="ftx-body-fit-sources-ready" && m.token===bodyTransfer.token) {
+    bodyTransfer.target.postMessage(bodyTransfer.sources?
+      {type:"ftx-body-fit-sources",token:bodyTransfer.token,...bodyTransfer.sources}:
+      {type:"ftx-body-fit-sources-cancelled",token:bodyTransfer.token},event.origin);
+    bodyFitTransfer=null;return;
+  }
   if(materialsTarget && event.origin===materialsOrigin && event.source===materialsTarget && m?.token===materialsToken &&
     ["ftx-materials-photo-cancelled","ftx-materials-photo-received"].includes(m.type)) {
     if(workbenchTransfer?.target===materialsTarget) workbenchTransfer=null;

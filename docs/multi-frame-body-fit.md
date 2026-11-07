@@ -49,9 +49,21 @@ without a JavaScript parse/serialize round trip, preserving full-width frame tim
 `REJECTED`, `AMBIGUOUS`, `UNOBSERVABLE`, `NOT_CONVERGED` and `BUDGET_STOP` outcomes remain
 diagnostic reports with no accepted shape.
 
-An accepted report can be selected under **Accepted body-fit report** in the Pattern or Material
-Workbench, with the same converted model and the existing explicit wearer association. The
-ordinary accepted-shape checks apply before body inspection or draping. Predicted measurements
+After acceptance, **Continue with this body in Pattern Workbench** opens a local workbench
+with immutable snapshots of the original report and the exact selected model. Choose garment
+and primary measurement evidence, then **Draft and check**. Under **Reuse an accepted image-fit
+shape**, confirm that the received fit belongs to the current wearer before checking the body
+or draping. Receiving a body never confirms that association; pending source reads cannot retain
+an earlier confirmation. The ordinary Pattern-to-Material handoff carries the same model and
+report after this explicit review.
+
+The received-source panel provides the original downloads and a clear action. Manual model or
+fit selection replaces only the corresponding received source. Source edits or page exit cancel
+an unfinished transfer; another origin, tab or token cannot supply its contents. A completed
+snapshot remains independent of later edits in the photo page. Serve the local pages over HTTP
+for the handoff; the original report and model can still be selected manually in either workbench.
+
+The ordinary accepted-shape checks apply before body inspection or draping. Predicted measurements
 remain `MODEL_FIT`; this route does not add photo measurement records, promote readiness,
 establish anatomical accuracy or qualify physical garment fit. Model bytes, observations and
 results stay in the local browser, with no uploads or browser storage.
