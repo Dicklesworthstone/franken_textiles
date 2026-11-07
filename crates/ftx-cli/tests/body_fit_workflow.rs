@@ -614,6 +614,23 @@ fn capture_review_args(dir: &Path, args: &[&str], code: i32) -> Value {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    if code == 0 {
+        let output = dir.join(args.windows(2).find(|pair| pair[0] == "--out").unwrap()[1]);
+        let prepared: Value =
+            serde_json::from_slice(&std::fs::read(output.join("prepared-input.json")).unwrap())
+                .unwrap();
+        let page = std::fs::read_to_string(output.join("index.html")).unwrap();
+        let embedded = page
+            .split_once("<script type=\"application/json\" id=\"preparedInput\">")
+            .unwrap()
+            .1
+            .split_once("</script>")
+            .unwrap()
+            .0;
+        // Every review carries the same native snapshot, including source masks, full-width
+        // timestamps and safely escaped caller labels; browser edits never rebuild cameras.
+        assert_eq!(serde_json::from_str::<Value>(embedded).unwrap(), prepared);
+    }
     serde_json::from_slice(&out.stdout).unwrap()
 }
 

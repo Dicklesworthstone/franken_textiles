@@ -17,33 +17,37 @@ const encoded = value => JSON.stringify(value, (_key, item) =>
 const savedInput = value => ({name: "capture-edited.json", mimeType: "application/json", buffer: Buffer.from(encoded(value))});
 const report = read("edit-review/review.json"), replay = read("edit-review/capture.json"), good = read("good.json");
 const hash = b => crypto.createHash("sha256").update(b).digest("hex");
-const frame = 0, point = 3;
+const frame = 0, point = 3, preparedFiles = [];
 assert.equal(report.frames.length, 2);
 assert.equal(replay.fit.frames[frame].keypoints[point].partition, "held_out");
 assert.equal(read("bad-fit.json").solution, null);
 assert.equal(read("expected-fit.json").status, "ACCEPTED");
 fs.mkdirSync(out, {mode: 0o700});
 function verifyFiles(directory = reviewDir, records = report) {
-  for (const item of [records.original_input, records.replay_input, records.viewer, records.editor,
+  for (const item of [records.original_input, records.replay_input, records.prepared_input, records.viewer, records.editor,
     ...records.frames.flatMap(f => [f.source_image, f.keypoint_svg, f.sheet_svg])]) {
     const b = fs.readFileSync(path.join(directory, item.file));
     assert.equal(b.length, item.bytes); assert.equal(hash(b), item.sha256);
   }
 }
-async function download(page, name, expected) {
+async function download(page, name, expected, prepared = false) {
+  assert(await page.locator("#correctedPreparedInput").isVisible());
   const event = page.waitForEvent("download");
-  await page.locator("#correctedInput").click();
+  await page.locator(prepared ? "#correctedPreparedInput" : "#correctedInput").click();
   const file = await event;
-  assert.equal(file.suggestedFilename(), "capture-edited.json");
+  assert.equal(file.suggestedFilename(), prepared ? "prepared-input-edited.json" : "capture-edited.json");
   const destination = path.join(out, name);
   assert(!fs.existsSync(destination));
   await file.saveAs(destination);
   assert.deepEqual(exact(fs.readFileSync(destination)), expected);
+  if (prepared) preparedFiles.push(destination);
   return destination;
 }
 async function hidden(page) {
-  assert(await page.locator("#correctedInput").isHidden());
-  assert.equal(await page.locator("#correctedInput").getAttribute("href"), null);
+  for (const id of ["correctedInput", "correctedPreparedInput"]) {
+    assert(await page.locator("#" + id).isHidden());
+    assert.equal(await page.locator("#" + id).getAttribute("href"), null);
+  }
 }
 async function restoreCapture(page, file, prefix = "Saved capture input restored:") {
   await page.locator("#captureDraftFile").setInputFiles(file);
@@ -139,7 +143,8 @@ async function sheetReview(page, records = report) {
     assert.match(await page.locator("#editStatus").innerText(), /^Select a point/);
     assert.equal(await page.evaluate(() => globalThis.captureInjection), undefined);
     assert.deepEqual(await page.locator("#captureInput").evaluate(n => JSON.parse(n.textContent)), replay);
-    assert.equal(await page.locator("script").count(), 2);
+    assert.deepEqual(await page.locator("#preparedInput").evaluate(n => JSON.parse(n.textContent)), read("edit-review/prepared-input.json"));
+    assert.equal(await page.locator("script").count(), 3);
     const policy = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute("content");
     assert.equal(policy.split(";").map(s => s.trim()).find(s => s.startsWith("script-src")), "script-src 'self'");
     assert.equal(await page.locator("section").count(), report.frames.length);
@@ -189,10 +194,15 @@ async function sheetReview(page, records = report) {
       const expected = structuredClone(replay);
       expected.fit.frames[frame].keypoints[point].pixel_px = pixel;
       await download(page, "click-" + label + ".json", expected);
+      const snapshot = read("edit-review/prepared-input.json");
+      snapshot.fit.frames[frame].keypoints[point].pixel_px = pixel;
+      await download(page, "prepared-click-" + label + ".json", snapshot, true);
       const previous = await page.locator("#correctedInput").getAttribute("href");
+      const previousPrepared = await page.locator("#correctedPreparedInput").getAttribute("href");
       await page.locator("#editX").fill("");
       await hidden(page);
       assert(await page.evaluate(url => globalThis.__revoked.includes(url), previous));
+      assert(await page.evaluate(url => globalThis.__revoked.includes(url), previousPrepared));
     }
     // Invalid or pending edits cannot advertise the last valid input or clamp to its boundary.
     const prior = await displayed(page, frame, point);
@@ -209,6 +219,9 @@ async function sheetReview(page, records = report) {
     const corrected = structuredClone(replay);
     corrected.fit.frames[frame].keypoints[point].pixel_px = target;
     const final = await download(page, "capture-edited.json", corrected);
+    const preparedCorrected = read("edit-review/prepared-input.json");
+    preparedCorrected.fit.frames[frame].keypoints[point].pixel_px = target;
+    await download(page, "prepared-corrected.json", preparedCorrected, true);
     assert.equal(corrected.reviewed_sources_sha256, report.capture_input.sources_sha256);
     await page.screenshot({path: path.join(out, "corrected.png"), fullPage: true});
     // Removing an observation must preserve every remaining correspondence, including the
@@ -242,6 +255,9 @@ async function sheetReview(page, records = report) {
     assert(await page.locator("#applyPoint").isDisabled());
     await pointDisplays(removed);
     const removedFile = await download(page, "capture-point-removed.json", removed);
+    const preparedRemoved = structuredClone(preparedCorrected);
+    preparedRemoved.fit.frames[0].keypoints.splice(4, 1);
+    await download(page, "prepared-point-removed.json", preparedRemoved, true);
     // This selection now refers to the NEXT observation, with its original role and sigma.
     await page.locator('.edit-point[data-frame="0"][data-point="4"]').click();
     const shiftedPixel = [removed.fit.frames[0].keypoints[4].pixel_px[0] + .125, removed.fit.frames[0].keypoints[4].pixel_px[1]];
@@ -307,6 +323,9 @@ async function sheetReview(page, records = report) {
     }
     await pointDisplays(noCheck);
     await download(page, "capture-empty-points.json", noCheck);
+    const emptyPrepared = read("edit-review/prepared-input.json");
+    emptyPrepared.fit.frames.forEach(frame => { frame.keypoints = []; });
+    await download(page, "prepared-empty-points.json", emptyPrepared, true);
     await page.locator("#resetPoints").click(); await hidden(page);
     await pointDisplays(replay);
     await page.locator('.edit-point[data-frame="0"][data-point="3"]').click();
@@ -481,6 +500,12 @@ async function sheetReview(page, records = report) {
     const maskedExpected = structuredClone(maskReplay);
     maskedExpected.fit.frames[0].keypoints[3].pixel_px = target;
     const maskedFile = await download(maskedPage, "capture-masked.json", maskedExpected);
+    const maskedPrepared = read("mask-review/prepared-input.json");
+    maskedPrepared.fit.frames[0].keypoints[3].pixel_px = target;
+    await download(maskedPage, "prepared-masked.json", maskedPrepared, true);
+    // The capture still refers to its mask manifest; the prepared route retains native samples.
+    assert(maskedExpected.fit.frames.every(frame => frame.silhouette == null));
+    assert(maskedPrepared.fit.frames.every(frame => frame.silhouette.lines.length === 5));
     assert.equal(await maskedPage.locator("g[data-silhouette]").count(), 10);
     assert.deepEqual(await maskedPage.locator("g[data-silhouette]").evaluateAll(ns => ns.map(n => n.outerHTML)), observedMarkup);
     await maskedPage.screenshot({path: path.join(out, "sampled-silhouettes.png"), fullPage: true});
@@ -609,6 +634,9 @@ async function sheetReview(page, records = report) {
       f.silhouette = silhouette;
     });
     const inlineFile = await download(contour, "capture-inline-silhouettes.json", authoredContour);
+    const inlinePrepared = read("inline-review/prepared-input.json");
+    inlinePrepared.fit.frames.forEach((frame, i) => { frame.silhouette = structuredClone(authoredContour.fit.frames[i].silhouette); });
+    await download(contour, "prepared-inline-silhouettes.json", inlinePrepared, true);
     assert.equal(authoredContour.reviewed_sources_sha256, inlineReplay.reviewed_sources_sha256);
     assert.equal(await contour.locator("g[data-silhouette]").count(), 10);
     await contour.locator("#resetPoints").click(); await hidden(contour);
@@ -668,6 +696,7 @@ async function sheetReview(page, records = report) {
     await restoreCapture(page, final);
     await pointDisplays(corrected);
     const resumedFile = await download(page, "capture-resumed.json", corrected);
+    await download(page, "prepared-resumed.json", preparedCorrected, true);
     await restoreCapture(page, removedFile);
     await pointDisplays(removed);
     await download(page, "capture-resumed-removal.json", removed);
@@ -694,6 +723,9 @@ async function sheetReview(page, records = report) {
     await pointDisplays(combined, contour);
     assert.deepEqual(await contour.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML)), combinedMarkup);
     const resumedInlineFile = await download(contour, "capture-resumed-inline.json", combined);
+    const combinedPrepared = structuredClone(inlinePrepared);
+    combinedPrepared.fit.frames[0].keypoints[0].pixel_px[0] += .125;
+    await download(contour, "prepared-resumed-inline.json", combinedPrepared, true);
     await restoreCapture(maskedPage, maskedFile);
     await pointDisplays(maskedExpected, maskedPage);
     assert.deepEqual(await maskedPage.locator("g[data-silhouette]").evaluateAll(nodes => nodes.map(n => n.outerHTML)), observedMarkup);
@@ -814,9 +846,11 @@ async function sheetReview(page, records = report) {
         await restoreCapture(page, path.join(out, "capture-replaced-metadata.json")); expected = replaced;
       } else await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
       const retainedUrl = await page.locator("#correctedInput").getAttribute("href");
+      const retainedPreparedUrl = await page.locator("#correctedPreparedInput").getAttribute("href");
       await finishCaptureRead(page);
       await pointDisplays(expected);
       assert.equal(await page.locator("#correctedInput").getAttribute("href"), retainedUrl, action);
+      assert.equal(await page.locator("#correctedPreparedInput").getAttribute("href"), retainedPreparedUrl, action);
       if (action === "apply" || action === "newer") await download(page, "capture-import-race-" + action + ".json", expected);
       else await hidden(page);
       if (action === "edit") assert.equal(await page.locator("#editX").inputValue(), "123.25");
@@ -876,6 +910,11 @@ async function sheetReview(page, records = report) {
       await hidden(integerPage);
       await integerPage.locator("#applyPoint").click();
       const file = await download(integerPage, name + "-edited.json", expected);
+      const preparedInteger = exact(fs.readFileSync(path.join(directory, "prepared-input.json")));
+      preparedInteger.fit.frames[0].keypoints[3].pixel_px = expected.fit.frames[0].keypoints[3].pixel_px;
+      await download(integerPage, name + "-prepared.json", preparedInteger, true);
+      assert.equal(preparedInteger.fit.frames[0].frame.timestamp_us, first);
+      assert.equal(preparedInteger.fit.frames[1].frame.timestamp_us, last);
       const bytes = fs.readFileSync(file, "utf8");
       assert(bytes.includes(String(first)) && bytes.includes(String(last)));
       integerFiles.push(file);
@@ -883,6 +922,7 @@ async function sheetReview(page, records = report) {
       await restoreCapture(integerPage, file);
       await pointDisplays(expected, integerPage);
       const resumed = await download(integerPage, name + "-resumed.json", expected);
+      await download(integerPage, name + "-prepared-resumed.json", preparedInteger, true);
       assert(fs.readFileSync(resumed, "utf8").includes(String(first)));
       const changedIdentity = structuredClone(expected);
       changedIdentity.fit.frames[0].source.metadata.frame.timestamp_us += 1n;
@@ -941,7 +981,7 @@ async function sheetReview(page, records = report) {
       crossEditorPendingCases: 4,
       resumedFile, resumedInlineFile, rejectedCaptureImports: invalidCaptures.length,
       rejectedSilhouetteImports: invalidSilhouettes.length, delayedImportCases: delayedCases,
-      integerFiles, maximumCodec, integerFallbacks: ["raw-json", "numeric-source"],
+      integerFiles, preparedFiles, maximumCodec, integerFallbacks: ["raw-json", "numeric-source"],
       removedFile, noCheckFile,
       boundary: "Synthetic actual page and data only; fit acceptance is a separate ordinary CLI run"}, null, 2));
   } finally { await browser.close(); }

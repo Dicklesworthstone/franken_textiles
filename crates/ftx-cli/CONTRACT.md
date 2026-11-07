@@ -118,8 +118,12 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   after explicit frame, FIT/CHECK role and sigma selection, including in initially empty frames.
   Target definitions and other input values stay fixed; duplicate names, invalid values and the
   128-observation frame budget refuse. Partial drafts do not bypass fitter admission/acceptance.
-  A current edit downloads as `capture-edited.json`; pending/invalid/cancel/reset revoke old URLs,
-  and reset restores the complete original point lists.
+  A current edit downloads as `capture-edited.json` and `prepared-input-edited.json`. The prepared
+  snapshot joins reviewed annotations to the original native cameras by exact frame identity;
+  model configuration, tape observations, starts and imported mask samples remain unchanged.
+  It feeds browser fitting without native re-preparation, but cannot recheck later source-file
+  changes. The path-bound capture retains that rechecking route. Pending/invalid/cancel/reset
+  revoke both URLs, and reset restores the complete original point lists.
   Explicit selected-observation removal preserves every remaining correspondence and makes the
   removed target placeable again. Pending point/silhouette edits must be resolved first; reset
   restores the original names/roles/sigmas too. Insufficient FIT evidence retains native refusals;

@@ -30,10 +30,20 @@ writes **`prepared-input.json`**. This is the immutable calibrated-observation s
 checked while creating that review. Its byte count and hash are retained under `prepared_input`
 in `review.json`; original path-bound `capture.json`, source receipts and copied images remain
 available. Load the prepared snapshot in the photo page with the same model. Imported mask
-constraints have already become inline sampled silhouettes. There is no browser filesystem-path
-access or source-image recheck: after changing an image, camera, mask or annotation, generate a
-fresh native capture review and use its new prepared snapshot. Downloading `capture-edited.json`
-does not change the earlier `prepared-input.json`.
+constraints have already become inline sampled silhouettes.
+
+After applying point or editable inline-silhouette corrections in that review, choose
+**Download prepared input for browser fitting**. The resulting **`prepared-input-edited.json`**
+uses the current reviewed annotations with the original checked cameras, image coordinates,
+model configuration, tape observations and starts. Imported mask samples remain unchanged.
+Select that edited snapshot in the photo page to fit the corrected observations without another
+native preparation step. Both edited downloads preserve exact full-width frame timestamps.
+
+Neither prepared snapshot rereads original files. If an image, camera, calibration or source
+mask has changed, generate a fresh native capture review. `capture-edited.json` retains the
+path-bound route for that recheck and for resuming annotations. Original `prepared-input.json`,
+`capture.json` and preparation receipts remain unchanged; the edited snapshot is a new input,
+not a new source-file freshness receipt.
 
 The form exposes the same limits as the CLI: 1–100 accepted steps per start (default 50) and
 1–1,000,000 model evaluations across all starts (default 100,000). Input text is limited to
@@ -208,7 +218,9 @@ acceptance then includes no independent image check. Do not remove CHECKs to imp
 Partial annotation drafts can be saved; the ordinary fitter still enforces observability, sufficient
 FIT/CHECK evidence and acceptance. A saved draft does not establish a usable body fit.
 
-Download `capture-edited.json`, then make a new immutable review before fitting:
+To fit the applied annotations in the browser, download **`prepared-input-edited.json`** and
+select it with the same converted model on the local photo page. To recheck original source
+files, download **`capture-edited.json`** and create a new immutable native review:
 
 ```sh
 ftx measure capture-review /path/to/capture-edited.json --out capture-review-002 --json
@@ -220,17 +232,19 @@ and editable inline silhouettes, including incomplete work, added or removed obs
 their explicitly authored FIT/CHECK roles and uncertainties. It requires the same complete source
 bindings, ordered frames, cameras, model targets, measurements, starts and other fit settings.
 Imported mask constraints and frames without a checked rectified camera remain read-only for
-silhouettes. Review restored labels, coordinates and roles before generating a new native review;
-loading a draft does not run the fitter or qualify its evidence.
+silhouettes. Review restored labels, coordinates and roles before using the edited prepared
+snapshot or generating a new native review; loading a draft does not run the fitter or qualify
+its evidence.
 
-Opening the saved-file chooser, cancelling it, or starting a read withdraws the earlier download.
+Opening the saved-file chooser, cancelling it, or starting a read withdraws both edited downloads.
 Invalid, oversized, unreadable or different-capture files leave both applied annotations and
 pending form edits intact. **Cancel loading** retains those edits; select a point or apply an edit
 to continue. Any later editor action, reset, newer import or page exit prevents a delayed read
 from replacing newer work. A successful load replaces pending edits with the checked saved input.
 
-Pending/invalid edits or **Cancel placement** withdraw the old download. **Reset all corrections**
-restores the original point lists and inline silhouettes, removing in-memory additions, and revokes the corrected input.
+Pending/invalid edits or **Cancel placement** withdraw both edited downloads. **Reset all corrections**
+restores the original point lists and inline silhouettes, removes in-memory additions, and revokes
+both the corrected capture and edited prepared input.
 Original files and preparation evidence stay unchanged;
 SVG/report links explicitly refer to that original review. Nothing is stored in browser storage.
 Browsers with JSON numeric-source and raw-JSON support preserve full-width integer identities,

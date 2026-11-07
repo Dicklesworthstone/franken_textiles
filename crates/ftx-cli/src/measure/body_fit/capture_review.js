@@ -1,11 +1,13 @@
 // Stored pixels and caller-authored observations only. No fitting or anatomical inference.
 (() => {
   const byId = id => document.getElementById(id);
-  const link = byId("correctedInput"), status = byId("editStatus");
-  let download = null;
+  const link = byId("correctedInput"), preparedLink = byId("correctedPreparedInput"), status = byId("editStatus");
+  let download = null, preparedDownload = null;
   function withdraw() {
     if (download !== null) URL.revokeObjectURL(download);
+    if (preparedDownload !== null) URL.revokeObjectURL(preparedDownload);
     download = null; link.hidden = true; link.removeAttribute("href");
+    preparedDownload = null; preparedLink.hidden = true; preparedLink.removeAttribute("href");
   }
   try {
     const parse = text => JSON.parse(text, (_key, value, context) => {
@@ -18,6 +20,7 @@
     const json = (value, space) => JSON.stringify(value, (_key, item) =>
       typeof item === "bigint" ? JSON.rawJSON(item.toString()) : item, space);
     const original = parse(byId("captureInput").textContent);
+    const prepared = parse(byId("preparedInput").textContent);
     // Opaque integer identities survive clones as BigInt and serialize from exact decimal tokens.
     // If the browser lacks either JSON capability, retain the original unsafe-number refusal.
     function requireSafeNumbers(value) {
@@ -28,6 +31,7 @@
       if (value !== null && typeof value === "object") Object.values(value).forEach(requireSafeNumbers);
     }
     requireSafeNumbers(original);
+    requireSafeNumbers(prepared);
     let edited = structuredClone(original), selected = null, pending = false, draft = null;
     let silhouettePending = false, silhouetteDrawing = null;
     let revision = 0, importPending = false;
@@ -36,6 +40,37 @@
     const silhouetteEditable = sections.map(section => section.dataset.silhouetteEditable === "true");
     const buttons = () => [...document.querySelectorAll(".edit-point")];
     if (original.fit.frames.length !== sections.length) throw Error("Frame identities disagree with the review");
+    if (prepared.schema !== "ftx-anny-body-fit-input/1" ||
+        prepared.model.model_sha256 !== original.model.model_sha256 ||
+        !Array.isArray(prepared.fit.frames) || prepared.fit.frames.length !== sections.length) {
+      throw Error("Prepared input disagrees with the capture review");
+    }
+    unchanged(prepared.fit, original.fit, ["frames"], "Prepared fit configuration");
+    const usedFrames = new Set();
+    const preparedIndices = original.fit.frames.map(frame => {
+      const index = prepared.fit.frames.findIndex(other => same(other.frame, frame.source.metadata.frame));
+      if (index === -1 || usedFrames.has(index) ||
+          !same(prepared.fit.frames[index].image_size_px, frame.source.image_size_px) ||
+          prepared.fit.frames[index].rotation_cw_deg !== frame.source.metadata.rotation_cw_deg) {
+        throw Error("Prepared frame identity or image coordinates disagree with the review");
+      }
+      usedFrames.add(index);
+      return index;
+    });
+    function preparedEdits() {
+      // Camera/pose/model data and imported mask samples come only from native preparation.
+      // Frame identities, including full-width timestamps, bind each reviewed annotation.
+      const value = structuredClone(prepared);
+      edited.fit.frames.forEach((frame, i) => {
+        const target = value.fit.frames[preparedIndices[i]];
+        target.keypoints = structuredClone(frame.keypoints);
+        if (silhouetteEditable[i]) {
+          if (frame.silhouette != null) target.silhouette = structuredClone(frame.silhouette);
+          else delete target.silhouette;
+        }
+      });
+      return json(value, 2) + "\n";
+    }
     function bindButton(button) {
       button.hidden = false;
       button.addEventListener("click", () => select(Number(button.dataset.frame), Number(button.dataset.point)));
@@ -114,8 +149,11 @@
         if (silhouetteEditable[i]) renderSilhouette(i);
       });
       if (changed && !pending && !silhouettePending && !importPending) {
+        const preparedText = preparedEdits();
         download = URL.createObjectURL(new Blob([json(edited, 2) + "\n"], {type: "application/json"}));
+        preparedDownload = URL.createObjectURL(new Blob([preparedText], {type: "application/json"}));
         link.href = download; link.hidden = false;
+        preparedLink.href = preparedDownload; preparedLink.hidden = false;
       }
       selectionDisplay();
       return changed;
@@ -165,7 +203,7 @@
       byId("editX").value = x; byId("editY").value = y;
       const count = render();
       status.textContent = silhouettePending ? "Point updated. Apply or cancel the pending silhouette edit before downloading." :
-        count + " changed point(s) or silhouette frame(s). Download the current input and create a new review before fitting. Original preparation files stay unchanged.";
+        count + " changed point(s) or silhouette frame(s). Download prepared input for browser fitting, or corrected capture input for a fresh native source check. Original preparation files stay unchanged.";
     }
     buttons().forEach(bindButton);
     original.fit.frames.forEach((frame, i) => {
@@ -428,7 +466,7 @@
         frame.silhouette = value; clearSilhouetteDrawing(); silhouettePending = false;
         importPending = false; cancelImport.disabled = true;
         byId("silhouetteLine").value = ""; loadSilhouetteForm();
-        status.textContent = render() + " changed point(s) or silhouette frame(s). Download the current input and create a new native review before fitting.";
+        status.textContent = render() + " changed point(s) or silhouette frame(s). Download prepared input for browser fitting, or corrected capture input for a fresh native source check.";
       } catch (error) { silhouetteFailure(error); }
     });
     byId("removeSilhouette").addEventListener("click", () => {
@@ -444,7 +482,7 @@
         clearSilhouetteDrawing(); silhouettePending = false;
         importPending = false; cancelImport.disabled = true;
         byId("silhouetteLine").value = ""; loadSilhouetteForm();
-        status.textContent = "Slice removed. " + render() + " changed point(s) or silhouette frame(s). Native review and fit gates still apply.";
+        status.textContent = "Slice removed. " + render() + " changed point(s) or silhouette frame(s). Prepared snapshots retain the reviewed source state; numerical fit gates still apply.";
       } catch (error) { silhouetteFailure(error); }
     });
     byId("cancelSilhouette").addEventListener("click", () => {
@@ -494,7 +532,7 @@
       importPending = false; cancelImport.disabled = true;
       const count = render();
       status.textContent = "Removed " + point.name + ". " + count +
-        " changed point(s) or silhouette frame(s). Create a new native review before fitting; missing evidence can refuse. Do not remove CHECKs to tune a fit result.";
+        " changed point(s) or silhouette frame(s). Prepared input is available for browser fitting; missing evidence can refuse. Recheck changed source files natively. Do not remove CHECKs to tune a fit result.";
     });
     sections.forEach((section, i) => {
       const svg = section.querySelector("svg");
@@ -548,7 +586,7 @@
         if (ticket !== revision) return;
         const value = checkedCapture(parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(bytes)));
         const changed = restore(value);
-        status.textContent = "Saved capture input restored: " + changed + " changed point(s) or silhouette frame(s). Review every observation and FIT/CHECK role, then create a new native review before fitting.";
+        status.textContent = "Saved capture input restored: " + changed + " changed point(s) or silhouette frame(s). Review every observation and FIT/CHECK role before fitting the prepared snapshot. Recheck changed source files in a fresh native review.";
       } catch (error) {
         if (ticket === revision) status.textContent = "Saved input not loaded: " + error.message + " Current annotations and pending edits are retained; no download published.";
       }
@@ -560,7 +598,7 @@
     // A delayed read cannot replace any subsequent edit, selection, application or reset.
     // Capture phase also covers dynamically added row buttons and clicks on body images.
     for (const event of ["input", "change", "click", "submit"]) document.addEventListener(event, e => {
-      if (e.target === savedFile || e.target === link) return;
+      if (e.target === savedFile || e.target === link || e.target === preparedLink) return;
       if (byId("captureEditor").contains(e.target) || e.target.closest?.(".edit-point") ||
           sections.some(section => section.querySelector("svg").contains(e.target))) {
         ++revision;
