@@ -50,6 +50,7 @@ function checkedOptions(text) {
 }
 function controls() {
   $("bodyFitRun").disabled=bodyFitBusy || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
+  $("bodyFitOpen").disabled=bodyFitBusy || !$("bodyFitModel").files.length || !$("bodyFitSaved").files.length;
   $("bodyFitCancel").disabled=!bodyFitBusy;
   $("bodyFitWorkbench").disabled=bodyFitBusy || !bodyFitSources;
   $("bodyFitReviewRun").disabled=bodyReviewBusy || bodyFitBusy || !bodyFitSources;
@@ -175,10 +176,10 @@ function withdrawBodyFit() {
 function publishBodyFit(text,input,iterations,maxEvaluations,modelSnapshot) {
   // Only presentation parses JSON. Downloads retain the original Rust bytes, including full-u64
   // source identities; no model prediction is passed to the measurement-fusion handoff.
-  const report=JSON.parse(text), accepted=report.status==="ACCEPTED";
+  const report=JSON.parse(text), accepted=report.status==="ACCEPTED", saved=input===null;
   if(report.schema!=="ftx-body-fit/1" || !Array.isArray(report.input?.frames) ||
       !Array.isArray(report.attempts) || !Array.isArray(report.flags) ||
-      !Array.isArray(report.model?.measurements) || accepted!==(report.solution!=null)) {
+      !Array.isArray(report.model?.measurements) || accepted!==(report.solution!=null) || (saved && !accepted)) {
     throw Error("The engine did not return a consistent body-fit report.");
   }
   const row=(parent,values)=>{
@@ -195,7 +196,7 @@ function publishBodyFit(text,input,iterations,maxEvaluations,modelSnapshot) {
       check.name,check.partition,`${check.residual ?? "Unavailable"} / ${check.limit} ${check.unit}`,check.passed?"Pass":"Fail"]);
     for(const flag of attempt.flags) flags.push(`Start ${i+1}: ${flag}`);
   }
-  $("bodyFitSummary").textContent=`${report.status}: ${report.input.frames.length} frames, ${report.attempts.length} starts, ${report.model_evaluations} model evaluations.`;
+  $("bodyFitSummary").textContent=`${saved?"Saved report: ":""}${report.status}: ${report.input.frames.length} frames, ${report.attempts.length} starts, ${report.model_evaluations} model evaluations.`;
   $("bodyFitUse").textContent=accepted?
     "Accepted shape available. Continue in Pattern Workbench with this exact report and model, then choose garment and measurement evidence and confirm the wearer before body checks or draping. The downloads also work in either workbench.":
     "No accepted shape was published. Keep the diagnostic report and resolve the reported evidence or numerical failures before trying again.";
@@ -204,11 +205,14 @@ function publishBodyFit(text,input,iterations,maxEvaluations,modelSnapshot) {
   $("bodyFitFlags").textContent=[...flags,report.no_claim].filter(Boolean).join("\n");
   $("bodyFitReport").textContent=text;
   link($("bodyFitDownloads"),text,"body-fit-report.json","application/json",bodyFitUrls);
-  link($("bodyFitDownloads"),input,"body-fit-input.json","application/json",bodyFitUrls);
-  link($("bodyFitDownloads"),JSON.stringify({iterations,max_model_evaluations:maxEvaluations}),"body-fit-options.json","application/json",bodyFitUrls);
+  if(!saved) {
+    link($("bodyFitDownloads"),input,"body-fit-input.json","application/json",bodyFitUrls);
+    link($("bodyFitDownloads"),JSON.stringify({iterations,max_model_evaluations:maxEvaluations}),"body-fit-options.json","application/json",bodyFitUrls);
+  }
   $("bodyFitResult").hidden=false;
-  $("bodyFitStatus").textContent=accepted?"Body fit accepted; review every start and held-out residual before reuse.":
-    "Body fit finished without an accepted shape. Review all diagnostics.";
+  $("bodyFitStatus").textContent=saved?"Saved accepted fit loaded; no fitting was run. Inspect the frames and saved residuals before reuse.":
+    accepted?"Body fit accepted; review every start and held-out residual before reuse.":
+      "Body fit finished without an accepted shape. Review all diagnostics.";
   bodyFitSources=accepted?{fit:new Blob([text],{type:"application/json"}),model:modelSnapshot}:null;
   $("bodyFitReview").hidden=!accepted;
   if(accepted) {
@@ -322,21 +326,21 @@ async function runBodyReview() {
     withdrawBodyReview(); $("bodyFitReviewError").textContent=String(error.message || error);
   }
 }
-async function runBodyFit() {
+async function runBodyFit(saved=false) {
   if(bodyFitBusy) return;
-  const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
+  const inputFile=$(saved?"bodyFitSaved":"bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
   const iterationsText=$("bodyFitIterations").value, evaluationsText=$("bodyFitEvaluations").value;
   const iterations=Number(iterationsText), maxEvaluations=Number(evaluationsText);
   withdrawBodyFit(); const id=bodyFitTicket;
   try {
     if(!inputFile || inputFile.size>16*1024*1024 || !modelFile || modelFile.size===0 || modelFile.size>512*1024*1024) {
-      throw Error("Choose prepared observations up to 16 MiB and a converted body model up to 512 MiB.");
+      throw Error("Choose "+(saved?"an original accepted fit report":"prepared observations")+" up to 16 MiB and a converted body model up to 512 MiB.");
     }
-    if(!iterationsText.trim() || !Number.isSafeInteger(iterations) || iterations<1 || iterations>100 ||
-        !evaluationsText.trim() || !Number.isSafeInteger(maxEvaluations) || maxEvaluations<1 || maxEvaluations>1000000) {
+    if(!saved && (!iterationsText.trim() || !Number.isSafeInteger(iterations) || iterations<1 || iterations>100 ||
+        !evaluationsText.trim() || !Number.isSafeInteger(maxEvaluations) || maxEvaluations<1 || maxEvaluations>1000000)) {
       throw Error("Enter 1..100 steps per start and 1..1000000 total model evaluations.");
     }
-    bodyFitBusy=true; controls(); $("bodyFitStatus").textContent="Reading the local observations and body model…";
+    bodyFitBusy=true; controls(); $("bodyFitStatus").textContent=saved?"Reading the saved fit and body model…":"Reading the local observations and body model…";
     const input=await readJsonFile(inputFile);
     if(id!==bodyFitTicket) return;
     const model=await modelFile.arrayBuffer();
@@ -348,8 +352,11 @@ async function runBodyFit() {
       if(current!==bodyFitWorker || m.request!==bodyFitTicket) return;
       if(m.type==="progress") {$("bodyFitStatus").textContent=m.text; return;}
       stopBodyFit();
-      if(m.type==="error") {$("bodyFitError").textContent=m.message; $("bodyFitStatus").textContent="Body fit refused; no report published."; return;}
-      try {publishBodyFit(m.report,input,iterations,maxEvaluations,modelSnapshot);} catch(error) {
+      if(m.type==="error") {$("bodyFitError").textContent=m.message; $("bodyFitStatus").textContent=saved?"Saved fit refused; no reusable body published.":"Body fit refused; no report published."; return;}
+      try {
+        publishBodyFit(saved?input:m.report,saved?null:input,iterations,maxEvaluations,modelSnapshot);
+        if(saved) publishBodyReview(m.report,0);
+      } catch(error) {
         withdrawBodyFit(); $("bodyFitError").textContent=String(error.message || error);
         $("bodyFitStatus").textContent="No body-fit report published.";
       }
@@ -357,9 +364,10 @@ async function runBodyFit() {
     current.onerror=error=>{
       if(current!==bodyFitWorker) return;
       withdrawBodyFit(); $("bodyFitError").textContent=error.message;
-      $("bodyFitStatus").textContent="Body-fit worker stopped; run the current input again.";
+      $("bodyFitStatus").textContent=saved?"Saved-fit loading stopped; open the selected report again.":"Body-fit worker stopped; run the current input again.";
     };
-    current.postMessage({request:id,op:"fit-body",input,model,iterations,maxEvaluations},[model]);
+    current.postMessage(saved?{request:id,op:"open-body-fit",report:input,model}:
+      {request:id,op:"fit-body",input,model,iterations,maxEvaluations},[model]);
   } catch(error) {
     if(id!==bodyFitTicket) return;
     withdrawBodyFit(); $("bodyFitError").textContent=String(error.message || error);
@@ -799,7 +807,8 @@ for(const id of ["photo","paper","referenceMode","sheet","calibration","rotation
 for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{withdraw(true); status("Capture evidence changed; analyze the current photo.");});
 $("clearCalibration").onclick=()=>{generatedCalibration=null; $("calibration").value=""; $("lensId").value=""; $("rotation").value=""; $("independence").value=""; withdraw(true); status("Calibration removed; analyze the current photo.");};
 $("cameraRun").onclick=runCamera;
-$("bodyFitRun").onclick=runBodyFit;
+$("bodyFitRun").onclick=()=>runBodyFit();
+$("bodyFitOpen").onclick=()=>runBodyFit(true);
 $("bodyFitReviewRun").onclick=runBodyReview;
 $("bodyFitReviewCancel").onclick=()=>{withdrawBodyReview();$("bodyFitReviewStatus").textContent="Frame review cancelled; the accepted fit report is unchanged.";};
 $("bodyFitReviewFrame").addEventListener("change",()=>{withdrawBodyReview();$("bodyFitReviewStatus").textContent="Frame changed; inspect the selected accepted pose.";});
@@ -823,9 +832,9 @@ $("bodyFitWorkbench").onclick=()=>{
   bodyFitTransfer={target,token,sources:bodyFitSources};
   notify("Workbench opened with the accepted body. Choose garment and measurement evidence there, then confirm the wearer.");
 };
-$("bodyFitCancel").onclick=()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Body fit cancelled; no report published.";};
-for(const id of ["bodyFitInput","bodyFitModel"]) for(const event of ["change","click","cancel"]) {
-  $(id).addEventListener(event,()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Review the selected model and observations, then run the body fit.";});
+$("bodyFitCancel").onclick=()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Body fit or saved-fit loading cancelled; no report published.";};
+for(const id of ["bodyFitInput","bodyFitModel","bodyFitSaved"]) for(const event of ["change","click","cancel"]) {
+  $(id).addEventListener(event,()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Review the selected model, then fit the observations or open the saved accepted report.";});
 }
 for(const id of ["bodyFitIterations","bodyFitEvaluations"]) $(id).addEventListener("input",()=>{
   withdrawBodyFit(); $("bodyFitStatus").textContent="Work limit changed; run the current observations again.";

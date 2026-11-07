@@ -279,9 +279,16 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <p><small>Every start and failed evaluation counts toward the shared budget. Stopping early publishes
       diagnostics without an accepted shape. These controls do not change residual or ambiguity gates.</small></p>
   </details>
+  <details><summary>Resume a saved accepted fit</summary>
+    <label>Original accepted fit report <input id="bodyFitSaved" type="file" accept=".json,application/json"></label>
+    <p>Choose a saved <code>ftx-body-fit/1</code> report from the native command or this page and its exact
+      converted model above. Opening verifies the report/model and rechecks the first full pose before
+      enabling frame inspection or garment reuse. It does not run the fitter or reread source photographs.</p>
+    <p><button id="bodyFitOpen" disabled>Open saved fit without refitting</button></p>
+  </details>
   <p><button id="bodyFitRun" disabled>Fit body from all frames</button>
-    <button id="bodyFitCancel" disabled>Cancel body fit</button></p>
-  <p id="bodyFitStatus" role="status" aria-live="polite">Choose the model and prepared observations.</p>
+    <button id="bodyFitCancel" disabled>Cancel</button></p>
+  <p id="bodyFitStatus" role="status" aria-live="polite">Choose a model and prepared observations, or open a saved accepted fit.</p>
   <pre id="bodyFitError" role="alert"></pre>
   <div id="bodyFitResult" hidden>
     <h3>Body-fit result</h3>

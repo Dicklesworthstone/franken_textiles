@@ -6,14 +6,15 @@ self.onmessage = async ({data: m}) => {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
-    if(m.op==="review-body-fit-frame") {
+    if(m.op==="review-body-fit-frame" || m.op==="open-body-fit") {
+      const frameIndex=m.op==="open-body-fit"?0:m.frameIndex;
       if(typeof m.report!=="string" || new TextEncoder().encode(m.report).length>16*1024*1024 ||
           !(m.model instanceof ArrayBuffer) || m.model.byteLength===0 || m.model.byteLength>512*1024*1024 ||
-          !Number.isSafeInteger(m.frameIndex) || m.frameIndex<0 || m.frameIndex>7) {
+          !Number.isSafeInteger(frameIndex) || frameIndex<0 || frameIndex>7) {
         throw Error("Frame review needs an accepted report up to 16 MiB, model up to 512 MiB and a frame index in 0..7.");
       }
       self.postMessage({type:"progress",request:m.request,text:"Evaluating the full accepted pose and rechecking every supplied FIT/CHECK keypoint and silhouette slice…"});
-      const report=ftx.review_body_fit_frame(new Uint8Array(m.model),m.report,String(m.frameIndex));
+      const report=ftx.review_body_fit_frame(new Uint8Array(m.model),m.report,String(frameIndex));
       self.postMessage({type:"result",request:m.request,report});
       return;
     }

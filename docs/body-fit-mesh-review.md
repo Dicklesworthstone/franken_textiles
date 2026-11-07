@@ -65,6 +65,23 @@ After an accepted fit on the local photo page, use **Inspect an accepted frame**
 frame and select **Inspect frame and prepare mesh**. This reuses the exact model bytes and
 original accepted report from that fit; it evaluates one saved pose without another optimization.
 
+To continue an earlier native or browser fit, select its exact converted model and expand
+**Resume a saved accepted fit**. Choose the original `ftx-body-fit/1` report and select
+**Open saved fit without refitting**. The same native review authority checks the accepted
+shape, model identity, configuration, frame/pose agreement and bounds, then rechecks the first
+frame's full-mesh keypoints and supplied silhouette slices before publishing a reusable body.
+The first frame opens immediately; choose other frames for their own full-mesh review.
+The fitting controls and their current numerical limits are not used to reopen a report.
+
+The result is labelled **Saved report** and keeps the original report bytes, historical attempts
+and residuals, exact timestamps and selected model snapshot. Its report download and the
+Pattern Workbench handoff preserve those sources. The report retains its numerical policy, but
+not the original request bytes or original options download; loading it therefore does not
+construct input or options files.
+Source photographs and masks are not reread; a saved accepted fit retains its original evidence
+and limitations. Rejected, inconsistent or wrong-model reports refuse, and cancelling or replacing
+a pending file read or worker cannot publish an older body.
+
 The drawing overlays orange observations and blue full-mesh projections in the original
 oriented pixel coordinates. Labels retain FIT/CHECK roles and unrounded residuals remain in
 the JSON. Supplied silhouette scanlines are independently rechecked on the complete mesh
