@@ -960,6 +960,15 @@ function adaptiveGuidance(design, candidates, comparison, matrix) {
   if (!["fit_band_violation_mm", "consumer_comparison", "consumer_pareto", "consumer_worst_case", "consumer_matrix_pareto"].includes(design.objective)) {
     throw Error("Choose fit-band, nominated-case, worst-case or Pareto adaptive guidance.");
   }
+  if (own(design, "constraintRestoration")) {
+    if (design.constraintRestoration !== "componentwise" || design.objective === "fit_band_violation_mm") {
+      throw Error("Constraint restoration requires componentwise consumer guidance.");
+    }
+    const policies = matrix ? matrix.cases.map(item => item.comparison ?? comparison) : [comparison];
+    if (!policies.some(policy => Array.isArray(policy?.constraints) && policy.constraints.length)) {
+      throw Error("Constraint restoration needs at least one explicit comparison limit.");
+    }
+  }
   if (design.objective === "fit_band_violation_mm") {
     if (own(design, "materialKey") || own(design, "materialKeys") || own(design, "caseKey")) throw Error("Fit-band discovery does not accept guidance material keys or a caseKey.");
     return;
@@ -1056,7 +1065,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
   const fields = multiple ? ["variables", "maxDesigns", "fitSpec"] :
     ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
   const required = adaptive ? [...fields, "mode", "objective", "maxEvaluations"] : fields;
-  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey", "restartPointsMm"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
+  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey", "restartPointsMm", "constraintRestoration"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
   const design = object(value, [...allowed, "after"], required, "Linked design");
   const after = own(design, "after") ? buildGuidedDesignAfterOperations(design.after, [...pieces], seamIds) : undefined;
   if (adaptive) {
@@ -1117,6 +1126,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
     throw Error("Design fit needs 1–32 explicit points and fabric-fit/1 when a schema is supplied.");
   }
   const search = JSON.stringify(adaptive ? { objective: design.objective,
+    ...(own(design, "constraintRestoration") ? { constraint_restoration: design.constraintRestoration } : {}),
     ...(own(design, "materialKey") ? { material_key: design.materialKey } : {}),
     ...(own(design, "materialKeys") ? { material_keys: [...design.materialKeys] } : {}),
     ...(own(design, "caseKey") ? { case_key: design.caseKey } : {}), variables,
@@ -1251,7 +1261,7 @@ export function buildMaterialStudyRequest(state, scenario) {
   } else if (target && (target.scope !== "default" || own(target, "ids"))) throw Error("Choose a default or explicit piece target.");
   if (!["nominal", "reported_bounds"].includes(state.basis)) throw Error("Choose nominal or reported-bound comparison.");
   const design = own(state, "design") ? linkedDesign(state.design, pieces, state.candidates,
-    { basis: state.basis, objectives: state.objectives }, matrix, state.seamIds) : null;
+    { basis: state.basis, objectives: state.objectives, constraints: state.constraints }, matrix, state.seamIds) : null;
   if (matrix) {
     const slots = ((design?.retainedDesigns ?? 1) * (state.candidates.length + 1) + (design?.probes ?? 0)) * matrix.cases.length;
     if (slots > matrix.maxEvaluations) {

@@ -5602,6 +5602,22 @@ bounded search, attendance replay and conservative forced-worker bounds; travel 
 work continue to share each person's existing clock. Missing maps retain the prior cell-wide
 contract. This extends `ftx-pb2.2`; independent measured skill and process qualification remains open.
 
+### 25.189 Approach explicit production limits during adaptive design discovery
+
+An opt-in componentwise restoration step closes the fit-residual plateau that can strand a
+consumer-guided search before its first production-feasible design. Complete source-qualified
+comparison evidence supplies separate minimum shortfalls and maximum excesses for every nominated
+material, named case and declared metric. A step advances only when none worsens and at least one
+strictly improves. Reported-bound guards retain their actual endpoints; quantities with different
+units or policies are never combined into a weighted score.
+
+Unavailable consumers, source mismatches, unsupported ranges and invalid arithmetic cannot become
+restoration evidence. Numeric failures retain their exclusions until ordinary comparison admission
+succeeds. Existing geometry caches, physical consumer probes, budgets, eligibility, Pareto frontiers
+and retained-output replay remain authoritative. The guided workbench can author this option and
+inspect each trial's original-unit violations. This advances `ftx-ds2`; bounded discovery still
+establishes neither global optimality nor independent measured garment qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

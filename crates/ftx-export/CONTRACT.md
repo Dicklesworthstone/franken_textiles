@@ -124,6 +124,21 @@ continuous/global optimality claim. Tests: real mass/constraint/source/reservati
 `design_study/adaptive` and real selected-body sewn-scenario guidance/cache replay through both CLIs
 and the portable authority in `accepted_body_workflow/consumer_adaptive`.
 
+**Componentwise constraint restoration** (`design_adaptive.constraint_restoration: componentwise`).
+Consumer guidance may approach explicitly declared comparison limits after canonical geometry and fit
+pass, before any eligible center exists. Each original material/case/metric/basis/unit retains separate
+nonnegative minimum shortfall and maximum excess; reported-range guards use the complete interval.
+Only a complete vector whose exclusions are entirely numeric guard failures can guide polling.
+Every component must be no worse and one must improve. Missing source qualification, required
+consumers, ranges, finite arithmetic or protocol compatibility prevents restoration; no refusal text
+is interpreted. Protocol anchors bind the first complete qualified vector. Constraint-excluded rows
+keep their original refusals and cannot enter ordinary eligible frontiers or retained consumer output.
+Once admitted, existing objective comparisons govern the search. Shared probe caches and trial,
+consumer, matrix and retention budgets remain authoritative; omission retains the existing wire shape
+and search. The guided workbench authors the opt-in and displays original-unit trial violations.
+Six regression groups in `tests/design_restarts.rs` cover actual manufacturing feasibility, independent
+guard sides and units, budgets/refusals, named cases, all material nominees and early admission.
+
 **Pareto-guided adaptive discovery** (`design_adaptive.objective: consumer_pareto`, `ftx-ds2.6`).
 Two to sixteen existing comparison objectives guide one nominated material and, for a named matrix,
 one explicit case. Every case still admits geometry, fit, required consumers, constraints and its own

@@ -901,6 +901,24 @@ pub struct Reading {
     pub consumer: Consumer,
 }
 
+/// Separate distances from an explicit guard, in its original unit and decision basis.
+/// A satisfied side is zero; an unauthored side is absent. These are not objective scores.
+#[derive(Clone, Debug, Serialize)]
+pub struct ConstraintViolation {
+    /// Actual production metric constrained by the caller.
+    pub metric: Metric,
+    /// This guard's explicit basis, or the inherited objective basis.
+    pub basis: Basis,
+    /// Fixed physical unit or exact currency, without conversion or normalization.
+    pub unit: String,
+    /// Distance below the minimum, using the lower endpoint for a reported-range guard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_shortfall: Option<f64>,
+    /// Distance above the maximum, using the upper endpoint for a reported-range guard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_excess: Option<f64>,
+}
+
 /// Explicit eligibility and dominance, independent of the source report's consumer outcomes.
 #[derive(Clone, Debug, Serialize)]
 pub struct Candidate {
@@ -916,6 +934,10 @@ pub struct Candidate {
     pub input_protocol_sha256: Option<String>,
     /// Eligible comparable alternatives no worse in all objectives and strictly better in at least one.
     pub dominated_by: Vec<String>,
+    /// Internal admission witness for opt-in adaptive constraint restoration. Present only when
+    /// every exclusion is a numeric guard failure; ordinary comparison JSON remains unchanged.
+    #[serde(skip)]
+    pub(in crate::material_study) constraint_violations: Option<Vec<ConstraintViolation>>,
 }
 
 /// An eligible pair whose protocols or reported ranges do not establish an ordering.
@@ -1396,6 +1418,7 @@ impl Policy {
             eligible: false,
             input_protocol_sha256: None,
             dominated_by: Vec::new(),
+            constraint_violations: None,
         };
         if row.binding.value().is_none() {
             result.exclusions.push(invalid(
@@ -1625,6 +1648,8 @@ impl Policy {
                 }
             }
         }
+        let mut constraint_violations = Vec::new();
+        let mut failed_constraints = 0;
         for metric in self.metrics() {
             let currency = metric.currency(row, currency);
             match metric
@@ -1669,9 +1694,25 @@ impl Policy {
                         let Some([lo, hi]) = interval else {
                             continue;
                         };
+                        let minimum_shortfall =
+                            c.minimum.map(|min| if lo < min { min - lo } else { 0.0 });
+                        let maximum_excess =
+                            c.maximum.map(|max| if hi > max { hi - max } else { 0.0 });
+                        if minimum_shortfall.is_none_or(f64::is_finite)
+                            && maximum_excess.is_none_or(f64::is_finite)
+                        {
+                            constraint_violations.push(ConstraintViolation {
+                                metric,
+                                basis,
+                                unit: metric.unit(currency).into(),
+                                minimum_shortfall,
+                                maximum_excess,
+                            });
+                        }
                         if c.minimum.is_some_and(|min| lo < min)
                             || c.maximum.is_some_and(|max| hi > max)
                         {
+                            failed_constraints += 1;
                             let observed = match basis {
                                 Basis::Nominal => value.to_string(),
                                 Basis::ReportedBounds => format!("reported range [{lo}, {hi}]"),
@@ -1690,6 +1731,13 @@ impl Policy {
             Err(e) => result.exclusions.push(e),
         }
         result.eligible = result.exclusions.is_empty();
+        // Do not infer qualification from refusal text. Count only the guard failures authored
+        // above, after all source, required-consumer, metric, range and protocol checks have run.
+        if result.exclusions.len() == failed_constraints
+            && constraint_violations.len() == self.constraints.len()
+        {
+            result.constraint_violations = Some(constraint_violations);
+        }
         result
     }
 

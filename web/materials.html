@@ -723,6 +723,12 @@ qualified combinations in grid order before downstream comparison.</p>
 <option value="consumer_worst_case">Improving the worst named case for one shared goal</option>
 <option value="consumer_matrix_pareto">Exploring tradeoffs across all named cases</option>
 </select></label>
+<div id="guidedDesignRestoreField" hidden>
+<label><input id="guidedDesignRestore" type="checkbox">Approach declared comparison limits before optimizing</label>
+<p class="note">When the starting design fails a limit, allow steps that improve at least one limit without worsening any other.
+Every required result and source qualification must be available. Intermediate designs stay excluded until all limits pass;
+the search does not combine different units into a score or relax your declared limits.</p>
+</div>
 <label id="guidedDesignMultipleField" hidden><input id="guidedDesignMultiple" type="checkbox">Let several materials guide tradeoff discovery</label>
 <label id="guidedDesignMaterialField">Material whose outcomes guide discovery <select id="guidedDesignMaterial">
 <option value="">Choose an explicit material</option></select></label>

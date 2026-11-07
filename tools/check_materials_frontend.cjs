@@ -9430,6 +9430,82 @@ function selectAdaptiveMaterials(p, keys) {
   p.e.guidedDesignMaterials.handlers.change();
 }
 
+test('guided constraint restoration is explicit, requires limits and stays inactive in grid and fit-only modes',async()=>{
+  const {p}=await adaptiveDesignSetup(false);
+  guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+  guidedDesignField(p,'guidedDesignMaterial','baseline','change');
+  p.e.guidedDesignRestore.checked=true;p.e.guidedDesignRestore.handlers.change();
+  assert.equal(p.e.guidedDesignRestoreField.hidden,false);assert.equal(p.e.guidedDesignRestore.disabled,false);
+  const before=p.current().messages.length;await p.e.study.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/explicit comparison limit/);
+  guidedDesignField(p,'guidedAreaLimit','0.25');await p.e.study.onclick();
+  const sent=p.current().messages.at(-1),request=JSON.parse(sent.studyRequest);
+  assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.equal(request.design_adaptive.constraint_restoration,'componentwise');
+  assert.deepEqual(request.comparison.constraints,[{metric:'stock_area_m2',maximum:0.25}]);
+  assert.equal(request.design_adaptive.max_evaluations,24);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignObjective','fit_band_violation_mm','change');
+  assert.equal(p.e.guidedDesignRestore.disabled,true);assert.equal(p.e.guidedDesignRestoreField.hidden,true);
+  await p.e.study.onclick();assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).studyRequest).design_adaptive,'constraint_restoration'),false);
+  p.emit(studyReport());guidedDesignField(p,'guidedDesignMode','grid','change');
+  await p.e.study.onclick();const grid=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(grid.design_adaptive,undefined);assert.equal(Object.hasOwn(grid.design_grid,'constraint_restoration'),false);
+  p.emit(studyReport());p.select('patternFile',coupledDesignPattern);await p.e.patternFile.onchange();
+  assert.equal(p.e.guidedDesignRestore.checked,false,'New geometry must not inherit the opt-in');
+});
+
+test('guided constraint restoration edits cancel stale reads while submitted policies retain their original snapshot',async()=>{
+  for(const notify of [true,false]) {
+    const {p,fit}=await adaptiveDesignSetup(false),delay=deferred();
+    guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+    guidedDesignField(p,'guidedDesignMaterial','baseline','change');guidedDesignField(p,'guidedAreaLimit','0.25');
+    p.e.guidedDesignRestore.checked=true;p.e.guidedDesignRestore.handlers.change();
+    p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();
+    p.e.guidedDesignRestore.checked=false;
+    if(notify){p.e.guidedDesignRestore.handlers.change();assert.equal(old.dead,true);p.ready();}
+    delay.resolve(fit);await running;
+    if(notify){
+      assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+      old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
+    }else assert.equal(JSON.parse(old.messages.at(-1).studyRequest).design_adaptive.constraint_restoration,'componentwise');
+  }
+});
+
+test('constraint restoration results keep native guard units and exclusions without browser scoring or selection',async()=>{
+  const p=await pageModule();await p.load();p.select('studyRequest','{}');const report=designReport();
+  const row=(key,eligible,selected)=>({selected,max_fit_band_violation_mm:0,total_fit_band_violation_mm:0,
+    design:{key,variables_mm:{length:20},validation:{passed:true},fit:outcome({passed:true})},
+    consumer_comparison:{key,eligible,readings:{stock_mass_kg:{value:0.1,unit:'kg',consumer:'cutting'}},
+      exclusions:eligible?[]:[{message:'Declared lower mass limit is not yet met'}],dominated_by:[]}});
+  const restoring=row('approach',false,false),missing=row('missing',false,false),selected=row('admitted',true,true);
+  restoring.constraint_violations=[
+    {material_key:'<linen>',case_key:'<cold>',metric:'stock_mass_kg',basis:'reported_bounds',unit:'kg',minimum_shortfall:0.025,maximum_excess:0},
+    {material_key:'<linen>',case_key:'<warm>',metric:'sewing_parallel_makespan_seconds',basis:'nominal',unit:'s',maximum_excess:2}];
+  selected.constraint_violations=[{...restoring.constraint_violations[0],minimum_shortfall:0}];
+  missing.consumer_comparison.exclusions=[{message:'Source-qualified production result unavailable'}];
+  report.design_search={schema:'ftx-design-adaptive-search/1',request:{constraint_restoration:'componentwise'},
+    evaluations:3,qualified_designs:3,selected_designs:1,stop_reason:'evaluation_budget',
+    consumer_guidance:{material_key:'<linen>',objective:{metric:'stock_mass_kg',direction:'minimize'},
+      evaluations:3,reserved_evaluations:6,best_trial_key:'admitted',best_reading:{value:0.1,unit:'kg'}},
+    rows:[restoring,missing,selected]};
+  const before=JSON.stringify(report);await p.e.study.onclick();p.emit(report);
+  assert.equal(JSON.stringify(report),before);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('approach: comparison-limit violations').children.slice(2).map(n=>n.children.map(c=>c.textContent))),[
+    ['<linen>','<cold>','stock_mass_kg','Source-reported ranges','kg','0.025','0'],
+    ['<linen>','<warm>','sewing_parallel_makespan_seconds','Nominal values','s','Not declared','2']]);
+  assert.equal(table('missing: comparison-limit violations'),undefined);
+  const trials=table('Adaptive alteration trials').children.slice(2);
+  assert.equal(trials[0].children[5].textContent,'Excluded');assert.equal(trials[0].children[7].textContent,'Not selected');
+  assert.equal(trials[2].children[5].textContent,'Eligible');assert.equal(trials[2].children[7].textContent,'Selected');
+  assert.match(visibleText(s),/Constraint restoration is enabled/);assert.match(visibleText(s),/Intermediate designs remain excluded/);
+  assert.match(visibleText(s),/Source-qualified production result unavailable/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.studyRequest.handlers.change();assert.equal(s.hidden,true);
+});
+
 test('guided multi-material adaptive discovery freezes explicit choices and refuses changed source nominations',async()=>{
   const {p}=await adaptiveDesignSetup(false);await addGuidedSelection(p,guidedSelection('b'),'alternate');
   guidedDesignField(p,'guidedDesignObjective','consumer_pareto','change');

@@ -2161,6 +2161,48 @@ test('adaptive consumer guidance nominates an exact material and retains ordinar
   assert.equal(JSON.parse(build({...pareto,design:fitOnly})).comparison.objectives.length,2,'Fit discovery keeps independent downstream objectives');
 });
 
+test('adaptive constraint restoration preserves explicit guard bases and original study inputs without changing budgets', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),constraints:[{metric:'stock_mass_kg',minimum:0.1,maximum:0.3,basis:'nominal'}],
+    design:adaptiveDesignInput({objective:'consumer_comparison',materialKey:'baseline',constraintRestoration:'componentwise',
+      maxEvaluations:3,maxDesigns:1})};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.equal(result.design_adaptive.constraint_restoration,'componentwise');
+  assert.deepEqual(result.comparison.constraints,input.constraints);
+  assert.equal(result.design_adaptive.max_evaluations,3);assert.equal(result.design_adaptive.max_designs,1);
+  assert.ok(raw.includes(input.design.fitSpec));assert.ok(raw.includes(input.candidates[0].selection));
+  const policies=[casePolicy('stock_area_m2','minimize'),casePolicy('stock_area_m2','minimize',{
+    constraints:[{metric:'assembly_mass_kg',minimum:0.2,basis:'reported_bounds'}]})];
+  const context=namedContext(policies.map((comparison,i)=>({key:i?'warm':'cold',surface:false,comparison})),20);
+  const original=JSON.stringify(context);
+  for(const objective of ['consumer_comparison','consumer_worst_case','consumer_matrix_pareto']) {
+    const design={...input.design,objective,...(objective==='consumer_comparison'?{caseKey:'cold'}:{})};
+    const named=JSON.parse(build({...input,constraints:[],design},context));
+    assert.equal(named.design_adaptive.constraint_restoration,'componentwise');
+    assert.equal(JSON.stringify(context),original,'Original per-case guards are not rewritten');
+  }
+  const multi={...input.design,objective:'consumer_pareto',materialKeys:['baseline','alternative']};delete multi.materialKey;
+  assert.deepEqual(JSON.parse(build({...input,design:multi})).design_adaptive.material_keys,multi.materialKeys);
+  const ordinary={...input.design};delete ordinary.constraintRestoration;
+  assert.equal(Object.hasOwn(JSON.parse(build({...input,design:ordinary})).design_adaptive,'constraint_restoration'),false);
+});
+
+test('adaptive constraint restoration rejects missing effective limits and unsupported policies before reading sources', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  let reads=0;const candidates=[{key:'alternative',get selection(){reads++;throw Error('Must not read source');}}];
+  const design=adaptiveDesignInput({objective:'consumer_comparison',materialKey:'baseline',maxEvaluations:2,maxDesigns:1,
+    constraintRestoration:'componentwise'});
+  assert.throws(()=>build({...state(),candidates,design}),/explicit comparison limit/);assert.equal(reads,0);
+  for(const constraintRestoration of [false,true,null,'weighted','']) {
+    assert.throws(()=>build({...state(),design:{...design,constraintRestoration}}),/componentwise/);
+  }
+  assert.throws(()=>build({...state(),design:adaptiveDesignInput({constraintRestoration:'componentwise'})}),/consumer guidance/);
+  assert.throws(()=>build({...state(),design:multiDesignInput({constraintRestoration:'componentwise'})}),/unsupported/);
+  const input={...state(),constraints:[{metric:'stock_mass_kg',maximum:0.3}],design:{...design,caseKey:'cold'}};
+  const noGuards=namedContext([{key:'cold',surface:false,comparison:casePolicy('stock_area_m2','minimize')}]);
+  assert.throws(()=>build(input,noGuards),/explicit comparison limit/,'An overridden fallback limit cannot authorize restoration');
+});
+
 test('multi-material adaptive authoring preserves explicit order and exact sources with one or several goals', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),design:adaptiveDesignInput({objective:'consumer_pareto',materialKeys:['alternative','baseline']})};

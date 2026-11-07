@@ -299,3 +299,360 @@ fn restarts_preserve_cached_incumbent_after_shared_consumer_budget_failure() {
                 && row["selected"] == false)
     );
 }
+
+
+fn restoring_request(bounded: bool, evaluations: usize) -> Request {
+    let mut value = serde_json::to_value(request(bounded, evaluations, json!([]))).unwrap();
+    value["design_adaptive"]["constraint_restoration"] = json!("componentwise");
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn constraint_restoration_reaches_real_manufacturing_feasibility_without_guessed_restarts() {
+    for bounded in [false, true] {
+        let original = run(&request(bounded, 12, json!([])));
+        let original_search = &original["design_search"];
+        assert_eq!(original_search["selected_designs"], 0);
+        assert_eq!(original_search["evaluations"], 2);
+        assert!(
+            original_search["request"]
+                .get("constraint_restoration")
+                .is_none()
+        );
+        assert!(
+            original_search["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| {
+                    row.get("constraint_violations").is_none()
+                        && row["consumer_comparison"]
+                            .get("constraint_violations")
+                            .is_none()
+                })
+        );
+
+        let request = restoring_request(bounded, 12);
+        let report = run(&request);
+        assert_eq!(report, run(&request));
+        let search = &report["design_search"];
+        assert_eq!(search["evaluations"], 4);
+        assert_eq!(search["selected_designs"], 1);
+        assert_eq!(search["stop_reason"], "minimum_steps");
+        assert_eq!(search["complete_search"], false);
+        assert_eq!(search["global_optimum_claim"], false);
+        assert!(search.get("search_starts").is_none());
+        let chosen = selected(&report);
+        assert_eq!(
+            chosen["design"]["variables_mm"]["length"],
+            if bounded { 60.0 } else { 40.0 }
+        );
+        for trial in search["rows"].as_array().unwrap() {
+            let reading = &trial["consumer_comparison"]["readings"]["assembly_mass_kg"];
+            let low = reading[if bounded { "reported_bounds" } else { "value" }].clone();
+            let low = if bounded {
+                low[0].as_f64().unwrap()
+            } else {
+                low.as_f64().unwrap()
+            };
+            let guard = &trial["constraint_violations"][0];
+            assert_eq!(guard["metric"], "assembly_mass_kg");
+            assert_eq!(guard["material_key"], "light-sheet");
+            assert!(guard.get("case_key").is_none());
+            assert_eq!(guard["unit"], "kg");
+            assert_eq!(
+                guard["basis"],
+                if bounded { "reported_bounds" } else { "nominal" }
+            );
+            assert_eq!(guard["minimum_shortfall"], json!((0.001 - low).max(0.0)));
+            assert!(guard.get("maximum_excess").is_none());
+            if low < 0.001 {
+                assert_eq!(trial["consumer_comparison"]["eligible"], false);
+                assert_eq!(trial["selected"], false);
+                assert!(trial["refusal"].is_object());
+            }
+        }
+        let key =
+            serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), "light-sheet"))
+                .unwrap();
+        let row = report["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == key)
+            .unwrap();
+        let bound = Pattern::new(row["binding"]["result"]["pattern"].clone());
+        assert_eq!(
+            row["cutting"]["result"],
+            serde_json::to_value(
+                CutPlan::build(&bound, request.cutting.as_ref().unwrap()).unwrap()
+            )
+            .unwrap()
+        );
+        let length = if bounded { 160.0 } else { 140.0 };
+        assert!(
+            (chosen["consumer_comparison"]["readings"]["assembly_mass_kg"]["value"]
+                .as_f64()
+                .unwrap()
+                - 2.0 * 20.0 * length * 1e-6 * 0.18)
+                .abs()
+                < 1e-12
+        );
+    }
+}
+
+#[test]
+fn constraint_restoration_keeps_guard_sides_and_physical_units_independent() {
+    for guards in [
+        json!([{"metric":"assembly_mass_kg","minimum":0.0008,"maximum":0.00082}]),
+        json!([{"metric":"assembly_mass_kg","minimum":0.001},{"metric":"feed_seconds","maximum":0}]),
+    ] {
+        let mut value = serde_json::to_value(restoring_request(false, 12)).unwrap();
+        value["comparison"]["constraints"] = guards;
+        let report = run(&serde_json::from_value(value).unwrap());
+        let search = &report["design_search"];
+        assert_eq!(search["evaluations"], 2);
+        assert_eq!(search["selected_designs"], 0);
+        assert_eq!(search["stop_reason"], "minimum_steps");
+        let vectors: Vec<_> = search["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["constraint_violations"].as_array().unwrap())
+            .collect();
+        let mass = |index: usize| {
+            vectors[index]
+                .iter()
+                .find(|guard| guard["metric"] == "assembly_mass_kg")
+                .unwrap()
+        };
+        assert!(
+            mass(1)["minimum_shortfall"].as_f64().unwrap()
+                < mass(0)["minimum_shortfall"].as_f64().unwrap()
+        );
+        let worsening = |index: usize| {
+            vectors[index]
+                .iter()
+                .find(|guard| guard.get("maximum_excess").is_some())
+                .unwrap()
+        };
+        assert!(
+            worsening(1)["maximum_excess"].as_f64().unwrap()
+                > worsening(0)["maximum_excess"].as_f64().unwrap()
+        );
+    }
+}
+
+#[test]
+fn constraint_restoration_preserves_budgets_missing_evidence_and_required_consumer_refusals() {
+    for (bounded, allowance, expected) in [(false, 2, 0), (false, 3, 1), (true, 3, 0)] {
+        let report = run(&restoring_request(bounded, allowance));
+        assert_eq!(report["design_search"]["evaluations"], allowance);
+        assert_eq!(report["design_search"]["selected_designs"], expected);
+        assert_eq!(report["design_search"]["budget_exhausted"], true);
+        if expected > 0 {
+            assert_eq!(selected(&report)["design"]["variables_mm"]["length"], 40.0);
+        }
+    }
+    for missing in ["bounds", "consumer"] {
+        let mut value = serde_json::to_value(restoring_request(true, 12)).unwrap();
+        if missing == "bounds" {
+            value["variants"][0]["changes"]["default"]["record"]["properties"]["areal_density"]
+                .as_object_mut()
+                .unwrap()
+                .remove("bounds");
+        } else {
+            // The declared roll widths are 100 and 80 mm; two 60 mm edge margins
+            // leave no usable stock. Cutting is requested but refuses per alternative,
+            // while the independent assembly-mass consumer retains its source evidence.
+            value["cutting"]["edge_margin_mm"] = json!(60);
+        }
+        let report = run(&serde_json::from_value(value).unwrap());
+        assert_eq!(report["design_search"]["evaluations"], 2, "{missing}");
+        assert_eq!(report["design_search"]["selected_designs"], 0, "{missing}");
+        for row in report["design_search"]["rows"].as_array().unwrap() {
+            assert!(row.get("constraint_violations").is_none(), "{missing}");
+            if missing == "consumer" {
+                let mass = &row["consumer_comparison"]["readings"]["assembly_mass_kg"];
+                assert!(mass["value"].as_f64().unwrap() > 0.0);
+                assert_eq!(mass["reported_bounds"].as_array().unwrap().len(), 2);
+            }
+            assert!(
+                row["consumer_comparison"]["exclusions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|e| {
+                        e["message"].as_str().unwrap().contains(if missing == "bounds" {
+                            "bounds"
+                        } else {
+                            "Cutting"
+                        })
+                    })
+            );
+        }
+    }
+}
+
+#[test]
+fn constraint_restoration_uses_every_named_case_and_reuses_only_eligible_cached_outputs() {
+    for mode in [
+        "consumer_comparison",
+        "consumer_worst_case",
+        "consumer_pareto",
+        "consumer_matrix_pareto",
+    ] {
+        let mut value = serde_json::to_value(restoring_request(false, 12)).unwrap();
+        value["design_adaptive"]["objective"] = json!(mode);
+        if matches!(mode, "consumer_comparison" | "consumer_pareto") {
+            value["design_adaptive"]["case_key"] = json!("first");
+        }
+        if mode == "consumer_pareto" {
+            value["comparison"]["objectives"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"metric":"feed_seconds","direction":"minimize"}));
+        }
+        let request: Request = serde_json::from_value(value).unwrap();
+        let mut range_guard = request.comparison.clone().unwrap();
+        range_guard.constraints[0].basis =
+            Some(ftx_export::material_study::comparison::Basis::ReportedBounds);
+        let cases = vec![
+            Case {
+                key: "first".into(),
+                scenario: json!({"case":"nominal"}),
+                comparison: None,
+            },
+            Case {
+                key: "range-guard".into(),
+                scenario: json!({"case":"source-range"}),
+                comparison: Some(range_guard),
+            },
+        ];
+        let pattern = Pattern::from_json(PATTERN).unwrap();
+        let body = Measurements(json!({"desired_length":100}));
+        let identity = json!({"source":"test:restoration-body"});
+        let fit = Context {
+            body: &body,
+            identity: &identity,
+        };
+        let mut calls = BTreeMap::new();
+        let report = request
+            .evaluate_matrix_with_fit(&pattern, &cases, 32, Some(&fit), |case, key, bound| {
+                *calls.entry((case, key.to_owned())).or_insert(0) += 1;
+                Ok(json!({"original":sha256_hex(&serde_json::to_vec(bound.raw()).unwrap()),"case":case}))
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        let search = &report["manufacturing"]["design_search"];
+        assert_eq!(search["evaluations"], 4, "{mode}");
+        assert_eq!(search["selected_designs"], 1, "{mode}");
+        let chosen = selected(&report["manufacturing"]);
+        assert_eq!(chosen["design"]["variables_mm"]["length"], 60.0, "{mode}");
+        let rows = search["rows"].as_array().unwrap();
+        assert_eq!(
+            rows[0]["constraint_violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| (
+                    v["case_key"].as_str().unwrap(),
+                    v["basis"].as_str().unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            vec![("first", "nominal"), ("range-guard", "reported_bounds")]
+        );
+        let blocked = rows
+            .iter()
+            .find(|row| row["design"]["variables_mm"]["length"] == 40.0)
+            .unwrap();
+        assert_eq!(blocked["consumer_cases"][0]["comparison"]["eligible"], true);
+        assert_eq!(blocked["consumer_cases"][1]["comparison"]["eligible"], false);
+        assert_eq!(blocked["selected"], false);
+        assert!(calls.values().all(|&count| count == 1), "{mode}");
+        let key =
+            serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), "light-sheet"))
+                .unwrap();
+        for case in 0..cases.len() {
+            assert_eq!(calls[&(case, key.clone())], 1);
+        }
+    }
+}
+
+#[test]
+fn constraint_restoration_requires_complete_evidence_from_every_material_nominee() {
+    for missing in [false, true] {
+        let mut value = serde_json::to_value(restoring_request(true, 12)).unwrap();
+        value["design_adaptive"]
+            .as_object_mut()
+            .unwrap()
+            .remove("material_key");
+        value["design_adaptive"]["material_keys"] = json!(["light-sheet", "heavy-sheet"]);
+        value["design_adaptive"]["objective"] = json!("consumer_pareto");
+        value["comparison"]["constraints"][0]["minimum"] = json!(0.0021);
+        if missing {
+            value["variants"][0]["changes"]["default"]["record"]["properties"]["areal_density"]
+                .as_object_mut()
+                .unwrap()
+                .remove("bounds");
+        }
+        let report = run(&serde_json::from_value(value).unwrap());
+        let search = &report["design_search"];
+        assert_eq!(search["evaluations"], if missing { 2 } else { 4 });
+        assert_eq!(search["selected_designs"], if missing { 0 } else { 1 });
+        if missing {
+            assert!(search["rows"][0].get("constraint_violations").is_none());
+        } else {
+            assert_eq!(selected(&report)["design"]["variables_mm"]["length"], 60.0);
+            assert_eq!(
+                search["rows"][0]["constraint_violations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v["material_key"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                vec!["light-sheet", "heavy-sheet"]
+            );
+            assert_eq!(search["consumer_guidance"]["evaluations"], 8);
+        }
+    }
+}
+
+#[test]
+fn constraint_restoration_refuses_empty_or_nonconsumer_policies_before_callbacks() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:restoration-body"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    for mode in ["no-guards", "fit-only"] {
+        let mut value = serde_json::to_value(restoring_request(false, 12)).unwrap();
+        if mode == "no-guards" {
+            value["comparison"]["constraints"] = json!([]);
+        } else {
+            value["design_adaptive"]["objective"] = json!("fit_band_violation_mm");
+            value["design_adaptive"]
+                .as_object_mut()
+                .unwrap()
+                .remove("material_key");
+        }
+        let request: Request = serde_json::from_value(value).unwrap();
+        let mut calls = 0;
+        let error = request
+            .evaluate_with_fit(&pattern, &json!({}), Some(&fit), |_, _| {
+                calls += 1;
+                Ok(json!({}))
+            })
+            .unwrap_err();
+        assert!(
+            error.message.contains("constraint_restoration"),
+            "{mode}: {error:?}"
+        );
+        assert_eq!(calls, 0);
+    }
+    let mut unknown = serde_json::to_value(restoring_request(false, 12)).unwrap();
+    unknown["design_adaptive"]["constraint_restoration"] = json!("weighted_sum");
+    assert!(serde_json::from_value::<Request>(unknown).is_err());
+}

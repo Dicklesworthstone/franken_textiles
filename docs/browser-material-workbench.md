@@ -488,6 +488,20 @@ complete default, piece and interface changes, so replacing just a lining or a c
 requires a fresh nomination. Removing or replacing that nominated source clears its selection and
 requires an explicit new choice, even if the same name or default material is reused.
 
+Enable **Approach declared comparison limits before optimizing** when the starting design fails
+an explicit comparison limit. The native search can then follow a sequence of qualified alterations
+that reduce at least one limit violation without increasing another. Minimum shortfalls and maximum
+excesses are separate, in their original units; no weighted or normalized score combines mass,
+time, heat or other quantities. Each guard uses its nominal or complete reported-range basis.
+
+This option requires at least one effective comparison constraint. Every required consumer,
+objective, guard reading, source and protocol must qualify before a restoration step can guide
+discovery, including participating named cases and nominated materials. Missing evidence cannot
+become a small violation. Intermediate designs remain excluded and are never selected as feasible;
+ordinary comparison admission and objective ranking take over when all limits pass. Trial tables
+retain the actual shortfalls/excesses, and the same coordinate cache and work allowances apply.
+Changing this option cancels pending comparisons; grid and fit-only modes leave it inactive.
+
 Set **Maximum unique discovery trials** from 1 to 256 and the retained-design capacity separately.
 Adaptive admission reserves the full retained design/material capacity, including both baselines,
 even when fewer discovery trials are allowed. Native aggregate manufacturing and scenario budgets

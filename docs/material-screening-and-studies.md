@@ -1472,6 +1472,36 @@ metrics and unknown material keys still refuse.
 Both modes retain `complete_search: false` and `global_optimum_claim: false`; neither an empty
 result nor a local improvement establishes empirical garment fit or a global optimum.
 
+### Approach explicit production constraints before an eligible design is found
+
+Add `"constraint_restoration": "componentwise"` to an existing consumer-guided
+`design_adaptive` request to let complete production evidence guide discovery toward its declared
+feasible region. At least one effective comparison policy must contain an explicit constraint.
+The option works with manufacturing, single-scenario and named-case guidance, including Pareto and
+multiple-material nominees. It uses the existing unique-trial, restart, consumer and retention
+allowances; omission preserves the original search.
+
+After canonical geometry and every selected-body fit target pass, each usable trial retains
+`constraint_violations`. Every entry identifies its original material, optional named case, metric,
+basis and unit. An authored minimum has a nonnegative `minimum_shortfall`; an authored maximum
+has a separate nonnegative `maximum_excess`. An absent bound remains absent. Nominal guards use
+the actual computed reading; reported-bounds guards use the lower endpoint for a minimum and the
+upper endpoint for a maximum. There is no unit conversion, weighting or sum across these quantities.
+
+Between constraint-excluded polling centers, every guard side must be no worse and at least one
+must strictly improve. Crossing from below a two-sided band to above it cannot hide a new violation.
+Conflicting improvements stay incomparable. A missing source, required consumer, reading, supported
+range or valid finite residual disables this guidance for the whole participating material/case vector.
+Each material and named case retains its own protocol admission, anchored at the first complete
+source-qualified vector when restoration is requested.
+
+Failed trials keep their original exclusions and cannot become eligible frontier members or retained
+consumer outputs through restoration. Once a design qualifies, ordinary objective comparisons,
+material frontiers and exact cached-output reuse govern selection. A bounded stop can retain a feasible
+incumbent while unvisited coordinates remain unknown. These authored numerical constraints provide
+no material failure limit, physiological comfort threshold, empirical garment-fit evidence or
+continuous/global optimum claim.
+
 ### Discover adaptive tradeoffs with several real objectives
 
 Use `objective: "consumer_pareto"` when improving one admitted outcome may worsen another and the

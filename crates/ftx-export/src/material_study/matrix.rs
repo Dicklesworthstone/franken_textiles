@@ -503,7 +503,7 @@ impl Request {
                 };
                 let row = self.evaluate_charged(pattern, variant, fit, &mut work)?;
                 let simulations = evaluate_cases(&row, cases.len(), &mut evaluations, evaluate);
-                let decisions = cases
+                let mut decisions = cases
                     .iter()
                     .enumerate()
                     .map(|(index, case)| {
@@ -526,6 +526,10 @@ impl Request {
                         })
                     })
                     .collect::<Result<Vec<_>, Refusal>>()?;
+                let mut restoration_qualified = adaptive.constraint_restoration.is_some()
+                    && decisions
+                        .iter()
+                        .all(|decision| decision.comparison.constraint_violations.is_some());
                 let mut admission_refusal = decisions
                     .iter()
                     .find(|decision| !decision.comparison.eligible)
@@ -543,10 +547,18 @@ impl Request {
                 if adaptive.worst_case() && admission_refusal.is_none() {
                     match design::adaptive::worst_case_index(&decisions, &policies[0].objectives[0]) {
                         Ok(index) => guiding = index,
-                        Err(refusal) => admission_refusal = Some(refusal),
+                        Err(refusal) => {
+                            admission_refusal = Some(refusal);
+                            restoration_qualified = false;
+                            for decision in &mut decisions {
+                                decision.comparison.constraint_violations = None;
+                            }
+                        }
                     }
                 }
-                if admission_refusal.is_none() {
+                // Restoration compares original guard residuals across every case. Its first
+                // complete source-qualified vector anchors protocols even before guards pass.
+                if admission_refusal.is_none() || restoration_qualified {
                     let current: Vec<_> = decisions
                         .iter()
                         .map(|decision| decision.comparison.input_protocol_sha256.clone())
@@ -559,6 +571,9 @@ impl Request {
                                 "adaptive matrix case '{}' source protocols differ from the first admitted incumbent; no ordering inferred",
                                 cases[index].key
                             )));
+                            for decision in &mut decisions {
+                                decision.comparison.constraint_violations = None;
+                            }
                         }
                     } else {
                         protocols.insert(material_key, current);

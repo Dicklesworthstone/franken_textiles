@@ -30,6 +30,14 @@ pub enum Objective {
     ConsumerWorstCase,
 }
 
+/// Explicit progress rule while complete production evidence still violates authored guards.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintRestoration {
+    /// No guard side may worsen and at least one must improve, without combining physical units.
+    Componentwise,
+}
+
 /// One bounded scalar, applied to its authored linked alteration sites in order.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +62,10 @@ pub struct Variable {
 pub struct Request {
     /// Raw fit-band discovery or an explicit production comparison; never an inferred fit score.
     pub objective: Objective,
+    /// Opt-in approach to a feasible production region after flat fit passes. Unavailable sources
+    /// never supply residuals, and failed constraints never enter the retained eligible designs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint_restoration: Option<ConstraintRestoration>,
     /// Exact material variant used to guide consumer polling. Required only for consumer guidance;
     /// selected geometries still cross every authored material alternative after discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,9 +159,26 @@ pub struct Trial {
     pub max_fit_band_violation_mm: Option<f64>,
     /// Sum of absolute band distances, used only to break maximum-violation ties.
     pub total_fit_band_violation_mm: Option<f64>,
+    /// Complete source-qualified guard vector across all nominated materials and named cases,
+    /// only for opted-in restoration. Absence means this trial cannot guide that phase.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub constraint_violations: Option<Vec<ConstraintViolation>>,
     /// Canonical geometry/fit refusal or consumer-admission/protocol exclusion, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
+}
+
+/// One guard's two independent residuals and the exact consumer context that produced them.
+#[derive(Clone, Debug, Serialize)]
+pub struct ConstraintViolation {
+    /// Original nominated material identity, without a generated design prefix.
+    pub material_key: String,
+    /// Original named case; absent for manufacturing and single-scenario discovery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_key: Option<String>,
+    /// Metric, basis, unit and separate minimum/maximum distances from the ordinary comparator.
+    #[serde(flatten)]
+    pub violation: comparison::ConstraintViolation,
 }
 
 /// One named case's ordinary comparison decision during an adaptive production probe.
@@ -368,6 +397,11 @@ impl Request {
     }
 
     pub(super) fn validate(&self) -> Result<(), Refusal> {
+        if self.constraint_restoration.is_some() && !self.consumer_guided() {
+            return Err(invalid(
+                "constraint_restoration requires explicit production-consumer guidance",
+            ));
+        }
         if self.consumer_guided() != (self.material_key.is_some() || self.material_keys.is_some())
             || (self.material_key.is_some() && self.material_keys.is_some())
             || self
@@ -694,6 +728,22 @@ impl Request {
         cases: &[(String, comparison::Policy)],
     ) -> Result<Expansion<T>, Refusal> {
         self.validate()?;
+        if self.constraint_restoration.is_some()
+            && if cases.is_empty() {
+                study
+                    .comparison
+                    .as_ref()
+                    .is_none_or(|policy| policy.constraints.is_empty())
+            } else {
+                cases
+                    .iter()
+                    .all(|(_, policy)| policy.constraints.is_empty())
+            }
+        {
+            return Err(invalid(
+                "constraint_restoration needs at least one explicit constraint in the effective comparison policies",
+            ));
+        }
         if (self.worst_case() || self.matrix_pareto()) && cases.is_empty() {
             return Err(invalid(
                 "all-case consumer guidance requires a named scenario matrix",
@@ -1170,14 +1220,30 @@ impl<T> Guidance<'_, T> {
             choices: material.source.choices.clone(),
             design: Some(design),
         })?;
-        let candidate = evaluation.comparison;
+        let mut candidate = evaluation.comparison;
+        let mut cases = evaluation.cases;
         let mut refusal = evaluation.admission_refusal;
         let mut eligible = refusal.is_none() && candidate.eligible;
-        if eligible && !request.worst_case() && !request.matrix_pareto() {
+        let restoration_qualified = request.constraint_restoration.is_some()
+            && if cases.is_empty() {
+                refusal.is_none() && candidate.constraint_violations.is_some()
+            } else {
+                // Matrix admission removes these witnesses on any independent protocol failure;
+                // an ordinary numeric constraint exclusion remains visible and ineligible.
+                cases
+                    .iter()
+                    .all(|case| case.comparison.constraint_violations.is_some())
+            };
+        if (eligible || restoration_qualified) && !request.worst_case() && !request.matrix_pareto()
+        {
             if material.protocol.as_ref().is_some_and(|protocol| {
                 !self.policy.allow_mixed_protocols && *protocol != candidate.input_protocol_sha256
             }) {
                 eligible = false;
+                candidate.constraint_violations = None;
+                for case in &mut cases {
+                    case.comparison.constraint_violations = None;
+                }
                 refusal = Some(invalid(if request.multiple_materials() {
                     "adaptive consumer protocols differ from this material's first admitted incumbent; no ordering inferred"
                 } else {
@@ -1188,7 +1254,8 @@ impl<T> Guidance<'_, T> {
                     .protocol
                     .get_or_insert_with(|| candidate.input_protocol_sha256.clone());
             }
-        } else if refusal.is_none() && !candidate.eligible {
+        }
+        if refusal.is_none() && !candidate.eligible {
             refusal = candidate.exclusions.first().cloned();
         }
         Ok((
@@ -1196,7 +1263,7 @@ impl<T> Guidance<'_, T> {
                 material_key: key,
                 eligible,
                 comparison: (!request.matrix_pareto()).then_some(candidate),
-                cases: evaluation.cases,
+                cases,
                 refusal: evaluation.refusal,
                 admission_refusal: refusal,
             },
@@ -1313,6 +1380,7 @@ impl Evaluator<'_, '_> {
                 raw_fit,
                 max_fit_band_violation_mm: score.map(|score| score.0),
                 total_fit_band_violation_mm: score.map(|score| score.1),
+                constraint_violations: None,
                 refusal: result.as_ref().err().cloned(),
             },
             result,
@@ -1444,7 +1512,17 @@ impl<T> Discovery<'_, '_, '_, T> {
                     let Some(index) = self.inspect(point)? else {
                         return Ok(StopReason::EvaluationBudget);
                     };
-                    if improves(&self.rows[index], &self.rows[best_fit]) {
+                    let candidate = &self.rows[index];
+                    let previous = &self.rows[best_fit];
+                    let improved = if request.constraint_restoration.is_some()
+                        && !candidate.consumer_admitted()
+                        && !previous.consumer_admitted()
+                    {
+                        self.improves(candidate, previous)
+                    } else {
+                        improves(candidate, previous)
+                    };
+                    if improved {
                         best_fit = index;
                     }
                 }
@@ -1601,8 +1679,15 @@ impl<T> Discovery<'_, '_, '_, T> {
                     .as_ref()
                     .expect("admitted incumbent"),
             ),
-            // Raw fit only approaches the declared admissible region; it never replaces an
-            // admitted production incumbent or substitutes a failed consumer reading.
+            // Raw fit first approaches the flat-admissible region. Opted-in restoration then
+            // follows only complete consumer guard vectors, never unavailable source evidence.
+            (false, false)
+                if self.request.constraint_restoration.is_some()
+                    && candidate.flat_qualified()
+                    && current.flat_qualified() =>
+            {
+                constraint_progress(candidate, current)
+            }
             (false, false) => improves(candidate, current),
             (false, true) => false,
         }
@@ -1623,6 +1708,8 @@ impl<T> Discovery<'_, '_, '_, T> {
         if let Some(guidance) = &mut self.guidance {
             row.selected = false;
             if result.is_ok() {
+                let mut constraint_violations =
+                    self.request.constraint_restoration.map(|_| Vec::new());
                 for material_index in 0..guidance.materials.len() {
                     let (decision, output) = guidance.probe(
                         material_index,
@@ -1634,6 +1721,13 @@ impl<T> Discovery<'_, '_, '_, T> {
                             evaluated: Some((row.design.clone(), result.clone())),
                         },
                     )?;
+                    if let Some(violations) = &mut constraint_violations {
+                        if let Some(next) = decision.constraint_violations() {
+                            violations.extend(next);
+                        } else {
+                            constraint_violations = None;
+                        }
+                    }
                     if self.request.multiple_materials() {
                         row.selected |= decision.eligible;
                         // A different nominee may retain this geometry. Preserve even a refused
@@ -1651,6 +1745,7 @@ impl<T> Discovery<'_, '_, '_, T> {
                         }
                     }
                 }
+                row.constraint_violations = constraint_violations;
                 if self.request.multiple_materials() {
                     if !row.selected {
                         row.refusal = row
@@ -1736,6 +1831,64 @@ impl<T> Discovery<'_, '_, '_, T> {
         self.rows.push(row);
         Ok(Some(index))
     }
+}
+
+impl MaterialDecision {
+    fn constraint_violations(&self) -> Option<Vec<ConstraintViolation>> {
+        let mut result = Vec::new();
+        let mut append = |case_key: Option<&str>, candidate: &comparison::Candidate| {
+            for violation in candidate.constraint_violations.as_ref()? {
+                result.push(ConstraintViolation {
+                    material_key: self.material_key.clone(),
+                    case_key: case_key.map(str::to_owned),
+                    violation: violation.clone(),
+                });
+            }
+            Some(())
+        };
+        if self.cases.is_empty() {
+            append(None, self.comparison.as_ref()?)?;
+        } else {
+            for case in &self.cases {
+                append(Some(&case.key), &case.comparison)?;
+            }
+        }
+        Some(result)
+    }
+}
+
+fn constraint_progress(candidate: &Trial, current: &Trial) -> bool {
+    let (Some(candidate), Some(current)) = (
+        &candidate.constraint_violations,
+        &current.constraint_violations,
+    ) else {
+        return false;
+    };
+    if candidate.is_empty() || candidate.len() != current.len() {
+        return false;
+    }
+    let mut strictly = false;
+    for (a, b) in candidate.iter().zip(current) {
+        if a.material_key != b.material_key
+            || a.case_key != b.case_key
+            || a.violation.metric != b.violation.metric
+            || a.violation.basis != b.violation.basis
+            || a.violation.unit != b.violation.unit
+        {
+            return false;
+        }
+        for (a, b) in [
+            (a.violation.minimum_shortfall, b.violation.minimum_shortfall),
+            (a.violation.maximum_excess, b.violation.maximum_excess),
+        ] {
+            match (a, b) {
+                (None, None) => {}
+                (Some(a), Some(b)) if a <= b => strictly |= a < b,
+                _ => return false,
+            }
+        }
+    }
+    strictly
 }
 
 impl Trial {
@@ -1842,6 +1995,7 @@ mod worst_case_range_tests {
                 eligible: true,
                 input_protocol_sha256: Some(key.into()),
                 dominated_by: Vec::new(),
+                constraint_violations: None,
             },
             refusal: None,
         }
