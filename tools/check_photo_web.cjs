@@ -482,6 +482,15 @@ async function bodyFitWorkflow(browser,origin) {
     assert.deepEqual(await page.evaluate(()=>Object.fromEntries(Object.entries(localStorage))),
       {'fab-wb-program':'"zouave_bolero"','fab-wb-bodyMode':'"chart"'},'Only ordinary workbench preferences are stored');
     assert.equal(await page.evaluate(()=>sessionStorage.length),0);
+    await page.locator('#bodyFitSaved').evaluate(e=>{e.closest('details').open=true;});
+    await page.setInputFiles('#bodyFitSaved',{name:'saved-fit.json',mimeType:'application/json',buffer:Buffer.from(originalReport)});
+    await page.click('#bodyFitOpen');
+    await page.waitForFunction(()=>/Saved accepted fit loaded|Saved fit refused|No body-fit report|Saved-fit loading stopped/.test(document.getElementById('bodyFitStatus').textContent));
+    assert.equal(await page.textContent('#bodyFitError'),'');
+    assert.match(await page.textContent('#bodyFitSummary'),/^Saved report: ACCEPTED/);
+    assert.equal(await download('body-fit-report.json'),originalReport);
+    assert.equal(await page.locator('#bodyFitReviewCanvas').isVisible(),true);
+    assert.equal(await page.locator('#bodyFitDownloads a').count(),1,'Saved fits do not reconstruct original input or work options');
     assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+'/')&&r.method==='GET'));
     console.log('PASS actual browser body fit: complete native equality, all starts/checks, exact downloads and accepted-body popup sources, immutable received evidence, stale-transfer cancellation, explicit wearer consent, no measurement promotion, no uploads or stored evidence. Artifacts:',work);
   } finally {await context.close();}
