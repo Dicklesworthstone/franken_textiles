@@ -3212,6 +3212,7 @@ mod tests {
                 collapsed: 0,
                 triangle_owner: vec![0; 2],
                 untangled: vec![],
+                start_backtracked_from: None,
                 target_thickness: material.options.contact.thickness,
                 solver: s,
                 elastic_rings: vec![],

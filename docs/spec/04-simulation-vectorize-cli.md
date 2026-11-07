@@ -342,6 +342,18 @@ their start position (mass vertex group). The report records `anchor_vertices` =
 
 ---
 
+**Native self-contact start recovery.** The chart-fitted 92 cm trouser case has a clear welded start
+after 200 relaxation iterations, but its left cuff crosses itself by iteration 225; the ordinary
+400-iteration endpoint fails the exact audit (`chart_trousers_self_contact_start`). When self-contact
+is requested and the final start fails its intersection audit, the native pipeline may rebuild earlier
+completed 200-iteration checkpoints. It chooses the latest one passing the unchanged body admission,
+material domains and actual cloth-contact audit, including source-specific offsets. No successful
+checkpoint means the original start remains refused. This is a bounded choice of start geometry,
+not a relaxation of collision detection or a new dynamics solver. A recovered start reports the
+original and accepted iteration counts and its actual initial strain; the original reference path
+and already-admissible starts remain unchanged. Numerical settling, full body offset and real-person
+fit remain separate requirements.
+
 ## 5. Dynamics contract (what any solver must provide)
 
 ### 5.1 Rest and start

@@ -440,6 +440,16 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
 - Untangling: crossings the exact audit still finds after relaxation are removed by moving the crossing
   cloth edge's ends (or the pierced cloth triangle) 2 mm above the crossed body triangle (or ridge), in
   rounds of up to 50; a piece wholly inside the body is refused.
+- Self-contact start recovery: if the final relaxed start fails cloth self-contact admission, the
+  resolved pipeline replays completed earlier 200-iteration relaxation blocks and selects the latest
+  one that passes the ordinary scene builder and actual contact policy. Rebuilding retains body
+  clearance, rest/material domains, welds and source-owned contact; constitutive histories bind only
+  after selection. No valid earlier block means the original refusal. Body-only and already-clear
+  starts retain their original path. `start_repair` reports rejected/accepted iteration counts, and
+  `initial_strain_pct`, `relax_iters` and the advisory describe the accepted start, even above the reference's
+  12% strain heuristic. The chart-trouser regression uses production tape uncertainties, runs actual
+  2 mm self-contact and retains a 50 mm offset refusal control. This is start admission, not settling,
+  independent anatomy, measured fabric or physical-fit qualification.
 - Offset ramp: when an edge of the start passes closer to the body than the cloth offset ξ, contact
   starts at half the smallest distance and `run_phase` raises ξ by at most 0.25 mm a step while every gap
   stays above ĝ/10. It backtracks up to eight times; if none succeeds, completing the exact target within
@@ -677,11 +687,12 @@ original KAT body recipe, before production fitting began honoring reported sigm
 The chart's broad uncertainty defines a different inferred body: at 92 cm honoring its sigmas gives
 a 21.0 mm maximum hem rise, while the restored nominal KAT has 10.5 mm. The KAT fixes its
 body-conditioning inputs; production fitting retains supplied uncertainty and its residual reports.
-These synthetic controls establish no measured-body accuracy. The current KAT 8 armpit-wedge run
-passes the 92 and 116 cm cases, but the 80 cm bolero fails offset completion: it achieves 1.413734 mm
-against 1.5 mm, with a final body gap of 0.100138 mm against the unchanged 0.1 mm continuation guard.
-Its quiet window and ±15 mm hem checks pass (the front/back 13 mm imbalance remains advisory), but
-those do not clear the offset gate. KAT 8 retains its original no-gating assertion; G2 remains open.
+These synthetic controls establish no measured-body accuracy. The earlier KAT 8 armpit-wedge run
+failed at 80 cm with only 1.413734 mm of the requested 1.5 mm body offset. The final-only continuation
+rule above now completes that target: all 80/92/116 cm cases settle with no gating flags under the
+original schedule and assertions. The 80 cm case retains its hem-balance advisory and stays within
+the original ±15 mm hem limit. Independent anatomy and empirical garment qualification remain open;
+this regression repair does not close G2.
 KAT 10 two starts, the 92 cm bolero sewn in 12 and in 18 steps:
 the same minimum, every hem, clearance and seam strain equal at the report's precision; KAT 9 the whole
 pipeline (tape fit, scene, three sewing and three draping steps at the shipped settings) by one SHA-256,

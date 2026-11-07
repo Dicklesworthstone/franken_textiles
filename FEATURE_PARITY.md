@@ -86,11 +86,17 @@ of its requested 1.5 mm offset. KAT 8 now passes unchanged on the
 pinned model's nominal fitted bodies: the 80/92/116 cm boleros reach 1.5 mm, settle and have no gating
 flags under the default schedule. The 80 cm case retains its hem-balance advisory; its largest hem rise is 13.4 mm, within the
 original 15 mm limit. The final-only continuation rule below fixes the numerical offset stall.
-All three pinned native digests pass unchanged. Retained Chromium/native ordinary and paired 92 cm
-bolero viewers agreed byte for byte; that browser comparison has not been rerun for this increment.
-Retained chart-body trouser runs refused an intersecting start with 2 mm self-contact. That startup
-defect remains unresolved and is a failed qualification cell; G2/G4 remain open,
-with their original assertions and intersection audits intact.
+All three pinned native digests pass unchanged. Fresh Chromium/native ordinary and paired 92 cm
+bolero viewers agree byte for byte on the current source. The chart-trouser viewer also agrees byte
+for byte, including gating/advisory flags and fitted targets/readings at the CLI's report precision.
+The 92 cm chart-body trousers previously refused an intersecting cuff start with 2 mm self-contact.
+The resolved pipeline now selects the latest fully admitted earlier relaxation block (200 rather
+than 400 iterations here), retaining all body/material/self-contact checks. The unchanged production
+CLI inputs complete 12 sewing and 36 draping steps with no gating flags, zero unconverged steps and
+one explicit start-repair advisory; the accepted start's plain-edge p95 strain is 16.2%, not the
+rejected start's 11.8%. A direct production-uncertainty regression covers transient self-contact and
+the still-refused 50 mm offset control. This fixes the startup cell; G2/G4 and independent body/
+empirical garment qualification remain open, with original assertions and intersection audits intact.
 
 Production admission now refuses intended simulation instances without explicit placement before
 meshing. Deliberate `sim: false` omissions remain supported and are listed with excluded seams in
@@ -189,6 +195,7 @@ evidence that the authored catalog garment is complete or fits a person.
 
 | Behaviour | Reference | Port | Reason |
 |---|---|---|---|
+| Self-contact start admission | kinematic relaxation stops by plain-edge strain, without a cloth self-contact admission policy | only when requested self-contact rejects the final start, select the latest earlier completed 200-iteration block that passes the ordinary scene builder and actual contact policy; otherwise retain refusal | `kat_fitted::chart_trousers_self_contact_start` reproduces a crossed chart-trouser cuff and checks 2 mm recovery plus a 50 mm refusal. Accepted/rejected counts, actual initial strain and a repair advisory are reported. Body-only/reference start fixtures remain unchanged; no audit exemption or physical-fit claim |
 | `body-offset-completion`: requested contact clearance | legacy settledness metrics do not qualify the IPC offset continuation | ordinary and paired runs gate an incomplete requested body offset; bounded smaller increments retain the 0.25 mm cap and absolute gap guard; only a final target increment after all eight trials fail may instead retain more than a tenth of each prior gap, as CCD does | A real chart-body run stopped at 0.737 mm against a 1.5 mm request while reporting no ordinary gate. `scene::grain_tests::body_offset_ramp_backtracks_without_dropping_its_safety_margin`, `body_offset_ramp_finishes_only_with_relative_clearance` and `run::self_contact_tests::numerical_settledness_rejects_motion_hidden_by_window_means` cover partial growth, safe/unsafe completion and quiet-but-incomplete rejection. Original pinned-model KAT 8 now passes at all three sizes; oracle inputs and static metric calculations are unchanged |
 | Production simulation coverage | unplaced instances and their seams are silently omitted | canonical draping requires placement on every active instance; explicit `sim: false` exclusions are reported with an advisory | Prevent a partial garment from appearing complete; low-level meshing retains reference selection. `garment::tests`, `run::self_contact_tests`, CLI drape regression |
 | JSON integer range | Python preserves arbitrarily large integer literals | `PyJson` preserves the full signed `i64` and unsigned `u64` ranges; larger integer literals refuse rather than become rounded floats | Native bounded representation, not arbitrary-precision arithmetic; `pyjson::tests::integer_overflow_refuses_instead_of_becoming_a_float` and full-width photo/round regression in `ftx-wasm/tests/page.rs` |

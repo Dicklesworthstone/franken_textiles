@@ -52,8 +52,12 @@ bands, fold-up animation, metrics and flags), `ftx-export` (every deliverable an
 **Qualification remains open (2026-11-06).** The garment runs without flags described above are historical
 observations. The original bolero test on nominal fitted bodies now passes under its fixed schedule.
 The 80, 92 and 116 cm cases reach the requested 1.5 mm body offset, settle and have no gating flags. The 80 cm case
-retains its hem-balance advisory. The chart trousers still refuse an intersecting cloth start with
-self-contact; that remains a failed cell. The optional static-equilibrium sewn cone-band regression
+retains its hem-balance advisory. The 92 cm chart trousers now complete the default 12 sewing and
+36 draping steps with 2 mm self-contact and no gating flags. Their final relaxed start crossed a
+cuff; the native path now selects an earlier fully audited relaxation block and reports that repair
+as an advisory, including the accepted iteration count and actual initial strain. Fresh Chromium
+ordinary bolero, paired bolero and trouser viewers match native byte for byte. The optional
+static-equilibrium sewn cone-band regression
 passes its original tolerance and 1,000-iteration cap: a static-only search direction lets free cloth
 reach its support without treating a regularized step as convergence. Unsupported loads still refuse.
 The [parity status](FEATURE_PARITY.md) and [drape contract](crates/ftx-drape/CONTRACT.md)
@@ -392,12 +396,14 @@ proven otherwise.
    *Passed 2026-10-12* (FEATURE_PARITY, body model).
 2. **G2 Drape**: the known-answer tests pass (ring on a cylinder, ring on a cone, ease sweep, elastic ladder,
    armpit wedge, determinism) and real garments settle on fitted bodies within budget. If not, the Blender
-   path stays. *Passed 2026-10-13* (FEATURE_PARITY, dynamics).
+   path stays. *Historical pass, 2026-10-13* (FEATURE_PARITY, dynamics); current qualification remains
+   open as described above. Fresh numerical regressions do not replace empirical evidence or benchmarks.
 3. **G3 Port slice**: patterns, validation, drafting and exports pass their fixtures; the skill's round runs
    through `ftx`. *Passed 2026-10-13* (FEATURE_PARITY, CLI / rounds).
-4. **G4 Browser**: the wasm page reaches parity and drapes a small garment. *Passed 2026-10-13*: the page's
+4. **G4 Browser**: the wasm page reaches parity and drapes a small garment. *Historical pass, 2026-10-13*: the page's
    round equals the reference's on its 25 oracle cases, and the bolero and trousers drape in Chromium
-   bit-identical to `ftx drape` (`tools/check_web.cjs`).
+   bit-identical to `ftx drape` (`tools/check_web.cjs`). The current ordinary/paired bolero and trouser
+   comparisons also pass; broader browser qualification remains open in the tracked release work.
 5. **G5 Gauntlet**: a convergent multi-round parity, physics and surface audit before 1.0.
 
 ---

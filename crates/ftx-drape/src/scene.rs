@@ -195,6 +195,9 @@ pub struct Scene {
     pub triangle_owner: Vec<usize>,
     /// Start crossings untangled, per round.
     pub untangled: Vec<usize>,
+    /// Rejected final relaxation count when an earlier self-contact-clear start was selected.
+    /// `start.relax_iterations` and `start.block_p95` describe the accepted checkpoint.
+    pub start_backtracked_from: Option<usize>,
     /// The cloth offset the contact ramps up to (m).
     pub target_thickness: f64,
     /// The solver (positions are the welded vertices).
@@ -562,6 +565,7 @@ pub fn build_scene(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -574,21 +578,77 @@ pub(crate) fn build_scene_resolved(
     material: &crate::material::MaterialInputs,
     elastics: &[ElasticCasing],
 ) -> Result<Scene, Refusal> {
-    let mut scene = build_scene_inner(
-        pattern,
-        mesh,
-        frames,
-        skin_vertices,
-        skin_triangles,
-        material.fabric,
-        material.options.compression,
-        material.options.contact,
-        elastics,
-        material.piece_fabrics.as_deref(),
-        material.response.as_ref(),
-        material.piece_responses.as_deref(),
-        material.contact_materials.as_ref(),
-    )?;
+    let build = |mesh, start| {
+        build_scene_inner(
+            pattern,
+            mesh,
+            frames,
+            skin_vertices,
+            skin_triangles,
+            material.fabric,
+            material.options.compression,
+            material.options.contact,
+            elastics,
+            material.piece_fabrics.as_deref(),
+            material.response.as_ref(),
+            material.piece_responses.as_deref(),
+            material.contact_materials.as_ref(),
+            start,
+        )
+    };
+    let mut scene = build(mesh, None)?;
+    if let Some(params) = material.options.self_contact {
+        let admit = |candidate: &Scene| {
+            candidate
+                .solver
+                .contact
+                .as_ref()
+                .expect("body contact exists")
+                .clone()
+                .with_self_contact(&candidate.solver.x, params)
+                .map(|_| ())
+        };
+        match admit(&scene) {
+            Err(e) if e.code == RefusalCode::IntersectingStart => {
+                // Only reuse complete earlier blocks. Rebuilding rechecks body clearance, material
+                // domains and source-owned contact before any constitutive history is initialized.
+                let original = scene.start.relax_iterations;
+                let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
+                let mut positions = scene.start.presewn.clone();
+                let mut replacement = None;
+                for iterations in
+                    (crate::start::RELAX_ITERS..original).step_by(crate::start::RELAX_ITERS)
+                {
+                    positions = crate::start::relax(
+                        &scene.mesh,
+                        &positions,
+                        &scene.start.groups,
+                        &tree,
+                        crate::start::RELAX_ITERS,
+                        crate::start::RELAX_CLEARANCE,
+                        &scene.start.gather_weights,
+                    );
+                    let mut start = scene.start.clone();
+                    start.relaxed = positions.clone();
+                    start.relax_iterations = iterations;
+                    start
+                        .block_p95
+                        .truncate(iterations / crate::start::RELAX_ITERS);
+                    if let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
+                        && admit(&candidate).is_ok()
+                    {
+                        candidate.start_backtracked_from = Some(original);
+                        replacement = Some(candidate);
+                    }
+                }
+                if let Some(candidate) = replacement {
+                    scene = candidate;
+                }
+            }
+            Err(e) => return Err(e),
+            Ok(()) => {}
+        }
+    }
     if material.relaxation.is_some()
         || material
             .piece_relaxations
@@ -677,6 +737,7 @@ fn build_scene_inner(
     response: Option<&ftx_pattern::material_response::CompiledMembrane>,
     piece_responses: Option<&[Option<ftx_pattern::material_response::CompiledMembrane>]>,
     contact_materials: Option<&crate::material::ContactMaterials>,
+    start_override: Option<StartState>,
 ) -> Result<Scene, Refusal> {
     fabric.validate()?;
     fabric.membrane(compression).validate()?;
@@ -752,7 +813,7 @@ fn build_scene_inner(
     let places = placements(pattern, &mesh, frames)?;
     let wrapped = wrapped_positions(&mesh, &places);
     let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
-    let start = start_state(&mesh, wrapped, &tree);
+    let start = start_override.unwrap_or_else(|| start_state(&mesh, wrapped, &tree));
     // Weld each sewing group into one vertex.
     let mut weld = vec![usize::MAX; mesh.verts2d.len()];
     let mut next = 0;
@@ -986,6 +1047,7 @@ fn build_scene_inner(
         collapsed,
         triangle_owner,
         untangled,
+        start_backtracked_from: None,
         target_thickness: contact.thickness,
         solver,
         elastic_rings,

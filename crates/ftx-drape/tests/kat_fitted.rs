@@ -53,12 +53,26 @@ fn drape_result(
     case: &Value,
     opts: &DrapeOptions,
 ) -> Result<ftx_drape::run::DrapeRun, ftx_core::Refusal> {
+    drape_result_with_targets(
+        model,
+        case,
+        opts,
+        &nominal_reference_targets(&case["input"]["measurements"]),
+    )
+}
+
+fn drape_result_with_targets(
+    model: &AnnyModel,
+    case: &Value,
+    opts: &DrapeOptions,
+    targets: &[ftx_body::TapeTarget],
+) -> Result<ftx_drape::run::DrapeRun, ftx_core::Refusal> {
     let meas = &case["input"]["measurements"];
     let pose = Pose::drape();
     let fit = fit_tape(
         model,
         &Wearer::from_measurements(meas).unwrap(),
-        &nominal_reference_targets(meas),
+        targets,
         &pose,
     )
     .unwrap();
@@ -109,6 +123,59 @@ fn no_fold_up_placement_refuses() {
         err.message.contains("back") && err.message.contains("placement"),
         "{err}"
     );
+}
+
+#[test]
+#[ignore = "needs the converted Anny model; chart-trouser self-contact start qualification"]
+fn chart_trousers_self_contact_start() {
+    let fx = drafts();
+    let case = fx["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "zouave_trousers-920")
+        .unwrap();
+    let model = AnnyModel::load(&default_model_path().unwrap(), false).unwrap();
+    let targets = tape_targets(&case["input"]["measurements"]).unwrap();
+    let self_contact = ftx_drape::ContactParams {
+        thickness: 2e-3,
+        ..DrapeOptions::default().contact
+    };
+    let options = DrapeOptions {
+        self_contact: Some(self_contact),
+        sew_steps: 3,
+        drape_steps: 3,
+        ..DrapeOptions::default()
+    };
+    let run = drape_result_with_targets(&model, case, &options, &targets).unwrap();
+    assert_eq!(run.scene.start_backtracked_from, Some(400));
+    assert_eq!(run.scene.start.relax_iterations, 200);
+    assert_eq!(run.report["relax_iters"], 200);
+    assert_eq!(run.report["start_repair"]["rejected_relax_iters"], 400);
+    assert_eq!(run.report["start_repair"]["accepted_relax_iters"], 200);
+    assert!(run.scene.start.block_p95[0] > ftx_drape::start::RELAX_TARGET_P95);
+    run.scene
+        .solver
+        .contact
+        .as_ref()
+        .unwrap()
+        .audit_self_contact(&run.scene.solver.x)
+        .unwrap();
+    let refused = drape_result_with_targets(
+        &model,
+        case,
+        &DrapeOptions {
+            self_contact: Some(ftx_drape::ContactParams {
+                thickness: 50e-3,
+                ..self_contact
+            }),
+            ..options
+        },
+        &targets,
+    )
+    .err()
+    .expect("no earlier checkpoint clears this contact offset");
+    assert_eq!(refused.code, ftx_core::RefusalCode::IntersectingStart);
 }
 
 #[test]

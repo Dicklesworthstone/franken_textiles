@@ -986,6 +986,22 @@ fn add_run_fields(
         json!(w.iter().filter(|&&v| v < 1.0).count()),
     );
     o.insert("relax_iters".into(), json!(scene.start.relax_iterations));
+    if let Some(original) = scene.start_backtracked_from {
+        o.insert(
+            "start_repair".into(),
+            json!({
+                "basis":"earlier_self_contact_clear_relaxation",
+                "rejected_relax_iters":original,
+                "accepted_relax_iters":scene.start.relax_iterations,
+            }),
+        );
+        o.get_mut("flags")
+            .and_then(Value::as_array_mut)
+            .expect("metrics flags exist")
+            .push(json!(
+                "start restored to an earlier self-contact-clear relaxation block"
+            ));
+    }
     o.insert(
         "frames".into(),
         json!({"sew": opts.sew_steps, "drape": opts.drape_steps}),
