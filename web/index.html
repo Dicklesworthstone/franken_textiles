@@ -306,7 +306,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
   const patternQuery = new URL(location.href).searchParams;
   let bodyFitToken = patternQuery.get("bodyFitImport"), bodyImportRead = 0, requestBodyImport = null;
-  let receivedBodyModel = null, receivedBodyFit = null;
+  let receivedBodyModel = null, receivedBodyFit = null, bodyImportProblem = null;
   const bodyImportUrls = [];
   const selectedBodyModel = () => receivedBodyModel || $("bodyFile").files[0];
   const materialImport = !patternQuery.has("traceImport") && patternQuery.has("materialImport");
@@ -937,15 +937,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     ++bodyImportRead;
     if (bodyFitToken) window.opener = null;
     if (requestBodyImport && receivedBodyFit === null && bodyFitText === null && !$("bodyFitFile").files.length) {
-      bodyFitReady = true;
+      bodyFitReady = false;
+      bodyImportProblem ||= "Body report import was interrupted. Choose a replacement fit report or clear the received body sources before using tape fitting.";
     }
     bodyFitToken = null; requestBodyImport = null;
   }
   function showBodyImport() {
     bodyImportUrls.forEach(u => URL.revokeObjectURL(u)); bodyImportUrls.length = 0;
     $("bodyFitImportFiles").replaceChildren();
-    $("bodyFitImportNote").hidden = !receivedBodyModel && receivedBodyFit === null;
-    $("bodyFitImportText").textContent = "Received body sources stay local. Choose garment and measurement evidence, then Draft and check. " +
+    $("bodyFitImportNote").hidden = !receivedBodyModel && receivedBodyFit === null && bodyImportProblem === null;
+    $("bodyFitImportText").textContent = bodyImportProblem || "Received body sources stay local. Choose garment and measurement evidence, then Draft and check. " +
       "Review and confirm this wearer under Reuse an accepted image-fit shape before checking the body or draping. " +
       "Model predictions do not add measurement evidence. Manual file choices replace the corresponding received source.";
     for (const [name, bytes] of [["body-model.ftxbody", receivedBodyModel], ["body-fit-report.json", receivedBodyFit]]) {
@@ -956,8 +957,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     }
   }
   function clearBodyImport() {
-    const pending = bodyFitToken !== null || requestBodyImport !== null;
-    cancelBodyImport();
+    const pending = bodyFitToken !== null || requestBodyImport !== null || bodyImportProblem !== null;
+    cancelBodyImport(); bodyImportProblem = null;
     if (receivedBodyModel) {
       receivedBodyModel = null; bodyLoaded = false; bodyRequest = ++nextRequest;
       if (!dead) worker.postMessage({ type: "clearBody" });
@@ -992,7 +993,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   });
   $("bodyFitFile").addEventListener("change", async () => {
     if (dead) return;
-    cancelBodyImport(); receivedBodyFit = null; showBodyImport();
+    cancelBodyImport(); receivedBodyFit = null; bodyImportProblem = null; showBodyImport();
     if (materialTransfer) materialTransfer.files = null;
     const request = ++bodyFitRead;
     bodyFitText = null; bodyFitReady = false; $("bodyFitConsent").checked = false;
@@ -1077,8 +1078,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
       } catch(error) {
         if(revision!==bodyImportRead || dead) return;
-        $("bodyFitImportNote").hidden=false;$("bodyFitImportText").textContent=error.message;
-        showError(error.message);foldButton();
+        bodyImportProblem=error.message;requestBodyImport=null;
+        showBodyImport();showError(error.message);foldButton();
       }
     });
     if(ready) requestBodyImport();

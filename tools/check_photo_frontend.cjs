@@ -957,6 +957,31 @@ test('accepted body handoff sends the original report and selected model once to
   p.e.bodyFitInput.handlers.change();assert.equal(p.e.bodyFitWorkbench.disabled,true);
   assert.equal(await packet.data.fit.text(),raw,'An already received snapshot is immutable');
 });
+test('accepted body handoff retains evaluated model bytes independently of later file reads and worker buffers',async()=>{
+  const p=await photoPage();selectBodyFit(p);let reads=0;
+  class ReadOnceModel extends Blob {
+    async arrayBuffer() {
+      assert.equal(++reads,1,'The evaluated model must not be read from the selected file again');
+      return super.arrayBuffer();
+    }
+  }
+  const source=new ReadOnceModel(['original model']);p.e.bodyFitModel.files=[source];
+  await p.e.bodyFitRun.onclick();const w=p.current();
+  assert.equal(new TextDecoder().decode(w.messages[0].model),'original model');
+  // The worker owns the transferred buffer; later mutations must not alter the retained snapshot.
+  new Uint8Array(w.messages[0].model).fill(0);
+  const raw=' \r\n'+JSON.stringify(bodyFitReport())
+    .replace('"timestamp_us":1','"timestamp_us":18446744073709551615')
+    .replace('"shape":[0.6]','"shape":[-0.0]')+'\r\n';
+  await w.emit({type:'result',request:w.messages[0].request,report:raw});
+  p.e.bodyFitWorkbench.onclick();const popup=p.popups[0],token=new URL(popup.url).searchParams.get('bodyFitImport');
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-body-fit-sources-ready',token}});
+  const packet=popup.messages[0].data;
+  assert.notEqual(packet.model,source,'The handoff owns a byte snapshot, not the selected file');
+  assert.equal(new TextDecoder().decode(await packet.model.arrayBuffer()),'original model');
+  assert.equal(await packet.fit.text(),raw);assert.equal(reads,1);
+});
+
 test('pending accepted-body transfers are cancelled by source edits, work-limit changes and page exit',async()=>{
   for(const invalidate of [p=>p.e.bodyFitInput.handlers.change(),p=>p.e.bodyFitModel.handlers.click(),
     p=>p.e.bodyFitInput.handlers.cancel(),p=>p.e.bodyFitIterations.handlers.input(),

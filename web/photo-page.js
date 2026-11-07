@@ -166,7 +166,7 @@ function withdrawBodyFit() {
   $("bodyFitAttempts").replaceChildren(); $("bodyFitChecks").replaceChildren();
   for(const id of ["bodyFitError","bodyFitReport","bodyFitSummary","bodyFitUse","bodyFitPredictions","bodyFitFlags"]) $(id).textContent="";
 }
-function publishBodyFit(text,input,iterations,maxEvaluations,modelFile) {
+function publishBodyFit(text,input,iterations,maxEvaluations,modelSnapshot) {
   // Only presentation parses JSON. Downloads retain the original Rust bytes, including full-u64
   // source identities; no model prediction is passed to the measurement-fusion handoff.
   const report=JSON.parse(text), accepted=report.status==="ACCEPTED";
@@ -203,7 +203,7 @@ function publishBodyFit(text,input,iterations,maxEvaluations,modelFile) {
   $("bodyFitResult").hidden=false;
   $("bodyFitStatus").textContent=accepted?"Body fit accepted; review every start and held-out residual before reuse.":
     "Body fit finished without an accepted shape. Review all diagnostics.";
-  bodyFitSources=accepted?{fit:new Blob([text],{type:"application/json"}),model:modelFile}:null;
+  bodyFitSources=accepted?{fit:new Blob([text],{type:"application/json"}),model:modelSnapshot}:null;
   controls();
 }
 async function runBodyFit() {
@@ -225,13 +225,15 @@ async function runBodyFit() {
     if(id!==bodyFitTicket) return;
     const model=await modelFile.arrayBuffer();
     if(id!==bodyFitTicket) return;
+    // Retain the evaluated bytes before transfer, independently of the original file and worker.
+    const modelSnapshot=new Blob([model],{type:"application/octet-stream"});
     const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); bodyFitWorker=current;
     current.onmessage=({data:m})=>{
       if(current!==bodyFitWorker || m.request!==bodyFitTicket) return;
       if(m.type==="progress") {$("bodyFitStatus").textContent=m.text; return;}
       stopBodyFit();
       if(m.type==="error") {$("bodyFitError").textContent=m.message; $("bodyFitStatus").textContent="Body fit refused; no report published."; return;}
-      try {publishBodyFit(m.report,input,iterations,maxEvaluations,modelFile);} catch(error) {
+      try {publishBodyFit(m.report,input,iterations,maxEvaluations,modelSnapshot);} catch(error) {
         withdrawBodyFit(); $("bodyFitError").textContent=String(error.message || error);
         $("bodyFitStatus").textContent="No body-fit report published.";
       }

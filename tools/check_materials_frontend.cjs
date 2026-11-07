@@ -5674,6 +5674,48 @@ test('body-fit receiver refuses invalid transfers and clears cancelled pending r
   }
 });
 
+test('failed or interrupted body imports stay blocked after model replacement until a report or explicit clear repairs them',async()=>{
+  const token='e'.repeat(32),raw=' {"schema":"ftx-body-fit/1","sequence":18446744073709551615,"probe":-0.0}\r\n';
+  const prepare=async interrupted=>{
+    const p=draftingPage({bodyToken:token}),pending=deferred();
+    class WaitingFit extends Blob {arrayBuffer(){return pending.promise;}}
+    const reading=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
+      data:{type:'ftx-body-fit-sources',token,fit:interrupted?new WaitingFit([raw]):new Blob([new Uint8Array([255])]),
+        model:new Blob([new Uint8Array([1,2])])}});
+    if(!interrupted)await reading;
+    p.e.bodyFile.files=[new Blob([new Uint8Array([9])])];await p.e.bodyFile.handlers.change();
+    p.emit({type:'bodyReady',request:p.last('body').request});
+    if(interrupted){pending.resolve(new TextEncoder().encode(raw).buffer);await reading;}
+    assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[9],'A late import cannot replace the manual model');
+    assert.equal(p.messages.filter(m=>m.type==='body').length,1);
+    assert.equal(p.e.bodyFitImportFiles.children.length,0);
+    assert.equal(p.e.bodyFitImportNote.hidden,false,'The unresolved report remains visible after model-only replacement');
+    assert.ok(p.e.bodyFitImportText.textContent);
+    await p.e.go.handlers.click();p.result(undefined,{roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}});
+    assert.equal(p.e.bodyCheckGo.disabled,true);assert.equal(p.e.foldGo.disabled,true);
+    await p.e.chooseMaterials.handlers.click();assert.equal(p.popups.length,0);
+    assert.equal(p.e.bodyFitConsent.checked,false);
+    return p;
+  };
+  for(const interrupted of [false,true]) {
+    const p=await prepare(interrupted);
+    await p.e.clearBodyFitImport.handlers.click();
+    assert.equal(p.e.bodyFitImportNote.hidden,true);assert.equal(p.e.bodyCheckGo.disabled,false);
+    p.e.bodyCheckGo.handlers.click();assert.equal(p.last('inspectBody').bodyFit,null,'Explicit clearing permits tape fitting');
+    const q=await prepare(interrupted),replacement=deferred();
+    class ReplacementFit extends Blob {arrayBuffer(){return replacement.promise;}}
+    q.e.bodyFitConsent.checked=true;q.e.bodyFitFile.files=[new ReplacementFit([raw])];
+    const reading=q.e.bodyFitFile.handlers.change();
+    assert.equal(q.e.bodyFitImportNote.hidden,true,'A manual report replaces the failed import before its read completes');
+    assert.equal(q.e.bodyFitConsent.checked,false);assert.equal(q.e.bodyCheckGo.disabled,true);
+    replacement.resolve(new TextEncoder().encode(raw).buffer);await reading;
+    assert.equal(q.e.bodyCheckGo.disabled,true,'Completed report reads still require wearer association');
+    q.e.bodyFitConsent.checked=true;await q.e.bodyFitConsent.handlers.change();
+    assert.equal(q.e.bodyCheckGo.disabled,false);q.e.bodyCheckGo.handlers.click();
+    assert.equal(q.last('inspectBody').bodyFit,raw,'Replacement reports retain exact original text');
+  }
+});
+
 test('received body association must follow completed source reads and current wearer selection',async()=>{
   const token='d'.repeat(32),p=draftingPage({bodyToken:token}),pending=deferred();
   class WaitingModel extends Blob {arrayBuffer(){return pending.promise;}}
