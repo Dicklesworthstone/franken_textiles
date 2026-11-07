@@ -873,6 +873,57 @@ test('guided dry instance temperatures obey the native entry count and complete 
   assert.throws(()=>run(oversized),/16 MiB/);
 });
 
+test('guided initial temperature profiles preserve every inside-to-outside cell and exact instance through single and named requests',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const profiles=JSON.parse('{"front.R":[35,25,10,-5],"lining.R":[30,25,20,15],"__proto__":[0,1,2,3]," side β ":[-273.15,-20,0,5]}');
+  const heat={...dryMotionHeat(),initial_temperature_c:999,initial_instance_temperature_profiles_c:profiles};
+  const input={...motionState(),transient_surface:heat},before=JSON.stringify(input),raw=motion(input);
+  assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(JSON.parse(raw).transient_surface,heat);
+  assert.equal(Object.hasOwn(JSON.parse(raw).transient_surface,'initial_instance_temperatures_c'),false);
+  const scenario=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:16000000});
+  const named=matrix({maxEvaluations:2,cases:[{key:'cold outside',scenario}]});
+  assert.deepEqual(JSON.parse(named).cases[0].scenario.motion.transient_surface.initial_instance_temperature_profiles_c,profiles);
+  const original=' \r\n'+raw.replace('"front.R":[35,25,10,-5]','"front.R":[35.0,25,10,-5.0]')+'\r\n';
+  assert.ok(single({...scenarioState(),motion:original,maxMotionTrials:1024,maxVertexFrames:16000000}).includes(original));
+  profiles['front.R'][0]=0;
+  assert.deepEqual(JSON.parse(named).cases[0].scenario.motion.transient_surface.initial_instance_temperature_profiles_c['front.R'],[35,25,10,-5]);
+  const legacy={...motionState(),transient_surface:dryMotionHeat()};
+  assert.equal(motion(legacy),JSON.stringify({schema:'ftx-drape-motion/1',...legacy}));
+});
+
+test('guided initial temperature profiles refuse missing cells ambiguous maps and unsupported thermal domains',async()=>{
+  const {buildMaterialMotionRequest:build}=await modulePromise;
+  const run=(profiles,changes={})=>build({...motionState(),transient_surface:{...dryMotionHeat(),
+    initial_instance_temperature_profiles_c:profiles,...changes}});
+  const sparse=Array(4);sparse[0]=18;
+  for(const profiles of [null,undefined,[],{},'{}',new Map([['front.R',[1,2,3,4]]]),Object.create({'front.R':[1,2,3,4]}),
+    {'':[1,2,3,4]},{' \t':[1,2,3,4]},...[
+      null,'1,2,3,4',[],[1,2,3],[1,2,3,4,5],sparse,
+      ...[-273.150001,NaN,Infinity,-Infinity,'20',null,undefined].map(value=>[1,2,3,value]),
+    ].map(values=>({'front.R':values}))])assert.throws(()=>run(profiles));
+  for(const initial_instance_temperatures_c of [{},{'front.R':18},null]) {
+    assert.throws(()=>run({'front.R':[1,2,3,4]},{initial_instance_temperatures_c}),/not both/);
+  }
+  for(const cells_per_layer of [0,1.5,3,5,65,'4'])assert.throws(()=>run({'front.R':[1,2,3,4]},{cells_per_layer}));
+  const coverage=await guidedMovingCoverageHeat();
+  assert.throws(()=>build({...motionState(),transient_coverage:{...coverage,
+    initial_instance_temperature_profiles_c:{'front.R':[1]}}}),/unsupported/);
+  const heat={...dryMotionHeat(),initial_instance_temperature_profiles_c:{'front.R':[1,2,3,4]}};
+  delete heat.initial_temperature_c;
+  assert.throws(()=>build({...motionState(),transient_surface:heat}),/missing/);
+});
+
+test('guided initial temperature profiles enforce the native entry limit without truncating complete maps',async()=>{
+  const {buildMaterialMotionRequest:build}=await modulePromise;
+  const profiles=Object.fromEntries(Array.from({length:65536},(_,i)=>['instance-'+i,[i%2?20:-273.15]]));
+  const input={...motionState(),transient_surface:{...dryMotionHeat(),cells_per_layer:1,
+    initial_instance_temperature_profiles_c:profiles}};
+  const retained=JSON.parse(build(input)).transient_surface.initial_instance_temperature_profiles_c;
+  assert.equal(Object.keys(retained).length,65536);assert.deepEqual(retained['instance-0'],[-273.15]);
+  profiles.extra=[0];assert.throws(()=>build(input),/1–65536/);
+});
+
 test('motion work limits and nominal substeps match canonical bounds without inventing convergence', async () => {
   const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:scenario}=await modulePromise;
   for(const max_step_s of [0,5e-10,1.001,NaN,Infinity,'0.1']) assert.throws(()=>build({...motionState(),max_step_s}));

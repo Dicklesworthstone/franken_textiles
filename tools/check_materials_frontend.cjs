@@ -9861,7 +9861,8 @@ test('bounded-marker purchasing shows one whole order and preserves exact totals
 
 test('marker selection forwards a zero-based index and withdraws stale preview replies independently of price', async () => {
   const p=await pageModule();await p.load();await p.bind();
-  const options='{"copies":3,"maximum_marker_length_m":0.12,"width_basis":"reported_lower_bound"}';
+  const options='{"copies":3,"maximum_marker_length_m":0.12,"width_basis":"reported_lower_bound",'+
+    '"nesting":{"passes":3,"work_limit":1000,"consolidate_markers":{"work_limit":5000}}}';
   p.select('cutOptions',options);
   p.select('quotes');p.select('market');await p.e.price.onclick();
   p.emit({roll_prices:[],least_observed_independent_order_total:2.5},[{name:'price.json',text:'{"total":2.5}',mime:'application/json'}]);
@@ -9870,7 +9871,10 @@ test('marker selection forwards a zero-based index and withdraws stale preview r
   assert.equal(p.current().messages.at(-1).rollIndex,1);
   assert.equal(p.current().messages.at(-1).options,options);
   const layout={width_m:0.075,reported_bounds_m:[0.075,0.11],notes:['Fixed source lower width; nominal purchase width retained']};
-  const plan={schema:'ftx-roll-cut-plan/2',options:JSON.parse(options),
+  const consolidation={algorithm:'bounded_whole_marker_consolidation/1',baseline_marker_count:3,marker_count:2,
+    baseline_length_m:0.36,length_m:0.24,saved_length_m:0.12,accepted_merges:1,transferred_placements:2,
+    candidates:70,work_limit:5000,work_used:5000,budget_exhausted:true,optimality_claim:false};
+  const plan={schema:'ftx-roll-cut-plan/2',options:JSON.parse(options),marker_consolidation:consolidation,
     rolls:[{width_m:0.1,layout_width:layout,length_m:0.12},{width_m:0.1,layout_width:layout,length_m:0.12}],limitations:[]};
   p.emit(plan,[{name:'cut-plan.json',text:JSON.stringify(plan),mime:'application/json'},
     {name:'roll-1.svg',text:'<svg id="second"/>',mime:'image/svg+xml'}]);
@@ -9879,6 +9883,7 @@ test('marker selection forwards a zero-based index and withdraws stale preview r
   assert.equal(await p.blobs.get(preview).text(),'<svg id="second"/>');
   const summary=JSON.parse(cut.children[1].textContent);
   assert.equal(summary.maximum_marker_length_m,0.12);
+  assert.deepEqual(summary.marker_consolidation,consolidation,'Show the complete incumbent and exhausted consolidation budget without inventing optimality');
   assert.deepEqual(summary.rolls.map(r=>r.marker_number),[1,2]);
   assert.equal(summary.rolls[1].width_m,0.1);
   assert.deepEqual(summary.rolls[1].layout_width,layout);
@@ -14339,6 +14344,40 @@ test('compiled WASM bounded markers retain whole geometry, selected SVG and one 
     assert.equal(widthOrder.required_continuous_length_m,0.12);
     assert.equal(widthOrder.least_observed_order.order_quantity,0.4);
     assert.equal(widthPrice.result.least_observed_independent_order_total,4);
+
+    // The native whole-marker known answer: a 75 mm square fits the L's recess with 5 mm clearance.
+    const consolidationSource=JSON.parse(pattern),square={...consolidationSource.pieces[0],id:'pocket',
+      vertices:{a:[0,0],b:[75,0],c:[75,75],d:[0,75]},
+      internal:[{kind:'cut',pts:[[5,8],[10,8]]}],drills:[{p:[8,12],d:2}]};
+    consolidationSource.pieces=[{...consolidationSource.pieces[0],id:'elbow',
+      vertices:{a:[0,0],b:[100,0],c:[100,20],d:[20,20],e:[20,100],f:[0,100]},
+      edges:[['bottom','a','b'],['right','b','c'],['inner-horizontal','c','d'],['inner-vertical','d','e'],
+        ['top','e','f'],['left','f','a']].map(([id,from,to])=>({id,from,to}))},square];
+    const consolidationPattern=JSON.stringify(consolidationSource);
+    const consolidationPolicy={copies:1,gap_mm:5,edge_margin_mm:0,end_margin_mm:0,maximum_marker_length_m:0.1,
+      nesting:{passes:3,work_limit:1000000}};
+    const unmerged=JSON.parse(ftx.cut_plan(consolidationPattern,JSON.stringify(consolidationPolicy)));
+    consolidationPolicy.nesting.consolidate_markers={work_limit:100000};
+    const consolidationOptions=JSON.stringify(consolidationPolicy);
+    const consolidated=await w.send({type:'cut',request:61,pattern:consolidationPattern,options:consolidationOptions,rollIndex:0});
+    assert.equal(consolidated.type,'result',consolidated.message);
+    assert.equal(consolidated.files[0].text,ftx.cut_plan(consolidationPattern,consolidationOptions));
+    assert.equal(consolidated.files[1].text,ftx.cut_svg(consolidationPattern,consolidationOptions,0));
+    assert.equal(unmerged.rolls.length,2);assert.equal(consolidated.result.rolls.length,1);
+    const consolidation=consolidated.result.marker_consolidation;
+    assert.deepEqual([consolidation.baseline_marker_count,consolidation.marker_count,consolidation.accepted_merges],[2,1,1]);
+    assert.ok(Math.abs(consolidation.baseline_length_m-0.175)<1e-14);
+    assert.equal(consolidation.length_m,0.1);assert.ok(Math.abs(consolidation.saved_length_m-0.075)<1e-14);
+    assert.equal(consolidation.optimality_claim,false);assert.equal(consolidation.budget_exhausted,false);
+    const mergedMarker=consolidated.result.rolls[0],pocket=mergedMarker.placements.find(p=>p.instance==='pocket');
+    assert.deepEqual(mergedMarker.placements.map(p=>[p.instance,p.copy]),[['elbow',0],['pocket',0]]);
+    assert.deepEqual(pocket.bounds_mm,[25,25,100,100]);assert.deepEqual(pocket.internal_cut_mm[0][0],[[30,33],[35,33]]);
+    assert.deepEqual(pocket.drills_mm,[[[33,37],2]]);assert.deepEqual(pocket.transform,[[1,-0,25],[0,1,25]]);
+    consolidationPolicy.nesting.consolidate_markers.work_limit=1;
+    const stopped=await w.send({type:'cut',request:62,pattern:consolidationPattern,options:JSON.stringify(consolidationPolicy),rollIndex:1});
+    assert.equal(stopped.type,'result',stopped.message);assert.deepEqual(stopped.result.rolls,unmerged.rolls);
+    assert.equal(stopped.result.marker_consolidation.budget_exhausted,true);
+    assert.equal(stopped.result.marker_consolidation.work_used,1);
   });
 
 test('compiled WASM fresh scalar and area identification publishes a reusable law with exact CHECK replay',
@@ -15990,7 +16029,8 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
   });
 
 test('compiled WASM textile-water objectives, moving mass, scheduled phase momentum and outgoing recoil replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY || process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY || process.env.FTX_SCHEDULED_PHASE_SUPPLY_REPLAY || process.env.FTX_SCHEDULED_PHASE_CONDENSING_REPLAY || process.env.FTX_OUTGOING_RECOIL_REPLAY || process.env.FTX_CONDENSING_OUTGOING_RECOIL_REPLAY)}, async()=>{
+  {skip:process.env.FTX_REAL_WASM!=='1' || !(process.env.FTX_DEPTH_PROFILE_WATER_REPLAY ||
+    process.env.FTX_COUPLED_WATER_REPLAY || process.env.FTX_SUPPLIED_WATER_REPLAY || process.env.FTX_CONDENSED_WATER_REPLAY || process.env.FTX_VARIABLE_WATER_REPLAY || process.env.FTX_EVAPORATING_MECHANICS_REPLAY || process.env.FTX_MECHANICAL_WATER_REPLAY || process.env.FTX_CONDENSING_MECHANICS_REPLAY || process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY || process.env.FTX_CONDENSING_IMPULSE_REPLAY || process.env.FTX_PHASE_SPECIFIC_SUPPLY_REPLAY || process.env.FTX_PHASE_SPECIFIC_CONDENSING_REPLAY || process.env.FTX_SCHEDULED_WATER_IMPULSE_REPLAY || process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY || process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY || process.env.FTX_SCHEDULED_PHASE_SUPPLY_REPLAY || process.env.FTX_SCHEDULED_PHASE_CONDENSING_REPLAY || process.env.FTX_OUTGOING_RECOIL_REPLAY || process.env.FTX_CONDENSING_OUTGOING_RECOIL_REPLAY)}, async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -15999,6 +16039,7 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
     try {
       for(const [dir,kind] of [[process.env.FTX_COUPLED_WATER_REPLAY,'initial'],[process.env.FTX_SUPPLIED_WATER_REPLAY,'supplied'],
         [process.env.FTX_CONDENSED_WATER_REPLAY,'condensed'],[process.env.FTX_VARIABLE_WATER_REPLAY,'variable'],
+        [process.env.FTX_DEPTH_PROFILE_WATER_REPLAY,'profile-mechanics'],
         [process.env.FTX_EVAPORATING_MECHANICS_REPLAY,'mechanics'],[process.env.FTX_MECHANICAL_WATER_REPLAY,'supplied-mechanics'],
         [process.env.FTX_CONDENSING_MECHANICS_REPLAY,'condensing-mechanics'],
         [process.env.FTX_INCOMING_WATER_IMPULSE_REPLAY,'supplied-impulse-mechanics'],
@@ -16013,7 +16054,7 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
         [process.env.FTX_FINITE_VAPOR_RESERVOIR_REPLAY,'condensing-finite-mechanics'],
         [process.env.FTX_SCHEDULED_CONDENSING_IMPULSE_REPLAY,'condensing-scheduled-impulse-mechanics']].filter(([dir])=>dir)) {
         const prescribed=kind.includes('impulse');
-        const finite=kind.includes('finite');
+        const finite=kind.includes('finite'),profile=kind==='profile-mechanics';
         const phases=kind.includes('phase'),scheduled=kind.includes('scheduled'),recoil=kind.includes('recoil');
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8');
         const bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
@@ -16068,12 +16109,36 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
             }
           }
           if(kind.startsWith('condensing')) assert.ok(heat.surface_water.condensation_latent_energy_j>0);
-          if(kind==='variable') {
+          if(kind==='variable'||profile) {
             assert.ok(heat.model.columns.length>0);
             for(const column of heat.model.columns) {
               assert.equal(column.schema,'ftx-dry-thermal-model/2');
               assert.deepEqual(column.temperature_domain_c,[0,60]);
               assert.equal(column.cell_capacity_j_m2_k,undefined);
+            }
+          }
+          if(profile) {
+            const initial=sourceCases[caseIndex].motion.transient_surface.initial_instance_temperature_profiles_c.band;
+            assert.deepEqual(initial,[10,30]);
+            assert.equal(heat.initial_condition.schema,'ftx-motion-surface-initial-condition/2');
+            assert.equal(heat.initial_condition.cell_order,'inside_to_outside');
+            assert.deepEqual(heat.initial_condition.instance_temperature_profiles_c,{band:initial});
+            assert.deepEqual(heat.initial_condition.temperature_range_c,[10,30]);
+            // Independent integral of the synthetic .2 kg/m² * Cp(T), split between two cells.
+            let dryEnthalpy=0;
+            for(const [index,patch] of heat.model.patches.entries()) {
+              const temperatures=heat.final.temperature_c[index];assert.equal(temperatures.length,initial.length);
+              for(const [cell,temperature] of temperatures.entries()) {
+                dryEnthalpy+=patch.reference_area_m2*0.1*(1000+10*(temperature+initial[cell]))*(temperature-initial[cell]);
+              }
+            }
+            assert.ok(Math.abs(dryEnthalpy-heat.stored_change_j)<1e-8);
+            assert.ok(Math.abs(heat.surface_water.liquid_stored_change_j+
+              heat.surface_water.initial_liquid_kg*4200*initial[0])<1e-8,'Liquid starts at the inner cell temperature');
+            for(const sample of [...heat.trace,heat]) {
+              const water=sample.surface_water;
+              assert.ok(Math.abs(sample.stored_change_j+water.liquid_stored_change_j+
+                water.exported_vapor_sensible_energy_j+water.latent_energy_j-sample.net_boundary_energy_j)<1e-8);
             }
           }
           const missing=report.simulations.find(row=>row.key==='missing-ret').evaluation.result.motion;
@@ -16082,7 +16147,7 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
             assert.deepEqual(mechanics,heat.mechanical_coupling);
             assert.deepEqual(mechanics.qualification,heat.request.mechanical_coupling);
             assert.deepEqual(mechanics.qualification,sourceCases[caseIndex].motion.transient_surface.mechanical_coupling);
-            if(kind==='mechanics') {
+            if(kind==='mechanics'||profile) {
               assert.equal(mechanics.remaining_liquid_mass_kg,0);
               assert.ok(mechanics.initial_liquid_mass_kg>0);
             } else {
@@ -17307,6 +17372,18 @@ function removeGuidedDryHeatInstance(p,instance) {
   const button=descendants(p.e.guidedMotionHeatInstances).find(node=>node.tag==='button'&&node.textContent==='Remove initial temperature for '+instance);
   assert.ok(button,instance);assert.equal(button.disabled,false);button.onclick();
 }
+function guidedDryHeatProfileMode(p) {
+  p.e.guidedMotionHeatInitialMode.value='profiles';p.e.guidedMotionHeatInitialMode.handlers.change();
+}
+function guidedDryHeatProfile(p,instance,temperatures) {
+  p.e.guidedMotionHeatProfileInstance.value=instance;
+  p.e.guidedMotionHeatProfileValues.value=Array.isArray(temperatures)?temperatures.join(', '):String(temperatures);
+  p.e.addMotionHeatProfile.onclick();
+}
+function removeGuidedDryHeatProfile(p,instance) {
+  const button=descendants(p.e.guidedMotionHeatProfiles).find(node=>node.tag==='button'&&node.textContent==='Remove initial profile for '+instance);
+  assert.ok(button,instance);assert.equal(button.disabled,false);button.onclick();
+}
 
 const guidedLiquidMechanicsOriginal=' {"schema":"ftx-coupled-liquid-mechanics/6","material_report_sha256":"'+'c'.repeat(64)+
   '","source":{"reference":"test:independent mechanics 🧵","sample":18446744073709551615}}\r\n';
@@ -18080,6 +18157,115 @@ test('original moving coverage preserves instance temperature sources and render
   const receipt=descendants(output).find(node=>node.tag==='details'&&node.children[0].textContent==='A: initial temperature source and retained triangle ownership (display only)');
   receipt.open=true;receipt.handlers.toggle();assert.match(visibleText(receipt),/coverage-source-lock/);assert.match(visibleText(receipt),/initial-coverage-frame/);
   const link=descendants(output).find(node=>node.download==='scenario-request.json');assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+});
+
+test('guided initial temperature profiles retain every cell and display only native retained instance receipts',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  guidedDryHeatInstance(p,'front.R',123);guidedDryHeatProfileMode(p);
+  guidedDryHeatProfile(p,'front.R',[35,25,10,-5]);guidedDryHeatProfile(p,'lining.R',[30,25,20,15]);
+  p.e.guidedMotionHeatInitial.value='invalid';p.e.guidedMotionHeatInitial.handlers.input();
+  await addGuidedMotion(p,0.002,35);await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const request=JSON.parse(sent.scenarioRequest),heat=request.motion.transient_surface;
+  assert.deepEqual(heat.initial_instance_temperature_profiles_c,{'front.R':[35,25,10,-5],'lining.R':[30,25,20,15]});
+  assert.equal(Object.hasOwn(heat,'initial_instance_temperatures_c'),false);
+  assert.equal(Object.hasOwn(request,'surface'),false);
+  // Explicit native-result double: retained owners and cell order are not inferred from the draft form.
+  const initial={schema:'ftx-motion-surface-initial-condition/2',model_sha256:'retained-profile-model',cell_order:'inside_to_outside',
+    instances:['lining.R','unused','front.R'],triangle_instance:[2,0],
+    instance_temperature_profiles_c:{'lining.R':[30,25,20,15],unused:[999,999,999,999],'front.R':[35,25,10,-5]},
+    temperature_range_c:[-5,35]};
+  const history={request:heat,initial_condition:initial,duration_s:0.002,thermal_steps:1,
+    trace:[{temperature_range_c:[0,20]}],net_boundary_energy_j:1,stored_change_j:1,balance_error_j:0};
+  const report=scenarioReport();report.scenario.scenario=request;
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome(history)});
+  p.emit(report,[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const output=section(p,'Fresh drape and heat alternatives'),table=descendants(output)
+    .find(node=>node.tag==='table'&&node.children[0].textContent==='A: resolved initial dry sheet temperatures');
+  assert.ok(table);assert.match(visibleText(table),/inside to outside/);
+  assert.deepEqual(plain(table.children.slice(2).map(row=>row.children.map(node=>node.textContent))),
+    [['lining.R','30, 25, 20, 15'],['front.R','35, 25, 10, -5']]);
+  assert.doesNotMatch(visibleText(table),/unused|999|123/);
+  assert.match(visibleText(output),/Resolved initial range over retained sheets: \[-5, 35\]/);
+  const source=descendants(output).find(node=>node.tag==='details'&&node.children[0].textContent==='A: initial temperature source and retained triangle ownership (display only)');
+  source.open=true;source.handlers.toggle();assert.match(visibleText(source),/retained-profile-model/);assert.match(visibleText(source),/inside_to_outside/);
+  const download=descendants(output).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);
+  await p.load();assert.equal(p.e.guidedMotionHeatProfiles.children.length,0);
+  assert.equal(p.e.guidedMotionHeatInitialMode.value,'uniform');
+  assert.equal(p.e.guidedMotionHeatProfileInstance.value,'');assert.equal(p.e.guidedMotionHeatProfileValues.value,'');
+});
+
+test('guided initial temperature profiles freeze independent named cases and reject stale profile row actions',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  guidedDryHeatProfileMode(p);guidedDryHeatProfile(p,'front.R',[30,20,10,0]);guidedDryHeatProfile(p,'lining.R',[25,25,25,25]);
+  const obsolete=descendants(p.e.guidedMotionHeatProfiles).find(node=>node.tag==='button'&&node.textContent==='Remove initial profile for lining.R');
+  guidedDryHeatProfile(p,'lining.R',[30,25,20,15]);obsolete.onclick();assert.equal(p.e.guidedMotionHeatProfiles.children.length,2);
+  await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'cold outside');
+  guidedDryHeatProfile(p,'front.R',[30,30,30,30]);await saveGuidedCase(p,'uniform warm');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).cases.map(item=>item.scenario.motion.transient_surface.initial_instance_temperature_profiles_c),
+    [{'front.R':[30,20,10,0],'lining.R':[30,25,20,15]},{'front.R':[30,30,30,30],'lining.R':[30,25,20,15]}]);
+  p.emit(scenarioReport());p.e.clearMotionHeatProfiles.onclick();p.e.guidedMotionHeatInitial.value='invalid';p.e.guidedMotionHeatInitial.handlers.input();
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false);
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);p.emit(scenarioReport());
+  await p.load();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatProfileMode(p);guidedDryHeatProfile(p,'lining.R',[1,2,3,4]);
+  obsolete.onclick();assert.equal(p.e.guidedMotionHeatProfiles.children.length,1,'Old garment rows cannot remove a new profile');
+});
+
+test('guided initial temperature profiles distinguish inactive drafts from saved changes that cancel pending case and motion work',async()=>{
+  for(const saving of [false,true])for(const change of ['save','remove','clear']) {
+    const {p,sources}=await guidedScenarioSetup();if(saving)guidedNamedCases(p);
+    guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);guidedDryHeatProfileMode(p);
+    guidedDryHeatProfile(p,'front.R',[30,20,10,0]);await addGuidedMotion(p,0.002,35);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),count=old.messages.length,running=saving?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    p.e.guidedMotionHeatProfileValues.value='40, 30, 20, 10';p.e.guidedMotionHeatProfileValues.handlers.input();
+    p.e.guidedMotionHeatProfileInstance.handlers.input();
+    p.e.guidedMotionHeatInitial.value='invalid';p.e.guidedMotionHeatInitial.handlers.input();
+    guidedDryHeatInstance(p,'front.R',999);p.e.clearMotionHeatInstances.onclick();
+    assert.equal(old.dead,false,'Unsaved profiles and hidden uniform controls cannot cancel the frozen profile request');
+    if(change==='save')p.e.addMotionHeatProfile.onclick();
+    else if(change==='remove')removeGuidedDryHeatProfile(p,'front.R');else p.e.clearMotionHeatProfiles.onclick();
+    assert.equal(old.dead,true,change);p.ready();delay.resolve(sources.fit);await running;
+    assert.equal(old.messages.length,count);assert.equal(p.current().messages.length,0);
+    if(saving)assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+  const {p,sources}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  guidedDryHeatProfileMode(p);guidedDryHeatProfile(p,'front.R',[30,20,10,0]);await addGuidedMotion(p,0.002,35);
+  const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const reading=p.e.scenario.onclick();p.e.guidedMotionHeatInitialMode.value='uniform'; // No event: the in-flight request owns its captured mode.
+  delay.resolve(sources.fit);await reading;const old=p.current(),sent=old.messages.at(-1);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.transient_surface.initial_instance_temperature_profiles_c,{'front.R':[30,20,10,0]});
+  p.e.guidedMotionHeatInitialMode.value='profiles';guidedDryHeatProfile(p,'front.R',[40,30,20,10]);
+  assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete-profile.json',text:'{}'}]});
+  assert.equal(p.live.size,0);assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  guidedTransientSource(p);await p.e.scenario.onclick();const original=p.current(),fileRequest=original.messages.at(-1);
+  p.e.guidedMotionHeatProfileValues.value='invalid';p.e.guidedMotionHeatProfileValues.handlers.input();
+  p.e.addMotionHeatProfile.onclick();p.e.clearMotionHeatProfiles.onclick();assert.equal(original.dead,false);
+  assert.ok(fileRequest.scenarioRequest.includes(guidedTransientOriginal));
+});
+
+test('guided initial temperature profiles require explicit complete cells and never repair a changed resolution silently',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);guidedDryHeatProfileMode(p);
+  for(const [instance,values] of [['','1,2,3,4'],[' \t','1,2,3,4'],['front.R',''],['front.R','1,2,3'],['front.R','1,2,3,4,5'],
+    ['front.R','1, ,3,4'],['front.R','1,2,3,'],['front.R','1,2,3,Infinity'],['front.R','1,2,3,-273.1501']]) {
+    guidedDryHeatProfile(p,instance,values);assert.equal(p.e.guidedMotionHeatProfiles.children.length,0);assert.equal(p.e.error.hidden,false);
+  }
+  guidedDryHeatProfile(p,' front β.R ',[-273.15,-20,0,5]);guidedDryHeatProfile(p,'__proto__',[0,1,2,3]);
+  await addGuidedMotion(p,0.002,35);await p.e.scenario.onclick();const old=p.current(),sent=old.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const profiles=JSON.parse(sent.scenarioRequest).motion.transient_surface.initial_instance_temperature_profiles_c;
+  assert.deepEqual(Object.keys(profiles),[' front β.R ','__proto__']);assert.equal(Object.hasOwn(profiles,'__proto__'),true);
+  assert.deepEqual(profiles.__proto__,[0,1,2,3]);
+  p.e.guidedMotionHeatCells.value='3';p.e.guidedMotionHeatCells.handlers.input();assert.equal(old.dead,true);p.ready();
+  const count=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,count);
+  assert.match(p.e.error.textContent,/exactly cells_per_layer/);assert.equal(p.e.guidedMotionHeatProfiles.children.length,2);
+  p.e.guidedMotionHeatCells.value='4';p.e.guidedMotionHeatCells.handlers.input();await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.transient_surface.initial_instance_temperature_profiles_c,profiles);
+  p.emit(scenarioReport());p.e.clearMotionHeatProfiles.onclick();const cleared=p.current().messages.length;
+  await p.e.scenario.onclick();assert.equal(p.current().messages.length,cleared);assert.match(p.e.error.textContent,/every retained physical instance/);
 });
 
 test('guided dry instance temperatures retain explicit overrides, uniform fallback and actual resolved source receipts',async()=>{

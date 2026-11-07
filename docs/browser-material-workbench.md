@@ -1059,6 +1059,31 @@ sheet starts when each actual owner has the independent mechanical source qualif
 must contain the complete water temperature/loading domain. A coupled failure refuses and restores
 the whole motion; it cannot publish an uncoupled replacement. Moving coverage retains its dry contract.
 
+#### Start with a temperature gradient through each sheet
+
+For independent-sheet heat, choose **Explicit profile through every retained sheet** under
+**Initial temperature arrangement**. Set **Cells through each sheet**, enter an exact retained
+physical instance and that many comma-separated temperatures, then choose **Add or replace initial
+temperature profile**. Values run from the inner face toward the outer face. For example, two cells
+with `30, 10` describe an explicitly warmer inner half and cooler outer half; the editor supplies
+neither measured temperatures nor an equilibrium assumption.
+
+Save one complete profile for every retained instance. Missing or extra names and cells refuse;
+this mode has no fallback for an unlisted instance. Switching back to **Uniform through each sheet**
+retains both sets of saved drafts, but only the selected arrangement enters the request. Changing
+the cell count requires replacing profiles with the exact new length; values are never resized,
+interpolated or averaged. Clear or remove profiles explicitly. Unsaved fields do not change an
+active request, while saved changes cancel obsolete work and pending case saves. Named cases keep
+their captured profiles, and replacing the original garment clears garment-specific entries.
+
+The request uses `initial_instance_temperature_profiles_c`; native admission checks every cell
+against its material and any requested dissipation or water qualifications. The result displays
+each retained instance's exact inside-to-outside array and actual initial extrema. Heat storage
+uses every cell separately, including temperature-dependent heat capacity. Initial liquid shares
+the inner cell's temperature, also when qualified liquid mass and momentum affect motion. Original
+motion files preserve the same native field. Moving body coverage continues to use its separate
+uniform-per-instance initialization.
+
 Every saved endpoint owns its four boundary values. Editing the current endpoint or film fields
 prepares a draft; only adding or replacing an endpoint changes the saved schedule. Removing an
 endpoint also removes its boundary, and the next endpoint retains its own conditions over its new

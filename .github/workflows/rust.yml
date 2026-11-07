@@ -82,6 +82,7 @@ jobs:
           FTX_SUPPLIED_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-water-replay
           FTX_CONDENSED_WATER_REPLAY: ${{ runner.temp }}/ftx-condensed-water-replay
           FTX_VARIABLE_WATER_REPLAY: ${{ runner.temp }}/ftx-variable-water-replay
+          FTX_DEPTH_PROFILE_WATER_REPLAY: ${{ runner.temp }}/ftx-depth-profile-water-replay
           FTX_EVAPORATING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-evaporating-mechanics-replay
           FTX_MECHANICAL_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-mechanics-replay
           FTX_CONDENSING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-condensing-mechanics-replay
@@ -113,6 +114,7 @@ jobs:
           FTX_SUPPLIED_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-water-replay
           FTX_CONDENSED_WATER_REPLAY: ${{ runner.temp }}/ftx-condensed-water-replay
           FTX_VARIABLE_WATER_REPLAY: ${{ runner.temp }}/ftx-variable-water-replay
+          FTX_DEPTH_PROFILE_WATER_REPLAY: ${{ runner.temp }}/ftx-depth-profile-water-replay
           FTX_EVAPORATING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-evaporating-mechanics-replay
           FTX_MECHANICAL_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-mechanics-replay
           FTX_CONDENSING_MECHANICS_REPLAY: ${{ runner.temp }}/ftx-condensing-mechanics-replay

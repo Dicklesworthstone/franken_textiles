@@ -375,6 +375,10 @@ History-dependent materials require a fixed-duration run and refuse automatic se
 <h3>Cutting, purchasing and sewing</h3>
 <label>Roll-planning options JSON <input id="cutOptions" type="file" accept=".json,application/json"></label>
 <p class="note">Set <code>maximum_marker_length_m</code> in the options to place complete pieces across separate markers within a cutting-table or continuous-cut limit. Purchasing normally combines markers of the same material into one order; optional supplier allocation can distribute whole markers across qualified offers.</p>
+<p class="note">To fill unused space across those markers, add <code>nesting.consolidate_markers: {"work_limit":100000}</code>
+to the nesting options. The bounded search tries to absorb a complete later marker into an earlier same-material marker without
+increasing its stock length. It retains grain permissions and cutting gaps. The report shows saved stock length and work used;
+an exhausted search retains a complete layout and does not establish a globally optimal cut plan.</p>
 <p class="note">For a qualified knife program with declared fixtures, add
 <code>program.travel_routing: {"model":"fixture_box_visibility/1","waypoint_offset_mm":1.0}</code>
 to allow checked raised-tool detours. The positive offset places candidate waypoints around fixture bounds;
@@ -1267,8 +1271,10 @@ Choose numerical force limits explicitly; no safe-fit threshold is supplied.</p>
 Each endpoint gives an absolute arm and leg pose; selecting standing explicitly returns the legs to standing.</p>
 <label><input id="guidedMotionHeat" type="checkbox"> Track independent-sheet heat through this movement</label>
 <fieldset id="guidedMotionHeatSettings" hidden><legend>Sheet heat initial state and work limits</legend>
+<label>Initial temperature arrangement <select id="guidedMotionHeatInitialMode"><option value="uniform">Uniform through each sheet</option>
+<option value="profiles">Explicit profile through every retained sheet</option></select></label>
 <div class="study-fields">
-<label>Default initial textile temperature (°C) <input id="guidedMotionHeatInitial" type="number" min="-273.15" step="any" placeholder="Explicit initial condition"></label>
+<label id="guidedMotionHeatDefaultField">Default initial textile temperature (°C) <input id="guidedMotionHeatInitial" type="number" min="-273.15" step="any" placeholder="Explicit initial condition"></label>
 <label>Cells through each sheet <input id="guidedMotionHeatCells" type="number" min="1" max="64" step="1" value="4"></label>
 <label>Maximum thermal substep (s) <input id="guidedMotionHeatStep" type="number" min="0.000000001" max="1" step="any" value="0.01"></label>
 <label>Temperature-cell advances per history <input id="guidedMotionHeatBudget" type="number" min="1" max="10000000" step="1" value="100000"></label>
@@ -1283,7 +1289,7 @@ is an authored condition after the initial drape. Work limits bound computation;
 The engine distributes converted work uniformly through reference thickness over each accepted motion interval.
 Initial drape work, recoverable energy and numerical loss are excluded. Choices apply to this whole history and freeze with each saved named case.</p>
 </fieldset>
-<details><summary>Different initial temperatures for individual garment instances</summary>
+<details id="guidedMotionHeatUniform"><summary>Different initial temperatures for individual garment instances</summary>
 <p class="note">The default above applies to every unlisted retained instance. Save an override for each instance that starts
 at a different temperature, even if two instances use the same material. Use its exact physical instance name from the
 retained garment, not a material ID or source-piece shortcut. The engine checks the instance and its material temperature domain.</p>
@@ -1298,6 +1304,21 @@ retained garment, not a material ID or source-piece shortcut. The engine checks 
 <p class="note">Only saved overrides run. Editing these two fields prepares a change; use Add or replace to save it.
 Each sheet starts uniformly through its thickness. Disabling heat retains this draft; saved named cases keep their own temperatures.</p>
 </details>
+<div id="guidedMotionHeatProfileSettings" hidden>
+<p class="note">Save a profile for every retained physical instance, including instances sharing one material.
+Enter one temperature per cell in order from the inner face to the outer face. The engine checks each cell against its material
+and heating qualifications. Liquid initially shares its sheet's inner-cell temperature.</p>
+<div class="study-fields">
+<label>Exact physical instance <input id="guidedMotionHeatProfileInstance" type="text" placeholder="e.g. front.R" spellcheck="false"></label>
+<label>Temperatures from inner to outer face (°C, comma separated) <input id="guidedMotionHeatProfileValues" type="text" placeholder="30, 25, 20, 15" spellcheck="false"></label>
+</div>
+<button id="addMotionHeatProfile" type="button" disabled>Add or replace initial temperature profile</button>
+<p id="guidedMotionHeatProfilesSummary" class="note" role="status">No profiles saved. Every retained instance needs an explicit profile.</p>
+<div id="guidedMotionHeatProfiles"></div>
+<button id="clearMotionHeatProfiles" type="button" disabled>Clear saved profiles</button>
+<p class="note">Only saved profiles run. Changing the cell count requires replacing profiles with the new number of values;
+temperatures are never interpolated automatically. Switching arrangements retains your drafts; saved named cases keep their own initial states.</p>
+</div>
 <fieldset><legend>Textile-owned liquid</legend>
 <label>Qualified liquid policy <select id="guidedMotionWaterMode">
 <option value="none">No textile liquid</option>

@@ -432,7 +432,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined) {
     const fields = ["schema", "initial_temperature_c", "boundaries", "max_step_s", "max_cell_steps",
       ...(coverage ? ["body_triangle_ids", "instance_layers", "settings", "exposed_boundaries", "max_geometry_operations"] : ["cells_per_layer"])];
     const heat = object(state[consumer], [...fields, ...heatingFields, "initial_instance_temperatures_c", "exterior_exchange",
-      ...(coverage ? ["bare_boundaries", "exposed_exterior_exchange"] : [])], fields, label);
+      ...(coverage ? ["bare_boundaries", "exposed_exterior_exchange"] : ["initial_instance_temperature_profiles_c"])], fields, label);
     const schema = coverage ? "ftx-motion-coverage-heat/1" : "ftx-motion-surface-heat/1";
     if (heat.schema !== schema) throw Error(`${label} needs ${schema}.`);
     for (const field of heatingFields) {
@@ -458,6 +458,31 @@ export function buildMaterialMotionRequest(state, liquid = undefined) {
         instanceLayers: entries.map(([instance, layer]) => ({ instance, layer })), settings: heat.settings });
     }
     temperature(heat.initial_temperature_c, coverage ? "Initial coverage temperature" : "Initial sheet temperature");
+    if (!coverage && own(heat, "initial_instance_temperature_profiles_c")) {
+      if (own(heat, "initial_instance_temperatures_c")) {
+        throw Error("Choose uniform instance temperatures or complete through-thickness profiles, not both.");
+      }
+      const profiles = heat.initial_instance_temperature_profiles_c;
+      if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) {
+        throw Error("Initial temperature profiles must be an object keyed by exact physical instance names.");
+      }
+      const entries = Object.entries(profiles);
+      if (!entries.length || entries.length > 65536) throw Error("Initial temperature profiles need 1–65536 explicit instances.");
+      let size = 2;
+      for (const [instance, values] of entries) {
+        name(instance, "Initial-profile instance");
+        if (!Array.isArray(values) || !Number.isSafeInteger(heat.cells_per_layer) || heat.cells_per_layer < 1
+          || heat.cells_per_layer > 64 || values.length !== heat.cells_per_layer) {
+          throw Error("Each initial temperature profile needs exactly cells_per_layer values, from inside to outside.");
+        }
+        for (const [cell, value] of values.entries()) {
+          temperature(value, `Initial cell ${cell + 1} for ${instance}`);
+        }
+        size += bytes(JSON.stringify(instance)) + bytes(JSON.stringify(values)) + 2;
+        if (size > MAX_REQUEST_BYTES) throw Error("Guided motion request exceeds 16 MiB.");
+      }
+      // The native retained mesh requires complete instance coverage and qualifies every cell.
+    }
     if (own(heat, "initial_instance_temperatures_c")) {
       const values = heat.initial_instance_temperatures_c;
       if (!values || typeof values !== "object" || Array.isArray(values)) {
