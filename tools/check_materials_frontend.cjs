@@ -19596,3 +19596,111 @@ test('pre-run saving cancels obsolete reads and pattern replacement clears saved
   assert.ok(urls.every(url=>!p.live.has(url)));assert.deepEqual(p.e.studyPieces.children.map(n=>n.value),['replacement']);
   await reopenSavedStudy(p,workbenchSavedFile());assert.ok(p.live.size>0);p.windowEvents.pagehide();assert.equal(p.live.size,0);
 });
+
+function authoredFitControls(p, overrides={}) {
+  p.e.fitSource.value='guided';p.e.fitSource.handlers.change();
+  const values={Name:'length',Label:'Synthetic explicit target',Kind:'vertical',Instance:'front',From:'a',To:'d',
+    Body:'stature',BodyScale:'0.1',BodyOffset:'0',Minimum:'-0.2',Nominal:'0',Maximum:'0.2',Dy:'0',Scale:'1',Line:'vertex',...overrides};
+  for(const [key,value]of Object.entries(values)){p.e['guidedFit'+key].value=value;p.e['guidedFit'+key].handlers.input();}
+}
+function authoredFitAction(p,label) {
+  const button=descendants(p.e.guidedFitTargets).find(node=>node.tag==='button'&&node.textContent===label);
+  assert.ok(button,label);assert.equal(button.disabled,false,label);button.onclick();
+}
+async function authoredFitDownload(p) {
+  const link=descendants(p.e.guidedFitFiles).find(node=>node.download==='fit_spec.json');
+  assert.ok(link,p.e.error.textContent);return p.blobs.get(link.href).text();
+}
+test('authored fit targets feed the exact contract into design, export and drape consumers without reading an inactive file',async()=>{
+  const {p}=await guidedDesignSetup();authoredFitControls(p);
+  assert.equal(p.e.study.disabled,true,'An empty authored source cannot borrow the selected original contract');
+  p.e.fit.files[0].arrayBuffer=async()=>{throw Error('Inactive fit file was read');};
+  p.e.guidedFitAdd.onclick();const raw=await authoredFitDownload(p);assert.equal(p.e.study.disabled,false,p.e.error.textContent);
+  await p.e.study.onclick();let sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);assert.equal(sent.onBody,true);assert.ok(sent.studyRequest.includes(raw));
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_fit.fit_spec,JSON.parse(raw));p.emit(studyReport());
+  await p.bind();p.select('measurements','{"schema":"fabric-measurements/1","fused":{}}');p.e.measurements.handlers.change();
+  for(const op of ['exports','fold']) {
+    await p.e[op].onclick();sent=p.current().messages.at(-1);
+    assert.equal(sent.type,op,p.e.error.textContent);assert.equal(sent.fit,raw);
+    p.current().emit({type:'error',request:sent.request,message:'Synthetic dispatch check; no numerical result supplied'});
+  }
+});
+
+test('authored fit editor saves every supported measurement kind and replaces atomically while preserving draft isolation',async()=>{
+  const p=await pageModule();await p.load();authoredFitControls(p);p.e.guidedFitAdd.onclick();
+  for(const values of [
+    {Name:'width',Kind:'width',Vertex:'a',Body:'chest',Dy:'-2'},
+    {Name:'landmark-width',Kind:'width',Line:'landmark',Landmark:'chest',Body:'chest'},
+    {Name:'girth',Kind:'girth',Instances:'front.R\nfront.L\nback',Landmark:'chest',Body:'chest',Minimum:'-5',Nominal:'0',Maximum:'8'},
+    {Name:'path',Kind:'path',Refs:'front.R/neck\nfront.L/neck+shoulder',Scale:'0.5',Body:'neck_base'},
+  ]){for(const [key,value]of Object.entries(values))p.e['guidedFit'+key].value=value;p.e.guidedFitKind.handlers.change();p.e.guidedFitAdd.onclick();}
+  const raw=await authoredFitDownload(p),points=JSON.parse(raw).points;
+  assert.deepEqual(points.map(point=>point.kind),['vertical','width','width','girth','path']);
+  assert.equal(points[1].at_vertex,'a');assert.equal(points[1].dy,-2);assert.equal(Object.hasOwn(points[1],'landmark'),false);
+  assert.equal(points[2].landmark,'chest');assert.equal(Object.hasOwn(points[2],'at_vertex'),false);
+  assert.deepEqual(points[3].instances,['front.R','front.L','back']);assert.deepEqual(points[4].refs,['front.R/neck','front.L/neck+shoulder']);
+  assert.equal(points[4].scale,0.5);assert.equal(Object.hasOwn(points[4],'instance'),false);
+  authoredFitAction(p,'Edit length');assert.equal(p.e.guidedFitMinimum.value,'-0.2');assert.equal(p.e.guidedFitKind.value,'vertical');
+  p.e.guidedFitMinimum.value='2';p.e.guidedFitMinimum.handlers.input();
+  assert.equal(await authoredFitDownload(p),raw,'Unsaved fields never replace the contract');
+  authoredFitAction(p,'Replace length');assert.match(p.e.error.textContent,/minimum/);assert.equal(await authoredFitDownload(p),raw);
+  p.e.guidedFitMinimum.value='-2';authoredFitAction(p,'Replace length');
+  assert.equal(JSON.parse(await authoredFitDownload(p)).points[0].target_mm[0],-2);
+  authoredFitAction(p,'Remove path');assert.equal(JSON.parse(await authoredFitDownload(p)).points.length,4);
+  p.e.guidedFitClear.onclick();assert.equal(p.e.guidedFitTargets.children.length,0);assert.equal(p.e.guidedFitFiles.children.length,0);
+});
+
+test('authored fit mode keeps original source bytes and refuses empty or malformed replacements without fallback',async()=>{
+  const {p,fit}=await guidedDesignSetup();authoredFitControls(p);const before=p.current().messages.length;
+  await p.e.study.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/contract|targets/);
+  p.e.guidedFitAdd.onclick();const raw=await authoredFitDownload(p);
+  p.e.fitSource.value='file';p.e.fitSource.handlers.change();assert.equal(p.e.guidedFit.hidden,true);
+  await p.e.study.onclick();let sent=p.current().messages.at(-1);assert.ok(sent.studyRequest.includes(fit));assert.equal(sent.studyRequest.includes(raw),false);
+  p.emit(studyReport());p.e.fitSource.value='guided';p.e.fitSource.handlers.change();
+  assert.equal(await authoredFitDownload(p),raw);await p.e.study.onclick();assert.ok(p.current().messages.at(-1).studyRequest.includes(raw));
+  p.emit(studyReport());p.select('fit','{broken');p.e.fit.handlers.change();assert.equal(p.e.fitSource.value,'file');
+  const count=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,count);assert.equal(p.e.error.hidden,false);
+  p.e.fitSource.value='guided';p.e.fitSource.handlers.change();assert.equal(await authoredFitDownload(p),raw);
+});
+
+test('authored fit saved changes cancel pending source reads and late results while draft edits leave snapshots running',async()=>{
+  const {p}=await guidedDesignSetup();authoredFitControls(p);p.e.guidedFitAdd.onclick();
+  const raw=await authoredFitDownload(p),oldLink=p.e.guidedFitFiles.children[0].href,delay=deferred();let reading=false;
+  p.e.body.files=[{size:3,arrayBuffer:async()=>{reading=true;return delay.promise;}}];
+  const old=p.current(),before=old.messages.length,running=p.e.study.onclick();await new Promise(setImmediate);assert.equal(reading,true);
+  p.e.guidedFitMinimum.value='-2';p.e.guidedFitMinimum.handlers.input();assert.equal(old.dead,false);
+  assert.equal(await authoredFitDownload(p),raw);
+  authoredFitAction(p,'Replace length');assert.equal(old.dead,true);assert.equal(p.live.has(oldLink),false);p.ready();
+  delay.resolve(new Uint8Array([1,3,5]).buffer);await running;
+  assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+  old.emit({type:'result',request:1,result:studyReport(),files:[{name:'obsolete.json',text:'{}'}]});
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(JSON.parse(await authoredFitDownload(p)).points[0].target_mm[0],-2);
+});
+
+test('authored fit contracts freeze independently into named cases and later target edits do not rewrite saved cases',async()=>{
+  const {p}=await guidedScenarioSetup();authoredFitControls(p);p.e.guidedFitAdd.onclick();
+  const first=await authoredFitDownload(p);guidedNamedCases(p);await saveGuidedCase(p,'first targets');
+  assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
+  p.e.guidedFitMaximum.value='1';authoredFitAction(p,'Replace length');const second=await authoredFitDownload(p);
+  await saveGuidedCase(p,'second targets');assert.equal(p.e.guidedScenarioCases.children.length,2,p.e.error.textContent);
+  p.e.guidedFitClear.onclick();await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(first));assert.ok(sent.scenarioRequest.includes(second));
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases[0].scenario.fit_spec,JSON.parse(first));assert.deepEqual(cases[1].scenario.fit_spec,JSON.parse(second));
+});
+
+test('authored fit targets survive evaluated design adoption but clear on an unrelated source and page exit',async()=>{
+  const {p}=await guidedDesignSetup();authoredFitControls(p);p.e.guidedFitAdd.onclick();
+  const raw=await authoredFitDownload(p),stale=descendants(p.e.guidedFitTargets).find(node=>node.textContent==='Replace length');
+  await p.e.study.onclick();p.emit({...studyReport([studyRow('chosen','{"pieces":[{"id":"front"}],"derived":true}')]),schema:'ftx-design-study-report/1'});
+  descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(node=>node.tag==='button'&&node.textContent==='Use chosen pattern').onclick();
+  assert.equal(p.e.fitSource.value,'guided');assert.equal(await authoredFitDownload(p),raw);
+  assert.equal(p.e.guidedDesign.checked,false);await p.bind();p.select('measurements','{}');p.e.measurements.handlers.change();
+  await p.e.exports.onclick();assert.equal(p.current().messages.at(-1).fit,raw);
+  p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'Synthetic transport only'});
+  await p.load();assert.equal(p.e.fitSource.value,'guided');assert.equal(p.e.guidedFitTargets.children.length,0);assert.equal(p.e.guidedFitFiles.children.length,0);
+  stale.onclick();assert.equal(p.e.guidedFitTargets.children.length,0,'An old row cannot republish a target after source replacement');
+  authoredFitControls(p);p.e.guidedFitAdd.onclick();assert.ok(p.live.size);p.windowEvents.pagehide();assert.equal(p.live.size,0);
+});

@@ -858,6 +858,55 @@ function adaptiveDomain(variable) {
   return [low, high, variable.initialMm];
 }
 
+// The selected-body adapter reports these canonical tape quantities in millimetres.
+export const GUIDED_FIT_BODY_MEASUREMENTS = Object.freeze([
+  "stature", "chest", "waist", "hip", "waist_height", "crotch_height", "thigh", "knee", "calf", "ankle",
+  "upper_arm", "wrist", "arm_length", "knee_height", "back_neck_to_waist", "neck_base", "head",
+  "shoulder_length", "across_back", "total_crotch_length", "outseam",
+]);
+
+/** Author explicit canonical targets; actual geometry, body readings and fit admission stay in Rust. */
+export function buildGuidedFitSpec(points) {
+  if (!Array.isArray(points) || !points.length || points.length > 32) throw Error("Save 1–32 explicit fit targets.");
+  const ids = new Set();
+  const retained = Array.from(points, point => {
+    const common = ["id", "kind", "body", "target_mm"], optional = ["label", "body_scale", "body_offset_mm"];
+    const fields = { girth: ["instances", "landmark", "dy"], width: ["instance", "at_vertex", "landmark", "dy"],
+      vertical: ["instance", "from", "to"], path: ["refs", "scale"] };
+    if (!own(fields, point?.kind)) throw Error("Choose a girth, width, vertical or path fit target.");
+    object(point, [...common, ...optional, ...fields[point.kind]], common, "Fit target");
+    name(point.id, "Fit target name");
+    if (ids.has(point.id)) throw Error("Fit target names must be unique.");
+    ids.add(point.id);
+    if (!GUIDED_FIT_BODY_MEASUREMENTS.includes(point.body)) throw Error("Choose a supported body measurement in millimetres.");
+    if (own(point, "label")) name(point.label, "Fit target label");
+    const target = point.target_mm;
+    if (!Array.isArray(target) || target.length !== 3 || Array.from(target).some(value => typeof value !== "number" || !Number.isFinite(value)) ||
+      target[0] > target[1] || target[1] > target[2]) throw Error("Ease targets need finite minimum ≤ nominal ≤ maximum values in millimetres.");
+    for (const key of ["body_scale", "body_offset_mm", "dy", "scale"]) if (own(point, key) &&
+      (typeof point[key] !== "number" || !Number.isFinite(point[key]))) throw Error("Fit target " + key + " must be finite.");
+    if (point.kind === "girth" || point.kind === "path") {
+      const key = point.kind === "girth" ? "instances" : "refs", selectors = point[key];
+      if (!Array.isArray(selectors) || !selectors.length || selectors.length > 64) throw Error("A fit target needs 1–64 explicit instance or path references.");
+      for (const value of selectors) name(value, "Fit target reference");
+      if (point.kind === "girth") name(point.landmark, "Measuring-line landmark");
+    } else {
+      name(point.instance, "Physical instance");
+      if (point.kind === "vertical") {
+        name(point.from, "Starting vertex"); name(point.to, "Ending vertex");
+      } else {
+        if (own(point, "at_vertex") === own(point, "landmark")) throw Error("A width target needs exactly one vertex or landmark for its measuring line.");
+        name(point.at_vertex ?? point.landmark, "Measuring-line vertex or landmark");
+      }
+    }
+    return { ...point, target_mm: [...target], ...(point.instances ? { instances: [...point.instances] } : {}),
+      ...(point.refs ? { refs: [...point.refs] } : {}) };
+  });
+  const raw = JSON.stringify({ schema: "fabric-fit/1", points: retained }, null, 2) + "\n";
+  bytes(raw, 256 * 1024, "Authored fit contract exceeds 256 KiB.");
+  return raw;
+}
+
 /** Validate explicitly authored additional starts against the same complete variable domains. */
 export function buildGuidedDesignRestartPoints(points, variables) {
   if (!Array.isArray(points) || points.length > 31) throw Error("Choose at most 31 additional adaptive starting points.");

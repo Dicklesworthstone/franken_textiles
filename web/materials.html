@@ -288,9 +288,61 @@ material binding does not establish measurement readiness or physical fit.</p>
 drapes and studies using these measurements. Photo estimates remain PHOTO_ESTIMATED. Separate body-request studies
 use their own evidence. Added records do not establish readiness or physical fit.</p>
 </details>
-<label>Fit specification JSON <input id="fit" type="file" accept=".json,application/json"></label>
+<label>Garment fit targets <select id="fitSource">
+<option value="file">Use a selected or received fit specification</option>
+<option value="guided">Author explicit points of measure</option>
+</select></label>
+<label id="fitFileField">Fit specification JSON <input id="fit" type="file" accept=".json,application/json"></label>
 <p id="importFitNote" class="note" hidden>Using the supplied imported fit specification. Inspect it below, or choose a file above to replace it. Measurement readiness and physical fit remain separate.</p>
 <div id="importFitFiles" class="links"></div>
+<div id="guidedFit" hidden>
+<p>Save the garment dimensions to compare against the selected body. Every band below is <strong>finished garment minus body</strong>,
+in millimetres; negative ease is an explicit design choice. No ease recommendation is supplied.</p>
+<label>Target name <input id="guidedFitName" type="text"></label>
+<label>Display label (optional) <input id="guidedFitLabel" type="text"></label>
+<label>Measurement <select id="guidedFitKind">
+<option value="vertical">Vertical distance between two vertices</option>
+<option value="width">Horizontal width at a vertex or body landmark</option>
+<option value="girth">Sum of instance widths at a body landmark</option>
+<option value="path">Sum of declared edge paths</option>
+</select></label>
+<label id="guidedFitInstanceField">Exact physical instance <input id="guidedFitInstance" type="text"></label>
+<div id="guidedFitVerticalFields">
+<label>Starting vertex <input id="guidedFitFrom" type="text"></label>
+<label>Ending vertex <input id="guidedFitTo" type="text"></label>
+</div>
+<label id="guidedFitInstancesField" hidden>Exact physical instances, one per line <textarea id="guidedFitInstances" rows="3"></textarea></label>
+<label id="guidedFitLineField" hidden>Width measuring line <select id="guidedFitLine">
+<option value="vertex">At an exact vertex</option><option value="landmark">At a body landmark</option>
+</select></label>
+<label id="guidedFitVertexField" hidden>Measuring-line vertex <input id="guidedFitVertex" type="text"></label>
+<label id="guidedFitLandmarkField" hidden>Measuring-line landmark <input id="guidedFitLandmark" type="text"></label>
+<label id="guidedFitDyField" hidden>Measuring-line shift (mm, positive upwards) <input id="guidedFitDy" type="number" step="any" value="0"></label>
+<div id="guidedFitPathFields" hidden>
+<label>Exact edge paths, one per line <textarea id="guidedFitRefs" rows="3" placeholder="front.R/neck&#10;front.L/neck"></textarea></label>
+<label>Path-length multiplier <input id="guidedFitScale" type="number" step="any" value="1"></label>
+</div>
+<label>Body measurement <select id="guidedFitBody"><option value="">Choose the body measurement</option></select></label>
+<details><summary>Explicit body-value transformation</summary>
+<label>Body-value multiplier <input id="guidedFitBodyScale" type="number" step="any" value="1"></label>
+<label>Body-value offset (mm) <input id="guidedFitBodyOffset" type="number" step="any" value="0"></label>
+<p class="note">The compared body value is measurement × multiplier + offset. The initial 1 and 0 keep the selected reading unchanged.</p>
+</details>
+<div class="grid">
+<label>Minimum ease (mm) <input id="guidedFitMinimum" type="number" step="any"></label>
+<label>Nominal ease (mm) <input id="guidedFitNominal" type="number" step="any"></label>
+<label>Maximum ease (mm) <input id="guidedFitMaximum" type="number" step="any"></label>
+</div>
+<button id="guidedFitAdd" type="button" disabled>Save additional fit target</button>
+<button id="guidedFitClear" type="button" disabled>Clear saved fit targets</button>
+<p id="guidedFitSummary" class="note" role="status">No fit targets saved.</p>
+<div id="guidedFitTargets"></div><div id="guidedFitFiles" class="links"></div>
+<p class="note">Only saved targets are used. Editing the fields leaves them unchanged until Save or Replace.
+Use exact physical instance, vertex and edge names from the pattern: paired pieces use .R and .L, and unfolded edges use their .R/.L names.
+Landmark lines use the pattern's authored placement. The engine checks every reference, seam, outline and available body reading;
+missing evidence cannot pass. These targets do not establish physical fit, comfort or safe ease. A new source pattern clears saved targets;
+adopting an evaluated design retains them for the next explicit check.</p>
+</div>
 <button id="exports" data-command="exports" disabled>Validate &amp; regenerate exports</button>
 <label>Local converted body model (.ftxbody) <input id="body" type="file" accept=".ftxbody"></label>
 <p id="receivedBodyNote" class="note" hidden></p><div id="receivedBodyFiles" class="links"></div>
@@ -697,8 +749,8 @@ The trial allowance and smallest steps limit discovery; successful results remai
 A named matrix must reserve every discovery trial and every retained design/material combination for every case, up to
 64 evaluations in total. Increase its declared allowance or reduce the search, retained designs or shortlist if it does not fit.</p>
 </div>
-<p>Load the original garment fit contract in <a href="#materialConsumers">section 3</a>, with 1–32 explicit points of measure
-and a maximum file size of 256 KiB. Select the local body model and a body source below. Both comparison actions use those
+<p>Load a garment fit contract or author saved targets in <a href="#materialConsumers">section 3</a>, with 1–32 explicit points of measure
+and a maximum size of 256 KiB. Select the local body model and a body source below. Both comparison actions use those
 targets to screen geometry and fit before evaluating each retained design with every material choice.</p>
 <p class="note">The unchanged geometry is additional to the retained-design cap; the complete geometry × material comparison is limited to 32 rows.
 Adaptive discovery reserves that complete retained capacity even when the trial allowance is smaller. No mode establishes a global optimum.
@@ -1028,11 +1080,11 @@ These controls author a numerical experiment; material qualifications, convergen
 <p class="note">In named-case mode, these controls prepare the next case. Save a named case below or explicitly replace a saved case.
 Changing a draft or choosing another source file leaves saved cases unchanged.</p>
 <label>Garment fit contract <select id="guidedScenarioFitSource">
-<option value="file">Use the original fit contract selected in section 3</option>
+<option value="file">Use the fit contract selected in section 3</option>
 <option value="none">No fit contract — numerical comparison only</option>
 </select></label>
 <p class="note">Supply the garment's own points-of-measure contract for fit reporting. Choosing no contract does not assess those targets
-or establish physical garment fit. The source document is retained unchanged. Guided linked alterations still require the original
+or establish physical garment fit. The selected document is retained unchanged. Guided linked alterations still require the
 section-3 contract for their separate design-fit screening even when this scenario reports no fit targets.</p>
 <fieldset><legend>Drape policy and work limits</legend><div class="study-fields">
 <label>Mesh spacing (mm) <input id="guidedScenarioSpacing" type="number" min="0" step="any" value="12"></label>

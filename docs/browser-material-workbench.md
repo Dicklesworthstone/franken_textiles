@@ -315,11 +315,50 @@ the joint outfit's garment assignment groups and exact treated pattern, retains 
 measurement, fit and body inputs, and clears the accepted-body association for fresh confirmation
 before recomputation.
 
+### Author explicit garment fit targets
+
+Section 3's **Garment fit targets → Author explicit points of measure** builds a regular
+`fabric-fit/1` contract without writing JSON. Choose a target name, a canonical body
+measurement in millimetres and an explicit minimum, nominal and maximum ease. The band applies to
+finished garment length minus the selected body value. Negative ease is allowed when deliberately
+authored; the page supplies no recommended band.
+
+The four existing measurement kinds retain their native meaning:
+
+- **Vertical** measures the absolute vertical distance between two named vertices of one physical
+  instance. It is not the curved edge length between them.
+- **Width** measures one instance's horizontal outline width at an exact vertex or body landmark,
+  with an explicit upward-positive line shift.
+- **Girth** sums widths of the listed instances at the declared landmark and line shift.
+- **Path** sums the declared edge paths and applies an explicit path-length multiplier.
+
+Enter exact physical instance, vertex and path names. Paired instances use `.R` and `.L`;
+unfolded edge names retain their half suffixes. Landmark lines use the pattern's authored placement.
+The optional body transformation uses measurement × multiplier + offset; its initial 1 and 0 keep
+the reading unchanged. The 21 listed measurements match the selected model's tape fields, but a
+missing section or unsupported landmark remains unavailable. Rust still measures the geometry,
+checks seams and outlines, and decides whether the targets pass.
+
+**Save additional fit target** retains a point; **Edit** only copies it into the draft controls.
+**Replace** validates the complete revised set before publishing it, and **Remove** or **Clear**
+withdraws saved targets. Up to 32 points and 64 selectors per point fit inside a 256 KiB contract.
+Only saved points enter computations. The exact downloadable `fit_spec.json` is shared by
+exports, mechanical draping, linked/adaptive design screening and fresh scenario authoring. Saved
+named cases keep their original fit snapshots when later targets change.
+
+Switching back to **Use a selected or received fit specification** restores that original source
+without rewriting its numbers or other fields. Choosing a fit file explicitly selects this route.
+An empty authored list never falls back to a previous file. Saved target or source changes cancel
+dependent pending work; unsaved field edits leave its frozen request intact. Loading an unrelated
+pattern clears the targets. Adopting an evaluated or treated design retains them for another explicit
+check, just like the existing selected fit file. Authored targets do not establish measurement
+readiness, physical garment fit, comfort or safe ease.
+
 ### Search linked alterations against the selected body
 
 The guided study's **Fit-driven linked alterations** option searches up to three ordered variables
-through the existing design engine. Load the original garment fit contract in section 3, select the
-local model and the desired study body source, then choose the source pieces or vertices to alter.
+through the existing design engine. Load a garment fit contract or author saved targets in section 3,
+select the local model and the desired study body source, then choose the source pieces or vertices to alter.
 Alteration targets are independent of the material-assignment target. An accepted shape still requires
 the existing wearer association; a refused or missing source never falls back to another body.
 

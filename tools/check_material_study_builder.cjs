@@ -3306,3 +3306,57 @@ test('saved study limits count UTF-8 source bytes and encoded files while retain
     measurementSources:JSON.stringify([extra])},workbenchModel()),/Additional measurements exceed 16 MiB/);
   assert.throws(()=>parse(' '.repeat(MAX_WORKBENCH_STUDY_BYTES+1)),/128 MiB/);
 });
+
+test('authored fit targets preserve explicit native point kinds, signed bands and body transformations',async()=>{
+  const {buildGuidedFitSpec:build,GUIDED_FIT_BODY_MEASUREMENTS:names}=await modulePromise;
+  const base={body:'stature',body_scale:0.1,body_offset_mm:-3,target_mm:[-2,0,4]};
+  const points=[
+    {...base,id:'length <β>',label:'Explicit synthetic target',kind:'vertical',instance:'front.R',from:'a',to:'d'},
+    {...base,id:'width-at-vertex',kind:'width',instance:'sleeve.L',at_vertex:'cap',dy:-2},
+    {...base,id:'width-at-landmark',kind:'width',instance:'sleeve.R',landmark:'elbow',dy:3},
+    {...base,id:'circumference',kind:'girth',instances:['front.R','front.L','back'],landmark:'chest',dy:-5},
+    {...base,id:'neckline',kind:'path',refs:['front.R/neck','front.L/neck+shoulder'],scale:0.5},
+  ];
+  const original=JSON.stringify(points),raw=build(points),result=JSON.parse(raw);
+  assert.deepEqual(result,{schema:'fabric-fit/1',points});assert.equal(JSON.stringify(points),original);
+  const rust=fs.readFileSync(path.join(__dirname,'../crates/ftx-body/src/fit.rs'),'utf8');
+  const canonical=[.../pub const TAPE_FIELDS:[\s\S]*?= \[([\s\S]*?)\];/.exec(rust)[1].matchAll(/"([^"]+)"/g)].map(m=>m[1]);
+  assert.deepEqual([...names],canonical,'Guided choices are canonical model tape readings in millimetres');
+  for(const body of names)assert.equal(JSON.parse(build([{...points[0],body}])).points[0].body,body);
+  points[0].target_mm[0]=-99;assert.equal(JSON.parse(raw).points[0].target_mm[0],-2);
+});
+
+test('authored fit targets reject incomplete bands, unknown anatomy, ambiguous references and oversized contracts',async()=>{
+  const {buildGuidedFitSpec:build}=await modulePromise;
+  const point={id:'length',kind:'vertical',instance:'front',from:'a',to:'d',body:'stature',target_mm:[-1,0,1]};
+  for(const points of [[],Array(1),[null],[point,point],Array.from({length:33},(_,i)=>({...point,id:String(i)}))])assert.throws(()=>build(points));
+  for(const change of [{id:' '},{kind:'unknown'},{body:'shoulder_slope_deg'},{body:'invented'},
+    {target_mm:[]},{target_mm:[0,1]},{target_mm:[0,1,2,3]},{target_mm:[0,-1,2]},
+    {target_mm:[0,1,0]},{target_mm:[0,NaN,2]},{target_mm:[0,'1',2]},{target_mm:Array(3)},
+    {body_scale:Infinity},{body_offset_mm:'2'},{instance:''},{from:''},{to:''},{dy:1},{label:''}]) {
+    assert.throws(()=>build([{...point,...change}]),JSON.stringify(change));
+  }
+  const width={id:'width',kind:'width',instance:'front',body:'chest',target_mm:[0,0,0]};
+  for(const change of [{},{at_vertex:'a',landmark:'chest'},{at_vertex:''},{landmark:null},{at_vertex:'a',dy:NaN}]) {
+    assert.throws(()=>build([{...width,...change}]));
+  }
+  const pathPoint={id:'path',kind:'path',body:'neck_base',target_mm:[-10,-5,0],refs:['front/neck']};
+  for(const change of [{refs:[]},{refs:['']},{refs:[null]},{refs:Array(1)},{refs:Array(65).fill('front/neck')},{scale:Infinity}]) {
+    assert.throws(()=>build([{...pathPoint,...change}]));
+  }
+  assert.throws(()=>build([{...pathPoint,kind:'girth',refs:undefined,instances:['front'],landmark:'chest'}]));
+  assert.throws(()=>build([{...point,label:'🧵'.repeat(65536)}]),/256 KiB/);
+  assert.equal(JSON.parse(build(Array.from({length:32},(_,i)=>({...point,id:String(i)})))).points.length,32);
+});
+
+test('authored fit contracts enter existing linked and adaptive studies without numeric or target substitution',async()=>{
+  const {buildGuidedFitSpec:fit,buildMaterialStudyRequest:build}=await modulePromise;
+  const raw=fit([{id:'explicit length',kind:'vertical',instance:'front',from:'a',to:'d',body:'stature',
+    body_scale:0.1,body_offset_mm:0,target_mm:[-0.2,0,0.2]}]);
+  const input=state();input.design=linkedDesignInput();input.design.fitSpec=raw;
+  const request=build(input);assert.ok(request.includes(raw));
+  assert.deepEqual(JSON.parse(request).design_fit.fit_spec,JSON.parse(raw));
+  input.design={...namedDesign(),fitSpec:raw};
+  const adaptive=build(input,namedContext(undefined,12));assert.ok(adaptive.includes(raw));
+  assert.deepEqual(JSON.parse(adaptive).design_fit.fit_spec,JSON.parse(raw));
+});

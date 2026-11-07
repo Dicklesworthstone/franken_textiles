@@ -1,6 +1,7 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
-  buildGuidedDesignAfterOperations, buildGuidedDesignRestartPoints, hasTextileWaterPolicy, hasTextileWaterMechanicsPolicy, buildMaterialSurfaceConditions,
+  buildGuidedDesignAfterOperations, buildGuidedDesignRestartPoints, buildGuidedFitSpec, GUIDED_FIT_BODY_MEASUREMENTS,
+  hasTextileWaterPolicy, hasTextileWaterMechanicsPolicy, buildMaterialSurfaceConditions,
   buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
   buildMaterialExteriorExchange, buildWorkbenchStudyBundle, parseWorkbenchStudyBundle,
   MAX_WORKBENCH_STUDY_BYTES } from "./materials-study-builder.js";
@@ -48,6 +49,10 @@ const guidedDesignVariables = [];
 const guidedDesignButtons = [];
 const guidedDesignAfter = [], guidedDesignAfterButtons = [];
 const guidedDesignRestarts = [], guidedDesignRestartButtons = [], guidedDesignRestartInputs = [];
+const guidedFitPoints = [], guidedFitButtons = [];
+let guidedFitText = null;
+const guidedFitFields = ["Name", "Label", "Kind", "Instance", "From", "To", "Instances", "Line", "Vertex", "Landmark",
+  "Dy", "Refs", "Scale", "Body", "BodyScale", "BodyOffset", "Minimum", "Nominal", "Maximum"];
 let guidedDesignRestartNames = [];
 let guidedDesignAfterSource = null, guidedDesignAfterProblem = "";
 let guidedDesignCurrent = 0;
@@ -209,7 +214,9 @@ for (const op of operations) {
   sections.set(op, { section, summary, comparison, links, study: null, adoptions: [] });
 }
 const text = value => JSON.stringify(value, null, 2);
-const has = id => (id === "stockRequest" && selectedStockRequest !== null) || roundFiles.has(id) || !!$(id).files.length;
+const fitMode = () => $("fitSource").value || "file";
+const has = id => id === "fit" && fitMode() !== "file" ? fitMode() === "guided" && guidedFitText !== null :
+  (id === "stockRequest" && selectedStockRequest !== null) || roundFiles.has(id) || !!$(id).files.length;
 const guidedStudyMode = () => $("studyMode").value === "guided";
 const guidedScreenMode = () => $("screenMode").value === "guided";
 const guidedScenarioMode = () => ["guided", "guided_matrix"].includes($("scenarioMode").value);
@@ -255,6 +262,21 @@ function guidedSourceStudies(id) {
 }
 function controls() {
   const guided = guidedStudyMode();
+  const authoredFit = fitMode() === "guided", fitKind = $("guidedFitKind").value || "vertical";
+  $("guidedFit").hidden = !authoredFit; $("fitFileField").hidden = authoredFit;
+  $("importFitNote").hidden = authoredFit || selectedImportFit === null;
+  $("importFitFiles").hidden = authoredFit;
+  $("guidedFitInstanceField").hidden = !["width", "vertical"].includes(fitKind);
+  $("guidedFitVerticalFields").hidden = fitKind !== "vertical";
+  $("guidedFitInstancesField").hidden = fitKind !== "girth";
+  $("guidedFitLineField").hidden = fitKind !== "width";
+  $("guidedFitVertexField").hidden = fitKind !== "width" || $("guidedFitLine").value === "landmark";
+  $("guidedFitLandmarkField").hidden = fitKind !== "girth" && !(fitKind === "width" && $("guidedFitLine").value === "landmark");
+  $("guidedFitDyField").hidden = !["width", "girth"].includes(fitKind);
+  $("guidedFitPathFields").hidden = fitKind !== "path";
+  $("guidedFitAdd").disabled = !source || !authoredFit || guidedFitPoints.length >= 32;
+  $("guidedFitClear").disabled = !guidedFitPoints.length;
+  for (const button of guidedFitButtons) button.disabled = !source || !authoredFit;
   for (const el of commands) el.disabled = !ready || !!pending;
   for (const section of sections.values()) {
     for (const button of section.adoptions) button.disabled = !ready || !!pending ||
@@ -4325,8 +4347,97 @@ function show(op, msg, request) {
     }
   }
 }
+function selectedFitSource() {
+  if (fitMode() === "guided") return guidedFitText;
+  if (fitMode() !== "file") throw Error("Choose a selected fit specification or authored fit targets.");
+  return roundFiles.has("fit") ? roundFiles.get("fit") : $("fit").files[0];
+}
+function invalidateFitSource() {
+  ++roundRead; roundToken = null; window.opener = null;
+  invalidate(["exports", "fold", "heat", "vaporSurface", "coverage", ...guidedSourceStudies("fit")], true);
+}
+function guidedFitPoint() {
+  const value = key => $("guidedFit" + key).value;
+  const number = (key, label) => {
+    optionalNumberPresent("guidedFit" + key, label);
+    return finiteField("guidedFit" + key, label);
+  };
+  const kind = value("Kind") || "vertical";
+  const point = { id: value("Name"), ...(value("Label").trim() ? { label: value("Label") } : {}), kind,
+    body: value("Body"), body_scale: number("BodyScale", "body-value multiplier"),
+    body_offset_mm: number("BodyOffset", "body-value offset"),
+    target_mm: [number("Minimum", "minimum ease"), number("Nominal", "nominal ease"), number("Maximum", "maximum ease")] };
+  if (["width", "vertical"].includes(kind)) point.instance = value("Instance");
+  if (kind === "vertical") { point.from = value("From"); point.to = value("To"); }
+  if (kind === "girth") { point.instances = value("Instances").split(/\r?\n/).filter(line => line.length); point.landmark = value("Landmark"); }
+  if (kind === "width") {
+    const line = value("Line") || "vertex";
+    if (!["vertex", "landmark"].includes(line)) throw Error("Choose a vertex or landmark measuring line.");
+    point[line === "vertex" ? "at_vertex" : "landmark"] = value(line === "vertex" ? "Vertex" : "Landmark");
+  }
+  if (["width", "girth"].includes(kind)) point.dy = number("Dy", "measuring-line shift");
+  if (kind === "path") { point.refs = value("Refs").split(/\r?\n/).filter(line => line.length); point.scale = number("Scale", "path-length multiplier"); }
+  return point;
+}
+function editGuidedFit(point) {
+  const fields = { Name: point.id, Label: point.label || "", Kind: point.kind, Body: point.body,
+    BodyScale: point.body_scale ?? 1, BodyOffset: point.body_offset_mm ?? 0, Instance: point.instance || "",
+    From: point.from || "", To: point.to || "", Instances: (point.instances || []).join("\n"),
+    Line: point.landmark ? "landmark" : "vertex", Vertex: point.at_vertex || "", Landmark: point.landmark || "",
+    Dy: point.dy ?? 0, Refs: (point.refs || []).join("\n"), Scale: point.scale ?? 1,
+    Minimum: point.target_mm[0], Nominal: point.target_mm[1], Maximum: point.target_mm[2] };
+  for (const [key, value] of Object.entries(fields)) $("guidedFit" + key).value = String(value);
+  controls();
+}
+function saveGuidedFit(points) {
+  // Validate the complete replacement before changing the selected contract or its downloads.
+  const raw = points.length ? buildGuidedFitSpec(points) : null;
+  guidedFitPoints.splice(0, guidedFitPoints.length, ...points); guidedFitText = raw;
+  clear(["guidedFit"]); $("guidedFitFiles").replaceChildren(); $("guidedFitTargets").replaceChildren(); guidedFitButtons.length = 0;
+  for (const point of guidedFitPoints) {
+    const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
+    label.textContent = point.id + ": " + point.kind + ", " + point.body + ", ease " + point.target_mm.join(" / ") + " mm";
+    row.append(label);
+    for (const [action, run] of [["Edit", () => editGuidedFit(point)], ["Replace", () => {
+      const replacement = guidedFitPoints.map(current => current === point ? guidedFitPoint() : current); saveGuidedFit(replacement);
+    }], ["Remove", () => saveGuidedFit(guidedFitPoints.filter(current => current !== point))]]) {
+      const button = document.createElement("button"); button.type = "button"; button.textContent = action + " " + point.id;
+      button.onclick = () => {
+        if (!source || fitMode() !== "guided" || !guidedFitPoints.includes(point)) return;
+        try { run(); } catch (e) { error(String(e.message || e)); }
+      };
+      row.append(button); guidedFitButtons.push(button);
+    }
+    $("guidedFitTargets").append(row);
+  }
+  $("guidedFitSummary").textContent = raw ? points.length + " saved fit target(s). The downloaded contract is used unchanged by selected fit consumers." : "No fit targets saved. Authoring mode cannot use a previously selected file.";
+  if (raw) link("guidedFit", $("guidedFitFiles"), { name: "fit_spec.json", text: raw, mime: "application/json" });
+  if (fitMode() === "guided") invalidateFitSource(); else controls();
+}
+function resetGuidedFit() {
+  guidedFitPoints.length = 0; guidedFitText = null; guidedFitButtons.length = 0;
+  clear(["guidedFit"]); $("guidedFitFiles").replaceChildren(); $("guidedFitTargets").replaceChildren();
+  $("guidedFitSummary").textContent = "No fit targets saved.";
+  for (const key of guidedFitFields) $("guidedFit" + key).value =
+    ({ Kind: "vertical", Line: "vertex", BodyScale: "1", BodyOffset: "0", Dy: "0", Scale: "1" })[key] ?? "";
+}
+for (const name of GUIDED_FIT_BODY_MEASUREMENTS) {
+  const option = document.createElement("option"); option.value = name; option.textContent = name.replaceAll("_", " "); $("guidedFitBody").append(option);
+}
+for (const key of guidedFitFields) {
+  $("guidedFit" + key).addEventListener("input", controls); $("guidedFit" + key).addEventListener("change", controls);
+}
+$("fitSource").addEventListener("change", invalidateFitSource);
+$("guidedFitAdd").onclick = () => {
+  if (!source || fitMode() !== "guided") return;
+  try { saveGuidedFit([...guidedFitPoints, guidedFitPoint()]); } catch (e) { error(String(e.message || e)); }
+};
+$("guidedFitClear").onclick = () => saveGuidedFit([]);
 async function read(id, binary = false) {
   if (id === "stockRequest" && selectedStockRequest !== null) return selectedStockRequest;
+  if (id === "fit" && fitMode() !== "file") {
+    const raw = selectedFitSource(); if (raw === null) throw Error("Save at least one explicit fit target before continuing."); return raw;
+  }
   if (!binary && roundFiles.has(id)) return roundFiles.get(id);
   const f = binary && roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
   if (!f) throw Error(`Choose ${id} first.`);
@@ -4766,7 +4877,7 @@ async function guidedStudyInput(scenarioRead) {
   const retained = [], budget = 16 * 1024 * 1024;
   let sourceBytes = 0;
   const retain = (key, id, label) => {
-    const original = id === "stockRequest" && selectedStockRequest !== null ? selectedStockRequest :
+    const original = id === "fit" ? selectedFitSource() : id === "stockRequest" && selectedStockRequest !== null ? selectedStockRequest :
       roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
     if (!original) throw Error(`Choose ${label} first.`);
     const size = typeof original === "string" ? new Blob([original]).size : original.size;
@@ -4775,7 +4886,7 @@ async function guidedStudyInput(scenarioRead) {
     if (sourceBytes > budget) throw Error("Guided study source files exceed 16 MiB combined; no source was read.");
     retained.push({ key, original });
   };
-  if (input.design) retain("designFit", "fit", "the original section-3 garment fit contract for linked alterations");
+  if (input.design) retain("designFit", "fit", "the section-3 garment fit contract or saved fit targets for linked alterations");
   if ($("guidedCutting").checked) {
     if (stockMode === "roll" && rollSource === "file") retain("cutting", "cutOptions", "the original roll-planning options in section 3");
     if (stockMode === "finite") retain("finiteStock", "stockRequest", "the original finite-stock inventory in section 3");
@@ -5221,7 +5332,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     ...(includeCasePolicy && policy === "file" ? [["comparison", "guidedScenarioComparison", "the original case comparison policy"]] : [])];
   const budget = 16 * 1024 * 1024; let total = 0;
   const retained = entries.map(([key, id, label]) => {
-    const original = Object.hasOwn(sheetConditionForms, id) ? sheetConditionsSource(id) : roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
+    const original = id === "fit" ? selectedFitSource() : Object.hasOwn(sheetConditionForms, id) ? sheetConditionsSource(id) : roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
     if (!original) throw Error(`Choose ${label} first.`);
     const size = typeof original === "string" ? new Blob([original]).size : original.size;
     if (key === "fitSpec" && designFit && size > 256 * 1024) throw Error("Guided alteration fit contract exceeds 256 KiB; no source was read.");
@@ -6344,7 +6455,7 @@ function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
 function installDerivedPattern(raw, label) {
   const data = parsePattern(raw), retainedOutfit = outfit;
   const garments = retainedOutfit ? JSON.parse(retainedOutfit.composition_json).garments : [];
-  resetPatternInput();
+  resetPatternInput(false, true);
   ++roundRead; roundToken = null; window.opener = null;
   roundFiles.delete("patternFile"); $("patternFile").value = "";
   installPattern(raw, label, garments, data);
@@ -6353,7 +6464,7 @@ function installDerivedPattern(raw, label) {
   if (roundFiles.size) $("roundImportText").textContent =
     "A derived pattern is now the current pattern. Received measurement, fit and body snapshots remain selected. Review them before recomputing this pattern.";
 }
-function resetPatternInput(keepImport = false) {
+function resetPatternInput(keepImport = false, keepFitTargets = false) {
   cancelPhotoReturn();
   forgetSavedStudy();
   ++patternRead; source = null; sourceText = null; outfit = null; adoptedImport = false;
@@ -6363,6 +6474,7 @@ function resetPatternInput(keepImport = false) {
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
   studyCandidates.length = 0; studyCandidateSequence = 0; showStudyCandidates(); $("studyPieces").replaceChildren();
   resetGuidedScenarios(); resetGuidedDesign();
+  if (!keepFitTargets) resetGuidedFit();
   invalidate(["bodyCheck", "bind", ...boundOperations, "study", "scenario", "outfit", ...(keepImport ? [] : ["garmentcode"])]);
   $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
@@ -6413,6 +6525,7 @@ $("useGarmentcode").onclick = () => {
   adoptedImport = true;
   if (useFit) {
     selectedImportFit = fit; roundFiles.set("fit", fit); $("fit").value = "";
+    $("fitSource").value = "file";
     $("importFitNote").hidden = false;
     link("importFit", $("importFitFiles"), { name: "fit_spec.json", text: fit, mime: "application/json" });
   }
@@ -6569,7 +6682,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
       scenarioCasesLoading = loadGuidedScenarioCases();
     }
     if (id === "measurements" || id === "body") cancelPhotoReturn();
-    if (id === "fit") clearImportFit();
+    if (id === "fit") { clearImportFit(); $("fitSource").value = "file"; }
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
     if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "maxSettleSteps"].includes(id)) {
@@ -6726,6 +6839,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       }
       installPattern(files.get("patternFile"), traceImport ? `Traced pattern.json — image ${m.source_sha256}` : "Received round pattern.json");
       for (const [id, raw] of files) roundFiles.set(id, raw);
+      if (files.has("fit")) $("fitSource").value = "file";
       $("bodyArmDeg").value = String(hasArm ? settings.arm_abduction_deg : context?.fit ? context.armDeg : 35);
       if (settings !== undefined) {
         $("selfContact").checked = settings.self_contact_mm === 2; $("twoStart").checked = settings.two_start;
@@ -6750,6 +6864,6 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
   });
   sender.postMessage({ type: `${handoffType}-ready`, token: roundToken }, roundOrigin);
 } else roundToken = null;
-window.addEventListener("pagehide", () => { clearPhotoEvidence(); clearRoundSources(); ++savedStudyRead;
+window.addEventListener("pagehide", () => { clearPhotoEvidence(); clearRoundSources(); resetGuidedFit(); ++savedStudyRead;
   pending = null; ++epoch; worker?.terminate(); clear(["bind", ...operations, "studySave", "savedStudy"]); });
 start();
