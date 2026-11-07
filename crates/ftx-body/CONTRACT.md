@@ -19,6 +19,8 @@ subdividing a straight edge must not change which limb is measured. Nonfinite ax
 nonfinite or out-of-range slicing heights yield no reading. This is a native geometric rule, not an
 independent qualification of the chosen anatomical axis. `Slicer` buckets triangles
 by height (5 mm slabs) so a search over levels visits only nearby triangles (same loops, same order).
+Bucket and face-membership storage are bounded linearly by the mesh face count. Unsuitable slab widths
+or excessive face replication use the original-order full mesh cut; tape definitions and values do not change.
 `tape_readings` reads 21 measurements on the posed body (`TAPE_FIELDS`, definitions in the `fit.rs`
 table and the `tape.rs` functions): stature, chest, waist, hip, waist and crotch heights, thigh, knee,
 calf, ankle, upper arm, wrist, arm length, knee height, back neck to waist (along the back's median line

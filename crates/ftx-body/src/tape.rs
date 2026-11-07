@@ -17,13 +17,15 @@ pub fn section_loops(vertices: &[Vec3], triangles: &[[usize; 3]], z: f64) -> Vec
 }
 
 /// Horizontal cuts of one mesh at many heights: triangles bucketed by height, so a cut visits only the
-/// triangles near it. Its cuts equal [`section_loops`] (same triangles, same order).
+/// triangles near it. Its cuts equal [`section_loops`] (same triangles, same order). If the index
+/// would exceed linear mesh storage, cuts scan the original triangles instead.
 pub struct Slicer<'a> {
     vertices: &'a [Vec3],
     triangles: &'a [[usize; 3]],
     z0: f64,
     width: f64,
     /// Slab `b`'s triangles, in index order: `faces[start[b]..start[b + 1]]`.
+    /// Empty when queries scan the original triangles without a bucket index.
     start: Vec<usize>,
     faces: Vec<usize>,
 }
@@ -45,7 +47,26 @@ impl<'a> Slicer<'a> {
                 (a.min(v.z), b.max(v.z))
             });
         let slab = |z: f64| ((z - z0) / width).floor() as usize;
-        let n = if z1 >= z0 { slab(z1) + 1 } else { 0 };
+        let direct = || Self {
+            vertices,
+            triangles,
+            z0,
+            width,
+            start: Vec::new(),
+            faces: Vec::new(),
+        };
+        let n = if z1 >= z0 {
+            let top = (z1 - z0) / width;
+            if !top.is_finite() || top >= triangles.len().saturating_mul(4) as f64 {
+                return direct();
+            }
+            let Some(n) = slab(z1).checked_add(1) else {
+                return direct();
+            };
+            n
+        } else {
+            0
+        };
         // the slabs each triangle reaches; counted, then filled in triangle order (one allocation each)
         let spans: Vec<(usize, usize)> = triangles
             .iter()
@@ -58,6 +79,12 @@ impl<'a> Slicer<'a> {
                 (slab(lo), slab(hi))
             })
             .collect();
+        let memberships = spans.iter().try_fold(0usize, |total, &(lo, hi)| {
+            hi.checked_sub(lo)?.checked_add(1)?.checked_add(total)
+        });
+        if memberships.is_none_or(|count| count > triangles.len().saturating_mul(8)) {
+            return direct();
+        }
         let mut start = vec![0usize; n + 1];
         for &(lo, hi) in &spans {
             for c in &mut start[lo + 1..=hi + 1] {
@@ -88,6 +115,9 @@ impl<'a> Slicer<'a> {
     /// [`section_loops`] at height `z`.
     #[must_use]
     pub fn loops(&self, z: f64) -> Vec<Vec<[f64; 2]>> {
+        if self.start.is_empty() {
+            return section_loops(self.vertices, self.triangles, z);
+        }
         let b = (z - self.z0) / self.width;
         if !(b >= 0.0 && (b as usize) < self.start.len().saturating_sub(1)) {
             return Vec::new();
@@ -1231,6 +1261,28 @@ mod tests {
             assert_eq!(s.loops(z), section_loops(&v, &t, z), "z {z}");
         }
         assert_eq!(s.girth(0.25, [0.0, 0.0]), girth(&v, &t, 0.25, [0.0, 0.0]));
+    }
+
+    #[test]
+    fn slicer_bounds_index_storage_without_changing_sections() {
+        for unused in [None, Some(Vec3::new(0.0, 0.0, 1e100))] {
+            let (mut v, t) = prism(&[[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]);
+            v.extend(unused);
+            for width in [f64::from_bits(1), 1e-300, 0.025, 0.25] {
+                let s = Slicer::new(&v, &t, width);
+                assert!(s.start.len() <= 4 * t.len() + 1);
+                assert!(s.faces.len() <= 8 * t.len());
+                for z in [-0.5, 0.0, 1e-9, 0.125, 0.5, 0.999, 1.0, 1.5] {
+                    assert_eq!(
+                        s.loops(z),
+                        loops_reference(&v, &t, z),
+                        "width {width}, z {z}"
+                    );
+                }
+                assert_eq!(s.girth(0.5, [1.0, 0.5]), Some(6.0));
+                assert_eq!(s.girth(0.5, [5.0, 0.5]), None);
+            }
+        }
     }
 
     /// The walk as it was first written: each cut edge's segments in a `BTreeMap`.
