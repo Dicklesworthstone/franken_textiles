@@ -1,14 +1,17 @@
 //! Prepared multi-frame observations fitted locally with the canonical Anny adapter and solver.
 //! File-backed capture acquisition remains native; this boundary never follows paths or loads images.
 
+use std::fmt::Write as _;
+
 use ftx_body::{
     AnnyData, AnnyModel,
+    accepted_shape::AcceptedShape,
     correspondence::{Configuration, CorrespondenceModel},
 };
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::{
-    body_fit::{self, BodyFitInput, BodyModel, FitOptions, ModelLayout, Parameter},
-    silhouette::SurfaceMesh,
+    body_fit::{self, BodyFitInput, BodyModel, FitOptions, FramePose, ModelLayout, Parameter},
+    silhouette::{self, SurfaceMesh},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -145,4 +148,178 @@ pub fn fit_body(
             "local_changes":p.local_changes});
     }
     Ok(value)
+}
+
+/// Inspect one accepted image pose without fitting again or replacing its saved report.
+/// The ordinal addresses the report's native frame order; full-width identities never pass
+/// through a JavaScript number. Full-mesh keypoints and supplied silhouette slices are rechecked
+/// through the same kernels as native mesh export, including all held-out observations.
+///
+/// # Errors
+/// Oversized input/model, nonaccepted or inconsistent reports, wrong model, invalid frame/pose,
+/// excessive mesh size, or a full-mesh projection/contour that fails its original gate.
+pub fn review_body_fit_frame(
+    model_bytes: &[u8],
+    report_text: &str,
+    frame_index: &str,
+) -> Result<Value, Refusal> {
+    if report_text.len() > 16 * 1024 * 1024 || model_bytes.len() > 512 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "body-frame review supports at most 16 MiB report and 512 MiB converted model",
+        ));
+    }
+    let index = frame_index
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n < 8)
+        .ok_or_else(|| invalid("body-frame review index must be an integer in 0..7"))?;
+    let report: Value = serde_json::from_str(report_text)
+        .map_err(|e| invalid(format!("invalid accepted body-fit report: {e}")))?;
+    if report["schema"] != "ftx-body-fit/1"
+        || report["status"] != "ACCEPTED"
+        || report["flags"].as_array().is_none_or(|v| !v.is_empty())
+    {
+        return Err(invalid(
+            "only an intact ACCEPTED body-fit report can be reviewed",
+        ));
+    }
+    let hash = sha256_hex(model_bytes);
+    if report["anny_configuration"]["model_sha256"].as_str() != Some(hash.as_str()) {
+        return Err(invalid("model SHA-256 mismatch; no frame was reviewed"));
+    }
+    let model = AnnyModel::from_data(AnnyData::from_bytes(model_bytes, true)?)?;
+    let accepted = AcceptedShape::read(&report, &hash, &model.data().header.labels.local_changes)?;
+    let counts = &model.data().header.counts;
+    if counts.vertices == 0 || counts.vertices > 100_000 || counts.faces == 0 || counts.faces > 200_000 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "body-frame review needs 1..100000 vertices and 1..200000 faces",
+        ));
+    }
+    let config = serde_json::from_value(report["anny_configuration"].clone())
+        .map_err(|e| invalid(format!("invalid accepted Anny configuration: {e}")))?;
+    let adapter = Adapter::new(CorrespondenceModel::new(model, config, &hash)?);
+    if serde_json::to_value(&adapter.layout).map_err(|e| invalid(e.to_string()))? != report["model"] {
+        return Err(invalid(
+            "accepted body-fit model layout disagrees with its configuration",
+        ));
+    }
+    let input: BodyFitInput = serde_json::from_value(report["input"].clone())
+        .map_err(|e| invalid(format!("invalid accepted body-fit observations: {e}")))?;
+    body_fit::prepare_input(&input, &adapter.layout)?;
+    let poses: Vec<FramePose> = serde_json::from_value(report["solution"]["poses"].clone())
+        .map_err(|e| invalid(format!("invalid accepted frame poses: {e}")))?;
+    let spreads = report["pose_spread_fraction"]
+        .as_array()
+        .ok_or_else(|| invalid("accepted body-fit pose agreement is missing"))?;
+    let limit = report["options"]["max_pose_spread_fraction"]
+        .as_f64()
+        .filter(|n| *n > 0.0 && *n <= 0.01)
+        .ok_or_else(|| invalid("accepted body-fit pose agreement policy is missing or weakened"))?;
+    if poses.len() != input.frames.len() || spreads.len() != poses.len() || index >= poses.len() {
+        return Err(invalid(
+            "accepted frame, pose or review index counts disagree",
+        ));
+    }
+    for ((frame, pose), spread) in input.frames.iter().zip(&poses).zip(spreads) {
+        let fractions = spread["fractions"].as_array();
+        if frame.frame != pose.frame
+            || spread["frame"] != json!(frame.frame)
+            || pose.values.len() != adapter.layout.pose.len()
+            || pose
+                .values
+                .iter()
+                .zip(&adapter.layout.pose)
+                .any(|(v, p)| !(*v > p.lower && *v < p.upper))
+            || fractions.is_none_or(|v| {
+                v.len() != adapter.layout.pose.len()
+                    || v.iter().any(|f| {
+                        f.as_f64()
+                            .is_none_or(|n| !(0.0..=limit).contains(&n))
+                    })
+            })
+        {
+            return Err(invalid(
+                "accepted frame poses or their multistart agreement are inconsistent",
+            ));
+        }
+    }
+    let frame = &input.frames[index];
+    let rest = adapter.inner.model().rest(&accepted.params)?;
+    let body = adapter
+        .inner
+        .model()
+        .pose(&rest, &adapter.inner.deltas(&poses[index].values)?)?;
+    let targets = adapter.inner.points_on_body(&rest, &body)?;
+    let keypoints = body_fit::review_keypoints(frame, &adapter.layout.keypoints, &targets)?;
+    let faces = &adapter.inner.model().data().faces;
+    let mesh = SurfaceMesh {
+        vertices_m: body.vertices,
+        triangles: faces.iter().map(|f| f.map(|v| v as usize)).collect(),
+    };
+    let contour = frame
+        .silhouette
+        .as_ref()
+        .map(|source| {
+            let comparisons =
+                silhouette::compare(&mesh, &frame.camera, frame.image_size_px, source, None)?;
+            if comparisons.iter().any(|line| !line.passed) {
+                return Err(invalid(
+                    "full mesh silhouette disagrees with an accepted fit/held-out scanline gate",
+                ));
+            }
+            let lines: Vec<_> = comparisons
+                .iter()
+                .map(|comparison| {
+                    let observation = source
+                        .lines
+                        .iter()
+                        .find(|line| {
+                            line.axis == comparison.axis && line.at_px == comparison.at_px
+                        })
+                        .ok_or_else(|| invalid("missing source silhouette scanline"))?;
+                    Ok(json!({"observation":observation,"comparison":comparison}))
+                })
+                .collect::<Result<_, Refusal>>()?;
+            Ok(json!({"evidence":source.evidence,"lines":lines}))
+        })
+        .transpose()?;
+    let mut obj = String::from(
+        "# FrankenTextiles accepted MODEL_FIT; metres, common calibrated world frame, +Z up\n\
+         # Complete model topology; NOT collision-skin admission or real-wearer fit evidence\n",
+    );
+    for point in &mesh.vertices_m {
+        if !point.is_finite() {
+            return Err(invalid("mesh review needs finite posed vertices"));
+        }
+        writeln!(obj, "v {} {} {}", point.x, point.y, point.z).unwrap();
+    }
+    for face in faces {
+        if face.iter().any(|&i| i as usize >= mesh.vertices_m.len()) {
+            return Err(invalid("mesh face index outside the posed vertex array"));
+        }
+        writeln!(
+            obj,
+            "f {} {} {}",
+            u64::from(face[0]) + 1,
+            u64::from(face[1]) + 1,
+            u64::from(face[2]) + 1
+        )
+        .unwrap();
+    }
+    let pixels: Vec<_> = mesh
+        .vertices_m
+        .iter()
+        .map(|&point| frame.camera.project(point).ok())
+        .collect();
+    Ok(json!({"schema":"ftx-body-frame-review/1","report_sha256":sha256_hex(report_text.as_bytes()),
+        "model_sha256":hash,"frame_index":index,"frame":frame.frame,
+        "frame_label":format!("{} @ {} us",frame.frame.stream,frame.frame.timestamp_us),
+        "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,"camera":frame.camera,
+        "keypoints":keypoints,"silhouette":contour,"mesh_obj":obj,"triangles":faces,"projected_vertices_px":pixels,
+        "unprojectable_vertices":pixels.iter().filter(|p|p.is_none()).count(),
+        "projection_kind":if silhouette::require_rectified(&frame.camera).is_ok(){"straight_edges"}else{"distorted_vertices"},
+        "export_pose_evaluations":1,
+        "no_claim":"Accepted MODEL_FIT pose reviewed without refitting. Complete topology, not a collision skin. Supplied keypoints and scanlines are rechecked, not full-mask, visibility, occlusion, anatomy or real-wearer fit. No source photograph was loaded."}))
 }

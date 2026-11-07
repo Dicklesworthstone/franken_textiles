@@ -364,8 +364,32 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
             let tolerance = if name == "silhouette" { 0.02 } else { 1e-5 };
             assert!((reused.params.phenotype.height - 0.6).abs() < tolerance);
             assert!((reused.params.phenotype.weight - 0.45).abs() < tolerance);
+            let text = serde_json::to_string(&portable).unwrap();
+            let review = ftx_wasm::body_fit::review_body_fit_frame(&model, &text, "0").unwrap();
+            assert_eq!(review["frame"]["timestamp_us"].as_u64(), Some(first_timestamp));
+            assert!(review["frame_label"].as_str().unwrap().contains(&first_timestamp.to_string()));
+            assert_eq!(review["camera"], portable["input"]["frames"][0]["camera"]);
+            assert_eq!(review["image_size_px"], portable["input"]["frames"][0]["image_size_px"]);
+            assert_eq!(review["rotation_cw_deg"], portable["input"]["frames"][0]["rotation_cw_deg"]);
+            assert_eq!(review["report_sha256"], sha256_hex(text.as_bytes()));
+            assert_eq!(review["export_pose_evaluations"], 1);
+            if name == "silhouette" {
+                assert_eq!(review["silhouette"]["lines"].as_array().unwrap().len(),
+                    portable["input"]["frames"][0]["silhouette"]["lines"].as_array().unwrap().len());
+                let mut changed = portable.clone();
+                let lines = changed["input"]["frames"][0]["silhouette"]["lines"].as_array_mut().unwrap();
+                let line = lines.iter_mut().find(|line| !line["intervals_px"].as_array().unwrap().is_empty()).unwrap();
+                for interval in line["intervals_px"].as_array_mut().unwrap() {
+                    for value in interval.as_array_mut().unwrap() {
+                        *value = json!(value.as_f64().unwrap() + 10.0);
+                    }
+                }
+                let error = ftx_wasm::body_fit::review_body_fit_frame(&model, &changed.to_string(), "0").unwrap_err();
+                assert!(error.message.contains("scanline gate"), "{error}");
+            }
         } else {
             assert!(portable["solution"].is_null());
+            assert!(ftx_wasm::body_fit::review_body_fit_frame(&model, &portable.to_string(), "0").is_err());
         }
         if name == "accepted" {
             accepted = Some(native.clone());
@@ -388,7 +412,16 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
                 serde_json::to_vec_pretty(&native).unwrap(),
             )
             .unwrap();
-            cases.push(json!({"name":name,"input":input_file,"report":report_file,
+            let review_file = if status == "ACCEPTED" {
+                let file = format!("{name}-frame-0000.json");
+                let report_text = serde_json::to_string_pretty(&native).unwrap();
+                let review = ftx_wasm::body_fit::review_body_fit_frame(&model, &report_text, "0").unwrap();
+                std::fs::write(destination.join(&file), serde_json::to_vec_pretty(&review).unwrap()).unwrap();
+                Some(file)
+            } else {
+                None
+            };
+            cases.push(json!({"name":name,"input":input_file,"report":report_file,"review":review_file,
                 "iterations":iterations,"max_evaluations":evaluations,"status":status}));
         }
     }
@@ -2396,7 +2429,37 @@ fn accepted_mesh_bundle_replays_each_pose_without_grounding_or_refitting() {
             })
             .collect();
         assert_eq!(faces, model.data().faces);
+        let review = ftx_wasm::body_fit::review_body_fit_frame(&bytes, &report.to_string(), &i.to_string()).unwrap();
+        assert_eq!(review["mesh_obj"], text);
+        let projected: Value = serde_json::from_slice(
+            &std::fs::read(bundle.join(entry["reprojections"]["file"].as_str().unwrap())).unwrap()
+        ).unwrap();
+        assert_eq!(review["keypoints"], projected["keypoints"]);
+        assert_eq!(review["camera"], projected["camera"]);
+        assert_eq!(review["frame"], projected["frame"]);
     }
+    for ordinal in ["", "-1", "2", "8", "1.5", "4294967296", "9007199254740993"] {
+        assert!(ftx_wasm::body_fit::review_body_fit_frame(&bytes, &report.to_string(), ordinal).is_err());
+    }
+    for mutation in ["pose", "frame", "agreement", "point", "layout", "flags"] {
+        let mut changed = report.clone();
+        match mutation {
+            "pose" => changed["solution"]["poses"][0]["values"][0] = json!(1000.0),
+            "frame" => changed["solution"]["poses"][0]["frame"]["timestamp_us"] = json!(999),
+            "agreement" => changed["options"]["max_pose_spread_fraction"] = json!(0.02),
+            "point" => {
+                let point = &mut changed["input"]["frames"][0]["keypoints"][3]["pixel_px"][0];
+                *point = json!(point.as_f64().unwrap() + 10.0);
+            }
+            "layout" => changed["model"]["pose"][0]["name"] = json!("different"),
+            "flags" => changed["flags"] = json!(["not accepted"]),
+            _ => unreachable!(),
+        }
+        assert!(ftx_wasm::body_fit::review_body_fit_frame(&bytes, &changed.to_string(), "0").is_err(), "{mutation}");
+    }
+    let mut wrong_model = bytes.clone();
+    *wrong_model.last_mut().unwrap() ^= 1;
+    assert!(ftx_wasm::body_fit::review_body_fit_frame(&wrong_model, &report.to_string(), "0").is_err());
     // Bundle paths are not used in numerical results or the deterministic files.
     let again = run(&dir, &["--mesh-out", "again"], 0);
     assert_eq!(again, result);

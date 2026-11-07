@@ -145,6 +145,39 @@ fn scene() -> (HingedBody, BodyFitInput, Vec<Vec<f64>>) {
 }
 
 #[test]
+fn full_mesh_review_preserves_observation_roles_and_refuses_failed_projections() {
+    let (model, input, poses) = scene();
+    let points = model.points(&[0.48, 1.25], &poses[0]).unwrap();
+    let mut frame = input.frames[0].clone();
+    frame.keypoints.reverse();
+    let review = review_keypoints(&frame, &model.layout.keypoints, &points).unwrap();
+    for (observed, projected) in frame.keypoints.iter().zip(&review) {
+        assert_eq!(projected.name, observed.name);
+        assert_eq!(projected.partition, observed.partition);
+        assert_eq!(projected.sigma_px, observed.sigma_px);
+        assert_eq!(projected.observed_px, observed.pixel_px);
+        assert_eq!(projected.predicted_px, observed.pixel_px);
+        assert_eq!(projected.residual_px, 0.0);
+        let index = model.layout.keypoints.iter().position(|n| n == &observed.name).unwrap();
+        assert_eq!(projected.world_m, points[index]);
+    }
+    for role in [Partition::Fit, Partition::HeldOut] {
+        let mut changed = frame.clone();
+        let observation = changed.keypoints.iter_mut().find(|p| p.partition == role).unwrap();
+        observation.pixel_px.x += 3.0;
+        assert!(review_keypoints(&changed, &model.layout.keypoints, &points).is_ok());
+        changed.keypoints.iter_mut().find(|p| p.partition == role).unwrap().pixel_px.x += 0.01;
+        assert!(review_keypoints(&changed, &model.layout.keypoints, &points).is_err());
+    }
+    assert!(review_keypoints(&frame, &model.layout.keypoints, &points[..9]).is_err());
+    let mut behind_camera = points;
+    behind_camera[0] = frame.camera.center_m;
+    assert!(review_keypoints(&frame, &model.layout.keypoints, &behind_camera).is_err());
+    frame.keypoints[0].name = "unknown".into();
+    assert!(review_keypoints(&frame, &model.layout.keypoints, &behind_camera).is_err());
+}
+
+#[test]
 fn first_capture_drafts_retain_validation_without_becoming_fittable() {
     let (mut model, mut input, _) = scene();
     let point = input.frames[0].keypoints[0].clone();

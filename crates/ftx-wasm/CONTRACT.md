@@ -16,6 +16,22 @@ photos are loaded, anatomy inferred, MODEL_FIT predictions promoted to evidence 
 acceptance added. Native/portable integration uses independently authored articulated synthetic
 observations, held-out mutations, unobservable motion, capped solves and raster silhouettes.
 
+**Accepted image-frame inspection.** `body_fit::review_body_fit_frame(model_bytes, report, frame_index)`
+and its wasm32 export re-evaluate one saved accepted pose without optimization. The report and model
+retain the same 16 MiB/512 MiB bounds; model identity/arrays, accepted shape, complete named layout,
+frame/pose pairing, parameter bounds and multistart pose agreement must agree before export.
+The ordinal is native-parsed text and original u64 frame identities remain exact. Full-mesh keypoints
+use the same `ftx-measure::body_fit::review_keypoints` kernel as native mesh export; all supplied FIT/CHECK
+silhouette slices use the unchanged triangle-coverage gate. An inconsistent projection refuses the
+review without replacing the accepted report. One evaluation supports at most 100,000 vertices and
+200,000 faces. OBJ coordinates retain full precision in metres and all model topology.
+The photo page draws the original oriented pixel projections and retains the raw review JSON.
+Distorted cameras show vertices without invented straight lens-warped edges; unprojectable vertices
+remain explicit and the OBJ keeps them. Frame/source changes, cancellation and page exit terminate
+the review worker and withdraw its downloads; accepted report/model reuse remains independent.
+No photograph is loaded, no point visibility or full-mask agreement is inferred, and these diagnostic
+meshes are not certified collision skins, measurement evidence or real-wearer fit.
+
 **Still-window candidates.** `photo::still_window(input, source)` and the matching wasm32 export delegate to
 `ftx-measure::still::assess_still_window`, with the existing 256 KiB browser JSON limit. The shared
 photo geometry worker preserves exact source/report text, the original filename and source-byte hash,

@@ -287,6 +287,25 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <h3>Body-fit result</h3>
     <p id="bodyFitSummary"></p><p id="bodyFitUse"></p>
     <p><button id="bodyFitWorkbench" disabled>Continue with this body in Pattern Workbench</button></p>
+    <section id="bodyFitReview" hidden>
+      <h4>Inspect an accepted frame</h4>
+      <p>Evaluate the complete saved pose without fitting again. Orange circles and thick contours show
+        observations; blue crosses and thin contours show the fitted model. Labels keep FIT/CHECK roles.
+        The drawing uses the original oriented pixel coordinates and does not load a photograph.</p>
+      <label>Accepted frame <select id="bodyFitReviewFrame" disabled></select></label>
+      <p><button id="bodyFitReviewRun" disabled>Inspect frame and prepare mesh</button>
+        <button id="bodyFitReviewCancel" disabled>Cancel frame review</button></p>
+      <label><input id="bodyFitReviewMesh" type="checkbox" checked> Show projected body geometry</label>
+      <p id="bodyFitReviewStatus" role="status" aria-live="polite"></p>
+      <pre id="bodyFitReviewError" role="alert"></pre>
+      <canvas id="bodyFitReviewCanvas" hidden style="max-width:100%;height:auto;border:1px solid #888"
+        aria-label="Accepted full-mesh projections against observed keypoints and silhouette slices"></canvas>
+      <p id="bodyFitReviewSummary"></p>
+      <div id="bodyFitReviewDownloads" class="files"></div>
+      <p><small>One frame is evaluated at a time. The OBJ keeps all original model faces and unrounded
+        metre coordinates in the common calibrated world frame. It is a model estimate, not a certified
+        collision skin or evidence of real-wearer fit. Source changes and cancellation withdraw this review.</small></p>
+    </section>
     <div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Outcome</th><th>Model calls</th><th>Initial / final objective</th></tr></thead>
       <tbody id="bodyFitAttempts"></tbody></table></div>
     <h4>Every residual check</h4>

@@ -5,7 +5,7 @@ use std::{fmt::Write as _, fs, path::Path};
 use ftx_body::{PosedBody, RestBody};
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_export::text::xml_escape;
-use ftx_measure::body_fit::{BodyFitReport, FitFrame};
+use ftx_measure::body_fit::{BodyFitReport, FitFrame, review_keypoints};
 use ftx_measure::silhouette::{self, Axis, SurfaceMesh};
 use serde_json::{Value, json};
 
@@ -654,24 +654,12 @@ fn projections(
          {background}\
          <g font-family=\"sans-serif\" font-size=\"12\">"
     );
-    let mut points = Vec::new();
     let targets = adapter.points_on_body(rest, body)?;
-    for observation in &frame.keypoints {
-        let index = adapter
-            .layout
-            .keypoints
-            .iter()
-            .position(|n| n == &observation.name)
-            .ok_or_else(|| bad_input("unknown accepted mesh correspondence"))?;
-        let point = targets[index];
-        let projected = frame.camera.project(point)?;
-        let error = (projected - observation.pixel_px).norm();
-        if !error.is_finite() || error > 3.0 {
-            return Err(bad_input(
-                "full mesh keypoint disagrees with the accepted 3-pixel fit gate",
-            ));
-        }
-        let observed = observation.pixel_px;
+    let points = review_keypoints(frame, &adapter.layout.keypoints, &targets)?;
+    for observation in &points {
+        let projected = observation.predicted_px;
+        let error = observation.residual_px;
+        let observed = observation.observed_px;
         let name = label(&observation.name);
         let partition = match observation.partition {
             ftx_measure::triangulate::Partition::Fit => "fit",
@@ -698,11 +686,6 @@ fn projections(
             observed.y - 6.0
         )
         .unwrap();
-        points.push(json!({
-            "name":observation.name, "partition":observation.partition,
-            "sigma_px":observation.sigma_px, "observed_px":observed,
-            "predicted_px":projected, "world_m":point, "residual_px":error
-        }));
     }
     let mut result = json!({"schema":"ftx-body-reprojections/1","frame":frame.frame,
         "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,

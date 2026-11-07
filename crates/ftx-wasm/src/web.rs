@@ -107,6 +107,21 @@ pub fn fit_body(
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Review one accepted image-frame mesh and its original evidence without another fit.
+///
+/// # Errors
+/// Invalid accepted report/model/ordinal, excessive mesh, or failed full-mesh evidence checks.
+#[wasm_bindgen]
+pub fn review_body_fit_frame(
+    model_bytes: &[u8],
+    report: &str,
+    frame_index: &str,
+) -> Result<String, JsError> {
+    crate::body_fit::review_body_fit_frame(model_bytes, report, frame_index)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Assess a sparse still-window candidate without creating reviewed capture evidence.
 ///
 /// # Errors

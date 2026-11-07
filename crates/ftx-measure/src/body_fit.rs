@@ -76,6 +76,72 @@ pub struct Keypoint {
     pub partition: Partition,
 }
 
+/// A full-mesh correspondence reprojected for review, retaining its original evidence role.
+#[derive(Clone, Debug, Serialize)]
+pub struct KeypointProjection {
+    /// Authored correspondence name.
+    pub name: String,
+    /// Original fit or held-out role; review never changes the fitting objective.
+    pub partition: Partition,
+    /// Original per-coordinate observation uncertainty.
+    pub sigma_px: f64,
+    /// Original oriented pixel coordinates.
+    pub observed_px: Vec2,
+    /// Projection of the complete posed mesh correspondence.
+    pub predicted_px: Vec2,
+    /// Complete posed mesh correspondence in the calibrated world frame, metres.
+    pub world_m: Vec3,
+    /// Unrounded Euclidean pixel residual.
+    pub residual_px: f64,
+}
+
+/// Recheck full-mesh correspondences against the fitter's fixed 3-pixel gate for review/export.
+/// Callers supply points in the declared name order, evaluated on the complete accepted mesh.
+/// This performs no fitting, visibility test or acceptance upgrade.
+///
+/// # Errors
+/// Inconsistent correspondence arrays, missing names, failed projections or residuals above 3 px.
+pub fn review_keypoints(
+    frame: &FitFrame,
+    names: &[String],
+    points: &[Vec3],
+) -> Result<Vec<KeypointProjection>, Refusal> {
+    if names.len() != points.len()
+        || names.len() > 128
+        || frame.keypoints.len() > 128
+        || points.iter().any(|p| !p.is_finite())
+    {
+        return Err(invalid("invalid full-mesh review correspondences"));
+    }
+    frame
+        .keypoints
+        .iter()
+        .map(|observation| {
+            let index = names
+                .iter()
+                .position(|name| name == &observation.name)
+                .ok_or_else(|| invalid("unknown accepted mesh correspondence"))?;
+            let point = points[index];
+            let projected = frame.camera.project(point)?;
+            let error = (projected - observation.pixel_px).norm();
+            if !error.is_finite() || error > 3.0 {
+                return Err(invalid(
+                    "full mesh keypoint disagrees with the accepted 3-pixel fit gate",
+                ));
+            }
+            Ok(KeypointProjection {
+                name: observation.name.clone(),
+                partition: observation.partition,
+                sigma_px: observation.sigma_px,
+                observed_px: observation.pixel_px,
+                predicted_px: projected,
+                world_m: point,
+                residual_px: error,
+            })
+        })
+        .collect()
+}
+
 /// One decoded image, with an independently variable body pose and a fixed metric camera.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

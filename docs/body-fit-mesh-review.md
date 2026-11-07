@@ -59,3 +59,29 @@ of total output. It performs one rest-body evaluation and one full pose evaluati
 accepted frame, recorded as `export_pose_evaluations`; these bounded output evaluations
 are separate from the fitter's `--max-evaluations` callback budget. No additional input
 file or photo is opened from metadata. Model-estimated geometry remains `MODEL_FIT`.
+## Inspect a browser-fitted frame
+
+After an accepted fit on the local photo page, use **Inspect an accepted frame**, choose the
+frame and select **Inspect frame and prepare mesh**. This reuses the exact model bytes and
+original accepted report from that fit; it evaluates one saved pose without another optimization.
+
+The drawing overlays orange observations and blue full-mesh projections in the original
+oriented pixel coordinates. Labels retain FIT/CHECK roles and unrounded residuals remain in
+the JSON. Supplied silhouette scanlines are independently rechecked on the complete mesh
+through the same native coverage gate. The projected mesh can be hidden to inspect observations.
+For a distorted camera, only projected vertices are drawn; straight triangle edges would
+misrepresent lens-warped edges. Vertices outside the camera's projection domain are counted
+explicitly and omitted from the drawing, while the OBJ retains the complete geometry.
+
+Download the per-frame **JSON** and **OBJ** for local review. The JSON preserves the original
+full-width timestamp, camera, orientation, observations, coverage comparisons and exact report
+and model hashes. The OBJ retains unrounded metre coordinates and every original face,
+including internal shells. No photograph is loaded and no file path is followed. This review
+does not establish full-mask agreement, point visibility, occlusion, collision-skin validity
+or physical fit.
+
+Changing the selected frame, cancelling a review, changing the fit sources or limits, or
+leaving the page withdraws stale review downloads. Review refusal or cancellation preserves
+the accepted fit report and its separate Pattern Workbench handoff. The existing 16 MiB
+report, 512 MiB model, 100,000-vertex and 200,000-face bounds apply; only one frame is evaluated
+at a time. Keep the native `--mesh-out` route for a complete immutable multi-frame bundle.
