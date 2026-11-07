@@ -359,7 +359,17 @@ not a pose estimated from the photographs. Up to four starts can be retained.
 An input with `fit.starts: []` or one valid start can be opened for authoring. The empty case does
 not generate a placeholder body. Downloading and applying a completed initialization set requires
 the ordinary fitter's two to four distinct, strictly interior starts. Incomplete fields, bounds
-violations and duplicate starts withdraw the download; cancel and reset discard pending edits.
+violations and duplicate starts withdraw the downloads; cancel and reset discard pending edits.
+
+After applying two to four complete distinct starts, **Download prepared input for browser fitting**
+saves `prepared-input-edited.json`. Select it with the same converted model in the local photo
+page to run the ordinary body fitter directly. The download replaces only the starts in this
+review's native `prepared-input.json` snapshot. Cameras, observations, imported mask samples,
+model settings, metric evidence, uncertainty and FIT/CHECK roles stay fixed. Native frame ordinals
+map each pose back to its exact original frame identity, including full-width timestamps.
+The original snapshot and displayed previews remain unchanged. If the browser cannot preserve
+those numbers exactly, the prepared download is withheld with an explanation; initialization
+annotations and draft editing remain available for the native route below.
 
 After applying a valid first start, **Save applied start draft** preserves it in
 `body-starts-draft.json` even before a second start exists. Reopen the same review page and
@@ -367,12 +377,12 @@ choose that file under **Reopen an applied start draft for this source** to cont
 existing annotation format retains the exact source/model/capture/silhouette bindings and
 native frame ordinals. The local loader accepts UTF-8 files up to 256 KiB, checks every value
 and refuses different bindings without replacing current work. Opening the file chooser withdraws
-both downloads, including during a slow read or after an invalid or canceled file selection.
+downloads, including during a slow read or after an invalid or canceled file selection.
 Choose **Apply this start** or **Cancel pending edit** to restore downloads for retained values.
-Pending edits also withdraw both downloads; only applied values are saved. After loading, review
-the starts and choose **Apply this start** before preparing completed annotations. A one-start
-draft still refuses native materialization; add a distinct second start to use the ordinary
-commands below. Original previews stay unchanged, and later editor actions cancel pending file
+Pending edits also withdraw downloads; only applied values are saved. After loading, review
+the starts and choose **Apply this start** before preparing completed annotations or browser input.
+A one-start draft still refuses fitting and native materialization; add a distinct second start
+to prepare either complete download. Original previews stay unchanged, and later editor actions cancel pending file
 reads. Leaving the page cancels reads and withdraws downloads; a cached-page return retains
 entered values and exposes the same explicit Apply/Cancel recovery controls.
 
@@ -405,9 +415,11 @@ identities and all inline or imported silhouette samples. `starts.json` retains 
 and SHA-256. After reviewing the updated starts, select this new snapshot and the same model in
 the photo page; no additional capture-review round is needed merely to prepare browser input.
 The earlier capture review's snapshot still contains its original starts. Keep `input.json` for
-the native route, which rechecks original capture sources on use. The portable snapshot does not
-follow file paths or recheck source images: changing photographs, masks, calibration, observations
-or starts requires a fresh checked snapshot. Publishing it does not run the fitter or accept a shape.
+the native route, which rechecks original capture sources on use. Portable snapshots do not
+follow file paths or recheck source images. Applied start or observation edits can be exported
+from their respective review pages while retaining the rest of that page's prepared context.
+Changed photographs, masks, calibration or other source-bound inputs require a fresh native
+review. Publishing an edited snapshot does not run the fitter or accept a shape.
 
 Keep predeclared CHECK observations fixed; this preview does not authorize fitting to their residuals.
 The original input download retains its original relative paths and belongs at its original

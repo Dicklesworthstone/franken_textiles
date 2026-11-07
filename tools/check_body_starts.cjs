@@ -1,4 +1,4 @@
-// Actual offline start editor -> native initialization replay -> ordinary body fitter.
+// Actual offline start editor -> prepared fitting and native initialization replay -> ordinary body fitter.
 // Prepare with FTX_BODY_START_DIR and start_edits_editor_fixture_ in body_fit_workflow.
 // Synthetic numerical acceptance only; no photograph, anatomical or physical-fit claim.
 // FTX_START_EDITOR_SOURCE tests exact source JS against a retained native review; not a rebuilt CLI.
@@ -18,7 +18,8 @@ const expected = read("expected-annotations.json"), original = fs.readFileSync(p
 assert.deepEqual(seed.starts, []);
 assert.equal(seed.source_input_sha256, hash(original));
 assert.equal(report.body_fitted, false);
-for (const item of [report.original_input, report.start_editor.annotations, report.viewer, report.start_editor.script]) {
+for (const item of [report.original_input, report.start_editor.annotations, report.start_editor.prepared_input,
+  report.viewer, report.start_editor.script]) {
   const bytes = fs.readFileSync(path.join(root, "review", item.file));
   assert.equal(bytes.length, item.bytes); assert.equal(hash(bytes), item.sha256);
 }
@@ -33,13 +34,33 @@ function command(cwd, args) {
 function control(page, group, index, frame) {
   return page.locator(`#startParameters input[data-group="${group}"][data-parameter="${index}"]${frame === undefined ? "" : `[data-frame="${frame}"]`}`);
 }
+const preparedUrls = new WeakMap();
 async function hidden(page) {
-  assert(await page.locator("#startDownload").isHidden());
-  assert.equal(await page.locator("#startDownload").getAttribute("href"), null);
+  for (const id of ["startDownload", "startPreparedDownload"]) {
+    assert(await page.locator("#" + id).isHidden());
+    assert.equal(await page.locator("#" + id).getAttribute("href"), null);
+  }
+  if (preparedUrls.has(page)) {
+    await revoked(page, preparedUrls.get(page));
+    preparedUrls.delete(page);
+  }
 }
 async function visible(page) {
-  assert(await page.locator("#startDownload").isVisible());
-  assert.match(await page.locator("#startDownload").getAttribute("href"), /^blob:/);
+  for (const id of ["startDownload", "startPreparedDownload"]) {
+    assert(await page.locator("#" + id).isVisible());
+    assert.match(await page.locator("#" + id).getAttribute("href"), /^blob:/);
+  }
+  preparedUrls.set(page, await page.locator("#startPreparedDownload").getAttribute("href"));
+}
+async function exactPrepared(page, text) {
+  return page.evaluate(source => JSON.parse(source, (_key, value, context) => {
+    if (typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value)) {
+      if (!context?.source || !/^-?\d+$/.test(context.source)) throw Error("Exact numeric parsing unavailable.");
+      // Keep an explicit numeric marker so quoted or rounded identities cannot compare equal.
+      return {exactInteger: context.source};
+    }
+    return value;
+  }), text);
 }
 async function fill(page, start) {
   for (const [i, value] of start.shape.entries()) await control(page, "shape", i).fill(String(value));
@@ -82,6 +103,21 @@ async function add(page, start) {
     await page.goto(pathToFileURL(path.join(root, "review/index.html")).href);
     await page.waitForFunction(() => !document.getElementById("startEditor").hidden);
     assert.equal(await page.evaluate(() => globalThis.startInjection), undefined);
+    const snapshotBytes = fs.readFileSync(path.join(root, "review/prepared-input.json"));
+    const snapshot = await exactPrepared(page, snapshotBytes.toString("utf8"));
+    assert.deepEqual(await exactPrepared(page, await page.locator("#startPreparedInput").textContent()), snapshot);
+    // Exercise the actual prepared emitter: unedited native floats retain signed zero.
+    const editor = (sourceScript || fs.readFileSync(path.join(root, "review", report.start_editor.script.file))).toString("utf8");
+    const emitterStart = editor.indexOf("    return JSON.stringify(value,");
+    const emitterEnd = editor.indexOf("\n  }", emitterStart);
+    assert(emitterStart >= 0 && emitterEnd > emitterStart);
+    const zeroText = await page.evaluate(new Function(
+      "const value = {camera: {translation_m: [-0, 0]}};\n" + editor.slice(emitterStart, emitterEnd)));
+    const zeroValues = JSON.parse(zeroText).camera.translation_m;
+    assert(Object.is(zeroValues[0], -0)); assert(Object.is(zeroValues[1], 0));
+    assert.equal(snapshot.schema, "ftx-anny-body-fit-input/1");
+    assert.equal(snapshot.model.model_sha256, expected.model_sha256);
+    assert.deepEqual(snapshot.fit.starts, []);
     await hidden(page);
     await page.locator("#newStart").click();
     assert((await page.locator("#startParameters input").evaluateAll(nodes => nodes.map(node => node.value))).every(value => value === ""));
@@ -183,13 +219,14 @@ async function add(page, start) {
       await revoked(page, oldUrl); await revoked(page, oldDraft);
       await page.locator('#cancelStart').click(); await visible(page);
     }
-    for (const action of ['focus', 'chooser', 'empty']) {
+    for (const action of ['focus', 'chooser', 'cancel', 'empty']) {
       const before = await form(), oldUrl = await page.locator('#startDownload').getAttribute('href');
       if (action === 'focus') await page.locator('#startDraftFile').focus();
       else if (action === 'chooser') {
         const chooser = page.waitForEvent('filechooser');
         await page.locator('#startDraftFile').click(); await chooser;
-      } else await page.locator('#startDraftFile').setInputFiles([]);
+      } else if (action === 'cancel') await page.locator('#startDraftFile').dispatchEvent('cancel');
+      else await page.locator('#startDraftFile').setInputFiles([]);
       await hidden(page); assert(await page.locator('#startDraftDownload').isHidden());
       await revoked(page, oldUrl); assert.deepEqual(await form(), before);
       // Selecting an applied start must not silently restore the unresolved download.
@@ -266,14 +303,14 @@ async function add(page, start) {
       const before = await form(), count = await appliedCount(page), message = await page.locator('#startStatus').innerText();
       assert(!message.startsWith('Reading saved starts'));
       if (action === 'pagehide') assert(await page.locator('#cancelStart').isEnabled());
-      const links = await page.locator('#startDownload,#startDraftDownload').evaluateAll(nodes => nodes.map(node => [node.hidden, node.getAttribute('href')]));
+      const links = await page.locator('#startDownload,#startDraftDownload,#startPreparedDownload').evaluateAll(nodes => nodes.map(node => [node.hidden, node.getAttribute('href')]));
       await page.evaluate(({reject, text}) => {
         if (reject) globalThis.__startRead.reject(new Error('obsolete read error'));
         else globalThis.__startRead.resolve(new TextEncoder().encode(text).buffer);
       }, {reject, text: JSON.stringify(partial)});
       assert.deepEqual(await form(), before); assert.equal(await appliedCount(page), count);
       assert.equal(await page.locator('#startStatus').innerText(), message);
-      assert.deepEqual(await page.locator('#startDownload,#startDraftDownload').evaluateAll(nodes => nodes.map(node => [node.hidden, node.getAttribute('href')])), links);
+      assert.deepEqual(await page.locator('#startDownload,#startDraftDownload,#startPreparedDownload').evaluateAll(nodes => nodes.map(node => [node.hidden, node.getAttribute('href')])), links);
     }
     await load(JSON.stringify(expected)); await page.locator('#startList').selectOption('1');
     await page.locator('#applyStart').click(); await visible(page);
@@ -324,6 +361,58 @@ async function add(page, start) {
     assert.deepEqual(JSON.parse(fs.readFileSync(destination)), expected);
     assert.deepEqual(fs.readFileSync(path.join(root, "input.json")), original);
 
+    const preparedEvent = page.waitForEvent("download");
+    await page.locator("#startPreparedDownload").click();
+    const preparedDownload = await preparedEvent;
+    assert.equal(preparedDownload.suggestedFilename(), "prepared-input-edited.json");
+    const preparedDestination = path.join(out, "prepared-input-edited.json");
+    await preparedDownload.saveAs(preparedDestination);
+    const preparedBytes = fs.readFileSync(preparedDestination);
+    const prepared = await exactPrepared(page, preparedBytes.toString("utf8"));
+    const expectedPrepared = structuredClone(snapshot);
+    expectedPrepared.fit.starts = expected.starts.map(start => ({shape: start.shape,
+      poses: snapshot.fit.frames.map((frame, index) => ({frame: frame.frame,
+        values: start.poses.find(pose => pose.frame_index === index).values}))}));
+    assert.deepEqual(prepared, expectedPrepared);
+    assert(preparedBytes.includes(Buffer.from("9007199254740993")));
+    assert.deepEqual(fs.readFileSync(path.join(root, "review/prepared-input.json")), snapshotBytes);
+    assert.deepEqual(await exactPrepared(page, await page.locator("#startPreparedInput").textContent()), snapshot);
+
+    // A serializer failure must withdraw the previous prepared link, preserving native annotations.
+    const oldPrepared = await page.locator("#startPreparedDownload").getAttribute("href");
+    await page.evaluate(() => {
+      globalThis.__originalRawJSON = JSON.rawJSON;
+      JSON.rawJSON = () => { throw Error("test prepared serializer refusal"); };
+    });
+    await page.locator("#startList").selectOption("0");
+    assert(await page.locator("#startDownload").isVisible());
+    assert(await page.locator("#startDraftDownload").isVisible());
+    assert(await page.locator("#startPreparedDownload").isHidden());
+    assert.equal(await page.locator("#startPreparedDownload").getAttribute("href"), null);
+    await revoked(page, oldPrepared);
+    assert.match(await page.locator("#startPreparedNotice").innerText(), /serializer refusal/);
+    await page.evaluate(() => { JSON.rawJSON = globalThis.__originalRawJSON; });
+    await page.locator("#applyStart").click(); await visible(page);
+
+    // Browsers without the lossless codec still support the existing annotations/draft route.
+    const legacy = await context.newPage();
+    legacy.on("pageerror", error => errors.push(String(error)));
+    await legacy.addInitScript(() => { JSON.rawJSON = undefined; });
+    await legacy.goto(pathToFileURL(path.join(root, "review/index.html")).href);
+    await legacy.waitForFunction(() => !document.getElementById("startEditor").hidden);
+    for (const start of expected.starts) await add(legacy, start);
+    assert(await legacy.locator("#startDownload").isVisible());
+    assert(await legacy.locator("#startDraftDownload").isVisible());
+    assert(await legacy.locator("#startPreparedDownload").isHidden());
+    assert.equal(await legacy.locator("#startPreparedDownload").getAttribute("href"), null);
+    assert.match(await legacy.locator("#startPreparedNotice").innerText(), /unavailable.*native materialization/);
+    const legacyEvent = legacy.waitForEvent("download");
+    await legacy.locator("#startDownload").click();
+    const legacyDownload = await legacyEvent, legacyPath = path.join(out, "legacy-body-starts.json");
+    await legacyDownload.saveAs(legacyPath);
+    assert.deepEqual(JSON.parse(fs.readFileSync(legacyPath)), expected);
+    await legacy.close();
+
     // Existing geometry and exact long native timestamp labels must stay frozen while editing.
     await page.goto(pathToFileURL(path.join(root, "seeded-review/index.html")).href);
     await page.waitForFunction(() => !document.getElementById("startEditor").hidden);
@@ -352,6 +441,12 @@ async function add(page, start) {
     assert.equal(reference.capture_input.source, fs.realpathSync(path.join(root, "authored/input.json")));
     reference.capture_input.source = fitted.capture_input.source;
     assert.deepEqual(fitted, reference);
+    const direct = command(out, ["measure", "fit-body", preparedDestination, "--model", model]);
+    const expectedDirect = structuredClone(fitted);
+    delete expectedDirect.capture_input;
+    expectedDirect.input_sha256 = hash(preparedBytes);
+    assert.deepEqual(direct, expectedDirect);
+    assert.deepEqual(await exactPrepared(page, fs.readFileSync(path.join(applied, "prepared-input.json"), "utf8")), prepared);
     if (sourceScript) assert(sourceLoads > 0, 'The source-script override must actually execute.');
     assert.deepEqual(errors, []);
     assert(requests.every(request => request.method === "GET" && request.url.startsWith("file:")));
@@ -359,6 +454,8 @@ async function add(page, start) {
       editor_script: {mode: sourceScript ? 'source override' : 'compiled review',
         sha256: sourceScript ? hash(sourceScript) : report.start_editor.script.sha256, source_loads: sourceLoads},
       exercised: ["empty bootstrap", "named bounded parameters", "midpoint", "copy", "distinctness", "partial edit", "boundary", "cancel", "remove", "maximum starts", "reset", "one-start save/reload/resume", "partial native refusal", "invalid file preservation", "file-choice URL revocation", "slow-read withdrawal", "late-read ownership", "cached-page recovery", "frozen native previews", "exact native frame identities", "download to ordinary fit"],
+      prepared: {download: preparedDestination, fit: direct.status, exact_snapshot_preserved: true,
+        legacy_annotation_fallback: true, serializer_failure_withdrawal: true},
       download: destination, browser_errors: errors.length, local_requests: requests.length}));
   } finally {
     await browser.close();

@@ -18,12 +18,16 @@
       return value;
     });
     const json = (value, space) => JSON.stringify(value, (_key, item) =>
-      typeof item === "bigint" ? JSON.rawJSON(item.toString()) : item, space);
+      typeof item === "bigint" ? JSON.rawJSON(item.toString())
+        : Object.is(item, -0) ? JSON.rawJSON("-0.0") : item, space);
     const original = parse(byId("captureInput").textContent);
     const prepared = parse(byId("preparedInput").textContent);
     // Opaque integer identities survive clones as BigInt and serialize from exact decimal tokens.
     // If the browser lacks either JSON capability, retain the original unsafe-number refusal.
     function requireSafeNumbers(value) {
+      if (Object.is(value, -0) && typeof JSON.rawJSON !== "function") {
+        throw Error("This browser cannot preserve signed zero in native input; use a browser with lossless JSON support or edit the original JSON natively");
+      }
       if (typeof value === "number" && (!Number.isFinite(value) ||
           (Number.isInteger(value) && !Number.isSafeInteger(value)))) {
         throw Error("Input exceeds safe browser numeric precision; edit the original JSON with an integer-preserving tool");

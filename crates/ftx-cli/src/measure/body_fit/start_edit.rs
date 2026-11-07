@@ -71,7 +71,7 @@ pub(super) fn attach(
             })
         })
         .transpose()?;
-    // Only original frame ordinals reach JavaScript. Native u64 timestamps remain native.
+    // Annotation edits use original frame ordinals; prepared exports retain exact FrameIds.
     let starts = original_fit
         .starts
         .iter()
@@ -118,7 +118,9 @@ pub(super) fn attach(
         .enumerate()
         .map(|(frame_index, frame)| {
             json!({"frame_index":frame_index,"label":format!("Frame {}: {} @ {} us",
-                frame_index + 1, frame.frame.stream, frame.frame.timestamp_us)})
+                frame_index + 1, frame.frame.stream, frame.frame.timestamp_us),
+                "identity":{"stream":frame.frame.stream,
+                    "timestamp_us":frame.frame.timestamp_us.to_string()}})
         })
         .collect();
     let shape: Vec<_> = adapter
@@ -141,6 +143,13 @@ pub(super) fn attach(
         })
         .collect();
     let data = json!({"annotations":annotations,"shape":shape,"pose":pose,"frames":frames});
+    // Keep original source frame order: annotation ordinals do not refer to sorted previews.
+    let prepared = json!({"schema":"ftx-anny-body-fit-input/1",
+        "model":adapter.configuration(),"fit":original_fit});
+    let prepared_entry = bundle.push(
+        "prepared-input.json".into(),
+        workspace::json_bytes(&prepared)?,
+    )?;
     let annotation = bundle.push(
         "body-starts.json".into(),
         workspace::json_bytes(&json!(annotations))?,
@@ -150,10 +159,10 @@ pub(super) fn attach(
         include_bytes!("start_edit.js").to_vec(),
     )?;
     Ok((
-        page(&data)?,
-        json!({"annotations":annotation,"script":editor,"frames":frames,
-            "frame_indices":"Original source fit.frames order; timestamps are never round-tripped through JavaScript.",
-            "preview":"Original declared starts only; edited values require native materialization and a new review."}),
+        page(&data, &prepared)?,
+        json!({"annotations":annotation,"script":editor,"frames":frames,"prepared_input":prepared_entry,
+            "frame_indices":"Original source fit.frames order; annotations use native ordinals and prepared exports retain exact u64 frame identities.",
+            "preview":"Original declared starts only; updated previews require native materialization and a new review."}),
     ))
 }
 
@@ -320,15 +329,19 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
     ))
 }
 
-fn page(data: &Value) -> Result<String, Refusal> {
+fn page(data: &Value, prepared: &Value) -> Result<String, Refusal> {
     let payload = serde_json::to_string(data)
+        .map_err(|e| bad_input(e.to_string()))?
+        .replace('<', "\\u003c");
+    let prepared_payload = serde_json::to_string(prepared)
         .map_err(|e| bad_input(e.to_string()))?
         .replace('<', "\\u003c");
     Ok(format!(
         r##"
 <section><h2>Author initialization values</h2>
 <p>Enter shared shape and one pose for each source frame. Values must be strictly inside the named bounds. A complete download needs 2–4 distinct starts. Empty drafts do not guess a body or pose; the midpoint button is an explicit starting guess only.</p>
-<p><a href="body-starts.json">Original initialization annotations</a></p>
+<p><a href="body-starts.json">Original initialization annotations</a> · <a href="prepared-input.json">Original prepared observations and starts</a></p>
+<p>Edited prepared input can be fitted on the local photo page with the same model. It retains this review's checked cameras, observations, imported mask samples and model settings. It does not reread source files; if images, masks or calibration changed, generate a fresh native review.</p>
 <p id="startPreviewNotice"><strong>All photographs, projections and meshes below show the original input.</strong> Editing values does not regenerate them. Materialize the download and generate a new native review to inspect edited starts.</p>
 <label>Reopen an applied start draft for this source <input id="startDraftFile" type="file" accept=".json,application/json"></label>
 <p>A draft replaces the applied start list after its source bindings and values are checked. Review loaded starts before preparing completed annotations. Invalid files leave current work intact.</p>
@@ -339,11 +352,12 @@ fn page(data: &Value) -> Result<String, Refusal> {
 <div id="startParameters"></div>
 <p><button id="applyStart" type="button">Apply this start</button> <button id="cancelStart" type="button">Cancel pending edit</button></p>
 <p id="startStatus" role="status"></p>
-<p><button id="resetStarts" type="button">Reset all start changes</button> · <a id="startDownload" download="body-starts.json" hidden>Download body-starts.json</a></p>
+<p><button id="resetStarts" type="button">Reset all start changes</button> · <a id="startDownload" download="body-starts.json" hidden>Download body-starts.json</a> · <a id="startPreparedDownload" download="prepared-input-edited.json" hidden>Download prepared input for browser fitting</a></p>
+<p id="startPreparedNotice"></p>
 <p><a id="startDraftDownload" download="body-starts-draft.json" hidden>Save applied start draft</a>. Save one valid applied start and reopen it here later. Pending edits must be applied or canceled first. A draft is not a fitted body; native materialization still requires 2–4 distinct starts.</p>
-<p>Apply with <code>ftx measure fit-starts body-starts.json --model MODEL --out NEW_DIR</code>. Then run <code>ftx measure fit-start-review NEW_DIR/input.json --model MODEL --out NEW_REVIEW</code> before fitting. Keep observations and FIT/CHECK roles fixed; do not tune starts to held-out residuals.</p>
+<p>Fit prepared-input-edited.json on the local photo page with the same model, or apply annotations with <code>ftx measure fit-starts body-starts.json --model MODEL --out NEW_DIR</code>. To inspect updated previews and recheck source files, run <code>ftx measure fit-start-review NEW_DIR/input.json --model MODEL --out NEW_REVIEW</code>. Keep observations and FIT/CHECK roles fixed; do not tune starts to held-out residuals.</p>
 </div><noscript><p>The supplied local script is required to edit starts. Original input and previews remain available.</p></noscript>
-<script type="application/json" id="startData">{payload}</script><script src="start-editor.js" defer></script></section>
+<script type="application/json" id="startData">{payload}</script><script type="application/json" id="startPreparedInput">{prepared_payload}</script><script src="start-editor.js" defer></script></section>
 "##
     ))
 }

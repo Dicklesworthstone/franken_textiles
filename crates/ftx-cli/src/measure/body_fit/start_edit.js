@@ -13,7 +13,86 @@
   const list = byId('startList'), status = byId('startStatus');
   const download = byId('startDownload');
   const draftDownload = byId('startDraftDownload');
+  const preparedDownload = byId('startPreparedDownload'), preparedNotice = byId('startPreparedNotice');
+  let preparedSource = null, preparedDownloadUrl = null;
+  const preparedBoundary = 'Prepared input keeps the reviewed cameras, observations, masks and model settings. Source files are not reread; use native review if they changed.';
   const changed = () => JSON.stringify(starts) !== JSON.stringify(original);
+
+  function parsePrepared(text) {
+    const value = JSON.parse(text, (_key, item, context) => {
+      if (typeof item === 'number' && Number.isInteger(item) && !Number.isSafeInteger(item)
+        && typeof JSON.rawJSON === 'function' && context?.source && /^-?\d+$/.test(context.source)) {
+        return BigInt(context.source);
+      }
+      return item;
+    });
+    function exactNumbers(item) {
+      if (typeof item === 'number' && (!Number.isFinite(item)
+        || Number.isInteger(item) && !Number.isSafeInteger(item))) {
+        throw new Error('This browser cannot preserve the prepared input numeric identities exactly.');
+      }
+      if (item !== null && typeof item === 'object') Object.values(item).forEach(exactNumbers);
+    }
+    exactNumbers(value);
+    return value;
+  }
+
+  function checkedPrepared(value) {
+    if (value.schema !== 'ftx-anny-body-fit-input/1'
+      || value.model?.model_sha256 !== data.annotations.model_sha256
+      || value.fit?.schema !== 'ftx-body-fit-input/1'
+      || !Array.isArray(value.fit.frames) || value.fit.frames.length !== data.frames.length) {
+      throw new Error('Prepared input does not match this initialization review.');
+    }
+    const seen = new Set();
+    data.frames.forEach((frame, index) => {
+      const identity = value.fit.frames[index].frame, expected = frame.identity;
+      if (frame.frame_index !== index || !expected || typeof expected.stream !== 'string'
+        || typeof expected.timestamp_us !== 'string' || !/^(0|[1-9]\d*)$/.test(expected.timestamp_us)
+        || identity?.stream !== expected.stream
+        || !['number', 'bigint'].includes(typeof identity.timestamp_us)
+        || String(identity.timestamp_us) !== expected.timestamp_us) {
+        throw new Error('Prepared frame identities disagree with the native frame ordinals.');
+      }
+      const key = JSON.stringify([expected.stream, expected.timestamp_us]);
+      if (seen.has(key)) throw new Error('Prepared frame identities are duplicated.');
+      seen.add(key);
+    });
+    return value;
+  }
+
+  try {
+    preparedSource = checkedPrepared(parsePrepared(byId('startPreparedInput').textContent));
+    preparedNotice.textContent = preparedBoundary;
+  } catch (error) {
+    preparedNotice.textContent = 'Prepared browser input unavailable: ' + error.message
+      + ' Initialization annotations and native materialization remain available.';
+  }
+
+  function preparedText(annotations) {
+    if (annotations.starts.length < 2 || annotations.starts.length > 4) {
+      throw new Error('Prepared input needs 2–4 distinct complete starts.');
+    }
+    const complete = checkedAnnotations(annotations), value = structuredClone(preparedSource);
+    // Frame ordinals identify original_fit, never the separately sorted preview/report frames.
+    value.fit.starts = complete.map(start => ({
+      shape: copy(start.shape),
+      poses: data.frames.map(frame => ({
+        frame: value.fit.frames[frame.frame_index].frame,
+        values: copy(start.poses.find(pose => pose.frame_index === frame.frame_index).values)
+      }))
+    }));
+    return JSON.stringify(value, (_key, item) =>
+      typeof item === 'bigint' ? JSON.rawJSON(item.toString())
+        : Object.is(item, -0) ? JSON.rawJSON('-0.0') : item, 2) + '\n';
+  }
+
+  function withdrawPrepared() {
+    preparedDownload.hidden = true;
+    preparedDownload.removeAttribute('href');
+    if (preparedDownloadUrl !== null) URL.revokeObjectURL(preparedDownloadUrl);
+    preparedDownloadUrl = null;
+  }
 
   function withdraw() {
     download.hidden = true;
@@ -22,6 +101,7 @@
     draftDownload.removeAttribute('href');
     if (downloadUrl !== null) URL.revokeObjectURL(downloadUrl);
     downloadUrl = null;
+    withdrawPrepared();
   }
 
   function updateDownload() {
@@ -35,6 +115,19 @@
     if (!needsReview && changed() && starts.length >= 2 && starts.length <= 4) {
       download.href = downloadUrl;
       download.hidden = false;
+      if (preparedSource !== null) {
+        try {
+          preparedDownloadUrl = URL.createObjectURL(new Blob([preparedText(annotations)],
+            { type: 'application/json' }));
+          preparedDownload.href = preparedDownloadUrl;
+          preparedDownload.hidden = false;
+          preparedNotice.textContent = preparedBoundary;
+        } catch (error) {
+          withdrawPrepared();
+          preparedNotice.textContent = 'Prepared browser input unavailable: ' + error.message
+            + ' Initialization annotations and native materialization remain available.';
+        }
+      }
     }
   }
 
@@ -211,7 +304,7 @@
   }
 
   const savedFile = byId('startDraftFile');
-  for (const event of ['focus', 'click']) savedFile.addEventListener(event, () => {
+  for (const event of ['focus', 'click', 'cancel']) savedFile.addEventListener(event, () => {
     ++revision;
     importPending = true;
     withdraw();
@@ -298,7 +391,7 @@
       render();
       status.textContent = `${starts.length} applied start${starts.length === 1 ? '' : 's'}. `
         + (starts.length < 2 ? 'Save the applied start draft, or add a distinct second start for completed annotations.'
-          : changed() ? 'Download the edited annotations and materialize them with the native command.'
+          : changed() ? 'Download prepared input for browser fitting, or materialize annotations natively for updated previews and source checks.'
             : 'Values match the original annotations.');
     } catch (error) {
       pending = true;

@@ -13,7 +13,8 @@ const exact = bytes => JSON.parse(bytes.toString(), (_key, value, context) =>
   typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) && /^-?\d+$/.test(context.source)
     ? BigInt(context.source) : value);
 const encoded = value => JSON.stringify(value, (_key, item) =>
-  typeof item === "bigint" ? JSON.rawJSON(item.toString()) : item);
+  typeof item === "bigint" ? JSON.rawJSON(item.toString())
+    : Object.is(item, -0) ? JSON.rawJSON("-0.0") : item);
 const savedInput = value => ({name: "capture-edited.json", mimeType: "application/json", buffer: Buffer.from(encoded(value))});
 const report = read("edit-review/review.json"), replay = read("edit-review/capture.json"), good = read("good.json");
 const hash = b => crypto.createHash("sha256").update(b).digest("hex");
@@ -883,13 +884,16 @@ async function sheetReview(page, records = report) {
     assert.equal(await staticMasks.locator("g[data-silhouette]").count(), 10);
     assert(await staticMasks.locator("#captureEditor").isHidden());
     const integerFiles = [];
-    const maximumCodec = await page.evaluate(() => {
-      const value = JSON.parse('{"timestamp_us":18446744073709551615}', (key, item, context) =>
-        key === "timestamp_us" ? BigInt(context.source) : item);
-      return JSON.stringify(structuredClone(value), (_key, item) =>
-        typeof item === "bigint" ? JSON.rawJSON(item.toString()) : item);
-    });
-    assert.equal(maximumCodec, '{"timestamp_us":18446744073709551615}');
+    // Exercise the actual export codec, including unedited native signed-zero values.
+    const editor = fs.readFileSync(path.join(reviewDir, report.editor.file), "utf8");
+    const codecStart = editor.indexOf("    const json = ");
+    const codecEnd = editor.indexOf("\n    const original =", codecStart);
+    assert(codecStart >= 0 && codecEnd > codecStart);
+    const maximumCodec = await page.evaluate(new Function(editor.slice(codecStart, codecEnd)
+      + "\nreturn json({timestamp_us: 18446744073709551615n, camera: {translation_m: [-0, 0]}});"));
+    assert.equal(maximumCodec, '{"timestamp_us":18446744073709551615,"camera":{"translation_m":[-0.0,0]}}');
+    const zeroValues = exact(Buffer.from(maximumCodec)).camera.translation_m;
+    assert(Object.is(zeroValues[0], -0)); assert(Object.is(zeroValues[1], 0));
     for (const [name, first, last] of [
       ["numeric-unsafe", 9007199254740993n, 9007199254940993n],
       ["numeric-u64-near-max", 18446744073708551615n, 18446744073708751615n],
@@ -957,6 +961,17 @@ async function sheetReview(page, records = report) {
       const safePage = await legacy.newPage(), expected = structuredClone(replay);
       await safePage.goto(pathToFileURL(path.join(reviewDir, "index.html")).href);
       await safePage.waitForFunction(() => !document.getElementById("captureEditor").hidden);
+      const hasSignedZero = await safePage.locator("#captureInput,#preparedInput").evaluateAll(nodes => {
+        const contains = value => Object.is(value, -0) || value !== null && typeof value === "object"
+          && Object.values(value).some(contains);
+        return nodes.some(node => contains(JSON.parse(node.textContent)));
+      });
+      if (missing === "raw-json" && hasSignedZero) {
+        assert.match(await safePage.locator("#editStatus").innerText(), /Editor unavailable:.*signed.zero/i);
+        await hidden(safePage);
+        assert(await safePage.locator("#applyPoint").isDisabled());
+        await legacy.close(); continue;
+      }
       await safePage.locator('.edit-point[data-frame="0"][data-point="3"]').click();
       expected.fit.frames[0].keypoints[3].pixel_px[0] = good.fit.frames[0].keypoints[3].pixel_px[0];
       await safePage.locator("#editX").fill(String(expected.fit.frames[0].keypoints[3].pixel_px[0]));

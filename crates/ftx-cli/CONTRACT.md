@@ -37,7 +37,16 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   The local editor authors shared-shape and per-frame pose starts with explicit named bounds and
   units. Empty/one-start inputs are draft-only; all existing starts retain strict validation, and
   the ordinary fitter still requires two to four distinct starts. Edits do not recompute the
-  displayed original geometry. Pending/invalid edits, cancellation and reset withdraw old links.
+  displayed original geometry. The review writes and embeds immutable `prepared-input.json` in
+  original frame order. After applying two to four complete distinct starts, the editor can
+  download `prepared-input-edited.json` directly for browser fitting, changing only `fit.starts`.
+  Exact native frame identities, checked cameras, imported mask samples, observations, model
+  configuration, metric evidence and FIT/CHECK roles remain intact. Pending edits, unresolved
+  imports, cancellation, reset and page departure withdraw stale prepared and annotation links;
+  restored drafts require Apply before complete downloads. Unsupported lossless timestamp
+  handling withholds only the prepared download; annotations and draft editing remain usable.
+  Browser export does not reread source files, update previews, run optimization or accept a body.
+  Changed source evidence requires a fresh native review.
 - `ftx measure fit-starts ANNOTATIONS --model MODEL --out NEW_DIR [--json]`: apply a complete
   `ftx-body-starts/1` annotation through the same native fitter admission. Exact source bytes,
   model and capture/mask evidence bind the values; original-order frame ordinals preserve full
