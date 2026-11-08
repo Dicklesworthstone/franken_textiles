@@ -207,6 +207,13 @@ It retains the ordinary frame/camera, evidence, parameter-domain, measurement an
 checks. Unknown observations still refuse, and neither this draft helper nor empty starts changes
 ordinary fitting admission. The native first-capture constructor uses it before publication.
 
+**Capture image identities.** Optional `CaptureImage` records bind every prepared observation
+frame exactly once by its full `FrameId`, original encoded SHA-256, stored pixel dimensions and
+already-applied rotation. `validate_capture_images` rejects incomplete, duplicate or mismatched
+bindings; `capture_images_from_receipt` extracts the same records from native capture receipts.
+Only display basenames are retained, and they never authorize file access. These records preserve
+local inspection through prepared-input and initialization handoffs; they add no fitting evidence or acceptance claim.
+
 **Sampled body silhouettes (FTX-21).** Optional frame silhouettes participate in the shared
 shape/per-frame pose fitter through `BodyModel::surface`. Rectified mesh triangle unions are
 compared on fixed horizontal/vertical image lines; limb gaps and overlapping surfaces retain

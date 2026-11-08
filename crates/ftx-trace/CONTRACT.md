@@ -30,6 +30,13 @@ dimensions and JPEG stored-to-oriented mapping; a filesystem path is added only 
 adapter. Tracing's more permissive image semantics are unchanged. Decoding establishes neither
 physical image identity nor reference scale, camera accuracy or body measurement validity.
 
+`load_capture_image_with_limit` shares the stricter, already-oriented decoded-frame admission
+between native video selection and portable body-frame image review. PNG must be opaque 8-bit
+gray/RGB with no EXIF, animation, transparency or trailing data; JPEG must have absent or identity
+EXIF orientation. No second rotation is applied. The 128 MiB capture boundary retains the strict
+JPEG decoder's 64 MiB ceiling. Capture previews may explicitly reserve up to 40 million pixels
+through `encode_png_bgr_with_limit`; ordinary `encode_png_bgr` retains its 16-million-pixel limit.
+
 **Reading documents.** Drafts and patterns are typed `PatternDoc`s parsed from text (vertex order and unknown
 keys such as `trace` survive); `names.json` is an `OValue`, a JSON value whose objects keep their order,
 because renames, splits and the reference's error messages follow it (a `serde_json::Value` sorts keys).

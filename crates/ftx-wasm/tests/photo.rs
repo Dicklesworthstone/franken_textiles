@@ -1121,7 +1121,7 @@ fn accepted_capture_image_preserves_stored_pixels_and_exact_source_identity() {
     let id = json!({"stream":"capture","timestamp_us":9_007_199_254_740_993_u64});
     let review = json!({"schema":"ftx-body-frame-review/1","frame":id,
         "image_size_px":[3,2],"rotation_cw_deg":90,
-        "source_image":{"frame":id,"image_name":"never-follow/this-path.png",
+        "source_image":{"frame":id,"image_name":"not-on-disk.png",
             "image_sha256":sha256_hex(&bytes),"image_size_px":[3,2],"rotation_cw_deg":90}});
     let text = review.to_string();
     let image = BodyFitImage::new(&bytes, &text).unwrap();
@@ -1143,6 +1143,8 @@ fn accepted_capture_image_preserves_stored_pixels_and_exact_source_identity() {
         "hash",
         "missing",
         "oversize",
+        "posix-path",
+        "windows-path",
     ] {
         let mut changed = review.clone();
         match mutation {
@@ -1156,6 +1158,10 @@ fn accepted_capture_image_preserves_stored_pixels_and_exact_source_identity() {
                 changed.as_object_mut().unwrap().remove("source_image");
             }
             "oversize" => changed["source_image"]["image_size_px"] = json!([u32::MAX, u32::MAX]),
+            "posix-path" => changed["source_image"]["image_name"] = json!("private/frame.png"),
+            "windows-path" => {
+                changed["source_image"]["image_name"] = json!(r"C:\private\frame.png")
+            }
             _ => unreachable!(),
         }
         assert!(

@@ -1094,6 +1094,19 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
     assert!(prepared.get("video_manifest").is_none());
     assert!(prepared.get("silhouettes").is_none());
     assert_eq!(prepared["capture_images"].as_array().unwrap().len(), 2);
+    let frames: Vec<ftx_measure::body_fit::FitFrame> =
+        serde_json::from_value(prepared["fit"]["frames"].clone()).unwrap();
+    for path in [
+        "/private/capture/original.png",
+        "private/capture/original.png",
+        r"C:\private\capture\original.png",
+    ] {
+        let mut receipt = report["capture_input"].clone();
+        receipt["frames"][0]["source"]["image"] = json!(path);
+        let images = ftx_measure::body_fit::capture_images_from_receipt(&receipt, &frames).unwrap();
+        assert_eq!(images[0].image_name, "original.png", "{path}");
+        assert_eq!(images[0].frame, frames[0].frame);
+    }
     for image in prepared["capture_images"].as_array().unwrap() {
         let frame = prepared["fit"]["frames"]
             .as_array()
@@ -1103,7 +1116,14 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
             .unwrap();
         assert_eq!(image["image_size_px"], frame["image_size_px"]);
         assert_eq!(image["rotation_cw_deg"], frame["rotation_cw_deg"]);
-        let pixels = std::fs::read(dir.join(image["image_name"].as_str().unwrap())).unwrap();
+        let original = report["capture_input"]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|frame| frame["frame"] == image["frame"])
+            .unwrap();
+        let pixels =
+            std::fs::read(dir.join(original["source"]["image"].as_str().unwrap())).unwrap();
         assert_eq!(image["image_sha256"], sha256_hex(&pixels));
     }
     #[cfg(unix)]
