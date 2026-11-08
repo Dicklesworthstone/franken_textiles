@@ -44,7 +44,11 @@ def text(value, name: str) -> str:
 
 
 def finite(value, name: str, *, positive=False) -> float:
-    if type(value) not in (int, float) or not math.isfinite(value):
+    try:
+        is_finite = type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        is_finite = False
+    if not is_finite:
         fail(f"{name}: finite number required")
     if positive and value <= 0:
         fail(f"{name}: positive number required")

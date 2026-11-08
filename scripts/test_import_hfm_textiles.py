@@ -130,6 +130,25 @@ class HfmImportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             convert(e, SOURCE.encode())
 
+    def test_oversized_manifest_integers_refuse_without_traceback_or_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "run.tst").write_text(SOURCE)
+            script = str(Path(__file__).with_name("import_hfm_textiles.py"))
+            for index, value in enumerate((10**400, -(10**400))):
+                e = entry()
+                e["temperature_grouping"]["maximum_deviation_c"] = value
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, "finite number required"):
+                    convert(e, SOURCE.encode())
+                (root / "manifest.json").write_text(json.dumps(manifest(e)))
+                out = root / f"output-{index}"
+                result = subprocess.run([sys.executable, script, str(root / "manifest.json"),
+                                         "--out", str(out)], capture_output=True, text=True, check=False, timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("HFM import refused: maximum_temperature_deviation_c: finite number required", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse(out.exists())
+
     def test_create_only_outputs_and_exact_evidence_replay(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
