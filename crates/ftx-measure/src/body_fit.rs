@@ -168,7 +168,7 @@ pub struct FitFrame {
 pub struct CaptureImage {
     /// Original decoded identity, never an ordinal or a rounded JavaScript timestamp.
     pub frame: FrameId,
-    /// Display label only. Consumers must never open a path from this field.
+    /// Display basename only. Consumers must never open a path from this field.
     pub image_name: String,
     /// SHA-256 of the original encoded image, before any preview conversion.
     pub image_sha256: String,
@@ -188,6 +188,8 @@ impl CaptureImage {
             || self.frame.stream.len() > 4096
             || self.image_name.trim().is_empty()
             || self.image_name.len() > 4096
+            || self.image_name.contains(['/', '\\'])
+            || matches!(self.image_name.as_str(), "." | "..")
             || self.image_sha256.len() != 64
             || !self
                 .image_sha256
@@ -281,7 +283,13 @@ pub fn capture_images_from_receipt(
             }
             Ok(CaptureImage {
                 frame: record.frame,
-                image_name: record.source.image,
+                image_name: record
+                    .source
+                    .image
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
                 image_sha256: record.source.image_sha256,
                 image_size_px: record.source.image_size_px,
                 rotation_cw_deg: record.source.metadata.rotation_cw_deg,

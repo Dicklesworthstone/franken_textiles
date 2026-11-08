@@ -45,9 +45,9 @@ image bytes and the exact review text. They verify the original encoded hash, fr
 and rotation before publishing a lossless PNG and an image/review identity receipt. The shared
 native capture decoder accepts opaque 8-bit PNG or strict JPEG with absent/identity EXIF; recorded
 rotation has already been applied and is never applied again. Bounds are 16 MiB review, 128 MiB
-encoded image (the JPEG decoder retains its 64 MiB limit), and 40 million pixels. Original paths
-are display labels only. Pixels stay outside saved fit reports and garment handoffs; selecting a
-matching image changes neither acceptance nor measurement readiness.
+encoded image (the JPEG decoder retains its 64 MiB limit), and 40 million pixels. Only the original
+basename is retained for display; no source directory is exported. Pixels stay outside saved fit
+reports and garment handoffs; selecting a matching image changes neither acceptance nor measurement readiness.
 
 **Still-window candidates.** `photo::still_window(input, source)` and the matching wasm32 export delegate to
 `ftx-measure::still::assess_still_window`, with the existing 256 KiB browser JSON limit. The shared
