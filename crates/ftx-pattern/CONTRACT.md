@@ -4,6 +4,8 @@
 and frozen source-bearing selection for both native inspection commands. Mechanical coefficients,
 steady conduction, transient storage, width and sewing clearance report independent admission;
 availability does not establish successful draping, empirical fit or process qualification.
+Stock-width readiness requires a positive nominal width in metres under the selected evidence
+policy; nonpositive authored observations remain inspectable without being admitted for stock.
 Regression: CLI `material_binding_workflow` (both native commands and the portable adapter).
 
 **Bounded origin approximation.** `material_linearization::linearize` transfers exact Wang2011

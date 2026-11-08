@@ -235,6 +235,68 @@ fn native_inspection_refuses_stale_locks_and_invalid_records_without_rewriting_i
 }
 
 #[test]
+fn inspection_stock_width_agrees_with_actual_cutting_without_rewriting_observations() {
+    let source: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+    ))
+    .unwrap();
+    let options = serde_json::from_value(json!({"copies":1,"gap_mm":2.0,
+        "edge_margin_mm":0.0,"end_margin_mm":0.0,"seam_allowance_mm":0.0}))
+    .unwrap();
+    let dir = workspace();
+    for (i, (width, unit, consent, ready)) in [
+        (-1.0, "m", true, false),
+        (0.0, "m", true, false),
+        (-0.0, "m", true, false),
+        (1600.0, "mm", true, true),
+        (1.6, "m", false, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut pattern = source.clone();
+        let selected = &mut pattern["fabric"]["material"];
+        selected["allow_estimates"] = json!(consent);
+        selected["record"]["properties"]["width"] = json!({"value":width,"unit":unit,
+            "source":"test","evidence":"estimate","method":"Synthetic stock-width admission test"});
+        let input = selected.to_string();
+        let name = format!("width-{i}.json");
+        write(&dir, &name, input.as_bytes());
+        let portable: Value =
+            serde_json::from_str(&ftx_wasm::materials::inspect(&input).unwrap()).unwrap();
+        assert_eq!(portable["selection"]["record"], selected["record"]);
+        assert_eq!(portable["selection"]["allow_estimates"], consent);
+        assert_eq!(portable["capabilities"]["stock_width_m"]["ready"], ready);
+        assert_eq!(
+            portable["capabilities"]["sewing_thickness_m"]["ready"],
+            consent
+        );
+        if ready {
+            assert_eq!(portable["capabilities"]["stock_width_m"]["value"], 1.6);
+        } else {
+            assert!(
+                portable["capabilities"]["stock_width_m"]
+                    .get("value")
+                    .is_none()
+            );
+            assert_eq!(
+                portable["capabilities"]["stock_width_m"]["refusal"]["code"],
+                "invalid_document"
+            );
+        }
+        let cut = ftx_export::cutting::CutPlan::build(&Pattern::new(pattern), &options);
+        assert_eq!(cut.is_ok(), ready);
+        if consent && !ready {
+            assert!(cut.unwrap_err().message.contains("stock width"));
+        }
+        for unified in [false, true] {
+            assert_eq!(success(&inspect(&dir, unified, &name), unified), portable);
+        }
+        assert_eq!(fs::read(dir.join(name)).unwrap(), input.as_bytes());
+    }
+}
+
+#[test]
 fn both_binaries_replace_heterogeneous_materials_and_pairs_with_exact_core_and_file_replay() {
     let (pattern, changes) = inputs();
     let source = Pattern::new(pattern.clone());

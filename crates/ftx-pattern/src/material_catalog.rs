@@ -365,6 +365,14 @@ impl ResolvedMaterial {
         let transient = crate::material_thermal::ThermalLaw::from_material(material, policy)
             .map(|law| law.domain());
         let sewing = self.unloaded_thickness().map(|q| q.value);
+        let width = material.require("width", "m", policy).and_then(|width| {
+            if width > 0.0 {
+                Ok(width)
+            } else {
+                Err(invalid("stock width must be positive")
+                    .repair("supply a sourced positive stock width"))
+            }
+        });
         let selection = self.frozen_selection();
         let selection_json =
             serde_json::to_string(&selection).map_err(|e| invalid(e.to_string()))?;
@@ -372,7 +380,7 @@ impl ResolvedMaterial {
             json!({"snapshot":self,"selection":selection,"selection_json":selection_json,"missing_mechanics":material.missing_mechanics(),
             "capabilities":{"mechanical_coefficients":readiness(mechanical),
                 "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
-                "stock_width_m":readiness(material.require("width","m",policy)),
+                "stock_width_m":readiness(width),
                 "sewing_thickness_m":readiness(sewing)},
             "note":"Coefficient availability is not successful draping, process qualification, empirical fit or a safety rating."}),
         )
