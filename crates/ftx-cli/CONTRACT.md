@@ -242,6 +242,10 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
 - `ftx materials list|show|validate|fit|thermal ... [--json]`: inspects and validates the material
   catalogue, fits fabric parameters to cantilever/stretch tests, and computes dry/evaporative thermal
   resistance (`docs/material-catalog.md`, `docs/material-calibration.md`, `docs/material-thermal.md`).
+- `ftx materials inspect SELECTION.json [--json]` and `ftx-materials inspect SELECTION.json`:
+  inspect an ID-based or self-contained selection through the same source/capability report as the
+  browser. Inputs use the existing 64 MiB material limit. The file owns estimate consent and digest
+  locks; missing capabilities remain separate refusals. No pattern binding or output file is required.
 - `ftx materials sew-cell-svg PATTERN OPTIONS CELL OPERATION NEW.svg [--json]` and
   `ftx-materials sew-cell-svg PATTERN OPTIONS CELL OPERATION NEW.svg` rebuild the full sewing job
   and render the explicitly selected cell's actual machine/recipe stations. Frozen machine and

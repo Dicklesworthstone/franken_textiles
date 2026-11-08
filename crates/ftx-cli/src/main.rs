@@ -81,6 +81,7 @@ const USAGE: &str = "usage:
   ftx alter cap-ease PATTERN --piece P --seams S1,S2 --target RATIO --out OUT [--json]
   ftx alter transfer-curve PATTERN --from SRC.json:INSTANCE/EDGE --to PIECE/EDGE --out OUT [--json]
   ftx materials [list|show ID|freeze ID|compare ID ID] [--allow-estimates] [--json]
+  ftx materials inspect SELECTION.json [--json]
   ftx materials calibrate SWATCHES.json [--allow-estimates] [--json]
   ftx materials linearize-origin REQUEST.json [--json]
   ftx materials calibrate-bending COUPONS.json [--allow-estimates] [--json]

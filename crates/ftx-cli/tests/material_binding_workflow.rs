@@ -131,6 +131,109 @@ fn refused(out: &Output, unified: bool, code: &str) -> Value {
     value["refusal"].clone()
 }
 
+fn inspect(dir: &Path, unified: bool, path: &str) -> Output {
+    let mut command = Command::new(if unified {
+        env!("CARGO_BIN_EXE_ftx")
+    } else {
+        env!("CARGO_BIN_EXE_ftx-materials")
+    });
+    command.current_dir(dir);
+    if unified {
+        command.args(["--json", "materials"]);
+    }
+    command.args(["inspect", path]).output().unwrap()
+}
+
+#[test]
+fn both_native_inspect_commands_preserve_custom_sources_and_match_portable_capabilities() {
+    use ftx_pattern::material_catalog::Selection;
+
+    let catalog = textile_import::catalog().unwrap();
+    let original = catalog
+        .resolve(&Selection {
+            id: "fsri/hfm/cotton-sheet/dry/220330-r1".into(),
+            ..Selection::default()
+        })
+        .unwrap();
+    let mut record = original.authored().clone();
+    record.id = "custom-retained-hfm-run".into();
+    let dir = workspace();
+    for consent in [false, true] {
+        let selection = Selection {
+            id: record.id.clone(),
+            record: Some(record.clone()),
+            allow_estimates: consent,
+            ..Selection::default()
+        };
+        let input = serde_json::to_string(&selection).unwrap();
+        let name = format!("custom {consent}.json");
+        write(&dir, &name, input.as_bytes());
+        let portable: Value =
+            serde_json::from_str(&ftx_wasm::materials::inspect(&input).unwrap()).unwrap();
+        assert_eq!(portable["selection"]["record"], json!(record));
+        assert_eq!(portable["selection"]["allow_estimates"], consent);
+        assert_eq!(
+            portable["capabilities"]["steady_conduction"]["ready"],
+            consent
+        );
+        for capability in [
+            "mechanical_coefficients",
+            "transient_thermal",
+            "sewing_thickness_m",
+        ] {
+            assert_eq!(portable["capabilities"][capability]["ready"], false);
+        }
+        assert_eq!(portable["missing_mechanics"].as_array().unwrap().len(), 8);
+        let frozen: Selection =
+            serde_json::from_str(portable["selection_json"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            catalog.resolve(&frozen).unwrap().sha256(),
+            portable["snapshot"]["sha256"].as_str().unwrap()
+        );
+        for unified in [false, true] {
+            assert_eq!(success(&inspect(&dir, unified, &name), unified), portable);
+        }
+        assert_eq!(fs::read(dir.join(&name)).unwrap(), input.as_bytes());
+    }
+
+    let input = r#"{"id":"mit.raw-2013.08a"}"#;
+    write(&dir, "catalog-id.json", input.as_bytes());
+    let portable: Value =
+        serde_json::from_str(&ftx_wasm::materials::inspect(input).unwrap()).unwrap();
+    for unified in [false, true] {
+        assert_eq!(
+            success(&inspect(&dir, unified, "catalog-id.json"), unified),
+            portable
+        );
+    }
+}
+
+#[test]
+fn native_inspection_refuses_stale_locks_and_invalid_records_without_rewriting_inputs() {
+    let (pattern, _) = inputs();
+    let selection = pattern["fabric"]["material"].clone();
+    let mut stale = selection.clone();
+    stale["expected_sha256"] = json!("0".repeat(64));
+    let mut bad_source = selection;
+    bad_source["record"]["properties"]["areal_density"]["source"] = json!("absent-source");
+    let dir = workspace();
+    for (i, input) in [stale.to_string(), bad_source.to_string(), "{".into()]
+        .iter()
+        .enumerate()
+    {
+        let name = format!("invalid-{i}.json");
+        write(&dir, &name, input.as_bytes());
+        let expected = ftx_wasm::materials::inspect(input).unwrap_err();
+        for unified in [false, true] {
+            let actual = refused(&inspect(&dir, unified, &name), unified, "invalid_document");
+            if i < 2 {
+                assert_eq!(actual, json!(expected));
+            }
+        }
+        assert_eq!(fs::read(dir.join(name)).unwrap(), input.as_bytes());
+    }
+}
+
 #[test]
 fn both_binaries_replace_heterogeneous_materials_and_pairs_with_exact_core_and_file_replay() {
     let (pattern, changes) = inputs();

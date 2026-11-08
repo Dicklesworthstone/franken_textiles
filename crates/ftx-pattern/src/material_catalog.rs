@@ -335,6 +335,49 @@ impl ResolvedMaterial {
         &self.sha256
     }
 
+    /// Source-preserving inspection shared by native and browser entry points.
+    /// Capability availability is separate from drape success, empirical fit and qualification.
+    ///
+    /// # Errors
+    /// A frozen selection cannot be serialized. Individual capability refusals stay in the report.
+    pub fn inspection(&self) -> Result<serde_json::Value, Refusal> {
+        use serde_json::json;
+
+        fn readiness<T: Serialize>(result: Result<T, Refusal>) -> serde_json::Value {
+            match result {
+                Ok(value) => json!({"ready":true,"value":value}),
+                Err(refusal) => json!({"ready":false,"refusal":refusal}),
+            }
+        }
+
+        let material = self.material();
+        let policy = self.allows_estimates();
+        let mechanical = (|| {
+            let mechanics = self.mechanics()?;
+            self.membrane_relaxation()?;
+            self.membrane_plasticity()?;
+            self.bending_response()?;
+            self.bending_plasticity()?;
+            Ok(mechanics)
+        })();
+        let steady = crate::material_thermal::ConductionLaw::from_material(material, policy)
+            .map(|law| law.domain());
+        let transient = crate::material_thermal::ThermalLaw::from_material(material, policy)
+            .map(|law| law.domain());
+        let sewing = self.unloaded_thickness().map(|q| q.value);
+        let selection = self.frozen_selection();
+        let selection_json =
+            serde_json::to_string(&selection).map_err(|e| invalid(e.to_string()))?;
+        Ok(
+            json!({"snapshot":self,"selection":selection,"selection_json":selection_json,"missing_mechanics":material.missing_mechanics(),
+            "capabilities":{"mechanical_coefficients":readiness(mechanical),
+                "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
+                "stock_width_m":readiness(material.require("width","m",policy)),
+                "sewing_thickness_m":readiness(sewing)},
+            "note":"Coefficient availability is not successful draping, process qualification, empirical fit or a safety rating."}),
+        )
+    }
+
     /// Admitted unloaded sheet clearance in metres under this selection's evidence policy.
     /// The returned observation retains its original source, conditions and reported bounds.
     ///

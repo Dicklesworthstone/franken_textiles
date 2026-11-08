@@ -26,13 +26,17 @@ After a successful import, choose one generated selection under **Or load a
 source-bearing selection JSON** in the Material Workbench, then **Inspect sources & capabilities**. The
 selection carries the complete imported record, its original source references,
 conditioning and source-byte hash; it does not depend on a built-in catalog ID.
-The same file works with the existing native binding command:
+Inspect the same file natively, or bind it to a pattern:
 
 ```sh
+ftx materials inspect OUT/selections/SOURCE-SHA256.json --json
+ftx-materials inspect OUT/selections/SOURCE-SHA256.json
 ftx-materials bind pattern.json OUT/selections/SOURCE-SHA256.json NEW-PATTERN.json
 ```
 
-Use the actual path from the importer's output and a new pattern destination. Rust
+Both inspection commands share the browser's report and read estimate consent from the file.
+They do not need a pattern or create output files. Use the actual selection path from the importer's
+output and a new destination when binding a pattern. Rust
 still validates and normalizes the record and produces its ordinary frozen digest.
 The importer does not compute that digest or grant estimate consent:
 `allow_estimates` remains false. Interpolation requires the existing explicit

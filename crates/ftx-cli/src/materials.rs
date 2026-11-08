@@ -30,6 +30,18 @@ use calibration::{read, simulation_readiness};
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if action == "inspect" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials inspect SELECTION.json [--json]",
+            ));
+        };
+        let selected = textile_import::catalog()?.resolve(&read::<Selection>(path)?)?;
+        let result = selected.inspection()?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if action == "linearize-origin" {
         known_options(args, "materials", &[])?;
         let [path] = &args.positional[2..] else {

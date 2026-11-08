@@ -1,5 +1,11 @@
 # ftx-pattern contract
 
+**Shared material inspection.** `ResolvedMaterial::inspection` retains the existing browser report
+and frozen source-bearing selection for both native inspection commands. Mechanical coefficients,
+steady conduction, transient storage, width and sewing clearance report independent admission;
+availability does not establish successful draping, empirical fit or process qualification.
+Regression: CLI `material_binding_workflow` (both native commands and the portable adapter).
+
 **Bounded origin approximation.** `material_linearization::linearize` transfers exact Wang2011
 origin coefficients into the existing `TabulatedMembrane`, with G12=C33/2, explicit estimate consent,
 operator-authored physical Green-strain bounds and dated rationale. Original observations and

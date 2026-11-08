@@ -40,31 +40,7 @@ fn readiness<T: serde::Serialize>(result: Result<T, Refusal>) -> Value {
 }
 
 fn detail(m: &ResolvedMaterial) -> Result<Value, Refusal> {
-    let material = m.material();
-    let policy = m.allows_estimates();
-    let mechanical = (|| {
-        let mechanics = m.mechanics()?;
-        m.membrane_relaxation()?;
-        m.membrane_plasticity()?;
-        m.bending_response()?;
-        m.bending_plasticity()?;
-        Ok(mechanics)
-    })();
-    let steady = ftx_pattern::material_thermal::ConductionLaw::from_material(material, policy)
-        .map(|law| law.domain());
-    let transient = ftx_pattern::material_thermal::ThermalLaw::from_material(material, policy)
-        .map(|law| law.domain());
-    let sewing = m.unloaded_thickness().map(|q| q.value);
-    let selection = m.frozen_selection();
-    let selection_json = serde_json::to_string(&selection).map_err(invalid)?;
-    Ok(
-        json!({"snapshot":m,"selection":selection,"selection_json":selection_json,"missing_mechanics":material.missing_mechanics(),
-        "capabilities":{"mechanical_coefficients":readiness(mechanical),
-            "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
-            "stock_width_m":readiness(material.require("width","m",policy)),
-            "sewing_thickness_m":readiness(sewing)},
-        "note":"Coefficient availability is not successful draping, process qualification, empirical fit or a safety rating."}),
-    )
+    m.inspection()
 }
 
 /// Discover the existing built-in catalog; original observations remain accessible through inspect.

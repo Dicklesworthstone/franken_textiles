@@ -67,6 +67,7 @@ ftx-materials stock-price PATTERN.json STOCK.json PRICING.json
 ftx-materials stock-residual PATTERN.json STOCK.json
 ftx-materials stock-svg PATTERN.json STOCK.json STOCK-INDEX NEW.svg
 ftx-materials show ID [--allow-estimates]
+ftx-materials inspect SELECTION.json
 ftx-materials resolve PATTERN.json
 ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
 ftx-materials bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json
@@ -113,6 +114,7 @@ ftx-materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg
 ftx-materials sew-cell-svg PATTERN.json OPTIONS.json CELL-ID OPERATION-ID NEW.svg
 
 JSON output. `show` includes a portable selection, missing-property coverage and separate steady/transient readiness.
+`inspect` reads a selection file and shares the browser's source/capability report; consent comes from the file.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
 `bind` preserves geometry and embeds a locked selection; its output path must not exist.
 `bind-changes` atomically replaces named/default selections and optional exact pair-friction evidence, with separate mechanical readiness; its output path must not exist.
@@ -379,6 +381,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             });
             serde_json::to_value(db).map_err(|e| invalid(e.to_string()))
         }
+        ["inspect", path] => catalog()?.resolve(&read::<Selection>(path)?)?.inspection(),
         ["show", id] | ["show", id, "--allow-estimates"] => {
             let snapshot = catalog()?.resolve(&Selection {
                 id: (*id).into(),
