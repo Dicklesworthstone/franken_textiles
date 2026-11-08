@@ -298,13 +298,26 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       <h4>Inspect an accepted frame</h4>
       <p>Evaluate the complete saved pose without fitting again. Orange circles and thick contours show
         observations; blue crosses and thin contours show the fitted model. Labels keep FIT/CHECK roles.
-        The drawing uses the original oriented pixel coordinates and does not load a photograph.</p>
+        The drawing uses the original oriented pixel coordinates. For capture-backed fits, you can
+        select the original photograph below to inspect it behind the projections.</p>
       <label>Accepted frame <select id="bodyFitReviewFrame" disabled></select></label>
       <p><button id="bodyFitReviewRun" disabled>Inspect frame and prepare mesh</button>
         <button id="bodyFitReviewCancel" disabled>Cancel frame review</button></p>
       <label><input id="bodyFitReviewMesh" type="checkbox" checked> Show projected body geometry</label>
       <p id="bodyFitReviewStatus" role="status" aria-live="polite"></p>
       <pre id="bodyFitReviewError" role="alert"></pre>
+      <fieldset>
+        <legend>Optional original photograph</legend>
+        <p id="bodyFitReviewImageSource">Inspect a frame to check whether its original capture photograph is available.</p>
+        <label>Original capture PNG or JPEG <input id="bodyFitReviewImage" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" disabled></label>
+        <p><button id="bodyFitReviewImageRun" disabled>Verify and show original photograph</button>
+          <button id="bodyFitReviewImageClear" disabled>Clear photograph / cancel loading</button></p>
+        <p><small>The exact source bytes and stored dimensions are checked locally before display.
+          The recorded rotation is already applied; the image is not rotated again.
+          Photographs are not added to fit or frame-review downloads.</small></p>
+        <p id="bodyFitReviewImageStatus" role="status" aria-live="polite" style="overflow-wrap:anywhere"></p>
+        <pre id="bodyFitReviewImageError" role="alert"></pre>
+      </fieldset>
       <canvas id="bodyFitReviewCanvas" hidden style="max-width:100%;height:auto;border:1px solid #888"
         aria-label="Accepted full-mesh projections against observed keypoints and silhouette slices"></canvas>
       <p id="bodyFitReviewSummary"></p>

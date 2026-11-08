@@ -78,9 +78,9 @@ and residuals, exact timestamps and selected model snapshot. Its report download
 Pattern Workbench handoff preserve those sources. The report retains its numerical policy, but
 not the original request bytes or original options download; loading it therefore does not
 construct input or options files.
-Source photographs and masks are not reread; a saved accepted fit retains its original evidence
-and limitations. Rejected, inconsistent or wrong-model reports refuse, and cancelling or replacing
-a pending file read or worker cannot publish an older body.
+Source photographs and masks are not automatically reread when reopening; a saved accepted fit
+retains its original evidence and limitations. Rejected, inconsistent or wrong-model reports refuse,
+and cancelling or replacing a pending file read or worker cannot publish an older body.
 
 The drawing overlays orange observations and blue full-mesh projections in the original
 oriented pixel coordinates. Labels retain FIT/CHECK roles and unrounded residuals remain in
@@ -90,15 +90,43 @@ For a distorted camera, only projected vertices are drawn; straight triangle edg
 misrepresent lens-warped edges. Vertices outside the camera's projection domain are counted
 explicitly and omitted from the drawing, while the OBJ retains the complete geometry.
 
+### Show the original capture photograph
+
+When a frame retains its original capture image identity, **Optional original photograph** shows
+the expected filename. Select that original PNG or JPEG and choose **Verify and show original
+photograph**. The locally checked photograph appears beneath the observations and fitted
+projections, so you can inspect the correspondences against the captured person and scene.
+
+Native capture preparation preserves these image identities in `prepared-input.json`, and both
+native and browser fits retain them in their reports. Saved native capture reports can also supply
+their original capture receipts. Earlier prepared inputs or reports without either source identity
+still support geometry review, but the photograph control stays disabled. Recreate the prepared
+input from the original capture to retain the required image identities.
+
+The native image decoder checks the original encoded bytes against the retained SHA-256, along
+with the exact frame identity, stored dimensions and recorded rotation. A resaved, cropped or
+otherwise different file is refused even if it looks similar. Only the checked PNG preview reaches
+the browser drawing. The frame's recorded clockwise rotation has already been applied to pixels,
+annotations and calibration; the image is not rotated again. JPEGs that still request a nonidentity
+EXIF orientation are refused. The display reports the verified source hash and stored orientation.
+
+**Clear photograph / cancel loading** removes the background or cancels its pending read and
+decode. Image refusal or cancellation leaves the accepted fit, frame geometry and their downloads
+available. Choosing another photograph immediately removes the previous background. Viewing a
+photograph is a visual inspection aid; it neither adds new evidence to the fitter nor changes an
+acceptance decision, and no image bytes are embedded in the fit or frame-review JSON.
+
 Download the per-frame **JSON** and **OBJ** for local review. The JSON preserves the original
 full-width timestamp, camera, orientation, observations, coverage comparisons and exact report
 and model hashes. The OBJ retains unrounded metre coordinates and every original face,
-including internal shells. No photograph is loaded and no file path is followed. This review
+including internal shells. No filename or path is followed automatically. This review
 does not establish full-mask agreement, point visibility, occlusion, collision-skin validity
 or physical fit.
 
 Changing the selected frame, cancelling a review, changing the fit sources or limits, or
-leaving the page withdraws stale review downloads. Review refusal or cancellation preserves
-the accepted fit report and its separate Pattern Workbench handoff. The existing 16 MiB
-report, 512 MiB model, 100,000-vertex and 200,000-face bounds apply; only one frame is evaluated
-at a time. Keep the native `--mesh-out` route for a complete immutable multi-frame bundle.
+leaving the page withdraws stale review downloads and releases any loaded photograph. Delayed
+image reads, worker replies and preview decodes cannot replace a newer selection. Review refusal
+or cancellation preserves the accepted fit report and its separate Pattern Workbench handoff. The existing 16 MiB
+report, 512 MiB model, 100,000-vertex and 200,000-face bounds apply; optional photographs are
+limited to 128 MiB and 40 million stored pixels, with a frame review up to 16 MiB. Only one frame
+is evaluated at a time. Keep the native `--mesh-out` route for a complete immutable multi-frame bundle.

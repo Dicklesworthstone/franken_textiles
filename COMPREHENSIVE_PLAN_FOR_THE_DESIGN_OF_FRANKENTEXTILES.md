@@ -582,6 +582,15 @@ Accepted reports feed existing body/garment consumers with explicit wearer assoc
 becoming measurement records or READY evidence. Source acquisition and independent physical
 qualification remain distinct from this portable fitting capability; see `docs/multi-frame-body-fit.md`.
 
+The capture-to-body browser handoff also preserves each original image's exact encoded hash,
+decoded frame identity and already-oriented pixel geometry through prepared inputs, initialization
+edits and accepted reports. A separate explicit local-image action verifies those bindings with
+the native capture decoder before placing original pixels behind accepted full-mesh projections.
+Old native capture receipts remain usable; unbound coordinate-only inputs remain unbound. Source
+changes and cancellation withdraw stale previews without altering the fit, its evidence roles or
+the garment handoff. This advances `ftx-onn.11` operator inspection; image consistency establishes
+neither anatomical correspondence, camera accuracy, measurement readiness nor physical garment fit.
+
 ---
 
 ## 16. Workspace crates, budgets, dependency direction and dependency policy

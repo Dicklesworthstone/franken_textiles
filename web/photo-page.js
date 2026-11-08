@@ -18,7 +18,8 @@ const triangulationUrls = [];
 let bodyFitWorker = null, bodyFitTicket = 0, bodyFitBusy = false;
 let bodyFitSources = null, bodyFitTransfer = null;
 const bodyFitUrls = [];
-let bodyReviewWorker = null, bodyReviewTicket = 0, bodyReviewBusy = false, bodyReviewValue = null;
+let bodyReviewWorker = null, bodyReviewTicket = 0, bodyReviewBusy = false, bodyReviewValue = null, bodyReviewText = null;
+let bodyReviewImageWorker = null, bodyReviewImageTicket = 0, bodyReviewImageBusy = false, bodyReviewBitmap = null;
 const bodyReviewUrls = [];
 const status = text => {$("status").textContent=text;};
 function pointText() {
@@ -54,8 +55,12 @@ function controls() {
   $("bodyFitCancel").disabled=!bodyFitBusy;
   $("bodyFitWorkbench").disabled=bodyFitBusy || !bodyFitSources;
   $("bodyFitReviewRun").disabled=bodyReviewBusy || bodyFitBusy || !bodyFitSources;
-  $("bodyFitReviewCancel").disabled=!bodyReviewBusy;
+  $("bodyFitReviewCancel").disabled=!bodyReviewBusy && !bodyReviewImageBusy;
   $("bodyFitReviewFrame").disabled=bodyFitBusy || !bodyFitSources;
+  const reviewImageUnavailable=bodyFitBusy || bodyReviewBusy || !bodyReviewValue?.source_image;
+  $("bodyFitReviewImage").disabled=reviewImageUnavailable;
+  $("bodyFitReviewImageRun").disabled=reviewImageUnavailable || bodyReviewImageBusy || !$("bodyFitReviewImage").files.length;
+  $("bodyFitReviewImageClear").disabled=!bodyReviewImageBusy && !bodyReviewBitmap && !$("bodyFitReviewImage").files.length;
   const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate";
   $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
   $("geometryStillControls").hidden=!still;
@@ -229,9 +234,17 @@ function stopBodyReview() {
   bodyReviewWorker?.terminate(); bodyReviewWorker=null; bodyReviewBusy=false; controls();
 }
 function withdrawBodyReview() {
-  ++bodyReviewTicket; stopBodyReview(); bodyReviewValue=null; revoke(bodyReviewUrls);
+  ++bodyReviewTicket; bodyReviewValue=null; bodyReviewText=null; stopBodyReview(); withdrawBodyReviewImage(); revoke(bodyReviewUrls);
   $("bodyFitReviewCanvas").hidden=true; $("bodyFitReviewDownloads").replaceChildren();
+  $("bodyFitReviewImageSource").textContent="Inspect a frame to check whether its original capture photograph is available.";
   for(const id of ["bodyFitReviewStatus","bodyFitReviewSummary","bodyFitReviewError"]) $(id).textContent="";
+}
+function withdrawBodyReviewImage(clearFile=true) {
+  ++bodyReviewImageTicket; bodyReviewImageWorker?.terminate(); bodyReviewImageWorker=null; bodyReviewImageBusy=false;
+  bodyReviewBitmap?.close(); bodyReviewBitmap=null;
+  if(clearFile) $("bodyFitReviewImage").value="";
+  for(const id of ["bodyFitReviewImageStatus","bodyFitReviewImageError"]) $(id).textContent="";
+  drawBodyReview(); controls();
 }
 function drawBodyReview() {
   if(!bodyReviewValue) return;
@@ -241,6 +254,7 @@ function drawBodyReview() {
   const c=canvas.getContext("2d"), xy=p=>[p[0]*canvas.width/w,p[1]*canvas.height/h];
   const line=(a,b)=>{c.moveTo(...xy(a));c.lineTo(...xy(b));};
   c.fillStyle="white"; c.fillRect(0,0,canvas.width,canvas.height);
+  if(bodyReviewBitmap) c.drawImage(bodyReviewBitmap,0,0,canvas.width,canvas.height);
   if($("bodyFitReviewMesh").checked) {
     c.strokeStyle="#b4bdc8"; c.fillStyle="#b4bdc8"; c.lineWidth=0.5; c.beginPath();
     if(v.projection_kind==="straight_edges") {
@@ -282,7 +296,10 @@ function publishBodyReview(text,index) {
       !["straight_edges","distorted_vertices"].includes(v.projection_kind)) {
     throw Error("The engine did not return the requested body-frame review.");
   }
-  bodyReviewValue=v; drawBodyReview();
+  bodyReviewValue=v; bodyReviewText=text; drawBodyReview();
+  $("bodyFitReviewImageSource").textContent=v.source_image?
+    "Original capture: "+v.source_image.image_name+". Choose the original PNG or JPEG below to inspect it behind the projections.":
+    "This frame has no retained original-image identity. Photograph review requires a capture-backed prepared input or saved capture report.";
   const name="body-fit-frame-"+String(index).padStart(4,"0");
   link($("bodyFitReviewDownloads"),text,name+".json","application/json",bodyReviewUrls);
   link($("bodyFitReviewDownloads"),v.mesh_obj,name+".obj","text/plain",bodyReviewUrls);
@@ -290,6 +307,46 @@ function publishBodyReview(text,index) {
   $("bodyFitReviewSummary").textContent=v.projected_vertices_px.length+" vertices, "+v.triangles.length+" faces. "+
     v.unprojectable_vertices+" vertices cannot be projected in this camera and are omitted from the drawing; the OBJ retains the full mesh. "+
     (v.projection_kind==="distorted_vertices"?"Distorted camera: only projected vertices are drawn, because straight image edges would be misleading. ":"")+v.no_claim;
+  controls();
+}
+async function runBodyReviewImage() {
+  if(bodyReviewImageBusy || bodyReviewBusy || bodyFitBusy || !bodyReviewText || !bodyReviewValue?.source_image) return;
+  const file=$("bodyFitReviewImage").files[0], review=bodyReviewText, value=bodyReviewValue;
+  withdrawBodyReviewImage(false); const id=bodyReviewImageTicket;
+  const fail=error=>{
+    if(id!==bodyReviewImageTicket || review!==bodyReviewText) return;
+    withdrawBodyReviewImage(false); $("bodyFitReviewImageError").textContent=String(error.message || error);
+    $("bodyFitReviewImageStatus").textContent="No photograph shown; the frame review and accepted fit are unchanged.";
+  };
+  try {
+    if(!file || file.size===0 || file.size>128*1024*1024 || new Blob([review]).size>16*1024*1024 ||
+        value.image_size_px[0]*value.image_size_px[1]>40000000) {
+      throw Error("Choose an original PNG or JPEG up to 128 MiB and 40 million pixels, with a frame review up to 16 MiB.");
+    }
+    bodyReviewImageBusy=true; controls(); $("bodyFitReviewImageStatus").textContent="Reading the selected original photograph…";
+    const image=await file.arrayBuffer();
+    if(id!==bodyReviewImageTicket || review!==bodyReviewText) return;
+    const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); bodyReviewImageWorker=current;
+    current.onmessage=async({data:m})=>{
+      if(current!==bodyReviewImageWorker || m.request!==bodyReviewImageTicket) return;
+      if(m.type==="progress") {$("bodyFitReviewImageStatus").textContent=m.text;return;}
+      if(m.type==="error") {fail(m.message);return;}
+      current.terminate(); bodyReviewImageWorker=null;
+      try {
+        if(!(m.preview instanceof Uint8Array) || m.preview.byteLength===0) throw Error("The engine did not return a verified photograph preview.");
+        const decoded=await createImageBitmap(new Blob([m.preview],{type:"image/png"}),{imageOrientation:"none"});
+        if(id!==bodyReviewImageTicket || review!==bodyReviewText) {decoded.close();return;}
+        const [w,h]=value.image_size_px;
+        if(decoded.width!==w || decoded.height!==h) {decoded.close();throw Error("The verified photograph preview does not match the frame's stored pixel dimensions.");}
+        bodyReviewBitmap=decoded; bodyReviewImageBusy=false; drawBodyReview(); controls();
+        $("bodyFitReviewImageStatus").textContent="Verified original capture photograph: "+value.source_image.image_name+". "+
+          w+" × "+h+" stored pixels; "+value.rotation_cw_deg+"° clockwise rotation already applied. SHA-256 "+
+          value.source_image.image_sha256+". Visual inspection does not change the accepted fit.";
+      } catch(error) {fail(error);}
+    };
+    current.onerror=error=>{if(current===bodyReviewImageWorker)fail(error);};
+    current.postMessage({request:id,op:"review-body-fit-image",review,image},[image]);
+  } catch(error) {fail(error);}
 }
 async function runBodyReview() {
   if(bodyReviewBusy || bodyFitBusy || !bodyFitSources) return;
@@ -813,6 +870,12 @@ $("bodyFitReviewRun").onclick=runBodyReview;
 $("bodyFitReviewCancel").onclick=()=>{withdrawBodyReview();$("bodyFitReviewStatus").textContent="Frame review cancelled; the accepted fit report is unchanged.";};
 $("bodyFitReviewFrame").addEventListener("change",()=>{withdrawBodyReview();$("bodyFitReviewStatus").textContent="Frame changed; inspect the selected accepted pose.";});
 $("bodyFitReviewMesh").addEventListener("change",drawBodyReview);
+$("bodyFitReviewImage").addEventListener("change",()=>{
+  withdrawBodyReviewImage(false);
+  if($("bodyFitReviewImage").files.length) $("bodyFitReviewImageStatus").textContent="Original photograph selected; verify it before displaying.";
+});
+$("bodyFitReviewImageRun").onclick=runBodyReviewImage;
+$("bodyFitReviewImageClear").onclick=()=>{withdrawBodyReviewImage();$("bodyFitReviewImageStatus").textContent="Photograph cleared; the frame review and accepted fit are unchanged.";};
 $("bodyFitWorkbench").onclick=()=>{
   if(bodyFitBusy || !bodyFitSources) return;
   const notify=text=>{$("bodyFitStatus").textContent=text;};

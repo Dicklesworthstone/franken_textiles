@@ -301,7 +301,6 @@ fn restarts_preserve_cached_incumbent_after_shared_consumer_budget_failure() {
     );
 }
 
-
 fn restoring_request(bounded: bool, evaluations: usize) -> Request {
     let mut value = serde_json::to_value(request(bounded, evaluations, json!([]))).unwrap();
     value["design_adaptive"]["constraint_restoration"] = json!("componentwise");
@@ -363,7 +362,11 @@ fn constraint_restoration_reaches_real_manufacturing_feasibility_without_guessed
             assert_eq!(guard["unit"], "kg");
             assert_eq!(
                 guard["basis"],
-                if bounded { "reported_bounds" } else { "nominal" }
+                if bounded {
+                    "reported_bounds"
+                } else {
+                    "nominal"
+                }
             );
             assert_eq!(guard["minimum_shortfall"], json!((0.001 - low).max(0.0)));
             assert!(guard.get("maximum_excess").is_none());
@@ -484,11 +487,14 @@ fn constraint_restoration_preserves_budgets_missing_evidence_and_required_consum
                     .unwrap()
                     .iter()
                     .any(|e| {
-                        e["message"].as_str().unwrap().contains(if missing == "bounds" {
-                            "bounds"
-                        } else {
-                            "Cutting"
-                        })
+                        e["message"]
+                            .as_str()
+                            .unwrap()
+                            .contains(if missing == "bounds" {
+                                "bounds"
+                            } else {
+                                "Cutting"
+                            })
                     })
             );
         }
@@ -568,7 +574,10 @@ fn constraint_restoration_uses_every_named_case_and_reuses_only_eligible_cached_
             .find(|row| row["design"]["variables_mm"]["length"] == 40.0)
             .unwrap();
         assert_eq!(blocked["consumer_cases"][0]["comparison"]["eligible"], true);
-        assert_eq!(blocked["consumer_cases"][1]["comparison"]["eligible"], false);
+        assert_eq!(
+            blocked["consumer_cases"][1]["comparison"]["eligible"],
+            false
+        );
         assert_eq!(blocked["selected"], false);
         assert!(calls.values().all(|&count| count == 1), "{mode}");
         let key =
@@ -691,7 +700,12 @@ fn joint_polling_crosses_a_seam_corridor_and_replays_real_manufacturing() {
     assert_eq!(old["design_search"]["selected_designs"], 0);
     assert_eq!(old["design_search"]["evaluations"], 3);
     assert!(old["design_search"]["request"].get("polling").is_none());
-    for row in old["design_search"]["rows"].as_array().unwrap().iter().skip(1) {
+    for row in old["design_search"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .skip(1)
+    {
         assert_eq!(
             row["design"]["validation"]["flat"]["summary"]["seams_failing"],
             1
@@ -718,8 +732,7 @@ fn joint_polling_crosses_a_seam_corridor_and_replays_real_manufacturing() {
     assert_eq!(chosen["raw_fit"]["result"][0]["finished_mm"], 140.0);
     for (material, density) in [("light-sheet", 0.18), ("heavy-sheet", 0.36)] {
         let key =
-            serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), material))
-                .unwrap();
+            serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), material)).unwrap();
         let row = report["alternatives"]
             .as_array()
             .unwrap()
@@ -736,15 +749,18 @@ fn joint_polling_crosses_a_seam_corridor_and_replays_real_manufacturing() {
         );
         assert_eq!(
             row["sewing"]["result"],
-            serde_json::to_value(
-                SewPlan::build(&bound, request.sewing.as_ref().unwrap()).unwrap()
-            )
-            .unwrap()
+            serde_json::to_value(SewPlan::build(&bound, request.sewing.as_ref().unwrap()).unwrap())
+                .unwrap()
         );
         assert_eq!(
             row["assembly_mass"]["result"],
             serde_json::to_value(
-                request.assembly_mass.as_ref().unwrap().evaluate(&bound).unwrap()
+                request
+                    .assembly_mass
+                    .as_ref()
+                    .unwrap()
+                    .evaluate(&bound)
+                    .unwrap()
             )
             .unwrap()
         );
@@ -861,14 +877,18 @@ fn joint_polling_reaches_a_three_control_corridor_with_both_signed_directions() 
             .as_array_mut()
             .unwrap()
             .push(third);
-        for variable in input["design_adaptive"]["variables"].as_array_mut().unwrap() {
+        for variable in input["design_adaptive"]["variables"]
+            .as_array_mut()
+            .unwrap()
+        {
             variable["bounds_mm"] = json!([-20, 20]);
         }
-        input["design_fit"]["fit_spec"]["points"][0]["target_mm"] =
-            json!([target,target,target]);
+        input["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([target, target, target]);
         let request: Request = serde_json::from_value(input).unwrap();
         let report = serde_json::to_value(
-            request.evaluate_with_fit_body(&pattern, Some(&fit)).unwrap(),
+            request
+                .evaluate_with_fit_body(&pattern, Some(&fit))
+                .unwrap(),
         )
         .unwrap();
         let chosen = selected(&report);
@@ -881,7 +901,12 @@ fn joint_polling_reaches_a_three_control_corridor_with_both_signed_directions() 
             report["design_search"]["evaluations"],
             if target < 0.0 { 20 } else { 27 }
         );
-        for row in report["design_search"]["rows"].as_array().unwrap().iter().skip(1) {
+        for row in report["design_search"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+        {
             if row["design"]["variables_mm"]["front"] != row["design"]["variables_mm"]["back"]
                 || row["design"]["variables_mm"]["front"] != row["design"]["variables_mm"]["lining"]
             {
@@ -895,7 +920,10 @@ fn joint_polling_reaches_a_three_control_corridor_with_both_signed_directions() 
 #[test]
 fn joint_polling_shares_boundary_cache_restarts_and_exact_trial_budgets() {
     let mut input = serde_json::to_value(independent_lengths(12, true)).unwrap();
-    for variable in input["design_adaptive"]["variables"].as_array_mut().unwrap() {
+    for variable in input["design_adaptive"]["variables"]
+        .as_array_mut()
+        .unwrap()
+    {
         variable["bounds_mm"] = json!([0, 20]);
     }
     input["design_adaptive"]["restart_points_mm"] = json!([{"front":20,"back":20}]);
@@ -933,7 +961,10 @@ fn joint_polling_shares_boundary_cache_restarts_and_exact_trial_budgets() {
         selected(&report)["design"]["variables_mm"],
         json!({"front":0.0,"back":0.0})
     );
-    assert_eq!(report["design_search"]["consumer_guidance"]["evaluations"], 2);
+    assert_eq!(
+        report["design_search"]["consumer_guidance"]["evaluations"],
+        2
+    );
 }
 
 #[test]
@@ -1006,9 +1037,15 @@ fn joint_polling_composes_with_every_consumer_mode_restoration_and_exact_output_
             .find(|row| row["design"]["variables_mm"] == json!({"front":40.0,"back":40.0}))
             .unwrap();
         assert_eq!(blocked["consumer_cases"][0]["comparison"]["eligible"], true);
-        assert_eq!(blocked["consumer_cases"][1]["comparison"]["eligible"], false);
+        assert_eq!(
+            blocked["consumer_cases"][1]["comparison"]["eligible"],
+            false
+        );
         assert_eq!(blocked["selected"], false);
-        assert_eq!(blocked["constraint_violations"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            blocked["constraint_violations"].as_array().unwrap().len(),
+            2
+        );
         for row in search["rows"].as_array().unwrap() {
             if row["max_fit_band_violation_mm"].is_null() {
                 assert!(row.get("constraint_violations").is_none());
@@ -1038,7 +1075,10 @@ fn joint_polling_preserves_single_variable_results_and_rejects_unbounded_modes()
     assert!(value["design_adaptive"].get("polling").is_none());
     value["design_adaptive"]["polling"] = json!("axis_and_joint");
     let after = run(&serde_json::from_value(value.clone()).unwrap());
-    assert_eq!(before["design_search"]["evaluations"], after["design_search"]["evaluations"]);
+    assert_eq!(
+        before["design_search"]["evaluations"],
+        after["design_search"]["evaluations"]
+    );
     for (a, b) in before["design_search"]["rows"]
         .as_array()
         .unwrap()
@@ -1048,8 +1088,14 @@ fn joint_polling_preserves_single_variable_results_and_rejects_unbounded_modes()
         assert_eq!(a["design"]["variables_mm"], b["design"]["variables_mm"]);
         assert_eq!(a["raw_fit"], b["raw_fit"]);
         assert_eq!(a["selected"], b["selected"]);
-        assert_eq!(a["consumer_comparison"]["readings"], b["consumer_comparison"]["readings"]);
-        assert_eq!(a["consumer_comparison"]["eligible"], b["consumer_comparison"]["eligible"]);
+        assert_eq!(
+            a["consumer_comparison"]["readings"],
+            b["consumer_comparison"]["readings"]
+        );
+        assert_eq!(
+            a["consumer_comparison"]["eligible"],
+            b["consumer_comparison"]["eligible"]
+        );
     }
     value["design_adaptive"]["polling"] = json!("diagonal_only");
     assert!(serde_json::from_value::<Request>(value).is_err());
@@ -1059,7 +1105,10 @@ fn joint_polling_preserves_single_variable_results_and_rejects_unbounded_modes()
     for key in ["third", "fourth"] {
         let mut variable = base.clone();
         variable["key"] = json!(key);
-        invalid["design_adaptive"]["variables"].as_array_mut().unwrap().push(variable);
+        invalid["design_adaptive"]["variables"]
+            .as_array_mut()
+            .unwrap()
+            .push(variable);
     }
     let request: Request = serde_json::from_value(invalid).unwrap();
     let pattern = Pattern::from_json(PATTERN).unwrap();

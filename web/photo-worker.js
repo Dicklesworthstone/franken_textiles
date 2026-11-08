@@ -1,11 +1,22 @@
 // One request per disposable worker. Calibration images are decoded sequentially; only retained
 // source observations reach the camera solver. Files never leave the local worker/browser.
 self.onmessage = async ({data: m}) => {
-  let photo, calibration, sheet;
+  let photo, calibration, sheet, bodyImage;
   try {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
+    if(m.op==="review-body-fit-image") {
+      if(typeof m.review!=="string" || new TextEncoder().encode(m.review).length>16*1024*1024 ||
+          !(m.image instanceof ArrayBuffer) || m.image.byteLength===0 || m.image.byteLength>128*1024*1024) {
+        throw Error("Frame image review needs the original review up to 16 MiB and an original image up to 128 MiB.");
+      }
+      self.postMessage({type:"progress",request:m.request,text:"Checking the original capture image hash and already-oriented pixels…"});
+      bodyImage=new ftx.WebBodyFitImage(new Uint8Array(m.image),m.review);
+      const preview=bodyImage.preview(),report=bodyImage.report();
+      self.postMessage({type:"result",request:m.request,preview,report},[preview.buffer]);
+      return;
+    }
     if(m.op==="review-body-fit-frame" || m.op==="open-body-fit") {
       const frameIndex=m.op==="open-body-fit"?0:m.frameIndex;
       if(typeof m.report!=="string" || new TextEncoder().encode(m.report).length>16*1024*1024 ||
@@ -109,5 +120,5 @@ self.onmessage = async ({data: m}) => {
     } else throw Error("Unknown photo operation");
   } catch(e) {
     self.postMessage({type:"error",request:m.request,message:String(e?.message || e)});
-  } finally { photo?.free(); calibration?.free(); sheet?.free(); }
+  } finally { photo?.free(); calibration?.free(); sheet?.free(); bodyImage?.free(); }
 };

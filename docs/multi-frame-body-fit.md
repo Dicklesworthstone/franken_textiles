@@ -80,6 +80,15 @@ results stay in the local browser, with no uploads or browser storage.
 
 ## Construct the first capture input
 
+Prepared capture and initialization snapshots now retain `capture_images`: the original encoded
+image hashes, exact frame identities, dimensions and already-applied rotations. Fitting preserves
+these bindings so **Inspect an accepted frame** in the photo page can check a locally selected
+original photograph before drawing the fitted body over it. Use the original encoded frame, not
+a resized or re-encoded copy. A source mismatch refuses the photograph; it does not replace the
+accepted body or change its residuals. See [frame inspection](body-fit-mesh-review.md). Older native
+capture reports retain the same capability through their original capture receipt. Prepared
+coordinate-only reports with no image source cannot claim a verified photograph.
+
 The first-capture constructor starts from an ordinary decoded-frame manifest, a saved accepted
 lens calibration, the converted model, and an existing `ftx-charuco-sheet-reference/1`
 declaration. It creates the capture and model configuration without copying selected-source

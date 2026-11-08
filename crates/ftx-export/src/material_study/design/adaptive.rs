@@ -588,7 +588,11 @@ impl Request {
             })
             .collect();
         let dimensions = self.variables.len();
-        let largest_group = if self.polling.is_some() { dimensions } else { 1 };
+        let largest_group = if self.polling.is_some() {
+            dimensions
+        } else {
+            1
+        };
         let mut neighbors = Vec::new();
         // At most 3^3 - 1 = 26 points. Cardinality first preserves every old axis poll;
         // authored axis subsets and lexicographic signs make the added work reproducible.

@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -31,6 +31,12 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
     finish(){calls.push({kind:'finish'});return JSON.stringify(calibrationReport);}
     free(){assert.equal(this.freed,undefined);this.freed=true;}
   }
+  class WebBodyFitImage {
+    constructor(image,review){calls.push({kind:'body-frame-image',image:[...image],review});if(failBodyImage)throw Error('original capture image SHA-256 mismatch');instances.push(this);}
+    preview(){if(failBodyImagePreview)throw Error('image preview failed');return new Uint8Array([8,5,3]);}
+    report(){return ' {"verified":"original image"}\r\n';}
+    free(){assert.equal(this.freed,undefined);this.freed=true;}
+  }
   function camera_calibration(input,noise){calls.push({kind:'coordinates',input,noise});return JSON.stringify(calibrationReport);}
   function photo_section(width,depth,options){calls.push({kind:'section',width,depth,options});if(failSection)throw Error('section evidence refused');return JSON.stringify(sectionReport());}
   function triangulate(input,noise){calls.push({kind:'triangulate',input,noise});if(failTriangulation)throw Error('capture evidence refused');return JSON.stringify(triangulationReport());}
@@ -39,9 +45,10 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function fit_body(model,input,iterations,maxEvaluations){calls.push({kind:'fit-body',model:[...model],input,iterations,maxEvaluations});if(failBodyFit)throw Error('model SHA-256 mismatch');return JSON.stringify(bodyFitReport());}
   function review_body_fit_frame(model,report,frameIndex){calls.push({kind:'body-frame-review',model:[...model],report,frameIndex});if(failBodyReview)throw Error('full mesh keypoint disagrees with the accepted 3-pixel fit gate');return JSON.stringify(bodyFrameReport());}
   const context=vm.createContext({Uint8Array,ArrayBuffer,TextEncoder,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body','review_body_fit_frame'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body','review_body_fit_frame'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
+    this.setExport('WebBodyFitImage',bodyImageClass ?? WebBodyFitImage);
     this.setExport('photo_section',photo_section);
     this.setExport('triangulate',triangulate);
     this.setExport('bundle_adjust',bundle_adjust);
@@ -86,13 +93,15 @@ class Element {
   addEventListener(event,fn){this.handlers[event]=fn;}
   append(...items){this.children.push(...items);}
   replaceChildren(...items){this.children=items;}
-  getContext(){const element=this;return {drawImage(){},beginPath(){},moveTo(){},lineTo(){},closePath(){},stroke(){},arc(){},fill(){},fillRect(){},fillText(...args){(element.labels ||= []).push(args);}};}
+  getContext(){const element=this,mark=(kind,args)=>(element.drawing ||= []).push([kind,...args]);return {
+    drawImage(...args){mark('image',args);},beginPath(){},moveTo(){},lineTo(){},closePath(){},stroke(){},arc(){},fill(){},
+    fillRect(...args){mark('fill',args);},fillText(...args){(element.labels ||= []).push(args);mark('label',args);}};}
 }
 const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text);return {name,size:bytes.length,arrayBuffer:async()=>bytes.buffer};};
 async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','bodyFitModel','bodyFitInput','bodyFitSaved'])if(e[id])e[id].type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','bodyFitModel','bodyFitInput','bodyFitSaved','bodyFitReviewImage'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images',geometryOperation:'triangulate',bundleIterations:'50'}))e[id].value=value;
   for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
   e.bodyFitIterations.value='50';e.bodyFitEvaluations.value='100000';
@@ -910,6 +919,17 @@ function selectSavedBodyFit(p,report=JSON.stringify(bodyFitReport())) {
   p.e.bodyFitModel.files=[Object.assign(new Blob(['original model']),{name:'model.ftxbody'})];
   p.e.bodyFitSaved.files=[file(report,'accepted-fit.json')];p.e.bodyFitSaved.handlers.change();return report;
 }
+async function openCaptureBodyReview(p,overrides={}) {
+  selectSavedBodyFit(p);await p.e.bodyFitOpen.onclick();
+  const source_image={frame:{stream:'synthetic',timestamp_us:1},image_name:'capture & <original>.png',
+    image_sha256:'ab'.repeat(32),image_size_px:[640,480],rotation_cw_deg:90};
+  const review=' \r\n'+JSON.stringify(bodyFrameReport({source_image,...overrides}))
+    .replaceAll('"timestamp_us":1','"timestamp_us":18446744073709551615')+'\r\n';
+  const w=p.current();await w.emit({type:'result',request:w.messages[0].request,report:review});return review;
+}
+function selectBodyReviewImage(p,image=file('original capture bytes','capture.png')) {
+  p.e.bodyFitReviewImage.files=[image];p.e.bodyFitReviewImage.handlers.change();
+}
 test('saved body-fit worker validates the exact report and first pose without dispatching fitting',async()=>{
   const source={request:71,op:'open-body-fit',model:new Uint8Array([1,3,7]).buffer,
     report:' \r\n{"status":"ACCEPTED","timestamp_us":18446744073709551615}\r\n',iterations:'inactive',frameIndex:7};
@@ -1152,6 +1172,135 @@ test('body-frame review cancels delayed snapshot reads and retains accepted repo
   }
 });
 
+test('body-frame photograph worker verifies exact original bytes and frees previews without refitting',async()=>{
+  const source={request:81,op:'review-body-fit-image',image:new Uint8Array([255,216,0,7]).buffer,
+    review:' \r\n{"timestamp_us":18446744073709551615,"source_image":{"original":"λ"}}\r\n'};
+  const w=await photoWorker(),result=await w.send(source);
+  assert.equal(result.type,'result');assert.deepEqual([...result.preview],[8,5,3]);
+  assert.equal(result.report,' {"verified":"original image"}\r\n');
+  assert.deepEqual(w.calls,[{kind:'body-frame-image',image:[255,216,0,7],review:source.review}]);
+  assert.equal(w.instances[0].freed,true);
+  for(const bad of [{review:null},{review:' '.repeat(16*1024*1024+1)},{image:[255,216]},
+    {image:new ArrayBuffer(0)},{image:new ArrayBuffer(128*1024*1024+1)}]) {
+    const refused=await photoWorker();assert.equal((await refused.send({...source,...bad})).type,'error');
+    assert.equal(refused.calls.length,0);
+  }
+  const refused=await photoWorker({failBodyImage:true});
+  assert.match((await refused.send(source)).message,/SHA-256 mismatch/);assert.equal(refused.calls.length,1);
+  assert.equal(refused.instances.length,0,'No alternate decoder or unverified fallback');
+  const failed=await photoWorker({failBodyImagePreview:true});
+  assert.match((await failed.send(source)).message,/preview failed/);assert.equal(failed.instances[0].freed,true);
+});
+
+test('body-frame photograph import requires a retained capture source identity',async()=>{
+  for(const source_image of [undefined,null]) {
+    const p=await photoPage();assert.equal(p.e.bodyFitReviewImage.disabled,true);
+    await openCaptureBodyReview(p,{source_image});
+    assert.equal(p.e.bodyFitReviewImage.disabled,true);assert.match(p.e.bodyFitReviewImageSource.textContent,/no retained original-image identity/);
+    selectBodyReviewImage(p);assert.equal(p.e.bodyFitReviewImageRun.disabled,true);
+    await p.e.bodyFitReviewImageRun.onclick();assert.equal(p.workers.length,1);
+    assert.equal(p.e.bodyFitReviewCanvas.hidden,false);assert.equal(p.urls.size,3);
+    assert.ok(!p.e.bodyFitReviewCanvas.drawing.some(([kind])=>kind==='image'));
+  }
+});
+
+test('body-frame photograph preview sits behind projections in stored orientation and leaves exact reports unchanged',async()=>{
+  let closed=0;const decoded={width:640,height:480,close(){closed++;}},decodes=[];
+  const p=await photoPage({decode:async(blob,options)=>{decodes.push({bytes:[...new Uint8Array(await blob.arrayBuffer())],options});return decoded;}});
+  const review=await openCaptureBodyReview(p),fit=p.e.bodyFitReport.textContent;
+  assert.equal(p.e.bodyFitReviewImage.disabled,false);assert.match(p.e.bodyFitReviewImageSource.textContent,/capture & <original>\.png/);
+  const source='original \0 JPEG source λ';selectBodyReviewImage(p,file(source));await p.e.bodyFitReviewImageRun.onclick();
+  const w=p.current(),message=w.messages[0];
+  assert.equal(message.op,'review-body-fit-image');assert.equal(message.review,review);
+  assert.equal(new TextDecoder().decode(message.image),source);assert.equal(p.e.bodyFitReviewImageClear.disabled,false);
+  assert.equal(p.e.bodyFitReviewCancel.disabled,false);assert.equal(p.e.bodyFitReviewImageRun.disabled,true);
+  p.e.bodyFitReviewCanvas.drawing=[];
+  await w.emit({type:'result',request:message.request,preview:new Uint8Array([8,5,3]),report:'original verified receipt'});
+  assert.equal(w.dead,true);assert.equal(decodes.length,1);assert.deepEqual(decodes[0].bytes,[8,5,3],'Only native-verified PNG bytes reach the browser decoder');
+  assert.equal(decodes[0].options.imageOrientation,'none');
+  const drawing=p.e.bodyFitReviewCanvas.drawing;
+  assert.deepEqual(drawing[0],['fill',0,0,640,480]);assert.deepEqual(drawing[1],['image',decoded,0,0,640,480]);
+  assert.ok(drawing.findIndex(([kind])=>kind==='label')>1,'Observations and labels are painted over the photograph');
+  assert.match(p.e.bodyFitReviewImageStatus.textContent,/640 × 480 stored pixels; 90° clockwise rotation already applied/);
+  assert.match(p.e.bodyFitReviewImageStatus.textContent,new RegExp('ab'.repeat(32)));
+  assert.equal(p.e.bodyFitReviewCanvas.width,640);assert.equal(p.e.bodyFitReviewCanvas.height,480,'Recorded quarter-turn is not applied twice');
+  assert.equal(p.e.bodyFitReport.textContent,fit);assert.equal(p.e.bodyFitWorkbench.disabled,false);assert.equal(p.urls.size,3);
+  assert.equal(await p.urls.get(p.e.bodyFitReviewDownloads.children[0].href).text(),review);
+  p.e.bodyFitReviewMesh.handlers.change();assert.equal(p.workers.length,2);assert.equal(closed,0);
+  p.e.bodyFitReviewCanvas.drawing=[];p.e.bodyFitReviewImageClear.onclick();
+  assert.equal(closed,1);assert.equal(p.e.bodyFitReviewImage.files.length,0);assert.equal(p.e.bodyFitReviewCanvas.hidden,false);
+  assert.ok(!p.e.bodyFitReviewCanvas.drawing.some(([kind])=>kind==='image'));assert.equal(p.urls.size,3);
+  assert.equal(p.e.bodyFitReviewImageRun.disabled,true);assert.equal(p.e.bodyFitReviewImageClear.disabled,true);
+});
+
+test('body-frame photograph refuses invalid sources and previews while retaining the accepted fit and geometry',async()=>{
+  for(const source of [null,{size:0},{size:128*1024*1024+1}]) {
+    const p=await photoPage();await openCaptureBodyReview(p);
+    if(source)selectBodyReviewImage(p,source);await p.e.bodyFitReviewImageRun.onclick();
+    assert.equal(p.workers.length,1);assert.match(p.e.bodyFitReviewImageError.textContent,/128 MiB/);
+    assert.equal(p.e.bodyFitReviewCanvas.hidden,false);assert.equal(p.e.bodyFitWorkbench.disabled,false);assert.equal(p.urls.size,3);
+  }
+  const large=await photoPage();await openCaptureBodyReview(large,{image_size_px:[10000,4001]});
+  selectBodyReviewImage(large);await large.e.bodyFitReviewImageRun.onclick();
+  assert.equal(large.workers.length,1);assert.match(large.e.bodyFitReviewImageError.textContent,/40 million pixels/);
+  for(const outcome of ['refused','crash','missing-preview','wrong-dimensions','decode-error']) {
+    let decodes=0,closed=0;
+    const p=await photoPage({decode:async()=>{decodes++;if(outcome==='decode-error')throw Error('PNG decode failed');
+      return {width:480,height:640,close(){closed++;}};}});
+    await openCaptureBodyReview(p);selectBodyReviewImage(p);await p.e.bodyFitReviewImageRun.onclick();
+    const w=p.current(),request=w.messages[0].request;
+    if(outcome==='refused')await w.emit({type:'error',request,message:'original capture image SHA-256 mismatch'});
+    else if(outcome==='crash')w.onerror({message:'image worker stopped'});
+    else await w.emit({type:'result',request,preview:outcome==='missing-preview'?new Uint8Array():new Uint8Array([8,5,3])});
+    assert.equal(w.dead,true);assert.ok(p.e.bodyFitReviewImageError.textContent);
+    assert.match(p.e.bodyFitReviewImageStatus.textContent,/frame review and accepted fit are unchanged/);
+    assert.equal(decodes,['wrong-dimensions','decode-error'].includes(outcome)?1:0);assert.equal(closed,outcome==='wrong-dimensions'?1:0);
+    assert.equal(p.e.bodyFitReviewCanvas.hidden,false);assert.equal(p.e.bodyFitWorkbench.disabled,false);assert.equal(p.urls.size,3);
+    assert.ok(!p.e.bodyFitReviewCanvas.drawing.some(([kind])=>kind==='image'));assert.equal(p.e.bodyFitReviewImageRun.disabled,false);
+  }
+});
+
+test('body-frame photograph cancellation and source changes discard old workers and close displayed bitmaps',async()=>{
+  for(const completed of [false,true])for(const [invalidate,keepReview,keepFit] of [
+    [p=>p.e.bodyFitReviewImageClear.onclick(),true,true],
+    [p=>selectBodyReviewImage(p,file('replacement image')),true,true],
+    [p=>p.e.bodyFitReviewCancel.onclick(),false,true],
+    [p=>p.e.bodyFitReviewFrame.handlers.change(),false,true],
+    [p=>p.e.bodyFitModel.handlers.change(),false,false],
+    [p=>p.windowEvents.pagehide(),false,false]]) {
+    let decodes=0,closed=0;const p=await photoPage({decode:async()=>{decodes++;return {width:640,height:480,close(){closed++;}};}});
+    await openCaptureBodyReview(p);selectBodyReviewImage(p);await p.e.bodyFitReviewImageRun.onclick();
+    const w=p.current(),result={type:'result',request:w.messages[0].request,preview:new Uint8Array([8,5,3])};
+    if(completed)await w.emit(result);
+    invalidate(p);const message=p.e.bodyFitReviewImageStatus.textContent;await w.emit(result);
+    assert.equal(w.dead,true);assert.equal(decodes,completed?1:0);assert.equal(closed,completed?1:0);
+    assert.equal(p.e.bodyFitReviewImageStatus.textContent,message);assert.equal(p.e.bodyFitReviewCanvas.hidden,!keepReview);
+    assert.equal(p.e.bodyFitWorkbench.disabled,!keepFit);assert.equal(p.urls.size,keepReview?3:keepFit?1:0);
+  }
+});
+
+test('body-frame photograph delayed reads and decodes cannot replace or erase a newer verified image',async()=>{
+  for(const phase of ['read','decode'])for(const rejected of [false,true]) {
+    let release,fail,entered,decodes=0,lateClosed=0;
+    const reading=new Promise(resolve=>{entered=resolve;}),late=()=>new Promise((yes,no)=>{release=yes;fail=no;entered();});
+    const currentBitmap={width:640,height:480,close(){}},lateBitmap={width:640,height:480,close(){lateClosed++;}};
+    const p=await photoPage({decode:async()=>{decodes++;return phase==='decode' && decodes===1?late():currentBitmap;}});
+    await openCaptureBodyReview(p);selectBodyReviewImage(p,phase==='read'?{size:4,arrayBuffer:late}:file('old image'));
+    let pending=p.e.bodyFitReviewImageRun.onclick();
+    if(phase==='decode') {await pending;const old=p.current();pending=old.emit({type:'result',request:old.messages[0].request,preview:new Uint8Array([8,5,3])});}
+    await reading;p.e.bodyFitReviewImageClear.onclick();selectBodyReviewImage(p,file('new image'));
+    await p.e.bodyFitReviewImageRun.onclick();const w=p.current();
+    await w.emit({type:'result',request:w.messages[0].request,preview:new Uint8Array([8,5,3])});
+    const message=p.e.bodyFitReviewImageStatus.textContent,count=p.workers.length;
+    if(rejected)fail(Error('old source failed'));else release(phase==='read'?new Uint8Array([1,2]).buffer:lateBitmap);
+    await pending;assert.equal(p.workers.length,count);assert.equal(p.e.bodyFitReviewImageStatus.textContent,message);
+    assert.match(message,/Verified original capture photograph/);assert.equal(p.e.bodyFitReviewImageError.textContent,'');
+    assert.equal(lateClosed,phase==='decode' && !rejected?1:0);assert.equal(p.urls.size,3);
+    assert.ok(!p.e.bodyFitReviewCanvas.drawing.some(([kind,image])=>kind==='image' && image===lateBitmap));
+    assert.equal(p.e.bodyFitWorkbench.disabled,false);assert.equal(p.e.bodyFitReviewCanvas.hidden,false);
+  }
+});
+
 test('accepted body handoff sends the original report and selected model once to the expected local tab',async()=>{
   const p=await photoPage();selectBodyFit(p);
   assert.equal(p.e.bodyFitWorkbench.disabled,true);
@@ -1318,7 +1467,28 @@ test('compiled body fitting reproduces complete native multistart reports and pr
       if(item.status==='ACCEPTED') {
         const review=ftx.review_body_fit_frame(model,savedReport,'0');
         assert.ok(item.review,'Native fixture must retain its frame review');
-        assert.deepEqual(parse(review),parse(fs.readFileSync(path.join(dir,item.review),'utf8')),item.name+' complete native frame review');
+        const savedReview=fs.readFileSync(path.join(dir,item.review),'utf8');
+        assert.deepEqual(parse(review),parse(savedReview),item.name+' complete native frame review');
+        if(item.image) {
+          assert.ok(item.image_report && item.image_preview,'Native capture fixture must retain its image receipt and preview');
+          const image=fs.readFileSync(path.join(dir,item.image)),expectedReceipt=parse(fs.readFileSync(path.join(dir,item.image_report),'utf8'));
+          const expectedPreview=fs.readFileSync(path.join(dir,item.image_preview));
+          // The receipt hashes the exact saved review bytes, including its native pretty printing.
+          const photo=new ftx.WebBodyFitImage(image,savedReview);
+          try {
+            assert.deepEqual(parse(photo.report()),expectedReceipt,item.name+' complete native image receipt');
+            assert.deepEqual(Buffer.from(photo.preview()),expectedPreview,item.name+' exact native PNG preview');
+          } finally {photo.free();}
+          const changed=Buffer.from(image);changed[changed.length-1]^=1;
+          assert.throws(()=>new ftx.WebBodyFitImage(changed,savedReview),/SHA-256 mismatch/);
+          const worker=await photoWorker({bodyImageClass:ftx.WebBodyFitImage});
+          const result=await worker.send({request:82,op:'review-body-fit-image',review:savedReview,image:Uint8Array.from(image).buffer});
+          assert.equal(result.type,'result',result.message);assert.deepEqual(parse(result.report),expectedReceipt);
+          assert.deepEqual(Buffer.from(result.preview),expectedPreview,item.name+' compiled image through the actual worker');
+          const refusedWorker=await photoWorker({bodyImageClass:ftx.WebBodyFitImage});
+          const refused=await refusedWorker.send({request:83,op:'review-body-fit-image',review:savedReview,image:Uint8Array.from(changed).buffer});
+          assert.equal(refused.type,'error');assert.match(refused.message,/SHA-256 mismatch/);
+        }
       } else assert.throws(()=>ftx.review_body_fit_frame(model,savedReport,'0'),/ACCEPTED/);
     }
     const acceptedReport=fs.readFileSync(path.join(dir,'accepted-report.json'),'utf8');
