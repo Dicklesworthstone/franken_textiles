@@ -3,9 +3,9 @@
 use std::{fmt::Write as _, path::Path};
 
 use ftx_body::{AnnyData, AnnyModel};
-use ftx_core::{Refusal, RefusalCode, Vec2, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, receipt::sha256_hex};
 use ftx_measure::{
-    body_fit::{BodyModel, FitFrame, prepare_start_authoring},
+    body_fit::{BodyModel, FitFrame, prepare_start_authoring, preview_keypoints},
     silhouette::{self, Axis, SurfaceMesh},
 };
 use serde_json::{Value, json};
@@ -54,13 +54,13 @@ fn interval(svg: &mut String, axis: Axis, at: f64, range: [f64; 2], color: &str)
 }
 
 fn project(
-    adapter: &Adapter,
     frame: &FitFrame,
-    shape: &[f64],
+    names: &[String],
     pose: &[f64],
     mesh: Option<&SurfaceMesh>,
+    targets: Result<&[Vec3], &Refusal>,
     photo: Option<&str>,
-) -> (String, Value) {
+) -> Result<(String, Value), Refusal> {
     let [w, h] = frame.image_size_px;
     let mut svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" overflow=\"hidden\" role=\"img\">\
@@ -120,49 +120,25 @@ fn project(
         }
         svg.push_str("</g>");
     }
-    let targets = adapter.points(shape, pose);
-    if let Err(error) = &targets {
+    if let Err(error) = targets {
         diagnostics.push(json!({"stage":"model_targets","refusal":error}));
     }
-    let mut keypoints = Vec::new();
-    for observation in &frame.keypoints {
-        let observed = observation.pixel_px;
-        let name = review::label(&observation.name);
-        write!(svg, "<g><title>{name}: {:?}</title><circle cx=\"{}\" cy=\"{}\" r=\"4\" fill=\"none\" stroke=\"#b45309\"/></g>", observation.partition, observed.x, observed.y).unwrap();
-        let index = adapter
-            .layout
-            .keypoints
-            .iter()
-            .position(|n| n == &observation.name)
+    let keypoints = preview_keypoints(frame, names, targets)?;
+    for point in &keypoints {
+        let observed = point.observed_px;
+        let name = review::label(&point.name);
+        write!(svg, "<g><title>{name}: {:?}</title><circle cx=\"{}\" cy=\"{}\" r=\"4\" fill=\"none\" stroke=\"#b45309\"/></g>", point.partition, observed.x, observed.y).unwrap();
+        if let Some(pixel) = point.predicted_px {
+            write!(
+                svg,
+                "<path d=\"M {} {} h 8 M {} {} v 8\" stroke=\"#0369a1\"/>",
+                pixel.x - 4.0,
+                pixel.y,
+                pixel.x,
+                pixel.y - 4.0
+            )
             .unwrap();
-        let mut point = json!({"name":observation.name,"partition":observation.partition,
-            "sigma_px":observation.sigma_px,"observed_px":observed});
-        if let Ok(targets) = &targets {
-            point["world_m"] = json!(targets[index]);
-            match frame.camera.project(targets[index]) {
-                Ok(pixel) => {
-                    let error = (pixel - observed).norm();
-                    point["predicted_px"] = json!(pixel);
-                    if error.is_finite() {
-                        point["residual_px"] = json!(error);
-                    } else {
-                        point["projection_refusal"] =
-                            json!(bad_input("initial point residual overflow"));
-                    }
-                    write!(
-                        svg,
-                        "<path d=\"M {} {} h 8 M {} {} v 8\" stroke=\"#0369a1\"/>",
-                        pixel.x - 4.0,
-                        pixel.y,
-                        pixel.x,
-                        pixel.y - 4.0
-                    )
-                    .unwrap();
-                }
-                Err(error) => point["projection_refusal"] = json!(error),
-            }
         }
-        keypoints.push(point);
     }
     let mut contours = Value::Null;
     if let Some(observation) = &frame.silhouette {
@@ -199,13 +175,13 @@ fn project(
         }
     }
     svg.push_str("</svg>\n");
-    (
+    Ok((
         svg,
         json!({"frame":frame.frame,"pose_values":pose,"camera":frame.camera,
         "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,
         "keypoints":keypoints,"observed_silhouette":frame.silhouette,"silhouette_comparisons":contours,
         "unprojectable_vertices":failed_vertices,"omitted_faces":omitted_faces,"diagnostics":diagnostics}),
-    )
+    ))
 }
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
@@ -320,20 +296,37 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         write!(page, "<h2>Start {}</h2><pre>{}</pre>", s + 1, review::label(&serde_json::to_string_pretty(&json!({"shape_parameters":adapter.layout.shape,"shape_values":start.shape,"pose_parameters":adapter.layout.pose})).unwrap())).unwrap();
         let mut frames = Vec::new();
         for (f, (frame, pose)) in input.frames.iter().zip(&start.poses).enumerate() {
-            let mesh = adapter.surface(&start.shape, &pose.values);
+            let (mesh, targets) = match adapter.inner.posed_with_points(&start.shape, &pose.values)
+            {
+                Ok((body, targets)) => (
+                    Ok(SurfaceMesh {
+                        vertices_m: body.vertices,
+                        triangles: adapter
+                            .inner
+                            .model()
+                            .data()
+                            .faces
+                            .iter()
+                            .map(|face| face.map(|i| i as usize))
+                            .collect(),
+                    }),
+                    Ok(targets),
+                ),
+                Err(error) => (Err(error.clone()), Err(error)),
+            };
             let mesh_entry = mesh.as_ref().ok().map(mesh_bytes).transpose()?;
             let mesh_entry = mesh_entry
                 .map(|bytes| bundle.push(format!("start-{s:02}-frame-{f:02}.obj"), bytes))
                 .transpose()?;
             let photo = images[f].as_ref().and_then(|i| i["file"].as_str());
             let (svg, mut record) = project(
-                &adapter,
                 frame,
-                &start.shape,
+                &adapter.layout.keypoints,
                 &pose.values,
                 mesh.as_ref().ok(),
+                targets.as_ref().map(Vec::as_slice),
                 photo,
-            );
+            )?;
             if let Err(error) = mesh {
                 record["diagnostics"]
                     .as_array_mut()

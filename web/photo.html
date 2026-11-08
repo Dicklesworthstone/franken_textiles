@@ -273,6 +273,19 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     FIT/CHECK roles, parameter bounds and every initialization. Reviewed inline silhouette slices are
     supported. A path-based capture input or mask manifest must first be prepared with the native tools;
     this page does not read local paths or infer landmarks from a video. Input limit: 16 MiB; model limit: 512 MiB.</small></p>
+  <details>
+    <summary>Inspect a declared starting pose before fitting</summary>
+    <p>Evaluate one caller-authored start on one frame through the real body model. Inspect misplaced
+      geometry, large residuals and failed projections before spending a fitting budget. This does not
+      optimize parameters or produce an accepted body.</p>
+    <label>Declared start (1–4) <input id="bodyFitStartIndex" type="number" min="1" max="4" step="1" value="1"></label>
+    <label>Frame in the prepared input (1–8) <input id="bodyFitStartFrame" type="number" min="1" max="8" step="1" value="1"></label>
+    <p><button id="bodyFitStartRun" disabled>Preview declared starting pose</button></p>
+    <p><small>Frame numbers follow the original input order; the review shows the exact native frame identity
+      and actual counts. A single declared start can be previewed; fitting still needs 2–4 distinct starts.
+      To revise values, use the initialization editor's named controls, download its edited prepared input,
+      then select that input here. Keep predeclared CHECK evidence fixed; do not tune starts to its residuals.</small></p>
+  </details>
   <details><summary>Numerical work limits</summary>
     <label>Maximum accepted steps per start <input id="bodyFitIterations" type="number" min="1" max="100" step="1" value="50"></label>
     <label>Total model evaluations <input id="bodyFitEvaluations" type="number" min="1" max="1000000" step="1" value="100000"></label>
@@ -290,19 +303,17 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <button id="bodyFitCancel" disabled>Cancel</button></p>
   <p id="bodyFitStatus" role="status" aria-live="polite">Choose a model and prepared observations, or open a saved accepted fit.</p>
   <pre id="bodyFitError" role="alert"></pre>
-  <div id="bodyFitResult" hidden>
-    <h3>Body-fit result</h3>
-    <p id="bodyFitSummary"></p><p id="bodyFitUse"></p>
-    <p><button id="bodyFitWorkbench" disabled>Continue with this body in Pattern Workbench</button></p>
     <section id="bodyFitReview" hidden>
-      <h4>Inspect an accepted frame</h4>
-      <p>Evaluate the complete saved pose without fitting again. Orange circles and thick contours show
-        observations; blue crosses and thin contours show the fitted model. Labels keep FIT/CHECK roles.
+      <h3 id="bodyFitReviewHeading">Inspect an accepted frame</h3>
+      <p>Orange circles and thick contours show observations; blue crosses and thin contours show
+        model projections. Labels keep FIT/CHECK roles.
         The drawing uses the original oriented pixel coordinates. For capture-backed fits, you can
         select the original photograph below to inspect it behind the projections.</p>
-      <label>Accepted frame <select id="bodyFitReviewFrame" disabled></select></label>
-      <p><button id="bodyFitReviewRun" disabled>Inspect frame and prepare mesh</button>
-        <button id="bodyFitReviewCancel" disabled>Cancel frame review</button></p>
+      <div id="bodyFitAcceptedReviewControls" hidden>
+        <label>Accepted frame <select id="bodyFitReviewFrame" disabled></select></label>
+        <p><button id="bodyFitReviewRun" disabled>Inspect accepted frame and prepare mesh</button></p>
+      </div>
+      <p><button id="bodyFitReviewCancel" disabled>Cancel review</button></p>
       <label><input id="bodyFitReviewMesh" type="checkbox" checked> Show projected body geometry</label>
       <p id="bodyFitReviewStatus" role="status" aria-live="polite"></p>
       <pre id="bodyFitReviewError" role="alert"></pre>
@@ -319,13 +330,24 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
         <pre id="bodyFitReviewImageError" role="alert"></pre>
       </fieldset>
       <canvas id="bodyFitReviewCanvas" hidden style="max-width:100%;height:auto;border:1px solid #888"
-        aria-label="Accepted full-mesh projections against observed keypoints and silhouette slices"></canvas>
+        aria-label="Body model projections against observed keypoints and silhouette slices"></canvas>
       <p id="bodyFitReviewSummary"></p>
+      <details id="bodyFitStartDetails" hidden open>
+        <summary>Declared values and every projection comparison</summary>
+        <pre id="bodyFitReviewParameters"></pre>
+        <div style="overflow-x:auto"><table><thead><tr><th>Observation</th><th>Role</th><th>Residual / comparison</th><th>Diagnostic</th></tr></thead>
+          <tbody id="bodyFitReviewChecks"></tbody></table></div>
+        <pre id="bodyFitReviewDiagnostics"></pre>
+      </details>
       <div id="bodyFitReviewDownloads" class="files"></div>
       <p><small>One frame is evaluated at a time. The OBJ keeps all original model faces and unrounded
         metre coordinates in the common calibrated world frame. It is a model estimate, not a certified
         collision skin or evidence of real-wearer fit. Source changes and cancellation withdraw this review.</small></p>
     </section>
+  <div id="bodyFitResult" hidden>
+    <h3>Body-fit result</h3>
+    <p id="bodyFitSummary"></p><p id="bodyFitUse"></p>
+    <p><button id="bodyFitWorkbench" disabled>Continue with this body in Pattern Workbench</button></p>
     <div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Outcome</th><th>Model calls</th><th>Initial / final objective</th></tr></thead>
       <tbody id="bodyFitAttempts"></tbody></table></div>
     <h4>Every residual check</h4>

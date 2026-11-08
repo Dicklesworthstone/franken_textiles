@@ -366,6 +366,212 @@ pub fn review_body_fit_frame(
     Ok(value)
 }
 
+/// Inspect one declared initialization with the real model, without fitting or acceptance.
+/// Frame ordinals address the original prepared request, while canonical admission joins poses
+/// by exact frame identity. A one-start draft may be inspected; ordinary fitting still needs
+/// two to four distinct starts. Failed projections and large residuals remain diagnostic data.
+///
+/// # Errors
+/// Oversized inputs, invalid ordinals, wrong model identity, malformed observations/starts,
+/// out-of-domain parameters or mesh bounds. A model pose refusal is retained in the preview.
+pub fn review_body_fit_start(
+    model_bytes: &[u8],
+    input_text: &str,
+    start_index: &str,
+    frame_index: &str,
+) -> Result<Value, Refusal> {
+    if input_text.len() > 16 * 1024 * 1024 || model_bytes.len() > 512 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "initialization review supports at most 16 MiB input and 512 MiB converted model",
+        ));
+    }
+    let ordinal = |text: &str, count, label| {
+        text.parse::<usize>()
+            .ok()
+            .filter(|i| *i < count)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "initialization {label} index must be an integer in 0..{}",
+                    count - 1
+                ))
+            })
+    };
+    let start_index = ordinal(start_index, 4, "start")?;
+    let frame_index = ordinal(frame_index, 8, "frame")?;
+    let request: Request = serde_json::from_str(input_text)
+        .map_err(|error| invalid(format!("invalid prepared initialization input: {error}")))?;
+    if request.schema != "ftx-anny-body-fit-input/1" {
+        return Err(invalid(
+            "initialization review requires prepared ftx-anny-body-fit-input/1",
+        ));
+    }
+    if let Some(images) = &request.capture_images {
+        body_fit::validate_capture_images(images, &request.fit.frames)?;
+    }
+    let selected_frame = request
+        .fit
+        .frames
+        .get(frame_index)
+        .ok_or_else(|| invalid("selected initialization frame is missing"))?
+        .frame
+        .clone();
+    let hash = sha256_hex(model_bytes);
+    if request.model.model_sha256 != hash {
+        return Err(invalid(
+            "model SHA-256 mismatch; no initialization was reviewed",
+        ));
+    }
+    let model = AnnyModel::from_data(AnnyData::from_bytes(model_bytes, true)?)?;
+    let counts = &model.data().header.counts;
+    if counts.vertices == 0
+        || counts.vertices > 100_000
+        || counts.faces == 0
+        || counts.faces > 200_000
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "initialization review needs 1..100000 vertices and 1..200000 faces",
+        ));
+    }
+    let adapter = Adapter::new(CorrespondenceModel::new(model, request.model, &hash)?);
+    let input = body_fit::prepare_start_authoring(&request.fit, adapter.layout())?;
+    let canonical_index = input
+        .frames
+        .iter()
+        .position(|frame| frame.frame == selected_frame)
+        .ok_or_else(|| invalid("initialization frame identity was not preserved"))?;
+    let frame = &input.frames[canonical_index];
+    let start = input.starts.get(start_index).ok_or_else(|| {
+        invalid("selected initialization start is missing; author a start before previewing")
+    })?;
+    let pose = &start.poses[canonical_index];
+    let (mesh, targets) = match adapter.inner.posed_with_points(&start.shape, &pose.values) {
+        Ok((body, targets)) => (
+            Ok(SurfaceMesh {
+                vertices_m: body.vertices,
+                triangles: adapter
+                    .inner
+                    .model()
+                    .data()
+                    .faces
+                    .iter()
+                    .map(|face| face.map(|i| i as usize))
+                    .collect(),
+            }),
+            Ok(targets),
+        ),
+        Err(error) => (Err(error.clone()), Err(error)),
+    };
+    let keypoints = body_fit::preview_keypoints(
+        frame,
+        &adapter.layout.keypoints,
+        targets.as_ref().map(Vec::as_slice),
+    )?;
+    let mut diagnostics = Vec::new();
+    if let Err(error) = &mesh {
+        diagnostics.push(json!({"stage":"model_surface","refusal":error}));
+    }
+    if let Err(error) = &targets {
+        diagnostics.push(json!({"stage":"model_targets","refusal":error}));
+    }
+    let mut mesh_obj = None;
+    let mut pixels = Vec::new();
+    let mut triangles = Vec::new();
+    let mut omitted_faces = 0usize;
+    if let Ok(mesh) = &mesh {
+        if mesh.vertices_m.is_empty()
+            || mesh.vertices_m.iter().any(|point| !point.is_finite())
+            || mesh
+                .triangles
+                .iter()
+                .flatten()
+                .any(|&i| i >= mesh.vertices_m.len())
+        {
+            return Err(invalid(
+                "initialization mesh has invalid vertices or face indices",
+            ));
+        }
+        let projected: Vec<_> = mesh
+            .vertices_m
+            .iter()
+            .map(|&point| frame.camera.project(point))
+            .collect();
+        if let Some(error) = projected.iter().find_map(|point| point.as_ref().err()) {
+            diagnostics.push(json!({"stage":"surface_projection","refusal":error,
+                "unprojectable_vertices":projected.iter().filter(|point| point.is_err()).count()}));
+        }
+        pixels = projected.into_iter().map(Result::ok).collect();
+        triangles = mesh.triangles.clone();
+        if silhouette::require_rectified(&frame.camera).is_ok() {
+            omitted_faces = triangles
+                .iter()
+                .filter(|face| face.iter().any(|&i| pixels[i].is_none()))
+                .count();
+        }
+        let mut obj = String::from(
+            "# FrankenTextiles declared INITIALIZATION; metres, calibrated world frame, +Z up\n\
+             # No optimization, accepted body, collision-skin admission or real-wearer fit claim\n",
+        );
+        for point in &mesh.vertices_m {
+            writeln!(obj, "v {} {} {}", point.x, point.y, point.z).unwrap();
+        }
+        for face in &triangles {
+            writeln!(obj, "f {} {} {}", face[0] + 1, face[1] + 1, face[2] + 1).unwrap();
+        }
+        mesh_obj = Some(obj);
+    }
+    let contour = frame.silhouette.as_ref().map(|source| {
+        let comparisons = match &mesh {
+            Ok(mesh) => {
+                match silhouette::compare(mesh, &frame.camera, frame.image_size_px, source, None) {
+                    Ok(comparisons) => Some(comparisons),
+                    Err(error) => {
+                        diagnostics.push(json!({"stage":"silhouette_projection","refusal":error}));
+                        None
+                    }
+                }
+            }
+            Err(_) => None,
+        };
+        let lines: Vec<_> = source
+            .lines
+            .iter()
+            .map(|observation| {
+                let comparison = comparisons.as_ref().and_then(|comparisons| {
+                    comparisons.iter().find(|line| {
+                        line.axis == observation.axis && line.at_px == observation.at_px
+                    })
+                });
+                json!({"observation":observation,"comparison":comparison})
+            })
+            .collect();
+        json!({"evidence":source.evidence,"lines":lines})
+    });
+    let mut value = json!({"schema":"ftx-body-start-frame-review/1","status":"INITIALIZATION_REVIEW",
+        "body_fitted":false,"pose_evaluations":usize::from(mesh.is_ok()),"input_sha256":sha256_hex(input_text.as_bytes()),
+        "model_sha256":hash,"start_index":start_index,"frame_index":frame_index,
+        "start_count":input.starts.len(),"frame_count":input.frames.len(),"frame":frame.frame,
+        "frame_label":format!("{} @ {} us",frame.frame.stream,frame.frame.timestamp_us),
+        "shape_parameters":adapter.layout.shape,"shape_values":start.shape,
+        "pose_parameters":adapter.layout.pose,"pose_values":pose.values,
+        "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,"camera":frame.camera,
+        "keypoints":keypoints,"silhouette":contour,"mesh_obj":mesh_obj,"triangles":triangles,
+        "projected_vertices_px":pixels,"unprojectable_vertices":pixels.iter().filter(|point| point.is_none()).count(),
+        "omitted_faces":omitted_faces,"diagnostics":diagnostics,
+        "projection_kind":if silhouette::require_rectified(&frame.camera).is_ok(){"straight_edges"}else{"distorted_vertices"},
+        "no_claim":"Declared INITIALIZATION inspected without optimization or acceptance; pose_evaluations counts complete requested poses. Large residuals and failed projections remain diagnostics. Keep held-out evidence fixed; do not tune starts to CHECK residuals. This is not an accepted body, collision skin, anatomical validation, READY measurement or physical garment-fit result."});
+    if let Some(images) = request.capture_images {
+        value["source_image"] = json!(
+            images
+                .iter()
+                .find(|image| image.frame == frame.frame)
+                .unwrap()
+        );
+    }
+    Ok(value)
+}
+
 /// One exact capture photograph decoded for a previously checked frame review.
 /// Pixels are kept only in this transient preview, never added to a fit report or garment handoff.
 pub struct BodyFitImage {
@@ -384,6 +590,10 @@ impl BodyFitImage {
         #[derive(Deserialize)]
         struct Review {
             schema: String,
+            #[serde(default)]
+            status: Option<String>,
+            #[serde(default)]
+            body_fitted: Option<bool>,
             frame: ftx_measure::triangulate::FrameId,
             image_size_px: [u32; 2],
             rotation_cw_deg: u16,
@@ -402,7 +612,10 @@ impl BodyFitImage {
         })?;
         let source = &frame.source_image;
         source.validate()?;
-        if frame.schema != "ftx-body-frame-review/1"
+        let initialization = frame.schema == "ftx-body-start-frame-review/1"
+            && frame.status.as_deref() == Some("INITIALIZATION_REVIEW")
+            && frame.body_fitted == Some(false);
+        if !(frame.schema == "ftx-body-frame-review/1" || initialization)
             || source.frame != frame.frame
             || source.image_size_px != frame.image_size_px
             || source.rotation_cw_deg != frame.rotation_cw_deg
@@ -424,10 +637,13 @@ impl BodyFitImage {
         }
         let preview = ftx_trace::raster::image::encode_png_bgr_with_limit(&image, 40_000_000)
             .map_err(invalid)?;
-        let report = json!({"schema":"ftx-body-frame-image/1",
+        let mut report = json!({"schema":"ftx-body-frame-image/1",
             "review_sha256":sha256_hex(review.as_bytes()),"source_image":source,
             "preview_sha256":sha256_hex(&preview),"orientation":"already_applied_stored_pixels",
             "no_claim":"Original encoded image bytes and dimensions match the retained frame. No refitting, camera calibration, anatomy, visibility or physical-fit acceptance was performed."});
+        if initialization {
+            report["review_kind"] = json!("INITIALIZATION_REVIEW");
+        }
         Ok(Self { preview, report })
     }
 

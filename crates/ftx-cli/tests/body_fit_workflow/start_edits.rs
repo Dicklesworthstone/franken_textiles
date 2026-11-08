@@ -240,7 +240,7 @@ fn start_edits_bootstrap_and_ordinals_preserve_exact_native_frame_identities() {
     let mut single = good;
     single["fit"]["starts"].as_array_mut().unwrap().truncate(1);
     save(&dir, &single);
-    review(&dir, "single-review", 0);
+    let single_review = review(&dir, "single-review", 0)["result"].clone();
     assert_eq!(
         read(&dir, "single-review/body-starts.json")["starts"]
             .as_array()
@@ -248,6 +248,74 @@ fn start_edits_bootstrap_and_ordinals_preserve_exact_native_frame_identities() {
             .len(),
         1
     );
+    let model = std::fs::read(dir.join("model.ftxbody")).unwrap();
+    let text = std::fs::read_to_string(dir.join("single-review/prepared-input.json")).unwrap();
+    let prepared: Value = serde_json::from_str(&text).unwrap();
+    for (index, frame) in prepared["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let preview =
+            ftx_wasm::body_fit::review_body_fit_start(&model, &text, "0", &index.to_string())
+                .unwrap();
+        let native = single_review["starts"][0]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["frame"] == frame["frame"])
+            .unwrap();
+        assert_eq!(preview["schema"], "ftx-body-start-frame-review/1");
+        assert_eq!(preview["status"], "INITIALIZATION_REVIEW");
+        assert_eq!(preview["body_fitted"], false);
+        assert_eq!(preview["pose_evaluations"], 1);
+        assert_eq!(preview["start_count"], 1);
+        assert_eq!(preview["frame_count"], 2);
+        assert_eq!(preview["start_index"], 0);
+        assert_eq!(preview["frame_index"], index);
+        assert_eq!(preview["frame"], frame["frame"]);
+        assert_eq!(
+            preview["frame_label"],
+            format!(
+                "{} @ {} us",
+                frame["frame"]["stream"].as_str().unwrap(),
+                frame["frame"]["timestamp_us"].as_u64().unwrap()
+            )
+        );
+        assert_eq!(preview["input_sha256"], sha256_hex(text.as_bytes()));
+        assert_eq!(preview["model_sha256"], sha256_hex(&model));
+        assert_eq!(preview["shape_parameters"], single_review["model"]["shape"]);
+        assert_eq!(preview["pose_parameters"], single_review["model"]["pose"]);
+        assert_eq!(preview["shape_values"], single["fit"]["starts"][0]["shape"]);
+        for field in [
+            "pose_values",
+            "camera",
+            "keypoints",
+            "image_size_px",
+            "rotation_cw_deg",
+            "unprojectable_vertices",
+        ] {
+            assert_eq!(preview[field], native[field], "{field}");
+        }
+        let native_mesh = std::fs::read_to_string(
+            dir.join("single-review")
+                .join(native["mesh"]["file"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            preview["mesh_obj"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with("v ") || line.starts_with("f "))
+                .collect::<Vec<_>>(),
+            native_mesh
+                .lines()
+                .filter(|line| line.starts_with("v ") || line.starts_with("f "))
+                .collect::<Vec<_>>()
+        );
+    }
     run(&dir, &[], 3);
 }
 
@@ -362,6 +430,40 @@ fn start_edits_editor_fixture_replays_the_complete_capture_through_the_fitter() 
         prepared["capture_images"],
         read(&dir, "review/prepared-input.json")["capture_images"]
     );
+    let model = std::fs::read(dir.join("model.ftxbody")).unwrap();
+    for (index, frame) in prepared["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let preview = ftx_wasm::body_fit::review_body_fit_start(
+            &model,
+            &prepared_text,
+            "0",
+            &index.to_string(),
+        )
+        .unwrap();
+        let source = prepared["capture_images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|image| image["frame"] == frame["frame"])
+            .unwrap();
+        assert_eq!(preview["source_image"], *source);
+        assert_eq!(preview["frame"], frame["frame"]);
+        let bytes = std::fs::read(dir.join(source["image_name"].as_str().unwrap())).unwrap();
+        let image = ftx_wasm::body_fit::BodyFitImage::new(&bytes, &preview.to_string()).unwrap();
+        assert_eq!(image.report()["source_image"], *source);
+        let other = prepared["capture_images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|image| image["frame"] != frame["frame"])
+            .unwrap();
+        let wrong = std::fs::read(dir.join(other["image_name"].as_str().unwrap())).unwrap();
+        assert!(ftx_wasm::body_fit::BodyFitImage::new(&wrong, &preview.to_string()).is_err());
+    }
     let frame_review = ftx_wasm::body_fit::review_body_fit_frame(
         &std::fs::read(dir.join("model.ftxbody")).unwrap(),
         &portable.to_string(),
@@ -579,6 +681,55 @@ fn start_edits_preserve_mixed_inline_and_imported_masks_and_refuse_stale_evidenc
             .unwrap();
         assert_eq!(frame["silhouette"], expected["silhouette"]);
         assert!(!frame["silhouette"].is_null());
+    }
+    let preview_text = std::fs::read_to_string(dir.join("review/prepared-input.json")).unwrap();
+    let model = std::fs::read(dir.join("model.ftxbody")).unwrap();
+    for (index, frame) in review_prepared["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let preview = ftx_wasm::body_fit::review_body_fit_start(
+            &model,
+            &preview_text,
+            "0",
+            &index.to_string(),
+        )
+        .unwrap();
+        let native = reviewed["starts"][0]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["frame"] == frame["frame"])
+            .unwrap();
+        assert_eq!(
+            preview["silhouette"]["evidence"],
+            frame["silhouette"]["evidence"]
+        );
+        let lines = preview["silhouette"]["lines"].as_array().unwrap();
+        assert_eq!(
+            lines.len(),
+            frame["silhouette"]["lines"].as_array().unwrap().len()
+        );
+        for line in lines {
+            assert!(
+                frame["silhouette"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&line["observation"])
+            );
+            let expected = native["silhouette_comparisons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|candidate| {
+                    candidate["axis"] == line["observation"]["axis"]
+                        && candidate["at_px"] == line["observation"]["at_px"]
+                })
+                .unwrap();
+            assert_eq!(line["comparison"], *expected);
+        }
     }
     annotation["starts"][0]["shape"][0] = json!(0.62);
     write(&dir, "annotations.json", &annotation);

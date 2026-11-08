@@ -38,10 +38,28 @@ the review worker and withdraw its downloads; accepted report/model reuse remain
 Pose evaluation loads no photograph, no point visibility or full-mask agreement is inferred, and these diagnostic
 meshes are not certified collision skins, measurement evidence or real-wearer fit.
 
+**Declared initialization inspection.** `body_fit::review_body_fit_start(model_bytes, input,
+start_index, frame_index)` and its wasm32 export inspect an exact prepared input without invoking
+the fitter. Text ordinals select one of at most four starts and eight original-order frames;
+canonical preparation joins the selected pose by full-width `FrameId`. All supplied starts,
+observations, bounds, model identity and arrays remain checked. A one-start draft can be previewed,
+but ordinary fitting still requires two to four distinct starts. The successful preview evaluates
+one full requested pose and derives its targets from that same surface, without tape measurement
+evaluation. The 16 MiB input, 512 MiB model and 100,000-vertex/200,000-face bounds remain explicit.
+`ftx-body-start-frame-review/1` retains exact input/model hashes, named declared values, full OBJ,
+all observed keypoints and silhouette samples, raw residuals and unavailable-projection diagnostics.
+Large residuals and unprojectable points do not become acceptance refusals or invented predictions.
+The local page labels every preview `INITIALIZATION_REVIEW`, never publishes an accepted body or
+garment handoff, and retains any separate accepted result independently. Source/ordinal changes,
+cancel, delayed file reads and stale worker replies withdraw obsolete previews and image overlays.
+Held-out evidence stays fixed; inspecting it does not justify tuning starts to CHECK residuals.
+
 **Original capture image inspection.** An accepted frame review retains `source_image` when its
 report has complete `capture_images` or an older native `capture_input` receipt. Both must agree
 when present. `body_fit::BodyFitImage` and wasm32 `WebBodyFitImage` accept only explicitly supplied
-image bytes and the exact review text. They verify the original encoded hash, frame, dimensions
+image bytes and the exact review text. Initialization reviews retain the same source binding and
+are admitted only with `status: INITIALIZATION_REVIEW` and `body_fitted: false`; their image receipt
+keeps that review kind. Both review modes verify the original encoded hash, frame, dimensions
 and rotation before publishing a lossless PNG and an image/review identity receipt. The shared
 native capture decoder accepts opaque 8-bit PNG or strict JPEG with absent/identity EXIF; recorded
 rotation has already been applied and is never applied again. Bounds are 16 MiB review, 128 MiB

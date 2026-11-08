@@ -95,6 +95,92 @@ pub struct KeypointProjection {
     pub residual_px: f64,
 }
 
+/// Diagnostic projection of an authored initialization, never an accepted fit.
+/// Unavailable projections remain attached to their original observations and evidence roles.
+#[derive(Clone, Debug, Serialize)]
+pub struct KeypointPreview {
+    /// Original correspondence name.
+    pub name: String,
+    /// Original FIT or held-out CHECK role.
+    pub partition: Partition,
+    /// Original per-coordinate observation uncertainty.
+    pub sigma_px: f64,
+    /// Original oriented observation, pixels.
+    pub observed_px: Vec2,
+    /// Full-pose target in calibrated world metres, when model evaluation succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub world_m: Option<Vec3>,
+    /// Projected target, if it lies within the calibrated camera domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicted_px: Option<Vec2>,
+    /// Unrounded residual, including values beyond fitting acceptance limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residual_px: Option<f64>,
+    /// Original model/camera refusal or unrepresentable residual; never a zero residual.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection_refusal: Option<Refusal>,
+}
+
+/// Inspect full-pose correspondences without applying the accepted-fit residual gate.
+/// Use after ordinary initialization admission. Model and projection failures stay visible
+/// beside every affected observation; this neither runs a fitter nor upgrades evidence.
+///
+/// # Errors
+/// Inconsistent target arrays, nonfinite model points, excessive observations or unknown names.
+pub fn preview_keypoints(
+    frame: &FitFrame,
+    names: &[String],
+    points: Result<&[Vec3], &Refusal>,
+) -> Result<Vec<KeypointPreview>, Refusal> {
+    if names.len() > 128
+        || frame.keypoints.len() > 128
+        || points.is_ok_and(|p| p.len() != names.len() || p.iter().any(|v| !v.is_finite()))
+    {
+        return Err(invalid("invalid initialization review correspondences"));
+    }
+    frame
+        .keypoints
+        .iter()
+        .map(|observation| {
+            let index = names
+                .iter()
+                .position(|name| name == &observation.name)
+                .ok_or_else(|| invalid("unknown initialization correspondence"))?;
+            let mut result = KeypointPreview {
+                name: observation.name.clone(),
+                partition: observation.partition,
+                sigma_px: observation.sigma_px,
+                observed_px: observation.pixel_px,
+                world_m: None,
+                predicted_px: None,
+                residual_px: None,
+                projection_refusal: None,
+            };
+            match points {
+                Err(error) => result.projection_refusal = Some(error.clone()),
+                Ok(points) => {
+                    let point = points[index];
+                    result.world_m = Some(point);
+                    match frame.camera.project(point) {
+                        Err(error) => result.projection_refusal = Some(error),
+                        Ok(pixel) => {
+                            result.predicted_px = Some(pixel);
+                            let residual = (pixel - observation.pixel_px).norm();
+                            if residual.is_finite() {
+                                result.residual_px = Some(residual);
+                            } else {
+                                result.projection_refusal =
+                                    Some(invalid("initial point residual overflow"));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(result)
+        })
+        .collect()
+}
+
 /// Recheck full-mesh correspondences against the fitter's fixed 3-pixel gate for review/export.
 /// Callers supply points in the declared name order, evaluated on the complete accepted mesh.
 /// This performs no fitting, visibility test or acceptance upgrade.

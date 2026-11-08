@@ -122,7 +122,23 @@ pub fn review_body_fit_frame(
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// A local photograph checked against the original capture identity of an accepted frame review.
+/// Preview one declared start/frame using the actual model, without running or accepting a fit.
+///
+/// # Errors
+/// Invalid prepared sources, ordinals, model identity, initialization bounds or mesh budgets.
+#[wasm_bindgen]
+pub fn review_body_fit_start(
+    model_bytes: &[u8],
+    input: &str,
+    start_index: &str,
+    frame_index: &str,
+) -> Result<String, JsError> {
+    crate::body_fit::review_body_fit_start(model_bytes, input, start_index, frame_index)
+        .map(|value| value.to_string())
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+
+/// A local photograph checked against the capture identity of an accepted or initialization review.
 #[wasm_bindgen]
 pub struct WebBodyFitImage {
     inner: crate::body_fit::BodyFitImage,

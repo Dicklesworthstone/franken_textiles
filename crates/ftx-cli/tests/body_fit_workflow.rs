@@ -2944,6 +2944,240 @@ fn mesh_review_retains_observations_and_escapes_untrusted_labels() {
 }
 
 #[test]
+fn portable_start_preview_evaluates_authored_shape_and_pose_without_fitting() {
+    let (bytes, mut input) = fixture();
+    input["fit"]["starts"].as_array_mut().unwrap().truncate(1);
+    input["fit"]["starts"][0]["shape"] = json!([0.72, 0.34]);
+    input["fit"]["starts"][0]["poses"][0]["values"] =
+        json!([0.17, 0.1, 0.05, 0.04, -0.05, 0.02, -0.65]);
+    let text = serde_json::to_string_pretty(&input).unwrap();
+    let preview = ftx_wasm::body_fit::review_body_fit_start(&bytes, &text, "0", "0").unwrap();
+    assert_eq!(preview["status"], "INITIALIZATION_REVIEW");
+    assert_eq!(preview["body_fitted"], false);
+    assert_eq!(preview["pose_evaluations"], 1);
+    assert_eq!(preview["start_count"], 1);
+    assert!(preview["solution"].is_null());
+    assert_eq!(preview["input_sha256"], sha256_hex(text.as_bytes()));
+    assert_eq!(preview["shape_values"], input["fit"]["starts"][0]["shape"]);
+    assert_eq!(
+        preview["pose_values"],
+        input["fit"]["starts"][0]["poses"][0]["values"]
+    );
+
+    let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true).unwrap()).unwrap();
+    let rest = model
+        .rest(&model.params(Phenotype {
+            height: 0.72,
+            weight: 0.34,
+            ..Phenotype::default()
+        }))
+        .unwrap();
+    let rotation = Vec3::new(0.04, -0.05, 0.02);
+    let body = model
+        .pose(
+            &rest,
+            &[
+                Affine {
+                    m: Mat3::rotation(rotation.normalized(), rotation.norm()),
+                    t: Vec3::new(0.17, 0.1, 0.05),
+                },
+                Affine {
+                    m: Mat3::rotation(Vec3::new(1., 0., 0.), -0.65),
+                    t: Vec3::ZERO,
+                },
+            ],
+        )
+        .unwrap();
+    let frame = &input["fit"]["frames"][0];
+    let camera: Camera = serde_json::from_value(frame["camera"].clone()).unwrap();
+    assert_eq!(preview["triangles"], json!(model.data().faces));
+    let pixels: Vec<Vec2> =
+        serde_json::from_value(preview["projected_vertices_px"].clone()).unwrap();
+    assert_eq!(pixels.len(), body.vertices.len());
+    for (&pixel, &world) in pixels.iter().zip(&body.vertices) {
+        assert!((pixel - camera.project(world).unwrap()).norm() < 1e-11);
+    }
+    for point in preview["keypoints"].as_array().unwrap() {
+        let observation = frame["keypoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["name"] == point["name"])
+            .unwrap();
+        let index = input["model"]["keypoints"][point["name"].as_str().unwrap()]["index"]
+            .as_u64()
+            .unwrap() as usize;
+        let world: Vec3 = serde_json::from_value(point["world_m"].clone()).unwrap();
+        assert!((world - body.vertices[index]).norm() < 1e-12);
+        assert_eq!(point["observed_px"], observation["pixel_px"]);
+        assert_eq!(point["partition"], observation["partition"]);
+        assert_eq!(point["sigma_px"], observation["sigma_px"]);
+    }
+
+    input["fit"]["starts"][0]["shape"][1] = json!(0.44);
+    input["fit"]["starts"][0]["poses"][0]["values"][6] = json!(0.4);
+    let edited_text = input.to_string();
+    let edited = ftx_wasm::body_fit::review_body_fit_start(&bytes, &edited_text, "0", "0").unwrap();
+    assert_eq!(edited["pose_evaluations"], 1);
+    assert_eq!(edited["input_sha256"], sha256_hex(edited_text.as_bytes()));
+    assert_ne!(edited["mesh_obj"], preview["mesh_obj"]);
+    assert_ne!(
+        edited["projected_vertices_px"],
+        preview["projected_vertices_px"]
+    );
+    assert_eq!(edited["frame"], preview["frame"]);
+    for (before, after) in preview["keypoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(edited["keypoints"].as_array().unwrap())
+    {
+        assert_eq!(after["observed_px"], before["observed_px"]);
+    }
+}
+
+#[test]
+fn portable_start_preview_keeps_rest_geometry_independent_of_unavailable_tapes() {
+    use ftx_body::correspondence::{Configuration, CorrespondenceModel};
+
+    let (bytes, mut input) = fixture();
+    let hash = sha256_hex(&bytes);
+    let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true).unwrap()).unwrap();
+    let mut config: Configuration = serde_json::from_value(input["model"].clone()).unwrap();
+    let ordinary = CorrespondenceModel::new(model.clone(), config.clone(), &hash).unwrap();
+    // The synthetic rig can supply stature and the authored image points, but has no
+    // anatomical chest tape. Previewing its surface must not request that functional.
+    config.measurements.push("chest".into());
+    input["model"] = serde_json::to_value(&config).unwrap();
+    let unavailable = CorrespondenceModel::new(model, config, &hash).unwrap();
+    let shape: Vec<f64> =
+        serde_json::from_value(input["fit"]["starts"][0]["shape"].clone()).unwrap();
+    let pose: Vec<f64> =
+        serde_json::from_value(input["fit"]["starts"][0]["poses"][0]["values"].clone()).unwrap();
+    let changed_shape = [0.4, 0.65];
+    for shape in [shape.as_slice(), changed_shape.as_slice(), shape.as_slice()] {
+        let (expected, expected_points) = ordinary.posed_with_points(shape, &pose).unwrap();
+        let height = ordinary.measurements(shape).unwrap()[0];
+        assert!((height - (1.0 + 0.5 * shape[0])).abs() < 1e-12);
+        assert_eq!(ordinary.points(shape, &pose).unwrap(), expected_points);
+        assert_eq!(
+            ordinary.posed(shape, &pose).unwrap().vertices,
+            expected.vertices
+        );
+
+        assert!(unavailable.measurements(shape).is_err());
+        let (body, points) = unavailable.posed_with_points(shape, &pose).unwrap();
+        assert_eq!(body.vertices, expected.vertices);
+        assert_eq!(points, expected_points);
+        // A successful preview cannot mark unavailable metrics as prepared or weaken
+        // the fitter's existing all-requested-functionals admission.
+        assert!(unavailable.measurements(shape).is_err());
+        assert!(unavailable.points(shape, &pose).is_err());
+        assert!(unavailable.posed(shape, &pose).is_err());
+        let (retried, retried_points) = unavailable.posed_with_points(shape, &pose).unwrap();
+        assert_eq!(retried.vertices, body.vertices);
+        assert_eq!(retried_points, points);
+    }
+    let preview =
+        ftx_wasm::body_fit::review_body_fit_start(&bytes, &input.to_string(), "0", "0").unwrap();
+    assert_eq!(preview["pose_evaluations"], 1);
+    assert!(preview["mesh_obj"].is_string());
+    assert!(
+        preview["keypoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|point| !point["world_m"].is_null() && point["projection_refusal"].is_null())
+    );
+}
+
+#[test]
+fn portable_start_preview_keeps_projection_failures_and_refuses_invalid_sources() {
+    let (bytes, mut input) = fixture();
+    input["model"]["pose_parameters"][1]["lower"] = json!(-8.0);
+    input["fit"]["starts"][0]["poses"][0]["values"][1] = json!(-6.0);
+    let silhouette = json!({"evidence":"Synthetic deliberately misplaced initialization contour",
+        "lines":[{"axis":"horizontal","at_px":10.0,"intervals_px":[[600.0,700.0]],
+            "sigma_px":1.0,"partition":"fit"}]});
+    for frame in input["fit"]["frames"].as_array_mut().unwrap() {
+        frame["silhouette"] = silhouette.clone();
+    }
+    let text = input.to_string();
+    let behind = ftx_wasm::body_fit::review_body_fit_start(&bytes, &text, "0", "0").unwrap();
+    assert_eq!(behind["status"], "INITIALIZATION_REVIEW");
+    assert_eq!(behind["body_fitted"], false);
+    assert_eq!(behind["unprojectable_vertices"], 10);
+    assert!(behind["mesh_obj"].is_string());
+    assert!(
+        behind["projected_vertices_px"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(Value::is_null)
+    );
+    for point in behind["keypoints"].as_array().unwrap() {
+        assert!(!point["world_m"].is_null());
+        assert!(point["predicted_px"].is_null());
+        assert!(point["residual_px"].is_null());
+        assert!(!point["projection_refusal"].is_null());
+    }
+    assert_eq!(
+        behind["silhouette"]["lines"][0]["observation"],
+        silhouette["lines"][0]
+    );
+    assert!(behind["silhouette"]["lines"][0]["comparison"].is_null());
+    let visible = ftx_wasm::body_fit::review_body_fit_start(&bytes, &text, "0", "1").unwrap();
+    assert_eq!(visible["unprojectable_vertices"], 0);
+    assert_eq!(
+        visible["silhouette"]["lines"][0]["comparison"]["passed"],
+        false
+    );
+    assert_eq!(
+        visible["silhouette"]["lines"][0]["comparison"]["symmetric_difference_px"],
+        100.0
+    );
+    assert!(
+        visible["keypoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|point| point["residual_px"]
+                .as_f64()
+                .is_some_and(|residual| residual > 3.0))
+    );
+    for bad in ["", "-1", "2", "8", "1.5", "4294967296", "9007199254740993"] {
+        for (start, frame) in [(bad, "0"), ("0", bad)] {
+            assert!(
+                ftx_wasm::body_fit::review_body_fit_start(&bytes, &text, start, frame).is_err()
+            );
+        }
+    }
+    for mutation in ["model", "boundary", "empty", "missing_pose", "frame"] {
+        let mut bad = input.clone();
+        match mutation {
+            "model" => bad["model"]["model_sha256"] = json!("0".repeat(64)),
+            "boundary" => bad["fit"]["starts"][0]["shape"][0] = json!(0.0),
+            "empty" => bad["fit"]["starts"] = json!([]),
+            "missing_pose" => {
+                bad["fit"]["starts"][0]["poses"]
+                    .as_array_mut()
+                    .unwrap()
+                    .pop();
+            }
+            "frame" => bad["fit"]["starts"][0]["poses"][0]["frame"]["timestamp_us"] = json!(99),
+            _ => unreachable!(),
+        }
+        assert!(
+            ftx_wasm::body_fit::review_body_fit_start(&bytes, &bad.to_string(), "0", "0").is_err(),
+            "{mutation}"
+        );
+    }
+    let mut changed_model = bytes;
+    *changed_model.last_mut().unwrap() ^= 1;
+    assert!(ftx_wasm::body_fit::review_body_fit_start(&changed_model, &text, "0", "0").is_err());
+}
+
+#[test]
 fn model_evaluation_limit_is_global_and_cannot_publish_a_partial_fit() {
     let dir = setup();
     let stopped = run(

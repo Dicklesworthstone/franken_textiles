@@ -190,6 +190,11 @@ configuration against the exact array-verified model, resolves explicit vertex/s
 and evaluates shared shape, independent root/joint poses and requested rest-body tape functionals.
 Surface points interpolate the individually skinned triangle vertices; skeleton endpoints use the
 same posed rig. The sparse target path and complete-mesh export checks retain identical arithmetic.
+`posed_with_points` evaluates one full requested pose and derives all ordered correspondences
+from those same vertices and rig transforms. Initialization inspection shares the cached rest
+shape but does not evaluate independent tape functionals; unavailable tape anatomy cannot hide
+otherwise usable initial geometry. The fitter's measurement, sparse-point and ordinary posed
+paths keep their existing requested-tape admission.
 The module has no camera, fitting solver, filesystem or measurement-crate dependency. Native and
 portable adapters implement the existing `ftx-measure::body_fit::BodyModel` trait; that engine retains
 all observability, multistart, held-out and work-budget gates. Configurations do not establish

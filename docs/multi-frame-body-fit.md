@@ -395,9 +395,47 @@ to prepare either complete download. Original previews stay unchanged, and later
 reads. Leaving the page cancels reads and withdraws downloads; a cached-page return retains
 entered values and exposes the same explicit Apply/Cancel recovery controls.
 
-The existing mesh and image overlays remain the **original** preview while values are edited. To
-evaluate an edited initialization through the real model, download `body-starts.json`, materialize
-it, and generate a fresh review:
+The generated review's mesh and image overlays remain the **original** preview while values are
+edited. You can evaluate the edited declaration directly in the local photo page, or materialize
+it and generate a fresh native review.
+
+### Preview a declared start in the local photo page
+
+Select the converted model and the current prepared input in `web/photo.html`, then expand
+**Inspect a declared starting pose before fitting**. Choose the start and frame and select
+**Preview declared starting pose**. Frame numbers follow the original prepared input's frame
+order; the result shows the exact decoded identity and the actual start/frame counts. This works
+with an edited prepared snapshot from the initialization editor and avoids a native
+materialize/review cycle for each visual check.
+
+The real model evaluates only that declared shape and pose, without optimization. Review its named
+parameter values and bounds, the projected mesh, and every FIT/CHECK keypoint and silhouette
+comparison. Large residuals remain visible at their stored precision in the comparison table;
+failed projections retain the observations and an explicit unavailable result. Model or coverage
+refusals remain diagnostic entries. A missing usable mesh produces a JSON review without an OBJ,
+so an invalid guess cannot masquerade as valid geometry. Distorted cameras retain the existing
+vertex-only drawing. If the input retains `capture_images`, select the original capture photograph
+to inspect it behind the projections using the same local source-image verification as
+[accepted-frame inspection](body-fit-mesh-review.md#show-the-original-capture-photograph).
+
+The result is labelled `INITIALIZATION_REVIEW`. It does not run fitting, accept a body, create
+measurement records or enable garment reuse. A valid single declared start can be previewed;
+an empty source has no pose to evaluate. Ordinary fitting still requires two to four distinct
+complete starts. Revise starts in the existing initialization editor, download its new prepared
+snapshot, and select that snapshot here; the preview does not change authored values or CHECK
+evidence. Do not tune initializations to held-out residuals.
+
+The frame JSON is downloaded unchanged from Rust, retaining exact frame identities and input/model
+hashes; OBJ coordinates remain unrounded metres. Input/model limits are 16 MiB and 512 MiB, with at most 100,000 vertices
+and 200,000 faces in the preview. Fitting work-limit controls are not used by this action. Changing
+the selected start/frame, replacing a source, cancelling, starting a fit or leaving the page
+withdraws the old preview and photograph; delayed reads or workers cannot restore them. A preview
+refusal or cancellation preserves any separately accepted fit already displayed. Its garment
+handoff continues to use that original accepted report, never the initialization preview.
+
+### Reevaluate edited starts natively
+
+Download `body-starts.json`, materialize it, and generate a fresh review:
 
 ```sh
 ftx measure fit-starts /path/to/body-starts.json --model /path/to/anny.ftxbody \

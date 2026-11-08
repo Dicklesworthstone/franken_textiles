@@ -1136,6 +1136,33 @@ fn accepted_capture_image_preserves_stored_pixels_and_exact_source_identity() {
         image.report()["orientation"],
         "already_applied_stored_pixels"
     );
+    assert!(image.report().get("review_kind").is_none());
+    let mut initialization = review.clone();
+    initialization["schema"] = json!("ftx-body-start-frame-review/1");
+    initialization["status"] = json!("INITIALIZATION_REVIEW");
+    initialization["body_fitted"] = json!(false);
+    let initial_text = initialization.to_string();
+    let initial_image = BodyFitImage::new(&bytes, &initial_text).unwrap();
+    assert_eq!(load_png(initial_image.preview()).unwrap(), pixels);
+    assert_eq!(
+        initial_image.report()["review_kind"],
+        "INITIALIZATION_REVIEW"
+    );
+    assert_eq!(
+        initial_image.report()["review_sha256"],
+        sha256_hex(initial_text.as_bytes())
+    );
+    for (status, fitted) in [
+        (json!("ACCEPTED"), json!(false)),
+        (Value::Null, json!(false)),
+        (json!("INITIALIZATION_REVIEW"), json!(true)),
+        (json!("INITIALIZATION_REVIEW"), Value::Null),
+    ] {
+        let mut changed = initialization.clone();
+        changed["status"] = status;
+        changed["body_fitted"] = fitted;
+        assert!(BodyFitImage::new(&bytes, &changed.to_string()).is_err());
+    }
     for mutation in [
         "timestamp",
         "dimensions",

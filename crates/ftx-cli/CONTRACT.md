@@ -45,7 +45,10 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   imports, cancellation, reset and page departure withdraw stale prepared and annotation links;
   restored drafts require Apply before complete downloads. Unsupported lossless timestamp
   handling withholds only the prepared download; annotations and draft editing remain usable.
-  Browser export does not reread source files, update previews, run optimization or accept a body.
+  Browser export does not reread source files, update this static review, run optimization or accept a body.
+  Load its exact edited prepared input and model in Photo Workbench to preview a selected declared
+  start/frame through the shared portable model. Native and portable initialization views derive
+  the complete mesh and ordered targets from one requested pose without evaluating tape functionals.
   Changed source evidence requires a fresh native review.
 - `ftx measure fit-starts ANNOTATIONS --model MODEL --out NEW_DIR [--json]`: apply a complete
   `ftx-body-starts/1` annotation through the same native fitter admission. Exact source bytes,
@@ -54,7 +57,8 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   plus explicit inline materialization of separately imported review-mask slices. All observations,
   FIT/CHECK roles, model targets and parameter bounds remain intact. `input.json` is an ordinary
   capture/prepared-fit input; `starts.json` records private create-only publication. Regenerate a
-  start review to see the changed geometry. No pose estimate, optimization or fit acceptance.
+  start review, or preview the edited prepared snapshot in Photo Workbench, to see changed geometry.
+  No pose estimate, optimization or fit acceptance.
 - `ftx measure capture-init-review MANIFEST --model MODEL --calibration CAL --reference CHARUCO_DECL
   --reference-id ID --out NEW_DIR [--json]` and `ftx measure capture-init CHOICES --model MODEL
   --out NEW_DIR [--json]`: construct the first ordinary capture input from actual selected frames,

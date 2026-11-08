@@ -6,6 +6,18 @@ self.onmessage = async ({data: m}) => {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
+    if(m.op==="review-body-fit-start") {
+      if(typeof m.input!=="string" || new TextEncoder().encode(m.input).length>16*1024*1024 ||
+          !(m.model instanceof ArrayBuffer) || m.model.byteLength===0 || m.model.byteLength>512*1024*1024 ||
+          !Number.isSafeInteger(m.startIndex) || m.startIndex<0 || m.startIndex>3 ||
+          !Number.isSafeInteger(m.frameIndex) || m.frameIndex<0 || m.frameIndex>7) {
+        throw Error("Initialization preview needs prepared input up to 16 MiB, model up to 512 MiB, start 0..3 and frame 0..7.");
+      }
+      self.postMessage({type:"progress",request:m.request,text:"Evaluating the declared shape and pose without fitting; failed projections remain diagnostics…"});
+      const report=ftx.review_body_fit_start(new Uint8Array(m.model),m.input,String(m.startIndex),String(m.frameIndex));
+      self.postMessage({type:"result",request:m.request,report});
+      return;
+    }
     if(m.op==="review-body-fit-image") {
       if(typeof m.review!=="string" || new TextEncoder().encode(m.review).length>16*1024*1024 ||
           !(m.image instanceof ArrayBuffer) || m.image.byteLength===0 || m.image.byteLength>128*1024*1024) {

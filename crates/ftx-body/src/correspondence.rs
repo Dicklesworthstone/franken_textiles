@@ -119,7 +119,7 @@ enum PoseAxis {
 struct Cache {
     shape: Vec<f64>,
     rest: RestBody,
-    metrics: Vec<f64>,
+    metrics: Option<Vec<f64>>,
 }
 
 /// One checked correspondence configuration and its shared-shape evaluation cache.
@@ -464,7 +464,7 @@ impl CorrespondenceModel {
         Ok(p)
     }
 
-    fn prepare(&self, shape: &[f64]) -> Result<(), Refusal> {
+    fn prepare_rest(&self, shape: &[f64]) -> Result<(), Refusal> {
         if self
             .cache
             .borrow()
@@ -474,6 +474,22 @@ impl CorrespondenceModel {
             return Ok(());
         }
         let rest = self.model.rest(&self.parameters(shape)?)?;
+        self.cache.replace(Some(Cache {
+            shape: shape.to_vec(),
+            rest,
+            metrics: None,
+        }));
+        Ok(())
+    }
+
+    fn prepare(&self, shape: &[f64]) -> Result<(), Refusal> {
+        self.prepare_rest(shape)?;
+        let mut cache = self.cache.borrow_mut();
+        let cache = cache.as_mut().unwrap();
+        if cache.metrics.is_some() {
+            return Ok(());
+        }
+        let rest = &cache.rest;
         let height = rest
             .vertices
             .iter()
@@ -487,8 +503,8 @@ impl CorrespondenceModel {
         let mut metrics = vec![height; self.config.measurements.len()];
         if self.config.measurements.iter().any(|n| n != "stature") {
             let posed = self.model.pose(
-                &rest,
-                &pose_deltas(&self.model, &rest, &Pose::a_pose(35.0), 1.0)?,
+                rest,
+                &pose_deltas(&self.model, rest, &Pose::a_pose(35.0), 1.0)?,
             )?;
             let frames = BodyFrames::new(&self.model, &posed)?;
             let faces: Vec<_> = self
@@ -512,11 +528,9 @@ impl CorrespondenceModel {
                     })? / 1000.0;
             }
         }
-        self.cache.replace(Some(Cache {
-            shape: shape.to_vec(),
-            rest,
-            metrics,
-        }));
+        // A failed tape evaluation leaves only the reusable rest body cached. It must not
+        // become an empty successful metric result or block independent image previews.
+        cache.metrics = Some(metrics);
         Ok(())
     }
 
@@ -526,7 +540,15 @@ impl CorrespondenceModel {
     /// Invalid shape/model geometry or a requested unavailable tape functional.
     pub fn measurements(&self, shape: &[f64]) -> Result<Vec<f64>, Refusal> {
         self.prepare(shape)?;
-        Ok(self.cache.borrow().as_ref().unwrap().metrics.clone())
+        Ok(self
+            .cache
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .metrics
+            .as_ref()
+            .unwrap()
+            .clone())
     }
 
     /// Expand one frame's root and local-joint pose without changing its fixed controls.
@@ -597,6 +619,25 @@ impl CorrespondenceModel {
         let cache = self.cache.borrow();
         let rest = &cache.as_ref().unwrap().rest;
         self.model.pose(rest, &self.deltas(pose)?)
+    }
+
+    /// Evaluate a full surface and its ordered correspondences with exactly one pose evaluation.
+    /// Initialization reviews use the same skinned vertices and rig endpoints for both displays.
+    /// Independent tape functionals are not needed or evaluated for this image-pose review.
+    ///
+    /// # Errors
+    /// Invalid vectors, model geometry or inconsistent posed surface/skeleton dimensions.
+    pub fn posed_with_points(
+        &self,
+        shape: &[f64],
+        pose: &[f64],
+    ) -> Result<(PosedBody, Vec<Vec3>), Refusal> {
+        self.prepare_rest(shape)?;
+        let cache = self.cache.borrow();
+        let rest = &cache.as_ref().unwrap().rest;
+        let body = self.model.pose(rest, &self.deltas(pose)?)?;
+        let points = self.points_on_body(rest, &body)?;
+        Ok((body, points))
     }
 
     /// Evaluate correspondences on a complete already-posed mesh for independent export checks.

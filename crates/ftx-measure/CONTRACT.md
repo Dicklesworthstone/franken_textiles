@@ -202,6 +202,11 @@ or claiming observability, convergence or acceptance.
 begin with an empty or one-start draft. The four-start cap, validation of every supplied start,
 identity association, bounds and distinctness remain unchanged. It supplies no initialization
 values and cannot make a draft admissible to `fit_body`.
+`preview_keypoints` retains each original observation, FIT/CHECK role and sigma alongside the
+declared model point, projected pixel and raw residual when available. Model and camera refusals
+remain per-observation diagnostics; a large initialization residual is not an acceptance refusal.
+Native and portable start reviews share this kernel. The accepted `review_keypoints` gate is
+unchanged, and preview diagnostics supply no additional fitting evidence.
 `prepare_capture_authoring` also permits an empty model-target map for a first capture draft.
 It retains the ordinary frame/camera, evidence, parameter-domain, measurement and aggregate-variable
 checks. Unknown observations still refuse, and neither this draft helper nor empty starts changes

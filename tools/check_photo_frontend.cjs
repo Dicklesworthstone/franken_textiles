@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -43,9 +43,10 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function bundle_adjust(input,iterations){calls.push({kind:'bundle-adjust',input,iterations});if(failBundle)throw Error('metric controls refused');return JSON.stringify(bundleReport());}
   function still_window(input,source){calls.push({kind:'still-window',input,source});if(failStill)throw Error('track evidence refused');return JSON.stringify(stillReport());}
   function fit_body(model,input,iterations,maxEvaluations){calls.push({kind:'fit-body',model:[...model],input,iterations,maxEvaluations});if(failBodyFit)throw Error('model SHA-256 mismatch');return JSON.stringify(bodyFitReport());}
+  function review_body_fit_start(model,input,startIndex,frameIndex){calls.push({kind:'body-start-review',model:[...model],input,startIndex,frameIndex});if(failBodyStart)throw Error('no declared initialization at that index');return JSON.stringify(bodyStartFrameReport({start_index:Number(startIndex),frame_index:Number(frameIndex),start_count:4,frame_count:8}));}
   function review_body_fit_frame(model,report,frameIndex){calls.push({kind:'body-frame-review',model:[...model],report,frameIndex});if(failBodyReview)throw Error('full mesh keypoint disagrees with the accepted 3-pixel fit gate');return JSON.stringify(bodyFrameReport());}
   const context=vm.createContext({Uint8Array,ArrayBuffer,TextEncoder,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body','review_body_fit_frame'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body','review_body_fit_start','review_body_fit_frame'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('WebBodyFitImage',bodyImageClass ?? WebBodyFitImage);
@@ -54,6 +55,7 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
     this.setExport('bundle_adjust',bundle_adjust);
     this.setExport('still_window',still_window);
     this.setExport('fit_body',fit_body);
+    this.setExport('review_body_fit_start',bodyStartReview ?? review_body_fit_start);
     this.setExport('review_body_fit_frame',review_body_fit_frame);
   },{context});
   await imports.link(()=>{}); await imports.evaluate();
@@ -105,6 +107,7 @@ async function photoPage({decode,materialsToken=null}={}) {
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images',geometryOperation:'triangulate',bundleIterations:'50'}))e[id].value=value;
   for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
   e.bodyFitIterations.value='50';e.bodyFitEvaluations.value='100000';
+  e.bodyFitStartIndex.value='1';e.bodyFitStartFrame.value='1';
   const workers=[],urls=new Map(),closed=[],windowEvents={},popups=[]; let serial=0;
   class Worker {
     constructor(){this.messages=[];workers.push(this);}
@@ -911,6 +914,14 @@ function bodyFrameReport(overrides={}) {
     silhouette:{lines:[{observation:{axis:'horizontal',at_px:70,partition:'held_out',intervals_px:[[10,40]]},
       comparison:{predicted_intervals_px:[[11,41]],passed:true}}]},no_claim:'Not full-mask, occlusion or real-wearer fit.',...overrides};
 }
+function bodyStartFrameReport(overrides={}) {
+  return bodyFrameReport({schema:'ftx-body-start-frame-review/1',status:'INITIALIZATION_REVIEW',body_fitted:false,
+    start_index:0,start_count:2,frame_count:2,pose_evaluations:1,
+    shape_parameters:[{name:'height',lower:0,upper:1,unit:'coefficient'}],shape_values:[0.6],
+    pose_parameters:[{name:'root_tx',lower:-3,upper:3,unit:'m'}],pose_values:[0.2],diagnostics:[],
+    mesh_obj:'# declared INITIALIZATION; no fitted body\nv 0.12345678912345678 -0 2\nf 1 2 3\n',
+    no_claim:'Declared starting pose only. No optimization or acceptance was performed.',...overrides});
+}
 function selectBodyFit(p,input=' {"timestamp_us":18446744073709551615,"evidence":"λ"}\r\n') {
   p.e.bodyFitModel.files=[Object.assign(new Blob(['original model']),{name:'model.ftxbody'})];p.e.bodyFitInput.files=[file(input)];
   p.e.bodyFitInput.handlers.change();return input;
@@ -1170,6 +1181,166 @@ test('body-frame review cancels delayed snapshot reads and retains accepted repo
     await fit.emit({type:'result',request:fit.messages[0].request,report:JSON.stringify(bodyFitReport({status,solution:null}))});
     assert.equal(p.e.bodyFitReviewRun.disabled,true);await p.e.bodyFitReviewRun.onclick();assert.equal(p.workers.length,1);
   }
+});
+
+test('body-start preview worker passes exact sources and native ordinals without fitting or acceptance',async()=>{
+  const source={request:84,op:'review-body-fit-start',model:new Uint8Array([1,3,7]).buffer,
+    input:' \r\n{"timestamp_us":18446744073709551615,"starts":"original λ"}\r\n',startIndex:1,frameIndex:3};
+  const w=await photoWorker(),result=await w.send(source);
+  assert.equal(result.type,'result');assert.equal(JSON.parse(result.report).status,'INITIALIZATION_REVIEW');
+  assert.deepEqual(w.calls,[{kind:'body-start-review',model:[1,3,7],input:source.input,startIndex:'1',frameIndex:'3'}]);
+  for(const change of [{startIndex:-1},{startIndex:4},{startIndex:1.5},{startIndex:'0'},
+    {frameIndex:-1},{frameIndex:8},{frameIndex:1.5},{frameIndex:'0'},{frameIndex:4294967296},
+    {model:new ArrayBuffer(0)},{model:[1,3,7]},{input:null},{input:' '.repeat(16*1024*1024+1)}]) {
+    const invalid=await photoWorker();assert.equal((await invalid.send({...source,...change})).type,'error');
+    assert.equal(invalid.calls.length,0);
+  }
+  const refused=await photoWorker({failBodyStart:true});
+  assert.match((await refused.send(source)).message,/no declared initialization/);
+  assert.equal(refused.calls.length,1);assert.equal(refused.calls[0].kind,'body-start-review');
+});
+
+test('body-start preview displays a single declared start and exact sources without enabling garment reuse',async()=>{
+  const p=await photoPage();assert.equal(p.e.bodyFitStartRun.disabled,true);
+  const input=selectBodyFit(p);p.e.bodyFitStartFrame.value='2';
+  p.e.bodyFitIterations.value='unused';p.e.bodyFitEvaluations.value='unused';
+  assert.equal(p.e.bodyFitStartRun.disabled,false);await p.e.bodyFitStartRun.onclick();
+  const w=p.current(),m=w.messages[0];
+  assert.equal(m.op,'review-body-fit-start');assert.equal(m.input,input);assert.equal(m.startIndex,0);assert.equal(m.frameIndex,1);
+  assert.equal(new TextDecoder().decode(m.model),'original model');assert.equal(m.iterations,undefined);assert.equal(m.maxEvaluations,undefined);
+  assert.equal(p.e.bodyFitReviewCancel.disabled,false);assert.equal(p.e.bodyFitWorkbench.disabled,true);
+  const value=bodyStartFrameReport({start_count:1,frame_index:1});
+  const raw=' \r\n'+JSON.stringify(value).replaceAll('"timestamp_us":1','"timestamp_us":18446744073709551615')+'\r\n';
+  await w.emit({type:'result',request:m.request,report:raw});
+  assert.equal(w.dead,true);assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.e.bodyFitReview.hidden,false);
+  assert.equal(p.e.bodyFitReviewCanvas.hidden,false);assert.equal(p.e.bodyFitStartDetails.hidden,false);
+  assert.match(p.e.bodyFitReviewHeading.textContent,/Declared initialization/);
+  assert.match(p.e.bodyFitReviewStatus.textContent,/INITIALIZATION_REVIEW: start 1 of 1, frame 2 of 2/);
+  assert.match(p.e.bodyFitReviewParameters.textContent,/height: 0.6 coefficient \(0 < value < 1\)/);
+  assert.match(p.e.bodyFitReviewParameters.textContent,/root_tx: 0.2 m \(-3 < value < 3\)/);
+  assert.equal(p.e.bodyFitReviewChecks.children.length,3);assert.equal(p.e.bodyFitAcceptedReviewControls.hidden,true);
+  const [json,obj]=p.e.bodyFitReviewDownloads.children;
+  assert.equal(json.download,'body-fit-start-0000-frame-0001.json');assert.equal(obj.download,'body-fit-start-0000-frame-0001.obj');
+  assert.equal(await p.urls.get(json.href).text(),raw);assert.equal(await p.urls.get(obj.href).text(),value.mesh_obj);
+  assert.equal(p.e.bodyFitReport.textContent,'');assert.equal(p.e.bodyFitDownloads.children.length,0);
+  assert.equal(p.e.bodyFitWorkbench.disabled,true);p.e.bodyFitWorkbench.onclick();assert.equal(p.popups.length,0);
+  assert.equal(p.e.openWorkbench.disabled,true);assert.equal(p.e.bodyFitReviewRun.disabled,true);
+});
+
+test('body-start preview retains failed projections, large residuals and every unavailable silhouette comparison',async()=>{
+  const p=await photoPage();selectBodyFit(p);await p.e.bodyFitStartRun.onclick();const w=p.current();
+  const value=bodyStartFrameReport({mesh_obj:null,triangles:[],projected_vertices_px:[],unprojectable_vertices:0,
+    keypoints:[
+      {name:'behind-camera',partition:'fit',observed_px:[20,30],predicted_px:null,residual_px:null,projection_refusal:{code:'InvalidGeometry',message:'point behind camera'}},
+      {name:'missing-model-point',partition:'held_out',observed_px:[30,40],projection_refusal:{message:'model evaluation failed'}},
+      {name:'distant-guess',partition:'fit',observed_px:[40,50],predicted_px:[10000,12000],residual_px:12345.678901}],
+    silhouette:{lines:[{observation:{axis:'horizontal',at_px:70,partition:'held_out',intervals_px:[[10,40]]},comparison:null}]},
+    diagnostics:[{stage:'model_surface',refusal:{message:'no usable surface'}},{stage:'silhouette_projection',refusal:{message:'coverage unavailable'}}]});
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(value)});
+  assert.equal(p.e.bodyFitReviewCanvas.hidden,false);assert.equal(p.e.bodyFitReviewError.textContent,'');
+  const labels=p.e.bodyFitReviewCanvas.labels.map(([text])=>text);
+  assert.ok(labels.some(text=>text.includes('behind-camera (FIT, projection unavailable)')));
+  assert.ok(labels.some(text=>text.includes('missing-model-point (CHECK, projection unavailable)')));
+  assert.ok(labels.some(text=>text.includes('distant-guess (FIT, 12345.679 px)')));
+  const rows=p.e.bodyFitReviewChecks.children.map(row=>row.children.map(cell=>cell.textContent));
+  assert.equal(rows.length,4);assert.equal(rows[0][2],'Unavailable');assert.match(rows[0][3],/point behind camera/);
+  assert.equal(rows[1][1],'CHECK');assert.equal(rows[2][2],'12345.678901 px');assert.equal(rows[3][2],'Unavailable');
+  assert.match(p.e.bodyFitReviewDiagnostics.textContent,/no usable surface/);assert.match(p.e.bodyFitReviewDiagnostics.textContent,/coverage unavailable/);
+  assert.match(p.e.bodyFitReviewSummary.textContent,/No usable mesh was produced/);
+  assert.deepEqual(p.e.bodyFitReviewDownloads.children.map(a=>a.download),['body-fit-start-0000-frame-0000.json']);
+  assert.equal(p.e.bodyFitWorkbench.disabled,true);assert.equal(p.e.bodyFitResult.hidden,true);
+});
+
+test('body-start preview refuses malformed files, undeclared choices and inconsistent engine output without an accepted body',async()=>{
+  for(const change of [p=>p.e.bodyFitModel.files=[],p=>p.e.bodyFitInput.files=[],
+    p=>p.e.bodyFitModel.files=[{size:512*1024*1024+1}],p=>p.e.bodyFitInput.files=[{size:16*1024*1024+1}],
+    p=>p.e.bodyFitInput.files=[{size:1,arrayBuffer:async()=>new Uint8Array([255]).buffer}],
+    p=>p.e.bodyFitStartIndex.value='',p=>p.e.bodyFitStartIndex.value='0',p=>p.e.bodyFitStartIndex.value='5',
+    p=>p.e.bodyFitStartFrame.value='9',p=>p.e.bodyFitStartFrame.value='1.5']) {
+    const p=await photoPage();selectBodyFit(p);change(p);await p.e.bodyFitStartRun.onclick();
+    assert.equal(p.workers.length,0);assert.ok(p.e.bodyFitReviewError.textContent);assert.equal(p.urls.size,0);
+    assert.equal(p.e.bodyFitWorkbench.disabled,true);assert.equal(p.e.bodyFitReviewCanvas.hidden,true);
+  }
+  for(const outcome of ['refused','crash',{schema:'ftx-body-frame-review/1'},{status:'ACCEPTED'},{body_fitted:true},
+    {start_index:1},{frame_index:1},{start_count:0},{frame_count:1},{pose_values:[]},{diagnostics:null}]) {
+    const p=await photoPage();selectBodyFit(p);await p.e.bodyFitStartRun.onclick();const w=p.current(),request=w.messages[0].request;
+    if(outcome==='refused')await w.emit({type:'error',request,message:'no declared initialization at that index'});
+    else if(outcome==='crash')w.onerror({message:'preview worker stopped'});
+    else await w.emit({type:'result',request,report:JSON.stringify(bodyStartFrameReport(outcome))});
+    assert.equal(w.dead,true);assert.ok(p.e.bodyFitReviewError.textContent);assert.equal(p.e.bodyFitReviewCanvas.hidden,true);
+    assert.equal(p.e.bodyFitWorkbench.disabled,true);assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.urls.size,0);
+    assert.match(p.e.bodyFitReviewStatus.textContent,/no fitting was run/);
+  }
+});
+
+test('body-start selection, cancellation and source changes withdraw prior reviews and ignore stale workers',async()=>{
+  for(const invalidate of [p=>p.e.bodyFitReviewCancel.onclick(),p=>p.e.bodyFitStartIndex.handlers.input(),
+    p=>p.e.bodyFitStartFrame.handlers.input(),p=>p.e.bodyFitInput.handlers.change(),p=>p.e.bodyFitModel.handlers.click(),
+    p=>p.e.bodyFitInput.handlers.cancel(),p=>p.e.bodyFitIterations.handlers.input(),p=>p.windowEvents.pagehide()]) {
+    const p=await photoPage();selectBodyFit(p);await p.e.bodyFitStartRun.onclick();let w=p.current();
+    await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bodyStartFrameReport())});assert.equal(p.urls.size,2);
+    await p.e.bodyFitStartRun.onclick();w=p.current();assert.equal(p.urls.size,0);invalidate(p);
+    const message=p.e.bodyFitReviewStatus.textContent;
+    await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bodyStartFrameReport())});
+    assert.equal(w.dead,true);assert.equal(p.e.bodyFitReviewStatus.textContent,message);assert.equal(p.e.bodyFitReviewCanvas.hidden,true);
+    assert.equal(p.e.bodyFitStartDetails.hidden,true);assert.equal(p.e.bodyFitWorkbench.disabled,true);assert.equal(p.urls.size,0);
+  }
+  const p=await photoPage();selectBodyFit(p);await p.e.bodyFitStartRun.onclick();const old=p.current();
+  await p.e.bodyFitRun.onclick();const fit=p.current();
+  await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify(bodyStartFrameReport())});
+  assert.equal(old.dead,true);assert.equal(fit.dead,undefined);assert.equal(p.e.bodyFitReviewCanvas.hidden,true);
+  await fit.emit({type:'result',request:fit.messages[0].request,report:JSON.stringify(bodyFitReport())});
+  assert.equal(p.e.bodyFitWorkbench.disabled,false);assert.equal(p.e.bodyFitStartDetails.hidden,true);
+});
+
+test('body-start delayed source reads cannot create a worker or erase a newer reviewed initialization',async()=>{
+  for(const which of ['bodyFitInput','bodyFitModel'])for(const rejected of [false,true]) {
+    const p=await photoPage();selectBodyFit(p);let release,fail,entered;
+    const reading=new Promise(resolve=>{entered=resolve;});
+    p.e[which].files=[{size:2,arrayBuffer:()=>{entered();return new Promise((yes,no)=>{release=yes;fail=no;});}}];
+    const pending=p.e.bodyFitStartRun.onclick();await reading;p.e.bodyFitReviewCancel.onclick();
+    selectBodyFit(p);await p.e.bodyFitStartRun.onclick();const current=p.current();
+    await current.emit({type:'result',request:current.messages[0].request,report:JSON.stringify(bodyStartFrameReport())});
+    const message=p.e.bodyFitReviewStatus.textContent;
+    if(rejected)fail(Error('old read failed'));else release(new TextEncoder().encode('{}').buffer);
+    await pending;assert.equal(p.workers.length,1);assert.equal(p.e.bodyFitReviewStatus.textContent,message);
+    assert.equal(p.e.bodyFitReviewCanvas.hidden,false);assert.equal(p.e.bodyFitReviewError.textContent,'');
+    assert.equal(p.e.bodyFitWorkbench.disabled,true);assert.equal(p.urls.size,2);
+  }
+});
+
+test('body-start preview shares verified photographs without accepting a body and clears them on a new selection',async()=>{
+  let closed=0;const p=await photoPage({decode:async()=>({width:640,height:480,close(){closed++;}})});
+  selectBodyFit(p);await p.e.bodyFitStartRun.onclick();const w=p.current();
+  const source_image={frame:{stream:'synthetic',timestamp_us:1},image_name:'source.png',image_sha256:'ab'.repeat(32),image_size_px:[640,480],rotation_cw_deg:90};
+  const review=' \r\n'+JSON.stringify(bodyStartFrameReport({source_image})).replaceAll('"timestamp_us":1','"timestamp_us":18446744073709551615')+'\r\n';
+  await w.emit({type:'result',request:w.messages[0].request,report:review});
+  assert.equal(p.e.bodyFitReviewImage.disabled,false);selectBodyReviewImage(p);await p.e.bodyFitReviewImageRun.onclick();
+  let image=p.current();assert.equal(image.messages[0].review,review);
+  await image.emit({type:'error',request:image.messages[0].request,message:'wrong source image'});
+  assert.match(p.e.bodyFitReviewImageStatus.textContent,/declared start and fit inputs are unchanged/);
+  await p.e.bodyFitReviewImageRun.onclick();image=p.current();
+  await image.emit({type:'result',request:image.messages[0].request,preview:new Uint8Array([8,5,3])});
+  assert.match(p.e.bodyFitReviewImageStatus.textContent,/does not fit or accept a body/);
+  assert.equal(p.e.bodyFitWorkbench.disabled,true);assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.urls.size,2);
+  p.e.bodyFitStartIndex.value='2';p.e.bodyFitStartIndex.handlers.input();
+  assert.equal(closed,1);assert.equal(p.e.bodyFitReviewCanvas.hidden,true);assert.equal(p.e.bodyFitReviewImage.disabled,true);assert.equal(p.urls.size,0);
+});
+
+test('body-start review leaves an existing accepted body separate and can return to accepted-frame inspection',async()=>{
+  const p=await photoPage();selectBodyFit(p);await p.e.bodyFitRun.onclick();const fit=p.current(),raw=JSON.stringify(bodyFitReport());
+  await fit.emit({type:'result',request:fit.messages[0].request,report:raw});
+  await p.e.bodyFitStartRun.onclick();const initial=p.current();
+  await initial.emit({type:'result',request:initial.messages[0].request,report:JSON.stringify(bodyStartFrameReport())});
+  assert.equal(p.e.bodyFitReport.textContent,raw);assert.equal(p.e.bodyFitWorkbench.disabled,false);assert.equal(p.urls.size,5);
+  p.e.bodyFitWorkbench.onclick();const popup=p.popups[0],token=new URL(popup.url).searchParams.get('bodyFitImport');
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-body-fit-sources-ready',token}});
+  assert.equal(await popup.messages[0].data.fit.text(),raw,'Only the original accepted report is reusable');
+  await p.e.bodyFitReviewRun.onclick();const accepted=p.current();assert.equal(accepted.messages[0].report,raw);
+  await accepted.emit({type:'result',request:accepted.messages[0].request,report:JSON.stringify(bodyFrameReport())});
+  assert.match(p.e.bodyFitReviewHeading.textContent,/accepted frame/);assert.equal(p.e.bodyFitStartDetails.hidden,true);
+  assert.equal(p.e.bodyFitReviewChecks.children.length,0);assert.equal(p.e.bodyFitReviewDownloads.children[0].download,'body-fit-frame-0000.json');
+  assert.equal(p.e.bodyFitReport.textContent,raw);assert.equal(p.urls.size,5);
 });
 
 test('body-frame photograph worker verifies exact original bytes and frees previews without refitting',async()=>{
@@ -1458,8 +1629,19 @@ test('compiled body fitting reproduces complete native multistart reports and pr
     const ftx=await compiledPhotoBindings(),dir=process.env.FTX_BODY_FIT_PORTABLE_DIR;
     const model=fs.readFileSync(path.join(dir,'model.ftxbody'));
     const parse=text=>JSON.parse(text,(key,value,meta)=>key==='timestamp_us'?meta.source:value);
+    const hash=text=>require('node:crypto').createHash('sha256').update(text).digest('hex');
     for(const item of JSON.parse(fs.readFileSync(path.join(dir,'cases.json'),'utf8')).cases) {
       const input=fs.readFileSync(path.join(dir,item.input),'utf8');
+      const declared=parse(input),initialText=ftx.review_body_fit_start(model,input,'0','0'),initial=parse(initialText);
+      assert.equal(initial.schema,'ftx-body-start-frame-review/1');assert.equal(initial.status,'INITIALIZATION_REVIEW');
+      assert.equal(initial.body_fitted,false);assert.equal(initial.pose_evaluations,1);assert.equal(initial.input_sha256,hash(input));
+      assert.deepEqual(initial.frame,declared.fit.frames[0].frame,item.name+' original input frame ordinal');
+      assert.deepEqual(initial.shape_values,declared.fit.starts[0].shape);
+      const declaredPose=declared.fit.starts[0].poses.find(p=>p.frame.stream===initial.frame.stream && p.frame.timestamp_us===initial.frame.timestamp_us);
+      assert.deepEqual(initial.pose_values,declaredPose.values,item.name+' exact authored pose');
+      const startWorker=await photoWorker({bodyStartReview:ftx.review_body_fit_start});
+      const startResult=await startWorker.send({request:85,op:'review-body-fit-start',model:Uint8Array.from(model).buffer,input,startIndex:0,frameIndex:0});
+      assert.equal(startResult.type,'result',startResult.message);assert.deepEqual(parse(startResult.report),initial);
       const actual=ftx.fit_body(model,input,item.iterations,item.max_evaluations);
       assert.deepEqual(parse(actual),parse(fs.readFileSync(path.join(dir,item.report),'utf8')),item.name+' complete original native body-fit report');
       assert.equal(JSON.parse(actual).status,item.status);
