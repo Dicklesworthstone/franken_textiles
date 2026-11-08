@@ -181,11 +181,14 @@ def grouped(run: ConductivityRun, tolerance_c: float) -> list[dict]:
     tolerance = finite(tolerance_c, "maximum_temperature_deviation_c")
     if not 0 <= tolerance < 0.5:
         fail("nominal-temperature grouping tolerance must be in [0, 0.5) C")
+    maximum = Fraction(Decimal(str(tolerance)))
     groups = defaultdict(list)
     for index, row in enumerate(run.rows):
-        nominal = float(Decimal(str(row[0])).to_integral_value(rounding=ROUND_HALF_EVEN))
-        if abs(row[0] - nominal) > tolerance + 1e-12:
+        actual = Decimal(str(row[0]))
+        rounded = actual.to_integral_value(rounding=ROUND_HALF_EVEN)
+        if abs(Fraction(actual) - Fraction(rounded)) > maximum:
             fail("actual temperature exceeds the explicitly admitted nominal-temperature tolerance")
+        nominal = float(rounded)
         groups[nominal].append((index, row))
     if len(groups) < 2:
         fail("a bounded thermal series needs at least two distinct nominal temperatures")

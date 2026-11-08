@@ -68,6 +68,9 @@ establish instrument accuracy or physical uncertainty; exported observations rem
 Grouping is explicitly admitted with `within_run_nearest_integer_c` and a reviewed
 maximum temperature deviation strictly less than 0.5 C. This follows the nominal-degree
 binning used by the primary FSRI processing script, but **does not pool different runs**.
+The deviation limit is inclusive and compares decimal representations of the retained
+f64 readings and tolerance, without an extra allowance. A zero limit admits only retained
+integer temperatures; half-degree ties exceed every permitted limit.
 The receipt preserves every printed temperature, upper/lower/average conductivity,
 source row index, reading count and run count. Catalog means and sample standard
 deviations describe repeated readings *within this single run*. A singleton has no

@@ -3,6 +3,7 @@ import copy
 from decimal import localcontext
 import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -135,6 +136,24 @@ class HfmImportTests(unittest.TestCase):
                 points = grouped(parse_conductivity(large.encode()), 0.1)
                 self.assertEqual([p["temperature_c"] for p in points], [65, 1e30])
                 self.assertEqual(points[1]["source_row_indices"], [0, 2])
+
+    def test_grouping_enforces_declared_deviation_without_extra_slack(self):
+        base = SOURCE.replace("65.01", "65.0").replace("65.02", "65.0")
+        cases = (("25.1", 0.1, True), ("25.0", 0.0, True),
+                 ("25.1000000000005", 0.1, False), ("25.0000000000005", 0.0, False),
+                 ("25.5", math.nextafter(0.5, 0.0), False))
+        for precision in (1, 6, 28, 80):
+            with localcontext() as context:
+                context.prec = precision
+                for temperature, tolerance, admitted in cases:
+                    with self.subTest(precision=precision, temperature=temperature, tolerance=tolerance):
+                        source = base.replace("15.01", temperature).replace("15.02", temperature)
+                        run = parse_conductivity(source.encode())
+                        if admitted:
+                            self.assertEqual([p["temperature_c"] for p in grouped(run, tolerance)], [25, 65])
+                        else:
+                            with self.assertRaisesRegex(ValueError, "actual temperature exceeds"):
+                                grouped(run, tolerance)
 
     def test_explicit_temperature_grouping_and_missing_variability(self):
         for tolerance in (-1, 0.5, float("nan"), True, 0.001):
