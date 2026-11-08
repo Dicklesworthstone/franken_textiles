@@ -122,6 +122,38 @@ pub fn review_body_fit_frame(
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// A local photograph checked against the original capture identity of an accepted frame review.
+#[wasm_bindgen]
+pub struct WebBodyFitImage {
+    inner: crate::body_fit::BodyFitImage,
+}
+
+#[wasm_bindgen]
+impl WebBodyFitImage {
+    /// Verify original encoded bytes and decode only already-oriented capture pixels.
+    ///
+    /// # Errors
+    /// Missing/stale source identity, unsupported encoding/orientation or bounded input refusal.
+    #[wasm_bindgen(constructor)]
+    pub fn new(bytes: &[u8], review: &str) -> Result<Self, JsError> {
+        crate::body_fit::BodyFitImage::new(bytes, review)
+            .map(|inner| Self { inner })
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Full-resolution lossless PNG, preserving the original stored pixel coordinates.
+    #[must_use]
+    pub fn preview(&self) -> Vec<u8> {
+        self.inner.preview().to_vec()
+    }
+
+    /// Source/review/preview hashes and the already-applied orientation, without image bytes.
+    #[must_use]
+    pub fn report(&self) -> String {
+        self.inner.report().to_string()
+    }
+}
+
 /// Assess a sparse still-window candidate without creating reviewed capture evidence.
 ///
 /// # Errors

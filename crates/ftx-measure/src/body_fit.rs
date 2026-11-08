@@ -161,6 +161,137 @@ pub struct FitFrame {
     pub silhouette: Option<Silhouette>,
 }
 
+/// Exact encoded image retained by capture preparation for later local visual inspection.
+/// This binds bytes and already-oriented coordinates, not image authenticity or anatomy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureImage {
+    /// Original decoded identity, never an ordinal or a rounded JavaScript timestamp.
+    pub frame: FrameId,
+    /// Display label only. Consumers must never open a path from this field.
+    pub image_name: String,
+    /// SHA-256 of the original encoded image, before any preview conversion.
+    pub image_sha256: String,
+    /// Stored pixels already share the observations' oriented coordinate system.
+    pub image_size_px: [u32; 2],
+    /// Recorded clockwise rotation already applied to image, masks and camera.
+    pub rotation_cw_deg: u16,
+}
+
+impl CaptureImage {
+    /// Validate one source identity without opening an image or changing its coordinates.
+    ///
+    /// # Errors
+    /// Empty/oversized labels, invalid hashes, dimensions, rotation or decoded identity.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        if self.frame.stream.trim().is_empty()
+            || self.frame.stream.len() > 4096
+            || self.image_name.trim().is_empty()
+            || self.image_name.len() > 4096
+            || self.image_sha256.len() != 64
+            || !self
+                .image_sha256
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            || self.image_size_px.contains(&0)
+            || u64::from(self.image_size_px[0]) * u64::from(self.image_size_px[1]) > 40_000_000
+            || !matches!(self.rotation_cw_deg, 0 | 90 | 180 | 270)
+        {
+            return Err(invalid(
+                "invalid capture image identity, hash, size or orientation",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Require a complete one-to-one image binding to the exact supplied observation frames.
+/// Source order is independent of the fitter's canonical frame order.
+///
+/// # Errors
+/// Missing, duplicate or unrelated images, invalid source metadata, or mismatched coordinates.
+pub fn validate_capture_images(
+    images: &[CaptureImage],
+    frames: &[FitFrame],
+) -> Result<(), Refusal> {
+    if images.is_empty() || images.len() > 8 || images.len() != frames.len() {
+        return Err(invalid(
+            "capture images must bind every fit frame exactly once",
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for image in images {
+        image.validate()?;
+        let frame = frames
+            .iter()
+            .find(|frame| frame.frame == image.frame)
+            .ok_or_else(|| invalid("capture image has no matching fit frame"))?;
+        if !seen.insert(&image.frame)
+            || image.image_size_px != frame.image_size_px
+            || image.rotation_cw_deg != frame.rotation_cw_deg
+        {
+            return Err(invalid(
+                "capture image identity, dimensions or rotation disagree with fit frame",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Extract the image-only binding from an existing native capture receipt, without following paths.
+/// Used for portable prepared inputs and for reopening older native accepted reports.
+///
+/// # Errors
+/// Missing/inconsistent receipt metadata or a non-bijective join to the observation frames.
+pub fn capture_images_from_receipt(
+    capture: &serde_json::Value,
+    frames: &[FitFrame],
+) -> Result<Vec<CaptureImage>, Refusal> {
+    #[derive(Deserialize)]
+    struct Source {
+        image: String,
+        image_sha256: String,
+        image_size_px: [u32; 2],
+        metadata: Metadata,
+    }
+    #[derive(Deserialize)]
+    struct Metadata {
+        frame: FrameId,
+        rotation_cw_deg: u16,
+    }
+    #[derive(Deserialize)]
+    struct Record {
+        frame: FrameId,
+        source: Source,
+    }
+    if capture["schema"] != "ftx-anny-capture/1" {
+        return Err(invalid(
+            "expected original ftx-anny-capture/1 image receipt",
+        ));
+    }
+    let records: Vec<Record> = serde_json::from_value(capture["frames"].clone())
+        .map_err(|e| invalid(format!("invalid capture image receipt: {e}")))?;
+    let images = records
+        .into_iter()
+        .map(|record| {
+            if record.frame != record.source.metadata.frame {
+                return Err(invalid(
+                    "capture image metadata disagrees with its decoded frame",
+                ));
+            }
+            Ok(CaptureImage {
+                frame: record.frame,
+                image_name: record.source.image,
+                image_sha256: record.source.image_sha256,
+                image_size_px: record.source.image_size_px,
+                rotation_cw_deg: record.source.metadata.rotation_cw_deg,
+            })
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    validate_capture_images(&images, frames)?;
+    Ok(images)
+}
+
 /// Independent tape evidence that constrains shared shape, never a population prior.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -1098,3 +1098,113 @@ fn image_calibration_refuses_changed_capture_incomplete_evidence_and_budget_over
     assert!(CameraCalibration::new(&manifest, SHEET, "{}").is_err());
     assert!(CameraCalibration::new(&" ".repeat(16 * 1024 * 1024 + 1), SHEET, "").is_err());
 }
+
+#[test]
+fn accepted_capture_image_preserves_stored_pixels_and_exact_source_identity() {
+    use ftx_core::receipt::sha256_hex;
+    use ftx_trace::raster::image::{Bgr, encode_png_bgr, encode_png_bgr_with_limit, load_png};
+    use ftx_wasm::body_fit::BodyFitImage;
+
+    // Asymmetric color pixels make an accidental rotation, reflection or grayscale conversion visible.
+    let pixels = Bgr {
+        w: 3,
+        h: 2,
+        data: vec![
+            0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 80, 160, 30, 60, 90, 7, 11, 13,
+        ],
+    };
+    let bytes = encode_png_bgr(&pixels).unwrap();
+    assert_eq!(encode_png_bgr_with_limit(&pixels, 6).unwrap(), bytes);
+    for limit in [0, 5, 40_000_001] {
+        assert!(encode_png_bgr_with_limit(&pixels, limit).is_err());
+    }
+    let id = json!({"stream":"capture","timestamp_us":9_007_199_254_740_993_u64});
+    let review = json!({"schema":"ftx-body-frame-review/1","frame":id,
+        "image_size_px":[3,2],"rotation_cw_deg":90,
+        "source_image":{"frame":id,"image_name":"never-follow/this-path.png",
+            "image_sha256":sha256_hex(&bytes),"image_size_px":[3,2],"rotation_cw_deg":90}});
+    let text = review.to_string();
+    let image = BodyFitImage::new(&bytes, &text).unwrap();
+    assert_eq!(load_png(image.preview()).unwrap(), pixels);
+    assert_eq!(image.report()["source_image"], review["source_image"]);
+    assert_eq!(image.report()["review_sha256"], sha256_hex(text.as_bytes()));
+    assert_eq!(
+        image.report()["preview_sha256"],
+        sha256_hex(image.preview())
+    );
+    assert_eq!(
+        image.report()["orientation"],
+        "already_applied_stored_pixels"
+    );
+    for mutation in [
+        "timestamp",
+        "dimensions",
+        "rotation",
+        "hash",
+        "missing",
+        "oversize",
+    ] {
+        let mut changed = review.clone();
+        match mutation {
+            "timestamp" => {
+                changed["source_image"]["frame"]["timestamp_us"] = json!(9_007_199_254_740_992_u64)
+            }
+            "dimensions" => changed["source_image"]["image_size_px"] = json!([2, 3]),
+            "rotation" => changed["source_image"]["rotation_cw_deg"] = json!(0),
+            "hash" => changed["source_image"]["image_sha256"] = json!("0".repeat(64)),
+            "missing" => {
+                changed.as_object_mut().unwrap().remove("source_image");
+            }
+            "oversize" => changed["source_image"]["image_size_px"] = json!([u32::MAX, u32::MAX]),
+            _ => unreachable!(),
+        }
+        assert!(
+            BodyFitImage::new(&bytes, &changed.to_string()).is_err(),
+            "{mutation}"
+        );
+    }
+    let mut wrong_pixels = pixels;
+    wrong_pixels.data[0] = 255;
+    assert!(BodyFitImage::new(&encode_png_bgr(&wrong_pixels).unwrap(), &text).is_err());
+    let mut wrong_dimensions = review.clone();
+    wrong_dimensions["image_size_px"] = json!([2, 3]);
+    wrong_dimensions["source_image"]["image_size_px"] = json!([2, 3]);
+    assert!(BodyFitImage::new(&bytes, &wrong_dimensions.to_string()).is_err());
+    assert!(BodyFitImage::new(&bytes, &" ".repeat(16 * 1024 * 1024 + 1)).is_err());
+}
+
+#[test]
+fn accepted_capture_image_reuses_strict_native_orientation_and_encoding_admission() {
+    use ftx_core::receipt::sha256_hex;
+    use ftx_wasm::body_fit::BodyFitImage;
+
+    let review = |bytes: &[u8], size: [usize; 2]| {
+        let id = json!({"stream":"capture","timestamp_us":1});
+        json!({"schema":"ftx-body-frame-review/1","frame":id,
+            "image_size_px":size,"rotation_cw_deg":0,
+            "source_image":{"frame":id,"image_name":"frame",
+                "image_sha256":sha256_hex(bytes),"image_size_px":size,"rotation_cw_deg":0}})
+        .to_string()
+    };
+    let jpeg = include_bytes!("../../../tests/fixtures/photo/plain-letter-exif6.jpg");
+    let decoded = ftx_trace::raster::jpeg::decode_photo(jpeg, 40_000_000).unwrap();
+    assert_eq!(decoded.exif_orientation, Some(6));
+    let error = BodyFitImage::new(jpeg, &review(jpeg, [decoded.image.w, decoded.image.h]))
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("already be oriented"));
+
+    let bytes = encode_png_gray(&Gray::filled(2, 3, 80));
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(BodyFitImage::new(&trailing, &review(&trailing, [2, 3])).is_err());
+    for kind in [*b"eXIf", *b"tRNS", *b"acTL", *b"fcTL", *b"fdAT"] {
+        // Valid source hash cannot turn prohibited metadata into admitted capture pixels.
+        let mut changed = bytes.clone();
+        let mut chunk = vec![0, 0, 0, 0];
+        chunk.extend_from_slice(&kind);
+        chunk.extend_from_slice(&[0; 4]);
+        changed.splice(33..33, chunk);
+        assert!(BodyFitImage::new(&changed, &review(&changed, [2, 3])).is_err());
+    }
+}

@@ -318,6 +318,28 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
             .unwrap();
         frame["silhouette"] = source["silhouette"].clone();
     }
+    let capture_pixels = Gray {
+        w: 1280,
+        h: 960,
+        data: (0..1280 * 960)
+            .map(|i| ((i / 1280 + i % 1280) % 256) as u8)
+            .collect(),
+    };
+    let capture_bytes = encode_png_gray(&capture_pixels);
+    let mut source_bound = base.clone();
+    let capture_images: Vec<_> = source_bound["fit"]["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .map(|frame| {
+            // Coordinates already describe this orientation; no pixel transform is requested.
+            frame["rotation_cw_deg"] = json!(90);
+            json!({"frame":frame["frame"],"image_name":"capture-image.png",
+                "image_sha256":sha256_hex(&capture_bytes),"image_size_px":frame["image_size_px"],
+                "rotation_cw_deg":90})
+        })
+        .collect();
+    source_bound["capture_images"] = json!(capture_images);
     let export = std::env::var_os("FTX_BODY_FIT_PORTABLE_DIR").map(PathBuf::from);
     if let Some(destination) = &export {
         std::fs::create_dir(destination).unwrap();
@@ -339,6 +361,7 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
         ("budget", base.clone(), "50", "1", 4, "BUDGET_STOP"),
         ("iterations", base.clone(), "1", "100000", 4, "BUDGET_STOP"),
         ("silhouette", silhouette, "50", "100000", 0, "ACCEPTED"),
+        ("capture-image", source_bound, "50", "100000", 0, "ACCEPTED"),
     ] {
         save(&dir, &input);
         let text = std::fs::read_to_string(dir.join("input.json")).unwrap();
@@ -455,10 +478,35 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
             } else {
                 None
             };
-            cases.push(
-                json!({"name":name,"input":input_file,"report":report_file,"review":review_file,
-                "iterations":iterations,"max_evaluations":evaluations,"status":status}),
-            );
+            let mut case = json!({"name":name,"input":input_file,"report":report_file,"review":review_file,
+                "iterations":iterations,"max_evaluations":evaluations,"status":status});
+            if name == "capture-image" {
+                let review_text =
+                    std::fs::read_to_string(destination.join(review_file.unwrap())).unwrap();
+                let image =
+                    ftx_wasm::body_fit::BodyFitImage::new(&capture_bytes, &review_text).unwrap();
+                assert_eq!(
+                    ftx_trace::raster::color::bgr_to_gray(
+                        &ftx_trace::raster::image::load_png(image.preview()).unwrap()
+                    ),
+                    capture_pixels
+                );
+                std::fs::write(destination.join("capture-image.png"), &capture_bytes).unwrap();
+                std::fs::write(
+                    destination.join("capture-image-preview.png"),
+                    image.preview(),
+                )
+                .unwrap();
+                std::fs::write(
+                    destination.join("capture-image-receipt.json"),
+                    image.report().to_string(),
+                )
+                .unwrap();
+                case["image"] = json!("capture-image.png");
+                case["image_preview"] = json!("capture-image-preview.png");
+                case["image_report"] = json!("capture-image-receipt.json");
+            }
+            cases.push(case);
         }
     }
     if let Some(destination) = export {
@@ -1045,6 +1093,19 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
     );
     assert!(prepared.get("video_manifest").is_none());
     assert!(prepared.get("silhouettes").is_none());
+    assert_eq!(prepared["capture_images"].as_array().unwrap().len(), 2);
+    for image in prepared["capture_images"].as_array().unwrap() {
+        let frame = prepared["fit"]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|frame| frame["frame"] == image["frame"])
+            .unwrap();
+        assert_eq!(image["image_size_px"], frame["image_size_px"]);
+        assert_eq!(image["rotation_cw_deg"], frame["rotation_cw_deg"]);
+        let pixels = std::fs::read(dir.join(image["image_name"].as_str().unwrap())).unwrap();
+        assert_eq!(image["image_sha256"], sha256_hex(&pixels));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1166,6 +1227,70 @@ fn capture_review_runs_without_model_and_replays_the_original_fit() {
         .remove("capture_input");
     expected_portable["input_sha256"] = portable["input_sha256"].clone();
     assert_eq!(portable, expected_portable);
+    assert_eq!(portable["capture_images"], prepared["capture_images"]);
+    let model_bytes = std::fs::read(dir.join("model.ftxbody")).unwrap();
+    // Source order need not match the fitter's canonical frame order. Every join uses exact IDs.
+    let mut reversed = portable.clone();
+    reversed["capture_images"].as_array_mut().unwrap().reverse();
+    let mut legacy = original_fit.clone();
+    legacy.as_object_mut().unwrap().remove("capture_images");
+    for index in 0..2 {
+        let ordinal = index.to_string();
+        let review = ftx_wasm::body_fit::review_body_fit_frame(
+            &model_bytes,
+            &reversed.to_string(),
+            &ordinal,
+        )
+        .unwrap();
+        let old_review =
+            ftx_wasm::body_fit::review_body_fit_frame(&model_bytes, &legacy.to_string(), &ordinal)
+                .unwrap();
+        assert_eq!(review["source_image"], old_review["source_image"]);
+        assert_eq!(review["source_image"]["frame"], review["frame"]);
+        let pixels =
+            std::fs::read(dir.join(review["source_image"]["image_name"].as_str().unwrap()))
+                .unwrap();
+        let text = review.to_string();
+        let image = ftx_wasm::body_fit::BodyFitImage::new(&pixels, &text).unwrap();
+        assert_eq!(image.report()["review_sha256"], sha256_hex(text.as_bytes()));
+        assert_eq!(
+            ftx_trace::raster::image::load_png(image.preview()).unwrap(),
+            ftx_trace::raster::image::load_png(&pixels).unwrap()
+        );
+    }
+    for mutation in [
+        "duplicate",
+        "missing",
+        "timestamp",
+        "size",
+        "rotation",
+        "hash",
+    ] {
+        let mut changed = prepared.clone();
+        match mutation {
+            "duplicate" => changed["capture_images"][1] = changed["capture_images"][0].clone(),
+            "missing" => changed["capture_images"] = json!([]),
+            "timestamp" => changed["capture_images"][0]["frame"]["timestamp_us"] = json!(u64::MAX),
+            "size" => changed["capture_images"][0]["image_size_px"] = json!([1, 1]),
+            "rotation" => changed["capture_images"][0]["rotation_cw_deg"] = json!(270),
+            "hash" => changed["capture_images"][0]["image_sha256"] = json!("not-a-digest"),
+            _ => unreachable!(),
+        }
+        assert!(
+            ftx_wasm::body_fit::fit_body(&model_bytes, &changed.to_string(), "50", "100000")
+                .is_err(),
+            "{mutation}"
+        );
+        save(&dir, &changed);
+        run(&dir, &[], 3);
+    }
+    save(&dir, &input);
+    let mut conflicting = original_fit.clone();
+    conflicting["capture_images"][0]["image_sha256"] = json!("0".repeat(64));
+    assert!(
+        ftx_wasm::body_fit::review_body_fit_frame(&model_bytes, &conflicting.to_string(), "0")
+            .is_err()
+    );
     // A different cwd exposes accidental dependence on the review output's relative paths.
     let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(dir.join("before-fit"))

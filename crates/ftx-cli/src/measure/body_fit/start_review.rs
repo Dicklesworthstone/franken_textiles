@@ -231,6 +231,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if request.schema != "ftx-anny-body-fit-input/1" {
         return Err(bad_input("expected ftx-anny-body-fit-input/1"));
     }
+    if let Some(images) = &request.capture_images {
+        ftx_measure::body_fit::validate_capture_images(images, &request.fit.frames)?;
+    }
     let model_path = Path::new(required(args, "model")?);
     let model_bytes = super::super::video::read_limited(model_path, 256 * 1024 * 1024)?;
     let hash = sha256_hex(&model_bytes);

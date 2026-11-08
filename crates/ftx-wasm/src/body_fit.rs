@@ -1,5 +1,5 @@
 //! Prepared multi-frame observations fitted locally with the canonical Anny adapter and solver.
-//! File-backed capture acquisition remains native; this boundary never follows paths or loads images.
+//! File-backed capture acquisition remains native; local review accepts explicit source bytes only.
 
 use std::fmt::Write as _;
 
@@ -10,7 +10,9 @@ use ftx_body::{
 };
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::{
-    body_fit::{self, BodyFitInput, BodyModel, FitOptions, FramePose, ModelLayout, Parameter},
+    body_fit::{
+        self, BodyFitInput, BodyModel, CaptureImage, FitOptions, FramePose, ModelLayout, Parameter,
+    },
     silhouette::{self, SurfaceMesh},
 };
 use serde::Deserialize;
@@ -22,6 +24,8 @@ struct Request {
     schema: String,
     model: Configuration,
     fit: BodyFitInput,
+    #[serde(default)]
+    capture_images: Option<Vec<CaptureImage>>,
 }
 
 struct Adapter {
@@ -111,6 +115,9 @@ pub fn fit_body(
             "expected prepared ftx-anny-body-fit-input/1; file-backed capture acquisition requires native preparation",
         ));
     }
+    if let Some(images) = &request.capture_images {
+        body_fit::validate_capture_images(images, &request.fit.frames)?;
+    }
     let iterations = iterations
         .parse::<usize>()
         .ok()
@@ -140,6 +147,9 @@ pub fn fit_body(
     value["anny_configuration"] =
         serde_json::to_value(adapter.inner.configuration()).map_err(|e| invalid(e.to_string()))?;
     value["input_sha256"] = json!(sha256_hex(input.as_bytes()));
+    if let Some(images) = request.capture_images {
+        value["capture_images"] = json!(images);
+    }
     if let Some(solution) = &report.solution {
         let p = adapter.inner.parameters(&solution.shape)?;
         let h = p.phenotype;
@@ -213,6 +223,28 @@ pub fn review_body_fit_frame(
     let input: BodyFitInput = serde_json::from_value(report["input"].clone())
         .map_err(|e| invalid(format!("invalid accepted body-fit observations: {e}")))?;
     body_fit::prepare_input(&input, &adapter.layout)?;
+    let explicit_images: Option<Vec<CaptureImage>> = report
+        .get("capture_images")
+        .map(|value| {
+            serde_json::from_value(value.clone())
+                .map_err(|e| invalid(format!("invalid accepted capture images: {e}")))
+        })
+        .transpose()?;
+    if let Some(images) = &explicit_images {
+        body_fit::validate_capture_images(images, &input.frames)?;
+    }
+    let legacy_images = report
+        .get("capture_input")
+        .map(|capture| body_fit::capture_images_from_receipt(capture, &input.frames))
+        .transpose()?;
+    if let (Some(explicit), Some(legacy)) = (&explicit_images, &legacy_images)
+        && explicit.iter().any(|image| !legacy.contains(image))
+    {
+        return Err(invalid(
+            "accepted image bindings disagree with the original capture receipt",
+        ));
+    }
+    let images = explicit_images.or(legacy_images);
     let poses: Vec<FramePose> = serde_json::from_value(report["solution"]["poses"].clone())
         .map_err(|e| invalid(format!("invalid accepted frame poses: {e}")))?;
     let spreads = report["pose_spread_fraction"]
@@ -314,8 +346,7 @@ pub fn review_body_fit_frame(
         .iter()
         .map(|&point| frame.camera.project(point).ok())
         .collect();
-    Ok(
-        json!({"schema":"ftx-body-frame-review/1","report_sha256":sha256_hex(report_text.as_bytes()),
+    let mut value = json!({"schema":"ftx-body-frame-review/1","report_sha256":sha256_hex(report_text.as_bytes()),
         "model_sha256":hash,"frame_index":index,"frame":frame.frame,
         "frame_label":format!("{} @ {} us",frame.frame.stream,frame.frame.timestamp_us),
         "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,"camera":frame.camera,
@@ -323,6 +354,92 @@ pub fn review_body_fit_frame(
         "unprojectable_vertices":pixels.iter().filter(|p|p.is_none()).count(),
         "projection_kind":if silhouette::require_rectified(&frame.camera).is_ok(){"straight_edges"}else{"distorted_vertices"},
         "export_pose_evaluations":1,
-        "no_claim":"Accepted MODEL_FIT pose reviewed without refitting. Complete topology, not a collision skin. Supplied keypoints and scanlines are rechecked, not full-mask, visibility, occlusion, anatomy or real-wearer fit. No source photograph was loaded."}),
-    )
+        "no_claim":"Accepted MODEL_FIT pose reviewed without refitting. Complete topology, not a collision skin. Supplied keypoints and scanlines are rechecked, not full-mask, visibility, occlusion, anatomy or real-wearer fit. Source image identity, when retained, supports separate local inspection."});
+    if let Some(images) = images {
+        value["source_image"] = json!(
+            images
+                .iter()
+                .find(|image| image.frame == frame.frame)
+                .unwrap()
+        );
+    }
+    Ok(value)
+}
+
+/// One exact capture photograph decoded for a previously checked frame review.
+/// Pixels are kept only in this transient preview, never added to a fit report or garment handoff.
+pub struct BodyFitImage {
+    preview: Vec<u8>,
+    report: Value,
+}
+
+impl BodyFitImage {
+    /// Check source bytes before decoding and keep the original stored orientation.
+    /// The review is an internally consistent local receipt, not an authenticity certificate.
+    ///
+    /// # Errors
+    /// Missing or inconsistent source binding, wrong bytes/dimensions, nonidentity EXIF,
+    /// unsupported encoding, more than 128 MiB image / 16 MiB review, or more than 40M pixels.
+    pub fn new(bytes: &[u8], review: &str) -> Result<Self, Refusal> {
+        #[derive(Deserialize)]
+        struct Review {
+            schema: String,
+            frame: ftx_measure::triangulate::FrameId,
+            image_size_px: [u32; 2],
+            rotation_cw_deg: u16,
+            source_image: CaptureImage,
+        }
+        if bytes.len() > 128 * 1024 * 1024 || review.len() > 16 * 1024 * 1024 {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "capture image review supports at most 128 MiB image and 16 MiB review",
+            ));
+        }
+        let frame: Review = serde_json::from_str(review).map_err(|e| {
+            invalid(format!(
+                "frame review has no valid capture image binding: {e}"
+            ))
+        })?;
+        let source = &frame.source_image;
+        source.validate()?;
+        if frame.schema != "ftx-body-frame-review/1"
+            || source.frame != frame.frame
+            || source.image_size_px != frame.image_size_px
+            || source.rotation_cw_deg != frame.rotation_cw_deg
+        {
+            return Err(invalid(
+                "capture image binding disagrees with the selected frame review",
+            ));
+        }
+        if sha256_hex(bytes) != source.image_sha256 {
+            return Err(invalid(
+                "capture image SHA-256 mismatch; select the original encoded frame",
+            ));
+        }
+        let image = ftx_trace::raster::image::load_capture_image_with_limit(bytes, 40_000_000)?;
+        if [image.w as u32, image.h as u32] != source.image_size_px {
+            return Err(invalid(
+                "capture image dimensions disagree with the original oriented frame",
+            ));
+        }
+        let preview = ftx_trace::raster::image::encode_png_bgr_with_limit(&image, 40_000_000)
+            .map_err(invalid)?;
+        let report = json!({"schema":"ftx-body-frame-image/1",
+            "review_sha256":sha256_hex(review.as_bytes()),"source_image":source,
+            "preview_sha256":sha256_hex(&preview),"orientation":"already_applied_stored_pixels",
+            "no_claim":"Original encoded image bytes and dimensions match the retained frame. No refitting, camera calibration, anatomy, visibility or physical-fit acceptance was performed."});
+        Ok(Self { preview, report })
+    }
+
+    /// Lossless PNG of the original stored pixels, with no second rotation or lens transform.
+    #[must_use]
+    pub fn preview(&self) -> &[u8] {
+        &self.preview
+    }
+
+    /// Exact image/review identities; contains no image bytes or file access instructions.
+    #[must_use]
+    pub fn report(&self) -> &Value {
+        &self.report
+    }
 }

@@ -321,7 +321,11 @@ pub(super) fn prepare_capture(
     };
     let original_entry = bundle.push("original-input.json".into(), original.to_vec())?;
     let replay_entry = bundle.push("capture.json".into(), workspace::json_bytes(replay)?)?;
-    let prepared = json!({"schema":request.schema,"model":request.model,"fit":request.fit});
+    let mut prepared = json!({"schema":request.schema,"model":request.model,"fit":request.fit});
+    if let Some(images) = &request.capture_images {
+        ftx_measure::body_fit::validate_capture_images(images, &request.fit.frames)?;
+        prepared["capture_images"] = json!(images);
+    }
     let prepared_entry = bundle.push(
         "prepared-input.json".into(),
         workspace::json_bytes(&prepared)?,

@@ -532,11 +532,13 @@ fn prepare_from_base(
         receipt["silhouette_input"] = masks;
     }
     check_receipt_budget(&receipt)?;
+    let capture_images = ftx_measure::body_fit::capture_images_from_receipt(&receipt, &fit.frames)?;
     Ok((
         Request {
             schema: "ftx-anny-body-fit-input/1".into(),
             model: input.model,
             fit,
+            capture_images: Some(capture_images),
         },
         receipt,
     ))

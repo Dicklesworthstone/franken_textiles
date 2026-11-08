@@ -144,8 +144,22 @@ pub(super) fn attach(
         .collect();
     let data = json!({"annotations":annotations,"shape":shape,"pose":pose,"frames":frames});
     // Keep original source frame order: annotation ordinals do not refer to sorted previews.
-    let prepared = json!({"schema":"ftx-anny-body-fit-input/1",
+    let mut prepared = json!({"schema":"ftx-anny-body-fit-input/1",
         "model":adapter.configuration(),"fit":original_fit});
+    let images = if let Some(capture) = capture_receipt {
+        Some(ftx_measure::body_fit::capture_images_from_receipt(
+            capture,
+            &original_fit.frames,
+        )?)
+    } else {
+        serde_json::from_slice::<Request>(input_bytes)
+            .map_err(|e| bad_input(format!("invalid prepared body-fit input: {e}")))?
+            .capture_images
+    };
+    if let Some(images) = images {
+        ftx_measure::body_fit::validate_capture_images(&images, &original_fit.frames)?;
+        prepared["capture_images"] = json!(images);
+    }
     let prepared_entry = bundle.push(
         "prepared-input.json".into(),
         workspace::json_bytes(&prepared)?,
@@ -294,6 +308,9 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
     request.fit.starts = decoded_starts(annotations.starts, &request.fit)?;
     // One validator: the exact same complete-start contract used by ordinary fitting.
     prepare_input(&request.fit, adapter.layout())?;
+    if let Some(images) = &request.capture_images {
+        ftx_measure::body_fit::validate_capture_images(images, &request.fit.frames)?;
+    }
     input["fit"]["starts"] = json!(request.fit.starts);
     targets::rebase_capture(&mut input, source_path)?;
     let mut bundle = review::Bundle::new();
@@ -302,10 +319,14 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let replay = bundle.push("input.json".into(), workspace::json_bytes(&input)?)?;
     // The portable fitter must receive the starts just applied, not an earlier capture-review
     // snapshot. Cameras and inline masks come from this invocation's checked preparation.
+    let mut portable = json!({"schema":request.schema,
+        "model":adapter.configuration(),"fit":request.fit});
+    if let Some(images) = &request.capture_images {
+        portable["capture_images"] = json!(images);
+    }
     let prepared = bundle.push(
         "prepared-input.json".into(),
-        workspace::json_bytes(&json!({"schema":request.schema,
-            "model":adapter.configuration(),"fit":request.fit}))?,
+        workspace::json_bytes(&portable)?,
     )?;
     let report = json!({"schema":"ftx-body-start-materialization/1","status":"STARTS_APPLIED",
         "body_fitted":false,"source_input":annotations.source_input,

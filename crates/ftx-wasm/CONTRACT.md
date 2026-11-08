@@ -16,6 +16,12 @@ photos are loaded, anatomy inferred, MODEL_FIT predictions promoted to evidence 
 acceptance added. Native/portable integration uses independently authored articulated synthetic
 observations, held-out mutations, unobservable motion, capped solves and raster silhouettes.
 
+Optional `capture_images` preserves the native capture's image-only bindings through prepared
+inputs and fit reports: exact decoded frame identity, encoded-byte SHA-256, display name,
+already-oriented dimensions and recorded rotation. A supplied collection must cover all frames
+exactly once; inconsistent, duplicate or incomplete bindings refuse before fitting. Omission
+preserves ordinary prepared inputs. These labels never cause file access or certify authenticity.
+
 **Accepted image-frame inspection.** `body_fit::review_body_fit_frame(model_bytes, report, frame_index)`
 and its wasm32 export re-evaluate one saved accepted pose without optimization. The report and model
 retain the same 16 MiB/512 MiB bounds; model identity/arrays, accepted shape, complete named layout,
@@ -29,8 +35,19 @@ The photo page draws the original oriented pixel projections and retains the raw
 Distorted cameras show vertices without invented straight lens-warped edges; unprojectable vertices
 remain explicit and the OBJ keeps them. Frame/source changes, cancellation and page exit terminate
 the review worker and withdraw its downloads; accepted report/model reuse remains independent.
-No photograph is loaded, no point visibility or full-mask agreement is inferred, and these diagnostic
+Pose evaluation loads no photograph, no point visibility or full-mask agreement is inferred, and these diagnostic
 meshes are not certified collision skins, measurement evidence or real-wearer fit.
+
+**Original capture image inspection.** An accepted frame review retains `source_image` when its
+report has complete `capture_images` or an older native `capture_input` receipt. Both must agree
+when present. `body_fit::BodyFitImage` and wasm32 `WebBodyFitImage` accept only explicitly supplied
+image bytes and the exact review text. They verify the original encoded hash, frame, dimensions
+and rotation before publishing a lossless PNG and an image/review identity receipt. The shared
+native capture decoder accepts opaque 8-bit PNG or strict JPEG with absent/identity EXIF; recorded
+rotation has already been applied and is never applied again. Bounds are 16 MiB review, 128 MiB
+encoded image (the JPEG decoder retains its 64 MiB limit), and 40 million pixels. Original paths
+are display labels only. Pixels stay outside saved fit reports and garment handoffs; selecting a
+matching image changes neither acceptance nor measurement readiness.
 
 **Still-window candidates.** `photo::still_window(input, source)` and the matching wasm32 export delegate to
 `ftx-measure::still::assess_still_window`, with the existing 256 KiB browser JSON limit. The shared

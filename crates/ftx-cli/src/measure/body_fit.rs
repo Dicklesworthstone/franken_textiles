@@ -8,7 +8,8 @@ use ftx_body::{
 };
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::body_fit::{
-    BodyFitInput, BodyModel, FitOptions, ModelLayout, Parameter, fit_body,
+    BodyFitInput, BodyModel, CaptureImage, FitOptions, ModelLayout, Parameter, fit_body,
+    validate_capture_images,
 };
 use ftx_measure::{
     silhouette::{MaskSample, SurfaceMesh, require_rectified, sample_mask},
@@ -62,6 +63,8 @@ struct Request {
     schema: String,
     model: Configuration,
     fit: BodyFitInput,
+    #[serde(default)]
+    capture_images: Option<Vec<CaptureImage>>,
 }
 
 #[derive(Deserialize)]
@@ -251,6 +254,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if request.schema != "ftx-anny-body-fit-input/1" {
         return Err(bad_input("expected ftx-anny-body-fit-input/1"));
     }
+    if let Some(images) = &request.capture_images {
+        validate_capture_images(images, &request.fit.frames)?;
+    }
     let iterations = option(args, "iterations")
         .map(|s| {
             s.parse::<usize>()
@@ -318,6 +324,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     value["anny_configuration"] =
         serde_json::to_value(adapter.configuration()).map_err(|e| bad_input(e.to_string()))?;
     value["input_sha256"] = json!(sha256_hex(&input_bytes));
+    if let Some(images) = request.capture_images {
+        value["capture_images"] = json!(images);
+    }
     if let Some(capture_input) = capture_input {
         value["capture_input"] = capture_input;
     }

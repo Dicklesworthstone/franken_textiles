@@ -405,6 +405,13 @@ fits keep their input and output semantics. Capture consistency does not authent
 decoding, stationarity, calibration accuracy or fit, and never promotes measurement readiness.
 See `docs/multi-frame-body-fit.md` for the capture/decode boundary and input contract.
 
+Capture and initialization reviews, including `fit-starts` materialization, retain an optional
+complete `capture_images` binding in `prepared-input.json`. Native and portable fitting validate
+the same exact frame/hash/dimension/already-applied-orientation records and preserve them in the
+saved report. Browser frame review can then inspect an explicitly selected original image without
+reopening a native file path or refitting. Coordinate-only inputs without image bindings retain
+their behavior; image matching does not authenticate the capture or upgrade measurement evidence.
+
 Imported-shape drapes retain the exact accepted report bytes as `body_fit.json` through
 the existing create-only output writer. Simulated rounds keep it in their own `sim/`
 directory and link it from the construction review. That review displays the saved

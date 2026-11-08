@@ -357,6 +357,25 @@ fn start_edits_editor_fixture_replays_the_complete_capture_through_the_fitter() 
         .remove("capture_input");
     expected_portable["input_sha256"] = json!(sha256_hex(prepared_text.as_bytes()));
     assert_eq!(portable, expected_portable);
+    assert_eq!(prepared["capture_images"], fit["capture_images"]);
+    assert_eq!(
+        prepared["capture_images"],
+        read(&dir, "review/prepared-input.json")["capture_images"]
+    );
+    let frame_review = ftx_wasm::body_fit::review_body_fit_frame(
+        &std::fs::read(dir.join("model.ftxbody")).unwrap(),
+        &portable.to_string(),
+        "0",
+    )
+    .unwrap();
+    assert_eq!(
+        frame_review["source_image"]["frame"]["timestamp_us"].as_u64(),
+        Some(9_007_199_254_740_993)
+    );
+    let image =
+        std::fs::read(dir.join(frame_review["source_image"]["image_name"].as_str().unwrap()))
+            .unwrap();
+    assert!(ftx_wasm::body_fit::BodyFitImage::new(&image, &frame_review.to_string()).is_ok());
     for (value, expected) in fit["solution"]["shape"]
         .as_array()
         .unwrap()

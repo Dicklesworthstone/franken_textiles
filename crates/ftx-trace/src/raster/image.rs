@@ -9,6 +9,73 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
 use serde_json::{Value, json};
 
+/// Decode an already-oriented capture frame without applying a second image transform.
+/// Matches decoded-video acquisition: opaque 8-bit PNG, or strict JPEG with absent/identity EXIF.
+///
+/// # Errors
+/// Encoded/decoded budgets, nonidentity orientation, transparency, animation or malformed pixels.
+pub fn load_capture_image_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Bgr, Refusal> {
+    let bad = |message: &str| Refusal::new(RefusalCode::InvalidDocument, message);
+    if bytes.len() > 128 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "capture image exceeds 128 MiB encoded input",
+        ));
+    }
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        let photo = super::jpeg::decode_photo(bytes, max_pixels)?;
+        if photo
+            .exif_orientation
+            .is_some_and(|orientation| orientation != 1)
+        {
+            return Err(bad(
+                "capture frames must already be oriented; apply JPEG EXIF orientation to pixels, masks and calibration before selection",
+            ));
+        }
+        return Ok(photo.image);
+    }
+    if bytes.len() < 33
+        || &bytes[..8] != b"\x89PNG\r\n\x1a\n"
+        || &bytes[8..16] != b"\0\0\0\rIHDR"
+        || bytes[24] != 8
+        || !matches!(bytes[25], 0 | 2)
+    {
+        return Err(bad(
+            "capture frames need opaque 8-bit grayscale or RGB PNG with orientation already applied",
+        ));
+    }
+    let mut pos = 8usize;
+    let mut ended = false;
+    while pos + 12 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+        let end = pos
+            .checked_add(12)
+            .and_then(|p| p.checked_add(len))
+            .filter(|&p| p <= bytes.len())
+            .ok_or_else(|| bad("truncated PNG chunk"))?;
+        if matches!(
+            &bytes[pos + 4..pos + 8],
+            b"tRNS" | b"eXIf" | b"acTL" | b"fcTL" | b"fdAT"
+        ) {
+            return Err(bad(
+                "remove transparency, animation and EXIF metadata after decoding and orienting capture pixels",
+            ));
+        }
+        if &bytes[pos + 4..pos + 8] == b"IEND" {
+            if len != 0 || end != bytes.len() {
+                return Err(bad("PNG must end with an empty IEND and no trailing data"));
+            }
+            ended = true;
+        }
+        pos = end;
+    }
+    if !ended {
+        return Err(bad("PNG has no complete IEND"));
+    }
+    load_png_with_limit(bytes, max_pixels)
+        .map_err(|message| Refusal::new(RefusalCode::InvalidDocument, message))
+}
+
 /// Decode measurement evidence without changing brightness or estimating missing pixels.
 /// JPEG orientation is applied once; PNG must already be oriented, opaque 8-bit gray/RGB.
 /// The receipt has no filesystem path; callers may add their explicit source label.
@@ -174,13 +241,27 @@ pub fn encode_png_gray(img: &Gray) -> Vec<u8> {
 /// `cv2.imwrite`'s default: on a photographed sheet's overlay level 6 took a third of the trace for files
 /// 14 % smaller.
 pub fn encode_png_bgr(img: &Bgr) -> Result<Vec<u8>, String> {
+    encode_png_bgr_with_limit(img, 16_000_000)
+}
+
+/// Encode under an explicit pixel allowance, at most the native capture boundary's 40M pixels.
+/// Ordinary exports keep [`encode_png_bgr`]'s 16M allowance; capture previews reserve their own work.
+///
+/// # Errors
+/// Invalid allowance, incomplete pixels, dimensions overflow, or a raster exceeding the allowance.
+pub fn encode_png_bgr_with_limit(img: &Bgr, max_pixels: usize) -> Result<Vec<u8>, String> {
+    if !(1..=40_000_000).contains(&max_pixels) {
+        return Err("BGR PNG pixel allowance must be in 1..=40000000".into());
+    }
     let pixels = img.w.checked_mul(img.h).ok_or("PNG dimensions overflow")?;
     if img.w == 0
         || img.h == 0
-        || pixels > 16_000_000
+        || pixels > max_pixels
         || pixels.checked_mul(3) != Some(img.data.len())
     {
-        return Err("BGR PNG needs a complete raster of 1..=16000000 pixels".into());
+        return Err(format!(
+            "BGR PNG needs a complete raster of 1..={max_pixels} pixels"
+        ));
     }
     let mut raw = Vec::with_capacity(img.data.len() + img.h);
     for row in img.data.chunks_exact(3 * img.w) {
