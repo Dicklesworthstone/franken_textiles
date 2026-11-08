@@ -314,9 +314,17 @@ def publish(manifest_path: Path, destination: Path) -> dict:
     # I/O failures may leave an incomplete directory without the completion receipt, never replace it.
     destination.mkdir(exist_ok=False)
     (destination / "evidence").mkdir()
+    (destination / "selections").mkdir()
     for digest, raw in sorted(evidence.items()):
         with (destination / "evidence" / f"{digest}.tst").open("xb") as stream:
             stream.write(raw)
+    for material in catalog["materials"]:
+        # Source hashes are bounded filenames; specimen IDs may contain path separators.
+        digest = material["structure"]["raw_source_sha256"]
+        selection = {"id": material["id"], "record": material, "allow_estimates": False}
+        with (destination / "selections" / f"{digest}.json").open("x", encoding="utf-8") as stream:
+            json.dump(selection, stream, ensure_ascii=False, allow_nan=False, sort_keys=True, indent=2)
+            stream.write("\n")
     for name, value in (("catalog.json", catalog), ("acquisition.json", receipt)):
         with (destination / name).open("x", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False, allow_nan=False, sort_keys=True, indent=2)
@@ -335,6 +343,9 @@ def main(argv=None) -> int:
         print(f"HFM import refused: {error}", file=sys.stderr)
         return 2
     print(json.dumps({"catalog": str(args.out / "catalog.json"), "runs": len(receipt["runs"]),
+                      "selections": [{"material_id": run["material_id"],
+                                      "path": str(args.out / "selections" / f'{run["source_sha256"]}.json')}
+                                     for run in receipt["runs"]],
                       "mechanical_or_transient_readiness_claimed": False}, sort_keys=True))
     return 0
 

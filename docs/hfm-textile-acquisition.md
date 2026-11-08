@@ -15,9 +15,29 @@ python3 -m unittest discover -s scripts -p 'test_import_hfm_textiles.py' -v
 The `synthetic-manifest.json` example is entirely **synthetic**, including its instrument identity.
 Use a new output directory: existing results are never replaced. A successful import
 writes `catalog.json`, `acquisition.json` and byte-for-byte copies under
-`evidence/<sha256>.tst`. All input validation precedes directory creation; an I/O failure
+`evidence/<sha256>.tst`. It also writes one self-contained selection to
+`selections/<source-sha256>.json` for each run. The CLI's JSON output lists each
+material ID and its selection path; filenames use source hashes, not specimen IDs.
+All input validation precedes directory creation; an I/O failure
 may leave an incomplete directory without the final completion receipt. It is not a
 successful import and must not be consumed as one.
+
+After a successful import, choose one generated selection under **Or load a
+source-bearing selection JSON** in the Material Workbench, then **Inspect sources & capabilities**. The
+selection carries the complete imported record, its original source references,
+conditioning and source-byte hash; it does not depend on a built-in catalog ID.
+The same file works with the existing native binding command:
+
+```sh
+ftx-materials bind pattern.json OUT/selections/SOURCE-SHA256.json NEW-PATTERN.json
+```
+
+Use the actual path from the importer's output and a new pattern destination. Rust
+still validates and normalizes the record and produces its ordinary frozen digest.
+The importer does not compute that digest or grant estimate consent:
+`allow_estimates` remains false. Interpolation requires the existing explicit
+estimate policy, and missing mass, specific heat, mechanics and unloaded clearance
+remain unavailable. The catalog and acquisition receipt keep their existing formats.
 
 ## Manifest and acquisition boundary
 

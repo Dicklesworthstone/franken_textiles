@@ -144,11 +144,41 @@ class HfmImportTests(unittest.TestCase):
             catalog = json.loads((out / "catalog.json").read_text())
             self.assertEqual(catalog["schema"], "ftx-textile-catalog/1")
             self.assertEqual(len(catalog["materials"]), 1)
+            selection_path = out / "selections" / f'{entry(raw)["sha256"]}.json'
+            selection_bytes = selection_path.read_bytes()
+            self.assertEqual(json.loads(selection_bytes), {
+                "id": entry(raw)["id"], "record": catalog["materials"][0],
+                "allow_estimates": False,
+            })
             self.assertTrue(json.loads((out / "acquisition.json").read_text())["complete"])
             before = (out / "catalog.json").read_bytes()
             with self.assertRaises(FileExistsError):
                 publish(root / "manifest.json", out)
             self.assertEqual(before, (out / "catalog.json").read_bytes())
+            self.assertEqual(selection_bytes, selection_path.read_bytes())
+
+    def test_selection_paths_and_order_follow_exact_sources_not_specimen_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            other_raw = SOURCE.replace(SAMPLE, "synthetic-other-run").encode()
+            first, second = entry(), entry(other_raw)
+            second.update(id="synthetic/hfm/a/other", path="other.tst", sample_name="synthetic-other-run")
+            (root / "run.tst").write_bytes(SOURCE.encode())
+            (root / "other.tst").write_bytes(other_raw)
+            for index, entries in enumerate(([first, second], [second, first])):
+                (root / "manifest.json").write_text(json.dumps({"schema": "ftx-hfm-import/1", "runs": entries}))
+                out = root / str(index)
+                receipt = publish(root / "manifest.json", out)
+                self.assertEqual([run["material_id"] for run in receipt["runs"]], [second["id"], first["id"]])
+                self.assertEqual({p.name for p in (out / "selections").iterdir()},
+                                 {f'{e["sha256"]}.json' for e in entries})
+                for e in entries:
+                    selected = json.loads((out / "selections" / f'{e["sha256"]}.json').read_text())
+                    self.assertEqual(selected["id"], e["id"])
+                    self.assertEqual(selected["record"]["thermal_response"]["specimen"], e["sample_name"])
+                    self.assertEqual(selected["record"]["structure"]["raw_source_sha256"], e["sha256"])
+            self.assertEqual({p.name: p.read_bytes() for p in (root / "0/selections").iterdir()},
+                             {p.name: p.read_bytes() for p in (root / "1/selections").iterdir()})
 
     def test_duplicate_sources_and_traversal_are_not_replicates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -183,7 +213,11 @@ class HfmImportTests(unittest.TestCase):
             (root / "manifest.json").write_text(json.dumps(manifest()))
             result = subprocess.run(args, capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(json.loads(result.stdout)["mechanical_or_transient_readiness_claimed"])
+            report = json.loads(result.stdout)
+            self.assertFalse(report["mechanical_or_transient_readiness_claimed"])
+            self.assertEqual(report["selections"], [{"material_id": e["id"],
+                "path": str(root / "out/selections" / f'{e["sha256"]}.json')}])
+            self.assertEqual(json.loads(Path(report["selections"][0]["path"]).read_text())["id"], e["id"])
 
 
 if __name__ == "__main__":
