@@ -434,6 +434,66 @@ async function bodyFitWorkflow(browser,origin) {
     await page.goto(origin+'/photo.html');
     await page.setInputFiles('#bodyFitModel',path.join(native,'model.ftxbody'));
     await page.locator('#bodyFitIterations').evaluate(e=>{e.closest('details').open=true;});
+    // A declared draft is reviewable before it has enough starts to run the fitter.
+    const originalInput=fs.readFileSync(path.join(native,'accepted-input.json'),'utf8');
+    const draft=JSON.parse(originalInput,(key,value,meta)=>key==='timestamp_us'?JSON.rawJSON(meta.source):value);
+    draft.fit.starts=draft.fit.starts.slice(0,1);
+    const draftText=JSON.stringify(draft),declared=parse(draftText);
+    await page.setInputFiles('#bodyFitInput',{name:'one-start-draft.json',mimeType:'application/json',buffer:Buffer.from(draftText)});
+    await page.locator('#bodyFitStartIndex').evaluate(e=>{e.closest('details').open=true;});
+    await page.click('#bodyFitStartRun');
+    await page.waitForFunction(()=>/INITIALIZATION_REVIEW|Initialization preview refused/.test(document.getElementById('bodyFitReviewStatus').textContent));
+    assert.equal(await page.textContent('#bodyFitReviewError'),'');
+    const previewText=await download('body-fit-start-0000-frame-0000.json'),preview=parse(previewText);
+    assert.equal(preview.schema,'ftx-body-start-frame-review/1');
+    assert.equal(preview.status,'INITIALIZATION_REVIEW');assert.equal(preview.body_fitted,false);
+    assert.equal(preview.start_count,1);assert.equal(preview.pose_evaluations,1);
+    assert.equal(preview.input_sha256,sha256(Buffer.from(draftText)));
+    assert.deepEqual(preview.frame,declared.fit.frames[0].frame);
+    assert.deepEqual(preview.shape_values,declared.fit.starts[0].shape);
+    assert.deepEqual(preview.pose_values,declared.fit.starts[0].poses.find(p=>
+      p.frame.stream===preview.frame.stream && p.frame.timestamp_us===preview.frame.timestamp_us).values);
+    assert.equal(await download('body-fit-start-0000-frame-0000.obj'),preview.mesh_obj);
+    assert.equal(await page.locator('#bodyFitReviewCanvas').isVisible(),true);
+    assert.equal(await page.locator('#bodyFitReviewChecks tr').count(),
+      preview.keypoints.length+(preview.silhouette?.lines.length || 0));
+    for(const point of preview.keypoints) {
+      const observation=declared.fit.frames[0].keypoints.find(p=>p.name===point.name);
+      assert.deepEqual(point.observed_px,observation.pixel_px);assert.equal(point.partition,observation.partition);
+    }
+    await absent();assert.equal(await page.isDisabled('#bodyFitWorkbench'),true);
+    assert.equal(await page.isDisabled('#openWorkbench'),true);
+    await page.fill('#bodyFitStartFrame','2');
+    assert.equal(await page.locator('#bodyFitReviewCanvas').isVisible(),false);
+    assert.equal(await page.locator('#bodyFitReviewDownloads a').count(),0);
+    // Hold a real module request so cancellation occurs before the engine can publish.
+    let previewRoute,previewArrived;
+    const previewLoading=new Promise(resolve=>{previewArrived=resolve;});
+    await context.route('**/ftx_wasm_bg.wasm',route=>{previewRoute=route;previewArrived();});
+    let previewTimeout;
+    try {
+      await page.click('#bodyFitStartRun');
+      await Promise.race([previewLoading,new Promise((_,reject)=>{
+        previewTimeout=setTimeout(()=>reject(Error('Initialization worker did not request its module')),30000);
+      })]);
+      await page.click('#bodyFitReviewCancel');
+      assert.match(await page.textContent('#bodyFitReviewStatus'),/cancelled/);
+      assert.equal(await page.locator('#bodyFitReviewDownloads a').count(),0);
+      assert.equal(await page.locator('#bodyFitReviewCanvas').isVisible(),false);await absent();
+    } finally {
+      clearTimeout(previewTimeout);await previewRoute?.continue().catch(()=>{});
+      await context.unroute('**/ftx_wasm_bg.wasm');
+    }
+    await page.click('#bodyFitStartRun');
+    await page.waitForFunction(()=>/INITIALIZATION_REVIEW|Initialization preview refused/.test(document.getElementById('bodyFitReviewStatus').textContent));
+    assert.equal(await page.textContent('#bodyFitReviewError'),'');
+    const secondPreview=parse(await download('body-fit-start-0000-frame-0001.json'));
+    assert.deepEqual(secondPreview.frame,declared.fit.frames[1].frame);
+    await page.setInputFiles('#bodyFitInput',path.join(native,'accepted-input.json'));
+    assert.equal(await page.locator('#bodyFitReviewCanvas').isVisible(),false);
+    assert.equal(await page.locator('#bodyFitReviewDownloads a').count(),0);
+    assert.equal(fs.readFileSync(path.join(native,'accepted-input.json'),'utf8'),originalInput);
+    console.log('PASS actual browser initialization: one-start draft, exact frame/shape/pose and OBJ, no accepted body, worker cancellation, fresh second-frame review and source invalidation.');
     for(const item of JSON.parse(fs.readFileSync(path.join(native,'cases.json'),'utf8')).cases) {
       await page.setInputFiles('#bodyFitInput',path.join(native,item.input));await absent();
       await page.fill('#bodyFitIterations',item.iterations);await page.fill('#bodyFitEvaluations',item.max_evaluations);
@@ -449,8 +509,12 @@ async function bodyFitWorkflow(browser,origin) {
       if(item.name==='accepted') {
         await page.screenshot({path:path.join(work,'body-fit-accepted.png'),fullPage:true});
         await page.setViewportSize({width:390,height:844});
-        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Accepted report stays within the narrow viewport');
         await page.screenshot({path:path.join(work,'body-fit-mobile.png'),fullPage:true});
+        const overflowing=await page.evaluate(()=>[...document.querySelectorAll('body *')]
+          .filter(e=>e.getBoundingClientRect().right>innerWidth)
+          .slice(0,12).map(e=>({tag:e.tagName,id:e.id,right:e.getBoundingClientRect().right})));
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,
+          'Accepted report stays within the narrow viewport: '+JSON.stringify(overflowing));
         await page.setViewportSize({width:1280,height:720});
       }
     }
