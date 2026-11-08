@@ -169,6 +169,436 @@ fn availability_calendars(mut options: Value, resources: Value) -> Value {
     options
 }
 
+fn copy_windows(mut options: Value, copies: Value) -> Value {
+    options["production"]["routing"]["copy_windows"] = json!({
+        "model":"explicit_copy_release_and_completion/1", "copies":copies,
+        "source":source("copy-arrivals-and-waiting"),
+        "method":"Invented unloaded kit availability and waiting at every eligible first cell before route entry; deadlines are authored order requirements",
+        "conditions":{}, "evidence":"estimate", "allow_estimates":true
+    });
+    options
+}
+
+#[test]
+fn routed_copy_windows_preserve_omitted_bytes_and_unconstrained_execution() {
+    let (pattern, raw) = fixture(2);
+    let old = SewProgram::build(&pattern, &serde_json::from_value(raw.clone()).unwrap()).unwrap();
+    let original = serde_json::to_string(&old).unwrap();
+    assert!(
+        old.plan
+            .options
+            .production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap()
+            .copy_windows
+            .is_none()
+    );
+    let mut omitted = raw.clone();
+    omitted["production"]["routing"]["copy_windows"] = Value::Null;
+    assert_eq!(
+        original,
+        serde_json::to_string(
+            &SewProgram::build(&pattern, &serde_json::from_value(omitted).unwrap()).unwrap()
+        )
+        .unwrap()
+    );
+    let options = copy_windows(
+        raw,
+        json!([
+            {"copy":1,"available_at_milliseconds":0},
+            {"copy":0,"available_at_milliseconds":0}
+        ]),
+    );
+    let program =
+        SewProgram::build(&pattern, &serde_json::from_value(options.clone()).unwrap()).unwrap();
+    let production = program.plan.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    let old_route = old
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert_eq!(program.plan.schema, "ftx-sewing-plan/31");
+    assert_eq!(production.schema, "ftx-sewing-production/19");
+    assert_eq!(route.schema, "ftx-sewing-routing/14");
+    assert_eq!(
+        serde_json::to_value(&route.selected).unwrap(),
+        serde_json::to_value(&old_route.selected).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&route.baseline).unwrap(),
+        serde_json::to_value(&old_route.baseline).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&program.stitches).unwrap(),
+        serde_json::to_value(&old.stitches).unwrap()
+    );
+    let windows = route.copy_windows.as_ref().unwrap();
+    assert_eq!(windows.schema, "ftx-sewing-copy-windows/1");
+    assert_eq!(
+        serde_json::to_value(&windows.policy).unwrap(),
+        options["production"]["routing"]["copy_windows"]
+    );
+    assert_eq!(windows.policy.copies[0].copy, 1);
+    assert_eq!(
+        windows
+            .selected
+            .iter()
+            .map(|row| row.copy)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    for row in &windows.selected {
+        assert_eq!(row.first_cell, "cell-a");
+        assert_eq!(row.available_at_milliseconds, 0);
+        assert_eq!(row.waiting_milliseconds, row.loading_start_milliseconds);
+        let value = serde_json::to_value(row).unwrap();
+        assert!(value.get("complete_by_milliseconds").is_none());
+        assert!(value.get("deadline_slack_milliseconds").is_none());
+    }
+    assert_eq!(
+        serde_json::to_string(&program).unwrap(),
+        serde_json::to_string(&SewProgram::build(&pattern, &program.plan.options).unwrap())
+            .unwrap()
+    );
+}
+
+#[test]
+fn routed_copy_windows_reorder_staggered_arrivals_and_urgent_garments() {
+    let (pattern, raw) = fixture(2);
+    let original = build(&pattern, raw.clone()).unwrap();
+    let old_route = original
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert_eq!(old_route.selected.operations[0].copy, 0);
+    let options = copy_windows(
+        raw,
+        json!([
+            {"copy":1,"available_at_milliseconds":0,"complete_by_milliseconds":8800},
+            {"copy":0,"available_at_milliseconds":6000,"complete_by_milliseconds":20000}
+        ]),
+    );
+    let program = SewProgram::build(&pattern, &serde_json::from_value(options).unwrap()).unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert!(route.baseline_replaced && route.search_complete);
+    assert_eq!(route.selected.operations[0].copy, 1);
+    assert_eq!(route.selected.makespan_milliseconds, 13300);
+    assert_eq!(program.stitches.len(), 120);
+    assert_eq!(route.selected.scheduled_feed_milliseconds, 12000);
+    let windows = route.copy_windows.as_ref().unwrap();
+    let late = &windows.selected[0];
+    let urgent = &windows.selected[1];
+    assert_eq!(
+        (late.loading_start_milliseconds, late.finish_milliseconds),
+        (6000, 13300)
+    );
+    assert_eq!(late.deadline_slack_milliseconds, Some(6700));
+    assert_eq!(
+        (
+            urgent.loading_start_milliseconds,
+            urgent.finish_milliseconds
+        ),
+        (0, 8800)
+    );
+    assert_eq!(urgent.deadline_slack_milliseconds, Some(0));
+    assert_eq!(
+        serde_json::to_value(&windows.baseline).unwrap(),
+        serde_json::to_value(&windows.selected).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&route.baseline).unwrap(),
+        serde_json::to_value(&route.selected).unwrap()
+    );
+    assert!(!program.plan.hardware_execution_authorized && !route.physical_routing_validated);
+}
+
+#[test]
+fn routed_copy_deadlines_include_final_unloading_and_keep_exact_large_clocks() {
+    let (pattern, raw) = fixture(1);
+    const MAX: u64 = 9_007_199_254_740_991;
+    for release in [0, 6000, MAX - 8800] {
+        let finish = release + 8800;
+        let options = copy_windows(
+            raw.clone(),
+            json!([
+                {"copy":0,"available_at_milliseconds":release,"complete_by_milliseconds":finish}
+            ]),
+        );
+        let plan = build(&pattern, options.clone()).unwrap();
+        let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+        let row = &route.copy_windows.as_ref().unwrap().selected[0];
+        assert_eq!(row.loading_start_milliseconds, release);
+        assert_eq!(row.finish_milliseconds, finish);
+        assert_eq!(row.deadline_slack_milliseconds, Some(0));
+        assert_eq!(
+            route
+                .selected
+                .operations
+                .last()
+                .unwrap()
+                .feed_finish_milliseconds,
+            finish - 200
+        );
+        let mut missed = options;
+        missed["production"]["routing"]["copy_windows"]["copies"][0]["complete_by_milliseconds"] =
+            json!(finish - 1);
+        assert_eq!(
+            build(&pattern, missed).unwrap_err().code,
+            RefusalCode::NotConverged
+        );
+    }
+}
+
+#[test]
+fn routed_copy_deadlines_preserve_complete_capped_schedules_and_unresolved_search() {
+    let (pattern, raw) = fixture(2);
+    let mut urgent = copy_windows(
+        raw.clone(),
+        json!([
+            {"copy":0,"available_at_milliseconds":0},
+            {"copy":1,"available_at_milliseconds":0,"complete_by_milliseconds":8800}
+        ]),
+    );
+    urgent["production"]["routing"]["max_search_nodes"] = json!(4);
+    let error = build(&pattern, urgent.clone()).unwrap_err();
+    assert_eq!(error.code, RefusalCode::NotConverged);
+    assert!(
+        error
+            .message
+            .contains("does not establish unrestricted production infeasibility")
+    );
+    urgent["production"]["routing"]["max_search_nodes"] = json!(10000);
+    let plan = build(&pattern, urgent).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(route.baseline_replaced);
+    assert_eq!(
+        route.copy_windows.as_ref().unwrap().selected[1].finish_milliseconds,
+        8800
+    );
+
+    let mut feasible = copy_windows(
+        raw,
+        json!([
+            {"copy":0,"available_at_milliseconds":0,"complete_by_milliseconds":8800},
+            {"copy":1,"available_at_milliseconds":0}
+        ]),
+    );
+    feasible["production"]["routing"]["max_search_nodes"] = json!(4);
+    let plan = build(&pattern, feasible).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(route.budget_exhausted && !route.search_complete && !route.optimality_proven);
+    assert!(!route.baseline_replaced);
+    assert_eq!(
+        (route.search_nodes, route.replay_operations, route.work_used),
+        (4, 8, 12)
+    );
+    assert_eq!(route.selected.operations.len(), 4);
+    assert_eq!(route.selected.makespan_milliseconds, 12600);
+    assert_eq!(route.copy_windows.as_ref().unwrap().selected.len(), 2);
+
+    let (pattern, raw) = fixture(1);
+    let impossible = copy_windows(
+        raw,
+        json!([
+            {"copy":0,"available_at_milliseconds":100,"complete_by_milliseconds":6699}
+        ]),
+    );
+    let error = build(&pattern, impossible).unwrap_err();
+    assert_eq!(error.code, RefusalCode::NotConverged);
+    assert!(
+        error
+            .message
+            .contains("mandatory loading, feed and unloading")
+    );
+}
+
+#[test]
+fn routed_copy_windows_require_complete_identities_and_explicit_waiting_evidence() {
+    let (pattern, raw) = fixture(2);
+    let options = copy_windows(
+        raw,
+        json!([
+            {"copy":0,"available_at_milliseconds":0},
+            {"copy":1,"available_at_milliseconds":0}
+        ]),
+    );
+    for (field, value) in [
+        ("model", json!("implicit_arrivals/1")),
+        ("method", json!("")),
+        ("allow_estimates", json!(false)),
+        ("copies", json!([])),
+        ("copies", json!([{"copy":0,"available_at_milliseconds":0}])),
+        (
+            "copies",
+            json!([{"copy":0,"available_at_milliseconds":0},{"copy":0,"available_at_milliseconds":0}]),
+        ),
+        (
+            "copies",
+            json!([{"copy":0,"available_at_milliseconds":0},{"copy":2,"available_at_milliseconds":0}]),
+        ),
+    ] {
+        let mut changed = options.clone();
+        changed["production"]["routing"]["copy_windows"][field] = value;
+        assert!(
+            build(&pattern, changed).is_err(),
+            "admitted invalid {field}"
+        );
+    }
+    for (field, value) in [
+        (
+            "available_at_milliseconds",
+            json!(9_007_199_254_740_992_u64),
+        ),
+        ("complete_by_milliseconds", json!(9_007_199_254_740_992_u64)),
+    ] {
+        let mut changed = options.clone();
+        changed["production"]["routing"]["copy_windows"]["copies"][0][field] = value;
+        assert!(build(&pattern, changed).is_err());
+    }
+    let mut reversed = options.clone();
+    reversed["production"]["routing"]["copy_windows"]["copies"][0]["available_at_milliseconds"] =
+        json!(2);
+    reversed["production"]["routing"]["copy_windows"]["copies"][0]["complete_by_milliseconds"] =
+        json!(1);
+    assert!(build(&pattern, reversed).is_err());
+    let mut source_missing = options.clone();
+    source_missing["production"]["routing"]["copy_windows"]["source"]["reference"] = json!("");
+    assert!(build(&pattern, source_missing).is_err());
+    let mut wrong_count = options;
+    wrong_count["production"]["production_copies"] = json!(1);
+    assert!(build(&pattern, wrong_count).is_err());
+}
+
+#[test]
+fn routed_copy_windows_compose_with_worker_calendars_fixtures_and_finite_buffers() {
+    let (pattern, raw) = fixture(2);
+    let mut options = availability_calendars(
+        attending_labor(shared_fixtures(raw, 1), &[&["cell-a", "cell-b"]], 500),
+        json!({"worker-0":[
+            {"start_milliseconds":0,"end_milliseconds":8800},
+            {"start_milliseconds":10000,"end_milliseconds":30000}
+        ]}),
+    );
+    options["production"]["routing"]["staging_capacity"] = json!(1);
+    options["production"]["routing"]["bounded_staging"] = json!({
+        "model":"finite_unloaded_cell_buffers/1","source":source("copy-window-slots"),
+        "method":"Synthetic first-loading entry and final-unloading exit with independent handoffs reserving both cells through transfer",
+        "conditions":{},"evidence":"estimate","allow_estimates":true
+    });
+    let options = copy_windows(
+        options,
+        json!([
+            {"copy":0,"available_at_milliseconds":6000,"complete_by_milliseconds":17800},
+            {"copy":1,"available_at_milliseconds":0,"complete_by_milliseconds":8800}
+        ]),
+    );
+    let program =
+        SewProgram::build(&pattern, &serde_json::from_value(options.clone()).unwrap()).unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    let windows = route.copy_windows.as_ref().unwrap();
+    assert!(route.baseline_replaced);
+    assert_eq!(route.selected.makespan_milliseconds, 17800);
+    assert_eq!(windows.selected[1].finish_milliseconds, 8800);
+    assert_eq!(
+        (
+            windows.selected[0].loading_start_milliseconds,
+            windows.selected[0].waiting_milliseconds
+        ),
+        (10500, 4500)
+    );
+    assert_eq!(windows.selected[0].deadline_slack_milliseconds, Some(0));
+    let slots = route.bounded_staging.as_ref().unwrap();
+    assert_eq!(
+        slots.entry_exit_protocol,
+        "first_loading_entry_final_unloading_exit/1"
+    );
+    for cell in ["cell-a", "cell-b"] {
+        assert_eq!(slots.selected.peak_reserved_slots[cell], 1);
+        assert_eq!(slots.selected.final_reserved_slots[cell], 0);
+    }
+    assert_eq!(
+        route
+            .workholding
+            .as_ref()
+            .unwrap()
+            .selected
+            .shared_peak_occupancy["common-jigs"],
+        1
+    );
+    assert_eq!(program.stitches.len(), 120);
+    let mut missed = options;
+    missed["production"]["routing"]["copy_windows"]["copies"][0]["complete_by_milliseconds"] =
+        json!(17799);
+    assert_eq!(
+        build(&pattern, missed).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn eligible_copy_windows_match_independent_complete_assignment_enumeration() {
+    let (pattern, raw) = eligible_fixture(2);
+    for (release, deadlines) in [
+        ([0, 0], [None, None]),
+        ([0, 0], [Some(7000), Some(9300)]),
+        ([0, 0], [Some(6999), None]),
+        ([1, 0], [Some(7000), None]),
+    ] {
+        let options = copy_windows(
+            raw.clone(),
+            json!([
+                {"copy":0,"available_at_milliseconds":release[0],"complete_by_milliseconds":deadlines[0]},
+                {"copy":1,"available_at_milliseconds":release[1],"complete_by_milliseconds":deadlines[1]}
+            ]),
+        );
+        let expected = independently_enumerated_window_finish(release, deadlines);
+        let actual = build(&pattern, options);
+        if let Some(finish) = expected {
+            let plan = actual.unwrap();
+            let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+            assert_eq!(route.selected.makespan_milliseconds, finish);
+            assert!(route.search_complete);
+            let rows = &route.copy_windows.as_ref().unwrap().selected;
+            for (row, deadline) in rows.iter().zip(deadlines) {
+                assert!(deadline.is_none_or(|limit| row.finish_milliseconds <= limit));
+                assert!(row.loading_start_milliseconds >= release[row.copy]);
+            }
+            if deadlines[0] == Some(7000) {
+                assert_eq!(rows[0].first_cell, "cell-c");
+                assert_eq!(rows[0].finish_milliseconds, 7000);
+                assert_eq!(rows[1].first_cell, "cell-a");
+                assert_eq!(rows[1].finish_milliseconds, 9300);
+            }
+        } else {
+            assert_eq!(actual.unwrap_err().code, RefusalCode::NotConverged);
+        }
+    }
+}
+
 #[test]
 fn routed_calendars_delay_whole_operations_and_handoffs_with_inclusive_finishes() {
     let (pattern, raw) = fixture(1);
@@ -3178,6 +3608,13 @@ fn eligible_fixture(copies: usize) -> (Pattern, Value) {
 /// Exhaust all four first-stage assignments and all six precedence-respecting dispatch orders.
 /// This small integer oracle uses the independent synthetic phase inputs, no planner or receipt.
 fn independently_enumerated_finish() -> u64 {
+    independently_enumerated_window_finish([0, 0], [None, None]).unwrap()
+}
+
+fn independently_enumerated_window_finish(
+    releases: [u64; 2],
+    deadlines: [Option<u64>; 2],
+) -> Option<u64> {
     let orders = [
         [0, 0, 1, 1],
         [0, 1, 0, 1],
@@ -3202,7 +3639,7 @@ fn independently_enumerated_finish() -> u64 {
                     1
                 };
                 let arrived = if stage[copy] == 0 {
-                    0
+                    releases[copy]
                 } else {
                     mover =
                         mover.max(garment[copy]) + if assignment[copy] == 0 { 700 } else { 900 };
@@ -3215,7 +3652,9 @@ fn independently_enumerated_finish() -> u64 {
                 };
                 let finish =
                     machines[cell].max(arrived) + 100 + setup + [4000, 2000, 2000][cell] + 200;
-                if finish > [5300, u64::MAX, 3300][cell] {
+                if finish > [5300, u64::MAX, 3300][cell]
+                    || (stage[copy] == 1 && deadlines[copy].is_some_and(|limit| finish > limit))
+                {
                     feasible = false;
                     break;
                 }
@@ -3229,7 +3668,7 @@ fn independently_enumerated_finish() -> u64 {
             }
         }
     }
-    best
+    (best != u64::MAX).then_some(best)
 }
 
 #[test]

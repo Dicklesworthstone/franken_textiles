@@ -16,6 +16,7 @@ use crate::sewing::{
 };
 
 pub mod calendars;
+pub mod copy_windows;
 pub mod fixtures;
 pub mod labor;
 pub mod staging;
@@ -70,6 +71,10 @@ pub struct Policy {
     /// resource. Complete occupancy fits one window; unnamed resources retain their outer window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub availability_calendars: Option<calendars::Policy>,
+    /// Optional complete per-copy arrivals and authored final-unloading deadlines. Qualified
+    /// unloaded waiting at the selected first cell precedes the finite staging entry boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_windows: Option<copy_windows::Policy>,
     /// Every original operation exactly once, in an order respecting every original predecessor.
     pub route: Vec<RouteStep>,
     /// First qualified carrier, optionally owned by a worker. Without a pool it covers every edge.
@@ -276,7 +281,8 @@ pub struct Timeline {
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
     /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars;
-    /// `/7` cost; `/8` retained fixtures; `/9` finite staging; `/10` transfer pools; `/11` eligible labor.
+    /// `/7` cost; `/8` retained fixtures; `/9` finite staging; `/10` transfer pools; `/11` eligible labor;
+    /// `/12` owned-carrier pools; `/13` operation-qualified workers; `/14` individual copy windows.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -302,6 +308,9 @@ pub struct Report {
     /// machine setups, worker locations or independently tracked fixture inventory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability_calendars: Option<calendars::Policy>,
+    /// Exact authored arrivals/deadlines and actual per-copy boundaries in both complete schedules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy_windows: Option<copy_windows::Report>,
     /// Optional complete-order assignment objective and its independent bounded-search evidence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_order_search: Option<ThreadOrderReport>,
@@ -429,6 +438,9 @@ impl Policy {
             return Err(budget(
                 "thread-order route search supports 1..64 complete order evaluations and an exact nonnegative millisecond deadline",
             ));
+        }
+        if let Some(windows) = &self.copy_windows {
+            windows.validate(copies)?;
         }
         self.max_search_nodes
             .checked_add(2 * expanded)
@@ -711,6 +723,7 @@ struct Prepared<'a> {
     fixtures: Option<fixtures::Compiled>,
     labor: Option<labor::Compiled>,
     staging: Option<staging::Compiled>,
+    copy_windows: Option<copy_windows::Compiled>,
 }
 
 #[derive(Clone)]
@@ -759,7 +772,10 @@ impl Prepared<'_> {
     fn initial(&self) -> State {
         State {
             next: vec![0; self.copies],
-            copy_ready: vec![0; self.copies],
+            copy_ready: self.copy_windows.as_ref().map_or_else(
+                || vec![0; self.copies],
+                copy_windows::Compiled::initial_ready,
+            ),
             copy_cell: vec![None; self.copies],
             cell_ready: self
                 .policy
@@ -1048,6 +1064,15 @@ impl Prepared<'_> {
         let feed_start = add(setup_start, self.setup[from][index])?;
         let feed_finish = add(feed_start, task.feed)?;
         let finish = add(feed_finish, task.unload)?;
+        // Remaining loading/feed/unloading is unavoidable even with free setup, transfer and
+        // resources. Rejecting this relaxed deadline miss cannot remove a feasible continuation.
+        if self
+            .copy_windows
+            .as_ref()
+            .is_some_and(|windows| !windows.allows(copy, task.route + 1, finish))
+        {
+            return Ok(None);
+        }
         if self.policy.cells[task.cell]
             .available_until_milliseconds
             .is_some_and(|end| finish > end)
@@ -1659,7 +1684,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.operation_qualified_labor() {
+        schema: if policy.copy_windows.is_some() {
+            "ftx-sewing-plan/31"
+        } else if policy.operation_qualified_labor() {
             "ftx-sewing-plan/30"
         } else if policy.qualified_transfer_pool() {
             "ftx-sewing-plan/29"
@@ -1825,6 +1852,11 @@ pub(in crate::sewing) fn build(
             handoffs[from][to] = Some(handoffs[from][to].map_or(duration, |old| old.min(duration)));
         }
     }
+    let copy_windows = policy
+        .copy_windows
+        .as_ref()
+        .map(|windows| copy_windows::Compiled::new(windows, &tasks, &choices))
+        .transpose()?;
     let prepared = Prepared {
         policy,
         tasks,
@@ -1837,22 +1869,33 @@ pub(in crate::sewing) fn build(
         fixtures,
         labor,
         staging,
+        copy_windows,
     };
-    let lower = prepared.lower_bound()?.max(
-        prepared
-            .labor
-            .as_ref()
-            .map(|labor| {
-                labor.lower_bound(
-                    &prepared.tasks,
-                    &prepared.choices,
-                    &prepared.handoffs,
-                    copies,
-                )
-            })
-            .transpose()?
-            .unwrap_or(0),
-    );
+    let lower = prepared
+        .lower_bound()?
+        .max(
+            prepared
+                .labor
+                .as_ref()
+                .map(|labor| {
+                    labor.lower_bound(
+                        &prepared.tasks,
+                        &prepared.choices,
+                        &prepared.handoffs,
+                        copies,
+                    )
+                })
+                .transpose()?
+                .unwrap_or(0),
+        )
+        .max(
+            prepared
+                .copy_windows
+                .as_ref()
+                .map(copy_windows::Compiled::lower_bound)
+                .transpose()?
+                .unwrap_or(0),
+        );
     let mut seed = prepared.initial();
     let mut seed_path = Vec::with_capacity(copies * count);
     let mut seed_used = 0;
@@ -2043,8 +2086,15 @@ pub(in crate::sewing) fn build(
         .as_ref()
         .map(|pool| pool.report(policy, &baseline, &selected))
         .transpose()?;
+    let copy_windows = prepared
+        .copy_windows
+        .as_ref()
+        .map(|windows| windows.report(&baseline, &selected))
+        .transpose()?;
     let report = Report {
-        schema: if policy.operation_qualified_labor() {
+        schema: if copy_windows.is_some() {
+            "ftx-sewing-routing/14"
+        } else if policy.operation_qualified_labor() {
             "ftx-sewing-routing/13"
         } else if policy.qualified_transfer_pool() {
             "ftx-sewing-routing/12"
@@ -2079,6 +2129,7 @@ pub(in crate::sewing) fn build(
         transfer_pool,
         attending_labor,
         availability_calendars: policy.availability_calendars.clone(),
+        copy_windows,
         thread_order_search,
         baseline,
         selected,
@@ -2128,7 +2179,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.operation_qualified_labor() {
+        schema: if policy.copy_windows.is_some() {
+            "ftx-sewing-production/19"
+        } else if policy.operation_qualified_labor() {
             "ftx-sewing-production/18"
         } else if policy.qualified_transfer_pool() {
             "ftx-sewing-production/17"

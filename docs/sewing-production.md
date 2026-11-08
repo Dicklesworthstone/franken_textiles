@@ -1543,6 +1543,59 @@ branches. Native/portable replay checks actual selected stitches and complete sc
 checks do not establish empirical labor capacity, factory throughput, seam quality or hardware
 authorization.
 
+## Individual garment arrivals and completion deadlines
+
+Specialist routing can declare a complete `copy_windows` policy when cut kits become available at
+different times or individual garments have different completion requirements:
+
+```json
+{
+  "copy_windows": {
+    "model": "explicit_copy_release_and_completion/1",
+    "copies": [
+      {"copy": 0, "available_at_milliseconds": 6000, "complete_by_milliseconds": 20000},
+      {"copy": 1, "available_at_milliseconds": 0, "complete_by_milliseconds": 8800}
+    ],
+    "source": {
+      "reference": "YOUR_ARRIVAL_AND_WAITING_SOURCE",
+      "accessed_on": "2026-11-08",
+      "note": "Declared kit availability and unloaded waiting at each eligible first cell"
+    },
+    "method": "Available kits may wait unloaded at their selected first cell until complete loading starts; deadlines are authored order requirements",
+    "conditions": {},
+    "evidence": "estimate",
+    "allow_estimates": true
+  }
+}
+```
+
+Place this object inside `production.routing`. Name every resolved physical garment copy exactly
+once, using its existing zero-based index. Row order does not change identity or dispatch priority.
+Release and optional completion times are inclusive integer milliseconds from the common job origin,
+at most `9007199254740991`; a deadline cannot precede that copy's release. Omitted deadlines impose
+no extra completion requirement. Unknown, duplicated or missing copies refuse before planning.
+
+This policy independently qualifies availability and unloaded waiting at whichever first cell the
+route selects. Inbound transport and that pre-loading holding area are outside the modeled route;
+the optional finite in-process staging buffer still begins at first loading. The source must support
+that boundary and every eligible first-cell choice. No kit is assumed to arrive through an unmodeled
+carrier, and no capacity for an external holding area is inferred. Deadlines are authored scheduling
+requirements, not measured material properties or predictions of physical factory performance.
+
+First loading cannot precede release. Final unloading must finish on or before the individual
+deadline, in addition to any whole-batch deadline. Existing cell, worker, fixture, carrier, finite
+staging and calendar constraints remain in force; a late copy-major seed can be replaced by a
+complete feasible dispatch. The planner may reject a partial copy when its remaining mandatory
+loading, feed and unloading alone cannot fit its deadline. This bound ignores setup, transfer and
+resource waits, so it cannot exclude a feasible schedule. Search and replay use the same admission;
+an exhausted search without a complete incumbent remains unresolved.
+
+The routing report retains the exact policy plus baseline and selected rows for each copy: its
+actual first cell, release, first loading, pre-loading wait, final unloading, optional deadline and
+deadline slack. New-policy jobs use plan `/31`, production `/19` and routing `/14`. Omitting
+`copy_windows` preserves the earlier schemas, timestamps and serialized output. These planning
+receipts neither reserve live factory resources nor authorize machine execution.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **256 copy/operation pairs** and 1–200000 examined search nodes.
