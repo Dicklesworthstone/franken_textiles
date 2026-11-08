@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import datetime as dt
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+from fractions import Fraction
 import hashlib
 import json
 import math
@@ -162,9 +163,10 @@ def parse_conductivity(raw: bytes) -> ConductivityRun:
             fail("nonphysical conductivity observation")
         # Each printed column may have rounded its own underlying value. Check consistency using
         # only that printed precision, not an invented physical or instrument-error tolerance.
-        rounding = [Decimal(10) ** x.as_tuple().exponent / 2 for x in values[1:]]
+        upper, lower, average = map(Fraction, values[1:])
+        rounding = [Fraction(10) ** x.as_tuple().exponent / 2 for x in values[1:]]
         allowed = rounding[2] + (rounding[0] + rounding[1]) / 2
-        if abs(values[3] - (values[1] + values[2]) / 2) > allowed:
+        if abs(average - (upper + lower) / 2) > allowed:
             fail("Average Cond conflicts with the printed upper/lower conductivity")
         rows.append(tuple(float(x) for x in values))
         if len(rows) > MAX_ROWS:
@@ -181,7 +183,7 @@ def grouped(run: ConductivityRun, tolerance_c: float) -> list[dict]:
         fail("nominal-temperature grouping tolerance must be in [0, 0.5) C")
     groups = defaultdict(list)
     for index, row in enumerate(run.rows):
-        nominal = float(Decimal(str(row[0])).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
+        nominal = float(Decimal(str(row[0])).to_integral_value(rounding=ROUND_HALF_EVEN))
         if abs(row[0] - nominal) > tolerance + 1e-12:
             fail("actual temperature exceeds the explicitly admitted nominal-temperature tolerance")
         groups[nominal].append((index, row))

@@ -1,5 +1,6 @@
 """Synthetic instrument-format regressions, not observations of real textiles."""
 import copy
+from decimal import localcontext
 import hashlib
 import json
 from pathlib import Path
@@ -108,6 +109,32 @@ class HfmImportTests(unittest.TestCase):
         source = source.replace("0.02000", "0.02002")
         with self.assertRaises(ValueError):
             parse_conductivity(source.encode())
+
+    def test_printed_consistency_is_exact_independently_of_decimal_context(self):
+        matching = "0.02123456789012345678901234567890"
+        conflicting = "0.02123456789012345678901234568000"
+        for precision in (1, 6, 28, 80):
+            with self.subTest(precision=precision), localcontext() as context:
+                context.prec = precision
+                for average in (matching, conflicting):
+                    source = SOURCE.replace("0.02100\t0.01900\t0.02000",
+                                            "\t".join((matching, matching, average)))
+                    if average == matching:
+                        self.assertEqual(parse_conductivity(source.encode()).rows[0][3], float(matching))
+                    else:
+                        with self.assertRaisesRegex(ValueError, "Average Cond conflicts"):
+                            parse_conductivity(source.encode())
+
+    def test_nominal_temperature_rounding_does_not_require_decimal_precision(self):
+        large = SOURCE.replace("15.01", "1e30").replace("15.02", "1e30")
+        for precision in (1, 6, 28, 80):
+            with self.subTest(precision=precision), localcontext() as context:
+                context.prec = precision
+                ordinary = grouped(parse_conductivity(SOURCE.encode()), 0.1)
+                self.assertEqual([p["temperature_c"] for p in ordinary], [15, 65])
+                points = grouped(parse_conductivity(large.encode()), 0.1)
+                self.assertEqual([p["temperature_c"] for p in points], [65, 1e30])
+                self.assertEqual(points[1]["source_row_indices"], [0, 2])
 
     def test_explicit_temperature_grouping_and_missing_variability(self):
         for tolerance in (-1, 0.5, float("nan"), True, 0.001):

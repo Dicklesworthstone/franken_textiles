@@ -59,6 +59,10 @@ within the manifest directory, including after symlink resolution. A batch is li
 to 128 runs and 32 MiB; an individual source to 8 MiB and 4096 table rows. Repeated
 paths, source bytes, material IDs or Sample Names cannot masquerade as more replicates.
 
+Upper/lower/average consistency is checked exactly at the source's printed precision,
+independently of the caller's Decimal precision. Additional decimal places do not
+establish instrument accuracy or physical uncertainty; exported observations remain f64.
+
 ## Repeated readings are not independent specimens
 
 Grouping is explicitly admitted with `within_run_nearest_integer_c` and a reviewed
