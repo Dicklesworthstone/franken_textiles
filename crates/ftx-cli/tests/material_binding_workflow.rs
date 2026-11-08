@@ -259,12 +259,14 @@ fn inspection_stock_width_agrees_with_actual_cutting_without_rewriting_observati
         selected["allow_estimates"] = json!(consent);
         selected["record"]["properties"]["width"] = json!({"value":width,"unit":unit,
             "source":"test","evidence":"estimate","method":"Synthetic stock-width admission test"});
+        let authored: ftx_pattern::materials::Material =
+            serde_json::from_value(selected["record"].clone()).unwrap();
         let input = selected.to_string();
         let name = format!("width-{i}.json");
         write(&dir, &name, input.as_bytes());
         let portable: Value =
             serde_json::from_str(&ftx_wasm::materials::inspect(&input).unwrap()).unwrap();
-        assert_eq!(portable["selection"]["record"], selected["record"]);
+        assert_eq!(portable["selection"]["record"], json!(authored));
         assert_eq!(portable["selection"]["allow_estimates"], consent);
         assert_eq!(portable["capabilities"]["stock_width_m"]["ready"], ready);
         assert_eq!(
