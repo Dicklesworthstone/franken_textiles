@@ -1030,7 +1030,12 @@ pub(super) fn evaluate(
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if shared_workholding.is_some() {
+        schema: if shared_operator
+            .as_ref()
+            .is_some_and(|operator| operator.availability_calendars.is_some())
+        {
+            "ftx-sewing-parallel/6"
+        } else if shared_workholding.is_some() {
             "ftx-sewing-parallel/5"
         } else if shared_operator.is_some() {
             "ftx-sewing-parallel/4"

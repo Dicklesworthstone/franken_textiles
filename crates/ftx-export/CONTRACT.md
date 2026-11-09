@@ -443,6 +443,20 @@ exercise this model. Source timing does not establish safe physical autonomy or 
 Tests: exhaustive and bounded `sewing_parallel`, native/portable `sewing_production_workflow`.
 Declared windows do not imply calendar reservations, shared labor, preemption or physical execution.
 
+**Shared-operator resource calendars** (`ftx-pb2.2`). Optional
+`production.parallel.shared_operator.availability_calendars` reuses the routed calendar authority's
+source-qualified `nonpreemptive_resource_windows/1`. Whole worker travel/wait/attendance intervals
+and complete machine handling/setup/feed phases fit one opening; autonomous feed may continue
+through an operator break. Unoccupied delay before departure is reported separately. Qualified
+inactive garment retention, source setup state and persistent fixture holds survive gaps; calendar
+and pool admission are iterated to a bounded fixed point. Exact phase/travel/calendar/occupancy replay
+checks both complete returned schedules. Parallel `/6` and shared-operator `/2` retain the complete
+policy, including idle resources; omitted calendars preserve prior output. Feed and thread comparison
+identities retain calendar-constrained allocation and outer recipe domains, even when readings happen
+to match. `sewing_parallel::shared_operator_calendars_*` covers inclusive boundaries, autonomous feed,
+travel, fixture retention, bounded incumbents, invalid sources and actual manufacturing comparisons;
+the existing frontend shared-operator test covers direct, study and scenario views.
+
 **Shared fixture pools** (`production.parallel.shared_workholding`). Optional
 `shared_workholding_pools/1` maps qualified cell-local workholding resources to finite common
 inventories under the existing one-operator dispatch model. Exact cell locks, separate source and
