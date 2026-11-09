@@ -11,8 +11,8 @@ use ftx_body::{
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::{
     body_fit::{
-        self, BodyFitInput, BodyModel, CaptureImage, FitOptions, FitStart, FramePose, ModelLayout,
-        Parameter,
+        self, BodyFitInput, BodyModel, CaptureImage, FitOptions, FitStart, FramePose, Keypoint,
+        ModelLayout, Parameter,
     },
     silhouette::{self, SurfaceMesh},
 };
@@ -291,6 +291,141 @@ pub fn body_fit_starts(
         "body_fitted":false,"original_input_sha256":source_hash,
         "input_sha256":sha256_hex(input.as_bytes()),"model_sha256":hash,
         "shape":shape,"pose":pose,"frames":frames,"starts":starts,"input":input}),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservationEdits {
+    input_sha256: String,
+    model_sha256: String,
+    frames: Vec<FrameObservations>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrameObservations {
+    frame_index: usize,
+    keypoints: Vec<Keypoint>,
+}
+
+/// Open a prepared observation draft or replace its reviewed keypoints, without evaluating a body.
+/// Original frame ordinals bind edits; all full-width identities and unedited evidence stay native.
+/// Existing observations retain their declared uncertainty and FIT/CHECK roles. Newly observed
+/// targets require explicit values, uncertainty and partition; absent points are never inferred.
+///
+/// # Errors
+/// Invalid model/source identity, more than 16 MiB input / 512 MiB model / 256 KiB edits, incomplete
+/// frame edits, unknown/duplicate targets, changed existing roles/sigmas or canonical draft refusal.
+pub fn body_fit_observations(
+    model_bytes: &[u8],
+    input_text: &str,
+    edits_text: &str,
+) -> Result<Value, Refusal> {
+    if input_text.len() > 16 * 1024 * 1024
+        || model_bytes.len() > 512 * 1024 * 1024
+        || edits_text.len() > 256 * 1024
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "observation authoring permits 16 MiB input, 512 MiB model and 256 KiB edits",
+        ));
+    }
+    let mut request: Request = serde_json::from_str(input_text)
+        .map_err(|e| invalid(format!("invalid prepared observation input: {e}")))?;
+    if request.schema != "ftx-anny-body-fit-input/1" {
+        return Err(invalid(
+            "observation authoring requires prepared ftx-anny-body-fit-input/1",
+        ));
+    }
+    if let Some(images) = &request.capture_images {
+        body_fit::validate_capture_images(images, &request.fit.frames)?;
+    }
+    let source_hash = sha256_hex(input_text.as_bytes());
+    let model_hash = sha256_hex(model_bytes);
+    if request.model.model_sha256 != model_hash {
+        return Err(invalid(
+            "model SHA-256 mismatch; no observations were edited",
+        ));
+    }
+    let model = AnnyModel::from_data(AnnyData::from_bytes(model_bytes, true)?)?;
+    let adapter = Adapter::new(CorrespondenceModel::new(model, request.model, &model_hash)?);
+    body_fit::prepare_capture_authoring(&request.fit, adapter.layout())?;
+    let input = if edits_text.is_empty() {
+        input_text.to_owned()
+    } else {
+        let edits: ObservationEdits = serde_json::from_str(edits_text)
+            .map_err(|e| invalid(format!("invalid observation edits: {e}")))?;
+        if edits.input_sha256 != source_hash || edits.model_sha256 != model_hash {
+            return Err(invalid(
+                "observation edits belong to different input or model bytes",
+            ));
+        }
+        if edits.frames.len() != request.fit.frames.len() {
+            return Err(invalid(
+                "observation edits need every original frame exactly once",
+            ));
+        }
+        let mut seen = vec![false; request.fit.frames.len()];
+        for edit in edits.frames {
+            let frame = request
+                .fit
+                .frames
+                .get_mut(edit.frame_index)
+                .ok_or_else(|| invalid("observation frame_index is out of range"))?;
+            if std::mem::replace(&mut seen[edit.frame_index], true) {
+                return Err(invalid("duplicate observation frame_index"));
+            }
+            for point in &edit.keypoints {
+                if frame.keypoints.iter().any(|old| {
+                    old.name == point.name
+                        && (old.partition != point.partition || old.sigma_px != point.sigma_px)
+                }) {
+                    return Err(invalid(
+                        "existing observation uncertainty and FIT/CHECK roles stay fixed",
+                    ));
+                }
+            }
+            frame.keypoints = edit.keypoints;
+        }
+        body_fit::prepare_capture_authoring(&request.fit, adapter.layout())?;
+        let mut value: Value =
+            serde_json::from_str(input_text).map_err(|e| invalid(e.to_string()))?;
+        for (index, frame) in request.fit.frames.iter().enumerate() {
+            value["fit"]["frames"][index]["keypoints"] = json!(frame.keypoints);
+        }
+        serde_json::to_string_pretty(&value).map_err(|e| invalid(e.to_string()))?
+    };
+    if input.len() > 16 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "edited observation input exceeds 16 MiB",
+        ));
+    }
+    let frames = request.fit.frames.iter().enumerate().map(|(frame_index, frame)| {
+        let source = request.capture_images.as_ref().and_then(|images| images.iter().find(|image| image.frame == frame.frame));
+        // This opaque receipt binds only original pixels, not observations or a computed body.
+        // It remains valid while keypoints change; JavaScript never serializes its u64 identity.
+        let image_review = source.map(|source_image| serde_json::to_string(&json!({
+            "schema":"ftx-body-observation-frame-review/1","status":"OBSERVATION_REVIEW","body_fitted":false,
+            "frame":frame.frame,"image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,
+            "source_image":source_image})).map_err(|e| invalid(e.to_string()))).transpose()?;
+        Ok(json!({"frame_index":frame_index,"label":format!("{} @ {} us",frame.frame.stream,frame.frame.timestamp_us),
+            "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,"keypoints":frame.keypoints,
+            "image_name":source.map(|image| &image.image_name),"image_review":image_review}))
+    }).collect::<Result<Vec<_>, Refusal>>()?;
+    let targets: Vec<_> = adapter
+        .inner
+        .configuration()
+        .keypoints
+        .iter()
+        .map(|(name, definition)| json!({"name":name,"definition":definition}))
+        .collect();
+    Ok(
+        json!({"schema":"ftx-body-observations-review/1","status":"OBSERVATION_REVIEW","body_fitted":false,
+        "original_input_sha256":source_hash,"input_sha256":sha256_hex(input.as_bytes()),"model_sha256":model_hash,
+        "input":input,"frames":frames,"targets":targets,"start_count":request.fit.starts.len(),
+        "no_claim":"Manually observed keypoints only. Cameras, model targets, starts, silhouettes and source identities stay fixed. Keep predeclared CHECK evidence independent; do not tune observations to fit residuals. No fitted body, measurement readiness or physical accuracy is established."}),
     )
 }
 
@@ -822,7 +957,10 @@ impl BodyFitImage {
         let initialization = frame.schema == "ftx-body-start-frame-review/1"
             && frame.status.as_deref() == Some("INITIALIZATION_REVIEW")
             && frame.body_fitted == Some(false);
-        if !(frame.schema == "ftx-body-frame-review/1" || initialization)
+        let observation = frame.schema == "ftx-body-observation-frame-review/1"
+            && frame.status.as_deref() == Some("OBSERVATION_REVIEW")
+            && frame.body_fitted == Some(false);
+        if !(frame.schema == "ftx-body-frame-review/1" || initialization || observation)
             || source.frame != frame.frame
             || source.image_size_px != frame.image_size_px
             || source.rotation_cw_deg != frame.rotation_cw_deg
@@ -850,6 +988,8 @@ impl BodyFitImage {
             "no_claim":"Original encoded image bytes and dimensions match the retained frame. No refitting, camera calibration, anatomy, visibility or physical-fit acceptance was performed."});
         if initialization {
             report["review_kind"] = json!("INITIALIZATION_REVIEW");
+        } else if observation {
+            report["review_kind"] = json!("OBSERVATION_REVIEW");
         }
         Ok(Self { preview, report })
     }

@@ -105,6 +105,200 @@ fn long_frame_ids(input: &mut Value, first: u64) {
 }
 
 #[test]
+fn portable_observation_authoring_reaches_start_editing_preview_and_actual_fitting() {
+    use ftx_wasm::body_fit::{
+        BodyFitImage, body_fit_observations, body_fit_starts, fit_body, review_body_fit_start
+    };
+    let (model, mut expected) = fixture();
+    long_frame_ids(&mut expected, u64::MAX - 200_000);
+    expected["model"]["root_rotation_rad"] = json!([-0.0, 0.0, 0.0]);
+    let pixels = Gray {
+        w: 1280,
+        h: 960,
+        data: (0..1280 * 960)
+            .map(|i| ((i / 1280 * 7 + i % 1280 * 13) % 256) as u8)
+            .collect()
+    };
+    let image = encode_png_gray(&pixels);
+    expected["capture_images"] = json!(
+        expected["fit"]["frames"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .map(|frame| {
+                frame["rotation_cw_deg"] = json!(90);
+                json!({"frame":frame["frame"],"image_name":"synthetic-rotated.png","image_sha256":sha256_hex(&image),
+                    "image_size_px":frame["image_size_px"],"rotation_cw_deg":90})
+            })
+            .collect::<Vec<_>>()
+    );
+    let mut draft = expected.clone();
+    draft["fit"]["starts"] = json!([]);
+    for frame in draft["fit"]["frames"].as_array_mut().unwrap() {
+        frame["keypoints"] = json!([]);
+    }
+    let source = format!(" \r\n{draft}\r\n");
+    let opened = body_fit_observations(&model, &source, "").unwrap();
+    assert_eq!(opened["input"], source);
+    assert_eq!(opened["body_fitted"], false);
+    assert_eq!(opened["start_count"], 0);
+    assert!(
+        opened["frames"][1]["label"]
+            .as_str()
+            .unwrap()
+            .contains(&u64::MAX.to_string())
+    );
+    let receipt = opened["frames"][1]["image_review"].as_str().unwrap();
+    let decoded = BodyFitImage::new(&image, receipt).unwrap();
+    assert_eq!(decoded.report()["review_kind"], "OBSERVATION_REVIEW");
+    assert_eq!(
+        decoded.report()["source_image"]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert_eq!(
+        ftx_trace::raster::color::bgr_to_gray(
+            &ftx_trace::raster::image::load_png(decoded.preview()).unwrap()
+        ),
+        pixels,
+        "90-degree source metadata describes already-oriented pixels, never another rotation"
+    );
+    let mut wrong = image.clone();
+    wrong[0] ^= 1;
+    assert!(BodyFitImage::new(&wrong, receipt).is_err());
+    for (field, value) in [
+        ("body_fitted", json!(true)),
+        ("status", json!("ACCEPTED")),
+        ("rotation_cw_deg", json!(0))
+    ] {
+        let mut wrong: Value = serde_json::from_str(receipt).unwrap();
+        wrong[field] = value;
+        assert!(BodyFitImage::new(&image, &wrong.to_string()).is_err());
+    }
+    let frames: Vec<_> = expected["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(frame_index, frame)| json!({"frame_index":frame_index,"keypoints":frame["keypoints"]}))
+        .rev()
+        .collect();
+    let edits = json!({"input_sha256":opened["input_sha256"],"model_sha256":opened["model_sha256"],"frames":frames});
+    let annotated = body_fit_observations(&model, &source, &edits.to_string()).unwrap();
+    let text = annotated["input"].as_str().unwrap();
+    let value: Value = serde_json::from_str(text).unwrap();
+    let mut no_starts = expected.clone();
+    no_starts["fit"]["starts"] = json!([]);
+    assert_eq!(
+        value, no_starts,
+        "only the intended frame observations may change"
+    );
+    assert!(
+        value["model"]["root_rotation_rad"][0]
+            .as_f64()
+            .unwrap()
+            .is_sign_negative()
+    );
+    assert_eq!(annotated["frames"][1]["image_review"], receipt);
+    let starts = body_fit_starts(&model, text, "").unwrap();
+    let with_starts = body_fit_starts(
+        &model,
+        text,
+        &json!({"input_sha256":starts["input_sha256"],
+            "model_sha256":starts["model_sha256"],"starts":annotations_for(&expected)})
+        .to_string()
+    )
+    .unwrap();
+    let ready = with_starts["input"].as_str().unwrap();
+    assert_eq!(serde_json::from_str::<Value>(ready).unwrap(), expected);
+    let preview = review_body_fit_start(&model, ready, "0", "1").unwrap();
+    assert_eq!(preview["frame"], expected["fit"]["frames"][1]["frame"]);
+    let mut actual = fit_body(&model, ready, "60", "100000").unwrap();
+    let mut manual = fit_body(&model, &expected.to_string(), "60", "100000").unwrap();
+    assert_eq!(actual["status"], "ACCEPTED");
+    assert_eq!(actual["input_sha256"], sha256_hex(ready.as_bytes()));
+    actual.as_object_mut().unwrap().remove("input_sha256");
+    manual.as_object_mut().unwrap().remove("input_sha256");
+    assert_eq!(actual, manual);
+    let reopened = body_fit_observations(&model, ready, "").unwrap();
+    let mut corrections = json!({"input_sha256":reopened["input_sha256"],"model_sha256":reopened["model_sha256"],"frames":frames});
+    corrections["frames"][0]["keypoints"][0]["pixel_px"][0] = json!(600.25);
+    let corrected = body_fit_observations(&model, ready, &corrections.to_string()).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(corrected["input"].as_str().unwrap()).unwrap()["fit"]["starts"],
+        expected["fit"]["starts"]
+    );
+    assert!(
+        body_fit_observations(&model, ready, &edits.to_string()).is_err(),
+        "edits bind the current, not an earlier, snapshot"
+    );
+}
+
+#[test]
+fn portable_observation_authoring_refuses_stale_or_invalid_changes() {
+    use ftx_wasm::body_fit::body_fit_observations;
+    let (model, input) = fixture();
+    let text = input.to_string();
+    let opened = body_fit_observations(&model, &text, "").unwrap();
+    assert_eq!(opened["frames"][0]["image_review"], Value::Null);
+    let frames: Vec<_> = input["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(frame_index, frame)| json!({"frame_index":frame_index,"keypoints":frame["keypoints"]}))
+        .collect();
+    let edits = json!({"input_sha256":opened["input_sha256"],"model_sha256":opened["model_sha256"],"frames":frames});
+    for kind in [
+        "source",
+        "model",
+        "missing_frame",
+        "duplicate_frame",
+        "unknown_frame",
+        "unknown_target",
+        "duplicate_target",
+        "bounds",
+        "sigma",
+        "role",
+        "extra"
+    ] {
+        let mut bad = edits.clone();
+        match kind {
+            "source" => bad["input_sha256"] = json!("0".repeat(64)),
+            "model" => bad["model_sha256"] = json!("0".repeat(64)),
+            "missing_frame" => {
+                bad["frames"].as_array_mut().unwrap().pop();
+            }
+            "duplicate_frame" => bad["frames"][1]["frame_index"] = json!(0),
+            "unknown_frame" => bad["frames"][0]["frame_index"] = json!(8),
+            "unknown_target" => bad["frames"][0]["keypoints"][0]["name"] = json!("invented anatomy"),
+            "duplicate_target" =>
+                bad["frames"][0]["keypoints"][1] = bad["frames"][0]["keypoints"][0].clone(),
+            "bounds" => bad["frames"][0]["keypoints"][0]["pixel_px"] = json!([-1.0, 10.0]),
+            "sigma" => bad["frames"][0]["keypoints"][0]["sigma_px"] = json!(2.0),
+            "role" => bad["frames"][0]["keypoints"][0]["partition"] = json!("held_out"),
+            "extra" => bad["cameras"] = json!([]),
+            _ => unreachable!(),
+        }
+        assert!(
+            body_fit_observations(&model, &text, &bad.to_string()).is_err(),
+            "{kind}"
+        );
+    }
+    assert!(body_fit_observations(&model, &(text.clone() + "\n"), &edits.to_string()).is_err());
+    assert!(body_fit_observations(&model, &text, &" ".repeat(256 * 1024 + 1)).is_err());
+    let mut cleared = edits;
+    for frame in cleared["frames"].as_array_mut().unwrap() {
+        frame["keypoints"] = json!([]);
+    }
+    let empty = body_fit_observations(&model, &text, &cleared.to_string()).unwrap();
+    assert!(empty["frames"][0]["keypoints"].as_array().unwrap().is_empty());
+    let unfitted =
+        ftx_wasm::body_fit::fit_body(&model, empty["input"].as_str().unwrap(), "50", "100000").unwrap();
+    assert_eq!(unfitted["status"], "UNOBSERVABLE");
+    assert_eq!(unfitted["solution"], Value::Null);
+}
+
+#[test]
 fn portable_start_authoring_preserves_evidence_and_replays_native_fit() {
     let (model, mut original) = fixture();
     long_frame_ids(&mut original, u64::MAX - 200_000);

@@ -399,6 +399,43 @@ The generated review's mesh and image overlays remain the **original** preview w
 edited. You can evaluate the edited declaration directly in the local photo page, or materialize
 it and generate a fresh native review.
 
+### Observe keypoints and continue directly to fitting in the local photo page
+
+Select the exact converted model and a prepared input in `web/photo.html`, then choose **Open
+observations**. The input may have empty observations and no starts, but its calibrated cameras
+and model targets must already be declared. The editor lists those target names and definitions
+for each original frame; it does not infer anatomy or add model targets.
+
+For a frame with retained `capture_images`, select its original encoded photograph and choose
+**Verify and show photograph**. The native decoder checks its hash, exact frame identity,
+dimensions and recorded rotation before enabling image clicks. A resized or re-encoded copy
+refuses. Displayed pixels are already oriented: there is no second rotation or lens transform,
+and clicks account for the displayed canvas size. Select a declared target and click its observed
+location, or enter its stored x/y pixel coordinates directly. Coordinate-only inputs remain
+editable without a verified photograph.
+
+Each new observation requires an explicit pixel uncertainty and FIT or CHECK role. Existing
+uncertainties and roles stay fixed; coordinates can be corrected and points can be removed.
+Changes across targets and frames remain pending until **Check and apply all observations** checks the
+whole draft through the ordinary native camera, target, coordinate and uncertainty rules.
+Missing or invalid fields refuse the application. Keep CHECK evidence independent and
+predeclared; this editor does not justify tuning observations to a fitted body's residuals.
+
+After applying, download the exact prepared snapshot or open the initialization editor below.
+Both editors use the same current input: applying starts preserves observed points, and returning
+to observations preserves the applied starts. Each application binds that current input and model
+by their exact hashes. Frame timestamps and all untouched fields remain native, including
+full-width integers. Preview and fitting consume this same snapshot without uploading it or
+requiring a download/reselection cycle. Ordinary fitting gates and MODEL_FIT provenance remain
+unchanged.
+
+Pending changes withdraw old previews, fits, handoffs and downloads. Apply or cancel them before
+switching editors or fitting; cancellation restores the last applied values. Opening or cancelling
+a source chooser retains the work and blocks outputs until explicit recovery. Actual source
+selection clears the editors, and **Restore original input** restores both observations and starts
+from the selected uploaded file. Original photographs, cameras, silhouettes, tapes and model target
+definitions remain fixed; use the native capture workflow to revise those sources.
+
 ### Edit and preview starts in the local photo page
 
 Select the converted model and prepared input in `web/photo.html`, then open the initialization
@@ -418,7 +455,7 @@ Pending or invalid edits withdraw stale fits, previews and downloads. Apply vali
 start atomically; cancellation returns to the last applied values, and reset restores the
 original selected input. Opening or cancelling a source file chooser retains current edits and
 blocks outputs until you apply or cancel pending edits; selecting a different input or model
-withdraws the editor. Each browser application binds the exact original input and model hashes,
+withdraws the editor. Each browser application binds the exact current input and model hashes,
 and a newer edit cancels an in-flight application. Cancelled reads and obsolete worker responses
 cannot restore old values or results. Downloaded snapshots remain independent of later edits.
 Editing starts does not change fitting acceptance or establish anatomical or physical fit.

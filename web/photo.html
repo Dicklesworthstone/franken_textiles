@@ -9,7 +9,8 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:24px auto;paddin
 section{background:white;border:1px solid #ccd5db;border-radius:8px;padding:16px;margin:18px 0}
 h1,h2{line-height:1.2}label{display:inline-block;max-width:100%;margin:6px 14px 6px 0}input,select,button,textarea{font:inherit;padding:6px}
 input[type=file],select{max-width:100%;box-sizing:border-box}
-#bodyFitReview fieldset,#bodyStartsEditor fieldset{min-inline-size:0}
+#bodyFitReview fieldset,#bodyStartsEditor fieldset,#bodyPointsEditor fieldset{min-inline-size:0}
+#bodyPointsEditor input{max-width:100%;box-sizing:border-box}#bodyPointsRows td{overflow-wrap:anywhere}#bodyPointsError{color:#a02020}
 #bodyStartsFields label{display:block;overflow-wrap:anywhere}#bodyStartsFields input{max-width:100%;box-sizing:border-box}
 button{cursor:pointer}button:disabled{cursor:default;opacity:.5}textarea{width:100%;box-sizing:border-box;font:14px monospace}
 canvas{display:block;width:100%;height:auto;cursor:crosshair}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
@@ -275,6 +276,41 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     FIT/CHECK roles, parameter bounds and every initialization. Reviewed inline silhouette slices are
     supported. A path-based capture input or mask manifest must first be prepared with the native tools;
     this page does not read local paths or infer landmarks from a video. Input limit: 16 MiB; model limit: 512 MiB.</small></p>
+  <details>
+    <summary>Observe declared landmarks on original photographs</summary>
+    <p>Add or correct 2D observations for the model targets already declared in this input. Verify an
+      original photograph before clicking, or enter independently reviewed stored-pixel coordinates.
+      New points need an explicit uncertainty and FIT/CHECK role; existing roles and uncertainties stay fixed.</p>
+    <p><button id="bodyPointsLoad" disabled>Open observations</button></p>
+    <div id="bodyPointsEditor" hidden>
+      <label>Frame <select id="bodyPointsFrame"></select></label>
+      <label>Declared target <select id="bodyPointsTarget"></select></label>
+      <p id="bodyPointsDefinition"></p><p id="bodyPointsImageSource"></p>
+      <label>Original photograph <input id="bodyPointsImage" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
+      <p><button id="bodyPointsImageRun" disabled>Verify and show photograph</button>
+        <button id="bodyPointsImageClear" disabled>Clear photograph</button></p>
+      <p id="bodyPointsImageStatus" role="status" aria-live="polite"></p>
+      <canvas id="bodyPointsCanvas" hidden aria-label="Verified original capture with manually observed target points"></canvas>
+      <fieldset><legend>Selected point in stored pixels</legend>
+        <label>X <input id="bodyPointsX" type="number" step="any" min="0" disabled></label>
+        <label>Y <input id="bodyPointsY" type="number" step="any" min="0" disabled></label>
+        <label>Sigma (px) <input id="bodyPointsSigma" type="number" step="any" min="0.000001" max="1000000" disabled></label>
+        <label>Role <select id="bodyPointsPartition" disabled><option value="">Choose FIT or CHECK</option>
+          <option value="fit">FIT</option><option value="held_out">CHECK (held out)</option></select></label>
+        <button id="bodyPointsRemove" disabled>Remove selected observation</button>
+      </fieldset>
+      <p><small>Values are retained as drafts when you change target or frame. Keep CHECK observations
+        independent; do not move or remove them to improve fitted residuals. Cameras, silhouettes,
+        model targets, tape evidence and applied starting values stay unchanged.</small></p>
+      <div style="overflow-x:auto"><table><thead><tr><th>Target</th><th>Role</th><th>X (px)</th><th>Y (px)</th><th>Sigma (px)</th></tr></thead>
+        <tbody id="bodyPointsRows"></tbody></table></div>
+      <p><button id="bodyPointsApply" disabled>Check and apply all observations</button>
+        <button id="bodyPointsReset">Restore original input</button></p>
+    </div>
+    <p><button id="bodyPointsCancel" disabled>Cancel loading or pending observations</button></p>
+    <p id="bodyPointsStatus" role="status" aria-live="polite">Open the current prepared input to observe its declared targets.</p>
+    <pre id="bodyPointsError" role="alert"></pre><div id="bodyPointsDownloads" class="files"></div>
+  </details>
   <details>
     <summary>Edit shared-shape and per-frame starting values</summary>
     <p>Load the prepared input's named controls, then enter each start's shared shape and each frame's

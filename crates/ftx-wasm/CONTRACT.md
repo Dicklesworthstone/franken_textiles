@@ -70,12 +70,28 @@ sends both, retains drafts across cancelled file choices, and invalidates in-fli
 when a newer edit arrives. Reset and actual source selection discard the editor; a cancelled
 file choice never silently reloads the original input over applied values.
 
+**Manual prepared observations.** `body_fit::body_fit_observations(model_bytes, input, edits)` and
+its wasm32 export open empty or populated keypoint drafts and replace only explicitly supplied
+per-frame keypoints. Both source hashes are required for edits; original frame ordinals join to
+native full-width identities. Canonical `prepare_capture_authoring` retains camera, target, pixel,
+uncertainty and budget checks. Existing point uncertainty and FIT/CHECK roles cannot change;
+new points require an explicit declared target, pixel, sigma and role. Every other input field,
+including starts, silhouettes and source images, remains fixed. Limits are 16 MiB input, 512 MiB
+model and 256 KiB edits. Each frame's opaque `OBSERVATION_REVIEW` image receipt can use the existing
+strict image verifier before a start exists; its already-oriented pixels receive no second rotation.
+The photo page annotates named targets on those verified original pixels or accepts explicit stored
+pixel coordinates. Observation and initialization editors share one exact native prepared snapshot;
+each application binds the current snapshot hash. Pending changes withdraw stale previews, fits and
+handoffs, while cancellation restores the last applied values and reset restores the uploaded source.
+This authoring path performs no model evaluation, fitting, anatomy inference or readiness promotion.
+
 **Original capture image inspection.** An accepted frame review retains `source_image` when its
 report has complete `capture_images` or an older native `capture_input` receipt. Both must agree
 when present. `body_fit::BodyFitImage` and wasm32 `WebBodyFitImage` accept only explicitly supplied
 image bytes and the exact review text. Initialization reviews retain the same source binding and
 are admitted only with `status: INITIALIZATION_REVIEW` and `body_fitted: false`; their image receipt
-keeps that review kind. Both review modes verify the original encoded hash, frame, dimensions
+keeps that review kind. Observation reviews likewise require their explicit status and unfitted flag.
+All three review modes verify the original encoded hash, frame, dimensions
 and rotation before publishing a lossless PNG and an image/review identity receipt. The shared
 native capture decoder accepts opaque 8-bit PNG or strict JPEG with absent/identity EXIF; recorded
 rotation has already been applied and is never applied again. Bounds are 16 MiB review, 128 MiB

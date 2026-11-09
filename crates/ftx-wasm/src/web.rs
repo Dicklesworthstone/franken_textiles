@@ -102,6 +102,21 @@ pub fn body_fit_starts(model_bytes: &[u8], input: &str, edits: &str) -> Result<S
         .map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// Inspect or apply source-bound manual keypoints while retaining every other prepared input field.
+///
+/// # Errors
+/// Invalid sources, frame ordinals, target names, coordinates, uncertainties or fixed evidence roles.
+#[wasm_bindgen]
+pub fn body_fit_observations(
+    model_bytes: &[u8],
+    input: &str,
+    edits: &str,
+) -> Result<String, JsError> {
+    crate::body_fit::body_fit_observations(model_bytes, input, edits)
+        .map(|value| value.to_string())
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Fit prepared multi-frame observations and local model bytes with native acceptance gates.
 /// Work limits are strings so the boundary cannot truncate a JavaScript number into a valid limit.
 ///
