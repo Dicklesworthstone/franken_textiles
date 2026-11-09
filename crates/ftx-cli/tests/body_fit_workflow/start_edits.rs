@@ -105,6 +105,201 @@ fn long_frame_ids(input: &mut Value, first: u64) {
 }
 
 #[test]
+fn portable_start_authoring_preserves_evidence_and_replays_native_fit() {
+    let (model, mut original) = fixture();
+    long_frame_ids(&mut original, u64::MAX - 200_000);
+    original["fit"]["frames"].as_array_mut().unwrap().reverse();
+    original["fit"]["starts"][0]["poses"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    original["capture_images"] = json!(
+        original["fit"]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(i, frame)| json!({"frame":frame["frame"],
+            "image_name":format!("synthetic-{i}.png"),"image_sha256":"a".repeat(64),
+            "image_size_px":frame["image_size_px"],"rotation_cw_deg":frame["rotation_cw_deg"]}))
+            .collect::<Vec<_>>()
+    );
+    let desired = annotations_for(&original);
+    let mut draft = original.clone();
+    draft["fit"]["starts"] = json!([]);
+    let source = serde_json::to_string_pretty(&draft).unwrap();
+    let prepared = ftx_wasm::body_fit::body_fit_starts(&model, &source, "").unwrap();
+    assert_eq!(prepared["input"], source);
+    assert_eq!(prepared["input_sha256"], sha256_hex(source.as_bytes()));
+    assert_eq!(prepared["original_input_sha256"], prepared["input_sha256"]);
+    assert_eq!(prepared["model_sha256"], sha256_hex(&model));
+    assert_eq!(prepared["starts"], json!([]));
+    assert_eq!(prepared["body_fitted"], false);
+    assert_eq!(
+        prepared["frames"][0]["identity"]["timestamp_us"],
+        u64::MAX.to_string()
+    );
+    assert_eq!(prepared["frames"][0]["frame_index"], 0);
+    assert_eq!(
+        prepared["shape"][0]["name"],
+        original["model"]["shape_parameters"][0]["name"]
+    );
+    assert_eq!(
+        prepared["shape"][0]["lower"],
+        original["model"]["shape_parameters"][0]["lower"]
+    );
+    assert_eq!(prepared["pose"][0]["unit"], "m");
+    assert_eq!(prepared["pose"][6]["unit"], "rad");
+
+    // Annotations deliberately arrive in a different pose order. The edited input retains
+    // the original frame order and joins each pose by ordinal, not by its array position.
+    let mut edits = json!({"starts":desired});
+    edits["starts"][0]["poses"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    edits["starts"][0]["shape"][0] = json!(0.64);
+    let applied = ftx_wasm::body_fit::body_fit_starts(&model, &source, &edits.to_string()).unwrap();
+    let text = applied["input"].as_str().unwrap();
+    let mut value: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        applied["original_input_sha256"],
+        sha256_hex(source.as_bytes())
+    );
+    assert_eq!(applied["input_sha256"], sha256_hex(text.as_bytes()));
+    assert_ne!(applied["input_sha256"], applied["original_input_sha256"]);
+    assert_eq!(
+        value["fit"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
+    for start in value["fit"]["starts"].as_array().unwrap() {
+        for (pose, frame) in start["poses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(original["fit"]["frames"].as_array().unwrap())
+        {
+            assert_eq!(pose["frame"], frame["frame"]);
+        }
+    }
+    value["fit"]["starts"] = json!([]);
+    assert_eq!(
+        value, draft,
+        "editing starts changed observation or source evidence"
+    );
+    let reopened = ftx_wasm::body_fit::body_fit_starts(&model, text, "").unwrap();
+    assert_eq!(reopened["input"], text);
+    assert_eq!(reopened["starts"], applied["starts"]);
+    let preview = ftx_wasm::body_fit::review_body_fit_start(&model, text, "0", "0").unwrap();
+    assert_eq!(preview["shape_values"][0], 0.64);
+    assert_eq!(preview["frame"]["timestamp_us"].as_u64(), Some(u64::MAX));
+    assert_eq!(preview["source_image"], original["capture_images"][0]);
+
+    let portable = ftx_wasm::body_fit::fit_body(&model, text, "60", "20000").unwrap();
+    assert_eq!(portable["status"], "ACCEPTED");
+    let dir = setup();
+    std::fs::write(dir.join("input.json"), text).unwrap();
+    let native = run(
+        &dir,
+        &["--iterations", "60", "--max-evaluations", "20000"],
+        0,
+    );
+    assert_eq!(portable, native["result"]);
+}
+
+#[test]
+fn portable_start_authoring_supports_one_start_without_weakening_fit_admission() {
+    let (model, input) = fixture();
+    let original = input.to_string();
+    let starts = annotations_for(&input);
+    let applied = ftx_wasm::body_fit::body_fit_starts(
+        &model,
+        &original,
+        &json!({"starts":[starts[0]]}).to_string(),
+    )
+    .unwrap();
+    let text = applied["input"].as_str().unwrap();
+    assert_eq!(applied["starts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        ftx_wasm::body_fit::review_body_fit_start(&model, text, "0", "1").unwrap()["body_fitted"],
+        false
+    );
+    assert!(ftx_wasm::body_fit::fit_body(&model, text, "50", "10000").is_err());
+    assert_eq!(
+        ftx_wasm::body_fit::body_fit_starts(&model, &original, "").unwrap()["input"],
+        original
+    );
+}
+
+#[test]
+fn portable_start_authoring_refuses_invalid_edits_and_changed_sources() {
+    let (model, input) = fixture();
+    let text = input.to_string();
+    let valid = json!({"starts":annotations_for(&input)});
+    for kind in [
+        "empty",
+        "too_many",
+        "duplicate_start",
+        "boundary",
+        "dimension",
+        "missing_pose",
+        "duplicate_frame",
+        "unknown_frame",
+        "fractional_frame",
+        "edit_evidence",
+        "extra_pose_field",
+    ] {
+        let mut bad = valid.clone();
+        match kind {
+            "empty" => bad["starts"] = json!([]),
+            "too_many" => bad["starts"] = json!(vec![bad["starts"][0].clone(); 5]),
+            "duplicate_start" => bad["starts"][1] = bad["starts"][0].clone(),
+            "boundary" => {
+                bad["starts"][0]["shape"][0] =
+                    input["model"]["shape_parameters"][0]["lower"].clone()
+            }
+            "dimension" => bad["starts"][0]["shape"] = json!([]),
+            "missing_pose" => {
+                bad["starts"][0]["poses"].as_array_mut().unwrap().pop();
+            }
+            "duplicate_frame" => bad["starts"][0]["poses"][1]["frame_index"] = json!(0),
+            "unknown_frame" => bad["starts"][0]["poses"][0]["frame_index"] = json!(8),
+            "fractional_frame" => bad["starts"][0]["poses"][0]["frame_index"] = json!(0.5),
+            "edit_evidence" => bad["measurements"] = json!([]),
+            "extra_pose_field" => {
+                bad["starts"][0]["poses"][0]["frame"] = input["fit"]["frames"][0]["frame"].clone()
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            ftx_wasm::body_fit::body_fit_starts(&model, &text, &bad.to_string()).is_err(),
+            "{kind}"
+        );
+    }
+    let infinite = valid.to_string().replacen("0.63", "1e999", 1);
+    assert_ne!(infinite, valid.to_string());
+    assert!(ftx_wasm::body_fit::body_fit_starts(&model, &text, &infinite).is_err());
+    for kind in ["schema", "model", "capture", "evidence"] {
+        let mut bad = input.clone();
+        match kind {
+            "schema" => bad["schema"] = json!("ftx-anny-capture-input/1"),
+            "model" => bad["model"]["model_sha256"] = json!("a".repeat(64)),
+            "capture" => bad["capture_images"] = json!([]),
+            "evidence" => bad["fit"]["frames"][0]["keypoints"][0]["sigma_px"] = json!(0),
+            _ => unreachable!(),
+        }
+        assert!(
+            ftx_wasm::body_fit::body_fit_starts(&model, &bad.to_string(), &valid.to_string())
+                .is_err(),
+            "{kind}"
+        );
+    }
+    assert!(
+        ftx_wasm::body_fit::body_fit_starts(&model, &text, &" ".repeat(64 * 1024 + 1)).is_err()
+    );
+}
+
+#[test]
 fn start_edits_bootstrap_and_ordinals_preserve_exact_native_frame_identities() {
     let dir = setup();
     let mut good = read(&dir, "input.json");

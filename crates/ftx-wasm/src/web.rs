@@ -90,6 +90,18 @@ pub fn bundle_adjust(input: &str, iterations: &str) -> Result<String, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Prepare named body-fit initializations or apply bounded edits while keeping evidence fixed.
+/// An empty edit string returns the exact original prepared input.
+///
+/// # Errors
+/// Invalid prepared sources/model, excessive inputs, incomplete poses or invalid start values.
+#[wasm_bindgen]
+pub fn body_fit_starts(model_bytes: &[u8], input: &str, edits: &str) -> Result<String, JsError> {
+    crate::body_fit::body_fit_starts(model_bytes, input, edits)
+        .map(|value| value.to_string())
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Fit prepared multi-frame observations and local model bytes with native acceptance gates.
 /// Work limits are strings so the boundary cannot truncate a JavaScript number into a valid limit.
 ///

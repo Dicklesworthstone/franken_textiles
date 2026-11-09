@@ -11,7 +11,8 @@ use ftx_body::{
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::{
     body_fit::{
-        self, BodyFitInput, BodyModel, CaptureImage, FitOptions, FramePose, ModelLayout, Parameter,
+        self, BodyFitInput, BodyModel, CaptureImage, FitOptions, FitStart, FramePose, ModelLayout,
+        Parameter,
     },
     silhouette::{self, SurfaceMesh},
 };
@@ -85,6 +86,191 @@ impl BodyModel for Adapter {
 
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartEdits {
+    starts: Vec<StartValues>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartValues {
+    shape: Vec<f64>,
+    poses: Vec<PoseValues>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PoseValues {
+    frame_index: usize,
+    values: Vec<f64>,
+}
+
+/// Prepare named initialization controls, or replace starts in an otherwise unchanged input.
+/// Empty edit text retains the original input bytes. Edits use original frame ordinals; native
+/// identities never pass through JavaScript numbers. One start is an inspectable draft, while
+/// the ordinary fitter still requires two to four distinct initializations.
+///
+/// # Errors
+/// Oversized input/model/edits, wrong model identity, malformed observations or edit fields,
+/// incomplete frame poses, duplicate starts, or values outside the original exclusive bounds.
+pub fn body_fit_starts(
+    model_bytes: &[u8],
+    input_text: &str,
+    edits_text: &str,
+) -> Result<Value, Refusal> {
+    if input_text.len() > 16 * 1024 * 1024
+        || model_bytes.len() > 512 * 1024 * 1024
+        || edits_text.len() > 64 * 1024
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "initialization authoring supports at most 16 MiB input, 512 MiB model and 64 KiB edits",
+        ));
+    }
+    let mut request: Request = serde_json::from_str(input_text)
+        .map_err(|error| invalid(format!("invalid prepared initialization input: {error}")))?;
+    if request.schema != "ftx-anny-body-fit-input/1" {
+        return Err(invalid(
+            "initialization authoring requires prepared ftx-anny-body-fit-input/1",
+        ));
+    }
+    if let Some(images) = &request.capture_images {
+        body_fit::validate_capture_images(images, &request.fit.frames)?;
+    }
+    let hash = sha256_hex(model_bytes);
+    if request.model.model_sha256 != hash {
+        return Err(invalid(
+            "model SHA-256 mismatch; no initialization was edited",
+        ));
+    }
+    let model = AnnyModel::from_data(AnnyData::from_bytes(model_bytes, true)?)?;
+    let adapter = Adapter::new(CorrespondenceModel::new(model, request.model, &hash)?);
+    body_fit::prepare_start_authoring(&request.fit, adapter.layout())?;
+    let input = if edits_text.trim().is_empty() {
+        input_text.to_owned()
+    } else {
+        let edits: StartEdits = serde_json::from_str(edits_text)
+            .map_err(|error| invalid(format!("invalid initialization edits: {error}")))?;
+        if !(1..=4).contains(&edits.starts.len()) {
+            return Err(invalid("initialization edits need one to four starts"));
+        }
+        request.fit.starts = edits
+            .starts
+            .into_iter()
+            .map(|start| {
+                if start.poses.len() != request.fit.frames.len() {
+                    return Err(invalid(
+                        "each start needs exactly one pose per source frame",
+                    ));
+                }
+                let mut values = vec![None; request.fit.frames.len()];
+                for pose in start.poses {
+                    let slot = values
+                        .get_mut(pose.frame_index)
+                        .ok_or_else(|| invalid("start pose frame_index is out of range"))?;
+                    if slot.replace(pose.values).is_some() {
+                        return Err(invalid("duplicate start pose frame_index"));
+                    }
+                }
+                let poses = request
+                    .fit
+                    .frames
+                    .iter()
+                    .zip(values)
+                    .map(|(frame, values)| {
+                        Ok(FramePose {
+                            frame: frame.frame.clone(),
+                            values: values
+                                .ok_or_else(|| invalid("missing start pose frame_index"))?,
+                        })
+                    })
+                    .collect::<Result<_, Refusal>>()?;
+                Ok(FitStart {
+                    shape: start.shape,
+                    poses,
+                })
+            })
+            .collect::<Result<_, Refusal>>()?;
+        body_fit::prepare_start_authoring(&request.fit, adapter.layout())?;
+        // Preserve every other authored JSON value, including exact u64 source identities and
+        // original frame order. Do not substitute the canonically sorted fitting representation.
+        let mut value: Value = serde_json::from_str(input_text)
+            .map_err(|error| invalid(format!("invalid initialization source: {error}")))?;
+        value["fit"]["starts"] = json!(request.fit.starts);
+        let edited = serde_json::to_string_pretty(&value).map_err(|error| {
+            invalid(format!("cannot serialize edited initializations: {error}"))
+        })?;
+        if edited.len() > 16 * 1024 * 1024 {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "edited prepared initialization input exceeds 16 MiB",
+            ));
+        }
+        edited
+    };
+    let frames: Vec<_> = request
+        .fit
+        .frames
+        .iter()
+        .enumerate()
+        .map(|(frame_index, frame)| {
+            json!({"frame_index":frame_index,
+                "label":format!("Frame {}: {} @ {} us", frame_index + 1,
+                    frame.frame.stream, frame.frame.timestamp_us),
+                "identity":{"stream":frame.frame.stream,
+                    "timestamp_us":frame.frame.timestamp_us.to_string()}})
+        })
+        .collect();
+    let starts = request
+        .fit
+        .starts
+        .iter()
+        .map(|start| {
+            let poses = request
+                .fit
+                .frames
+                .iter()
+                .enumerate()
+                .map(|(frame_index, frame)| {
+                    let pose = start
+                        .poses
+                        .iter()
+                        .find(|pose| pose.frame == frame.frame)
+                        .ok_or_else(|| invalid("start is missing its source frame pose"))?;
+                    Ok(json!({"frame_index":frame_index,"values":pose.values}))
+                })
+                .collect::<Result<Vec<_>, Refusal>>()?;
+            Ok(json!({"shape":start.shape,"poses":poses}))
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    let shape: Vec<_> = adapter
+        .layout
+        .shape
+        .iter()
+        .map(|p| json!({"name":p.name,"lower":p.lower,"upper":p.upper,"unit":"dimensionless"}))
+        .collect();
+    let pose: Vec<_> = adapter
+        .layout
+        .pose
+        .iter()
+        .map(|p| {
+            let unit = if matches!(p.name.as_str(), "root_x_m" | "root_y_m" | "root_z_m") {
+                "m"
+            } else {
+                "rad"
+            };
+            json!({"name":p.name,"lower":p.lower,"upper":p.upper,"unit":unit})
+        })
+        .collect();
+    Ok(
+        json!({"schema":"ftx-body-starts-review/1","status":"INITIALIZATION_REVIEW",
+        "body_fitted":false,"original_input_sha256":sha256_hex(input_text.as_bytes()),
+        "input_sha256":sha256_hex(input.as_bytes()),"model_sha256":hash,
+        "shape":shape,"pose":pose,"frames":frames,"starts":starts,"input":input}),
+    )
 }
 
 /// Fit one shared shape and independent frame poses from original prepared JSON and model bytes.

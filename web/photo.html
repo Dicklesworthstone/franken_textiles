@@ -9,11 +9,12 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:24px auto;paddin
 section{background:white;border:1px solid #ccd5db;border-radius:8px;padding:16px;margin:18px 0}
 h1,h2{line-height:1.2}label{display:inline-block;max-width:100%;margin:6px 14px 6px 0}input,select,button,textarea{font:inherit;padding:6px}
 input[type=file],select{max-width:100%;box-sizing:border-box}
-#bodyFitReview fieldset{min-inline-size:0}
+#bodyFitReview fieldset,#bodyStartsEditor fieldset{min-inline-size:0}
+#bodyStartsFields label{display:block;overflow-wrap:anywhere}#bodyStartsFields input{max-width:100%;box-sizing:border-box}
 button{cursor:pointer}button:disabled{cursor:default;opacity:.5}textarea{width:100%;box-sizing:border-box;font:14px monospace}
 canvas{display:block;width:100%;height:auto;cursor:crosshair}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px;border-bottom:1px solid #ddd}
-a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError,#sectionError,#bodyFitError{color:#a02020}small{color:#42515a}
+a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError,#sectionError,#bodyFitError,#bodyStartsError{color:#a02020}small{color:#42515a}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -275,6 +276,31 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     supported. A path-based capture input or mask manifest must first be prepared with the native tools;
     this page does not read local paths or infer landmarks from a video. Input limit: 16 MiB; model limit: 512 MiB.</small></p>
   <details>
+    <summary>Edit shared-shape and per-frame starting values</summary>
+    <p>Load the prepared input's named controls, then enter each start's shared shape and each frame's
+      pose. Cameras, observations, FIT/CHECK roles and parameter bounds stay fixed. Values must lie
+      strictly inside the declared bounds; no values are inferred or fitted by this editor.</p>
+    <p><button id="bodyStartsLoad" disabled>Load starting values</button></p>
+    <div id="bodyStartsEditor" hidden>
+      <label>Initialization <select id="bodyStartsSelect"></select></label>
+      <p><button id="bodyStartsAdd">Add blank start</button>
+        <button id="bodyStartsCopy">Copy selected start</button>
+        <button id="bodyStartsRemove">Remove selected start</button>
+        <button id="bodyStartsMidpoint">Set selected values to bound midpoints</button></p>
+      <div id="bodyStartsFields"></div>
+      <p><button id="bodyStartsApply">Check and apply all starts</button>
+        <button id="bodyStartsReset">Restore original input</button></p>
+      <p><small>One complete start can be previewed. Fitting requires 2–4 distinct complete starts.
+        Copying a start requires changing at least one value before applying it. Edits withdraw previous
+        fit results and previews; apply or cancel them before running again. Keep predeclared CHECK
+        evidence fixed and do not tune starts to its residuals.</small></p>
+    </div>
+    <p><button id="bodyStartsCancel" disabled>Cancel loading or pending edits</button></p>
+    <p id="bodyStartsStatus" role="status" aria-live="polite">Load the selected prepared input to edit its starts.</p>
+    <pre id="bodyStartsError" role="alert"></pre>
+    <div id="bodyStartsDownloads" class="files"></div>
+  </details>
+  <details>
     <summary>Inspect a declared starting pose before fitting</summary>
     <p>Evaluate one caller-authored start on one frame through the real body model. Inspect misplaced
       geometry, large residuals and failed projections before spending a fitting budget. This does not
@@ -284,8 +310,9 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <p><button id="bodyFitStartRun" disabled>Preview declared starting pose</button></p>
     <p><small>Frame numbers follow the original input order; the review shows the exact native frame identity
       and actual counts. A single declared start can be previewed; fitting still needs 2–4 distinct starts.
-      To revise values, use the initialization editor's named controls, download its edited prepared input,
-      then select that input here. Keep predeclared CHECK evidence fixed; do not tune starts to its residuals.</small></p>
+      Apply values in the initialization editor above, then preview them directly here. The edited input
+      can also be downloaded for native fitting. Keep predeclared CHECK evidence fixed; do not tune starts
+      to its residuals.</small></p>
   </details>
   <details><summary>Numerical work limits</summary>
     <label>Maximum accepted steps per start <input id="bodyFitIterations" type="number" min="1" max="100" step="1" value="50"></label>

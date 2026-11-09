@@ -6,6 +6,17 @@ self.onmessage = async ({data: m}) => {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
+    if(m.op==="body-fit-starts") {
+      if(typeof m.input!=="string" || new TextEncoder().encode(m.input).length>16*1024*1024 ||
+          typeof m.edits!=="string" || new TextEncoder().encode(m.edits).length>64*1024 ||
+          !(m.model instanceof ArrayBuffer) || m.model.byteLength===0 || m.model.byteLength>512*1024*1024) {
+        throw Error("Start editing needs prepared input up to 16 MiB, model up to 512 MiB and edits up to 64 KiB.");
+      }
+      self.postMessage({type:"progress",request:m.request,text:"Checking the exact model, source evidence and declared initialization bounds…"});
+      const report=ftx.body_fit_starts(new Uint8Array(m.model),m.input,m.edits);
+      self.postMessage({type:"result",request:m.request,report});
+      return;
+    }
     if(m.op==="review-body-fit-start") {
       if(typeof m.input!=="string" || new TextEncoder().encode(m.input).length>16*1024*1024 ||
           !(m.model instanceof ArrayBuffer) || m.model.byteLength===0 || m.model.byteLength>512*1024*1024 ||

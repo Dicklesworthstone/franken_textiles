@@ -594,8 +594,8 @@ pub fn prepare_input(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyF
 }
 
 /// Prepare an initialization editor, allowing zero or one declared start while it is incomplete.
-/// All existing starts and observations retain the ordinary validation rules. Fitting and
-/// materializing edited starts must still use [`prepare_input`], which requires 2..4 starts.
+/// All existing starts and observations retain the ordinary validation rules. Drafts may be
+/// saved and previewed, but fitting still uses [`prepare_input`], which requires 2..4 starts.
 pub fn prepare_start_authoring(
     input: &BodyFitInput,
     layout: &ModelLayout,

@@ -54,6 +54,17 @@ garment handoff, and retains any separate accepted result independently. Source/
 cancel, delayed file reads and stale worker replies withdraw obsolete previews and image overlays.
 Held-out evidence stays fixed; inspecting it does not justify tuning starts to CHECK residuals.
 
+**Local initialization authoring.** `body_fit::body_fit_starts(model_bytes, input, edits)` and its
+wasm32 export prepare named shape/pose controls from the same checked model and input. Empty edit
+text returns the original input bytes unchanged, including zero-start drafts. Explicit edits
+replace only one to four starts, joining original frame ordinals to native full-width identities.
+All observations, bounds, cameras, source images and FIT/CHECK roles stay fixed. Duplicate starts,
+missing or repeated frame ordinals, nonfinite values and boundary/out-of-domain values refuse
+through ordinary native admission. The returned input can immediately be previewed, downloaded
+and fitted; a one-start draft is inspectable but fitting still requires two to four distinct starts.
+Edits are limited to 64 KiB alongside the existing 16 MiB input and 512 MiB model limits. Every
+result names both original and returned input hashes, with no optimization or accepted body.
+
 **Original capture image inspection.** An accepted frame review retains `source_image` when its
 report has complete `capture_images` or an older native `capture_input` receipt. Both must agree
 when present. `body_fit::BodyFitImage` and wasm32 `WebBodyFitImage` accept only explicitly supplied

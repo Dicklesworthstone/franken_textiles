@@ -399,7 +399,26 @@ The generated review's mesh and image overlays remain the **original** preview w
 edited. You can evaluate the edited declaration directly in the local photo page, or materialize
 it and generate a fresh native review.
 
-### Preview a declared start in the local photo page
+### Edit and preview starts in the local photo page
+
+Select the converted model and prepared input in `web/photo.html`, then open the initialization
+editor. It reads the named shape controls and per-frame pose controls from the checked native
+model, including their units and exclusive bounds. Add an explicit start, copy one as a draft,
+edit the named values, or remove a start. Applying sends the complete proposed starts through
+ordinary native validation before replacing the page's active prepared input. Observations,
+cameras, target definitions, FIT/CHECK roles and original capture bindings stay fixed.
+
+The edited input can immediately be previewed or fitted in the same page and downloaded for
+native reuse. A zero-start source can be opened for authoring; one applied start can be saved
+and previewed; fitting still requires two to four distinct complete starts. Frame ordinals are
+joined to their full-width identities in Rust, so even timestamps beyond JavaScript's integer
+precision remain unchanged. Opening an editor without edits retains the original source bytes.
+
+Pending or invalid edits withdraw stale fits, previews and downloads. Apply validates every
+start atomically; cancellation returns to the last applied values, and reset restores the
+original selected input. Source changes, cancelled reads and obsolete worker responses cannot
+restore old results. Downloaded snapshots remain independent of later edits. Editing starts
+does not change fitting acceptance or establish anatomical or physical fit.
 
 Select the converted model and the current prepared input in `web/photo.html`, then expand
 **Inspect a declared starting pose before fitting**. Choose the start and frame and select
@@ -421,9 +440,10 @@ to inspect it behind the projections using the same local source-image verificat
 The result is labelled `INITIALIZATION_REVIEW`. It does not run fitting, accept a body, create
 measurement records or enable garment reuse. A valid single declared start can be previewed;
 an empty source has no pose to evaluate. Ordinary fitting still requires two to four distinct
-complete starts. Revise starts in the existing initialization editor, download its new prepared
-snapshot, and select that snapshot here; the preview does not change authored values or CHECK
-evidence. Do not tune initializations to held-out residuals.
+complete starts. Revise starts in the page's initialization editor and apply them before previewing
+again; the preview itself does not change authored values or CHECK evidence. The separate native
+initialization editor and its prepared snapshots remain supported. Do not tune initializations
+to held-out residuals.
 
 The frame JSON is downloaded unchanged from Rust, retaining exact frame identities and input/model
 hashes; OBJ coordinates remain unrounded metres. Input/model limits are 16 MiB and 512 MiB, with at most 100,000 vertices

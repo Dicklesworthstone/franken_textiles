@@ -18,6 +18,10 @@ const triangulationUrls = [];
 let bodyFitWorker = null, bodyFitTicket = 0, bodyFitBusy = false;
 let bodyFitSources = null, bodyFitTransfer = null;
 const bodyFitUrls = [];
+let bodyStartsWorker = null, bodyStartsTicket = 0, bodyStartsBusy = false;
+let bodyStartsSource = null, bodyStartsView = null, bodyStartsDraft = [], bodyStartsSelected = 0, bodyStartsPending = false;
+const bodyStartsUrls = [];
+let bodyStartsInputs = [];
 let bodyReviewWorker = null, bodyReviewTicket = 0, bodyReviewBusy = false, bodyReviewValue = null, bodyReviewText = null;
 let bodyReviewImageWorker = null, bodyReviewImageTicket = 0, bodyReviewImageBusy = false, bodyReviewBitmap = null;
 const bodyReviewUrls = [];
@@ -50,20 +54,32 @@ function checkedOptions(text) {
   }
 }
 function controls() {
-  $("bodyFitRun").disabled=bodyFitBusy || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
-  $("bodyFitOpen").disabled=bodyFitBusy || !$("bodyFitModel").files.length || !$("bodyFitSaved").files.length;
+  const startsBlocked=bodyStartsBusy || bodyStartsPending;
+  $("bodyFitRun").disabled=bodyFitBusy || startsBlocked || bodyStartsView?.starts.length<2 || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
+  $("bodyFitOpen").disabled=bodyFitBusy || startsBlocked || !$("bodyFitModel").files.length || !$("bodyFitSaved").files.length;
   $("bodyFitCancel").disabled=!bodyFitBusy;
   $("bodyFitWorkbench").disabled=bodyFitBusy || !bodyFitSources;
   $("bodyFitReviewRun").disabled=bodyReviewBusy || bodyFitBusy || !bodyFitSources;
   $("bodyFitReviewCancel").disabled=!bodyReviewBusy && !bodyReviewImageBusy;
   $("bodyFitReviewFrame").disabled=bodyFitBusy || !bodyFitSources;
-  $("bodyFitStartRun").disabled=bodyReviewBusy || bodyFitBusy || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
+  $("bodyFitStartRun").disabled=bodyReviewBusy || bodyFitBusy || startsBlocked || bodyStartsView?.starts.length===0 || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
   $("bodyFitStartIndex").disabled=bodyFitBusy; $("bodyFitStartFrame").disabled=bodyFitBusy;
   $("bodyFitAcceptedReviewControls").hidden=!bodyFitSources;
   const reviewImageUnavailable=bodyFitBusy || bodyReviewBusy || !bodyReviewValue?.source_image;
   $("bodyFitReviewImage").disabled=reviewImageUnavailable;
   $("bodyFitReviewImageRun").disabled=reviewImageUnavailable || bodyReviewImageBusy || !$("bodyFitReviewImage").files.length;
   $("bodyFitReviewImageClear").disabled=!bodyReviewImageBusy && !bodyReviewBitmap && !$("bodyFitReviewImage").files.length;
+  $("bodyStartsLoad").disabled=bodyStartsBusy || bodyFitBusy || bodyStartsView!==null || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
+  $("bodyStartsEditor").hidden=bodyStartsView===null;
+  const startsLocked=bodyStartsBusy || bodyFitBusy, hasStart=!!bodyStartsDraft[bodyStartsSelected];
+  $("bodyStartsSelect").disabled=startsLocked || !bodyStartsDraft.length;
+  for(const id of ["bodyStartsCopy","bodyStartsRemove","bodyStartsMidpoint"]) $(id).disabled=startsLocked || !hasStart;
+  $("bodyStartsCopy").disabled ||= bodyStartsDraft.length>=4;
+  $("bodyStartsAdd").disabled=startsLocked || !bodyStartsView || bodyStartsDraft.length>=4;
+  $("bodyStartsApply").disabled=startsLocked || !bodyStartsPending || !bodyStartsDraft.length;
+  $("bodyStartsCancel").disabled=!bodyStartsPending && !bodyStartsBusy;
+  $("bodyStartsReset").disabled=!bodyStartsView && !bodyStartsBusy;
+  for(const input of bodyStartsInputs) input.disabled=startsLocked;
   const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate";
   $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
   $("geometryStillControls").hidden=!still;
@@ -168,6 +184,169 @@ async function readJsonFile(file) {
   // Preserve the exact UTF-8 source, including a BOM (which the Rust JSON parser will reject).
   // Replacing invalid bytes or stripping a BOM would change the source identity before hashing.
   return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
+}
+function bodyInputText(file) {
+  // The editor receives complete input text from Rust. Never parse/rewrite its frame IDs in JS.
+  if(bodyStartsView && file===bodyStartsSource?.inputFile && $("bodyFitModel").files[0]===bodyStartsSource.modelFile) {
+    return Promise.resolve(bodyStartsView.input);
+  }
+  return readJsonFile(file);
+}
+function copyBodyStarts(starts) {
+  return starts.map(start=>({shape:[...start.shape],poses:start.poses.map(pose=>({frame_index:pose.frame_index,values:[...pose.values]}))}));
+}
+function stopBodyStarts() {
+  ++bodyStartsTicket; bodyStartsWorker?.terminate(); bodyStartsWorker=null; bodyStartsBusy=false;
+}
+function withdrawBodyStartsDownloads() {
+  revoke(bodyStartsUrls); $("bodyStartsDownloads").replaceChildren();
+}
+function bodyStartsDownload() {
+  withdrawBodyStartsDownloads();
+  if(bodyStartsView && !bodyStartsPending && !bodyStartsBusy) {
+    const name=bodyStartsView.input===bodyStartsSource.input?"body-fit-input-original.json":"body-fit-input-edited.json";
+    link($("bodyStartsDownloads"),bodyStartsView.input,name,"application/json",bodyStartsUrls);
+  }
+}
+function withdrawBodyStarts() {
+  stopBodyStarts(); withdrawBodyStartsDownloads();
+  bodyStartsSource=null; bodyStartsView=null; bodyStartsDraft=[]; bodyStartsInputs=[]; bodyStartsPending=false; bodyStartsSelected=0;
+  $("bodyStartsFields").replaceChildren(); $("bodyStartsSelect").replaceChildren();
+  $("bodyStartsError").textContent="";
+  $("bodyStartsStatus").textContent="Load the selected prepared input to edit its starts.";
+  controls();
+}
+function pendingBodyStarts() {
+  bodyStartsPending=true; withdrawBodyStartsDownloads(); withdrawBodyFit();
+  $("bodyStartsError").textContent="";
+  $("bodyStartsStatus").textContent="Pending starting values: check and apply all starts, or cancel the edits. Previous fit results and previews are withdrawn.";
+  $("bodyFitStatus").textContent="Starting values changed; apply or cancel pending edits before previewing or fitting.";
+  controls();
+}
+function renderBodyStarts() {
+  const list=$("bodyStartsSelect"), fields=$("bodyStartsFields");
+  list.replaceChildren(); fields.replaceChildren(); bodyStartsInputs=[];
+  bodyStartsSelected=Math.min(bodyStartsSelected,Math.max(0,bodyStartsDraft.length-1));
+  for(let i=0;i<bodyStartsDraft.length;i++) {
+    const option=document.createElement("option"); option.value=String(i); option.textContent="Start "+(i+1); list.append(option);
+  }
+  list.value=String(bodyStartsSelected);
+  const start=bodyStartsDraft[bodyStartsSelected];
+  if(!start) {controls();return;}
+  const group=(title,parameters,values,prefix)=>{
+    const fieldset=document.createElement("fieldset"), legend=document.createElement("legend");
+    legend.textContent=title; fieldset.append(legend);
+    parameters.forEach((parameter,index)=>{
+      const label=document.createElement("label"), input=document.createElement("input"), text=document.createElement("span");
+      input.type="number"; input.step="any"; input.min=String(parameter.lower); input.max=String(parameter.upper);
+      input.id=`bodyStart-${prefix}-${index}`; label.htmlFor=input.id;
+      input.value=Object.is(values[index],-0)?"-0":String(values[index]);
+      text.textContent=`${parameter.name} (${parameter.unit}); ${parameter.lower} < value < ${parameter.upper} `;
+      input.addEventListener("input",()=>{
+        if(bodyStartsBusy || bodyFitBusy) return;
+        values[index]=input.value; pendingBodyStarts();
+      });
+      label.append(text,input); fieldset.append(label); bodyStartsInputs.push(input);
+    });
+    fields.append(fieldset);
+  };
+  group("Shared shape — same across every frame",bodyStartsView.shape,start.shape,"shape");
+  for(const frame of bodyStartsView.frames) {
+    group(frame.label,bodyStartsView.pose,start.poses.find(pose=>pose.frame_index===frame.frame_index).values,"pose-"+frame.frame_index);
+  }
+  controls();
+}
+function checkedBodyStartsView(text,input,edits) {
+  const view=JSON.parse(text), hash=value=>typeof value==="string" && /^[0-9a-f]{64}$/.test(value);
+  if(view.schema!=="ftx-body-starts-review/1" || typeof view.input!=="string" || new Blob([view.input]).size>16*1024*1024 ||
+      !hash(view.input_sha256) || !hash(view.original_input_sha256) || !hash(view.model_sha256) ||
+      !Array.isArray(view.shape) || !Array.isArray(view.pose) || !Array.isArray(view.frames) ||
+      !view.frames.length || view.frames.length>8 || !Array.isArray(view.starts) || view.starts.length>4 ||
+      (!edits && (view.input!==input || view.input_sha256!==view.original_input_sha256)) ||
+      (edits && (!view.starts.length || view.original_input_sha256!==bodyStartsSource?.input_sha256 || view.model_sha256!==bodyStartsView?.model_sha256))) {
+    throw Error("The engine did not return a source-bound initialization editor.");
+  }
+  for(const parameters of [view.shape,view.pose]) {
+    if(parameters.length>128 || parameters.some(p=>typeof p.name!=="string" || typeof p.unit!=="string" ||
+        !Number.isFinite(p.lower) || !Number.isFinite(p.upper) || p.lower>=p.upper)) {
+      throw Error("The engine returned invalid initialization controls.");
+    }
+  }
+  for(const [index,frame] of view.frames.entries()) {
+    if(frame.frame_index!==index || typeof frame.label!=="string" || typeof frame.identity?.stream!=="string" ||
+        typeof frame.identity.timestamp_us!=="string" || !/^(0|[1-9]\d*)$/.test(frame.identity.timestamp_us)) {
+      throw Error("The engine returned invalid original frame identities.");
+    }
+  }
+  const validVector=(values,parameters)=>Array.isArray(values) && values.length===parameters.length &&
+    values.every((value,i)=>Number.isFinite(value) && value>parameters[i].lower && value<parameters[i].upper);
+  for(const start of view.starts) {
+    if(!validVector(start.shape,view.shape) || !Array.isArray(start.poses) || start.poses.length!==view.frames.length ||
+        new Set(start.poses.map(p=>p.frame_index)).size!==view.frames.length ||
+        start.poses.some(p=>!Number.isSafeInteger(p.frame_index) || p.frame_index<0 || p.frame_index>=view.frames.length || !validVector(p.values,view.pose))) {
+      throw Error("The engine returned incomplete initialization values.");
+    }
+  }
+  if(edits && (JSON.stringify(view.shape)!==JSON.stringify(bodyStartsView.shape) ||
+      JSON.stringify(view.pose)!==JSON.stringify(bodyStartsView.pose) || JSON.stringify(view.frames)!==JSON.stringify(bodyStartsView.frames))) {
+    throw Error("Initialization editing changed the original controls or frames.");
+  }
+  return view;
+}
+function bodyStartsEdits() {
+  if(bodyStartsDraft.length<1 || bodyStartsDraft.length>4) throw Error("Supply 1–4 complete starts; fitting needs at least two.");
+  const vector=(values,parameters)=>"["+values.map((raw,i)=>{
+    const value=Number(raw), parameter=parameters[i];
+    if(typeof raw==="string" && !raw.trim() || !Number.isFinite(value) || value<=parameter.lower || value>=parameter.upper) {
+      throw Error(`Enter a finite ${parameter.name} strictly between ${parameter.lower} and ${parameter.upper}.`);
+    }
+    // These tokens contain only validated numbers; source JSON and full-width identities stay native.
+    return Object.is(value,-0)?"-0.0":JSON.stringify(value);
+  }).join(",")+"]";
+  return '{"starts":['+bodyStartsDraft.map(start=>'{"shape":'+vector(start.shape,bodyStartsView.shape)+',"poses":['+
+    start.poses.map(pose=>'{"frame_index":'+pose.frame_index+',"values":'+vector(pose.values,bodyStartsView.pose)+'}').join(",")+"]}").join(",")+"]}";
+}
+async function runBodyStarts(apply=false) {
+  if(bodyStartsBusy || bodyFitBusy || (apply && (!bodyStartsView || !bodyStartsPending))) return;
+  const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
+  stopBodyStarts(); const id=bodyStartsTicket;
+  $("bodyStartsError").textContent="";
+  const fail=error=>{
+    if(id!==bodyStartsTicket) return;
+    stopBodyStarts(); $("bodyStartsError").textContent=String(error.message || error);
+    $("bodyStartsStatus").textContent="Starting values were not applied. Correct them or cancel pending edits."; controls();
+  };
+  try {
+    if(!inputFile || inputFile.size>16*1024*1024 || !modelFile || modelFile.size===0 || modelFile.size>512*1024*1024 ||
+        (apply && (inputFile!==bodyStartsSource.inputFile || modelFile!==bodyStartsSource.modelFile))) {
+      throw Error("Choose the prepared input up to 16 MiB and its exact converted model up to 512 MiB.");
+    }
+    const edits=apply?bodyStartsEdits():"";
+    bodyStartsBusy=true; controls(); $("bodyStartsStatus").textContent="Reading the source and checking declared starting values…";
+    const input=apply?bodyStartsSource.input:await readJsonFile(inputFile);
+    if(id!==bodyStartsTicket) return;
+    const model=await modelFile.arrayBuffer();
+    if(id!==bodyStartsTicket) return;
+    const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); bodyStartsWorker=current;
+    current.onmessage=({data:m})=>{
+      if(current!==bodyStartsWorker || m.request!==bodyStartsTicket) return;
+      if(m.type==="progress") {$("bodyStartsStatus").textContent=m.text;return;}
+      if(m.type==="error") {fail(m.message);return;}
+      try {
+        const view=checkedBodyStartsView(m.report,input,edits);
+        if(apply) withdrawBodyFit();
+        stopBodyStarts();
+        bodyStartsSource ??= {input,inputFile,modelFile,input_sha256:view.original_input_sha256};
+        bodyStartsView=view; bodyStartsDraft=copyBodyStarts(view.starts); bodyStartsPending=false;
+        renderBodyStarts(); bodyStartsDownload();
+        $("bodyStartsStatus").textContent=`${apply?"Applied":"Loaded"} ${view.starts.length} checked starts. `+
+          (view.starts.length===0?"Add an explicitly authored start to preview it.":view.starts.length===1?"Preview this start; add a distinct second start before fitting.":"Preview the declared poses or fit from these exact values.");
+        if(apply) $("bodyFitStatus").textContent="Checked starting values applied. Preview them or run the fit again.";
+      } catch(error) {fail(error);}
+    };
+    current.onerror=error=>{if(current===bodyStartsWorker)fail(error);};
+    current.postMessage({request:id,op:"body-fit-starts",model,input,edits},[model]);
+  } catch(error) {fail(error);}
 }
 function stopBodyFit() {
   bodyFitWorker?.terminate(); bodyFitWorker=null; bodyFitBusy=false; controls();
@@ -382,7 +561,7 @@ async function runBodyReviewImage() {
   } catch(error) {fail(error);}
 }
 async function runBodyStartReview() {
-  if(bodyReviewBusy || bodyFitBusy) return;
+  if(bodyReviewBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || bodyStartsView?.starts.length===0) return;
   const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
   const startText=$("bodyFitStartIndex").value, frameText=$("bodyFitStartFrame").value;
   const startIndex=Number(startText)-1, frameIndex=Number(frameText)-1;
@@ -400,7 +579,7 @@ async function runBodyStartReview() {
       throw Error("Choose prepared observations up to 16 MiB, a converted model up to 512 MiB, and a declared start (1–4) and frame (1–8).");
     }
     bodyReviewBusy=true; controls(); $("bodyFitReviewStatus").textContent="Reading the declared starts and exact model for a preview…";
-    const input=await readJsonFile(inputFile);
+    const input=await bodyInputText(inputFile);
     if(id!==bodyReviewTicket) return;
     const model=await modelFile.arrayBuffer();
     if(id!==bodyReviewTicket) return;
@@ -453,7 +632,7 @@ async function runBodyReview() {
   }
 }
 async function runBodyFit(saved=false) {
-  if(bodyFitBusy) return;
+  if(bodyFitBusy || bodyStartsBusy || bodyStartsPending || (!saved && bodyStartsView?.starts.length<2)) return;
   const inputFile=$(saved?"bodyFitSaved":"bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
   const iterationsText=$("bodyFitIterations").value, evaluationsText=$("bodyFitEvaluations").value;
   const iterations=Number(iterationsText), maxEvaluations=Number(evaluationsText);
@@ -467,7 +646,7 @@ async function runBodyFit(saved=false) {
       throw Error("Enter 1..100 steps per start and 1..1000000 total model evaluations.");
     }
     bodyFitBusy=true; controls(); $("bodyFitStatus").textContent=saved?"Reading the saved fit and body model…":"Reading the local observations and body model…";
-    const input=await readJsonFile(inputFile);
+    const input=await (saved?readJsonFile(inputFile):bodyInputText(inputFile));
     if(id!==bodyFitTicket) return;
     const model=await modelFile.arrayBuffer();
     if(id!==bodyFitTicket) return;
@@ -937,6 +1116,48 @@ $("bodyFitRun").onclick=()=>runBodyFit();
 $("bodyFitOpen").onclick=()=>runBodyFit(true);
 $("bodyFitReviewRun").onclick=runBodyReview;
 $("bodyFitStartRun").onclick=runBodyStartReview;
+$("bodyStartsLoad").onclick=()=>runBodyStarts();
+$("bodyStartsApply").onclick=()=>runBodyStarts(true);
+$("bodyStartsSelect").addEventListener("change",()=>{
+  if(bodyStartsBusy || bodyFitBusy) return;
+  const index=Number($("bodyStartsSelect").value);
+  if(!Number.isSafeInteger(index) || !bodyStartsDraft[index]) return;
+  bodyStartsSelected=index; renderBodyStarts();
+});
+$("bodyStartsAdd").onclick=()=>{
+  if(!bodyStartsView || bodyStartsBusy || bodyFitBusy || bodyStartsDraft.length>=4) return;
+  bodyStartsDraft.push({shape:bodyStartsView.shape.map(()=>""),
+    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,values:bodyStartsView.pose.map(()=>"")}))});
+  bodyStartsSelected=bodyStartsDraft.length-1; pendingBodyStarts(); renderBodyStarts();
+};
+$("bodyStartsCopy").onclick=()=>{
+  if(bodyStartsBusy || bodyFitBusy || !bodyStartsDraft[bodyStartsSelected] || bodyStartsDraft.length>=4) return;
+  bodyStartsDraft.push(copyBodyStarts([bodyStartsDraft[bodyStartsSelected]])[0]);
+  bodyStartsSelected=bodyStartsDraft.length-1; pendingBodyStarts(); renderBodyStarts();
+};
+$("bodyStartsRemove").onclick=()=>{
+  if(bodyStartsBusy || bodyFitBusy || !bodyStartsDraft[bodyStartsSelected]) return;
+  bodyStartsDraft.splice(bodyStartsSelected,1); pendingBodyStarts(); renderBodyStarts();
+};
+$("bodyStartsMidpoint").onclick=()=>{
+  if(bodyStartsBusy || bodyFitBusy || !bodyStartsDraft[bodyStartsSelected]) return;
+  const middle=parameters=>parameters.map(p=>p.lower/2+p.upper/2);
+  bodyStartsDraft[bodyStartsSelected]={shape:middle(bodyStartsView.shape),
+    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,values:middle(bodyStartsView.pose)}))};
+  pendingBodyStarts(); renderBodyStarts();
+};
+$("bodyStartsCancel").onclick=()=>{
+  stopBodyStarts(); bodyStartsPending=false;
+  bodyStartsDraft=bodyStartsView?copyBodyStarts(bodyStartsView.starts):[];
+  $("bodyStartsError").textContent=""; renderBodyStarts(); bodyStartsDownload();
+  $("bodyStartsStatus").textContent="Loading or pending edits cancelled; the last checked input is unchanged.";
+  $("bodyFitStatus").textContent="Pending start edits cancelled. Preview or fit the last checked input again.";
+};
+$("bodyStartsReset").onclick=()=>{
+  withdrawBodyStarts(); withdrawBodyFit();
+  $("bodyStartsStatus").textContent="Original selected input restored; all edited values and previous results withdrawn.";
+  $("bodyFitStatus").textContent="Original selected input restored. Preview or fit its declared starts again.";
+};
 for(const id of ["bodyFitStartIndex","bodyFitStartFrame"]) $(id).addEventListener("input",()=>{
   withdrawBodyReview(); $("bodyFitReviewHeading").textContent="Declared initialization — no fitted body";
   $("bodyFitReviewStatus").textContent="Initialization selection changed; preview the chosen declared start and frame.";
@@ -972,7 +1193,10 @@ $("bodyFitWorkbench").onclick=()=>{
 };
 $("bodyFitCancel").onclick=()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Body fit or saved-fit loading cancelled; no report published.";};
 for(const id of ["bodyFitInput","bodyFitModel","bodyFitSaved"]) for(const event of ["change","click","cancel"]) {
-  $(id).addEventListener(event,()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Review the selected model, then fit the observations or open the saved accepted report.";});
+  $(id).addEventListener(event,()=>{
+    if(id!=="bodyFitSaved") withdrawBodyStarts();
+    withdrawBodyFit(); $("bodyFitStatus").textContent="Review the selected model, then fit the observations or open the saved accepted report.";
+  });
 }
 for(const id of ["bodyFitIterations","bodyFitEvaluations"]) $(id).addEventListener("input",()=>{
   withdrawBodyFit(); $("bodyFitStatus").textContent="Work limit changed; run the current observations again.";
@@ -1124,6 +1348,6 @@ window.addEventListener("pagehide",()=>{
     materialsTarget.postMessage({type:"ftx-photo-records-cancelled",token:materialsToken},materialsOrigin);
     materialsTarget=null;materialsToken=null;window.opener=null;
   }
-  withdrawBodyFit(); withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
+  withdrawBodyStarts(); withdrawBodyFit(); withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
 });
 controls();

@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -43,10 +43,11 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function bundle_adjust(input,iterations){calls.push({kind:'bundle-adjust',input,iterations});if(failBundle)throw Error('metric controls refused');return JSON.stringify(bundleReport());}
   function still_window(input,source){calls.push({kind:'still-window',input,source});if(failStill)throw Error('track evidence refused');return JSON.stringify(stillReport());}
   function fit_body(model,input,iterations,maxEvaluations){calls.push({kind:'fit-body',model:[...model],input,iterations,maxEvaluations});if(failBodyFit)throw Error('model SHA-256 mismatch');return JSON.stringify(bodyFitReport());}
+  function body_fit_starts(model,input,edits){calls.push({kind:'body-starts',model:[...model],input,edits});return JSON.stringify(bodyStartsReport({input}));}
   function review_body_fit_start(model,input,startIndex,frameIndex){calls.push({kind:'body-start-review',model:[...model],input,startIndex,frameIndex});if(failBodyStart)throw Error('no declared initialization at that index');return JSON.stringify(bodyStartFrameReport({start_index:Number(startIndex),frame_index:Number(frameIndex),start_count:4,frame_count:8}));}
   function review_body_fit_frame(model,report,frameIndex){calls.push({kind:'body-frame-review',model:[...model],report,frameIndex});if(failBodyReview)throw Error('full mesh keypoint disagrees with the accepted 3-pixel fit gate');return JSON.stringify(bodyFrameReport());}
   const context=vm.createContext({Uint8Array,ArrayBuffer,TextEncoder,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body','review_body_fit_start','review_body_fit_frame'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body','body_fit_starts','review_body_fit_start','review_body_fit_frame'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('WebBodyFitImage',bodyImageClass ?? WebBodyFitImage);
@@ -55,6 +56,7 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
     this.setExport('bundle_adjust',bundle_adjust);
     this.setExport('still_window',still_window);
     this.setExport('fit_body',fit_body);
+    this.setExport('body_fit_starts',bodyStarts ?? body_fit_starts);
     this.setExport('review_body_fit_start',bodyStartReview ?? review_body_fit_start);
     this.setExport('review_body_fit_frame',review_body_fit_frame);
   },{context});
@@ -941,6 +943,142 @@ async function openCaptureBodyReview(p,overrides={}) {
 function selectBodyReviewImage(p,image=file('original capture bytes','capture.png')) {
   p.e.bodyFitReviewImage.files=[image];p.e.bodyFitReviewImage.handlers.change();
 }
+function bodyStartsReport(overrides={}) {
+  return {schema:'ftx-body-starts-review/1',input:'{}',input_sha256:'a'.repeat(64),original_input_sha256:'a'.repeat(64),model_sha256:'c'.repeat(64),
+    shape:[{name:'height <λ>',lower:0,upper:1,unit:'dimensionless'}],pose:[{name:'root_x_m',lower:-3,upper:3,unit:'m'}],
+    frames:[{frame_index:0,label:'Frame 1: late <λ> @ 18446744073709551615 us',identity:{stream:'late <λ>',timestamp_us:'18446744073709551615'}},
+      {frame_index:1,label:'Frame 2: early @ 9007199254740993 us',identity:{stream:'early',timestamp_us:'9007199254740993'}}],
+    starts:[{shape:[0.4],poses:[{frame_index:0,values:[0.1]},{frame_index:1,values:[0.2]}]},
+      {shape:[0.6],poses:[{frame_index:0,values:[0.15]},{frame_index:1,values:[0.25]}]}],...overrides};
+}
+function bodyStartField(p,id) {
+  const descend=node=>[node,...node.children.flatMap(descend)];
+  const input=descend(p.e.bodyStartsFields).find(node=>node.id===id);assert.ok(input,`missing start field ${id}`);return input;
+}
+function editBodyStart(p,id,value) {const input=bodyStartField(p,id);input.value=value;input.handlers.input();}
+async function loadBodyStarts(p,overrides={}) {
+  await p.e.bodyStartsLoad.onclick();const w=p.current(),message=w.messages[0];
+  assert.equal(message.op,'body-fit-starts');assert.equal(message.edits,'');
+  const view=bodyStartsReport({input:message.input,...overrides});
+  await w.emit({type:'result',request:message.request,report:JSON.stringify(view)});return view;
+}
+
+test('body-start editor worker preserves source and edit bytes and refuses transport limits without another estimator',async()=>{
+  const source={request:91,op:'body-fit-starts',model:new Uint8Array([8,5,3]).buffer,
+    input:' \r\n{"timestamp_us":18446744073709551615,"evidence":"λ"}\r\n',edits:' {"starts":[]}\r\n'};
+  const w=await photoWorker(),result=await w.send(source);
+  assert.equal(result.type,'result');assert.equal(result.request,91);
+  assert.deepEqual(w.calls,[{kind:'body-starts',model:[8,5,3],input:source.input,edits:source.edits}]);
+  assert.equal(JSON.parse(result.report).input,source.input);assert.equal(w.instances.length,0);
+  const failed=await photoWorker({bodyStarts:()=>{throw Error('duplicate starts refused');}});
+  assert.match((await failed.send(source)).message,/duplicate starts refused/);
+  for(const bad of [{input:null},{input:' '.repeat(16*1024*1024+1)},{edits:null},{edits:' '.repeat(64*1024+1)},
+    {model:[]},{model:new ArrayBuffer(0)},{model:new ArrayBuffer(512*1024*1024+1)}]) {
+    const invalid=await photoWorker();assert.equal((await invalid.send({...source,...bad})).type,'error');assert.equal(invalid.calls.length,0);
+  }
+});
+
+test('body-start editor applies every named pose natively and uses exact edited input for preview fit and download',async()=>{
+  const p=await photoPage(),original=selectBodyFit(p),view=await loadBodyStarts(p);
+  assert.equal(p.e.bodyStartsEditor.hidden,false);assert.equal(p.e.bodyStartsFields.children[1].children[0].textContent,view.frames[0].label);
+  assert.match(p.e.bodyStartsFields.children[0].children[1].children[0].textContent,/height <λ>/);
+  editBodyStart(p,'bodyStart-shape-0','0.45');editBodyStart(p,'bodyStart-pose-1-0','-0');
+  p.e.bodyStartsSelect.value='1';p.e.bodyStartsSelect.handlers.change();editBodyStart(p,'bodyStart-shape-0','0.65');
+  p.e.bodyStartsSelect.value='0';p.e.bodyStartsSelect.handlers.change();assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.45');
+  await p.e.bodyStartsApply.onclick();const apply=p.current(),message=apply.messages[0],edits=JSON.parse(message.edits);
+  assert.equal(message.input,original);assert.equal(new TextDecoder().decode(message.model),'original model');
+  assert.deepEqual(edits.starts.map(start=>start.shape),[[0.45],[0.65]]);assert.ok(Object.is(edits.starts[0].poses[1].values[0],-0));
+  assert.deepEqual(edits.starts[0].poses.map(pose=>pose.frame_index),[0,1]);assert.equal(p.e.bodyFitRun.disabled,true);
+  const native=' {"timestamp_us":18446744073709551615,"other_frame":9007199254740993,"edited":"native λ"}\r\n';
+  await apply.emit({type:'result',request:message.request,report:JSON.stringify({...view,input:native,input_sha256:'b'.repeat(64),starts:edits.starts})});
+  assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.e.bodyFitRun.disabled,false);assert.equal(p.e.bodyStartsApply.disabled,true);
+  assert.equal(await p.urls.get(p.e.bodyStartsDownloads.children[0].href).text(),native);
+  assert.equal(await new Blob([await p.e.bodyFitInput.files[0].arrayBuffer()]).text(),original);
+  await p.e.bodyFitStartRun.onclick();const preview=p.current();assert.equal(preview.messages[0].input,native);
+  await p.e.bodyFitRun.onclick();const fit=p.current();assert.equal(preview.dead,true);assert.equal(fit.messages[0].input,native);
+  await fit.emit({type:'result',request:fit.messages[0].request,report:JSON.stringify(bodyFitReport())});
+  assert.equal(await p.urls.get(p.e.bodyFitDownloads.children.find(a=>a.download==='body-fit-input.json').href).text(),native);
+  p.e.bodyStartsReset.onclick();assert.equal(p.e.bodyStartsEditor.hidden,true);assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.urls.size,0);
+  await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,original);
+});
+
+test('body-start draft edits withdraw accepted handoffs and invalid applies cannot fit or restore stale output',async()=>{
+  const p=await photoPage();selectBodyFit(p);await loadBodyStarts(p);await p.e.bodyFitRun.onclick();let w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bodyFitReport())});
+  p.e.bodyFitWorkbench.onclick();const popup=p.popups[0];
+  editBodyStart(p,'bodyStart-shape-0','1');
+  assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.e.bodyFitWorkbench.disabled,true);assert.equal(p.urls.size,0);
+  assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.e.bodyFitStartRun.disabled,true);
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-body-fit-sources-ready',token:new URL(popup.url).searchParams.get('bodyFitImport')}});
+  assert.equal(popup.messages[0].data.type,'ftx-body-fit-sources-cancelled');
+  let count=p.workers.length;await p.e.bodyStartsApply.onclick();assert.equal(p.workers.length,count);assert.match(p.e.bodyStartsError.textContent,/strictly between/);
+  await p.e.bodyFitRun.onclick();await p.e.bodyFitStartRun.onclick();assert.equal(p.workers.length,count);
+  editBodyStart(p,'bodyStart-shape-0','0.49');await p.e.bodyStartsApply.onclick();w=p.current();
+  await w.emit({type:'error',request:w.messages[0].request,message:'native evidence refused'});
+  assert.match(p.e.bodyStartsError.textContent,/native evidence refused/);assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.urls.size,0);
+  p.e.bodyStartsCancel.onclick();assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.4');
+  assert.equal(p.e.bodyFitRun.disabled,false);assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.e.bodyFitWorkbench.disabled,true);
+});
+
+test('body-start editor creates empty starts explicitly and separates one-start preview from fitting',async()=>{
+  const p=await photoPage();selectBodyFit(p);const view=await loadBodyStarts(p,{starts:[]});
+  assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.e.bodyFitStartRun.disabled,true);
+  p.e.bodyStartsAdd.onclick();assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'');
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').value,'');await p.e.bodyStartsApply.onclick();assert.equal(p.workers.length,1);
+  assert.match(p.e.bodyStartsError.textContent,/finite/);p.e.bodyStartsMidpoint.onclick();
+  assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.5');assert.equal(bodyStartField(p,'bodyStart-pose-1-0').value,'0');
+  await p.e.bodyStartsApply.onclick();let w=p.current(),edits=JSON.parse(w.messages[0].edits);
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify({...view,input:'{"one_start":"native"}',input_sha256:'b'.repeat(64),starts:edits.starts})});
+  assert.equal(p.e.bodyFitStartRun.disabled,false);assert.equal(p.e.bodyFitRun.disabled,true);
+  const count=p.workers.length;await p.e.bodyFitRun.onclick();assert.equal(p.workers.length,count);
+  p.e.bodyStartsCopy.onclick();editBodyStart(p,'bodyStart-shape-0','0.7');await p.e.bodyStartsApply.onclick();
+  w=p.current();edits=JSON.parse(w.messages[0].edits);assert.equal(edits.starts.length,2);
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify({...view,input:'{"two_starts":"native"}',input_sha256:'d'.repeat(64),starts:edits.starts})});
+  assert.equal(p.e.bodyFitRun.disabled,false);p.e.bodyStartsCopy.onclick();p.e.bodyStartsCopy.onclick();
+  assert.equal(p.e.bodyStartsAdd.disabled,true);assert.equal(p.e.bodyStartsCopy.disabled,true);
+  p.e.bodyStartsRemove.onclick();assert.equal(p.e.bodyStartsAdd.disabled,false);
+  p.e.bodyStartsCancel.onclick();assert.equal(p.e.bodyStartsSelect.children.length,2);assert.equal(p.e.bodyFitRun.disabled,false);
+});
+
+test('body-start editor cancellation and source changes ignore old workers and native refusals',async()=>{
+  for(const invalidate of [p=>p.e.bodyStartsCancel.onclick(),p=>p.e.bodyStartsReset.onclick(),p=>p.e.bodyFitInput.handlers.change(),
+    p=>p.e.bodyFitModel.handlers.click(),p=>p.e.bodyFitInput.handlers.cancel(),p=>p.windowEvents.pagehide()]) {
+    for(const late of ['result','error','crash']) {
+      const p=await photoPage();selectBodyFit(p);const view=await loadBodyStarts(p);
+      editBodyStart(p,'bodyStart-shape-0','0.45');await p.e.bodyStartsApply.onclick();const old=p.current(),request=old.messages[0].request;
+      invalidate(p);const message=p.e.bodyStartsStatus.textContent,downloadCount=p.urls.size;
+      if(late==='crash')old.onerror({message:'old crash'});
+      else await old.emit(late==='error'?{type:'error',request,message:'old refusal'}:
+        {type:'result',request,report:JSON.stringify({...view,input:'{"stale":true}',input_sha256:'b'.repeat(64)})});
+      assert.equal(old.dead,true);assert.equal(p.e.bodyStartsStatus.textContent,message);assert.equal(p.e.bodyStartsError.textContent,'');
+      assert.equal(p.urls.size,downloadCount);assert.equal(p.e.bodyFitResult.hidden,true);
+    }
+  }
+});
+
+test('body-start source read races and inconsistent native replies never replace the checked editor',async()=>{
+  for(const which of ['bodyFitInput','bodyFitModel'])for(const rejected of [false,true]) {
+    const p=await photoPage();selectBodyFit(p);let finish,fail,entered;
+    const reading=new Promise(resolve=>{entered=resolve;});
+    p.e[which].files=[{size:2,arrayBuffer:()=>{entered();return new Promise((yes,no)=>{finish=yes;fail=no;});}}];
+    const pending=p.e.bodyStartsLoad.onclick();await reading;p.e.bodyStartsCancel.onclick();
+    selectBodyFit(p);await loadBodyStarts(p);const message=p.e.bodyStartsStatus.textContent;
+    if(rejected)fail(Error('stale read failed'));else finish(new TextEncoder().encode('{}').buffer);
+    await pending;assert.equal(p.workers.length,1);assert.equal(p.e.bodyStartsStatus.textContent,message);
+    assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.e.bodyStartsEditor.hidden,false);
+  }
+  for(const override of [{input:'{"wrong":true}'},{model_sha256:'bad'},{frames:[]},{starts:[{shape:[1],poses:[]}]},
+    {frames:[{frame_index:0,label:'rounded',identity:{stream:'x',timestamp_us:18446744073709551615}}]}]) {
+    const p=await photoPage();selectBodyFit(p);await loadBodyStarts(p,override);
+    assert.equal(p.e.bodyStartsEditor.hidden,true);assert.ok(p.e.bodyStartsError.textContent);assert.equal(p.urls.size,0);
+  }
+  const p=await photoPage();selectBodyFit(p);const view=await loadBodyStarts(p);
+  editBodyStart(p,'bodyStart-shape-0','0.45');await p.e.bodyStartsApply.onclick();const w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify({...view,input:'{"changed":true}',input_sha256:'b'.repeat(64),original_input_sha256:'d'.repeat(64)})});
+  assert.match(p.e.bodyStartsError.textContent,/source-bound/);assert.equal(p.e.bodyFitRun.disabled,true);
+  p.e.bodyStartsCancel.onclick();assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.4');
+});
+
 test('saved body-fit worker validates the exact report and first pose without dispatching fitting',async()=>{
   const source={request:71,op:'open-body-fit',model:new Uint8Array([1,3,7]).buffer,
     report:' \r\n{"status":"ACCEPTED","timestamp_us":18446744073709551615}\r\n',iterations:'inactive',frameIndex:7};
@@ -1685,6 +1823,57 @@ test('compiled body fitting reproduces complete native multistart reports and pr
     const changed=Buffer.from(model);changed[changed.length-1]^=1;
     assert.throws(()=>ftx.fit_body(changed,input,'50','100000'),/SHA-256 mismatch/);
     assert.throws(()=>ftx.review_body_fit_frame(changed,acceptedReport,'0'),/SHA-256 mismatch/);
+  });
+
+test('compiled body-start editing preserves unchanged evidence and feeds actual preview fitting and worker paths',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_BODY_FIT_PORTABLE_DIR},async()=>{
+    const ftx=await compiledPhotoBindings(),dir=process.env.FTX_BODY_FIT_PORTABLE_DIR;
+    const model=fs.readFileSync(path.join(dir,'model.ftxbody')),input=fs.readFileSync(path.join(dir,'accepted-input.json'),'utf8');
+    const parse=text=>JSON.parse(text,(key,value,meta)=>key==='timestamp_us' && typeof value==='number'?meta.source:value);
+    const hash=text=>require('node:crypto').createHash('sha256').update(text).digest('hex');
+    const original=parse(input),prepared=JSON.parse(ftx.body_fit_starts(model,input,''));
+    assert.equal(prepared.input,input);assert.equal(prepared.input_sha256,hash(input));assert.equal(prepared.original_input_sha256,hash(input));
+    assert.equal(prepared.model_sha256,hash(model));assert.equal(prepared.starts.length,original.fit.starts.length);
+    prepared.frames.forEach((frame,index)=>{
+      assert.equal(frame.frame_index,index);assert.deepEqual(frame.identity,original.fit.frames[index].frame);
+      prepared.starts.forEach((start,startIndex)=>{
+        const expected=original.fit.starts[startIndex].poses.find(p=>p.frame.stream===frame.identity.stream && p.frame.timestamp_us===frame.identity.timestamp_us);
+        assert.deepEqual(start.poses.find(p=>p.frame_index===index).values,expected.values);
+      });
+    });
+    const edits={starts:structuredClone(prepared.starts)},parameter=prepared.shape[0];
+    const replacement=[0.25,0.5,0.75,0.125,0.875].map(t=>parameter.lower*(1-t)+parameter.upper*t)
+      .find(value=>value>parameter.lower && value<parameter.upper && edits.starts.every(start=>start.shape[0]!==value));
+    assert.ok(Number.isFinite(replacement),'an independent interior start value exists');edits.starts[0].shape[0]=replacement;
+    const edited=JSON.parse(ftx.body_fit_starts(model,input,JSON.stringify(edits))),request=parse(edited.input);
+    assert.equal(edited.original_input_sha256,hash(input));assert.equal(edited.input_sha256,hash(edited.input));
+    assert.deepEqual({...request,fit:{...request.fit,starts:[]}},{...original,fit:{...original.fit,starts:[]}},'all cameras, observations, evidence, roles, source identities and bounds unchanged');
+    assert.deepEqual(request.fit.starts[0].shape,edits.starts[0].shape);
+    const preview=parse(ftx.review_body_fit_start(model,edited.input,'0','0'));
+    assert.deepEqual(preview.shape_values,edits.starts[0].shape);assert.deepEqual(preview.frame,original.fit.frames[0].frame);
+    const fit=parse(ftx.fit_body(model,edited.input,'50','100000'));
+    assert.equal(fit.schema,'ftx-body-fit/1');assert.equal(fit.status,'ACCEPTED');
+    const worker=await photoWorker({bodyStarts:ftx.body_fit_starts});
+    const result=await worker.send({request:92,op:'body-fit-starts',model:Uint8Array.from(model).buffer,input,edits:JSON.stringify(edits)});
+    assert.equal(result.type,'result',result.message);assert.deepEqual(JSON.parse(result.report),edited);
+    const p=await photoPage();p.e.bodyFitInput.files=[file(input)];p.e.bodyFitModel.files=[new Blob([model])];p.e.bodyFitInput.handlers.change();
+    await p.e.bodyStartsLoad.onclick();let live=p.current();
+    await live.emit({type:'result',request:live.messages[0].request,report:ftx.body_fit_starts(model,input,'')});
+    assert.equal(p.e.bodyStartsError.textContent,'');editBodyStart(p,'bodyStart-shape-0',String(replacement));
+    await p.e.bodyStartsApply.onclick();live=p.current();
+    await live.emit({type:'result',request:live.messages[0].request,report:ftx.body_fit_starts(model,live.messages[0].input,live.messages[0].edits)});
+    assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(await p.urls.get(p.e.bodyStartsDownloads.children[0].href).text(),edited.input);
+    await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,edited.input);
+    const one=JSON.parse(ftx.body_fit_starts(model,input,JSON.stringify({starts:[edits.starts[0]]})));
+    assert.equal(JSON.parse(ftx.review_body_fit_start(model,one.input,'0','0')).body_fitted,false);
+    assert.throws(()=>ftx.fit_body(model,one.input,'50','100000'),/start/);
+    assert.throws(()=>ftx.body_fit_starts(model,input,JSON.stringify({starts:[edits.starts[0],edits.starts[0]]})),/distinct|duplicate/);
+    const boundary=structuredClone(edits);boundary.starts[0].shape[0]=parameter.lower;
+    assert.throws(()=>ftx.body_fit_starts(model,input,JSON.stringify(boundary)),/bound|inside|interior/);
+    const duplicateFrame=structuredClone(edits);duplicateFrame.starts[0].poses[1].frame_index=duplicateFrame.starts[0].poses[0].frame_index;
+    assert.throws(()=>ftx.body_fit_starts(model,input,JSON.stringify(duplicateFrame)),/duplicate/);
+    const changed=Buffer.from(model);changed[changed.length-1]^=1;
+    assert.throws(()=>ftx.body_fit_starts(changed,input,''),/SHA-256 mismatch/);
   });
 
 test('compiled still-window assessment matches complete original native reports and input refusals',
