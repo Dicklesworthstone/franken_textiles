@@ -255,9 +255,9 @@ design and scenario studies. It includes availability and final unloading under 
 declared millisecond planning convention; it is distinct from the sum of machine work.
 The complete cell-independence, source, timing and fixture policy belongs to the comparison protocol.
 Declared per-copy arrivals, deadlines and unloaded-waiting qualifications also belong to fixed-route
-feed and thread comparison protocols. Authored route selection retains the complete candidate domain
-and work allowance, including copy-window policies on routes that did not win. Equal reported feed or
-thread demand does not erase a changed scheduling requirement.
+feed and thread comparison protocols. When copy windows are declared, authored route selection retains
+the complete candidate domain and work allowance, including policies on routes that did not win.
+Equal reported feed or thread demand does not erase a changed scheduling requirement.
 An unproved complete incumbent can be compared, while recipe optimality requires all examined
 inner allocations to be proved. Missing cell qualification withholds the sewing result and its
 objective without erasing independent mass or cutting. Reported-bound makespan is unsupported.
