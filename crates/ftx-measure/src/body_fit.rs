@@ -626,7 +626,6 @@ fn canonical(
         || !text(&input.observation_evidence)
         || !text(&layout.model_id)
         || !(2..=8).contains(&input.frames.len())
-        || !(minimum_starts..=4).contains(&input.starts.len())
         || !(1..=12).contains(&ns)
         || !(1..=18).contains(&np)
         || ns + np * input.frames.len() > 128
@@ -637,6 +636,12 @@ fn canonical(
         return Err(invalid(
             "invalid body-fit schema, evidence or model/input budget",
         ));
+    }
+    if !(minimum_starts..=4).contains(&input.starts.len()) {
+        return Err(invalid(format!(
+            "body-fit input requires {minimum_starts}..=4 starts; found {}",
+            input.starts.len()
+        )));
     }
     for params in [&layout.shape, &layout.pose] {
         if !unique(params.iter().map(|p| p.name.as_str()))

@@ -224,7 +224,12 @@ fn portable_start_authoring_supports_one_start_without_weakening_fit_admission()
         ftx_wasm::body_fit::review_body_fit_start(&model, text, "0", "1").unwrap()["body_fitted"],
         false
     );
-    assert!(ftx_wasm::body_fit::fit_body(&model, text, "50", "10000").is_err());
+    let refusal = ftx_wasm::body_fit::fit_body(&model, text, "50", "10000").unwrap_err();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::InvalidDocument);
+    assert_eq!(
+        refusal.message,
+        "body-fit input requires 2..=4 starts; found 1"
+    );
     assert_eq!(
         ftx_wasm::body_fit::body_fit_starts(&model, &original, "").unwrap()["input"],
         original

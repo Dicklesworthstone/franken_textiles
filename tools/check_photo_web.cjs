@@ -461,6 +461,8 @@ async function bodyFitWorkflow(browser,origin) {
       const observation=declared.fit.frames[0].keypoints.find(p=>p.name===point.name);
       assert.deepEqual(point.observed_px,observation.pixel_px);assert.equal(point.partition,observation.partition);
     }
+    await run();
+    assert.match(await page.textContent('#bodyFitError'),/requires 2\.\.=4 starts; found 1/);
     await absent();assert.equal(await page.isDisabled('#bodyFitWorkbench'),true);
     assert.equal(await page.isDisabled('#openWorkbench'),true);
     await page.fill('#bodyFitStartFrame','2');
