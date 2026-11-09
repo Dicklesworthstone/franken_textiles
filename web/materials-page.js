@@ -3384,16 +3384,29 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const heterogeneous = Boolean(report.cell_plans?.length);
   const windowed = Boolean(report.availability);
   const operator = report.shared_operator;
+  const orderSearch = report.thread_order_search;
   const calendars = operator?.availability_calendars;
   const pools = report.shared_workholding;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
     ["Allocation", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)", "Total setup work (s)", "Total handling work (s)"]);
-  const baselineLabel = report.availability?.baseline_replaced || operator?.baseline_replaced ? "Feasible replacement baseline" : "Single-cell baseline";
+  const baselineLabel = report.availability?.baseline_replaced || operator?.baseline_replaced || orderSearch?.baseline_replaced ?
+    "Feasible replacement baseline" : "Single-cell baseline";
   for (const [name, allocation] of [[baselineLabel, report.baseline], ["Selected cells", report.selected]]) {
     cells(totals, [name, metric(seconds(allocation?.makespan_milliseconds)), metric(allocation?.feed_seconds),
       metric(seconds(allocation?.scheduled_feed_milliseconds)), metric(seconds(allocation?.setup_milliseconds)),
       metric(seconds(allocation?.handling_milliseconds))]);
+  }
+  if (orderSearch) {
+    const orders = table(parent, `${label}: complete thread-order allocation`,
+      ["Currency", "Selected order cost", "Inclusive deadline (ms)", "Count search complete", "Cost minimum proved",
+        "Count search nodes", "Complete order evaluations", "Unresolved orders", "Unresolved cell counts",
+        "Count work limit reached", "Order work limit reached"]);
+    cells(orders, [orderSearch.currency, metric(orderSearch.selected_order_cost),
+      orderSearch.completion_deadline_milliseconds == null ? "None" : metric(orderSearch.completion_deadline_milliseconds),
+      String(orderSearch.search_complete), String(orderSearch.optimality_proven), metric(orderSearch.search_nodes),
+      metric(orderSearch.order_evaluations), metric(orderSearch.unresolved_assignments), metric(orderSearch.unresolved_cell_counts),
+      String(orderSearch.assignment_budget_exhausted), String(orderSearch.order_budget_exhausted)]);
   }
   const machines = table(parent, `${label}: selected physical cells`,
     ["Cell", ...(heterogeneous ? ["Qualified machine"] : []), "Global garment copies (zero-based)", "Available (s)",
@@ -3477,6 +3490,8 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       "A lower bound that still fits leaves an over-limit incumbent unresolved. " : "") +
     (report.availability?.baseline_replaced || operator?.baseline_replaced ?
       `The first-cell baseline failed a qualified cell or operator window${pools ? " or shared fixture constraint" : ""}; the displayed replacement is the complete selected feasible assignment. ` : "") +
+    (orderSearch?.baseline_replaced && !report.availability?.baseline_replaced ?
+      "The first-cell baseline missed the inclusive completion deadline; the displayed replacement is the complete selected feasible assignment. " : "") +
     "Every garment stays in one physical cell. " +
     (operator ? "One qualified operator performs exclusive travel, handling, setup and final unloading while explicitly qualified autonomous machine feed may overlap. " +
       (calendars ? "Each worker trip, destination wait and attended phase fits one qualified opening; each machine phase, including its full feed, fits one cell opening. " +
@@ -3490,7 +3505,9 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     "Each used cell includes its own availability, initial setup and final unloading; raw feed and padding remain separate. " +
     "Elapsed completion is distinct from summed machine work. The retained single-machine reference is not the selected concurrent order. " +
     (heterogeneous ? "Stitch pitch, feed, qualifications and thread consumption come from each selected cell's own admitted plan. " +
-      "The allocation minimizes elapsed completion; its thread purchasing cost and total feed are reported consequences, not separately optimized quantities. " : "") +
+      (orderSearch ? "Complete source-qualified thread orders select the allocation within the explicit deadline. Cost proof is separate from makespan proof; missing orders and unresolved cell/count timing withhold a cost minimum. " +
+        "Every supplier minimum, increment and tier applies to the combined order. " :
+        "The allocation minimizes elapsed completion; its thread purchasing cost and total feed are reported consequences, not separately optimized quantities. ") : "") +
     (operator ? "This calculation does not qualify garment transfers, unmodeled shared resources or hardware execution." :
       "This calculation does not qualify garment transfers, shared operators or hardware execution.");
   parent.append(note);

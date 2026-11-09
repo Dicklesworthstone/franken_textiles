@@ -194,16 +194,20 @@ retained even if no complete priced incumbent exists. Exact cost ties prefer the
 then the existing operation/recipe ID traversal. The selected plan retains its full consumption
 sources, exact yarn snapshots and canonical supplier order receipts, and its options replay through
 the ordinary sewing commands. Feed/setup objectives keep their existing schemas and serialized
-fields. The cost objective does not require an optimal operation ordering because ordering cannot
-change the declared operation set, traversed intervals or per-operation thread allowances.
+fields. A fixed assignment's cost does not require an optimal operation ordering because ordering
+cannot change its declared operation set, traversed intervals or per-operation thread allowances.
+Configured whole-garment cells additionally require their explicit cost-directed allocation policy;
+unfinished cell/count timing can leave a cheaper feasible assignment unresolved even when the
+selected assignment has a complete order. That inner cost proof participates in recipe optimality.
 
 This objective covers the independently priced thread orders for the complete declared production
 quantity. Set `options.consumables.production_copies` for standalone selection; material/design studies
 inherit their cutting quantity when it is omitted and refuse mismatches. The same per-garment recipe
 is repeated, then all yarn demand is aggregated before source price tiers, minimums and stock apply.
-The selected options retain that count for exact replay. Geometry and feed/setup time remain per garment.
+The selected options retain that count for exact replay. Explicit production requests retain their
+complete batch schedule; ordinary nonproduction geometry and feed/setup time remain per garment.
 It does not combine thread with fabric cutting costs, value worker time, or optimize a coupled supplier
-shipping bundle or cross-garment execution schedule. Production quality and hardware permission retain their
+shipping bundle. Production quality and hardware permission retain their
 independent gates. Material-study comparisons continue applying their explicit source-protocol
 policy to each actual selected plan.
 
@@ -236,6 +240,14 @@ The original objective values remain visible on excluded and unresolved trials. 
 works with fixed specialist routes, qualified calendars, fixtures, attending workers and transfers.
 Existing eligibility and allocation restrictions on cost/feed objectives still apply: this constraint
 does not turn a makespan-selected cell assignment into a joint cost/assignment optimizer.
+
+For configured independent-labor whole-garment cells, explicitly set
+`options.production.parallel.objective` to `minimize_thread_observed_order_cost` and provide its
+bounded `thread_order_search`. Selection `/3` then compares the actual complete orders from that
+allocator. An outer deadline tightens the inner completion limit before each allocation search;
+it cannot loosen an authored inner deadline. Recipe selection retains the original request and
+freezes the effective limit in selected options. A cost-directed cell request cannot be used with
+the time or feed objective. See [complete cell-order allocation](sewing-production.md#allocate-whole-garments-by-complete-thread-order-cost).
 
 Each trial retains `completion_deadline` with its limit, timing basis, available selected completion,
 valid lower bound, timing proof and reason:

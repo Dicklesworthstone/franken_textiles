@@ -802,6 +802,13 @@ impl SewPlan {
                 .production
                 .as_ref()
                 .and_then(|production| production.parallel.as_ref())
+                .is_some_and(production::parallel::Policy::cost_directed)
+            {
+                "ftx-sewing-plan/32"
+            } else if options
+                .production
+                .as_ref()
+                .and_then(|production| production.parallel.as_ref())
                 .is_some_and(|parallel| parallel.model == "independent_whole_garment_cells/2")
             {
                 "ftx-sewing-plan/17"
@@ -1200,6 +1207,23 @@ impl SewPlan {
         }
         if let Some(request) = &options.consumables {
             out.consumables = Some(consumables::evaluate(&out, request)?);
+        }
+        if let Some(search) = out
+            .production
+            .as_ref()
+            .and_then(|production| production.parallel.as_ref())
+            .and_then(|parallel| parallel.thread_order_search.as_ref())
+            && let Some(selected_cost) = search.selected_order_cost
+        {
+            let (replayed, _) = consumables::complete_order_cost(
+                out.consumables.as_ref().expect("cost-directed consumption"),
+                &search.currency,
+            )?;
+            if replayed != selected_cost {
+                return Err(bad(
+                    "selected parallel thread order changed during exact consumption replay",
+                ));
+            }
         }
         Ok(out)
     }

@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{handling, workholding};
 use crate::sewing::{
-    MAX_STATIONS, SewOptions, SewPlan, SewingMachine, SewingQualification, access, bad, ordering,
-    qualified_text, sha256_text,
+    MAX_STATIONS, SewOptions, SewPlan, SewingMachine, SewingQualification, access, bad,
+    consumables, ordering, qualified_text, sha256_text,
 };
 use crate::sewing_selection::Recipe;
 
@@ -30,8 +30,11 @@ pub mod shared_workholding;
 pub struct Policy {
     /// `independent_whole_garment_cells/1` or `/2`; no garment transfers are represented.
     pub model: String,
-    /// `minimize_makespan`, over complete cell assignments and their serial schedules.
+    /// `minimize_makespan`, or `minimize_thread_observed_order_cost` for configured independent cells.
     pub objective: String,
+    /// Optional complete-order allocation search, with separately bounded scheduling and purchasing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_order_search: Option<ThreadOrderSearch>,
     /// `ceil_cell_feed_milliseconds/1`, or `ceil_operation_feed_milliseconds/1` with shared labor.
     pub time_basis: String,
     /// `independent_machines_fixtures_and_handling_labor/1`, or the separately qualified
@@ -68,6 +71,53 @@ pub struct Policy {
     /// Separate consent for an estimated cell independence/applicability declaration.
     #[serde(default)]
     pub allow_estimates: bool,
+}
+
+/// Cost-directed whole-garment allocation; no partial demand or per-cell price is a job score.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadOrderSearch {
+    /// Reserved portion of `parallel.max_search_nodes`, charging the seed and count-prefix choices.
+    pub max_search_nodes: usize,
+    /// At most 64 distinct complete allocations are priced, including the fastest complete seed.
+    pub max_order_evaluations: usize,
+    /// Inclusive job-origin finish limit, including every used cell's final unloading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
+}
+
+/// Complete thread-order optimization, separate from the selected allocation's makespan proof.
+#[derive(Clone, Debug, Serialize)]
+pub struct ThreadOrderReport {
+    /// Exact canonical purchasing currency; no exchange-rate conversion is inferred.
+    pub currency: String,
+    /// Complete count allocations over independently qualified cells and their retained schedules.
+    pub search_scope: &'static str,
+    /// Inclusive limit supplied directly or tightened by outer recipe selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
+    /// Complete selected order; absent when all examined orders were unavailable.
+    pub selected_order_cost: Option<f64>,
+    /// Charged seed and count-prefix choices, inside the enclosing parallel work reservation.
+    pub search_nodes: usize,
+    /// Whether every count allocation in this bounded domain was considered.
+    pub search_complete: bool,
+    /// Distinct complete allocations sent to the ordinary thread consumer, including refused prices.
+    pub order_evaluations: usize,
+    /// Examined orders with missing evidence or unproved supplier allocation.
+    pub unresolved_assignments: usize,
+    /// Cell/count incumbents missing a window or deadline which their valid lower bound still admits.
+    /// These counts remain possible under another serial order and prevent a global cost proof.
+    pub unresolved_cell_counts: usize,
+    /// The all-copies-on-first-cell baseline missed availability or the cost-search deadline.
+    pub baseline_replaced: bool,
+    /// Count-prefix search stopped at its explicit cap.
+    pub assignment_budget_exhausted: bool,
+    /// Complete-order pricing stopped at its separate explicit cap.
+    pub order_budget_exhausted: bool,
+    /// All feasible counts were covered and every relevant complete order was available and proved.
+    /// This is a cost proof, never a minimum makespan or empirical factory claim.
+    pub optimality_proven: bool,
 }
 
 /// One physical instance of a fully qualified configuration. No per-operation transfers occur.
@@ -279,7 +329,8 @@ pub struct AvailabilityReport {
 /// Bounded assignment with exact replay and proof conditional on the declared integer time model.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` shared geometry; `/2` configured sources; `/3` windows; `/4` shared labor; `/5` shared pools.
+    /// `/1` shared geometry; `/2` configured sources; `/3` windows; `/4` shared labor; `/5` shared pools;
+    /// `/6` operator calendars; `/7` configured-cell thread-order allocation.
     pub schema: &'static str,
     /// Same explicit time convention as the qualified input.
     pub time_basis: &'static str,
@@ -305,6 +356,9 @@ pub struct Report {
     /// Complete common-pool holds and exact capacity replay on both retained assignments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_workholding: Option<shared_workholding::Report>,
+    /// Complete selected-order search, whose cost proof does not replace the makespan proof below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_order_search: Option<ThreadOrderReport>,
     /// Allocation optimum over the valid lower bounds of every cell/count serial subproblem.
     pub lower_bound_makespan_milliseconds: u64,
     /// Actual nested examinations, including reconstruction, plus both allocation DP transitions.
@@ -332,6 +386,10 @@ fn budget(message: &str) -> Refusal {
 }
 
 impl Policy {
+    pub(crate) fn cost_directed(&self) -> bool {
+        self.objective == "minimize_thread_observed_order_cost"
+    }
+
     fn budget(&self, copies: usize, serial_nodes: usize) -> Result<Budget, Refusal> {
         if !(1..=MAX_CELLS).contains(&self.cells.len())
             || !(1..=ordering::MAX_PRODUCTION_PASSES).contains(&copies)
@@ -356,13 +414,28 @@ impl Policy {
                 "shared operator search needs 1..200000 reserved work units",
             ));
         }
+        let order_work = self
+            .thread_order_search
+            .as_ref()
+            .map_or(0, |search| search.max_search_nodes);
+        if self.thread_order_search.as_ref().is_some_and(|search| {
+            !(1..=MAX_WORK).contains(&search.max_search_nodes)
+                || !(1..=64).contains(&search.max_order_evaluations)
+                || search
+                    .completion_deadline_milliseconds
+                    .is_some_and(|end| end > MAX_EXACT_MILLISECONDS)
+        }) {
+            return Err(budget(
+                "parallel thread-order search needs 1..200000 reserved count-prefix nodes, 1..64 complete prices and an exact millisecond deadline",
+            ));
+        }
         let trials = self.cells.len() * copies;
         let replays = 1 + self.cells.len().min(copies);
         let remaining = self
             .max_search_nodes
-            .checked_sub(allocation + operator_work)
+            .checked_sub(allocation + operator_work + order_work)
             .ok_or_else(|| {
-                budget("parallel work limit cannot cover the complete allocation dynamic programs and requested operator search")
+                budget("parallel work limit cannot cover the complete allocation dynamic programs and requested operator or thread-order search")
             })?;
         let per_trial = remaining / (trials + replays);
         if per_trial == 0 {
@@ -402,7 +475,11 @@ impl Policy {
         let shared_operator = self.shared_operator.is_some();
         if (!configured && self.model != "independent_whole_garment_cells/1")
             || self.shared_workholding.is_some() && !shared_operator
-            || self.objective != "minimize_makespan"
+            || !(self.objective == "minimize_makespan" && self.thread_order_search.is_none()
+                || self.cost_directed()
+                    && configured
+                    && !shared_operator
+                    && self.thread_order_search.is_some())
             || self.time_basis
                 != if shared_operator {
                     "ceil_operation_feed_milliseconds/1"
@@ -436,6 +513,18 @@ impl Policy {
         if self.evidence == Evidence::Estimate && !self.allow_estimates {
             return Err(bad(
                 "estimated parallel-cell independence needs its own explicit consent",
+            ));
+        }
+        if self.cost_directed()
+            && plan
+                .options
+                .consumables
+                .as_ref()
+                .and_then(|request| request.purchasing.as_ref())
+                .is_none()
+        {
+            return Err(bad(
+                "cost-directed configured cells require complete thread purchasing in one explicit market",
             ));
         }
         if self.qualifications.values().map(Vec::len).sum::<usize>() > 256 {
@@ -713,6 +802,240 @@ fn allocate(
     (Some((costs[copies], allocation)), work)
 }
 
+struct CostSearch<'a> {
+    plan: &'a SewPlan,
+    cell_plans: &'a [CellPlan],
+    cells: &'a [&'a Cell],
+    trials: &'a [Vec<Trial>],
+    policy: &'a ThreadOrderSearch,
+    request: &'a consumables::Request,
+    currency: String,
+    prices: BTreeMap<Vec<usize>, Option<f64>>,
+    counts: Vec<usize>,
+    finish: u64,
+    best_cost: Option<f64>,
+    nodes: usize,
+    unresolved: usize,
+    assignment_exhausted: bool,
+    order_exhausted: bool,
+}
+
+impl CostSearch<'_> {
+    fn tick(&mut self) -> bool {
+        if self.nodes == self.policy.max_search_nodes {
+            self.assignment_exhausted = true;
+            false
+        } else {
+            self.nodes += 1;
+            true
+        }
+    }
+
+    fn consider(&mut self, counts: &[usize], finish: u64) {
+        if self.prices.contains_key(counts) {
+            return;
+        }
+        if self.prices.len() == self.policy.max_order_evaluations {
+            self.order_exhausted = true;
+            return;
+        }
+        // Use the same complete physical-copy IDs as final assignment replay. Pricing receives
+        // every actual cell/operation once per garment, never a partial count or independent quote.
+        let mut assignments = Vec::new();
+        let mut first_copy = 0;
+        for (source, &count) in self.cell_plans.iter().zip(counts) {
+            for copy in first_copy..first_copy + count {
+                for seam in &source.plan.seams {
+                    assignments.push(consumables::RoutedAssignment {
+                        cell: &source.cell,
+                        operation_id: seam.pass.operation_id(),
+                        copy,
+                    });
+                }
+            }
+            first_copy += count;
+        }
+        let priced = consumables::evaluate_routed(
+            self.plan,
+            self.request,
+            Some((self.cell_plans, &assignments)),
+        )
+        .and_then(|report| consumables::complete_order_cost(&report, &self.currency));
+        let score = match priced {
+            Ok((value, proof)) => {
+                if proof == Some(false) {
+                    self.unresolved += 1;
+                }
+                Some(value)
+            }
+            Err(_) => {
+                self.unresolved += 1;
+                None
+            }
+        };
+        if let Some(score) = score
+            && self.best_cost.is_none_or(|old| score < old)
+        {
+            self.best_cost = Some(score);
+            self.counts = counts.to_vec();
+            self.finish = finish;
+        }
+        self.prices.insert(counts.to_vec(), score);
+    }
+
+    fn visit(&mut self, counts: &mut [usize], cell: usize, remaining: usize, finish: u64) {
+        if self.assignment_exhausted || self.order_exhausted {
+            return;
+        }
+        if cell == counts.len() {
+            if remaining == 0 {
+                self.consider(counts, finish);
+            }
+            return;
+        }
+        let first = if cell + 1 == counts.len() {
+            remaining
+        } else {
+            0
+        };
+        for count in first..=remaining {
+            if !self.tick() {
+                return;
+            }
+            let next = if count == 0 {
+                0
+            } else {
+                self.trials[cell][count - 1].finish
+            };
+            if count > 0
+                && (self.cells[cell]
+                    .available_until_milliseconds
+                    .is_some_and(|end| next > end)
+                    || self
+                        .policy
+                        .completion_deadline_milliseconds
+                        .is_some_and(|end| next > end))
+            {
+                continue;
+            }
+            counts[cell] = count;
+            self.visit(counts, cell + 1, remaining - count, finish.max(next));
+            if self.assignment_exhausted || self.order_exhausted {
+                return;
+            }
+        }
+        counts[cell] = 0;
+    }
+}
+
+struct CostOutcome {
+    counts: Vec<usize>,
+    finish: u64,
+    report: ThreadOrderReport,
+}
+
+fn cheapest_assignment(
+    plan: &SewPlan,
+    policy: &ThreadOrderSearch,
+    cells: &[&Cell],
+    cell_plans: &[CellPlan],
+    trials: &[Vec<Trial>],
+    seed: (u64, &[usize]),
+    lower: u64,
+) -> Result<CostOutcome, Refusal> {
+    if policy
+        .completion_deadline_milliseconds
+        .is_some_and(|end| seed.0 > end)
+    {
+        return Err(
+            if policy
+                .completion_deadline_milliseconds
+                .is_some_and(|end| lower > end)
+            {
+                bad("parallel completion lower bound exceeds the thread-order search deadline")
+            } else {
+                Refusal::new(RefusalCode::NotConverged,
+                "no retained complete cell allocation meets the thread-order search deadline; unfinished serial orders remain unresolved")
+                .repair("increase the bounded serial/parallel schedule allowance or supply a longer completion deadline")
+            },
+        );
+    }
+    let request = plan
+        .options
+        .consumables
+        .as_ref()
+        .expect("admitted cost request");
+    let currency = request
+        .purchasing
+        .as_ref()
+        .expect("admitted purchasing")
+        .market
+        .currency
+        .clone();
+    let unresolved_cell_counts = cells
+        .iter()
+        .zip(trials)
+        .map(|(cell, row)| {
+            let limit = cell
+                .available_until_milliseconds
+                .unwrap_or(MAX_EXACT_MILLISECONDS)
+                .min(
+                    policy
+                        .completion_deadline_milliseconds
+                        .unwrap_or(MAX_EXACT_MILLISECONDS),
+                );
+            row.iter()
+                .filter(|trial| trial.finish > limit && trial.lower <= limit)
+                .count()
+        })
+        .sum();
+    let copies = seed.1.iter().sum();
+    let mut search = CostSearch {
+        plan,
+        cell_plans,
+        cells,
+        trials,
+        policy,
+        request,
+        currency,
+        prices: BTreeMap::new(),
+        counts: seed.1.to_vec(),
+        finish: seed.0,
+        best_cost: None,
+        nodes: 0,
+        unresolved: 0,
+        assignment_exhausted: false,
+        order_exhausted: false,
+    };
+    search.tick();
+    search.consider(seed.1, seed.0);
+    search.visit(&mut vec![0; cells.len()], 0, copies, 0);
+    let complete = !search.assignment_exhausted && !search.order_exhausted;
+    let optimality_proven = complete
+        && search.best_cost.is_some()
+        && search.unresolved == 0
+        && unresolved_cell_counts == 0;
+    Ok(CostOutcome {
+        counts: search.counts,
+        finish: search.finish,
+        report: ThreadOrderReport {
+            currency: search.currency,
+            search_scope: "complete_cell_count_assignments/1",
+            completion_deadline_milliseconds: policy.completion_deadline_milliseconds,
+            selected_order_cost: search.best_cost,
+            search_nodes: search.nodes,
+            search_complete: complete,
+            order_evaluations: search.prices.len(),
+            unresolved_assignments: search.unresolved,
+            unresolved_cell_counts,
+            baseline_replaced: false,
+            assignment_budget_exhausted: search.assignment_exhausted,
+            order_budget_exhausted: search.order_exhausted,
+            optimality_proven,
+        },
+    })
+}
+
 fn assignment(
     plan: &SewPlan,
     cell_plans: &[CellPlan],
@@ -929,14 +1252,42 @@ pub(super) fn evaluate(
         cost = operator.selected.makespan;
         counts.clone_from(&operator.selected.counts);
     }
+    let mut thread_order_search = if let Some(search) = &policy.thread_order_search {
+        let selected = cheapest_assignment(
+            plan,
+            search,
+            &cells,
+            &cell_plans,
+            &trials,
+            (cost, &counts),
+            lower_bound_makespan_milliseconds,
+        )?;
+        search_nodes += selected.report.search_nodes;
+        search_complete &= selected.report.search_complete;
+        budget_exhausted |=
+            selected.report.assignment_budget_exhausted || selected.report.order_budget_exhausted;
+        counts = selected.counts;
+        cost = selected.finish;
+        Some(selected.report)
+    } else {
+        None
+    };
     let baseline_replaced = operator.as_ref().map_or_else(
         || {
             cells[0]
                 .available_until_milliseconds
                 .is_some_and(|end| trials[0][copies - 1].finish > end)
+                || policy
+                    .thread_order_search
+                    .as_ref()
+                    .and_then(|search| search.completion_deadline_milliseconds)
+                    .is_some_and(|end| trials[0][copies - 1].finish > end)
         },
         |operator| operator.baseline_replaced,
     );
+    if let Some(search) = &mut thread_order_search {
+        search.baseline_replaced = baseline_replaced;
+    }
     let mut baseline_counts = vec![0; cells.len()];
     if let Some(operator) = &operator {
         baseline_counts.clone_from(&operator.baseline.counts);
@@ -955,7 +1306,9 @@ pub(super) fn evaluate(
         pattern,
     )?;
     let mut selected = if counts != baseline_counts
-        && (operator.is_some() || cost < baseline.makespan_milliseconds)
+        && (operator.is_some()
+            || thread_order_search.is_some()
+            || cost < baseline.makespan_milliseconds)
     {
         assignment(
             plan,
@@ -1030,7 +1383,9 @@ pub(super) fn evaluate(
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if shared_operator
+        schema: if thread_order_search.is_some() {
+            "ftx-sewing-parallel/7"
+        } else if shared_operator
             .as_ref()
             .is_some_and(|operator| operator.availability_calendars.is_some())
         {
@@ -1059,6 +1414,7 @@ pub(super) fn evaluate(
         availability,
         shared_operator,
         shared_workholding,
+        thread_order_search,
         lower_bound_makespan_milliseconds,
         search_nodes,
         search_complete,

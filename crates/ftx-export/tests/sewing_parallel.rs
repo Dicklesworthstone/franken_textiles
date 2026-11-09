@@ -306,6 +306,584 @@ fn thread_inventory(options: &mut Value) -> Selection {
     yarn
 }
 
+fn thread_cost_fixture() -> (Pattern, Value) {
+    let (pattern, mut options) = heterogeneous();
+    thread_inventory(&mut options);
+    let slow = &mut options["production"]["parallel"]["cells"][0];
+    for qualification in slow["configuration"]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+    {
+        let channel = &mut qualification["thread_consumption"]["channels"][0];
+        channel["metres_per_traversal"] = json!(0.00625);
+        channel["start_allowance_m"] = json!(0.0);
+        channel["end_allowance_m"] = json!(0.0);
+    }
+    refresh_cell_locks(slow);
+    let parallel = &mut options["production"]["parallel"];
+    parallel["objective"] = json!("minimize_thread_observed_order_cost");
+    parallel["thread_order_search"] = json!({"max_search_nodes":1000,"max_order_evaluations":16});
+    (pattern, options)
+}
+
+fn thread_cost_selection(options: Value) -> Value {
+    let pass = &options["passes"][0];
+    json!({"schema":"ftx-sewing-selection/3","objective":"minimize_thread_observed_order_cost",
+        "max_plan_evaluations":2,"alternatives":[{"operation":"join","recipes":[{
+            "id":"same-qualified-recipe","needle":pass["needle"],"thread":pass["thread"],
+            "max_stitch_mm":pass["max_stitch_mm"],"stitches_per_minute":pass["stitches_per_minute"]}]}],
+        "options":options})
+}
+
+#[test]
+fn parallel_thread_cost_matches_independent_counts_prices_deadlines_and_complete_stitches() {
+    // Each slow-cell garment consumes 0.5 m; each fast-cell garment consumes 0.8 m.
+    // One 2 m order is USD 10; 4 m reaches the USD 7 / 2 m tier and costs USD 14.
+    // The existing independent enumerator supplies A's serial optimum; B needs one setup,
+    // 100 ms loading, 100 ms within each garment, 1000 ms between garments and 200 ms unloading.
+    for deadline in [
+        None,
+        Some(41100),
+        Some(25500),
+        Some(25499),
+        Some(11100),
+        Some(9900),
+        Some(9899),
+    ] {
+        let (pattern, mut options) = thread_cost_fixture();
+        options["production"]["parallel"]["thread_order_search"]["completion_deadline_milliseconds"] =
+            json!(deadline);
+        let expected: Vec<_> = (0..=3usize)
+            .filter_map(|a| {
+                let b = 3 - a;
+                let fast = if b == 0 {
+                    0
+                } else {
+                    (8000 * b as u64).div_ceil(3) + 1100 * b as u64 - 200
+                };
+                let finish = serial_cost(a, 2, 5000).max(fast);
+                let demand = 0.5 * a as f64 + 0.8 * b as f64;
+                let ordered = (demand / 2.0).ceil() * 2.0;
+                let price = ordered / 2.0 * if ordered >= 4.0 { 7.0 } else { 10.0 };
+                deadline
+                    .is_none_or(|end| finish <= end)
+                    .then_some((a, finish, price))
+            })
+            .collect();
+        let program =
+            SewProgram::build(&pattern, &serde_json::from_value(options.clone()).unwrap());
+        if expected.is_empty() {
+            let refusal = program.unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+            assert!(refusal.message.contains("lower bound"));
+            continue;
+        }
+        let program = program.unwrap();
+        let plan = &program.plan;
+        let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+        let search = parallel.thread_order_search.as_ref().unwrap();
+        let a = parallel.selected.cells[0].copies.len();
+        let (_, finish, price) = expected.iter().find(|(count, _, _)| *count == a).unwrap();
+        assert_eq!(search.selected_order_cost, Some(*price));
+        assert_eq!(
+            *price,
+            expected
+                .iter()
+                .map(|row| row.2)
+                .fold(f64::INFINITY, f64::min)
+        );
+        assert_eq!(parallel.selected.makespan_milliseconds, *finish);
+        assert!(search.search_complete && search.optimality_proven);
+        assert_eq!(search.unresolved_cell_counts, 0);
+        assert_eq!(search.order_evaluations, expected.len());
+        assert_eq!(
+            search.baseline_replaced,
+            deadline.is_some_and(|end| end < 41100)
+        );
+        assert!(deadline.is_none_or(|end| parallel.baseline.makespan_milliseconds <= end));
+        assert_eq!(parallel.optimality_proven, *finish == 9900);
+        assert_eq!(program.stitches.len(), 80 * a + 40 * (3 - a));
+        let physical: BTreeSet<_> = program
+            .stitches
+            .iter()
+            .map(|step| step.copy.unwrap())
+            .collect();
+        assert_eq!(physical, BTreeSet::from([0, 1, 2]));
+        for step in &program.stitches {
+            let assigned = parallel
+                .selected
+                .cells
+                .iter()
+                .find(|cell| cell.cell == *step.cell.as_ref().unwrap())
+                .unwrap();
+            assert!(assigned.copies.contains(&step.copy.unwrap()));
+            let source = plan.parallel_cell_plan(&assigned.cell).unwrap();
+            assert_eq!(
+                step.a_mm,
+                source.seams[step.operation].stations.a[step.to_station]
+            );
+        }
+        assert_eq!(plan.schema, "ftx-sewing-plan/32");
+        assert_eq!(
+            plan.production.as_ref().unwrap().schema,
+            "ftx-sewing-production/20"
+        );
+        assert_eq!(parallel.schema, "ftx-sewing-parallel/7");
+        let replay = SewProgram::build(&pattern, &plan.options).unwrap();
+        assert_eq!(
+            serde_json::to_value(program).unwrap(),
+            serde_json::to_value(replay).unwrap()
+        );
+    }
+}
+
+#[test]
+fn parallel_thread_cost_aggregates_one_order_and_preserves_qualified_cell_windows() {
+    let (pattern, options) = thread_cost_fixture();
+    let plan = build(&pattern, options.clone()).unwrap();
+    let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    assert_eq!(
+        parallel
+            .selected
+            .cells
+            .iter()
+            .map(|cell| cell.copies.len())
+            .collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+    assert_eq!(parallel.selected.makespan_milliseconds, 25500);
+    assert!(!parallel.optimality_proven);
+    let consumption = plan.consumables.as_ref().unwrap();
+    assert!((consumption.total_required_length_m.unwrap() - 1.8).abs() < 1e-12);
+    let purchasing = consumption.purchasing.as_ref().unwrap();
+    assert_eq!(purchasing.material_orders.len(), 1);
+    assert_eq!(purchasing.selected_total(), Some(10.0));
+    assert_eq!(
+        purchasing.material_orders[0]
+            .least_observed_order
+            .as_ref()
+            .unwrap()
+            .order_quantity,
+        2.0
+    );
+    // Pricing the two used cells independently would buy two minimum orders for USD 20.
+    let mut linear = options.clone();
+    let quote = &mut linear["consumables"]["purchasing"]["quote_book"]["quotes"][0];
+    quote["price"] = json!(2.0);
+    quote["quantity"] = json!(1.0);
+    quote["minimum_quantity"] = json!(0.1);
+    quote["order_increment"] = json!(0.1);
+    quote["price_breaks"] = json!([]);
+    let plan = build(&pattern, linear).unwrap();
+    let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    assert_eq!(parallel.selected.cells[0].copies, vec![0, 1, 2]);
+    assert!(parallel.selected.cells[1].copies.is_empty());
+    assert_eq!(parallel.selected.makespan_milliseconds, 41100);
+    assert_eq!(
+        parallel
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .selected_order_cost,
+        Some(3.0)
+    );
+    for deadline in [11100, 11099] {
+        let mut windowed = options.clone();
+        windowed["production"]["parallel"]["cells"][0]["available_until_milliseconds"] =
+            json!(9899);
+        windowed["production"]["parallel"]["thread_order_search"]["completion_deadline_milliseconds"] =
+            json!(deadline);
+        let result = build(&pattern, windowed);
+        if deadline == 11099 {
+            assert_eq!(result.unwrap_err().code, RefusalCode::InvalidDocument);
+        } else {
+            let parallel = result.unwrap().production.unwrap().parallel.unwrap();
+            assert!(parallel.selected.cells[0].copies.is_empty());
+            assert_eq!(parallel.selected.makespan_milliseconds, 11100);
+            assert!(parallel.thread_order_search.unwrap().baseline_replaced);
+        }
+    }
+}
+
+#[test]
+fn parallel_thread_cost_caps_and_unavailable_orders_keep_complete_honest_incumbents() {
+    let (pattern, options) = thread_cost_fixture();
+    for field in ["max_search_nodes", "max_order_evaluations"] {
+        let mut capped = options.clone();
+        capped["production"]["parallel"]["thread_order_search"][field] = json!(1);
+        let plan = build(&pattern, capped).unwrap();
+        let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+        let search = parallel.thread_order_search.as_ref().unwrap();
+        assert_eq!(parallel.selected.makespan_milliseconds, 9900);
+        assert_eq!(search.selected_order_cost, Some(14.0));
+        assert!(!search.search_complete && !search.optimality_proven && parallel.optimality_proven);
+        assert_eq!(search.order_evaluations, 1);
+        assert_eq!(
+            search.assignment_budget_exhausted,
+            field == "max_search_nodes"
+        );
+        assert_eq!(
+            search.order_budget_exhausted,
+            field == "max_order_evaluations"
+        );
+        assert!(parallel.budget_exhausted && parallel.search_nodes <= 10000);
+        assert_eq!(
+            SewProgram::build(&pattern, &plan.options)
+                .unwrap()
+                .stitches
+                .len(),
+            160
+        );
+    }
+    let mut missing = options.clone();
+    let cell = &mut missing["production"]["parallel"]["cells"][0];
+    for qualification in cell["configuration"]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+    {
+        qualification["thread_consumption"] = Value::Null;
+    }
+    refresh_cell_locks(cell);
+    let plan = build(&pattern, missing).unwrap();
+    let parallel = plan.production.unwrap().parallel.unwrap();
+    let search = parallel.thread_order_search.unwrap();
+    assert_eq!(search.selected_order_cost, Some(14.0));
+    assert_eq!(search.unresolved_assignments, 3);
+    assert!(!search.optimality_proven && search.search_complete);
+    assert!(parallel.selected.cells[0].copies.is_empty());
+    assert_eq!(parallel.selected.makespan_milliseconds, 11100);
+    for available in [false, true] {
+        let mut changed = options.clone();
+        let quote = &mut changed["consumables"]["purchasing"]["quote_book"]["quotes"][0];
+        quote["available"] = json!(available);
+        // Every complete allocation buys the same qualified four-metre order, preserving the
+        // fastest seed on a cost tie. Supplier prices remain strictly positive even when unavailable.
+        quote["minimum_quantity"] = json!(4.0);
+        quote["price"] = json!(7.0);
+        quote["price_breaks"] = json!([]);
+        let mut zero_price = changed.clone();
+        zero_price["consumables"]["purchasing"]["quote_book"]["quotes"][0]["price"] = json!(0.0);
+        let refusal = build(&pattern, zero_price).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert_eq!(refusal.message, "price must be finite and positive");
+        let plan = build(&pattern, changed).unwrap();
+        let parallel = plan.production.unwrap().parallel.unwrap();
+        let search = parallel.thread_order_search.unwrap();
+        assert_eq!(search.selected_order_cost, available.then_some(14.0));
+        assert_eq!(search.optimality_proven, available);
+        assert_eq!(search.unresolved_assignments, if available { 0 } else { 4 });
+        assert_eq!(parallel.selected.makespan_milliseconds, 9900);
+    }
+    let mut split = options;
+    split["production"]["parallel"]["thread_order_search"]["completion_deadline_milliseconds"] =
+        json!(9900);
+    let mut small = split["consumables"]["purchasing"]["quote_book"]["quotes"][0].clone();
+    small["available_quantity"] = json!(2.0);
+    let mut large = small.clone();
+    large["offer_id"] = json!("large-order");
+    large["sku"] = json!("independent-large-stock");
+    large["available_quantity"] = json!(20.0);
+    large["price"] = json!(30.0);
+    large["price_breaks"] = json!([]);
+    split["consumables"]["purchasing"]["quote_book"]["quotes"] = json!([small, large]);
+    split["consumables"]["purchasing"]["market"]["split_orders"] = json!({
+        "schema":"ftx-thread-order-allocation/1","max_search_nodes":1});
+    let plan = build(&pattern, split).unwrap();
+    let purchasing = plan
+        .consumables
+        .as_ref()
+        .unwrap()
+        .purchasing
+        .as_ref()
+        .unwrap();
+    assert_eq!(purchasing.order_allocation_optimality_proven, Some(false));
+    let search = plan
+        .production
+        .unwrap()
+        .parallel
+        .unwrap()
+        .thread_order_search
+        .unwrap();
+    assert_eq!(search.selected_order_cost, Some(60.0));
+    assert!(search.search_complete && !search.optimality_proven);
+    assert_eq!(search.unresolved_assignments, 1);
+}
+
+#[test]
+fn parallel_thread_cost_does_not_prune_possible_cheaper_unfinished_serial_orders() {
+    let (pattern, mut options) = thread_cost_fixture();
+    let parallel = &mut options["production"]["parallel"];
+    parallel["thread_order_search"]["max_search_nodes"] = json!(100);
+    parallel["thread_order_search"]["completion_deadline_milliseconds"] = json!(17800);
+    parallel["max_search_nodes"] = json!(149); // 40 DP nodes + 100 count nodes + nine one-node solves/replays.
+    for row in parallel["cells"][0]["handling"]["transitions"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if row["relation"] == "different_copy" {
+            row["milliseconds"] = json!(0);
+        }
+    }
+    let plan = build(&pattern, options.clone()).unwrap();
+    let parallel = plan.production.unwrap().parallel.unwrap();
+    let search = parallel.thread_order_search.unwrap();
+    assert!(search.search_complete && search.unresolved_cell_counts > 0);
+    assert!(!search.optimality_proven);
+    assert_eq!(search.selected_order_cost, Some(14.0));
+    options["production"]["parallel"]["max_search_nodes"] = json!(10000);
+    let plan = build(&pattern, options).unwrap();
+    let parallel = plan.production.unwrap().parallel.unwrap();
+    let search = parallel.thread_order_search.unwrap();
+    assert_eq!(parallel.selected.makespan_milliseconds, 17800);
+    assert_eq!(search.selected_order_cost, Some(10.0));
+    assert!(search.optimality_proven);
+}
+
+#[test]
+fn parallel_thread_cost_validates_domains_and_reserves_all_candidate_purchasing() {
+    use ftx_export::sewing::consumables::purchasing_work_bound;
+    let (pattern, options) = thread_cost_fixture();
+    let mut ordinary = options.clone();
+    ordinary["production"]["parallel"]["objective"] = json!("minimize_makespan");
+    ordinary["production"]["parallel"]["thread_order_search"] = Value::Null;
+    let base = purchasing_work_bound(&serde_json::from_value(ordinary).unwrap()).unwrap();
+    let configured =
+        purchasing_work_bound(&serde_json::from_value(options.clone()).unwrap()).unwrap();
+    assert_eq!(configured, 17 * base); // Sixteen candidate orders and one final exact replay.
+    for (field, value) in [
+        ("max_search_nodes", json!(0)),
+        ("max_order_evaluations", json!(0)),
+        ("max_order_evaluations", json!(65)),
+        (
+            "completion_deadline_milliseconds",
+            json!(9007199254740992u64),
+        ),
+    ] {
+        let mut invalid = options.clone();
+        invalid["production"]["parallel"]["thread_order_search"][field] = value;
+        assert_eq!(
+            build(&pattern, invalid).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+    }
+    let mut too_small = options.clone();
+    too_small["production"]["parallel"]["max_search_nodes"] = json!(1000);
+    assert_eq!(
+        build(&pattern, too_small).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    let mut too_many_prices = options.clone();
+    too_many_prices["production"]["parallel"]["thread_order_search"]["max_order_evaluations"] =
+        json!(64);
+    let quote = options["consumables"]["purchasing"]["quote_book"]["quotes"][0].clone();
+    too_many_prices["consumables"]["purchasing"]["quote_book"]["quotes"] = json!(
+        (0..1027)
+            .map(|index| {
+                let mut quote = quote.clone();
+                quote["offer_id"] = json!(format!("offer-{index}"));
+                quote
+            })
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        build(&pattern, too_many_prices).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    for case in [
+        "unconfigured",
+        "operator",
+        "missing_search",
+        "wrong_objective",
+        "missing_purchasing",
+        "stale_source",
+    ] {
+        let mut invalid = options.clone();
+        match case {
+            "unconfigured" => {
+                invalid["production"]["parallel"]["model"] =
+                    json!("independent_whole_garment_cells/1")
+            }
+            "operator" => shared_operator(&mut invalid, 40000),
+            "missing_search" => {
+                invalid["production"]["parallel"]["thread_order_search"] = Value::Null
+            }
+            "wrong_objective" => {
+                invalid["production"]["parallel"]["objective"] = json!("minimize_makespan")
+            }
+            "missing_purchasing" => invalid["consumables"]["purchasing"] = Value::Null,
+            "stale_source" => {
+                invalid["production"]["parallel"]["cells"][0]["configuration"]["qualifications"]
+                    [0]["source"]["note"] = json!("Changed unqualified observation")
+            }
+            _ => unreachable!(),
+        }
+        assert!(build(&pattern, invalid).is_err(), "{case}");
+    }
+}
+
+#[test]
+fn parallel_thread_cost_recipe_selection_inherits_deadlines_and_separates_inner_proofs() {
+    use ftx_export::sewing_selection::Request;
+    let (pattern, mut options) = thread_cost_fixture();
+    options["production"]["parallel"]["thread_order_search"]["completion_deadline_milliseconds"] =
+        json!(41100);
+    let mut request = thread_cost_selection(options);
+    request["completion_deadline_milliseconds"] = json!(25499);
+    let typed: Request = serde_json::from_value(request.clone()).unwrap();
+    let result = typed.select(&pattern).unwrap();
+    assert_eq!(result.selected_thread_order_cost, Some(14.0));
+    assert!(result.search_complete && result.optimality_proven);
+    let plan = result.selected_plan.unwrap();
+    let search = plan
+        .options
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap()
+        .thread_order_search
+        .as_ref()
+        .unwrap();
+    assert_eq!(search.completion_deadline_milliseconds, Some(25499));
+    assert_eq!(
+        typed
+            .options
+            .production
+            .as_ref()
+            .unwrap()
+            .parallel
+            .as_ref()
+            .unwrap()
+            .thread_order_search
+            .as_ref()
+            .unwrap()
+            .completion_deadline_milliseconds,
+        Some(41100)
+    );
+    assert_eq!(
+        serde_json::to_value(&plan).unwrap(),
+        serde_json::to_value(SewPlan::build(&pattern, &plan.options).unwrap()).unwrap()
+    );
+    request["options"]["production"]["parallel"]["thread_order_search"]["max_order_evaluations"] =
+        json!(1);
+    let result = serde_json::from_value::<Request>(request.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert!(result.selected_plan.is_some() && result.search_complete && !result.optimality_proven);
+    assert!(
+        result
+            .trials
+            .iter()
+            .all(|trial| trial.thread_order_optimality_proven == Some(false))
+    );
+    request["schema"] = json!("ftx-sewing-selection/5");
+    request["objective"] = json!("minimize_parallel_makespan");
+    assert!(
+        serde_json::from_value::<Request>(request)
+            .unwrap()
+            .select(&pattern)
+            .is_err()
+    );
+}
+
+#[test]
+fn parallel_thread_cost_protocol_covers_unused_cells_prices_and_outer_selection_for_every_reading()
+{
+    use ftx_export::material_study::Request;
+    let (pattern, mut options) = thread_cost_fixture();
+    options["production"]["parallel"]["cells"][1]["available_until_milliseconds"] = json!(0);
+    options["production"]["parallel"]["thread_order_search"]["completion_deadline_milliseconds"] =
+        json!(50000);
+    for selected in [false, true] {
+        let input = if selected {
+            thread_cost_selection(options.clone())
+        } else {
+            options.clone()
+        };
+        for metric in ["feed_seconds", "thread_required_length_m"] {
+            let study = |input: Value| {
+                let mut request = json!({"schema":"ftx-material-study/1",
+                    "variants":[{"key":"cost","changes":{"schema":"ftx-material-bindings/1",
+                        "default":pattern.raw()["fabric"]["material"]}}],
+                    "comparison":{"basis":"nominal","objectives":[{"metric":metric,"direction":"minimize"}]}});
+                request[if selected {
+                    "sewing_selection"
+                } else {
+                    "sewing"
+                }] = input;
+                let result = serde_json::to_value(
+                    serde_json::from_value::<Request>(request)
+                        .unwrap()
+                        .evaluate(&pattern)
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(result["comparison"]["frontier"], json!(["cost"]));
+                assert_eq!(
+                    result["alternatives"][0]["sewing"]["result"]["production"]["parallel"]["selected"]
+                        ["cells"][1]["copies"],
+                    json!([])
+                );
+                result
+            };
+            let original = study(input.clone());
+            for field in ["unused_cell", "count_work", "deadline", "price"] {
+                let mut changed = input.clone();
+                let options = if selected {
+                    &mut changed["options"]
+                } else {
+                    &mut changed
+                };
+                match field {
+                    "unused_cell" => {
+                        options["production"]["parallel"]["cells"][1]["available_until_milliseconds"] =
+                            json!(1)
+                    }
+                    "count_work" => {
+                        options["production"]["parallel"]["thread_order_search"]["max_search_nodes"] =
+                            json!(1001)
+                    }
+                    "deadline" => {
+                        options["production"]["parallel"]["thread_order_search"]["completion_deadline_milliseconds"] =
+                            json!(50001)
+                    }
+                    "price" => {
+                        options["consumables"]["purchasing"]["quote_book"]["quotes"][0]["price"] =
+                            json!(11.0)
+                    }
+                    _ => unreachable!(),
+                }
+                let changed = study(changed);
+                let comparison = |report: &Value| report["comparison"]["alternatives"][0].clone();
+                assert_eq!(
+                    comparison(&original)["readings"],
+                    comparison(&changed)["readings"]
+                );
+                assert_ne!(
+                    comparison(&original)["input_protocol_sha256"],
+                    comparison(&changed)["input_protocol_sha256"],
+                    "selected={selected},metric={metric},field={field}"
+                );
+            }
+            if selected {
+                let mut changed = input.clone();
+                changed["max_plan_evaluations"] = json!(3);
+                let changed = study(changed);
+                assert_eq!(
+                    original["alternatives"][0]["sewing"]["result"],
+                    changed["alternatives"][0]["sewing"]["result"]
+                );
+                assert_ne!(
+                    original["comparison"]["alternatives"][0]["input_protocol_sha256"],
+                    changed["comparison"]["alternatives"][0]["input_protocol_sha256"]
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn heterogeneous_cells_use_actual_machine_recipe_geometry_feed_and_global_copy_stitches() {
     let (pattern, options) = heterogeneous();

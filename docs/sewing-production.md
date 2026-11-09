@@ -504,10 +504,10 @@ Pricing each cell separately would miss the combined 4 m price tier and incorrec
 
 Configured output uses plan `/17`, production `/5`, parallel `/2`, consumables `/3` and stitch `/6`.
 Complete frozen replay preserves each source plan, the selected allocation and its combined order.
-The existing makespan objective remains the allocation authority: actual feed, inventory and cost
-are conditional outputs of that assignment. Heterogeneous recipe searches therefore require
-`minimize_parallel_makespan`; they do not claim that its selected allocation also minimizes feed or
-thread cost. Joint time/cost allocation remains a separate future objective.
+The existing makespan objective remains the default allocation authority: actual feed, inventory and
+cost are conditional outputs of that assignment. Heterogeneous recipe searches must match that
+objective unless they explicitly request the complete thread-order allocation below. A time-selected
+allocation does not establish a separate feed or purchasing minimum.
 
 The same eight-cell, 256-expanded-operation and aggregate 200000 scheduling-work bounds apply.
 The retained outer and all configured cell source plans additionally share a 250000-station bound.
@@ -519,6 +519,75 @@ limits. Scheduling replays and complete-order purchasing retain their own separa
 Every garment still stays in one cell, with independently qualified machines, fixture units and
 handling labor. Shared labor requires the separately qualified optional protocol below. Inter-cell
 garment transfer, hardware control and empirical seam qualification remain outside this model.
+
+### Allocate whole garments by complete thread order cost
+
+Configured independent-labor cells (`independent_whole_garment_cells/2`) can explicitly optimize the
+complete thread order instead of elapsed completion. Keep the existing qualified machine, setup,
+handling, fixture, availability and source declarations, and supply ordinary `consumables.purchasing`
+with its unchanged quote book and comparable market. Add these fields to `production.parallel`:
+
+```json
+{
+  "objective": "minimize_thread_observed_order_cost",
+  "thread_order_search": {
+    "max_search_nodes": 1000,
+    "max_order_evaluations": 16,
+    "completion_deadline_milliseconds": 25500
+  }
+}
+```
+
+The optional deadline is inclusive and measured from the job origin; every used cell must finish
+its complete retained schedule, including final unloading. It must be an exact integer from zero
+through `9007199254740991`. This mode currently requires separately qualified independent handling
+labor; it refuses the shared-operator and shared-fixture protocols rather than ignoring their work.
+
+The existing cell/count solvers and complete fastest allocation supply the initial feasible
+incumbent. Deterministic bounded count-prefix search then considers whole-garment allocations,
+preserving the first equal-cost incumbent. Each complete feasible allocation passes every actual
+cell/operation/copy through the existing consumption and purchasing authority. All exact-yarn demand
+is combined before supplier minimums, increments, price tiers, observed stock and continuity checks.
+Split supplier orders use their existing bounded allocator. The cost is never a sum of separately
+rounded per-cell purchases, and an incomplete quantity or unavailable order cannot become zero.
+
+`thread_order_search.max_search_nodes` reserves 1–200000 units **inside** the enclosing parallel cap.
+It charges the seed and each count-prefix choice; the original serial/count/replay and two dynamic
+program reservations remain intact. `max_order_evaluations` permits 1–64 distinct complete prices,
+including the seed; repeated count vectors reuse their retained score. Purchasing preflight reserves
+that many full evaluations plus final replay, including all declared yarns, quotes, aliases and split
+order work. Recipe and material searches multiply both complete scheduling and purchasing bounds.
+No prefix price or monotonic-price assumption prunes the allocation domain.
+
+Plan `/32`, production `/20` and parallel `/7` retain the selected real cell schedules and
+`parallel.thread_order_search`. That report separates count-search completion, cost proof, both
+budget limits, unavailable/unproved orders and `unresolved_cell_counts`: a slow serial incumbent
+can miss a window or deadline even when its valid lower bound still permits a cheaper feasible
+count. Such a count withholds a global cost proof. Finishing the count search alone cannot prove
+that the discarded serial possibilities fail. The parent's `parallel.optimality_proven` continues
+to mean **makespan** proof; choosing a cheaper slower allocation normally leaves it false.
+
+A cap preserves the complete incumbent. If no examined order is fully priced, the fastest complete
+sewing allocation remains usable with `selected_order_cost: null`; no cost minimum is claimed.
+If no retained schedule meets the deadline, the planner refuses, distinguishing a valid impossible
+lower bound from unresolved serial search. A first-cell baseline outside the deadline is replaced
+by the complete selected allocation and identified by `thread_order_search.baseline_replaced`.
+Independent schedule reconstruction and final canonical consumables must exactly reproduce the
+chosen assignment and its score before publishing a result.
+
+The synthetic regression gives three garments a choice between a slow cell using 0.5 m of yarn per
+garment and a fast cell using 0.8 m. The fastest split finishes at 9900 ms and needs a USD 14 order;
+cost-directed allocation finishes at 25500 ms with one USD 10 order. A 25500 ms deadline admits
+that cheaper job; 25499 ms selects the USD 14 allocation. With a linear USD 2/m offer, all three
+garments move to the slow cell for USD 3 and finish at 41100 ms. These are independent synthetic
+arithmetic cases, without a factory timing, seam-quality or purchasing authorization claim.
+
+Use `ftx-sewing-selection/3` and `minimize_thread_observed_order_cost` when comparing recipes under
+this allocation objective. An outer completion deadline tightens each inner deadline before search.
+Actual stitches, complete thread inventory, manufacturing/design/scenario studies and ordinary
+browser views consume the same retained allocation. Feed-only and thread-only comparisons retain
+the complete allocation policy and purchasing inputs, including unused cells and original outer
+selection domains. Omitting the new policy preserves the existing schemas and allocation behavior.
 
 ## Finite cell availability windows
 

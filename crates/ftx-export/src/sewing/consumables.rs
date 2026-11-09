@@ -504,19 +504,31 @@ pub fn purchasing_work_bound(options: &SewOptions) -> Result<usize, Refusal> {
     let evaluations = options
         .production
         .as_ref()
-        .and_then(|production| production.routing.as_ref())
-        .and_then(|routing| routing.thread_order_search.as_ref())
-        .map_or(Ok(1), |search| {
-            if !(1..=64).contains(&search.max_order_evaluations) {
+        .and_then(|production| {
+            production
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.thread_order_search.as_ref())
+                .map(|search| search.max_order_evaluations)
+                .or_else(|| {
+                    production
+                        .parallel
+                        .as_ref()
+                        .and_then(|parallel| parallel.thread_order_search.as_ref())
+                        .map(|search| search.max_order_evaluations)
+                })
+        })
+        .map_or(Ok(1), |evaluations| {
+            if !(1..=64).contains(&evaluations) {
                 return Err(budget(
-                    "eligible thread-order search supports 1..64 complete price evaluations",
+                    "cell-assignment thread-order search supports 1..64 complete price evaluations",
                 ));
             }
-            Ok(search.max_order_evaluations + 1)
+            Ok(evaluations + 1)
         })?;
     let work = per_order
         .checked_mul(evaluations)
-        .ok_or_else(|| budget("eligible thread-order purchasing reservation overflows"))?;
+        .ok_or_else(|| budget("cell-assignment thread-order purchasing reservation overflows"))?;
     if work > MAX_WORK {
         return Err(budget(
             "thread purchasing exceeds 200000 canonical quote/stock-alias work units",

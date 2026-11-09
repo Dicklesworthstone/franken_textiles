@@ -520,14 +520,14 @@ impl Request {
             .production
             .as_ref()
             .and_then(|production| production.routing.as_ref());
-        if parallel.is_some_and(|policy| policy.model == "independent_whole_garment_cells/2")
-            && matches!(
-                self.objective,
-                Objective::MinimizeFeedSeconds | Objective::MinimizeThreadObservedOrderCost
-            )
-        {
+        if parallel.is_some_and(|policy| {
+            policy.cost_directed() && !cost
+                || policy.model == "independent_whole_garment_cells/2"
+                    && (self.objective == Objective::MinimizeFeedSeconds
+                        || cost && !policy.cost_directed())
+        }) {
             return Err(invalid(
-                "heterogeneous cells allocate garments for minimum makespan; feed and thread cost depend on that allocation and cannot claim their own minimum; use minimize_parallel_makespan and inspect the actual feed and thread orders",
+                "heterogeneous feed and thread costs depend on that allocation; match recipe selection with explicit bounded thread-order search for cost or makespan search for time; feed-only selection cannot claim its own allocation minimum",
             ));
         }
         if (timed || handled) && (parallel.is_some() || routing.is_some()) {
@@ -654,6 +654,19 @@ impl Request {
                 .as_mut()
                 .and_then(|production| production.routing.as_mut())
                 .and_then(|route| route.thread_order_search.as_mut())
+                && let Some(deadline) = self.completion_deadline_milliseconds
+            {
+                search.completion_deadline_milliseconds = Some(
+                    search
+                        .completion_deadline_milliseconds
+                        .map_or(deadline, |inner| inner.min(deadline)),
+                );
+            }
+            if let Some(search) = options
+                .production
+                .as_mut()
+                .and_then(|production| production.parallel.as_mut())
+                .and_then(|parallel| parallel.thread_order_search.as_mut())
                 && let Some(deadline) = self.completion_deadline_milliseconds
             {
                 search.completion_deadline_milliseconds = Some(

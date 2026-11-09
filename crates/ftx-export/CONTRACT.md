@@ -406,7 +406,7 @@ preserving minimum/increment/tier/stock/source rules. Idle demand is excluded; m
 coverage withholds complete quantity/mass/cost. Quote preflight unions all supplied cell yarn locks.
 Plan `/17`, production `/5` and parallel `/2` retain all cell plans and original frozen options.
 Conditional feed/cost reporting does not imply their optimization: heterogeneous recipe selection
-requires makespan. Focused `sewing_parallel` cases cover actual machine/pitch/rate substitution,
+must match makespan or the explicit thread-order allocation below. Focused `sewing_parallel` cases cover actual machine/pitch/rate substitution,
 source invalidation, selected-cell inventory, combined pricing, idle/partial demand and frozen
 stitch replay. Version 1 output is preserved. No shared-labor, transfer or physical-execution claim.
 Explicit `preview::svg_cell` rebuilds the whole original job before rendering the retained cell's
@@ -415,6 +415,23 @@ selected global copies, including an empty list for an idle source. Plain `svg` 
 jobs without a named cell; legacy previews retain their bytes. Portable native/browser and both
 CLI adapters use the same renderer; CLI files are create-new. The focused regression checks actual
 2.5-versus-5 mm needle spacing, feed, full-job revalidation and escaped labels.
+
+**Cost-directed whole-garment allocation** (`ftx-pb2.2`, `ftx-tm7`). Configured independent-labor
+cells can select `minimize_thread_observed_order_cost` with bounded `thread_order_search` and an
+optional exact inclusive final-unloading deadline. The ordinary fastest complete allocation seeds
+deterministic count-prefix search; complete cell/operation/copy assignments use the same thread
+inventory and canonical purchasing authority, including shared yarn, minimums, tiers, stock aliases
+and bounded split orders. No partial score, per-cell rounded sum or monotonic-price pruning is used.
+Count nodes are reserved inside the parallel cap; 1–64 complete prices plus final replay are
+reserved across every recipe/material multiplier. Missing/unproved orders and unresolved cell/count
+timing prevent cost proof while preserving a complete sewing incumbent. Cost and makespan proofs
+remain separate. Reconstruction verifies serial digests and the final canonical selected price.
+Plan `/32`, production `/20`, parallel `/7` retain exact options, assignments, both caps and their
+scope; omission retains legacy output. Outer cost selection tightens inner deadlines and includes
+the allocation proof. Feed/thread study protocols retain unused cells, full purchasing inputs and
+selection domains. Tests: `sewing_parallel::parallel_thread_cost_*` and the actual native/portable
+production replay. Shared-operator cost search, physical process validation and hardware execution
+are not established by this independent-cell model.
 
 **Finite cell availability** (`ftx-pb2.2.7`). Optional source-qualified
 `available_until_milliseconds` limits complete cell finish, including initial setup/loading,

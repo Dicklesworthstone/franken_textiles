@@ -2047,6 +2047,138 @@ fn heterogeneous_cells_replay_actual_stitches_and_combined_thread_orders_through
 }
 
 #[test]
+fn parallel_thread_cost_replays_complete_native_orders_deadlines_and_material_studies() {
+    use ftx_export::sewing::production::workholding::qualification_sha256;
+
+    let directory = workspace();
+    let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+    let slow = &mut options["production"]["parallel"]["cells"][0];
+    for qualification in slow["configuration"]["qualifications"]
+        .as_array_mut()
+        .unwrap()
+    {
+        let channel = &mut qualification["thread_consumption"]["channels"][0];
+        channel["metres_per_traversal"] = json!(0.00625);
+        channel["start_allowance_m"] = json!(0.0);
+        channel["end_allowance_m"] = json!(0.0);
+    }
+    let qualifications: Vec<ftx_export::sewing::SewingQualification> =
+        serde_json::from_value(slow["configuration"]["qualifications"].clone()).unwrap();
+    let locks: std::collections::BTreeMap<_, _> = qualifications
+        .iter()
+        .map(|source| (source.id.as_str(), qualification_sha256(source).unwrap()))
+        .collect();
+    for path in [
+        "/configuration/qualification_refs",
+        "/handling/qualifications",
+        "/workholding/qualifications",
+    ] {
+        for references in slow
+            .pointer_mut(path)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            for reference in references.as_array_mut().unwrap() {
+                reference["sha256"] = json!(locks[reference["id"].as_str().unwrap()]);
+            }
+        }
+    }
+    options["production"]["parallel"]["objective"] = json!("minimize_thread_observed_order_cost");
+    options["production"]["parallel"]["thread_order_search"] = json!({
+        "max_search_nodes":1000,"max_order_evaluations":16});
+    let program =
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap());
+    let parallel = &program["plan"]["production"]["parallel"];
+    assert_eq!(parallel["selected"]["makespan_milliseconds"], 25500);
+    assert_eq!(parallel["thread_order_search"]["selected_order_cost"], 10.0);
+    assert_eq!(parallel["thread_order_search"]["optimality_proven"], true);
+    assert_eq!(parallel["optimality_proven"], false);
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 200);
+    let pass = &options["passes"][0];
+    let selection = json!({"schema":"ftx-sewing-selection/3","options":options,
+        "objective":"minimize_thread_observed_order_cost","max_plan_evaluations":2,
+        "completion_deadline_milliseconds":25499,
+        "alternatives":[{"operation":"join","recipes":[{"id":"same-qualified-recipe",
+            "needle":pass["needle"],"thread":pass["thread"],"max_stitch_mm":pass["max_stitch_mm"],
+            "stitches_per_minute":pass["stitches_per_minute"]}]}]});
+    let selected = portable(ftx_wasm::sew_select(PATTERN, &selection.to_string()).unwrap());
+    assert_eq!(selected["report"]["selected_thread_order_cost"], 14.0);
+    assert_eq!(selected["report"]["optimality_proven"], true);
+    let selected_options = selected["selected_options_json"].as_str().unwrap();
+    let replay =
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, selected_options).unwrap());
+    assert_eq!(replay["plan"], selected["report"]["selected_plan"]);
+    assert_eq!(
+        replay["plan"]["production"]["parallel"]["selected"]["makespan_milliseconds"],
+        9900
+    );
+    assert_eq!(replay["stitches"].as_array().unwrap().len(), 160);
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"cost","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],"sewing_selection":selection,
+        "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_purchasing"],
+            "objectives":[{"metric":"thread_observed_order_cost","direction":"minimize"},
+                {"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+    let studied = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    let row = &studied["alternatives"][0];
+    assert_eq!(studied["comparison"]["frontier"], json!(["cost"]));
+    assert_eq!(row["metrics"]["thread_observed_order_cost"], 14.0);
+    assert_eq!(row["metrics"]["sewing_parallel_makespan_seconds"], 9.9);
+    let bound = portable(
+        ftx_wasm::manufacturing::sew_plan(
+            row["binding"]["result"]["pattern_json"].as_str().unwrap(),
+            selected_options,
+        )
+        .unwrap(),
+    );
+    assert_eq!(row["sewing"]["result"], bound);
+    for (name, text) in [
+        ("pattern.json", PATTERN.to_owned()),
+        ("options.json", options.to_string()),
+        ("program.json", program.to_string()),
+        ("selection.json", selection.to_string()),
+        ("selection-result.json", selected.to_string()),
+        ("study.json", study.to_string()),
+        ("study-report.json", studied.to_string()),
+    ] {
+        fs::write(directory.join(name), text).unwrap();
+    }
+    for main in [false, true] {
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "options.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-select",
+                "pattern.json",
+                "selection.json"
+            ),
+            selected
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            studied
+        );
+    }
+    eprintln!(
+        "parallel thread-cost production replay: {}",
+        directory.display()
+    );
+}
+
+#[test]
 fn split_thread_orders_replay_actual_configured_and_specialist_copies_in_both_clis() {
     for (kind, mut options) in [
         (

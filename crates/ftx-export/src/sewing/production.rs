@@ -311,6 +311,11 @@ pub(super) fn evaluate(
     Ok(Report {
         schema: if parallel
             .as_ref()
+            .is_some_and(|parallel| parallel.thread_order_search.is_some())
+        {
+            "ftx-sewing-production/20"
+        } else if parallel
+            .as_ref()
             .is_some_and(|parallel| !parallel.cell_plans.is_empty())
         {
             "ftx-sewing-production/5"

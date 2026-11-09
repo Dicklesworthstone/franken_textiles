@@ -4093,6 +4093,56 @@ test('heterogeneous cells display their actual machine recipes and selected thre
   p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
 });
 
+test('heterogeneous cell thread orders retain cost and time proofs independently in every result view', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('sewOptions');
+  const source=cell=>({cell,machine_sha256:cell+'-lock',plan:{options:{machine:{id:cell+'-machine'}},
+    seams:[{pass:{id:'join',needle:cell+'-needle',thread:cell+'-thread',max_stitch_mm:2.5,stitches_per_minute:600}}]}});
+  const schedule={feed_seconds:1,operations:[{id:'0/join',copy:0,operation_id:'join',seam_index:0,after:[]}],
+    ordering:{selected_order:['0/join'],optimality_proven:true}};
+  const selected={makespan_milliseconds:2000,feed_seconds:2,scheduled_feed_milliseconds:2000,
+    setup_milliseconds:0,handling_milliseconds:0,cells:['a','b'].map((cell,i)=>({cell,copies:[i],
+      available_at_milliseconds:0,finish_milliseconds:2000,feed_padding_seconds:0,schedule}))};
+  const parallel={schema:'ftx-sewing-parallel/7',baseline:selected,selected,cell_plans:['a','b'].map(source),
+    lower_bound_makespan_milliseconds:1500,search_nodes:30,optimality_proven:false,budget_exhausted:false};
+  const plan={schema:'ftx-sewing-plan/32',seams:[],hardware_execution_authorized:false,
+    options:{production:{parallel:{model:'independent_whole_garment_cells/2',
+      objective:'minimize_thread_observed_order_cost',cells:[]}}},
+    production:{production_copies:2,feed_seconds:2,stitch_intervals:80,ordering:{optimality_proven:true},parallel}};
+  const downloads=[];
+  for(const mode of ['complete','zero','unresolved'])for(const op of ['sew','study','scenario']) {
+    const unresolved=mode==='unresolved';
+    parallel.thread_order_search={currency:'USD',search_scope:'complete_cell_count_assignments/1',
+      ...(mode==='zero'?{}:{completion_deadline_milliseconds:2000}),selected_order_cost:unresolved?null:mode==='zero'?0:7,
+      search_nodes:9,search_complete:!unresolved,order_evaluations:3,unresolved_assignments:unresolved?1:0,
+      unresolved_cell_counts:unresolved?2:0,baseline_replaced:mode!=='zero',assignment_budget_exhausted:false,
+      order_budget_exhausted:unresolved,optimality_proven:!unresolved};
+    const row=studyRow('priced');row.sewing=outcome(plan);row.metrics.sewing_parallel_makespan_seconds=2;
+    const study=studyReport([row]);
+    const report=op==='sew'?{schema:'ftx-sewing-program/1',plan,stitches:[]}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=` ${JSON.stringify(report)}\n`;
+    await p.e[op].onclick();p.emit(report,[{name:'priced-allocation.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    assert.deepEqual(plain(table('complete thread-order allocation').children[2].children.map(n=>n.textContent)),
+      ['USD',unresolved?'Unknown':mode==='zero'?'0':'7',mode==='zero'?'None':'2000',String(!unresolved),String(!unresolved),
+        '9','3',unresolved?'1':'0',unresolved?'2':'0','false',String(unresolved)]);
+    assert.equal(table('parallel completion and aggregate work').children[2].children[0].textContent,
+      mode==='zero'?'Single-cell baseline':'Feasible replacement baseline');
+    assert.match(visibleText(s),/minimum parallel completion time is not proved/);
+    assert.match(visibleText(s),/Cost proof is separate from makespan proof/);
+    assert.match(visibleText(s),/Every supplier minimum, increment and tier applies to the combined order/);
+    assert.doesNotMatch(visibleText(s),/reported consequences, not separately optimized quantities|Minimum parallel completion time proved/);
+    const download=descendants(s).find(n=>n.download==='priced-allocation.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);downloads.push(download.href);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.sewOptions.handlers.change();p.e.studyRequest.handlers.change();
+  for(const name of ['sew','Fixed-pattern manufacturing alternatives','Fresh drape and heat alternatives'])
+    assert.equal(section(p,name).hidden,true);
+  for(const url of downloads)assert.equal(p.live.has(url),false);
+});
+
 test('partial sewing spans display both source sides without an ordering policy or new geometry', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
   await p.e.sew.onclick();

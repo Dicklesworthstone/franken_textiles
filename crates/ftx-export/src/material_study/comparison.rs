@@ -1937,6 +1937,13 @@ impl Policy {
                 .and_then(|parallel| parallel.shared_operator.as_ref())
                 .is_some_and(|operator| operator.availability_calendars.is_some())
         };
+        let parallel_order_search = |options: &crate::sewing::SewOptions| {
+            options
+                .production
+                .as_ref()
+                .and_then(|production| production.parallel.as_ref())
+                .is_some_and(crate::sewing::production::parallel::Policy::cost_directed)
+        };
         if consumers.contains(&Consumer::Sewing) || thread {
             keys.insert("thickness");
         }
@@ -2396,6 +2403,7 @@ impl Policy {
             && let Some(selection) = row.sewing_selection.value()
             && (selection.request.completion_deadline_milliseconds.is_some()
                 || parallel_calendars(&selection.request.options)
+                || parallel_order_search(&selection.request.options)
                 || selection
                     .request
                     .options
@@ -2446,6 +2454,7 @@ impl Policy {
             || ((consumers.contains(&Consumer::Sewing) || thread)
                 && row.sewing.value().is_some_and(|plan| {
                     parallel_calendars(&plan.options)
+                        || parallel_order_search(&plan.options)
                         || plan
                             .options
                             .production
@@ -2456,13 +2465,13 @@ impl Policy {
                             })
                 }))
         {
-            let production = row
+            let plan = row
                 .sewing
                 .value()
-                .and_then(|plan| plan.options.production.as_ref())
-                .ok_or_else(|| {
-                    invalid("source-qualified multi-cell sewing production unavailable")
-                })?;
+                .ok_or_else(|| invalid("source-qualified sewing plan unavailable"))?;
+            let production = plan.options.production.as_ref().ok_or_else(|| {
+                invalid("source-qualified multi-cell sewing production unavailable")
+            })?;
             // Resource independence, availability, time resolution and every cell's source-bound
             // timing/fixture policy define this experiment, independent of textile protocol consent.
             // Eligible routes optimize makespan before reporting feed/yarn. Copy windows constrain
@@ -2479,6 +2488,14 @@ impl Policy {
                     .as_ref()
                     .ok_or_else(|| invalid("source-qualified parallel sewing cells unavailable"))?;
                 base = hash(&(base, parallel))?;
+                if parallel.cost_directed() {
+                    // Complete quotes, stock and purchasing work select the actual cell recipes
+                    // even when this comparison consumes only feed or thread quantity.
+                    base = hash(&(
+                        base,
+                        ("parallel_thread_order_inputs", &plan.options.consumables),
+                    ))?;
+                }
             }
         }
         if consumers.contains(&Consumer::VaporCoverage) {

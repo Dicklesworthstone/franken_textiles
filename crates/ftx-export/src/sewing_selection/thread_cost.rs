@@ -67,5 +67,18 @@ pub(super) fn score(plan: &SewPlan, currency: &str) -> Result<(f64, Option<bool>
         }
         proof = Some(proof != Some(false) && search.optimality_proven);
     }
+    if let Some(search) = plan
+        .production
+        .as_ref()
+        .and_then(|production| production.parallel.as_ref())
+        .and_then(|parallel| parallel.thread_order_search.as_ref())
+    {
+        if search.selected_order_cost != Some(cost) {
+            return Err(unavailable(
+                "parallel assignment has no matching canonical selected thread order",
+            ));
+        }
+        proof = Some(proof != Some(false) && search.optimality_proven);
+    }
     Ok((cost, proof))
 }
