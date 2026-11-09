@@ -4075,6 +4075,145 @@ fn eligible_recipe_selection_scores_makespan_and_refuses_unoptimized_feed_or_cos
     }
 }
 
+fn check_copy_window_protocol(outer: bool, recipe_only: bool) {
+    use ftx_export::material_study::Request;
+
+    let (pattern, mut options) = fixture(1);
+    let yarn = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: "coats/epic-2994120-2026".into(),
+            ..Selection::default()
+        })
+        .unwrap()
+        .frozen_selection();
+    for cell in options["production"]["routing"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["configuration"]["qualifications"][0]["thread_consumption"] = json!({
+            "channels_complete":true,"evidence":"estimate","allow_estimates":true,
+            "source":source("copy-window-thread"),"method":"Synthetic complete thread per selected interval",
+            "channels":[{"id":"complete","material":yarn,"metres_per_traversal":0.01,
+                "start_allowance_m":0.0,"end_allowance_m":0.0}]});
+    }
+    options["consumables"] = json!({});
+    refresh_locks(&mut options);
+    let windowed = copy_windows(
+        options.clone(),
+        json!([
+            {"copy":0,"available_at_milliseconds":0,"complete_by_milliseconds":30000}
+        ]),
+    );
+    let study = |input: Value, metric: &str, outer: bool| {
+        let mut request = json!({"schema":"ftx-material-study/1",
+            "variants":[{"key":"windowed","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}],
+            "comparison":{"basis":"nominal","objectives":[{"metric":metric,"direction":"minimize"}]}});
+        request[if outer { "sewing_selection" } else { "sewing" }] = input;
+        let request: Request = serde_json::from_value(request).unwrap();
+        let result = serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap();
+        assert_eq!(result["comparison"]["frontier"], json!(["windowed"]));
+        result
+    };
+    let mut input = windowed.clone();
+    if outer {
+        let mut offered = windowed["production"]["routing"].clone();
+        offered["transfer"]["available_at_milliseconds"] = json!(20000);
+        input = json!({"schema":"ftx-sewing-selection/6","options":options,
+                "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+                "route_candidates":[{"id":"windowed-alternative","routing":offered}],"alternatives":[]});
+    } else if recipe_only {
+        let mut recipe =
+            options["production"]["routing"]["cells"][1]["configuration"]["recipes"]["reinforce"]
+                .clone();
+        recipe["id"] = json!("same-qualified-recipe");
+        input = json!({"schema":"ftx-sewing-selection/5","options":windowed,
+            "objective":"minimize_parallel_makespan","max_plan_evaluations":2,
+            "alternatives":[{"operation":"reinforce","recipes":[recipe]}]});
+    }
+    for metric in ["feed_seconds", "thread_required_length_m"] {
+        let original = study(input.clone(), metric, outer || recipe_only);
+        assert_eq!(original, study(input.clone(), metric, outer || recipe_only));
+        if outer {
+            assert_eq!(
+                original["alternatives"][0]["sewing_selection"]["result"]["selected_route"],
+                "template"
+            );
+        }
+        for field in [
+            "available_at_milliseconds",
+            "complete_by_milliseconds",
+            "method",
+        ] {
+            let mut changed = input.clone();
+            let route = if outer {
+                &mut changed["route_candidates"][0]["routing"]
+            } else if recipe_only {
+                &mut changed["options"]["production"]["routing"]
+            } else {
+                &mut changed["production"]["routing"]
+            };
+            if field == "method" {
+                route["copy_windows"][field] =
+                    json!("Different independently qualified unloaded waiting protocol");
+            } else {
+                route["copy_windows"]["copies"][0][field] =
+                    json!(if field == "available_at_milliseconds" {
+                        1
+                    } else {
+                        30001
+                    });
+            }
+            let changed = study(changed, metric, outer || recipe_only);
+            assert_eq!(
+                original["comparison"]["alternatives"][0]["readings"],
+                changed["comparison"]["alternatives"][0]["readings"]
+            );
+            if outer {
+                assert_eq!(
+                    original["alternatives"][0]["sewing"]["result"],
+                    changed["alternatives"][0]["sewing"]["result"]
+                );
+            }
+            let identity = &original["comparison"]["alternatives"][0]["input_protocol_sha256"];
+            assert!(identity.is_string());
+            assert_ne!(
+                *identity, changed["comparison"]["alternatives"][0]["input_protocol_sha256"],
+                "outer={outer}, recipe_only={recipe_only}, metric={metric}, field={field}"
+            );
+        }
+        if outer || recipe_only {
+            let mut capped = input.clone();
+            capped["max_plan_evaluations"] = json!(3);
+            let capped = study(capped, metric, true);
+            assert_eq!(
+                original["alternatives"][0]["sewing"]["result"],
+                capped["alternatives"][0]["sewing"]["result"]
+            );
+            assert_ne!(
+                original["comparison"]["alternatives"][0]["input_protocol_sha256"],
+                capped["comparison"]["alternatives"][0]["input_protocol_sha256"]
+            );
+        }
+    }
+}
+
+#[test]
+fn fixed_route_copy_window_protocol_tracks_arrivals_deadlines_and_qualification() {
+    check_copy_window_protocol(false, false);
+}
+
+#[test]
+fn unselected_route_copy_window_protocol_tracks_the_authored_search_domain() {
+    check_copy_window_protocol(true, false);
+}
+
+#[test]
+fn recipe_selection_copy_window_protocol_tracks_the_authored_search_domain() {
+    check_copy_window_protocol(false, true);
+}
+
 #[test]
 fn feed_and_thread_only_comparisons_retain_the_entire_eligible_routing_protocol() {
     use ftx_export::material_study::Request;

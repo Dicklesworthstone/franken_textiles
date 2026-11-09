@@ -2386,9 +2386,16 @@ impl Policy {
         }
         if (consumers.contains(&Consumer::Sewing) || thread)
             && let Some(selection) = row.sewing_selection.value()
-            && selection.request.completion_deadline_milliseconds.is_some()
+            && (selection.request.completion_deadline_milliseconds.is_some()
+                || selection
+                    .request
+                    .options
+                    .production
+                    .as_ref()
+                    .and_then(|production| production.routing.as_ref())
+                    .is_some_and(|routing| routing.copy_windows.is_some()))
         {
-            // The deadline and complete candidate domain determine which otherwise usable
+            // Arrival/deadline constraints and the complete candidate domain determine which usable
             // recipe can supply these readings. A changed search must not inherit its protocol.
             base = hash(&(
                 base,
@@ -2415,13 +2422,12 @@ impl Policy {
                 .as_ref()
                 .and_then(|production| production.routing.as_ref())
                 .is_some_and(crate::sewing::production::routing::Policy::eligible)
-                || selection
-                    .request
-                    .route_candidates
-                    .iter()
-                    .any(|candidate| candidate.routing.eligible()))
+                || selection.request.route_candidates.iter().any(|candidate| {
+                    candidate.routing.eligible() || candidate.routing.copy_windows.is_some()
+                }))
         {
-            // The winner may be fixed even though an eligible route participated in its search.
+            // The winner may be unconstrained even though an eligible or copy-window route was
+            // searched. Retain arrivals/deadlines and their qualification on unused candidates too.
             // Preserve every outer candidate, recipe and work cap that determined that decision.
             base = hash(&(base, ("eligible_route_selection", &selection.request)))?;
         }
@@ -2434,7 +2440,7 @@ impl Policy {
                     .value()
                     .and_then(|plan| plan.options.production.as_ref())
                     .and_then(|production| production.routing.as_ref())
-                    .is_some_and(crate::sewing::production::routing::Policy::eligible))
+                    .is_some_and(|routing| routing.eligible() || routing.copy_windows.is_some()))
         {
             let production = row
                 .sewing
@@ -2445,8 +2451,9 @@ impl Policy {
                 })?;
             // Resource independence, availability, time resolution and every cell's source-bound
             // timing/fixture policy define this experiment, independent of textile protocol consent.
-            // Eligible routes optimize makespan before reporting feed/yarn. Their complete search
-            // domain therefore remains relevant even when no makespan metric was requested.
+            // Eligible routes optimize makespan before reporting feed/yarn. Copy windows constrain
+            // the admitted dispatch even on fixed routes. Both domains qualify every consumed plan,
+            // including comparisons that request only feed or thread quantities.
             if let Some(routing) = &production.routing {
                 // The complete routing domain, including unused eligible cells, qualifies unloaded
                 // movement, staging and the assignment search. Never hash only selected resources.
