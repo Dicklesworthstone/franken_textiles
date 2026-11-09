@@ -195,6 +195,149 @@ fn refresh_routed_locks(options: &mut Value) {
 }
 
 #[test]
+fn copy_deadlines_replay_exact_native_and_portable_plans_and_refusals() {
+    let mut options = routed_specialist_options();
+    options["production"]["routing"]["copy_windows"] = json!({
+        "model":"explicit_copy_release_and_completion/1",
+        "copies":[{"copy":1,"available_at_milliseconds":0,"complete_by_milliseconds":8134},
+            {"copy":0,"available_at_milliseconds":6000,"complete_by_milliseconds":20000}],
+        "source":{"reference":"test:native-copy-deadlines","accessed_on":"2026-11-08",
+            "note":"Invented unloaded arrivals and authored deadlines, not measured factory evidence"},
+        "method":"Synthetic availability and unloaded waiting at every first-cell choice before loading",
+        "conditions":{},"evidence":"estimate","allow_estimates":true
+    });
+    let text = options.to_string();
+    let program_text = ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap();
+    let program = portable(program_text.clone());
+    let plan = &program["plan"];
+    let windows = &plan["production"]["routing"]["copy_windows"];
+    assert_eq!(plan["schema"], "ftx-sewing-plan/31");
+    assert_eq!(windows["schema"], "ftx-sewing-copy-windows/1");
+    assert_eq!(
+        windows["policy"],
+        options["production"]["routing"]["copy_windows"]
+    );
+    for schedule in ["baseline", "selected"] {
+        let rows = windows[schedule].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["copy"], 0);
+        assert!(rows[0]["loading_start_milliseconds"].as_u64().unwrap() >= 6000);
+        assert_eq!(rows[1]["copy"], 1);
+        assert_eq!(rows[1]["finish_milliseconds"], 8134);
+        assert_eq!(rows[1]["deadline_slack_milliseconds"], 0);
+    }
+    let replay = plan["options"].to_string();
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &replay).unwrap()),
+        *plan
+    );
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &replay).unwrap()),
+        program
+    );
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("options.json"), &text).unwrap();
+    fs::write(directory.join("replay.json"), &replay).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+            *plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "replay.json"
+            ),
+            program
+        );
+    }
+    for (index, (release, deadline)) in [(6000, 5999), (0, 0)].into_iter().enumerate() {
+        let mut invalid = options.clone();
+        invalid["production"]["routing"]["copy_windows"]["copies"][1]["available_at_milliseconds"] =
+            json!(release);
+        invalid["production"]["routing"]["copy_windows"]["copies"][1]["complete_by_milliseconds"] =
+            json!(deadline);
+        let invalid_text = invalid.to_string();
+        let file = format!("invalid-{index}.json");
+        fs::write(directory.join(&file), &invalid_text).unwrap();
+        let refusal = ftx_wasm::manufacturing::sew_plan(PATTERN, &invalid_text).unwrap_err();
+        assert_eq!(
+            refusal.code,
+            if index == 0 {
+                ftx_core::RefusalCode::InvalidDocument
+            } else {
+                ftx_core::RefusalCode::NotConverged
+            }
+        );
+        assert_eq!(
+            ftx_wasm::manufacturing::sew_stitches(PATTERN, &invalid_text).unwrap_err(),
+            refusal
+        );
+        for main in [false, true] {
+            for action in ["sew-plan", "sew-stitches"] {
+                let mut command = Command::new(if main {
+                    env!("CARGO_BIN_EXE_ftx")
+                } else {
+                    env!("CARGO_BIN_EXE_ftx-materials")
+                });
+                command.current_dir(&directory);
+                if main {
+                    command.args(["--json", "materials"]);
+                }
+                let output = command
+                    .args([action, "pattern.json", &file])
+                    .output()
+                    .unwrap();
+                assert_eq!(output.status.code(), Some(if main { 3 } else { 2 }));
+                let response: Value =
+                    serde_json::from_slice(if main { &output.stdout } else { &output.stderr })
+                        .unwrap();
+                assert_eq!(response["refusal"], json!(refusal));
+                assert!(response.get("result").is_none());
+            }
+        }
+        assert_eq!(
+            fs::read_to_string(directory.join(file)).unwrap(),
+            invalid_text
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(directory.join("pattern.json")).unwrap(),
+        PATTERN
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("options.json")).unwrap(),
+        text
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("replay.json")).unwrap(),
+        replay
+    );
+    if let Some(capture) = std::env::var_os("FTX_ROUTED_FIXTURE_REPLAY") {
+        use std::io::Write;
+        let capture = PathBuf::from(capture).join("copy-windows");
+        fs::create_dir_all(&capture).unwrap();
+        for (name, text) in [
+            ("pattern.json", PATTERN.to_owned()),
+            ("options.json", text),
+            ("program.json", program_text),
+        ] {
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(capture.join(name))
+                .unwrap()
+                .write_all(text.as_bytes())
+                .unwrap();
+        }
+    }
+}
+
+#[test]
 fn qualified_carrier_pools_replay_actual_stitches_and_material_studies_through_both_commands() {
     let directory = workspace();
     let mut options = routed_specialist_options();
