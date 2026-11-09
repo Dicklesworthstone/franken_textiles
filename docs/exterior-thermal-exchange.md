@@ -64,7 +64,7 @@ Omit `radiation` for explicitly convection-only exchange. A radiative request
 without qualified emissivity refuses. Missing heat capacity still does not
 prevent this steady calculation and is not fabricated to enable transients.
 
-## Source-reported material ranges with prescribed convection
+## Source-reported material ranges with qualified exterior exchange
 
 Positive convection without radiation now retains complete source-reported material resistance
 ranges in steady columns and independent draped sheets. The coefficient, its source/conditions,
@@ -75,14 +75,38 @@ not the prescribed boundary or its evidence. No heat capacity is required.
 Both endpoint outer-face temperatures must remain inside the coefficient's qualified
 `surface_temperature_range_c`. Missing material intervals, endpoint escape or unsupported
 temperature-dependent laws leave nominal flux and power available with an explicit unavailable-range
-reason. Radiation, zero convection and body-coverage exterior ranges remain unsupported; an omitted
-source interval is never replaced with the nominal number.
+reason. An omitted source interval is never replaced with the nominal number. Layered body coverage
+uses the same authority with each actual body/cloth area factor and separately declared bare films.
 
-Material and design studies can use these independent-sheet ranges in existing
-`independent_surface_power_w` objectives and guards with `basis: "reported_bounds"`.
+With opaque-gray radiation, the actual selected outer-face emissivity also needs complete source
+bounds, including explicitly reported singleton or zero endpoints. The shared material authority
+solves all four constant-resistance/emissivity corners. Each corner solves
+`Ts - T_inside + R * (q_conv + q_rad) / area_factor = 0`, a strictly increasing function of `Ts`.
+Signed flux is monotone in either source coordinate while the other is fixed, even when convection
+and radiation oppose or net flux changes direction across the source intervals. Corner envelopes
+therefore include every combination without assuming statistical independence. Pure radiation and
+an explicitly zero-emissivity corner are supported; convection-only zero-coefficient behavior is
+unchanged.
+
+Every endpoint temperature must remain in the intersection of the convection and optical domains.
+The original observation still qualifies the radiant enclosure, specimen, conditioning and physical
+face. A mapped coverage face follows the actual outer cloth/body normals; hidden layers do not
+contribute additional emissivity observations. Missing optical bounds or an escaping corner withholds
+the range while retaining the independently qualified nominal solution.
+
+Radiative column bounds include `exterior.model: "opaque_gray_source_endpoints/1"`, the original
+emissivity interval and the enclosing `surface_temperature_c` range. Their
+`total_resistance_m2_k_w` is explicitly labelled `inside_film_interfaces_and_materials_only`;
+it excludes the nonlinear exterior instead of inventing a radiative film. The bounded root search
+retains its numerical enclosure, and unrepresentable arithmetic or insufficient nominal precision
+withholds the range. Old film and convection-only receipts retain their original shape and arithmetic.
+
+Material and design studies can use these ranges in existing `independent_surface_power_w` and
+`body_coverage_power_w` objectives and guards with `basis: "reported_bounds"`.
 Admission preserves the exact exterior source and per-column model identity, recomputes complete
-source/area endpoints, and checks duplicated conduction and convection receipts. Reversed exchange
-keeps signed endpoints; equal reservoirs give zero exchange. These conditional material ranges
+source/area endpoints, and checks the selected optical observation, duplicated conduction receipts
+and separate convective/radiative powers. Reversed exchange keeps signed endpoints; equal reservoirs
+give zero exchange. These conditional material ranges
 do not propagate uncertainty in wind, convection, boundary temperatures or garment geometry, and
 do not establish statistical confidence, wearer comfort or measured fabric performance.
 

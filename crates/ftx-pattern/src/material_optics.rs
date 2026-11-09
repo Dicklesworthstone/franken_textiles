@@ -55,6 +55,17 @@ pub struct OpticalFaces {
     pub conditioning: String,
 }
 
+/// Qualified total-hemispherical optical observation for opaque-gray thermal exchange.
+#[derive(Clone, Copy, Debug)]
+pub struct ThermalEmissivity {
+    /// Nominal dimensionless value in [0, 1].
+    pub value: f64,
+    /// Original source interval; absence never becomes a singleton nominal observation.
+    pub bounds: Option<[f64; 2]>,
+    /// Qualified surface and radiant-enclosure temperature domain, degrees Celsius.
+    pub temperature_range_c: [f64; 2],
+}
+
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
@@ -101,6 +112,84 @@ impl OpticalFaces {
 }
 
 impl Material {
+    /// Qualify one exact optical face against this material's transport specimen and conditioning.
+    /// The caller separately admits the opaque-gray closure and the convection boundary.
+    ///
+    /// # Errors
+    /// Missing/unadmitted observation, wrong face or spectral basis, mismatched specimen,
+    /// nonphysical emissivity, or an unqualified radiant-enclosure temperature.
+    pub fn thermal_emissivity(
+        &self,
+        property: &str,
+        face: &str,
+        ambient_c: f64,
+        allow_estimates: bool,
+    ) -> Result<ThermalEmissivity, Refusal> {
+        self.validate()?;
+        if property.trim().is_empty() || face.trim().is_empty() {
+            return Err(invalid(
+                "radiation needs an explicit face and emissivity property",
+            ));
+        }
+        let value = self.require(property, "1", allow_estimates)?;
+        let q = &self.properties[property];
+        if !(0.0..=1.0).contains(&value)
+            || q.bounds.is_some_and(|[lo, hi]| lo < 0.0 || hi > 1.0)
+            || q.conditions.get("face").map(String::as_str) != Some(face)
+            || q.conditions.get("spectral_basis").map(String::as_str) != Some("total_hemispherical")
+        {
+            return Err(invalid(
+                "emissivity needs [0,1] bounds, the exact exposed face and total_hemispherical spectral basis",
+            ));
+        }
+        let transport = self
+            .properties
+            .get("thermal_resistance")
+            .or_else(|| self.properties.get("thermal_conductivity"))
+            .or_else(|| self.properties.get("thickness"));
+        for field in ["specimen", "conditioning"] {
+            let actual = q
+                .conditions
+                .get(field)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| invalid(format!("emissivity requires {field}")))?;
+            let expected = self
+                .thermal_response
+                .as_ref()
+                .map(|t| {
+                    if field == "specimen" {
+                        &t.specimen
+                    } else {
+                        &t.conditioning
+                    }
+                })
+                .or_else(|| transport.and_then(|t| t.conditions.get(field)));
+            if expected.is_some_and(|v| v != actual) {
+                return Err(invalid(format!("emissivity must match transport {field}")));
+            }
+        }
+        let number = |key: &str| {
+            q.conditions
+                .get(key)
+                .and_then(|s| s.parse::<f64>().ok())
+                .ok_or_else(|| invalid(format!("emissivity requires numeric {key}")))
+        };
+        let [lo, hi] = [number("temperature_min_c")?, number("temperature_max_c")?];
+        if !lo.is_finite() || !hi.is_finite() || lo < -273.15 || hi < lo || !(hi - lo).is_finite() {
+            return Err(invalid("invalid exterior surface temperature range"));
+        }
+        if !ambient_c.is_finite() || ambient_c < lo || ambient_c > hi {
+            return Err(invalid(
+                "radiant enclosure lies outside the emissivity temperature qualification",
+            ));
+        }
+        Ok(ThermalEmissivity {
+            value,
+            bounds: q.bounds,
+            temperature_range_c: [lo, hi],
+        })
+    }
+
     /// Resolve the explicitly mapped observation for a canonical side under the material policy.
     /// Spectral/angular, temperature and numeric qualifications remain the consumer's responsibility.
     ///

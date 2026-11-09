@@ -10,14 +10,14 @@ use ftx_core::Refusal;
 use ftx_pattern::{
     material_catalog::ResolvedMaterial,
     material_optics::Side,
-    material_thermal::{ConductionLaw, ReportedConductionBounds},
+    material_thermal::{ConductionLaw, RadiativeBoundary, ReportedConductionBounds},
     materials::{Evidence, Source},
 };
 use serde::{Deserialize, Serialize};
 
 /// Stefan-Boltzmann constant in W/(m² K⁴), rounded from its exact SI expression.
 /// NIST CODATA 2022: https://physics.nist.gov/cuu/Constants/Table/allascii.txt
-pub const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
+pub use ftx_pattern::material_thermal::STEFAN_BOLTZMANN;
 
 /// A single large isothermal radiative enclosure, not a ray-traced scene or a solar spectrum.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -104,6 +104,7 @@ pub struct MaterialFace {
 pub(in crate::thermal) struct Exchange<'a> {
     input: &'a Exterior,
     pub(in crate::thermal) emissivity: f64,
+    emissivity_bounds: Option<[f64; 2]>,
     pub(in crate::thermal) domain: [f64; 2],
     pub(in crate::thermal) material_face: Option<MaterialFace>,
 }
@@ -138,6 +139,7 @@ impl<'a> Exchange<'a> {
             ));
         }
         let mut emissivity = 0.0;
+        let mut emissivity_bounds = None;
         let mut material_face = None;
         if let Some(r) = &input.radiation {
             temperature(r.ambient_c)?;
@@ -173,63 +175,18 @@ impl<'a> Exchange<'a> {
                 }
                 (&r.emissivity_property, &r.exposed_face)
             };
-            emissivity = m.require(property, "1", outer.allows_estimates())?;
-            let q = &m.properties[property];
-            if !(0.0..=1.0).contains(&emissivity)
-                || q.bounds.is_some_and(|[lo, hi]| lo < 0.0 || hi > 1.0)
-                || q.conditions.get("face") != Some(face)
-                || q.conditions.get("spectral_basis").map(String::as_str)
-                    != Some("total_hemispherical")
-            {
-                return Err(invalid(
-                    "emissivity needs [0,1] bounds, the exact exposed face and total_hemispherical spectral basis",
-                ));
-            }
-            let transport = m
-                .properties
-                .get("thermal_resistance")
-                .or_else(|| m.properties.get("thermal_conductivity"))
-                .or_else(|| m.properties.get("thickness"));
-            for field in ["specimen", "conditioning"] {
-                let actual = q
-                    .conditions
-                    .get(field)
-                    .filter(|s| !s.trim().is_empty())
-                    .ok_or_else(|| invalid(format!("emissivity requires {field}")))?;
-                let expected = m
-                    .thermal_response
-                    .as_ref()
-                    .map(|t| {
-                        if field == "specimen" {
-                            &t.specimen
-                        } else {
-                            &t.conditioning
-                        }
-                    })
-                    .or_else(|| transport.and_then(|t| t.conditions.get(field)));
-                if expected.is_some_and(|v| v != actual) {
-                    return Err(invalid(format!("emissivity must match transport {field}")));
-                }
-            }
-            let number = |key: &str| -> Result<f64, Refusal> {
-                q.conditions
-                    .get(key)
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .ok_or_else(|| invalid(format!("emissivity requires numeric {key}")))
-            };
-            let [lo, hi] = range([number("temperature_min_c")?, number("temperature_max_c")?])?;
-            // Gray absorptivity is an admitted closure over BOTH relevant blackbody spectra.
-            if r.ambient_c < lo || r.ambient_c > hi {
-                return Err(invalid(
-                    "radiant enclosure lies outside the emissivity temperature qualification",
-                ));
-            }
+            let optical =
+                m.thermal_emissivity(property, face, r.ambient_c, outer.allows_estimates())?;
+            emissivity = optical.value;
+            emissivity_bounds = optical.bounds;
+            let [lo, hi] = optical.temperature_range_c;
             domain = [domain[0].max(lo), domain[1].min(hi)];
         }
         range(domain)?;
         Ok(Self {
             input,
             emissivity,
+            emissivity_bounds,
             domain,
             material_face,
         })
@@ -352,7 +309,7 @@ impl SteadyConductionModel {
                     if residual.abs() <= super::temperature_tolerance(b)
                         && let Ok(mut conduction) = self.finish(faces, q, b)
                     {
-                        match self.reported_convection_bounds(boundary, exterior, factor) {
+                        match self.reported_exterior_bounds(boundary, exterior, factor, &exchange) {
                             Ok(bounds)
                                 if q >= bounds.flux_w_m2[0] && q <= bounds.flux_w_m2[1] =>
                             {
@@ -360,7 +317,7 @@ impl SteadyConductionModel {
                                 conduction.bounds_unavailable.clear();
                             }
                             Ok(_) => conduction.exclude_reported_bounds(
-                                "nominal solver precision does not resolve the source-reported convection interval",
+                                "nominal solver precision does not resolve the source-reported exterior interval",
                             ),
                             Err(refusal) => conduction.exclude_reported_bounds(&refusal.message),
                         }
@@ -390,13 +347,32 @@ impl SteadyConductionModel {
         ))
     }
 
-    fn reported_convection_bounds(
+    fn reported_exterior_bounds(
         &self,
         boundary: Boundary,
         exterior: &Exterior,
         factor: f64,
+        exchange: &Exchange<'_>,
     ) -> Result<ReportedConductionBounds, Refusal> {
-        if exterior.radiation.is_some() || exterior.convection_w_m2_k <= 0. {
+        if let Some(radiation) = &exterior.radiation {
+            return ConductionLaw::reported_radiation_bounds(
+                &self.laws,
+                &self.area_factors,
+                &self.interfaces,
+                boundary.inside_c,
+                boundary.inside_resistance,
+                RadiativeBoundary {
+                    air_c: exterior.air_c,
+                    ambient_c: radiation.ambient_c,
+                    convection_w_m2_k: exterior.convection_w_m2_k,
+                    emissivity: exchange.emissivity_bounds.ok_or_else(|| {
+                        invalid("selected emissivity needs complete source-reported endpoints")
+                    })?,
+                    surface_temperature_range_c: exchange.domain,
+                },
+            );
+        }
+        if exterior.convection_w_m2_k <= 0. {
             return Err(invalid(
                 "source-reported exterior ranges require positive prescribed convection without radiation",
             ));

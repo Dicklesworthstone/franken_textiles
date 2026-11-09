@@ -2,6 +2,172 @@
 use super::*;
 
 #[test]
+fn production_radiation_ranges_reach_studies_with_frozen_replay_and_source_refusals() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let mut request = request();
+    request.variants.truncate(2);
+    for (variant, resistance) in request.variants.iter_mut().zip([0.1, 0.4]) {
+        let material = variant
+            .changes
+            .default
+            .as_mut()
+            .unwrap()
+            .record
+            .as_mut()
+            .unwrap();
+        material.properties.insert(
+            "thermal_resistance".into(),
+            serde_json::from_value(json!({
+            "value":resistance,"bounds":[resistance*0.9,resistance*1.1],"unit":"m2*K/W",
+            "source":"test","evidence":"estimate","method":"Synthetic source interval",
+            "conditions":{"specimen":"radiative-test","conditioning":"dry"}}))
+            .unwrap(),
+        );
+        for (key, face, value) in [
+            ("emissivity", "public", 0.8),
+            ("reverse_emissivity", "reverse", 0.4),
+        ] {
+            material.properties.insert(key.into(),serde_json::from_value(json!({
+                "value":value,"bounds":[value-0.01,value+0.01],"unit":"1","source":"test",
+                "evidence":"estimate","method":"Synthetic total-hemispherical observation",
+                "conditions":{"specimen":"radiative-test","conditioning":"dry","face":face,
+                    "spectral_basis":"total_hemispherical","temperature_min_c":"-100","temperature_max_c":"100"}})).unwrap());
+        }
+        material.optical_faces = Some(
+            serde_json::from_value(json!({
+            "positive":{"face":"public","emissivity_property":"emissivity"},
+            "negative":{"face":"reverse","emissivity_property":"reverse_emissivity"},
+            "source":"test","evidence":"estimate","method":"Synthetic source orientation",
+            "specimen":"radiative-test","conditioning":"dry"}))
+            .unwrap(),
+        );
+    }
+    let mut incomplete = request.variants[0].clone();
+    incomplete.key = "missing".into();
+    for key in ["emissivity", "reverse_emissivity"] {
+        incomplete
+            .changes
+            .default
+            .as_mut()
+            .unwrap()
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut(key)
+            .unwrap()
+            .bounds = None;
+    }
+    request.variants.push(incomplete);
+    request.comparison = Some(
+        serde_json::from_value(json!({"basis":"reported_bounds",
+        "objectives":[{"metric":"independent_surface_power_w","direction":"minimize"},
+            {"metric":"body_coverage_power_w","direction":"minimize"}]}))
+        .unwrap(),
+    );
+    for reverse in [false, true] {
+        let mut scenario: Value = serde_json::from_str(SCENARIO).unwrap();
+        scenario["options"]["sew_steps"] = json!(120);
+        scenario["options"]["drape_steps"] = json!(0);
+        let inside = if reverse { 10. } else { 30. };
+        let outside = if reverse { 30. } else { 10. };
+        let exterior = json!({"air_c":outside,"convection_w_m2_k":5.,
+            "surface_temperature_range_c":[-100.,100.],"convection_conditions":"Synthetic fixed coefficient",
+            "convection_source":{"reference":"test:source-ranges","accessed_on":"2026-11-09","note":"Synthetic balance only"},
+            "convection_evidence":"estimate","allow_estimates":true,
+            "radiation":{"ambient_c":if reverse {35.} else {-5.},
+                "automatic_material_face":true,"allow_opaque_gray_approximation":true}});
+        for path in ["/surface", "/coverage/conditions"] {
+            let conditions = scenario.pointer_mut(path).unwrap();
+            conditions["boundaries"][0] = json!({"inside_c":inside,"outside_c":outside,
+                "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.});
+            conditions["exterior_exchange"] = json!([exterior]);
+        }
+        scenario["coverage"]["conditions"]["bare_boundaries"] = json!([{
+            "inside_c":inside,"outside_c":outside,"inside_resistance_m2_k_w":0.2,"outside_resistance_m2_k_w":0.4}]);
+        let result: Value = serde_json::from_str(
+            &on_body(
+                &body,
+                PATTERN,
+                &json!(request).to_string(),
+                &scenario.to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            result["comparison"]["frontier"],
+            json!([if reverse { "a" } else { "b" }]),
+            "{}",
+            result["comparison"]
+        );
+        for row in result["comparison"]["alternatives"].as_array().unwrap() {
+            let missing = row["key"] == "missing";
+            assert_eq!(row["eligible"], !missing, "{row}");
+            for metric in ["independent_surface_power_w", "body_coverage_power_w"] {
+                let reading = &row["readings"][metric];
+                assert!(reading["value"].is_number());
+                assert_eq!(reading["reported_bounds"].is_array(), !missing);
+            }
+        }
+        for row in result["simulations"].as_array().unwrap() {
+            let outcome = &row["evaluation"]["result"];
+            let surface = &outcome["surface"]["result"];
+            let coverage = &outcome["coverage"]["result"];
+            let replay: Value = serde_json::from_str(
+                &ftx_wasm::thermal::steady_surface(
+                    &surface["request"]["report"].to_string(),
+                    &surface["request"]["conditions"].to_string(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(&replay, surface);
+            let replay: Value = serde_json::from_str(
+                &ftx_wasm::thermal::steady_coverage(&coverage["request"].to_string()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(&replay, coverage);
+        }
+        let pattern = Pattern::new(serde_json::from_str(PATTERN).unwrap());
+        for fault in ["none", "optical-range", "face", "radiative-power", "source"] {
+            let checked = request.evaluate_with(&pattern,&result["scenario"],|key,_| {
+                let mut output = result["simulations"].as_array().unwrap().iter()
+                    .find(|row| row["key"]==key).unwrap()["evaluation"]["result"].clone();
+                if key == "b" {
+                    let heat = &mut output["surface"]["result"];
+                    match fault {
+                        "optical-range" => heat["steady"]["columns"][0]["reported_bounds"]["exterior"]["emissivity"] = json!([0.,1.]),
+                        "face" => heat["exterior_exchange"]["columns"][0]["material_face"]["side"] = json!("negative"),
+                        "radiative-power" => heat["exterior_exchange"]["radiative_power_w"] = json!(0.),
+                        "source" => heat["request"]["conditions"]["exterior_exchange"][0]["radiation"]["automatic_material_face"] = json!(false),
+                        _ => {},
+                    }
+                }
+                Ok(output)
+            }).unwrap();
+            let checked = json!(checked);
+            assert_eq!(
+                checked["comparison"]["alternatives"][1]["eligible"],
+                fault == "none",
+                "{fault}: {}",
+                checked["comparison"]
+            );
+            if fault == "none" {
+                assert_eq!(checked["comparison"], result["comparison"]);
+            }
+        }
+    }
+}
+
+#[test]
 fn production_surface_and_coverage_ranges_admit_signed_decisions_and_frozen_replay() {
     let form = form();
     let body = DrapeBody {

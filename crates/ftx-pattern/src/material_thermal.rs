@@ -15,7 +15,10 @@ mod polynomial;
 pub use polynomial::PolynomialFit;
 mod conduction;
 use conduction::qualified_scalar;
-pub use conduction::{ConductionLaw, ReportedConductionBounds};
+pub use conduction::{
+    ConductionLaw, RadiativeBoundary, ReportedConductionBounds, ReportedExteriorBounds,
+    STEFAN_BOLTZMANN,
+};
 
 /// One reported mean; standard deviation is not an uncertainty of the mean or a confidence interval.
 #[derive(Clone, Debug, Serialize, Deserialize)]

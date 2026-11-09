@@ -646,6 +646,66 @@ fn covered_convection_ranges_preserve_layer_areas_signs_and_separate_bare_films(
 }
 
 #[test]
+fn covered_radiative_ranges_use_only_the_actual_outer_face_and_unequal_layer_areas() {
+    let inner = bounded_selection(0.2, [0.1, 0.3]);
+    let mut outer = serde_json::to_value(exterior_selection(0.4, 0.8)).unwrap();
+    outer["record"]["properties"]["thermal_resistance"]["bounds"] = json!([0.3, 0.5]);
+    outer["record"]["properties"]["emissivity"]["bounds"] = json!([0.7, 0.9]);
+    let mut reverse = outer["record"]["properties"]["emissivity"].clone();
+    reverse["value"] = json!(0.2);
+    reverse["bounds"] = json!([0.1, 0.3]);
+    reverse["conditions"]["face"] = json!("reverse");
+    outer["record"]["properties"]["reverse_emissivity"] = reverse;
+    outer["record"]["optical_faces"] = json!({
+        "positive":{"face":"public","emissivity_property":"emissivity"},
+        "negative":{"face":"reverse","emissivity_property":"reverse_emissivity"},
+        "source":"test","evidence":"estimate","method":"Synthetic normal-to-face mapping",
+        "specimen":"test-sheet","conditioning":"synthetic-dry"});
+    let conditions = outer["record"]["properties"]["emissivity"]["conditions"].clone();
+    outer["record"]["optical_faces"]["specimen"] = conditions["specimen"].clone();
+    outer["record"]["optical_faces"]["conditioning"] = conditions["conditioning"].clone();
+    let assembly = SteadyCoverage::new(
+        source_with(inner, serde_json::from_value(outer).unwrap()),
+        layout(),
+    )
+    .unwrap();
+    let mut environment = environment(true);
+    let radiation = environment.radiation.as_mut().unwrap();
+    radiation.automatic_material_face = true;
+    radiation.emissivity_property.clear();
+    radiation.exposed_face.clear();
+    for flipped in [false, true] {
+        let mut vertices = cloth();
+        if flipped {
+            vertices.swap(4, 5);
+        }
+        let result = assembly
+            .solve_exterior(
+                &vertices,
+                &body(),
+                &[exterior_boundary()],
+                std::slice::from_ref(&environment),
+                &[],
+            )
+            .unwrap();
+        let range = result.regions[0].conduction.reported_bounds.unwrap();
+        assert_eq!(
+            range.exterior.unwrap().emissivity,
+            if flipped { [0.1, 0.3] } else { [0.7, 0.9] }
+        );
+        near(range.total_resistance_m2_k_w[0], 0.45);
+        near(range.total_resistance_m2_k_w[1], 0.75);
+        assert_eq!(result.regions[0].outer_area_per_model_area, 2.);
+        let power = result.steady.ranges.reported_bounds.unwrap().power_w;
+        assert!(power[0] < result.steady.power_w && result.steady.power_w < power[1]);
+        near(
+            result.steady.power_w,
+            result.convective_power_w + result.radiative_power_w,
+        );
+    }
+}
+
+#[test]
 fn covered_convection_unqualified_ranges_keep_nominal_and_consistent_region_receipts() {
     for fault in ["missing", "domain", "radiation", "zero-h", "nonlinear"] {
         let mut inner = bounded_selection(0.2, [0.1, 0.3]);
@@ -672,7 +732,7 @@ fn covered_convection_unqualified_ranges_keep_nominal_and_consistent_region_rece
                     .unwrap()
                     .bounds = Some([0.3, 0.5]);
                 e = environment(true);
-                "without radiation"
+                "emissivity needs complete"
             }
             "zero-h" => {
                 e.convection_w_m2_k = 0.;

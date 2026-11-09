@@ -183,6 +183,29 @@ scenario total-coverage heat objective consumes baseline plus bridge power, with
 comparison protocols and frozen replay. This is not a generic seam microgeometry or comfort model.
 See [steady-thermal-coverage.md](../steady-thermal-coverage.md#qualified-seam-and-closure-thermal-bridges).
 
+### Conditional source ranges under opaque-gray exterior radiation
+
+Steady sheet and body-coverage comparisons may propagate complete constant transport and selected
+outer-face emissivity intervals through the existing qualified exterior boundary. Convection, air
+and radiant temperatures, geometry, films, interfaces and face selection remain fixed. Every
+consumed transport observation and the actual emissivity observation require explicit bounds;
+missing intervals leave the nominal calculation available but exclude reported-range decisions.
+
+The common arithmetic solves the monotone balance at every resistance/emissivity corner. For each
+fixed emissivity, signed heat is monotone in resistance; for fixed resistance it is monotone in
+emissivity (its direction depends on the radiant reservoir). Thus all four corners enclose the
+complete rectangle, including opposing convection/radiation and heat-flow sign changes. Every
+corner's outer-face temperature must remain in the intersection of the qualified convection and
+optical domains. Temperature-dependent transport, unsupported interfaces and unrepresentable
+endpoint arithmetic still withhold ranges. No confidence interval or empirical accuracy follows.
+
+Radiative ranges carry an explicit `exterior` receipt with their emissivity and outer-face
+temperature envelopes. Their `total_resistance_m2_k_w` contains only material, interface and
+inside-film resistance; radiation is a nonlinear boundary, never an invented constant film.
+Convection-only receipts and their existing arithmetic remain unchanged. Producer and comparison
+admission share the endpoint authority and independently retain exact material, face and area
+identities; covered regions expose only the actual outermost layer and keep bare films separate.
+
 ## Dated purchasing and finite observed stock
 
 `ftx-textile-quotes/1` may bind an offer to `material_sha256`, the exact resolved material

@@ -5,7 +5,11 @@ use super::{
     Alternative, Catalog, Consumer, Refusal, Selection, Value, admit_vapor_assignments, finite,
     hash, invalid, json, same_identity, vapor_triangle_area,
 };
-use ftx_pattern::material_thermal::{ConductionLaw, ReportedConductionBounds};
+use ftx_pattern::{
+    material_catalog::ResolvedMaterial,
+    material_optics::Side,
+    material_thermal::{ConductionLaw, RadiativeBoundary, ReportedConductionBounds},
+};
 use std::collections::BTreeSet;
 
 fn fail() -> Refusal {
@@ -53,6 +57,7 @@ struct Source<'a> {
     owners: &'a [Value],
     instances: &'a [Value],
     laws: Vec<ConductionLaw>,
+    materials: Vec<ResolvedMaterial>,
     areas: Vec<f64>,
 }
 
@@ -103,6 +108,7 @@ fn source<'a>(alternative: &Alternative, simulation: &'a Value) -> Result<Source
     };
     let mut selections = Vec::new();
     let mut laws = Vec::new();
+    let mut materials = Vec::new();
     for column in columns {
         let layers = array(column, "layers")?;
         if column["schema"] != "ftx-steady-conduction-model/1"
@@ -124,6 +130,7 @@ fn source<'a>(alternative: &Alternative, simulation: &'a Value) -> Result<Source
             material.allows_estimates(),
         )?);
         selections.push(layers[0].clone());
+        materials.push(material);
     }
     admit_vapor_assignments(alternative, instances, owners, patches, &selections).map_err(
         |_| {
@@ -155,6 +162,7 @@ fn source<'a>(alternative: &Alternative, simulation: &'a Value) -> Result<Source
         owners,
         instances,
         laws,
+        materials,
         areas,
     })
 }
@@ -222,20 +230,34 @@ struct Convection {
     radiation: Option<Value>,
 }
 
-fn convection_network(
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Radiation {
+    ambient_c: f64,
+    #[serde(default)]
+    emissivity_property: String,
+    #[serde(default)]
+    exposed_face: String,
+    #[serde(default)]
+    automatic_material_face: bool,
+    allow_opaque_gray_approximation: bool,
+}
+
+fn exterior_network(
     laws: &[ConductionLaw],
     factors: &[f64],
     interfaces: &Value,
     boundary: &Value,
     environment: &Value,
-    state: &Value,
-    exterior: &Value,
+    solution: (&Value, &Value),
+    optics: (&ResolvedMaterial, Side),
 ) -> Result<ReportedConductionBounds, Refusal> {
+    let (state, exterior) = solution;
     let input: Convection = serde_json::from_value(environment.clone()).map_err(|_| fail())?;
     let source = &input.convection_source;
     let [lo, hi] = input.surface_temperature_range_c;
     let h = input.convection_w_m2_k;
-    if input.radiation.is_some() || h <= 0. {
+    if input.radiation.is_none() && h <= 0. {
         return Err(invalid(
             "steady heat source ranges require positive prescribed convection without radiation",
         ));
@@ -243,6 +265,7 @@ fn convection_network(
     if !input.air_c.is_finite()
         || input.air_c < -273.15
         || !h.is_finite()
+        || h < 0.
         || !lo.is_finite()
         || !hi.is_finite()
         || lo < -273.15
@@ -260,6 +283,89 @@ fn convection_network(
         return Err(fail());
     }
     let factor = factors.last().copied().ok_or_else(fail)?;
+    if let Some(radiation) = &input.radiation {
+        let radiation: Radiation = serde_json::from_value(radiation.clone()).map_err(|_| fail())?;
+        if !radiation.allow_opaque_gray_approximation {
+            return Err(fail());
+        }
+        let (material, side) = optics;
+        let m = material.material();
+        let (property, face, mapping) = if radiation.automatic_material_face {
+            if !radiation.emissivity_property.is_empty() || !radiation.exposed_face.is_empty() {
+                return Err(fail());
+            }
+            let face = m.optical_face(side, material.allows_estimates())?;
+            (
+                &face.emissivity_property,
+                &face.face,
+                json!({
+                "side":side,"face":face.face,"emissivity_property":face.emissivity_property,
+                "mapping_source":m.optical_faces.as_ref().ok_or_else(fail)?.source,
+                "material_sha256":material.sha256()}),
+            )
+        } else {
+            (
+                &radiation.emissivity_property,
+                &radiation.exposed_face,
+                Value::Null,
+            )
+        };
+        let optical = m.thermal_emissivity(
+            property,
+            face,
+            radiation.ambient_c,
+            material.allows_estimates(),
+        )?;
+        let environment = RadiativeBoundary {
+            air_c: input.air_c,
+            ambient_c: radiation.ambient_c,
+            convection_w_m2_k: h,
+            emissivity: optical.bounds.ok_or_else(|| {
+                invalid("selected emissivity needs complete source-reported endpoints")
+            })?,
+            surface_temperature_range_c: [
+                lo.max(optical.temperature_range_c[0]),
+                hi.min(optical.temperature_range_c[1]),
+            ],
+        };
+        let interfaces: Vec<f64> =
+            serde_json::from_value(interfaces.clone()).map_err(|_| fail())?;
+        let bounds = ConductionLaw::reported_radiation_bounds(
+            laws,
+            factors,
+            &interfaces,
+            number(&boundary["inside_c"])?,
+            number(&boundary["inside_resistance_m2_k_w"])?,
+            environment,
+        )?;
+        let surface = number(&exterior["surface_c"])?;
+        if surface < environment.surface_temperature_range_c[0]
+            || surface > environment.surface_temperature_range_c[1]
+        {
+            return Err(fail());
+        }
+        let [convective, radiative] = environment.flux(surface, optical.value)?;
+        let q = number(&state["flux_w_m2"])?;
+        let faces = array(state, "layer_faces_c")?;
+        if state["reported_bounds"] != json!(bounds)
+            || !array(state, "bounds_unavailable")?.is_empty()
+            || q < bounds.flux_w_m2[0]
+            || q > bounds.flux_w_m2[1]
+            || number(&exterior["convective_flux_w_m2"])? != convective
+            || number(&exterior["radiative_flux_w_m2"])? != radiative
+            || q != (convective + radiative) / factor
+            || exterior["conduction"] != *state
+            || faces.len() != laws.len()
+            || faces.last().ok_or_else(fail)?[1] != exterior["surface_c"]
+            || exterior["radiation_enabled"] != true
+            || exterior["material_face"] != mapping
+            || number(&exterior["outer_area_per_model_area"])? != 1. / factor
+            || number(&exterior["balance_residual_w_m2"])? != 0.
+        {
+            return Err(fail());
+        }
+        return Ok(bounds);
+    }
     let film = positive(&json!(factor / h))?;
     let outer_area_per_model_area = positive(&json!(1. / factor))?;
     let mut effective = boundary.clone();
@@ -393,8 +499,6 @@ fn surface(policy: &Value, result: &Value, source: &Source<'_>) -> Result<[f64; 
         if (environments.len() != 1 && environments.len() != columns.len())
             || (environments.len() != 1 && policy["model_sha256"].is_null())
             || exchanges.len() != columns.len()
-            || result["exterior_exchange"]["convective_power_w"] != steady["power_w"]
-            || number(&result["exterior_exchange"]["radiative_power_w"])? != 0.
         {
             return Err(fail());
         }
@@ -404,14 +508,14 @@ fn surface(policy: &Value, result: &Value, source: &Source<'_>) -> Result<[f64; 
     for (i, law) in source.laws.iter().enumerate() {
         let boundary = condition(policy, "boundaries", columns.len(), i)?;
         column_bounds.push(if let Some((environments, exchanges)) = exterior {
-            convection_network(
+            exterior_network(
                 std::slice::from_ref(law),
                 &[1.],
                 &json!([]),
                 boundary,
                 &environments[if environments.len() == 1 { 0 } else { i }],
-                &columns[i],
-                &exchanges[i],
+                (&columns[i], &exchanges[i]),
+                (&source.materials[i], Side::Positive),
             )?
         } else {
             network(
@@ -426,6 +530,8 @@ fn surface(policy: &Value, result: &Value, source: &Source<'_>) -> Result<[f64; 
     let mut total = [0.; 2];
     let mut nominal = 0.;
     let mut area = 0.;
+    let mut convective = 0.;
+    let mut radiative = 0.;
     for ((patch, reading), &current_area) in source.patches.iter().zip(patches).zip(&source.areas) {
         let column = index(&patch["column"])?;
         let range = column_bounds[column].power_bounds(current_area)?;
@@ -440,8 +546,25 @@ fn surface(policy: &Value, result: &Value, source: &Source<'_>) -> Result<[f64; 
         ReportedConductionBounds::add_power_bounds(&mut total, range)?;
         nominal += power;
         area += current_area;
+        if let Some((_, exchanges)) = exterior {
+            let c = number(&exchanges[column]["convective_flux_w_m2"])?;
+            let r = number(&exchanges[column]["radiative_flux_w_m2"])?;
+            let (cp, rp) = (current_area * c, current_area * r);
+            if !cp.is_finite() || !rp.is_finite() || (c != 0. && cp == 0.) || (r != 0. && rp == 0.)
+            {
+                return Err(fail());
+            }
+            convective += cp;
+            radiative += rp;
+        }
     }
     if number(&steady["power_w"])? != nominal || number(&steady["area_m2"])? != area {
+        return Err(fail());
+    }
+    if exterior.is_some()
+        && (number(&result["exterior_exchange"]["convective_power_w"])? != convective
+            || number(&result["exterior_exchange"]["radiative_power_w"])? != radiative)
+    {
         return Err(fail());
     }
     match_power(steady, total)?;
@@ -658,6 +781,7 @@ fn coverage(
                 layer_resistance_m2_k_w: [0.; 2],
                 total_resistance_m2_k_w: [resistance; 2],
                 flux_w_m2: [flux; 2],
+                exterior: None,
             }
             .power_bounds(area * (1. - covered))?[0]
         } else {
@@ -695,14 +819,52 @@ fn coverage(
             .collect();
         let b = condition(&conditions, "boundaries", areas.len(), body)?;
         let conduction = if let Some(exchanges) = exchanges {
-            convection_network(
+            let environment = condition(&conditions, "exterior_exchange", areas.len(), body)?;
+            let outer =
+                index(&array(region, "layers")?.last().ok_or_else(fail)?["cloth_triangle"])?;
+            let side = if environment["radiation"]["automatic_material_face"] == true {
+                let normal = |positions: &Value, face: &Value| -> Result<ftx_core::Vec3, Refusal> {
+                    let vertices: [usize; 3] =
+                        serde_json::from_value(face.clone()).map_err(|_| fail())?;
+                    let mut points = Vec::new();
+                    for vertex in vertices {
+                        let p: [f64; 3] = serde_json::from_value(positions[vertex].clone())
+                            .map_err(|_| fail())?;
+                        if p.iter().any(|v| !v.is_finite()) {
+                            return Err(fail());
+                        }
+                        points.push(ftx_core::Vec3::new(p[0], p[1], p[2]));
+                    }
+                    let n = (points[1] - points[0]).cross(points[2] - points[0]);
+                    Ok(n / n.norm())
+                };
+                let cosine = normal(
+                    &source.frame["positions_m"],
+                    &source.patches[outer]["vertices"],
+                )?
+                .dot(normal(&map["body_positions_m"], &body_triangles[body])?);
+                if !cosine.is_finite() || cosine.abs() <= 1e-12 {
+                    return Err(fail());
+                }
+                if cosine < 0. {
+                    Side::Negative
+                } else {
+                    Side::Positive
+                }
+            } else {
+                Side::Positive
+            };
+            exterior_network(
                 &laws,
                 &factors,
                 &region["interface_resistance_m2_k_w"],
                 b,
-                condition(&conditions, "exterior_exchange", areas.len(), body)?,
-                &reading["conduction"],
-                &exchanges[i],
+                environment,
+                (&reading["conduction"], &exchanges[i]),
+                (
+                    &source.materials[index(&source.patches[outer]["column"])?],
+                    side,
+                ),
             )?
         } else {
             network(

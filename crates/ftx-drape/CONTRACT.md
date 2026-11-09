@@ -916,7 +916,7 @@ their published behavior.
 prescribed convection without radiation propagates complete constant material-resistance endpoints
 through the existing series-network authority, using the fixed outside film `(model area / outer
 cloth area) / h`. Both endpoint surface temperatures must remain in the coefficient's qualified
-domain. Missing intervals, unsupported laws, endpoint escape, radiation or zero convection retain
+domain. Missing intervals, unsupported laws, endpoint escape or convection-only zero coefficients retain
 the nominal exterior solution with an explicit unavailable-range reason. Current-area sheet powers
 and layered covered-body powers use ordinary signed range accumulation. Coverage refers each layer
 to its covered body area, applies convection only to allocated outer cloth area, and adds uncovered
@@ -927,6 +927,16 @@ remain outside these ranges. Boundary values, coefficient, interfaces and geomet
 these are material-source intervals, not weather uncertainty, confidence intervals or measured
 garment performance. `tests/thermal_exterior.rs` checks fixed-film equivalence in both heat-flow
 directions and at equal reservoirs, plus independent range refusal.
+
+Opaque-gray radiation additionally admits complete source intervals for the actual outer-face
+emissivity. The shared `ConductionLaw::reported_radiation_bounds` evaluates all four constant
+resistance/emissivity corners, including signed, opposing and pure-radiative exchange. Root trials
+stay inside the joint optical/convection domain; an unqualified corner withholds the range.
+Its explicit `exterior` receipt identifies the optical interval, enclosing face temperatures and
+resistance basis excluding the nonlinear boundary. Actual source orientation selects the covered
+outer face; inner layers require no unused optical observation. Existing films and convection-only
+numerics retain their previous path. Synthetic manufactured, area/face and source-refusal tests
+establish numerical behavior, not measured textile performance.
 
 **Qualified centerline thermal bridges** (`thermal::steady::coverage::bridges`).
 

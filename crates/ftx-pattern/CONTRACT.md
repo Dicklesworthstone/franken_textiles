@@ -33,6 +33,15 @@ finished insulating layer. Constant stacks retain their arithmetic and output. A
 retains its domain even if its knots are equal and requires the existing temperature-aware steady
 consumer. Regressions: `thermal_conduction`; CLI inspection reports independent steady/storage readiness.
 
+**Conditional exterior source intervals.** `ConductionLaw::reported_radiation_bounds` is the common
+constant-transport/opaque-gray endpoint authority for steady production and comparison admission.
+It preserves signed corner extrema, positive area factors and qualified root brackets; its explicit
+exterior receipt keeps nonlinear radiation separate from conductive resistance. Missing intervals
+or unsupported domains refuse ranges without inventing nominal endpoints. `Material::thermal_emissivity`
+validates the original material and exact face, spectral basis, specimen, conditioning and optical
+temperature domain. Geometry and boundary inputs stay fixed; these are numerical source envelopes,
+not confidence, weather uncertainty or physical-validation claims. Tests: `thermal_conduction`.
+
 **Contact-specific mechanical admission** (`Material::mechanics_for_contacts`,
 `ResolvedMaterial::mechanics_for_contacts`). Body-contact sheet mechanics can retain absent
 same-sheet friction when self-contact is disabled. `Mechanics.friction_self` is optional and

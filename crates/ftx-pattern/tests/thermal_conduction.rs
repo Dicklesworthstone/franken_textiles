@@ -1,7 +1,7 @@
 //! Transport-only admission and independent Fourier answers; no physical garment validation.
 use ftx_pattern::{
     material_catalog::Selection,
-    material_thermal::{ConductionLaw, ReportedConductionBounds, ThermalLaw},
+    material_thermal::{ConductionLaw, RadiativeBoundary, ReportedConductionBounds, ThermalLaw},
     materials::{Catalog, Form, Material, ThermalStack},
 };
 use serde_json::{Value, json};
@@ -80,6 +80,175 @@ fn source_resistance_endpoints_follow_unequal_areas_films_and_signed_flux() {
         .unwrap();
     near(combined[0], 15. / 0.95 - 7.5 / 0.65);
     near(combined[1], 15. / 0.65 - 7.5 / 0.95);
+}
+
+#[test]
+fn radiative_ranges_enclose_manufactured_balances_with_signed_and_scaled_exchange() {
+    let laws = [ConductionLaw::from_material(&resistance(0.5, Some([0.4, 0.6])), true).unwrap()];
+    for (surface, air, radiant, h, epsilon) in [
+        (26.85_f64, 6.85_f64, 6.85_f64, 0., 1.),
+        (20., 30., 0., 4., 0.8),
+        (15., 30., 35., 7., 0.9),
+        (20., 20., 20., 5., 0.5),
+        (17., 0., 30., 0., 0.),
+    ] {
+        for factor in [0.5, 1., 2.] {
+            // Independently choose an exact face state, then manufacture the inside reservoir
+            // from Stefan-Boltzmann's unfactored expression and the known network resistance.
+            let a = surface + 273.15;
+            let b = radiant + 273.15;
+            let q = (h * (surface - air)
+                + epsilon * 5.670_374_419e-8 * (a * a * a * a - b * b * b * b))
+                / factor;
+            let inside = surface + q * (0.1 + factor * 0.5);
+            let environment = RadiativeBoundary {
+                air_c: air,
+                ambient_c: radiant,
+                convection_w_m2_k: h,
+                emissivity: [(epsilon - 0.1).max(0.), (epsilon + 0.1).min(1.)],
+                surface_temperature_range_c: [-200., 200.],
+            };
+            let bounds = ConductionLaw::reported_radiation_bounds(
+                &laws,
+                &[factor],
+                &[],
+                inside,
+                0.1,
+                environment,
+            )
+            .unwrap();
+            assert!(
+                bounds.flux_w_m2[0] <= q && q <= bounds.flux_w_m2[1],
+                "{bounds:?}, q={q}"
+            );
+            let face = bounds.exterior.unwrap();
+            assert!(
+                face.surface_temperature_c[0] <= surface
+                    && surface <= face.surface_temperature_c[1]
+            );
+            near(bounds.total_resistance_m2_k_w[0], 0.1 + factor * 0.4);
+            assert_eq!(
+                face.resistance_basis,
+                "inside_film_interfaces_and_materials_only"
+            );
+        }
+    }
+}
+
+#[test]
+fn radiative_range_admission_requires_all_sources_and_every_endpoint_domain() {
+    let complete = ConductionLaw::from_material(&resistance(0.4, Some([0.2, 0.8])), true).unwrap();
+    let missing = ConductionLaw::from_material(&resistance(0.4, None), true).unwrap();
+    let input = RadiativeBoundary {
+        air_c: 30.,
+        ambient_c: -20.,
+        convection_w_m2_k: 5.,
+        emissivity: [0., 1.],
+        surface_temperature_range_c: [-200., 200.],
+    };
+    let solve = |law, environment| {
+        ConductionLaw::reported_radiation_bounds(&[law], &[1.], &[], 20., 0.1, environment)
+    };
+    let bounds = solve(complete.clone(), input).unwrap();
+    assert!(bounds.flux_w_m2[0] < 0. && bounds.flux_w_m2[1] > 0.);
+    assert!(solve(missing, input).is_err());
+    for changed in [
+        RadiativeBoundary {
+            emissivity: [0.8, 0.7],
+            ..input
+        },
+        RadiativeBoundary {
+            emissivity: [0., f64::NAN],
+            ..input
+        },
+        RadiativeBoundary {
+            surface_temperature_range_c: [19., 21.],
+            ..input
+        },
+        RadiativeBoundary {
+            convection_w_m2_k: -1.,
+            ..input
+        },
+        RadiativeBoundary {
+            ambient_c: f64::INFINITY,
+            ..input
+        },
+    ] {
+        assert!(solve(complete.clone(), changed).is_err());
+    }
+    let insulated = solve(
+        complete,
+        RadiativeBoundary {
+            convection_w_m2_k: 0.,
+            emissivity: [0., 0.],
+            ..input
+        },
+    )
+    .unwrap();
+    assert_eq!(insulated.flux_w_m2, [0., 0.]);
+    // Only the outer face consumes the optical domain; a hotter inside reservoir behind the
+    // qualified resistance is valid. Root trials must stay inside the surface domain.
+    let insulated_sheet =
+        ConductionLaw::from_material(&resistance(10., Some([9., 11.])), true).unwrap();
+    let confined = ConductionLaw::reported_radiation_bounds(
+        &[insulated_sheet],
+        &[1.],
+        &[],
+        150.,
+        0.1,
+        RadiativeBoundary {
+            air_c: 10.,
+            ambient_c: 20.,
+            convection_w_m2_k: 5.,
+            emissivity: [0.7, 0.9],
+            surface_temperature_range_c: [0., 40.],
+        },
+    )
+    .unwrap();
+    let temperatures = confined.exterior.unwrap().surface_temperature_c;
+    assert!(temperatures[0] >= 0. && temperatures[1] <= 40.);
+}
+
+#[test]
+fn public_thermal_optical_qualification_validates_the_original_material_and_interval() {
+    let mut m = resistance(0.4, Some([0.3, 0.5]));
+    let mut q = m.properties["thermal_resistance"].clone();
+    q.value = 0.8;
+    q.unit = "1".into();
+    q.bounds = Some([0.7, 0.9]);
+    for (key, value) in [
+        ("face", "public"),
+        ("spectral_basis", "total_hemispherical"),
+        ("temperature_min_c", "-100"),
+        ("temperature_max_c", "100"),
+    ] {
+        q.conditions.insert(key.into(), value.into());
+    }
+    m.properties.insert("emissivity".into(), q);
+    assert!(
+        m.thermal_emissivity("emissivity", "public", 20., true)
+            .is_ok()
+    );
+    for bounds in [
+        [0.9, 0.7],
+        [0.1, 0.2],
+        [f64::NAN, 0.9],
+        [0.7, f64::INFINITY],
+    ] {
+        let mut changed = m.clone();
+        changed.properties.get_mut("emissivity").unwrap().bounds = Some(bounds);
+        assert!(
+            changed
+                .thermal_emissivity("emissivity", "public", 20., true)
+                .is_err()
+        );
+    }
+    let key = m.properties["emissivity"].source.clone();
+    m.sources.get_mut(&key).unwrap().reference.clear();
+    assert!(
+        m.thermal_emissivity("emissivity", "public", 20., true)
+            .is_err()
+    );
 }
 
 #[test]

@@ -139,13 +139,68 @@ fn unsupported_convection_ranges_preserve_the_qualified_nominal_solution() {
     near(retained.conduction.flux_w_m2, missing.conduction.flux_w_m2);
     assert!(retained.conduction.reported_bounds.is_none());
     assert!(retained.conduction.bounds_unavailable[0].contains("endpoints"));
-    for unsupported in [environment(0., 0., None), environment(5., 0., Some(0.))] {
+    for (unsupported, reason) in [
+        (environment(0., 0., None), "without radiation"),
+        (environment(5., 0., Some(0.)), "emissivity needs complete"),
+    ] {
         let result = model
             .solve_exterior(boundary(30., 0., 0.1), &unsupported)
             .unwrap();
         assert!(result.conduction.flux_w_m2.is_finite());
         assert!(result.conduction.reported_bounds.is_none());
-        assert!(result.conduction.bounds_unavailable[0].contains("without radiation"));
+        assert!(result.conduction.bounds_unavailable[0].contains(reason));
+    }
+}
+
+#[test]
+fn complete_radiative_ranges_enclose_actual_solver_resistance_and_emissivity_substitutions() {
+    let mut selected = record(0.4, 0.5);
+    let material = selected.record.as_mut().unwrap();
+    material
+        .properties
+        .get_mut("thermal_resistance")
+        .unwrap()
+        .bounds = Some([0.2, 0.8]);
+    material.properties.get_mut("emissivity").unwrap().bounds = Some([0., 1.]);
+    for (inside, air, radiant, h) in [(20., 30., -20., 5.), (0., 30., 35., 7.), (35., 0., 0., 0.)] {
+        let b = boundary(inside, air, 0.1);
+        let e = environment(h, air, Some(radiant));
+        let result = build(&[selected.clone()], vec![])
+            .solve_exterior(b, &e)
+            .unwrap();
+        let range = result
+            .conduction
+            .reported_bounds
+            .expect("complete radiative interval");
+        if inside == 20. {
+            assert!(range.flux_w_m2[0] < 0. && range.flux_w_m2[1] > 0.);
+        }
+        for r in [0.2, 0.3, 0.4, 0.6, 0.8] {
+            for epsilon in [0., 0.1, 0.5, 0.8, 1.] {
+                let point = build(&[record(r, epsilon)], vec![])
+                    .solve_exterior(b, &e)
+                    .unwrap();
+                // The production Fourier solve reports its residual instead of claiming an
+                // exact root. Its endpoint error is bounded by that original-equation residual.
+                let error = point.conduction.max_flux_residual_w_m2
+                    + point.conduction.max_temperature_residual_c / (0.1 + r)
+                    + 64. * f64::EPSILON * (1. + point.conduction.flux_w_m2.abs());
+                assert!(
+                    range.flux_w_m2[0] <= point.conduction.flux_w_m2 + error
+                        && point.conduction.flux_w_m2 - error <= range.flux_w_m2[1],
+                    "r={r} epsilon={epsilon}, {range:?}, {:?}",
+                    point.conduction
+                );
+            }
+        }
+        let mut narrow = e;
+        narrow.surface_temperature_range_c = [result.surface_c - 0.01, result.surface_c + 0.01];
+        let nominal = build(&[selected.clone()], vec![])
+            .solve_exterior(b, &narrow)
+            .unwrap();
+        near(nominal.conduction.flux_w_m2, result.conduction.flux_w_m2);
+        assert!(nominal.conduction.reported_bounds.is_none());
+        assert!(nominal.conduction.bounds_unavailable[0].contains("endpoints"));
     }
 }
 

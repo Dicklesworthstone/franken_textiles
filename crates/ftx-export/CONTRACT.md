@@ -195,7 +195,12 @@ source-column assignment and complete component/aggregate convection receipts mu
 power bounds participate in ordinary objectives and mixed-basis guards. Coverage retains separate
 explicit bare films, requires the original body identity for nonuniform exterior or bare conditions,
 and admits a completely bare domain's fixed film-only range without consuming textile exchange.
-Radiation and zero-convection ranges remain unsupported on covered paths.
+Opaque-gray radiation uses the same shared material authority with complete selected-face emissivity
+endpoints and a separate nonlinear boundary receipt. Every resistance/emissivity corner must qualify
+inside the optical/convection domain. Admission recomputes automatic covered-face orientation from
+the retained body/cloth normals, reconciles the exact observation, and checks separate convection and
+radiation powers at every covered region or independent patch. Pure radiation and explicit zero
+emissivity endpoints are supported; convection-only zero coefficients retain their previous refusal.
 Missing bounds, unsupported nonlinear/bridge/consumed stagnant-gap coupling, stale inputs,
 changed component ranges or unrepresentable arithmetic exclude bounded decisions while the ordinary
 nominal reading remains visible. Source-dependent gap thickness cannot vary while its derived gap
