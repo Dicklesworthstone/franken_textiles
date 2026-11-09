@@ -219,7 +219,7 @@ fn material_point(reference: [f64; 2], fixture: &Fixture, state: &State) -> Vec3
     }
     let c = point(column + 1, row + 1);
     let d = point(column, row + 1);
-    if (column + row) % 2 == 0 {
+    if (column + row).is_multiple_of(2) {
         if v <= u {
             a + (b - a) * (u - v) + (c - a) * v
         } else {
