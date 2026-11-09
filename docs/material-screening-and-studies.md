@@ -369,8 +369,9 @@ For example, this policy minimizes complete thread cost subject to a declared de
 
 Protocol comparison includes the independently reported consumption method, conditions, evidence
 and channel identities, plus the methods and evidence of the process qualifications actually used.
-Unused candidate models do not change the selected plan's protocol. Reported bounds are not inferred
-for these computed quantities or costs.
+Unused consumption models do not enter that consumption component. The rules above for scheduling
+and candidate searches also apply to the overall `input_protocol_sha256` identity. Reported bounds
+are not inferred for these computed quantities or costs.
 
 Thread and cutting costs remain separate, with their own currencies and complete-coverage checks.
 The thread inventory uses the same production quantity as every requested cutting route. Omitted
