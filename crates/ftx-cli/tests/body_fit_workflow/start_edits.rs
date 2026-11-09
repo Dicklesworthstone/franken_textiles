@@ -237,6 +237,57 @@ fn portable_start_authoring_supports_one_start_without_weakening_fit_admission()
 }
 
 #[test]
+fn portable_start_authoring_binds_edits_to_exact_source_and_model() {
+    use ftx_wasm::body_fit::body_fit_starts;
+
+    let (model, input) = fixture();
+    let source = format!(" \r\n{input}\r\n");
+    let opened = body_fit_starts(&model, &source, "").unwrap();
+    let mut edits = json!({"input_sha256":opened["input_sha256"],
+        "model_sha256":opened["model_sha256"],"starts":opened["starts"]});
+    edits["starts"][0]["shape"][0] = json!(0.64);
+    let bound = body_fit_starts(&model, &source, &edits.to_string()).unwrap();
+    let legacy = json!({"starts":edits["starts"]});
+    assert_eq!(
+        bound,
+        body_fit_starts(&model, &source, &legacy.to_string()).unwrap(),
+        "paired source hashes must retain the existing authoring behavior"
+    );
+    for field in ["input_sha256", "model_sha256"] {
+        let mut missing = edits.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            body_fit_starts(&model, &source, &missing.to_string())
+                .unwrap_err()
+                .to_string()
+                .contains("both input_sha256 and model_sha256")
+        );
+        for value in ["0".repeat(64), "bad".to_owned()] {
+            let mut wrong = edits.clone();
+            wrong[field] = json!(value);
+            assert!(
+                body_fit_starts(&model, &source, &wrong.to_string())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("different input or model bytes")
+            );
+        }
+    }
+    let mut changed = input.clone();
+    changed["fit"]["frames"][0]["keypoints"][0]["sigma_px"] = json!(1.25);
+    for stale in [source.clone() + "\n", changed.to_string()] {
+        assert!(body_fit_starts(&model, &stale, "").is_ok());
+        assert!(
+            body_fit_starts(&model, &stale, &edits.to_string())
+                .unwrap_err()
+                .to_string()
+                .contains("different input or model bytes"),
+            "edits cannot cross even valid source revisions"
+        );
+    }
+}
+
+#[test]
 fn portable_start_authoring_refuses_invalid_edits_and_changed_sources() {
     let (model, input) = fixture();
     let text = input.to_string();

@@ -69,7 +69,7 @@ function controls() {
   $("bodyFitReviewImage").disabled=reviewImageUnavailable;
   $("bodyFitReviewImageRun").disabled=reviewImageUnavailable || bodyReviewImageBusy || !$("bodyFitReviewImage").files.length;
   $("bodyFitReviewImageClear").disabled=!bodyReviewImageBusy && !bodyReviewBitmap && !$("bodyFitReviewImage").files.length;
-  $("bodyStartsLoad").disabled=bodyStartsBusy || bodyFitBusy || bodyStartsView!==null || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
+  $("bodyStartsLoad").disabled=startsBlocked || bodyFitBusy || bodyStartsView!==null || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
   $("bodyStartsEditor").hidden=bodyStartsView===null;
   const startsLocked=bodyStartsBusy || bodyFitBusy, hasStart=!!bodyStartsDraft[bodyStartsSelected];
   $("bodyStartsSelect").disabled=startsLocked || !bodyStartsDraft.length;
@@ -217,6 +217,7 @@ function withdrawBodyStarts() {
   controls();
 }
 function pendingBodyStarts() {
+  stopBodyStarts();
   bodyStartsPending=true; withdrawBodyStartsDownloads(); withdrawBodyFit();
   $("bodyStartsError").textContent="";
   $("bodyStartsStatus").textContent="Pending starting values: check and apply all starts, or cancel the edits. Previous fit results and previews are withdrawn.";
@@ -243,7 +244,7 @@ function renderBodyStarts() {
       input.value=Object.is(values[index],-0)?"-0":String(values[index]);
       text.textContent=`${parameter.name} (${parameter.unit}); ${parameter.lower} < value < ${parameter.upper} `;
       input.addEventListener("input",()=>{
-        if(bodyStartsBusy || bodyFitBusy) return;
+        if(bodyFitBusy) return;
         values[index]=input.value; pendingBodyStarts();
       });
       label.append(text,input); fieldset.append(label); bodyStartsInputs.push(input);
@@ -303,11 +304,13 @@ function bodyStartsEdits() {
     // These tokens contain only validated numbers; source JSON and full-width identities stay native.
     return Object.is(value,-0)?"-0.0":JSON.stringify(value);
   }).join(",")+"]";
-  return '{"starts":['+bodyStartsDraft.map(start=>'{"shape":'+vector(start.shape,bodyStartsView.shape)+',"poses":['+
+  return '{"input_sha256":'+JSON.stringify(bodyStartsSource.input_sha256)+',"model_sha256":'+JSON.stringify(bodyStartsView.model_sha256)+',"starts":['+
+    bodyStartsDraft.map(start=>'{"shape":'+vector(start.shape,bodyStartsView.shape)+',"poses":['+
     start.poses.map(pose=>'{"frame_index":'+pose.frame_index+',"values":'+vector(pose.values,bodyStartsView.pose)+'}').join(",")+"]}").join(",")+"]}";
 }
 async function runBodyStarts(apply=false) {
-  if(bodyStartsBusy || bodyFitBusy || (apply && (!bodyStartsView || !bodyStartsPending))) return;
+  if(bodyStartsBusy || bodyFitBusy || (!apply && (bodyStartsView || bodyStartsPending)) ||
+      (apply && (!bodyStartsView || !bodyStartsPending))) return;
   const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
   stopBodyStarts(); const id=bodyStartsTicket;
   $("bodyStartsError").textContent="";
@@ -1194,8 +1197,16 @@ $("bodyFitWorkbench").onclick=()=>{
 $("bodyFitCancel").onclick=()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Body fit or saved-fit loading cancelled; no report published.";};
 for(const id of ["bodyFitInput","bodyFitModel","bodyFitSaved"]) for(const event of ["change","click","cancel"]) {
   $(id).addEventListener(event,()=>{
-    if(id!=="bodyFitSaved") withdrawBodyStarts();
-    withdrawBodyFit(); $("bodyFitStatus").textContent="Review the selected model, then fit the observations or open the saved accepted report.";
+    if(id!=="bodyFitSaved") {
+      if(event==="change") withdrawBodyStarts();
+      else if(bodyStartsView) {
+        pendingBodyStarts();
+        $("bodyStartsStatus").textContent="Starting values retained while choosing a source. Apply them or cancel pending edits before previewing or fitting.";
+      } else stopBodyStarts();
+    }
+    withdrawBodyFit(); $("bodyFitStatus").textContent=bodyStartsPending?
+      "Starting values retained; apply or cancel pending edits before previewing or fitting.":
+      "Review the selected model, then fit the observations or open the saved accepted report.";
   });
 }
 for(const id of ["bodyFitIterations","bodyFitEvaluations"]) $(id).addEventListener("input",()=>{

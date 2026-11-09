@@ -416,9 +416,12 @@ precision remain unchanged. Opening an editor without edits retains the original
 
 Pending or invalid edits withdraw stale fits, previews and downloads. Apply validates every
 start atomically; cancellation returns to the last applied values, and reset restores the
-original selected input. Source changes, cancelled reads and obsolete worker responses cannot
-restore old results. Downloaded snapshots remain independent of later edits. Editing starts
-does not change fitting acceptance or establish anatomical or physical fit.
+original selected input. Opening or cancelling a source file chooser retains current edits and
+blocks outputs until you apply or cancel pending edits; selecting a different input or model
+withdraws the editor. Each browser application binds the exact original input and model hashes,
+and a newer edit cancels an in-flight application. Cancelled reads and obsolete worker responses
+cannot restore old values or results. Downloaded snapshots remain independent of later edits.
+Editing starts does not change fitting acceptance or establish anatomical or physical fit.
 
 Select the converted model and the current prepared input in `web/photo.html`, then expand
 **Inspect a declared starting pose before fitting**. Choose the start and frame and select

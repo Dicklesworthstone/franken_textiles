@@ -64,6 +64,11 @@ through ordinary native admission. The returned input can immediately be preview
 and fitted; a one-start draft is inspectable but fitting still requires two to four distinct starts.
 Edits are limited to 64 KiB alongside the existing 16 MiB input and 512 MiB model limits. Every
 result names both original and returned input hashes, with no optimization or accepted body.
+Edit requests may bind `input_sha256` and `model_sha256` to the exact supplied source bytes; the
+pair must be complete and match when present. Older callers may omit both. The browser always
+sends both, retains drafts across cancelled file choices, and invalidates in-flight applications
+when a newer edit arrives. Reset and actual source selection discard the editor; a cancelled
+file choice never silently reloads the original input over applied values.
 
 **Original capture image inspection.** An accepted frame review retains `source_image` when its
 report has complete `capture_images` or an older native `capture_input` receipt. Both must agree

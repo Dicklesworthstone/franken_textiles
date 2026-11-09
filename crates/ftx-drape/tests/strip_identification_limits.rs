@@ -286,6 +286,129 @@ fn add_prior_domain(input: &mut Input, ranges: [[f64; 2]; 3]) {
 }
 
 #[test]
+fn source_admitted_equilibria_survive_refused_exploratory_probes() {
+    let mut input = synthetic(PARAMETERS);
+    input.controls.tolerance_m = 1e-12;
+    input.controls.force_tolerance_n = 1e-9;
+    // Resolve synthetic acquisitions and source centers more tightly than the narrowest
+    // sensitivity probe: a loose equilibrium tolerance could otherwise admit that probe.
+    for experiment in &mut input.experiments {
+        for observation in &mut experiment.observations {
+            let state = solve(
+                &experiment.fixture,
+                PARAMETERS,
+                observation.extension_fraction,
+                &input.controls,
+            )
+            .unwrap();
+            observation.force_n = state.force_n;
+            observation.mid_width.as_mut().unwrap().value_m = state.mid_width_m;
+        }
+    }
+    let mut ranges = [[0.0_f64; 2]; 3];
+    for fraction in [0.25, 0.5, 0.75] {
+        let parameters = std::array::from_fn(|i| {
+            let [a, b] = input.parameter_bounds[i];
+            a + fraction * (b - a)
+        });
+        for experiment in &input.experiments {
+            for observation in &experiment.observations {
+                let state = solve(
+                    &experiment.fixture,
+                    parameters,
+                    observation.extension_fraction,
+                    &input.controls,
+                )
+                .unwrap();
+                for (range, observed) in ranges.iter_mut().zip(state.green_strain_range) {
+                    range[0] = range[0].min(observed[0]);
+                    range[1] = range[1].max(observed[1]);
+                }
+            }
+        }
+    }
+    for range in &mut ranges {
+        range[0] -= 1e-10;
+        range[1] = 1.0;
+    }
+    ranges[2][0] = -1.0;
+    // A synthetic source domain just beyond the three original starting equilibria. Central
+    // sensitivity probes may cross its compression edge; the true coefficients lie inside it.
+    add_prior_domain(&mut input, ranges);
+    input.replace_existing = true;
+    for fraction in [0.25, 0.5, 0.75] {
+        let mut material = input.material.clone();
+        for (i, key) in [
+            "warp_stiffness",
+            "weft_stiffness",
+            "poisson_warp_weft",
+            "shear_stiffness",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let [a, b] = input.parameter_bounds[i];
+            material.properties.get_mut(key).unwrap().value = a + fraction * (b - a);
+        }
+        let selection = Selection {
+            id: material.id.clone(),
+            record: Some(material),
+            allow_estimates: true,
+            ..Selection::default()
+        };
+        for experiment in &input.experiments {
+            evaluate(&Request {
+                schema: "ftx-strip-experiment/1".into(),
+                material: selection.clone(),
+                fixture: experiment.fixture.clone(),
+                extensions: experiment
+                    .observations
+                    .iter()
+                    .map(|point| point.extension_fraction)
+                    .collect(),
+                controls: input.controls.clone(),
+            })
+            .unwrap_or_else(|refusal| {
+                panic!("original start {fraction}, {}: {refusal:?}", experiment.id)
+            });
+        }
+    }
+    let unchanged = serde_json::to_value(&input).unwrap();
+    let report = calibrate(&input).unwrap();
+    assert!(report.accepted, "{:?}", report.reasons);
+    assert!(report.starts.iter().all(|start| start.converged));
+    assert!(report.domain_replay_verified);
+    let recovery = report.search_recovery.as_ref().unwrap();
+    assert!(recovery.refused_forward_solves > 0);
+    assert!(recovery.sensitivity_halvings > 0);
+    assert!(recovery.one_sided_sensitivity_columns > 0, "{recovery:?}");
+    for (actual, expected) in report.parameters.iter().zip(PARAMETERS) {
+        assert!((actual - expected).abs() < 1e-3 * expected);
+    }
+    for (fitted, inherited) in report.fitted_green_strain_range.iter().zip(ranges) {
+        assert!(fitted[0] >= inherited[0] && fitted[1] <= inherited[1]);
+    }
+    assert_eq!(serde_json::to_value(&input).unwrap(), unchanged);
+    assert_eq!(serde_json::to_value(&report.input).unwrap(), unchanged);
+
+    // A complete replay cannot borrow the work spent on failed numerical probes.
+    input.policy.max_forward_solves = report.forward_solves - 1;
+    assert_eq!(
+        calibrate(&input).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn numerical_retries_cannot_hide_objective_overflow() {
+    let mut input = synthetic(PARAMETERS);
+    input.experiments[0].observations[0].scale_n = f64::MIN_POSITIVE;
+    let refusal = calibrate(&input).unwrap_err();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::InvalidDocument);
+    assert!(refusal.message.contains("strip objective overflow"));
+}
+
+#[test]
 fn replacing_coefficients_cannot_erase_the_original_strain_domain() {
     let mut narrow = synthetic(PARAMETERS);
     add_prior_domain(&mut narrow, [[-0.001, 0.001]; 3]);
