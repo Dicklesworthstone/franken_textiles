@@ -1596,6 +1596,10 @@ deadline slack. New-policy jobs use plan `/31`, production `/19` and routing `/1
 `copy_windows` preserves the earlier schemas, timestamps and serialized output. These planning
 receipts neither reserve live factory resources nor authorize machine execution.
 
+The materials workbench shows both schedules' per-copy arrivals, first loading, unloaded wait,
+final unloading, deadlines and slack in exact integer milliseconds. Missing deadlines remain explicit.
+The sewing, manufacturing-study and scenario views retain the full arrival/waiting qualification.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **256 copy/operation pairs** and 1–200000 examined search nodes.

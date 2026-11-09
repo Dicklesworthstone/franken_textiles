@@ -3224,6 +3224,29 @@ function sewingRoutedLabor(parent, routing, label) {
   parent.append(note);
   detail(parent, `${label}: attending worker sources, cell locks and complete replay`, report);
 }
+function sewingRoutedCopyWindows(parent, routing, label) {
+  const report = routing.copy_windows;
+  if (!report) return;
+  const milliseconds = value => Number.isSafeInteger(value) ? String(value) : "Unavailable";
+  const timings = table(parent, `${label}: garment arrivals and completion deadlines`,
+    ["Schedule", "Garment copy", "First cell", "Available at (ms)", "Loading starts (ms)",
+      "Waiting before loading (ms)", "Final unloading (ms)", "Complete by (ms)", "Deadline slack (ms)"]);
+  for (const [name, rows] of [["Baseline", report.baseline], ["Selected", report.selected]]) {
+    for (const row of rows) cells(timings, [name, metric(row.copy), row.first_cell,
+      milliseconds(row.available_at_milliseconds), milliseconds(row.loading_start_milliseconds),
+      milliseconds(row.waiting_milliseconds), milliseconds(row.finish_milliseconds),
+      row.complete_by_milliseconds === undefined ? "None declared" : milliseconds(row.complete_by_milliseconds),
+      row.complete_by_milliseconds === undefined ? "No deadline" : milliseconds(row.deadline_slack_milliseconds)]);
+  }
+  const note = document.createElement("p");
+  note.textContent = "All times are exact integer milliseconds from the common job origin. " +
+    "Separately qualified unloaded waiting precedes first loading, outside finite in-process staging. " +
+    "Deadlines are authored requirements on complete final unloading, not measured process durations. " +
+    "No inbound transport or external holding-area capacity is inferred. " +
+    "These schedules do not reserve factory resources or authorize hardware execution.";
+  parent.append(note);
+  detail(parent, `${label}: copy arrivals, deadlines and waiting qualification`, report);
+}
 function sewingRouting(parent, plan, label = "Selected sewing plan") {
   const report = plan?.production?.routing;
   if (!report) return;
@@ -3317,6 +3340,7 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     parent.append(scope);
     detail(parent, `${label}: operating calendar source and exact windows`, calendars);
   }
+  sewingRoutedCopyWindows(parent, report, label);
   sewingRoutedTransferPool(parent, report, label);
   sewingRoutedStaging(parent, report, label);
   sewingRoutedWorkholding(parent, report, label);

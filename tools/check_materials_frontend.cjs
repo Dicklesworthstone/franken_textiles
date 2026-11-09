@@ -3329,6 +3329,34 @@ test('routed specialist cells show actual operations, serialized garment transfe
     assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
     delete routing.availability_calendars;
     delete plan.options.production.routing.availability_calendars;
+    assert.equal(table('garment arrivals and completion deadlines'),undefined);
+    const copyPolicy={model:'explicit_copy_release_and_completion/1',
+      copies:[{copy:1,available_at_milliseconds:9007199254730991},
+        {copy:0,available_at_milliseconds:0,complete_by_milliseconds:8800}],
+      source:{note:'<qualified kit availability café 🧵>'},method:'Independent unloaded arrival and waiting evidence'};
+    const copyTimings=[{copy:0,first_cell:'straight',available_at_milliseconds:0,loading_start_milliseconds:0,
+      waiting_milliseconds:0,finish_milliseconds:8800,complete_by_milliseconds:8800,deadline_slack_milliseconds:0},
+      {copy:1,first_cell:'<entry cell>',available_at_milliseconds:9007199254730991,
+        loading_start_milliseconds:9007199254732991,waiting_milliseconds:2000,finish_milliseconds:9007199254740991}];
+    routing.copy_windows={schema:'ftx-sewing-copy-windows/1',policy:copyPolicy,
+      waiting_scope:'qualified_unloaded_waiting_at_selected_first_cell_before_loading/1',baseline:copyTimings,selected:copyTimings};
+    const copyRaw=' '+JSON.stringify(report)+'\n';
+    await p.e[op].onclick();p.emit(report,[{name:'copy-windows-report.json',text:copyRaw,mime:'application/json'}]);
+    assert.deepEqual(plain(table('garment arrivals and completion deadlines').children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      ['Baseline','0','straight','0','0','0','8800','8800','0'],
+      ['Baseline','1','<entry cell>','9007199254730991','9007199254732991','2000','9007199254740991','None declared','No deadline'],
+      ['Selected','0','straight','0','0','0','8800','8800','0'],
+      ['Selected','1','<entry cell>','9007199254730991','9007199254732991','2000','9007199254740991','None declared','No deadline']]);
+    assert.match(visibleText(s),/outside finite in-process staging/);
+    assert.match(visibleText(s),/Deadlines are authored requirements/);
+    const copyDetail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('copy arrivals, deadlines and waiting qualification'));
+    copyDetail.open=true;copyDetail.handlers.toggle();
+    assert.deepEqual(JSON.parse(copyDetail.children[1].textContent),routing.copy_windows);
+    assert.match(visibleText(copyDetail),/<qualified kit availability café 🧵>/);
+    const copyDownload=descendants(s).find(n=>n.download==='copy-windows-report.json');
+    assert.equal(await p.blobs.get(copyDownload.href).text(),copyRaw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    delete routing.copy_windows;
     const localPeak={straight:{fixture:1},finish:{fixture:1}}, localFinal={straight:{fixture:0},finish:{fixture:0}};
     routing.workholding={schema:'ftx-sewing-routed-workholding/1',
       release_protocol:'available_after_unload_with_access_in_cell_handling/1',
