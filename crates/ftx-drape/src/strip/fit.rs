@@ -198,6 +198,17 @@ pub struct Prediction {
     pub extensometers: Vec<ExtensometerPrediction>,
 }
 
+/// Bounded numerical recovery during FIT exploration; every attempted solve remains charged.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SearchRecovery {
+    /// Exploratory equilibria refused by the source domain or numerical convergence gate.
+    pub refused_forward_solves: usize,
+    /// Halvings of a finite-difference interval after at least one refused probe.
+    pub sensitivity_halvings: usize,
+    /// Sensitivity columns using the admitted center and one admissible neighboring state.
+    pub one_sided_sensitivity_columns: usize,
+}
+
 /// Reviewable candidate, diagnostics and conditional material publication.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
@@ -231,6 +242,10 @@ pub struct Report {
     pub excitation_pivot: f64,
     /// All attempted equilibrium solves across the complete operation.
     pub forward_solves: usize,
+    /// Present only when a numerical FIT probe was refused. These counts do not relax any
+    /// stationarity, excitation, held-out, source-domain or publication requirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_recovery: Option<SearchRecovery>,
     /// FIT quality re-evaluated with the chosen coefficients on the doubled mesh.
     pub fit: Quality,
     /// CHECK quality, evaluated only after coefficients are fixed, on the doubled mesh.
@@ -259,6 +274,28 @@ struct Budget<'a> {
     inherited_domain: Option<StrainDomain>,
     family: Option<family::Prepared>,
     input: &'a Input,
+    recovery: SearchRecovery,
+}
+
+// Only execution of a prevalidated trial membrane can be recoverable. Errors from source
+// compilation, input validation, measurement arithmetic or work admission always stay fatal.
+enum ForwardFailure {
+    Fatal(Refusal),
+    Trial(Refusal),
+}
+
+impl ForwardFailure {
+    fn refusal(self) -> Refusal {
+        match self {
+            Self::Fatal(refusal) | Self::Trial(refusal) => refusal,
+        }
+    }
+}
+
+impl From<Refusal> for ForwardFailure {
+    fn from(refusal: Refusal) -> Self {
+        Self::Fatal(refusal)
+    }
 }
 
 fn intersect(a: StrainDomain, b: StrainDomain) -> Result<StrainDomain, Refusal> {
@@ -288,6 +325,17 @@ impl Budget<'_> {
         extension: f64,
         controls: &Controls,
     ) -> Result<State, Refusal> {
+        self.trial(fixture, parameters, extension, controls)
+            .map_err(ForwardFailure::refusal)
+    }
+
+    fn trial(
+        &mut self,
+        fixture: &Fixture,
+        parameters: &[f64],
+        extension: f64,
+        controls: &Controls,
+    ) -> Result<State, ForwardFailure> {
         self.admit()?;
         let base = base_parameters(self.input, parameters);
         let mut response = if let Some(family) = &self.family {
@@ -349,9 +397,12 @@ impl Budget<'_> {
             Some(response) => response.reference_moduli()?,
             None => four(parameters)?,
         };
+        let membrane = Membrane::orthotropic(warp, weft, nu, shear, 1.0);
+        // In particular, an unrepresentable tensor must not become an admissibility retry.
+        membrane.validate()?;
         let state = solve_law(
             fixture,
-            Membrane::orthotropic(warp, weft, nu, shear, 1.0),
+            membrane,
             response.as_ref(),
             self.inherited_domain,
             extension,
@@ -364,7 +415,12 @@ impl Budget<'_> {
                     self.used, fixture.cells, fixture.warp_axis, refusal.message,
                 );
             }
-            refusal
+            match refusal.code {
+                RefusalCode::OutOfRange | RefusalCode::NotConverged => {
+                    ForwardFailure::Trial(refusal)
+                }
+                _ => ForwardFailure::Fatal(refusal),
+            }
         })
     }
 
@@ -734,7 +790,7 @@ fn evaluate<const N: usize>(
     input: &Input,
     p: [f64; N],
     budget: &mut Budget<'_>,
-) -> Result<Evaluation, Refusal> {
+) -> Result<Evaluation, ForwardFailure> {
     let mut residuals = Vec::new();
     let parameters = physical(input, p);
     for experiment in input
@@ -743,12 +799,19 @@ fn evaluate<const N: usize>(
         .filter(|e| e.partition == Partition::Fit)
     {
         for point in &experiment.observations {
-            let state = budget.solve(
+            let state = match budget.trial(
                 &experiment.fixture,
                 &parameters,
                 point.extension_fraction,
                 &input.controls,
-            )?;
+            ) {
+                Ok(state) => state,
+                Err(failure @ ForwardFailure::Trial(_)) => {
+                    budget.recovery.refused_forward_solves += 1;
+                    return Err(failure);
+                }
+                Err(failure) => return Err(failure),
+            };
             residuals.push((state.force_n - point.force_n) / point.scale_n);
             if let Some(width) = &point.mid_width {
                 residuals.push((state.mid_width_m - width.value_m) / width.scale_m);
@@ -762,7 +825,7 @@ fn evaluate<const N: usize>(
     }
     let sse = residuals.iter().map(|v| v * v).sum::<f64>();
     if !sse.is_finite() {
-        return Err(invalid("strip objective overflow"));
+        return Err(invalid("strip objective overflow").into());
     }
     Ok(Evaluation { residuals, sse })
 }
@@ -771,20 +834,81 @@ fn jacobian<const N: usize>(
     input: &Input,
     p: [f64; N],
     budget: &mut Budget<'_>,
+    center: Option<&Evaluation>,
 ) -> Result<Vec<[f64; N]>, Refusal> {
     let mut rows = Vec::new();
+    let mut computed_center = None;
     for j in 0..N {
-        let mut lo = p;
-        let mut hi = p;
-        lo[j] = (p[j] - 1e-4).max(0.0);
-        hi[j] = (p[j] + 1e-4).min(1.0);
-        let left = evaluate(input, lo, budget)?;
-        let right = evaluate(input, hi, budget)?;
-        if rows.is_empty() {
-            rows = vec![[0.0; N]; left.residuals.len()];
+        let mut delta = 1e-4;
+        let mut admissible = [None, None];
+        let mut refused = None;
+        let mut column = None;
+        for attempt in 0..=8 {
+            let coordinates = [(p[j] - delta).max(0.0), (p[j] + delta).min(1.0)];
+            let mut pair = [None, None];
+            for (side, coordinate) in coordinates.into_iter().enumerate() {
+                let mut probe = p;
+                probe[j] = coordinate;
+                match evaluate(input, probe, budget) {
+                    Ok(value) => pair[side] = Some((coordinate, value)),
+                    Err(ForwardFailure::Trial(refusal)) => refused = Some(refusal),
+                    Err(ForwardFailure::Fatal(refusal)) => return Err(refusal),
+                }
+            }
+            if let [Some((lo, left)), Some((hi, right))] = &pair {
+                // Preserve the original central-difference arithmetic and solve count whenever
+                // both initial probes are admitted by the ordinary forward solver.
+                column = Some(
+                    left.residuals
+                        .iter()
+                        .zip(&right.residuals)
+                        .map(|(a, b)| (b - a) / (hi - lo))
+                        .collect::<Vec<_>>(),
+                );
+                break;
+            }
+            for (retained, candidate) in admissible.iter_mut().zip(pair) {
+                if candidate.as_ref().is_some_and(|(q, _)| *q != p[j]) {
+                    *retained = candidate;
+                }
+            }
+            if attempt < 8 {
+                delta *= 0.5;
+                budget.recovery.sensitivity_halvings += 1;
+            }
         }
-        for ((row, a), b) in rows.iter_mut().zip(left.residuals).zip(right.residuals) {
-            row[j] = (b - a) / (hi[j] - lo[j]);
+        let column = if let Some(column) = column {
+            column
+        } else {
+            let Some((coordinate, neighbor)) = admissible
+                .iter()
+                .flatten()
+                .min_by(|a, b| (a.0 - p[j]).abs().total_cmp(&(b.0 - p[j]).abs()))
+            else {
+                return Err(refused.unwrap_or_else(|| {
+                    invalid("strip sensitivity has no distinct admissible neighboring state")
+                }));
+            };
+            if center.is_none() && computed_center.is_none() {
+                computed_center =
+                    Some(evaluate(input, p, budget).map_err(ForwardFailure::refusal)?);
+            }
+            let middle = center
+                .or(computed_center.as_ref())
+                .ok_or_else(|| invalid("strip sensitivity requires an admitted center state"))?;
+            budget.recovery.one_sided_sensitivity_columns += 1;
+            middle
+                .residuals
+                .iter()
+                .zip(&neighbor.residuals)
+                .map(|(a, b)| (b - a) / (coordinate - p[j]))
+                .collect()
+        };
+        if rows.is_empty() {
+            rows = vec![[0.0; N]; column.len()];
+        }
+        for (row, value) in rows.iter_mut().zip(column) {
+            row[j] = value;
         }
     }
     if rows.iter().flatten().any(|v| !v.is_finite()) {
@@ -849,13 +973,13 @@ fn search<const N: usize>(
     budget: &mut Budget<'_>,
 ) -> Result<(Start, [f64; N]), Refusal> {
     let mut p = [initial; N];
-    let mut e = evaluate(input, p, budget)?;
+    let mut e = evaluate(input, p, budget).map_err(ForwardFailure::refusal)?;
     let mut lambda = 1e-3_f64;
     let mut converged = false;
     let mut iterations = 0;
     for _ in 0..input.policy.max_iterations {
         iterations += 1;
-        let j = jacobian(input, p, budget)?;
+        let j = jacobian(input, p, budget, Some(&e))?;
         if gradient(&j, &e) < 1e-6 {
             converged = true;
             break;
@@ -888,7 +1012,14 @@ fn search<const N: usize>(
             }
             // Projection is an explicit bounded-search operation, never an input/property repair.
             let candidate = std::array::from_fn(|k| (p[k] + step[k]).clamp(0.0, 1.0));
-            let trial = evaluate(input, candidate, budget)?;
+            let trial = match evaluate(input, candidate, budget) {
+                Ok(trial) => trial,
+                Err(ForwardFailure::Trial(_)) => {
+                    lambda *= 10.0;
+                    continue;
+                }
+                Err(ForwardFailure::Fatal(refusal)) => return Err(refusal),
+            };
             if trial.sse < e.sse {
                 p = candidate;
                 e = trial;
@@ -1006,6 +1137,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         inherited_domain,
         family,
         input,
+        recovery: SearchRecovery::default(),
     };
     let mut starts = Vec::new();
     let mut coordinates = Vec::new();
@@ -1019,7 +1151,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         .unwrap_or(0);
     let p = coordinates[best];
     let parameters = starts[best].parameters.clone();
-    let j = jacobian(input, p, &mut budget)?;
+    let j = jacobian(input, p, &mut budget, None)?;
     let pivot = excitation(&j);
     let mut reasons = Vec::new();
     if starts.iter().any(|s| !s.converged) {
@@ -1409,6 +1541,8 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         starts,
         excitation_pivot: pivot,
         forward_solves: budget.used,
+        search_recovery: (budget.recovery.refused_forward_solves > 0)
+            .then(|| budget.recovery.clone()),
         fit,
         check,
         mesh_change_peak_scaled: mesh_peak,

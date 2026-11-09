@@ -531,8 +531,18 @@ When replacing an already fitted material, every objective evaluation, sensitivi
 coarse/refined FIT or CHECK state and final replay also retains the inherited source strain limits.
 The new range is the intersection of that prior support and the new FIT envelope; the inherited
 domain must admit the exact undeformed reference. `replace_existing` permits coefficient replacement,
-not broader strain authority. An exploratory search state outside that support can refuse even when
-the original fitted selection itself replays successfully. No refit silently expands the source domain.
+not broader strain authority. A refused exploratory equilibrium increases search damping instead of
+discarding an already admitted candidate. Sensitivity probes first use the original central difference;
+after a domain or convergence refusal they try at most eight interval halvings, then may use the admitted
+center and an admissible one-sided neighbor. Missing admissible probes still refuse. Every original
+starting center, final candidate and coarse/refined replay must pass their ordinary forward gates;
+all three searches must still satisfy the original stationarity and publication requirements.
+
+When recovery occurs, `search_recovery` records refused forward solves, sensitivity halvings and
+one-sided sensitivity columns. Every attempted solve, including rejected probes, consumes the same
+`max_forward_solves` budget. Source/compiler errors, malformed inputs, nonfinite arithmetic and budget
+exhaustion remain hard failures. A refit never widens the source domain or invents a successful
+observation for a refused trial. These local finite-difference estimates are not confidence bounds.
 
 Mass, unloaded thickness, directional bending, body/self/interface friction, thermal response and
 manufacturing properties remain separate observations. A strip-only material can run this membrane
