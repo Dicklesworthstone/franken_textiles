@@ -91,6 +91,10 @@ fn invalid(message: impl Into<String>) -> Refusal {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartEdits {
+    #[serde(default)]
+    input_sha256: Option<String>,
+    #[serde(default)]
+    model_sha256: Option<String>,
     starts: Vec<StartValues>,
 }
 
@@ -112,9 +116,11 @@ struct PoseValues {
 /// Empty edit text retains the original input bytes. Edits use original frame ordinals; native
 /// identities never pass through JavaScript numbers. One start is an inspectable draft, while
 /// the ordinary fitter still requires two to four distinct initializations.
+/// Source hashes may be omitted together for older callers; when supplied, both must match the
+/// exact original input and model bytes. The browser always supplies this binding.
 ///
 /// # Errors
-/// Oversized input/model/edits, wrong model identity, malformed observations or edit fields,
+/// Oversized input/model/edits, wrong model identity or edit binding, malformed observations or fields,
 /// incomplete frame poses, duplicate starts, or values outside the original exclusive bounds.
 pub fn body_fit_starts(
     model_bytes: &[u8],
@@ -140,6 +146,7 @@ pub fn body_fit_starts(
     if let Some(images) = &request.capture_images {
         body_fit::validate_capture_images(images, &request.fit.frames)?;
     }
+    let source_hash = sha256_hex(input_text.as_bytes());
     let hash = sha256_hex(model_bytes);
     if request.model.model_sha256 != hash {
         return Err(invalid(
@@ -154,6 +161,20 @@ pub fn body_fit_starts(
     } else {
         let edits: StartEdits = serde_json::from_str(edits_text)
             .map_err(|error| invalid(format!("invalid initialization edits: {error}")))?;
+        match (edits.input_sha256.as_deref(), edits.model_sha256.as_deref()) {
+            (None, None) => {}
+            (Some(input), Some(model)) if input == source_hash && model == hash => {}
+            (Some(_), Some(_)) => {
+                return Err(invalid(
+                    "initialization edits belong to different input or model bytes",
+                ));
+            }
+            _ => {
+                return Err(invalid(
+                    "initialization edits must supply both input_sha256 and model_sha256",
+                ));
+            }
+        }
         if !(1..=4).contains(&edits.starts.len()) {
             return Err(invalid("initialization edits need one to four starts"));
         }
@@ -267,7 +288,7 @@ pub fn body_fit_starts(
         .collect();
     Ok(
         json!({"schema":"ftx-body-starts-review/1","status":"INITIALIZATION_REVIEW",
-        "body_fitted":false,"original_input_sha256":sha256_hex(input_text.as_bytes()),
+        "body_fitted":false,"original_input_sha256":source_hash,
         "input_sha256":sha256_hex(input.as_bytes()),"model_sha256":hash,
         "shape":shape,"pose":pose,"frames":frames,"starts":starts,"input":input}),
     )

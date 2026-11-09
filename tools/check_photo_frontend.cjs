@@ -987,6 +987,7 @@ test('body-start editor applies every named pose natively and uses exact edited 
   p.e.bodyStartsSelect.value='0';p.e.bodyStartsSelect.handlers.change();assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.45');
   await p.e.bodyStartsApply.onclick();const apply=p.current(),message=apply.messages[0],edits=JSON.parse(message.edits);
   assert.equal(message.input,original);assert.equal(new TextDecoder().decode(message.model),'original model');
+  assert.equal(edits.input_sha256,view.original_input_sha256);assert.equal(edits.model_sha256,view.model_sha256);
   assert.deepEqual(edits.starts.map(start=>start.shape),[[0.45],[0.65]]);assert.ok(Object.is(edits.starts[0].poses[1].values[0],-0));
   assert.deepEqual(edits.starts[0].poses.map(pose=>pose.frame_index),[0,1]);assert.equal(p.e.bodyFitRun.disabled,true);
   const native=' {"timestamp_us":18446744073709551615,"other_frame":9007199254740993,"edited":"native λ"}\r\n';
@@ -1077,6 +1078,59 @@ test('body-start source read races and inconsistent native replies never replace
   await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify({...view,input:'{"changed":true}',input_sha256:'b'.repeat(64),original_input_sha256:'d'.repeat(64)})});
   assert.match(p.e.bodyStartsError.textContent,/source-bound/);assert.equal(p.e.bodyFitRun.disabled,true);
   p.e.bodyStartsCancel.onclick();assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.4');
+});
+
+test('body-start editor retains applied and pending values through source chooser cancellation until explicit recovery',async()=>{
+  for(const source of ['bodyFitInput','bodyFitModel'])for(const pending of [false,true]) {
+    const p=await photoPage(),original=selectBodyFit(p),view=await loadBodyStarts(p);
+    editBodyStart(p,'bodyStart-shape-0','0.45');await p.e.bodyStartsApply.onclick();
+    const applied=p.current(),request=applied.messages[0],native='{"applied":"exact native text"}';
+    const starts=JSON.parse(request.edits).starts;
+    await applied.emit({type:'result',request:request.request,report:JSON.stringify({...view,input:native,input_sha256:'b'.repeat(64),starts})});
+    assert.equal(p.e.bodyStartsLoad.disabled,true);
+    let count=p.workers.length;await p.e.bodyStartsLoad.onclick();assert.equal(p.workers.length,count);
+    assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.45');
+    if(pending)editBodyStart(p,'bodyStart-shape-0','0.49');
+    for(const event of ['click','cancel']) {
+      p.e[source].handlers[event]();assert.equal(p.e.bodyStartsEditor.hidden,false);
+      assert.equal(bodyStartField(p,'bodyStart-shape-0').value,pending?'0.49':'0.45');
+      assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.e.bodyFitStartRun.disabled,true);assert.equal(p.urls.size,0);
+      count=p.workers.length;await p.e.bodyStartsLoad.onclick();assert.equal(p.workers.length,count);
+    }
+    p.e.bodyStartsCancel.onclick();assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.45');
+    assert.equal(await p.urls.get(p.e.bodyStartsDownloads.children[0].href).text(),native);
+    await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,native);
+    p.e[source].handlers.change();assert.equal(p.e.bodyStartsEditor.hidden,true);assert.equal(p.urls.size,0);
+    await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,original);
+  }
+});
+
+test('body-start input events retire in-flight application workers and reads before newer values can be overwritten',async()=>{
+  for(const late of ['result','error','crash']) {
+    const p=await photoPage();selectBodyFit(p);const view=await loadBodyStarts(p);
+    editBodyStart(p,'bodyStart-shape-0','0.45');await p.e.bodyStartsApply.onclick();
+    const old=p.current(),request=old.messages[0].request;
+    editBodyStart(p,'bodyStart-shape-0','0.47');const status=p.e.bodyStartsStatus.textContent;
+    assert.equal(old.dead,true);
+    if(late==='crash')old.onerror({message:'obsolete application crashed'});
+    else await old.emit(late==='error'?{type:'error',request,message:'obsolete refusal'}:
+      {type:'result',request,report:JSON.stringify({...view,input:'{"obsolete":true}',input_sha256:'b'.repeat(64)})});
+    assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.47');assert.equal(p.e.bodyStartsStatus.textContent,status);
+    assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.urls.size,0);assert.equal(p.e.bodyFitRun.disabled,true);
+    await p.e.bodyStartsApply.onclick();const current=p.current(),edits=JSON.parse(current.messages[0].edits);
+    assert.equal(edits.starts[0].shape[0],0.47);assert.equal(edits.input_sha256,view.original_input_sha256);
+    assert.equal(edits.model_sha256,view.model_sha256);
+  }
+  for(const rejected of [false,true]) {
+    const p=await photoPage();selectBodyFit(p);await loadBodyStarts(p);let resolve,reject,entered;
+    const reading=new Promise(done=>{entered=done;});
+    p.e.bodyFitModel.files[0].arrayBuffer=()=>{entered();return new Promise((yes,no)=>{resolve=yes;reject=no;});};
+    editBodyStart(p,'bodyStart-shape-0','0.45');const pending=p.e.bodyStartsApply.onclick();await reading;
+    editBodyStart(p,'bodyStart-shape-0','0.48');const status=p.e.bodyStartsStatus.textContent;
+    if(rejected)reject(Error('obsolete model read'));else resolve(new ArrayBuffer(4));
+    await pending;assert.equal(p.workers.length,1);assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.48');
+    assert.equal(p.e.bodyStartsStatus.textContent,status);assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.urls.size,0);
+  }
 });
 
 test('saved body-fit worker validates the exact report and first pose without dispatching fitting',async()=>{
@@ -1841,7 +1895,7 @@ test('compiled body-start editing preserves unchanged evidence and feeds actual 
         assert.deepEqual(start.poses.find(p=>p.frame_index===index).values,expected.values);
       });
     });
-    const edits={starts:structuredClone(prepared.starts)},parameter=prepared.shape[0];
+    const edits={input_sha256:prepared.original_input_sha256,model_sha256:prepared.model_sha256,starts:structuredClone(prepared.starts)},parameter=prepared.shape[0];
     const replacement=[0.25,0.5,0.75,0.125,0.875].map(t=>parameter.lower*(1-t)+parameter.upper*t)
       .find(value=>value>parameter.lower && value<parameter.upper && edits.starts.every(start=>start.shape[0]!==value));
     assert.ok(Number.isFinite(replacement),'an independent interior start value exists');edits.starts[0].shape[0]=replacement;
@@ -1872,6 +1926,9 @@ test('compiled body-start editing preserves unchanged evidence and feeds actual 
     assert.throws(()=>ftx.body_fit_starts(model,input,JSON.stringify(boundary)),/bound|inside|interior/);
     const duplicateFrame=structuredClone(edits);duplicateFrame.starts[0].poses[1].frame_index=duplicateFrame.starts[0].poses[0].frame_index;
     assert.throws(()=>ftx.body_fit_starts(model,input,JSON.stringify(duplicateFrame)),/duplicate/);
+    assert.throws(()=>ftx.body_fit_starts(model,input+'\n',JSON.stringify(edits)),/different input or model bytes/);
+    assert.throws(()=>ftx.body_fit_starts(model,input,JSON.stringify({...edits,model_sha256:'0'.repeat(64)})),/different input or model bytes/);
+    assert.throws(()=>ftx.body_fit_starts(model,input,JSON.stringify({input_sha256:edits.input_sha256,starts:edits.starts})),/both input_sha256 and model_sha256/);
     const changed=Buffer.from(model);changed[changed.length-1]^=1;
     assert.throws(()=>ftx.body_fit_starts(changed,input,''),/SHA-256 mismatch/);
   });
