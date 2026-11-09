@@ -3851,6 +3851,18 @@ function areaCalibrationResult(parent, c) {
     "The area domain also intersects the directional Green-strain limits. An area-energy response does not impose constant area.";
   parent.append(note);
 }
+function stripExtensometerColumns(operator) {
+  const names = {
+    edge_chord: "Euclidean edge chord", edge_projection: "Signed edge projection",
+    material_chord: "Euclidean material chord", material_projection: "Signed material projection"
+  };
+  const materialPoints = operator.kind === "material_chord" || operator.kind === "material_projection";
+  const locations = materialPoints ?
+    `[${operator.start_fraction.map(metric).join(", ")}] → [${operator.end_fraction.map(metric).join(", ")}]` :
+    metric(operator.station_fraction);
+  return [names[operator.kind] ?? operator.kind, locations,
+    operator.axis?.map(metric).join(", ") || "Not applicable"];
+}
 function stripCalibrationResult(parent, r) {
   const c = r.calibration, family = c.input.response_family, nonlinear = c.input.nonlinear;
   const quality = table(parent, "Clamped strip observations — independent partitions",
@@ -3933,14 +3945,12 @@ function stripCalibrationResult(parent, r) {
       observed.join("; ") || "Not observed"]);
   }
   if (c.input.experiments.some(e => e.observations.some(o => o.extensometers?.length))) {
-    const measured = table(parent, "Declared transverse extensometer acquisitions",
-      ["Experiment / observation", "Partition", "Channel", "Operator", "Reference station fraction", "Projection axis [across, along]",
+    const measured = table(parent, "Declared extensometer acquisitions",
+      ["Experiment / observation", "Partition", "Channel", "Operator", "Reference station or [across, along] endpoints", "Projection axis [across, along]",
         "Observed value (m)", "Residual scale (m)"]);
     for (const e of c.input.experiments) for (const o of e.observations) for (const channel of o.extensometers || []) {
-      const operator = channel.operator;
       cells(measured, [`${e.id} / ${o.id}`, e.partition, channel.id,
-        operator.kind === "edge_chord" ? "Euclidean edge chord" : "Signed edge projection",
-        metric(operator.station_fraction), operator.axis?.map(metric).join(", ") || "Not applicable",
+        ...stripExtensometerColumns(channel.operator),
         metric(channel.value_m), metric(channel.scale_m)]);
     }
   }
@@ -3962,6 +3972,11 @@ function stripCalibrationResult(parent, r) {
     ["Doubled-mesh change / limit", `${metric(c.mesh_change_peak_scaled)} / ${metric(c.input.policy.max_mesh_scaled)}`],
     ["Enforced-domain replay", c.domain_replay_verified ? "Verified" : "Not verified"]
   ]) cells(work, row);
+  if (c.search_recovery) for (const row of [
+    ["Refused exploratory solves", c.search_recovery.refused_forward_solves],
+    ["Sensitivity interval halvings", c.search_recovery.sensitivity_halvings],
+    ["One-sided sensitivity columns", c.search_recovery.one_sided_sensitivity_columns]
+  ]) cells(work, [row[0], metric(row[1])]);
   const predictions = table(parent, "Actual refined strip predictions and observation residuals",
     ["Experiment / observation", "Partition", "Grip extension", "Force (N)", "Force residual (N)", "Mid-width (m)", "Width residual (m)"]);
   for (const p of c.predictions) cells(predictions, [`${p.experiment} / ${p.observation}`, p.partition,
@@ -3969,13 +3984,11 @@ function stripCalibrationResult(parent, r) {
     metric(p.state.mid_width_m), p.width_residual_m == null ? "Not observed" : metric(p.width_residual_m)]);
   if (c.predictions.some(p => p.extensometers?.length)) {
     const measured = table(parent, "Refined extensometer predictions and residuals",
-      ["Experiment / observation", "Partition", "Channel", "Operator", "Reference station fraction", "Projection axis [across, along]",
+      ["Experiment / observation", "Partition", "Channel", "Operator", "Reference station or [across, along] endpoints", "Projection axis [across, along]",
         "Predicted value (m)", "Residual (m)"]);
     for (const p of c.predictions) for (const channel of p.extensometers || []) {
-      const operator = channel.operator;
       cells(measured, [`${p.experiment} / ${p.observation}`, p.partition, channel.id,
-        operator.kind === "edge_chord" ? "Euclidean edge chord" : "Signed edge projection",
-        metric(operator.station_fraction), operator.axis?.map(metric).join(", ") || "Not applicable",
+        ...stripExtensometerColumns(channel.operator),
         metric(channel.predicted_m), metric(channel.residual_m)]);
     }
   }
@@ -3984,7 +3997,8 @@ function stripCalibrationResult(parent, r) {
   }
   const note = document.createElement("p");
   note.textContent = "Each prediction solves the finite strip with clamped ends, free in-plane interior motion, and a prescribed planar quasistatic boundary. " +
-    "Grip extension is not treated as uniform fabric strain. Transverse measurements need the declared reference station and chord or signed-projection definition; no source contraction is mapped automatically. " +
+    "Grip extension is not treated as uniform fabric strain. Edge measurements declare their reference station; material gauges declare both [across width, along gauge] reference fractions and follow the production triangles through refinement. " +
+    "Each channel distinguishes a chord from a signed projection; no source contraction is mapped automatically. " +
     "This existing reversible law cannot supply hysteresis, damage or rate dependence. FIT determines the parameters before CHECK replay. " +
     "Search bounds, force scales and local sensitivity are not confidence intervals or a global uniqueness proof.";
   parent.append(note);

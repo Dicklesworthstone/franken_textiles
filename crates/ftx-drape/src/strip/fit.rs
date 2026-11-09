@@ -14,7 +14,7 @@ use ftx_pattern::{
 use serde::{Deserialize, Serialize};
 
 use super::experiment::{Controls, Fixture, SCOPE, State, invalid, solve_law};
-use super::measurement::{self, Extensometer, ExtensometerPrediction, Operator};
+use super::measurement::{self, Extensometer, ExtensometerPrediction};
 use crate::Membrane;
 
 /// Caller-declared nonlinear shapes identified through the same bounded strip experiment.
@@ -59,7 +59,7 @@ pub struct Observation {
     /// Optional transverse observation; missing width never means no contraction.
     #[serde(default)]
     pub mid_width: Option<Width>,
-    /// Additional explicitly located transverse channels, at most eight per observed state.
+    /// Additional explicitly located material-point channels, at most eight per observed state.
     /// Omission preserves the original midpoint-only observation and serialization.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extensometers: Vec<Extensometer>,
@@ -697,8 +697,7 @@ fn validate(input: &Input) -> Result<(), Refusal> {
                 if channel.id.trim().is_empty()
                     || !channel_ids.insert(&channel.id)
                     || !channel.value_m.is_finite()
-                    || (matches!(channel.operator, Operator::EdgeChord { .. })
-                        && channel.value_m <= 0.0)
+                    || (channel.operator.is_chord() && channel.value_m <= 0.0)
                     || !channel.scale_m.is_finite()
                     || channel.scale_m <= 0.0
                 {

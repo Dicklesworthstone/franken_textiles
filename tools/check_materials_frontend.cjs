@@ -4971,7 +4971,7 @@ test('clamped-strip results show geometry and operator assumptions and withdraw 
   p.e.calibrationMode.value='nonlinear';p.e.calibrationMode.handlers.change();assert.equal(s.hidden,true);
 });
 
-test('declared strip extensometers retain station, signed axis and observed residuals in both controls', async () => {
+test('declared strip extensometers retain material points, station, signed axis and residuals in both controls', async () => {
   for (const dedicated of [false,true]) {
     const p=await pageModule(); await p.load();
     p.e.calibrationMode.value='clamped_strip'; p.e.calibrationEstimates.checked=true;
@@ -4981,24 +4981,39 @@ test('declared strip extensometers retain station, signed axis and observed resi
     const report=stripCalibration('ACCEPTED',true), c=report.calibration;
     const chord={kind:'edge_chord',station_fraction:0.25};
     const projection={kind:'edge_projection',station_fraction:0.75,axis:[-1,0]};
+    const materialChord={kind:'material_chord',start_fraction:[0.2,0.15],end_fraction:[0.8,0.7]};
+    const materialProjection={kind:'material_projection',start_fraction:[0.25,0.2],end_fraction:[0.75,0.8],axis:[0,-1]};
     c.input.experiments[0].observations=[{id:'point-1',mid_width:null,extensometers:[
       {id:'<chord>',operator:chord,value_m:0.058,scale_m:0.001},
-      {id:'signed',operator:projection,value_m:-0.04,scale_m:0.002}]}];
+      {id:'signed',operator:projection,value_m:-0.04,scale_m:0.002},
+      {id:'<markers>',operator:materialChord,value_m:0.065,scale_m:0.001},
+      {id:'axial',operator:materialProjection,value_m:-0.06,scale_m:0.002}]}];
     c.predictions[0].width_residual_m=null;
     c.predictions[0].extensometers=[
       {id:'<chord>',operator:chord,predicted_m:0.059,residual_m:0.001},
-      {id:'signed',operator:projection,predicted_m:-0.039,residual_m:0.001}];
+      {id:'signed',operator:projection,predicted_m:-0.039,residual_m:0.001},
+      {id:'<markers>',operator:materialChord,predicted_m:0.064,residual_m:-0.001},
+      {id:'axial',operator:materialProjection,predicted_m:-0.059,residual_m:0.001}];
+    c.search_recovery={refused_forward_solves:7,sensitivity_halvings:3,one_sided_sensitivity_columns:1};
     const raw=JSON.stringify(report);
     p.emit(report,[{name:'extensometer-report.json',text:raw,mime:'application/json'}]);
     const s=section(p,dedicated?'Clamped-strip identification':'Identified material behavior');
     const tables=descendants(s).filter(n=>n.tag==='table');
-    const acquisition=tables.find(t=>t.children[0].textContent==='Declared transverse extensometer acquisitions');
+    const acquisition=tables.find(t=>t.children[0].textContent==='Declared extensometer acquisitions');
     assert.deepEqual(plain(acquisition.children.slice(2).map(n=>n.children.map(v=>v.textContent))),[
       ['strip-source / point-1','fit','<chord>','Euclidean edge chord','0.25','Not applicable','0.058','0.001'],
-      ['strip-source / point-1','fit','signed','Signed edge projection','0.75','-1, 0','-0.04','0.002']]);
+      ['strip-source / point-1','fit','signed','Signed edge projection','0.75','-1, 0','-0.04','0.002'],
+      ['strip-source / point-1','fit','<markers>','Euclidean material chord','[0.2, 0.15] → [0.8, 0.7]','Not applicable','0.065','0.001'],
+      ['strip-source / point-1','fit','axial','Signed material projection','[0.25, 0.2] → [0.75, 0.8]','0, -1','-0.06','0.002']]);
     const predictions=tables.find(t=>t.children[0].textContent==='Refined extensometer predictions and residuals');
     assert.deepEqual(plain(predictions.children[3].children.map(v=>v.textContent)),
       ['strip-source / point-1','fit','signed','Signed edge projection','0.75','-1, 0','-0.039','0.001']);
+    assert.deepEqual(plain(predictions.children.slice(4).map(n=>n.children.map(v=>v.textContent))),[
+      ['strip-source / point-1','fit','<markers>','Euclidean material chord','[0.2, 0.15] → [0.8, 0.7]','Not applicable','0.064','-0.001'],
+      ['strip-source / point-1','fit','axial','Signed material projection','[0.25, 0.2] → [0.75, 0.8]','0, -1','-0.059','0.001']]);
+    const work=tables.find(t=>t.children[0].textContent==='Inverse solve and excitation diagnostics');
+    assert.deepEqual(plain(work.children.slice(-3).map(n=>n.children.map(v=>v.textContent))),[
+      ['Refused exploratory solves','7'],['Sensitivity interval halvings','3'],['One-sided sensitivity columns','1']]);
     const geometry=tables.find(t=>t.children[0].textContent==='Actual strip geometry and declared width comparison');
     assert.equal(geometry.children[2].children[6].textContent,'Declared extensometers (see below)');
     assert.match(visibleText(s),/no source contraction is mapped automatically/);
@@ -12681,7 +12696,7 @@ test('compiled WASM explicit extensometers retain acquired widths, frozen forwar
     const p=await pageModule(); await p.load(); p.select('stripFitRequest',request); await p.e.stripFit.onclick();
     p.emit(result.result,result.files);
     const sectionResult=section(p,'Clamped-strip identification');
-    assert.match(visibleText(sectionResult),/Declared transverse extensometer acquisitions/);
+    assert.match(visibleText(sectionResult),/Declared extensometer acquisitions/);
     assert.match(visibleText(sectionResult),/Refined extensometer predictions and residuals/);
     assert.equal(p.e.assign.disabled,false); assert.equal(p.e.selection.value,result.result.selection_json);
     const bad=JSON.parse(request);

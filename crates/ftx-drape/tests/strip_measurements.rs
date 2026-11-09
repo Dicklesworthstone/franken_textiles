@@ -100,6 +100,180 @@ fn reference_station_interpolates_material_edges_and_survives_mesh_refinement() 
 }
 
 #[test]
+fn interior_material_gauges_follow_affine_fields_and_reference_points_across_meshes() {
+    for cells in [[2, 2], [4, 8], [8, 4]] {
+        let fixture = fixture(cells);
+        let state = field(&fixture, |x, y| {
+            [2.0 + 0.8 * x + 0.3 * y, -1.0 + 0.6 * x + 1.2 * y, 0.0]
+        });
+        // Independent affine answers, including axial/diagonal interior gauges and corners.
+        for (start_fraction, end_fraction, dx, dy) in [
+            ([0.2, 0.15], [0.8, 0.85], 0.0498_f64, 0.1056_f64),
+            ([0.5, 0.2], [0.5, 0.8], 0.018, 0.072),
+            ([0.0, 0.0], [1.0, 1.0], 0.078, 0.156),
+            ([0.0, 1.0], [1.0, 0.0], 0.018, -0.084),
+        ] {
+            for (start, end, sign) in [
+                (start_fraction, end_fraction, 1.0),
+                (end_fraction, start_fraction, -1.0),
+            ] {
+                let chord = Operator::MaterialChord {
+                    start_fraction: start,
+                    end_fraction: end,
+                };
+                close(
+                    measurement::evaluate(&chord, &fixture, &state).unwrap(),
+                    dx.hypot(dy),
+                );
+                let projected = Operator::MaterialProjection {
+                    start_fraction: start,
+                    end_fraction: end,
+                    axis: [0.6, 0.8],
+                };
+                close(
+                    measurement::evaluate(&projected, &fixture, &state).unwrap(),
+                    sign * (0.6 * dx + 0.8 * dy),
+                );
+                assert_eq!(
+                    serde_json::from_value::<Operator>(serde_json::to_value(&projected).unwrap())
+                        .unwrap(),
+                    projected
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn interior_markers_use_both_production_triangle_diagonals_instead_of_bilinear_sampling() {
+    let fixture = fixture([2, 2]);
+    let mut state = field(&fixture, |x, y| [x, y, 0.0]);
+    state.positions_m[4][0] += 1.0;
+    // The central vertex's piecewise-linear hat is min(u,v) in the lower-left cell,
+    // min(1-u,v) in the lower-right, min(u,1-v) in the upper-left, and
+    // 1-max(u,v) in the upper-right. Bilinear interpolation would use products.
+    for (end_fraction, expected) in [
+        ([0.375, 0.125], 0.2725),
+        ([0.125, 0.375], 0.2575),
+        ([0.25, 0.25], 0.515),
+        ([0.625, 0.125], 0.2875),
+        ([0.875, 0.375], 0.3025),
+        ([0.875, 0.125], 0.3025),
+        ([0.125, 0.625], 0.2575),
+        ([0.375, 0.875], 0.2725),
+        ([0.625, 0.875], 0.2875),
+        ([0.875, 0.625], 0.3025),
+        ([0.5, 0.25], 0.53),
+        ([0.5, 0.5], 1.03),
+        ([1.0, 0.75], 0.06),
+        ([0.75, 1.0], 0.045),
+        ([1.0, 1.0], 0.06),
+    ] {
+        let operator = Operator::MaterialProjection {
+            start_fraction: [0.0, 0.0],
+            end_fraction,
+            axis: [1.0, 0.0],
+        };
+        close(
+            measurement::evaluate(&operator, &fixture, &state).unwrap(),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn interior_gauges_measure_free_motion_while_clamps_stay_fixed() {
+    let fixture = fixture([2, 2]);
+    let initial = field(&fixture, |x, y| [x, y, 0.0]);
+    let mut contracted = initial.clone();
+    contracted.positions_m[3][0] += 0.005;
+    contracted.positions_m[5][0] -= 0.005;
+    // These markers carry 0.3 of each opposite free-side vertex; their shared center
+    // contribution cancels. Moving those vertices narrows the chord's x component
+    // by 0.003 m without changing its 0.03 m axial component or either clamp.
+    let chord = Operator::MaterialChord {
+        start_fraction: [0.2, 0.35],
+        end_fraction: [0.8, 0.65],
+    };
+    close(
+        measurement::evaluate(&chord, &fixture, &initial).unwrap(),
+        0.036_f64.hypot(0.03),
+    );
+    close(
+        measurement::evaluate(&chord, &fixture, &contracted).unwrap(),
+        0.033_f64.hypot(0.03),
+    );
+    let projected = Operator::MaterialProjection {
+        start_fraction: [0.2, 0.35],
+        end_fraction: [0.8, 0.65],
+        axis: [-1.0, 0.0],
+    };
+    close(
+        measurement::evaluate(&projected, &fixture, &initial).unwrap(),
+        -0.036,
+    );
+    close(
+        measurement::evaluate(&projected, &fixture, &contracted).unwrap(),
+        -0.033,
+    );
+}
+
+#[test]
+fn material_edge_markers_retain_existing_station_answers_and_zero_projections() {
+    let fixture = fixture([4, 6]);
+    let state = field(&fixture, |x, y| [x * x + 0.2 * y, y * y + x * y, 0.0]);
+    for station_fraction in [0.0, 0.17, 0.5, 0.91, 1.0] {
+        for (edge, material) in [
+            (
+                Operator::EdgeChord { station_fraction },
+                Operator::MaterialChord {
+                    start_fraction: [0.0, station_fraction],
+                    end_fraction: [1.0, station_fraction],
+                },
+            ),
+            (
+                Operator::EdgeProjection {
+                    station_fraction,
+                    axis: [-1.0, 0.0],
+                },
+                Operator::MaterialProjection {
+                    start_fraction: [0.0, station_fraction],
+                    end_fraction: [1.0, station_fraction],
+                    axis: [-1.0, 0.0],
+                },
+            ),
+        ] {
+            assert_eq!(
+                measurement::evaluate(&edge, &fixture, &state).unwrap(),
+                measurement::evaluate(&material, &fixture, &state).unwrap()
+            );
+        }
+    }
+    let undeformed = field(&fixture, |x, y| [x, y, 0.0]);
+    let zero_projection = Operator::MaterialProjection {
+        start_fraction: [0.25, 0.5],
+        end_fraction: [0.75, 0.5],
+        axis: [0.0, 1.0],
+    };
+    assert_eq!(
+        measurement::evaluate(&zero_projection, &fixture, &undeformed).unwrap(),
+        0.0
+    );
+    let collapsed = field(&fixture, |_, _| [0.0; 3]);
+    assert!(
+        measurement::evaluate(
+            &Operator::MaterialChord {
+                start_fraction: [0.25, 0.5],
+                end_fraction: [0.75, 0.5],
+            },
+            &fixture,
+            &collapsed
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn malformed_operators_and_incompatible_states_refuse() {
     let fixture = fixture([2, 2]);
     let state = field(&fixture, |x, y| [x, y, 0.0]);
@@ -121,6 +295,38 @@ fn malformed_operators_and_incompatible_states_refuse() {
         Operator::EdgeProjection {
             station_fraction: 0.5,
             axis: [0.0, 0.0],
+        },
+        Operator::MaterialChord {
+            start_fraction: [-0.1, 0.2],
+            end_fraction: [0.5, 0.8],
+        },
+        Operator::MaterialChord {
+            start_fraction: [0.2, 0.2],
+            end_fraction: [0.5, 1.1],
+        },
+        Operator::MaterialChord {
+            start_fraction: [0.2, 0.2],
+            end_fraction: [0.2, 0.2],
+        },
+        Operator::MaterialProjection {
+            start_fraction: [0.2, f64::NAN],
+            end_fraction: [0.5, 0.8],
+            axis: [1.0, 0.0],
+        },
+        Operator::MaterialProjection {
+            start_fraction: [0.2, 0.2],
+            end_fraction: [f64::INFINITY, 0.8],
+            axis: [1.0, 0.0],
+        },
+        Operator::MaterialProjection {
+            start_fraction: [0.2, 0.2],
+            end_fraction: [0.2, 0.2],
+            axis: [1.0, 0.0],
+        },
+        Operator::MaterialProjection {
+            start_fraction: [0.2, 0.2],
+            end_fraction: [0.5, 0.8],
+            axis: [0.0, 2.0],
         },
     ] {
         assert!(measurement::evaluate(&operator, &fixture, &state).is_err());
@@ -148,7 +354,7 @@ fn input() -> Input {
         "../../../examples/strip-identification/synthetic-nonlinear-forward.json"
     ))
     .unwrap();
-    input.method = "Synthetic production strip observations with explicit quarter-gauge material chords and signed transverse projections at three-quarter gauge. No physical measurement or inferred source operator.".into();
+    input.method = "Synthetic production strip observations with explicit quarter-gauge edge chords, signed transverse projections at three-quarter gauge and diagonal interior material-marker lengths/projections. No physical measurement or inferred source operator.".into();
     for experiment in &mut input.experiments {
         let report = evaluate(&Request {
             fixture: experiment.fixture.clone(),
@@ -173,6 +379,21 @@ fn input() -> Input {
                     "three-quarter-negative-x",
                     Operator::EdgeProjection {
                         station_fraction: 0.75,
+                        axis: [-1.0, 0.0],
+                    },
+                ),
+                (
+                    "interior-diagonal",
+                    Operator::MaterialChord {
+                        start_fraction: [0.2, 0.35],
+                        end_fraction: [0.8, 0.65],
+                    },
+                ),
+                (
+                    "interior-negative-x",
+                    Operator::MaterialProjection {
+                        start_fraction: [0.2, 0.35],
+                        end_fraction: [0.8, 0.65],
                         axis: [-1.0, 0.0],
                     },
                 ),
@@ -207,8 +428,8 @@ fn explicit_operators_identify_the_law_and_replay_the_actual_published_field() {
     for (actual, known) in report.parameters.iter().zip([1.1, 0.9, 1.2, 40.0]) {
         assert!((actual - known).abs() < 1e-3, "{actual} != {known}");
     }
-    assert_eq!(report.fit.components, 27);
-    assert_eq!(report.check.as_ref().unwrap().components, 3);
+    assert_eq!(report.fit.components, 45);
+    assert_eq!(report.check.as_ref().unwrap().components, 5);
     let selection = report.selection.clone().unwrap();
     let mut mesh_peak = 0.0_f64;
     for experiment in &report.input.experiments {
@@ -270,7 +491,10 @@ fn explicit_operators_identify_the_law_and_replay_the_actual_published_field() {
                 assert_eq!(actual.predicted_m, value);
                 assert_eq!(actual.residual_m, value - channel.value_m);
                 mesh_peak = mesh_peak.max((value - coarse_value).abs() / channel.scale_m);
-                if matches!(channel.operator, Operator::EdgeProjection { .. }) {
+                if matches!(
+                    channel.operator,
+                    Operator::EdgeProjection { .. } | Operator::MaterialProjection { .. }
+                ) {
                     assert!(value < 0.0);
                 }
             }
@@ -288,7 +512,7 @@ fn held_out_extensometers_cannot_choose_parameters_or_expand_support() {
         .iter_mut()
         .find(|e| e.partition == Partition::Check)
         .unwrap();
-    check.observations[0].extensometers[0].value_m += 0.1;
+    check.observations[0].extensometers[2].value_m += 0.1;
     let rejected = calibrate(&changed).unwrap();
     assert_eq!(rejected.parameters, expected.parameters);
     assert_eq!(
@@ -310,7 +534,7 @@ fn held_out_extensometers_cannot_choose_parameters_or_expand_support() {
 fn fit_extensometer_readings_enter_the_objective_and_parameter_sensitivities() {
     let expected = baseline();
     let mut changed = expected.input.clone();
-    changed.experiments[0].observations[0].extensometers[0].value_m += 0.0001;
+    changed.experiments[0].observations[0].extensometers[2].value_m += 0.0001;
     let report = calibrate(&changed).unwrap();
     assert_ne!(report.parameters, expected.parameters);
     assert!(report.starts.iter().all(|start| start.fit_sse > 1e-6));
@@ -329,7 +553,7 @@ fn invalid_channels_refuse_before_solving_and_legacy_json_omits_the_extension() 
             .contains("extensometers")
     );
     let valid = input();
-    for failure in 0..5 {
+    for failure in 0..8 {
         let mut changed = valid.clone();
         let channels = &mut changed.experiments[0].observations[0].extensometers;
         match failure {
@@ -341,7 +565,15 @@ fn invalid_channels_refuse_before_solving_and_legacy_json_omits_the_extension() 
                     station_fraction: 1.1,
                 }
             }
-            _ => channels.extend(vec![channels[0].clone(); 7]),
+            4 => channels.extend(vec![channels[0].clone(); 7]),
+            5 => channels[2].value_m = 0.0,
+            6 => {
+                channels[2].operator = Operator::MaterialChord {
+                    start_fraction: [0.25, 0.2],
+                    end_fraction: [0.75, 1.1],
+                }
+            }
+            _ => channels[2].value_m = -0.01,
         }
         assert!(calibrate(&changed).is_err());
     }

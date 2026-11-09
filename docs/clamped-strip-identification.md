@@ -89,10 +89,10 @@ The returned material contains only the four identified membrane properties. Mis
 bending, thickness and friction remain missing, so this successful membrane example still cannot
 be presented as a complete garment material.
 
-## Explicit transverse measurement operators
+## Explicit material-point measurement operators
 
 Each observation may supply up to eight named `extensometers` in addition to its required force.
-Use the spatial definition actually established by the acquisition. A material-point chord, a
+Use the spatial definition actually established by the acquisition. A local material-point chord, a
 projected width and an image-wide edge statistic are different observations; the fitter does not
 choose or infer an operator from a source label.
 
@@ -113,6 +113,24 @@ This schema example uses illustrative values only:
     },
     "value_m": -0.058,
     "scale_m": 0.001
+  },
+  {
+    "id": "interior-diagonal",
+    "operator": {
+      "kind": "material_chord",
+      "start_fraction": [0.2, 0.35], "end_fraction": [0.8, 0.65]
+    },
+    "value_m": 0.072,
+    "scale_m": 0.001
+  },
+  {
+    "id": "interior-axial-projection",
+    "operator": {
+      "kind": "material_projection",
+      "start_fraction": [0.5, 0.2], "end_fraction": [0.5, 0.8], "axis": [0, 1]
+    },
+    "value_m": 0.065,
+    "scale_m": 0.001
   }
 ]
 ```
@@ -123,6 +141,22 @@ stations interpolate on the actual piecewise-linear side edges. Refinement prese
 station. `edge_chord` reports Euclidean distance; `edge_projection` reports the signed left-to-right
 chord dotted with the explicit `[x,y]` unit axis in the strip frame. It is not an image-pixel axis or
 an automatically grain-rotated material axis. Nonfinite or non-unit axes refuse without normalization.
+
+`material_chord` and `material_projection` instead declare two distinct material markers through
+`start_fraction` and `end_fraction`. Each is `[across_width, along_gauge]` in the original strip frame,
+with both coordinates finite and in `[0,1]`. The origin is the left endpoint of the fixed grip;
+`[1,1]` is the right endpoint of the moving grip before extension. These coordinates describe material
+locations, not deformed positions, mesh indices, image pixels or grain-oriented strain components.
+
+Interior positions use barycentric interpolation on the actual production triangles, including the
+grid's alternating cell diagonals. Boundary points interpolate on the actual material edges; exact
+vertices retain their stored positions. The declared reference markers remain fixed when the mesh
+is refined. The chord is the Euclidean end-to-start separation; the projection is the end-minus-start
+vector dotted with the explicit strip-frame unit axis. Reversing the markers preserves chord length
+and reverses the projection sign. A collapsed deformed chord refuses; a zero signed projection is
+valid. These operators support explicitly sourced axial, diagonal and local marker gauges without
+assuming that the grip extension is a homogeneous gauge strain. They measure current separation,
+not extension from the original separation or a strain ratio.
 
 Channel IDs must be nonempty and unique within an observed state. `value_m` is in metres and may be
 negative for a projection; chord observations must be positive. `scale_m` is a positive residual
@@ -136,6 +170,11 @@ that same measurement explicitly, replace `mid_width` with one `edge_chord` at `
 retaining its original value and scale; supplying both would deliberately count two residual channels.
 Force remains required at every observed extension in this version. Unspecified source locations,
 loading branches or missing force samples are not filled in by this interface.
+
+The `strip_measurements` tests include independent affine answers, a non-affine nodal field that
+distinguishes both production triangle diagonals from bilinear sampling, boundary/edge equivalence,
+and synthetic interior-gauge inverse recovery through actual refined-state replay. Those checks
+establish the observation software; they do not supply missing real-source marker definitions.
 
 ## Identify amplitudes of declared nonlinear shapes
 

@@ -5,6 +5,7 @@ use ftx_core::{RefusalCode, receipt::sha256_hex};
 use ftx_drape::strip::{
     Request,
     fit::{Input, Report},
+    measurement::{self, Operator},
 };
 use ftx_pattern::{material_calibration::Partition, material_catalog::Selection, textile_import};
 use ftx_wasm::materials;
@@ -20,8 +21,45 @@ fn portable_extensometer_identification_matches_the_shared_engine_and_keeps_oper
         "../../../examples/strip-identification/synthetic-calibration.json"
     ))
     .unwrap();
+    let forward: Request = serde_json::from_str(include_str!(
+        "../../../examples/strip-identification/synthetic-forward.json"
+    ))
+    .unwrap();
+    let markers = [
+        (
+            "interior-diagonal",
+            Operator::MaterialChord {
+                start_fraction: [0.2, 0.35],
+                end_fraction: [0.8, 0.65],
+            },
+        ),
+        (
+            "interior-negative-x",
+            Operator::MaterialProjection {
+                start_fraction: [0.2, 0.35],
+                end_fraction: [0.8, 0.65],
+                axis: [-1.0, 0.0],
+            },
+        ),
+    ];
     for experiment in input["experiments"].as_array_mut().unwrap() {
-        for observation in experiment["observations"].as_array_mut().unwrap() {
+        let synthetic = ftx_drape::strip::evaluate(&Request {
+            fixture: serde_json::from_value(experiment["fixture"].clone()).unwrap(),
+            extensions: experiment["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|o| o["extension_fraction"].as_f64().unwrap())
+                .collect(),
+            ..forward.clone()
+        })
+        .unwrap();
+        for (observation, state) in experiment["observations"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .zip(&synthetic.states)
+        {
             let width = observation
                 .as_object_mut()
                 .unwrap()
@@ -31,6 +69,16 @@ fn portable_extensometer_identification_matches_the_shared_engine_and_keeps_oper
                 "id":"midpoint", "operator":{"kind":"edge_chord","station_fraction":0.5},
                 "value_m":width["value_m"], "scale_m":width["scale_m"]
             }]);
+            for (id, operator) in &markers {
+                let value =
+                    measurement::evaluate(operator, &synthetic.input.fixture, state).unwrap();
+                observation["extensometers"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                        "id": id, "operator": operator, "value_m": value, "scale_m": 0.001
+                    }));
+            }
         }
     }
     let mut typed: Input = serde_json::from_value(input.clone()).unwrap();
@@ -47,11 +95,26 @@ fn portable_extensometer_identification_matches_the_shared_engine_and_keeps_oper
     assert_eq!(result["selection_json"], expected.selection_json.unwrap());
     assert_eq!(result["simulation_ready"], false);
     for prediction in &expected.predictions {
-        assert_eq!(prediction.extensometers.len(), 1);
+        assert_eq!(prediction.extensometers.len(), 3);
         assert_eq!(prediction.extensometers[0].id, "midpoint");
+        for (channel, (id, operator)) in prediction.extensometers[1..].iter().zip(&markers) {
+            assert_eq!(channel.id.as_str(), *id);
+            assert_eq!(&channel.operator, operator);
+        }
+        assert!(prediction.extensometers[1].predicted_m > 0.0);
+        assert!(prediction.extensometers[2].predicted_m < 0.0);
     }
     input["experiments"][0]["observations"][0]["extensometers"][0]["operator"] =
         json!({"kind":"edge_projection","station_fraction":0.5,"axis":[2.0,0.0]});
+    assert!(materials::calibrate_strip(&input.to_string(), true).is_err());
+    input["experiments"][0]["observations"][0]["extensometers"][0]["operator"] = json!({
+        "kind":"material_projection","start_fraction":[0.25,0.2],
+        "end_fraction":[0.75,0.8],"axis":[0.0,2.0]
+    });
+    assert!(materials::calibrate_strip(&input.to_string(), true).is_err());
+    input["experiments"][0]["observations"][0]["extensometers"][0]["operator"] = json!({
+        "kind":"material_chord","start_fraction":[0.25,0.2],"end_fraction":[1.01,0.8]
+    });
     assert!(materials::calibrate_strip(&input.to_string(), true).is_err());
 }
 

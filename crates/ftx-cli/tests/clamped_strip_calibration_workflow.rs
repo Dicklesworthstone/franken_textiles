@@ -9,7 +9,11 @@ use std::{
 };
 
 use ftx_core::receipt::sha256_hex;
-use ftx_drape::strip::fit::Input;
+use ftx_drape::strip::{
+    Request,
+    fit::Input,
+    measurement::{self, Operator},
+};
 use ftx_pattern::{material_catalog::Selection, textile_import};
 use serde_json::{Value, json};
 
@@ -21,8 +25,45 @@ fn both_commands_preserve_explicit_extensometers_through_identification() {
         "../../../examples/strip-identification/synthetic-calibration.json"
     ))
     .unwrap();
+    let forward: Request = serde_json::from_str(include_str!(
+        "../../../examples/strip-identification/synthetic-forward.json"
+    ))
+    .unwrap();
+    let markers = [
+        (
+            "interior-diagonal",
+            Operator::MaterialChord {
+                start_fraction: [0.2, 0.35],
+                end_fraction: [0.8, 0.65],
+            },
+        ),
+        (
+            "interior-negative-x",
+            Operator::MaterialProjection {
+                start_fraction: [0.2, 0.35],
+                end_fraction: [0.8, 0.65],
+                axis: [-1.0, 0.0],
+            },
+        ),
+    ];
     for experiment in input["experiments"].as_array_mut().unwrap() {
-        for observation in experiment["observations"].as_array_mut().unwrap() {
+        let synthetic = ftx_drape::strip::evaluate(&Request {
+            fixture: serde_json::from_value(experiment["fixture"].clone()).unwrap(),
+            extensions: experiment["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|o| o["extension_fraction"].as_f64().unwrap())
+                .collect(),
+            ..forward.clone()
+        })
+        .unwrap();
+        for (observation, state) in experiment["observations"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .zip(&synthetic.states)
+        {
             let width = observation
                 .as_object_mut()
                 .unwrap()
@@ -32,6 +73,16 @@ fn both_commands_preserve_explicit_extensometers_through_identification() {
                 "id":"midpoint", "operator":{"kind":"edge_chord","station_fraction":0.5},
                 "value_m":width["value_m"], "scale_m":width["scale_m"]
             }]);
+            for (id, operator) in &markers {
+                let value =
+                    measurement::evaluate(operator, &synthetic.input.fixture, state).unwrap();
+                observation["extensometers"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                        "id": id, "operator": operator, "value_m": value, "scale_m": 0.001
+                    }));
+            }
         }
     }
     let workspace = Workspace::new();
@@ -49,6 +100,7 @@ fn both_commands_preserve_explicit_extensometers_through_identification() {
         serde_json::to_value(&typed.experiments).unwrap()
     );
     for prediction in report["predictions"].as_array().unwrap() {
+        assert_eq!(prediction["extensometers"].as_array().unwrap().len(), 3);
         assert_eq!(prediction["extensometers"][0]["id"], "midpoint");
         assert_eq!(
             prediction["extensometers"][0]["operator"],
@@ -61,6 +113,24 @@ fn both_commands_preserve_explicit_extensometers_through_identification() {
                 > 0.0
         );
         assert!(prediction["extensometers"][0]["residual_m"].is_number());
+        for (index, (id, operator)) in markers.iter().enumerate() {
+            let channel = &prediction["extensometers"][index + 1];
+            assert_eq!(channel["id"], *id);
+            assert_eq!(channel["operator"], serde_json::to_value(operator).unwrap());
+            assert!(channel["residual_m"].is_number());
+        }
+        assert!(
+            prediction["extensometers"][1]["predicted_m"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        assert!(
+            prediction["extensometers"][2]["predicted_m"]
+                .as_f64()
+                .unwrap()
+                < 0.0
+        );
     }
     assert_eq!(primary["simulation_ready"], false);
     assert_eq!(primary["empirical_validation_claim"], false);

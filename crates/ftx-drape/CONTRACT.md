@@ -1057,15 +1057,19 @@ replay, CHECK isolation, insufficient excitation, source/domain failures and com
 These are conditional numerical tests, not independent empirical knit or garment validation.
 
 **Explicit strip extensometers** (`strip::measurement`, plan §25.50). Optional bounded observation
-channels declare a reference side-edge station and either its Euclidean material-point chord or
-signed projection on an explicit strip-frame unit axis. The same evaluator uses actual production
-positions in fitting, sensitivities, refinement, CHECK and published-law replay. Stations interpolate
-in the original mesh coordinates and remain fixed through refinement. Nonfinite coordinates, invalid
-axes, incompatible meshes, duplicate IDs and invalid scales refuse. The original midpoint channel and
-omitted-field serialization remain unchanged. Force remains required; unknown source operators are
-not guessed. `strip_measurements` checks independent affine/interpolation answers, actual inverse
-recovery, sensitivity, held-out isolation and exact frozen forward replay. Numerical recovery does not
-qualify a measured coupon or supply missing material properties.
+channels declare either a reference side-edge station or two distinct normalized reference material
+points, and measure their Euclidean chord or signed end-minus-start projection on an explicit
+strip-frame unit axis. Interior axial/diagonal/local markers use barycentric interpolation on the
+actual production grid's alternating triangles; boundary markers use the material edges. These are
+current separations, not inferred local strain or image-wide statistics. The same evaluator uses
+actual production positions in fitting, sensitivities, refinement, CHECK and published-law replay.
+Reference coordinates remain fixed through refinement. Nonfinite/out-of-range or coincident reference
+markers, invalid axes, incompatible meshes, duplicate IDs and invalid scales refuse. Chord lengths
+must be positive; signed projections may be negative or zero. The original edge/midpoint arithmetic
+and omitted-field serialization remain unchanged. Force remains required; unknown source operators
+are not guessed. `strip_measurements` checks independent affine/interpolation answers, both triangle
+diagonals, actual inverse recovery, sensitivity, held-out isolation and exact frozen forward replay.
+Numerical recovery does not qualify a measured coupon or supply missing material properties.
 
 **Timed clamped-strip history** (`strip::history`, `ftx-sh1`). `ftx-strip-history/1` loads, holds and
 unloads a planar, fully gripped sheet through the existing implicit dynamic solver. Canonical membrane
