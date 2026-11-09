@@ -1929,6 +1929,14 @@ impl Policy {
         let thread = consumers.contains(&Consumer::SewingConsumables)
             || consumers.contains(&Consumer::SewingPurchasing)
             || combined;
+        let parallel_calendars = |options: &crate::sewing::SewOptions| {
+            options
+                .production
+                .as_ref()
+                .and_then(|production| production.parallel.as_ref())
+                .and_then(|parallel| parallel.shared_operator.as_ref())
+                .is_some_and(|operator| operator.availability_calendars.is_some())
+        };
         if consumers.contains(&Consumer::Sewing) || thread {
             keys.insert("thickness");
         }
@@ -2387,6 +2395,7 @@ impl Policy {
         if (consumers.contains(&Consumer::Sewing) || thread)
             && let Some(selection) = row.sewing_selection.value()
             && (selection.request.completion_deadline_milliseconds.is_some()
+                || parallel_calendars(&selection.request.options)
                 || selection
                     .request
                     .options
@@ -2395,8 +2404,8 @@ impl Policy {
                     .and_then(|production| production.routing.as_ref())
                     .is_some_and(|routing| routing.copy_windows.is_some()))
         {
-            // Arrival/deadline constraints and the complete candidate domain determine which usable
-            // recipe can supply these readings. A changed search must not inherit its protocol.
+            // Arrival/deadline/calendar constraints and the complete candidate domain determine
+            // which usable recipe supplies these readings, including fixed feed/yarn objectives.
             base = hash(&(
                 base,
                 ("deadline_constrained_sewing_selection", &selection.request),
@@ -2435,12 +2444,17 @@ impl Policy {
             .metrics()
             .contains(&Metric::SewingParallelMakespanSeconds)
             || ((consumers.contains(&Consumer::Sewing) || thread)
-                && row
-                    .sewing
-                    .value()
-                    .and_then(|plan| plan.options.production.as_ref())
-                    .and_then(|production| production.routing.as_ref())
-                    .is_some_and(|routing| routing.eligible() || routing.copy_windows.is_some()))
+                && row.sewing.value().is_some_and(|plan| {
+                    parallel_calendars(&plan.options)
+                        || plan
+                            .options
+                            .production
+                            .as_ref()
+                            .and_then(|production| production.routing.as_ref())
+                            .is_some_and(|routing| {
+                                routing.eligible() || routing.copy_windows.is_some()
+                            })
+                }))
         {
             let production = row
                 .sewing
@@ -2453,7 +2467,8 @@ impl Policy {
             // timing/fixture policy define this experiment, independent of textile protocol consent.
             // Eligible routes optimize makespan before reporting feed/yarn. Copy windows constrain
             // the admitted dispatch even on fixed routes. Both domains qualify every consumed plan,
-            // including comparisons that request only feed or thread quantities.
+            // including comparisons that request only feed or thread quantities. Parallel resource
+            // calendars likewise change which complete assignment supplies those quantities.
             if let Some(routing) = &production.routing {
                 // The complete routing domain, including unused eligible cells, qualifies unloaded
                 // movement, staging and the assignment search. Never hash only selected resources.

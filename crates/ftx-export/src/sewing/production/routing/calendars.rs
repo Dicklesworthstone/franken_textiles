@@ -1,4 +1,4 @@
-//! Source-qualified finite operating windows for routed cells, workers and unloaded handoffs.
+//! Source-qualified finite operating windows for production cells, workers and unloaded handoffs.
 //! A window contains a whole occupied interval; inactive gaps never imply preemption or travel.
 
 use std::collections::BTreeMap;
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::{MAX_EXACT_MILLISECONDS, Policy as RoutePolicy, add, source_valid};
 use crate::sewing::bad;
 
-pub(super) const MAX_WINDOWS: usize = 16;
+pub(in crate::sewing::production) const MAX_WINDOWS: usize = 16;
 
 /// One explicit finite availability interval measured from the common production-job origin.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -47,20 +47,6 @@ pub struct Policy {
 
 impl Policy {
     pub(super) fn validate(&self, route: &RoutePolicy) -> Result<(), Refusal> {
-        if self.model != "nonpreemptive_resource_windows/1"
-            || self.resources.is_empty()
-            || self.resources.len() > 16 + route.transfer_resources().count()
-            || !source_valid(&self.source, &self.method, &self.conditions)
-        {
-            return Err(bad(
-                "routed calendars need a qualified nonpreemptive model and named resources",
-            ));
-        }
-        if self.evidence == Evidence::Estimate && !self.allow_estimates {
-            return Err(bad(
-                "estimated routed calendars need their own explicit consent",
-            ));
-        }
         let mut bounds: BTreeMap<_, _> = route
             .cells
             .iter()
@@ -110,9 +96,32 @@ impl Policy {
                 ));
             }
         }
+        self.validate_resources(&bounds)
+    }
+
+    pub(in crate::sewing::production) fn validate_resources(
+        &self,
+        bounds: &BTreeMap<&str, (u64, Option<u64>)>,
+    ) -> Result<(), Refusal> {
+        if self.model != "nonpreemptive_resource_windows/1"
+            || self.resources.is_empty()
+            || self.resources.len() > bounds.len()
+            || !source_valid(&self.source, &self.method, &self.conditions)
+        {
+            return Err(bad(
+                "production calendars need a qualified nonpreemptive model and named resources",
+            ));
+        }
+        if self.evidence == Evidence::Estimate && !self.allow_estimates {
+            return Err(bad(
+                "estimated production calendars need their own explicit consent",
+            ));
+        }
         for (id, windows) in &self.resources {
             let Some(&(start, end)) = bounds.get(id.as_str()) else {
-                return Err(bad("routed calendar names an unknown physical resource"));
+                return Err(bad(
+                    "production calendar names an unknown physical resource",
+                ));
             };
             if windows.is_empty()
                 || windows.len() > MAX_WINDOWS
@@ -127,18 +136,18 @@ impl Policy {
                     .any(|pair| pair[0].end_milliseconds >= pair[1].start_milliseconds)
             {
                 return Err(bad(
-                    "routed calendars need 1..16 sorted, disjoint finite windows inside each resource's outer availability",
+                    "production calendars need 1..16 sorted, disjoint finite windows inside each resource's outer availability",
                 ));
             }
         }
         Ok(())
     }
 
-    pub(super) fn windows(&self, id: &str) -> Option<&[Window]> {
+    pub(in crate::sewing::production) fn windows(&self, id: &str) -> Option<&[Window]> {
         self.resources.get(id).map(Vec::as_slice)
     }
 
-    pub(super) fn earliest_start(
+    pub(in crate::sewing::production) fn earliest_start(
         &self,
         id: &str,
         earliest: u64,
@@ -157,4 +166,31 @@ impl Policy {
         }
         Ok(None)
     }
+}
+
+// Travel, destination waiting and attendance form one occupied worker interval. Delaying departure
+// to a later opening leaves the preceding calendar gap unoccupied rather than inventing work there.
+pub(in crate::sewing::production) fn fit_departure(
+    windows: Option<&[Window]>,
+    earliest_departure: u64,
+    travel: u64,
+    earliest_start: u64,
+    duration: u64,
+) -> Result<Option<[u64; 3]>, Refusal> {
+    let open = [Window {
+        start_milliseconds: 0,
+        end_milliseconds: MAX_EXACT_MILLISECONDS,
+    }];
+    for window in windows.unwrap_or(&open) {
+        let departure = earliest_departure.max(window.start_milliseconds);
+        if departure > window.end_milliseconds || travel > window.end_milliseconds - departure {
+            continue;
+        }
+        let arrival = add(departure, travel)?;
+        let start = earliest_start.max(arrival);
+        if start <= window.end_milliseconds && duration <= window.end_milliseconds - start {
+            return Ok(Some([departure, arrival, start]));
+        }
+    }
+    Ok(None)
 }

@@ -3384,6 +3384,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const heterogeneous = Boolean(report.cell_plans?.length);
   const windowed = Boolean(report.availability);
   const operator = report.shared_operator;
+  const calendars = operator?.availability_calendars;
   const pools = report.shared_workholding;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
@@ -3435,15 +3436,27 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       for (const count of cell.counts || []) cells(windows, [cell.cell, metric(count.copies),
         typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended",
         metric(seconds(count.incumbent_finish_milliseconds)), metric(seconds(count.lower_bound_finish_milliseconds)),
-        count.feasible ? (pools ? "Fits without shared-resource contention" : operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
+        count.feasible ? (calendars ? "Fits before calendar and shared-resource constraints" : pools ? "Fits without shared-resource contention" : operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
     }
   }
   if (operator) {
     const labor = table(parent, `${label}: shared operator work`,
-      ["Operator", "Busy (s)", "Travel (s)", "Waiting (s)", "Restricted search complete", "Operator work limit reached"]);
+      ["Operator", "Busy (s)", "Travel (s)", "Waiting (s)", ...(calendars ? ["Unoccupied calendar delay (s)"] : []),
+        "Restricted search complete", "Operator work limit reached"]);
     cells(labor, [operator.operator, metric(seconds(operator.selected?.busy_milliseconds)),
       metric(seconds(operator.selected?.transfer_milliseconds)), metric(seconds(operator.selected?.waiting_milliseconds)),
+      ...(calendars ? [metric(seconds(operator.selected?.calendar_delay_milliseconds))] : []),
       String(operator.search_complete), String(operator.budget_exhausted)]);
+    if (calendars) {
+      const openings = table(parent, `${label}: qualified operator and cell calendars`,
+        ["Resource", "Window", "Starts (s)", "Ends (s)", "Complete occupied interval"]);
+      for (const [resource, windows] of Object.entries(calendars.resources || {})) {
+        for (const [index, window] of windows.entries()) cells(openings, [resource, metric(index + 1),
+          metric(seconds(window.start_milliseconds)), metric(seconds(window.end_milliseconds)),
+          resource === operator.operator ? "Travel, destination waiting and attendance" : "Handling, setup and autonomous feed"]);
+      }
+      detail(parent, `${label}: resource calendar qualification and exact windows`, calendars);
+    }
     const timeline = table(parent, `${label}: selected shared operator timeline`,
       ["Cell", "Local operation", "Global copy", "Departure (s)", "Arrival (s)", "Handling starts (s)",
         "Setup starts (s)", "Operator free (s)", "Feed complete (s)"]);
@@ -3466,6 +3479,9 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       `The first-cell baseline failed a qualified cell or operator window${pools ? " or shared fixture constraint" : ""}; the displayed replacement is the complete selected feasible assignment. ` : "") +
     "Every garment stays in one physical cell. " +
     (operator ? "One qualified operator performs exclusive travel, handling, setup and final unloading while explicitly qualified autonomous machine feed may overlap. " +
+      (calendars ? "Each worker trip, destination wait and attended phase fits one qualified opening; each machine phase, including its full feed, fits one cell opening. " +
+        "Autonomous feed may continue through an operator break. Calendar delay before departure is unoccupied and separate from destination waiting. " +
+        "Existing garment and fixture holds remain active through breaks. " : "") +
       "The operator search considers the retained serial operation orders; completing that search alone does not prove an unrestricted joint optimum. " +
       (pools ? "Cell-only window receipts ignore shared operator and fixture contention; the selected timeline enforces cell, operator and pool limits. " :
         "Cell-only window receipts ignore operator contention; the selected timeline enforces both cell and operator limits. ") +

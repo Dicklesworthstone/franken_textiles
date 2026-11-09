@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     Assignment, Cell, MAX_EXACT_MILLISECONDS, MAX_WORK, Trial, budget, shared_workholding, sum_time,
 };
+use crate::sewing::production::routing::calendars;
 use crate::sewing::{SewOptions, SewPlan, bad, ordering::Setup, qualified_text, sha256_text};
 
 /// A separately qualified one-person operating protocol. Every operation is handled, set up and
@@ -26,6 +27,11 @@ pub struct Policy {
     /// Optional inclusive operator-shift end, covering all travel, waiting and final unloading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_until_milliseconds: Option<u64>,
+    /// Optional independently qualified operating windows for this person and the declared cells.
+    /// Travel/wait/attendance and each complete machine phase remain indivisible. Unnamed resources
+    /// retain their outer availability; idle garment and fixture retention must stay qualified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability_calendars: Option<calendars::Policy>,
     /// Full cell and effective recipe/timing locks, including cells that ultimately remain idle.
     pub cells: BTreeMap<String, String>,
     /// Explicit travel from the declared initial operator location to every possible first cell.
@@ -102,15 +108,22 @@ pub struct Timeline {
     pub waiting_milliseconds: u64,
     /// Travel plus setup and handling, excluding waiting and unattended feed.
     pub busy_milliseconds: u64,
+    /// Unoccupied delay before departure introduced by the operating calendars, separate from
+    /// destination waiting that occupies the person. Absent when calendars were not requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_delay_milliseconds: Option<u64>,
 }
 
 /// Bounded operator search, separate from the unrestricted global makespan proof in its parent.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-sewing-shared-operator/1`.
+    /// `/1` contiguous availability; `/2` independently qualified resource calendars.
     pub schema: &'static str,
     /// The one source-qualified operator, never multiplied by the number of cells.
     pub operator: String,
+    /// Exact calendar policy, including idle cells and its separate evidence and estimate consent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability_calendars: Option<calendars::Policy>,
     /// Complete feasible first-cell seed, or the selected feasible replacement when that seed fails.
     pub baseline: Timeline,
     /// All attended intervals in the selected complete whole-garment allocation.
@@ -230,6 +243,35 @@ impl Policy {
                     "invalid, repeated or unknown directed shared-operator transfer",
                 ));
             }
+        }
+        if let Some(calendars) = &self.availability_calendars {
+            let mut bounds: BTreeMap<_, _> = cells
+                .iter()
+                .map(|cell| {
+                    (
+                        cell.id.as_str(),
+                        (
+                            u64::from(cell.available_at_milliseconds),
+                            cell.available_until_milliseconds,
+                        ),
+                    )
+                })
+                .collect();
+            if bounds
+                .insert(
+                    &self.operator,
+                    (
+                        u64::from(self.available_at_milliseconds),
+                        self.available_until_milliseconds,
+                    ),
+                )
+                .is_some()
+            {
+                return Err(bad(
+                    "shared-operator calendars need distinct person and cell identities",
+                ));
+            }
+            calendars.validate_resources(&bounds)?;
         }
         Ok(())
     }
@@ -461,8 +503,11 @@ impl Search<'_> {
         let travel = state
             .previous
             .map_or(self.arrivals[cell], |from| self.transfers[from][cell]);
-        let arrival = sum_time(state.free, travel)?;
+        let mut departure = state.free;
+        let mut arrival = sum_time(departure, travel)?;
         let mut start = arrival.max(state.ready[cell]);
+        let attended = phase.attended()?;
+        let duration = phase.duration()?;
         if let Some(policy) = self.shared_workholding {
             let Some(available) = policy.earliest_start(
                 state
@@ -480,7 +525,57 @@ impl Search<'_> {
             };
             start = available;
         }
-        let release = sum_time(start, phase.attended()?)?;
+        if let Some(calendars) = &self.policy.availability_calendars {
+            // Every strict advance crosses a worker/cell window opening or one of at most eight
+            // pending pool releases. Calendar delays cannot drop a persistent fixture hold.
+            let mut fitted = false;
+            for _ in 0..=2 * calendars::MAX_WINDOWS + super::MAX_CELLS {
+                let previous = start;
+                let Some(next) = calendars.earliest_start(&self.cells[cell].id, start, duration)?
+                else {
+                    return Ok(None);
+                };
+                start = next;
+                if let Some(policy) = self.shared_workholding {
+                    let Some(next) = policy.earliest_start(
+                        state
+                            .shared_workholding
+                            .as_ref()
+                            .expect("shared pool state"),
+                        phase
+                            .shared_workholding
+                            .as_ref()
+                            .expect("shared pool phase"),
+                        start,
+                    )?
+                    else {
+                        return Ok(None);
+                    };
+                    start = next;
+                }
+                let Some(next) = calendars::fit_departure(
+                    calendars.windows(&self.policy.operator),
+                    state.free,
+                    travel,
+                    start,
+                    attended,
+                )?
+                else {
+                    return Ok(None);
+                };
+                [departure, arrival, start] = next;
+                if start == previous {
+                    fitted = true;
+                    break;
+                }
+            }
+            if !fitted {
+                return Err(budget(
+                    "shared-operator calendar and fixture intersection exceeded its finite event bound",
+                ));
+            }
+        }
+        let release = sum_time(start, attended)?;
         let finish = sum_time(release, phase.feed)?;
         if self
             .policy
@@ -496,7 +591,7 @@ impl Search<'_> {
             cell,
             phase: state.positions[cell],
             previous: state.previous,
-            departure: state.free,
+            departure,
             arrival,
             start,
             release,
@@ -839,6 +934,7 @@ pub(super) fn evaluate(
 impl Candidate {
     fn apply(
         &self,
+        policy: &Policy,
         assignment: &mut Assignment,
         trials: &[Vec<Trial>],
     ) -> Result<Timeline, Refusal> {
@@ -847,7 +943,16 @@ impl Candidate {
             transfer_milliseconds: 0,
             waiting_milliseconds: 0,
             busy_milliseconds: 0,
+            calendar_delay_milliseconds: policy.availability_calendars.as_ref().map(|_| 0),
         };
+        let mut free = u64::from(policy.available_at_milliseconds);
+        let mut previous: Option<usize> = None;
+        let mut ready: Vec<_> = assignment
+            .cells
+            .iter()
+            .map(|cell| u64::from(cell.available_at_milliseconds))
+            .collect();
+        let mut positions = vec![0; assignment.cells.len()];
         for dispatch in &self.steps {
             let cell = &assignment.cells[dispatch.cell];
             let phase =
@@ -863,6 +968,68 @@ impl Candidate {
                 .expect("replayed handling")
                 .selected
                 .steps[dispatch.phase];
+            let travel = match previous {
+                None => u64::from(policy.initial_arrival_milliseconds[&cell.cell]),
+                Some(from) if from == dispatch.cell => 0,
+                Some(from) => u64::from(
+                    policy
+                        .transfers
+                        .iter()
+                        .find(|transfer| {
+                            transfer.from == assignment.cells[from].cell && transfer.to == cell.cell
+                        })
+                        .ok_or_else(|| bad("operator replay omits directed travel evidence"))?
+                        .milliseconds,
+                ),
+            };
+            if dispatch.previous != previous
+                || dispatch.phase != positions[dispatch.cell]
+                || dispatch.departure < free
+                || policy.availability_calendars.is_none() && dispatch.departure != free
+                || dispatch.arrival != sum_time(dispatch.departure, travel)?
+                || dispatch.start < dispatch.arrival.max(ready[dispatch.cell])
+                || dispatch.release != sum_time(dispatch.start, phase.attended()?)?
+                || dispatch.finish != sum_time(dispatch.release, phase.feed)?
+                || policy
+                    .available_until_milliseconds
+                    .is_some_and(|end| dispatch.release > end)
+                || cell
+                    .available_until_milliseconds
+                    .is_some_and(|end| dispatch.finish > end)
+            {
+                return Err(bad(
+                    "shared-operator replay violates source phases, exclusive occupancy or availability",
+                ));
+            }
+            if let Some(calendars) = &policy.availability_calendars {
+                for (id, start, finish) in [
+                    (
+                        policy.operator.as_str(),
+                        dispatch.departure,
+                        dispatch.release,
+                    ),
+                    (cell.cell.as_str(), dispatch.start, dispatch.finish),
+                ] {
+                    if calendars.windows(id).is_some_and(|windows| {
+                        !windows.iter().any(|window| {
+                            start >= window.start_milliseconds && finish <= window.end_milliseconds
+                        })
+                    }) {
+                        return Err(bad(
+                            "shared-operator replay crosses a qualified resource calendar gap",
+                        ));
+                    }
+                }
+                let delay = timeline
+                    .calendar_delay_milliseconds
+                    .as_mut()
+                    .expect("calendar receipt");
+                *delay = sum_time(*delay, dispatch.departure - free)?;
+            }
+            free = dispatch.release;
+            previous = Some(dispatch.cell);
+            ready[dispatch.cell] = dispatch.finish;
+            positions[dispatch.cell] += 1;
             timeline.transfer_milliseconds = sum_time(
                 timeline.transfer_milliseconds,
                 dispatch.arrival - dispatch.departure,
@@ -895,6 +1062,25 @@ impl Candidate {
                 assignment.handling_milliseconds,
             )?,
         )?;
+        for (cell, &count) in self.counts.iter().enumerate() {
+            let expected = if count == 0 {
+                0
+            } else {
+                trials[cell][count - 1].phases.len()
+            };
+            if positions[cell] != expected
+                || self.finishes[cell] != (count > 0).then_some(ready[cell])
+            {
+                return Err(bad(
+                    "shared-operator replay omits a complete cell phase or final unloading",
+                ));
+            }
+        }
+        if self.makespan != self.finishes.iter().flatten().copied().max().unwrap_or(0) {
+            return Err(bad(
+                "shared-operator replay changes complete allocation finish",
+            ));
+        }
         for (cell, finish) in assignment.cells.iter_mut().zip(&self.finishes) {
             cell.finish_milliseconds = *finish;
         }
@@ -912,10 +1098,15 @@ impl Outcome {
         trials: &[Vec<Trial>],
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: "ftx-sewing-shared-operator/1",
+            schema: if policy.availability_calendars.is_some() {
+                "ftx-sewing-shared-operator/2"
+            } else {
+                "ftx-sewing-shared-operator/1"
+            },
             operator: policy.operator.clone(),
-            baseline: self.baseline.apply(baseline, trials)?,
-            selected: self.selected.apply(selected, trials)?,
+            availability_calendars: policy.availability_calendars.clone(),
+            baseline: self.baseline.apply(policy, baseline, trials)?,
+            selected: self.selected.apply(policy, selected, trials)?,
             baseline_replaced: self.baseline_replaced,
             serial_order_scope: "retained_serial_incumbents/1",
             search_nodes: self.nodes,

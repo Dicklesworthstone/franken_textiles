@@ -101,6 +101,26 @@ fn shared_operator(options: &mut Value, work: usize) {
     refresh_operator_locks(options);
 }
 
+fn operator_calendars(options: &mut Value, resources: Value) {
+    options["production"]["parallel"]["shared_operator"]["availability_calendars"] = json!({
+        "model":"nonpreemptive_resource_windows/1", "resources":resources,
+        "source":{"reference":"test:operator-and-machine-calendars","accessed_on":"2026-11-08",
+            "note":"Synthetic shifts and breaks; no measured factory availability"},
+        "method":"Explicit complete operating intervals with qualified inactive garment and fixture retention",
+        "conditions":{}, "evidence":"estimate", "allow_estimates":true
+    });
+}
+
+fn windows(rows: &[[u64; 2]]) -> Value {
+    json!(
+        rows.iter()
+            .map(|[start, end]| json!({
+                "start_milliseconds":start, "end_milliseconds":end
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
 fn shared_fixtures(options: &mut Value, capacity: u32) {
     let release = options["passes"].as_array().unwrap().last().unwrap()["id"].clone();
     for cell in options["production"]["parallel"]["cells"]
@@ -1503,6 +1523,353 @@ fn shared_operator_overlaps_only_autonomous_feed_and_replays_every_attended_phas
                 .unwrap()
                 .max_search_nodes
     );
+}
+
+#[test]
+fn shared_operator_calendars_allow_autonomous_feed_during_breaks_and_replay_stitches() {
+    for (first_end, finish, delay) in [(1100, 11300, 4900), (1099, 12400, 6000)] {
+        let (pattern, mut options) = one_operation(2);
+        shared_operator(&mut options, 40000);
+        operator_calendars(
+            &mut options,
+            json!({
+                "synthetic-person":windows(&[[0,first_end],[6000,30000]]),
+                "cell-a":windows(&[[0,30000]]), "cell-b":windows(&[[0,30000]])
+            }),
+        );
+        let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
+        let program = SewProgram::build(&pattern, &typed).unwrap();
+        let report = program
+            .plan
+            .production
+            .as_ref()
+            .unwrap()
+            .parallel
+            .as_ref()
+            .unwrap();
+        let labor = report.shared_operator.as_ref().unwrap();
+        assert_eq!(report.schema, "ftx-sewing-parallel/6");
+        assert_eq!(labor.schema, "ftx-sewing-shared-operator/2");
+        assert_eq!(report.selected.makespan_milliseconds, finish);
+        assert_eq!(labor.selected.calendar_delay_milliseconds, Some(delay));
+        assert_eq!(labor.selected.busy_milliseconds, 2600);
+        assert_eq!(program.stitches.len(), 80);
+        assert!(labor.search_complete && !labor.budget_exhausted);
+        for timeline in [&labor.baseline, &labor.selected] {
+            let mut previous_release = 0;
+            let mut unoccupied = 0;
+            for step in &timeline.steps {
+                unoccupied += step.departure_milliseconds - previous_release;
+                previous_release = step.operator_release_milliseconds;
+                for (id, start, end) in [
+                    (
+                        "synthetic-person",
+                        step.departure_milliseconds,
+                        step.operator_release_milliseconds,
+                    ),
+                    (
+                        step.cell.as_str(),
+                        step.handling_start_milliseconds,
+                        step.feed_finish_milliseconds,
+                    ),
+                ] {
+                    let policy = labor.availability_calendars.as_ref().unwrap();
+                    assert!(
+                        policy.resources[id]
+                            .iter()
+                            .any(|window| window.start_milliseconds <= start
+                                && end <= window.end_milliseconds)
+                    );
+                }
+            }
+            assert_eq!(timeline.calendar_delay_milliseconds, Some(unoccupied));
+        }
+        if first_end == 1100 {
+            let first = &labor.selected.steps[0];
+            assert_eq!(first.operator_release_milliseconds, 1100);
+            assert_eq!(first.feed_finish_milliseconds, 5100);
+        }
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(labor.availability_calendars.as_ref().unwrap()).unwrap(),
+            options["production"]["parallel"]["shared_operator"]["availability_calendars"]
+        );
+    }
+}
+
+#[test]
+fn shared_operator_calendars_keep_complete_feed_and_travel_inside_qualified_windows() {
+    let (pattern, mut options) = one_operation(2);
+    shared_operator(&mut options, 40000);
+    let machine_windows = windows(&[[0, 5099], [10000, 18000]]);
+    operator_calendars(
+        &mut options,
+        json!({"cell-a":machine_windows,"cell-b":machine_windows}),
+    );
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    let labor = report.shared_operator.unwrap();
+    assert!(labor.baseline_replaced);
+    assert_eq!(report.selected.makespan_milliseconds, 16400);
+    assert_eq!(labor.selected.calendar_delay_milliseconds, Some(0));
+    assert_eq!(labor.selected.waiting_milliseconds, 13800);
+    for step in &labor.selected.steps {
+        assert!(step.handling_start_milliseconds >= 10000);
+        assert!(step.feed_finish_milliseconds <= 18000);
+    }
+
+    let (pattern, mut options) = one_operation(1);
+    shared_operator(&mut options, 40000);
+    options["production"]["parallel"]["shared_operator"]["initial_arrival_milliseconds"] =
+        json!({"cell-a":200,"cell-b":200});
+    operator_calendars(
+        &mut options,
+        json!({
+            "synthetic-person":windows(&[[0,1200],[6000,14000]]),
+            "cell-a":windows(&[[0,12000]]), "cell-b":windows(&[[0,12000]])
+        }),
+    );
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    let labor = report.shared_operator.unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 11500);
+    let first = &labor.selected.steps[0];
+    assert_eq!(first.departure_milliseconds, 6000);
+    assert_eq!(first.arrival_milliseconds, 6200);
+    assert_eq!(first.operator_release_milliseconds, 7300);
+    assert_eq!(labor.selected.transfer_milliseconds, 200);
+    assert_eq!(labor.selected.calendar_delay_milliseconds, Some(6000));
+}
+
+#[test]
+fn shared_operator_calendars_preserve_shared_fixture_holds_and_bounded_complete_seeds() {
+    let (pattern, mut options) = fixture(2);
+    shared_fixtures(&mut options, 1);
+    operator_calendars(
+        &mut options,
+        json!({
+            "synthetic-person":windows(&[[0,1100],[6000,50000]])
+        }),
+    );
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    let holds = &report.shared_workholding.as_ref().unwrap().selected.holds;
+    assert_eq!(holds.len(), 2);
+    let first = holds
+        .iter()
+        .min_by_key(|hold| hold.acquired_at_milliseconds)
+        .unwrap();
+    assert_eq!(first.acquired_at_milliseconds, 0);
+    assert!(first.released_at_milliseconds >= 10600);
+    let mut intervals: Vec<_> = holds
+        .iter()
+        .map(|hold| (hold.acquired_at_milliseconds, hold.released_at_milliseconds))
+        .collect();
+    intervals.sort();
+    assert!(intervals[0].1 <= intervals[1].0);
+    assert_eq!(program.stitches.len(), 160);
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+
+    let (pattern, mut options) = one_operation(2);
+    shared_operator(&mut options, 3);
+    operator_calendars(
+        &mut options,
+        json!({
+            "synthetic-person":windows(&[[0,1100],[6000,30000]])
+        }),
+    );
+    let report = build(&pattern, options)
+        .unwrap()
+        .production
+        .unwrap()
+        .parallel
+        .unwrap();
+    let labor = report.shared_operator.unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 15200);
+    assert_eq!(labor.search_nodes, 3);
+    assert_eq!(labor.selected.steps.len(), 3);
+    assert!(report.budget_exhausted && labor.budget_exhausted);
+    assert!(!report.optimality_proven && !labor.search_complete);
+}
+
+#[test]
+fn shared_operator_calendars_refuse_unknown_invalid_or_unqualified_domains() {
+    let (pattern, mut original) = one_operation(2);
+    shared_operator(&mut original, 40000);
+    operator_calendars(
+        &mut original,
+        json!({"synthetic-person":windows(&[[0,30000]])}),
+    );
+    for (field, value) in [
+        ("model", json!("inferred-shifts")),
+        ("allow_estimates", json!(false)),
+        ("method", json!("")),
+        ("resources", json!({})),
+        ("resources", json!({"unknown-person":windows(&[[0,30000]])})),
+        (
+            "resources",
+            json!({"synthetic-person":windows(&[[0,1000],[1000,30000]])}),
+        ),
+        (
+            "resources",
+            json!({"synthetic-person":windows(&[[6000,30000],[0,1000]])}),
+        ),
+        (
+            "resources",
+            json!({"synthetic-person":windows(&[[30000,0]])}),
+        ),
+        (
+            "resources",
+            json!({"synthetic-person":windows(&[[0,9_007_199_254_740_992]])}),
+        ),
+        (
+            "resources",
+            json!({"synthetic-person":windows(&[[0,0];17])}),
+        ),
+    ] {
+        let mut wrong = original.clone();
+        wrong["production"]["parallel"]["shared_operator"]["availability_calendars"][field] = value;
+        assert_eq!(
+            build(&pattern, wrong).unwrap_err().code,
+            RefusalCode::InvalidDocument,
+            "{field}"
+        );
+    }
+    let mut collision = original.clone();
+    collision["production"]["parallel"]["shared_operator"]["operator"] = json!("cell-a");
+    assert!(
+        build(&pattern, collision)
+            .unwrap_err()
+            .message
+            .contains("distinct")
+    );
+    let mut outside = original.clone();
+    outside["production"]["parallel"]["shared_operator"]["available_until_milliseconds"] =
+        json!(29999);
+    assert!(
+        build(&pattern, outside)
+            .unwrap_err()
+            .message
+            .contains("outer availability")
+    );
+    operator_calendars(
+        &mut original,
+        json!({"synthetic-person":windows(&[[0,1099]])}),
+    );
+    let refusal = build(&pattern, original).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::NotConverged);
+    assert!(refusal.message.contains("infeasibility is not proved"));
+}
+
+#[test]
+fn shared_operator_calendars_qualify_direct_and_selected_feed_and_thread_comparisons() {
+    use ftx_export::material_study::Request;
+
+    let (pattern, mut options) = heterogeneous();
+    thread_inventory(&mut options);
+    shared_operator(&mut options, 40000);
+    operator_calendars(
+        &mut options,
+        json!({
+            "synthetic-person":windows(&[[0,50000]]),
+            "cell-a":windows(&[[0,0]]), "cell-b":windows(&[[0,50000]])
+        }),
+    );
+    for selected in [false, true] {
+        let pass = &options["passes"][0];
+        let input = if selected {
+            json!({
+                "schema":"ftx-sewing-selection/5", "options":options,
+                "objective":"minimize_parallel_makespan", "max_plan_evaluations":2,
+                "alternatives":[{"operation":"join", "recipes":[{"id":"same-qualified-recipe",
+                    "needle":pass["needle"], "thread":pass["thread"],
+                    "max_stitch_mm":pass["max_stitch_mm"],
+                    "stitches_per_minute":pass["stitches_per_minute"]}]}]
+            })
+        } else {
+            options.clone()
+        };
+        for metric in ["feed_seconds", "thread_required_length_m"] {
+            let study = |input: Value| {
+                let mut request = json!({"schema":"ftx-material-study/1",
+                    "variants":[{"key":"calendar","changes":{"schema":"ftx-material-bindings/1",
+                        "default":pattern.raw()["fabric"]["material"]}}],
+                    "comparison":{"basis":"nominal","objectives":[{"metric":metric,"direction":"minimize"}]}});
+                request[if selected {
+                    "sewing_selection"
+                } else {
+                    "sewing"
+                }] = input;
+                let request: Request = serde_json::from_value(request).unwrap();
+                let result = serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap();
+                assert_eq!(result["comparison"]["frontier"], json!(["calendar"]));
+                result
+            };
+            let original = study(input.clone());
+            assert_eq!(
+                original["alternatives"][0]["sewing"]["result"]["production"]["parallel"]["selected"]
+                    ["cells"][0]["copies"],
+                json!([])
+            );
+            for field in ["method", "end_milliseconds", "unused_end"] {
+                let mut changed = input.clone();
+                let policy = if selected {
+                    &mut changed["options"]
+                } else {
+                    &mut changed
+                };
+                let calendar = &mut policy["production"]["parallel"]["shared_operator"]["availability_calendars"];
+                if field == "method" {
+                    calendar[field] = json!(
+                        "Different independently qualified operating and inactive retention protocol"
+                    );
+                } else if field == "unused_end" {
+                    calendar["resources"]["cell-a"][0]["end_milliseconds"] = json!(1);
+                } else {
+                    calendar["resources"]["cell-b"][0][field] = json!(50001);
+                }
+                let changed = study(changed);
+                assert_eq!(
+                    original["comparison"]["alternatives"][0]["readings"],
+                    changed["comparison"]["alternatives"][0]["readings"]
+                );
+                let identity = &original["comparison"]["alternatives"][0]["input_protocol_sha256"];
+                assert!(identity.is_string());
+                assert_ne!(
+                    *identity, changed["comparison"]["alternatives"][0]["input_protocol_sha256"],
+                    "selected={selected},metric={metric},field={field}"
+                );
+            }
+            if selected {
+                let mut changed = input.clone();
+                changed["max_plan_evaluations"] = json!(3);
+                let changed = study(changed);
+                assert_eq!(
+                    original["alternatives"][0]["sewing"]["result"],
+                    changed["alternatives"][0]["sewing"]["result"]
+                );
+                assert_ne!(
+                    original["comparison"]["alternatives"][0]["input_protocol_sha256"],
+                    changed["comparison"]["alternatives"][0]["input_protocol_sha256"]
+                );
+            }
+        }
+    }
 }
 
 #[test]

@@ -4010,6 +4010,47 @@ test('shared operator timelines preserve resource waits, restricted proof and ce
     if(op==='sew') assert.equal(JSON.parse(s.children[1].textContent).shared_fixture_pools_enforced,true);
     delete parallel.shared_workholding;
     delete plan.options.production.parallel.shared_workholding;
+    const originalOperator=parallel.shared_operator, originalAvailability=parallel.availability;
+    const calendars={model:'nonpreemptive_resource_windows/1',resources:{
+      'cell-a':[{start_milliseconds:0,end_milliseconds:20000}],
+      '<one qualified person>':[{start_milliseconds:0,end_milliseconds:1100},
+        {start_milliseconds:6000,end_milliseconds:20000}]},
+      source:{reference:'test:qualified-breaks',note:'<independent calendar evidence>'},
+      method:'Qualified whole phases and retained idle garments',evidence:'estimate',allow_estimates:true};
+    const calendarTimeline={busy_milliseconds:2600,transfer_milliseconds:0,waiting_milliseconds:3800,
+      calendar_delay_milliseconds:4900,steps:[
+        step('cell-a','0/join',0,0,0,0,100,1100,5100),
+        step('cell-b','0/join',1,6000,6000,6000,6100,7100,11100),
+        step('cell-a',null,null,7100,7100,7100,7300,7300,7300),
+        step('cell-b',null,null,7300,7300,11100,11300,11300,11300)]};
+    const calendarSelected={...selected,makespan_milliseconds:11300,cells:selected.cells.map((cell,index)=>({
+      ...cell,available_until_milliseconds:20000,finish_milliseconds:index?11300:7300}))};
+    parallel.schema='ftx-sewing-parallel/6';parallel.baseline=calendarSelected;parallel.selected=calendarSelected;
+    parallel.shared_operator={...originalOperator,schema:'ftx-sewing-shared-operator/2',
+      availability_calendars:calendars,baseline:calendarTimeline,selected:calendarTimeline};
+    parallel.availability={baseline_replaced:true,cells:[{...originalAvailability.cells[0],available_until_milliseconds:20000}]};
+    plan.options.production.parallel.shared_operator.availability_calendars=calendars;
+    const calendarRaw=JSON.stringify(report);
+    await p.e[op].onclick();p.emit(report,[{name:'calendar-report.json',text:calendarRaw,mime:'application/json'}]);
+    assert.deepEqual(plain(table('shared operator work').children[2].children.map(n=>n.textContent)),
+      ['<one qualified person>','2.6','0','3.8','4.9','true','false']);
+    assert.deepEqual(plain(table('qualified operator and cell calendars').children.at(-1).children.map(n=>n.textContent)),
+      ['<one qualified person>','2','6','20','Travel, destination waiting and attendance']);
+    assert.deepEqual(plain(table('selected shared operator timeline').children[3].children.map(n=>n.textContent)),
+      ['cell-b','0/join','1','6','6','6','6.1','7.1','11.1']);
+    assert.equal(table('cell-only window relaxation').children[2].children.at(-1).textContent,
+      'Fits before calendar and shared-resource constraints');
+    assert.match(visibleText(s),/Autonomous feed may continue through an operator break/);
+    assert.match(visibleText(s),/Calendar delay before departure is unoccupied/);
+    const calendarSource=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('resource calendar qualification and exact windows'));
+    calendarSource.open=true;calendarSource.handlers.toggle();
+    assert.match(visibleText(s),/independent calendar evidence/);
+    const calendarDownload=descendants(s).find(n=>n.download==='calendar-report.json');
+    assert.equal(await p.blobs.get(calendarDownload.href).text(),calendarRaw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    parallel.baseline=selected;parallel.selected=selected;parallel.shared_operator=originalOperator;
+    parallel.availability=originalAvailability;
+    delete plan.options.production.parallel.shared_operator.availability_calendars;
     parallel.schema='ftx-sewing-parallel/4';
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();

@@ -572,7 +572,8 @@ part of the planning convention, and the final unload cannot be hidden behind a 
 The ordinary stitch program, selected thread inventory, material studies, both native commands
 and portable/browser APIs all consume this same constrained assignment and frozen replay options.
 No calendar lookup, reservation, source update or hardware execution is implied. Shared labor requires
-the additional protocol below; machine breaks/preemption and garment transfers remain unsupported.
+the additional protocol below; qualified breaks use its optional resource calendars. Preemption and
+garment transfers remain outside whole-garment parallel mode.
 
 ## One operator tending autonomous-feed cells
 
@@ -673,6 +674,42 @@ operator-constrained allocation through both native commands and the portable/br
 The page displays these exact timelines and withdraws them when inputs change. These checks establish
 the declared software model; physical seam quality, safe unattended equipment and hardware execution
 still require their own evidence and authorization.
+
+### Qualified shifts and breaks with autonomous feed
+
+Optional `production.parallel.shared_operator.availability_calendars` reuses the routed scheduler's
+`nonpreemptive_resource_windows/1` policy. Its `resources` map names the exact operator and/or declared
+cell IDs; each value contains 1–16 sorted, strictly separated `{start_milliseconds, end_milliseconds}`
+windows inside that resource's outer availability. Unnamed resources keep their contiguous outer
+window. The calendar needs its own source, method, conditions, evidence and explicit consent for
+estimates. Unknown IDs, operator/cell identity collisions and overlapping or out-of-bounds windows
+refuse even when the affected cell would be idle.
+
+Each worker interval from departure through destination waiting, handling and setup must fit one
+operator opening. Each cell interval from handling start through the complete autonomous feed must
+fit one cell opening. Final unloading is its own complete attended phase. The operator can therefore
+take a declared break during qualified autonomous feed, but a machine feed cannot pause across a
+machine break. A later opening can delay departure; that time is unoccupied and appears separately
+as `calendar_delay_milliseconds`, rather than as busy time or occupied destination waiting.
+
+The source must qualify inactive garment and fixture retention. Existing setup state and persistent
+fixture holds continue through gaps; a calendar never releases held inventory. The scheduler
+rechecks windows after shared-pool delays and rechecks pools after calendar delays. Its bounded
+allocation and dispatch search retains complete feasible incumbents, and independently replayed
+baseline/selected timelines check source durations, travel, exclusivity and every occupied window.
+Cell/count availability receipts remain a relaxation before calendars and shared-resource contention.
+
+For the synthetic two-cell example above, an operator opening `[0,1100]` followed by `[6000,30000]`
+allows the first feed to run from 1100 to 5100 during the break. The selected complete allocation
+finishes at 11300 ms with 4900 ms of unoccupied calendar delay. Moving the first opening's end to
+1099 ms prevents the 1100 ms attended block from starting there; completion becomes 12400 ms.
+These independently calculated examples test software interval semantics, not factory timing.
+
+Calendar input selects parallel report `/6` and shared-operator report `/2`; omission retains previous
+wire output. The report and workbench retain every declared window and its separate qualification,
+including unused resources. Actual stitches, yarn demand, recipe selection and material/design
+comparisons follow the resulting allocation. Feed-only and thread-only comparisons also include
+the complete calendar-constrained production/selection domain in their protocol identity.
 
 ## Shared fixture and tool pools across cells
 

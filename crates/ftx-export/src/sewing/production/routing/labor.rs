@@ -584,35 +584,24 @@ impl Compiled {
         earliest: u64,
         duration: u64,
     ) -> Result<Option<(Arrival, u64)>, Refusal> {
-        let Some(windows) = &self.calendars[arrival.worker] else {
-            let start = earliest.max(arrival.time);
-            if duration > MAX_EXACT_MILLISECONDS - start {
-                return Ok(None);
-            }
-            return Ok(self
-                .available(arrival, add(start, duration)?)
-                .then_some((arrival, start)));
+        let Some([departure, time, start]) = calendars::fit_departure(
+            self.calendars[arrival.worker].as_deref(),
+            arrival.departure,
+            arrival.time - arrival.departure,
+            earliest,
+            duration,
+        )?
+        else {
+            return Ok(None);
         };
-        let travel = arrival.time - arrival.departure;
-        for window in windows {
-            let departure = arrival.departure.max(window.start_milliseconds);
-            if departure > window.end_milliseconds || travel > window.end_milliseconds - departure {
-                continue;
-            }
-            let time = add(departure, travel)?;
-            let start = earliest.max(time);
-            if start <= window.end_milliseconds && duration <= window.end_milliseconds - start {
-                return Ok(Some((
-                    Arrival {
-                        departure,
-                        time,
-                        ..arrival
-                    },
-                    start,
-                )));
-            }
-        }
-        Ok(None)
+        let adjusted = Arrival {
+            departure,
+            time,
+            ..arrival
+        };
+        Ok(self
+            .available(adjusted, add(start, duration)?)
+            .then_some((adjusted, start)))
     }
 
     pub(super) fn finish(&self, state: &mut State, arrival: Arrival, cell: usize, finish: u64) {
