@@ -4928,7 +4928,8 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
     optionalNumberPresent(`${id}Limit`, `limit for ${metric}`);
   }
   optionalNumberPresent("guidedHeatMinimumLimit", "minimum signed sheet heat");
-  for (const id of ["guidedContactResultant", "guidedContactVertex", "guidedMotionContactResultant", "guidedMotionContactVertex"]) {
+  for (const id of ["guidedContactResultant", "guidedContactSum", "guidedContactVertex",
+    "guidedMotionContactResultant", "guidedMotionContactSum", "guidedMotionContactVertex"]) {
     if ($(`${id}Limit`).value.trim() && number(`${id}Limit`, "body contact force limit in newtons") < 0) {
       throw Error("Body contact force limits must be nonnegative newtons.");
     }

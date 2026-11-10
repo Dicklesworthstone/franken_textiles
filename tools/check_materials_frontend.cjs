@@ -8215,7 +8215,8 @@ test('guided contact loads admit explicit nominal force guards beside bounded he
   assert.deepEqual(comparison.constraints,[{metric:'max_body_contact_vertex_force_n',maximum:0,basis:'nominal'},
     {metric:'body_contact_sum_vertex_force_n',maximum:0,basis:'nominal'}]);
   for(const invalid of ['empty-scope','duplicate-scope','blank-scope','missing-contact','missing-motion','motion-without-contact',
-    'reported-goal','reported-guard','negative-limit','fractional-vertices','zero-pairs','oversized-pairs']) {
+    'reported-goal','reported-guard','negative-limit','negative-sum-limit','negative-motion-sum-limit',
+    'fractional-vertices','zero-pairs','oversized-pairs']) {
     const {p}=await guidedScenarioSetup();guidedContactControls(p);
     if(invalid.endsWith('scope')) {
       p.e.guidedContactLoadsScope.value='instances';p.e.guidedContactLoadsInstances.value={
@@ -8229,12 +8230,17 @@ test('guided contact loads admit explicit nominal force guards beside bounded he
       p.e.guidedDrapeMassGoal.checked=false;p.e.guidedContactResultantGoal.checked=true;p.e.guidedBasis.value='reported_bounds';
     } else if(invalid==='reported-guard') {p.e.guidedContactResultantLimit.value='1';p.e.guidedLimitBasis.value='reported_bounds';}
     else if(invalid==='negative-limit')p.e.guidedContactVertexLimit.value='-1';
+    else if(invalid==='negative-sum-limit')p.e.guidedContactSumLimit.value='-1';
+    else if(invalid==='negative-motion-sum-limit') {
+      guidedMotionSourceControls(p);await addGuidedMotion(p,'0.002','35');p.e.guidedMotionContactSumLimit.value='-1';
+    }
     else if(invalid==='fractional-vertices')p.e.guidedContactVertexBudget.value='1.5';
     else if(invalid==='zero-pairs')p.e.guidedContactPairBudget.value='0';
     else p.e.guidedContactPairBudget.value='64000001';
     const before=p.current().messages.length;await p.e.scenario.onclick();
     assert.equal(p.current().messages.length,before,invalid);assert.equal(p.e.error.hidden,false,invalid);
     assert.ok(p.e.error.textContent,invalid);assert.equal(p.live.size,0,invalid);
+    if(invalid.includes('sum-limit'))assert.match(p.e.error.textContent,/nonnegative newtons/,invalid);
   }
 });
 
