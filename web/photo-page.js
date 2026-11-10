@@ -26,6 +26,7 @@ let bodyStartsInputs = [];
 let bodyPointsWorker = null, bodyPointsTicket = 0, bodyPointsBusy = false, bodyPointsPending = false;
 let bodyPointsSource = null, bodyPointsView = null, bodyPointsDraft = [], bodyPointsSelected = 0;
 let bodyPointsImageWorker = null, bodyPointsImageTicket = 0, bodyPointsImageBusy = false, bodyPointsBitmap = null;
+let bodySilhouetteDrawing = null;
 const bodyPointsUrls = [];
 let bodyReviewWorker = null, bodyReviewTicket = 0, bodyReviewBusy = false, bodyReviewValue = null, bodyReviewText = null;
 let bodyReviewImageWorker = null, bodyReviewImageTicket = 0, bodyReviewImageBusy = false, bodyReviewBitmap = null;
@@ -100,6 +101,19 @@ function controls() {
   $("bodyPointsImage").disabled=pointsLocked || !pointFrame?.image_review;
   $("bodyPointsImageRun").disabled=pointsLocked || bodyPointsImageBusy || !pointFrame?.image_review || !$("bodyPointsImage").files.length;
   $("bodyPointsImageClear").disabled=!bodyPointsImageBusy && !bodyPointsBitmap && !$("bodyPointsImage").files.length;
+  const silhouette=bodyPointsDraft[bodyPointsSelected]?.silhouette, slice=silhouette?.lines[Number($("bodySilhouetteLine").value)];
+  const silhouetteLocked=pointsLocked || pointFrame?.silhouette_editable!==true;
+  const originalSlice=originalBodySilhouetteSlice(slice,pointFrame);
+  $("bodySilhouetteLine").disabled=pointsLocked || !silhouette?.lines.length;
+  $("bodySilhouetteAdd").disabled=silhouetteLocked || (silhouette?.lines.length ?? 0)>=64;
+  $("bodySilhouetteRemove").disabled=silhouetteLocked || !slice;
+  $("bodySilhouetteClear").disabled=silhouetteLocked || !silhouette;
+  for(const id of ["bodySilhouetteAxis","bodySilhouetteAt","bodySilhouetteSigma","bodySilhouettePartition"]) $(id).disabled=silhouetteLocked || !slice || !!originalSlice;
+  $("bodySilhouetteIntervals").disabled=silhouetteLocked || !slice || slice.background;
+  $("bodySilhouetteBackground").disabled=silhouetteLocked || !slice;
+  $("bodySilhouetteEvidence").disabled=silhouetteLocked || !silhouette;
+  $("bodySilhouettePick").disabled=silhouetteLocked || !slice || slice.background || !bodyPointsBitmap;
+  $("bodySilhouettePickCancel").disabled=!bodySilhouetteDrawing;
   const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate";
   $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
   $("geometryStillControls").hidden=!still;
@@ -382,16 +396,20 @@ async function runBodyStarts(apply=false) {
   } catch(error) {fail(error);}
 }
 function copyBodyPoints(frames) {
-  return frames.map(frame=>({frame_index:frame.frame_index,keypoints:frame.keypoints.map(p=>({...p,pixel_px:[...p.pixel_px]}))}));
+  return frames.map(frame=>({frame_index:frame.frame_index,keypoints:frame.keypoints.map(p=>({...p,pixel_px:[...p.pixel_px]})),
+    silhouette:frame.silhouette?{evidence:frame.silhouette.evidence,lines:frame.silhouette.lines.map(line=>({...line,
+      intervals_text:line.intervals_px.map(pair=>pair.join(", ")).join("\n"),background:line.intervals_px.length===0}))}:null,
+    silhouette_changed:false,silhouette_selected:0}));
 }
 function stopBodyPoints() {
   ++bodyPointsTicket; bodyPointsWorker?.terminate(); bodyPointsWorker=null; bodyPointsBusy=false;
 }
 function withdrawBodyPointsImage(clearFile=true) {
+  stopBodySilhouetteDrawing();
   ++bodyPointsImageTicket; bodyPointsImageWorker?.terminate(); bodyPointsImageWorker=null; bodyPointsImageBusy=false;
   bodyPointsBitmap?.close(); bodyPointsBitmap=null; $("bodyPointsCanvas").hidden=true;
   if(clearFile) $("bodyPointsImage").value="";
-  $("bodyPointsImageStatus").textContent="Choose the original photograph and verify it before placing points on the image.";
+  $("bodyPointsImageStatus").textContent="Choose the original photograph and verify it before placing observations on the image.";
   controls();
 }
 function withdrawBodyPoints() {
@@ -410,7 +428,7 @@ function bodyPointsDownload() {
 function pendingBodyPoints() {
   stopBodyPoints(); bodyPointsPending=true; bodyPointsDownload(); withdrawBodyFit();
   $("bodyPointsError").textContent="";
-  $("bodyPointsStatus").textContent="Pending observations. Complete each point and apply all frames, or cancel the edits before previewing or fitting.";
+  $("bodyPointsStatus").textContent="Pending observations. Complete each point and silhouette slice, then apply all frames or cancel before previewing or fitting.";
   controls();
 }
 function drawBodyPoints() {
@@ -419,6 +437,29 @@ function drawBodyPoints() {
   const [w,h]=frame.image_size_px, scale=Math.min(1,1100/w,700/h);
   canvas.width=Math.max(1,Math.round(w*scale)); canvas.height=Math.max(1,Math.round(h*scale));
   const c=canvas.getContext("2d"); c.drawImage(bodyPointsBitmap,0,0,canvas.width,canvas.height);
+  const drawSlice=(line,intervals,selected)=>{
+    const at=Number(line.at_px),horizontal=line.axis==="horizontal";
+    if(!["horizontal","vertical"].includes(line.axis) || String(line.at_px).trim()==="" || !Number.isFinite(at)) return;
+    if(at<0 || at>(horizontal?h:w)-1) return;
+    const point=value=>horizontal?[(value+.5)*canvas.width/w,(at+.5)*canvas.height/h]:[(at+.5)*canvas.width/w,(value+.5)*canvas.height/h];
+    if(selected || line.background) {
+      const [a,b]=[0,(horizontal?w:h)-1].map(point);c.strokeStyle="#475569";c.lineWidth=1;c.setLineDash?.([5,5]);
+      c.beginPath();c.moveTo(...a);c.lineTo(...b);c.stroke();c.setLineDash?.([]);
+    }
+    c.strokeStyle=selected?"#dc3030":line.partition==="held_out"?"#7c3aed":"#b45309";c.lineWidth=selected?4:2;
+    for(const pair of intervals) {
+      const [a,b]=pair.map(point);c.beginPath();c.moveTo(...a);c.lineTo(...b);c.stroke();
+    }
+  };
+  const silhouette=bodyPointsDraft[bodyPointsSelected].silhouette;
+  for(const [i,line] of (silhouette?.lines || []).entries()) {
+    let intervals=[];try {intervals=bodySilhouetteIntervals(line,frame);} catch {}
+    drawSlice(line,intervals,i===Number($("bodySilhouetteLine").value));
+  }
+  if(bodySilhouetteDrawing?.start!==null && bodySilhouetteDrawing) {
+    const line=silhouette?.lines[bodySilhouetteDrawing.line];
+    if(line) drawSlice(line,[[bodySilhouetteDrawing.start,bodySilhouetteDrawing.start+1]],true);
+  }
   for(const p of bodyPointsDraft[bodyPointsSelected].keypoints) {
     if(p.pixel_px.some(v=>typeof v==="string" && !v.trim() || !Number.isFinite(Number(v)))) continue;
     const [x,y]=p.pixel_px.map(Number);
@@ -465,6 +506,7 @@ function renderBodyPoints() {
   $("bodyPointsImageSource").textContent=frame?.image_review?"Original capture: "+frame.image_name+". Stored pixels are already oriented ("+frame.rotation_cw_deg+"° recorded).":
     "This frame has no original-image binding. Enter independently reviewed coordinates in its stored pixel space.";
   renderBodyPointForm();
+  renderBodySilhouette();
 }
 function editBodyPoint() {
   if(!bodyPointsView || bodyFitBusy || bodyStartsBusy || bodyStartsPending) return;
@@ -478,18 +520,124 @@ function editBodyPoint() {
     sigma_px:original?.sigma_px ?? $("bodyPointsSigma").value,partition:original?.partition ?? $("bodyPointsPartition").value});
   pendingBodyPoints(); renderBodyPointRows(); controls();
 }
+function stopBodySilhouetteDrawing() {
+  bodySilhouetteDrawing=null;$("bodySilhouettePickStatus").textContent="";
+}
+function originalBodySilhouetteSlice(line,frame) {
+  if(!line || String(line.at_px).trim()==="" || !Number.isFinite(Number(line.at_px))) return;
+  return frame?.silhouette?.lines.find(old=>old.axis===line.axis && old.at_px===Number(line.at_px));
+}
+function bodySilhouetteNumber(raw,lo,hi,label) {
+  const value=Number(raw);
+  if(typeof raw==="string" && !raw.trim() || !Number.isFinite(value) || value<lo || value>hi) throw Error("Enter a finite "+label+" in "+lo+".."+hi+".");
+  return value;
+}
+function bodySilhouetteIntervals(line,frame) {
+  if(!["horizontal","vertical"].includes(line.axis)) throw Error("Choose a silhouette slice axis.");
+  if(line.background) return [];
+  const text=line.intervals_text.trim(),max=frame.image_size_px[line.axis==="horizontal"?0:1]-1;
+  if(!text) throw Error("Enter foreground interval pairs, or explicitly mark the slice as background.");
+  const rows=text.split(/\r?\n/);
+  if(rows.length>8) throw Error("A silhouette slice permits at most eight foreground intervals.");
+  const intervals=rows.map(row=>{
+    const pair=row.split(",");
+    if(pair.length!==2) throw Error("Enter one low, high pixel pair per silhouette interval line.");
+    const values=pair.map(value=>bodySilhouetteNumber(value,0,max,"silhouette interval endpoint"));
+    if(values[0]>=values[1]) throw Error("Every silhouette interval needs a lower endpoint strictly before its upper endpoint.");
+    return values;
+  });
+  if(intervals.some((pair,i)=>i>0 && pair[0]<=intervals[i-1][1])) throw Error("Silhouette intervals must be ordered and disjoint, without touching or overlapping.");
+  return intervals;
+}
+function bodySilhouetteValue(silhouette,frame,manual=true) {
+  if(!silhouette) return null;
+  if(typeof silhouette.evidence!=="string" || !silhouette.evidence.trim() || new Blob([silhouette.evidence]).size>4096 ||
+      manual && silhouette.evidence.includes("decoded_mask_sha256:")) throw Error("Declare manual clothing, occlusion and sampling evidence (1..4096 bytes), without an imported-mask source marker.");
+  if(!silhouette.lines.length || silhouette.lines.length>64) throw Error("A silhouette needs one to 64 distinct slices.");
+  const lines=silhouette.lines.map(line=>{
+    if(!["horizontal","vertical"].includes(line.axis)) throw Error("Choose a silhouette slice axis.");
+    if(!["fit","held_out"].includes(line.partition)) throw Error("Choose FIT or CHECK explicitly for every silhouette slice.");
+    return {axis:line.axis,at_px:bodySilhouetteNumber(line.at_px,0,frame.image_size_px[line.axis==="horizontal"?1:0]-1,"silhouette fixed coordinate"),
+      intervals_px:bodySilhouetteIntervals(line,frame),sigma_px:bodySilhouetteNumber(line.sigma_px,1e-6,1e6,"silhouette sigma"),partition:line.partition};
+  });
+  if(new Set(lines.map(line=>line.axis+":"+line.at_px)).size!==lines.length) throw Error("Silhouette slices must have distinct axis and fixed-coordinate pairs.");
+  if(!lines.some(line=>line.intervals_px.length)) throw Error("A silhouette needs foreground on at least one slice.");
+  for(const line of lines) {
+    const original=frame.silhouette?.lines.find(old=>old.axis===line.axis && old.at_px===line.at_px);
+    if(original && (original.partition!==line.partition || original.sigma_px!==line.sigma_px)) throw Error("Existing silhouette uncertainty and FIT/CHECK roles stay fixed.");
+  }
+  return {evidence:silhouette.evidence,lines};
+}
+function bodySilhouetteIdentity(value) {
+  return JSON.stringify(value?[value.evidence,value.lines.map(line=>[line.axis,line.at_px,line.intervals_px,line.sigma_px,line.partition])]:null);
+}
+function renderBodySilhouette() {
+  const frame=bodyPointsDraft[bodyPointsSelected],source=bodyPointsView?.frames[bodyPointsSelected],select=$("bodySilhouetteLine");
+  select.replaceChildren();
+  for(const [i,line] of (frame?.silhouette?.lines || []).entries()) {
+    const option=document.createElement("option");option.value=String(i);
+    option.textContent="Slice "+(i+1)+": "+(line.axis || "choose axis")+" at "+(String(line.at_px).trim() || "?")+" px ("+(line.partition==="held_out"?"CHECK":line.partition || "choose role")+")";select.append(option);
+  }
+  const selected=frame?.silhouette_selected ?? 0;select.value=frame?.silhouette?.lines[selected]?String(selected):"";
+  const line=frame?.silhouette?.lines[selected];
+  for(const [id,value] of [["bodySilhouetteAxis",line?.axis],["bodySilhouetteAt",line?.at_px],["bodySilhouetteSigma",line?.sigma_px],
+    ["bodySilhouettePartition",line?.partition],["bodySilhouetteIntervals",line?.intervals_text],["bodySilhouetteEvidence",frame?.silhouette?.evidence]]) $(id).value=String(value ?? "");
+  $("bodySilhouetteBackground").checked=line?.background ?? false;
+  $("bodySilhouetteAvailability").textContent=source?.silhouette_reason ?? "Open observations to review this frame's silhouette availability.";
+  controls();drawBodyPoints();
+}
+function editBodySilhouette() {
+  const frame=bodyPointsDraft[bodyPointsSelected],source=bodyPointsView?.frames[bodyPointsSelected];
+  if(!frame || source?.silhouette_editable!==true || bodyFitBusy || bodyStartsBusy || bodyStartsPending) return;
+  const line=frame.silhouette?.lines[frame.silhouette_selected];if(!line)return;
+  const original=originalBodySilhouetteSlice(line,source);
+  if(!original) Object.assign(line,{axis:$("bodySilhouetteAxis").value,at_px:$("bodySilhouetteAt").value,
+    sigma_px:$("bodySilhouetteSigma").value,partition:$("bodySilhouettePartition").value});
+  Object.assign(line,{intervals_text:$("bodySilhouetteIntervals").value,background:$("bodySilhouetteBackground").checked});
+  const fixed=originalBodySilhouetteSlice(line,source);
+  if(fixed) {
+    line.sigma_px=fixed.sigma_px;line.partition=fixed.partition;
+    $("bodySilhouetteSigma").value=String(fixed.sigma_px);$("bodySilhouettePartition").value=fixed.partition;
+  }
+  frame.silhouette.evidence=$("bodySilhouetteEvidence").value;frame.silhouette_changed=true;
+  stopBodySilhouetteDrawing();pendingBodyPoints();controls();drawBodyPoints();
+}
+function pickBodySilhouette(x,y) {
+  const drawing=bodySilhouetteDrawing,frame=bodyPointsDraft[bodyPointsSelected],source=bodyPointsView?.frames[bodyPointsSelected];
+  if(!drawing || drawing.frame!==bodyPointsSelected || source?.silhouette_editable!==true) return;
+  const line=frame.silhouette?.lines[drawing.line];if(!line)return;
+  const value=line.axis==="horizontal"?x:y;
+  if(drawing.start===null) {
+    drawing.start=value;$("bodySilhouettePickStatus").textContent="First endpoint: "+value+" px. Click the higher endpoint along the declared slice.";drawBodyPoints();return;
+  }
+  if(value<=drawing.start) throw Error("Pick the higher endpoint after the first; intervals are never reordered or clamped.");
+  const previous=line.intervals_text;
+  line.intervals_text=(previous.trim()?previous.trim()+"\n":"")+drawing.start+", "+value;
+  try {bodySilhouetteIntervals(line,source);} catch(error) {line.intervals_text=previous;throw error;}
+  frame.silhouette_changed=true;stopBodySilhouetteDrawing();pendingBodyPoints();renderBodySilhouette();
+  $("bodySilhouettePickStatus").textContent="Interval added in stored pixels. Review every slice, then apply all observations.";
+}
 function bodyPointsEdits() {
+  if(bodySilhouetteDrawing) throw Error("Finish or cancel silhouette interval picking before applying observations.");
   const number=(raw,lo,hi,label)=>{
     const value=Number(raw);
     if(typeof raw==="string" && !raw.trim() || !Number.isFinite(value) || value<lo || value>hi) throw Error("Enter a finite "+label+" in "+lo+".."+hi+".");
     return Object.is(value,-0)?"-0.0":JSON.stringify(value);
   };
-  const frames=bodyPointsDraft.map((frame,i)=>'{"frame_index":'+frame.frame_index+',"keypoints":['+frame.keypoints.map(p=>{
+  const frames=bodyPointsDraft.map((frame,i)=>{
+    const source=bodyPointsView.frames[i];let silhouette="";
+    if(frame.silhouette_changed) {
+      if(source.silhouette_editable!==true) throw Error("This frame's imported mask or camera makes its silhouette read-only.");
+      const value=bodySilhouetteValue(frame.silhouette,source);
+      silhouette=',"silhouette_edit":'+JSON.stringify(value?{action:"replace",silhouette:value}:{action:"remove"});
+    }
+    return '{"frame_index":'+frame.frame_index+',"keypoints":['+frame.keypoints.map(p=>{
     if(!["fit","held_out"].includes(p.partition)) throw Error("Choose FIT or CHECK explicitly for "+p.name+".");
     const [w,h]=bodyPointsView.frames[i].image_size_px;
     return '{"name":'+JSON.stringify(p.name)+',"partition":'+JSON.stringify(p.partition)+',"sigma_px":'+number(p.sigma_px,1e-6,1e6,"sigma")+
       ',"pixel_px":['+number(p.pixel_px[0],0,w-1,"x pixel")+','+number(p.pixel_px[1],0,h-1,"y pixel")+']}';
-  }).join(",")+']}');
+    }).join(",")+']'+silhouette+'}';
+  });
   return '{"input_sha256":'+JSON.stringify(bodyPointsView.input_sha256)+',"model_sha256":'+JSON.stringify(bodyPointsView.model_sha256)+',"frames":['+frames.join(",")+']}';
 }
 function checkedBodyPointsView(text,input,apply) {
@@ -507,13 +655,20 @@ function checkedBodyPointsView(text,input,apply) {
     if(frame.frame_index!==i || typeof frame.label!=="string" || !Array.isArray(frame.image_size_px) || frame.image_size_px.length!==2 ||
         frame.image_size_px.some(n=>!Number.isSafeInteger(n) || n<2 || n>1000000) || ![0,90,180,270].includes(frame.rotation_cw_deg) ||
         !(frame.image_review===null || typeof frame.image_review==="string" && frame.image_review.length<=65536 && typeof frame.image_name==="string") ||
+        typeof frame.silhouette_editable!=="boolean" || typeof frame.silhouette_reason!=="string" || frame.silhouette_reason.length>4096 ||
+        !(frame.silhouette===null || frame.silhouette && typeof frame.silhouette==="object" && Array.isArray(frame.silhouette.lines)) ||
         !Array.isArray(frame.keypoints) || frame.keypoints.length>128 || new Set(frame.keypoints.map(p=>p.name)).size!==frame.keypoints.length ||
         frame.keypoints.some(p=>!v.targets.some(t=>t.name===p.name) || !["fit","held_out"].includes(p.partition) || !Number.isFinite(p.sigma_px) || p.sigma_px<1e-6 || p.sigma_px>1e6 ||
           !Array.isArray(p.pixel_px) || p.pixel_px.length!==2 || p.pixel_px.some((x,j)=>!Number.isFinite(x) || x<0 || x>frame.image_size_px[j]-1))) {
       throw Error("The engine returned invalid observation controls or frame coordinates.");
     }
+    bodySilhouetteValue(copyBodyPoints([frame])[0].silhouette,frame,false);
+    if(apply) {
+      const draft=bodyPointsDraft[i],expected=draft.silhouette_changed?bodySilhouetteValue(draft.silhouette,bodyPointsView.frames[i]):bodyPointsView.frames[i].silhouette;
+      if(bodySilhouetteIdentity(frame.silhouette)!==bodySilhouetteIdentity(expected)) throw Error("The engine did not retain the requested silhouette observations.");
+    }
   }
-  const evidence=view=>JSON.stringify([view.targets,view.start_count,view.frames.map(({keypoints,...frame})=>frame)]);
+  const evidence=view=>JSON.stringify([view.targets,view.start_count,view.frames.map(({keypoints,silhouette,...frame})=>frame)]);
   if(apply && evidence(v)!==evidence(bodyPointsView)) throw Error("Observation editing changed the original targets, starts or image bindings.");
   return v;
 }
@@ -544,7 +699,8 @@ async function runBodyPoints(apply=false) {
         withdrawBodyStarts(); keepBodyInput(view,input,inputFile,modelFile); stopBodyPoints();
         bodyPointsSource ??= {inputFile,modelFile}; bodyPointsView=view; bodyPointsDraft=copyBodyPoints(view.frames); bodyPointsPending=false;
         renderBodyPoints(); bodyPointsDownload();
-        $("bodyPointsStatus").textContent=(apply?"Applied ":"Loaded ")+view.frames.reduce((n,f)=>n+f.keypoints.length,0)+" observations. Edit declared targets, continue with starting values, or preview and fit the current input.";
+        $("bodyPointsStatus").textContent=(apply?"Applied ":"Loaded ")+view.frames.reduce((n,f)=>n+f.keypoints.length,0)+" landmarks and "+
+          view.frames.reduce((n,f)=>n+(f.silhouette?.lines.length ?? 0),0)+" silhouette slices. Continue with starting values, or preview and fit the current input.";
       } catch(error) {fail(error);}
     };
     current.onerror=error=>{if(current===bodyPointsWorker)fail(error);};
@@ -575,7 +731,7 @@ async function runBodyPointsImage() {
         if(id!==bodyPointsImageTicket) {bitmap.close();return;}
         if(bitmap.width!==frame.image_size_px[0] || bitmap.height!==frame.image_size_px[1]) {bitmap.close();throw Error("Photograph dimensions disagree with the stored frame.");}
         bodyPointsBitmap=bitmap; bodyPointsImageBusy=false; drawBodyPoints(); controls();
-        $("bodyPointsImageStatus").textContent="Verified original pixels; "+frame.rotation_cw_deg+"° rotation already applied. Choose a target and click its observed location. No additional rotation or lens transform is performed.";
+        $("bodyPointsImageStatus").textContent="Verified original pixels; "+frame.rotation_cw_deg+"° rotation already applied. Choose a target to place a landmark, or explicitly pick a silhouette interval. No additional rotation or lens transform is performed.";
       } catch(error) {fail(error);}
     };
     current.onerror=error=>{if(current===bodyPointsImageWorker)fail(error);};
@@ -1366,7 +1522,7 @@ $("bodyPointsRemove").onclick=()=>{
   frame.keypoints=frame.keypoints.filter(point=>point.name!==name); pendingBodyPoints(); renderBodyPointForm();
 };
 $("bodyPointsCancel").onclick=()=>{
-  stopBodyPoints(); bodyPointsPending=false; bodyPointsDraft=bodyPointsView?copyBodyPoints(bodyPointsView.frames):[];
+  stopBodyPoints(); stopBodySilhouetteDrawing(); bodyPointsPending=false; bodyPointsDraft=bodyPointsView?copyBodyPoints(bodyPointsView.frames):[];
   $("bodyPointsError").textContent=""; renderBodyPoints(); bodyPointsDownload();
   $("bodyPointsStatus").textContent="Loading or pending observations cancelled; the last applied input is unchanged.";
 };
@@ -1374,12 +1530,54 @@ $("bodyPointsReset").onclick=resetBodyInput;
 $("bodyPointsImageRun").onclick=runBodyPointsImage;
 $("bodyPointsImageClear").onclick=()=>withdrawBodyPointsImage();
 for(const event of ["change","click","cancel"]) $("bodyPointsImage").addEventListener(event,()=>withdrawBodyPointsImage(false));
+$("bodySilhouetteLine").addEventListener("change",()=>{
+  const frame=bodyPointsDraft[bodyPointsSelected],index=Number($("bodySilhouetteLine").value);
+  if(!frame?.silhouette?.lines[index] || !Number.isSafeInteger(index) || bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending) return;
+  stopBodySilhouetteDrawing();frame.silhouette_selected=index;renderBodySilhouette();
+});
+$("bodySilhouetteAdd").onclick=()=>{
+  const frame=bodyPointsDraft[bodyPointsSelected],source=bodyPointsView?.frames[bodyPointsSelected];
+  if(!frame || source?.silhouette_editable!==true || bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || (frame.silhouette?.lines.length ?? 0)>=64) return;
+  frame.silhouette ??= {evidence:"",lines:[]};
+  frame.silhouette_selected=frame.silhouette.lines.length;
+  frame.silhouette.lines.push({axis:"",at_px:"",sigma_px:"",partition:"",intervals_text:"",background:false});
+  frame.silhouette_changed=true;stopBodySilhouetteDrawing();pendingBodyPoints();renderBodySilhouette();
+};
+for(const id of ["bodySilhouetteRemove","bodySilhouetteClear"]) $(id).onclick=()=>{
+  const frame=bodyPointsDraft[bodyPointsSelected],source=bodyPointsView?.frames[bodyPointsSelected];
+  if(!frame?.silhouette || source?.silhouette_editable!==true || bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending) return;
+  if(id==="bodySilhouetteClear") frame.silhouette=null;
+  else {
+    frame.silhouette.lines.splice(frame.silhouette_selected,1);
+    if(!frame.silhouette.lines.length) frame.silhouette=null;
+  }
+  frame.silhouette_selected=0;frame.silhouette_changed=true;stopBodySilhouetteDrawing();pendingBodyPoints();renderBodySilhouette();
+};
+for(const id of ["bodySilhouetteAxis","bodySilhouetteAt","bodySilhouetteSigma","bodySilhouettePartition","bodySilhouetteIntervals","bodySilhouetteBackground","bodySilhouetteEvidence"]) {
+  $(id).addEventListener(["bodySilhouetteAxis","bodySilhouettePartition","bodySilhouetteBackground"].includes(id)?"change":"input",editBodySilhouette);
+}
+$("bodySilhouettePick").onclick=()=>{
+  const frame=bodyPointsDraft[bodyPointsSelected],source=bodyPointsView?.frames[bodyPointsSelected],line=frame?.silhouette?.lines[frame.silhouette_selected];
+  if(!line || line.background || !bodyPointsBitmap || source?.silhouette_editable!==true || bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending) return;
+  try {
+    if(!["horizontal","vertical"].includes(line.axis)) throw Error("Choose a silhouette slice axis before picking endpoints.");
+    bodySilhouetteNumber(line.at_px,0,source.image_size_px[line.axis==="horizontal"?1:0]-1,"silhouette fixed coordinate");
+    if(line.intervals_text.trim() && bodySilhouetteIntervals(line,source).length>=8) throw Error("This slice already has eight intervals.");
+    pendingBodyPoints();bodySilhouetteDrawing={frame:bodyPointsSelected,line:frame.silhouette_selected,start:null};
+    $("bodySilhouettePickStatus").textContent="Click the lower then the higher foreground endpoint. Clicks are projected onto the declared "+line.axis+" slice at "+line.at_px+" px.";controls();drawBodyPoints();
+  } catch(error) {$("bodyPointsError").textContent=String(error.message || error);}
+};
+$("bodySilhouettePickCancel").onclick=()=>{stopBodySilhouetteDrawing();controls();drawBodyPoints();};
 $("bodyPointsCanvas").addEventListener("click",event=>{
-  if(!bodyPointsBitmap || !bodyPointsView || bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || !$("bodyPointsTarget").value) return;
+  if(!bodyPointsBitmap || !bodyPointsView || bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || !bodySilhouetteDrawing && !$("bodyPointsTarget").value) return;
   const frame=bodyPointsView.frames[bodyPointsSelected], rect=$("bodyPointsCanvas").getBoundingClientRect();
   const x=(event.clientX-rect.left)*frame.image_size_px[0]/rect.width-.5, y=(event.clientY-rect.top)*frame.image_size_px[1]/rect.height-.5;
   if(!Number.isFinite(x) || !Number.isFinite(y) || x<0 || y<0 || x>frame.image_size_px[0]-1 || y>frame.image_size_px[1]-1) {
     $("bodyPointsError").textContent="Choose a pixel center inside the stored image; coordinates are never clamped.";return;
+  }
+  if(bodySilhouetteDrawing) {
+    try {pickBodySilhouette(x,y);} catch(error) {$("bodyPointsError").textContent=String(error.message || error);}
+    return;
   }
   $("bodyPointsX").value=String(x); $("bodyPointsY").value=String(y); editBodyPoint();
 });

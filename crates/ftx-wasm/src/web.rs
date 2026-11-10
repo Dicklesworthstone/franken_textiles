@@ -102,10 +102,12 @@ pub fn body_fit_starts(model_bytes: &[u8], input: &str, edits: &str) -> Result<S
         .map_err(|error| JsError::new(&error.to_string()))
 }
 
-/// Inspect or apply source-bound manual keypoints while retaining every other prepared input field.
+/// Inspect or apply source-bound manual keypoints and explicitly edited rectified silhouette slices.
+/// Imported mask samples and every other prepared input field remain fixed.
 ///
 /// # Errors
-/// Invalid sources, frame ordinals, target names, coordinates, uncertainties or fixed evidence roles.
+/// Invalid sources, frame ordinals, target names, coordinates, uncertainties, fixed evidence roles,
+/// unrectified cameras or source-bound mask edits.
 #[wasm_bindgen]
 pub fn body_fit_observations(
     model_bytes: &[u8],

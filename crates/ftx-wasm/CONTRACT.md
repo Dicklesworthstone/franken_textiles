@@ -71,16 +71,23 @@ when a newer edit arrives. Reset and actual source selection discard the editor;
 file choice never silently reloads the original input over applied values.
 
 **Manual prepared observations.** `body_fit::body_fit_observations(model_bytes, input, edits)` and
-its wasm32 export open empty or populated keypoint drafts and replace only explicitly supplied
-per-frame keypoints. Both source hashes are required for edits; original frame ordinals join to
+its wasm32 export open empty or populated keypoint/contour drafts and replace explicitly supplied
+per-frame keypoints and manual silhouette slices. Both source hashes are required for edits; original frame ordinals join to
 native full-width identities. Canonical `prepare_capture_authoring` retains camera, target, pixel,
 uncertainty and budget checks. Existing point uncertainty and FIT/CHECK roles cannot change;
-new points require an explicit declared target, pixel, sigma and role. Every other input field,
-including starts, silhouettes and source images, remains fixed. Limits are 16 MiB input, 512 MiB
+new points require an explicit declared target, pixel, sigma and role. An optional per-frame
+`silhouette_edit` explicitly replaces or removes manual contours; omission preserves the original
+silhouette field, including absence or null. Replacements supply evidence and the canonical
+1–64 distinct horizontal/vertical slices with at most eight ordered disjoint foreground intervals
+each. Existing slices at the same axis/coordinate retain their sigma and FIT/CHECK partition.
+Zero lens distortion is required. Imported-mask source receipts remain read-only and cannot be
+asserted through a manual replacement. Every other input field, including starts, cameras, targets
+and source images, remains fixed. Limits are 16 MiB input, 512 MiB
 model and 256 KiB edits. Each frame's opaque `OBSERVATION_REVIEW` image receipt can use the existing
 strict image verifier before a start exists; its already-oriented pixels receive no second rotation.
-The photo page annotates named targets on those verified original pixels or accepts explicit stored
-pixel coordinates. Observation and initialization editors share one exact native prepared snapshot;
+The photo page annotates named targets and sampled intervals on those verified original pixels or
+accepts explicit stored pixel coordinates. Each frame reports whether manual silhouette editing
+is available and why. Observation and initialization editors share one exact native prepared snapshot;
 each application binds the current snapshot hash. Pending changes withdraw stale previews, fits and
 handoffs, while cancellation restores the last applied values and reset restores the uploaded source.
 This authoring path performs no model evaluation, fitting, anatomy inference or readiness promotion.

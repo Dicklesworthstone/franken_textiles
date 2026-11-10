@@ -289,6 +289,321 @@ fn portable_observation_authoring_refuses_stale_or_invalid_changes() {
     assert_eq!(unfitted["solution"], Value::Null);
 }
 
+fn observation_edits(view: &Value) -> Value {
+    json!({"input_sha256":view["input_sha256"],"model_sha256":view["model_sha256"],
+        "frames":view["frames"].as_array().unwrap().iter().map(|frame|
+            json!({"frame_index":frame["frame_index"],"keypoints":frame["keypoints"]})).collect::<Vec<_>>()})
+}
+
+fn manual_contour() -> Value {
+    json!({"evidence":"Synthetic manually reviewed contours, no clothing or occluders; not physical evidence.",
+        "lines":[
+            {"axis":"horizontal","at_px":400.0,"intervals_px":[[100.0,200.0],[300.0,450.0]],"sigma_px":1.0,"partition":"fit"},
+            {"axis":"vertical","at_px":600.0,"intervals_px":[[200.0,700.0]],"sigma_px":2.0,"partition":"held_out"},
+            {"axis":"horizontal","at_px":50.0,"intervals_px":[],"sigma_px":1.5,"partition":"held_out"}]})
+}
+
+#[test]
+fn portable_silhouette_authoring_reaches_actual_native_and_portable_fit() {
+    use ftx_wasm::body_fit::{body_fit_observations, fit_body, review_body_fit_start};
+    let dir = setup();
+    let (model, mut original) = fixture();
+    long_frame_ids(&mut original, u64::MAX - 200_000);
+    original["model"]["root_rotation_rad"] = json!([-0.0, 0.0, 0.0]);
+    original["fit"]["frames"].as_array_mut().unwrap().reverse();
+    let masks = mask_manifest_for(&dir, &original);
+    original["capture_images"] = json!(original["fit"]["frames"].as_array().unwrap().iter().zip(&masks)
+        .enumerate().map(|(index, (frame, mask))| json!({"frame":frame["frame"],
+            "image_name":format!("synthetic-contour-{index}.png"),"image_sha256":sha256_hex(&encode_png_gray(mask)),
+            "image_size_px":frame["image_size_px"],"rotation_cw_deg":frame["rotation_cw_deg"]})).collect::<Vec<_>>());
+    let source = format!(" \n{original}\n");
+    let opened = body_fit_observations(&model, &source, "").unwrap();
+    let mut edits = observation_edits(&opened);
+    for (index, mask) in masks.iter().enumerate() {
+        // Independent integer rasters provide boundary pairs; neither the fitting silhouette
+        // projection nor its mask sampler generates this observed contour.
+        let lines: Vec<_> = [100, 420, 480, 540]
+            .into_iter()
+            .map(|row| {
+                let pixels = &mask.data[row * mask.w..(row + 1) * mask.w];
+                assert_eq!((pixels[0], pixels[mask.w - 1]), (0, 0));
+                let edges: Vec<_> = pixels
+                    .windows(2)
+                    .enumerate()
+                    .filter(|(_, pair)| pair[0] != pair[1])
+                    .map(|(column, _)| column as f64 + 0.5)
+                    .collect();
+                assert_eq!(edges.len() % 2, 0);
+                let intervals: Vec<_> = edges
+                    .chunks_exact(2)
+                    .map(|pair| [pair[0], pair[1]])
+                    .collect();
+                json!({"axis":"horizontal","at_px":row,"intervals_px":intervals,"sigma_px":1.0,
+                "partition":if row == 100 || row == 480 {"held_out"}else{"fit"}})
+            })
+            .collect();
+        edits["frames"][index]["silhouette_edit"] = json!({"action":"replace","silhouette":{
+            "evidence":"Independent synthetic raster boundaries manually declared as scanlines; no person or camera evidence.","lines":lines}});
+    }
+    edits["frames"].as_array_mut().unwrap().reverse();
+    let applied = body_fit_observations(&model, &source, &edits.to_string()).unwrap();
+    assert_eq!(
+        applied["frames"][0]["image_review"],
+        opened["frames"][0]["image_review"]
+    );
+    let prepared = applied["input"].as_str().unwrap();
+    let mut value: Value = serde_json::from_str(prepared).unwrap();
+    assert_eq!(
+        applied["original_input_sha256"],
+        sha256_hex(source.as_bytes())
+    );
+    assert_eq!(applied["input_sha256"], sha256_hex(prepared.as_bytes()));
+    assert!(
+        applied["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["silhouette_editable"] == true)
+    );
+    assert_eq!(
+        value["fit"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert!(
+        value["model"]["root_rotation_rad"][0]
+            .as_f64()
+            .unwrap()
+            .is_sign_negative()
+    );
+    for frame in value["fit"]["frames"].as_array_mut().unwrap() {
+        frame.as_object_mut().unwrap().remove("silhouette");
+    }
+    assert_eq!(
+        value, original,
+        "only explicitly edited silhouette fields may change"
+    );
+    let preview = review_body_fit_start(&model, prepared, "0", "0").unwrap();
+    assert!(!preview["silhouette"].is_null());
+    let portable = fit_body(&model, prepared, "50", "100000").unwrap();
+    assert_eq!(portable["status"], "ACCEPTED");
+    std::fs::write(dir.join("input.json"), prepared).unwrap();
+    let native = run(&dir, &[], 0);
+    assert_eq!(portable, native["result"]);
+    // A CHECK contour never steers the fit and cannot be discarded by this handoff.
+    let mut bad: Value = serde_json::from_str(prepared).unwrap();
+    bad["fit"]["frames"][0]["silhouette"]["lines"][2]["intervals_px"][0][0] = json!(100.0);
+    let rejected = fit_body(&model, &bad.to_string(), "50", "100000").unwrap();
+    assert_eq!(rejected["status"], "REJECTED");
+    assert!(rejected["solution"].is_null());
+    for (baseline, changed) in portable["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(rejected["attempts"].as_array().unwrap())
+    {
+        assert_eq!(
+            baseline["cost_history"], changed["cost_history"],
+            "held-out contours never steer optimization"
+        );
+    }
+}
+
+#[test]
+fn portable_silhouette_edits_preserve_existing_roles_and_allow_explicit_removal() {
+    use ftx_wasm::body_fit::body_fit_observations;
+    let (model, mut source) = fixture();
+    source["fit"]["frames"][0]["silhouette"] = manual_contour();
+    source["fit"]["frames"][1]["silhouette"] = Value::Null;
+    let text = source.to_string();
+    let opened = body_fit_observations(&model, &text, "").unwrap();
+    assert_eq!(opened["input"], text);
+    assert_eq!(opened["frames"][0]["silhouette"], manual_contour());
+    let mut edits = observation_edits(&opened);
+    let unchanged = body_fit_observations(&model, &text, &edits.to_string()).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(unchanged["input"].as_str().unwrap()).unwrap(),
+        source
+    );
+    let mut replacement = manual_contour();
+    replacement["lines"][0]["intervals_px"] = json!([[110.0, 190.0], [310.0, 440.0]]);
+    replacement["lines"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"axis":"vertical","at_px":610.0,
+        "intervals_px":[[200.0,700.0]],"sigma_px":0.5,"partition":"fit"}));
+    edits["frames"][0]["silhouette_edit"] = json!({"action":"replace","silhouette":replacement});
+    let corrected = body_fit_observations(&model, &text, &edits.to_string()).unwrap();
+    assert_eq!(corrected["frames"][0]["silhouette"], replacement);
+    for (field, value) in [("partition", json!("held_out")), ("sigma_px", json!(1.5))] {
+        let mut bad = edits.clone();
+        bad["frames"][0]["silhouette_edit"]["silhouette"]["lines"][0][field] = value;
+        assert!(
+            body_fit_observations(&model, &text, &bad.to_string()).is_err(),
+            "{field}"
+        );
+    }
+    edits["frames"][0]["silhouette_edit"] = json!({"action":"remove"});
+    let removed = body_fit_observations(&model, &text, &edits.to_string()).unwrap();
+    let mut value: Value = serde_json::from_str(removed["input"].as_str().unwrap()).unwrap();
+    assert!(value["fit"]["frames"][0].get("silhouette").is_none());
+    assert_eq!(
+        value["fit"]["frames"][1].get("silhouette"),
+        Some(&Value::Null)
+    );
+    value["fit"]["frames"][0]["silhouette"] = source["fit"]["frames"][0]["silhouette"].clone();
+    assert_eq!(value, source);
+}
+
+#[test]
+fn portable_silhouette_authoring_preserves_imported_masks_and_refuses_unrectified_edits() {
+    use ftx_wasm::body_fit::body_fit_observations;
+    let (model, mut source) = fixture();
+    let mut mask_contour = manual_contour();
+    mask_contour["evidence"] = json!(format!(
+        "Native source; decoded_mask_sha256:{}",
+        "a".repeat(64)
+    ));
+    source["fit"]["frames"][0]["silhouette"] = mask_contour.clone();
+    source["fit"]["frames"][1]["camera"]["intrinsics"]["distortion"]["radial"] =
+        json!([0.001, 0.0, 0.0]);
+    let text = source.to_string();
+    let opened = body_fit_observations(&model, &text, "").unwrap();
+    for (index, reason) in [(0, "mask"), (1, "rectif")] {
+        assert_eq!(opened["frames"][index]["silhouette_editable"], false);
+        assert!(
+            opened["frames"][index]["silhouette_reason"]
+                .as_str()
+                .unwrap()
+                .contains(reason)
+        );
+    }
+    let mut edits = observation_edits(&opened);
+    edits["frames"][0]["keypoints"][0]["pixel_px"][0] = json!(600.0);
+    let points = body_fit_observations(&model, &text, &edits.to_string()).unwrap();
+    assert_eq!(points["frames"][0]["silhouette"], mask_contour);
+    for index in 0..2 {
+        for action in [
+            json!({"action":"replace","silhouette":manual_contour()}),
+            json!({"action":"remove"}),
+        ] {
+            let mut bad = edits.clone();
+            bad["frames"][index]["silhouette_edit"] = action;
+            assert!(body_fit_observations(&model, &text, &bad.to_string()).is_err());
+        }
+    }
+    source["fit"]["frames"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("silhouette");
+    let text = source.to_string();
+    let opened = body_fit_observations(&model, &text, "").unwrap();
+    let mut edits = observation_edits(&opened);
+    edits["frames"][0]["silhouette_edit"] = json!({"action":"replace","silhouette":mask_contour});
+    assert!(
+        body_fit_observations(&model, &text, &edits.to_string()).is_err(),
+        "manual edits cannot invent mask receipts"
+    );
+}
+
+#[test]
+fn portable_silhouette_authoring_uses_the_canonical_contour_limits() {
+    use ftx_wasm::body_fit::body_fit_observations;
+    let (model, source) = fixture();
+    let text = source.to_string();
+    let opened = body_fit_observations(&model, &text, "").unwrap();
+    let mut edits = observation_edits(&opened);
+    edits["frames"][0]["silhouette_edit"] =
+        json!({"action":"replace","silhouette":manual_contour()});
+    for kind in [
+        "null",
+        "unknown_action",
+        "extra_action_field",
+        "missing_contour",
+        "evidence",
+        "long_evidence",
+        "no_lines",
+        "background_only",
+        "duplicate",
+        "axis",
+        "coordinate",
+        "out_of_bounds",
+        "sigma",
+        "missing_partition",
+        "many_lines",
+        "many_intervals",
+        "overlap",
+        "touching",
+        "outside",
+        "backwards",
+        "extra_line_field",
+    ] {
+        let mut bad = edits.clone();
+        let edit = &mut bad["frames"][0]["silhouette_edit"];
+        match kind {
+            "null" => *edit = Value::Null,
+            "unknown_action" => edit["action"] = json!("unchanged"),
+            "extra_action_field" => edit["ignored"] = json!(true),
+            "missing_contour" => {
+                edit.as_object_mut().unwrap().remove("silhouette");
+            }
+            "evidence" => edit["silhouette"]["evidence"] = json!(" "),
+            "long_evidence" => edit["silhouette"]["evidence"] = json!("a".repeat(4097)),
+            "no_lines" => edit["silhouette"]["lines"] = json!([]),
+            "background_only" => {
+                for line in edit["silhouette"]["lines"].as_array_mut().unwrap() {
+                    line["intervals_px"] = json!([]);
+                }
+            }
+            "duplicate" => {
+                let line = edit["silhouette"]["lines"][0].clone();
+                edit["silhouette"]["lines"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(line);
+            }
+            "axis" => edit["silhouette"]["lines"][0]["axis"] = json!("diagonal"),
+            "coordinate" => edit["silhouette"]["lines"][0]["at_px"] = json!(-1.0),
+            "out_of_bounds" => edit["silhouette"]["lines"][0]["at_px"] = json!(960.0),
+            "sigma" => edit["silhouette"]["lines"][0]["sigma_px"] = json!(0.0),
+            "missing_partition" => {
+                edit["silhouette"]["lines"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("partition");
+            }
+            "many_lines" => {
+                edit["silhouette"]["lines"] = json!(
+                    (0..65)
+                        .map(|i| {
+                            let mut line = manual_contour()["lines"][0].clone();
+                            line["at_px"] = json!(i);
+                            line
+                        })
+                        .collect::<Vec<_>>()
+                )
+            }
+            "many_intervals" => {
+                edit["silhouette"]["lines"][0]["intervals_px"] =
+                    json!((0..9).map(|i| [i * 3, i * 3 + 1]).collect::<Vec<_>>())
+            }
+            "overlap" => {
+                edit["silhouette"]["lines"][0]["intervals_px"] = json!([[100, 300], [200, 400]])
+            }
+            "touching" => {
+                edit["silhouette"]["lines"][0]["intervals_px"] = json!([[100, 200], [200, 400]])
+            }
+            "outside" => edit["silhouette"]["lines"][0]["intervals_px"] = json!([[100, 1280]]),
+            "backwards" => edit["silhouette"]["lines"][0]["intervals_px"] = json!([[200, 100]]),
+            "extra_line_field" => edit["silhouette"]["lines"][0]["ignored"] = json!(true),
+            _ => unreachable!(),
+        }
+        assert!(
+            body_fit_observations(&model, &text, &bad.to_string()).is_err(),
+            "{kind}"
+        );
+    }
+}
+
 #[test]
 fn portable_start_authoring_preserves_evidence_and_replays_native_fit() {
     let (model, mut original) = fixture();

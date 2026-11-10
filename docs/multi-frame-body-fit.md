@@ -399,7 +399,7 @@ The generated review's mesh and image overlays remain the **original** preview w
 edited. You can evaluate the edited declaration directly in the local photo page, or materialize
 it and generate a fresh native review.
 
-### Observe keypoints and continue directly to fitting in the local photo page
+### Observe keypoints and contours, then continue directly to fitting in the local photo page
 
 Select the exact converted model and a prepared input in `web/photo.html`, then choose **Open
 observations**. The input may have empty observations and no starts, but its calibrated cameras
@@ -433,8 +433,9 @@ Pending changes withdraw old previews, fits, handoffs and downloads. Apply or ca
 switching editors or fitting; cancellation restores the last applied values. Opening or cancelling
 a source chooser retains the work and blocks outputs until explicit recovery. Actual source
 selection clears the editors, and **Restore original input** restores both observations and starts
-from the selected uploaded file. Original photographs, cameras, silhouettes, tapes and model target
-definitions remain fixed; use the native capture workflow to revise those sources.
+from the selected uploaded file. Original photographs, cameras, imported-mask silhouettes, tapes and
+model target definitions remain fixed; use the native capture workflow to revise those sources.
+Manual contours can be authored in the same editor as described under **Author sampled silhouettes**.
 
 ### Edit and preview starts in the local photo page
 
@@ -780,6 +781,21 @@ output still contains exactly the requested predictions in their declared order.
 The local capture-review page can author body-contour constraints directly on the selected images,
 without first preparing a separate binary mask. These constraints describe the visible body contour
 at explicit sampled lines. They are separate from the person/sheet regions used for video sharpness.
+
+The ordinary **photo page** also supports these constraints for prepared
+`ftx-anny-body-fit-input/1` inputs. Open the observation editor and select a frame, then use
+**Sampled silhouette in stored pixels** to add or correct slices. The editor shares its exact prepared
+snapshot with keypoint and initialization editing, so **Check and apply all observations** returns
+one input that can immediately be previewed, downloaded and fitted. A separate native capture-review
+round is not required for this prepared-input route. Inspect the selected frame's original verified
+image before picking endpoints, or enter coordinates directly in its stored pixel frame.
+
+Contour edits are explicit: replacing the slices changes only that frame's manual silhouette;
+removing all its contours requires the removal control. Frames with imported mask receipts remain
+read-only, as do distorted-camera frames. Existing slices keep their declared role and uncertainty
+when endpoints are corrected. Switching frames retains drafts; cancelling pending observations
+restores the last applied snapshot. Pending edits invalidate previews, fitting results and garment
+handoffs until applied or cancelled, and stale worker replies cannot replace newer work.
 
 Choose a frame in the silhouette editor, then declare a horizontal or vertical slice, its fixed
 full-resolution pixel coordinate, FIT or CHECK role, and contour-location sigma. Explain the

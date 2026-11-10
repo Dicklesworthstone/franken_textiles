@@ -11,10 +11,10 @@ use ftx_body::{
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::{
     body_fit::{
-        self, BodyFitInput, BodyModel, CaptureImage, FitOptions, FitStart, FramePose, Keypoint,
-        ModelLayout, Parameter,
+        self, BodyFitInput, BodyModel, CaptureImage, FitFrame, FitOptions, FitStart, FramePose,
+        Keypoint, ModelLayout, Parameter,
     },
-    silhouette::{self, SurfaceMesh},
+    silhouette::{self, Silhouette, SurfaceMesh},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -307,16 +307,88 @@ struct ObservationEdits {
 struct FrameObservations {
     frame_index: usize,
     keypoints: Vec<Keypoint>,
+    #[serde(default)]
+    silhouette_edit: SilhouetteEdit,
 }
 
-/// Open a prepared observation draft or replace its reviewed keypoints, without evaluating a body.
+#[derive(Default, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum SilhouetteEdit {
+    // Omitting the edit preserves the original JSON field, including absent versus null.
+    #[default]
+    #[serde(skip)]
+    Unchanged,
+    Replace {
+        silhouette: Silhouette,
+    },
+    Remove,
+}
+
+fn silhouette_edit_refusal(frame: &FitFrame) -> Option<&'static str> {
+    if frame
+        .silhouette
+        .as_ref()
+        .is_some_and(|source| source.evidence.contains("decoded_mask_sha256:"))
+    {
+        // Native mask import retains this source receipt when a file-backed capture becomes
+        // a portable snapshot. Editing sampled intervals must not detach them from that mask.
+        Some(
+            "Imported mask samples are source-bound and read-only; review the original mask and prepare a new capture snapshot.",
+        )
+    } else if silhouette::require_rectified(&frame.camera).is_err() {
+        Some(
+            "Silhouette authoring requires rectified pixels and zero lens distortion; rectify images, keypoints and calibration together before preparing a new input.",
+        )
+    } else {
+        None
+    }
+}
+
+fn apply_silhouette_edit(frame: &mut FitFrame, edit: SilhouetteEdit) -> Result<bool, Refusal> {
+    let replacement = match edit {
+        SilhouetteEdit::Unchanged => return Ok(false),
+        SilhouetteEdit::Replace { silhouette } => Some(silhouette),
+        SilhouetteEdit::Remove => None,
+    };
+    if let Some(reason) = silhouette_edit_refusal(frame) {
+        return Err(invalid(reason));
+    }
+    if let Some(silhouette) = &replacement {
+        if silhouette.evidence.contains("decoded_mask_sha256:") {
+            return Err(invalid(
+                "manual silhouette edits cannot assert an imported mask source receipt",
+            ));
+        }
+        silhouette.validate(frame.image_size_px)?;
+        if let Some(original) = &frame.silhouette {
+            for line in &silhouette.lines {
+                if original.lines.iter().any(|old| {
+                    old.axis == line.axis
+                        && old.at_px == line.at_px
+                        && (old.sigma_px != line.sigma_px || old.partition != line.partition)
+                }) {
+                    return Err(invalid(
+                        "existing silhouette slice uncertainty and FIT/CHECK roles stay fixed",
+                    ));
+                }
+            }
+        }
+    }
+    frame.silhouette = replacement;
+    Ok(true)
+}
+
+/// Open a prepared observation draft or edit reviewed keypoints and manual silhouette samples.
+/// No body is evaluated. Silhouette edits are explicit replacements or removals; omitted edits
+/// preserve the original field. Rectified cameras are required and imported mask samples stay fixed.
 /// Original frame ordinals bind edits; all full-width identities and unedited evidence stay native.
-/// Existing observations retain their declared uncertainty and FIT/CHECK roles. Newly observed
-/// targets require explicit values, uncertainty and partition; absent points are never inferred.
+/// Existing points and slices retain their uncertainty and FIT/CHECK roles. New evidence requires
+/// explicit coordinates, uncertainty and partition; absent points or contours are never inferred.
 ///
 /// # Errors
 /// Invalid model/source identity, more than 16 MiB input / 512 MiB model / 256 KiB edits, incomplete
-/// frame edits, unknown/duplicate targets, changed existing roles/sigmas or canonical draft refusal.
+/// frame edits, unknown/duplicate targets or slices, changed existing roles/sigmas, unrectified or
+/// source-bound mask edits, or canonical draft refusal.
 pub fn body_fit_observations(
     model_bytes: &[u8],
     input_text: &str,
@@ -367,6 +439,7 @@ pub fn body_fit_observations(
             ));
         }
         let mut seen = vec![false; request.fit.frames.len()];
+        let mut silhouette_changed = vec![false; request.fit.frames.len()];
         for edit in edits.frames {
             let frame = request
                 .fit
@@ -387,12 +460,24 @@ pub fn body_fit_observations(
                 }
             }
             frame.keypoints = edit.keypoints;
+            silhouette_changed[edit.frame_index] =
+                apply_silhouette_edit(frame, edit.silhouette_edit)?;
         }
         body_fit::prepare_capture_authoring(&request.fit, adapter.layout())?;
         let mut value: Value =
             serde_json::from_str(input_text).map_err(|e| invalid(e.to_string()))?;
         for (index, frame) in request.fit.frames.iter().enumerate() {
             value["fit"]["frames"][index]["keypoints"] = json!(frame.keypoints);
+            if silhouette_changed[index] {
+                if let Some(silhouette) = &frame.silhouette {
+                    value["fit"]["frames"][index]["silhouette"] = json!(silhouette);
+                } else {
+                    value["fit"]["frames"][index]
+                        .as_object_mut()
+                        .ok_or_else(|| invalid("observation frame must remain an object"))?
+                        .remove("silhouette");
+                }
+            }
         }
         serde_json::to_string_pretty(&value).map_err(|e| invalid(e.to_string()))?
     };
@@ -410,8 +495,11 @@ pub fn body_fit_observations(
             "schema":"ftx-body-observation-frame-review/1","status":"OBSERVATION_REVIEW","body_fitted":false,
             "frame":frame.frame,"image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,
             "source_image":source_image})).map_err(|e| invalid(e.to_string()))).transpose()?;
+        let silhouette_refusal = silhouette_edit_refusal(frame);
         Ok(json!({"frame_index":frame_index,"label":format!("{} @ {} us",frame.frame.stream,frame.frame.timestamp_us),
             "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,"keypoints":frame.keypoints,
+            "silhouette":frame.silhouette,"silhouette_editable":silhouette_refusal.is_none(),
+            "silhouette_reason":silhouette_refusal.unwrap_or("Manual sampled contours may be authored in stored, rectified pixels. Existing slice roles and uncertainties stay fixed; declare clothing and occluders explicitly."),
             "image_name":source.map(|image| &image.image_name),"image_review":image_review}))
     }).collect::<Result<Vec<_>, Refusal>>()?;
     let targets: Vec<_> = adapter
@@ -425,7 +513,7 @@ pub fn body_fit_observations(
         json!({"schema":"ftx-body-observations-review/1","status":"OBSERVATION_REVIEW","body_fitted":false,
         "original_input_sha256":source_hash,"input_sha256":sha256_hex(input.as_bytes()),"model_sha256":model_hash,
         "input":input,"frames":frames,"targets":targets,"start_count":request.fit.starts.len(),
-        "no_claim":"Manually observed keypoints only. Cameras, model targets, starts, silhouettes and source identities stay fixed. Keep predeclared CHECK evidence independent; do not tune observations to fit residuals. No fitted body, measurement readiness or physical accuracy is established."}),
+        "no_claim":"Manually observed keypoints and explicitly sampled contours only, not inferred anatomy or full-mask agreement. Cameras, model targets, starts, imported mask samples and source identities stay fixed. Keep predeclared CHECK evidence independent; do not tune observations to fit residuals. No fitted body, measurement readiness or physical accuracy is established."}),
     )
 }
 

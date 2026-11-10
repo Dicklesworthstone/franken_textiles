@@ -277,7 +277,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     supported. A path-based capture input or mask manifest must first be prepared with the native tools;
     this page does not read local paths or infer landmarks from a video. Input limit: 16 MiB; model limit: 512 MiB.</small></p>
   <details>
-    <summary>Observe declared landmarks on original photographs</summary>
+    <summary>Observe landmarks and silhouette slices on original photographs</summary>
     <p>Add or correct 2D observations for the model targets already declared in this input. Verify an
       original photograph before clicking, or enter independently reviewed stored-pixel coordinates.
       New points need an explicit uncertainty and FIT/CHECK role; existing roles and uncertainties stay fixed.</p>
@@ -290,7 +290,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       <p><button id="bodyPointsImageRun" disabled>Verify and show photograph</button>
         <button id="bodyPointsImageClear" disabled>Clear photograph</button></p>
       <p id="bodyPointsImageStatus" role="status" aria-live="polite"></p>
-      <canvas id="bodyPointsCanvas" hidden aria-label="Verified original capture with manually observed target points"></canvas>
+      <canvas id="bodyPointsCanvas" hidden aria-label="Verified original capture with observed landmarks and silhouette slices"></canvas>
       <fieldset><legend>Selected point in stored pixels</legend>
         <label>X <input id="bodyPointsX" type="number" step="any" min="0" disabled></label>
         <label>Y <input id="bodyPointsY" type="number" step="any" min="0" disabled></label>
@@ -300,10 +300,36 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
         <button id="bodyPointsRemove" disabled>Remove selected observation</button>
       </fieldset>
       <p><small>Values are retained as drafts when you change target or frame. Keep CHECK observations
-        independent; do not move or remove them to improve fitted residuals. Cameras, silhouettes,
+        independent; do not move or remove them to improve fitted residuals. Cameras,
         model targets, tape evidence and applied starting values stay unchanged.</small></p>
       <div style="overflow-x:auto"><table><thead><tr><th>Target</th><th>Role</th><th>X (px)</th><th>Y (px)</th><th>Sigma (px)</th></tr></thead>
         <tbody id="bodyPointsRows"></tbody></table></div>
+      <fieldset><legend>Sampled silhouette in stored pixels</legend>
+        <p id="bodySilhouetteAvailability"></p>
+        <p><small>Declare the visible body outline on an independently rectified frame. Record clothing,
+          occlusions and sampling evidence. These sparse slices do not imply full-mask agreement.
+          Imported mask evidence stays read-only. Existing slice roles and uncertainties stay fixed.</small></p>
+        <label>Slice <select id="bodySilhouetteLine" disabled></select></label>
+        <p><button id="bodySilhouetteAdd" disabled>Add a slice</button>
+          <button id="bodySilhouetteRemove" disabled>Remove selected slice</button>
+          <button id="bodySilhouetteClear" disabled>Remove this frame's silhouette</button></p>
+        <label>Axis <select id="bodySilhouetteAxis" disabled><option value="">Choose axis</option>
+          <option value="horizontal">Horizontal (fixed Y)</option><option value="vertical">Vertical (fixed X)</option></select></label>
+        <label>Fixed coordinate (px) <input id="bodySilhouetteAt" type="number" min="0" step="any" disabled></label>
+        <label>Sigma (px) <input id="bodySilhouetteSigma" type="number" min="0.000001" max="1000000" step="any" disabled></label>
+        <label>Role <select id="bodySilhouettePartition" disabled><option value="">Choose FIT or CHECK</option>
+          <option value="fit">FIT</option><option value="held_out">CHECK (held out)</option></select></label>
+        <label>Foreground intervals, low then high coordinate in pixels, one pair per line
+          <textarea id="bodySilhouetteIntervals" rows="3" placeholder="120, 240&#10;280, 310" disabled></textarea></label>
+        <label><input id="bodySilhouetteBackground" type="checkbox" disabled> This slice contains only background</label>
+        <p><button id="bodySilhouettePick" disabled>Pick an interval on the photograph</button>
+          <button id="bodySilhouettePickCancel" disabled>Cancel interval picking</button></p>
+        <p id="bodySilhouettePickStatus" role="status" aria-live="polite"></p>
+        <label>Clothing, occlusion and sampling evidence for this frame
+          <textarea id="bodySilhouetteEvidence" rows="3" maxlength="4096" disabled></textarea></label>
+        <p><small>At most 64 distinct slices and eight ordered, disjoint foreground intervals per slice.
+          Include foreground on at least one slice. Pending silhouette and landmark edits are applied together below.</small></p>
+      </fieldset>
       <p><button id="bodyPointsApply" disabled>Check and apply all observations</button>
         <button id="bodyPointsReset">Restore original input</button></p>
     </div>

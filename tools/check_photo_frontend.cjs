@@ -1141,8 +1141,10 @@ function bodyPointsReport(overrides={}) {
   return {schema:'ftx-body-observations-review/1',status:'OBSERVATION_REVIEW',body_fitted:false,input:'{}',input_sha256:'a'.repeat(64),original_input_sha256:'a'.repeat(64),model_sha256:'c'.repeat(64),start_count:2,
     targets:[{name:'p0 <λ>',definition:{kind:'vertex',index:0}},{name:'p1',definition:{kind:'vertex',index:1}}],
     frames:[{frame_index:0,label:'synthetic @ 18446744073709551615 us',image_size_px:[640,480],rotation_cw_deg:90,image_name:'original.png',image_review,
+      silhouette:null,silhouette_editable:true,silhouette_reason:'Rectified manual silhouettes may be authored.',
       keypoints:[{name:'p0 <λ>',pixel_px:[10,20],sigma_px:1,partition:'held_out'}]},
-      {frame_index:1,label:'second @ 9007199254740993 us',image_size_px:[640,480],rotation_cw_deg:0,image_name:null,image_review:null,keypoints:[]}],...overrides};
+      {frame_index:1,label:'second @ 9007199254740993 us',image_size_px:[640,480],rotation_cw_deg:0,image_name:null,image_review:null,keypoints:[],
+        silhouette:null,silhouette_editable:true,silhouette_reason:'Rectified manual silhouettes may be authored.'}],...overrides};
 }
 async function loadBodyPoints(p,overrides={}) {
   await p.e.bodyPointsLoad.onclick();const w=p.current(),message=w.messages[0];
@@ -1158,12 +1160,151 @@ function pointField(p,id,value) {p.e[id].value=value;p.e[id].handlers[id==='body
 async function applyBodyPoints(p,view,input,digest) {
   await p.e.bodyPointsApply.onclick();const w=p.current(),message=w.messages[0],edits=JSON.parse(message.edits);
   const result={...view,input,input_sha256:digest,original_input_sha256:edits.input_sha256,
-    frames:view.frames.map(frame=>({...frame,keypoints:edits.frames.find(f=>f.frame_index===frame.frame_index).keypoints}))};
+    frames:view.frames.map(frame=>{
+      const edit=edits.frames.find(f=>f.frame_index===frame.frame_index);
+      return {...frame,keypoints:edit.keypoints,silhouette:edit.silhouette_edit?.action==='replace'?edit.silhouette_edit.silhouette:
+        edit.silhouette_edit?.action==='remove'?null:frame.silhouette};
+    })};
   await w.emit({type:'result',request:message.request,report:JSON.stringify(result)});
   assert.equal(p.e.bodyPointsError.textContent,'');return {result,message,edits};
 }
 const observationImageResult=request=>({type:'result',request,preview:new Uint8Array([8,5,3]),
   report:JSON.stringify({schema:'ftx-body-frame-image/1',review_kind:'OBSERVATION_REVIEW',orientation:'already_applied_stored_pixels'})});
+function silhouetteField(p,id,value) {
+  if(id==='bodySilhouetteBackground')p.e[id].checked=value;else p.e[id].value=value;
+  p.e[id].handlers[['bodySilhouetteAxis','bodySilhouettePartition','bodySilhouetteBackground'].includes(id)?'change':'input']();
+}
+function addSilhouette(p,overrides={}) {
+  p.e.bodySilhouetteAdd.onclick();
+  for(const [id,value] of Object.entries({bodySilhouetteAxis:'horizontal',bodySilhouetteAt:'100.25',bodySilhouetteSigma:'1.5',
+    bodySilhouettePartition:'held_out',bodySilhouetteIntervals:'30.5, 90.75\n120, 200',bodySilhouetteEvidence:'Synthetic rectified outline; no clothing or occlusion.',...overrides})) silhouetteField(p,id,value);
+}
+
+test('body-silhouette authoring composes source-bound frame drafts with landmarks and hands the exact native input to fitting',async()=>{
+  const p=await photoPage(),original=selectBodyFit(p),view=await loadBodyPoints(p);addSilhouette(p);
+  assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.e.bodyPointsDownloads.children.length,0);
+  chooseBodyPoint(p,'p1',1);addSilhouette(p,{bodySilhouetteAxis:'vertical',bodySilhouetteAt:'50',bodySilhouettePartition:'fit',bodySilhouetteIntervals:'10, 150'});
+  chooseBodyPoint(p,'p0 <λ>');assert.equal(p.e.bodySilhouetteAt.value,'100.25');pointField(p,'bodyPointsX','12.25');
+  const input=' {"native":"landmarks and silhouettes","timestamp_us":18446744073709551615}\r\n';
+  const applied=await applyBodyPoints(p,view,input,'b'.repeat(64));
+  assert.equal(applied.message.input,original);assert.equal(applied.edits.input_sha256,view.input_sha256);
+  assert.equal(applied.edits.model_sha256,view.model_sha256);
+  assert.deepEqual(applied.edits.frames[0].silhouette_edit,{action:'replace',silhouette:{evidence:'Synthetic rectified outline; no clothing or occlusion.',
+    lines:[{axis:'horizontal',at_px:100.25,intervals_px:[[30.5,90.75],[120,200]],sigma_px:1.5,partition:'held_out'}]}});
+  assert.equal(applied.edits.frames[1].silhouette_edit.silhouette.lines[0].axis,'vertical');
+  assert.deepEqual(applied.edits.frames[0].keypoints[0].pixel_px,[12.25,20]);
+  assert.equal(p.e.bodySilhouetteSigma.disabled,true);assert.equal(p.e.bodySilhouettePartition.disabled,true);
+  assert.equal(p.e.bodySilhouetteAxis.disabled,true);assert.equal(p.e.bodySilhouetteAt.disabled,true);
+  assert.equal(await p.urls.get(p.e.bodyPointsDownloads.children[0].href).text(),input);
+  await p.e.bodyFitStartRun.onclick();assert.equal(p.current().messages[0].input,input);
+  pointField(p,'bodyPointsY','20.125');const second=await applyBodyPoints(p,applied.result,'{"native":"point correction"}','d'.repeat(64));
+  assert.equal(Object.hasOwn(second.edits.frames[0],'silhouette_edit'),false,'point-only edits preserve the original silhouette field');
+  assert.equal(Object.hasOwn(second.edits.frames[1],'silhouette_edit'),false);
+  p.e.bodySilhouetteClear.onclick();assert.equal(p.e.bodyFitRun.disabled,true);
+  p.e.bodyPointsCancel.onclick();assert.equal(p.e.bodySilhouetteAt.value,'100.25');
+  p.e.bodySilhouetteClear.onclick();const removed=await applyBodyPoints(p,second.result,'{"native":"silhouette removed"}','e'.repeat(64));
+  assert.deepEqual(removed.edits.frames[0].silhouette_edit,{action:'remove'});
+  assert.equal(removed.result.frames[1].silhouette.lines.length,1);
+  await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,'{"native":"silhouette removed"}');
+});
+
+test('body-silhouette authoring rejects missing evidence, duplicate slices, unsafe intervals and incomplete backgrounds before dispatch',async()=>{
+  for(const [field,value,pattern] of [
+    ['bodySilhouetteEvidence','',/evidence/],['bodySilhouetteEvidence','decoded_mask_sha256: invented',/source marker/],
+    ['bodySilhouetteSigma','0',/silhouette sigma/],['bodySilhouettePartition','',/FIT or CHECK/],
+    ['bodySilhouetteAt','480',/fixed coordinate/],['bodySilhouetteIntervals','30, 90\n90, 120',/disjoint/],
+    ['bodySilhouetteIntervals','90, 30',/strictly before/],['bodySilhouetteIntervals','-1, 30',/endpoint/],
+    ['bodySilhouetteIntervals','30, 90, 120',/pair per/],['bodySilhouetteBackground',true,/foreground on at least one/]]) {
+    const p=await photoPage();selectBodyFit(p);await loadBodyPoints(p);addSilhouette(p);silhouetteField(p,field,value);
+    const count=p.workers.length;await p.e.bodyPointsApply.onclick();assert.equal(p.workers.length,count);
+    assert.match(p.e.bodyPointsError.textContent,pattern);assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.urls.size,0);
+  }
+  const p=await photoPage();selectBodyFit(p);const view=await loadBodyPoints(p);addSilhouette(p);addSilhouette(p);
+  await p.e.bodyPointsApply.onclick();assert.match(p.e.bodyPointsError.textContent,/distinct/);
+  silhouetteField(p,'bodySilhouetteAt','200');silhouetteField(p,'bodySilhouetteBackground',true);
+  const applied=await applyBodyPoints(p,view,'{"native":"foreground and background"}','b'.repeat(64));
+  assert.deepEqual(applied.edits.frames[0].silhouette_edit.silhouette.lines[1].intervals_px,[]);
+  p.e.bodySilhouetteLine.value='0';p.e.bodySilhouetteLine.handlers.change();p.e.bodySilhouetteRemove.onclick();
+  await p.e.bodyPointsApply.onclick();assert.match(p.e.bodyPointsError.textContent,/foreground on at least one/);
+  p.e.bodyPointsCancel.onclick();assert.equal(p.e.bodySilhouetteLine.children.length,2);
+});
+
+test('body-silhouette imported masks and distorted cameras remain read-only while keypoint-only edits preserve them',async()=>{
+  for(const masked of [false,true]) {
+    const p=await photoPage();selectBodyFit(p);const initial=bodyPointsReport();
+    Object.assign(initial.frames[0],{silhouette_editable:false,silhouette_reason:masked?'Imported source mask remains read-only.':'Rectify the camera and all observations together.'});
+    if(masked)initial.frames[0].silhouette={evidence:'decoded_mask_sha256: '+'f'.repeat(64),
+      lines:[{axis:'vertical',at_px:40,intervals_px:[[20,150]],sigma_px:2,partition:'fit'}]};
+    const view=await loadBodyPoints(p,{frames:initial.frames});assert.equal(p.e.bodyPointsError.textContent,'');
+    assert.equal(p.e.bodySilhouetteAdd.disabled,true);assert.equal(p.e.bodySilhouetteClear.disabled,true);
+    p.e.bodySilhouetteAdd.onclick();p.e.bodySilhouetteClear.onclick();assert.equal(p.e.bodyPointsApply.disabled,true);
+    chooseBodyPoint(p,'p0 <λ>');pointField(p,'bodyPointsX','15');
+    const applied=await applyBodyPoints(p,view,'{"native":"keypoints only"}','b'.repeat(64));
+    assert.equal(Object.hasOwn(applied.edits.frames[0],'silhouette_edit'),false);
+    assert.deepEqual(applied.result.frames[0].silhouette,initial.frames[0].silhouette);
+  }
+});
+
+test('body-silhouette photo picking uses verified stored pixels and explicitly owns canvas clicks',async()=>{
+  const p=await photoPage({decode:async()=>({width:640,height:480,close(){}})});selectBodyFit(p);const view=await loadBodyPoints(p);
+  chooseBodyPoint(p,'p0 <λ>');addSilhouette(p,{bodySilhouetteIntervals:''});
+  p.e.bodySilhouettePick.onclick();assert.equal(p.e.bodySilhouettePickCancel.disabled,true,'unverified pixels cannot be picked');
+  p.e.bodyPointsImage.files=[file('original pixels','original.png')];await p.e.bodyPointsImageRun.onclick();let w=p.current();
+  await w.emit(observationImageResult(w.messages[0].request));
+  p.e.bodyPointsCanvas.getBoundingClientRect=()=>({left:10,top:20,width:320,height:240});
+  const click=(x,y)=>p.e.bodyPointsCanvas.handlers.click({clientX:10+(x+.5)/2,clientY:20+(y+.5)/2});
+  p.e.bodySilhouettePick.onclick();click(30.25,130);
+  const count=p.workers.length;await p.e.bodyPointsApply.onclick();assert.equal(p.workers.length,count);assert.match(p.e.bodyPointsError.textContent,/Finish or cancel/);
+  click(20,130);assert.match(p.e.bodyPointsError.textContent,/never reordered or clamped/);
+  click(90.75,130);assert.equal(p.e.bodySilhouetteIntervals.value,'30.25, 90.75');
+  assert.equal(p.e.bodyPointsX.value,'10','slice clicks do not move the selected anatomical target');
+  assert.equal(p.e.bodySilhouetteAt.value,'100.25','transverse clicks never move the authored scanline');
+  const applied=await applyBodyPoints(p,view,'{"native":"picked intervals"}','b'.repeat(64));
+  assert.deepEqual(applied.edits.frames[0].silhouette_edit.silhouette.lines[0].intervals_px,[[30.25,90.75]]);
+  p.e.bodySilhouettePick.onclick();click(100,10);p.e.bodySilhouettePickCancel.onclick();
+  assert.equal(p.e.bodySilhouetteIntervals.value,'30.25, 90.75');
+  p.e.bodyPointsCancel.onclick();assert.equal(p.e.bodyFitRun.disabled,false);
+});
+
+test('body-silhouette newer drafts cancel stale worker results and reject changed or ignored silhouette replies',async()=>{
+  const p=await photoPage();selectBodyFit(p);const view=await loadBodyPoints(p);addSilhouette(p);
+  await p.e.bodyPointsApply.onclick();let old=p.current();const staleRequest=old.messages[0].request;
+  silhouetteField(p,'bodySilhouetteIntervals','40, 100');assert.equal(old.dead,true);
+  await old.emit({type:'result',request:staleRequest,report:JSON.stringify({...view,input:'{"stale":true}',input_sha256:'b'.repeat(64)})});
+  assert.equal(p.e.bodySilhouetteIntervals.value,'40, 100');assert.equal(p.e.bodyPointsError.textContent,'');assert.equal(p.urls.size,0);
+  await p.e.bodyPointsApply.onclick();old=p.current();
+  await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify({...view,input:'{"ignored":true}',input_sha256:'b'.repeat(64)})});
+  assert.match(p.e.bodyPointsError.textContent,/requested silhouette/);assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.urls.size,0);
+  p.e.bodyPointsCancel.onclick();assert.equal(p.e.bodySilhouetteLine.children.length,0);assert.equal(p.e.bodyFitRun.disabled,false);
+  addSilhouette(p);p.e.bodyFitModel.handlers.change();assert.equal(p.e.bodyPointsEditor.hidden,true);assert.equal(p.urls.size,0);
+});
+
+test('body-silhouette remove and re-add retains original roles at the same location, including coordinate zero',async()=>{
+  const p=await photoPage();selectBodyFit(p);const initial=bodyPointsReport();
+  initial.frames[0].silhouette={evidence:'Synthetic reviewed original silhouette.',
+    lines:[{axis:'horizontal',at_px:0,intervals_px:[[20,100]],sigma_px:3,partition:'held_out'}]};
+  const view=await loadBodyPoints(p,{frames:initial.frames});p.e.bodySilhouetteClear.onclick();p.e.bodySilhouetteAdd.onclick();
+  silhouetteField(p,'bodySilhouetteAxis','horizontal');assert.equal(p.e.bodySilhouetteAt.disabled,false,'a blank coordinate is not silently treated as zero');
+  silhouetteField(p,'bodySilhouetteAt','0');assert.equal(p.e.bodySilhouetteAt.disabled,true);
+  assert.equal(p.e.bodySilhouetteSigma.value,'3');assert.equal(p.e.bodySilhouettePartition.value,'held_out');
+  silhouetteField(p,'bodySilhouetteSigma','9');silhouetteField(p,'bodySilhouettePartition','fit');
+  silhouetteField(p,'bodySilhouetteIntervals','25, 105');silhouetteField(p,'bodySilhouetteEvidence','Explicitly reviewed interval correction.');
+  const applied=await applyBodyPoints(p,view,'{"native":"same sampled location"}','b'.repeat(64));
+  const line=applied.edits.frames[0].silhouette_edit.silhouette.lines[0];
+  assert.equal(line.at_px,0);assert.equal(line.partition,'held_out');assert.equal(line.sigma_px,3);
+});
+
+test('body-silhouette changing frames cancels partial image picks without writing to either frame',async()=>{
+  const p=await photoPage({decode:async()=>({width:640,height:480,close(){}})});selectBodyFit(p);await loadBodyPoints(p);
+  addSilhouette(p,{bodySilhouetteIntervals:''});p.e.bodyPointsImage.files=[file('original pixels','original.png')];await p.e.bodyPointsImageRun.onclick();
+  const worker=p.current();await worker.emit(observationImageResult(worker.messages[0].request));
+  p.e.bodyPointsCanvas.getBoundingClientRect=()=>({left:0,top:0,width:640,height:480});
+  p.e.bodySilhouettePick.onclick();p.e.bodyPointsCanvas.handlers.click({clientX:30.5,clientY:100.75});
+  assert.equal(p.e.bodySilhouettePickCancel.disabled,false);chooseBodyPoint(p,'p1',1);
+  assert.equal(p.e.bodySilhouettePickCancel.disabled,true);assert.equal(p.e.bodyPointsCanvas.hidden,true);
+  p.e.bodyPointsCanvas.handlers.click({clientX:90.5,clientY:100.75});assert.equal(p.e.bodyPointsX.value,'');
+  chooseBodyPoint(p,'p0 <λ>');assert.equal(p.e.bodySilhouetteIntervals.value,'');assert.equal(p.e.bodyPointsX.value,'10');
+});
 
 test('body-observation worker delegates exact bound drafts and transport refusals to the native authority',async()=>{
   const source={request:93,op:'body-fit-observations',model:new Uint8Array([1,5]).buffer,input:' {"timestamp_us":18446744073709551615}\r\n',edits:' {"frames":[]}\n'};
