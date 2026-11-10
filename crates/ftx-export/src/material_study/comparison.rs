@@ -180,6 +180,9 @@ pub enum Metric {
     MaxAbsoluteEdgeStrainPct,
     /// Magnitude of summed body barrier forces on selected welded vertices, in N.
     BodyContactResultantN,
+    /// Sum of body barrier-force magnitudes over selected welded vertices, in N.
+    /// Opposing nodal forces do not cancel; this is not a pressure or mesh-independent load.
+    BodyContactSumVertexForceN,
     /// Largest body barrier-force magnitude at one selected welded vertex, in N.
     MaxBodyContactVertexForceN,
     /// Lowest raw warp Green strain E11 on the selected initial drape, dimensionless.
@@ -210,6 +213,8 @@ pub enum Metric {
     MotionMaxAbsoluteEdgeStrainPct,
     /// Peak selected body-force resultant magnitude over initial and accepted samples, in N.
     MotionPeakBodyContactResultantN,
+    /// Peak sum of selected nodal body-force magnitudes over initial and accepted samples, in N.
+    MotionPeakBodyContactSumVertexForceN,
     /// Largest selected nodal body-force magnitude over initial and accepted samples, in N.
     MotionMaxBodyContactVertexForceN,
     /// Lowest selected raw warp E11 over the initial state and every accepted motion sample.
@@ -330,9 +335,9 @@ impl Metric {
             Self::CutAndSewSelectedOrderCost => Consumer::CutAndSewPurchasing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
-            Self::BodyContactResultantN | Self::MaxBodyContactVertexForceN => {
-                Consumer::ContactLoads
-            }
+            Self::BodyContactResultantN
+            | Self::BodyContactSumVertexForceN
+            | Self::MaxBodyContactVertexForceN => Consumer::ContactLoads,
             Self::MinWarpGreenStrain
             | Self::MaxWarpGreenStrain
             | Self::MinWeftGreenStrain
@@ -347,9 +352,9 @@ impl Metric {
                 Consumer::VaporCoverage
             }
             Self::MotionMaxAbsoluteEdgeStrainPct => Consumer::Motion,
-            Self::MotionPeakBodyContactResultantN | Self::MotionMaxBodyContactVertexForceN => {
-                Consumer::MotionContactLoads
-            }
+            Self::MotionPeakBodyContactResultantN
+            | Self::MotionPeakBodyContactSumVertexForceN
+            | Self::MotionMaxBodyContactVertexForceN => Consumer::MotionContactLoads,
             Self::MotionMinWarpGreenStrain
             | Self::MotionMaxWarpGreenStrain
             | Self::MotionMinWeftGreenStrain
@@ -453,8 +458,10 @@ impl Metric {
             Self::SimulatedClothMassKg => "kg",
             Self::MaxAbsoluteEdgeStrainPct | Self::MotionMaxAbsoluteEdgeStrainPct => "%",
             Self::BodyContactResultantN
+            | Self::BodyContactSumVertexForceN
             | Self::MaxBodyContactVertexForceN
             | Self::MotionPeakBodyContactResultantN
+            | Self::MotionPeakBodyContactSumVertexForceN
             | Self::MotionMaxBodyContactVertexForceN => "N",
             Self::MinWarpGreenStrain
             | Self::MaxWarpGreenStrain
@@ -542,11 +549,17 @@ impl Metric {
             Self::BodyContactResultantN => {
                 admitted.contact_loads?["peak_body_resultant_n"].as_f64()
             }
+            Self::BodyContactSumVertexForceN => {
+                admitted.contact_loads?["peak_body_sum_vertex_force_n"].as_f64()
+            }
             Self::MaxBodyContactVertexForceN => {
                 admitted.contact_loads?["max_body_vertex_force_n"].as_f64()
             }
             Self::MotionPeakBodyContactResultantN => {
                 admitted.motion_contact_loads?["peak_body_resultant_n"].as_f64()
+            }
+            Self::MotionPeakBodyContactSumVertexForceN => {
+                admitted.motion_contact_loads?["peak_body_sum_vertex_force_n"].as_f64()
             }
             Self::MotionMaxBodyContactVertexForceN => {
                 admitted.motion_contact_loads?["max_body_vertex_force_n"].as_f64()
@@ -1336,7 +1349,7 @@ impl Policy {
         if self.consumers().contains(&Consumer::ContactLoads)
             || self.consumers().contains(&Consumer::MotionContactLoads)
         {
-            report.notes.push("Body contact objectives use the negative gradient of production barrier energy on an explicit union of welded vertices. They exclude self-contact and Coulomb tangential forces. Opposing forces can cancel in a resultant; nodal peaks depend on mesh and barrier settings. Material and numerical policies, scope and complete sampled motion are retained. No contact area, pressure, comfort, safe-fit threshold or continuous-time force bound is inferred.");
+            report.notes.push("Body contact objectives use the negative gradient of production barrier energy on an explicit union of welded vertices. They exclude self-contact and Coulomb tangential forces. Opposing nodal forces can cancel in a resultant but remain in the sum of nodal magnitudes. All discrete reductions depend on mesh and barrier settings. Material and numerical policies, scope and complete sampled motion are retained. No contact area, pressure, comfort, safe-fit threshold or continuous-time force bound is inferred.");
         }
         if self.consumers().contains(&Consumer::VaporCoverage) {
             report.notes.push("Covered vapor objectives require the whole declared body domain to be covered on the admitted drape. Partial covered subtotals stay visible but cannot be ranked as complete-domain transfer. Actual layer areas, explicit interlayer resistance, pressure boundaries and films define the potential network; no sweat supply, condensation, thermal feedback or comfort is inferred.");

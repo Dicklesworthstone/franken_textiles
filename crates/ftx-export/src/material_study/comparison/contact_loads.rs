@@ -238,8 +238,17 @@ pub(super) fn admit<'a>(
     }
     let mut pairs = 0usize;
     let mut peak_resultant = 0.;
+    // Older frozen receipts remain usable for their original metrics. New aggregate readings
+    // require the complete frame field and peak witness together; partial upgrades refuse.
+    let has_sum = report.get("peak_body_sum_vertex_force_n").is_some()
+        || report.get("peak_body_sum_vertex_force_sample").is_some()
+        || frames
+            .iter()
+            .any(|frame| frame["body"].get("sum_vertex_force_n").is_some());
+    let mut peak_sum = 0.;
     let mut peak_vertex = 0.;
     let mut resultant_sample = 0;
+    let mut sum_sample = 0;
     let mut vertex_sample = 0;
     let mut previous = 0.;
     for (i, frame) in frames.iter().enumerate() {
@@ -290,6 +299,7 @@ pub(super) fn admit<'a>(
             }
         }
         let mut resultant = Vec3::ZERO;
+        let mut sum = 0.;
         let mut maximum = 0.;
         let mut witness = selected[0];
         for (&vertex, &force) in selected.iter().zip(&forces) {
@@ -298,22 +308,31 @@ pub(super) fn admit<'a>(
                 return Err(fail());
             }
             resultant += force;
+            sum += norm;
             if norm > maximum {
                 maximum = norm;
                 witness = vertex;
             }
         }
         let norm = resultant.norm();
-        if !norm.is_finite()
-            || frame["body"]
-                != json!({"resultant_n":resultant,
-            "resultant_magnitude_n":norm,"max_vertex_force_n":maximum,"max_force_vertex":witness})
-        {
+        let mut expected = json!({"resultant_n":resultant,
+            "resultant_magnitude_n":norm,"max_vertex_force_n":maximum,"max_force_vertex":witness});
+        if has_sum {
+            if !sum.is_finite() {
+                return Err(fail());
+            }
+            expected["sum_vertex_force_n"] = json!(sum);
+        }
+        if !norm.is_finite() || frame["body"] != expected {
             return Err(fail());
         }
         if norm > peak_resultant {
             peak_resultant = norm;
             resultant_sample = i;
+        }
+        if sum > peak_sum {
+            peak_sum = sum;
+            sum_sample = i;
         }
         if maximum > peak_vertex {
             peak_vertex = maximum;
@@ -328,6 +347,9 @@ pub(super) fn admit<'a>(
         previous = time;
     }
     if report["peak_body_resultant_n"].as_f64() != Some(peak_resultant)
+        || (has_sum
+            && (report["peak_body_sum_vertex_force_n"].as_f64() != Some(peak_sum)
+                || report["peak_body_sum_vertex_force_sample"] != sum_sample))
         || report["max_body_vertex_force_n"].as_f64() != Some(peak_vertex)
         || report["peak_body_resultant_sample"] != resultant_sample
         || report["max_body_vertex_force_sample"] != vertex_sample
@@ -434,6 +456,86 @@ mod tests {
         let history = admit(&alternative, &descriptor, &simulation, Some(&motion)).unwrap();
         assert_eq!(history["peak_body_resultant_n"], 6.);
         assert_eq!(history["max_body_vertex_force_sample"], 1);
+        assert!(history.get("peak_body_sum_vertex_force_n").is_none());
+    }
+
+    fn summed_case() -> (Alternative, Value, Value, Value) {
+        let (alternative, descriptor, mut simulation, mut motion) = case();
+        // Independent arithmetic: two opposed 5 N forces plus 2 N, followed by a single 6 N.
+        // The maximum aggregate is at the initial state; the resultant and vertex peaks are later.
+        for report in [
+            &mut simulation["contact_loads"]["result"],
+            &mut motion["contact_loads"]["result"],
+        ] {
+            report["frames"][0]["body"]["sum_vertex_force_n"] = json!(12.);
+            report["peak_body_sum_vertex_force_n"] = json!(12.);
+            report["peak_body_sum_vertex_force_sample"] = json!(0);
+        }
+        motion["contact_loads"]["result"]["frames"][1]["body"]["sum_vertex_force_n"] = json!(6.);
+        (alternative, descriptor, simulation, motion)
+    }
+
+    #[test]
+    fn summed_loads_keep_opposing_forces_and_the_initial_peak_in_complete_motion() {
+        let (alternative, descriptor, simulation, motion) = summed_case();
+        let initial = admit(&alternative, &descriptor, &simulation, None).unwrap();
+        assert_eq!(initial["peak_body_sum_vertex_force_n"], 12.);
+        assert_eq!(initial["peak_body_resultant_n"], 2.);
+        let history = admit(&alternative, &descriptor, &simulation, Some(&motion)).unwrap();
+        assert_eq!(history["peak_body_sum_vertex_force_n"], 12.);
+        assert_eq!(history["peak_body_sum_vertex_force_sample"], 0);
+        assert_eq!(history["peak_body_resultant_n"], 6.);
+        assert_eq!(history["peak_body_resultant_sample"], 1);
+    }
+
+    #[test]
+    fn aggregate_readings_require_every_force_sample_and_the_exact_peak_witness() {
+        let (alternative, descriptor, simulation, motion) = summed_case();
+        for (pointer, value) in [
+            (
+                "/contact_loads/result/peak_body_sum_vertex_force_n",
+                json!(6.),
+            ),
+            (
+                "/contact_loads/result/peak_body_sum_vertex_force_sample",
+                json!(1),
+            ),
+            (
+                "/contact_loads/result/frames/1/body/sum_vertex_force_n",
+                json!(5.),
+            ),
+            (
+                "/contact_loads/result/frames/1/body/sum_vertex_force_n",
+                Value::Null,
+            ),
+        ] {
+            let mut changed = motion.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                admit(&alternative, &descriptor, &simulation, Some(&changed)).is_err(),
+                "{pointer}"
+            );
+        }
+        for key in [
+            "peak_body_sum_vertex_force_n",
+            "peak_body_sum_vertex_force_sample",
+        ] {
+            let mut changed = simulation.clone();
+            changed["contact_loads"]["result"]
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+            assert!(
+                admit(&alternative, &descriptor, &changed, None).is_err(),
+                "{key}"
+            );
+        }
+        let mut changed = simulation.clone();
+        changed["contact_loads"]["result"]["frames"][0]["body"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sum_vertex_force_n");
+        assert!(admit(&alternative, &descriptor, &changed, None).is_err());
     }
 
     #[test]

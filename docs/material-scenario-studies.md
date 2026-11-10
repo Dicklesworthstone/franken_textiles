@@ -1085,12 +1085,13 @@ those material fields. The physical material-thickness ramp must be complete fir
 
 Selected retained triangles contribute a sorted union of welded cloth vertices, counted once.
 A node shared with an unselected piece retains its whole body force: no unqualified allocation
-between pieces is invented. Reports include the vector sum and its magnitude, plus the maximum
-nodal-force magnitude and global welded vertex that witnesses it. Opposing forces can cancel
-in the resultant while local forces remain large.
+between pieces is invented. Reports include the vector sum and its magnitude, the sum of individual
+nodal-force magnitudes, and the maximum nodal magnitude with its global welded vertex witness.
+Opposing forces can cancel in the resultant while their summed magnitudes remain large: two
+opposite 5 N forces have a 0 N resultant and a 10 N sum of nodal magnitudes.
 
 These are discrete body barrier forces, excluding self-contact forces and Coulomb tangential
-friction. Nodal maxima depend on mesh and barrier policy. No contact-area or physiological
+friction. All reductions depend on mesh and barrier policy. No contact-area or physiological
 model is supplied: `physical_validation_claim`, `pressure_claim`, `comfort_claim` and
 `continuous_time_bound` are all false. Caller-supplied force limits remain numerical design
 requirements, without an inferred comfort, safe-fit or garment-tightness threshold.
@@ -1110,19 +1111,25 @@ welded vertex indices, body topology, material-report digest and `source_sha256`
 Each frame retains sample index, time, cloth-position hash, body-state hash,
 active-contact-policy hash, candidate-pair count and
 `body_force_on_selected_vertices_n` aligned with `source.selected_vertices`.
-Its `body` reduction contains `resultant_n`, `resultant_magnitude_n`,
+Its `body` reduction contains `resultant_n`, `resultant_magnitude_n`, `sum_vertex_force_n`,
 `max_vertex_force_n` and `max_force_vertex`.
 
 Whole-history `peak_body_resultant_n` and `max_body_vertex_force_n` retain their respective
 `peak_body_resultant_sample` and `max_body_vertex_force_sample` witnesses. Equal maxima use
 the earliest sample; equal nodal maxima use the lowest selected vertex index. Initial/final
 cloth hashes, duration and consumed vertex/pair work remain inspectable.
+The sum has its own `peak_body_sum_vertex_force_n` and `peak_body_sum_vertex_force_sample`,
+including the initial state even when later resultant or single-vertex peaks occur elsewhere.
+Legacy reports without summed readings retain their original metrics; they cannot supply a new
+sum metric. Partially present or inconsistent summed fields refuse comparison admission.
 
 | Comparison metric | Consumer | Unit | Meaning |
 | --- | --- | --- | --- |
 | `body_contact_resultant_n` | `contact_loads` | N | Initial selected resultant magnitude |
+| `body_contact_sum_vertex_force_n` | `contact_loads` | N | Initial sum of selected nodal force magnitudes |
 | `max_body_contact_vertex_force_n` | `contact_loads` | N | Initial maximum selected nodal force |
 | `motion_peak_body_contact_resultant_n` | `motion_contact_loads` | N | Peak selected resultant over the complete accepted history |
+| `motion_peak_body_contact_sum_vertex_force_n` | `motion_contact_loads` | N | Peak sum of selected nodal force magnitudes over the complete accepted history |
 | `motion_max_body_contact_vertex_force_n` | `motion_contact_loads` | N | Peak selected nodal force over the complete accepted history |
 
 Existing settled/gating-clear mechanical admission still applies before ranking; motion metrics
@@ -1154,7 +1161,7 @@ components, maxima, sample/time/vertex witnesses, selected instances and raw rec
 the Rust comparison result without deriving a pressure or reranking the alternatives in JavaScript.
 
 In guided scenarios, enable **Track normal body forces on retained cloth**, choose all retained
-instances or exact physical instance names, and declare both work allowances. The four force
+instances or exact physical instance names, and declare both work allowances. The six force
 criteria above can be minimized or given inclusive maximums independently of their goal checkboxes.
 Required initial or complete-motion loads can also be declared without a force objective. These
 criteria use nominal values; source-reported heat or mass objectives can retain explicit nominal

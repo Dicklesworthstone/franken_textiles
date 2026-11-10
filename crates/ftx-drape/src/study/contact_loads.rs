@@ -76,6 +76,7 @@ impl Budget {
 struct Reading {
     resultant_n: Vec3,
     resultant_magnitude_n: f64,
+    sum_vertex_force_n: f64,
     max_vertex_force_n: f64,
     max_force_vertex: usize,
 }
@@ -89,6 +90,7 @@ fn reading(vertices: &[usize], forces: &[Vec3]) -> Result<Reading, Refusal> {
     let mut result = Reading {
         resultant_n: Vec3::ZERO,
         resultant_magnitude_n: 0.,
+        sum_vertex_force_n: 0.,
         max_vertex_force_n: 0.,
         max_force_vertex: vertices[0],
     };
@@ -98,14 +100,18 @@ fn reading(vertices: &[usize], forces: &[Vec3]) -> Result<Reading, Refusal> {
             return Err(invalid("contact force magnitude is not representable"));
         }
         result.resultant_n += force;
+        // Sum the already assembled nodal magnitudes in source-vertex order. Opposing
+        // body loads remain visible without inventing a contact area or dividing by
+        // vertex count. Forces meeting at the same welded vertex are still assembled once.
+        result.sum_vertex_force_n += magnitude;
         if magnitude > result.max_vertex_force_n {
             result.max_vertex_force_n = magnitude;
             result.max_force_vertex = vertex;
         }
     }
     result.resultant_magnitude_n = result.resultant_n.norm();
-    if !result.resultant_magnitude_n.is_finite() {
-        return Err(invalid("contact force resultant is not representable"));
+    if !result.resultant_magnitude_n.is_finite() || !result.sum_vertex_force_n.is_finite() {
+        return Err(invalid("contact force reduction is not representable"));
     }
     Ok(result)
 }
@@ -271,12 +277,18 @@ impl History {
 
     pub(super) fn report(&self, motion: bool) -> Value {
         let mut peak_resultant = 0;
+        let mut peak_sum = 0;
         let mut peak_vertex = 0;
         for i in 1..self.frames.len() {
             if self.frames[i].body.resultant_magnitude_n
                 > self.frames[peak_resultant].body.resultant_magnitude_n
             {
                 peak_resultant = i;
+            }
+            if self.frames[i].body.sum_vertex_force_n
+                > self.frames[peak_sum].body.sum_vertex_force_n
+            {
+                peak_sum = i;
             }
             if self.frames[i].body.max_vertex_force_n
                 > self.frames[peak_vertex].body.max_vertex_force_n
@@ -293,13 +305,15 @@ impl History {
             "duration_s":last.time_s,"frames":self.frames,
             "peak_body_resultant_n":self.frames[peak_resultant].body.resultant_magnitude_n,
             "peak_body_resultant_sample":peak_resultant,
+            "peak_body_sum_vertex_force_n":self.frames[peak_sum].body.sum_vertex_force_n,
+            "peak_body_sum_vertex_force_sample":peak_sum,
             "max_body_vertex_force_n":self.frames[peak_vertex].body.max_vertex_force_n,
             "max_body_vertex_force_sample":peak_vertex,
             "vertex_samples":self.frames.len()*(self.vertex_count+self.contact.body.vertices.len()),
             "pair_evaluations":self.pairs,
             "physical_validation_claim":false,"pressure_claim":false,"comfort_claim":false,
             "continuous_time_bound":false,
-            "note":"Negative gradient of production body barrier energy, including mollifiers; excludes self-contact and Coulomb tangential forces. Selected instance vertices form a union, with welded seam vertices counted once and their entire body force retained. Resultants can cancel opposing forces; nodal peaks depend on the mesh and barrier. Sampled forces are not pressure, safe-fit limits, continuous-time bounds or measured comfort."})
+            "note":"Negative gradient of production body barrier energy, including mollifiers; excludes self-contact and Coulomb tangential forces. Selected instance vertices form a union, with welded seam vertices counted once and their entire body force retained. Resultants can cancel opposing forces; the sum of nodal magnitudes retains opposite-vertex loads without averaging by vertex count. Both nodal peaks and summed magnitudes depend on the mesh and barrier. Sampled forces are not pressure, safe-fit limits, continuous-time bounds or measured comfort."})
     }
 }
 
@@ -315,9 +329,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.resultant_magnitude_n, 0.);
+        assert_eq!(result.sum_vertex_force_n, 10.);
         assert_eq!(result.max_vertex_force_n, 5.);
         assert_eq!(result.max_force_vertex, 2);
         assert!(reading(&[0], &[Vec3::new(f64::MAX, f64::MAX, 0.)]).is_err());
+    }
+
+    #[test]
+    fn summed_load_preserves_rotation_scaling_and_distributed_opposing_forces() {
+        let forces = [Vec3::new(3., 4., 0.), Vec3::new(-3., -4., 0.)];
+        let original = reading(&[2, 8], &forces).unwrap();
+        // A signed permutation is an exact rigid rotation: no tolerances can hide a
+        // component-wise absolute sum being substituted for the Euclidean magnitude.
+        let rotated = forces.map(|f| Vec3::new(f.z, f.x, f.y));
+        assert_eq!(reading(&[2, 8], &rotated).unwrap().sum_vertex_force_n, 10.);
+        let scaled = forces.map(|f| f * 3.);
+        assert_eq!(reading(&[2, 8], &scaled).unwrap().sum_vertex_force_n, 30.);
+
+        // Spreading the same parallel nodal forces over more vertices changes the
+        // maximum per-vertex reading, but neither the resultant nor the magnitude sum.
+        let distributed = reading(
+            &[0, 1, 2, 3],
+            &[
+                Vec3::new(1.5, 2., 0.),
+                Vec3::new(1.5, 2., 0.),
+                Vec3::new(-1.5, -2., 0.),
+                Vec3::new(-1.5, -2., 0.),
+            ],
+        )
+        .unwrap();
+        assert_eq!(distributed.resultant_n, original.resultant_n);
+        assert_eq!(distributed.sum_vertex_force_n, original.sum_vertex_force_n);
+        assert_eq!(distributed.max_vertex_force_n, 2.5);
+        assert_eq!(reading(&[4], &[Vec3::ZERO]).unwrap().sum_vertex_force_n, 0.);
     }
 
     #[test]

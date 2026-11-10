@@ -47,7 +47,9 @@ fn contact_loads_replay_the_real_material_bound_solver_on_static_and_moving_bodi
         serde_json::from_value(history["source"]["selected_vertices"].clone()).unwrap();
     assert!(selected.windows(2).all(|p| p[0] < p[1]));
     let mut peak = 0_f64;
-    for (frame, sample) in frames.iter().zip(samples) {
+    let mut peak_sum = 0_f64;
+    let mut peak_sum_sample = 0;
+    for (sample_index, (frame, sample)) in frames.iter().zip(samples).enumerate() {
         let positions: Vec<Vec3> = serde_json::from_value(sample["positions_m"].clone()).unwrap();
         contact.body = Body::new(
             serde_json::from_value(sample["body_positions_m"].clone()).unwrap(),
@@ -65,12 +67,32 @@ fn contact_loads_replay_the_real_material_bound_solver_on_static_and_moving_bodi
         assert_eq!(frame["time_s"], sample["time_s"]);
         let sum = chosen.iter().copied().fold(Vec3::ZERO, |a, b| a + b);
         assert_eq!(frame["body"]["resultant_n"], json!(sum));
+        let magnitude_sum: f64 = chosen.iter().map(|f| f.norm()).sum();
+        assert_eq!(frame["body"]["sum_vertex_force_n"], magnitude_sum);
+        if magnitude_sum > peak_sum {
+            peak_sum = magnitude_sum;
+            peak_sum_sample = sample_index;
+        }
         let maximum = chosen.iter().map(|f| f.norm()).fold(0., f64::max);
         assert_eq!(frame["body"]["max_vertex_force_n"], maximum);
         peak = peak.max(maximum);
     }
     assert!(peak > 0.);
     assert_eq!(history["max_body_vertex_force_n"], peak);
+    assert!(peak_sum >= peak);
+    assert_eq!(history["peak_body_sum_vertex_force_n"], peak_sum);
+    assert_eq!(
+        history["peak_body_sum_vertex_force_sample"],
+        peak_sum_sample
+    );
+    assert_eq!(
+        result["contact_loads"]["result"]["peak_body_sum_vertex_force_n"],
+        frames[0]["body"]["sum_vertex_force_n"]
+    );
+    assert_eq!(
+        result["contact_loads"]["result"]["peak_body_sum_vertex_force_sample"],
+        0
+    );
     assert_eq!(
         history["source"],
         result["contact_loads"]["result"]["source"]
@@ -92,6 +114,10 @@ fn contact_loads_replay_the_real_material_bound_solver_on_static_and_moving_bodi
     assert_ne!(
         swapped["contact_loads"]["result"]["max_body_vertex_force_n"],
         result["contact_loads"]["result"]["max_body_vertex_force_n"]
+    );
+    assert_ne!(
+        swapped["contact_loads"]["result"]["peak_body_sum_vertex_force_n"],
+        result["contact_loads"]["result"]["peak_body_sum_vertex_force_n"]
     );
 }
 

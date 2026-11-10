@@ -5642,6 +5642,16 @@ ordinary Pareto/eligibility rules remain separate from neighborhood generation. 
 `ftx-ds2`; a successful numerical alteration still establishes neither exhaustive feasibility nor
 independent measured garment fit.
 
+### 25.191 Preserve opposing body loads in material and design decisions
+
+The existing material-bound body contact history now retains the sum of selected nodal force
+magnitudes alongside the vector resultant and largest nodal force. This keeps opposing garment
+loads visible without inventing a contact area or pressure. Initial and accepted-motion objectives
+use the same welded-vertex union, exact reaction fields and source identities; each aggregate peak
+retains its earliest sample witness. Comparison admission replays complete reductions and rejects
+partial or inconsistent sums, while legacy receipts retain their original metrics. This advances
+`ftx-ms2` and `ftx-ds2`; mesh/contact-policy dependence and independent physical qualification remain.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
