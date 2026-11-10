@@ -96,6 +96,10 @@ pub struct Request {
     /// All starts share the same unique-trial, consumer, protocol and retention allowances.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub restart_points_mm: Vec<BTreeMap<String, f64>>,
+    /// Optional 1..32 additional deterministic domain seeds, after every authored restart.
+    /// Midpoint, corners and bounded radical-inverse points share the existing trial allowance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_restarts: Option<usize>,
     /// Explicit canonical operations after each trial's linked alterations, such as seam truing.
     #[serde(default)]
     pub after: Vec<Operation>,
@@ -121,8 +125,11 @@ pub enum StopReason {
 /// One attempted local search within an explicitly requested multi-start discovery.
 #[derive(Clone, Debug, Serialize)]
 pub struct SearchStart {
-    /// Zero is the variables' initial point; n > 0 is restart_points_mm[n - 1].
+    /// Zero is the initial point, followed by authored restart_points_mm, then domain seeds.
     pub start_index: usize,
+    /// Zero-based index in domain_restart_points_mm; absent for initial and authored starts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_restart_index: Option<usize>,
     /// Original trial at this start, possibly reused from the shared coordinate cache.
     pub initial_trial_key: String,
     /// Last polling centre; it need not satisfy the production or flat-fit gates.
@@ -267,10 +274,14 @@ pub struct Receipt {
     pub best_total_fit_band_violation_mm: Option<f64>,
     /// Polling steps at termination, indexed by the original variable identities.
     pub final_steps_mm: BTreeMap<String, f64>,
-    /// Attempted starts, including the initial point, only when restart points were requested.
-    /// Remaining declared starts were not explored. Budgets, caches and protocols never reset.
+    /// Attempted starts, including the initial point, for authored or domain restarts.
+    /// Remaining prepared starts were not explored. Budgets, caches and protocols never reset.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub search_starts: Vec<SearchStart>,
+    /// Exact prepared domain seeds in execution order, including any not reached before a stop.
+    /// These supplement the unmodified authored points; each uses the ordinary canonical gates.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub domain_restart_points_mm: Vec<BTreeMap<String, f64>>,
     /// Actual production guidance and its bounded callback-slot reservation, when requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_guidance: Option<Box<ConsumerGuidance>>,
@@ -504,6 +515,12 @@ impl Request {
                 site.validate(&[lo, hi, variable.initial_mm])?;
             }
         }
+        if self
+            .domain_restarts
+            .is_some_and(|count| !(1..=32).contains(&count))
+        {
+            return Err(invalid("domain_restarts must be an integer in 1..=32"));
+        }
         if self.restart_points_mm.len() > 31 {
             return Err(budget(
                 "adaptive design accepts at most 31 additional start points",
@@ -540,7 +557,74 @@ impl Request {
                 ));
             }
         }
+        // Validate every generated coordinate even if the trial budget would stop before it.
+        self.domain_restart_points()?;
         Ok(())
+    }
+
+    fn domain_restart_points(&self) -> Result<Vec<BTreeMap<String, f64>>, Refusal> {
+        let Some(count) = self.domain_restarts else {
+            return Ok(Vec::new());
+        };
+        let initial: Vec<_> = self.variables.iter().map(|v| v.initial_mm).collect();
+        let mut seen = BTreeSet::from([coordinate_identity(&initial)]);
+        for point in &self.restart_points_mm {
+            let values: Vec<_> = self.variables.iter().map(|v| point[&v.key]).collect();
+            seen.insert(coordinate_identity(&values));
+        }
+        let dimensions = self.variables.len();
+        let corners = 1usize << dimensions;
+        let mut points = Vec::with_capacity(count);
+        // The fixed proposal cap bounds duplicate skipping on very narrow floating-point domains.
+        // No coordinate is clamped and no unrepresentable requested start is silently omitted.
+        for proposal in 0..256 {
+            let mut values = Vec::with_capacity(dimensions);
+            for (axis, variable) in self.variables.iter().enumerate() {
+                let fraction = if proposal == 0 {
+                    0.5
+                } else if proposal <= corners {
+                    ((proposal - 1) >> (dimensions - axis - 1) & 1) as f64
+                } else {
+                    radical_inverse(proposal - corners, [2, 3, 5][axis])
+                };
+                let [lo, hi] = variable.bounds_mm;
+                let span = hi - lo;
+                let value = if fraction == 0.0 {
+                    lo
+                } else if fraction == 1.0 {
+                    hi
+                } else if fraction <= 0.5 {
+                    lo + span * fraction
+                } else {
+                    hi - span * (1.0 - fraction)
+                };
+                if !value.is_finite() || !(lo..=hi).contains(&value) {
+                    return Err(invalid(
+                        "domain restart interpolation must produce finite in-domain coordinates",
+                    ));
+                }
+                for site in &variable.sites {
+                    site.validate(&[value])?;
+                }
+                values.push(value);
+            }
+            if !seen.insert(coordinate_identity(&values)) {
+                continue;
+            }
+            points.push(
+                self.variables
+                    .iter()
+                    .zip(values)
+                    .map(|(variable, value)| (variable.key.clone(), value))
+                    .collect(),
+            );
+            if points.len() == count {
+                return Ok(points);
+            }
+        }
+        Err(invalid(
+            "domain_restarts could not produce the requested distinct representable starts in 256 proposals; reduce the count or widen the declared bounds",
+        ))
     }
 
     fn design(
@@ -801,6 +885,12 @@ impl Request {
         cases: &[(String, comparison::Policy)],
     ) -> Result<Expansion<T>, Refusal> {
         self.validate()?;
+        let domain_restart_points_mm = self.domain_restart_points()?;
+        let restart_points: Vec<_> = self
+            .restart_points_mm
+            .iter()
+            .chain(&domain_restart_points_mm)
+            .collect();
         if self.constraint_restoration.is_some()
             && if cases.is_empty() {
                 study
@@ -978,7 +1068,7 @@ impl Request {
             if !matches!(local_stop, StopReason::MinimumSteps) {
                 break local_stop;
             }
-            let Some(point) = self.restart_points_mm.get(start_index) else {
+            let Some(point) = restart_points.get(start_index) else {
                 break StopReason::MinimumSteps;
             };
             search_starts.push(discovery.record_start(
@@ -1002,7 +1092,7 @@ impl Request {
                 *step = variable.initial_step_mm;
             }
         };
-        if !self.restart_points_mm.is_empty()
+        if !restart_points.is_empty()
             && let Some(initial) = start_initial
         {
             search_starts.push(discovery.record_start(
@@ -1054,6 +1144,7 @@ impl Request {
                 .map(|(variable, step)| (variable.key.clone(), step))
                 .collect(),
             search_starts,
+            domain_restart_points_mm,
             consumer_guidance: discovery.guidance.as_ref().map(|guidance| {
                 Box::new(ConsumerGuidance {
                     material_key: self.material_key.clone(),
@@ -1488,6 +1579,7 @@ impl<T> Discovery<'_, '_, '_, T> {
     ) -> SearchStart {
         SearchStart {
             start_index,
+            domain_restart_index: start_index.checked_sub(self.request.restart_points_mm.len() + 1),
             initial_trial_key: self.rows[initial].design.key.clone(),
             final_trial_key: self.rows[current].design.key.clone(),
             evaluations: self.rows.len() - before,
@@ -2012,6 +2104,17 @@ fn coordinate_identity(point: &[f64]) -> Vec<u64> {
         .collect()
 }
 
+fn radical_inverse(mut index: usize, base: usize) -> f64 {
+    let mut value = 0.0;
+    let mut place = 1.0;
+    while index != 0 {
+        place /= base as f64;
+        value += (index % base) as f64 * place;
+        index /= base;
+    }
+    value
+}
+
 #[cfg(test)]
 mod worst_case_range_tests {
     use super::*;
@@ -2145,6 +2248,82 @@ mod worst_case_range_tests {
                 _ => candidate.readings.clear(),
             }
             assert!(worst_case_range(&cases, &objective).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod domain_restart_tests {
+    use super::*;
+
+    fn request(dimensions: usize, count: usize) -> Request {
+        let variables: Vec<_> = (0..dimensions)
+            .map(|axis| {
+                let span = 6.0 * (axis + 1) as f64;
+                serde_json::json!({
+                    "key":format!("axis{axis}"),"bounds_mm":[-span,span],
+                    "initial_mm":-span,"initial_step_mm":1,"minimum_step_mm":0.5,
+                    "sites":[{"piece":"panel","axis":"y","at_mm":0,"multiplier":1}]
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "objective":"fit_band_violation_mm","variables":variables,
+            "domain_restarts":count,"max_evaluations":1,"max_designs":1
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn domain_seeds_are_distinct_bounded_and_deterministic_in_each_supported_dimension() {
+        for dimensions in 1..=3 {
+            let request = request(dimensions, 32);
+            request.validate().unwrap();
+            let points = request.domain_restart_points().unwrap();
+            assert_eq!(points, request.domain_restart_points().unwrap());
+            assert_eq!(points.len(), 32);
+            let initial: Vec<_> = request.variables.iter().map(|v| v.initial_mm).collect();
+            let mut seen = BTreeSet::from([coordinate_identity(&initial)]);
+            for point in &points {
+                let values: Vec<_> = request.variables.iter().map(|v| point[&v.key]).collect();
+                assert!(seen.insert(coordinate_identity(&values)));
+                for (variable, &value) in request.variables.iter().zip(&values) {
+                    assert!(value.is_finite());
+                    assert!((variable.bounds_mm[0]..=variable.bounds_mm[1]).contains(&value));
+                }
+            }
+            assert!(points[0].values().all(|&value| value == 0.0));
+            for (axis, variable) in request.variables.iter().enumerate() {
+                assert_eq!(
+                    points[1][&variable.key],
+                    variable.bounds_mm[usize::from(axis == dimensions - 1)]
+                );
+            }
+        }
+        let points = request(3, 9).domain_restart_points().unwrap();
+        assert_eq!(points[8]["axis0"], 0.0);
+        assert!((points[8]["axis1"] + 4.0).abs() < 1e-12);
+        assert!((points[8]["axis2"] + 10.8).abs() < 1e-12);
+    }
+
+    #[test]
+    fn domain_interpolation_does_not_overflow_when_finite_bounds_have_a_finite_span() {
+        for bounds in [
+            [f64::MAX * 0.5, f64::MAX],
+            [-f64::MAX, -f64::MAX * 0.5],
+            [-f64::MAX * 0.25, f64::MAX * 0.25],
+        ] {
+            let mut request = request(1, 32);
+            let variable = &mut request.variables[0];
+            variable.bounds_mm = bounds;
+            variable.initial_mm = bounds[0];
+            variable.initial_step_mm = bounds[1] - bounds[0];
+            variable.minimum_step_mm = variable.initial_step_mm;
+            request.validate().unwrap();
+            assert!(request.domain_restart_points().unwrap().iter().all(|point| {
+                let value = point["axis0"];
+                value.is_finite() && (bounds[0]..=bounds[1]).contains(&value)
+            }));
         }
     }
 }

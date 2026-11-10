@@ -1128,3 +1128,286 @@ fn joint_polling_preserves_single_variable_results_and_rejects_unbounded_modes()
     assert_eq!(error.code, RefusalCode::InvalidDocument);
     assert_eq!(calls, 0);
 }
+
+#[test]
+fn domain_restarts_find_remote_feasible_designs_without_authored_coordinates() {
+    for bounded in [false, true] {
+        let original = request(bounded, 12, json!([]));
+        let before = run(&original);
+        assert_eq!(before["design_search"]["selected_designs"], 0);
+        assert!(
+            before["design_search"]
+                .get("domain_restart_points_mm")
+                .is_none()
+        );
+        assert!(before["design_search"].get("search_starts").is_none());
+
+        let mut request = original;
+        request.design_adaptive.as_mut().unwrap().domain_restarts = Some(1);
+        let report = run(&request);
+        assert_eq!(report, run(&request));
+        let search = &report["design_search"];
+        assert_eq!(search["domain_restart_points_mm"], json!([{"length":30.0}]));
+        assert_eq!(search["evaluations"], 6);
+        assert_eq!(search["selected_designs"], 1);
+        assert_eq!(search["stop_reason"], "minimum_steps");
+        assert_eq!(search["complete_search"], false);
+        assert_eq!(search["global_optimum_claim"], false);
+        assert_eq!(search["search_starts"][0]["evaluations"], 2);
+        assert!(
+            search["search_starts"][0]
+                .get("domain_restart_index")
+                .is_none()
+        );
+        assert_eq!(search["search_starts"][1]["domain_restart_index"], 0);
+        let chosen = selected(&report);
+        assert_eq!(chosen["design"]["variables_mm"]["length"], 50.0);
+        let key =
+            serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), "light-sheet"))
+                .unwrap();
+        let row = report["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["key"] == key)
+            .unwrap();
+        let bound = Pattern::new(row["binding"]["result"]["pattern"].clone());
+        assert_eq!(
+            row["cutting"]["result"],
+            serde_json::to_value(
+                CutPlan::build(&bound, request.cutting.as_ref().unwrap()).unwrap()
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            row["sewing"]["result"],
+            serde_json::to_value(SewPlan::build(&bound, request.sewing.as_ref().unwrap()).unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            row["assembly_mass"]["result"],
+            serde_json::to_value(request.assembly_mass.as_ref().unwrap().evaluate(&bound).unwrap())
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn domain_restarts_follow_authored_starts_and_reuse_the_shared_coordinate_cache() {
+    let mut request = request(false, 24, json!([{"length":60},{"length":40}]));
+    let original = run(&request);
+    assert!(
+        original["design_search"]
+            .get("domain_restart_points_mm")
+            .is_none()
+    );
+    assert!(
+        original["design_search"]["search_starts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|start| start.get("domain_restart_index").is_none())
+    );
+    request.design_adaptive.as_mut().unwrap().domain_restarts = Some(3);
+    let report = run(&request);
+    let search = &report["design_search"];
+    assert_eq!(
+        search["domain_restart_points_mm"],
+        json!([{"length":30.0},{"length":15.0},{"length":45.0}])
+    );
+    assert_eq!(
+        search["request"]["restart_points_mm"],
+        json!([{"length":60.0},{"length":40.0}])
+    );
+    let rows = search["rows"].as_array().unwrap();
+    let starts = search["search_starts"].as_array().unwrap();
+    assert_eq!(starts.len(), 6);
+    for (index, expected) in [0.0, 60.0, 40.0, 30.0, 15.0, 45.0].into_iter().enumerate() {
+        let row = rows
+            .iter()
+            .find(|row| row["design"]["key"] == starts[index]["initial_trial_key"])
+            .unwrap();
+        assert_eq!(row["design"]["variables_mm"]["length"], expected);
+        if index >= 3 {
+            assert_eq!(starts[index]["domain_restart_index"], index - 3);
+        } else {
+            assert!(starts[index].get("domain_restart_index").is_none());
+        }
+    }
+    assert_eq!(starts[2]["evaluations"], 0);
+    let identities: std::collections::BTreeSet<_> = rows
+        .iter()
+        .map(|row| row["design"]["variables_mm"].to_string())
+        .collect();
+    assert_eq!(identities.len(), rows.len());
+    assert_eq!(selected(&report)["design"]["variables_mm"]["length"], 40.0);
+}
+
+#[test]
+fn domain_restarts_keep_unvisited_seeds_and_complete_incumbents_at_the_shared_budget() {
+    for (allowance, retained, starts) in [(2, 0, 1), (5, 1, 2)] {
+        let mut request = request(false, allowance, json!([]));
+        request.design_adaptive.as_mut().unwrap().domain_restarts = Some(3);
+        let report = run(&request);
+        let search = &report["design_search"];
+        assert_eq!(search["evaluations"], allowance);
+        assert_eq!(search["selected_designs"], retained);
+        assert_eq!(search["stop_reason"], "evaluation_budget");
+        assert_eq!(search["budget_exhausted"], true);
+        assert_eq!(search["search_starts"].as_array().unwrap().len(), starts);
+        assert_eq!(
+            search["domain_restart_points_mm"].as_array().unwrap().len(),
+            3
+        );
+        assert_eq!(
+            search["consumer_guidance"]["reserved_evaluations"],
+            allowance + 4
+        );
+        if retained > 0 {
+            assert_eq!(selected(&report)["design"]["variables_mm"]["length"], 50.0);
+        }
+    }
+}
+
+#[test]
+fn domain_restarts_reach_a_joint_fit_region_and_share_every_named_case_consumer_mode() {
+    let mut value = serde_json::to_value(independent_lengths(20, false)).unwrap();
+    value["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([30, 30, 30]);
+    let mut fit_request: Request = serde_json::from_value(value).unwrap();
+    assert_eq!(run(&fit_request)["design_search"]["selected_designs"], 0);
+    fit_request.design_adaptive.as_mut().unwrap().domain_restarts = Some(1);
+    let report = run(&fit_request);
+    assert_eq!(
+        selected(&report)["design"]["variables_mm"],
+        json!({"front":30.0,"back":30.0})
+    );
+    assert_eq!(report["design_search"]["stop_reason"], "qualified_design_limit");
+
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:domain-restart-body"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let cases: Vec<_> = ["first", "second"]
+        .into_iter()
+        .map(|key| Case {
+            key: key.into(),
+            scenario: json!({"name":key}),
+            comparison: None,
+        })
+        .collect();
+    for mode in [
+        "consumer_comparison",
+        "consumer_worst_case",
+        "consumer_pareto",
+        "consumer_matrix_pareto",
+    ] {
+        let mut value = serde_json::to_value(request(false, 12, json!([]))).unwrap();
+        value["design_adaptive"]["objective"] = json!(mode);
+        value["design_adaptive"]["domain_restarts"] = json!(1);
+        if matches!(mode, "consumer_comparison" | "consumer_pareto") {
+            value["design_adaptive"]["case_key"] = json!("first");
+        }
+        if mode == "consumer_pareto" {
+            value["comparison"]["objectives"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"metric":"feed_seconds","direction":"minimize"}));
+        }
+        let request: Request = serde_json::from_value(value).unwrap();
+        let mut calls = BTreeMap::new();
+        let report = request
+            .evaluate_matrix_with_fit(&pattern, &cases, 32, Some(&fit), |case, key, bound| {
+                *calls.entry((case, key.to_owned())).or_insert(0) += 1;
+                Ok(json!({"case":case,
+                    "pattern":sha256_hex(&serde_json::to_vec(bound.raw()).unwrap())}))
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        let search = &report["manufacturing"]["design_search"];
+        assert_eq!(search["selected_designs"], 1, "{mode}");
+        assert_eq!(search["domain_restart_points_mm"], json!([{"length":30.0}]));
+        assert!(calls.values().all(|&count| count == 1), "{mode}");
+        let chosen = selected(&report["manufacturing"]);
+        assert_eq!(chosen["design"]["variables_mm"]["length"], 50.0, "{mode}");
+        let key =
+            serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), "light-sheet"))
+                .unwrap();
+        for case in 0..cases.len() {
+            assert_eq!(calls[&(case, key.clone())], 1, "{mode}");
+        }
+    }
+
+    let mut value = serde_json::to_value(request(false, 12, json!([]))).unwrap();
+    value["design_adaptive"]
+        .as_object_mut()
+        .unwrap()
+        .remove("material_key");
+    value["design_adaptive"]["material_keys"] = json!(["light-sheet", "heavy-sheet"]);
+    value["design_adaptive"]["objective"] = json!("consumer_pareto");
+    value["design_adaptive"]["max_designs"] = json!(2);
+    value["design_adaptive"]["domain_restarts"] = json!(1);
+    let report = run(&serde_json::from_value(value).unwrap());
+    let rows = report["design_search"]["rows"].as_array().unwrap();
+    assert!(rows.iter().any(|row| {
+        row["selected"] == true
+            && row["design"]["variables_mm"]["length"] == 50.0
+            && row["consumer_materials"][0]["eligible"] == true
+    }));
+    assert_eq!(report["design_search"]["selected_designs"], 2);
+}
+
+#[test]
+fn domain_restart_counts_resolution_and_generated_site_errors_refuse_before_consumers() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:domain-restart-admission"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    for case in ["zero", "too-many", "resolution", "generated-underflow"] {
+        let mut value = serde_json::to_value(request(false, 1, json!([]))).unwrap();
+        value["design_adaptive"]["domain_restarts"] = match case {
+            "zero" => json!(0),
+            "too-many" => json!(33),
+            "resolution" => json!(2),
+            _ => json!(3),
+        };
+        let variable = &mut value["design_adaptive"]["variables"][0];
+        if case == "resolution" {
+            variable["bounds_mm"] = json!([1.0, 1.0 + f64::EPSILON]);
+            variable["initial_mm"] = json!(1.0);
+            variable["initial_step_mm"] = json!(f64::EPSILON);
+            variable["minimum_step_mm"] = json!(f64::EPSILON);
+        } else if case == "generated-underflow" {
+            variable["bounds_mm"] = json!([-1.0, 1.0]);
+            variable["initial_mm"] = json!(-1.0);
+            variable["initial_step_mm"] = json!(1.0);
+            variable["minimum_step_mm"] = json!(0.5);
+            for site in variable["sites"].as_array_mut().unwrap() {
+                site["multiplier"] = json!(f64::from_bits(1));
+            }
+        }
+        let request: Request = serde_json::from_value(value).unwrap();
+        let mut calls = 0;
+        let error = request
+            .evaluate_with_fit(&pattern, &json!({}), Some(&fit), |_, _| {
+                calls += 1;
+                Ok(json!({}))
+            })
+            .unwrap_err();
+        assert_eq!(error.code, RefusalCode::InvalidDocument, "{case}");
+        assert!(
+            error.message.contains(match case {
+                "resolution" => "256 proposals",
+                "generated-underflow" => "underflowed",
+                _ => "domain_restarts",
+            }),
+            "{case}: {error:?}"
+        );
+        assert_eq!(calls, 0, "{case}");
+    }
+}

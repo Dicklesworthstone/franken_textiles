@@ -1338,6 +1338,40 @@ operations, 256 MiB of document-processing reservation, and 40 million measureme
 work units each. Missing selected-body context refuses the request. Failed trials remain
 inspectable without invoking their production or simulation callbacks.
 
+### Explore other regions without guessing restart coordinates
+
+Set `design_adaptive.domain_restarts` to an integer from 1 through 32 to prepare that many
+additional starting points inside the declared variable bounds. The initial local search runs
+first, followed by every authored `restart_points_mm` in its original order, then these domain
+seeds. A local `minimum_steps` stop permits the next start; evaluation and retained-design limits
+still stop the whole search. Omission preserves the existing search and report shape.
+
+Seeds are deterministic: the box midpoint comes first, then corners in authored-axis order with
+lower bounds before upper bounds, then radical-inverse points with bases 2, 3 and 5 for the first,
+second and third variables. The first variable changes slowest through the corners. Coordinates
+equal to the initial point, an authored restart or an earlier generated seed are skipped.
+Interpolation uses a finite domain span and the nearer endpoint; it never clamps a generated value.
+Generation examines at most 256 proposals. If the requested number of distinct representable
+coordinates is unavailable, the request refuses before consumer work; reduce the count or widen
+the declared bounds. Every prepared seed also passes the existing linked-site arithmetic checks,
+even if the evaluation allowance will prevent visiting it.
+
+This lets the ordinary search enter a separated feasible region after the initial local search
+stalls, including when flat fit passes but a production constraint remains unsatisfied. Every seed
+still passes the same actual seam, geometry, selected-body fit and source-qualified consumer gates.
+The option works with scalar, Pareto, named-case, worst-case and multiple-material guidance, as well
+as joint-variable polling and constraint restoration. It does not infer alteration bounds or ease,
+rank incomparable outcomes, or establish feasibility or optimality across the continuous domain.
+
+The receipt's `domain_restart_points_mm` retains the exact prepared maps, including seeds not
+visited before a bounded stop. `search_starts` identifies each attempted start;
+`domain_restart_index` is present only for a domain start and indexes those prepared maps from
+zero. The ordinary `start_index` counts the initial, authored and domain starts in order.
+A coordinate reached earlier during polling reuses the shared trial and consumer cache, then uses
+the normal restart step sizes. All starts share `max_evaluations`, consumer reservations and retained
+outputs: requesting more seeds grants no extra simulation allowance. Synthetic search and replay
+tests establish this numerical behavior, not independently measured garment fit.
+
 ### Explore coordinated changes to independent variables
 
 Set `design_adaptive.polling: "axis_and_joint"` when separately authored controls may need to
