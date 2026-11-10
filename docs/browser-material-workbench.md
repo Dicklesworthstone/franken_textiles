@@ -1154,12 +1154,14 @@ allowances. Each case reserves these maxima across its alternatives, with separa
 contact evaluation. Missing instances or exhausted work refuse the affected load result while
 independent drape, strain, heat and motion outcomes remain visible.
 
-Four ordinary comparison criteria minimize or limit the initial resultant magnitude, initial
-maximum vertex force and their peaks across complete accepted motion. All use newtons and nominal
-values. Motion criteria require motion and contact-load tracking in the same case; initial or motion
-results can also be required without choosing a force objective. Use explicit nominal limits with
-source-reported heat or mass objectives. Saved named cases retain their exact scope and budgets,
-and the same criteria can guide existing grid and adaptive design discovery.
+Six ordinary comparison criteria minimize or limit the initial resultant magnitude, sum of nodal
+force magnitudes, maximum vertex force and their peaks across complete accepted motion. All use
+newtons and nominal values. Motion criteria require motion and contact-load tracking in the same
+case. Initial or motion results can also be required without choosing a force objective. Use
+explicit nominal limits with source-reported heat or mass objectives. Saved named cases retain
+their exact scope and budgets, and the same criteria can guide existing grid and adaptive design
+discovery. Result tables retain the sums at each sample and the earliest sample/time witnessing
+each peak. Older receipts without summed readings display **Unknown** rather than supplying a zero.
 
 Initial and accepted motion samples share each evaluation's allocation. Native partial results stay
 available: an initial reading can survive an exhausted motion-load request, and later alternatives
@@ -1167,7 +1169,8 @@ can lose only their optional force results. The authoring controls do not reject
 because its probes and alternatives would exhaust those optional per-case reservations.
 
 These are discrete normal body forces. Opposing forces can cancel in the resultant, shared welded
-vertices keep their complete force, and nodal maxima depend on the mesh and contact policy. No
+vertices keep their complete force, and summed magnitudes retain opposing loads at different vertices.
+Both sums and nodal maxima depend on the mesh and contact policy. No
 contact area, pressure, tangential friction, physiological comfort or safe-fit threshold is inferred.
 
 #### Continue the same sewn garment through movement
