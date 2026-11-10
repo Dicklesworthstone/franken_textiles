@@ -436,12 +436,16 @@ pub fn skin_mesh(vertices: &[Vec3], faces: &[[u32; 3]]) -> Result<SkinMesh, Refu
         }
     }
     // Each shell's enclosed volume; the skin encloses the most (ties to the lowest root).
+    // A fixed vertex of each component is its origin, avoiding cancellation between large
+    // world-coordinate tetrahedra when a small body or internal shell is translated.
     let mut shells: BTreeMap<usize, f64> = BTreeMap::new();
     for f in faces {
-        let [a, b, c] = f.map(|i| vertices[i as usize]);
-        *shells.entry(find(&mut root, f[0] as usize)).or_default() += a.cross(b).dot(c) / 6.0;
+        let shell = find(&mut root, f[0] as usize);
+        let origin = vertices[shell];
+        let [a, b, c] = f.map(|i| vertices[i as usize] - origin);
+        *shells.entry(shell).or_default() += a.cross(b).dot(c) / 6.0;
     }
-    let (&skin, _) = shells
+    let (&skin, &volume) = shells
         .iter()
         .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()).then(b.0.cmp(a.0)))
         .ok_or_else(|| degenerate("the body mesh has no triangles".into()))?;
@@ -477,10 +481,9 @@ pub fn skin_mesh(vertices: &[Vec3], faces: &[[u32; 3]]) -> Result<SkinMesh, Refu
             source[a], source[b]
         )));
     }
-    let (mut volume, mut area, mut min_area) = (0.0, 0.0, f64::INFINITY);
+    let (mut area, mut min_area) = (0.0, f64::INFINITY);
     for t in &tris {
         let (a, b, c) = (out_v[t[0]], out_v[t[1]], out_v[t[2]]);
-        volume += a.cross(b).dot(c) / 6.0;
         let ar = 0.5 * (b - a).cross(c - a).norm();
         area += ar;
         min_area = min_area.min(ar);
@@ -697,6 +700,53 @@ mod tests {
         assert_eq!(s.report.triangles_dropped, 12);
         assert!((s.report.volume - 1.0).abs() < 1e-15);
         assert!((s.report.area - 6.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn skin_selection_and_volume_are_translation_invariant() {
+        for origin in [
+            Vec3::ZERO,
+            Vec3::new(1e6, 1e6, 1e6),
+            Vec3::new(-1e6, -1e6, -1e6),
+            Vec3::new(1e8, -1e8, 1e8),
+        ] {
+            // Exactly representable offsets and sides keep input rounding out of this control.
+            // The small internal shell must never displace the unit-volume outer skin.
+            let (mut vertices, mut faces) =
+                cube(origin + Vec3::new(0.25, 0.25, 0.25), 1.0 / 128.0, 0);
+            let (outer, outer_faces) = cube(origin, 1.0, 8);
+            vertices.extend(outer);
+            faces.extend(outer_faces);
+            for reverse in [false, true] {
+                if reverse {
+                    faces.reverse();
+                }
+                let skin = skin_mesh(&vertices, &faces).unwrap();
+                assert_eq!((skin.vertices.len(), skin.triangles.len()), (8, 12));
+                assert_eq!(skin.report.shells_dropped, 1);
+                assert_eq!(skin.report.triangles_dropped, 12);
+                let mut selected = skin.source_vertex.clone();
+                selected.sort_unstable();
+                assert_eq!(selected, (8..16).collect::<Vec<_>>());
+                for (&point, &source) in skin.vertices.iter().zip(&skin.source_vertex) {
+                    assert_eq!(point, vertices[source]);
+                }
+                assert!((skin.report.volume - 1.0).abs() < 1e-15);
+                assert!((skin.report.area - 6.0).abs() < 1e-15);
+            }
+            for face in &mut faces {
+                face.swap(1, 2);
+            }
+            assert_eq!(
+                skin_mesh(&vertices, &faces).unwrap_err().code,
+                RefusalCode::InwardWound
+            );
+
+            let (vertices, faces) = cube(origin, 0.125, 0);
+            let skin = skin_mesh(&vertices, &faces).unwrap();
+            assert!((skin.report.volume - 1.0 / 512.0).abs() < 1e-18);
+            assert!((skin.report.area - 3.0 / 32.0).abs() < 1e-15);
+        }
     }
 
     #[test]
