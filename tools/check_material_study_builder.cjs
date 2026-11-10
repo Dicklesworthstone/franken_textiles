@@ -1545,8 +1545,8 @@ test('directional strain and motion refuse reported ranges while retaining expli
   }
 });
 
-const initialContactMetrics=['body_contact_resultant_n','max_body_contact_vertex_force_n'];
-const movingContactMetrics=['motion_peak_body_contact_resultant_n','motion_max_body_contact_vertex_force_n'];
+const initialContactMetrics=['body_contact_resultant_n','body_contact_sum_vertex_force_n','max_body_contact_vertex_force_n'];
+const movingContactMetrics=['motion_peak_body_contact_resultant_n','motion_peak_body_contact_sum_vertex_force_n','motion_max_body_contact_vertex_force_n'];
 
 test('body contact objectives and guards require their own initial or complete-motion consumer', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;

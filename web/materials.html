@@ -1595,10 +1595,14 @@ Use the scenario action below; the manufacturing-only action cannot evaluate the
 <input id="guidedMotionStrainLimit" type="number" min="0" step="any" aria-label="Maximum absolute panel-edge strain throughout movement" placeholder="No limit">
 <label><input id="guidedContactResultantGoal" type="checkbox"> Minimize initial body-force resultant magnitude (N)</label>
 <input id="guidedContactResultantLimit" type="number" min="0" step="any" aria-label="Maximum initial body-force resultant in newtons" placeholder="No limit">
+<label><input id="guidedContactSumGoal" type="checkbox"> Minimize initial sum of nodal body-force magnitudes (N)</label>
+<input id="guidedContactSumLimit" type="number" min="0" step="any" aria-label="Maximum initial sum of nodal body-force magnitudes in newtons" placeholder="No limit">
 <label><input id="guidedContactVertexGoal" type="checkbox"> Minimize initial maximum vertex body force (N)</label>
 <input id="guidedContactVertexLimit" type="number" min="0" step="any" aria-label="Maximum initial vertex body force in newtons" placeholder="No limit">
 <label><input id="guidedMotionContactResultantGoal" type="checkbox"> Minimize peak body-force resultant through motion (N)</label>
 <input id="guidedMotionContactResultantLimit" type="number" min="0" step="any" aria-label="Maximum body-force resultant through complete motion in newtons" placeholder="No limit">
+<label><input id="guidedMotionContactSumGoal" type="checkbox"> Minimize peak summed nodal body forces through motion (N)</label>
+<input id="guidedMotionContactSumLimit" type="number" min="0" step="any" aria-label="Maximum sum of nodal body-force magnitudes through complete motion in newtons" placeholder="No limit">
 <label><input id="guidedMotionContactVertexGoal" type="checkbox"> Minimize maximum vertex body force through motion (N)</label>
 <input id="guidedMotionContactVertexLimit" type="number" min="0" step="any" aria-label="Maximum vertex body force through complete motion in newtons" placeholder="No limit">
 <label><input id="guidedHeatPowerGoal" type="checkbox"> Compare signed independent sheet heat (W)</label>
@@ -2209,11 +2213,11 @@ An exhausted strain budget refuses that consumer while preserving independent me
 <p class="note">For body-contact load comparisons, add scenario <code>contact_loads</code> with
 <code>{"schema":"ftx-contact-loads/1","max_vertex_samples":100000,"max_pair_evaluations":1000000}</code>.
 Optional <code>instances</code> selects exact retained garment instances; their shared sewn vertices count once.
-Use nominal <code>body_contact_resultant_n</code> or <code>max_body_contact_vertex_force_n</code> for the initial state,
-and <code>motion_peak_body_contact_resultant_n</code> or <code>motion_max_body_contact_vertex_force_n</code> for the complete accepted history.
+Use nominal <code>body_contact_resultant_n</code>, <code>body_contact_sum_vertex_force_n</code> or <code>max_body_contact_vertex_force_n</code> for the initial state,
+and <code>motion_peak_body_contact_resultant_n</code>, <code>motion_peak_body_contact_sum_vertex_force_n</code> or <code>motion_max_body_contact_vertex_force_n</code> for the complete accepted history.
 Consumers <code>contact_loads</code> and <code>motion_contact_loads</code> may also be required independently.
-The workbench retains signed resultant vectors, nodal maxima, source vertices, sample times and exact material identities.
-Opposing forces can cancel in the resultant; nodal maxima depend on the mesh. These normal forces in newtons exclude tangential friction;
+The workbench retains signed resultant vectors, summed nodal magnitudes, nodal maxima, source vertices, sample times and exact material identities.
+Opposing vertex forces remain visible in the magnitude sum when they cancel in the resultant. Sums and nodal maxima depend on the mesh and contact policy. These normal forces in newtons exclude tangential friction;
 they are not pressure or comfort limits. Missing source data or exhausted work allowances keep this consumer unavailable without hiding independent results.</p>
 <p>Changing either request, measurements, body or original pattern withdraws affected results. Cancel terminates the worker,
 including synchronous simulation. Raw reports and exact input JSON are downloadable; keep the source-identified body model locally for replay.</p>

@@ -8173,8 +8173,9 @@ test('guided contact loads preserve exact instance scopes, force criteria and in
   guidedMotionSourceControls(p);await addGuidedMotion(p,'0.002','35');
   p.e.guidedDrapeMassGoal.checked=false;p.e.guidedHeatPowerGoal.checked=false;
   p.e.guidedRequireContactLoads.checked=true;p.e.guidedRequireMotionContactLoads.checked=true;
-  const metrics=[['ContactResultant','body_contact_resultant_n',5],['ContactVertex','max_body_contact_vertex_force_n',2],
-    ['MotionContactResultant','motion_peak_body_contact_resultant_n',10],['MotionContactVertex','motion_max_body_contact_vertex_force_n',4]];
+  const metrics=[['ContactResultant','body_contact_resultant_n',5],['ContactSum','body_contact_sum_vertex_force_n',12],
+    ['ContactVertex','max_body_contact_vertex_force_n',2],['MotionContactResultant','motion_peak_body_contact_resultant_n',10],
+    ['MotionContactSum','motion_peak_body_contact_sum_vertex_force_n',15],['MotionContactVertex','motion_max_body_contact_vertex_force_n',4]];
   for(const [id,,maximum] of metrics) {p.e['guided'+id+'Goal'].checked=true;p.e['guided'+id+'Limit'].value=String(maximum);}
   await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
   const scenario=JSON.parse(sent.scenarioRequest),comparison=JSON.parse(sent.studyRequest).comparison;
@@ -8206,12 +8207,13 @@ test('guided contact loads preserve exact instance scopes, force criteria and in
 test('guided contact loads admit explicit nominal force guards beside bounded heat and refuse incomplete or unsupported criteria',async()=>{
   const {p}=await guidedScenarioSetup(true);guidedContactControls(p);
   p.e.guidedDrapeMassGoal.checked=false;p.e.guidedBasis.value='reported_bounds';p.e.guidedLimitBasis.value='nominal';
-  p.e.guidedContactVertexLimit.value='0';p.e.guidedRequireContactLoads.checked=true;
+  p.e.guidedContactVertexLimit.value='0';p.e.guidedContactSumLimit.value='0';p.e.guidedRequireContactLoads.checked=true;
   await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
   assert.deepEqual(JSON.parse(sent.scenarioRequest).contact_loads,{schema:'ftx-contact-loads/1',max_vertex_samples:100000,max_pair_evaluations:1000000});
   const comparison=JSON.parse(sent.studyRequest).comparison;
   assert.equal(comparison.basis,'reported_bounds');assert.deepEqual(comparison.objectives,[{metric:'independent_surface_power_w',direction:'maximize'}]);
-  assert.deepEqual(comparison.constraints,[{metric:'max_body_contact_vertex_force_n',maximum:0,basis:'nominal'}]);
+  assert.deepEqual(comparison.constraints,[{metric:'max_body_contact_vertex_force_n',maximum:0,basis:'nominal'},
+    {metric:'body_contact_sum_vertex_force_n',maximum:0,basis:'nominal'}]);
   for(const invalid of ['empty-scope','duplicate-scope','blank-scope','missing-contact','missing-motion','motion-without-contact',
     'reported-goal','reported-guard','negative-limit','fractional-vertices','zero-pairs','oversized-pairs']) {
     const {p}=await guidedScenarioSetup();guidedContactControls(p);
@@ -8239,9 +8241,11 @@ test('guided contact loads admit explicit nominal force guards beside bounded he
 test('guided named cases freeze contact scopes, independent allowances and force limits without reading later drafts',async()=>{
   const {p}=await guidedScenarioSetup();guidedContactControls(p,['front.R']);
   p.e.guidedContactResultantGoal.checked=true;p.e.guidedContactResultantLimit.value='5';p.e.guidedRequireContactLoads.checked=true;
+  p.e.guidedContactSumGoal.checked=true;p.e.guidedContactSumLimit.value='12';
   guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';await saveGuidedCase(p,'front contact');
   guidedContactControls(p);p.e.guidedContactVertexBudget.value='200000';p.e.guidedContactPairBudget.value='3000000';
   p.e.guidedContactResultantLimit.value='10';guidedMotionSourceControls(p);await addGuidedMotion(p,'0.002','35');
+  p.e.guidedContactSumLimit.value='15';p.e.guidedMotionContactSumGoal.checked=true;p.e.guidedMotionContactSumLimit.value='20';
   p.e.guidedMotionContactVertexGoal.checked=true;p.e.guidedMotionContactVertexLimit.value='4';p.e.guidedRequireMotionContactLoads.checked=true;
   await saveGuidedCase(p,'moving garment');await p.e.scenario.onclick();
   const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
@@ -8251,8 +8255,9 @@ test('guided named cases freeze contact scopes, independent allowances and force
     {schema:'ftx-contact-loads/1',max_vertex_samples:200000,max_pair_evaluations:3000000}]);
   assert.equal(Object.hasOwn(cases[0].scenario,'motion'),false);assert.ok(cases[1].scenario.motion);
   assert.deepEqual(cases.map(item=>item.comparison.constraints),[
-    [{metric:'body_contact_resultant_n',maximum:5}],
-    [{metric:'body_contact_resultant_n',maximum:10},{metric:'motion_max_body_contact_vertex_force_n',maximum:4}]]);
+    [{metric:'body_contact_resultant_n',maximum:5},{metric:'body_contact_sum_vertex_force_n',maximum:12}],
+    [{metric:'body_contact_resultant_n',maximum:10},{metric:'body_contact_sum_vertex_force_n',maximum:15},
+      {metric:'motion_peak_body_contact_sum_vertex_force_n',maximum:20},{metric:'motion_max_body_contact_vertex_force_n',maximum:4}]]);
   assert.deepEqual(cases.map(item=>item.comparison.required_consumers.sort()),[
     ['contact_loads','drape'],['contact_loads','drape','motion_contact_loads']]);
   p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
@@ -8272,7 +8277,7 @@ test('guided contact source reads capture scopes and cancel obsolete single runs
   p.e.guidedContactVertexBudget.value='1';p.e.guidedContactPairBudget.value='2';delay.resolve(sources.fit);await running;
   assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).contact_loads,
     {schema:'ftx-contact-loads/1',instances:['front.R'],max_vertex_samples:100000,max_pair_evaluations:1000000});
-  for(const mode of ['single','draft'])for(const change of ['enabled','scope','instances','vertices','pairs','goal','guard','required']) {
+  for(const mode of ['single','draft'])for(const change of ['enabled','scope','instances','vertices','pairs','goal','guard','sum-goal','sum-guard','required']) {
     const {p,sources}=await guidedScenarioSetup();guidedContactControls(p,['front.R']);
     if(mode==='draft'){guidedNamedCases(p);await saveGuidedCase(p,'retained');p.e.guidedScenarioPolicySource.value='snapshot';}
     const delay=deferred();let reading=false;
@@ -8281,7 +8286,9 @@ test('guided contact source reads capture scopes and cancel obsolete single runs
     const running=mode==='draft'?saveGuidedCase(p,'pending'):p.e.scenario.onclick();assert.equal(reading,true,mode+':'+change);
     const [id,event]={enabled:['guidedContactLoads','change'],scope:['guidedContactLoadsScope','change'],
       instances:['guidedContactLoadsInstances','input'],vertices:['guidedContactVertexBudget','input'],pairs:['guidedContactPairBudget','input'],
-      goal:['guidedContactResultantGoal','change'],guard:['guidedMotionContactVertexLimit','input'],required:['guidedRequireMotionContactLoads','change']}[change];
+      goal:['guidedContactResultantGoal','change'],guard:['guidedMotionContactVertexLimit','input'],
+      'sum-goal':['guidedContactSumGoal','change'],'sum-guard':['guidedMotionContactSumLimit','input'],
+      required:['guidedRequireMotionContactLoads','change']}[change];
     p.e[id].handlers[event]();assert.equal(old.dead,true,mode+':'+change);p.ready();delay.resolve(sources.fit);await running;
     assert.equal(old.messages.length,before,mode+':'+change);assert.equal(p.current().messages.length,0,mode+':'+change);
     assert.equal(p.e.guidedScenarioCases.children.length,mode==='draft'?1:0,mode+':'+change);assert.equal(p.live.size,0,mode+':'+change);
@@ -13772,9 +13779,9 @@ test('body-contact loads retain signed vectors, force witnesses and independent 
   const s=section(p,'Fresh drape and heat alternatives');
   const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
   assert.deepEqual(plain(table('A: accepted-motion body-contact loads').children[2].children.map(n=>n.textContent)),
-    ['10','Sample 1 at 0.5 s','6','Sample 1 at 0.5 s']);
+    ['10','Sample 1 at 0.5 s','Unknown','Unknown','6','Sample 1 at 0.5 s']);
   assert.deepEqual(plain(table('A: accepted-motion sampled body-contact forces').children[3].children.map(n=>n.textContent)),
-    ['1','0.5','0','-8','6','10','6','9']);
+    ['1','0.5','0','-8','6','10','Unknown','6','9']);
   assert.match(visibleText(s),/Motion peak body-contact resultant/);
   assert.match(visibleText(s),/Nodal maxima depend on mesh resolution/);
   assert.match(visibleText(s),/Selected garment instances: <cuff>/);
@@ -13782,6 +13789,22 @@ test('body-contact loads retain signed vectors, force witnesses and independent 
   const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: accepted-motion contact scope, materials and sampled force witnesses (display only)');
   source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<material digest>/);
   assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  // The initial frame can carry the largest opposing load although its resultant is smaller.
+  loads.frames[0].body.sum_vertex_force_n=12;loads.frames[1].body.sum_vertex_force_n=10;
+  loads.peak_body_sum_vertex_force_n=12;loads.peak_body_sum_vertex_force_sample=0;
+  initial.contact_loads.result.peak_body_sum_vertex_force_n=12;
+  initial.contact_loads.result.peak_body_sum_vertex_force_sample=0;
+  report.comparison.policy.objectives.push({metric:'motion_peak_body_contact_sum_vertex_force_n',direction:'minimize'});
+  report.comparison.alternatives[0].readings.motion_peak_body_contact_sum_vertex_force_n={value:12,unit:'N'};
+  await p.e.scenario.onclick();p.emit(report);
+  assert.deepEqual(plain(table('A: accepted-motion body-contact loads').children[2].children.map(n=>n.textContent)),
+    ['10','Sample 1 at 0.5 s','12','Sample 0 at 0 s','6','Sample 1 at 0.5 s']);
+  assert.deepEqual(plain(table('A: initial body-contact loads').children[2].children.map(n=>n.textContent)),
+    ['5','Sample 0 at 0 s','12','Sample 0 at 0 s','4','Sample 0 at 0 s']);
+  assert.deepEqual(plain(table('A: accepted-motion sampled body-contact forces').children[2].children.map(n=>n.textContent)),
+    ['0','0','-3','0','4','5','12','4','7']);
+  assert.match(visibleText(s),/Motion peak sum of nodal body-contact force magnitudes/);
+  assert.match(visibleText(s),/Summed nodal magnitudes retain opposing vertex loads/);
   initial.motion.result.contact_loads=refused('contact-load pair budget exhausted');
   await p.e.scenario.onclick(); p.emit(report);
   assert.equal(table('A: accepted-motion body-contact loads'),undefined);
@@ -17028,8 +17051,10 @@ test('compiled WASM guided contact loads preserve native force histories and ind
   {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_GUIDED_SCENARIO_BODY},async t=>{
     const source=path.resolve(process.env.FTX_GUIDED_SCENARIO_BODY),load=name=>fs.readFileSync(path.join(source,name));
     const guidedContactMetrics=[['guidedContactResultant','body_contact_resultant_n'],
+      ['guidedContactSum','body_contact_sum_vertex_force_n'],
       ['guidedContactVertex','max_body_contact_vertex_force_n'],
       ['guidedMotionContactResultant','motion_peak_body_contact_resultant_n'],
+      ['guidedMotionContactSum','motion_peak_body_contact_sum_vertex_force_n'],
       ['guidedMotionContactVertex','motion_max_body_contact_vertex_force_n']];
     const sourcePattern=JSON.parse(load('pattern.json'));
     // Reuse accepted_body_workflow's settled, slightly stretched band on the synthetic 100 mm cylinder.
@@ -17117,9 +17142,13 @@ test('compiled WASM guided contact loads preserve native force histories and ind
         for(const force of forces)force.forEach((value,index)=>{sum[index]+=value;});
         sum.forEach((value,index)=>close(frame.body.resultant_n[index],value));
         close(frame.body.resultant_magnitude_n,Math.hypot(...sum));
+        close(frame.body.sum_vertex_force_n,forces.reduce((total,force)=>total+Math.hypot(...force),0));
         close(frame.body.max_vertex_force_n,Math.max(...forces.map(force=>Math.hypot(...force))));
       }
-      const expected=[first.peak_body_resultant_n,first.max_body_vertex_force_n,history.peak_body_resultant_n,history.max_body_vertex_force_n];
+      const expected=[first.peak_body_resultant_n,first.peak_body_sum_vertex_force_n,first.max_body_vertex_force_n,
+        history.peak_body_resultant_n,history.peak_body_sum_vertex_force_n,history.max_body_vertex_force_n];
+      assert.equal(history.peak_body_sum_vertex_force_n,Math.max(...history.frames.map(frame=>frame.body.sum_vertex_force_n)));
+      assert.equal(history.peak_body_sum_vertex_force_sample,history.frames.findIndex(frame=>frame.body.sum_vertex_force_n===history.peak_body_sum_vertex_force_n));
       guidedContactMetrics.forEach(([,metric],index)=>{
         const reading=row.readings[metric];assert.equal(reading.unit,'N');assert.equal(reading.value,expected[index]);
         assert.equal(reading.consumer,metric.startsWith('motion_')?'motion_contact_loads':'contact_loads');
@@ -17149,7 +17178,7 @@ test('compiled WASM guided contact loads preserve native force histories and ind
       assert.deepEqual(after.motion.result.samples,before.motion.result.samples,'A contact-scope refusal leaves the actual mechanical trajectory intact');
       assert.equal(after.metrics.independent_surface_power_w,before.metrics.independent_surface_power_w);
     }
-    t.diagnostic('Guided nonzero initial and accepted-motion body forces, exact material scope, all four nominal readings, a 0.18 N nodal guard and independent scope refusal match '+
+    t.diagnostic('Guided nonzero initial and accepted-motion body forces, exact material scope, all six nominal readings, a 0.18 N nodal guard and independent scope refusal match '+
       (native?'native ftx-materials, public WASM and the worker':'public WASM and the worker')+
       '. Existing synthetic settled-band fixture: baseline '+baselineForce+' N, thicker '+thickerForce+
       ' N. These are numerical nodal forces, not pressure, comfort or physical garment-fit validation. Replay: '+(work||'not requested'));
@@ -19281,8 +19310,9 @@ test('compiled WASM guided seam adjustments preserve native fit-screened repair 
     t.diagnostic('Generated true-seam grid repair, unrepaired flat refusal and two-probe cap-ease adaptive mass guidance match native, public WASM and worker reports against the accepted synthetic body. No drape or physical-fit claim. Replay: '+work);
   });
 
-const guidedContactGoals=[['guidedContactResultant','body_contact_resultant_n'],
+const guidedContactGoals=[['guidedContactResultant','body_contact_resultant_n'],['guidedContactSum','body_contact_sum_vertex_force_n'],
   ['guidedContactVertex','max_body_contact_vertex_force_n'],['guidedMotionContactResultant','motion_peak_body_contact_resultant_n'],
+  ['guidedMotionContactSum','motion_peak_body_contact_sum_vertex_force_n'],
   ['guidedMotionContactVertex','motion_max_body_contact_vertex_force_n']];
 
 test('guided inactive contact controls preserve pending runs and original scenario files',async()=>{

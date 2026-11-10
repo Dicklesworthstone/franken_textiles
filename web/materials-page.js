@@ -101,7 +101,9 @@ const guidedMetrics = [
   ["guidedDrapeMass", "simulated_cloth_mass_kg"], ["guidedStrain", "max_absolute_edge_strain_pct"],
   ["guidedMotionStrain", "motion_max_absolute_edge_strain_pct"],
   ["guidedContactResultant", "body_contact_resultant_n"], ["guidedContactVertex", "max_body_contact_vertex_force_n"],
+  ["guidedContactSum", "body_contact_sum_vertex_force_n"],
   ["guidedMotionContactResultant", "motion_peak_body_contact_resultant_n"],
+  ["guidedMotionContactSum", "motion_peak_body_contact_sum_vertex_force_n"],
   ["guidedMotionContactVertex", "motion_max_body_contact_vertex_force_n"],
   ["guidedHeatPower", "independent_surface_power_w"],
 ];
@@ -939,8 +941,10 @@ function objectiveComparison(parent, r) {
   }
   const contactLabels = {
     body_contact_resultant_n: "Initial body-contact resultant",
+    body_contact_sum_vertex_force_n: "Initial sum of nodal body-contact force magnitudes",
     max_body_contact_vertex_force_n: "Initial maximum nodal body-contact force",
     motion_peak_body_contact_resultant_n: "Motion peak body-contact resultant",
+    motion_peak_body_contact_sum_vertex_force_n: "Motion peak sum of nodal body-contact force magnitudes",
     motion_max_body_contact_vertex_force_n: "Motion maximum nodal body-contact force"
   };
   const textileWaterLabels = {
@@ -979,6 +983,7 @@ function objectiveComparison(parent, r) {
     const contact = document.createElement("p");
     contact.textContent = "Body-contact objectives use normal barrier forces in newtons over the selected garment vertices. " +
       "Shared seam vertices count once, and opposite forces can cancel in a resultant. Nodal maxima depend on mesh resolution. " +
+      "Summed nodal magnitudes retain opposing vertex loads and also depend on mesh and contact policy. " +
       "Motion extrema cover the initial state and every accepted sample; these declared limits do not establish contact pressure, friction loads, comfort or measured fit.";
     parent.append(contact);
   }
@@ -1144,20 +1149,22 @@ function contactLoadsComparison(parent, key, output, dependency, requested, movi
       return frame ? `Sample ${metric(frame.sample_index)} at ${metric(frame.time_s)} s` : "Unknown";
     };
     const summary = table(parent, `${key}: ${label} body-contact loads`,
-      ["Peak resultant (N)", "Resultant witness", "Maximum nodal force (N)", "Nodal-force witness"]);
+      ["Peak resultant (N)", "Resultant witness", "Peak sum of nodal magnitudes (N)", "Summed-force witness", "Maximum nodal force (N)", "Nodal-force witness"]);
     cells(summary, [metric(result.peak_body_resultant_n), witness(result.peak_body_resultant_sample),
+      metric(result.peak_body_sum_vertex_force_n), witness(result.peak_body_sum_vertex_force_sample),
       metric(result.max_body_vertex_force_n), witness(result.max_body_vertex_force_sample)]);
     const samples = table(parent, `${key}: ${label} sampled body-contact forces`,
-      ["Sample", "Time (s)", "Resultant x (N)", "Resultant y (N)", "Resultant z (N)", "Resultant magnitude (N)", "Maximum nodal force (N)", "Source vertex"]);
+      ["Sample", "Time (s)", "Resultant x (N)", "Resultant y (N)", "Resultant z (N)", "Resultant magnitude (N)", "Sum of nodal magnitudes (N)", "Maximum nodal force (N)", "Source vertex"]);
     for (const frame of frames) {
       const body = frame.body;
       cells(samples, [metric(frame.sample_index), metric(frame.time_s),
         ...[0, 1, 2].map(i => metric(body?.resultant_n?.[i])), metric(body?.resultant_magnitude_n),
+        metric(body?.sum_vertex_force_n),
         metric(body?.max_vertex_force_n), metric(body?.max_force_vertex)]);
     }
     const scope = document.createElement("p");
     scope.textContent = `Selected garment instances: ${Object.keys(result.source?.instances || {}).join(", ") || "Unknown"}. ` +
-      "The shared vertices of sewn pieces are counted once. Resultants can hide opposing local loads; compare nodal maxima at the same mesh resolution. " +
+      "The shared vertices of sewn pieces are counted once. Summed nodal magnitudes retain opposing vertex loads that a resultant can hide. Compare sums and nodal maxima at the same mesh and contact policy. " +
       "These normal barrier forces exclude tangential friction and do not establish pressure, safe wear or continuous-time load bounds.";
     parent.append(scope);
   }

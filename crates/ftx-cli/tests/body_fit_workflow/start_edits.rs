@@ -334,10 +334,7 @@ fn portable_silhouette_authoring_reaches_actual_native_and_portable_fit() {
                     .map(|(column, _)| column as f64 + 0.5)
                     .collect();
                 assert_eq!(edges.len() % 2, 0);
-                let intervals: Vec<_> = edges
-                    .chunks_exact(2)
-                    .map(|pair| [pair[0], pair[1]])
-                    .collect();
+                let intervals = edges.as_chunks::<2>().0;
                 json!({"axis":"horizontal","at_px":row,"intervals_px":intervals,"sigma_px":1.0,
                 "partition":if row == 100 || row == 480 {"held_out"}else{"fit"}})
             })
