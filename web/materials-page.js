@@ -394,6 +394,7 @@ function controls() {
   $("guidedDesignAdaptivePolicy").hidden = !adaptiveDesign;
   $("guidedDesignRestartControls").hidden = !adaptiveDesign;
   const restartActive = !!source && guided && $("guidedDesign").checked && adaptiveDesign;
+  $("guidedDesignDomainRestarts").disabled = !restartActive;
   for (const { input } of guidedDesignRestartInputs) input.disabled = !restartActive;
   $("guidedDesignRestartAdd").disabled = !restartActive || guidedDesignRestarts.length >= 31;
   $("guidedDesignRestartClear").disabled = !restartActive || !guidedDesignRestarts.length;
@@ -1947,21 +1948,26 @@ function designComparison(op, parent, study, casePolicies = {}) {
         "or that a global optimum was found. Selected designs use the ordinary manufacturing and scenario consumers, and the original baseline remains visible. " +
         "Computed target compliance does not establish physical garment fit.";
       parent.append(scope);
-      if (grid.request?.restart_points_mm?.length) {
+      if (grid.request?.restart_points_mm?.length || grid.request?.domain_restarts) {
+        const authored = grid.request.restart_points_mm || [];
+        const generated = grid.domain_restart_points_mm || [];
         const points = [Object.fromEntries((grid.request.variables || []).map(variable => [variable.key, variable.initial_mm])),
-          ...grid.request.restart_points_mm];
+          ...authored, ...generated];
         const starts = table(parent, "Adaptive starting points", ["Start", "Coordinates (mm)", "New trials", "Stop reason",
           "Initial trial", "Final polling trial", "Final polling steps (mm)"]);
         const coordinates = point => Object.entries(point || {}).map(([key, value]) => `${key}: ${metric(value)}`).join("; ") || "Unknown";
         for (const [index, point] of points.entries()) {
           const attempted = grid.search_starts?.find(start => start.start_index === index);
-          cells(starts, [index ? `Additional start ${index}` : "Initial point", coordinates(point),
+          const label = !index ? "Initial point" : index <= authored.length ?
+            `Additional start ${index}` : `Automatic start ${index - authored.length}`;
+          cells(starts, [label, coordinates(point),
             attempted ? metric(attempted.evaluations) : "Not reached", attempted?.stop_reason?.replaceAll("_", " ") ?? "Not reached",
             attempted?.initial_trial_key ?? "—", attempted?.final_trial_key ?? "—",
             attempted ? coordinates(attempted.final_steps_mm) : "—"]);
         }
         const restarts = document.createElement("p");
         restarts.textContent = "Additional starts run in the declared order after a minimum-step stop, within the same unique-trial and consumer budgets. " +
+          (grid.request?.domain_restarts ? "Automatic starts follow your saved points; their exact returned coordinates are shown without browser recalculation. " : "") +
           "A cached start may add no new trials. Unreached starts remain unknown; these local searches do not establish a global optimum.";
         parent.append(restarts);
       }
@@ -6163,7 +6169,7 @@ $("clearGuidedInventory").onclick = () => {
 $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
   "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
-  "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations",
+  "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations", "guidedDesignDomainRestarts",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...[...guidedMetrics, ...guidedDirectionalMetrics].flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]),
@@ -6212,7 +6218,7 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
   if (id.endsWith("Limit") || ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
     "guidedDesignKey", "guidedDesignAt", "guidedDesignMultiplier", "guidedDesignValues", "guidedDesignDx", "guidedDesignDy",
     "guidedDesignMax", "guidedDesignGridBudget", "guidedDesignLower", "guidedDesignUpper", "guidedDesignInitial",
-    "guidedDesignInitialStep", "guidedDesignMinimumStep", "guidedDesignEvaluations"].includes(id)) $(id).addEventListener("input", changed);
+    "guidedDesignInitialStep", "guidedDesignMinimumStep", "guidedDesignEvaluations", "guidedDesignDomainRestarts"].includes(id)) $(id).addEventListener("input", changed);
 }
 $("rollPreview").addEventListener("change", () => invalidate(["cut"]));
 $("sewPreviewCell").addEventListener("change", () => {
@@ -6554,7 +6560,9 @@ function guidedDesignInput(number, inScenario) {
     guidedDesignCaseNomination.key !== caseKey || guidedDesignCaseNomination.source !== scenarioSourceIdentity())) {
     throw Error("Choose a current named scenario explicitly to guide adaptive discovery.");
   }
+  const domainRestarts = number("guidedDesignDomainRestarts", "automatic starting-point count");
   return { ...common, mode, objective, maxEvaluations: number("guidedDesignEvaluations", "unique discovery trial allowance"),
+    ...(domainRestarts === 0 ? {} : { domainRestarts }),
     ...($("guidedDesignJoint").checked ? { polling: "axis_and_joint" } : {}),
     ...(objective !== "fit_band_violation_mm" && $("guidedDesignRestore").checked ? { constraintRestoration: "componentwise" } : {}),
     ...(guidedDesignRestarts.length ? { restartPointsMm: guidedDesignRestarts.map(point => ({ ...point })) } : {}),
@@ -6574,6 +6582,7 @@ function resetGuidedDesign() {
   guidedDesignVariables.length = 0; guidedDesignVariables.push(newGuidedDesignVariable()); guidedDesignCurrent = 0;
   $("guidedDesignMode").value = "grid"; $("guidedDesignObjective").value = "fit_band_violation_mm";
   $("guidedDesignJoint").checked = false;
+  $("guidedDesignDomainRestarts").value = "0";
   $("guidedDesignRestore").checked = false;
   guidedDesignNomination = null;
   guidedDesignNominations.clear(); $("guidedDesignMultiple").checked = false;

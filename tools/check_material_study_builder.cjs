@@ -2057,6 +2057,41 @@ test('adaptive additional starts retain complete authored coordinates without in
   assert.deepEqual(matrix.design_adaptive.restart_points_mm,design.restartPointsMm);
 });
 
+test('automatic adaptive starts preserve native policy, authored order and shared reservations', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const domainRestarts of [1,32]) {
+    const design=adaptiveDesignInput({domainRestarts,restartPointsMm:[{ease:3,length:4,'local shape':5}]});
+    const input={...state(),design},before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+    assert.equal(JSON.stringify(input),before);
+    assert.equal(result.design_adaptive.domain_restarts,domainRestarts);
+    assert.deepEqual(result.design_adaptive.restart_points_mm,design.restartPointsMm);
+    assert.equal(result.design_adaptive.max_evaluations,96);
+    assert.equal(result.design_adaptive.max_designs,2);
+    assert.equal(Object.hasOwn(result.design_adaptive,'domain_restart_points_mm'),false,'Only Rust generates points');
+    assert.ok(raw.includes(input.design.fitSpec));assert.ok(raw.includes(input.candidates[0].selection));
+    delete result.design_adaptive.domain_restarts;
+    const plain={...design};delete plain.domainRestarts;
+    assert.deepEqual(result,JSON.parse(build({...input,design:plain})));
+  }
+  const design=adaptiveDesignInput({objective:'consumer_pareto',materialKeys:['baseline','alternative'],caseKey:'cold',
+    domainRestarts:32,maxEvaluations:3,maxDesigns:1});
+  const result=JSON.parse(build({...state(),design},namedContext(undefined,20)));
+  assert.equal(result.design_adaptive.domain_restarts,32);
+  assert.equal(result.design_adaptive.max_evaluations,3,'Starts do not reserve extra consumer probes');
+  assert.deepEqual(result.design_adaptive.material_keys,['baseline','alternative']);
+});
+
+test('automatic adaptive starts require an explicit bounded integer and remain absent in ordinary searches', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const domainRestarts of [undefined,null,false,true,0,-1,33,1.5,'4',NaN,Infinity,[],{}]) {
+    assert.throws(()=>build({...state(),design:adaptiveDesignInput({domainRestarts})}),/integer from 1 to 32/);
+  }
+  assert.throws(()=>build({...state(),design:multiDesignInput({domainRestarts:4})}),/unsupported/);
+  const result=JSON.parse(build({...state(),design:adaptiveDesignInput()}));
+  assert.equal(Object.hasOwn(result.design_adaptive,'domain_restarts'),false);
+  assert.equal(Object.hasOwn(result.design_adaptive,'restart_points_mm'),false);
+});
+
 test('adaptive additional starts refuse incomplete stale repeated and out-of-domain coordinates', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const valid={ease:3,length:4,'local shape':5},initial={ease:-0,length:1,'local shape':2};

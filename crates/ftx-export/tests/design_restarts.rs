@@ -1186,8 +1186,15 @@ fn domain_restarts_find_remote_feasible_designs_without_authored_coordinates() {
         );
         assert_eq!(
             row["assembly_mass"]["result"],
-            serde_json::to_value(request.assembly_mass.as_ref().unwrap().evaluate(&bound).unwrap())
-                .unwrap()
+            serde_json::to_value(
+                request
+                    .assembly_mass
+                    .as_ref()
+                    .unwrap()
+                    .evaluate(&bound)
+                    .unwrap()
+            )
+            .unwrap()
         );
     }
 }
@@ -1275,13 +1282,20 @@ fn domain_restarts_reach_a_joint_fit_region_and_share_every_named_case_consumer_
     value["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([30, 30, 30]);
     let mut fit_request: Request = serde_json::from_value(value).unwrap();
     assert_eq!(run(&fit_request)["design_search"]["selected_designs"], 0);
-    fit_request.design_adaptive.as_mut().unwrap().domain_restarts = Some(1);
+    fit_request
+        .design_adaptive
+        .as_mut()
+        .unwrap()
+        .domain_restarts = Some(1);
     let report = run(&fit_request);
     assert_eq!(
         selected(&report)["design"]["variables_mm"],
         json!({"front":30.0,"back":30.0})
     );
-    assert_eq!(report["design_search"]["stop_reason"], "qualified_design_limit");
+    assert_eq!(
+        report["design_search"]["stop_reason"],
+        "qualified_design_limit"
+    );
 
     let pattern = Pattern::from_json(PATTERN).unwrap();
     let body = Measurements(json!({"desired_length":100}));

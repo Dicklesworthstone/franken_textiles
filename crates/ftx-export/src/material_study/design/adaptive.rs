@@ -2320,10 +2320,16 @@ mod domain_restart_tests {
             variable.initial_step_mm = bounds[1] - bounds[0];
             variable.minimum_step_mm = variable.initial_step_mm;
             request.validate().unwrap();
-            assert!(request.domain_restart_points().unwrap().iter().all(|point| {
-                let value = point["axis0"];
-                value.is_finite() && (bounds[0]..=bounds[1]).contains(&value)
-            }));
+            assert!(
+                request
+                    .domain_restart_points()
+                    .unwrap()
+                    .iter()
+                    .all(|point| {
+                        let value = point["axis0"];
+                        value.is_finite() && (bounds[0]..=bounds[1]).contains(&value)
+                    })
+            );
         }
     }
 }

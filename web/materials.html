@@ -667,6 +667,11 @@ than the initial step and the initial step no larger than the domain span. Value
 Grid lists and adaptive domains remain separate when switching methods.</p>
 </div>
 <fieldset id="guidedDesignRestartControls" hidden><legend>Explore additional starting points</legend>
+<label>Automatic starts across the declared bounds
+<input id="guidedDesignDomainRestarts" type="number" min="0" max="32" step="1" value="0"></label>
+<p class="note">Use 0 to keep only the initial point and your saved starts, or request 1–32 automatic points.
+The search tries your saved starts first, then samples the midpoint, corners and interior of the declared bounds.
+Returned results show the exact generated points, including those the search did not reach.</p>
 <p>After one local search reaches its minimum polling steps, start from another declared combination of values.
 This can reach a useful region separated by infeasible designs. Enter one value for every variable below.</p>
 <div id="guidedDesignRestartFields" class="study-fields"></div>

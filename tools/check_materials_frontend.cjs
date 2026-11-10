@@ -9625,6 +9625,68 @@ function selectAdaptiveMaterials(p, keys) {
   p.e.guidedDesignMaterials.handlers.change();
 }
 
+test('guided automatic starts share budgets, preserve authored points and stay inactive in grid mode',async()=>{
+  const {p}=await adaptiveDesignSetup();
+  assert.equal(p.e.guidedDesignDomainRestarts.value,'0');assert.equal(p.e.guidedDesignDomainRestarts.disabled,false);
+  guidedDesignField(p,'guidedDesignDomainRestarts','8');
+  guidedRestartDraft(p,{length:30,taper:1});p.e.guidedDesignRestartAdd.onclick();
+  await p.e.study.onclick();let request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(request.design_adaptive.domain_restarts,8);
+  assert.deepEqual(request.design_adaptive.restart_points_mm,[{length:30,taper:1}]);
+  assert.equal(request.design_adaptive.max_evaluations,24);
+  assert.equal(Object.hasOwn(request.design_adaptive,'domain_restart_points_mm'),false);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMode','grid','change');assert.equal(p.e.guidedDesignDomainRestarts.disabled,true);
+  await p.e.study.onclick();request=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(request.design_adaptive,undefined);assert.equal(Object.hasOwn(request.design_grid,'domain_restarts'),false);p.emit(studyReport());
+  guidedDesignField(p,'guidedDesignMode','adaptive','change');assert.equal(p.e.guidedDesignDomainRestarts.value,'8');
+  for(const invalid of ['-1','33','1.5','']) {
+    guidedDesignField(p,'guidedDesignDomainRestarts',invalid);
+    const before=p.current().messages.length;await p.e.study.onclick();assert.equal(p.current().messages.length,before);
+    assert.match(p.e.error.textContent,/starting|integer|finite|Enter/i);
+  }
+  guidedDesignField(p,'guidedDesignDomainRestarts','0');await p.e.study.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).studyRequest).design_adaptive,'domain_restarts'),false);p.emit(studyReport());
+  p.select('patternFile',coupledDesignPattern);await p.e.patternFile.onchange();
+  assert.equal(p.e.guidedDesignDomainRestarts.value,'0');
+});
+
+test('guided automatic start edits cancel stale work and preserve the submitted policy snapshot',async()=>{
+  for(const notify of [true,false]) {
+    const {p,fit}=await adaptiveDesignSetup(),delay=deferred();
+    guidedDesignField(p,'guidedDesignDomainRestarts','8');
+    p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=p.e.study.onclick();
+    p.e.guidedDesignDomainRestarts.value='3';
+    if(notify){p.e.guidedDesignDomainRestarts.handlers.input();assert.equal(old.dead,true);p.ready();}
+    delay.resolve(fit);await running;
+    if(notify){
+      assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+      old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
+    }else assert.equal(JSON.parse(old.messages.at(-1).studyRequest).design_adaptive.domain_restarts,8);
+  }
+});
+
+test('automatic start results display exact native coordinates, cached starts and unvisited points',async()=>{
+  const p=await pageModule();await p.load();p.select('studyRequest','{}');const report=designReport();
+  report.design_search={schema:'ftx-design-adaptive-search/1',
+    request:{variables:[{key:'length',initial_mm:10}],restart_points_mm:[{length:30}],domain_restarts:2},
+    domain_restart_points_mm:[{length:17.125},{length:39.75}],evaluations:3,
+    qualified_designs:0,selected_designs:0,stop_reason:'evaluation_budget',rows:[],
+    search_starts:[
+      {start_index:0,initial_trial_key:'first',final_trial_key:'first',evaluations:2,stop_reason:'minimum_steps',final_steps_mm:{length:0.5}},
+      {start_index:1,initial_trial_key:'authored',final_trial_key:'authored',evaluations:1,stop_reason:'minimum_steps',final_steps_mm:{length:0.5}},
+      {start_index:2,domain_restart_index:0,initial_trial_key:'cached',final_trial_key:'cached',evaluations:0,stop_reason:'evaluation_budget',final_steps_mm:{length:10}}]};
+  const before=JSON.stringify(report);await p.e.study.onclick();p.emit(report);assert.equal(JSON.stringify(report),before);
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  const starts=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Adaptive starting points').children.slice(2);
+  assert.equal(starts.length,4);assert.equal(starts[1].children[0].textContent,'Additional start 1');
+  assert.equal(starts[2].children[0].textContent,'Automatic start 1');assert.match(starts[2].children[1].textContent,/17.125/);
+  assert.equal(starts[2].children[2].textContent,'0');assert.equal(starts[2].children[4].textContent,'cached');
+  assert.equal(starts[3].children[0].textContent,'Automatic start 2');assert.match(starts[3].children[1].textContent,/39.75/);
+  assert.equal(starts[3].children[2].textContent,'Not reached');assert.match(visibleText(s),/do not establish a global optimum/);
+  p.e.studyRequest.handlers.change();assert.equal(s.hidden,true);
+});
+
 test('guided joint polling is explicit across fit and consumer modes, inactive in grids and reset by new sources',async()=>{
   const {p}=await adaptiveDesignSetup();
   assert.equal(p.e.guidedDesignJoint.checked,false);assert.equal(p.e.guidedDesignJoint.disabled,false);

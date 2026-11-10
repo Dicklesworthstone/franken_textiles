@@ -1065,10 +1065,14 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
   const fields = multiple ? ["variables", "maxDesigns", "fitSpec"] :
     ["pieceIds", "axis", "atMm", "multiplier", "values", "maxDesigns", "fitSpec"];
   const required = adaptive ? [...fields, "mode", "objective", "maxEvaluations"] : fields;
-  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey", "restartPointsMm", "constraintRestoration", "polling"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
+  const allowed = adaptive ? [...required, "materialKey", "materialKeys", "caseKey", "restartPointsMm", "domainRestarts", "constraintRestoration", "polling"] : multiple ? [...fields, "mode", "maxCandidates"] : fields;
   const design = object(value, [...allowed, "after"], required, "Linked design");
   const after = own(design, "after") ? buildGuidedDesignAfterOperations(design.after, [...pieces], seamIds) : undefined;
   if (adaptive) {
+    if (own(design, "domainRestarts") && (!Number.isSafeInteger(design.domainRestarts) ||
+      design.domainRestarts < 1 || design.domainRestarts > 32)) {
+      throw Error("Automatic adaptive starting points must be an integer from 1 to 32.");
+    }
     if (own(design, "polling") && design.polling !== "axis_and_joint") {
       throw Error("Combined adaptive changes require the axis_and_joint polling policy.");
     }
@@ -1135,6 +1139,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
     ...(own(design, "materialKeys") ? { material_keys: [...design.materialKeys] } : {}),
     ...(own(design, "caseKey") ? { case_key: design.caseKey } : {}), variables,
     ...(restartPoints.length ? { restart_points_mm: restartPoints } : {}),
+    ...(own(design, "domainRestarts") ? { domain_restarts: design.domainRestarts } : {}),
     ...(after === undefined ? {} : { after }),
     max_evaluations: design.maxEvaluations, max_designs: design.maxDesigns } :
     { variables, ...(after === undefined ? {} : { after }), max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } });
