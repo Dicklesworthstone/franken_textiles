@@ -2035,4 +2035,79 @@ mod tests {
         with_mpf_ok.extend_from_slice(&s0[2..]);
         assert!(decode(&with_mpf_ok, 40_000_000).is_ok());
     }
+
+    #[test]
+    fn arithmetic_lossless_and_hierarchical_sof_markers_refuse_explicitly() {
+        let frame = |sof: u8| -> Vec<u8> {
+            vec![
+                0xFF, 0xD8, 0xFF, sof, 0x00, 0x0B, 0x08, 0x00, 0x08, 0x00, 0x08, 0x01, 0x01, 0x11,
+                0x00, 0xFF, 0xD9,
+            ]
+        };
+        for sof in [0xC3, 0xCB] {
+            let bytes = frame(sof);
+            assert_eq!(
+                decode(&bytes, 40_000_000).unwrap_err(),
+                "JPEG: lossless JPEG is not decoded here"
+            );
+            assert!(crate::raster::load_image(&bytes).is_err());
+            assert!(crate::raster::image::load_photo_with_limit(&bytes, 40_000_000).is_err());
+            assert!(
+                crate::raster::image::load_capture_image_with_limit(&bytes, 40_000_000).is_err()
+            );
+        }
+        for sof in [0xC9, 0xCA] {
+            let bytes = frame(sof);
+            assert_eq!(
+                decode(&bytes, 40_000_000).unwrap_err(),
+                "JPEG: arithmetic coding is not decoded here"
+            );
+            assert!(crate::raster::load_image(&bytes).is_err());
+            assert!(crate::raster::image::load_photo_with_limit(&bytes, 40_000_000).is_err());
+            assert!(
+                crate::raster::image::load_capture_image_with_limit(&bytes, 40_000_000).is_err()
+            );
+        }
+        for sof in [0xC5, 0xC6, 0xC7, 0xC8, 0xCD, 0xCE, 0xCF] {
+            let bytes = frame(sof);
+            assert_eq!(
+                decode(&bytes, 40_000_000).unwrap_err(),
+                format!("JPEG: unsupported JPEG process (SOF type 0x{sof:02x})")
+            );
+            assert!(crate::raster::load_image(&bytes).is_err());
+            assert!(crate::raster::image::load_photo_with_limit(&bytes, 40_000_000).is_err());
+            assert!(
+                crate::raster::image::load_capture_image_with_limit(&bytes, 40_000_000).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn wide_quantization_dequantized_overflow_follows_portable_c_idct() {
+        // Damaged 16-bit DQT stream where coef[1] * q[1] = 300 * 200 = 60_000 > i16::MAX (32_767):
+        // ARM64 Neon wraps at 16 bits (-5_536), whereas portable jidctint.c evaluates pass 1 in
+        // 32-bit C integers (ws = 60_000 << 2 = 240_000) and pass 2 descaled samples
+        // [10_403, 8_819, 5_893, 2_069, -2_069, -5_893, -8_819, -10_403] -> IDCT_range_limit
+        // [255, 0, 0, 149, 107, 255, 255, 0] across native x86_64, ARM64 and wasm32.
+        let mut coef = [0i16; 64];
+        let mut q = [1i16; 64];
+        coef[1] = 300;
+        q[1] = 200;
+        let mut c_out = [0u8; 64];
+        idct_islow(&coef, &q, &mut c_out, 8);
+        let expected_c_block: [u8; 64] =
+            core::array::from_fn(|idx| [255, 0, 0, 149, 107, 255, 255, 0][idx % 8]);
+        assert_eq!(c_out, expected_c_block);
+        let mut neon_wrapped_coef = coef;
+        neon_wrapped_coef[1] = (i32::from(coef[1]) * i32::from(q[1])) as i16;
+        let mut unit_q = [1i16; 64];
+        unit_q[1] = 1;
+        let mut neon_out = [0u8; 64];
+        idct_islow(&neon_wrapped_coef, &unit_q, &mut neon_out, 8);
+        assert_ne!(c_out, neon_out);
+        assert_eq!(
+            sha256_hex(&c_out),
+            "2df4b1ad02667105483dfe33a6cc9b5e1c02ab4c5ba2fc8cf9efebcda1431e1a"
+        );
+    }
 }

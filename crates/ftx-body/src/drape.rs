@@ -30,6 +30,7 @@
 
 use std::collections::BTreeMap;
 
+use ftx_core::intersection::{indexed_triangle_pair, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3, det};
 use serde::{Deserialize, Serialize};
 
@@ -359,6 +360,138 @@ pub struct SkinMesh {
     pub report: SkinReport,
 }
 
+/// Relative enclosed-volume change (`|(posed - rest) / rest|`) above which linear-blend-skinning
+/// joint collapse or expansion is flagged as an advisory in `pose_geometry` and `body_contact_proxy`.
+pub const LBS_VOLUME_CHANGE_ADVISORY_FRACTION: f64 = 0.03;
+
+/// Default candidate-pair budget for [`SkinMesh::audit_self_intersections`] and [`body_pose_geometry_json`].
+pub const DEFAULT_POSE_AUDIT_PAIR_BUDGET: usize = 1_000_000;
+
+/// Exact self-intersection summary for a closed skin or trimmed collider mesh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkinIntersectionAudit {
+    /// Unique overlapping triangle-AABB pairs tested (`a < b`).
+    pub pairs_tested: usize,
+    /// Number of triangle pairs intersecting beyond a shared indexed vertex or edge.
+    pub intersecting_pairs: usize,
+    /// Lexicographically first intersecting face pair `[a, b]` (`a < b`), if any.
+    pub first_intersecting_pair: Option<[usize; 2]>,
+}
+
+/// Rest-to-posed volume change and surface self-intersection diagnostics for a posed skin or
+/// trimmed clothing collider. This is geometric mesh telemetry, not a soft-tissue or fit proof.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PoseGeometryReport {
+    /// Rest-pose enclosed volume (m³).
+    pub rest_volume_m3: f64,
+    /// Posed enclosed volume (m³).
+    pub posed_volume_m3: f64,
+    /// Signed relative change `(posed_volume_m3 - rest_volume_m3) / rest_volume_m3`.
+    pub volume_change_fraction: f64,
+    /// True when `|volume_change_fraction| > LBS_VOLUME_CHANGE_ADVISORY_FRACTION` (3 %),
+    /// indicating linear-blend-skinning joint volume change without soft-tissue conservation.
+    pub lbs_volume_loss_advisory: bool,
+    /// Posed surface area (m²).
+    pub posed_area_m2: f64,
+    /// Exact self-intersection audit of the posed surface.
+    pub self_intersections: SkinIntersectionAudit,
+}
+
+#[derive(Clone, Copy)]
+enum BvhKind {
+    Leaf { start: usize, end: usize },
+    Branch { left: usize, right: usize },
+}
+
+#[derive(Clone, Copy)]
+struct BvhNode {
+    lo: Vec3,
+    hi: Vec3,
+    kind: BvhKind,
+}
+
+fn box_overlaps(a: (Vec3, Vec3), b: (Vec3, Vec3)) -> bool {
+    a.0.x <= b.1.x
+        && b.0.x <= a.1.x
+        && a.0.y <= b.1.y
+        && b.0.y <= a.1.y
+        && a.0.z <= b.1.z
+        && b.0.z <= a.1.z
+}
+
+fn build_bvh(
+    order: &mut [usize],
+    base: usize,
+    boxes: &[(Vec3, Vec3)],
+    mids: &[Vec3],
+    nodes: &mut Vec<BvhNode>,
+) -> usize {
+    let (lo, hi) = order.iter().fold(
+        (
+            Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+            Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |(lo, hi), &f| {
+            let (blo, bhi) = boxes[f];
+            (
+                Vec3::new(lo.x.min(blo.x), lo.y.min(blo.y), lo.z.min(blo.z)),
+                Vec3::new(hi.x.max(bhi.x), hi.y.max(bhi.y), hi.z.max(bhi.z)),
+            )
+        },
+    );
+    if order.len() <= 8 {
+        let idx = nodes.len();
+        nodes.push(BvhNode {
+            lo,
+            hi,
+            kind: BvhKind::Leaf {
+                start: base,
+                end: base + order.len(),
+            },
+        });
+        return idx;
+    }
+    let (c_lo, c_hi) = order.iter().fold(
+        (
+            Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+            Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |(lo, hi), &f| {
+            let m = mids[f];
+            (
+                Vec3::new(lo.x.min(m.x), lo.y.min(m.y), lo.z.min(m.z)),
+                Vec3::new(hi.x.max(m.x), hi.y.max(m.y), hi.z.max(m.z)),
+            )
+        },
+    );
+    let ext = [c_hi.x - c_lo.x, c_hi.y - c_lo.y, c_hi.z - c_lo.z];
+    let axis = if ext[0] >= ext[1] && ext[0] >= ext[2] {
+        0
+    } else if ext[1] >= ext[2] {
+        1
+    } else {
+        2
+    };
+    let coord = |v: Vec3| match axis {
+        0 => v.x,
+        1 => v.y,
+        _ => v.z,
+    };
+    order.sort_by(|&a, &b| coord(mids[a]).total_cmp(&coord(mids[b])).then(a.cmp(&b)));
+    let mid = order.len() / 2;
+    let idx = nodes.len();
+    nodes.push(BvhNode {
+        lo,
+        hi,
+        kind: BvhKind::Leaf { start: 0, end: 0 },
+    });
+    let (left_slice, right_slice) = order.split_at_mut(mid);
+    let left = build_bvh(left_slice, base, boxes, mids, nodes);
+    let right = build_bvh(right_slice, base + mid, boxes, mids, nodes);
+    nodes[idx].kind = BvhKind::Branch { left, right };
+    idx
+}
+
 impl SkinMesh {
     /// Explicit scope of the collision approximation; this does not qualify physical contact.
     #[must_use]
@@ -370,6 +503,168 @@ impl SkinMesh {
             "source_vertices_moved": false,
             "physical_qualification": false,
             "scope": "clothing collision only; full measurement and display skin retained; no hand, foot or facial-contact qualification"
+        })
+    }
+
+    /// [`Self::contact_proxy_basis`] augmented with rest-vs-posed enclosed-volume change diagnostics
+    /// (`rest_volume_m3`, `posed_volume_m3`, `volume_change_fraction`, `lbs_volume_loss_advisory`).
+    #[must_use]
+    pub fn contact_proxy_basis_with_rest(&self, rest_skin: &Self) -> serde_json::Value {
+        let mut basis = self.contact_proxy_basis();
+        let rest_v = rest_skin.report.volume;
+        let posed_v = self.report.volume;
+        if rest_v.is_finite() && rest_v > 0.0 && posed_v.is_finite() {
+            let frac = (posed_v - rest_v) / rest_v;
+            if frac.is_finite()
+                && let Some(obj) = basis.as_object_mut()
+            {
+                obj.insert("rest_volume_m3".into(), serde_json::json!(rest_v));
+                obj.insert("posed_volume_m3".into(), serde_json::json!(posed_v));
+                obj.insert("volume_change_fraction".into(), serde_json::json!(frac));
+                obj.insert(
+                    "lbs_volume_loss_advisory".into(),
+                    serde_json::json!(frac.abs() > LBS_VOLUME_CHANGE_ADVISORY_FRACTION),
+                );
+            }
+        }
+        basis
+    }
+
+    /// Exact self-intersection audit of this mesh in lexicographic `(a, b)` face order (`a < b`).
+    ///
+    /// # Errors
+    /// [`RefusalCode::OutOfRange`] for a zero candidate-pair budget; [`RefusalCode::BudgetExceeded`]
+    /// if overlapping AABB pairs exceed `max_pairs`; or mesh validation refusals from
+    /// [`ftx_core::intersection::validate_mesh`].
+    pub fn audit_self_intersections(
+        &self,
+        max_pairs: usize,
+    ) -> Result<SkinIntersectionAudit, Refusal> {
+        if max_pairs == 0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "skin self-intersection audit requires a positive candidate-pair budget",
+            ));
+        }
+        validate_mesh(&self.vertices, &self.triangles)?;
+        if self.triangles.len() < 2 {
+            return Ok(SkinIntersectionAudit {
+                pairs_tested: 0,
+                intersecting_pairs: 0,
+                first_intersecting_pair: None,
+            });
+        }
+        let mut boxes = Vec::with_capacity(self.triangles.len());
+        let mut mids = Vec::with_capacity(self.triangles.len());
+        for t in &self.triangles {
+            let [a, b, c] = t.map(|i| self.vertices[i]);
+            let lo = Vec3::new(
+                a.x.min(b.x).min(c.x),
+                a.y.min(b.y).min(c.y),
+                a.z.min(b.z).min(c.z),
+            );
+            let hi = Vec3::new(
+                a.x.max(b.x).max(c.x),
+                a.y.max(b.y).max(c.y),
+                a.z.max(b.z).max(c.z),
+            );
+            boxes.push((lo, hi));
+            mids.push((lo + hi) * 0.5);
+        }
+        let mut order: Vec<usize> = (0..self.triangles.len()).collect();
+        let mut nodes = Vec::with_capacity(self.triangles.len() / 2 + 2);
+        let root = build_bvh(&mut order, 0, &boxes, &mids, &mut nodes);
+        let mut stack = Vec::with_capacity(64);
+        let mut candidates = Vec::new();
+        let mut pairs_tested = 0usize;
+        let mut intersecting_pairs = 0usize;
+        let mut first_intersecting_pair = None;
+        for (a, &bounds) in boxes.iter().enumerate() {
+            candidates.clear();
+            stack.clear();
+            stack.push(root);
+            while let Some(node_idx) = stack.pop() {
+                let node = nodes[node_idx];
+                if !box_overlaps(bounds, (node.lo, node.hi)) {
+                    continue;
+                }
+                match node.kind {
+                    BvhKind::Leaf { start, end } => {
+                        for &b in &order[start..end] {
+                            if b > a && box_overlaps(bounds, boxes[b]) {
+                                candidates.push(b);
+                            }
+                        }
+                    }
+                    BvhKind::Branch { left, right } => {
+                        stack.push(right);
+                        stack.push(left);
+                    }
+                }
+            }
+            candidates.sort_unstable();
+            for &b in &candidates {
+                if pairs_tested == max_pairs {
+                    return Err(Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        format!(
+                            "skin self-intersection audit exceeds its {max_pairs} candidate-pair budget"
+                        ),
+                    )
+                    .repair("increase the explicit audit budget or inspect a smaller surface"));
+                }
+                pairs_tested += 1;
+                if indexed_triangle_pair(&self.vertices, self.triangles[a], self.triangles[b])
+                    .is_some()
+                {
+                    intersecting_pairs += 1;
+                    if first_intersecting_pair.is_none() {
+                        first_intersecting_pair = Some([a, b]);
+                    }
+                }
+            }
+        }
+        Ok(SkinIntersectionAudit {
+            pairs_tested,
+            intersecting_pairs,
+            first_intersecting_pair,
+        })
+    }
+
+    /// Rest-to-posed volume change and exact self-intersection diagnostics against `rest_skin`.
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] if `rest_skin`'s volume is not finite and positive or the derived
+    /// volume fraction is non-finite; or refusals of [`Self::audit_self_intersections`].
+    pub fn pose_geometry_against_rest(
+        &self,
+        rest_skin: &Self,
+        max_pairs: usize,
+    ) -> Result<PoseGeometryReport, Refusal> {
+        let rest_volume_m3 = rest_skin.report.volume;
+        let posed_volume_m3 = self.report.volume;
+        if !(rest_volume_m3.is_finite() && rest_volume_m3 > 0.0 && posed_volume_m3.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "rest and posed skin volumes must be finite and rest volume positive",
+            ));
+        }
+        let volume_change_fraction = (posed_volume_m3 - rest_volume_m3) / rest_volume_m3;
+        if !volume_change_fraction.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "derived rest-to-posed volume change fraction is not finite",
+            ));
+        }
+        let self_intersections = self.audit_self_intersections(max_pairs)?;
+        Ok(PoseGeometryReport {
+            rest_volume_m3,
+            posed_volume_m3,
+            volume_change_fraction,
+            lbs_volume_loss_advisory: volume_change_fraction.abs()
+                > LBS_VOLUME_CHANGE_ADVISORY_FRACTION,
+            posed_area_m2: self.report.area,
+            self_intersections,
         })
     }
 
@@ -654,6 +949,58 @@ pub fn posed_skin(
     skin_mesh(&posed.vertices, &model.data().faces)
 }
 
+/// Rest-to-posed geometry diagnostics for `ftx-body/1` (`pose_geometry`): full skin volume change
+/// and self-intersections, plus the trimmed [`clothing_skin`] collider when the model carries the
+/// four limb cap roots (`wrist.R/L`, `foot.R/L`).
+///
+/// # Errors
+/// As [`skin_mesh`], [`clothing_skin`] (when limb cap roots are present), and
+/// [`SkinMesh::pose_geometry_against_rest`].
+pub fn body_pose_geometry_json(
+    model: &AnnyModel,
+    rest_vertices: &[Vec3],
+    posed_vertices: &[Vec3],
+    posed_skin: &SkinMesh,
+) -> Result<serde_json::Value, Refusal> {
+    let rest_skin = skin_mesh(rest_vertices, &model.data().faces)?;
+    let skin_report =
+        posed_skin.pose_geometry_against_rest(&rest_skin, DEFAULT_POSE_AUDIT_PAIR_BUDGET)?;
+    let has_limb_roots = ["wrist.R", "wrist.L", "foot.R", "foot.L"]
+        .iter()
+        .all(|label| model.bone_index(label).is_some());
+    let clothing_collider = if has_limb_roots {
+        let rest_collider = clothing_skin(model, rest_vertices)?;
+        let posed_collider = clothing_skin(model, posed_vertices)?;
+        let report = posed_collider
+            .pose_geometry_against_rest(&rest_collider, DEFAULT_POSE_AUDIT_PAIR_BUDGET)?;
+        let mut value = serde_json::to_value(report).map_err(|e| {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!("pose_geometry serialization: {e}"),
+            )
+        })?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "admissible_for_drape".into(),
+                serde_json::json!(report.self_intersections.intersecting_pairs == 0),
+            );
+            obj.insert(
+                "selected_trim_roots".into(),
+                serde_json::json!(posed_collider.trim_roots),
+            );
+        }
+        value
+    } else {
+        serde_json::Value::Null
+    };
+    Ok(serde_json::json!({
+        "skin": skin_report,
+        "clothing_collider": clothing_collider,
+        "lbs_advisory_threshold_fraction": LBS_VOLUME_CHANGE_ADVISORY_FRACTION,
+        "no_claim": "Linear-blend-skinning mesh diagnostics only; neither soft-tissue volume conservation nor anatomical contact clearance is claimed."
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -792,6 +1139,139 @@ mod tests {
         assert_eq!(
             skin_mesh(&v, &flipped).unwrap_err().code,
             RefusalCode::DegenerateGeometry
+        );
+    }
+
+    /// Two stacked cubes sharing an equatorial 4-vertex ring: closed, manifold, outward-wound,
+    /// and when the top cap is pushed below the equator (`top_z < 0.5`), strictly self-intersecting
+    /// while still enclosing a positive signed volume (`V > 0`).
+    fn hourglass_prism(top_z: f64) -> SkinMesh {
+        let v = vec![
+            // z = 0 base (0..4)
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            // z = 0.5 pinched waist (4..8)
+            Vec3::new(0.25, 0.25, 0.5),
+            Vec3::new(0.75, 0.25, 0.5),
+            Vec3::new(0.75, 0.75, 0.5),
+            Vec3::new(0.25, 0.75, 0.5),
+            // z = top_z top cap (8..12)
+            Vec3::new(0.4, 0.4, top_z),
+            Vec3::new(0.6, 0.4, top_z),
+            Vec3::new(0.6, 0.6, top_z),
+            Vec3::new(0.4, 0.6, top_z),
+        ];
+        let mut faces = Vec::new();
+        // Bottom cap (outward -z): (0, 3, 2), (0, 2, 1)
+        faces.push([0, 3, 2]);
+        faces.push([0, 2, 1]);
+        // Lower side walls (0..4 -> 4..8, outward)
+        for i in 0..4u32 {
+            let j = (i + 1) % 4;
+            faces.push([i, j, 4 + j]);
+            faces.push([i, 4 + j, 4 + i]);
+        }
+        // Upper side walls (4..8 -> 8..12, outward)
+        for i in 0..4u32 {
+            let j = (i + 1) % 4;
+            faces.push([4 + i, 4 + j, 8 + j]);
+            faces.push([4 + i, 8 + j, 8 + i]);
+        }
+        // Top cap (outward +z): (8, 9, 10), (8, 10, 11)
+        faces.push([8, 9, 10]);
+        faces.push([8, 10, 11]);
+        skin_mesh(&v, &faces).unwrap()
+    }
+
+    #[test]
+    fn pose_geometry_detects_lbs_volume_loss_and_planted_self_intersections_matching_brute_force() {
+        let rest = hourglass_prism(1.0);
+        let mild = hourglass_prism(0.96); // slight compression (< 3 % volume loss)
+        let collapsed = hourglass_prism(0.70); // > 3 % volume loss, non-intersecting
+        let self_crossing = hourglass_prism(-0.10); // top cap pushed through z=0 base, still positive total volume!
+
+        for skin in [&rest, &mild, &collapsed, &self_crossing] {
+            let bvh = skin.audit_self_intersections(100_000).unwrap();
+            // Reference O(N^2) lexicographic double loop over overlapping triangle AABBs.
+            let boxes: Vec<(Vec3, Vec3)> = skin
+                .triangles
+                .iter()
+                .map(|t| {
+                    let [a, b, c] = t.map(|i| skin.vertices[i]);
+                    (
+                        Vec3::new(
+                            a.x.min(b.x).min(c.x),
+                            a.y.min(b.y).min(c.y),
+                            a.z.min(b.z).min(c.z),
+                        ),
+                        Vec3::new(
+                            a.x.max(b.x).max(c.x),
+                            a.y.max(b.y).max(c.y),
+                            a.z.max(b.z).max(c.z),
+                        ),
+                    )
+                })
+                .collect();
+            let mut ref_tested = 0usize;
+            let mut ref_hits = 0usize;
+            let mut ref_first = None;
+            for a in 0..skin.triangles.len() {
+                for b in (a + 1)..skin.triangles.len() {
+                    if box_overlaps(boxes[a], boxes[b]) {
+                        ref_tested += 1;
+                        if indexed_triangle_pair(
+                            &skin.vertices,
+                            skin.triangles[a],
+                            skin.triangles[b],
+                        )
+                        .is_some()
+                        {
+                            ref_hits += 1;
+                            if ref_first.is_none() {
+                                ref_first = Some([a, b]);
+                            }
+                        }
+                    }
+                }
+            }
+            assert_eq!(bvh.pairs_tested, ref_tested);
+            assert_eq!(bvh.intersecting_pairs, ref_hits);
+            assert_eq!(bvh.first_intersecting_pair, ref_first);
+        }
+
+        let mild_rep = mild.pose_geometry_against_rest(&rest, 100_000).unwrap();
+        assert_eq!(mild_rep.self_intersections.intersecting_pairs, 0);
+        assert!(mild_rep.volume_change_fraction < 0.0 && mild_rep.volume_change_fraction > -0.03);
+        assert!(!mild_rep.lbs_volume_loss_advisory);
+
+        let collapsed_rep = collapsed
+            .pose_geometry_against_rest(&rest, 100_000)
+            .unwrap();
+        assert_eq!(collapsed_rep.self_intersections.intersecting_pairs, 0);
+        assert!(collapsed_rep.volume_change_fraction < -0.03);
+        assert!(collapsed_rep.lbs_volume_loss_advisory);
+
+        let crossing_rep = self_crossing
+            .pose_geometry_against_rest(&rest, 100_000)
+            .unwrap();
+        assert!(crossing_rep.self_intersections.intersecting_pairs > 0);
+        assert!(
+            crossing_rep
+                .self_intersections
+                .first_intersecting_pair
+                .is_some()
+        );
+        assert!(crossing_rep.lbs_volume_loss_advisory);
+
+        assert_eq!(
+            rest.audit_self_intersections(0).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            rest.audit_self_intersections(2).unwrap_err().code,
+            RefusalCode::BudgetExceeded
         );
     }
 }

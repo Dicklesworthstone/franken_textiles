@@ -272,6 +272,7 @@ impl FittedBody {
         pose.legs = request.legs;
         pose.leg_fraction = request.leg_fraction;
         let rest = model.rest(occupied_params)?;
+        let rest_collision = clothing_skin(model, &rest.vertices)?;
         let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
         let collision = clothing_skin(model, &posed.vertices)?;
         let display = skin_mesh(&posed.vertices, &model.data().faces)?;
@@ -295,7 +296,7 @@ impl FittedBody {
             report["pose"]["leg_fraction"] = json!(request.leg_fraction);
         }
         report["body_provenance"] = json!("MODEL_FIT");
-        report["body_contact_proxy"] = collision.contact_proxy_basis();
+        report["body_contact_proxy"] = collision.contact_proxy_basis_with_rest(&rest_collision);
         report["physical_validation_claim"] = json!(false);
         let flat_source = json!({"shape_source":report["shape_source"],
             "input_measurements_sha256":report["measurements_sha256"]});

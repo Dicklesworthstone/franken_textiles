@@ -75,7 +75,9 @@ dominant-bone wrist/foot regions and paired `levator05` facial details are repla
 The complete detailed source can self-intersect; that negative must still fail `audit_surface`.
 No audit exclusion or tolerance relaxation is applied to the proxy. Retained source coordinates
 are unchanged, and measurement/display geometry remains complete. Reports retain the selected
-roots and synthetic cap count in `body_contact_proxy` (inside the study body report for studies).
+roots, synthetic cap count, and rest-to-posed volume diagnostics (`rest_volume_m3`, `posed_volume_m3`,
+`volume_change_fraction`, `lbs_volume_loss_advisory`) in `body_contact_proxy` (inside the study body
+report for studies).
 This supports the scoped clothing calculation, not facial/hand/foot contact or physical fit.
 
 **Nappy occupancy on selected bodies.** An explicit `wearer.nappies: true` invokes the shared body

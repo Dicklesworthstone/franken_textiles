@@ -840,6 +840,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         ..
     } = super::body_source::prepare(args, Some(&data))?;
     let rest = model.rest(&params)?;
+    let rest_skin = clothing_skin(&model, &rest.vertices)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
     let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
@@ -904,7 +905,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             let pattern = Pattern::new(bpat);
             let started = std::time::Instant::now();
             let mut run = drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?;
-            run.report["body_contact_proxy"] = skin.contact_proxy_basis();
+            run.report["body_contact_proxy"] = skin.contact_proxy_basis_with_rest(&rest_skin);
             let mut report = run.report.clone();
             if let Some(selected) = &fabric_override {
                 report["fabric_override"] = selected.receipt().clone();

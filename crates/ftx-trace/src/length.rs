@@ -121,4 +121,16 @@ mod tests {
         assert_eq!(parse_length("3 inches", None), Some(3.0 * 25.4));
         assert_eq!(parse_length("1,5 m", None), Some(1500.0));
     }
+
+    #[test]
+    fn unicode_decimal_digits_remain_outside_ascii_parse_length_scope() {
+        for sample in [
+            "\u{ff12}\u{ff18}cm",
+            "\u{0661}\u{0662} cm",
+            "\u{0968}\u{096e} mm",
+        ] {
+            assert_eq!(parse_length(sample, None), None, "{sample}");
+            assert_eq!(parse_length(sample, Some("mm")), None, "{sample}");
+        }
+    }
 }

@@ -375,6 +375,7 @@ fn fold_on_source(
         description["readings_mm"]["seat_over_nappy"] = json!(occupied.seat_over_nappy_mm);
         description["nappy_occupancy"] = occupied.description;
     }
+    let rest_skin = clothing_skin(model, &rest.vertices).map_err(m)?;
     let posed = model
         .pose(&rest, &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?)
         .map_err(m)?;
@@ -406,7 +407,7 @@ fn fold_on_source(
         &body,
         &material,
         description,
-        skin.contact_proxy_basis(),
+        skin.contact_proxy_basis_with_rest(&rest_skin),
     )
 }
 

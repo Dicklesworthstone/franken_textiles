@@ -177,8 +177,11 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let rest = model.rest(&params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
     let skin = skin_mesh(&posed.vertices, &model.data().faces)?;
+    let pose_geometry =
+        ftx_body::body_pose_geometry_json(&model, &rest.vertices, &posed.vertices, &skin)?;
     description.insert("schema".into(), json!("ftx-body/1"));
     description.insert("pose".into(), json!(pose_name));
+    description.insert("pose_geometry".into(), pose_geometry);
     if let Some((_, bytes)) = measurements {
         description.insert("measurements_sha256".into(), json!(sha256_hex(&bytes)));
     }

@@ -16,6 +16,68 @@ photo URL, runs an external detector or uploads data. `model.model_sha256` must 
 SHA-256 of the exact converted file. The reader also verifies the file's individual array
 hashes. Keep private photos, measurements and fitted bodies outside the repository.
 
+## End-to-end local operator sequence (clip to garment round)
+
+From a declared fixed-lens capture protocol with a printed stationary upright ChArUco board, the
+complete local CLI sequence from raw clip to garment round is:
+
+```sh
+# 1. Print a metric ChArUco reference at 100% scale and calibrate the fixed camera epoch.
+ftx measure calib-sheet --paper a4 --out sheet-001 --json
+ftx measure calibrate-camera calibration-views.json --out accepted-calibration.json --json
+
+# 2. Decode the clip locally via external FFmpeg/ffprobe (no masks or fit claims inferred).
+ftx measure video-decode decode-request.json --out decoded-001 --json
+
+# 3. Author person and stationary-sheet polygons offline, materialize masks, and select sharp windows.
+ftx measure video-mask-review decoded-001/frames.json --out mask-review-001 --json
+#    Open mask-review-001/index.html -> download edited annotations.json
+ftx measure video-masks mask-authored.json --out masked-001 --json
+ftx measure video-select masked-001/frames.json --out selection-001.json --json
+
+# 4. Select eligible frames, age/sex, free shape/pose controls, and any independent tape evidence.
+ftx measure capture-init-review masked-001/frames.json --model /path/to/anny-0.6.1-default.ftxbody \
+    --calibration accepted-calibration.json --reference stationary-board.json \
+    --reference-id studio-board --out capture-setup-001 --json
+#    Open capture-setup-001/index.html -> download capture-choices.json
+ftx measure capture-init capture-choices.json \
+    --model /path/to/anny-0.6.1-default.ftxbody --out capture-input-001 --json
+
+# 5. Declare anatomical mesh correspondence targets, review FIT/CHECK 2D points, and set multistarts.
+ftx measure body-target-review capture-input-001/input.json \
+    --model /path/to/anny-0.6.1-default.ftxbody --out target-review-001 --json
+ftx measure body-targets body-targets-edited.json \
+    --model /path/to/anny-0.6.1-default.ftxbody --out target-authored-001 --json
+ftx measure capture-review target-authored-001/input.json --out capture-review-001 --json
+ftx measure fit-start-review capture-edited.json \
+    --model /path/to/anny-0.6.1-default.ftxbody --out start-review-001 --json
+ftx measure fit-starts body-starts-edited.json \
+    --model /path/to/anny-0.6.1-default.ftxbody --out start-authored-001 --json
+
+# 6. Fit the shared Anny shape, inspect posed collider admissibility, and run an immutable garment round.
+ftx measure fit-body start-authored-001/input.json \
+    --model /path/to/anny-0.6.1-default.ftxbody --mesh-out accepted-fit-001 --json
+ftx body --body-fit accepted-fit-001/fit.json \
+    --model /path/to/anny-0.6.1-default.ftxbody --pose drape --out body-check-001 --json
+ftx round ws --pattern draft/pattern.json --fit draft/fit_spec.json \
+    --measurements wearer-measurements.json --sim --body-fit accepted-fit-001/fit.json \
+    --model /path/to/anny-0.6.1-default.ftxbody --as-of 2026-11-11 --export --json
+ftx report ws --json
+```
+
+Fail-closed operator boundaries enforced by this route (covered end-to-end in
+`crates/ftx-cli/tests/video_decode_workflow.rs`):
+- Unmasked `video-decode` manifests cannot enter `video-select` (exit `3`).
+- Blurred or occluded windows are rejected before `capture-init-review`; occluded predeclared
+  `CHECK` ChArUco corners or >3 px sheet-pose reprojection residuals refuse `capture-init` (exit `3`).
+- Mutating `accepted-calibration.json`, source frames, masks, or `.ftxbody` bytes after preparation
+  refuses downstream commands (exit `3`) without publishing partial outputs.
+- Weak-parallax / missing-scale observations return `UNOBSERVABLE` (exit `2`, `solution: null`), and
+  converged multistarts exceeding `max_shape_spread_fraction` return `AMBIGUOUS` (exit `2`,
+  `solution: null`); `ftx body --body-fit` and `ftx round --body-fit` refuse both.
+- Accepted body predictions carry `MODEL_FIT` provenance and never promote `round` readiness to
+  `READY` (`MEASUREMENTS_NOT_READY` until required `MEASURED_TAPE` records are supplied).
+
 ## Fit prepared observations in the local browser
 
 The local photo page (`web/photo.html`), under **Fit one body shape across changing poses**, runs

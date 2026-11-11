@@ -299,7 +299,8 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
 - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
   the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
-  the phenotype and every local change in use). Exit 0; an unknown pose is refused. Both reports carry
+  `pose_geometry` reporting rest-vs-posed skin and `clothing_collider` volume change, LBS volume-loss
+  advisories and exact self-intersection audits, the phenotype and every local change in use). Exit 0; an unknown pose is refused. Both reports carry
   `model_fit`: every available tape reading the file lacks, read off the fitted body, as a `fabric-measurements/1`
   record with provenance `MODEL_FIT` and the population spread as σ (the chart prior's at the wearer's
   stature and age, else the catalogue's 12 mm), so it can be added to the file as a model value, never

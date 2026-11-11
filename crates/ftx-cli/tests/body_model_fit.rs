@@ -289,6 +289,22 @@ fn standalone_body_and_drape_ignore_poisoned_caches_but_retain_source_identity()
         assert!(proxy["generated_cap_vertices"].as_u64().unwrap() > 0);
         assert_eq!(proxy["source_vertices_moved"], false);
         assert_eq!(proxy["physical_qualification"], false);
+        assert!(proxy["rest_volume_m3"].as_f64().unwrap() > 0.0);
+        assert!(proxy["posed_volume_m3"].as_f64().unwrap() > 0.0);
+        assert!(proxy["volume_change_fraction"].as_f64().unwrap().abs() < 0.03);
+        assert_eq!(proxy["lbs_volume_loss_advisory"], false);
+        assert_eq!(
+            body["pose_geometry"]["clothing_collider"]["admissible_for_drape"],
+            true
+        );
+        assert_eq!(
+            body["pose_geometry"]["clothing_collider"]["self_intersections"]["intersecting_pairs"],
+            0
+        );
+        assert_eq!(
+            body["pose_geometry"]["clothing_collider"]["lbs_volume_loss_advisory"],
+            false
+        );
         assert_eq!(std::fs::read(dir.join(&source)).unwrap(), bytes);
         bodies.push(body);
         drapes.push(drape_dir);
@@ -336,6 +352,59 @@ fn standalone_body_and_drape_ignore_poisoned_caches_but_retain_source_identity()
         explicit["result"]["body"]["fit"]["tape"]["chest"]["target_mm"],
         target
     );
+    // Deep squat (`leg_fraction = 1.0`) exhibits LBS hip/knee crease self-intersection and >3%
+    // volume loss on `clothing_collider`: `ftx body` reports it explicitly and `ftx drape` refuses.
+    let squat = production_command(
+        &dir,
+        &[
+            "body",
+            "--measurements",
+            "fresh.json",
+            "--model",
+            model.to_str().unwrap(),
+            "--pose",
+            "squat",
+            "--out",
+            "body-squat",
+        ],
+        0,
+        "body-squat",
+    )["result"]["body"]
+        .clone();
+    let squat_col = &squat["pose_geometry"]["clothing_collider"];
+    assert_eq!(squat_col["admissible_for_drape"], false);
+    assert!(
+        squat_col["self_intersections"]["intersecting_pairs"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(squat_col["lbs_volume_loss_advisory"], true);
+    assert!(squat_col["volume_change_fraction"].as_f64().unwrap() < -0.03);
+    let squat_drape = production_command(
+        &dir,
+        &[
+            "drape",
+            "pattern.json",
+            "--measurements",
+            "fresh.json",
+            "--model",
+            model.to_str().unwrap(),
+            "--legs",
+            "squat",
+            "--leg-fraction",
+            "1.0",
+            "--sew",
+            "5",
+            "--drape",
+            "1",
+            "--out",
+            "drape-squat",
+        ],
+        3,
+        "drape-squat",
+    );
+    assert_eq!(squat_drape["refusal"]["code"], "intersecting_start");
 }
 
 #[test]

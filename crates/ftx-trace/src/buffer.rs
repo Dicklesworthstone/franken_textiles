@@ -1093,4 +1093,33 @@ mod tests {
             Ok(Vec::new())
         );
     }
+
+    #[test]
+    fn exact_reversal_limited_mitre_and_round_joins_are_deterministic_via_det_trig() {
+        // Exact 180-degree reversal leader on an oblique ray where atan2/sin/cos last bits decide
+        // the limited-mitre bevel endpoints: ftx_core::det keeps native x86_64, ARM64 and wasm32
+        // bit-identical rather than following host libm.
+        let mut ring = Vec::new();
+        for k in 0..10 {
+            let a = f64::from(k) * std::f64::consts::TAU / 10.0;
+            let r = if k % 2 == 0 { 40.0 } else { 15.0 };
+            ring.push(Vec2::new(50.0 + r * det::cos(a), 50.0 + r * det::sin(a)));
+            if k == 3 {
+                let tip = Vec2::new(50.0 + 52.0 * det::cos(a), 50.0 + 52.0 * det::sin(a));
+                ring.push(tip);
+                ring.push(Vec2::new(50.0 + r * det::cos(a), 50.0 + r * det::sin(a)));
+            }
+        }
+        for join in [Join::Mitre(4.0), Join::Round(16)] {
+            let out_a = buffer(&[Polygon::new(ring.clone())], -1.5, join).unwrap();
+            let out_b = buffer(&[Polygon::new(ring.clone())], -1.5, join).unwrap();
+            assert_eq!(out_a, out_b);
+            assert!(!out_a.is_empty());
+            for poly in &out_a {
+                assert!(poly.shell.len() >= 4);
+                assert_eq!(poly.shell.first(), poly.shell.last());
+                assert!(poly.shell.iter().all(|p| p.is_finite()));
+            }
+        }
+    }
 }

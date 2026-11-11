@@ -140,8 +140,15 @@ not a characterized nappy garment, added body mass or an inferred thermal/fricti
 Production `clothing_skin` selects wrists, feet and, where present, paired `levator05` facial-detail
 regions. The pinned detailed face has intersections even with correct upstream coordinates. This
 clothing proxy preserves retained source vertices exactly and identifies synthetic cap centres;
-consumers still require the strict full-surface intersection audit. `body_contact_proxy` in drape
-reports records selected roots and cap count. Full measurement/display skin is retained. No hand,
+consumers still require the strict full-surface intersection audit. `SkinMesh::audit_self_intersections`
+evaluates exact `ftx_core::intersection::indexed_triangle_pair` crossings/contacts over a deterministic
+median-split AABB BVH in lexicographic `(a, b)` face order within an explicit candidate-pair budget.
+`SkinMesh::pose_geometry_against_rest` and `body_pose_geometry_json` report `rest_volume_m3`,
+`posed_volume_m3`, `volume_change_fraction`, `lbs_volume_loss_advisory` (`|ΔV / V_rest| > 3 %`),
+`posed_area_m2` and `SkinIntersectionAudit` for both the full `skin_mesh` and `clothing_skin` when limb
+cap roots are present. `body_contact_proxy` (`SkinMesh::contact_proxy_basis_with_rest`) in drape,
+qualification, browser fold and fitted-study reports records selected roots, synthetic cap count and
+rest-to-posed volume change. Full measurement/display skin is retained. No hand,
 foot, facial-contact, anatomical or real-fit qualification follows from these caps. The positive
 and detailed-source negative are in `ftx-drape/tests/kat_fitted.rs`.
 `examples/posed_skins.rs` writes the poses as OBJ for a look.
@@ -254,6 +261,11 @@ targets, which says nothing about whether the shape between them is the wearer's
 age prior of plan §9.4 (the priors here are the population middle); the shape distribution's
 weight and muscle priors (spec 05 §9.11); anything about the SMPL family or the `rig="anny"` preset.
 Poses are plain linear blend skinning without correctives: seated and squat bodies show webbing at the
-crotch and lose 4–6 % of their volume (2.5-year-old: −4.4 % seated, −5.4 % squat), and the skin is not
-checked for self-intersection there. The nappy is a shape proxy, not a garment. Landmarks are heuristics
+crotch and lose 4–6 % of their volume (2.5-year-old: −4.4 % seated, −5.4 % squat); `pose_geometry`
+and `body_contact_proxy` report that volume change and exact surface self-intersection counts, and
+drape consumers still refuse self-intersecting posed colliders (`IntersectingStart`), without claiming
+soft-tissue volume conservation or anatomical crease fidelity. Independent plane-mesh slicing,
+signed-angle winding and Jarvis-march convex-hull cross-checks in `tests/independent_tape_qualification.rs`
+verify all 21 `TAPE_FIELDS` functionals geometrically without establishing real-person anatomical accuracy.
+The nappy is a shape proxy, not a garment. Landmarks are heuristics
 on the body (see above), not measurements.

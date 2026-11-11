@@ -453,6 +453,8 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let rest = model.rest(params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
     let skin = skin_mesh(&posed.vertices, &model.data().faces)?;
+    let pose_geometry =
+        ftx_body::body_pose_geometry_json(&model, &rest.vertices, &posed.vertices, &skin)?;
     let ph = fit.params.phenotype;
     let labels = &model.data().header.labels.local_changes;
     let mut doc = body_json(&w, &fit);
@@ -464,6 +466,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     doc.insert("schema".into(), json!("ftx-body/1"));
     doc.insert("measurements_sha256".into(), json!(sha256_hex(&meas_bytes)));
     doc.insert("pose".into(), json!(pose_name));
+    doc.insert("pose_geometry".into(), pose_geometry);
     doc.insert(
         "phenotype".into(),
         json!({"gender": ph.gender, "age": ph.age, "height": ph.height, "weight": ph.weight,
@@ -863,6 +866,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         source_bytes,
     } = body_source::prepare(args, Some(&meas))?;
     let rest = model.rest(&params)?;
+    let rest_skin = clothing_skin(&model, &rest.vertices)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
     let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
@@ -887,7 +891,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             None => drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?,
         }
     };
-    run.report["body_contact_proxy"] = skin.contact_proxy_basis();
+    run.report["body_contact_proxy"] = skin.contact_proxy_basis_with_rest(&rest_skin);
     let mut report = run.report.clone();
     report["qualification_basis"] = ftx_drape::qualify::qualification_basis(&body, &material)?;
     if outfit.is_some() {

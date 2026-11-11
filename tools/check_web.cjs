@@ -864,7 +864,10 @@ async function offlineViewer(browser, file) {
       duration_clock: "Node performance.now (monotonic milliseconds)",
       host: { cpu: os.cpus()[0].model, logical_cpus: os.cpus().length, ram_bytes: os.totalmem(),
         platform: os.platform(), arch: os.arch(), kernel: os.release(), node: process.version },
-      browser: browser.version(), repository_head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+      browser: browser.version(), repository_head: process.env.FTX_REPOSITORY_HEAD || (() => {
+        const rev = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+        return rev.status === 0 ? rev.stdout.trim() : "git-archive (detached source export; bind via FTX_REPOSITORY_HEAD)";
+      })(),
       declared_build_profile: process.env.FTX_WASM_PROFILE || "unspecified; bind the artifact hash to its build receipt",
       wasm_sha256: sha(fs.readFileSync(path.join(root, "web/pkg/ftx_wasm_bg.wasm"))),
       glue_sha256: sha(fs.readFileSync(path.join(root, "web/pkg/ftx_wasm.js"))),
