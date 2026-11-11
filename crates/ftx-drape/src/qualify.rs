@@ -56,6 +56,22 @@ pub fn band_pattern(
     height_mm: f64,
     fabric: Option<&Value>,
 ) -> Result<Value, Refusal> {
+    let chest = Measurements(meas.clone())
+        .value("chest")
+        .map_err(|e| bad_input(format!("band_pattern needs chest measurement ({e})")))?;
+    band_pattern_from_girth(chest, ease_mm, height_mm, fabric)
+}
+
+/// Builds the same band from an explicit chest section girth in millimetres.
+///
+/// # Errors
+/// Refuses invalid chest girth, band width or height.
+pub fn band_pattern_from_girth(
+    chest_mm: f64,
+    ease_mm: i32,
+    height_mm: f64,
+    fabric: Option<&Value>,
+) -> Result<Value, Refusal> {
     Refusal::finite("band height", height_mm)?;
     if height_mm <= 0.0 {
         return Err(Refusal::new(
@@ -63,12 +79,15 @@ pub fn band_pattern(
             "band height must be positive",
         ));
     }
-    let chest = Measurements(meas.clone())
-        .value("chest")
-        .map_err(|e| bad_input(format!("band_pattern needs chest measurement ({e})")))?;
-    Refusal::finite("chest", chest)?;
+    Refusal::finite("chest girth", chest_mm)?;
+    if chest_mm <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "chest girth must be positive",
+        ));
+    }
     let ease = f64::from(ease_mm);
-    let w = (chest + ease) / 2.0;
+    let w = (chest_mm + ease) / 2.0;
     if w <= 0.0 {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,

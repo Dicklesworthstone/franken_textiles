@@ -414,7 +414,7 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         .output()
         .unwrap();
     assert!(
-        matches!(out.status.code(), Some(0 | 2)),
+        out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -422,13 +422,30 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     let q = &env["result"];
     assert_eq!(q["schema"], "fabric-qualify/1");
     assert_eq!(q["engine"], "ftx");
-    // spec 04 §7.1's record: the rows, and the measurements file's own sha256, which the skill's
-    // `fab round` compares as `ftx round` does
+    assert_eq!(q["pass"], true, "{q}");
+    // The chart target selects the fit. The posed collider supplies the band dimensions.
+    let target = q["input_chest_mm"].as_f64().unwrap();
+    let girth = q["posed_chest_girth_mm"].as_f64().unwrap();
+    assert_eq!(target, 540.0);
+    assert!(girth > 20.0 && (girth - target).abs() > 0.01, "{q}");
     let rows = q["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 3);
-    assert_eq!(rows[0]["ease_mm"], -20.0);
-    assert_eq!(rows[1]["ease_mm"], 0.0);
-    assert_eq!(rows[2]["ease_mm"], 20.0);
+    for (row, ease) in rows.iter().zip([-20, 0, 20]) {
+        assert_eq!(row["ease_mm"], f64::from(ease));
+        assert_eq!(row["pass"], true, "{row}");
+        let band = dir.join(format!("ws/qualification/band_{ease:+}"));
+        let pattern = read(&band.join("pattern.json"));
+        let girth_of_band: f64 = pattern["pieces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                p["vertices"]["b"][0].as_f64().unwrap() - p["vertices"]["a"][0].as_f64().unwrap()
+            })
+            .sum();
+        assert!((girth_of_band - (girth + f64::from(ease))).abs() <= 0.01);
+        assert!(band.join("sim/sim_report.json").is_file());
+    }
     let measurements = std::fs::read(dir.join("ws/measurements.json")).unwrap();
     assert_eq!(
         q["measurements_sha256"],
@@ -453,19 +470,17 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     )
     .unwrap();
     assert_eq!(sim["tightness_qualified"], q["pass"]);
-    for ease in ["-20", "+0", "+20"] {
-        assert!(
-            dir.join(format!("ws/qualification/band_{ease}/sim/sim_report.json"))
-                .is_file()
-        );
-    }
     // Re-running qualify on the same workspace rotates the previous qualification directory.
     let out2 = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
         .args(["qualify", "--ws", "ws", "--json"])
         .output()
         .unwrap();
-    assert!(matches!(out2.status.code(), Some(0 | 2)));
+    assert!(
+        out2.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
     assert!(
         dir.join("ws/qualification.before-000/qualify.json")
             .is_file()

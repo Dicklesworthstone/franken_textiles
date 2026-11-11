@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use ftx_core::{Refusal, RefusalCode};
 use ftx_measure::{date_day, format_round_readiness, fuse, round_readiness};
 use ftx_pattern::round::{fit_contract_changes, infer_placements, round_status};
-use ftx_pattern::{Measurements, Pattern, default_fit_spec, format_table, validate};
+use ftx_pattern::{BodyMeasure, Measurements, Pattern, default_fit_spec, format_table, validate};
 use serde_json::{Value, json};
 
 use super::{Args, bad_input, export, known_options, make_dir, read_json};
@@ -733,7 +733,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
     use ftx_drape::qualify::{
         DEFAULT_BAND_HEIGHT_MM, QUALIFY_DRAPE_STEPS, QUALIFY_EASES, QUALIFY_SEW_STEPS,
-        band_fit_spec, band_pattern, evaluate_band, fabric_key,
+        band_fit_spec, band_pattern_from_girth, evaluate_band, fabric_key,
     };
     use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
 
@@ -811,13 +811,6 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     };
     opts.validate()?;
 
-    let mut bands = Vec::with_capacity(QUALIFY_EASES.len());
-    for ease in QUALIFY_EASES {
-        let bpat = band_pattern(&data, ease, DEFAULT_BAND_HEIGHT_MM, pat.get("fabric"))?;
-        ftx_drape::material::resolve(&Pattern::new(bpat.clone()), &opts)?;
-        bands.push((ease, bpat));
-    }
-
     let super::body_source::PreparedBody {
         model,
         params,
@@ -829,6 +822,37 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
+    let torso = frames.torso.origin / 1000.0;
+    let chest_girth_mm = frames
+        .landmark_h("torso", "chest")
+        .and_then(|height_mm| {
+            ftx_body::tape::girth(
+                &skin.vertices,
+                &skin.triangles,
+                torso.z + height_mm / 1000.0,
+                [torso.x, torso.y],
+            )
+        })
+        .map(|girth_m| girth_m * 1000.0)
+        .filter(|girth_mm| girth_mm.is_finite() && *girth_mm > 0.0)
+        .ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "no closed torso section surrounding the axis at the posed chest landmark",
+            )
+        })?;
+    let input_chest_mm = Measurements(data).value("chest").ok();
+    let mut bands = Vec::with_capacity(QUALIFY_EASES.len());
+    for ease in QUALIFY_EASES {
+        let bpat = band_pattern_from_girth(
+            chest_girth_mm,
+            ease,
+            DEFAULT_BAND_HEIGHT_MM,
+            pat.get("fabric"),
+        )?;
+        ftx_drape::material::resolve(&Pattern::new(bpat.clone()), &opts)?;
+        bands.push((ease, bpat));
+    }
     let body = DrapeBody {
         frames: &frames,
         collision: (&skin.vertices, &skin.triangles),
@@ -913,13 +937,20 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         "schema": "fabric-qualify/1",
         "engine": "ftx",
         "measurements_sha256": meas_sha,
+        "posed_chest_girth_mm": chest_girth_mm,
+        "input_chest_mm": input_chest_mm,
         "fabric_key": fabric_key(pat.get("fabric")),
         "rows": rows,
         "pass": all_pass,
     });
     write_json(&out.join("qualify.json"), &rec)?;
     // spec 04 §7.1's printout: a line per band, then the verdict
-    let mut text = lines.join("\n");
+    let mut text = format!("Posed torso girth at the chest landmark: {chest_girth_mm:.2} mm");
+    if let Some(target) = input_chest_mm {
+        text.push_str(&format!(" (input chest: {target:.2} mm)"));
+    }
+    text.push('\n');
+    text.push_str(&lines.join("\n"));
     text.push_str(if all_pass {
         "\nQUALIFIED"
     } else {

@@ -645,6 +645,13 @@ The simulator's stdout ends with the line `SIM_REPORT {"gating", "flags", "settl
 - **Header:** `style` = `KAT_BAND_{ease:+d}`; `meta = {origin: QUALIFICATION, ease_mm}`.
 - **Tested:** the summed flat width at y = 0 equals chest + ease to 0.01 mm, and both seams walk.
 
+**Native sizing basis.** `ftx qualify` uses the convex-hull girth of the outermost closed torso
+section surrounding the torso axis, on the posed collision mesh at the chest placement landmark.
+The measurement input supplies targets for tape fitting. Its chest target can differ from the posed
+section girth, so the native command uses the latter for `chest` in the width formula. If there is
+no positive torso girth at that height, the command refuses. The reference `fab qualify` uses the
+input chest target.
+
 **Run.** Use eases −20, 0, +20 mm. Each band is in `OUT/band_{ease:+d}/` (`band_-20`, `band_+0`, `band_+20`) with its
 `pattern.json`, a `fit_spec.json`, and `sim/` (no stills; `--sew-frames 70 --drape-frames 0 --fold-frames 2`). The
 fit spec is `{schema: fabric-fit/1, points: [{id: chest, kind: girth, instances: [band_front, band_back], landmark:
@@ -661,6 +668,8 @@ chest, body: chest, target_mm: [−50, 0, 50]}]}`.
 **Output.** `OUT/qualify.json` = `{pass, rows: [{ease_mm, reading, ring_strain_mean_pct, ring_shift_mm, contact_frac,
 expected, pass, max_seam_gap_mm}], fabric_key, measurements_sha256}`, where `fabric_key = [areal_g_m2, tensile_N_m,
 bending_Nm]` of the pattern's fabric (null when no pattern was given).
+
+Native reports also include `posed_chest_girth_mm` and `input_chest_mm` (null when absent).
 
 Each band prints the line `ease ±E mm: READING mean ring strain X %  contact C  shift S mm  -> PASS|FAIL (expected L)`.
 The run then prints `QUALIFIED` or `NOT QUALIFIED: do not let the sim gate on tightness for this body/fabric`. Exit
