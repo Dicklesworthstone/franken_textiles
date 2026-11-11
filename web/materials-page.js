@@ -308,6 +308,9 @@ function controls() {
   $("studyFileControls").hidden = guided;
   $("guidedScenario").hidden = !guidedScenarioMode();
   $("scenarioFileControls").hidden = guidedScenarioMode();
+  for (const id of ["guidedScenarioSubdivisionHalvings", "guidedScenarioSubdivisionTrials"]) {
+    $(id).disabled = !guidedScenarioMode() || !$("guidedScenarioSubdivision").checked;
+  }
   $("guidedScenarioMatrix").hidden = !guidedMatrixMode();
   $("guidedScenarioCasePolicy").hidden = !guidedMatrixMode();
   $("guidedScenarioComparison").disabled = !guidedMatrixMode() || $("guidedScenarioPolicySource").value !== "file";
@@ -5511,6 +5514,12 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   if ($("guidedScenarioSelfContact").checked) {
     input.options.self_contact = { dhat: 0.001, thickness: 0.002, kappa: 100, mu: 0.4, eps_v: 0.001 };
   }
+  if ($("guidedScenarioSubdivision").checked) {
+    input.options.time_subdivision = {
+      max_halvings: number("guidedScenarioSubdivisionHalvings", "maximum drape interval halvings"),
+      max_trials: number("guidedScenarioSubdivisionTrials", "total drape-attempt allowance per alternative"),
+    };
+  }
   if (motionMode === "form") Object.assign(input, guidedMotionInput());
   if (motionMode === "file") input.maxMotionTrials = number("guidedScenarioMotionTrials", "case motion-attempt allowance");
   if (materialStrain) {
@@ -5588,6 +5597,8 @@ function showGuidedScenarioDrafts() {
     if (value.motion) motionTrials += value.max_motion_trials;
     const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
     label.textContent = `${item.key}: ${value.options.sew_steps} sewing + ${value.options.drape_steps} gravity steps, ` +
+      (value.options.time_subdivision ? `${value.options.time_subdivision.max_trials} drape attempts per alternative, ` +
+        `up to ${value.options.time_subdivision.max_halvings} halvings; ` : "") +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
       `${value.material_strain ? `directional strain on ${value.material_strain.instances?.join(", ") || "all retained instances"}, ${value.material_strain.max_triangle_samples} triangle-samples` : "no directional strain request"}; ` +
@@ -6212,6 +6223,14 @@ for (const id of ["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat
   };
   $(id).addEventListener("change", changed);
   if (!["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat", "guidedScenarioSelfContact"].includes(id)) $(id).addEventListener("input", changed);
+}
+for (const id of ["guidedScenarioSubdivision", "guidedScenarioSubdivisionHalvings", "guidedScenarioSubdivisionTrials"]) {
+  const changed = () => {
+    if (id === "guidedScenarioSubdivision" || $("guidedScenarioSubdivision").checked) changedGuidedScenarioDraft();
+    else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (id !== "guidedScenarioSubdivision") $(id).addEventListener("input", changed);
 }
 $("addScenarioCase").onclick = () => freezeGuidedScenarioCase();
 $("clearScenarioCases").onclick = () => { guidedScenarioDrafts.length = 0; changedGuidedScenarioDrafts(); };

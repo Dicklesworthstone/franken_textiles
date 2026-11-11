@@ -1391,6 +1391,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
+  e.guidedScenarioSubdivisionHalvings.value='8';e.guidedScenarioSubdivisionTrials.value='4096';
   for(const axis of ['X','Y','Z'])e['guidedMotionRoot'+axis].value='0';
   e.screenMode.value='guided';e.guidedScreenProperty.value='areal_density';
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
@@ -7194,6 +7195,80 @@ test('guided named scenarios freeze independent exact sources and replay without
   p.select('guidedScenarioComparison','{}');p.e.guidedScenarioComparison.handlers.change();
   assert.equal(result.hidden,false);assert.ok(p.live.has(link.href));
   await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided subdivision reaches the scenario worker with full budgets and omits inactive settings',async()=>{
+  const {p,sources}=await guidedScenarioSetup(true);
+  assert.equal(p.e.guidedScenarioSubdivisionHalvings.disabled,true);assert.equal(p.e.guidedScenarioSubdivisionTrials.disabled,true);
+  await p.e.scenario.onclick();let sent=p.current().messages.at(-1),value=JSON.parse(sent.scenarioRequest);
+  assert.equal(Object.hasOwn(value.options,'time_subdivision'),false);p.emit(scenarioReport());
+  p.e.guidedScenarioSubdivision.checked=true;p.e.guidedScenarioSubdivision.handlers.change();
+  assert.equal(p.e.guidedScenarioSubdivisionHalvings.disabled,false);assert.equal(p.e.guidedScenarioSubdivisionTrials.disabled,false);
+  await p.e.scenario.onclick();sent=p.current().messages.at(-1);value=JSON.parse(sent.scenarioRequest);
+  assert.deepEqual(value.options.time_subdivision,{max_halvings:8,max_trials:4096});
+  assert.equal(value.max_vertex_frames,25000);assert.equal(value.max_mesh_points,4096);
+  assert.equal(Object.hasOwn(value,'max_motion_trials'),false);
+  assert.ok(sent.scenarioRequest.includes(sources.fit));assert.ok(sent.scenarioRequest.includes(sources.heatConditions));
+  const w=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){}},material_scenario_study:(_model,...args)=>{
+    assert.deepEqual(args,[sent.pattern,sent.studyRequest,sent.scenarioRequest,sent.measurements]);return JSON.stringify(scenarioReport());
+  }}});
+  const response=await w.send(sent);assert.equal(response.type,'result',response.message);p.current().emit(response);
+  const output=section(p,'Fresh drape and heat alternatives'),link=descendants(output).find(n=>n.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(link.href).text(),sent.scenarioRequest);
+  for(const [id,bad] of [['guidedScenarioSubdivisionHalvings',''],['guidedScenarioSubdivisionHalvings','17'],
+    ['guidedScenarioSubdivisionTrials','119'],['guidedScenarioSubdivisionTrials','65536'],['guidedScenarioSubdivisionTrials','1.5']]) {
+    p.e.guidedScenarioSubdivisionHalvings.value='8';p.e.guidedScenarioSubdivisionTrials.value='4096';p.e[id].value=bad;
+    const before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+    assert.equal(p.e.error.hidden,false,`${id}/${bad}`);
+  }
+  p.e.guidedScenarioSubdivision.checked=false;p.e.guidedScenarioSubdivision.handlers.change();
+  await p.e.scenario.onclick();sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.equal(Object.hasOwn(JSON.parse(sent.scenarioRequest).options,'time_subdivision'),false);p.emit(scenarioReport());
+  p.e.guidedScenarioSubdivisionTrials.value='bad';p.e.guidedScenarioSubdivisionTrials.handlers.input();
+  assert.equal(output.hidden,false,'Inactive retry drafts do not withdraw the ordinary scenario');
+});
+
+test('guided subdivision freezes independent named cases and retains exact requests on replay',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);await saveGuidedCase(p,'ordinary');
+  p.e.guidedScenarioSubdivision.checked=true;p.e.guidedScenarioSubdivision.handlers.change();
+  p.e.guidedScenarioSubdivisionHalvings.value='3';p.e.guidedScenarioSubdivisionTrials.value='240';
+  await saveGuidedCase(p,'retry');
+  assert.match(descendants(p.e.guidedScenarioCases).map(n=>n.textContent).join(' '),/240 drape attempts per alternative, up to 3 halvings/);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1),request=JSON.parse(sent.scenarioRequest);
+  assert.equal(Object.hasOwn(request.cases[0].scenario.options,'time_subdivision'),false);
+  assert.deepEqual(request.cases[1].scenario.options.time_subdivision,{max_halvings:3,max_trials:240});
+  p.emit(scenarioReport(),[{name:'retained.json',text:'{}'}]);const output=section(p,'Fresh drape and heat alternatives');
+  for(const id of ['guidedScenarioSubdivisionHalvings','guidedScenarioSubdivisionTrials']) {
+    p.e[id].value='invalid';p.e[id].handlers.input();assert.equal(output.hidden,false,'Draft-only edits keep the saved matrix current');
+  }
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);p.emit(scenarioReport());
+  p.e.guidedScenarioSubdivisionHalvings.value='1';p.e.guidedScenarioSubdivisionTrials.value='120';
+  await guidedCaseAction(p,'Replace retry from current controls');assert.equal(output.hidden,true);
+  await p.e.scenario.onclick();assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).cases[1].scenario.options.time_subdivision,
+    {max_halvings:1,max_trials:120});p.emit(scenarioReport());
+  p.select('scenarioRequest',sent.scenarioRequest);await p.e.scenarioRequest.handlers.change();await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);p.emit(scenarioReport());
+  p.e.guidedScenarioSubdivision.handlers.change();assert.equal(output.hidden,false,'Advanced source files do not consume guided retry controls');
+});
+
+test('guided subdivision changes cancel pending sources and dispatched results without changing frozen cases',async()=>{
+  for(const saving of [false,true])for(const id of ['guidedScenarioSubdivision','guidedScenarioSubdivisionHalvings','guidedScenarioSubdivisionTrials']) {
+    const {p,sources}=await guidedScenarioSetup();if(saving){guidedNamedCases(p);await saveGuidedCase(p,'retained');}
+    p.e.guidedScenarioSubdivision.checked=true;p.e.guidedScenarioSubdivision.handlers.change();
+    const slow=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await slow.promise);
+    const old=p.current(),before=old.messages.length,running=saving?saveGuidedCase(p,'obsolete'):p.e.scenario.onclick();
+    p.e[id].handlers[id==='guidedScenarioSubdivision'?'change':'input']();assert.equal(old.dead,true,`${saving}/${id}`);
+    p.ready();slow.resolve(sources.fit);await running;assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+    if(saving)assert.equal(p.e.guidedScenarioCases.children.length,1);
+  }
+  const {p,sources}=await guidedScenarioSetup();p.e.guidedScenarioSubdivision.checked=true;p.e.guidedScenarioSubdivision.handlers.change();
+  const slow=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await slow.promise);
+  const running=p.e.scenario.onclick();p.e.guidedScenarioSubdivisionTrials.value='999';slow.resolve(sources.fit);await running;
+  const old=p.current(),sent=old.messages.at(-1);assert.equal(JSON.parse(sent.scenarioRequest).options.time_subdivision.max_trials,4096,
+    'Every control is frozen before any asynchronous source read');
+  p.e.guidedScenarioSubdivisionTrials.handlers.input();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
 test('guided named scenario replacement and ordering update exact cases and withdraw stale guidance',async()=>{

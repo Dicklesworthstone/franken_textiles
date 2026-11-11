@@ -702,6 +702,19 @@ These are numerical settings, not measured fabric thickness, friction or a runti
 Enable independent sheet heat to retain the exact section-3 heat conditions and evaluate each
 alternative's current geometry through the existing thermal engine.
 
+**Retry unconverged drape steps with bounded time subdivision** enables the same transactional
+solver used by ordinary drapes. Declare 0–16 halvings per nominal interval and 1–65535 total
+attempts per alternative; the initial sewing and gravity intervals each need at least one attempt.
+The default opt-in limits are 8 halvings and 4096 attempts. Failed retries and any extra settling
+share that allowance. Each alternative and adaptive probe reserves the entire allowance against
+the case's existing vertex-frame budget before solving, using its actual mesh bound. A larger
+allowance can exhaust that budget sooner; no allowance is silently reduced or distributed among
+alternatives. Named cases retain their own settings and show them in the saved-case list.
+Prescribed motion keeps its independent work limits. Disabling subdivision omits the policy and
+retains ordinary behavior. The solver keeps nominal frame times and convergence tolerances;
+subdivision recovers numerical convergence without estimating time-discretization error or
+establishing physical garment fit.
+
 Guided material comparisons can combine the following goals and inclusive limits with
 manufacturing objectives, or run without manufacturing consumers. For a scenario-only comparison,
 clear unused manufacturing goals and limits before disabling their inputs.

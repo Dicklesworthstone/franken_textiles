@@ -657,6 +657,37 @@ test('guided scenarios preserve exact fit and heat sources and only author decla
   assert.equal(JSON.parse(build(off)).options.self_contact,null);
 });
 
+test('guided drape subdivision preserves the complete allowance and independent case budgets', async () => {
+  const {buildMaterialScenarioRequest:build,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const ordinary=scenarioState(), original=build(ordinary);
+  assert.equal(Object.hasOwn(JSON.parse(original).options,'time_subdivision'),false);
+  const saved=[];
+  for(const policy of [{max_halvings:0,max_trials:48},{max_halvings:8,max_trials:4096},{max_halvings:16,max_trials:65535}]) {
+    const input={...ordinary,maxVertexFrames:32000000,options:{...ordinary.options,max_settle_steps:16,time_subdivision:policy}};
+    const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+    assert.equal(JSON.stringify(input),before);assert.deepEqual(result.options.time_subdivision,policy);
+    assert.equal(result.max_vertex_frames,32000000,'Do not resize a case budget to fit the requested retry allowance');
+    assert.equal(Object.hasOwn(result,'max_motion_trials'),false,'Drape recovery cannot consume an invented motion allowance');
+    saved.push(raw);
+  }
+  const raw=matrix({maxEvaluations:4,cases:[{key:'short',scenario:saved[0]},{key:'retry',scenario:saved[2]}]});
+  assert.ok(raw.includes(saved[0]));assert.ok(raw.includes(saved[2]));
+  assert.deepEqual(JSON.parse(raw).cases.map(item=>item.scenario.options.time_subdivision),
+    [{max_halvings:0,max_trials:48},{max_halvings:16,max_trials:65535}]);
+  assert.equal(build(ordinary),original,'Preparing another policy cannot mutate the original disabled request');
+  assert.equal(JSON.parse(build({...ordinary,options:{...ordinary.options,time_subdivision:null}})).options.time_subdivision,null);
+});
+
+test('guided drape subdivision refuses malformed policies and undersized mandatory phase allowances', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  for(const policy of [[],{},false,8,{max_halvings:8},{max_trials:4096},
+    {max_halvings:8,max_trials:4096,tolerance:1},...[-1,17,0.5,'8',NaN,Infinity].map(max_halvings=>({max_halvings,max_trials:4096})),
+    ...[0,65536,1.5,'4096',NaN,Infinity,47].map(max_trials=>({max_halvings:8,max_trials}))]) {
+    const input=scenarioState();input.options.time_subdivision=policy;
+    assert.throws(()=>build(input),/Time subdivision/);
+  }
+});
+
 test('guided motion preserves ordered absolute endpoints and original scenario sources', async () => {
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:build}=await modulePromise;
   const request={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:25,leg_pose:{posture:'seated',fraction:0.5}},

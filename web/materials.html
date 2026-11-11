@@ -1130,6 +1130,15 @@ section-3 contract for their separate design-fit screening even when this scenar
 <label>Mesh candidate budget per alternative <input id="guidedScenarioMeshBudget" type="number" min="3" max="32768" step="1" value="32768"></label>
 <label>Total vertex-frame work budget <input id="guidedScenarioFrameBudget" type="number" min="1" max="64000000" step="1" value="64000000"></label>
 </div>
+<label><input id="guidedScenarioSubdivision" type="checkbox"> Retry unconverged drape steps with bounded time subdivision</label>
+<div class="study-fields">
+<label>Maximum halvings per drape interval <input id="guidedScenarioSubdivisionHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
+<label>Total drape attempts per alternative <input id="guidedScenarioSubdivisionTrials" type="number" min="1" max="65535" step="1" value="4096" disabled></label>
+</div>
+<p class="note">The attempt allowance includes failed retries and is shared across sewing, gravity and extra settling.
+The engine reserves the full allowance within the case's vertex-frame budget for every alternative and adaptive probe;
+larger allowances can leave fewer alternatives evaluable. Nominal frame times and convergence tolerances stay unchanged.
+Prescribed movement keeps its separate limits. Subdivision does not estimate time-discretization error.</p>
 <label><input id="guidedScenarioSelfContact" type="checkbox"> Enable the ordinary cloth–cloth contact policy (2 mm numerical thickness)</label>
 <p class="note">Joint outfits require explicit cloth–cloth contact. This option uses the existing solver contact policy;
 it does not measure a fabric's thickness or friction. Source material resolution and intersection checks still apply.</p>

@@ -669,7 +669,7 @@ export function buildMaterialScenarioRequest(state) {
     sourceObject(state.fitSpec, "Fit contract"); fitSpec = state.fitSpec;
   } else if (!state.allowNoFit) throw Error("Choose a fit contract or explicitly allow a numerical-only study without one.");
   const fields = ["spacing", "sew_steps", "drape_steps", "step", "max_settle_steps"];
-  const options = object(state.options, [...fields, "self_contact"], fields, "Drape options");
+  const options = object(state.options, [...fields, "self_contact", "time_subdivision"], fields, "Drape options");
   for (const key of ["spacing", "step"]) {
     if (typeof options[key] !== "number" || !Number.isFinite(options[key]) || options[key] <= 0) {
       throw Error("Drape " + key + " must be finite and positive.");
@@ -686,6 +686,19 @@ export function buildMaterialScenarioRequest(state) {
   }
   if (options.max_settle_steps > 0 && !Number.isFinite((options.drape_steps + options.max_settle_steps) * options.step)) {
     throw Error("The declared gravity and settling duration must be finite.");
+  }
+  if (own(options, "time_subdivision") && options.time_subdivision !== null) {
+    const keys = ["max_halvings", "max_trials"];
+    const subdivision = object(options.time_subdivision, keys, keys, "Time subdivision");
+    if (!Number.isSafeInteger(subdivision.max_halvings) || subdivision.max_halvings < 0 || subdivision.max_halvings > 16 ||
+        !Number.isSafeInteger(subdivision.max_trials) || subdivision.max_trials < 1 || subdivision.max_trials > 65535) {
+      throw Error("Time subdivision needs max_halvings (whole 0–16) and max_trials (whole 1–65535).");
+    }
+    if (subdivision.max_trials < options.sew_steps + options.drape_steps) {
+      throw Error("Time subdivision needs at least one trial per requested sewing and gravity interval.");
+    }
+    // Rust reserves this complete allowance using the actual mesh bound for each alternative.
+    // A quiet settling tail can finish early, so it need not receive a separate minimum here.
   }
   if (own(options, "self_contact") && options.self_contact !== null) {
     const keys = ["dhat", "thickness", "kappa", "mu", "eps_v"];
