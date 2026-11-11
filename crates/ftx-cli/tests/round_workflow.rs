@@ -437,6 +437,13 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         assert_eq!(row["pass"], true, "{row}");
         let band = dir.join(format!("ws/qualification/band_{ease:+}"));
         let pattern = read(&band.join("pattern.json"));
+        assert_eq!(
+            read(&band.join("fit_spec.json")),
+            json!({"schema":"fabric-fit/1", "points":[{
+                "id":"chest", "kind":"girth", "instances":["band_front", "band_back"],
+                "landmark":"chest", "body":"chest", "target_mm":[-50,0,50]
+            }]})
+        );
         let girth_of_band: f64 = pattern["pieces"]
             .as_array()
             .unwrap()
@@ -448,6 +455,41 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         assert!((girth_of_band - (girth + f64::from(ease))).abs() <= 0.01);
         assert!(band.join("sim/sim_report.json").is_file());
     }
+    let replay = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "drape",
+            "ws/qualification/band_+0/pattern.json",
+            "--fit",
+            "ws/qualification/band_+0/fit_spec.json",
+            "--measurements",
+            "ws/measurements.json",
+            "--out",
+            "band-replay",
+            "--sew",
+            "70",
+            "--drape",
+            "0",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(replay.status.code(), Some(0 | 2)),
+        "{}\n{}",
+        String::from_utf8_lossy(&replay.stderr),
+        String::from_utf8_lossy(&replay.stdout)
+    );
+    let original = dir.join("ws/qualification/band_+0/sim");
+    let report = read(&dir.join("band-replay/sim_report.json"));
+    let qualified = read(&original.join("sim_report.json"));
+    for key in ["landmarks", "seams", "numerical", "material"] {
+        assert_eq!(report[key], qualified[key], "{key}");
+    }
+    assert_eq!(
+        std::fs::read(dir.join("band-replay/fold.pc2")).unwrap(),
+        std::fs::read(original.join("fold.pc2")).unwrap()
+    );
     let measurements = std::fs::read(dir.join("ws/measurements.json")).unwrap();
     assert_eq!(
         q["measurements_sha256"],

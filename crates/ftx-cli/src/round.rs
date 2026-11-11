@@ -877,6 +877,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         make_dir(&bdir)?;
         let pat_path = bdir.join("pattern.json");
         write_json(&pat_path, &bpat)?;
+        write_json(&bdir.join("fit_spec.json"), &spec)?;
         let sim_dir = bdir.join("sim");
         super::reserve_drape_output(&sim_dir)?;
         let pattern = Pattern::new(bpat);

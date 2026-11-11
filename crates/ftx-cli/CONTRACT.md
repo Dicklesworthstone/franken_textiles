@@ -206,7 +206,8 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   of the posed collision mesh at the chest placement landmark. The command reports that girth
   and the input chest target in `qualify.json` (`fabric-qualify/1`, spec 04 §7.1) alongside
   `pass`, `rows`, `fabric_key`, `qualification_basis` and the measurements file's `measurements_sha256`.
-  It prints each
+  Each band saves its `pattern.json`, the exact `fit_spec.json` used by the solve, and `sim/` outputs,
+  so the band can be replayed through `ftx drape` with those saved inputs. It prints each
   band's result and `QUALIFIED` / `NOT QUALIFIED: ...`. Exit 0 when all three bands pass, 2 otherwise.
 - `ftx report WS [--json]`: regenerates `WS/report.html` from existing `WS/rounds.jsonl` without creating
   a new round directory.
