@@ -2,7 +2,7 @@
 //! relative-curvature edges, and the seams as 1:1 stitches after splitting multi-edge sides at matched arclength
 //! points (notches included), for a 3D sewing check in GarmentCode.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::curve::{abs_to_rel, curve_points, rel_to_abs};
 use ftx_core::polyline::{cumulative, polyline_length};
@@ -277,9 +277,7 @@ pub fn export_garmentcode(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal
         };
         let (ba, la) = bounds(&ia.id, &ea);
         let (bb_own, _lb) = bounds(&ib.id, &eb);
-        let rev = seam
-            .get("reverse")
-            .is_none_or(|v| v.as_bool().unwrap_or(true));
+        let rev = seam.get("reverse").is_none_or(ftx_pattern::doc::truthy);
         let na = pat.notch_fractions(a_ref).unwrap_or_default();
         let mut nb = pat.notch_fractions(b_ref).unwrap_or_default();
         if rev {
@@ -383,6 +381,11 @@ pub fn export_garmentcode(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal
     let mut panels = Vec::new();
     let mut order = Vec::new();
     let mut edge_map = Vec::new();
+    let reserved_names: BTreeSet<String> =
+        insts.iter().map(|inst| inst.id.replace('.', "_")).collect();
+    let has_name_collisions = reserved_names.len() != insts.len();
+    let mut used_names = BTreeSet::new();
+    let mut instance_map = Vec::new();
     let mut index: BTreeMap<u64, (String, usize)> = BTreeMap::new();
     let top = raw
         .get("placement3d")
@@ -390,7 +393,22 @@ pub fn export_garmentcode(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal
         .cloned()
         .unwrap_or(Value::Null);
     for inst in &insts {
-        let name = inst.id.replace('.', "_");
+        let base = inst.id.replace('.', "_");
+        let name = if used_names.insert(base.clone()) {
+            base
+        } else {
+            // Generated suffixes must not displace another physical panel's ordinary name,
+            // including one encountered later in instance order.
+            let mut suffix = 2usize;
+            loop {
+                let candidate = format!("{base}_{suffix}");
+                if !reserved_names.contains(&candidate) && used_names.insert(candidate.clone()) {
+                    break candidate;
+                }
+                suffix += 1;
+            }
+        };
+        instance_map.push((name.clone(), PyJson::str(&inst.id)));
         let flat: Vec<&Seg> = inst
             .edges
             .iter()
@@ -506,6 +524,30 @@ pub fn export_garmentcode(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal
         }
     }
     let (n_panels, n_stitches, n_warnings) = (panels.len(), stitches.len(), warnings.len());
+    let mut metadata = PyJson::dict(vec![
+        ("source_schema", PyJson::from_value(raw.get("schema").unwrap_or(&Value::Null))),
+        ("style", PyJson::str(&ctx.style)),
+        ("size", PyJson::str(&ctx.size)),
+        ("edge_map", PyJson::Dict(edge_map)),
+        ("warnings", PyJson::List(warnings.into_iter().map(PyJson::Str).collect())),
+        (
+            "notes",
+            PyJson::List(
+                [
+                    "net sew-line shapes only: no seam allowance, notches, grain, internal lines or decor",
+                    "multi-edge seam sides are split at matched arclength points (incl. notches) into 1:1 stitches",
+                    "poly edges become straight sub-edges; translation/rotation are zero unless placement3d is given",
+                    "loops are CCW as drafted (public side toward +z for rotation 0)",
+                ]
+                .iter()
+                .map(|s| PyJson::str(*s))
+                .collect(),
+            ),
+        ),
+    ]);
+    if has_name_collisions {
+        metadata.set("instance_map", PyJson::Dict(instance_map));
+    }
     let spec = PyJson::dict(vec![
         (
             "pattern",
@@ -526,30 +568,7 @@ pub fn export_garmentcode(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal
                 ("units_in_meter", PyJson::Int(100)),
             ]),
         ),
-        (
-            "fabric_pattern_export",
-            PyJson::dict(vec![
-                ("source_schema", PyJson::from_value(raw.get("schema").unwrap_or(&Value::Null))),
-                ("style", PyJson::str(&ctx.style)),
-                ("size", PyJson::str(&ctx.size)),
-                ("edge_map", PyJson::Dict(edge_map)),
-                ("warnings", PyJson::List(warnings.into_iter().map(PyJson::Str).collect())),
-                (
-                    "notes",
-                    PyJson::List(
-                        [
-                            "net sew-line shapes only: no seam allowance, notches, grain, internal lines or decor",
-                            "multi-edge seam sides are split at matched arclength points (incl. notches) into 1:1 stitches",
-                            "poly edges become straight sub-edges; translation/rotation are zero unless placement3d is given",
-                            "loops are CCW as drafted (public side toward +z for rotation 0)",
-                        ]
-                        .iter()
-                        .map(|s| PyJson::str(*s))
-                        .collect(),
-                    ),
-                ),
-            ]),
-        ),
+        ("fabric_pattern_export", metadata),
     ]);
     let name = format!("{}.garmentcode.json", ctx.style);
     let entry = PyJson::dict(vec![

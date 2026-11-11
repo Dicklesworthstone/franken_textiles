@@ -217,6 +217,7 @@ evidence that the authored catalog garment is complete or fits a person.
 | `cut.qty` 2.7 or `"2"` | truncated or parsed to 2 | structure error | Only the integers 1 and 2 mean anything |
 | Rewritten documents | insertion order, `"curve": null` kept | canonical key order, null curve dropped | Semantic equality is the bar (spec 01 §14.6) |
 | DXF extents | ±1e20 placeholders | real extents | Correct values; no check reads them |
+| GarmentCode normalized panel names | dot-to-underscore conversion can alias distinct physical instances | reserve all ordinary names and suffix collisions without shadowing; report final panel-to-instance mapping only when needed | `export_gc::colliding_panel_names_preserve_geometry_and_stitches_on_reimport` covers both source orders, every physical panel, source edges and real reimport; existing reference exports remain unchanged |
 | Cubic Bézier samples | x³ via the platform `pow` (not correctly rounded, varies by platform) | correctly rounded x³ | Deterministic; ≤ 1 ULP from numpy, which disagrees with itself across platforms |
 | Anny batch size | any batch, broadcast | batch 1 | Loop over bodies instead; simpler and as fast here (0.3–0.4 ms per body) |
 | PDF/DXF creation dates | wall clock | the pattern's `created` | Reproducible files |
