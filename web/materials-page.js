@@ -320,8 +320,10 @@ function controls() {
   const motion = $("guidedScenarioMotion").checked, motionMode = guidedMotionMode();
   $("guidedMotionControls").hidden = !motion;
   $("guidedMotionLegFraction").disabled = $("guidedMotionLegs").value === "standing";
-  for (const axis of ["X", "Y", "Z"]) $("guidedMotionRoot" + axis).disabled =
-    motionMode !== "form" || !$("guidedMotionTranslate").checked;
+  for (const axis of ["X", "Y", "Z"]) {
+    $("guidedMotionRoot" + axis).disabled = motionMode !== "form" || !$("guidedMotionTranslate").checked;
+    $("guidedMotionRotation" + axis).disabled = motionMode !== "form" || !$("guidedMotionRotate").checked;
+  }
   $("addMotionKeyframe").disabled = !source || !guidedScenarioMode() || motionMode !== "form" || guidedMotionKeyframes.length >= 16;
   $("clearMotionKeyframes").disabled = motionMode !== "form" || !guidedMotionKeyframes.length;
   for (const button of guidedMotionButtons) button.disabled = !source || !guidedScenarioMode() || motionMode !== "form";
@@ -1620,12 +1622,15 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested, filePrefix);
     if (!result) continue;
     const translated = result.keyframes.some(endpoint => Array.isArray(endpoint.root_translation_m));
+    const rotated = result.keyframes.some(endpoint => Array.isArray(endpoint.root_rotation_rad));
     const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)", "Arm angle (degrees)", "Leg posture", "Leg fraction",
       ...(translated ? ["Root X (m)", "Root Y (m)", "Root Z (m)"] : []),
+      ...(rotated ? ["Root rotation X (rad)", "Root rotation Y (rad)", "Root rotation Z (rad)"] : []),
       "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
     for (const endpoint of result.keyframes) {
       cells(endpoints, [metric(endpoint.time_s), metric(endpoint.arm_abduction_deg), endpoint.leg_pose?.posture || "standing", endpoint.leg_pose ? metric(endpoint.leg_pose.fraction) : "—",
-        ...(translated ? (endpoint.root_translation_m ?? [0, 0, 0]).map(value => metric(value)) : []), state(endpoint.surface),
+        ...(translated ? (endpoint.root_translation_m ?? [0, 0, 0]).map(value => metric(value)) : []),
+        ...(rotated ? (endpoint.root_rotation_rad ?? [0, 0, 0]).map(value => metric(value)) : []), state(endpoint.surface),
         metric(available(endpoint.surface)?.steady?.power_w), state(endpoint.coverage), metric(available(endpoint.coverage)?.steady?.power_w)]);
       steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s independent sheets`, available(endpoint.surface));
       steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s body coverage`, available(endpoint.coverage));
@@ -5231,7 +5236,8 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     keyframes: keyframes.map(({ heat_boundary, heat_exterior, coverage_boundary, coverage_exterior,
       coverage_bare_boundary, coverage_exposed_boundary, coverage_exposed_exterior, ...frame }) =>
       ({ ...frame, ...(frame.leg_pose ? { leg_pose: { ...frame.leg_pose } } : {}),
-        ...(frame.root_translation_m ? { root_translation_m: frame.root_translation_m.slice() } : {}) })),
+        ...(frame.root_translation_m ? { root_translation_m: frame.root_translation_m.slice() } : {}),
+        ...(frame.root_rotation_rad ? { root_rotation_rad: frame.root_rotation_rad.slice() } : {}) })),
     max_step_s: number("guidedMotionStep", "maximum motion substep in seconds"),
     max_trials: number("guidedMotionTrials", "trajectory substep allowance"),
     max_pairs: number("guidedMotionPairs", "collision candidate allowance"),
@@ -5384,6 +5390,7 @@ function showGuidedMotionKeyframes() {
     label.textContent = `${index + 1}: ${frame.time_s} s; arms ${frame.arm_abduction_deg}°; ` +
       (frame.leg_pose ? `${frame.leg_pose.posture} at fraction ${frame.leg_pose.fraction}.` : "standing legs.");
     if (frame.root_translation_m) label.textContent += ` World offset (m): ${frame.root_translation_m.join(", ")}.`;
+    if (frame.root_rotation_rad) label.textContent += ` Root rotation vector (rad): ${frame.root_rotation_rad.join(", ")}.`;
     if (frame.heat_boundary) {
       const film = frame.heat_boundary, start = index ? guidedMotionKeyframes[index - 1].time_s : 0;
       label.textContent += ` Saved heat for ${start}–${frame.time_s} s: inside ${film.inside_c} °C / ${film.inside_resistance_m2_k_w} m² K/W; ` +
@@ -5442,6 +5449,8 @@ function saveGuidedMotionKeyframe(replacing = null) {
       ...(legs === "standing" ? {} : { leg_pose: { posture: legs, fraction: number("guidedMotionLegFraction", "leg-pose fraction") } }) };
     if ($("guidedMotionTranslate").checked) frame.root_translation_m = ["X", "Y", "Z"]
       .map(axis => number("guidedMotionRoot" + axis, `world ${axis} displacement in metres`));
+    if ($("guidedMotionRotate").checked) frame.root_rotation_rad = ["X", "Y", "Z"]
+      .map(axis => number("guidedMotionRotation" + axis, `root rotation-vector ${axis} component in radians`));
     if ($("guidedMotionHeat").checked) {
       const exterior = exteriorInput("guidedMotionHeatExterior", number);
       frame.heat_boundary = filmInput("guidedMotionHeat", number, exterior);
@@ -6205,6 +6214,7 @@ for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs",
 }
 for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "guidedMotionLegFraction",
   "guidedMotionTranslate", "guidedMotionRootX", "guidedMotionRootY", "guidedMotionRootZ",
+  "guidedMotionRotate", "guidedMotionRotationX", "guidedMotionRotationY", "guidedMotionRotationZ",
   "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm",
   "guidedMotionHeatInstance", "guidedMotionHeatInstanceInitial", "guidedMotionCoverageInstance", "guidedMotionCoverageInstanceInitial",
   "guidedMotionHeatProfileInstance", "guidedMotionHeatProfileValues",
@@ -6212,7 +6222,7 @@ for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "gu
   ...motionExteriorPrefixes.flatMap(prefix => exteriorSuffixes.map(suffix => prefix + suffix)),
   "guidedMotionExposedMode"]) {
   $(id).addEventListener("change", controls);
-  if (!["guidedMotionLegs", "guidedMotionExposedMode", "guidedMotionTranslate"].includes(id)) $(id).addEventListener("input", controls);
+  if (!["guidedMotionLegs", "guidedMotionExposedMode", "guidedMotionTranslate", "guidedMotionRotate"].includes(id)) $(id).addEventListener("input", controls);
 }
 for (const id of ["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat", "guidedScenarioSelfContact",
   "guidedScenarioSpacing", "guidedScenarioSewSteps", "guidedScenarioDrapeSteps", "guidedScenarioStep",
@@ -6703,8 +6713,10 @@ function resetGuidedScenarios() {
   $("guidedMotionExposedMode").value = "";
   for (const suffix of ["Inside", "Outside", "InsideFilm", "OutsideFilm"]) $("guidedMotionExposed" + suffix).value = "";
   $("guidedMotionTime").value = ""; $("guidedMotionArm").value = "";
-  $("guidedMotionTranslate").checked = false;
-  for (const axis of ["X", "Y", "Z"]) $("guidedMotionRoot" + axis).value = "0";
+  $("guidedMotionTranslate").checked = false; $("guidedMotionRotate").checked = false;
+  for (const axis of ["X", "Y", "Z"]) {
+    $("guidedMotionRoot" + axis).value = "0"; $("guidedMotionRotation" + axis).value = "0";
+  }
   $("guidedMotionLegs").value = "standing"; $("guidedMotionLegFraction").value = "1"; showGuidedMotionKeyframes();
   $("guidedMaterialStrain").checked = false; $("guidedMaterialStrainScope").value = "all";
   $("guidedMaterialStrainInstances").value = "";

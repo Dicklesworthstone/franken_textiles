@@ -21012,3 +21012,80 @@ test('time subdivision handoffs reject malformed policies and legacy packets cle
   await q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data:{type:'ftx-round-sources',token,files,drapeSettings:checkedSettings}});
   assert.equal(q.e.splitTimeSteps.checked,false);assert.equal(q.e.timeMaxTrials.disabled,true);
 });
+function guidedRootRotationDraft(p,rotation,enabled=true) {
+  p.e.guidedMotionRotate.checked=enabled;p.e.guidedMotionRotate.handlers.change();
+  for(const [index,axis] of ['X','Y','Z'].entries()) {
+    p.e['guidedMotionRotation'+axis].value=String(rotation[index]);p.e['guidedMotionRotation'+axis].handlers.input();
+  }
+}
+
+test('guided root rotation composes with translation and displays the actual returned orientation',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  assert.equal(p.e.guidedMotionRotate.checked,false);
+  assert.ok(['X','Y','Z'].every(axis=>p.e['guidedMotionRotation'+axis].disabled));
+  guidedRootMotionDraft(p,[0.01,-0.02,0.03]);guidedRootRotationDraft(p,[0.1,-0.2,0.3]);
+  await addGuidedMotion(p,0.002,35,'seated',0.1);
+  guidedRootMotionDraft(p,[0,0,0],false);guidedRootRotationDraft(p,[9,8,7],false);
+  await addGuidedMotion(p,0.004,35);
+  guidedRootRotationDraft(p,[0,0,0]);await addGuidedMotion(p,0.006,35);
+  const expected=[{time_s:0.002,arm_abduction_deg:35,leg_pose:{posture:'seated',fraction:0.1},
+    root_translation_m:[0.01,-0.02,0.03],root_rotation_rad:[0.1,-0.2,0.3]},
+    {time_s:0.004,arm_abduction_deg:35},{time_s:0.006,arm_abduction_deg:35,root_rotation_rad:[0,0,0]}];
+  assert.match(visibleText(p.e.guidedMotionKeyframes),/Root rotation vector \(rad\): 0.1, -0.2, 0.3/);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.keyframes,expected);
+  const report=scenarioReport();report.scenario.scenario=JSON.parse(sent.scenarioRequest);
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({duration_s:0.006,
+    samples:[{},{},{}],trials:6,path_sha256:'rotated-source',metrics:{max_absolute_edge_strain_pct:1.25},
+    keyframes:expected.map(frame=>({...frame,surface:omitted(),coverage:omitted()}))});
+  guidedRootRotationDraft(p,[-0.9,-0.8,-0.7]);
+  p.emit(report,[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const result=section(p,'Fresh drape and heat alternatives');
+  const table=descendants(result).find(node=>node.tag==='table'&&node.children[0].textContent.startsWith('A: endpoint'));
+  assert.ok(table);assert.deepEqual(table.children[1].children.slice(7,10).map(node=>node.textContent),
+    ['Root rotation X (rad)','Root rotation Y (rad)','Root rotation Z (rad)']);
+  assert.deepEqual(table.children.slice(2).map(row=>row.children.slice(7,10).map(node=>node.textContent)),
+    [['0.1','-0.2','0.3'],['0','0','0'],['0','0','0']]);
+  const download=descendants(result).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);
+});
+
+test('guided root rotation keeps drafts separate and refuses invalid replacements before canceling saved work',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  guidedRootRotationDraft(p,[0.1,-0.2,0.3]);await addGuidedMotion(p,0.002,35);
+  await p.e.scenario.onclick();const old=p.current(),original=old.messages.at(-1).scenarioRequest;
+  for(const rotation of [[2,2,2],[Math.PI+1e-8,0,0],['',0,0],[0,'Infinity',0]]) {
+    guidedRootRotationDraft(p,rotation);assert.equal(old.dead,false);
+    await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+    assert.equal(old.dead,false);assert.equal(p.e.guidedMotionKeyframes.children.length,1);
+    assert.match(p.e.error.textContent,/root rotation/i);
+  }
+  guidedRootRotationDraft(p,[0,0,0.4]);assert.equal(old.dead,false);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  assert.equal(old.dead,true);p.ready();
+  await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.keyframes[0].root_rotation_rad,[0,0,0.4]);
+  assert.deepEqual(JSON.parse(original).motion.keyframes[0].root_rotation_rad,[0.1,-0.2,0.3]);
+  p.emit(scenarioReport());await p.load();
+  assert.equal(p.e.guidedMotionRotate.checked,false);
+  assert.deepEqual(['X','Y','Z'].map(axis=>p.e['guidedMotionRotation'+axis].value),['0','0','0']);
+  assert.ok(['X','Y','Z'].every(axis=>p.e['guidedMotionRotation'+axis].disabled));
+});
+
+test('guided root rotation named cases keep independent snapshots after later pose replacement',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
+  guidedRootRotationDraft(p,[0,0,0.1]);await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'left');
+  guidedRootRotationDraft(p,[0,0,-0.2]);guidedMotionDraft(p,0.004,36,'squat',0.2);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await saveGuidedCase(p,'right');
+  guidedRootRotationDraft(p,[1,1,1]);await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).cases.map(item=>[item.key,item.scenario.motion.keyframes[0].root_rotation_rad]),
+    [['left',[0,0,0.1]],['right',[0,0,-0.2]]]);
+  const worker=p.current();guidedRootRotationDraft(p,[0,0,0]);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');p.e.clearMotionKeyframes.onclick();
+  assert.equal(worker.dead,false);
+  p.emit(scenarioReport());await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+

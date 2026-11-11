@@ -5702,6 +5702,21 @@ withdraw obsolete fits and garment handoffs. This completes the software authori
 anatomical correspondence remains an operator declaration, separate from empirical body and garment
 qualification.
 
+### 25.195 Rotate the selected body during continuous garment motion
+
+Absolute root rotation vectors extend prescribed garment motion to whole-body turns and tilts.
+Each finite axis-times-angle vector has norm at most pi radians and rotates the complete selected
+source surface before its existing world translation. Omitted/null rotation returns to the original
+orientation at that endpoint; explicit zero preserves the old geometry exactly. One scaled,
+deterministic rotation law admits and constructs endpoints without erasing tiny nonzero angles.
+
+Native and portable scenarios, guided motion controls and frozen named cases retain the same
+source and endpoint receipts. Comparison admission rejects missing or altered requested rotations.
+Existing checked vertex chords, rollback, cloth history, gravity and world-frame environments remain
+authoritative. Independent geometry and occupied-shape replay regressions cover composition and
+identity returns. This advances `ftx-mv1.1`; prescribed turns do not establish anatomical paths,
+rotational arcs between endpoints, floor/chair support or physical garment qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

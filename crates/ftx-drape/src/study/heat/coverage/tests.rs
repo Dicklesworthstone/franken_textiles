@@ -386,7 +386,7 @@ fn coverage_initial_profiles_keep_exact_owners_cells_and_storage_through_motion(
         .iter()
         .zip(history.state.temperature_c())
     {
-        for (layer, values) in region.layers.iter().zip(row.chunks_exact(2)) {
+        for (layer, values) in region.layers.iter().zip(row.as_chunks::<2>().0) {
             allocated[layer.cloth_triangle] += layer.fraction;
             stored += 50.
                 * layer.fraction

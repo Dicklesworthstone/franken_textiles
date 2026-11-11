@@ -3510,6 +3510,15 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
 
 #[test]
 fn translated_seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape() {
+    occupied_root_continuation(false);
+}
+
+#[test]
+fn rotated_seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape() {
+    occupied_root_continuation(true);
+}
+
+fn occupied_root_continuation(rotate: bool) {
     use ftx_wasm::materials::scenario::on_model;
 
     let dir = setup();
@@ -3534,7 +3543,7 @@ fn translated_seated_and_squat_continuation_replays_native_and_portable_with_occ
     let study = json!({"schema":"ftx-material-study/1","variants":[{"key":"baseline",
         "changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
         "cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,"end_margin_mm":0.0}});
-    let scenario = json!({"schema":"ftx-drape-scenario/1",
+    let mut scenario = json!({"schema":"ftx-drape-scenario/1",
         "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
         "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000,
         "motion":{"schema":"ftx-drape-motion/1","keyframes":[
@@ -3545,6 +3554,14 @@ fn translated_seated_and_squat_continuation_replays_native_and_portable_with_occ
             {"time_s":0.006,"arm_abduction_deg":35.0,"root_translation_m":[0.0,0.0,0.0]},
             {"time_s":0.008,"arm_abduction_deg":35.0}],
             "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000}});
+    if rotate {
+        for (i, rotation) in [[0.0, 0.0, 0.0001], [0.0, -0.0001, 0.0], [0.0, 0.0, 0.0]]
+            .into_iter()
+            .enumerate()
+        {
+            scenario["motion"]["keyframes"][i]["root_rotation_rad"] = json!(rotation);
+        }
+    }
     let portable: Value = serde_json::from_str(
         &on_model(
             &model,
@@ -3642,6 +3659,12 @@ fn translated_seated_and_squat_continuation_replays_native_and_portable_with_occ
         assert_eq!(
             motion["keyframes"][i]["root_translation_m"],
             scenario["motion"]["keyframes"][i]["root_translation_m"]
+        );
+    }
+    for i in 0..4 {
+        assert_eq!(
+            motion["keyframes"][i].get("root_rotation_rad"),
+            scenario["motion"]["keyframes"][i].get("root_rotation_rad")
         );
     }
     assert!(motion["keyframes"][2].get("leg_pose").is_none());

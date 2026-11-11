@@ -277,11 +277,26 @@ movement. Source-model posing remains fixed to the same selected shape; the init
 and its display geometry still describe time zero. The motion viewer uses each accepted translated
 `body_positions_m` sample. Large or invalid paths retain the existing contact and work refusals.
 
+An optional `"root_rotation_rad":[rx,ry,rz]` adds an absolute whole-body orientation about the
+selected model's root origin. It is an **axis times angle rotation vector in radians**, with vector
+length at most pi; these components are not three Euler angles. For example, `[0,0,0.1]` rotates
+0.1 radians around world +Z. The source surface is rotated before applying `root_translation_m`;
+arm/leg poses, selected shape and occupied-body calibration stay unchanged. Omission, `null` or
+an explicit zero vector means identity at that endpoint. Repeating a translated or rotated hold
+therefore requires repeating both controls. Gravity, prescribed environment values and sourced
+incoming-flow velocities remain in their existing world frame.
+
+The guided workbench exposes translation and rotation independently. Add or Replace freezes the
+complete endpoint; typing in either set of fields does not alter the saved trajectory or an active
+request. Invalid or incomplete vectors refuse before replacing an endpoint. Saved named cases keep
+their exact requested transforms, and endpoint tables display the recorded rotation vectors.
+Use short turn increments: the solver still checks linear vertex chords, not circular rotation arcs.
+
 The same scenario JSON reaches both native material-study commands and the browser's scenario
-input. Reports retain each requested `leg_pose` and `root_translation_m` beside its endpoint time,
-arm angle and exact collision geometry; motion comparisons reject a missing or changed requested
-posture or translation. Existing arm-only inputs keep their standing, untranslated behavior and
-serialized source identities. Calibrated nappy
+input. Reports retain each requested `leg_pose`, `root_translation_m` and `root_rotation_rad` beside
+its endpoint time, arm angle and exact collision geometry; motion comparisons reject a missing or
+changed requested posture, translation or rotation. Existing arm-only and translation-only inputs
+keep their previous behavior and serialized source identities. Calibrated nappy
 occupancy follows the same fixed occupied shape through every endpoint without recalibration.
 
 Between endpoints, the existing transactional motion kernel follows **linear body-vertex chords**,

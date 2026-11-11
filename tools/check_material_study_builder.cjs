@@ -3656,3 +3656,44 @@ test('authored fit contracts enter existing linked and adaptive studies without 
   const adaptive=build(input,namedContext(undefined,12));assert.ok(adaptive.includes(raw));
   assert.deepEqual(JSON.parse(adaptive).design_fit.fit_spec,JSON.parse(raw));
 });
+test('guided root rotations retain exact absolute controls through source files and frozen cases', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const legacy=motion(motionState());
+  const frames=[
+    {time_s:0.25,arm_abduction_deg:30,leg_pose:{posture:'seated',fraction:0.1},root_translation_m:[0.01,-0.02,0.03],root_rotation_rad:[0.1,-0.2,0.3]},
+    {time_s:0.5,arm_abduction_deg:35,root_rotation_rad:[0,0,0]},
+    {time_s:0.75,arm_abduction_deg:35}];
+  const input={...motionState(),keyframes:frames},before=JSON.stringify(input);
+  assert.deepEqual(JSON.parse(motion(input)).keyframes,frames);
+  assert.equal(JSON.stringify(input),before);
+  const first=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  input.keyframes[0].root_rotation_rad[2]=0.4;
+  const second=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const saved=matrix({maxEvaluations:4,cases:[{key:'turn',scenario:first},{key:'further',scenario:second}]});
+  assert.deepEqual(JSON.parse(saved).cases.map(item=>item.scenario.motion.keyframes[0].root_rotation_rad[2]),[0.3,0.4]);
+  assert.ok(saved.includes(first));assert.ok(saved.includes(second));
+  for(const rotation of [[Math.PI,0,0],[0,0,0],[1e-200,0,0],null]) {
+    const value={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30,root_rotation_rad:rotation}]};
+    assert.deepEqual(JSON.parse(motion(value)).keyframes[0].root_rotation_rad,rotation);
+  }
+  const original=' {\r\n"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.25,"arm_abduction_deg":30.0,'+
+    '"root_rotation_rad":[-0.0,1e-200,0.1],"root_translation_m":[0.01,0.0,0.0]}],'+
+    '"max_step_s":0.125,"max_trials":128,"max_pairs":100000,"max_sample_vertices":500000}\r\n';
+  assert.ok(single({...scenarioState(),motion:original,maxMotionTrials:1024}).includes(original));
+  assert.equal(motion(motionState()),legacy);
+});
+
+test('guided and original-file motion refuse malformed or excessive root rotation vectors', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  for(const rotation of [false,1,'0,0,0',{},[],[0,0],[0,0,0,0],[0,'0',0],[0,null,0],
+    [NaN,0,0],[0,Infinity,0],[0,0,-Infinity],[Math.PI+1e-10,0,0],[2,2,2],[1e308,0,0]]) {
+    const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30,root_rotation_rad:rotation}]};
+    assert.throws(()=>motion(input),/root rotation/i);
+    if(Array.isArray(rotation)&&rotation.some(value=>typeof value==='number'&&!Number.isFinite(value)))continue;
+    const original=JSON.stringify({schema:'ftx-drape-motion/1',...input});
+    assert.throws(()=>single({...scenarioState(),motion:original,maxMotionTrials:1024}),/root rotation/i);
+  }
+  const wrong={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30,root_rotation_deg:[0,0,5]}]};
+  assert.throws(()=>motion(wrong),/unsupported/);
+});
+

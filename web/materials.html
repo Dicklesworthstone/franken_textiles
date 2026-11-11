@@ -1437,6 +1437,16 @@ The engine checks exact retained ownership and each material's thermal domain.</
 </div>
 <p class="note">These are absolute offsets from the selected body's starting origin, not distances added to the previous endpoint.
 An unchecked endpoint returns to that origin. Use Add or Replace to save the offset with its pose; editing these fields alone leaves saved endpoints unchanged.</p>
+<label><input id="guidedMotionRotate" type="checkbox"> Rotate the whole body at this endpoint</label>
+<div class="study-fields">
+<label>Root rotation vector X (rad) <input id="guidedMotionRotationX" type="number" step="any" value="0" disabled></label>
+<label>Root rotation vector Y (rad) <input id="guidedMotionRotationY" type="number" step="any" value="0" disabled></label>
+<label>Root rotation vector Z (rad) <input id="guidedMotionRotationZ" type="number" step="any" value="0" disabled></label>
+</div>
+<p class="note">The vector points along the rotation axis; its length is the angle in radians, at most pi.
+For example, [0, 0, 0.1] turns 0.1 radians around world +Z. Rotation is about the selected body's root origin,
+before its displacement. Each endpoint has an absolute orientation; an unchecked rotation returns to the original orientation.
+Use short turn increments because the solver follows checked vertex chords between saved endpoints.</p>
 <fieldset id="guidedMotionHeatBoundary" hidden><legend>Heat conditions for the interval ending at this endpoint</legend>
 <div class="study-fields">
 <label>Inside reservoir temperature (°C) <input id="guidedMotionHeatInside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>

@@ -425,6 +425,13 @@ impl FittedBody {
                 pose.leg_fraction = legs.fraction;
             }
             let mut posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
+            if let Some(rotation) = keyframe.root_rotation_matrix()? {
+                // Posed source vertices are root-relative. Rotate the complete surface about
+                // that origin before the existing world translation and collider cap extraction.
+                for vertex in &mut posed.vertices {
+                    *vertex = rotation.mul_vec(*vertex);
+                }
+            }
             if let Some([x, y, z]) = keyframe.root_translation_m
                 && (x != 0.0 || y != 0.0 || z != 0.0)
             {
@@ -1019,6 +1026,84 @@ mod tests {
         assert_eq!(fitted.collision.vertices, original_collision);
         assert_eq!(fitted.display.vertices, original_display);
         assert_eq!(fitted.report, original_report);
+    }
+
+    #[test]
+    fn rotated_motion_endpoints_keep_absolute_source_origin_and_selected_shape() {
+        let model = model();
+        let digest = "a".repeat(64);
+        let fitted = FittedBody::prepare(&model, &digest, &request()).unwrap();
+        let original_report = fitted.report.clone();
+        let original_collision = fitted.collision.vertices.clone();
+        let original_display = fitted.display.vertices.clone();
+        let rest = model.rest(&fitted.params).unwrap();
+        let motion: motion::Request = serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[
+                {"time_s":0.01,"arm_abduction_deg":36.0,
+                 "leg_pose":{"posture":"seated","fraction":0.05},
+                 "root_rotation_rad":[0.0,0.0,0.125],"root_translation_m":[0.02,-0.04,0.01]},
+                {"time_s":0.02,"arm_abduction_deg":37.0,
+                 "root_translation_m":[-0.01,0.02,-0.03]},
+                {"time_s":0.03,"arm_abduction_deg":35.0},
+                {"time_s":0.04,"arm_abduction_deg":35.0,"root_rotation_rad":[-0.0,0.0,-0.0]}],
+            "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000}))
+        .unwrap();
+        let mut expected = Vec::new();
+        for (i, frame) in motion.keyframes.iter().enumerate() {
+            let mut pose = Pose::drape();
+            pose.arm_abduction_deg = Some(frame.arm_abduction_deg);
+            if i == 0 {
+                pose.legs = Legs::Seated;
+                pose.leg_fraction = 0.05;
+            }
+            let mut posed = model
+                .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+                .unwrap();
+            let original = posed.vertices.clone();
+            let angle = if i == 0 { 0.125 } else { 0.0 };
+            let (s, c) = ftx_core::det::sin_cos(angle);
+            if i == 0 {
+                // Independent Z-axis matrix, rather than the candidate's vector-normalization
+                // helper. The second frame has no rotation: it never inherits the first turn.
+                let rotation = Mat3::from_rows([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]);
+                for vertex in &mut posed.vertices {
+                    *vertex = rotation.mul_vec(*vertex);
+                }
+            }
+            let translation = Vec3::from(frame.root_translation_m.unwrap_or([0.0; 3]));
+            if i < 2 {
+                for vertex in &mut posed.vertices {
+                    *vertex += translation;
+                }
+            }
+            for (before, after) in original.iter().zip(&posed.vertices) {
+                let analytic = Vec3::new(
+                    c * before.x - s * before.y,
+                    s * before.x + c * before.y,
+                    before.z,
+                ) + translation;
+                assert!((*after - analytic).norm() < 2e-14);
+            }
+            let skin = clothing_skin(&model, &posed.vertices).unwrap();
+            assert_eq!(skin.triangles, fitted.collision.triangles);
+            assert_eq!(skin.source_vertex, fitted.collision.source_vertex);
+            expected.push(skin.vertices);
+        }
+        assert_eq!(expected[2], original_collision);
+        assert_eq!(expected[3], original_collision);
+        let independent = motion::Path::new(&motion, fitted.body().collision, expected).unwrap();
+        let actual = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_eq!(actual.sha256(), independent.sha256());
+        assert_eq!(fitted.report, original_report);
+        assert_eq!(fitted.collision.vertices, original_collision);
+        assert_eq!(fitted.display.vertices, original_display);
+        let mut changed = motion.clone();
+        changed.keyframes[0].root_rotation_rad.as_mut().unwrap()[2] += 0.01;
+        assert_ne!(
+            actual.sha256(),
+            fitted.motion_path(&model, &digest, &changed).unwrap().sha256()
+        );
+        assert!(actual.validate_for(&changed, &fitted.body()).is_err());
     }
 
     #[test]

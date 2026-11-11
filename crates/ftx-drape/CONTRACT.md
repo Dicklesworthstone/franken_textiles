@@ -136,6 +136,18 @@ source replay, actual sewn-contact continuation/rollback, coverage recomputation
 whole-report equality are covered by the existing motion/scenario test seams (`ftx-mv1`). No measured
 trajectory, floor support, anatomical movement or garment-fit truth is inferred from these inputs.
 
+Optional `root_rotation_rad: [rx, ry, rz]` supplies an absolute axis-times-angle rotation vector
+in radians, with norm at most π. The deterministic Rodrigues matrix rotates the fully posed source
+surface about its root-relative origin before the existing world translation and collider extraction.
+Omitted/null and explicit zero preserve the original geometry arithmetic; an omitted later rotation
+returns to the unrotated source pose, never carrying a prior turn forward. A scaled vector norm
+retains representable nonzero subnormal angles and rejects nonfinite or excessive inputs. Endpoint
+receipts and comparison admission bind the exact requested vector alongside translation and
+local-joint posture. Intermediate motion remains the same checked linear vertex chords, not a
+rotational arc. World gravity, fixed cloth constraints and authored environments are unchanged.
+Analytic principal-axis/source-geometry controls and occupied-shape continuation exercise the shared
+pose/contact path without establishing anatomical motion or measured garment response.
+
 **Declared simulation coverage.** `garment::simulation_scope` validates all instance and seam
 references and requires explicit placement on each instance whose `sim` is not false. Missing
 placement refuses before production meshing, including disconnected panels. Explicit exclusions

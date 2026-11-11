@@ -204,10 +204,21 @@ fn covered_depth_profiles_qualify_every_heated_cell_and_preserve_independent_mec
             .unwrap()
             .contains("conversion")
     );
-    assert_eq!(
-        failed["motion"]["result"]["transient_surface"],
-        result["motion"]["result"]["transient_surface"]
+    // Path receipts bind the entire motion request, including independent coverage policy.
+    // A refused coverage profile changes that identity, never the sheet's numerical outcome.
+    assert_ne!(
+        result["motion"]["result"]["path_sha256"],
+        failed["motion"]["result"]["path_sha256"]
     );
+    let sheets = [&result, &failed].map(|run| {
+        let mut sheet = heat(run).clone();
+        assert_eq!(
+            sheet.as_object_mut().unwrap().remove("path_sha256"),
+            Some(run["motion"]["result"]["path_sha256"].clone())
+        );
+        sheet
+    });
+    assert_eq!(sheets[0], sheets[1]);
 }
 
 // Independently integrate constant-capacity reference mass across covered portions and remaining

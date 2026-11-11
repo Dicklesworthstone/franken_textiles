@@ -544,6 +544,7 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
         "pose",
         "leg_pose",
         "root_translation",
+        "root_rotation",
         "cloth",
         "body",
         "trials",
@@ -577,6 +578,9 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
                     }
                     "root_translation" => {
                         m["keyframes"][1]["root_translation_m"] = json!([0.0, 0.0, 0.01])
+                    }
+                    "root_rotation" => {
+                        m["keyframes"][1]["root_rotation_rad"] = json!([0.0, 0.0, 0.01])
                     }
                     "cloth" => m["keyframes"][1]["positions_sha256"] = json!("stale"),
                     "body" => m["keyframes"][1]["body_collision_sha256"] = json!("stale"),
@@ -670,6 +674,61 @@ fn root_translations_must_match_every_requested_endpoint_before_motion_compariso
                         "y" => frames[0]["root_translation_m"][1] = json!(0.02),
                         "z" => frames[0]["root_translation_m"][2] = json!(-0.03),
                         "inherited" => frames[1]["root_translation_m"] = json!([0.01, -0.02, 0.03]),
+                        _ => {}
+                    }
+                }
+                Ok(result)
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a", "b"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}"
+        );
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+    }
+}
+
+#[test]
+fn root_rotations_must_match_every_requested_endpoint_before_motion_comparison() {
+    let mut request = motion_request();
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut descriptor = motion_descriptor();
+    descriptor["scenario"]["motion"]["keyframes"][0]["root_rotation_rad"] =
+        json!([0.01, -0.02, 0.03]);
+    descriptor["scenario"]["motion"]["keyframes"][1]["root_rotation_rad"] = json!([0.0, 0.0, 0.0]);
+    for fault in ["none", "missing", "null", "x", "y", "z", "inherited"] {
+        let report = request
+            .evaluate_with(&pattern, &descriptor, |key, pattern| {
+                let mut result = synthetic_motion(pattern, 5.0);
+                for i in 0..2 {
+                    result["motion"]["result"]["keyframes"][i]["root_rotation_rad"] =
+                        descriptor["scenario"]["motion"]["keyframes"][i]["root_rotation_rad"]
+                            .clone();
+                }
+                if key == "a" {
+                    let frames = &mut result["motion"]["result"]["keyframes"];
+                    match fault {
+                        "missing" => {
+                            frames[0]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("root_rotation_rad");
+                        }
+                        "null" => frames[0]["root_rotation_rad"] = Value::Null,
+                        "x" => frames[0]["root_rotation_rad"][0] = json!(-0.01),
+                        "y" => frames[0]["root_rotation_rad"][1] = json!(0.02),
+                        "z" => frames[0]["root_rotation_rad"][2] = json!(-0.03),
+                        "inherited" => frames[1]["root_rotation_rad"] = json!([0.01, -0.02, 0.03]),
                         _ => {}
                     }
                 }

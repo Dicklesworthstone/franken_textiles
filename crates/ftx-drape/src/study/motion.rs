@@ -1,7 +1,7 @@
 //! Material-following continuation of an already sewn drape, not independent pose restarts.
 #[cfg(test)]
 use crate::motion::advance_body;
-use ftx_core::{Refusal, Vec3, intersection::validate_mesh};
+use ftx_core::{Mat3, Refusal, Vec3, intersection::validate_mesh};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -57,6 +57,40 @@ pub struct Keyframe {
     /// origin, applied after source posing. Omission means zero, never the previous offset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_translation_m: Option<[f64; 3]>,
+    /// Absolute root rotation vector (axis times angle in radians), with norm at most pi.
+    /// Rotate the posed source surface about its root-relative origin before world translation.
+    /// Omission/null means identity at this endpoint, never the previous rotation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_rotation_rad: Option<[f64; 3]>,
+}
+
+impl Keyframe {
+    // Keep admission and source posing on one deterministic law. Scaling avoids squaring tiny
+    // rotation vectors to zero or overflowing their norm; exact zero bypasses the old geometry.
+    pub(super) fn root_rotation_matrix(&self) -> Result<Option<Mat3>, Refusal> {
+        let Some(rotation) = self.root_rotation_rad else {
+            return Ok(None);
+        };
+        if rotation.iter().any(|value| !value.is_finite()) {
+            return Err(invalid(
+                "motion root rotation needs a finite rotation vector in radians",
+            ));
+        }
+        let vector = Vec3::from(rotation);
+        let scale = vector.x.abs().max(vector.y.abs()).max(vector.z.abs());
+        if scale == 0.0 {
+            return Ok(None);
+        }
+        let scaled = vector / scale;
+        let length = scaled.norm();
+        let angle = scale * length;
+        if angle > std::f64::consts::PI {
+            return Err(invalid(
+                "motion root rotation vector norm must not exceed pi radians",
+            ));
+        }
+        Ok(Some(Mat3::rotation(scaled / length, angle)))
+    }
 }
 
 /// Bounded prescribed motion following the scenario's fresh initial drape.
@@ -139,6 +173,7 @@ impl Request {
                     "motion root translation needs finite world-space coordinates in metres",
                 ));
             }
+            let _ = frame.root_rotation_matrix()?;
             minimum_trials += ((frame.time_s - previous) / self.max_step_s - 1e-12).ceil();
             previous = frame.time_s;
         }
@@ -562,6 +597,9 @@ fn evaluate_path(
         if let Some(translation) = frame.root_translation_m {
             endpoint["root_translation_m"] = json!(translation);
         }
+        if let Some(rotation) = frame.root_rotation_rad {
+            endpoint["root_rotation_rad"] = json!(rotation);
+        }
         if let Some(conditions) = &scenario.vapor_surface {
             endpoint["vapor_surface"] = outcome(conditions.evaluate(&snapshot));
         }
@@ -805,6 +843,80 @@ mod tests {
         omitted["keyframes"][0]["root_translation_m"] = Value::Null;
         let request: Request = serde_json::from_value(omitted).unwrap();
         assert_eq!(serde_json::to_value(request).unwrap(), source);
+    }
+
+    #[test]
+    fn root_rotations_are_absolute_bounded_vectors_and_preserve_legacy_bytes() {
+        let source = json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.01,"arm_abduction_deg":35.0}],
+            "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000});
+        let legacy: Request = serde_json::from_value(source.clone()).unwrap();
+        assert!(legacy.keyframes[0].root_rotation_matrix().unwrap().is_none());
+        assert_eq!(serde_json::to_value(&legacy).unwrap(), source);
+        for rotation in [
+            [0.0; 3],
+            [0.0, 0.0, std::f64::consts::PI],
+            [0.1, -0.2, 0.3],
+        ] {
+            let mut value = source.clone();
+            value["keyframes"][0]["root_rotation_rad"] = json!(rotation);
+            let request: Request = serde_json::from_value(value.clone()).unwrap();
+            request.validate().unwrap();
+            assert_eq!(serde_json::to_value(&request).unwrap(), value);
+            for axis in 0..3 {
+                for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                    let mut invalid = request.clone();
+                    invalid.keyframes[0].root_rotation_rad.as_mut().unwrap()[axis] = bad;
+                    assert!(invalid.validate().is_err());
+                }
+            }
+        }
+        for rotation in [
+            [std::f64::consts::PI + 1e-6, 0.0, 0.0],
+            [2.3, 2.3, 0.0],
+            [f64::MAX, f64::MAX, 0.0],
+        ] {
+            let mut invalid = legacy.clone();
+            invalid.keyframes[0].root_rotation_rad = Some(rotation);
+            assert!(invalid.validate().is_err());
+        }
+        for malformed in [
+            json!([]),
+            json!([0.0, 0.0]),
+            json!([0.0, 0.0, 0.0, 0.0]),
+            json!({"x":0.0,"y":0.0,"z":0.0}),
+        ] {
+            let mut value = source.clone();
+            value["keyframes"][0]["root_rotation_rad"] = malformed;
+            assert!(serde_json::from_value::<Request>(value).is_err());
+        }
+        let mut omitted = source.clone();
+        omitted["keyframes"][0]["root_rotation_rad"] = Value::Null;
+        let request: Request = serde_json::from_value(omitted).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), source);
+        let mut unknown = source;
+        unknown["keyframes"][0]["root_rotation_deg"] = json!([0.0, 0.0, 90.0]);
+        assert!(serde_json::from_value::<Request>(unknown).is_err());
+    }
+
+    #[test]
+    fn root_rotation_retains_nonzero_angles_below_the_naive_norm_range() {
+        let mut frame: Keyframe =
+            serde_json::from_value(json!({"time_s":0.01,"arm_abduction_deg":35.0})).unwrap();
+        for angle in [1e-200, 1e-300, f64::from_bits(1)] {
+            frame.root_rotation_rad = Some([0.0, 0.0, angle]);
+            let rotation = frame.root_rotation_matrix().unwrap().unwrap();
+            assert_eq!(rotation.rows[1][0], angle);
+            assert_eq!(rotation.rows[0][1], -angle);
+            assert_eq!(rotation.mul_vec(Vec3::new(1.0, 0.0, 0.0)).y, angle);
+        }
+        frame.root_rotation_rad = Some([1e-300, -1e-300, 1e-300]);
+        let rotation = frame.root_rotation_matrix().unwrap().unwrap();
+        assert!(rotation.rows[0][1] < 0.0);
+        assert!(rotation.rows[0][2] < 0.0);
+        assert!(rotation.rows[1][2] < 0.0);
+        frame.root_rotation_rad = Some([-0.0, 0.0, -0.0]);
+        assert!(frame.root_rotation_matrix().unwrap().is_none());
     }
 
     struct Form;

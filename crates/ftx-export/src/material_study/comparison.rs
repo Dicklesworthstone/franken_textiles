@@ -4094,6 +4094,7 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
             || endpoint["arm_abduction_deg"] != frame["arm_abduction_deg"]
             || endpoint["leg_pose"] != frame["leg_pose"]
             || endpoint["root_translation_m"] != frame["root_translation_m"]
+            || endpoint["root_rotation_rad"] != frame["root_rotation_rad"]
             || !sample["positions_m"].is_array()
             || !sample["body_positions_m"].is_array()
             || endpoint["positions_sha256"].as_str() != Some(hash(&sample["positions_m"])?.as_str())
