@@ -844,12 +844,7 @@ fn add_contact_report(
         if let Some(partition) = &sample.time_subdivision {
             subdivided = true;
             accepted_samples += partition.accepted.len();
-            samples.extend(
-                partition
-                    .accepted
-                    .iter()
-                    .filter_map(|s| s.contact.as_ref()),
-            );
+            samples.extend(partition.accepted.iter().filter_map(|s| s.contact.as_ref()));
         } else {
             accepted_samples += 1;
             samples.extend(sample.contact.iter());

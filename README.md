@@ -95,6 +95,8 @@ restores the complete solver state. Output frames and nominal duration stay unch
 This is convergence recovery, not a time-discretization error estimate: smaller steps can change the
 trajectory. Configured portable folds and material/scenario options accept the same optional
 `time_subdivision` policy; studies reserve its full trial allowance before evaluating an alternative.
+The browser fold forms expose the policy as **Split stalled time steps**; checked garment transfers
+between the pattern and material workbenches retain the selected limits.
 
 Photo/video body fitting requires prepared, calibrated frames and reviewed correspondences or masks.
 The [decoded-frame selection](docs/video-frame-selection.md), [multi-frame fitting](docs/multi-frame-body-fit.md)

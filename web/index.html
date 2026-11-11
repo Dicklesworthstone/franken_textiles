@@ -234,6 +234,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
         <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
         <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label></p>
+      <p class="row"><label><input type="checkbox" id="splitTimeSteps"> Split stalled time steps</label>
+        <label>Maximum halvings <input id="timeMaxHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
+        <label>Maximum step trials <input id="timeMaxTrials" type="number" min="1" max="65535" step="1" value="4096" disabled></label></p>
+      <p class="mut">Retries a stalled step as smaller steps without extending simulated time. The trial limit covers sewing, draping and settling, separately for each start. Exhausting the limits refuses the run.</p>
       <p class="mut">Arm angle applies to tape-fitted or accepted shapes; the default is 35°.
         Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
         Extra settling continues the sewn garment until its quiet window or the step limit; 0 keeps the fixed schedule.
@@ -517,6 +521,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   // a round or a fold-up has finished (successfully or not): tests wait on this counter
   function finished() { document.body.dataset.runs = String((+document.body.dataset.runs || 0) + 1); }
   function foldButton() {
+    for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
     const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
       && (bodyFitText === null || $("bodyFitConsent").checked);
     $("foldGo").disabled = !available || !foldable;
@@ -558,6 +563,29 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         + "<p>Calibrated in the fixed reference pose and reused for display, contact and movement. Bare body parameters, model mass and fitting residuals stay unchanged. A chart target remains a prior; this geometry proxy supplies no nappy material properties or physical-fit evidence.</p>" : "")
       + "</details>";
   }
+  function checkedTimeSubdivision(value) {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+        Object.keys(value).length !== 2 || Object.keys(value).some(key => !["max_halvings", "max_trials"].includes(key)) ||
+        !Number.isSafeInteger(value.max_halvings) || value.max_halvings < 0 || value.max_halvings > 16 ||
+        !Number.isSafeInteger(value.max_trials) || value.max_trials < 1 || value.max_trials > 65535) {
+      throw Error("Time subdivision needs only max_halvings (whole 0–16) and max_trials (whole 1–65535).");
+    }
+    return { max_halvings: value.max_halvings, max_trials: value.max_trials };
+  }
+  function drapeTimeSubdivision() {
+    if (!$("splitTimeSteps").checked) return undefined;
+    const halvings = $("timeMaxHalvings").value.trim(), trials = $("timeMaxTrials").value.trim();
+    if (!halvings || !trials) throw Error("Supply both time-subdivision limits.");
+    return checkedTimeSubdivision({ max_halvings: Number(halvings), max_trials: Number(trials) });
+  }
+  function setTimeSubdivision(value) {
+    const settings = checkedTimeSubdivision(value);
+    $("splitTimeSteps").checked = settings !== undefined;
+    $("timeMaxHalvings").value = String(settings?.max_halvings ?? 8);
+    $("timeMaxTrials").value = String(settings?.max_trials ?? 4096);
+    for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = settings === undefined;
+  }
   let foldUrls = [];
   let materialSources = null, materialTransfer = null;
   const materialOrigin = new URL(location.href).origin;
@@ -588,6 +616,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         !settling || !Number.isSafeInteger(drapeSettings.max_settle_steps) || drapeSettings.max_settle_steps < 0 || drapeSettings.max_settle_steps > 256) {
       status("Choose a valid drape leg posture, fraction from 0 to 1 and whole settling limit from 0 to 256 before opening materials."); return;
     }
+    try {
+      const subdivision = drapeTimeSubdivision();
+      if (subdivision !== undefined) drapeSettings.time_subdivision = subdivision;
+    } catch (error) { status(error.message); return; }
     const bodySource = model || imported ? { model: model || null,
       fit: imported ? new Blob([bodyFitText], { type: "application/json" }) : null,
       armDeg: imported ? Number(angle) : null } : null;
@@ -935,7 +967,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "maxSettleSteps"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("resetStyle").addEventListener("click", () => {
@@ -1066,6 +1098,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if ($("drapeLegFraction").value.trim() === "" || $("maxSettleSteps").value.trim() === "") {
       showError("Supply a leg fraction and maximum extra settling steps."); return;
     }
+    let timeSubdivision;
+    try { timeSubdivision = drapeTimeSubdivision(); }
+    catch (error) { showError(error.message); return; }
     foldRequest = ++nextRequest;
     folding = true; foldButton(); dropFold();
     $("errorBox").classList.add("hidden");
@@ -1074,7 +1109,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       selfContactMm: $("selfContact").checked ? 2 : 0, twoStart: $("twoStart").checked,
       bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
       armDeg: Number(angle), legs: $("drapeLegs").value,
-      legFraction: Number($("drapeLegFraction").value), maxSettleSteps: Number($("maxSettleSteps").value) });
+      legFraction: Number($("drapeLegFraction").value), maxSettleSteps: Number($("maxSettleSteps").value),
+      ...(timeSubdivision !== undefined ? { timeSubdivision } : {}) });
   });
   const traceOrigin=new URL(location.href).origin;
   if(bodyFitToken && !traceToken && !photoToken && /^[0-9a-f]{32}$/.test(bodyFitToken) && traceOrigin!=="null" && window.opener) {
@@ -1152,6 +1188,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
                 !["standing","seated","squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
                 settings.leg_fraction<0 || settings.leg_fraction>1 || !Number.isSafeInteger(settings.max_settle_steps) ||
                 settings.max_settle_steps<0 || settings.max_settle_steps>256)throw Error("Checked drape model or settings are incomplete.");
+            checkedTimeSubdivision(settings.time_subdivision);
             if(context.bodyFit !== null && context.bodyFit !== undefined) {
               if(!(context.bodyFit instanceof Blob) || !context.bodyFit.size || context.bodyFit.size>16*1024*1024)throw Error("Accepted body report exceeds 16 MiB.");
               bodyFit=await readJson({files:[context.bodyFit]},"body-fit-report.json");
@@ -1171,6 +1208,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             $("bodyArmDeg").value=String(settings.arm_abduction_deg);$("selfContact").checked=settings.self_contact_mm===2;
             $("twoStart").checked=settings.two_start;$("drapeLegs").value=settings.legs;
             $("drapeLegFraction").value=String(settings.leg_fraction);$("maxSettleSteps").value=String(settings.max_settle_steps);
+            setTimeSubdivision(settings.time_subdivision);
             showBodyImport();worker.postMessage({type:"clearBody"});worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
           }
           materialImportBusy=false;showMaterialInputs();renderPrograms();onProgram(true);

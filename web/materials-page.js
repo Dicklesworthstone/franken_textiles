@@ -264,6 +264,7 @@ function guidedSourceStudies(id) {
   return used ? ["study", "scenario", ...scenarioKeys] : scenarioKeys;
 }
 function controls() {
+  for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
   const guided = guidedStudyMode();
   const authoredFit = fitMode() === "guided", fitKind = $("guidedFitKind").value || "vertical";
   $("guidedFit").hidden = !authoredFit; $("fitFileField").hidden = authoredFit;
@@ -4656,6 +4657,29 @@ function filmInput(prefix, number, exterior = null) {
     inside_resistance_m2_k_w: number(prefix + "InsideFilm", "inside film resistance"),
     outside_resistance_m2_k_w: exterior ? 0 : number(prefix + "OutsideFilm", "outside film resistance") };
 }
+function checkedTimeSubdivision(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).length !== 2 || Object.keys(value).some(key => !["max_halvings", "max_trials"].includes(key)) ||
+      !Number.isSafeInteger(value.max_halvings) || value.max_halvings < 0 || value.max_halvings > 16 ||
+      !Number.isSafeInteger(value.max_trials) || value.max_trials < 1 || value.max_trials > 65535) {
+    throw Error("Time subdivision needs only max_halvings (whole 0–16) and max_trials (whole 1–65535).");
+  }
+  return { max_halvings: value.max_halvings, max_trials: value.max_trials };
+}
+function drapeTimeSubdivision() {
+  if (!$("splitTimeSteps").checked) return undefined;
+  const halvings = $("timeMaxHalvings").value.trim(), trials = $("timeMaxTrials").value.trim();
+  if (!halvings || !trials) throw Error("Supply both time-subdivision limits.");
+  return checkedTimeSubdivision({ max_halvings: Number(halvings), max_trials: Number(trials) });
+}
+function setTimeSubdivision(value) {
+  const settings = checkedTimeSubdivision(value);
+  $("splitTimeSteps").checked = settings !== undefined;
+  $("timeMaxHalvings").value = String(settings?.max_halvings ?? 8);
+  $("timeMaxTrials").value = String(settings?.max_trials ?? 4096);
+  for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = settings === undefined;
+}
 function drapeArmAngle() {
   const angle = $("bodyArmDeg").value.trim();
   if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
@@ -5889,6 +5913,8 @@ async function execute(op) {
         msg.legs = $("drapeLegs").value;
         msg.legFraction = Number($("drapeLegFraction").value);
         msg.maxSettleSteps = Number($("maxSettleSteps").value);
+        const subdivision = drapeTimeSubdivision();
+        if (subdivision !== undefined) msg.timeSubdivision = subdivision;
         msg.twoStart = $("twoStart").checked;
         msg.armDeg = drapeArmAngle();
         if (has("bodyFitFile")) {
@@ -5936,7 +5962,8 @@ async function execute(op) {
       pattern: msg.pattern, fit: msg.fit, sourceSha: bound.pattern_sha256,
       ...(op === "fold" ? { model: new Blob([msg.bytes]), bodyFit: msg.bodyFit ?? null,
         drapeSettings: { self_contact_mm: msg.selfContactMm, two_start: msg.twoStart,
-          arm_abduction_deg: msg.armDeg, legs: msg.legs, leg_fraction: msg.legFraction, max_settle_steps: msg.maxSettleSteps } } : {}) };
+          arm_abduction_deg: msg.armDeg, legs: msg.legs, leg_fraction: msg.legFraction, max_settle_steps: msg.maxSettleSteps,
+          ...(msg.timeSubdivision !== undefined ? { time_subdivision: msg.timeSubdivision } : {}) } } : {}) };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
     if (pending?.id !== id) return;
@@ -6895,6 +6922,7 @@ $("clearSupplemental").onclick = () => { clearPhotoEvidence(); $("supplementalFi
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], twoStart:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
+  splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
@@ -6917,7 +6945,8 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "fit") { clearImportFit(); $("fitSource").value = "file"; }
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
-    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "maxSettleSteps"].includes(id)) {
+    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "maxSettleSteps",
+      "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
     }
@@ -6931,7 +6960,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     return scenarioCasesLoading;
   });
 }
-for (const id of ["drapeLegFraction", "maxSettleSteps"]) {
+for (const id of ["drapeLegFraction", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials"]) {
   $(id).addEventListener("input", () => {
     ++roundRead; roundToken = null; window.opener = null;
     invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
@@ -7060,6 +7089,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
           !["standing", "seated", "squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
           settings.leg_fraction < 0 || settings.leg_fraction > 1 || !Number.isSafeInteger(settings.max_settle_steps) ||
           settings.max_settle_steps < 0 || settings.max_settle_steps > 256)) throw Error("Received drape settings are incomplete or outside the supported controls.");
+      checkedTimeSubdivision(settings?.time_subdivision);
       const hasArm = settings !== undefined && Object.hasOwn(settings, "arm_abduction_deg");
       if (hasArm && (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180)) {
         throw Error("Received drape arm angle must be from 0 to 180 degrees.");
@@ -7105,6 +7135,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         $("selfContact").checked = settings.self_contact_mm === 2; $("twoStart").checked = settings.two_start;
         $("drapeLegs").value = settings.legs; $("drapeLegFraction").value = String(settings.leg_fraction);
         $("maxSettleSteps").value = String(settings.max_settle_steps);
+        setTimeSubdivision(settings.time_subdivision);
       }
       $("supplementalConsent").checked = false;
       $("bodyFitConsent").checked = false; showReceivedBody();

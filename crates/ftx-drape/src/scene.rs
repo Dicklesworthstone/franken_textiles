@@ -1290,7 +1290,11 @@ pub(crate) fn run_phase_with_subdivision(
     if let Some(policy) = policy {
         policy.validate(h)?;
     }
-    scene.solver.gravity = Vec3::new(0.0, 0.0, -gravity);
+    // Successful empty phases still select their load, as on the ordinary path. A failed
+    // subdivided interval must not change gravity or any other part of the accepted state.
+    if policy.is_none() || steps == 0 {
+        scene.solver.gravity = Vec3::new(0.0, 0.0, -gravity);
+    }
     let mut rep = PhaseReport::default();
     for k in 0..steps {
         if let Some(policy) = policy {
@@ -1302,6 +1306,7 @@ pub(crate) fn run_phase_with_subdivision(
                 ));
             }
             let mut candidate = scene.solver.clone();
+            candidate.gravity = Vec3::new(0.0, 0.0, -gravity);
             if let Some(contact) = candidate.contact.as_mut() {
                 ramp_thickness(contact, &candidate.x, scene.target_thickness);
             }
@@ -1537,7 +1542,10 @@ mod grain_tests {
         );
         let mut replay = original.clone();
         for substep in &partition.accepted {
-            assert_eq!(replay.step(substep.step.step_s).unwrap(), substep.step.solve);
+            assert_eq!(
+                replay.step(substep.step.step_s).unwrap(),
+                substep.step.solve
+            );
             assert_eq!(
                 substep.max_speed_m_s,
                 replay.v.iter().map(|v| v.norm()).fold(0., f64::max)
@@ -1546,12 +1554,12 @@ mod grain_tests {
         assert_eq!(format!("{:?}", scene.solver), format!("{replay:?}"));
 
         let accepted_state = format!("{:?}", scene.solver);
-        // A new phase receives the same exhausted allowance; it cannot silently reset it.
+        // A new phase cannot reset the allowance or change the accepted load before success.
         let error = run_phase_with_subdivision(
             &mut scene,
             1,
             0.04,
-            0.,
+            9.81,
             Some(SubdivisionOptions {
                 max_trials: trials,
                 ..policy
@@ -1570,7 +1578,7 @@ mod grain_tests {
             &mut scene,
             1,
             0.04,
-            0.,
+            9.81,
             Some(SubdivisionOptions {
                 max_trials: partition.trials - 1,
                 ..policy
@@ -1581,7 +1589,10 @@ mod grain_tests {
         .unwrap_err();
         assert_eq!(error.code, RefusalCode::BudgetExceeded);
         assert_eq!(format!("{:?}", scene.solver), before);
-        assert_eq!(used, 0, "failed run publishes no successful interval receipt");
+        assert_eq!(
+            used, 0,
+            "failed run publishes no successful interval receipt"
+        );
     }
 
     #[test]
@@ -1617,6 +1628,38 @@ mod grain_tests {
         assert_eq!(
             format!("{:?}", ordinary.solver),
             format!("{:?}", adaptive.solver)
+        );
+    }
+
+    #[test]
+    fn subdivision_empty_phase_preserves_the_existing_gravity_transition() {
+        let mut ordinary = subdivision_scene();
+        let mut adaptive = subdivision_scene();
+        let baseline = run_phase(&mut ordinary, 0, 0.01, 9.81, |_, _| {
+            panic!("empty phase emitted a frame")
+        })
+        .unwrap();
+        let policy = SubdivisionOptions::default();
+        let mut trials = policy.max_trials;
+        let report = run_phase_with_subdivision(
+            &mut adaptive,
+            0,
+            0.01,
+            9.81,
+            Some(policy),
+            &mut trials,
+            |_, _| panic!("empty phase emitted a frame"),
+        )
+        .unwrap();
+        assert_eq!(trials, policy.max_trials);
+        assert_eq!(adaptive.solver.gravity, Vec3::new(0., 0., -9.81));
+        assert_eq!(
+            format!("{:?}", ordinary.solver),
+            format!("{:?}", adaptive.solver)
+        );
+        assert_eq!(
+            serde_json::to_value(report).unwrap(),
+            serde_json::to_value(baseline).unwrap()
         );
     }
 
@@ -1658,7 +1701,7 @@ mod grain_tests {
             &mut scene,
             1,
             0.04,
-            0.,
+            9.81,
             Some(SubdivisionOptions {
                 max_halvings: 12,
                 max_trials: 1,

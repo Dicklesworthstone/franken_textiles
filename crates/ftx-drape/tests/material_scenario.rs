@@ -154,7 +154,10 @@ fn subdivision_reserves_all_attempts_before_each_production_alternative() {
         .evaluate(&p, |_| calls += 1)
         .unwrap_err();
     assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
-    assert_eq!(calls, 0, "retry work is reserved before any production progress");
+    assert_eq!(
+        calls, 0,
+        "retry work is reserved before any production progress"
+    );
 
     let expected_charge = points * (64 + FOLD_FRAMES + ZIP_FRAMES + 4);
     declared.max_vertex_frames = expected_charge;

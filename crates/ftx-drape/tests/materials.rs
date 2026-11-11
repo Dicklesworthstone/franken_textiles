@@ -135,7 +135,10 @@ fn ordinary_subdivision_preserves_sewn_frames_and_shares_trials_with_settling() 
         .unwrap()
         .remove("time_subdivision");
     for phase in ["sew", "drape"] {
-        for sample in report["numerical"][phase]["samples"].as_array_mut().unwrap() {
+        for sample in report["numerical"][phase]["samples"]
+            .as_array_mut()
+            .unwrap()
+        {
             let receipt = sample
                 .as_object_mut()
                 .unwrap()

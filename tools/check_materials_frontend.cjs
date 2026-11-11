@@ -1390,6 +1390,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
+  e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.screenMode.value='guided';e.guidedScreenProperty.value='areal_density';
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
     const el = e[/id="([^"]+)"/.exec(m[1])[1]]; el.dataset = { command: /data-command="([^"]+)"/.exec(m[1])[1] }; return el;
@@ -2109,7 +2110,8 @@ test('material round handoff rejects malformed drape settings and receiving edit
     assert.equal(p.e.bind.disabled,true);assert.match(p.e.roundImportText.textContent,/refused/i);
     assert.equal(p.live.size,0);assert.equal(p.current().messages.length,0);
   }
-  for(const [id,event] of [['selfContact','change'],['twoStart','change'],['drapeLegs','change'],['drapeLegFraction','input'],['maxSettleSteps','input'],['bodyArmDeg','input']]) {
+  for(const [id,event] of [['selfContact','change'],['twoStart','change'],['drapeLegs','change'],['drapeLegFraction','input'],['maxSettleSteps','input'],['bodyArmDeg','input'],
+    ['splitTimeSteps','change'],['timeMaxHalvings','input'],['timeMaxTrials','input']]) {
     const p=await pageModule({roundToken:token}),delayed=new Blob(['{"pieces":[]}']);let release;
     delayed.arrayBuffer=()=>new Promise(resolve=>{release=resolve;});
     const receiving=p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,
@@ -5472,8 +5474,18 @@ test('drafting worker discards refused replacements, frees failed rounds and che
   assert.deepEqual(calls.at(-1),{source:exact,settings:{self_contact_mm:2,two_start:true,arm_abduction_deg:50,legs:'squat',leg_fraction:0.25,max_settle_steps:2}});
   assert.deepEqual(JSON.parse(posed.settingsText),calls.at(-1).settings);
   assert.equal(posed.reportText,'{"numerical":{"settling":{"steps":2}},"raw":-0.0}');
+  for(const bodyFit of [undefined,exact]) {
+    const timeSubdivision={max_halvings:8,max_trials:4096};
+    const split=await fold({timeSubdivision,bodyFit,bodyFitConsent:true,armDeg:35});
+    assert.equal(split.type,'folded',split.message);
+    assert.deepEqual(JSON.parse(split.settingsText).time_subdivision,timeSubdivision);
+    assert.deepEqual(calls.at(-1).settings.time_subdivision,timeSubdivision);
+    assert.equal(calls.at(-1).source,bodyFit);
+  }
   const count=calls.length;
-  for(const options of [{legs:'kneeling'},{legFraction:Infinity},{maxSettleSteps:-1},{maxSettleSteps:257}]) {
+  for(const options of [{legs:'kneeling'},{legFraction:Infinity},{maxSettleSteps:-1},{maxSettleSteps:257},
+    {timeSubdivision:null},{timeSubdivision:{max_halvings:17,max_trials:4096}},
+    {timeSubdivision:{max_halvings:8,max_trials:1.5}},{timeSubdivision:{max_halvings:8,max_trials:4096,typo:1}}]) {
     assert.equal((await fold(options)).type,'error');assert.equal(calls.length,count);
   }
   const tapeCalls=calls.filter(x=>x==='fold').length;
@@ -5515,6 +5527,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
+  e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
       const a=previous?.(...args),b=fn(...args);return Promise.all([a,b]);};};
@@ -5974,7 +5987,8 @@ test('drafting round handoff snapshots all drape controls, rejects invalid value
     const q=await prepare();q.e[id].value=value;await q.e.chooseMaterials.handlers.click();
     assert.equal(q.popups.length,0,'Invalid configured sources must not open a defaulted material tab');
   }
-  for(const [id,event] of [['selfContact','change'],['twoStart','change'],['drapeLegs','change'],['drapeLegFraction','input'],['maxSettleSteps','input']]) {
+  for(const [id,event] of [['selfContact','change'],['twoStart','change'],['drapeLegs','change'],['drapeLegFraction','input'],['maxSettleSteps','input'],
+    ['splitTimeSteps','change'],['timeMaxHalvings','input'],['timeMaxTrials','input']]) {
     const q=await prepare();await q.e.chooseMaterials.handlers.click();await q.e[id].handlers[event]();
     assert.equal(send(q).type,'ftx-round-sources-cancelled');
   }
@@ -20496,7 +20510,7 @@ function checkedPacket(token,body=false) {
     evaluatedInputs:{fit:new Blob([checkedFit]),measurements:new Blob([checkedEffective]),
       ...(body?{model:new Blob([new Uint8Array([1,3,5])]),bodyFit:new Blob([checkedBodyFit]),drapeSettings:{...checkedSettings}}:{})}};
 }
-async function checkedMaterialPage(op='exports',authored=false,accepted=false) {
+async function checkedMaterialPage(op='exports',authored=false,accepted=false,subdivision=false) {
   const p=await pageModule();await p.load();
   await p.e.bind.onclick();p.emit({pattern:{pieces:[{id:'front'}]},pattern_json:checkedPattern,pieces:[],pattern_sha256:'ac'.repeat(32)});
   p.select('measurements',checkedPrimary);p.e.measurements.handlers.change();p.select('fit',checkedFit);p.e.fit.handlers.change();
@@ -20506,6 +20520,7 @@ async function checkedMaterialPage(op='exports',authored=false,accepted=false) {
     if(accepted){p.e.bodyFitFile.files=[new Blob([checkedBodyFit])];p.e.bodyFitFile.handlers.change();}
     p.e.bodyArmDeg.value='50';p.e.selfContact.checked=true;p.e.twoStart.checked=true;
     p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';p.e.maxSettleSteps.value='8';
+    p.e.splitTimeSteps.checked=subdivision;
     p.e.bodyFitConsent.checked=accepted;p.e.bodyFitConsent.handlers.change();
   }
   await p.e[op].onclick();const request=p.current().messages.at(-1);
@@ -20681,4 +20696,110 @@ test('checked garment receiver keeps export-only evidence and ordinary drape mod
     if(body){assert.equal(p.e.foldGo.disabled,false);await p.e.foldGo.handlers.click();assert.equal(p.last('fold').bodyFit,null);assert.equal(p.last('fold').armDeg,50);}
     else assert.equal(p.e.foldGo.disabled,true,'Exports carry no model that was not evaluated');
   }
+});
+
+test('time subdivision is opt-in, source-preserving and bounded before material model loading',async()=>{
+  const calls=[],freed=[],policy={max_halvings:8,max_trials:4096};
+  const fold=()=>({report:()=>'{"gating":[]}',viewer:()=>'<html/>',free(){freed.push('fold');}});
+  const w=await workerModule({bindings:{default:async()=>{},
+    WebBody:class{constructor(){calls.push('body');}free(){freed.push('body');}},
+    fold_up:()=>{calls.push('legacy');return fold();},
+    fold_up_configured:(_body,_pattern,_measurements,_fit,raw,source)=>{calls.push({raw,source});return fold();}}});
+  const input={type:'fold',request:1,bytes:new ArrayBuffer(1),pattern:'{}',measurements:'{}',fit:'{}'};
+  const ordinary=await w.send(input);assert.equal(ordinary.type,'result',ordinary.message);
+  assert.equal(calls.at(-1),'legacy');assert.equal(ordinary.files.some(f=>f.name==='fold-settings.json'),false);
+  for(const timeSubdivision of [policy,{max_halvings:0,max_trials:1},{max_halvings:16,max_trials:65535}]) {
+    const result=await w.send({...input,timeSubdivision,bodyFit:checkedBodyFit,bodyFitConsent:true,armDeg:35});
+    assert.equal(result.type,'result',result.message);
+    const saved=result.files.find(f=>f.name==='fold-settings.json').text;
+    assert.equal(saved,calls.at(-1).raw);assert.deepEqual(JSON.parse(saved).time_subdivision,timeSubdivision);
+    assert.equal(calls.at(-1).source,checkedBodyFit);assert.deepEqual(freed.slice(-2),['fold','body']);
+  }
+  const before=calls.length;
+  for(const timeSubdivision of [null,[],{}, {max_halvings:8},{max_halvings:'8',max_trials:4096},
+    {max_halvings:-1,max_trials:4096},{max_halvings:17,max_trials:4096},{max_halvings:0.5,max_trials:4096},
+    {max_halvings:8,max_trials:0},{max_halvings:8,max_trials:65536},{max_halvings:8,max_trials:Infinity},
+    {max_halvings:8,max_trials:4096,typo:true}]) {
+    const result=await w.send({...input,timeSubdivision});
+    assert.equal(result.type,'error');assert.match(result.message,/Time subdivision/);
+    assert.equal(calls.length,before,'Invalid subdivision must refuse before model loading');
+  }
+  const old=await workerModule(),refused=await old.send({...input,timeSubdivision:policy});
+  assert.equal(refused.type,'error');assert.match(refused.message,/configured/);
+  assert.deepEqual(old.freed,[],'Missing configured engine must not run a default fold');
+});
+
+test('time subdivision controls omit disabled settings and invalidate pending or completed material drapes',async()=>{
+  const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');
+  p.e.body.files=[new Blob([new Uint8Array([1])])];
+  assert.equal(p.e.timeMaxHalvings.disabled,true);assert.equal(p.e.timeMaxTrials.disabled,true);
+  await p.e.fold.onclick();assert.equal(p.current().messages.at(-1).timeSubdivision,undefined);p.emit({gating:[]});
+  p.e.splitTimeSteps.checked=true;p.e.splitTimeSteps.handlers.change();
+  assert.equal(p.e.timeMaxHalvings.disabled,false);assert.equal(p.e.timeMaxTrials.disabled,false);
+  const kept=p.live.size;
+  for(const [id,event] of [['splitTimeSteps','change'],['timeMaxHalvings','input'],['timeMaxTrials','input']]) {
+    await p.e.fold.onclick();const msg=p.current().messages.at(-1);
+    assert.deepEqual(plain(msg.timeSubdivision),{max_halvings:8,max_trials:4096});
+    p.emit({gating:[]},[{name:'sim_report.json',text:'{}'}]);
+    assert.ok(p.live.size>kept);p.e[id].handlers[event]();
+    assert.equal(section(p,'fold').hidden,true);assert.equal(p.live.size,kept);
+  }
+  for(const [id,value] of [['timeMaxHalvings',''],['timeMaxHalvings','-1'],['timeMaxHalvings','17'],
+    ['timeMaxHalvings','0.5'],['timeMaxTrials',''],['timeMaxTrials','0'],['timeMaxTrials','65536']]) {
+    p.e.timeMaxHalvings.value='8';p.e.timeMaxTrials.value='4096';p.e[id].value=value;
+    const before=p.current().messages.length;await p.e.fold.onclick();
+    assert.equal(p.current().messages.length,before);assert.equal(p.e.error.hidden,false);
+  }
+  p.e.timeMaxHalvings.value='8';p.e.timeMaxTrials.value='4096';await p.e.fold.onclick();
+  const stale=p.current(),request=stale.messages.at(-1).request;p.e.timeMaxTrials.handlers.input();
+  assert.equal(stale.dead,true);stale.emit({type:'result',request,result:{gating:[]},files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(section(p,'fold').hidden,true);p.ready();
+  p.e.splitTimeSteps.checked=false;p.e.splitTimeSteps.handlers.change();p.e.timeMaxTrials.value='';
+  await p.e.fold.onclick();assert.equal(p.current().messages.at(-1).timeSubdivision,undefined);
+  assert.equal(p.e.timeMaxTrials.disabled,true,'Inactive limits are neither required nor sent');
+});
+
+test('time subdivision survives checked-garment and round transfers in both directions',async()=>{
+  const policy={max_halvings:8,max_trials:4096};
+  const {p,request,publish}=await checkedMaterialPage('fold',false,true,true);
+  assert.deepEqual(plain(request.timeSubdivision),policy);publish();checkedAction(p).onclick();
+  const popup=p.popups[0],token=new URL(popup.url).searchParams.get('materialImport');
+  await p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-material-pattern-ready',token}});
+  const packet=popup.messages[0].data;assert.deepEqual(plain(packet.evaluatedInputs.drapeSettings.time_subdivision),policy);
+  const q=draftingPage({materialToken:token});
+  await q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data:packet});
+  assert.equal(q.e.splitTimeSteps.checked,true);assert.equal(q.e.timeMaxHalvings.value,'8');assert.equal(q.e.timeMaxTrials.value,'4096');
+  assert.equal(q.e.timeMaxTrials.disabled,false);q.emit({type:'bodyReady',request:q.last('body').request});
+  await q.e.go.handlers.click();q.result(undefined,{roundSources:{pattern:checkedPattern,measurements:checkedEffective,fit:checkedFit}});
+  q.e.bodyFitConsent.checked=true;await q.e.bodyFitConsent.handlers.change();await q.e.foldGo.handlers.click();
+  assert.deepEqual(plain(q.last('fold').timeSubdivision),policy);
+  q.emit({type:'folded',request:q.last('fold').request,report:{gating:[]},reportText:'{}',viewer:'<html/>'});
+  await q.e.chooseMaterials.handlers.click();const back=q.popups[0],roundToken=new URL(back.url).searchParams.get('roundImport');
+  await q.windowEvents.message({origin:'https://unit.invalid',source:back,data:{type:'ftx-round-sources-ready',token:roundToken}});
+  const returned=back.messages[0].data;assert.deepEqual(plain(returned.drapeSettings.time_subdivision),policy);
+  const r=await pageModule({roundToken});
+  await r.windowEvents.message({origin:'https://unit.invalid',source:r.opener,data:returned});
+  assert.equal(r.e.splitTimeSteps.checked,true);assert.equal(r.e.timeMaxTrials.disabled,false);
+  await r.bind();r.e.bodyFitConsent.checked=true;r.e.bodyFitConsent.handlers.change();await r.e.fold.onclick();
+  assert.deepEqual(plain(r.current().messages.at(-1).timeSubdivision),policy);
+});
+
+test('time subdivision handoffs reject malformed policies and legacy packets clear prior opt-in settings',async()=>{
+  const token='a'.repeat(32),files={pattern:new Blob(['{"pieces":[{"id":"front"}]}']),measurements:new Blob(['{}']),fit:new Blob(['{}'])};
+  for(const value of [null,{max_halvings:8,max_trials:0},{max_halvings:8,max_trials:4096,unknown:true}]) {
+    const p=draftingPage({materialToken:token}),packet=checkedPacket(token,true);
+    packet.evaluatedInputs.drapeSettings.time_subdivision=value;
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:packet});
+    assert.equal(p.last('body'),undefined);assert.match(p.e.errorText.textContent,/Time subdivision/);
+    const q=await pageModule({roundToken:token});
+    await q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data:{type:'ftx-round-sources',token,files,
+      drapeSettings:{...checkedSettings,time_subdivision:value}}});
+    assert.equal(q.e.bind.disabled,true);assert.match(q.e.roundImportText.textContent,/Time subdivision/);
+  }
+  const p=draftingPage({materialToken:token});p.e.splitTimeSteps.checked=true;
+  await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data:checkedPacket(token,true)});
+  assert.equal(p.e.splitTimeSteps.checked,false);assert.equal(p.e.timeMaxTrials.disabled,true);
+  const q=await pageModule({roundToken:token});q.e.splitTimeSteps.checked=true;
+  await q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data:{type:'ftx-round-sources',token,files,drapeSettings:checkedSettings}});
+  assert.equal(q.e.splitTimeSteps.checked,false);assert.equal(q.e.timeMaxTrials.disabled,true);
 });

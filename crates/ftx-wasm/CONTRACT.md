@@ -165,6 +165,11 @@ output frames, reports each accepted partition and refuses an exhausted allowanc
 a partial interval. Omission preserves ordinary fold behavior. This recovers convergence without
 loosening its tolerance; it does not estimate time-discretization error. Portable material/scenario
 studies use the same option and reserve its full trial allowance within their vertex-frame budget.
+Both browser fold forms expose an explicit opt-in with default limits of 8 halvings and 4096 trials.
+Both workers validate the exact two-field policy, require the configured export when enabled and
+preserve it in saved settings and checked pattern/material handoffs. Disabled forms
+omit it entirely. Editing the checkbox or either limit withdraws stale drape and downstream outputs
+and cancels in-flight work and pending handoffs through the existing lifecycle guards.
 
 **Purpose.** FrankenTextiles in the browser (plan §15): the page's round behind a thin `wasm-bindgen`
 boundary, replacing the skill's Pyodide page. `page` is the reference's `webapp.py` (`program_info`,
