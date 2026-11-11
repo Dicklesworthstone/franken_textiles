@@ -319,9 +319,16 @@ impl<'a, 'body> Session<'a, 'body> {
             self.scenario.options.spacing,
             self.scenario.max_mesh_points,
         )?;
-        let frames = self.scenario.options.sew_steps
+        let nominal_frames = self.scenario.options.sew_steps
             + self.scenario.options.drape_steps
-            + self.scenario.options.max_settle_steps
+            + self.scenario.options.max_settle_steps;
+        // A requested retry can run the full production solve. Reserve its complete allowance
+        // before the first alternative; nominal animation frame count cannot hide finer work.
+        let frames = self
+            .scenario
+            .options
+            .time_subdivision
+            .map_or(nominal_frames, |policy| policy.max_trials)
             + FOLD_FRAMES
             + ZIP_FRAMES
             + 4

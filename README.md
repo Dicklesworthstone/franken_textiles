@@ -86,6 +86,16 @@ Accepted reports retain body/self contact counts, sampled active gaps and final 
 adding simulation steps. Pressure remains unavailable without a justified physical contact area; a quiet
 window does not establish physical grip or fit. See the [drape contract](crates/ftx-drape/CONTRACT.md).
 
+For a Newton step that stalls, `drape --time-subdivision` or `round --sim --time-subdivision`
+can retry smaller intervals without loosening the convergence tolerance. Optional
+`--subdivision-max-halvings 8` and `--subdivision-max-trials 4096` bound the retries; the trial
+allowance is shared by sewing, draping and extra settling within each run. A failed nominal interval
+restores the complete solver state. Output frames and nominal duration stay unchanged, while
+`numerical.time_subdivision` records the actual accepted partitions, work and sampled diagnostics.
+This is convergence recovery, not a time-discretization error estimate: smaller steps can change the
+trajectory. Configured portable folds and material/scenario options accept the same optional
+`time_subdivision` policy; studies reserve its full trial allowance before evaluating an alternative.
+
 Photo/video body fitting requires prepared, calibrated frames and reviewed correspondences or masks.
 The [decoded-frame selection](docs/video-frame-selection.md), [multi-frame fitting](docs/multi-frame-body-fit.md)
 and [accepted-shape reuse](docs/reuse-body-fit.md) guides document those stages. An arbitrary phone clip

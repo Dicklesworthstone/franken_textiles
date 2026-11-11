@@ -195,6 +195,9 @@ pub struct FoldSettings {
     /// Independent frictionless static comparison, with no change to the dynamic fold or its time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub static_equilibrium: Option<StaticEquilibriumOptions>,
+    /// Explicit convergence-driven time bisection, sharing one trial budget across the whole drape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_subdivision: Option<ftx_drape::stepping::SubdivisionOptions>,
 }
 
 impl Default for FoldSettings {
@@ -207,6 +210,7 @@ impl Default for FoldSettings {
             leg_fraction: 1.0,
             max_settle_steps: 0,
             static_equilibrium: None,
+            time_subdivision: None,
         }
     }
 }
@@ -287,6 +291,7 @@ fn fold_on_source(
         leg_fraction,
         max_settle_steps,
         static_equilibrium,
+        time_subdivision,
     } = options;
     let m = |r: ftx_core::Refusal| r.message;
     let mut pose = Pose::drape();
@@ -305,6 +310,7 @@ fn fold_on_source(
     let mut opts = DrapeOptions {
         max_settle_steps,
         static_equilibrium,
+        time_subdivision,
         ..DrapeOptions::default()
     };
     if self_contact_mm > 0.0 {
@@ -441,6 +447,23 @@ fn finalize_browser_fold(
 mod tests {
     use super::*;
     use ftx_body::{BodyParams, TapeResidual};
+
+    #[test]
+    fn configured_fold_retains_bounded_time_subdivision_policy() {
+        let mut value = serde_json::to_value(FoldSettings::default()).unwrap();
+        assert!(value.get("time_subdivision").is_none());
+        value["time_subdivision"] = json!({"max_halvings":3,"max_trials":200});
+        let settings: FoldSettings = serde_json::from_value(value.clone()).unwrap();
+        let options = DrapeOptions {
+            time_subdivision: settings.time_subdivision,
+            ..DrapeOptions::default()
+        };
+        options.validate().unwrap();
+        assert_eq!(serde_json::to_value(settings).unwrap(), value);
+        assert_eq!(options.step, DrapeOptions::default().step);
+        value["time_subdivision"]["tolerance"] = json!(1.0);
+        assert!(serde_json::from_value::<FoldSettings>(value).is_err());
+    }
 
     #[test]
     fn configured_fold_preserves_explicit_static_distance_tolerance_without_changing_time() {

@@ -1,5 +1,20 @@
 # ftx-drape contract
 
+**Optional convergence-driven subdivision.** `DrapeOptions.time_subdivision` connects the existing
+transactional `Solver::step_subdivided` to ordinary sewing, gravity and settling. Explicit
+`max_halvings` and `max_trials` bound the whole run; every requested base interval needs at least
+one available trial. Only `NotConverged` causes deterministic chronological bisection. No source
+domain, tolerance, thickness, contact law or elapsed interval is relaxed. A complete nominal
+interval, its contact-offset ramp, caches, friction and material histories publish together, or
+refuse with no partial frame. Output geometry keeps the original equally spaced nominal clock.
+Optional per-interval receipts retain all accepted physical durations, solver reports, endpoint
+contact diagnostics and instantaneous speeds; energy values are never summed across step sizes.
+Quietness and declared-hold speed checks include every accepted physical endpoint. Scenario
+reservation charges the full trial allowance before running alternatives. Omission preserves the
+original path and report fields. Synthetic production-phase retry/rollback, ordinary sewn-frame
+replay and scenario-budget checks support numerical behavior; this is neither a time-discretization
+error controller nor a continuous-contact, material-validation or garment-fit claim.
+
 **Active-contact source requirements.** Uniform and per-piece drapes require body friction but
 do not require absent same-sheet friction when self-contact is disabled. Missing observations stay
 null in the source-bound mechanical report; no inactive interface is filled with zero. Supplied

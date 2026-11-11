@@ -5651,6 +5651,19 @@ retains its earliest sample witness. Comparison admission replays complete reduc
 partial or inconsistent sums, while legacy receipts retain their original metrics. This advances
 `ftx-ms2` and `ftx-ds2`; mesh/contact-policy dependence and independent physical qualification remain.
 
+### 25.192 Connect bounded step recovery to garment consumers
+
+Ordinary garment drapes now expose the existing transactional time-bisection solver through an
+optional `time_subdivision` policy. CLI drapes, simulated rounds, configured portable folds and
+material/scenario studies share the same implementation and limits. One attempted-step allowance
+covers sewing, gravity and extra settling within each run; studies reserve that full allowance before
+starting an alternative. Failed nominal intervals restore the complete solver, while accepted
+partitions preserve nominal frame times and report actual substep solves, sampled speeds and contact
+diagnostics. Regression cases cover real Newton recovery, rollback, phase-shared exhaustion,
+default-path identity and native/portable consumption. This advances `ftx-dr1`; it does not relax
+convergence or contact admission, certify time-discretization error, or replace the outstanding
+empirical drape and fit gates.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

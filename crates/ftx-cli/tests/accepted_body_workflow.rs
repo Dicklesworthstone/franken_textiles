@@ -245,6 +245,10 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
         legs: Legs::Seated,
         leg_fraction: 0.001,
         max_settle_steps: 2,
+        time_subdivision: Some(ftx_drape::stepping::SubdivisionOptions {
+            max_halvings: 3,
+            max_trials: 200,
+        }),
         static_equilibrium: Some(ftx_drape::run::StaticEquilibriumOptions {
             correction_tolerance_m: 1e-15,
             max_newton_iterations: 1,
@@ -283,6 +287,11 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
             "0.001",
             "--max-settle-steps",
             "2",
+            "--time-subdivision",
+            "--subdivision-max-halvings",
+            "3",
+            "--subdivision-max-trials",
+            "200",
             "--static-equilibrium",
             "--static-tol-mm",
             "0.000000000001",

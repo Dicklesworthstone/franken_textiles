@@ -18,9 +18,11 @@ use crate::garment::{build_garment, simulation_scope};
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{
-    Fabric, PartFrames, PhaseReport, Scene, casings_at_cut_length, elastic_casings, run_phase,
+    Fabric, PartFrames, PhaseReport, Scene, casings_at_cut_length, elastic_casings,
+    run_phase_with_subdivision,
 };
 use crate::start::{edge_strain, face_edges};
+use crate::stepping::SubdivisionOptions;
 
 /// Standard gravity (m/s²) of the drape phase.
 pub const GRAVITY: f64 = 9.81;
@@ -108,6 +110,9 @@ pub struct DrapeOptions {
     pub static_equilibrium: Option<StaticEquilibriumOptions>,
     /// Time step (s).
     pub step: f64,
+    /// Optional convergence-driven time bisection, with one attempted-step budget shared by sewing,
+    /// gravity and settling. Output frames keep the nominal `step`; actual partitions are reported.
+    pub time_subdivision: Option<SubdivisionOptions>,
     /// Newton tolerance on ‖Δx‖∞/h (m/s). The default, 1e-3 (each step converged to 42 µm), halves the
     /// work of 1e-4: tighter, Newton descends into the cloth's tiny buckling modes, where the exact Hessian is
     /// indefinite and the projected one converges linearly (the 92 cm bolero 374 → 180 iterations, the
@@ -151,6 +156,7 @@ impl Default for DrapeOptions {
             elastic_hold_steps: 0,
             static_equilibrium: None,
             step: 1.0 / 24.0,
+            time_subdivision: None,
             tol: 1e-3,
             compression: 1.0,
             lag_rounds: [0, 1],
@@ -177,6 +183,9 @@ impl DrapeOptions {
     pub fn validate(&self) -> Result<(), Refusal> {
         if let Some(policy) = &self.static_equilibrium {
             policy.validate()?;
+        }
+        if let Some(policy) = self.time_subdivision {
+            policy.validate(self.step)?;
         }
         self.contact.validate()?;
         if let Some(p) = self.self_contact {
@@ -235,6 +244,14 @@ impl DrapeOptions {
                     "animation frame count overflows",
                 )
             })?;
+        if let Some(policy) = self.time_subdivision
+            && policy.max_trials < total
+        {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "time subdivision needs at least one trial per requested sewing and gravity interval",
+            ));
+        }
         if self.max_settle_steps > 0
             && !((self.drape_steps + self.max_settle_steps) as f64 * self.step).is_finite()
         {
@@ -410,14 +427,21 @@ pub fn drape(
         .as_ref()
         .map(|c| c.accepted_sample(&scene.solver.x));
     let mut phases = Vec::new();
+    let mut subdivision_trials = 0;
     for (name, steps, g, lag) in [
         ("sew", opts.sew_steps, 0.0, opts.lag_rounds[0]),
         ("drape", opts.drape_steps, GRAVITY, opts.lag_rounds[1]),
     ] {
         scene.solver.friction_rounds = lag;
-        let rep = run_phase(&mut scene, steps, opts.step, g, |_, x| {
-            frames.push(x.to_vec());
-        })?;
+        let rep = run_phase_with_subdivision(
+            &mut scene,
+            steps,
+            opts.step,
+            g,
+            opts.time_subdivision,
+            &mut subdivision_trials,
+            |_, x| frames.push(x.to_vec()),
+        )?;
         progress(&format!(
             "{name}: {} steps, {} Newton iterations ({} unconverged), max speed {:.4} m/s",
             rep.steps, rep.iterations, rep.unconverged, rep.max_speed
@@ -436,9 +460,15 @@ pub fn drape(
             {
                 break;
             }
-            let step = run_phase(&mut scene, 1, opts.step, GRAVITY, |_, x| {
-                frames.push(x.to_vec());
-            })?;
+            let step = run_phase_with_subdivision(
+                &mut scene,
+                1,
+                opts.step,
+                GRAVITY,
+                opts.time_subdivision,
+                &mut subdivision_trials,
+                |_, x| frames.push(x.to_vec()),
+            )?;
             drape.append(step);
         }
         progress(&format!(
@@ -752,6 +782,22 @@ fn add_numerical_report(
         "drape":drape,
         "basis":"Newton correction/h and instantaneous speed; reference settled remains the legacy window-drift metric, not static stress equilibrium or real fit"
     });
+    if let Some(policy) = opts.time_subdivision {
+        let intervals: Vec<_> = sew
+            .samples
+            .iter()
+            .chain(&drape.samples)
+            .filter_map(|sample| sample.time_subdivision.as_ref())
+            .collect();
+        report["numerical"]["time_subdivision"] = json!({
+            "policy":policy,
+            "trials":intervals.iter().map(|s| s.trials).sum::<usize>(),
+            "accepted_substeps":intervals.iter().map(|s| s.accepted.len()).sum::<usize>(),
+            "subdivided_nominal_intervals":intervals.iter().filter(|s| s.accepted.len() > 1).count(),
+            "nominal_intervals":sew.steps+drape.steps,
+            "basis":"Convergence-driven bisection only; every complete nominal interval advances its original duration. One attempted-step allowance covers sewing, gravity and settling. Nominal output frames remain equally spaced; each sample retains its actual accepted partition. Quietness includes every accepted substep speed. Solve energies refer to individual physical steps, never their sum. No time-error, continuous-contact-minimum or physical-fit certificate."
+        });
+    }
     if opts.max_settle_steps > 0 {
         let steps = drape.steps - opts.drape_steps;
         let complete = settled == Some(true)
@@ -791,15 +837,24 @@ fn add_contact_report(
     drape: &PhaseReport,
     initial: Option<&crate::contact::ContactSample>,
 ) {
-    let samples: Vec<_> = initial
-        .into_iter()
-        .chain(
-            sew.samples
-                .iter()
-                .chain(&drape.samples)
-                .filter_map(|s| s.contact.as_ref()),
-        )
-        .collect();
+    let mut samples: Vec<_> = initial.into_iter().collect();
+    let mut accepted_samples = 0;
+    let mut subdivided = false;
+    for sample in sew.samples.iter().chain(&drape.samples) {
+        if let Some(partition) = &sample.time_subdivision {
+            subdivided = true;
+            accepted_samples += partition.accepted.len();
+            samples.extend(
+                partition
+                    .accepted
+                    .iter()
+                    .filter_map(|s| s.contact.as_ref()),
+            );
+        } else {
+            accepted_samples += 1;
+            samples.extend(sample.contact.iter());
+        }
+    }
     let minimum = |own: bool| {
         samples
             .iter()
@@ -827,8 +882,12 @@ fn add_contact_report(
             Err(e) => json!({"status":"refused","refusal":e}),
         });
     report["contact_diagnostics"] = json!({
-        "basis":"initial and accepted phase endpoints only; thickness-offset active-pair gaps, not an exact continuous-time minimum; no active pair means unavailable, not zero",
-        "initial":initial,"accepted_samples":sew.steps+drape.steps,
+        "basis":if subdivided {
+            "initial and every accepted implicit substep endpoint; thickness-offset active-pair gaps, not an exact continuous-time minimum; no active pair means unavailable, not zero"
+        } else {
+            "initial and accepted phase endpoints only; thickness-offset active-pair gaps, not an exact continuous-time minimum; no active pair means unavailable, not zero"
+        },
+        "initial":initial,"accepted_samples":accepted_samples,
         "minimum_sampled_active_body_gap_m":minimum(false),
         "minimum_sampled_active_self_gap_m":minimum(true),
         "friction_basis":"counts describe the frozen lag state, not a measured sticking/sliding verdict",
@@ -1327,6 +1386,7 @@ mod self_contact_tests {
                 },
                 max_speed_m_s: speed,
                 contact: None,
+                time_subdivision: None,
             });
             phase.steps += 1;
             phase.max_speed = speed;
@@ -1361,6 +1421,7 @@ mod self_contact_tests {
                 },
                 max_speed_m_s: 0.0,
                 contact: None,
+                time_subdivision: None,
             });
             phase.steps += 1;
         }
@@ -1447,6 +1508,25 @@ mod self_contact_tests {
             },
             DrapeOptions {
                 max_settle_steps: 257,
+                ..default
+            },
+            DrapeOptions {
+                time_subdivision: Some(SubdivisionOptions {
+                    max_halvings: 17,
+                    max_trials: 128,
+                }),
+                ..default
+            },
+            DrapeOptions {
+                time_subdivision: Some(SubdivisionOptions {
+                    max_halvings: 4,
+                    max_trials: 47,
+                }),
+                ..default
+            },
+            DrapeOptions {
+                time_subdivision: Some(SubdivisionOptions::default()),
+                step: f64::MIN_POSITIVE,
                 ..default
             },
             DrapeOptions {

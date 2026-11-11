@@ -23,6 +23,7 @@ use crate::nearest::NearestTree;
 use crate::start::{
     GATHER_COMPRESSION, MM, PartFrame, StartState, WrapPlacement, start_state, wrap_points,
 };
+use crate::stepping::{AcceptedSubstep, SubdivisionOptions};
 
 pub use crate::material::Fabric;
 
@@ -1174,27 +1175,55 @@ fn ramp_thickness(c: &mut Contact, x: &[Vec3], target: f64) {
     }
 }
 
-/// One accepted step; the Newton residual is in N, correction in m and potential in J.
+/// One nominal interval; the Newton residual is in N, correction in m and potential in J.
 #[derive(Clone, Debug, Serialize)]
 pub struct PhaseStep {
-    /// Newton diagnostics for this accepted implicit step.
+    /// Newton diagnostics for the final accepted implicit substep. Without subdivision this is
+    /// the whole nominal interval. Potentials from different step sizes are never added together.
     pub solve: SolveReport,
-    /// Largest instantaneous vertex speed after the step (m/s), never a window-mean drift.
+    /// Largest instantaneous vertex speed over every accepted endpoint in this nominal interval
+    /// (m/s), never a window-mean drift or a coarse displacement divided by the nominal duration.
     pub max_speed_m_s: f64,
     /// Accepted endpoint contact state, absent if contact is disabled.
+    pub contact: Option<crate::contact::ContactSample>,
+    /// Complete physical partition when explicitly requested; nominal animation timing is retained.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_subdivision: Option<PhaseSubdivision>,
+}
+
+/// Actual accepted time partition and diagnostics for one requested nominal interval.
+#[derive(Clone, Debug, Serialize)]
+pub struct PhaseSubdivision {
+    /// The complete requested physical duration, never shortened after a failure.
+    pub duration_s: f64,
+    /// All implicit-step attempts, including rejected attempts discarded before bisection.
+    pub trials: usize,
+    /// Chronological accepted substeps; their endpoints are relative to this nominal interval.
+    pub accepted: Vec<PhaseSubstep>,
+}
+
+/// Diagnostics from an actual accepted substep; no full intermediate geometry is retained here.
+#[derive(Clone, Debug, Serialize)]
+pub struct PhaseSubstep {
+    /// Exact physical time partition and the unchanged implicit solver's report.
+    #[serde(flatten)]
+    pub step: AcceptedSubstep,
+    /// Largest instantaneous vertex speed at this physical endpoint, m/s.
+    pub max_speed_m_s: f64,
+    /// Contact diagnostics at this same endpoint, absent when contact is disabled.
     pub contact: Option<crate::contact::ContactSample>,
 }
 
 /// One phase's per-step reports.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct PhaseReport {
-    /// Steps taken.
+    /// Nominal intervals taken, equal to retained animation-frame count.
     pub steps: usize,
-    /// Newton iterations, summed.
+    /// Newton iterations over accepted physical substeps, summed.
     pub iterations: usize,
     /// Steps that did not converge.
     pub unconverged: usize,
-    /// Sparse factorizations, summed.
+    /// Sparse factorizations over accepted physical substeps, summed.
     pub factorizations: usize,
     /// Iterations whose step the CCD bound cut, summed.
     pub ccd_limited: usize,
@@ -1208,7 +1237,8 @@ pub struct PhaseReport {
     pub max_speed: f64,
     /// The cloth offset at the end (m).
     pub thickness: f64,
-    /// Accepted steps in execution order. A failed step produces no sample or animation frame.
+    /// Completed nominal intervals in execution order, with an optional actual time partition.
+    /// A failed interval produces no sample or animation frame.
     pub samples: Vec<PhaseStep>,
 }
 
@@ -1240,11 +1270,102 @@ pub fn run_phase(
     steps: usize,
     h: f64,
     gravity: f64,
+    frame: impl FnMut(usize, &[Vec3]),
+) -> Result<PhaseReport, Refusal> {
+    run_phase_with_subdivision(scene, steps, h, gravity, None, &mut 0, frame)
+}
+
+/// Ordinary drape phases share one explicit attempted-step allowance, including a settling tail.
+/// The old path remains unchanged when the policy is absent. With subdivision, the thickness ramp,
+/// solver caches, friction and material memory commit only after the whole nominal interval succeeds.
+pub(crate) fn run_phase_with_subdivision(
+    scene: &mut Scene,
+    steps: usize,
+    h: f64,
+    gravity: f64,
+    policy: Option<SubdivisionOptions>,
+    trials_used: &mut usize,
     mut frame: impl FnMut(usize, &[Vec3]),
 ) -> Result<PhaseReport, Refusal> {
+    if let Some(policy) = policy {
+        policy.validate(h)?;
+    }
     scene.solver.gravity = Vec3::new(0.0, 0.0, -gravity);
     let mut rep = PhaseReport::default();
     for k in 0..steps {
+        if let Some(policy) = policy {
+            let remaining = policy.max_trials.saturating_sub(*trials_used);
+            if remaining == 0 {
+                return Err(Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "shared sewing/draping/settling subdivision trial budget exhausted; nominal interval unchanged",
+                ));
+            }
+            let mut candidate = scene.solver.clone();
+            if let Some(contact) = candidate.contact.as_mut() {
+                ramp_thickness(contact, &candidate.x, scene.target_thickness);
+            }
+            let (partition, observations) = candidate.step_subdivided_with(
+                h,
+                SubdivisionOptions {
+                    max_trials: remaining,
+                    ..policy
+                },
+                |solver| {
+                    (
+                        solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max),
+                        solver
+                            .contact
+                            .as_ref()
+                            .map(|c| c.accepted_sample(&solver.x)),
+                    )
+                },
+            )?;
+            *trials_used += partition.trials;
+            let solve = partition
+                .accepted
+                .last()
+                .expect("complete nonempty interval")
+                .solve;
+            let mut max_speed_m_s = 0.0_f64;
+            let accepted: Vec<_> = partition
+                .accepted
+                .into_iter()
+                .zip(observations)
+                .map(|(step, (speed, contact))| {
+                    rep.iterations += step.solve.iterations;
+                    rep.factorizations += step.solve.factorizations;
+                    rep.ccd_limited += step.solve.ccd_limited;
+                    rep.halvings += step.solve.halvings;
+                    rep.projected_iterations += step.solve.projected_iterations;
+                    rep.pcg_iterations += step.solve.pcg_iterations;
+                    max_speed_m_s = max_speed_m_s.max(speed);
+                    PhaseSubstep {
+                        step,
+                        max_speed_m_s: speed,
+                        contact,
+                    }
+                })
+                .collect();
+            rep.steps += 1;
+            rep.samples.push(PhaseStep {
+                solve,
+                max_speed_m_s,
+                contact: accepted
+                    .last()
+                    .expect("complete nonempty interval")
+                    .contact
+                    .clone(),
+                time_subdivision: Some(PhaseSubdivision {
+                    duration_s: partition.duration_s,
+                    trials: partition.trials,
+                    accepted,
+                }),
+            });
+            scene.solver = candidate;
+            frame(k, &scene.positions());
+            continue;
+        }
         let thickness = scene.solver.contact.as_ref().map(|c| c.params.thickness);
         if let Some(contact) = scene.solver.contact.as_mut() {
             ramp_thickness(contact, &scene.solver.x, scene.target_thickness);
@@ -1274,6 +1395,7 @@ pub fn run_phase(
                 .contact
                 .as_ref()
                 .map(|c| c.accepted_sample(&scene.solver.x)),
+            time_subdivision: None,
         });
         frame(k, &scene.positions());
     }
@@ -1302,6 +1424,252 @@ mod grain_tests {
     use crate::garment::build_garment;
     use crate::start::roll_points;
     use serde_json::json;
+
+    fn subdivision_scene() -> Scene {
+        let rest = vec![Vec2::ZERO, Vec2::new(0.1, 0.), Vec2::new(0., 0.1)];
+        let faces = vec![[0, 1, 2]];
+        let model = ClothModel::new(
+            rest.clone(),
+            &faces,
+            crate::Membrane::orthotropic(1000., 600., 0., 300., 1.),
+            0.,
+            0.2,
+        )
+        .unwrap();
+        let x = vec![Vec3::ZERO, Vec3::new(0.11, 0., 0.), Vec3::new(0., 0.1, 0.)];
+        let mut solver = Solver::new(
+            model,
+            x.clone(),
+            &[[true; 3], [false, true, true], [true; 3]],
+            Vec3::new(0., 0., -0.),
+        );
+        solver.tol = 1e-6;
+        solver.pcg_iters = 10;
+        Scene {
+            mesh: GarmentMesh {
+                instances: vec!["synthetic".into()],
+                verts2d: rest.iter().map(|p| *p / MM).collect(),
+                faces,
+                owner: vec![0; 3],
+                inst_range: vec![(0, 3)],
+                pairs: vec![],
+                seams: vec![],
+                corner: BTreeMap::new(),
+                index: BTreeMap::new(),
+            },
+            placements: vec![],
+            start: StartState {
+                wrapped: x.clone(),
+                presewn: x.clone(),
+                relaxed: x,
+                groups: vec![],
+                relax_iterations: 0,
+                block_p95: vec![],
+                gather_weights: vec![1.; 3],
+            },
+            weld: vec![0, 1, 2],
+            collapsed: 0,
+            triangle_owner: vec![0],
+            untangled: vec![],
+            start_backtracked_from: None,
+            target_thickness: 0.,
+            solver,
+            elastic_rings: vec![],
+            elastic_groups: vec![],
+        }
+    }
+
+    #[test]
+    fn ordinary_phase_subdivision_retries_real_failures_and_keeps_nominal_frames() {
+        let mut scene = subdivision_scene();
+        scene.solver.max_newton = 3;
+        let original = scene.solver.clone();
+        assert_eq!(
+            run_phase(&mut scene, 1, 0.04, 0., |_, _| {
+                panic!("failed interval emitted a frame")
+            })
+            .unwrap_err()
+            .code,
+            RefusalCode::NotConverged
+        );
+        assert_eq!(format!("{:?}", scene.solver), format!("{original:?}"));
+        let mut frames = Vec::new();
+        let mut trials = 0;
+        let policy = SubdivisionOptions {
+            max_halvings: 12,
+            max_trials: 4096,
+        };
+        let report = run_phase_with_subdivision(
+            &mut scene,
+            1,
+            0.04,
+            0.,
+            Some(policy),
+            &mut trials,
+            |index, points| frames.push((index, points.to_vec())),
+        )
+        .unwrap();
+        assert_eq!(report.steps, 1);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0], (0, scene.positions()));
+        let sample = &report.samples[0];
+        let partition = sample.time_subdivision.as_ref().unwrap();
+        assert_eq!(partition.duration_s, 0.04);
+        assert_eq!(partition.accepted.last().unwrap().step.end_s, 0.04);
+        assert!(partition.accepted.len() > 1 && partition.trials > partition.accepted.len());
+        assert_eq!(trials, partition.trials);
+        assert_eq!(sample.solve, partition.accepted.last().unwrap().step.solve);
+        assert_eq!(
+            sample.max_speed_m_s,
+            partition
+                .accepted
+                .iter()
+                .map(|s| s.max_speed_m_s)
+                .fold(0., f64::max)
+        );
+        assert_eq!(
+            report.iterations,
+            partition
+                .accepted
+                .iter()
+                .map(|s| s.step.solve.iterations)
+                .sum::<usize>()
+        );
+        let mut replay = original.clone();
+        for substep in &partition.accepted {
+            assert_eq!(replay.step(substep.step.step_s).unwrap(), substep.step.solve);
+            assert_eq!(
+                substep.max_speed_m_s,
+                replay.v.iter().map(|v| v.norm()).fold(0., f64::max)
+            );
+        }
+        assert_eq!(format!("{:?}", scene.solver), format!("{replay:?}"));
+
+        let accepted_state = format!("{:?}", scene.solver);
+        // A new phase receives the same exhausted allowance; it cannot silently reset it.
+        let error = run_phase_with_subdivision(
+            &mut scene,
+            1,
+            0.04,
+            0.,
+            Some(SubdivisionOptions {
+                max_trials: trials,
+                ..policy
+            }),
+            &mut trials,
+            |_, _| panic!("exhausted shared budget emitted a frame"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, RefusalCode::BudgetExceeded);
+        assert_eq!(format!("{:?}", scene.solver), accepted_state);
+
+        scene.solver = original;
+        let before = format!("{:?}", scene.solver);
+        let mut used = 0;
+        let error = run_phase_with_subdivision(
+            &mut scene,
+            1,
+            0.04,
+            0.,
+            Some(SubdivisionOptions {
+                max_trials: partition.trials - 1,
+                ..policy
+            }),
+            &mut used,
+            |_, _| panic!("partial nominal interval emitted a frame"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, RefusalCode::BudgetExceeded);
+        assert_eq!(format!("{:?}", scene.solver), before);
+        assert_eq!(used, 0, "failed run publishes no successful interval receipt");
+    }
+
+    #[test]
+    fn subdivision_nominal_success_matches_the_existing_phase_state_and_work() {
+        let mut ordinary = subdivision_scene();
+        let mut adaptive = subdivision_scene();
+        let mut ordinary_frames = Vec::new();
+        let baseline = run_phase(&mut ordinary, 2, 0.01, 0., |_, x| {
+            ordinary_frames.push(x.to_vec())
+        })
+        .unwrap();
+        let mut adaptive_frames = Vec::new();
+        let mut trials = 0;
+        let mut report = run_phase_with_subdivision(
+            &mut adaptive,
+            2,
+            0.01,
+            0.,
+            Some(SubdivisionOptions::default()),
+            &mut trials,
+            |_, x| adaptive_frames.push(x.to_vec()),
+        )
+        .unwrap();
+        assert_eq!(trials, 2);
+        for sample in &mut report.samples {
+            assert_eq!(sample.time_subdivision.take().unwrap().accepted.len(), 1);
+        }
+        assert_eq!(
+            serde_json::to_value(report).unwrap(),
+            serde_json::to_value(baseline).unwrap()
+        );
+        assert_eq!(ordinary_frames, adaptive_frames);
+        assert_eq!(
+            format!("{:?}", ordinary.solver),
+            format!("{:?}", adaptive.solver)
+        );
+    }
+
+    #[test]
+    fn refused_subdivided_phase_restores_the_contact_ramp_and_complete_solver() {
+        let mut scene = subdivision_scene();
+        for x in &mut scene.solver.x {
+            x.z = 0.0005;
+        }
+        let body = Body::new(
+            vec![
+                Vec3::new(-1., -1., 0.),
+                Vec3::new(1., -1., 0.),
+                Vec3::new(0., 1., 0.),
+            ],
+            vec![[0, 1, 2]],
+            0.1,
+        )
+        .unwrap();
+        let params = ContactParams {
+            dhat: 0.001,
+            thickness: 0.0002,
+            kappa: 100.,
+            mu: 0.4,
+            eps_v: 0.001,
+        };
+        scene.solver = scene.solver.with_contact(body, params).unwrap();
+        scene.solver.step(0.00001).unwrap();
+        scene.solver.max_newton = 1;
+        scene.target_thickness = 0.0003;
+        let mut ramp = scene.solver.contact.clone().unwrap();
+        ramp_thickness(&mut ramp, &scene.solver.x, scene.target_thickness);
+        assert!(
+            ramp.params.thickness > params.thickness,
+            "fixture must advance its trial ramp"
+        );
+        let before = format!("{:?}", scene.solver);
+        let refusal = run_phase_with_subdivision(
+            &mut scene,
+            1,
+            0.04,
+            0.,
+            Some(SubdivisionOptions {
+                max_halvings: 12,
+                max_trials: 1,
+            }),
+            &mut 0,
+            |_, _| panic!("failed nominal interval emitted a frame"),
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+        assert_eq!(format!("{:?}", scene.solver), before);
+    }
 
     #[test]
     fn body_offset_ramp_backtracks_without_dropping_its_safety_margin() {

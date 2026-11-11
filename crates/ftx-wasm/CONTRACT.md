@@ -157,6 +157,15 @@ solve adds an available/refused report and exact static geometry, without changi
 fold, elapsed time, flags or subsequent motion. Friction and material-history evolution are not
 part of this static comparison. Omission preserves the existing settings serialization.
 
+Configured settings also accept optional `time_subdivision: { max_halvings, max_trials }`.
+The integer limits are 0..=16 halvings and 1..=65535 attempted steps; the allowance must cover the
+requested sewing and draping intervals and is shared with any extra settling. Only a stalled Newton
+solve retries at smaller intervals. The native transactional solver retains the nominal duration and
+output frames, reports each accepted partition and refuses an exhausted allowance without committing
+a partial interval. Omission preserves ordinary fold behavior. This recovers convergence without
+loosening its tolerance; it does not estimate time-discretization error. Portable material/scenario
+studies use the same option and reserve its full trial allowance within their vertex-frame budget.
+
 **Purpose.** FrankenTextiles in the browser (plan §15): the page's round behind a thin `wasm-bindgen`
 boundary, replacing the skill's Pyodide page. `page` is the reference's `webapp.py` (`program_info`,
 `form_fields`, `body_file`, `run`): a body from a size chart, tape readings or a measurements file; a

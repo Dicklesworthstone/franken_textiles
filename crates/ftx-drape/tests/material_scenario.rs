@@ -123,6 +123,56 @@ fn vapor_pattern() -> Pattern {
 }
 
 #[test]
+fn subdivision_reserves_all_attempts_before_each_production_alternative() {
+    use ftx_drape::animation::{FOLD_FRAMES, ZIP_FRAMES};
+    use ftx_drape::stepping::SubdivisionOptions;
+    let form = form();
+    let body = body(&form);
+    let p = pattern();
+    let baseline_policy = scenario();
+    let baseline = Session::new(&baseline_policy, &body)
+        .unwrap()
+        .evaluate(&p, |_| {})
+        .unwrap();
+    let baseline_charge = baseline["charged_vertex_frames"].as_u64().unwrap() as usize;
+    let nominal_frames = baseline_policy.options.sew_steps
+        + baseline_policy.options.drape_steps
+        + FOLD_FRAMES
+        + ZIP_FRAMES
+        + 4;
+    assert_eq!(baseline_charge % nominal_frames, 0);
+    let points = baseline_charge / nominal_frames;
+    let mut declared = baseline_policy.clone();
+    declared.options.time_subdivision = Some(SubdivisionOptions {
+        max_halvings: 8,
+        max_trials: 64,
+    });
+    declared.max_vertex_frames = baseline_charge;
+    let mut calls = 0;
+    let refusal = Session::new(&declared, &body)
+        .unwrap()
+        .evaluate(&p, |_| calls += 1)
+        .unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+    assert_eq!(calls, 0, "retry work is reserved before any production progress");
+
+    let expected_charge = points * (64 + FOLD_FRAMES + ZIP_FRAMES + 4);
+    declared.max_vertex_frames = expected_charge;
+    let mut session = Session::new(&declared, &body).unwrap();
+    let actual = session.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(actual["charged_vertex_frames"], expected_charge);
+    assert_eq!(actual["positions_m"], baseline["positions_m"]);
+    assert_eq!(actual["surface"], baseline["surface"]);
+    assert_eq!(
+        actual["drape"]["numerical"]["time_subdivision"]["trials"],
+        6
+    );
+    assert_ne!(actual["scenario_sha256"], baseline["scenario_sha256"]);
+    let refusal = session.evaluate(&p, |_| {}).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+}
+
+#[test]
 fn vapor_substitution_uses_current_sewn_geometry_without_dry_heat_or_storage() {
     let form = form();
     let body = body(&form);

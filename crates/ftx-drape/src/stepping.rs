@@ -53,7 +53,7 @@ impl SubdivisionOptions {
 }
 
 /// One accepted physical substep. Its endpoint is relative to the nominal interval's start.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AcceptedSubstep {
     /// Endpoint in seconds, obtained from an exact dyadic fraction of the nominal duration.
     pub end_s: f64,
@@ -66,7 +66,7 @@ pub struct AcceptedSubstep {
 }
 
 /// Returned only after the whole nominal interval succeeds. Failed trials never supply samples.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SubdividedStep {
     /// Requested elapsed physical time; never shortened to make the solve pass.
     pub duration_s: f64,
@@ -100,6 +100,18 @@ impl Solver {
         duration_s: f64,
         options: SubdivisionOptions,
     ) -> Result<SubdividedStep, Refusal> {
+        self.step_subdivided_with(duration_s, options, |_| ())
+            .map(|(report, _)| report)
+    }
+
+    // Collect bounded diagnostics from actual accepted states without retaining full meshes or
+    // exposing intermediate states outside a complete nominal interval.
+    pub(crate) fn step_subdivided_with<T>(
+        &mut self,
+        duration_s: f64,
+        options: SubdivisionOptions,
+        mut observe: impl FnMut(&Self) -> T,
+    ) -> Result<(SubdividedStep, Vec<T>), Refusal> {
         options.validate(duration_s)?;
         if self.x.len() != self.model.rest.len()
             || self.v.len() != self.x.len()
@@ -128,6 +140,7 @@ impl Solver {
             trials: 0,
             accepted: Vec::new(),
         };
+        let mut observations = Vec::new();
         // Integer dyadic intervals cover exactly [0,ticks]; no accumulated floating-time residue
         // can silently omit the end or request an extra tiny step. The stack is depth-bounded.
         while let Some((start, end, depth)) = pending.pop() {
@@ -158,6 +171,7 @@ impl Solver {
                         ));
                     }
                     state = candidate;
+                    observations.push(observe(&state));
                     result.accepted.push(AcceptedSubstep {
                         end_s: duration_s * (end as f64 / ticks as f64),
                         step_s,
@@ -190,6 +204,6 @@ impl Solver {
             pending.push((start, middle, depth + 1));
         }
         *self = state;
-        Ok(result)
+        Ok((result, observations))
     }
 }
