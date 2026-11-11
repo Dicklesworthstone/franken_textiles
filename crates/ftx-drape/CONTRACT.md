@@ -125,6 +125,17 @@ FrankenSim `fs-query` algorithm pinned in `bvh.rs`; geometry and all indices pub
 Brute-force/rebuilt-body equivalence and actual sewn-cloth continuation tests cover this reuse;
 no runtime speedup or physical fit is inferred.
 
+Optional `root_translation_m: [x, y, z]` supplies the endpoint's absolute world-space displacement
+in metres from the selected body's fixed origin, after source posing. It transforms the complete
+source surface before collider extraction; initial collision/display geometry and body evidence
+remain the time-zero authority. Omitted/null offsets mean zero independently at each endpoint;
+explicit zero is retained and returns to the origin. The existing moving-body solver alone advances
+cloth, friction and constitutive history. Retained samples drive endpoint heat and coverage, and
+comparison admission checks the exact requested translation. Finite-vector admission, fixed-origin
+source replay, actual sewn-contact continuation/rollback, coverage recomputation and native/portable
+whole-report equality are covered by the existing motion/scenario test seams (`ftx-mv1`). No measured
+trajectory, floor support, anatomical movement or garment-fit truth is inferred from these inputs.
+
 **Declared simulation coverage.** `garment::simulation_scope` validates all instance and seam
 references and requires explicit placement on each instance whose `sim` is not false. Missing
 placement refuses before production meshing, including disconnected panels. Explicit exclusions

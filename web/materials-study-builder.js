@@ -388,6 +388,15 @@ function motionLiquidSources(sources) {
   // Parsed objects are never serialized back over the original qualification text.
 }
 
+function motionRootTranslation(frame) {
+  if (!own(frame, "root_translation_m") || frame.root_translation_m === null) return;
+  const offset = frame.root_translation_m;
+  if (!Array.isArray(offset) || offset.length !== 3 ||
+      Array.from(offset).some(value => typeof value !== "number" || !Number.isFinite(value))) {
+    throw Error("Motion root translation needs exactly three finite world-space offsets in metres, or null for the origin.");
+  }
+}
+
 /** Author prescribed endpoints around exact liquid policies; Rust owns physical admission and evolution. */
 export function buildMaterialMotionRequest(state, liquid = undefined) {
   object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "transient_surface", "transient_coverage"],
@@ -407,7 +416,8 @@ export function buildMaterialMotionRequest(state, liquid = undefined) {
   }
   let previous = 0, minimumTrials = 0;
   for (const frame of state.keyframes) {
-    object(frame, ["time_s", "arm_abduction_deg", "leg_pose"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
+    object(frame, ["time_s", "arm_abduction_deg", "leg_pose", "root_translation_m"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
+    motionRootTranslation(frame);
     if (typeof frame.time_s !== "number" || !Number.isFinite(frame.time_s) || frame.time_s > 60 ||
       frame.time_s - previous < 1e-9) {
       throw Error("Motion endpoint times must increase by at least 1e-9 seconds, through at most 60 seconds after the initial drape.");
@@ -581,7 +591,8 @@ function motionPolicy(value) {
   }
   let previous = 0, minimumTrials = 0;
   for (const frame of value.keyframes) {
-    object(frame, ["time_s", "arm_abduction_deg", "leg_pose"], ["time_s", "arm_abduction_deg"], "Motion keyframe");
+    object(frame, ["time_s", "arm_abduction_deg", "leg_pose", "root_translation_m"], ["time_s", "arm_abduction_deg"], "Motion keyframe");
+    motionRootTranslation(frame);
     if (!Number.isFinite(frame.time_s) || frame.time_s > 60 || frame.time_s - previous < 1e-9 ||
       !Number.isFinite(frame.arm_abduction_deg) || frame.arm_abduction_deg < 0 || frame.arm_abduction_deg > 180) {
       throw Error("Motion needs keyframes separated by at least 1e-9 seconds through 60 seconds and arm angles in 0–180 degrees.");

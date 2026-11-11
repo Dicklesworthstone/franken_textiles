@@ -1391,6 +1391,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
+  for(const axis of ['X','Y','Z'])e['guidedMotionRoot'+axis].value='0';
   e.screenMode.value='guided';e.guidedScreenProperty.value='areal_density';
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
     const el = e[/id="([^"]+)"/.exec(m[1])[1]]; el.dataset = { command: /data-command="([^"]+)"/.exec(m[1])[1] }; return el;
@@ -18998,6 +18999,139 @@ test('guided motion forwards explicit endpoint poses and independent work limits
     [['0.002','35.1','standing','—'],['0.004','35.2','seated','0.125'],['0.006','35','squat','0.25'],['0.008','35','standing','—']]);
   const download=descendants(result).find(n=>n.download==='scenario-request.json');
   assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);assert.match(visibleText(result),/not transient heat/);
+});
+
+function guidedRootMotionDraft(p,offset,enabled=true) {
+  p.e.guidedMotionTranslate.checked=enabled;p.e.guidedMotionTranslate.handlers.change();
+  for(const [index,axis] of ['X','Y','Z'].entries()) {
+    p.e['guidedMotionRoot'+axis].value=String(offset[index]);p.e['guidedMotionRoot'+axis].handlers.input();
+  }
+}
+
+test('guided root motion preserves three axes origin endpoints and actual returned XYZ values',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  assert.equal(p.e.guidedMotionTranslate.checked,false);
+  assert.ok(['X','Y','Z'].every(axis=>p.e['guidedMotionRoot'+axis].disabled));
+  guidedRootMotionDraft(p,[0.012,-0.034,0.056]);
+  assert.ok(['X','Y','Z'].every(axis=>!p.e['guidedMotionRoot'+axis].disabled));
+  await addGuidedMotion(p,0.002,35,'seated',0.1);
+  guidedRootMotionDraft(p,[99,88,77],false);await addGuidedMotion(p,0.004,36);
+  assert.ok(['X','Y','Z'].every(axis=>p.e['guidedMotionRoot'+axis].disabled));
+  guidedRootMotionDraft(p,[0,0,0]);await addGuidedMotion(p,0.006,35);
+  const expected=[{time_s:0.002,arm_abduction_deg:35,leg_pose:{posture:'seated',fraction:0.1},root_translation_m:[0.012,-0.034,0.056]},
+    {time_s:0.004,arm_abduction_deg:36},{time_s:0.006,arm_abduction_deg:35,root_translation_m:[0,0,0]}];
+  assert.match(visibleText(p.e.guidedMotionKeyframes),/World offset \(m\): 0.012, -0.034, 0.056/);
+  assert.doesNotMatch(visibleText(p.e.guidedMotionKeyframes),/99, 88, 77/);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.keyframes,expected);
+  const report=scenarioReport();report.scenario.scenario=JSON.parse(sent.scenarioRequest);
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({duration_s:0.006,
+    samples:[{},{},{}],trials:6,path_sha256:'translated-source',metrics:{max_absolute_edge_strain_pct:1.25},
+    keyframes:expected.map(frame=>({...frame,surface:omitted(),coverage:omitted()}))});
+  guidedRootMotionDraft(p,[-9,-8,-7]);
+  p.emit(report,[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const result=section(p,'Fresh drape and heat alternatives');
+  const table=descendants(result).find(node=>node.tag==='table'&&node.children[0].textContent.startsWith('A: endpoint'));
+  assert.ok(table);assert.deepEqual(table.children[1].children.slice(4,7).map(node=>node.textContent),
+    ['Root X (m)','Root Y (m)','Root Z (m)']);
+  assert.deepEqual(table.children.slice(2).map(row=>row.children.slice(4,7).map(node=>node.textContent)),
+    [['0.012','-0.034','0.056'],['0','0','0'],['0','0','0']]);
+  const download=descendants(result).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);
+});
+
+test('guided root motion draft changes retain saved work while replacement cancels stale workers and resets on a new pattern',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  guidedRootMotionDraft(p,[0.01,-0.02,0.03]);await addGuidedMotion(p,0.002,35);
+  await p.e.scenario.onclick();const old=p.current(),sent=old.messages.at(-1),original=sent.scenarioRequest;
+  guidedRootMotionDraft(p,[0.04,0.05,-0.06]);assert.equal(old.dead,false);
+  p.e.guidedMotionTranslate.checked=false;p.e.guidedMotionTranslate.handlers.change();assert.equal(old.dead,false);
+  p.emit(scenarioReport(),[{name:'retained-root.json',text:'{}'}]);
+  const result=section(p,'Fresh drape and heat alternatives');assert.equal(result.hidden,false);assert.ok(p.live.size);
+  await p.e.scenario.onclick();assert.equal(old.messages.at(-1).scenarioRequest,original);
+  const active=old.messages.at(-1);guidedRootMotionDraft(p,[0.04,0.05,-0.06]);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  assert.equal(old.dead,true);assert.equal(result.hidden,true);assert.equal(p.live.size,0);p.ready();
+  old.emit({type:'result',request:active.request,result:scenarioReport(),files:[{name:'stale-root.json',text:'{}'}]});
+  assert.equal(result.hidden,true);assert.equal(p.live.size,0);
+  await p.e.scenario.onclick();const replaced=JSON.parse(p.current().messages.at(-1).scenarioRequest);
+  assert.deepEqual(replaced.motion.keyframes[0].root_translation_m,[0.04,0.05,-0.06]);
+  assert.deepEqual(JSON.parse(original).motion.keyframes[0].root_translation_m,[0.01,-0.02,0.03]);
+  p.emit(scenarioReport());guidedRootMotionDraft(p,[91,92,93],false);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await p.e.scenario.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.keyframes[0],'root_translation_m'),false);
+  p.emit(scenarioReport());await p.load();assert.equal(p.e.guidedMotionTranslate.checked,false);
+  assert.deepEqual(['X','Y','Z'].map(axis=>p.e['guidedMotionRoot'+axis].value),['0','0','0']);
+  assert.ok(['X','Y','Z'].every(axis=>p.e['guidedMotionRoot'+axis].disabled));
+  assert.equal(p.e.guidedMotionKeyframes.children.length,0);
+});
+
+test('guided root motion named cases retain independent frozen vectors across later edits and clearing',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
+  guidedRootMotionDraft(p,[0.02,-0.01,0.04]);await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'rise');
+  guidedRootMotionDraft(p,[-0.03,0.05,-0.02]);guidedMotionDraft(p,0.004,36,'squat',0.2);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await saveGuidedCase(p,'lower');
+  guidedRootMotionDraft(p,[7,8,9]);await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>[item.key,item.scenario.motion.keyframes[0]]),[
+    ['rise',{time_s:0.002,arm_abduction_deg:35,root_translation_m:[0.02,-0.01,0.04]}],
+    ['lower',{time_s:0.004,arm_abduction_deg:36,leg_pose:{posture:'squat',fraction:0.2},root_translation_m:[-0.03,0.05,-0.02]}]]);
+  const worker=p.current();guidedRootMotionDraft(p,[0,0,0]);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');p.e.clearMotionKeyframes.onclick();
+  assert.equal(worker.dead,false,'Editing the next case cannot mutate already saved operating cases');
+  p.emit(scenarioReport());await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided root motion rejects blank and nonfinite axes before saving without corrupting a valid endpoint',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedMotionDraft(p,0.002,35);
+  const before=p.current().messages.length;
+  for(const axis of ['X','Y','Z'])for(const invalid of ['', ' ', 'Infinity', '-Infinity', 'NaN', 'unfinished']) {
+    guidedRootMotionDraft(p,[0.01,-0.02,0.03]);p.e['guidedMotionRoot'+axis].value=invalid;
+    p.e['guidedMotionRoot'+axis].handlers.input();await p.e.addMotionKeyframe.onclick();
+    assert.equal(p.e.guidedMotionKeyframes.children.length,0,`${axis}/${invalid}`);
+    assert.match(p.e.error.textContent,new RegExp(`finite world ${axis} displacement`));
+    assert.equal(p.current().messages.length,before);
+  }
+  await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+  guidedRootMotionDraft(p,[0.01,-0.02,0.03]);await p.e.addMotionKeyframe.onclick();
+  assert.equal(p.e.guidedMotionKeyframes.children.length,1,p.e.error.textContent);
+  guidedRootMotionDraft(p,[0.01,'',0.03]);await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  assert.equal(p.e.guidedMotionKeyframes.children.length,1);assert.match(p.e.error.textContent,/finite world Y displacement/);
+  await p.e.scenario.onclick();const saved=p.current().messages.at(-1);
+  assert.deepEqual(JSON.parse(saved.scenarioRequest).motion.keyframes[0].root_translation_m,[0.01,-0.02,0.03]);
+  p.emit(scenarioReport());guidedMotionSourceControls(p,'file');
+  for(const translation of ['[0,0]','[0,0,0,0]','[0,0,1e309]','"0,0,0"']) {
+    const raw=' {"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.002,"arm_abduction_deg":35,"root_translation_m":'+translation+
+      '}],"max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000}\n';
+    p.select('guidedMotionFile',raw);p.e.guidedMotionFile.handlers.change();
+    const count=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,count,translation);assert.match(p.e.error.textContent,/root translation.*three finite/i);
+  }
+});
+
+test('guided root motion source reads keep captured offsets and cancel only accepted endpoint replacements',async()=>{
+  for(const replacing of [false,true]) {
+    const {p,sources}=await guidedScenarioSetup();guidedMotionControls(p);
+    guidedRootMotionDraft(p,[0.005,-0.006,0.007]);await addGuidedMotion(p,0.002,35);
+    const delay=deferred();let reading=false;
+    p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const old=p.current(),before=old.messages.length,running=p.e.scenario.onclick();assert.equal(reading,true);
+    guidedRootMotionDraft(p,[-0.008,0.009,-0.01]);assert.equal(old.dead,false);
+    if(replacing) {
+      await guidedMotionAction(p,'Replace keyframe 1 from current controls');assert.equal(old.dead,true);p.ready();
+    }
+    delay.resolve(sources.fit);await running;
+    if(replacing) {
+      assert.equal(old.messages.length,before);assert.equal(p.current().messages.length,0);
+      await p.e.scenario.onclick();
+      assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.keyframes[0].root_translation_m,[-0.008,0.009,-0.01]);
+    } else {
+      assert.equal(old.messages.length,before+1);
+      assert.deepEqual(JSON.parse(old.messages.at(-1).scenarioRequest).motion.keyframes[0].root_translation_m,[0.005,-0.006,0.007]);
+    }
+  }
 });
 
 test('guided motion keeps unsaved endpoint controls separate and replaces or removes only explicitly selected endpoints',async()=>{

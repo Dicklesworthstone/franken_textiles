@@ -6,7 +6,7 @@ use ftx_body::{
     accepted_shape::AcceptedShape, clothing_skin, fit_tape, partial_tape_readings, pose_deltas,
     skin_mesh, tape_targets,
 };
-use ftx_core::Refusal;
+use ftx_core::{Refusal, Vec3};
 use ftx_pattern::{instance::PyError, validate::BodyMeasure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -381,7 +381,8 @@ impl FittedBody {
 
     /// Generate motion endpoints from the SAME selected shape, without fitting again. The caller
     /// supplies the model digest from its decoded bytes just as for `prepare`. Endpoint generation
-    /// uses Anny poses; the motion solver interpolates checked linear vertex chords between them.
+    /// uses Anny poses and optional absolute world translations; the motion solver interpolates
+    /// checked linear vertex chords between them. The selected body's initial geometry stays fixed.
     ///
     /// # Errors
     /// Invalid/excessive trajectory, changed model identity or nonmatching collision topology.
@@ -423,7 +424,17 @@ impl FittedBody {
                 // Scale only the source leg rotations; arm abduction and straightening stay fixed.
                 pose.leg_fraction = legs.fraction;
             }
-            let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
+            let mut posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
+            if let Some([x, y, z]) = keyframe.root_translation_m
+                && (x != 0.0 || y != 0.0 || z != 0.0)
+            {
+                let displacement = Vec3::new(x, y, z);
+                // Transform the complete source surface before deriving collision caps. Every
+                // endpoint starts at the fixed source origin, without accumulating prior offsets.
+                for vertex in &mut posed.vertices {
+                    *vertex += displacement;
+                }
+            }
             let skin = clothing_skin(model, &posed.vertices)?;
             if skin.triangles != self.collision.triangles
                 || skin.source_vertex != self.collision.source_vertex
@@ -950,6 +961,67 @@ mod tests {
     }
 
     #[test]
+    fn translated_motion_endpoints_use_one_fixed_origin_and_keep_the_selected_body_unchanged() {
+        let model = model();
+        let digest = "a".repeat(64);
+        let fitted = FittedBody::prepare(&model, &digest, &request()).unwrap();
+        let original_report = fitted.report.clone();
+        let original_collision = fitted.collision.vertices.clone();
+        let original_display = fitted.display.vertices.clone();
+        let motion: motion::Request = serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[
+                {"time_s":0.01,"arm_abduction_deg":35.0,"root_translation_m":[0.01,-0.02,0.03]},
+                {"time_s":0.02,"arm_abduction_deg":35.0},
+                {"time_s":0.03,"arm_abduction_deg":35.0,"root_translation_m":[0.0,0.0,0.0]}],
+            "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000}))
+        .unwrap();
+        let actual = fitted.motion_path(&model, &digest, &motion).unwrap();
+        let rest = model.rest(&fitted.params).unwrap();
+        let mut posed = model
+            .pose(
+                &rest,
+                &pose_deltas(&model, &rest, &Pose::drape(), 1.0).unwrap(),
+            )
+            .unwrap();
+        let translation = Vec3::new(0.01, -0.02, 0.03);
+        for vertex in &mut posed.vertices {
+            *vertex += translation;
+        }
+        let translated = clothing_skin(&model, &posed.vertices).unwrap();
+        for (&source, vertex) in translated.source_vertex.iter().zip(&translated.vertices) {
+            if source < posed.vertices.len() {
+                assert_eq!(*vertex, posed.vertices[source]);
+            }
+        }
+        for (translated, original) in translated.vertices.iter().zip(&original_collision) {
+            assert!((*translated - *original - translation).norm() < 1e-14);
+        }
+        let expected = motion::Path::new(
+            &motion,
+            fitted.body().collision,
+            vec![
+                translated.vertices,
+                original_collision.clone(),
+                original_collision.clone(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(actual.sha256(), expected.sha256());
+        let mut shifted = motion.clone();
+        shifted.keyframes[1].root_translation_m = Some([0.01, -0.02, 0.03]);
+        assert_ne!(
+            actual.sha256(),
+            fitted
+                .motion_path(&model, &digest, &shifted)
+                .unwrap()
+                .sha256()
+        );
+        assert_eq!(fitted.collision.vertices, original_collision);
+        assert_eq!(fitted.display.vertices, original_display);
+        assert_eq!(fitted.report, original_report);
+    }
+
+    #[test]
     fn seated_and_squat_paths_continue_real_cloth_and_restore_the_solver_after_a_late_refusal() {
         use crate::study::{Scenario, heat};
         use ftx_body::kinematics::Affine;
@@ -992,19 +1064,29 @@ mod tests {
         .unwrap();
         let original = run.scene.solver.clone();
         let count = body.collision.0.len() + original.x.len();
-        for (posture, hip, knee, foot) in [
-            ("seated", -90.0_f64, 90.0_f64, 0.0_f64),
-            ("squat", -100.0, 110.0, -10.0),
+        for (posture, hip, knee, foot, translation) in [
+            ("seated", -90.0_f64, 90.0_f64, 0.0_f64, None),
+            ("squat", -100.0, 110.0, -10.0, None),
+            (
+                "seated",
+                -90.0,
+                90.0,
+                0.0,
+                Some([0.00001, -0.00002, 0.00003]),
+            ),
         ] {
-            let request: motion::Request =
-                serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+            let mut requested = json!({"schema":"ftx-drape-motion/1",
                 "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.0,
                     "leg_pose":{"posture":posture,"fraction":0.0001}},
                     {"time_s":0.004,"arm_abduction_deg":35.0,
                     "leg_pose":{"posture":posture,"fraction":0.0002}}],
                 "max_step_s":0.001,"max_trials":16,"max_pairs":100000,
-                "max_sample_vertices":10000}))
-                .unwrap();
+                "max_sample_vertices":10000});
+            if let Some(translation) = translation {
+                requested["keyframes"][0]["root_translation_m"] = json!(translation);
+                requested["keyframes"][1]["root_translation_m"] = json!([0.0, 0.0, 0.0]);
+            }
+            let request: motion::Request = serde_json::from_value(requested).unwrap();
             let path = fitted.motion_path(&model, &digest, &request).unwrap();
             // Independently spell out the source joint angles, retaining all original arm deltas.
             let mut expected = Vec::new();
@@ -1025,7 +1107,14 @@ mod tests {
                         );
                     }
                 }
-                let posed = model.pose(&rest, &deltas).unwrap();
+                let mut posed = model.pose(&rest, &deltas).unwrap();
+                if let Some([x, y, z]) = key.root_translation_m
+                    && [x, y, z] != [0.0; 3]
+                {
+                    for vertex in &mut posed.vertices {
+                        *vertex += Vec3::new(x, y, z);
+                    }
+                }
                 expected.push(clothing_skin(&model, &posed.vertices).unwrap().vertices);
             }
             let independent =
@@ -1037,6 +1126,7 @@ mod tests {
             let mut standing = request.clone();
             for key in &mut standing.keyframes {
                 key.leg_pose = None;
+                key.root_translation_m = None;
             }
             let held = motion::Path::new(
                 &standing,
@@ -1074,8 +1164,36 @@ mod tests {
                 json!(request.keyframes[0].leg_pose)
             );
             assert_eq!(continued["continuous_contact_checked"], true);
+            assert_eq!(
+                continued["keyframes"][0]["root_translation_m"],
+                json!(translation)
+            );
             assert_ne!(run.scene.solver.x, original.x);
             let moved = run.scene.solver.x.clone();
+            if translation.is_some() {
+                let mut fixed_root = request.clone();
+                for key in &mut fixed_root.keyframes {
+                    key.root_translation_m = None;
+                }
+                let fixed_path = fitted.motion_path(&model, &digest, &fixed_root).unwrap();
+                run.scene.solver = original.clone();
+                motion::evaluate(
+                    &fixed_root,
+                    &fixed_path,
+                    &scenario,
+                    &body,
+                    &mut run,
+                    &mut heat::Budget::default(),
+                    None,
+                    None,
+                    |_| {},
+                )
+                .unwrap();
+                assert_ne!(
+                    run.scene.solver.x, moved,
+                    "root translation must affect the contact-driven cloth response"
+                );
+            }
             run.scene.solver = original.clone();
             motion::evaluate(
                 &standing,

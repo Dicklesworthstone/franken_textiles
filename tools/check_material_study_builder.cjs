@@ -674,6 +674,41 @@ test('guided motion preserves ordered absolute endpoints and original scenario s
   assert.equal(Object.hasOwn(JSON.parse(motion(omitted)),'max_sample_vertices'),false,'Omission retains the native 500000 default');
 });
 
+test('guided motion retains absolute root offsets and source tokens across authored and file routes', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const frames=[{time_s:0.1,arm_abduction_deg:35,root_translation_m:[0.02,-0.03,0.04]},
+    {time_s:0.2,arm_abduction_deg:45,leg_pose:{posture:'squat',fraction:0.5},root_translation_m:[0,0,0]},
+    {time_s:0.3,arm_abduction_deg:35},{time_s:0.4,arm_abduction_deg:35,root_translation_m:null}];
+  const input={...motionState(),keyframes:frames,max_step_s:0.1,max_trials:8},before=JSON.stringify(input);
+  const authored=motion(input);
+  assert.deepEqual(JSON.parse(authored).keyframes,frames);assert.equal(JSON.stringify(input),before);
+  for(const selected of [input,authored]) {
+    const raw=single({...scenarioState(),motion:selected,maxMotionTrials:64});
+    assert.deepEqual(JSON.parse(raw).motion.keyframes,frames);
+    const named=matrix({cases:[{key:'translated',scenario:raw}],maxEvaluations:2});
+    assert.deepEqual(JSON.parse(named).cases[0].scenario.motion.keyframes,frames);
+  }
+  const original=' {"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.1,"arm_abduction_deg":35,'+
+    '"root_translation_m":[-0.0,2e-3,-3e-3]}],"max_step_s":0.1,"max_trials":1,"max_pairs":1000,'+
+    '"transient_surface":{"source_value":18446744073709551615}}\r\n';
+  const raw=single({...scenarioState(),motion:original,maxMotionTrials:64});
+  assert.ok(raw.includes(original));assert.match(raw,/\[-0\.0,2e-3,-3e-3\]/);
+  assert.match(raw,/18446744073709551615/);
+});
+
+test('guided motion refuses malformed root vectors in both input routes without rewriting them', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  for(const root_translation_m of [undefined,{},false,1,'0,0,0',[],[0,0],[0,0,0,0],Array(3),
+    ...[0,1,2].flatMap(axis=>[NaN,Infinity,-Infinity,'0',null].map(value=>[0,0,0].map((x,i)=>i===axis?value:x)))]) {
+    const input={...motionState(),keyframes:[{...motionState().keyframes[0],root_translation_m}]};
+    assert.throws(()=>motion(input),/root translation/);
+    assert.throws(()=>single({...scenarioState(),motion:input,maxMotionTrials:64}),/root translation/);
+    // JSON omits undefined members; all other malformed source vectors must still refuse.
+    if(root_translation_m!==undefined) assert.throws(()=>single({...scenarioState(),
+      motion:JSON.stringify({schema:'ftx-drape-motion/1',...input}),maxMotionTrials:64}),/root translation/);
+  }
+});
+
 test('guided motion rejects ambiguous endpoints, invalid poses and unordered physical times', async () => {
   const {buildMaterialMotionRequest:build}=await modulePromise;
   const frame=motionState().keyframes[0],withFrames=keyframes=>({...motionState(),keyframes});

@@ -253,17 +253,35 @@ legs at that endpoint, including when returning from a preceding bend. Fractions
 absolute endpoint choices, not cumulative adjustments. Unknown postures and invalid fractions refuse.
 
 The existing seated posture uses hip −90° and knee +90°; squat uses hip −100°, knee +110° and foot
-−10°, about the source rest body's +X axis. The trunk stays upright and the model root stays fixed:
-these are prescribed joint movements, without inferred floor contact, chair support or root descent.
+−10°, about the source rest body's +X axis. The trunk stays upright. Joint rotations alone leave
+the model root fixed; no floor contact, chair support or root descent is inferred.
 Author short explicit increments through the desired bend and return. The shared solver retains
 its surface/contact checks, budgets and whole-trajectory rollback. These are the existing linear
 blend skinning poses, including their known crotch webbing and volume loss; adding a motion route
 does not qualify anatomical pose validity, real rise/seat ease or physical garment fit.
 
+An endpoint may additionally supply `"root_translation_m":[x,y,z]`. These three finite coordinates
+are an **absolute world-space displacement in metres**, with z up, from the selected body's fixed
+origin. The displacement applies to the complete posed source surface before the collision skin
+and its synthetic caps are derived. It combines with the endpoint's arm and leg choices without
+refitting the body or moving the cloth directly. The ordinary moving-collider solver produces the
+cloth response, contact/friction and all subsequent heat/coverage geometry.
+
+Omission or `null` means zero displacement at that endpoint, even after a translated endpoint;
+an explicit `[0,0,0]` also returns to the original origin and remains visible in the saved request
+and endpoint report. Offsets are never accumulated or inherited. A later hold must repeat the
+same translation as well as the same joint pose. For example,
+`{"time_s":0.002,"arm_abduction_deg":35.0,"root_translation_m":[0.00001,-0.00002,0.00003]}`
+is the small prescribed translation used in a synthetic continuation check, not a measured human
+movement. Source-model posing remains fixed to the same selected shape; the initial drape body
+and its display geometry still describe time zero. The motion viewer uses each accepted translated
+`body_positions_m` sample. Large or invalid paths retain the existing contact and work refusals.
+
 The same scenario JSON reaches both native material-study commands and the browser's scenario
-input. Reports retain each requested `leg_pose` beside its endpoint time, arm angle and exact
-collision geometry; motion comparisons reject a missing or changed requested leg posture. Existing
-arm-only inputs keep their standing behavior and serialized source identities. Calibrated nappy
+input. Reports retain each requested `leg_pose` and `root_translation_m` beside its endpoint time,
+arm angle and exact collision geometry; motion comparisons reject a missing or changed requested
+posture or translation. Existing arm-only inputs keep their standing, untranslated behavior and
+serialized source identities. Calibrated nappy
 occupancy follows the same fixed occupied shape through every endpoint without recalibration.
 
 Between endpoints, the existing transactional motion kernel follows **linear body-vertex chords**,

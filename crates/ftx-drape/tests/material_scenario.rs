@@ -1091,7 +1091,17 @@ fn motion_continues_the_same_sewn_solver_and_recomputes_endpoint_heat() {
     let form = form();
     let body = body(&form);
     let p = pattern();
-    let s = motion_scenario();
+    let mut s = motion_scenario();
+    for (frame, z) in s
+        .motion
+        .as_mut()
+        .unwrap()
+        .keyframes
+        .iter_mut()
+        .zip([0.0001, 0.0002])
+    {
+        frame.root_translation_m = Some([0.0, 0.0, z]);
+    }
     let mut session = Session::new(&s, &body).unwrap();
     session.set_motion_path(Ok(path(&s, &body))).unwrap();
     let result = session.evaluate(&p, |_| {}).unwrap();
@@ -1162,6 +1172,7 @@ fn motion_continues_the_same_sewn_solver_and_recomputes_endpoint_heat() {
                 "positions_m":sample.cloth,"body_positions_m":sample.body}));
         }
         let endpoint = &motion["keyframes"][i];
+        assert_eq!(endpoint["root_translation_m"], json!([0.0, 0.0, z]));
         assert_eq!(endpoint["surface"]["status"], "available");
         let actual = &endpoint["surface"]["result"];
         let boundary = ftx_drape::thermal::Boundary {

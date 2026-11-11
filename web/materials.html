@@ -1420,6 +1420,14 @@ The engine checks exact retained ownership and each material's thermal domain.</
 <label>Leg posture <select id="guidedMotionLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
 <label>Fraction of seated or squat pose <input id="guidedMotionLegFraction" type="number" min="0" max="1" step="any" value="1" disabled></label>
 </div>
+<label><input id="guidedMotionTranslate" type="checkbox"> Move the whole body at this endpoint</label>
+<div class="study-fields">
+<label>World X displacement (m) <input id="guidedMotionRootX" type="number" step="any" value="0" disabled></label>
+<label>World Y displacement (m) <input id="guidedMotionRootY" type="number" step="any" value="0" disabled></label>
+<label>World Z displacement (m, up) <input id="guidedMotionRootZ" type="number" step="any" value="0" disabled></label>
+</div>
+<p class="note">These are absolute offsets from the selected body's starting origin, not distances added to the previous endpoint.
+An unchecked endpoint returns to that origin. Use Add or Replace to save the offset with its pose; editing these fields alone leaves saved endpoints unchanged.</p>
 <fieldset id="guidedMotionHeatBoundary" hidden><legend>Heat conditions for the interval ending at this endpoint</legend>
 <div class="study-fields">
 <label>Inside reservoir temperature (°C) <input id="guidedMotionHeatInside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>
@@ -1560,7 +1568,7 @@ Disabling motion keeps this draft for return. Saving a named case freezes its ow
 <p class="note">The trajectory allowance includes failed subdivisions. The case allowance is shared across its alternatives and adaptive probes;
 active named cases share at most 32768 attempts. Budgets bound work without guaranteeing convergence.</p>
 <p class="note">The same sewn cloth continues with its velocities and material history. Use short pose increments: the solver follows checked
-body-vertex chords between endpoints, with a fixed root and no chair or floor support. These prescribed model poses do not establish
+body-vertex chords between endpoints, including any declared whole-body offsets, with no chair or floor support. These prescribed model poses do not establish
 anatomical movement accuracy or physical garment fit. A failed movement publishes no partial trajectory. Optional sheet heat is recomputed
 at endpoints as independent steady snapshots. The sheet heat option above separately carries textile temperature through the saved
 interval conditions, without a steady-sheet request. Moving body/layer heat separately follows covered and exposed reference material.

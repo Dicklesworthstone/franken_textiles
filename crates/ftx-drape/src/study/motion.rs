@@ -50,9 +50,13 @@ pub struct Keyframe {
     /// Straight-arm angle from vertical, in degrees, 0..=180.
     pub arm_abduction_deg: f64,
     /// Optional seated/squat leg rotation. Omission keeps standing legs at this endpoint;
-    /// this is not an increment from the previous endpoint. The root does not translate.
+    /// this is not an increment from the previous endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leg_pose: Option<LegPose>,
+    /// Absolute world-space displacement [x, y, z] in metres from the selected body's fixed
+    /// origin, applied after source posing. Omission means zero, never the previous offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_translation_m: Option<[f64; 3]>,
 }
 
 /// Bounded prescribed motion following the scenario's fresh initial drape.
@@ -125,6 +129,14 @@ impl Request {
             }) {
                 return Err(invalid(
                     "motion leg-pose fractions must be finite and in 0..=1",
+                ));
+            }
+            if frame
+                .root_translation_m
+                .is_some_and(|translation| translation.iter().any(|value| !value.is_finite()))
+            {
+                return Err(invalid(
+                    "motion root translation needs finite world-space coordinates in metres",
                 ));
             }
             minimum_trials += ((frame.time_s - previous) / self.max_step_s - 1e-12).ceil();
@@ -547,6 +559,9 @@ fn evaluate_path(
         if let Some(pose) = frame.leg_pose {
             endpoint["leg_pose"] = json!(pose);
         }
+        if let Some(translation) = frame.root_translation_m {
+            endpoint["root_translation_m"] = json!(translation);
+        }
         if let Some(conditions) = &scenario.vapor_surface {
             endpoint["vapor_surface"] = outcome(conditions.evaluate(&snapshot));
         }
@@ -751,6 +766,45 @@ mod tests {
             value["keyframes"][0]["leg_pose"] = pose;
             assert!(serde_json::from_value::<Request>(value).is_err());
         }
+    }
+
+    #[test]
+    fn root_translations_are_absolute_finite_world_coordinates_and_preserve_legacy_bytes() {
+        let source = json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.01,"arm_abduction_deg":35.0}],
+            "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000});
+        let legacy: Request = serde_json::from_value(source.clone()).unwrap();
+        assert!(legacy.keyframes[0].root_translation_m.is_none());
+        assert_eq!(serde_json::to_value(&legacy).unwrap(), source);
+        for translation in [[0.01, -0.02, 0.03], [0.0; 3]] {
+            let mut value = source.clone();
+            value["keyframes"][0]["root_translation_m"] = json!(translation);
+            let request: Request = serde_json::from_value(value.clone()).unwrap();
+            request.validate().unwrap();
+            assert_eq!(request.keyframes[0].root_translation_m, Some(translation));
+            assert_eq!(serde_json::to_value(&request).unwrap(), value);
+            for axis in 0..3 {
+                for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                    let mut invalid = request.clone();
+                    invalid.keyframes[0].root_translation_m.as_mut().unwrap()[axis] = bad;
+                    assert!(invalid.validate().is_err());
+                }
+            }
+        }
+        for malformed in [
+            json!([]),
+            json!([0., 0.]),
+            json!([0., 0., 0., 0.]),
+            json!("0,0,0"),
+        ] {
+            let mut value = source.clone();
+            value["keyframes"][0]["root_translation_m"] = malformed;
+            assert!(serde_json::from_value::<Request>(value).is_err());
+        }
+        let mut omitted = source.clone();
+        omitted["keyframes"][0]["root_translation_m"] = Value::Null;
+        let request: Request = serde_json::from_value(omitted).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), source);
     }
 
     struct Form;

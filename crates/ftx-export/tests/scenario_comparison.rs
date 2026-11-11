@@ -543,6 +543,7 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
         "index",
         "pose",
         "leg_pose",
+        "root_translation",
         "cloth",
         "body",
         "trials",
@@ -573,6 +574,9 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
                     "pose" => m["keyframes"][1]["arm_abduction_deg"] = json!(44.),
                     "leg_pose" => {
                         m["keyframes"][1]["leg_pose"] = json!({"posture":"seated","fraction":0.5})
+                    }
+                    "root_translation" => {
+                        m["keyframes"][1]["root_translation_m"] = json!([0.0, 0.0, 0.01])
                     }
                     "cloth" => m["keyframes"][1]["positions_sha256"] = json!("stale"),
                     "body" => m["keyframes"][1]["body_collision_sha256"] = json!("stale"),
@@ -632,6 +636,59 @@ fn explicit_leg_poses_must_match_the_requested_motion_before_comparison() {
             } else {
                 json!(["a", "b"])
             }
+        );
+    }
+}
+
+#[test]
+fn root_translations_must_match_every_requested_endpoint_before_motion_comparison() {
+    let request = motion_request();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut descriptor = motion_descriptor();
+    descriptor["scenario"]["motion"]["keyframes"][0]["root_translation_m"] =
+        json!([0.01, -0.02, 0.03]);
+    descriptor["scenario"]["motion"]["keyframes"][1]["root_translation_m"] = json!([0.0, 0.0, 0.0]);
+    for fault in ["none", "missing", "x", "y", "z", "inherited"] {
+        let report = request
+            .evaluate_with(&pattern, &descriptor, |key, pattern| {
+                let mut result = synthetic_motion(pattern, 5.0);
+                for i in 0..2 {
+                    result["motion"]["result"]["keyframes"][i]["root_translation_m"] =
+                        descriptor["scenario"]["motion"]["keyframes"][i]["root_translation_m"]
+                            .clone();
+                }
+                if key == "a" {
+                    let frames = &mut result["motion"]["result"]["keyframes"];
+                    match fault {
+                        "missing" => {
+                            frames[0]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("root_translation_m");
+                        }
+                        "x" => frames[0]["root_translation_m"][0] = json!(-0.01),
+                        "y" => frames[0]["root_translation_m"][1] = json!(0.02),
+                        "z" => frames[0]["root_translation_m"][2] = json!(-0.03),
+                        "inherited" => frames[1]["root_translation_m"] = json!([0.01, -0.02, 0.03]),
+                        _ => {}
+                    }
+                }
+                Ok(result)
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a", "b"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}"
+        );
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
         );
     }
 }

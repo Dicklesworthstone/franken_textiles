@@ -5677,6 +5677,18 @@ default-path identity and native/portable consumption. This advances `ftx-dr1`; 
 convergence or contact admission, certify time-discretization error, or replace the outstanding
 empirical drape and fit gates.
 
+### 25.193 Translate the selected body through prescribed garment motion
+
+Explicit whole-body offsets extend arm and leg endpoints into lateral, rising and falling movement.
+Each offset is absolute in the existing world frame and applies to the complete selected source
+surface before collision extraction. Endpoints always reuse the same shape and occupancy; omitted
+offsets return to the original origin. The existing continuous-contact solver advances the sewn cloth,
+and retained samples remain the authority for heat, coverage and comparison decisions.
+
+Native and portable scenarios and the guided workbench share the same bounded trajectory, including
+saved named cases, explicit zero returns and unchanged legacy requests. This advances `ftx-mv1`;
+prescribed movement does not establish measured anatomy, floor or chair support, or physical fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
