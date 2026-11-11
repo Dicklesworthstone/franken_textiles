@@ -6,6 +6,10 @@ self.onmessage = async ({data: m}) => {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
+    if((typeof ftx.initSync==="function" || "wasm_interface_stamp" in ftx) &&
+        (typeof ftx.wasm_interface_stamp!=="function" || ftx.wasm_interface_stamp()!=="ftx-wasm-interface/2026-11-11.1")) {
+      throw Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
+    }
     if(m.op==="body-fit-starts" || m.op==="body-fit-observations") {
       const observations=m.op==="body-fit-observations", editLimit=observations?256:64;
       if(typeof m.input!=="string" || new TextEncoder().encode(m.input).length>16*1024*1024 ||

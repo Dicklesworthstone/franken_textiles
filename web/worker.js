@@ -35,6 +35,10 @@ onmessage = async (ev) => {
       postMessage({ type: "progress", text: "Loading FrankenTextiles…" });
       ftx = await import(msg.pkg + "ftx_wasm.js");
       await ftx.default({ module_or_path: msg.pkg + "ftx_wasm_bg.wasm" });
+      if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
+          (typeof ftx.wasm_interface_stamp !== "function" || ftx.wasm_interface_stamp() !== "ftx-wasm-interface/2026-11-11.1")) {
+        throw new Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
+      }
       const info = JSON.parse(ftx.program_info());
       return postMessage({ type: "ready", info, sheetDictionaries: JSON.parse(ftx.calibration_dictionaries()),
         dxf: "every export built in", version: "FrankenTextiles, WebAssembly" });

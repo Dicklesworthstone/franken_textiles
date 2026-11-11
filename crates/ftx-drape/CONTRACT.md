@@ -674,6 +674,15 @@ identical. On a body other than the reference's dress form the level heights com
 (`examples/drape_drafted.rs`), and the true body is the drape body the cloth collided with (no hands
 or feet).
 
+**Qualification and tightness gating** (`qualify.rs`; spec 04 §7). `qualification_basis` binds the exact
+posed collision mesh, arm angle, torso frame and chest landmark (`body_sha256`), plus either `material_sha256`
+for uniform garments or sorted `piece_material_sha256s` across all active simulated piece materials (`piece.fabric`).
+`check_qualification` separates collider band separation (`collider_pass`) from wearer-blocking tightness
+promotion (`pass`): when `|posed_chest_girth_mm − input_chest_mm| > 5.0` mm (or `input_chest_mm` is absent),
+`collider_pass` stays `true` while `pass` becomes `false` so tightness flags stay `advisory` with an explicit
+residual note. `gate_tightness_with_spec` also demotes any `tightness_gating` flag at a landmark whose fitted
+or compared body girth residual exceeds `±5.0` mm or comes from an unmeasured `MODEL_FIT` prior.
+
 **Meshes.** Use `hex_grid` (near-equilateral) for anything that bends: hinge bending on it is isotropic
 (cylinder energy 0.98–1.02 of theory at 0°/30°/45°/90°). Right-triangle grids (`grid`) have a zig-zag mode
 along clamped edges that made a cantilever ~25 % too soft; they are fine for in-plane tests.

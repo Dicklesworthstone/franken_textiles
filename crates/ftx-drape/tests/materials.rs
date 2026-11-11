@@ -122,8 +122,48 @@ fn qualification_identity_tracks_the_actual_body_and_hidden_material_properties(
     );
     let mut per_piece = pattern.raw().clone();
     per_piece["pieces"][0]["fabric"] = json!({"material":record(1.0)});
-    let material = resolve(&Pattern::new(per_piece), &options).unwrap();
-    assert!(qualification_basis(&body, &material).unwrap()["material_sha256"].is_null());
+    let mut second_piece = per_piece["pieces"][0].clone();
+    second_piece["id"] = json!("band_2");
+    second_piece["fabric"] = json!({"material":record(1.25)});
+    per_piece["pieces"]
+        .as_array_mut()
+        .unwrap()
+        .push(second_piece);
+    let material_pp = resolve(&Pattern::new(per_piece.clone()), &options).unwrap();
+    let pp_basis = qualification_basis(&body, &material_pp).unwrap();
+    assert!(pp_basis["material_sha256"].is_null());
+    let u1 = qualification_basis(
+        &body,
+        &resolve(&band(json!({"material":record(1.0)})), &options).unwrap(),
+    )
+    .unwrap()["material_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let u2 = qualification_basis(
+        &body,
+        &resolve(&band(json!({"material":record(1.25)})), &options).unwrap(),
+    )
+    .unwrap()["material_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut expected_shas = vec![u1.clone(), u2.clone()];
+    expected_shas.sort_unstable();
+    assert_eq!(pp_basis["piece_material_sha256s"], json!(expected_shas));
+
+    let mut mutated_pp = per_piece.clone();
+    mutated_pp["pieces"][1]["fabric"]["material"]["record"]["properties"]["friction_skin"]["value"] =
+        json!(0.75);
+    let mutated_basis = qualification_basis(
+        &body,
+        &resolve(&Pattern::new(mutated_pp), &options).unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        pp_basis["piece_material_sha256s"],
+        mutated_basis["piece_material_sha256s"]
+    );
 }
 
 #[test]

@@ -81,7 +81,7 @@ async function add(page, start) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true});
+  const browser = await chromium.launch({headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || process.env.FTX_CHROMIUM_EXECUTABLE || undefined});
   const errors = [], requests = [];
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 900},

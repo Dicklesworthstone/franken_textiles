@@ -589,6 +589,37 @@ pub fn viewer_html(template: &str, payload: &Value) -> Result<String, String> {
     ))
 }
 
+/// Re-renders `html` (previously produced by [`viewer_html`] from `template`) with updated
+/// `report.gating` and `report.advisory` values, preserving the exact quantized geometry, colours
+/// and metadata without a float32 point-cache round-trip.
+///
+/// # Errors
+/// When `html` does not contain a valid embedded `fabric-fold-viewer/1` payload or `template` is invalid.
+pub fn sync_viewer_report(
+    template: &str,
+    html: &str,
+    gating: &Value,
+    advisory: &Value,
+) -> Result<String, String> {
+    const PREFIX: &str = "\nconst D = ";
+    const SUFFIX: &str = ";\nconst $ = ";
+    let (_, rest) = html
+        .split_once(PREFIX)
+        .ok_or_else(|| "viewer HTML is missing the embedded fold-data prefix".to_string())?;
+    let (escaped_json, _) = rest
+        .split_once(SUFFIX)
+        .ok_or_else(|| "viewer HTML is missing the embedded fold-data suffix".to_string())?;
+    let raw_json = escaped_json.replace("<\\/", "</");
+    let mut payload: Value = serde_json::from_str(&raw_json)
+        .map_err(|e| format!("embedded fold-data JSON is unreadable: {e}"))?;
+    if payload["schema"] != "fabric-fold-viewer/1" {
+        return Err("embedded fold-data schema is not fabric-fold-viewer/1".into());
+    }
+    payload["report"]["gating"] = gating.clone();
+    payload["report"]["advisory"] = advisory.clone();
+    viewer_html(template, &payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

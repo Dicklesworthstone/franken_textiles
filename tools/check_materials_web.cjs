@@ -96,7 +96,7 @@ const server = http.createServer((req, res) => {
   if (!stripProof && !outfitProof && !compressionProof && !purchasingProof && !areaProof && !swatchAreaProof && !fitProof && !adaptiveProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || process.env.FTX_CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
   const page = await browser.newPage({ viewport:{width:1280,height:900},
     userAgent:'OpenAI File Downloader, XaiImageApiFetch/1.0' }), errors = [], external = [], methods = [];
   page.on('pageerror', e => errors.push(String(e)));

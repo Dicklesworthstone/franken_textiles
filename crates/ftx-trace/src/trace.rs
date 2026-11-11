@@ -13,8 +13,8 @@
 //! value sits on such a boundary.
 
 use ftx_core::curve::{Curve, abs_to_rel, curve_points};
+use ftx_core::pyjson::PyJson;
 use ftx_core::{Vec2, det, np, polyline, py};
-use ftx_export::pyjson::PyJson;
 use ftx_pattern::Pattern;
 
 use crate::buffer::{Join, Polygon, buffer, line_distance, line_project_normalized};

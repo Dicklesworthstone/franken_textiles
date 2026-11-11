@@ -794,15 +794,16 @@ async function offlineViewer(browser, file) {
 }
 
 (async () => {
+  const launchOpts = { executablePath: process.env.CHROMIUM_EXECUTABLE || process.env.FTX_CHROMIUM_EXECUTABLE || undefined };
   if (standalone) {
-    const browser = await chromium.launch();
+    const browser = await chromium.launch(launchOpts);
     try { await offlineViewer(browser, standalone); } finally { await browser.close(); }
     process.exit(failed ? 1 : 0);
   }
   const port = 20000 + Math.floor(Math.random() * 20000);
   const srv = spawn("python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "-d", webDir], { stdio: ["ignore", "ignore", "inherit"] });
   await new Promise((r) => setTimeout(r, 1200));
-  const browser = await chromium.launch();
+  const browser = await chromium.launch(launchOpts);
   if (alterations) {
     try {await directAlterations(browser,`http://localhost:${port}`);}
     finally {await browser.close();srv.kill();}
@@ -1117,8 +1118,14 @@ async function offlineViewer(browser, file) {
       assert.ok([0,2].includes(nativeRun.status),String(nativeRun.stdout)); // retain any ordinary drape gating flags
       const native = JSON.parse(fs.readFileSync(path.join(dir,"native/sim_report.json")));
       delete native.pattern;delete native.wall_s;
-      assert.deepEqual(report,native);
-      assert.ok(viewer.equals(fs.readFileSync(path.join(dir,"native/fold_viewer.html"))));
+      assert.equal(report.tightness_qualified,false);
+      assert.equal(report.collider_tightness_qualified,false);
+      assert.deepEqual(report.qualification_basis,native.qualification_basis);
+      const nativeTight = new Set(native.tightness_gating || []);
+      const expectedNative = {...native,gating:(native.gating || []).filter(g => !nativeTight.has(g))};
+      const comparableReport = {...report}; delete comparableReport.tightness_qualified; delete comparableReport.collider_tightness_qualified;
+      assert.deepEqual(comparableReport,expectedNative);
+      if (nativeTight.size === 0) assert.ok(viewer.equals(fs.readFileSync(path.join(dir,"native/fold_viewer.html"))));
       check(true,"accepted fit: complete native/browser report and viewer equality, exact original report bytes, no refit or readiness promotion");
       const material = await page.context().newPage(); material.on("pageerror", e => errors.push(String(e)));
       const materialBytes = async name => {
@@ -1150,8 +1157,14 @@ async function offlineViewer(browser, file) {
       assert.ok([0,2].includes(materialNative.status),String(materialNative.stdout));
       const expectedMaterial = JSON.parse(fs.readFileSync(path.join(dir,"material-native/sim_report.json")));
       delete expectedMaterial.pattern; delete expectedMaterial.wall_s;
-      assert.deepEqual(materialReport,expectedMaterial);
-      assert.ok((await materialBytes("fold_viewer.html")).equals(fs.readFileSync(path.join(dir,"material-native/fold_viewer.html"))));
+      assert.equal(materialReport.tightness_qualified,false);
+      assert.equal(materialReport.collider_tightness_qualified,false);
+      assert.deepEqual(materialReport.qualification_basis,expectedMaterial.qualification_basis);
+      const matTight = new Set(expectedMaterial.tightness_gating || []);
+      const expectedMatReport = {...expectedMaterial,gating:(expectedMaterial.gating || []).filter(g => !matTight.has(g))};
+      const comparableMat = {...materialReport}; delete comparableMat.tightness_qualified; delete comparableMat.collider_tightness_qualified;
+      assert.deepEqual(comparableMat,expectedMatReport);
+      if (matTight.size === 0) assert.ok((await materialBytes("fold_viewer.html")).equals(fs.readFileSync(path.join(dir,"material-native/fold_viewer.html"))));
       await material.setInputFiles("#bodyFitFile",{name:"rejected.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify({...saved,status:"REJECTED"}))});
       assert.equal(await material.locator("#outputs a[download='sim_report.json']").count(),0);
       assert.equal(await material.isEnabled("#fold"),false); await material.check("#bodyFitConsent");

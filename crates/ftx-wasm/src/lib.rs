@@ -21,6 +21,25 @@ pub mod web;
 pub mod web_tracing;
 pub mod zip;
 
+/// Deterministic source-to-bundle interface stamp checked at Worker boot by `web/worker.js`,
+/// `web/materials-worker.js`, `web/photo-worker.js`, and `web/trace-worker.js` so a stale local
+/// `web/pkg/` bundle fails fast with `./tools/build_web.sh` instead of cryptic mid-workflow schema
+/// errors.
+pub const WASM_INTERFACE_STAMP: &str = "ftx-wasm-interface/2026-11-11.1";
+
+/// Return [`WASM_INTERFACE_STAMP`] for native and browser callers.
+#[must_use]
+pub const fn wasm_interface_stamp() -> &'static str {
+    WASM_INTERFACE_STAMP
+}
+
+/// Browser export of [`wasm_interface_stamp`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = wasm_interface_stamp)]
+pub fn web_wasm_interface_stamp() -> String {
+    WASM_INTERFACE_STAMP.to_owned()
+}
+
 /// Import evaluated GarmentCode JSON without files or network access. Returns the native pattern
 /// and review report, including hashes of the exact input texts. The additional `pattern_json`,
 /// `report_json` and optional `fit_spec_json` strings match native artifact bytes, preserving Rust's

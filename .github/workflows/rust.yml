@@ -98,19 +98,19 @@ jobs:
       - name: Test supplier source adapters
         if: ${{ !cancelled() }}
         run: python3 -m unittest discover -s scripts -p 'test*.py' -v
-      - name: Check browser bindings
+      - name: Build browser bindings (wasm32 release)
         if: ${{ !cancelled() }}
-        run: cargo check --target wasm32-unknown-unknown -p ftx-wasm --locked
-      - name: Check tracing page and worker state
+        run: cargo build --locked --release --target wasm32-unknown-unknown -p ftx-wasm
+      - name: Check all 9 pure-Node VM frontend and worker suites
         if: ${{ !cancelled() }}
-        run: node --experimental-vm-modules --test tools/check_trace_frontend.cjs
-      - name: Build requested browser bundle
+        run: node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
+      - name: Build and verify browser bundle (all 19 VM, WASM, and Playwright suites)
         if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[browser-bundle]')) }}
         env:
           FTX_MOTION_REPLAY: ${{ runner.temp }}/ftx-motion-replay
           FTX_COUPLED_WATER_REPLAY: ${{ runner.temp }}/ftx-coupled-water-replay
           FTX_COUPLED_WATER_ALTERNATIVES_REPLAY: ${{ runner.temp }}/ftx-paired-water-replay
-          FTX_GUIDED_SCENARIO_NATIVE: ${{ github.workspace }}/target/debug/ftx-materials
+          FTX_GUIDED_SCENARIO_NATIVE: ${{ github.workspace }}/target/release/ftx-materials
           FTX_SUPPLIED_WATER_REPLAY: ${{ runner.temp }}/ftx-supplied-water-replay
           FTX_CONDENSED_WATER_REPLAY: ${{ runner.temp }}/ftx-condensed-water-replay
           FTX_VARIABLE_WATER_REPLAY: ${{ runner.temp }}/ftx-variable-water-replay
@@ -126,10 +126,14 @@ jobs:
           FTX_CONSUMER_ADAPTIVE_REPLAY: ${{ runner.temp }}/ftx-consumer-adaptive-replay
           FTX_CUT_AND_SEW_REPLAY: ${{ runner.temp }}/ftx-cut-and-sew-replay
           FTX_MOVING_BRIDGES_REPLAY: ${{ runner.temp }}/ftx-moving-bridges-replay
+          NPM_CONFIG_USER_AGENT: "OpenAI File Downloader, XaiImageApiFetch/1.0"
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
         run: |
           cargo install wasm-bindgen-cli --version 0.2.128 --locked
-          sh tools/build_web.sh
-          FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs tools/check_design_worst_case_frontend.cjs tools/check_material_screen_builder.cjs
+          mkdir -p "$RUNNER_TEMP/ftx-playwright"
+          npm --prefix "$RUNNER_TEMP/ftx-playwright" install --no-save --no-audit --no-fund playwright@1.57.0
+          NODE_PATH="$RUNNER_TEMP/ftx-playwright/node_modules" "$RUNNER_TEMP/ftx-playwright/node_modules/.bin/playwright" install --with-deps chromium
+          NODE_PATH="$RUNNER_TEMP/ftx-playwright/node_modules" sh tools/check_all_web.sh
       - name: Preserve browser bundle
         if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[browser-bundle]')
         uses: actions/upload-artifact@v4

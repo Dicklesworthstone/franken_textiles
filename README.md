@@ -262,26 +262,26 @@ readiness and any subsequent drape retain their separate verdicts.
 
 ---
 
-## Workspace and budget
+## Workspace crates
 
-| Crate | Responsibility | Planned lines |
-|---|---|---:|
-| `ftx-core` | Units, deterministic maths, curves, polygons, schemas, refusals | 8,000 |
-| `ftx-pattern` | Pattern model, validation, alteration, drafting | 16,000 |
-| `ftx-body` | Anny forward model, tape functionals, fitting, poses | 9,000 |
-| `ftx-measure` | Catalogue, priors, fusion, readiness, photo scale, photogrammetry | 16,000 |
-| `ftx-drape` | Garment scene, contact cloth solver, metrics and flags | 14,000 |
-| `ftx-export` | SVG, PDF, DXF, HPGL, cutter, GarmentCode, DST, acceptance checks | 14,000 |
-| `ftx-trace` | Tracing pattern sheets | 7,000 |
-| `ftx-cli` | The `ftx` binary | 4,000 |
-| `ftx-wasm` | Browser bindings | 3,000 |
-| `ftx-conformance` | Oracle, known-answer and determinism tests | 9,000 |
-| **Ceiling** (incl. 20,000 contingency) | | **120,000** |
+| Crate | Responsibility |
+|---|---|
+| `ftx-core` | Units, deterministic maths, curves, polygons, `PyJson`/text/pole helpers, schemas, refusals |
+| `ftx-pattern` | Pattern model, validation, alteration, drafting, source-bearing material catalog & laws |
+| `ftx-body` | Anny forward model, tape functionals, fitting, poses |
+| `ftx-measure` | Catalogue, priors, fusion, readiness, photo scale, photogrammetry |
+| `ftx-drape` | Garment scene, contact cloth solver, multiphysics transport, qualification, metrics and flags |
+| `ftx-export` | SVG, PDF, DXF, HPGL, cutter, GarmentCode, DST, cutting/sewing planners, acceptance checks |
+| `ftx-trace` | Tracing pattern sheets, printable calibration references, raster decoders |
+| `ftx-cli` | The `ftx` and `ftx-materials` binaries |
+| `ftx-wasm` | Browser bindings for the five local `web/` workbenches (`index.html`, `materials.html`, `photo.html`, `trace.html`, `calibration/`) |
+| `ftx-conformance` | Oracle, known-answer, property and determinism tests |
 
-This is the original planned budget, and the implementation exceeds it: the frozen `2bc8b402` audit
-counted 262,470 Rust lines including tests and examples. The expanded material/thermal work in plan §25
-does not silently waive the ceiling. A maintainer decision on scope, source budget and release slice
-remains open as `ftx-onn.13`; tests and working features will not be removed merely to reduce the count.
+Ten crates with a fixed dependency DAG (`core <- pattern, body, measure`; `core/pattern/body <- drape`;
+`core/pattern <- export, trace`; `everything <- cli, wasm, conformance`) and no new crate without explicit
+approval. Plan §25 deliberately expands scope beyond the initial garment-only port into source-bearing textile
+materials, thermal/moisture transport, and manufacturing planning; arbitrary line-count ceilings are retired by
+maintainer decision so tests and verified capabilities are never trimmed to hit a line counter.
 
 `#![forbid(unsafe_code)]` everywhere. No Python, PyTorch, BLAS or C/C++ at runtime. Numerical code lifted
 from [frankensim](https://github.com/Dicklesworthstone/frankensim) (sparse LDLᵀ, orthotropic membrane,
@@ -297,10 +297,12 @@ ftx round WS --pattern DIR/pattern.json --measurements M.json --sim --export  # 
 ftx qualify --ws WS                                            # three chest qualification bands (-20/0/+20 mm)
 ftx body --measurements M.json --out DIR                       # fit Anny to tape measurements and write body.obj
 ftx measure fit-body OBS.json --model MODEL.ftxbody --out accepted-fit.json  # prepared multi-frame observations
-ftx drape P.json --measurements M.json --fit F.json --out DIR  # the cloth solver on its own
+ftx drape P.json --measurements M.json --fit F.json --out DIR  # the cloth solver on its own (body-only contact by default; --self-contact / --two-start-sew opt-in)
 ftx export all P.json --out DIR                                # all files + 51 acceptance checks
 ftx import garmentcode G.json --out NEW_DIR --annotations A.json # evaluated panels + optional sewing annotations
 ftx trace sheet.png --out DIR                                  # trace a PNG/JPEG/WebP pattern sheet
+ftx materials list --json                                      # inspect source-bearing textile catalog records
+ftx-materials --help                                           # textile mechanics, thermal/moisture, sourcing & manufacturing studies
 ```
 
 Every command prints human text and, with `--json`, a stable JSON envelope. The agent skill calls `ftx`

@@ -1,0 +1,59 @@
+# RCH remote build/test transfer exclusions (mirrors .gitignore + privacy & bundle dirs).
+# Upholds AGENTS.md §Privacy: NEVER stream local wearer workspaces, media, or models to remote workers.
+
+# Rust & Node build/package dirs
+/target/
+target/
+**/*.rs.bk
+node_modules/
+.playwright-browsers/
+
+# Profiling, coverage, benchmark scratch
+*.profraw
+*.profdata
+/coverage/
+/lcov.info
+/criterion/
+/bench-output/
+perf.data
+perf.data.old
+flamegraph.svg
+
+# Compiled WASM bundles (rebuilt from source, never synced)
+/pkg/
+/crates/*/pkg/
+/web/pkg/
+*.wasm
+
+# Local converted body-model tensors (never synced via source bundle)
+/models/
+*.ftxbody
+
+# Run workspaces, renders, drapes, and local audit scratch
+/runs/
+/out/
+/ws/
+*.pc2
+fold_viewer.html
+
+# Strict wearer privacy exclusions (AGENTS.md §Privacy)
+/private/
+*.private.json
+*.mov
+*.MOV
+*.mp4
+*.heic
+*.HEIC
+
+# Local Python / agent / editor caches
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.DS_Store
+.idea/
+.vscode/
+.bv/
+.ee/
+.rch/
+/175241839*/

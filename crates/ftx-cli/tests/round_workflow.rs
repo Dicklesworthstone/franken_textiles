@@ -425,11 +425,19 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     assert_eq!(q["schema"], "fabric-qualify/1");
     assert_eq!(q["engine"], "ftx");
     assert_eq!(q["pass"], true, "{q}");
-    // The chart target selects the fit. The posed collider supplies the band dimensions.
+    assert_eq!(q["collider_pass"], true, "{q}");
+    // Negative Control A: zouave_bolero-920 uses CHART_PRIOR (sigma_mm = 30.0), so the posed
+    // collider chest girth (~520.44 mm) differs from input chest (540.0 mm) by > 5.0 mm.
+    // Collider bands pass, while wearer_target_aligned is false so wearer tightness stays advisory.
     let target = q["input_chest_mm"].as_f64().unwrap();
     let girth = q["posed_chest_girth_mm"].as_f64().unwrap();
     assert_eq!(target, 540.0);
-    assert!(girth > 20.0 && (girth - target).abs() > 0.01, "{q}");
+    assert!(girth > 20.0 && (girth - target).abs() > 5.0, "{q}");
+    assert_eq!(q["wearer_target_aligned"], false, "{q}");
+    assert!(
+        (q["chest_girth_residual_mm"].as_f64().unwrap() - (girth - target)).abs() <= 1e-9,
+        "{q}"
+    );
     let rows = q["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 3);
     for (row, ease) in rows.iter().zip([-20, 0, 20]) {
@@ -481,10 +489,10 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         String::from_utf8_lossy(&replay.stdout)
     );
     let original = dir.join("ws/qualification/band_+0/sim");
-    let report = read(&dir.join("band-replay/sim_report.json"));
+    let replay_report = read(&dir.join("band-replay/sim_report.json"));
     let qualified = read(&original.join("sim_report.json"));
     for key in ["landmarks", "seams", "numerical", "material"] {
-        assert_eq!(report[key], qualified[key], "{key}");
+        assert_eq!(replay_report[key], qualified[key], "{key}");
     }
     assert_eq!(
         std::fs::read(dir.join("band-replay/fold.pc2")).unwrap(),
@@ -496,7 +504,6 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         ftx_core::receipt::sha256_hex(&measurements)
     );
     assert!(dir.join("ws/qualification/qualify.json").is_file());
-    // the next round on this body and fabric finds the qualification current
     let round = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
         .args([
@@ -513,11 +520,97 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         &std::fs::read(dir.join("ws/rounds/001/sim/sim_report.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(sim["tightness_qualified"], q["pass"]);
+    assert_eq!(sim["collider_tightness_qualified"], true);
+    assert_eq!(sim["tightness_qualified"], false);
     assert_eq!(sim["qualification_basis"], q["qualification_basis"]);
-    for (number, arm_deg, legacy) in [(2, "55", false), (3, "35", true)] {
+
+    // Synthetic MEASURED_TAPE records (sigma_mm = 2.0) fit the posed collider chest girth within
+    // <= ±5.0 mm so wearer tightness promotion is positively qualified, then verify pose, legacy,
+    // material, and per-piece invalidations plus fold_viewer.html report parity.
+    let mut aligned_meas = read(&dir.join("ws/measurements.json"));
+    aligned_meas["wearer"]["reference"] = json!(false);
+    aligned_meas["wearer"]["label"] = json!("synthetic tape-measured test wearer");
+    aligned_meas["taken_on"] = json!("2026-10-13");
+    if let Some(recs) = aligned_meas["records"].as_array_mut() {
+        for r in recs {
+            if r["name"] == "chest" {
+                *r = ftx_measure::make_record(
+                    "chest",
+                    (girth * 10.0).round() / 10.0,
+                    2.0,
+                    "MEASURED_TAPE",
+                    "synthetic tape check",
+                    None,
+                    "",
+                )
+                .unwrap();
+            } else if r["name"] == "stature" {
+                *r = ftx_measure::make_record(
+                    "stature",
+                    920.0,
+                    3.0,
+                    "MEASURED_TAPE",
+                    "synthetic height check",
+                    None,
+                    "",
+                )
+                .unwrap();
+            }
+        }
+    }
+    aligned_meas = ftx_measure::fuse(&aligned_meas, true).unwrap();
+    save(&dir.join("ws/measurements.json"), &aligned_meas);
+
+    let aligned_qual = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["qualify", "--ws", "ws", "--pattern", "p.json", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        aligned_qual.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&aligned_qual.stderr),
+        String::from_utf8_lossy(&aligned_qual.stdout)
+    );
+    let aligned_env: Value = serde_json::from_slice(&aligned_qual.stdout).unwrap();
+    let aq = &aligned_env["result"];
+    assert_eq!(aq["pass"], true, "{aq}");
+    assert_eq!(aq["collider_pass"], true, "{aq}");
+    assert_eq!(aq["wearer_target_aligned"], true, "{aq}");
+    assert!(
+        aq["chest_girth_residual_mm"].as_f64().unwrap().abs() <= 5.0,
+        "{aq}"
+    );
+
+    let aligned_round = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "round",
+            "ws",
+            "--pattern",
+            "p.json",
+            "--sim",
+            "--sew",
+            "40",
+            "--drape",
+            "0",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(aligned_round.status.code(), Some(0 | 2)),
+        "{}",
+        String::from_utf8_lossy(&aligned_round.stderr)
+    );
+    let sim2 = read(&dir.join("ws/rounds/002/sim/sim_report.json"));
+    assert_eq!(sim2["tightness_qualified"], true, "{sim2}");
+    assert_eq!(sim2["collider_tightness_qualified"], true, "{sim2}");
+    assert_eq!(sim2["qualification_basis"], aq["qualification_basis"]);
+
+    for (number, arm_deg, legacy) in [(3, "55", false), (4, "35", true)] {
         if legacy {
-            let mut old = q.clone();
+            let mut old = aq.clone();
             old.as_object_mut().unwrap().remove("qualification_basis");
             save(&dir.join("ws/qualification/qualify.json"), &old);
         }
@@ -526,6 +619,8 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
             .args([
                 "round",
                 "ws",
+                "--pattern",
+                "p.json",
                 "--sim",
                 "--sew",
                 "6",
@@ -547,14 +642,15 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         assert_eq!(report["tightness_qualified"], false, "{report}");
         assert_eq!(
             report["qualification_basis"]["material_sha256"],
-            q["qualification_basis"]["material_sha256"]
+            aq["qualification_basis"]["material_sha256"]
         );
         assert_eq!(
-            report["qualification_basis"]["body_sha256"] == q["qualification_basis"]["body_sha256"],
+            report["qualification_basis"]["body_sha256"]
+                == aq["qualification_basis"]["body_sha256"],
             legacy
         );
     }
-    save(&dir.join("ws/qualification/qualify.json"), q);
+    save(&dir.join("ws/qualification/qualify.json"), aq);
     let mut changed_pattern = read(&dir.join("p.json"));
     let acquisition: Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/materials/synthetic-friction-sliding.json"
@@ -569,7 +665,7 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     }
     assert_ne!(
         ftx_drape::qualify::fabric_key(changed_pattern.get("fabric")),
-        q["fabric_key"]
+        aq["fabric_key"]
     );
     save(&dir.join("changed_material.json"), &changed_pattern);
     let output = Command::new(env!("CARGO_BIN_EXE_ftx"))
@@ -594,31 +690,133 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-    let report = read(&dir.join("ws/rounds/004/sim/sim_report.json"));
+    let report = read(&dir.join("ws/rounds/005/sim/sim_report.json"));
     assert_eq!(report["tightness_qualified"], false);
     assert_eq!(
         report["qualification_basis"]["body_sha256"],
-        q["qualification_basis"]["body_sha256"]
+        aq["qualification_basis"]["body_sha256"]
     );
     assert_ne!(
         report["qualification_basis"]["material_sha256"],
-        q["qualification_basis"]["material_sha256"]
+        aq["qualification_basis"]["material_sha256"]
     );
-    // Re-running qualify on the same workspace rotates the previous qualification directory.
-    let out2 = Command::new(env!("CARGO_BIN_EXE_ftx"))
+
+    // Per-piece (`piece.fabric`) qualification and invalidation on the real Anny body.
+    let mut per_piece_pat = changed_pattern.clone();
+    let mut mat_a = acquisition["target"]["materials"][0].clone();
+    mat_a["record"]["id"] = json!("synthetic_shell");
+    mat_a["id"] = json!("synthetic_shell");
+    mat_a["record"]["properties"]["friction_skin"]["value"] = json!(0.38);
+    let mut mat_b = mat_a.clone();
+    mat_b["record"]["id"] = json!("synthetic_lining");
+    mat_b["id"] = json!("synthetic_lining");
+    mat_b["record"]["properties"]["friction_skin"]["value"] = json!(0.32);
+    for (idx, piece) in per_piece_pat["pieces"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        if piece["sim"] != false {
+            piece["fabric"] =
+                json!({"material": if idx == 0 { mat_a.clone() } else { mat_b.clone() }});
+        }
+    }
+    save(&dir.join("per_piece.json"), &per_piece_pat);
+    let pp_qual = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
-        .args(["qualify", "--ws", "ws", "--pattern", "p.json", "--json"])
+        .args([
+            "qualify",
+            "--ws",
+            "ws",
+            "--pattern",
+            "per_piece.json",
+            "--json",
+        ])
         .output()
         .unwrap();
     assert!(
-        out2.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out2.stderr)
+        pp_qual.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&pp_qual.stderr),
+        String::from_utf8_lossy(&pp_qual.stdout)
     );
+    let pp_env: Value = serde_json::from_slice(&pp_qual.stdout).unwrap();
+    let ppq = &pp_env["result"];
+    assert_eq!(ppq["pass"], true, "{ppq}");
+    assert_eq!(ppq["wearer_target_aligned"], true, "{ppq}");
+    assert!(ppq["qualification_basis"]["material_sha256"].is_null());
+    assert_eq!(
+        ppq["qualification_basis"]["piece_material_sha256s"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(ppq["piece_materials"].as_array().unwrap().len(), 2);
     assert!(
-        dir.join("ws/qualification.before-000/qualify.json")
+        dir.join("ws/qualification/piece_material_01/band_+0/sim/sim_report.json")
             .is_file()
     );
+    assert!(
+        dir.join("ws/qualification/piece_material_01/band_+0/fit_spec.json")
+            .is_file()
+    );
+
+    let pp_round = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "round",
+            "ws",
+            "--pattern",
+            "per_piece.json",
+            "--sim",
+            "--sew",
+            "6",
+            "--drape",
+            "0",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(pp_round.status.code(), Some(0 | 2)),
+        "{}\n{}",
+        String::from_utf8_lossy(&pp_round.stderr),
+        String::from_utf8_lossy(&pp_round.stdout)
+    );
+    let pp_report = read(&dir.join("ws/rounds/006/sim/sim_report.json"));
+    assert_eq!(pp_report["tightness_qualified"], true, "{pp_report}");
+    assert_eq!(pp_report["qualification_basis"], ppq["qualification_basis"]);
+
+    let mut pp_mutated = per_piece_pat.clone();
+    pp_mutated["pieces"][0]["fabric"]["material"]["record"]["properties"]["friction_skin"]["value"] =
+        json!(0.49);
+    save(&dir.join("per_piece_mutated.json"), &pp_mutated);
+    let pp_bad_round = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "round",
+            "ws",
+            "--pattern",
+            "per_piece_mutated.json",
+            "--sim",
+            "--sew",
+            "6",
+            "--drape",
+            "0",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(matches!(pp_bad_round.status.code(), Some(0 | 2)));
+    let pp_bad_report = read(&dir.join("ws/rounds/007/sim/sim_report.json"));
+    assert_eq!(
+        pp_bad_report["tightness_qualified"], false,
+        "{pp_bad_report}"
+    );
+
+    // Seated pose qualification and round parity.
     let seated = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
         .args(["qualify", "--ws", "ws", "--pattern", "p.json", "--json"])
@@ -634,7 +832,7 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     let seated_q = &envelope["result"];
     assert_ne!(
         seated_q["qualification_basis"]["body_sha256"],
-        q["qualification_basis"]["body_sha256"]
+        aq["qualification_basis"]["body_sha256"]
     );
     let round = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
@@ -649,11 +847,36 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         String::from_utf8_lossy(&round.stderr),
         String::from_utf8_lossy(&round.stdout)
     );
-    let report = read(&dir.join("ws/rounds/005/sim/sim_report.json"));
+    let report = read(&dir.join("ws/rounds/008/sim/sim_report.json"));
     assert_eq!(report["body"]["legs"], "seated");
     assert_eq!(
         report["qualification_basis"],
         seated_q["qualification_basis"]
     );
-    assert_eq!(report["tightness_qualified"], seated_q["pass"]);
+    assert_eq!(
+        report["collider_tightness_qualified"],
+        seated_q["collider_pass"]
+    );
+    assert_eq!(
+        report["tightness_qualified"],
+        seated_q["pass"].as_bool() == Some(true)
+            && seated_q["wearer_target_aligned"].as_bool() == Some(true)
+    );
+    let seated_html =
+        std::fs::read_to_string(dir.join("ws/rounds/008/sim/fold_viewer.html")).unwrap();
+    let (_, rest) = seated_html.split_once("\nconst D = ").unwrap();
+    let (escaped, _) = rest.split_once(";\nconst $ = ").unwrap();
+    let seated_view: Value = serde_json::from_str(&escaped.replace("<\\/", "</")).unwrap();
+    assert_eq!(seated_view["report"]["gating"], report["gating"]);
+    assert_eq!(seated_view["report"]["advisory"], report["advisory"]);
+    eprintln!(
+        "QUALIFY_SUMMARY prior_girth_mm={:.2} prior_residual_mm={:+.2} aligned_girth_mm={:.2} aligned_residual_mm={:+.2} aligned_basis={} per_piece_basis={} aligned_rows={}",
+        q["posed_chest_girth_mm"].as_f64().unwrap(),
+        q["chest_girth_residual_mm"].as_f64().unwrap(),
+        aq["posed_chest_girth_mm"].as_f64().unwrap(),
+        aq["chest_girth_residual_mm"].as_f64().unwrap(),
+        aq["qualification_basis"],
+        ppq["qualification_basis"],
+        aq["rows"],
+    );
 }

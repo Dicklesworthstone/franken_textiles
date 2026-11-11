@@ -282,7 +282,12 @@ mass and fit residuals remain intact. `nappy_occupancy` retains the original tar
 occupied reference geometry; `readings_mm.seat_over_nappy` is its computed MODEL_FIT seat. Every
 requested pose reuses the one 35-degree calibration. Missing/unreachable active targets refuse
 instead of falling back to bare geometry; no nappy material properties or readiness are inferred.
-The wasm boundary adds the exact loaded model and saved measurement document hashes.
+The fold report includes `qualification_basis`, `tightness_qualified: false`, and `collider_tightness_qualified: false`;
+because a browser fold-up has no workspace `qualify.json` (`ftx qualify`), `fold_on_source` applies
+`ftx_drape::qualify::gate_tightness` before rendering `fold_viewer.html`, demoting any unqualified
+`tightness_gating` flags out of `gating` into `advisory` in both `Fold.report` and `Fold.viewer`
+(spec 04 §7.3). When `tightness_gating` is empty, `Fold.viewer` remains byte-for-byte identical to
+standalone `ftx drape`. The wasm boundary adds the exact loaded model and saved measurement document hashes.
 The page shows residuals beside the cloth verdict, with unavailable data explicit; existing fold
 invalidation withdraws both. Targets can be priors, and these diagnostics supply no new measured
 evidence, inferred sigma, fit threshold or readiness approval. The CLI's historical rounded body fields are

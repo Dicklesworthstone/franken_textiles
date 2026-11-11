@@ -84,7 +84,7 @@ async function saveDownload(page, name) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true});
+  const browser = await chromium.launch({headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || process.env.FTX_CHROMIUM_EXECUTABLE || undefined});
   const errors = [], requests = [];
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 900},

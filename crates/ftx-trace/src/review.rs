@@ -4,9 +4,8 @@
 
 use std::collections::BTreeSet;
 
-use ftx_core::{Refusal, RefusalCode, Vec2, polyline};
-use ftx_export::{
-    pole,
+use ftx_core::{
+    Refusal, RefusalCode, Vec2, pole, polyline,
     text::{Anchor, ascii_text, stroke_text},
 };
 use ftx_pattern::doc::{PatternDoc, Piece};
@@ -910,7 +909,7 @@ pub fn audit_image(
 mod tests {
     use super::*;
     use crate::raster::load_png;
-    use ftx_export::pyjson::PyJson;
+    use ftx_core::pyjson::PyJson;
     use serde_json::json;
 
     fn document() -> PatternDoc {

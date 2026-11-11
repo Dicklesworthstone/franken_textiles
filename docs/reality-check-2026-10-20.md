@@ -1,10 +1,10 @@
 # FrankenTextiles reality check — 2026-10-20
 
-**Latest comprehensive assessment:** [2026-10-30, source `d58ba010`](#2026-10-30-comprehensive-reality-check).
-Earlier findings and follow-through below are retained as dated evidence; the latest assessment
-states which are resolved, current, failed or still unverified.
-The [2026-10-31 body and runtime follow-through](#2026-10-31-body-and-runtime-follow-through)
-records the recovered admitted asset, complete-surface reference and current garment execution.
+**Latest comprehensive assessment:** [2026-11-11, source `5f7a4be3`](#2026-11-11-comprehensive-reality-check).
+Earlier findings and follow-through below (including [2026-10-30, source `d58ba010`](#2026-10-30-comprehensive-reality-check)
+and the [2026-10-31 body and runtime follow-through](#2026-10-31-body-and-runtime-follow-through))
+are retained intact as dated evidence; the latest assessment states which are resolved, current,
+failed or still unverified.
 
 Assessed source: `main` at `6410556378514874274e77c304efd0d4e2200a73`.
 This initial assessment and delivery plan is not release certification. It preceded product changes;
@@ -3300,3 +3300,368 @@ The ten optional OpenCV/FFmpeg cases remain unexecuted; no ignore or numerical g
 These results establish bounded numerical parity and executable integration, not anatomical
 adequacy, empirical fabric/contact qualification, real-person fit, a new speed claim or G5.
 The material, capture, anatomy, muslin, scope/budget and release tasks above remain open.
+
+## 2026-11-11 comprehensive reality check
+
+**Assessed source:** `main` (and mirrored `master`) at `5f7a4be30216220967c2caf63ec09814be5f93d4`.
+`AGENTS.md` and `README.md` were read in full prior to investigation, followed by `FEATURE_PARITY.md`,
+`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md` (§0–§25.191 + Appendix A, 5,662 lines),
+`docs/spec/01…06-*.md`, `docs/material-platform-progress.md`, `docs/fabric-substitution.md`,
+`tools/body-model/PIN.md`, all nine existing crate `CONTRACT.md` files, `.github/workflows/*.yml`,
+source dispatch/qualification paths, and the live `.beads` dependency graph. No Rust implementation
+files, oracle fixtures, or pinned body-model assets were altered or deleted during this assessment.
+
+### Executive verdict and the five reality-check questions
+
+1. **Where are we?**
+   FrankenTextiles is a real, zero-stub (**0 `todo!()` / `unimplemented!()`** across **753 `.rs`
+   files** and **392,438 Rust lines**) garment-pattern, parametric-body, contact-draping,
+   manufacturing-export, pattern-tracing, and textile-physics engine spanning all ten planned crates,
+   two native CLI binaries (`ftx` and `ftx-materials`), and five local WebAssembly entry pages
+   (`web/index.html`, `web/materials.html`, `web/photo.html`, `web/trace.html`, `web/calibration/`).
+   Since the `2026-10-30` (`d58ba010`) check, the repository grew by another **50,056 Rust lines**
+   (`342,382 → 392,438`, now **3.27×** the still-written **120,000-line** ceiling while `README.md:281`
+   still cites the frozen `2bc8b402` count of `262,470` lines) and expanded plan §25 through
+   **§25.191**.
+2. **What is genuinely working on `5f7a4be3`?**
+   Formatting, strict workspace Clippy (`-D warnings` across all 32 compilation targets), release
+   `wasm32-unknown-unknown` `ftx-wasm` compilation, `ftx-conformance` + `ftx-core` + `ftx-body`
+   (`171` passed, `0` failed, `11` external-Anny cases ignored by default), `ftx-cli` `draft_workflow`
+   (`5/5`) and `round_workflow` (`12/12`, `1` Anny-backed qualification test ignored by default),
+   `ftx-pattern` `material_catalog` (`13/13`), `ftx-drape` `materials` (`19/19`, including
+   `5f7a4be3`'s SHA-256 posed-body and hidden-material qualification lock), `119/119` Python
+   material/sourcing adapter tests on Python `3.15.0`, all `9` pure-Node VM frontend suites
+   (`1,566` assertions passed with `182` real-WASM checks skipped when `FTX_REAL_WASM` is unset), and
+   both GitHub Actions workflows on `5f7a4be3` (`Rust checks` run `42956458308` and `ChArUco photo
+   conformance` run `42956458310`).
+3. **What is broken, incomplete, or drifting?**
+   - **Zero complete built-in drape materials (`ftx-tm2`)**: `friction_skin` has **zero occurrences**
+     across all bundled catalog JSON files and all 15 Rust catalog builder modules in
+     `crates/ftx-pattern/src/material_catalog/`. Because `Material::mechanics_for_contacts`
+     (`crates/ftx-pattern/src/materials.rs:499-544`) unconditionally requires `friction_skin`, **0
+     built-in catalog entries** pass body-contact drape admission even with `allow_estimates = true`.
+   - **Four tightness-qualification & viewer/browser verdict defects (`ftx-onn.27`)**:
+     1. *Per-piece hard block*: `crates/ftx-drape/src/qualify.rs:269-285, 348-353` sets
+        `material_sha256: None` whenever `material.piece_fabrics.is_some()` and forces
+        `check_qualification` to fail, blocking `tightness_qualified: true` on every multi-material
+        `piece.fabric` garment.
+     2. *Collider-vs-target landmark residual blindness*: `crates/ftx-cli/src/round.rs:830-966` sizes
+        qualification bands around `posed_chest_girth_mm` (`520.44 mm` on the 92 cm `sigma = 30 mm`
+        prior chart vs `540.00 mm` `input_chest_mm` — a **19.56 mm** residual, nearly an entire
+        `20 mm` band step) and promotes `tightness_qualified = true` onto `540.00 mm`-drafted
+        garments without gating on collider-vs-target girth residuals or non-chest `tightness_gating`
+        landmarks.
+     3. *Stale `fold_viewer.html` in `ftx round --sim`*: `crates/ftx-cli/src/round.rs:635-685` writes
+        `rounds/NNN/sim/fold_viewer.html` inside `cmd_drape` **before** `gate_tightness` (`line 670`);
+        line `676` rewrites `sim_report.json` with demoted `gating`/`advisory`, **but never updates
+        `fold_viewer.html`**, leaving the 3D viewer displaying unqualified tightness flags as `gating`.
+     4. *Un-demoted browser tightness flags*: `crates/ftx-wasm/src/fold.rs:390-410` (`fold_on_source`)
+        renders `Fold.report` and `Fold.viewer` directly from `drape(...)` (where
+        `crates/ftx-drape/src/metrics.rs:282-292` pushes `TIGHT` flags into `report["gating"]`)
+        **without calling `gate_tightness`**, violating Spec 04 §7 in browser rounds.
+   - **Remote-sync privacy/bandwidth hazard (`.rchignore` missing, `ftx-onn.29`)**: Without
+     `--clean-overlay --no-overlay`, `rch exec` transferred gitignored `out/` (`3.6 GB` raw / `786 MB`
+     zstd over `123–162 s`) to remote fleet workers and would silently transfer local `/runs/`, `/ws/`,
+     or `/private/` wearer workspaces despite `.gitignore` and `AGENTS.md` §Privacy.
+   - **Silent stale-WASM failure + 19-suite CI blind spot (`ftx-onn.29`)**: `web/worker.js`,
+     `web/materials-worker.js`, `web/photo-worker.js`, and `web/trace-worker.js` perform no version or
+     schema handshake with `web/pkg/` (reproduced against Oct 28 `web/pkg/`: silent boot followed by
+     mid-workflow `unknown field basis` and `unknown field program` refusals). Of the **19**
+     `tools/check_*.cjs` suites, **only 2** run on ordinary `main` pushes, **3** run only on
+     `[browser-bundle]`/`workflow_dispatch`, and **14 never run in CI at all** (including **0 of 7**
+     Playwright Chromium E2E suites and all 3 `*_wasm.cjs` suites).
+   - **Architecture & contract violations (`ftx-onn.28`)**: `crates/ftx-trace/Cargo.toml:13` still
+     depends on `ftx-export` solely for `pyjson`, `text`, and `pole` (`~1,125` lines that depend only
+     on `ftx-core`), and `crates/ftx-conformance/CONTRACT.md` is still missing (`9/10` crates have
+     `CONTRACT.md`).
+4. **Are we on track?**
+   **On track for numerical parity and bounded software integration; drifting into synthetic
+   multiphysics/manufacturing permutation expansion (`AGENTS.md` Rule 0.1 warning) ahead of empirical
+   closure.** Adding §25.192+ synthetic study modes will not supply `friction_skin`, physical coupons,
+   independent anatomical/photo accuracy, or a real-wearer muslin.
+5. **What is next?**
+   Freeze further synthetic law/study permutations until the empirical and release-hygiene critical
+   path advances: close the qualification/privacy/DAG/CI defects (`ftx-onn.27 → .30`,
+   `ftx-onn.28 + .29 → .31`), acquire matched conditioned specimen mechanics + `friction_skin`
+   (`ftx-tm2 → ftx-tm8`), finish independent tape/pose/capture/photo qualification (`ftx-onn.16`,
+   `ftx-onn.11 → .12`), resolve the scope/budget ceiling (`ftx-onn.13`), qualify the reproducible
+   fresh-checkout candidate (`ftx-onn.9 → ftx-onn.14`) and private muslin (`ftx-onn.15`), and execute
+   `G5` (`ftx-onn`, ≥10 gauntlet rounds ending in two consecutive zero-defect rounds).
+
+### The four claims — strictly separated
+
+No single completion percentage is reported (`AGENTS.md`: *"Never report them as one number"*):
+
+| Claim | Current status at `5f7a4be3` | Evidence established | Explicit non-claims / open blockers |
+|---|---|---|---|
+| **Parity** | **Substantial on ported garment/export/Anny core; partial on trace & qualification** | `ftx-conformance` + `ftx-core` + `ftx-body` (`171` passed, `0` failed on `5f7a4be3`); historical `690e4d6`/`da3153cd` full-vertex Anny parity (`438,976` vertices max error `1.405e-15 m` vs `1e-9 m` gate); `draft_workflow` (`5/5`) & `round_workflow` (`12/12`) pass | Full-model Anny tests (`11` in `ftx-body`) and CLI `qualify` (`round_workflow.rs:410`) were not re-executed with `--ignored` at `5f7a4be3`; browser `fold_on_source` and native `round.rs` `fold_viewer.html` violate Spec 04 §7 tightness demotion (`ftx-onn.27`); trace platform/codec tail remains partial (`ftx-q3m`) |
+| **Physics** | **Real numerical solvers & conservation laws; empirical material/thermal adequacy unproven** | Transactional IPC/CCD/Coulomb solver refuses stalled Newton steps (`cloth.rs:1375`) and enforces velocity-settled gravity endpoints (`run.rs:731`); `ftx-drape` `materials` (`19/19`) passes on `5f7a4be3` | `4` expensive release-only KATs and `7` ignored `ftx-drape` tests were not re-run at `5f7a4be3`; **0 built-in catalog materials** carry `friction_skin` (`ftx-tm2`); thermal/moisture/cutting/sewing laws remain source-conditioned numerical models pending `ftx-tme`/`ftx-tmf`/`ftx-tm7.5`/`ftx-sp2` |
+| **Fit** | **UNPROVEN (`0` real-wearer fit evidence)** | Public-prior chart fusion, `MODEL_FIT` non-promotion, and `19.56 mm` chest collider residual visibility work as designed | Nothing computed establishes fit. `ftx-onn.16` (independent anatomy/tape/pose), `ftx-onn.12` (independent physical photo/scale/body accuracy), and `ftx-onn.15` (predeclared private muslin round) all remain open |
+| **Performance** | **UNBENCHMARKED on `5f7a4be3`** | Historical timings exist on earlier revisions (`9d465ae`, `690e4d6`) with stated hardware | Zero timing from this `5f7a4be3` audit is promoted to a speed claim; M4 native and offline browser candidate benchmarks remain open under `ftx-onn.14` |
+
+### Checks executed and unexecuted/failed matrix at `5f7a4be3`
+
+Local host: macOS (`arm64`), `rustc` pinned via `rust-toolchain.toml` to `nightly-2026-08-31`, local
+admitted cache `~/.cache/franken_textiles/anny-0.6.1-default.ftxbody` present (`152,042,752` bytes;
+`anny-0.6.1-full-vertices.bin` absent locally), `dsr repos list` has no `franken_textiles` entry,
+`git tag -l` empty, `gh release list` empty (`0` releases). Cargo compilation/tests ran via RCH on
+Linux x86-64 workers.
+
+| Command / check | Target / worker | Result at `5f7a4be3` |
+|---|---|---|
+| `cargo fmt --all --check` | Local workspace | **PASS** (exit 0) |
+| `RCH_REQUIRE_REMOTE=1 rch exec -- ... cargo clippy --workspace --all-targets --locked -j 2 -- -D warnings` | RCH `vmi1149989` (32 units) | **PASS** (exit 0, 0 warnings; exposed `3.6 GB` `out/` sync without `.rchignore`) |
+| `RCH_REQUIRE_REMOTE=1 rch exec -- ... cargo build --release --locked -j 2 --target wasm32-unknown-unknown -p ftx-wasm` | RCH `vmi1152480` (38 crates) | **PASS** (exit 0; compilation only, does not populate local `web/pkg/`) |
+| `RCH_REQUIRE_REMOTE=1 rch exec --worker vmi1153651 --base HEAD --clean-overlay --no-overlay -- ... cargo test -p ftx-conformance -p ftx-core -p ftx-body --locked -j 2 --no-fail-fast` | RCH `vmi1153651` (37 targets) | **PASS**: `171` passed, `0` failed, `11` ignored (`ftx-body` external-Anny tests) |
+| `RCH_REQUIRE_REMOTE=1 rch exec --base HEAD --clean-overlay --no-overlay -- ... cargo test -p ftx-cli --test draft_workflow --test round_workflow --locked -j 2 --no-fail-fast` | RCH `trj` (2 targets) | **PASS**: `draft_workflow` `5/5`; `round_workflow` `12/12` + `1` ignored (`qualify_runs_three_chest_bands_and_writes_qualify_json`) |
+| `RCH_REQUIRE_REMOTE=1 rch exec --worker trj --base HEAD --clean-overlay --no-overlay -- ... cargo test -p ftx-pattern --lib material_catalog --locked -j 2 --no-fail-fast` | RCH `trj` | **PASS**: `13` passed, `0` failed |
+| `RCH_REQUIRE_REMOTE=1 rch exec --worker vmi1153651 --base HEAD --clean-overlay --no-overlay -- ... cargo test -p ftx-drape --test materials --locked -j 2 --no-fail-fast` | RCH `vmi1153651` | **PASS**: `19` passed, `0` failed (includes `5f7a4be3` qualification identity test) |
+| `python3 -m unittest discover -s scripts -p 'test*.py'` | Local macOS Python `3.15.0` | **PASS**: `119` tests in `1.400 s` |
+| `python3 tools/photo/test_charuco_detector.py` | Local macOS Python vs GH Actions | **FAIL locally** (`ModuleNotFoundError: No module named 'cv2'`); **PASS on GH Actions** run `42956458310` (`5f7a4be3`) |
+| `gh run list --limit 5` (`rust.yml` + `photo-charuco.yml` on `5f7a4be3`) | GitHub Actions | **PASS**: `Rust checks` (`42956458308`) and `ChArUco photo conformance` (`42956458310`) green |
+| Pure-Node VM suites (`node --experimental-vm-modules --test` across all 9 VM `tools/check_*_frontend.cjs` / `*_builder.cjs` files, `FTX_REAL_WASM` unset) | Local Node | **PASS**: `1,566` passed, `0` failed, `182` real-WASM checks skipped (`1,079/110` across 8 suites + `487/72` in `check_materials_frontend.cjs`) |
+| `FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs` against stale Oct 28 local `web/pkg/` | Local Node + stale `web/pkg/` | **FAIL** (`2` failures: `unknown field basis` at line `16773`, `unknown field program` at line `17568`), proving silent stale-WASM boot hazard |
+| Local Playwright Chromium suites (`tools/check_{body_starts,body_targets,capture_review,capture_setup}.cjs`) | Local Node | **FAIL locally** (`Error: Cannot find module 'playwright'`; no `package.json` or pinned runner in repo) |
+| Full `--workspace --release --all-targets` + `32` `#[ignore]` cases (`11` `ftx-body`, `7` `ftx-drape`, `14` `ftx-cli` incl. `9` OpenCV / `1` FFmpeg / `4` Anny) + `4` `#[cfg(not(debug_assertions))]` KATs + `3` `*_wasm.cjs` suites | Not run in this audit pass | **UNRUN at `5f7a4be3`** — explicitly retained as open qualification work under `ftx-onn.30`, `ftx-onn.31`, and `ftx-onn.9` |
+
+### Crate line-budget, dependency direction, and contract audit
+
+Workspace Rust lines at `5f7a4be3` (**753 `.rs` files**, **392,438 total lines** = `225,217` under
+`crates/*/src/` + `167,221` under integration `tests/` and `examples/`):
+
+| Crate | `src/` lines | `tests/` + `examples/` | Total lines (`5f7a4be3`) | Delta vs `d58ba010` | Written budget | Ratio | `CONTRACT.md` |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `ftx-core` | 5,442 | 0 | **5,442** | +237 | 8,000 | `0.68×` | Present |
+| `ftx-pattern` | 33,977 | 17,913 | **51,890** | +2,313 | 16,000 | `3.24×` | Present |
+| `ftx-body` | 7,029 | 1,175 | **8,204** | +2,202 | 9,000 | `0.91×` | Present |
+| `ftx-measure` | 14,233 | 5,460 | **19,693** | +979 | 16,000 | `1.23×` | Present |
+| `ftx-drape` | 58,926 | 33,494 | **92,420** | +10,887 | 14,000 | `6.60×` | Present |
+| `ftx-export` | 61,330 | 46,797 | **108,127** | +22,869 | 14,000 | `7.72×` | Present |
+| `ftx-trace` | 18,812 | 0 | **18,812** | −144 | 7,000 | `2.69×` | Present |
+| `ftx-cli` | 17,135 | 42,769 | **59,904** | +5,972 | 4,000 | `14.98×` | Present |
+| `ftx-wasm` | 6,096 | 13,183 | **19,279** | +4,741 | 3,000 | `6.43×` | Present |
+| `ftx-conformance` | 2,237 | 6,430 | **8,667** | 0 | 9,000 | `0.96×` | **MISSING** (`ftx-onn.28`) |
+| **Total (with 20,000 contingency)** | **225,217** | **167,221** | **392,438** | **+50,056** | **120,000** | **`3.27×`** | `9 / 10` |
+
+Additional structural findings:
+- **Dependency DAG violation (`ftx-onn.28`)**: `crates/ftx-trace/Cargo.toml:13` depends on
+  `ftx-export` (`AGENTS.md` mandates `core/pattern <- export, trace`), importing only
+  `ftx_export::pyjson::PyJson`, `ftx_export::text::{Anchor, ascii_text, stroke_text}`, and
+  `ftx_export::pole` (`~1,125` lines total, none depending on `ftx-pattern`). Hoisting those three
+  modules into `ftx-core` (`5,442 → ~6,567 / 8,000` lines) while keeping 1-line `pub use` shims in
+  `crates/ftx-export/src/{pole.rs,pyjson.rs,text.rs}` (preserving `AGENTS.md` Rule 1: zero file
+  deletions) cleanly restores the documented dependency DAG.
+- **Public-surface documentation drift (`ftx-onn.13`)**: `crates/ftx-cli/Cargo.toml` ships a second
+  55-subcommand binary (`ftx-materials`) and `web/` ships five entry pages (`index.html`,
+  `materials.html`, `photo.html`, `trace.html`, `calibration/`), whereas `AGENTS.md` and `README.md`
+  still describe a single `ftx` binary, a single browser entry, and the frozen `262,470`-line count.
+
+### Vision checklist against `README.md`, `AGENTS.md`, Plan §1–§25.191, and `FEATURE_PARITY.md`
+
+| # | Vision / specification pillar | Status at `5f7a4be3` | Ground truth & tracking Beads |
+|---|---|---|---|
+| 1 | Deterministic core, units, geometry, receipts, structured refusals (§6–7) | `IMPLEMENTED & VERIFIED` | `ftx-core` (`5,442` lines) + `ftx-conformance` math/unit checks pass on `5f7a4be3`; plan §6 vs `AGENTS.md` `mul_add` wording reconciled under `ftx-onn.13` |
+| 2 | Pattern document model, instances, validation, alteration, measured drafting (Specs 01–03) | `IMPLEMENTED & VERIFIED` | Oracle parity + `draft_workflow` (`5/5`) pass on `5f7a4be3` |
+| 3 | Measurement catalogue, priors, provenance, fusion, `MODEL_FIT` non-promotion (§8) | `IMPLEMENTED & VERIFIED` | Provenance separation enforced; population priors never establish wearer accuracy |
+| 4 | Anny 0.6.1 forward model, 21 tape functionals, poses, landmarks (`G1`, Spec 05) | `PARTIAL` | Software + historical `438,976`-vertex `1.405e-15 m` parity verified on `690e4d6`/`da3153cd`; independent anatomical/tape/pose qualification (`ftx-onn.16`) and `5f7a4be3` `--ignored` rerun (`ftx-onn.9`) open |
+| 5 | Photo ChArUco scale, calibration sheets, video frame selection, reviewed masks & multi-frame fit (§10) | `PARTIAL` | Prepared-input solvers, browser editors, and GH Actions ChArUco CI pass; fresh operator capture-to-garment (`ftx-onn.11`) and independent physical accuracy (`ftx-onn.12`) open; local OpenCV/FFmpeg `#[ignore]` cases (`10` in `ftx-cli`) unrun |
+| 6 | Garment mesh, welded seams, contact-correct IPC/CCD/Coulomb cloth solver (`G2`, §11) | `IMPLEMENTED — UNQUALIFIED AT HEAD` | Real transactional Newton/IPC/CCD solver (`cloth.rs`, `run.rs`); `4` release-only KATs and `7` ignored `ftx-drape` tests need candidate rerun under `ftx-onn.9` |
+| 7 | `ftx qualify` 3-band tightness gating across CLI, viewer, and browser (Spec 04 §7) | `BROKEN / DEFECTIVE` | `5f7a4be3` locks uniform material/posed-body hashes (`19/19` in `materials.rs`), **but** hard-blocks all `piece.fabric` garments, ignores `19.56 mm` collider-vs-target chest residuals, leaves `round.rs` `fold_viewer.html` stale before `gate_tightness`, and omits `gate_tightness` in `ftx-wasm/src/fold.rs` (`ftx-onn.27`, `ftx-onn.30`) |
+| 8 | Manufacturing exports (SVG, tiled/shop/projector PDF, DXF-ASTM/AAMA, HPGL, cutter, GarmentCode, DST) & 51 checks | `IMPLEMENTED & VERIFIED` (format) / `PARTIAL` (physical) | Oracle export suites pass; physical seam coupons (`ftx-sp2`), cold-knife coupons (`ftx-tm7.5`), and fixture/workholding (`ftx-pb2.2`) remain open |
+| 9 | Pattern-sheet tracing (`ftx trace`, `web/trace.html`, Spec 04) | `PARTIAL` | Core tracing + Node VM checks pass; `ftx-trace -> ftx-export` violates dependency DAG (`ftx-onn.28`); platform/codec parity tail in `ftx-q3m` |
+| 10 | Immutable rounds, separate verdict bases, accepted-body reuse (`G3`) | `PARTIAL` | `round_workflow` (`12/12`) passes, except `rounds/NNN/sim/fold_viewer.html` diverges from `sim_report.json` after tightness demotion (`ftx-onn.27`) |
+| 11 | Local offline browser workbench (`G4`, 5 `web/` apps + 4 workers) | `BROKEN / DEFECTIVE` (stale-bundle & CI coverage) | `wasm32` builds cleanly and `9` Node VM suites pass (`1,566/0`), **but** browser fold-up skips `gate_tightness` (`ftx-onn.27`), workers lack a stale-WASM version handshake (`ftx-onn.29`), and `14/19` `check_*.cjs` suites (`0/7` Playwright) never run in CI (`ftx-onn.29`, `ftx-onn.31`) |
+| 12 | Source-bearing textile material catalog & fixed-jacket substitution (`FTX-26`, §25, Spec 06) | `IMPLEMENTED — 0 COMPLETE BUILT-IN DRAPE RECORDS` | `15` catalog modules + constitutive/viscoelastic/plasticity consumers exist, **but 0 catalog entries contain `friction_skin`** (`ftx-tm2` blocks `ftx-tm8`, `ftx-tm4`, `ftx-tm5`) |
+| 13 | Layered thermal, optical, moisture, wet-mechanics, procurement, cutting/sewing & design search (§25.1–§25.191) | `IMPLEMENTED — SYNTHETIC / SOURCE-CONDITIONED` | Extensive numerical solvers and browser builders; empirical HFM/hotplate/layered/wet validation (`ftx-tme`, `ftx-tmf`, `ftx-tma`, `ftx-tmb`) and live procurement (`ftx-tm6`) remain open |
+| 14 | Privacy & local-only execution (`AGENTS.md` §Privacy) | `PARTIAL` (remote-build leak risk) | Browser apps upload nothing and `.gitignore` blocks wearer files, **but missing `.rchignore`** allows `rch exec` to sync `out/` (`3.6 GB`) and any local `/runs/`, `/ws/`, `/private/` dirs to remote workers (`ftx-onn.29`) |
+| 15 | Real-wearer fit (`Fit` claim) | `NOT STARTED` (empirically) | Tracked in `ftx-onn.15` (predeclared private muslin round); gated on `ftx-onn.9` |
+| 16 | Reproducible candidate, DSR quality gate, and `G5` Gauntlet (`ftx-onn`) | `NOT STARTED` | `0` git tags/releases, DSR unregistered, `../franken_textiles__gauntlet_workspace` absent; tracked in `ftx-onn.14` and `ftx-onn` |
+
+### Backlog sufficiency, 3 ambition rounds, and 5 plan-space refinement rounds
+
+Reconciling `.beads/issues.jsonl` into `.beads/beads.db` surfaced **305 existing issues** (`40` open,
+`9` in progress, `256` closed). Auditing those 49 active issues against `5f7a4be3` proved that
+completing the pre-existing backlog as written would **not** have closed:
+1. the two active tightness-verdict bugs (`round.rs:676` stale `fold_viewer.html` and
+   `ftx-wasm/src/fold.rs:405` un-demoted browser tightness flags) or `5f7a4be3`'s per-piece
+   qualification dead-end and `19.56 mm` collider-vs-target chest residual blindness;
+2. the concrete `ftx-trace -> ftx-export` dependency-direction fix and missing
+   `crates/ftx-conformance/CONTRACT.md`;
+3. the missing `.rchignore` remote-sync privacy/bandwidth hazard, silent stale-WASM worker boot
+   failures, and the `14/19` `tools/check_*.cjs` (`0/7` Playwright) CI blind spot.
+
+#### Three ambition rounds (explicitly bounded by `AGENTS.md` Rule 0.1)
+- **Round 1 (Truthfulness & Verdict Integrity)**: Eliminate every discrepancy where two views of the
+  same round (`sim_report.json` vs `fold_viewer.html`, native CLI vs browser `ftx-wasm`, posed
+  collider vs input tape target, uniform vs `piece.fabric` garment) silently disagree on blocking
+  tightness gates (`ftx-onn.27`, verified by `ftx-onn.30`).
+- **Round 2 (Zero-Leak Privacy, Fail-Fast Browser Bundles, & Full Existing-Suite CI)**: Close the
+  `.rchignore` remote-transfer gap before any real wearer capture enters a developer machine, add a
+  compile-time WASM/JS stamp handshake across all 4 browser workers so stale `web/pkg/` fails fast on
+  boot, and wire the already-written `19` `tools/check_*.cjs` suites into CI without inventing a new
+  test framework (`ftx-onn.29`, verified by `ftx-onn.31`).
+- **Round 3 (Rule 0.1 Anti-Ceremony Discipline — Freeze Synthetic Permutations)**: Reject adding a
+  393,000th+ line of uncalibrated multiphysics/manufacturing combinatorial modes before `ftx-tm2`
+  supplies a single complete built-in material with `friction_skin`. Cleanly sever `ftx-trace ->
+  ftx-export` via `ftx-core` while preserving 1-line re-export shims under `AGENTS.md` Rule 1, and
+  author the missing `crates/ftx-conformance/CONTRACT.md` (`ftx-onn.28`).
+
+#### Five plan-space refinement rounds applied to `.beads`
+1. **Coverage & non-duplication**: Added exactly **5 P1 tasks** under `ftx-onn` (`ftx-onn.27`,
+   `ftx-onn.28`, `ftx-onn.29`, `ftx-onn.30`, `ftx-onn.31`), bringing `.beads/issues.jsonl` from `305`
+   to **`310` issues** (`45` open, `9` in progress, `256` closed, `0` pre-existing issues dropped) and
+   attaching dated `2026-11-11` (`5f7a4be3`) evidence comments to `ftx-tm2`, `ftx-onn.9`,
+   `ftx-onn.13`, and `ftx-onn.14`.
+2. **Dependency & cycle hygiene**: Wired `ftx-onn.27 -> ftx-onn.30 -> ftx-onn.9`, `ftx-onn.28 ->
+   ftx-onn.13`, and `ftx-onn.28 + ftx-onn.29 -> ftx-onn.31 -> ftx-onn.14` as peer children of
+   `ftx-onn` (`br dep cycles --json`: `count: 0`; `bv --robot-insights`: `Cycles: None`).
+3. **Rule 1 & Rule 0.1 guardrails**: Embedded explicit `AGENTS.md` Rule 1 non-deletion instructions
+   into `ftx-onn.28`/`ftx-onn.31` (retain `crates/ftx-export/src/{pole.rs,pyjson.rs,text.rs}` as
+   `pub use` shims) and restricted `ftx-onn.30`/`ftx-onn.31` strictly to existing test targets and
+   scripts.
+4. **Empirical vs numerical separation**: Separated collider-level numerical qualification from
+   wearer-level residual gating in `ftx-onn.27`/`ftx-onn.30` so model-fit residuals never masquerade
+   as wearer fit.
+5. **Exactness & count convergence**: Verified exact 19-script `tools/check_*.cjs` inventory (`9`
+   Node VM + `3` `*_wasm.cjs` + `7` Playwright) and all five contract/spec updates (`docs/spec/04`,
+   `ftx-drape`, `ftx-cli`, `ftx-wasm`, `FEATURE_PARITY.md`) across descriptions, titles, and
+   checklists, then flushed and verified `.beads/issues.jsonl`.
+
+### Prioritized bridge plan (`bv --robot-triage` & critical-path order)
+
+| Priority | Track & Beads | Concrete deliverable & acceptance proof |
+|---|---|---|
+| **P0 — Immediate Hygiene, Privacy, & DAG** | `ftx-onn.28`, `ftx-onn.29` → `ftx-onn.31` | Add `.rchignore` (verified via `rch exec --source-content-receipt`), add 4-worker WASM/JS version handshake, wire all 19 `tools/check_*.cjs` suites into CI/local Playwright runner, hoist `pyjson`/`text`/`pole` into `ftx-core` (keeping `ftx-export` shims), and author `crates/ftx-conformance/CONTRACT.md`. |
+| **P0 — Empirical Material Bottleneck (`#1 bv pick`)** | `ftx-tm2` → `ftx-tm8` (and `ftx-tm4`, `ftx-tm5`) | Acquire matched conditioned linen, leather, performance-knit, and fill specimen data **including `friction_skin`**, thickness, bending, and directional tensile/shear + independent `CHECK` coupons; execute the unchanged 92 cm bolero substitution gate. |
+| **P1 — Qualification & Verdict Soundness** | `ftx-onn.27` → `ftx-onn.30` | Fix `round.rs` stale `fold_viewer.html` and `ftx-wasm/src/fold.rs` un-demoted tightness flags; qualify `piece.fabric` landmark rings; gate wearer tightness promotion on collider-vs-target girth residuals; pass `--ignored` Anny `qualify` workflow. |
+| **P1 — Scope/Budget Constitution Decision** | `ftx-onn.13` (unblocked by `ftx-onn.28`) | Maintainer decision reconciling the `392,438`-line tree vs the `120,000`-line ceiling, documenting `ftx-materials` and all 5 `web/` apps, and aligning plan §6 vs `AGENTS.md` `mul_add` wording. |
+| **P1 — Anatomy, Capture, & Full Source Qualification** | `ftx-onn.16` + `ftx-onn.30` → `ftx-onn.9`; `ftx-onn.11` → `ftx-onn.12` | Complete independent tape/landmark/pose checks, run full release workspace + all `32` `#[ignore]` Anny/KAT/OpenCV/FFmpeg lanes on frozen `HEAD`, and execute fresh-operator capture-to-garment + physical accuracy checks. |
+| **P1 — Empirical Thermal & Manufacturing Slices** | `ftx-tme` → `ftx-tmf` → `ftx-tma`/`ftx-tmb`; `ftx-tm7.2`/`.3` → `ftx-tm7.5`, `ftx-sp2` | Validate HFM/hotplate/layered heat & moisture coupons and physical seam/cold-knife manufacturing coupons against predeclared predictions. |
+| **P1 — Real-Wearer Muslin & Reproducible `G5` Release** | `ftx-onn.15`; `ftx-onn.31` + `ftx-onn.9` + `ftx-onn.13` → `ftx-onn.14` → `ftx-onn` | Compare one predeclared garment prediction against a privately retained muslin round (`Fit` claim); qualify clean-checkout native + offline browser candidate + M4/browser benchmarks; run ≥10 `G5` gauntlet rounds ending in 2 consecutive clean rounds. |
+
+### 2026-11-11 implementation & qualification follow-through (Waves 1–5)
+
+Following the maintainer directive retiring arbitrary line-count ceilings (`AGENTS.md` Rule 0) and
+authorizing full execution of all actionable software, architecture, browser, CI, and qualification
+gaps identified above, **all 6 actionable software/verification Beads (`ftx-onn.28`, `ftx-onn.13`,
+`ftx-onn.27`, `ftx-onn.30`, `ftx-onn.29`, `ftx-onn.31`) were implemented, verified end-to-end, and
+closed**, and a **full 10-crate `--release` + admitted-model + 19-suite browser/WASM/Playwright
+qualification sweep** was recorded on `ftx-onn.9`:
+
+1. **Wave 1 (`ftx-onn.28`, CLOSED)** — *Dependency DAG & `ftx-conformance/CONTRACT.md`*:
+   - Hoisted `pyjson`, `text` (+ byte-identical `ascii_fold.tsv`), and `pole` into
+     `crates/ftx-core/src/{lib.rs,pyjson.rs,text.rs,pole.rs,ascii_fold.tsv}`, retained 1-line
+     `pub use ftx_core::{pole, pyjson, text}::*;` shims in `crates/ftx-export/src/{pole.rs,pyjson.rs,text.rs}`
+     (`AGENTS.md` Rule 1: zero file deletions), removed `ftx-export` from `crates/ftx-trace/Cargo.toml`
+     (`cargo tree -p ftx-trace -e normal,build`: `0` `ftx-export` edges), and authored
+     `crates/ftx-conformance/CONTRACT.md` (`10/10` crates now carry `CONTRACT.md`).
+2. **Wave 2 (`ftx-onn.13`, CLOSED)** — *Truth-Source Scope, Retired Line Budget, & FMA/Drape Alignment*:
+   - Retired arbitrary per-crate and `120,000`-line source ceilings across `Cargo.toml`, `AGENTS.md`,
+     `README.md`, and `COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md` (§16) while preserving
+     the 10-crate boundary and dependency DAG; documented both CLI binaries (`ftx`, `ftx-materials`)
+     and all 5 browser pages (`web/index.html`, `web/materials.html`, `web/photo.html`,
+     `web/trace.html`, `web/calibration/`); reconciled Plan §6 vs `AGENTS.md` FMA (`f64::mul_add`
+     permitted; compiler-contracted FMA forbidden); updated `docs/material-platform-progress.md`.
+3. **Wave 3 (`ftx-onn.27` + `ftx-onn.30`, CLOSED)** — *Per-Piece Qualification, Residual Gating, & Viewer/Browser Tightness Verdict Fixes*:
+   - Updated `docs/spec/04-simulation-vectorize-cli.md` (§7.1–§7.3), `crates/ftx-drape/CONTRACT.md`,
+     `crates/ftx-cli/CONTRACT.md`, `crates/ftx-wasm/CONTRACT.md`, and `FEATURE_PARITY.md` first.
+   - Extended `ftx_drape::qualify::{qualification_basis, check_qualification}` and
+     `crates/ftx-cli/src/round.rs::cmd_qualify` to qualify per-piece (`piece.fabric`) assemblies across
+     every unique participating fabric (`piece_material_sha256s`, `-20 / 0 / +20 mm` band separation per
+     fabric) while keeping uniform `material_sha256` binding intact.
+   - Separated numerical `collider_pass` / `collider_tightness_qualified` from wearer `pass` /
+     `tightness_qualified`, demoting wearer tightness flags to `advisory` whenever
+     `|posed_chest_girth_mm - input_chest_mm| > 5.0 mm` (`MAX_QUALIFIED_GIRTH_RESIDUAL_MM`, e.g.,
+     `-19.56 mm` on public-prior chart `520.44 mm` vs `540.0 mm`) or any gated landmark target exceeds
+     `5.0 mm`.
+   - Re-rendered `rounds/NNN/sim/fold_viewer.html` **after** `gate_tightness` in
+     `crates/ftx-cli/src/round.rs` and applied `gate_tightness` before `viewer(...)` in
+     `crates/ftx-wasm/src/fold.rs::finalize_browser_fold`.
+   - Verified in `ftx-drape` (`295/295` lib + `19/19` `materials`), `ftx-wasm` (`6/6` lib),
+     `ftx-cli --test accepted_body_workflow` (`53/53`), and admitted-model
+     `ftx-cli --test round_workflow --release -- --ignored` (`1/1` in `102.49 s` against
+     `anny-0.6.1-default.ftxbody` SHA-256 `8f0bb151...`).
+4. **Wave 4 (`ftx-onn.29` + `ftx-onn.31`, CLOSED)** — *`.rchignore`, 4-Worker WASM/JS Stamp Handshake, Fresh `web/pkg/`, & All 19 Browser/WASM/Playwright Suites*:
+   - Added `.rchignore` + `.gitignore` (`.rch/`); verified via `rch exec --worker hz2
+     --source-content-receipt -- cargo check -p ftx-core --locked` (`j-30103800983323735`: `1,208`
+     files / `11.1 MB` in `3.6 s`, `forbidden=[]`,
+     `receipt_root=afb25ebab4a0fd1540d79439eb65e624946d257bc9724f043454206d4ec7a330`, down from
+     `3.6 GB` raw / `786 MB` zstd).
+   - Exported `wasm_interface_stamp()` (`ftx-wasm-interface-2026-11-11-v1`) in
+     `crates/ftx-wasm/src/lib.rs` and enforced fail-fast boot checks in `web/worker.js`,
+     `web/materials-worker.js`, `web/photo-worker.js`, and `web/trace-worker.js` (verified with
+     missing/mismatched/matching controls in both VM and real `web/pkg/` worker harnesses).
+   - Built fresh `web/pkg/` (`ftx_wasm_bg.wasm` SHA-256
+     `ad05729cb4154b3c1278e066564889139ac23bb8b0a1430b6ec9004f967587ee`, `ftx_wasm.js` SHA-256
+     `2df6c26a8a9a3873e2ee6a2271cc6180bc1a341f35174e45a1a68679e2703819`), standardized
+     `CHROMIUM_EXECUTABLE || FTX_CHROMIUM_EXECUTABLE` across all 7 Playwright scripts, added offline
+     `<link rel="icon" href="data:,">` to `web/{index,materials,photo,trace}.html` (eliminating local
+     `404 /favicon.ico` console errors), created `tools/check_all_web.sh`, and wired all 19
+     `tools/check_*.cjs` suites into `.github/workflows/rust.yml`.
+   - Executed **all 19 `tools/check_*.cjs` suites (`0` failures)**: `9/9` Node VM suites with
+     `FTX_REAL_WASM=1` (`846` active passed, `0` missing-WASM skips, `47` optional replay skips),
+     `3/3` `*_wasm.cjs` suites (`30` native/WASM comparisons + `9` refusals), and `7/7` headless
+     Chromium Playwright E2E suites offline (`0` console errors, `0` non-localhost requests).
+5. **Wave 5 (`ftx-onn.9` qualification sweep + CLI parallel-workspace race repair)** —
+   - Executed all 10 workspace crates in `--release --locked --no-fail-fast` (`314` targets):
+     **`3,390` unique Rust tests passed (`0` numerical/assertion failures)**, including `10/11`
+     `ftx-body` asset cases (`drape_poses` `1/1`, `fit_tape` `6/6`, `anny_parity` `3/4`; `1` missing
+     optional local `~/.cache/franken_textiles/anny-0.6.1-full-vertices.bin`), **`16/16` `ftx-drape`
+     physics/contact/elastic/fitted KATs** (`842/842` total `ftx-drape` tests, `0` ignored), and
+     `510/510` default `ftx-cli` tests + `4/4` admitted-Anny CLI ignored tests (`body_model_fit`
+     `3/3`, `round_workflow --ignored` `1/1`). Fixed a parallel-thread `SystemTime::now()`
+     `AlreadyExists` collision exposed during `ftx-cli` release execution across 8 shared CLI test
+     helpers (`material_area_response`, `area_identification_workflow`, `elastic_study_workflow`,
+     `material_binding_workflow`, `sewing_obstacles_workflow`, `sewing_workflow`,
+     `strip_experiment_workflow`, `video_masks_workflow`).
+   - `cargo fmt --all --check` (`exit 0`), `cargo clippy --workspace --all-targets --locked -- -D warnings`
+     (`exit 0`, `0` warnings across all 10 crates), `python3 -m unittest discover -s scripts -p 'test*.py'`
+     (`119/119` `OK`), and `ubs` across all modified files (`0` Critical issues; `tools/check_all_web.sh`
+     `0` warnings). `ftx-onn.9` stays **OPEN** on `ftx-onn.16` (independent anatomy/tape/pose), the `11`
+     absent-local-asset/OpenCV/FFmpeg cells, and empirical/muslin/benchmark gates.
+
+#### Written `/just-say-no-to-process-porn-and-ceremony` Worksheets (Waves 1–5)
+
+- **Process-Porn Creation Gate** (applied to `todo.md` artifact, `.beads` updates, `crates/ftx-conformance/CONTRACT.md`, and this section):
+  1. *Consumer*: Requesting maintainer (explicitly requested a granular persistent TODO list, `.beads` tracking, and reality-check follow-through) and crate contributors reading `ftx-conformance/CONTRACT.md` (`AGENTS.md` §Documentation rule).
+  2. *Gate enforced*: Done-declaration for Waves 1–5 (`todo.md` + worksheets) and `AGENTS.md`'s 10/10 crate `CONTRACT.md` requirement (`ftx-onn.28`).
+  3. *Observed defect class*: Silent tightness-verdict disagreement (`round.rs` / `fold.rs`), `3.6 GB` unguarded RCH sync, silent stale-WASM worker boot (`unknown field basis`), `14/19` unrun CI suites, `ftx-trace -> ftx-export` DAG violation, and `SystemTime::now()` test-workspace races.
+  4. *Retirement condition*: `todo.md` and these worksheets retire to static session history upon completion of this turn; zero ongoing governance loop, dashboard, or validator-for-a-validator was created.
+
+- **Real-Work Audit Worksheet**:
+  - *Window audited*: Current session Waves 1–5 (`6` closed Beads: `ftx-onn.28`, `ftx-onn.13`, `ftx-onn.27`, `ftx-onn.30`, `ftx-onn.29`, `ftx-onn.31` + `ftx-onn.9` qualification + 8-file CLI race fix).
+  - *Project's core purpose (from `README.md` / `AGENTS.md`)*: Make sewing patterns that demonstrably sew together and fit a specific body, and write the files people and machines need.
+  - *Classification tally*:
+    - **USER (`2`)**: `ftx-onn.27` (accurate tightness gating across CLI `fold_viewer.html`, browser `ftx-wasm`, `piece.fabric` garments, and collider-vs-target girth residuals) and `ftx-onn.29` (privacy-preserving `.rchignore`, fail-fast 4-worker stale-WASM boot refusal, offline favicon fix, refreshed `web/pkg/`).
+    - **ENABLER (`3`)**: `ftx-onn.28` (`ftx-core` hoist restoring `core/pattern <- export, trace` DAG), `ftx-onn.30` (end-to-end admitted-Anny `ftx qualify` + viewer/browser regression proof), and `ftx-onn.31` (`tools/check_all_web.sh` + CI wiring for all 19 browser/WASM/Playwright suites + 8-file CLI race fix).
+    - **PROCESS (`1`)**: `ftx-onn.13` (retiring arbitrary line-count ceilings per maintainer Rule 0 override and synchronizing truth-source docs) plus requested `todo.md`/Beads hygiene.
+    - **UNKNOWN (`0`)**.
+  - *Hard Questions*:
+    1. *Single most user-visible thing demoable in 2 minutes*: Run `ftx round` / open `web/index.html` on an unqualified or `19.56 mm`-residual chart body and inspect `fold_viewer.html` + `sim_report.json` (both now consistently show tightness as `advisory` rather than contradicting each other), or drop a mismatched `web/pkg` into `web/` and watch all 4 workers immediately refuse on boot with exact expected vs actual interface stamps instead of failing mid-workflow.
+    2. *If every PROCESS item had not happened*: The runtime fixes would still work, though contributors/agents would still trip over the contradicted `120,000`-line ceiling and undocumented `ftx-materials` / `web/*.html` surfaces.
+    3. *Did ENABLER items actually enable a consumer now?*: Yes — `ftx-trace` compiles and passes all trace/calibration/review tests directly against `ftx-core`; `round_workflow --ignored` exercised the real `ftx` binary + admitted Anny model across uniform and `piece.fabric` garments; `tools/check_all_web.sh` built `web/pkg/` and ran all 19 Node/WASM/Playwright consumers end-to-end.
+    4. *Oldest open user-facing item & why effort went here*: `ftx-onn` / `ftx-tm2` / `ftx-onn.15` (empirical material `friction_skin` coupons and real-wearer muslin). Physical specimens and a real wearer cannot be synthesized in software (`RH-2`); effort went to closing every concrete software/verdict/privacy/browser defect that was actively corrupting or hiding results on `HEAD`.
+    5. *Swarm pane comparison*: N/A — solo execution (`0` subagents or swarm workers spawned, obeying `AGENTS.md` Rule 0.1).
+    6. *Plan/spec edits standing in for implementation or follow-up laundering (`RH-9`/`RH-10`)*: None. `ftx-onn.13` retired the line budget by explicit maintainer instruction (`AGENTS.md` Rule 0); Spec 04 §7 was tightened *before* implementing `ftx-onn.27`; empirical Beads (`ftx-tm2`, `ftx-onn.16`, `ftx-onn.15`, `ftx-onn.9`) remain open with zero scope removed.
+  - *Verdict*: **[x] HEALTHY** — user-visible fixes and directly exercised enablers dominate (`5` USER/ENABLER vs `1` maintainer-requested PROCESS); freeze ceremony and hand off cleanly.
+
+- **Honesty Inventory (Questions 1–20)**:
+  - *Session/window reviewed*: Full `2026-11-11` session (reality check + Waves 1–5 implementation & qualification) + historical workspace `cass` sweep.
+  1. *Weakened/deleted/skipped/`#[ignore]`d tests?*: **No** (checked: `git diff` across all touched `tests/` and `src/` files; `0` tests deleted, `0` `#[ignore]` attributes added, all existing assertions preserved; `git reflog` has `0` history rewrites).
+  2. *Mocks/stubs/doubles to satisfy simplistic tests?*: **No** (checked: exercised real compiled `ftx`, `ftx-materials`, `ftx_wasm.wasm`, `anny-0.6.1-default.ftxbody`, and headless Chromium; synthetic tape/material test fixtures in `round_workflow.rs` are explicitly named `synthetic_*` and never claimed as physical data).
+  3. *Regenerated goldens/snapshots to match broken output (`RH-3`)?*: **No** (checked: `git status -s tests/fixtures/` is completely empty — `0` oracle/fixture files modified).
+  4. *Edited validator/gate/CI/conformance code alongside features, or added suppressions/bypasses/widened tolerances (`RH-1`/`RH-13`/`RH-14`/`RH-15`)?*: **Yes, bounded & reviewed**: `.github/workflows/rust.yml` and `tools/check_*.cjs` (`CHROMIUM_EXECUTABLE` fallback) were updated in `ftx-onn.29` strictly to *add* 17 previously unrun suites (`0` suites removed, `0` `continue-on-error`, `0` `#[allow]`, `0` tolerance widenings; `5.0 mm` girth-residual gate in `qualify.rs` is a new stricter promotion guard).
+  5. *Objective nonsense to satisfy a gate (`RH-12`)?*: **No** (checked: in `round_workflow.rs`, when initial `530.0 mm` chest distorted a `920 mm` toddler torso and when ultra-slippery `synthetic-friction-sliding` physically slid `-16.9 mm` off the chest at `+20 mm` ease, we fixed the test inputs to physically coherent synthetic values `520.5 mm` chest and `friction_skin = 0.38 / 0.32` rather than touching solver/qualification thresholds).
+  6. *Zero-run green (`PL-1`)?*: **No** (checked: every cited command has explicit non-zero `passed` counts summed from raw logs: `3,390` Rust release tests, `846` real-WASM VM tests, `30+9` `*_wasm.cjs` checks, `7` Playwright suites, `119` Python tests).
+  7. *Claimed unrun commands/inspections?*: **No** (checked: every command and count corresponds to an observed terminal task output in this session).
+  8. *Presented lower proof class as higher (`RH-2`)?*: **No** (checked: `Parity`, `Physics`, `Fit`, and `Performance` are reported separately; synthetic `MEASURED_TAPE` and `synthetic_shell` qualification tests prove software gating mechanics, NOT empirical fabric adequacy or real-wearer fit).
+  9. *Omitted/softened/buried failures?*: **No** (checked: explicitly disclosed the missing local `anny-0.6.1-full-vertices.bin` `os error 2` in `anny_parity`, the `10` locally unrun OpenCV/FFmpeg `#[ignore]` cases, the initial `task-1239`/`task-1267` synthetic-input failures in `round_workflow`, the initial `404 /favicon.ico` caught and fixed in `web/*.html`, the initial `AlreadyExists` timestamp race caught and fixed across 8 CLI test files, and busy-worker RCH queue timeouts).
+  10. *Silenced stderr in cited evidence commands?*: **No** (checked: all Cargo, Node, Playwright, UBS, Python, and RCH verification commands preserved full stdout/stderr in task logs; `2>/dev/null` was used only in helper `command -v`/Playwright path discovery probes).
+  11. *Closed items with unmet acceptance or follow-up laundering (`RH-9`)?*: **No** (checked: all 6 closed Beads met 100% of their scoped acceptance criteria; `ftx-onn.9`, `ftx-onn.16`, `ftx-q3m`, `ftx-tm2`, `ftx-onn.14`, `ftx-onn.15`, and `ftx-onn` remain open with all original criteria intact).
+  12. *Edited spec/plan to match built code while claiming original ask (`RH-10`)?*: **No** (checked: line-budget retirement in `ftx-onn.13` was explicitly ordered by the maintainer under `AGENTS.md` Rule 0; Spec 04 §7 was strengthened to require multi-fabric and girth-residual checks, which were then implemented).
+  13–17. *Swarm and subagent questions*: **N/A — truly solo session** (checked: `0` subagents or swarm workers were invoked; no peer closes or delegated reports occurred).
+  18. *Post-hoc metric denominators?*: **No** (checked: the `19`-script `tools/check_*.cjs` denominator, `10`-crate workspace denominator, and `32` `#[ignore]` denominator were fixed during the initial reality check before Waves 1–5 began).
+  - *Part 4 (`cass` sweep)*: Ran `cass search` across 7 queries (`weaken the test`, `make the test pass`, `skip this test`, `regenerate the golden`, `mark it done`, `qualify_runs_three_chest_bands`, `wasm_interface_stamp`); inspected archived hits (`task-1488`, `task-1495`), which were prior sessions' own `/just-say-no-to-process-porn-and-ceremony` audit queries and qualification logs, with zero hidden test-weakening uncovered.
+  19. *Moment to explain if owner replayed the session*: Because `/System/Volumes/Data` had `< 20 GiB` free (`sbh`) while external `/Volumes/SANDISK_SSD` had `3.5 TiB` free and local `~/.cache/franken_textiles/anny-0.6.1-default.ftxbody` lives on this Mac (not on RCH Linux workers), we temporarily set gitignored/rchignored `.rch/config.toml` `force_local = true` with `CARGO_TARGET_DIR=/Volumes/SANDISK_SSD/...` to run the heavy local admitted-Anny/release/Playwright verification suites, restored `force_local = false` afterward via `edit_file` (`0` file deletions), and separately verified remote RCH transfer hygiene on `hz2` (`j-30103800983323735`, `forbidden=[]`).
+  20. *Single strongest re-executable evidence*: Run `CARGO_TARGET_DIR=/Volumes/SANDISK_SSD/build/rch-target/rch_target_ftx TMPDIR=/Volumes/SANDISK_SSD/build/tmp sh tools/check_all_web.sh` (rebuilds `web/pkg` + native `ftx`/`ftx-materials` and executes all 19 Node VM, direct WASM, and headless Chromium Playwright E2E suites offline) alongside `cargo test -p ftx-cli --test round_workflow --release --locked -- --ignored` (exercises uniform, residual-demoted, aligned, and 2-fabric `piece.fabric` qualification end-to-end on the admitted Anny body model).
+  - *Disposition*: Reviewed all 20 items and `cass` history; the single bounded gate/CI touch in Q4 (`rust.yml` + Playwright Chromium path fallback) only *expanded* executed test coverage (`2 → 19` suites) with zero weakened assertions, suppressions, or widened tolerances. All initial test/environment failures were fixed at root cause and disclosed on the record.

@@ -58,5 +58,9 @@ __pycache__/
 .idea/
 .vscode/
 
-# bv (beads viewer) local config and caches
+# bv (beads viewer) and local tool caches
 .bv/
+.ee/
+.rch/
+node_modules/
+.playwright-browsers/

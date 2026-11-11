@@ -45,11 +45,16 @@ fn png(data: Vec<u8>) -> Vec<u8> {
 }
 
 fn setup() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("ftx-video-masks-{}-{stamp}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-video-masks-{}-{stamp}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(dir.join("video")).unwrap();
     for (name, person, sheet) in [("blurred", 0, 80), ("sharp", 25, 25)] {
         let data = (0usize..32 * 32)

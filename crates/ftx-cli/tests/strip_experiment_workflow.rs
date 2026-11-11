@@ -72,13 +72,15 @@ fn call(dir: &Path, input: &Value, main: bool) -> Result<Value, Value> {
 }
 
 fn directory() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "ftx-strip-consumers-{}-{}",
+        "ftx-strip-consumers-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     fs::create_dir(&dir).unwrap();
     dir

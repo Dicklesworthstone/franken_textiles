@@ -700,7 +700,8 @@ const server=http.createServer((req,res)=>{
 (async()=>{
   await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
   const origin=`http://127.0.0.1:${server.address().port}`;
-  const browser=await chromium.launch(process.env.FTX_CHROMIUM_EXECUTABLE?{executablePath:process.env.FTX_CHROMIUM_EXECUTABLE}:{}), page=await browser.newPage({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
+  const chromiumExe=process.env.CHROMIUM_EXECUTABLE||process.env.FTX_CHROMIUM_EXECUTABLE;
+  const browser=await chromium.launch(chromiumExe?{executablePath:chromiumExe}:{}), page=await browser.newPage({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
   const errors=[],requests=[];
   page.on("pageerror",e=>errors.push(String(e)));
   page.context().on("request",r=>requests.push({url:r.url(),method:r.method()}));

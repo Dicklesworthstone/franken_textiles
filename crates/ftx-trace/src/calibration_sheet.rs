@@ -5,8 +5,10 @@ use crate::raster::{
     draw,
     image::{Gray, encode_png_gray},
 };
-use ftx_core::{Refusal, RefusalCode, py};
-use ftx_export::text::{Anchor, stroke_text};
+use ftx_core::{
+    Refusal, RefusalCode, py,
+    text::{Anchor, stroke_text},
+};
 use serde_json::{Value, json};
 
 mod dictionaries;

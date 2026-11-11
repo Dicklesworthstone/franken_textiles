@@ -1,8 +1,15 @@
 // The only network request loads the local application bundle. User evidence is never uploaded.
 // Every operation carries explicit inputs; no old pattern/drape survives a failed replacement.
 import init, * as ftx from "./pkg/ftx_wasm.js";
+const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-11.1";
 let failure = null, active = null;
-const ready = init().then(() => postMessage({ type: "ready" })).catch(e => {
+const ready = init().then(() => {
+  if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
+      (typeof ftx.wasm_interface_stamp !== "function" || ftx.wasm_interface_stamp() !== EXPECTED_WASM_STAMP)) {
+    throw new Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
+  }
+  postMessage({ type: "ready" });
+}).catch(e => {
   failure = e; postMessage({ type: "loadError", message: String(e.message || e) });
 });
 self.ftxProgress = text => postMessage({ type: "progress", request: active, text });

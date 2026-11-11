@@ -2,7 +2,7 @@
 
 **Purpose.** Foundations shared by every crate: deterministic elementary functions, the exact 3D
 orientation predicate, vectors and 3×3 matrices, minimum-norm least squares, the numpy/Python semantics the reference's numbers and messages
-depend on, chord-relative edge curves, polyline and polygon helpers, refusals and run receipts. No domain
+depend on, insertion-ordered Python JSON (`pyjson::PyJson`), export/trace stroke and ASCII text helpers (`text`), GEOS-compatible polygon pole of inaccessibility (`pole`), chord-relative edge curves, polyline and polygon helpers, refusals and run receipts. No domain
 logic (no pieces, seams, bodies or garments).
 
 `aruco` supplies shared, immutable row-major marker bits for printable references and image

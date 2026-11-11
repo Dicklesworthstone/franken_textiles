@@ -245,3 +245,105 @@ test('load errors and image read limits do not hang the page or publish files', 
   p.current().emit({ type: 'loadError', message: 'missing module' });
   assert.equal(p.e.trace.disabled, true); assert.match(p.e.error.textContent, /missing module/);
 });
+
+test('all four browser workers reject missing or mismatched wasm_interface_stamp on real web/pkg bundles and accept the matching stamp', async () => {
+  const EXPECTED_STAMP = 'ftx-wasm-interface/2026-11-11.1';
+  for (const mode of ['missing', 'mismatch', 'match']) {
+    const stampExport = mode === 'missing'
+      ? {}
+      : { wasm_interface_stamp: () => (mode === 'match' ? EXPECTED_STAMP : 'ftx-wasm-interface/stale') };
+
+    // 1. web/worker.js
+    {
+      const sent = [];
+      const values = {
+        default: async () => {},
+        initSync: () => {},
+        program_info: () => '{}',
+        calibration_dictionaries: () => '[]',
+        ...stampExport,
+      };
+      const context = vm.createContext({ JSON, Date, TextDecoder, Uint8Array, WebAssembly, Error, self: {}, onmessage: null, postMessage: m => sent.push(m) });
+      const imports = new vm.SyntheticModule(Object.keys(values), function () {
+        for (const [k, v] of Object.entries(values)) this.setExport(k, v);
+      }, { context });
+      await imports.link(() => {}); await imports.evaluate();
+      const mod = new vm.SourceTextModule(read('worker.js'), { context, importModuleDynamically: () => imports });
+      await mod.link(() => {}); await mod.evaluate();
+      await context.onmessage({ data: { type: 'init', pkg: './pkg/', request: 1 } });
+      if (mode === 'match') {
+        assert.equal(sent.at(-1).type, 'ready');
+      } else {
+        assert.equal(sent.at(-1).type, 'error');
+        assert.match(sent.at(-1).message, /rebuild web\/pkg via \.\/tools\/build_web\.sh/);
+      }
+    }
+
+    // 2. web/materials-worker.js
+    {
+      const sent = [];
+      const values = { default: () => Promise.resolve(), initSync: () => {}, ...stampExport };
+      const context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error, self: {}, postMessage: m => sent.push(m) });
+      const imports = new vm.SyntheticModule(Object.keys(values), function () {
+        for (const [k, v] of Object.entries(values)) this.setExport(k, v);
+      }, { context });
+      const mod = new vm.SourceTextModule(read('materials-worker.js'), { context });
+      await mod.link(() => imports); await mod.evaluate();
+      await new Promise(resolve => setImmediate(resolve));
+      if (mode === 'match') {
+        assert.equal(sent.at(-1).type, 'ready');
+      } else {
+        assert.equal(sent.at(-1).type, 'loadError');
+        assert.match(sent.at(-1).message, /rebuild web\/pkg via \.\/tools\/build_web\.sh/);
+      }
+    }
+
+    // 3. web/photo-worker.js
+    {
+      const sent = [];
+      const values = {
+        default: async () => {},
+        initSync: () => {},
+        photo_section: () => '{"section":{}}',
+        ...stampExport,
+      };
+      const context = vm.createContext({ Uint8Array, ArrayBuffer, TextEncoder, JSON, Error, URL, self: { postMessage: m => sent.push(m) } });
+      const imports = new vm.SyntheticModule(Object.keys(values), function () {
+        for (const [k, v] of Object.entries(values)) this.setExport(k, v);
+      }, { context });
+      await imports.link(() => {}); await imports.evaluate();
+      const mod = new vm.SourceTextModule(read('photo-worker.js'), {
+        context,
+        initializeImportMeta: m => { m.url = 'https://unit.invalid/photo-worker.js'; },
+        importModuleDynamically: () => imports,
+      });
+      await mod.link(() => {}); await mod.evaluate();
+      await context.self.onmessage({ data: { request: 9, op: 'section', front: '{}', side: '{}', options: '{}' } });
+      if (mode === 'match') {
+        assert.equal(sent.at(-1).type, 'result');
+      } else {
+        assert.equal(sent.at(-1).type, 'error');
+        assert.match(sent.at(-1).message, /rebuild web\/pkg via \.\/tools\/build_web\.sh/);
+      }
+    }
+
+    // 4. web/trace-worker.js
+    {
+      const sent = [];
+      const values = { default: () => Promise.resolve(), initSync: () => {}, WebTrace: class {}, ...stampExport };
+      const context = vm.createContext({ Uint8Array, JSON, Error, self: {}, postMessage: m => sent.push(m) });
+      const imports = new vm.SyntheticModule(Object.keys(values), function () {
+        for (const [k, v] of Object.entries(values)) this.setExport(k, v);
+      }, { context });
+      const mod = new vm.SourceTextModule(read('trace-worker.js'), { context });
+      await mod.link(() => imports); await mod.evaluate();
+      await new Promise(resolve => setImmediate(resolve));
+      if (mode === 'match') {
+        assert.equal(sent.at(-1).type, 'ready');
+      } else {
+        assert.equal(sent.at(-1).type, 'loadError');
+        assert.match(sent.at(-1).message, /rebuild web\/pkg via \.\/tools\/build_web\.sh/);
+      }
+    }
+  }
+});

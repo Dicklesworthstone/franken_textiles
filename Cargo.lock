@@ -138,7 +138,6 @@ name = "ftx-trace"
 version = "0.1.0"
 dependencies = [
  "ftx-core",
- "ftx-export",
  "ftx-pattern",
  "miniz_oxide",
  "serde",

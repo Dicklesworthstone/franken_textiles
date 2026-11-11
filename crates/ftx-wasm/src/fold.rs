@@ -313,7 +313,7 @@ fn fold_on_source(
         opts.self_contact = Some(p);
     }
     opts.validate().map_err(m)?;
-    ftx_drape::material::resolve(&pat, &opts).map_err(m)?;
+    let material = ftx_drape::material::resolve(&pat, &opts).map_err(m)?;
     // Occupancy and the bare fitter must consume the same current evidence, including in direct
     // portable calls that have not passed through a saved round.
     let data = if measurements.get("records").is_some()
@@ -387,7 +387,7 @@ fn fold_on_source(
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
-    let mut run = if two_start {
+    let run = if two_start {
         ftx_drape::two_start::drape(
             &pat,
             fit_spec,
@@ -400,9 +400,36 @@ fn fold_on_source(
         drape(&pat, fit_spec, &body, &opts, &mut progress)
     }
     .map_err(m)?;
+    finalize_browser_fold(
+        run,
+        &pat,
+        &body,
+        &material,
+        description,
+        skin.contact_proxy_basis(),
+    )
+}
+
+fn finalize_browser_fold(
+    mut run: ftx_drape::run::DrapeRun,
+    pat: &Pattern,
+    body: &DrapeBody<'_>,
+    material: &ftx_drape::material::MaterialInputs,
+    description: Value,
+    contact_proxy_basis: Value,
+) -> Result<Fold, String> {
+    let m = |r: ftx_core::Refusal| r.message;
     run.report["body"] = description;
-    run.report["body_contact_proxy"] = skin.contact_proxy_basis();
-    let html = viewer(&run, &pat, &body, TEMPLATE)?;
+    run.report["body_contact_proxy"] = contact_proxy_basis;
+    run.report["qualification_basis"] =
+        ftx_drape::qualify::qualification_basis(body, material).map_err(m)?;
+    ftx_drape::qualify::gate_tightness(
+        &mut run.report,
+        &ftx_drape::qualify::QualificationStatus::unqualified(
+            "browser fold-up has no workspace qualification run (`ftx qualify`)",
+        ),
+    );
+    let html = viewer(&run, pat, body, TEMPLATE)?;
     Ok(Fold {
         report: run.report,
         viewer: html,
@@ -519,5 +546,121 @@ mod tests {
         );
         wearer.weight_kg = None;
         assert!(body_report(&wearer, &fit)["fit"]["weight_kg"].is_null());
+    }
+
+    #[test]
+    fn browser_fold_demotes_unqualified_tightness_in_report_and_viewer() {
+        use ftx_core::Vec3;
+        use ftx_drape::{PartFrame, scene::PartFrames};
+
+        struct Form;
+        impl PartFrames for Form {
+            fn frame(&self, _: &str) -> Option<PartFrame> {
+                Some(PartFrame {
+                    origin: Vec3::ZERO,
+                    up: Vec3::new(0., 0., 1.),
+                    front: Vec3::new(0., -1., 0.),
+                    lat: Vec3::new(1., 0., 0.),
+                })
+            }
+            fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+                Some(10.0)
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                30.0
+            }
+        }
+
+        let mut verts = Vec::new();
+        for z in [-0.02, 0.08] {
+            for i in 0..16 {
+                let (s, c) = ftx_core::det::sin_cos(i as f64 * std::f64::consts::TAU / 16.0);
+                verts.push(Vec3::new(0.03 * c, 0.03 * s, z));
+            }
+        }
+        let mut tris = Vec::new();
+        for i in 0..16 {
+            let j = (i + 1) % 16;
+            tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
+        }
+        let form = Form;
+        let body = DrapeBody {
+            frames: &form,
+            collision: (&verts, &tris),
+            display: (&verts, &tris),
+            arm_deg: 35.0,
+        };
+        let w = (0.94 * 0.06 * std::f64::consts::PI * 1000.0).round();
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [{
+                "id": "band",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [w, 0], "c": [w, 20], "d": [0, 20]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "notches": [],
+                "grain": [[0, 0], [0, 20]],
+                "placement": {"part": "torso", "radius_mm": 35, "x0": w / 2.0}
+            }],
+            "seams": [{"id": "join", "a": "band/right", "b": "band/left"}]
+        }));
+        let fit_spec = json!({
+            "schema": "fabric-fit/1",
+            "points": [{"id": "chest", "kind": "girth", "instances": ["band"], "landmark": "chest", "body": "chest", "target_mm": [-20, 0, 20]}]
+        });
+        let opts = DrapeOptions {
+            sew_steps: 20,
+            drape_steps: 0,
+            ..DrapeOptions::default()
+        };
+        let material = ftx_drape::material::resolve(&pat, &opts).unwrap();
+        let run = drape(&pat, &fit_spec, &body, &opts, |_| {}).unwrap();
+        let tight_flag = run.report["tightness_gating"][0]
+            .as_str()
+            .expect("tight ring should record tightness_gating")
+            .to_string();
+        assert!(
+            run.report["gating"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f.as_str() == Some(&tight_flag))
+        );
+
+        let folded =
+            finalize_browser_fold(run, &pat, &body, &material, json!({}), json!({})).unwrap();
+        assert_eq!(folded.report["tightness_qualified"], false);
+        assert_eq!(folded.report["collider_tightness_qualified"], false);
+        assert!(
+            !folded.report["gating"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f.as_str() == Some(&tight_flag))
+        );
+        assert!(
+            folded.report["flags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f.as_str() == Some(&tight_flag))
+        );
+        let (_, rest) = folded.viewer.split_once("\nconst D = ").unwrap();
+        let (escaped, _) = rest.split_once(";\nconst $ = ").unwrap();
+        let embedded: Value = serde_json::from_str(&escaped.replace("<\\/", "</")).unwrap();
+        assert_eq!(embedded["report"]["gating"], folded.report["gating"]);
+        assert!(
+            embedded["report"]["advisory"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f.as_str() == Some(&tight_flag))
+        );
     }
 }

@@ -192,20 +192,27 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   never reused. Failed, blocked, unscaled and inapplicable simulations do not render. New images
   use exclusive creation; the review permits only this round's six known paths and no symlinks.
   When `--sim` runs on a workspace, `WS/qualification/qualify.json` is checked (`check_qualification`):
-  a missing, failed or stale qualification keeps tightness flags advisory. A passing qualification
-  retains the tightness flags that were already gating. The native engine requires matching
-  `qualification_basis` identities for the posed collision body and resolved uniform material,
-  including body-contact parameters. Older reports require rerunning `ftx qualify`. Per-piece
-  material assemblies need separate qualification coverage.
+  a missing, failed or stale qualification keeps tightness flags advisory. The native engine requires matching
+  `qualification_basis` identities for the posed collision body (`body_sha256`) and either the resolved uniform
+  material (`material_sha256`) or all active simulated piece materials (`piece_material_sha256s`), including
+  body-contact parameters. Older reports require rerunning `ftx qualify`. Even when collider bands pass
+  (`collider_tightness_qualified: true`), wearer-blocking tightness promotion (`tightness_qualified: true`)
+  requires `|posed_chest_girth_mm - input_chest_mm| <= 5.0` mm and `|residual_mm| <= 5.0` mm on measured
+  girth targets at any `tightness_gating` landmark; larger residuals or `MODEL_FIT` priors demote those
+  tightness flags to `advisory` with an explicit note. After `gate_tightness` updates `sim_report.json`,
+  `rounds/NNN/sim/fold_viewer.html` is updated so its embedded `gating` and `advisory` arrays match
+  `sim_report.json` and `review.html`.
   Tests: `round_workflow`, `round_review`, and `round::stills` synthetic triangle scenes; these
   tests do not certify an Anny garment's fit or solve at every requested arm angle.
 - `ftx qualify [WS | --ws WS | --measurements M --out DIR] [--pattern P] [--fabric F] [--model PATH]
   [--body-fit PATH] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--json]`:
   runs the three known-answer chest bands (`-20`, `0`,
-  `+20` mm ease) at zero gravity (70 sew steps, no drape steps). Band widths use the torso girth
-  of the posed collision mesh at the chest placement landmark. The command reports that girth
-  and the input chest target in `qualify.json` (`fabric-qualify/1`, spec 04 §7.1) alongside
-  `pass`, `rows`, `fabric_key`, `qualification_basis` and the measurements file's `measurements_sha256`.
+  `+20` mm ease) at zero gravity (70 sew steps, no drape steps) for the uniform garment fabric or for
+  every distinct active simulated `piece.fabric` selection. Band widths use the torso girth
+  of the posed collision mesh at the chest placement landmark. The command reports that girth,
+  the input chest target, `chest_girth_residual_mm`, `collider_pass`, and `wearer_target_aligned`
+  in `qualify.json` (`fabric-qualify/1`, spec 04 §7.1) alongside `pass`, `rows`, optional
+  `piece_materials`, `fabric_key`, `qualification_basis` and `measurements_sha256`.
   Each band saves its `pattern.json`, the exact `fit_spec.json` used by the solve, and `sim/` outputs,
   so the band can be replayed through `ftx drape` with those saved inputs. It prints each
   band's result and `QUALIFIED` / `NOT QUALIFIED: ...`. Exit 0 when all three bands pass, 2 otherwise.

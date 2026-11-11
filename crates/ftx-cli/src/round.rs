@@ -657,7 +657,11 @@ fn simulate(
             let qdoc_ref = qdoc_owned
                 .as_ref()
                 .map(|r| r.as_ref().map_err(String::as_str));
-            // Native qualification also binds the actual posed collider and resolved material.
+            let fit_spec_owned = read_json(&rd.join("fit_spec.json").to_string_lossy())
+                .ok()
+                .map(|(v, _)| v);
+            // Native qualification also binds the actual posed collider, resolved material(s),
+            // and collider-vs-target landmark girth residuals.
             let meas_sha = ftx_core::receipt::sha256_hex(measurements_file);
             let qual = ftx_drape::qualify::check_qualification(
                 qdoc_ref,
@@ -667,13 +671,29 @@ fn simulate(
                 pattern.get("fabric"),
                 &report["qualification_basis"],
             );
-            if let Some(note) = ftx_drape::qualify::gate_tightness(&mut report, &qual) {
+            if let Some(note) = ftx_drape::qualify::gate_tightness_with_spec(
+                &mut report,
+                &qual,
+                fit_spec_owned.as_ref(),
+            ) {
                 notes.push(note);
             }
             let mut updated =
                 serde_json::to_vec_pretty(&report).map_err(|e| bad_input(e.to_string()))?;
             updated.push(b'\n');
             super::workspace::replace(&rd.join("sim/sim_report.json"), &updated)?;
+            let viewer_path = rd.join("sim/fold_viewer.html");
+            if regular(&viewer_path, false)? {
+                let raw_html = fs::read_to_string(&viewer_path).map_err(|e| io(&viewer_path, e))?;
+                let synced = ftx_drape::animation::sync_viewer_report(
+                    super::VIEWER_TEMPLATE,
+                    &raw_html,
+                    &report["gating"],
+                    &report["advisory"],
+                )
+                .map_err(bad_input)?;
+                super::workspace::replace(&viewer_path, synced.as_bytes())?;
+            }
             let basis = if ftx_pattern::truthy(&report["gating"]) {
                 "gating flags"
             } else {
@@ -844,119 +864,196 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             )
         })?;
     let input_chest_mm = Measurements(data).value("chest").ok();
+    let chest_girth_residual_mm = input_chest_mm.map(|target| chest_girth_mm - target);
+    let wearer_target_aligned = chest_girth_residual_mm
+        .is_some_and(|r| r.abs() <= ftx_drape::qualify::MAX_QUALIFIED_GIRTH_RESIDUAL_MM);
     let body = DrapeBody {
         frames: &frames,
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
-    let mut qualification_basis = Value::Null;
-    let mut bands = Vec::with_capacity(QUALIFY_EASES.len());
-    for ease in QUALIFY_EASES {
-        let bpat = band_pattern_from_girth(
-            chest_girth_mm,
-            ease,
-            DEFAULT_BAND_HEIGHT_MM,
-            pat.get("fabric"),
-        )?;
-        let material = ftx_drape::material::resolve(&Pattern::new(bpat.clone()), &opts)?;
-        if bands.is_empty() {
-            qualification_basis = ftx_drape::qualify::qualification_basis(&body, &material)?;
-        }
-        bands.push((ease, bpat));
-    }
-
     // spec 04 §7.1: the measurements file's sha256 (what a round compares, whichever engine runs it)
     let meas_sha = ftx_core::receipt::sha256_hex(&meas_bytes);
     let spec = band_fit_spec();
-    let mut rows = Vec::with_capacity(bands.len());
-    let mut lines = Vec::with_capacity(bands.len());
 
-    for (ease, bpat) in bands {
-        let bdir = out.join(format!("band_{ease:+}"));
-        make_dir(&bdir)?;
-        let pat_path = bdir.join("pattern.json");
-        write_json(&pat_path, &bpat)?;
-        write_json(&bdir.join("fit_spec.json"), &spec)?;
-        let sim_dir = bdir.join("sim");
-        super::reserve_drape_output(&sim_dir)?;
-        let pattern = Pattern::new(bpat);
-        let started = std::time::Instant::now();
-        let mut run = drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?;
-        run.report["body_contact_proxy"] = skin.contact_proxy_basis();
-        let mut report = run.report.clone();
-        if let Some(selected) = &fabric_override {
-            report["fabric_override"] = selected.receipt().clone();
-        }
-        if let Some(o) = report.as_object_mut() {
-            o.insert("pattern".into(), json!(pat_path.to_string_lossy()));
-            o.insert("measurements_sha256".into(), json!(meas_sha.clone()));
-            o.insert(
-                "wall_s".into(),
-                json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
-            );
-            let mut b = description.clone();
-            b.insert(
-                "pose".into(),
-                json!(format!(
-                    "drape: arms at {}° and straight, hands and feet left out of contact",
-                    body.arm_deg
-                )),
-            );
-            if !pose.legs.is_standing() {
-                b.insert("legs".into(), json!(pose.legs));
+    let run_three_bands = |group_out: &Path,
+                           fabric_sel: Option<&Value>|
+     -> Result<(Value, Vec<Value>, Vec<String>, bool), Refusal> {
+        let mut group_basis = Value::Null;
+        let mut bands = Vec::with_capacity(QUALIFY_EASES.len());
+        for ease in QUALIFY_EASES {
+            let bpat =
+                band_pattern_from_girth(chest_girth_mm, ease, DEFAULT_BAND_HEIGHT_MM, fabric_sel)?;
+            let material = ftx_drape::material::resolve(&Pattern::new(bpat.clone()), &opts)?;
+            if bands.is_empty() {
+                group_basis = ftx_drape::qualify::qualification_basis(&body, &material)?;
             }
-            if pose.leg_fraction != 1.0 {
-                b.insert("leg_fraction".into(), json!(pose.leg_fraction));
-            }
-            o.insert("body".into(), Value::Object(b));
+            bands.push((ease, bpat));
         }
-        let html = viewer(&run, &pattern, &body, super::VIEWER_TEMPLATE).map_err(bad_input)?;
-        let mesh = &run.scene.mesh;
-        let last = run.fold.frames.last().map_or(&[][..], Vec::as_slice);
-        let style = pattern.raw()["style"].as_str().unwrap_or("");
-        super::write_drape_output(
-            &sim_dir,
-            &report,
-            &[
-                ("fold.pc2", pc2(&run.fold.frames)),
-                (
-                    "mesh_map.json",
-                    serde_json::to_vec_pretty(&mesh_map(&run.scene.mesh, &run.fold))
-                        .map_err(|e| bad_input(e.to_string()))?,
-                ),
-                ("fold_viewer.html", html.into_bytes()),
-                (
-                    "garment.obj",
-                    super::obj(last, &mesh.faces, Some(&seam_colours(mesh, style))).into_bytes(),
-                ),
-                (
-                    "garment_strain.obj",
-                    super::obj(last, &mesh.faces, Some(&strain_colours(mesh, last))).into_bytes(),
-                ),
-                (
-                    "body.obj",
-                    super::obj(&full.vertices, &full.triangles, None).into_bytes(),
-                ),
-            ],
-        )?;
-        let (row, line, _) = evaluate_band(ease, &report);
-        rows.push(row);
-        lines.push(line);
-    }
+        let mut group_rows = Vec::with_capacity(bands.len());
+        let mut group_lines = Vec::with_capacity(bands.len());
+        for (ease, bpat) in bands {
+            let bdir = group_out.join(format!("band_{ease:+}"));
+            make_dir(&bdir)?;
+            let pat_path = bdir.join("pattern.json");
+            write_json(&pat_path, &bpat)?;
+            write_json(&bdir.join("fit_spec.json"), &spec)?;
+            let sim_dir = bdir.join("sim");
+            super::reserve_drape_output(&sim_dir)?;
+            let pattern = Pattern::new(bpat);
+            let started = std::time::Instant::now();
+            let mut run = drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?;
+            run.report["body_contact_proxy"] = skin.contact_proxy_basis();
+            let mut report = run.report.clone();
+            if let Some(selected) = &fabric_override {
+                report["fabric_override"] = selected.receipt().clone();
+            }
+            if let Some(o) = report.as_object_mut() {
+                o.insert("pattern".into(), json!(pat_path.to_string_lossy()));
+                o.insert("measurements_sha256".into(), json!(meas_sha.clone()));
+                o.insert(
+                    "wall_s".into(),
+                    json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
+                );
+                let mut b = description.clone();
+                b.insert(
+                    "pose".into(),
+                    json!(format!(
+                        "drape: arms at {}° and straight, hands and feet left out of contact",
+                        body.arm_deg
+                    )),
+                );
+                if !pose.legs.is_standing() {
+                    b.insert("legs".into(), json!(pose.legs));
+                }
+                if pose.leg_fraction != 1.0 {
+                    b.insert("leg_fraction".into(), json!(pose.leg_fraction));
+                }
+                o.insert("body".into(), Value::Object(b));
+            }
+            let html = viewer(&run, &pattern, &body, super::VIEWER_TEMPLATE).map_err(bad_input)?;
+            let mesh = &run.scene.mesh;
+            let last = run.fold.frames.last().map_or(&[][..], Vec::as_slice);
+            let style = pattern.raw()["style"].as_str().unwrap_or("");
+            super::write_drape_output(
+                &sim_dir,
+                &report,
+                &[
+                    ("fold.pc2", pc2(&run.fold.frames)),
+                    (
+                        "mesh_map.json",
+                        serde_json::to_vec_pretty(&mesh_map(&run.scene.mesh, &run.fold))
+                            .map_err(|e| bad_input(e.to_string()))?,
+                    ),
+                    ("fold_viewer.html", html.into_bytes()),
+                    (
+                        "garment.obj",
+                        super::obj(last, &mesh.faces, Some(&seam_colours(mesh, style)))
+                            .into_bytes(),
+                    ),
+                    (
+                        "garment_strain.obj",
+                        super::obj(last, &mesh.faces, Some(&strain_colours(mesh, last)))
+                            .into_bytes(),
+                    ),
+                    (
+                        "body.obj",
+                        super::obj(&full.vertices, &full.triangles, None).into_bytes(),
+                    ),
+                ],
+            )?;
+            let (row, line, _) = evaluate_band(ease, &report);
+            group_rows.push(row);
+            group_lines.push(line);
+        }
+        let group_pass = group_rows.iter().all(|r| r["pass"].as_bool() == Some(true));
+        Ok((group_basis, group_rows, group_lines, group_pass))
+    };
 
-    let all_pass = rows.iter().all(|r| r["pass"].as_bool() == Some(true));
-    let rec = json!({
+    let piece_selectors = ftx_drape::qualify::active_piece_fabric_selectors(&pat);
+    let (qualification_basis, rows, lines, all_pass, piece_materials) = if piece_selectors
+        .is_empty()
+    {
+        let (basis, rows, lines, pass) = run_three_bands(&out, pat.get("fabric"))?;
+        (basis, rows, lines, pass, None)
+    } else {
+        let garment_mat = ftx_drape::material::resolve(&Pattern::new(pat.clone()), &opts)?;
+        let basis = ftx_drape::qualify::qualification_basis(&body, &garment_mat)?;
+        let mut groups: BTreeMap<String, (Value, Vec<String>)> = BTreeMap::new();
+        for (pid, sel) in piece_selectors {
+            let probe =
+                band_pattern_from_girth(chest_girth_mm, 0, DEFAULT_BAND_HEIGHT_MM, Some(&sel))?;
+            let umat = ftx_drape::material::resolve(&Pattern::new(probe), &opts)?;
+            let ubasis = ftx_drape::qualify::qualification_basis(&body, &umat)?;
+            let mat_sha = ubasis["material_sha256"]
+                .as_str()
+                .ok_or_else(|| bad_input("missing uniform material_sha256 for piece fabric"))?
+                .to_string();
+            groups
+                .entry(mat_sha)
+                .or_insert_with(|| (sel, Vec::new()))
+                .1
+                .push(pid);
+        }
+        let mut primary_rows = Vec::new();
+        let mut all_lines = Vec::new();
+        let mut all_groups_pass = true;
+        let mut pm_records = Vec::with_capacity(groups.len());
+        for (idx, (mat_sha, (sel, piece_ids))) in groups.into_iter().enumerate() {
+            let group_dir = if idx == 0 {
+                out.clone()
+            } else {
+                let d = out.join(format!("piece_material_{idx:02}"));
+                make_dir(&d)?;
+                d
+            };
+            let (_, group_rows, group_lines, group_pass) = run_three_bands(&group_dir, Some(&sel))?;
+            if idx == 0 {
+                primary_rows.clone_from(&group_rows);
+            }
+            all_lines.push(format!(
+                "Piece material {} ({}):",
+                &mat_sha[..12],
+                piece_ids.join(", ")
+            ));
+            all_lines.extend(group_lines);
+            all_groups_pass &= group_pass;
+            pm_records.push(json!({
+                "material_sha256": mat_sha,
+                "fabric_key": fabric_key(Some(&sel)),
+                "piece_ids": piece_ids,
+                "rows": group_rows,
+                "pass": group_pass,
+            }));
+        }
+        (
+            basis,
+            primary_rows,
+            all_lines,
+            all_groups_pass,
+            Some(pm_records),
+        )
+    };
+
+    let mut rec = json!({
         "schema": "fabric-qualify/1",
         "engine": "ftx",
         "measurements_sha256": meas_sha,
         "posed_chest_girth_mm": chest_girth_mm,
         "input_chest_mm": input_chest_mm,
+        "chest_girth_residual_mm": chest_girth_residual_mm,
+        "max_wearer_girth_residual_mm": ftx_drape::qualify::MAX_QUALIFIED_GIRTH_RESIDUAL_MM,
+        "wearer_target_aligned": wearer_target_aligned,
         "qualification_basis": qualification_basis,
         "fabric_key": fabric_key(pat.get("fabric")),
         "rows": rows,
+        "collider_pass": all_pass,
         "pass": all_pass,
     });
+    if let Some(pm) = piece_materials {
+        rec["piece_materials"] = json!(pm);
+    }
     write_json(&out.join("qualify.json"), &rec)?;
     // spec 04 §7.1's printout: a line per band, then the verdict
     let mut text = format!("Posed torso girth at the chest landmark: {chest_girth_mm:.2} mm");
@@ -965,6 +1062,17 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     }
     text.push('\n');
     text.push_str(&lines.join("\n"));
+    if all_pass && !wearer_target_aligned {
+        match chest_girth_residual_mm {
+            Some(res) => text.push_str(&format!(
+                "\nNOTE: collider bands passed, but posed chest girth differs from input chest by {res:+.2} mm (max ±{:.1} mm); wearer tightness flags stay advisory",
+                ftx_drape::qualify::MAX_QUALIFIED_GIRTH_RESIDUAL_MM
+            )),
+            None => text.push_str(
+                "\nNOTE: collider bands passed, but chest target is absent from measurements; wearer tightness flags stay advisory",
+            ),
+        }
+    }
     text.push_str(if all_pass {
         "\nQUALIFIED"
     } else {

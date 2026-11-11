@@ -209,9 +209,10 @@ landmarks, residuals), `ftx-drape-scene/1` and `ftx-drape-report/1` (§11.8).
 - **Determinism**: single-threaded fixed-order assembly in solvers; candidate lists sorted with
   `total_cmp` and index tie-breaks; no iteration over hash maps in anything that affects output;
   deterministic elementary functions (`ln`, `exp`, `atan2`, `acos`) lifted from frankensim instead of the
-  platform maths library where results must match across native and wasm; no fused multiply-add in hot loops
-  that must be bit-identical on wasm. Target: identical final-state digests native debug, native release and
-  wasm (§17.5).
+  platform maths library where results must match across native and wasm; no compiler-contracted multiply-add
+  in hot loops that must be bit-identical on wasm (an explicit `f64::mul_add` is a correctly rounded IEEE-754
+  fused multiply-add on both native and `wasm32`, so it is deterministic). Target: identical final-state digests
+  native debug, native release and wasm (§17.5).
 - **Refusals, never silent clamps**: typed refusal records with a stable code, a message and a ranked list of
   repairs, for non-finite input, degenerate geometry, an inward-wound body, an intersecting drape start, a
   candidate-budget overflow (refuse, never truncate), a Newton stall, a budget stop (publishes nothing
@@ -593,26 +594,24 @@ neither anatomical correspondence, camera accuracy, measurement readiness nor ph
 
 ---
 
-## 16. Workspace crates, budgets, dependency direction and dependency policy
+## 16. Workspace crates, dependency direction and dependency policy
 
 Ten crates, not a tower of tiny layers. A crate joins the workspace when it gets real code. No crate outside
-this table without explicit approval.
+this table without explicit approval. Arbitrary per-crate and workspace line-count ceilings are retired by
+maintainer decision alongside the §25 textile-materials, multiphysics and manufacturing expansion.
 
-| Crate | Responsibility | Planned Rust lines incl. tests |
-|---|---|---:|
-| `ftx-core` | Units, deterministic maths, curves/polylines/polygons, schemas, refusals, receipts | 8,000 |
-| `ftx-pattern` | Pattern model, instances, validation, alteration, drafting programs | 16,000 |
-| `ftx-body` | Anny forward model, tape functionals, fitting, poses, landmarks | 9,000 |
-| `ftx-measure` | Catalogue, priors, fusion, readiness, photo scale, photogrammetry | 16,000 |
-| `ftx-drape` | Garment meshing and scene, contact cloth solver, metrics and flags | 14,000 |
-| `ftx-export` | SVG, PDF, DXF, HPGL, cutter, GarmentCode, DST, acceptance checks | 14,000 |
-| `ftx-trace` | Tracing pattern sheets | 7,000 |
-| `ftx-cli` | The `ftx` binary, rounds, reports | 4,000 |
-| `ftx-wasm` | Browser bindings | 3,000 |
-| `ftx-conformance` | Oracle fixtures, differential, known-answer and determinism tests | 9,000 |
-| **Planned** | | **100,000** |
-| Contingency | | 20,000 |
-| **Ceiling** | | **120,000** |
+| Crate | Responsibility |
+|---|---|
+| `ftx-core` | Units, deterministic maths, curves/polylines/polygons, `PyJson`/text/pole helpers, schemas, refusals, receipts |
+| `ftx-pattern` | Pattern model, instances, validation, alteration, drafting programs, source-bearing material catalog & laws |
+| `ftx-body` | Anny forward model, tape functionals, fitting, poses, landmarks |
+| `ftx-measure` | Catalogue, priors, fusion, readiness, photo scale, photogrammetry |
+| `ftx-drape` | Garment meshing and scene, contact cloth solver, multiphysics transport, qualification, metrics and flags |
+| `ftx-export` | SVG, PDF, DXF, HPGL, cutter, GarmentCode, DST, cutting/sewing planners, acceptance checks |
+| `ftx-trace` | Tracing pattern sheets, printable calibration references, raster decoders |
+| `ftx-cli` | The `ftx` and `ftx-materials` binaries, rounds, reports |
+| `ftx-wasm` | Browser bindings for the local `web/` workbenches (`index.html`, `materials.html`, `photo.html`, `trace.html`, `calibration/`) |
+| `ftx-conformance` | Oracle fixtures, differential, known-answer, property and determinism tests |
 
 Dependency direction:
 

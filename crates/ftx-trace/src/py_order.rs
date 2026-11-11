@@ -7,7 +7,7 @@
 //! stays), and every value it computes is marked. The typed result fills the marks, and
 //! `PyJson::dumps(Some(1))` of the outcome is the reference's `json.dump(obj, fh, indent=1)`.
 
-use ftx_export::pyjson::PyJson;
+use ftx_core::pyjson::PyJson;
 use ftx_pattern::PyError;
 use ftx_pattern::doc::PatternDoc;
 use serde_json::Value;

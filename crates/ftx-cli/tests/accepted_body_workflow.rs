@@ -302,15 +302,20 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
     );
     let mut native = read(&dir.join("leg-fold/sim_report.json"));
     assert!(native["qualification_basis"].is_object());
-    for field in [
-        "pattern",
-        "wall_s",
-        "measurements_sha256",
-        "qualification_basis",
-    ] {
+    assert_eq!(
+        native["qualification_basis"],
+        folded.report["qualification_basis"]
+    );
+    assert_eq!(folded.report["tightness_qualified"], false);
+    assert_eq!(folded.report["collider_tightness_qualified"], false);
+    for field in ["pattern", "wall_s", "measurements_sha256"] {
         native.as_object_mut().unwrap().remove(field);
     }
-    assert_eq!(native, folded.report);
+    let mut folded_report = folded.report.clone();
+    for field in ["tightness_qualified", "collider_tightness_qualified"] {
+        folded_report.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(native, folded_report);
     assert_eq!(native["body"]["legs"], "seated");
     assert_eq!(native["body"]["leg_fraction"], 0.001);
     assert_eq!(native["numerical"]["settling"]["max_steps"], 2);
@@ -675,17 +680,23 @@ fn nappy_occupancy_preserves_bare_evidence_and_drives_native_portable_and_motion
     assert_eq!(native["body"]["nappy_occupancy"], *receipt);
     // Native tape summaries retain their documented display rounding; cloth state is exact.
     assert!(native["qualification_basis"].is_object());
-    for field in [
-        "pattern",
-        "wall_s",
-        "measurements_sha256",
-        "qualification_basis",
-        "body",
-    ] {
+    assert_eq!(
+        native["qualification_basis"],
+        portable.report["qualification_basis"]
+    );
+    assert_eq!(portable.report["tightness_qualified"], false);
+    assert_eq!(portable.report["collider_tightness_qualified"], false);
+    for field in ["pattern", "wall_s", "measurements_sha256", "body"] {
         native.as_object_mut().unwrap().remove(field);
     }
     let mut portable_report = portable.report;
-    portable_report.as_object_mut().unwrap().remove("body");
+    for field in [
+        "body",
+        "tightness_qualified",
+        "collider_tightness_qualified",
+    ] {
+        portable_report.as_object_mut().unwrap().remove(field);
+    }
     assert_eq!(native, portable_report);
     assert_eq!(
         std::fs::read_to_string(dir.join("nappy-fold/fold_viewer.html")).unwrap(),
@@ -2612,15 +2623,20 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
     );
     let mut native = read(&dir.join("sim/sim_report.json"));
     assert!(native["qualification_basis"].is_object());
-    for field in [
-        "pattern",
-        "wall_s",
-        "measurements_sha256",
-        "qualification_basis",
-    ] {
+    assert_eq!(
+        native["qualification_basis"],
+        portable.report["qualification_basis"]
+    );
+    assert_eq!(portable.report["tightness_qualified"], false);
+    assert_eq!(portable.report["collider_tightness_qualified"], false);
+    for field in ["pattern", "wall_s", "measurements_sha256"] {
         native.as_object_mut().unwrap().remove(field);
     }
-    assert_eq!(native, portable.report);
+    let mut portable_report = portable.report.clone();
+    for field in ["tightness_qualified", "collider_tightness_qualified"] {
+        portable_report.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(native, portable_report);
     assert_eq!(
         std::fs::read_to_string(dir.join("sim/fold_viewer.html")).unwrap(),
         portable.viewer
@@ -3611,4 +3627,179 @@ fn seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape
     assert_eq!(motion["physical_validation_claim"], false);
     assert_eq!(read(&dir.join("body-input.json")), body);
     assert_eq!(std::fs::read(dir.join("model.ftxbody")).unwrap(), bytes);
+}
+
+#[test]
+fn portable_fold_and_round_viewer_demote_unqualified_tightness_in_report_and_html() {
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let accepted = receipt(&digest);
+    let accepted_raw = serde_json::to_string_pretty(&accepted).unwrap();
+    let params = model.params(ftx_body::Phenotype {
+        gender: 1.0,
+        age: ftx_body::age_parameter_for_years(2.5),
+        height: 0.6,
+        ..Default::default()
+    });
+    let rest = model.rest(&params).unwrap();
+    let posed = model
+        .pose(
+            &rest,
+            &ftx_body::pose_deltas(&model, &rest, &ftx_body::Pose::drape(), 1.0).unwrap(),
+        )
+        .unwrap();
+    let skin = ftx_body::clothing_skin(&model, &posed.vertices).unwrap();
+    let frames = ftx_body::BodyFrames::new(&model, &posed).unwrap();
+    let torso = frames.torso.origin / 1000.0;
+    let girth_mm = ftx_body::tape::girth(
+        &skin.vertices,
+        &skin.triangles,
+        torso.z + 0.010,
+        [torso.x, torso.y],
+    )
+    .unwrap()
+        * 1000.0;
+    let mut tight_pat: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let band_width = (girth_mm * 0.95).round();
+    tight_pat["pieces"][0]["vertices"]["b"][0] = json!(band_width);
+    tight_pat["pieces"][0]["vertices"]["c"][0] = json!(band_width);
+    tight_pat["pieces"][0]["placement"]["radius_mm"] =
+        json!(girth_mm / std::f64::consts::TAU + 5.0);
+    tight_pat["pieces"][0]["placement"]["x0"] = json!(band_width / 2.0);
+    let fit_spec = json!({
+        "schema": "fabric-fit/1",
+        "points": [{
+            "id": "waist_band",
+            "kind": "girth",
+            "instances": ["band"],
+            "landmark": "waist",
+            "body": "waist",
+            "target_mm": [-50, 0, 50]
+        }]
+    });
+    let measurements = json!({
+        "schema": "fabric-measurements/1",
+        "wearer": {"age_months": 30, "sex": "F", "stature_mm": 1300.0},
+        "taken_on": "2026-10-01",
+        "records": [
+            {"name": "stature", "value_mm": 1300.0, "sigma_mm": 5.0, "provenance": "MEASURED_TAPE"},
+            {"name": "chest", "value_mm": girth_mm, "sigma_mm": 2.0, "provenance": "MEASURED_TAPE"},
+            {"name": "waist", "value_mm": girth_mm, "sigma_mm": 2.0, "provenance": "MEASURED_TAPE"}
+        ],
+        "fused": {
+            "stature": {"value_mm": 1300.0, "sigma_mm": 5.0},
+            "chest": {"value_mm": girth_mm, "sigma_mm": 2.0},
+            "waist": {"value_mm": girth_mm, "sigma_mm": 2.0}
+        }
+    });
+    let source = ftx_wasm::fold::BodyFitSource {
+        model_sha256: &digest,
+        report: &accepted_raw,
+        arm_deg: 35.0,
+    };
+    let portable = ftx_wasm::fold::fold_up_configured(
+        &model,
+        &tight_pat,
+        &measurements,
+        &fit_spec,
+        ftx_wasm::fold::FoldSettings::default(),
+        Some(&source),
+        |_| {},
+    )
+    .unwrap();
+    let tight_flags = portable.report["tightness_gating"].as_array().unwrap();
+    assert!(
+        !tight_flags.is_empty(),
+        "tight band should emit tightness_gating: {}",
+        portable.report
+    );
+    let tight_flag = tight_flags[0].as_str().unwrap();
+    assert_eq!(portable.report["tightness_qualified"], false);
+    assert_eq!(portable.report["collider_tightness_qualified"], false);
+    assert!(
+        !portable.report["gating"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(tight_flag)),
+        "browser fold-up must demote unqualified tightness from gating: {}",
+        portable.report
+    );
+    let viewer_payload = |html: &str| -> Value {
+        let (_, rest) = html.split_once("\nconst D = ").unwrap();
+        let (escaped, _) = rest.split_once(";\nconst $ = ").unwrap();
+        serde_json::from_str(&escaped.replace("<\\/", "</")).unwrap()
+    };
+    let p_view = viewer_payload(&portable.viewer);
+    assert_eq!(p_view["report"]["gating"], portable.report["gating"]);
+    assert!(
+        p_view["report"]["advisory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(tight_flag)),
+        "browser fold_viewer.html must list demoted tightness in advisory: {}",
+        p_view["report"]
+    );
+
+    // Native round without qualify.json must also sync rounds/001/sim/fold_viewer.html with sim_report.json.
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    save(&dir.join("accepted.json"), &accepted);
+    save(&dir.join("tight.json"), &tight_pat);
+    save(&dir.join("fit.json"), &fit_spec);
+    save(&dir.join("m.json"), &measurements);
+    let round = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "round",
+            "ws",
+            "--measurements",
+            "m.json",
+            "--pattern",
+            "tight.json",
+            "--fit",
+            "fit.json",
+            "--sim",
+            "--body-fit",
+            "accepted.json",
+            "--model",
+            "model.ftxbody",
+            "--as-of",
+            "2026-10-15",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let round_out = String::from_utf8_lossy(&round.stdout);
+    assert!(
+        matches!(round.status.code(), Some(0 | 2)),
+        "{}\n{}",
+        String::from_utf8_lossy(&round.stderr),
+        round_out
+    );
+    let r0 = read(&dir.join("ws/rounds/000/sim/sim_report.json"));
+    assert_eq!(r0["tightness_qualified"], false);
+    assert!(
+        !r0["gating"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(tight_flag))
+    );
+    assert!(
+        r0["advisory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(tight_flag))
+    );
+    let r0_html = std::fs::read_to_string(dir.join("ws/rounds/000/sim/fold_viewer.html")).unwrap();
+    let r0_view = viewer_payload(&r0_html);
+    assert_eq!(r0_view["report"]["gating"], r0["gating"]);
+    assert_eq!(r0_view["report"]["advisory"], r0["advisory"]);
 }

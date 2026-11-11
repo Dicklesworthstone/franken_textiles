@@ -22,11 +22,14 @@ pub mod intersection;
 pub mod linalg;
 pub mod np;
 pub mod philox;
+pub mod pole;
 pub mod polyline;
 pub mod py;
+pub mod pyjson;
 pub mod receipt;
 pub mod refusal;
 pub mod response_curve;
+pub mod text;
 pub mod textile;
 pub mod vec;
 

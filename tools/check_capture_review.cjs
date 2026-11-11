@@ -118,7 +118,7 @@ async function sheetReview(page, records = report) {
 }
 (async () => {
   verifyFiles();
-  const browser = await chromium.launch({headless: true});
+  const browser = await chromium.launch({headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE || process.env.FTX_CHROMIUM_EXECUTABLE || undefined});
   const errors = [], requests = [], userAgent = "OpenAI File Downloader, XaiImageApiFetch/1.0";
   function observe(context) {
     context.on("request", r => requests.push({url: r.url(), method: r.method()}));

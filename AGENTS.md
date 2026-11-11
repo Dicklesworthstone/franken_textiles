@@ -203,23 +203,22 @@ workspace.
 
 ---
 
-## Planned Workspace Crates
+## Workspace Crates
 
-Ten crates. No new crate without explicit user approval.
+Ten crates. No new crate without explicit user approval (per-crate and workspace line-count ceilings are retired by maintainer decision).
 
-| Crate | Responsibility | Planned lines incl. tests |
-|---|---|---:|
-| `ftx-core` | Units, deterministic maths, curves, polygons, schemas, refusals, receipts | 8,000 |
-| `ftx-pattern` | Pattern model, instances, validation, alteration, drafting | 16,000 |
-| `ftx-body` | Anny forward model, tape functionals, fitting, poses, landmarks | 9,000 |
-| `ftx-measure` | Catalogue, priors, fusion, readiness, photo scale, photogrammetry | 16,000 |
-| `ftx-drape` | Garment scene, contact cloth solver, metrics and flags | 14,000 |
-| `ftx-export` | SVG, PDF, DXF, HPGL, cutter, GarmentCode, DST, acceptance checks | 14,000 |
-| `ftx-trace` | Tracing pattern sheets | 7,000 |
-| `ftx-cli` | The `ftx` binary | 4,000 |
-| `ftx-wasm` | Browser bindings | 3,000 |
-| `ftx-conformance` | Oracle, known-answer and determinism tests | 9,000 |
-| **Ceiling (with 20,000 contingency)** | | **120,000** |
+| Crate | Responsibility |
+|---|---|
+| `ftx-core` | Units, deterministic maths, curves, polygons, `PyJson`/text/pole helpers, schemas, refusals, receipts |
+| `ftx-pattern` | Pattern model, instances, validation, alteration, drafting, source-bearing material catalog & laws |
+| `ftx-body` | Anny forward model, tape functionals, fitting, poses, landmarks |
+| `ftx-measure` | Catalogue, priors, fusion, readiness, photo scale, photogrammetry |
+| `ftx-drape` | Garment scene, contact cloth solver, multiphysics transport, qualification, metrics and flags |
+| `ftx-export` | SVG, PDF, DXF, HPGL, cutter, GarmentCode, DST, cutting/sewing planners, acceptance checks |
+| `ftx-trace` | Tracing pattern sheets, printable calibration references, raster decoders |
+| `ftx-cli` | The `ftx` and `ftx-materials` binaries |
+| `ftx-wasm` | Browser bindings for the local `web/` workbenches |
+| `ftx-conformance` | Oracle, known-answer, property and determinism tests |
 
 ### Dependency Direction
 
@@ -384,7 +383,8 @@ The workspace contains all ten planned crates (`ftx-core`, `ftx-pattern`, `ftx-b
 `ftx-drape`, `ftx-export`, `ftx-trace`, `ftx-cli`, `ftx-wasm`, `ftx-conformance`), the six behaviour and data
 specifications in `docs/spec/01…06-*.md`, the subsystem design notes in `docs/*.md`, the oracle capture and
 body-model conversion scripts in `tools/`, the captured oracle fixtures in `tests/fixtures/oracle/`, the
-browser entry in `web/`, `FEATURE_PARITY.md`, and `.beads/` (prefix `ftx`) holding the active work breakdown.
+five local browser workbenches in `web/` (`index.html`, `materials.html`, `photo.html`, `trace.html`,
+`calibration/`), `FEATURE_PARITY.md`, and `.beads/` (prefix `ftx`) holding the active work breakdown.
 
 ---
 

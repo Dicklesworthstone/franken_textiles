@@ -669,11 +669,19 @@ chest, body: chest, target_mm: [−50, 0, 50]}]}`.
 expected, pass, max_seam_gap_mm}], fabric_key, measurements_sha256}`, where `fabric_key = [areal_g_m2, tensile_N_m,
 bending_Nm]` of the pattern's fabric (null when no pattern was given).
 
-Native reports also include `posed_chest_girth_mm` and `input_chest_mm` (null when absent).
+Native reports also include `posed_chest_girth_mm`, `input_chest_mm` (null when absent),
+`chest_girth_residual_mm` (`posed_chest_girth_mm − input_chest_mm`, null when `input_chest_mm` is
+absent), `max_wearer_girth_residual_mm` (`5.0` mm), `collider_pass`, and `wearer_target_aligned`.
 The native `qualification_basis` binds the exact posed collision vertices/triangles, arm angle,
-torso frame and chest landmark, plus the resolved uniform material snapshot, effective mass,
-stiffness, bending, compression and body-contact parameters. Per-piece material fields have no
-uniform material identity.
+torso frame and chest landmark (`body_sha256`), plus:
+- for uniform garments (`piece.fabric` absent on simulated pieces), `material_sha256` over the
+  resolved source snapshot, effective mass, stiffness, bending, compression and body-contact
+  parameters;
+- for per-piece assemblies (`piece.fabric` present on simulated pieces), `material_sha256: null`
+  and `piece_material_sha256s`: the sorted deduplicated per-sheet SHA-256 digests over each active
+  simulated piece's resolved source snapshot, effective sheet law, compression and body-contact
+  parameters (`piece_materials` in `qualify.json` records each distinct active sheet's three-band
+  results).
 
 Native `--arm-deg`, `--legs standing|seated|squat` and `--leg-fraction` use the same pose parser
 as `ftx drape` and `ftx round`. Band reports retain the selected leg posture and fraction.
@@ -699,17 +707,29 @@ Check in order:
 | otherwise | pass: `qualified for this body and fabric` |
 
 The native round additionally requires an `ftx` engine result with matching `qualification_basis`
-body and uniform-material SHA-256 values. Missing identities in older reports require a fresh
-qualification run. A different posed collider, material snapshot or body-contact policy keeps
-tightness advisory. Per-piece material assemblies require their own qualification coverage.
+`body_sha256` and either matching uniform `material_sha256` or complete `piece_material_sha256s`
+coverage across all active simulated pieces. Missing identities in older reports require a fresh
+qualification run. When the posed collider and material(s) pass the three chest bands (`collider_pass = true`),
+promoting a tightness flag from `advisory` to a wearer-blocking `gating` flag additionally requires:
+1. `input_chest_mm` present and `|posed_chest_girth_mm − input_chest_mm| ≤ 5.0` mm (`wearer_target_aligned = true`); and
+2. for any `tightness_gating` landmark evaluated on a fitted or accepted body, a measured/compared
+   target residual within `±5.0` mm (unmeasured `MODEL_FIT` priors or larger residuals keep that
+   landmark's tightness flag `advisory` with an explicit residual note, while retaining
+   `collider_tightness_qualified: true`).
 
 ### 7.3 `gate_tightness(sim, qual)`
 
-1. Set `sim.tightness_qualified = qual.pass`.
+1. Set `sim.tightness_qualified = qual.pass` and `sim.collider_tightness_qualified = qual.collider_pass`.
 2. Let `tight` = the entries of `tightness_gating` that are also in `gating`.
-3. If `tight` is empty or the qualification passed, return nothing.
-4. Otherwise remove `tight` from `gating` (they stay in `flags`) and return the note
+3. If `tight` is empty, return nothing.
+4. If `!qual.pass`, remove `tight` from `gating` (they stay in `flags` and move into `advisory`) and return the note
    `{n} tightness flag(s) kept advisory: {why}`.
+5. If `qual.pass`, check each `tight` entry's landmark body residual when `sim.body` is present; demote any entry
+   whose landmark target was unmeasured (`MODEL_FIT`) or whose `|residual_mm| > 5.0` mm out of `gating` into
+   `advisory` with an explicit residual note.
+6. Any saved viewer HTML for the round (`rounds/NNN/sim/fold_viewer.html`) and browser fold-up (`ftx-wasm::fold`,
+   where no workspace `qualify.json` exists so `tightness_qualified = false`) must reflect the post-`gate_tightness`
+   `gating` and `advisory` arrays.
 
 ---
 
