@@ -1101,7 +1101,10 @@ mod tests {
         changed.keyframes[0].root_rotation_rad.as_mut().unwrap()[2] += 0.01;
         assert_ne!(
             actual.sha256(),
-            fitted.motion_path(&model, &digest, &changed).unwrap().sha256()
+            fitted
+                .motion_path(&model, &digest, &changed)
+                .unwrap()
+                .sha256()
         );
         assert!(actual.validate_for(&changed, &fitted.body()).is_err());
     }
