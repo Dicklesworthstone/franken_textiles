@@ -47,6 +47,8 @@ struct Options {
     #[serde(skip_serializing_if = "Option::is_none")]
     static_equilibrium: Option<StaticEquilibriumOptions>,
     step: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_subdivision: Option<crate::stepping::SubdivisionOptions>,
     tol: f64,
     compression: f64,
     lag_rounds: [usize; 2],
@@ -70,6 +72,25 @@ impl<'de> Deserialize<'de> for DrapeOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subdivision_is_opt_in_and_preserves_the_exact_requested_budget() {
+        let ordinary = serde_json::to_value(DrapeOptions::default()).unwrap();
+        assert!(ordinary.get("time_subdivision").is_none());
+        let mut declared = ordinary.clone();
+        declared["time_subdivision"] = serde_json::json!({"max_halvings":8,"max_trials":512});
+        let options: DrapeOptions = serde_json::from_value(declared.clone()).unwrap();
+        options.validate().unwrap();
+        assert_eq!(serde_json::to_value(options).unwrap(), declared);
+        assert!(
+            serde_json::from_value::<DrapeOptions>(ordinary)
+                .unwrap()
+                .time_subdivision
+                .is_none()
+        );
+        declared["time_subdivision"]["relax_tolerance"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
+    }
 
     #[test]
     fn omitted_hold_preserves_the_wire_and_an_explicit_window_round_trips() {

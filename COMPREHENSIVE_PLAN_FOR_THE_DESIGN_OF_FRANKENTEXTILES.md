@@ -3530,6 +3530,9 @@ and replicated per-piece material/history records, not only selected candidates.
 Both native commands and the existing portable study interfaces use this same authority. Browser
 studies expose exact intermediate before/after/request downloads for alternatives and screened or
 adaptive trials, retaining final admission/refusal status and withdrawing obsolete links on edits.
+Guided grid and adaptive controls can also snapshot a complete source-qualified pattern-treatment
+request into their ordered post-alteration sequence. Each trial reaches the same final treated
+geometry, fit and material-state gates; later uploads cannot silently replace an authored step.
 The laundered-denim example can emit a complete comparison of untreated, treated, compensated and
 compensated-then-treated panels. This implements the software scope of `ftx-care1.3`; measured sewn
 restraint, process-dependent contact and held-out garment behavior remain under `ftx-care1`.
@@ -5374,9 +5377,13 @@ The initial-state receipt binds source model, initial frame, retained owners and
 Ordinary material/design comparisons independently reconcile that receipt and include only used
 initial values in complete-history extrema. Unknown pieces, invalid source domains and unsupported
 dissipation combinations refuse without erasing independent drape or manufacturing consumers.
-Scalar-only requests keep their original serialization and calculations. This software increment
-is tracked by `ftx-ms2.20`; arbitrary initial depth profiles, wet coupling and measured garment
-temperature acceptance remain separate. See [material-scenario-studies.md](docs/material-scenario-studies.md).
+Scalar-only requests keep their original serialization and calculations. The scalar increment
+is tracked by `ftx-ms2.20`. Exact source inside-to-outside depth profiles are also supported for
+every retained physical instance (`ftx-ms2.32`), with body-facing reversal, complete thermal and
+active heat-conversion domain admission, and a versioned initial-state receipt. Comparisons
+independently reconstruct covered and exposed enthalpy and exclude signed remap residuals from
+physical storage. Wet coupling and measured garment temperature acceptance remain separate.
+See [material-scenario-studies.md](docs/material-scenario-studies.md).
 
 ### 25.174 Author body and garment-layer heat through ordinary workbench controls
 
@@ -5550,6 +5557,12 @@ cover intermediate output, incoming waits and actual selected cells. Independent
 both cell slots through their complete qualified handoff, while worker-owned transfers use their
 explicit pickup/deposit boundaries.
 
+An optional complete `bounded_staging.cell_capacities` map gives each configured physical cell
+its own qualified slot limit, including unused eligible alternatives. Search and independent replay
+use those limits without borrowing the uniform fallback or another cell's inventory. Original
+omitted/null requests retain uniform behavior; reports and all three browser views expose the
+effective limits, and material comparisons bind even unused capacity assumptions (`ftx-pb2.2.18`).
+
 Buffer delays recheck complete operation, fixture, worker, transfer and calendar constraints.
 Bounded dispatch retains complete incumbents and independently reconstructs capacity histories;
 undispatched releases remain conservative open tails. This advances `ftx-pb2.2` without claiming
@@ -5650,6 +5663,59 @@ use the same welded-vertex union, exact reaction fields and source identities; e
 retains its earliest sample witness. Comparison admission replays complete reductions and rejects
 partial or inconsistent sums, while legacy receipts retain their original metrics. This advances
 `ftx-ms2` and `ftx-ds2`; mesh/contact-policy dependence and independent physical qualification remain.
+
+### 25.192 Connect bounded step recovery to garment consumers
+
+Ordinary garment drapes now expose the existing transactional time-bisection solver through an
+optional `time_subdivision` policy. CLI drapes, simulated rounds, configured portable folds and
+material/scenario studies share the same implementation and limits. One attempted-step allowance
+covers sewing, gravity and extra settling within each run; studies reserve that full allowance before
+starting an alternative. Failed nominal intervals restore the complete solver, while accepted
+partitions preserve nominal frame times and report actual substep solves, sampled speeds and contact
+diagnostics. Regression cases cover real Newton recovery, rollback, phase-shared exhaustion,
+default-path identity and native/portable consumption. This advances `ftx-dr1`; it does not relax
+convergence or contact admission, certify time-discretization error, or replace the outstanding
+empirical drape and fit gates.
+
+### 25.193 Translate the selected body through prescribed garment motion
+
+Explicit whole-body offsets extend arm and leg endpoints into lateral, rising and falling movement.
+Each offset is absolute in the existing world frame and applies to the complete selected source
+surface before collision extraction. Endpoints always reuse the same shape and occupancy; omitted
+offsets return to the original origin. The existing continuous-contact solver advances the sewn cloth,
+and retained samples remain the authority for heat, coverage and comparison decisions.
+
+Native and portable scenarios and the guided workbench share the same bounded trajectory, including
+saved named cases, explicit zero returns and unchanged legacy requests. This advances `ftx-mv1`;
+prescribed movement does not establish measured anatomy, floor or chair support, or physical fit.
+
+### 25.194 Author anatomical targets in the local Photo Workbench
+
+The portable capture workflow now starts with explicit locations on the actual unfitted body model.
+Native and browser reviews share the same surface, vertex and bone-endpoint picker and geometry
+authority. Users can populate an empty target map or repair missing definitions for already-observed
+names, then continue through observation authoring, independent starts, preview and fitting.
+
+Source-bound application changes only model targets in Rust, preserving camera and image evidence,
+observations, tape constraints, starts and exact frame identities. Pending edits and source changes
+withdraw obsolete fits and garment handoffs. This completes the software authoring slice `ftx-bt1`;
+anatomical correspondence remains an operator declaration, separate from empirical body and garment
+qualification.
+
+### 25.195 Rotate the selected body during continuous garment motion
+
+Absolute root rotation vectors extend prescribed garment motion to whole-body turns and tilts.
+Each finite axis-times-angle vector has norm at most pi radians and rotates the complete selected
+source surface before its existing world translation. Omitted/null rotation returns to the original
+orientation at that endpoint; explicit zero preserves the old geometry exactly. One scaled,
+deterministic rotation law admits and constructs endpoints without erasing tiny nonzero angles.
+
+Native and portable scenarios, guided motion controls and frozen named cases retain the same
+source and endpoint receipts. Comparison admission rejects missing or altered requested rotations.
+Existing checked vertex chords, rollback, cloth history, gravity and world-frame environments remain
+authoritative. Independent geometry and occupied-shape replay regressions cover composition and
+identity returns. This advances `ftx-mv1.1`; prescribed turns do not establish anatomical paths,
+rotational arcs between endpoints, floor/chair support or physical garment qualification.
 
 ## Appendix A. Sources
 

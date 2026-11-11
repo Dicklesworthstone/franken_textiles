@@ -19,6 +19,9 @@ let bodyFitWorker = null, bodyFitTicket = 0, bodyFitBusy = false;
 let bodyFitSources = null, bodyFitTransfer = null;
 const bodyFitUrls = [];
 let bodyPreparedSource = null;
+let bodyTargetsWorker = null, bodyTargetsTicket = 0, bodyTargetsBusy = false;
+let bodyTargetsView = null, bodyTargetsSource = null, bodyTargetsToken = null;
+const bodyTargetsUrls = [];
 let bodyStartsWorker = null, bodyStartsTicket = 0, bodyStartsBusy = false;
 let bodyStartsSource = null, bodyStartsView = null, bodyStartsDraft = [], bodyStartsSelected = 0, bodyStartsPending = false;
 const bodyStartsUrls = [];
@@ -60,7 +63,12 @@ function checkedOptions(text) {
   }
 }
 function controls() {
-  const startsBlocked=bodyStartsBusy || bodyStartsPending;
+  const targetsBlocked=bodyTargetsBusy || bodyTargetsView!==null;
+  $("bodyTargetsLoad").disabled=targetsBlocked || bodyFitBusy || bodyStartsBusy || bodyStartsPending || bodyPointsBusy || bodyPointsPending ||
+    !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
+  $("bodyTargetsCancel").disabled=!targetsBlocked;
+  $("bodyTargetsFrame").hidden=!bodyTargetsView || bodyTargetsBusy;
+  const startsBlocked=bodyStartsBusy || bodyStartsPending || targetsBlocked;
   const pointsBlocked=bodyPointsBusy || bodyPointsPending, startCount=bodyPreparedSource?.start_count;
   $("bodyFitRun").disabled=bodyFitBusy || startsBlocked || pointsBlocked || startCount<2 || !$("bodyFitModel").files.length || !$("bodyFitInput").files.length;
   $("bodyFitOpen").disabled=bodyFitBusy || startsBlocked || pointsBlocked || !$("bodyFitModel").files.length || !$("bodyFitSaved").files.length;
@@ -220,7 +228,7 @@ async function readJsonFile(file) {
   return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
 }
 function bodyInputText(file) {
-  // Both editors publish one exact native snapshot; never parse/rewrite its frame IDs in JS.
+  // All authoring stages publish one exact native snapshot; never parse/rewrite its frame IDs in JS.
   if(bodyPreparedSource && file===bodyPreparedSource.inputFile && $("bodyFitModel").files[0]===bodyPreparedSource.modelFile) {
     return Promise.resolve(bodyPreparedSource.input);
   }
@@ -232,8 +240,79 @@ function keepBodyInput(view,input,inputFile,modelFile) {
     start_count:view.start_count ?? view.starts.length});
 }
 function resetBodyInput() {
-  bodyPreparedSource=null; withdrawBodyStarts(); withdrawBodyPoints(); withdrawBodyFit();
-  $("bodyFitStatus").textContent="Original selected input restored. Observation and start edits, previews and previous fits withdrawn.";
+  bodyPreparedSource=null; withdrawBodyTargets(); withdrawBodyStarts(); withdrawBodyPoints(); withdrawBodyFit();
+  $("bodyFitStatus").textContent="Original selected input restored. Target, observation and start edits, previews and previous fits withdrawn.";
+}
+function stopBodyTargets() {
+  ++bodyTargetsTicket; bodyTargetsWorker?.terminate(); bodyTargetsWorker=null; bodyTargetsBusy=false;
+}
+function withdrawBodyTargets() {
+  stopBodyTargets(); bodyTargetsView=null; bodyTargetsSource=null; bodyTargetsToken=null;
+  $("bodyTargetsFrame").onload=null; $("bodyTargetsFrame").srcdoc="";
+  revoke(bodyTargetsUrls); $("bodyTargetsDownloads").replaceChildren();
+  $("bodyTargetsError").textContent="";
+  $("bodyTargetsStatus").textContent="Open the current prepared input and exact model to declare targets.";
+  controls();
+}
+async function runBodyTargets(annotations=null) {
+  if(bodyTargetsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || bodyPointsBusy || bodyPointsPending ||
+      (annotations && !bodyTargetsView) || (!annotations && bodyTargetsView)) return;
+  const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
+  stopBodyTargets(); const id=bodyTargetsTicket;
+  const fail=error=>{
+    if(id!==bodyTargetsTicket)return;
+    stopBodyTargets(); $("bodyTargetsError").textContent=String(error.message || error);
+    $("bodyTargetsStatus").textContent="Targets were not applied. Correct them in the picker or close it."; controls();
+  };
+  try {
+    if(!inputFile || inputFile.size>16*1024*1024 || !modelFile || !modelFile.size || modelFile.size>512*1024*1024 ||
+        (annotations && (inputFile!==bodyTargetsSource.inputFile || modelFile!==bodyTargetsSource.modelFile))) {
+      throw Error("Choose the prepared input up to 16 MiB and its exact converted model up to 512 MiB.");
+    }
+    const edits=annotations?JSON.stringify({input_sha256:annotations.source_input_sha256,
+      model_sha256:annotations.model_sha256,keypoints:annotations.keypoints}):"";
+    withdrawBodyFit(); withdrawBodyStarts(); withdrawBodyPoints();
+    revoke(bodyTargetsUrls); $("bodyTargetsDownloads").replaceChildren(); $("bodyTargetsError").textContent="";
+    bodyTargetsBusy=true; controls(); $("bodyTargetsStatus").textContent="Reading the exact source and model for anatomical target authoring…";
+    const input=annotations?bodyTargetsView.input:await bodyInputText(inputFile);
+    if(id!==bodyTargetsTicket)return;
+    const model=await modelFile.arrayBuffer(); if(id!==bodyTargetsTicket)return;
+    const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); bodyTargetsWorker=current;
+    current.onmessage=({data:m})=>{
+      if(current!==bodyTargetsWorker || m.request!==bodyTargetsTicket)return;
+      if(m.type==="progress") {$("bodyTargetsStatus").textContent=m.text;return;}
+      if(m.type==="error") {fail(m.message);return;}
+      try {
+        const view=JSON.parse(m.report);
+        if(view.schema!=="ftx-body-target-authoring/1" || view.body_fitted!==false || typeof view.input!=="string" ||
+            new Blob([view.input]).size>16*1024*1024 || !Number.isSafeInteger(view.start_count) || view.start_count<0 || view.start_count>4 ||
+            !Number.isSafeInteger(view.target_count) || view.target_count<0 || view.target_count>128 ||
+            [view.original_input_sha256,view.input_sha256,view.model_sha256].some(h=>typeof h!=="string" || !/^[0-9a-f]{64}$/.test(h)) ||
+            (!annotations && (view.input!==input || view.original_input_sha256!==view.input_sha256 || typeof view.editor_html!=="string")) ||
+            (annotations && (view.original_input_sha256!==bodyTargetsView.input_sha256 || view.model_sha256!==bodyTargetsView.model_sha256 || !view.target_count))) {
+          throw Error("The engine did not return a complete source-bound target authoring result.");
+        }
+        stopBodyTargets(); keepBodyInput(view,input,inputFile,modelFile);
+        if(annotations) {
+          withdrawBodyTargets();
+          link($("bodyTargetsDownloads"),view.input,"body-fit-input-edited.json","application/json",bodyTargetsUrls);
+          $("bodyTargetsStatus").textContent=`Applied ${view.target_count} checked model targets. Continue with observations, starting values and fitting.`;
+          $("bodyFitStatus").textContent="Model targets applied to the current prepared input. Previous fitted bodies and previews were withdrawn.";
+        } else {
+          bodyTargetsView=view; bodyTargetsSource={inputFile,modelFile};
+          bodyTargetsToken=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
+          const token=bodyTargetsToken, frame=$("bodyTargetsFrame");
+          frame.onload=()=>{if(token===bodyTargetsToken && bodyTargetsView===view)
+            frame.contentWindow.postMessage({type:"ftx-body-target-connect",token},"*");};
+          frame.srcdoc=view.editor_html;
+          $("bodyTargetsStatus").textContent="Choose explicit model locations in the picker, then use its return button to check and apply all targets.";
+        }
+        controls();
+      } catch(error) {fail(error);}
+    };
+    current.onerror=error=>{if(current===bodyTargetsWorker)fail(error);};
+    current.postMessage({request:id,op:"body-fit-targets",model,input,edits},[model]);
+  } catch(error) {fail(error);}
 }
 function copyBodyStarts(starts) {
   return starts.map(start=>({shape:[...start.shape],poses:start.poses.map(pose=>({frame_index:pose.frame_index,values:[...pose.values]}))}));
@@ -260,6 +339,7 @@ function withdrawBodyStarts() {
   controls();
 }
 function pendingBodyStarts() {
+  withdrawBodyTargets();
   stopBodyStarts();
   bodyStartsPending=true; withdrawBodyStartsDownloads(); withdrawBodyFit();
   $("bodyStartsError").textContent="";
@@ -352,7 +432,7 @@ function bodyStartsEdits() {
     start.poses.map(pose=>'{"frame_index":'+pose.frame_index+',"values":'+vector(pose.values,bodyStartsView.pose)+'}').join(",")+"]}").join(",")+"]}";
 }
 async function runBodyStarts(apply=false) {
-  if(bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || (!apply && (bodyStartsView || bodyStartsPending)) ||
+  if(bodyTargetsBusy || bodyTargetsView || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || (!apply && (bodyStartsView || bodyStartsPending)) ||
       (apply && (!bodyStartsView || !bodyStartsPending))) return;
   const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
   stopBodyStarts(); const id=bodyStartsTicket;
@@ -381,7 +461,7 @@ async function runBodyStarts(apply=false) {
       try {
         const view=checkedBodyStartsView(m.report,input,edits);
         if(apply) withdrawBodyFit();
-        withdrawBodyPoints(); keepBodyInput(view,input,inputFile,modelFile);
+        withdrawBodyTargets(); withdrawBodyPoints(); keepBodyInput(view,input,inputFile,modelFile);
         stopBodyStarts();
         bodyStartsSource ??= {input,inputFile,modelFile,input_sha256:view.original_input_sha256};
         bodyStartsView=view; bodyStartsDraft=copyBodyStarts(view.starts); bodyStartsPending=false;
@@ -426,6 +506,7 @@ function bodyPointsDownload() {
   }
 }
 function pendingBodyPoints() {
+  withdrawBodyTargets();
   stopBodyPoints(); bodyPointsPending=true; bodyPointsDownload(); withdrawBodyFit();
   $("bodyPointsError").textContent="";
   $("bodyPointsStatus").textContent="Pending observations. Complete each point and silhouette slice, then apply all frames or cancel before previewing or fitting.";
@@ -673,7 +754,7 @@ function checkedBodyPointsView(text,input,apply) {
   return v;
 }
 async function runBodyPoints(apply=false) {
-  if(bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || (!apply && (bodyPointsView || bodyPointsPending)) ||
+  if(bodyTargetsBusy || bodyTargetsView || bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || (!apply && (bodyPointsView || bodyPointsPending)) ||
       (apply && (!bodyPointsView || !bodyPointsPending))) return;
   const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
   stopBodyPoints(); const id=bodyPointsTicket; $("bodyPointsError").textContent="";
@@ -696,7 +777,7 @@ async function runBodyPoints(apply=false) {
       try {
         const view=checkedBodyPointsView(m.report,input,apply);
         if(apply) withdrawBodyFit();
-        withdrawBodyStarts(); keepBodyInput(view,input,inputFile,modelFile); stopBodyPoints();
+        withdrawBodyTargets(); withdrawBodyStarts(); keepBodyInput(view,input,inputFile,modelFile); stopBodyPoints();
         bodyPointsSource ??= {inputFile,modelFile}; bodyPointsView=view; bodyPointsDraft=copyBodyPoints(view.frames); bodyPointsPending=false;
         renderBodyPoints(); bodyPointsDownload();
         $("bodyPointsStatus").textContent=(apply?"Applied ":"Loaded ")+view.frames.reduce((n,f)=>n+f.keypoints.length,0)+" landmarks and "+
@@ -951,7 +1032,7 @@ async function runBodyReviewImage() {
   } catch(error) {fail(error);}
 }
 async function runBodyStartReview() {
-  if(bodyReviewBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || bodyPointsBusy || bodyPointsPending || bodyPreparedSource?.start_count===0) return;
+  if(bodyTargetsBusy || bodyTargetsView || bodyReviewBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || bodyPointsBusy || bodyPointsPending || bodyPreparedSource?.start_count===0) return;
   const inputFile=$("bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
   const startText=$("bodyFitStartIndex").value, frameText=$("bodyFitStartFrame").value;
   const startIndex=Number(startText)-1, frameIndex=Number(frameText)-1;
@@ -1022,7 +1103,7 @@ async function runBodyReview() {
   }
 }
 async function runBodyFit(saved=false) {
-  if(bodyFitBusy || bodyStartsBusy || bodyStartsPending || bodyPointsBusy || bodyPointsPending || (!saved && bodyPreparedSource?.start_count<2)) return;
+  if(bodyTargetsBusy || bodyTargetsView || bodyFitBusy || bodyStartsBusy || bodyStartsPending || bodyPointsBusy || bodyPointsPending || (!saved && bodyPreparedSource?.start_count<2)) return;
   const inputFile=$(saved?"bodyFitSaved":"bodyFitInput").files[0], modelFile=$("bodyFitModel").files[0];
   const iterationsText=$("bodyFitIterations").value, evaluationsText=$("bodyFitEvaluations").value;
   const iterations=Number(iterationsText), maxEvaluations=Number(evaluationsText);
@@ -1503,6 +1584,11 @@ for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{w
 $("clearCalibration").onclick=()=>{generatedCalibration=null; $("calibration").value=""; $("lensId").value=""; $("rotation").value=""; $("independence").value=""; withdraw(true); status("Calibration removed; analyze the current photo.");};
 $("cameraRun").onclick=runCamera;
 $("bodyFitRun").onclick=()=>runBodyFit();
+$("bodyTargetsLoad").onclick=()=>runBodyTargets();
+$("bodyTargetsCancel").onclick=()=>{
+  withdrawBodyTargets();
+  $("bodyTargetsStatus").textContent="Target picker closed; unapplied definitions discarded. The current prepared input is unchanged.";
+};
 $("bodyFitOpen").onclick=()=>runBodyFit(true);
 $("bodyFitReviewRun").onclick=runBodyReview;
 $("bodyFitStartRun").onclick=runBodyStartReview;
@@ -1659,6 +1745,7 @@ $("bodyFitWorkbench").onclick=()=>{
 $("bodyFitCancel").onclick=()=>{withdrawBodyFit(); $("bodyFitStatus").textContent="Body fit or saved-fit loading cancelled; no report published.";};
 for(const id of ["bodyFitInput","bodyFitModel","bodyFitSaved"]) for(const event of ["change","click","cancel"]) {
   $(id).addEventListener(event,()=>{
+    withdrawBodyTargets();
     if(id!=="bodyFitSaved") {
       if(event==="change") {bodyPreparedSource=null;withdrawBodyStarts();withdrawBodyPoints();}
       else if(bodyStartsView) {
@@ -1798,6 +1885,20 @@ $("returnMaterials").onclick=()=>returnMaterials(photoRecords,"photo",status);
 $("sectionMaterials").onclick=()=>returnMaterials(sectionRecords,"section",sectionStatus);
 window.addEventListener("message",event=>{
   const m=event.data;
+  if(bodyTargetsView && !bodyTargetsBusy && event.origin==="null" && event.source===$("bodyTargetsFrame").contentWindow &&
+      m?.token===bodyTargetsToken && ["ftx-body-target-dirty","ftx-body-target-apply"].includes(m.type)) {
+    withdrawBodyFit();
+    if(m.type==="ftx-body-target-dirty") {
+      $("bodyTargetsStatus").textContent="Target definitions changed in the picker. Use its return button to apply them, or close it to discard them.";
+    } else {
+      const a=m.annotations;
+      if(!a || a.schema!=="ftx-body-targets/1" || a.source_input!=="" || a.source_input_sha256!==bodyTargetsView.input_sha256 ||
+          a.model_sha256!==bodyTargetsView.model_sha256 || !a.keypoints || typeof a.keypoints!=="object" || Array.isArray(a.keypoints)) {
+        $("bodyTargetsError").textContent="Target definitions do not match the current input and model. Reopen the picker.";
+      } else return runBodyTargets(a);
+    }
+    return;
+  }
   const bodyTransfer=bodyFitTransfer;
   if(bodyTransfer && event.origin===new URL(import.meta.url).origin && event.source===bodyTransfer.target &&
       m?.type==="ftx-body-fit-sources-ready" && m.token===bodyTransfer.token) {
@@ -1825,6 +1926,6 @@ window.addEventListener("pagehide",()=>{
     materialsTarget.postMessage({type:"ftx-photo-records-cancelled",token:materialsToken},materialsOrigin);
     materialsTarget=null;materialsToken=null;window.opener=null;
   }
-  bodyPreparedSource=null; withdrawBodyPoints(); withdrawBodyStarts(); withdrawBodyFit(); withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
+  bodyPreparedSource=null; withdrawBodyTargets(); withdrawBodyPoints(); withdrawBodyStarts(); withdrawBodyFit(); withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
 });
 controls();

@@ -2423,10 +2423,16 @@ impl Policy {
                     .production
                     .as_ref()
                     .and_then(|production| production.routing.as_ref())
-                    .is_some_and(|routing| routing.copy_windows.is_some()))
+                    .is_some_and(|routing| {
+                        routing.copy_windows.is_some()
+                            || routing
+                                .bounded_staging
+                                .as_ref()
+                                .is_some_and(|staging| staging.cell_capacities.is_some())
+                    }))
         {
-            // Arrival/deadline/calendar constraints and the complete candidate domain determine
-            // which usable recipe supplies these readings, including fixed feed/yarn objectives.
+            // Arrival/deadline/calendar and explicit cell-buffer constraints qualify the complete
+            // candidate domain, including decisions that request only fixed feed/yarn objectives.
             base = hash(&(
                 base,
                 ("deadline_constrained_sewing_selection", &selection.request),
@@ -2453,11 +2459,17 @@ impl Policy {
                 .and_then(|production| production.routing.as_ref())
                 .is_some_and(crate::sewing::production::routing::Policy::eligible)
                 || selection.request.route_candidates.iter().any(|candidate| {
-                    candidate.routing.eligible() || candidate.routing.copy_windows.is_some()
+                    candidate.routing.eligible()
+                        || candidate.routing.copy_windows.is_some()
+                        || candidate
+                            .routing
+                            .bounded_staging
+                            .as_ref()
+                            .is_some_and(|staging| staging.cell_capacities.is_some())
                 }))
         {
-            // The winner may be unconstrained even though an eligible or copy-window route was
-            // searched. Retain arrivals/deadlines and their qualification on unused candidates too.
+            // The winner may be unconstrained even though an eligible, copy-window or per-cell
+            // buffer route was searched. Retain qualification on unused candidates too.
             // Preserve every outer candidate, recipe and work cap that determined that decision.
             base = hash(&(base, ("eligible_route_selection", &selection.request)))?;
         }
@@ -2474,7 +2486,12 @@ impl Policy {
                             .as_ref()
                             .and_then(|production| production.routing.as_ref())
                             .is_some_and(|routing| {
-                                routing.eligible() || routing.copy_windows.is_some()
+                                routing.eligible()
+                                    || routing.copy_windows.is_some()
+                                    || routing
+                                        .bounded_staging
+                                        .as_ref()
+                                        .is_some_and(|staging| staging.cell_capacities.is_some())
                             })
                 }))
         {
@@ -2487,8 +2504,8 @@ impl Policy {
             })?;
             // Resource independence, availability, time resolution and every cell's source-bound
             // timing/fixture policy define this experiment, independent of textile protocol consent.
-            // Eligible routes optimize makespan before reporting feed/yarn. Copy windows constrain
-            // the admitted dispatch even on fixed routes. Both domains qualify every consumed plan,
+            // Eligible routes optimize makespan before reporting feed/yarn. Copy windows and explicit
+            // cell capacities constrain fixed routes too. These domains qualify every consumed plan,
             // including comparisons that request only feed or thread quantities. Parallel resource
             // calendars likewise change which complete assignment supplies those quantities.
             if let Some(routing) = &production.routing {
@@ -4076,6 +4093,8 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
             || endpoint["time_s"] != sample["time_s"]
             || endpoint["arm_abduction_deg"] != frame["arm_abduction_deg"]
             || endpoint["leg_pose"] != frame["leg_pose"]
+            || endpoint["root_translation_m"] != frame["root_translation_m"]
+            || endpoint["root_rotation_rad"] != frame["root_rotation_rad"]
             || !sample["positions_m"].is_array()
             || !sample["body_positions_m"].is_array()
             || endpoint["positions_sha256"].as_str() != Some(hash(&sample["positions_m"])?.as_str())
@@ -4340,6 +4359,157 @@ fn initial_heat_profiles(
     Ok(result)
 }
 
+// Integrate final covered and exposed source material independently of the thermal ledger.
+// Each source uses its own admitted initial temperature as enthalpy zero. Cell orientation does
+// not change the integral, and physical storage excludes the separately reported remap residual.
+fn coverage_profile_storage(
+    heat: &Value,
+    motion: &Value,
+    patches: &[Value],
+    owners: &[Value],
+    profiles: &[Vec<f64>],
+    laws: &[ftx_pattern::material_thermal::ThermalLaw],
+    cells: usize,
+) -> Result<f64, Refusal> {
+    let fail = || invalid("covered initial profiles need complete final material enthalpy");
+    let checkpoint = &heat["checkpoint"];
+    let frame = &checkpoint["frame"];
+    let layout = &frame["projection"]["layout"];
+    let request = &heat["request"];
+    let last = vapor_array(motion, "samples")?.last().ok_or_else(fail)?;
+    let trace = vapor_array(heat, "trace")?.last().ok_or_else(fail)?;
+    let body_faces = vapor_array(motion, "body_triangles")?;
+    let selected_faces = vapor_array(request, "body_triangle_ids")?
+        .iter()
+        .map(|index| {
+            body_faces
+                .get(vapor_index(index)?)
+                .cloned()
+                .ok_or_else(fail)
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    let physical_layers = owners
+        .iter()
+        .map(|owner| {
+            let index = vapor_index(owner)?;
+            let id = heat["initial_condition"]["instances"][index]
+                .as_str()
+                .ok_or_else(fail)?;
+            request["instance_layers"][id]
+                .as_str()
+                .filter(|layer| !layer.is_empty())
+                .ok_or_else(fail)
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    let mut content = checkpoint.clone();
+    content.as_object_mut().ok_or_else(fail)?.remove("sha256");
+    if checkpoint["schema"] != "ftx-thermal-motion-state/1"
+        || frame["schema"] != "ftx-thermal-motion-frame/1"
+        || layout["schema"] != "ftx-thermal-coverage-layout/1"
+        || vapor_index(&layout["cells_per_layer"])? != cells
+        || layout["body_triangles"] != json!(selected_faces)
+        || layout["body_vertex_count"].as_u64()
+            != Some(vapor_array(last, "body_positions_m")?.len() as u64)
+        || frame["request"]["schema"] != "ftx-thermal-projection/1"
+        || frame["request"]["settings"] != request["settings"]
+        || frame["request"]["cloth_layers"] != json!(physical_layers)
+        || frame["cloth_positions_m"] != last["positions_m"]
+        || frame["body_positions_m"] != last["body_positions_m"]
+        || !same_identity(&frame["sha256"], &trace["frame_sha256"])
+        || !same_identity(&checkpoint["sha256"], &json!(hash(&content)?))
+    {
+        return Err(fail());
+    }
+    let regions = vapor_array(layout, "regions")?;
+    let covered = vapor_array(checkpoint, "temperature_c")?;
+    let exposed = vapor_array(checkpoint, "exposed_temperature_c")?;
+    if regions.len() != covered.len() || regions.len() > 65_536 || exposed.len() != patches.len() {
+        return Err(fail());
+    }
+    let mut allocated = vec![0.; patches.len()];
+    let mut body_allocated = vec![0.; selected_faces.len()];
+    let mut region_ids = BTreeSet::new();
+    let mut total = 0.;
+    let mut range = [f64::INFINITY, f64::NEG_INFINITY];
+    let mut cell_count = 0usize;
+    let mut energy = |index: usize, fraction: f64, values: &[Value]| -> Result<f64, Refusal> {
+        cell_count = cell_count.saturating_add(values.len());
+        if values.len() != cells || cell_count > 2_000_000 {
+            return Err(fail());
+        }
+        let patch = patches.get(index).ok_or_else(fail)?;
+        let law = laws.get(vapor_index(&patch["column"])?).ok_or_else(fail)?;
+        let initial = profiles
+            .get(vapor_index(owners.get(index).ok_or_else(fail)?)?)
+            .filter(|values| values.len() == cells)
+            .ok_or_else(fail)?;
+        let reference = initial[0];
+        let mut change = 0.;
+        for (&before, after) in initial.iter().zip(values) {
+            let after = finite(after).ok_or_else(fail)?;
+            range[0] = range[0].min(after);
+            range[1] = range[1].max(after);
+            change +=
+                law.sensible_change(reference, after)? - law.sensible_change(reference, before)?;
+        }
+        let area = finite(&patch["reference_area_m2"]).ok_or_else(fail)?;
+        let energy = area * fraction * change / cells as f64;
+        if !energy.is_finite() {
+            return Err(fail());
+        }
+        Ok(energy)
+    };
+    for (region, row) in regions.iter().zip(covered) {
+        let layers = vapor_array(region, "layers")?;
+        let row = row.as_array().ok_or_else(fail)?;
+        let id = region["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(fail)?;
+        let body_index = vapor_index(&region["body_triangle"])?;
+        let body_fraction = finite(&region["body_fraction"])
+            .filter(|f| *f > 0. && *f <= 1.)
+            .ok_or_else(fail)?;
+        let body_used = body_allocated.get_mut(body_index).ok_or_else(fail)?;
+        *body_used += body_fraction;
+        if *body_used > 1. || !region_ids.insert(id) {
+            return Err(fail());
+        }
+        if layers.is_empty() || layers.len() > 64 || row.len() != layers.len() * cells {
+            return Err(fail());
+        }
+        let mut region_layers = BTreeSet::new();
+        for (layer, values) in layers.iter().zip(row.chunks_exact(cells)) {
+            let index = vapor_index(&layer["cloth_triangle"])?;
+            let name = layer["layer"].as_str().ok_or_else(fail)?;
+            if physical_layers.get(index).copied() != Some(name) || !region_layers.insert(name) {
+                return Err(fail());
+            }
+            let fraction = finite(&layer["fraction"])
+                .filter(|f| *f > 0. && *f <= 1.)
+                .ok_or_else(fail)?;
+            let used = allocated.get_mut(index).ok_or_else(fail)?;
+            *used += fraction;
+            if *used > 1. {
+                return Err(fail());
+            }
+            total += energy(index, fraction, values)?;
+        }
+    }
+    for (index, (used, row)) in allocated.iter().zip(exposed).enumerate() {
+        let row = row.as_array().ok_or_else(fail)?;
+        if *used < 1. {
+            total += energy(index, 1. - *used, row)?;
+        } else if !row.is_empty() {
+            return Err(fail());
+        }
+    }
+    if !total.is_finite() || trace["temperature_range_c"] != json!(range) {
+        return Err(fail());
+    }
+    Ok(total - finite(&heat["signed_remap_residual_j"]).ok_or_else(fail)?)
+}
+
 // Reconstruct authored initial temperatures from the retained physical owners. Material columns
 // can be shared by differently conditioned pieces; neither their order nor an unused fallback
 // temperature defines the initial extrema. The production thermal solver still owns evolution.
@@ -4365,7 +4535,7 @@ fn initial_heat_range(
     let scalar_overrides = request
         .get("initial_instance_temperatures_c")
         .filter(|v| !v.is_null());
-    if profiles.is_some() && (coverage || scalar_overrides.is_some()) {
+    if profiles.is_some() && scalar_overrides.is_some() {
         return Err(fail());
     }
     let Some(overrides) = profiles.or(scalar_overrides) else {
@@ -4432,12 +4602,17 @@ fn initial_heat_range(
         heating_domains.push(domain);
     }
     let cells = if profiles.is_some() {
-        vapor_index(&request["cells_per_layer"])?
+        vapor_index(if coverage {
+            &request["settings"]["cells_per_layer"]
+        } else {
+            &request["cells_per_layer"]
+        })?
     } else {
         1
     };
     let temperatures = initial_heat_profiles(request, instances, cells)?;
     let final_profiles = profiles
+        .filter(|_| !coverage)
         .map(|_| {
             heat["final"]["temperature_c"]
                 .as_array()
@@ -4495,16 +4670,38 @@ fn initial_heat_range(
         "model_sha256":model["sha256"], "instances":instances, "triangle_instance":owners,
         "instance_temperature_c":scalar_temperatures, "temperature_range_c":range});
     if let Some(profiles) = profiles {
+        if coverage {
+            profile_storage_j = coverage_profile_storage(
+                heat,
+                motion,
+                patches,
+                owners,
+                &temperatures,
+                &laws,
+                cells,
+            )?;
+        }
         if used.len() != overrides.len()
             || !profile_storage_j.is_finite()
             || !heat_near(
                 profile_storage_j,
-                finite(&heat["stored_change_j"]).ok_or_else(fail)?,
+                finite(
+                    &heat[if coverage {
+                        "physical_stored_change_j"
+                    } else {
+                        "stored_change_j"
+                    }],
+                )
+                .ok_or_else(fail)?,
             )
         {
             return Err(fail());
         }
-        receipt["schema"] = json!("ftx-motion-surface-initial-condition/2");
+        receipt["schema"] = json!(if coverage {
+            "ftx-motion-coverage-initial-condition/2"
+        } else {
+            "ftx-motion-surface-initial-condition/2"
+        });
         receipt
             .as_object_mut()
             .ok_or_else(fail)?

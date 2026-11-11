@@ -74,6 +74,7 @@ fn history() -> (History, Vec<Vec3>) {
         settings: projection.settings.clone(),
         initial_temperature_c: 10.,
         initial_instance_temperatures_c: None,
+        initial_instance_temperature_profiles_c: None,
         boundaries: vec![film; 4],
         exterior_exchange: None,
         bare_boundaries: None,
@@ -343,6 +344,140 @@ fn coverage_initial_temperatures_qualify_applied_values_without_using_an_unused_
             .request
             .initial_state(&history.frame, &history.source, &instances, &[1, 0])
             .is_err()
+    );
+}
+
+#[test]
+fn coverage_initial_profiles_keep_exact_owners_cells_and_storage_through_motion() {
+    let (mut history, cloth) = two_instance_history();
+    history.request.settings.cells_per_layer = 2;
+    history.projection.settings.cells_per_layer = 2;
+    history.frame = Frame::new(
+        history.source.clone(),
+        cloth.clone(),
+        body(0.),
+        &history.triangles,
+        history.projection.clone(),
+    )
+    .unwrap();
+    history.initial_frame_sha256 = history.frame.sha256().to_owned();
+    history.request.initial_temperature_c = 999.;
+    history.request.initial_instance_temperature_profiles_c = Some(BTreeMap::from([
+        ("hot:0".into(), vec![35., 25.]),
+        ("cold:0".into(), vec![5., 15.]),
+    ]));
+    let instances = ["hot:0".into(), "cold:0".into(), "unused:0".into()];
+    (history.state, history.initial_condition, _) = history
+        .request
+        .initial_state(&history.frame, &history.source, &instances, &[1, 0])
+        .unwrap();
+    assert_eq!(history.state.temperature_c(), &[vec![5., 15., 35., 25.]]);
+    history
+        .advance(&cloth, &body(0.5), 0.25, 0, 0, None, None, None)
+        .unwrap();
+    let mut allocated = [0.; 2];
+    let initial = [[5., 15.], [35., 25.]];
+    let mut stored = 0.;
+    for (region, row) in history
+        .frame
+        .projection()
+        .layout
+        .regions
+        .iter()
+        .zip(history.state.temperature_c())
+    {
+        for (layer, values) in region.layers.iter().zip(row.as_chunks::<2>().0) {
+            allocated[layer.cloth_triangle] += layer.fraction;
+            stored += 50.
+                * layer.fraction
+                * values
+                    .iter()
+                    .zip(initial[layer.cloth_triangle])
+                    .map(|(after, before)| after - before)
+                    .sum::<f64>();
+        }
+    }
+    for (i, row) in history.state.exposed_temperature_c().iter().enumerate() {
+        stored += 50.
+            * (1. - allocated[i])
+            * row
+                .iter()
+                .zip(initial[i])
+                .map(|(after, before)| after - before)
+                .sum::<f64>();
+    }
+    assert!((stored - history.stored_j - history.signed_remap_j).abs() < 1e-9);
+    let result = history.finish("path", "initial", 0.25).unwrap();
+    assert_eq!(
+        result["initial_condition"]["schema"],
+        "ftx-motion-coverage-initial-condition/2"
+    );
+    assert_eq!(
+        result["initial_condition"]["cell_order"],
+        "inside_to_outside"
+    );
+    assert_eq!(
+        result["initial_condition"]["temperature_range_c"],
+        json!([5., 35.])
+    );
+    assert_eq!(
+        result["initial_condition"]["instance_temperature_profiles_c"],
+        result["request"]["initial_instance_temperature_profiles_c"]
+    );
+    let request: Request = serde_json::from_value(result["request"].clone()).unwrap();
+    assert_eq!(json!(request), result["request"]);
+}
+
+#[test]
+fn coverage_profile_maps_refuse_partial_extra_conflicting_and_unphysical_initial_states() {
+    let (history, _) = two_instance_history();
+    let instances = ["hot:0".into(), "cold:0".into(), "unused:0".into()];
+    for fault in 0..7 {
+        let mut request = history.request.clone();
+        request.initial_instance_temperature_profiles_c = Some(BTreeMap::from([
+            ("hot:0".into(), vec![35.]),
+            ("cold:0".into(), vec![5.]),
+        ]));
+        let profiles = request
+            .initial_instance_temperature_profiles_c
+            .as_mut()
+            .unwrap();
+        match fault {
+            0 => {
+                profiles.remove("cold:0");
+            }
+            1 => {
+                profiles.insert("unused:0".into(), vec![10.]);
+            }
+            2 => {
+                profiles.insert("missing:0".into(), vec![10.]);
+            }
+            3 => {
+                profiles.insert("hot:0".into(), vec![]);
+            }
+            4 => {
+                profiles.insert("hot:0".into(), vec![-274.]);
+            }
+            5 => {
+                profiles.insert("hot:0".into(), vec![f64::NAN]);
+            }
+            _ => {
+                request.initial_instance_temperatures_c =
+                    Some(BTreeMap::from([("hot:0".into(), 35.)]))
+            }
+        }
+        assert!(
+            request
+                .initial_state(&history.frame, &history.source, &instances, &[1, 0])
+                .is_err(),
+            "fault {fault}"
+        );
+    }
+    assert!(
+        !json!(history.request)
+            .as_object()
+            .unwrap()
+            .contains_key("initial_instance_temperature_profiles_c")
     );
 }
 

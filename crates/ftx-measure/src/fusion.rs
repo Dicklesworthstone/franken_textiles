@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use ftx_core::{Refusal, py};
 use serde_json::{Value, json};
 
+use crate::records::{checked_value, is_length};
 use crate::{PROVENANCES, canonical_name, definition, invalid, unit};
 
 fn number(record: &Value, key: &str) -> Result<f64, Refusal> {
@@ -21,7 +22,7 @@ fn checked_record(record: &Value) -> Result<(String, &'static str, f64, f64), Re
         .filter(|n| !n.is_empty())
         .ok_or_else(|| invalid("measurement needs a name"))?;
     let u = unit(&name);
-    let value = number(record, &format!("value_{u}"))?;
+    let value = checked_value(&name, number(record, &format!("value_{u}"))?)?;
     let sigma = number(record, &format!("sigma_{u}"))?;
     if sigma <= 0.0 {
         return Err(invalid("measurement sigma must be > 0"));
@@ -58,7 +59,7 @@ pub fn normalize_record(record: &Value) -> Result<(Value, &'static str), Refusal
     if let Some(hook) = def["normalization_hooks"].get(did) {
         let offset = hook[0].as_f64().unwrap_or(0.0);
         let extra = hook[1].as_f64().unwrap_or(0.0);
-        let value = Refusal::finite("normalized value", value + offset)?;
+        let value = checked_value(&name, Refusal::finite("normalized value", value + offset)?)?;
         let sigma = Refusal::finite("normalized sigma", ftx_core::det::hypot(sigma, extra))?;
         out[format!("value_{u}")] = json!(value);
         out[format!("sigma_{u}")] = json!(sigma);
@@ -109,7 +110,11 @@ impl Observation {
         let mut src = json!({"provenance": self.provenance(), "method": self.method(),
             "definition_id": self.record["definition_id"],
             "weight": py::round(weight, 4), "used": used});
-        src[format!("value_{u}")] = json!(py::round(self.value, digits));
+        src[format!("value_{u}")] = json!(rounded_value(
+            self.record["name"].as_str().expect("checked record name"),
+            self.value,
+            digits,
+        ));
         src[format!("sigma_{u}")] = json!(rounded_sigma(self.sigma, digits));
         if self.n > 1 {
             src["n_repeats"] = json!(self.n);
@@ -162,7 +167,7 @@ fn collapse(
                 .sqrt();
             Refusal::finite("repeat spread", spread)?;
             let stated = median(group.iter().map(|o| o.sigma).collect());
-            obs.value = median(group.iter().map(|o| o.value).collect());
+            obs.value = checked_value(name, median(group.iter().map(|o| o.value).collect()))?;
             obs.sigma = stated.max(spread);
             let old = obs.record["note"].as_str().unwrap_or("");
             let separator = if old.is_empty() { "" } else { "; " };
@@ -215,8 +220,19 @@ fn rounded_sigma(sigma: f64, digits: usize) -> f64 {
     if rounded == 0.0 { sigma } else { rounded }
 }
 
+// Native `measurement-positive-length` exception: preserve admitted positive dimensions when
+// display rounding would turn them into impossible zero-length evidence.
+fn rounded_value(name: &str, value: f64, digits: usize) -> f64 {
+    let rounded = py::round(value, digits);
+    if rounded == 0.0 && value > 0.0 && is_length(name) {
+        value
+    } else {
+        rounded
+    }
+}
+
 fn entry(
-    u: &str,
+    name: &str,
     value: f64,
     sigma: f64,
     provenance: &str,
@@ -224,10 +240,11 @@ fn entry(
     flags: &BTreeSet<String>,
     bounds: Option<[f64; 2]>,
 ) -> Value {
+    let u = unit(name);
     let digits = if u == "deg" { 2 } else { 1 };
     let mut out = json!({"unit": u, "primary_provenance": provenance,
         "sources": sources, "flags": flags});
-    out[format!("value_{u}")] = json!(py::round(value, digits));
+    out[format!("value_{u}")] = json!(rounded_value(name, value, digits));
     out[format!("sigma_{u}")] = json!(rounded_sigma(sigma, digits));
     if let Some(bounds) = bounds {
         out[format!("p1_p99_{u}")] = json!(bounds);
@@ -281,7 +298,7 @@ pub fn fuse_one(
         return Ok(prior.map(|p| {
             flags.insert("PRIOR_ONLY".into());
             entry(
-                u,
+                &name,
                 p.value,
                 p.sigma,
                 "CHART_PRIOR",
@@ -323,7 +340,7 @@ pub fn fuse_one(
             .collect();
         let chosen = &observations[best];
         let mut out = entry(
-            u,
+            &name,
             chosen.value,
             chosen.sigma,
             chosen.provenance(),
@@ -351,6 +368,7 @@ pub fn fuse_one(
         ));
     }
     let (evidence_value, _, _) = weighted(&observations)?;
+    checked_value(&name, evidence_value)?;
     let outside = bounds.is_some_and(|b| evidence_value < b[0] || evidence_value > b[1]);
     let prior_used = prior.is_some() && use_prior && !outside;
     if let Some([lo, hi]) = bounds.filter(|_| outside) {
@@ -361,6 +379,7 @@ pub fn fuse_one(
         observations.push(prior.as_ref().unwrap().clone());
     }
     let (value, sigma, weights) = weighted(&observations)?;
+    checked_value(&name, value)?;
     let mut totals: Vec<(&str, f64)> = Vec::new();
     for (obs, w) in observations.iter().zip(&weights) {
         if let Some((_, total)) = totals.iter_mut().find(|(p, _)| *p == obs.provenance()) {
@@ -383,7 +402,7 @@ pub fn fuse_one(
     if !prior_used && let Some(p) = prior {
         sources.push(p.source(u, 0.0, false));
     }
-    let mut out = entry(u, value, sigma, primary.0, sources, &flags, bounds);
+    let mut out = entry(&name, value, sigma, primary.0, sources, &flags, bounds);
     if multiple {
         out["z_max"] = json!(py::round(z_max, 2));
     }

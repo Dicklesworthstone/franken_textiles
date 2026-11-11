@@ -388,6 +388,25 @@ function motionLiquidSources(sources) {
   // Parsed objects are never serialized back over the original qualification text.
 }
 
+function motionRootTranslation(frame) {
+  if (!own(frame, "root_translation_m") || frame.root_translation_m === null) return;
+  const offset = frame.root_translation_m;
+  if (!Array.isArray(offset) || offset.length !== 3 ||
+      Array.from(offset).some(value => typeof value !== "number" || !Number.isFinite(value))) {
+    throw Error("Motion root translation needs exactly three finite world-space offsets in metres, or null for the origin.");
+  }
+}
+
+function motionRootRotation(frame) {
+  if (!own(frame, "root_rotation_rad") || frame.root_rotation_rad === null) return;
+  const rotation = frame.root_rotation_rad;
+  if (!Array.isArray(rotation) || rotation.length !== 3 ||
+      Array.from(rotation).some(value => typeof value !== "number" || !Number.isFinite(value)) ||
+      Math.hypot(...rotation) > Math.PI) {
+    throw Error("Motion root rotation needs three finite rotation-vector components in radians with length at most pi, or null for identity.");
+  }
+}
+
 /** Author prescribed endpoints around exact liquid policies; Rust owns physical admission and evolution. */
 export function buildMaterialMotionRequest(state, liquid = undefined) {
   object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "transient_surface", "transient_coverage"],
@@ -407,7 +426,9 @@ export function buildMaterialMotionRequest(state, liquid = undefined) {
   }
   let previous = 0, minimumTrials = 0;
   for (const frame of state.keyframes) {
-    object(frame, ["time_s", "arm_abduction_deg", "leg_pose"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
+    object(frame, ["time_s", "arm_abduction_deg", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
+    motionRootTranslation(frame);
+    motionRootRotation(frame);
     if (typeof frame.time_s !== "number" || !Number.isFinite(frame.time_s) || frame.time_s > 60 ||
       frame.time_s - previous < 1e-9) {
       throw Error("Motion endpoint times must increase by at least 1e-9 seconds, through at most 60 seconds after the initial drape.");
@@ -581,7 +602,9 @@ function motionPolicy(value) {
   }
   let previous = 0, minimumTrials = 0;
   for (const frame of value.keyframes) {
-    object(frame, ["time_s", "arm_abduction_deg", "leg_pose"], ["time_s", "arm_abduction_deg"], "Motion keyframe");
+    object(frame, ["time_s", "arm_abduction_deg", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion keyframe");
+    motionRootTranslation(frame);
+    motionRootRotation(frame);
     if (!Number.isFinite(frame.time_s) || frame.time_s > 60 || frame.time_s - previous < 1e-9 ||
       !Number.isFinite(frame.arm_abduction_deg) || frame.arm_abduction_deg < 0 || frame.arm_abduction_deg > 180) {
       throw Error("Motion needs keyframes separated by at least 1e-9 seconds through 60 seconds and arm angles in 0–180 degrees.");
@@ -658,7 +681,7 @@ export function buildMaterialScenarioRequest(state) {
     sourceObject(state.fitSpec, "Fit contract"); fitSpec = state.fitSpec;
   } else if (!state.allowNoFit) throw Error("Choose a fit contract or explicitly allow a numerical-only study without one.");
   const fields = ["spacing", "sew_steps", "drape_steps", "step", "max_settle_steps"];
-  const options = object(state.options, [...fields, "self_contact"], fields, "Drape options");
+  const options = object(state.options, [...fields, "self_contact", "time_subdivision"], fields, "Drape options");
   for (const key of ["spacing", "step"]) {
     if (typeof options[key] !== "number" || !Number.isFinite(options[key]) || options[key] <= 0) {
       throw Error("Drape " + key + " must be finite and positive.");
@@ -675,6 +698,19 @@ export function buildMaterialScenarioRequest(state) {
   }
   if (options.max_settle_steps > 0 && !Number.isFinite((options.drape_steps + options.max_settle_steps) * options.step)) {
     throw Error("The declared gravity and settling duration must be finite.");
+  }
+  if (own(options, "time_subdivision") && options.time_subdivision !== null) {
+    const keys = ["max_halvings", "max_trials"];
+    const subdivision = object(options.time_subdivision, keys, keys, "Time subdivision");
+    if (!Number.isSafeInteger(subdivision.max_halvings) || subdivision.max_halvings < 0 || subdivision.max_halvings > 16 ||
+        !Number.isSafeInteger(subdivision.max_trials) || subdivision.max_trials < 1 || subdivision.max_trials > 65535) {
+      throw Error("Time subdivision needs max_halvings (whole 0–16) and max_trials (whole 1–65535).");
+    }
+    if (subdivision.max_trials < options.sew_steps + options.drape_steps) {
+      throw Error("Time subdivision needs at least one trial per requested sewing and gravity interval.");
+    }
+    // Rust reserves this complete allowance using the actual mesh bound for each alternative.
+    // A quiet settling tail can finish early, so it need not receive a separate minimum here.
   }
   if (own(options, "self_contact") && options.self_contact !== null) {
     const keys = ["dhat", "thickness", "kappa", "mu", "eps_v"];
@@ -1022,26 +1058,77 @@ function adaptiveGuidance(design, candidates, comparison, matrix) {
   }
 }
 
-/** Author ordered canonical seam adjustments; root finding and geometry admission stay in Rust. */
+function guidedTreatmentRequest(raw, pieces) {
+  if (typeof raw !== "string") throw Error("A saved treatment must retain its original request JSON text.");
+  bytes(raw, 256 * 1024, "Guided treatment request exceeds 256 KiB.");
+  const request = object(sourceObject(raw, "Piece treatment request"),
+    ["schema", "mode", "transitions", "pieces", "interfaces", "seam_tolerance_mm"],
+    ["schema", "mode", "transitions", "pieces"], "Piece treatment request");
+  if (request.schema !== "ftx-pattern-treatment/1" || !["treat", "compensate"].includes(request.mode)) {
+    throw Error("Choose a complete ftx-pattern-treatment/1 request with explicit treat or compensate mode.");
+  }
+  if (own(request, "seam_tolerance_mm")) nonnegative(request.seam_tolerance_mm, "Treatment seam tolerance");
+  if (request.interfaces != null && !Array.isArray(request.interfaces)) throw Error("Treatment interfaces must be an explicit list.");
+  const entries = (value, maximum, label) => {
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+      !Object.keys(value).length || Object.keys(value).length > maximum) {
+      throw Error(`${label} needs 1–${maximum} named entries.`);
+    }
+    return Object.entries(value);
+  };
+  const transitions = entries(request.transitions, 64, "Treatment transitions");
+  const used = new Set();
+  for (const [piece, transition] of entries(request.pieces, 4096, "Treated source pieces")) {
+    if (!pieces.has(piece) || typeof transition !== "string" || !own(request.transitions, transition)) {
+      throw Error("Treatment must map original source pieces to declared transitions.");
+    }
+    used.add(transition);
+  }
+  for (const [key, transition] of transitions) {
+    name(key, "Treatment transition name"); bytes(key, 256, "Treatment transition names exceed 256 UTF-8 bytes.");
+    if (!used.has(key)) throw Error("Every treatment transition must be assigned to an original source piece.");
+    if (transition?.schema !== "ftx-material-treatment/1") throw Error("Supply complete source-qualified material transitions.");
+    for (const state of ["before", "after"]) {
+      const selection = frozenStudySelection(transition[state]);
+      for (const overlay of ["overrides", "sources"]) {
+        if (own(selection, overlay) && (!selection[overlay] || typeof selection[overlay] !== "object" ||
+          Array.isArray(selection[overlay]) || Object.keys(selection[overlay]).length)) {
+          throw Error("Treatment BEFORE and AFTER selections must be frozen without source or property overlays.");
+        }
+      }
+    }
+  }
+  // Source locks, observation qualifications and physical geometry are admitted by the native
+  // treatment authority. Keep its original bytes, including integer metadata and signed zero.
+  return raw;
+}
+
+/** Author ordered canonical seam/treatment steps; source qualification and geometry stay in Rust. */
 export function buildGuidedDesignAfterOperations(after, pieceIds, seamIds) {
   if (!Array.isArray(after) || after.length > 16) throw Error("Choose at most 16 ordered seam adjustments.");
   if (!after.length) return [];
   const pieces = uniqueNames(pieceIds, "Pattern source pieces", 4096);
-  if (!Array.isArray(seamIds)) throw Error("Seam adjustments require the original source seam identities.");
+  if (!Array.isArray(seamIds) && after.some(operation => operation?.op !== "treatment")) {
+    throw Error("Seam adjustments require the original source seam identities.");
+  }
   const counts = new Map();
-  for (const id of seamIds) if (typeof id === "string") counts.set(id, (counts.get(id) || 0) + 1);
+  for (const id of Array.isArray(seamIds) ? seamIds : []) if (typeof id === "string") counts.set(id, (counts.get(id) || 0) + 1);
   const seam = id => {
     name(id, "Adjusted source seam");
     if (counts.get(id) !== 1) throw Error(`Seam adjustment needs exactly one original source seam named ${id}.`);
   };
   return Array.from(after, value => {
+    if (value?.op === "treatment") {
+      object(value, ["op", "request"], ["op", "request"], "Post-alteration treatment");
+      return { op: "treatment", request: guidedTreatmentRequest(value.request, pieces) };
+    }
     if (value?.op === "true_seam") {
       object(value, ["op", "seam", "end"], ["op", "seam", "end"], "Seam truing");
       seam(value.seam);
       if (!["start", "end"].includes(value.end)) throw Error("Seam truing needs an explicit B-side start or end endpoint.");
       return { op: "true_seam", seam: value.seam, end: value.end };
     }
-    if (value?.op !== "cap_ease") throw Error("Guided seam adjustments support only true_seam and cap_ease.");
+    if (value?.op !== "cap_ease") throw Error("Guided after operations support true_seam, cap_ease and treatment.");
     object(value, ["op", "piece", "seams", "target_ratio"], ["op", "piece", "seams", "target_ratio"], "Cap ease");
     name(value.piece, "Cap source piece");
     if (!pieces.has(value.piece)) throw Error("Cap ease names a missing source piece.");
@@ -1134,7 +1221,7 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
   if ((own(fit, "schema") && fit.schema !== "fabric-fit/1") || !Array.isArray(fit.points) || !fit.points.length || fit.points.length > 32) {
     throw Error("Design fit needs 1–32 explicit points and fabric-fit/1 when a schema is supplied.");
   }
-  const search = JSON.stringify(adaptive ? { objective: design.objective,
+  const searchValue = adaptive ? { objective: design.objective,
     ...(own(design, "polling") ? { polling: design.polling } : {}),
     ...(own(design, "constraintRestoration") ? { constraint_restoration: design.constraintRestoration } : {}),
     ...(own(design, "materialKey") ? { material_key: design.materialKey } : {}),
@@ -1144,7 +1231,11 @@ function linkedDesign(value, pieces, candidates, comparison, matrix, seamIds) {
     ...(own(design, "domainRestarts") ? { domain_restarts: design.domainRestarts } : {}),
     ...(after === undefined ? {} : { after }),
     max_evaluations: design.maxEvaluations, max_designs: design.maxDesigns } :
-    { variables, ...(after === undefined ? {} : { after }), max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } });
+    { variables, ...(after === undefined ? {} : { after }), max_designs: design.maxDesigns, fit_screening: { max_candidates: maxCandidates } };
+  const search = "{" + Object.entries(searchValue).map(([key, value]) => JSON.stringify(key) + ":" +
+    (key === "after" ? "[" + value.map(operation => operation.op === "treatment" ?
+      '{"op":"treatment","request":' + operation.request + "}" : JSON.stringify(operation)).join(",") + "]" :
+      JSON.stringify(value))).join(",") + "}";
   bytes(search, 256 * 1024, `Linked design ${mode} exceeds 256 KiB of authored domain data.`);
   return { [adaptive ? "adaptive" : "grid"]: search, fitSpec: design.fitSpec, retainedDesigns: retained + 1,
     probes: adaptive && design.objective !== "fit_band_violation_mm" ? design.maxEvaluations * (design.materialKeys?.length ?? 1) : 0 };

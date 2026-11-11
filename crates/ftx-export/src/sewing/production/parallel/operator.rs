@@ -504,6 +504,9 @@ impl Search<'_> {
             .previous
             .map_or(self.arrivals[cell], |from| self.transfers[from][cell]);
         let mut departure = state.free;
+        if travel > MAX_EXACT_MILLISECONDS - departure {
+            return Ok(None);
+        }
         let mut arrival = sum_time(departure, travel)?;
         let mut start = arrival.max(state.ready[cell]);
         let attended = phase.attended()?;
@@ -574,6 +577,11 @@ impl Search<'_> {
                     "shared-operator calendar and fixture intersection exceeded its finite event bound",
                 ));
             }
+        }
+        // A calendar can move valid source phases beyond the exact clock domain. That makes
+        // this dispatch unavailable; it must not abort other qualified cells or interleavings.
+        if duration > MAX_EXACT_MILLISECONDS - start {
+            return Ok(None);
         }
         let release = sum_time(start, attended)?;
         let finish = sum_time(release, phase.feed)?;
@@ -713,6 +721,9 @@ impl Search<'_> {
                 remaining = sum_time(remaining, phase.duration()?)?;
                 attended = sum_time(attended, phase.attended()?)?;
             }
+            if remaining > MAX_EXACT_MILLISECONDS - state.ready[cell] {
+                return Ok(None);
+            }
             let end = sum_time(state.ready[cell], remaining)?;
             if self.cells[cell]
                 .available_until_milliseconds
@@ -721,6 +732,9 @@ impl Search<'_> {
                 return Ok(None);
             }
             finish = finish.max(end);
+        }
+        if attended > MAX_EXACT_MILLISECONDS - state.free {
+            return Ok(None);
         }
         let operator_end = sum_time(state.free, attended)?;
         if self

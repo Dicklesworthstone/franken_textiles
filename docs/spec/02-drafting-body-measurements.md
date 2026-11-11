@@ -308,6 +308,17 @@ defaults `definition_id` to the catalogue's id (null for unknown names), stores 
    (pipe-joined).
 6. `fused` present and not an object → `fused must be an object`.
 
+**Native exception `measurement-positive-length`:** the reference's finite-only value checks
+permit zero or negative catalogue lengths to satisfy the readiness gate when their uncertainty
+is small. All catalogue quantities whose unit is `mm` must instead be strictly positive, including
+aliases and an explicit wearer stature. Apply this rule at record construction, document validation,
+normalization (also after a definition offset), and direct fusion admission. Invalid evidence is
+refused, never clamped, discarded in favour of a prior, or accepted from a stale fused cache.
+Signed/zero angles and unknown custom quantities retain their finite-value semantics. Positive
+out-of-chart values remain admissible with their existing advisories; this is no population bound.
+If decimal display rounding would erase a positive catalogue length, retain the unrounded positive
+value in the fused result and source entries, just as `fusion-positive-sigma` retains uncertainty.
+
 **parse_value(text, unit)**: regex `^\s*([-+]?\d+(?:\.\d+)?)\s*(mm|cm|m|in|inch|inches|"|deg|°)?\s*$`,
 case-insensitive. For unit `deg`: suffix must be empty, `deg` or `°`, else `'<text>': an angle, give degrees`.
 For lengths the unit is mandatory: factors mm 1, cm 10, m 1000, in/inch/inches/`"` 25.4; missing → `'<text>': give a
@@ -2120,6 +2131,33 @@ more than 128 observations per frame refuse. Pending/invalid placement or cancel
 downloads; reset restores the entire original keypoint lists. All other input values and source
 bindings stay fixed. Partial drafts are saveable; source preparation and point count do not establish
 body observability, fit acceptance or READY. The ordinary fitter retains all its original gates.
+
+### E.2 Portable anatomical target authoring (native extension)
+
+The local photo workbench may open the same unfitted model-target review used by
+`measure body-target-review`. It accepts an exact prepared `ftx-anny-body-fit-input/1`
+and its array-verified converted model, including an empty or incomplete target map. Opening
+may retain unresolved observed names for explicit definition: only the inspection layout adds
+those names, without invented target locations. Ordinary camera, evidence, pixel, start, bounds
+and aggregate-budget validation still applies. Completed application requires every definition.
+The shared model evaluator supplies the unposed rest mesh, original triangle indices and named
+bone endpoints at the declared shape-bound midpoints. The existing visible-triangle picker
+retains explicit vertex, surface barycentric or bone-endpoint definitions; it infers no anatomy.
+
+Applying targets requires the original input and model SHA-256 bindings and every already
+observed name. The ordinary correspondence validator rejects duplicate physical locations,
+invalid topology/weights/bones and excess targets. Rust replaces only `model.keypoints` in the
+original parsed document, preserving all other values and full unsigned frame timestamps.
+Cameras, image bindings, observation coordinates/sigmas/FIT-CHECK roles, tapes and starts stay
+fixed. Empty maps may be inspected but cannot be applied as a completed target declaration.
+
+The shared review runs in an isolated local iframe. An explicit apply action, current source
+window, per-review random channel and source hashes bind its return to the photo page. Pending
+changes withdraw previous fit/review/handoff results and block observation/start/fitting work
+until applied or cancelled. Source replacement and cancellation revoke the review and stale
+asynchronous messages cannot publish. A successful application becomes the same exact prepared
+snapshot consumed by the existing observation, start, preview and fitting adapters. No source
+photo is reread and no anatomical, physical-fit, uncertainty or measurement-readiness claim follows.
 
 ## F. Quirks to preserve (or change deliberately with a fixture update)
 

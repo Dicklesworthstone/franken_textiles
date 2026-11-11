@@ -46,6 +46,7 @@ use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
 use ftx_drape::run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape, viewer};
+use ftx_drape::stepping::SubdivisionOptions;
 use ftx_pattern::{Measurements, Pattern, alter, format_table, validate};
 use serde_json::{Value, json};
 
@@ -59,6 +60,7 @@ const USAGE: &str = "usage:
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
             [--sim|--stills] [--body-fit REPORT] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
+            [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
@@ -66,6 +68,7 @@ const USAGE: &str = "usage:
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--self-contact-mm MM] [--self-mu MU] [--json]
             [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
+            [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--json]
@@ -175,6 +178,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
             }
             if name == "allow-estimates"
                 || name == "static-equilibrium"
+                || name == "time-subdivision"
                 || measure::BOOLEAN_OPTIONS.contains(&name)
                 || export::BOOLEAN_OPTIONS.contains(&name)
                 || round::BOOLEAN_OPTIONS.contains(&name)
@@ -699,6 +703,25 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     {
         return Err(bad_input(format!("--{name} requires --static-equilibrium")));
     }
+    if args.options.contains_key("time-subdivision") {
+        let mut policy = SubdivisionOptions::default();
+        for (name, slot) in [
+            ("subdivision-max-halvings", &mut policy.max_halvings),
+            ("subdivision-max-trials", &mut policy.max_trials),
+        ] {
+            if let Some(value) = args.options.get(name) {
+                *slot = value
+                    .parse()
+                    .map_err(|_| bad_input(format!("--{name} must be a whole number")))?;
+            }
+        }
+        opts.time_subdivision = Some(policy);
+    } else if let Some(name) = ["subdivision-max-halvings", "subdivision-max-trials"]
+        .into_iter()
+        .find(|key| args.options.contains_key(*key))
+    {
+        return Err(bad_input(format!("--{name} requires --time-subdivision")));
+    }
     if let Some(mm) = args.options.get("self-contact-mm") {
         let mut p = opts.contact;
         p.thickness = mm
@@ -805,6 +828,9 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "static-equilibrium",
             "static-tol-mm",
             "static-max-newton",
+            "time-subdivision",
+            "subdivision-max-halvings",
+            "subdivision-max-trials",
             "model",
             "self-contact-mm",
             "spacing-mm",
@@ -1420,6 +1446,60 @@ mod tests {
             .unwrap();
             assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
         }
+    }
+
+    #[test]
+    fn time_subdivision_controls_are_explicit_and_validate_before_io() {
+        let args = parse(
+            &[
+                "drape",
+                "--time-subdivision",
+                "--subdivision-max-halvings",
+                "3",
+                "--subdivision-max-trials",
+                "200",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let options = drape_options(&args).unwrap();
+        assert_eq!(
+            options.time_subdivision,
+            Some(SubdivisionOptions {
+                max_halvings: 3,
+                max_trials: 200,
+            })
+        );
+        assert_eq!(options.step, DrapeOptions::default().step);
+        assert_eq!(options.tol, DrapeOptions::default().tol);
+        assert!(
+            drape_options(&parse(&["drape".into()]).unwrap())
+                .unwrap()
+                .time_subdivision
+                .is_none()
+        );
+        for extra in [
+            vec!["--subdivision-max-halvings", "3"],
+            vec!["--subdivision-max-trials", "200"],
+            vec!["--time-subdivision", "--subdivision-max-halvings", "17"],
+            vec!["--time-subdivision", "--subdivision-max-halvings", "-1"],
+            vec!["--time-subdivision", "--subdivision-max-trials", "0"],
+            vec!["--time-subdivision", "--subdivision-max-trials", "65536"],
+            vec!["--time-subdivision", "--subdivision-max-trials", "1.5"],
+            vec!["--time-subdivision", "--subdivision-max-trials", "1"],
+        ] {
+            let mut argv = vec!["drape", "absent.json"];
+            argv.extend(extra);
+            let args = parse(&argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
+            assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        }
+        let args = parse(&["round", "absent", "--time-subdivision"].map(String::from)).unwrap();
+        assert!(
+            round::cmd_round(&args)
+                .unwrap_err()
+                .message
+                .contains("requires --sim")
+        );
     }
 
     #[test]

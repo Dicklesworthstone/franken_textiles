@@ -5,6 +5,20 @@ use serde_json::{Value, json};
 
 use crate::{PROVENANCES, canonical_name, definition, invalid, unit};
 
+// The catalogue defines positive body dimensions, while angles and application-specific values
+// may be signed. Keep this domain independent of provenance, priors and presentation precision.
+pub(super) fn is_length(name: &str) -> bool {
+    definition(name).is_some_and(|d| d["unit"] == "mm")
+}
+
+pub(super) fn checked_value(name: &str, value: f64) -> Result<f64, Refusal> {
+    Refusal::finite("measurement value", value)?;
+    if is_length(name) && value <= 0.0 {
+        return Err(invalid(format!("{name} must be positive")));
+    }
+    Ok(value)
+}
+
 /// Gregorian day ordinal (0001-01-01 = 1), or `None` for a non-ISO/invalid date.
 /// No clock is consulted, so staleness checks can be deterministic.
 #[must_use]
@@ -114,7 +128,7 @@ pub fn make_record(
     if name.is_empty() {
         return Err(invalid("measurement needs a name"));
     }
-    Refusal::finite("measurement value", value)?;
+    checked_value(&name, value)?;
     Refusal::finite("measurement sigma", sigma)?;
     if sigma <= 0.0 {
         return Err(invalid("measurement sigma must be > 0"));
@@ -151,6 +165,11 @@ pub fn validate(data: &Value) -> Vec<String> {
             let v = &data["wearer"][key];
             if !v.is_null() && !v.as_f64().is_some_and(f64::is_finite) {
                 errors.push(format!("wearer.{key} must be a number or null"));
+            } else if key == "stature_mm"
+                && let Some(value) = v.as_f64()
+                && let Err(error) = checked_value("stature", value)
+            {
+                errors.push(format!("wearer.{key}: {}", error.message));
             }
         }
     }
@@ -182,6 +201,10 @@ pub fn validate(data: &Value) -> Vec<String> {
             }
             if !r[&vk].as_f64().is_some_and(f64::is_finite) {
                 errors.push(format!("{prefix}: {vk} must be a finite number"));
+            } else if let Some(value) = r[&vk].as_f64()
+                && let Err(error) = checked_value(&name, value)
+            {
+                errors.push(format!("{prefix}: {}", error.message));
             }
             if !r[&sk].as_f64().is_some_and(|s| s.is_finite() && s > 0.0) {
                 errors.push(format!("{prefix}: {sk} must be > 0"));

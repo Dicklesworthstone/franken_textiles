@@ -42,6 +42,26 @@ Those endpoint requests support separately declared arm angles and fractional se
 postures. They reuse the existing joint rotations and occupied source shape while retaining the
 standing sewn start, unchanged cloth history and all contact/rollback checks described below.
 
+Source-model keyframes can also supply `root_translation_m: [x,y,z]` and
+`root_rotation_rad: [rx,ry,rz]`. These are absolute endpoint controls in the existing world frame
+(+Z up, facing −Y before rotation; anatomical axes are defined in `docs/spec/05`). The rotation is
+an axis-times-angle vector in radians, with finite norm at most π. It rotates the complete posed
+source surface about its root-relative origin before the metre translation and collider extraction.
+It is not an Euler-angle tuple, a turn about the feet, or an inferred squat descent. Omitted/null
+fields mean zero independently at each endpoint; explicit zero retains the original geometry
+and its authored receipt. A later endpoint without a rotation returns to the unrotated source pose,
+without inheriting a previous turn. Finite-vector and magnitude admission use one deterministic
+rotation law with a scaled norm, so tiny nonzero vectors are not silently squared to zero.
+
+Root controls prescribe endpoint geometry only. The same checked linear vertex chords connect
+those endpoints; a large root turn does not request a rotational arc. Author short explicit
+increments for a turn. Gravity, fixed cloth constraints and independently authored world-frame
+environments retain their declared frames. Actual body/cloth positions feed the existing contact,
+coverage, vapor and qualified liquid-mass/heat paths at accepted samples. Initial placement,
+tape diagnostics and accepted body evidence are not moved or refitted. Endpoint reports retain the
+exact optional controls beside their computed geometry, and changing either control invalidates
+the retained source path.
+
 ## Static scene admission
 
 Both the uniform-fabric and resolved-material scene builders audit the supplied

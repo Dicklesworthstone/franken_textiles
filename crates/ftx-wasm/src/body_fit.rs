@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use ftx_body::{
     AnnyData, AnnyModel,
     accepted_shape::AcceptedShape,
-    correspondence::{Configuration, CorrespondenceModel},
+    correspondence::{Configuration, CorrespondenceModel, Target},
 };
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::{
@@ -86,6 +86,141 @@ impl BodyModel for Adapter {
 
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetEdits {
+    input_sha256: String,
+    model_sha256: String,
+    keypoints: std::collections::BTreeMap<String, Target>,
+}
+
+/// Open the native unfitted target picker, or apply its explicitly authored locations.
+/// Only `model.keypoints` changes; observations and exact frame identities stay in Rust.
+/// Empty edit text permits an incomplete target map for explicit observed-name repair.
+///
+/// # Errors
+/// Excessive or invalid sources, stale edit bindings, invalid/duplicate model locations,
+/// or removal of an observed name. Ordinary body-fit admission remains unchanged.
+pub fn body_fit_targets(
+    model_bytes: &[u8],
+    input_text: &str,
+    edits_text: &str,
+) -> Result<Value, Refusal> {
+    if input_text.len() > 16 * 1024 * 1024
+        || model_bytes.len() > 512 * 1024 * 1024
+        || edits_text.len() > 256 * 1024
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "target authoring supports at most 16 MiB input, 512 MiB model and 256 KiB edits",
+        ));
+    }
+    let mut request: Request = serde_json::from_str(input_text)
+        .map_err(|error| invalid(format!("invalid prepared target input: {error}")))?;
+    if request.schema != "ftx-anny-body-fit-input/1" {
+        return Err(invalid(
+            "target authoring requires prepared ftx-anny-body-fit-input/1",
+        ));
+    }
+    if let Some(images) = &request.capture_images {
+        body_fit::validate_capture_images(images, &request.fit.frames)?;
+    }
+    let original_hash = sha256_hex(input_text.as_bytes());
+    let model_hash = sha256_hex(model_bytes);
+    if request.model.model_sha256 != model_hash {
+        return Err(invalid("model SHA-256 mismatch; no targets were edited"));
+    }
+    let applying = !edits_text.trim().is_empty();
+    if applying {
+        let edits: TargetEdits = serde_json::from_str(edits_text)
+            .map_err(|error| invalid(format!("invalid target edits: {error}")))?;
+        if edits.input_sha256 != original_hash || edits.model_sha256 != model_hash {
+            return Err(invalid(
+                "target edits belong to different input or model bytes",
+            ));
+        }
+        request.model.keypoints = edits.keypoints;
+    }
+    let model = AnnyModel::from_data(AnnyData::from_bytes(model_bytes, true)?)?;
+    let inner = if applying {
+        CorrespondenceModel::new(model, request.model, &model_hash)?
+    } else {
+        CorrespondenceModel::for_target_review(model, request.model, &model_hash)?
+    };
+    let adapter = Adapter::new(inner);
+    let mut layout = adapter.layout().clone();
+    if !applying {
+        // Unresolved names are selectable for repair, not synthetic model locations. The
+        // ordinary validator still checks cameras, pixels, evidence, starts and budgets.
+        // Applying uses only the actual defined targets and must resolve every observation.
+        let names: std::collections::BTreeSet<_> = layout
+            .keypoints
+            .into_iter()
+            .chain(
+                request
+                    .fit
+                    .frames
+                    .iter()
+                    .flat_map(|frame| frame.keypoints.iter().map(|point| point.name.clone())),
+            )
+            .collect();
+        layout.keypoints = names.into_iter().collect();
+    }
+    body_fit::prepare_capture_authoring(&request.fit, &layout)?;
+    let input = if applying {
+        let mut value: Value = serde_json::from_str(input_text)
+            .map_err(|error| invalid(format!("invalid target source: {error}")))?;
+        value["model"]["keypoints"] = json!(adapter.inner.configuration().keypoints);
+        let edited = serde_json::to_string_pretty(&value)
+            .map_err(|error| invalid(format!("cannot serialize target edits: {error}")))?;
+        if edited.len() > 16 * 1024 * 1024 {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "edited target input exceeds 16 MiB",
+            ));
+        }
+        edited
+    } else {
+        input_text.to_owned()
+    };
+    let mut result = json!({"schema":"ftx-body-target-authoring/1","body_fitted":false,
+        "original_input_sha256":original_hash,"input_sha256":sha256_hex(input.as_bytes()),
+        "model_sha256":model_hash,"input":input,"start_count":request.fit.starts.len(),
+        "target_count":adapter.inner.configuration().keypoints.len()});
+    if !applying {
+        let geometry = adapter.inner.target_preview()?;
+        let names: std::collections::BTreeSet<_> = request
+            .fit
+            .frames
+            .iter()
+            .flat_map(|frame| frame.keypoints.iter().map(|point| &point.name))
+            .collect();
+        let data = json!({"portable":true,"annotations":{
+            "schema":"ftx-body-targets/1","source_input":"",
+            "source_input_sha256":original_hash,"model_sha256":model_hash,
+            "keypoints":adapter.inner.configuration().keypoints},"observed_names":names,
+            "mesh":geometry["mesh"],"bones":geometry["bones"],"preview":geometry["preview"]});
+        let payload = serde_json::to_string(&data)
+            .map_err(|error| invalid(error.to_string()))?
+            .replace('<', "\\u003c");
+        // The native review and sandboxed portable review compile exactly the same picker.
+        // Substitute inert data last, so authored labels cannot become template directives.
+        result["editor_html"] = json!(
+            include_str!("../../ftx-cli/src/measure/body_fit/target_review.html")
+                .replace("__FTX_TARGET_CSP__", "script-src 'unsafe-inline';")
+                .replace(
+                    "__FTX_TARGET_SCRIPT__",
+                    &format!(
+                        "<script>{}</script>",
+                        include_str!("../../ftx-cli/src/measure/body_fit/target_review.js")
+                    )
+                )
+                .replace("__FTX_TARGET_DATA__", &payload)
+        );
+    }
+    Ok(result)
 }
 
 #[derive(Deserialize)]

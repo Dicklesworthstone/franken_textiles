@@ -245,6 +245,10 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
         legs: Legs::Seated,
         leg_fraction: 0.001,
         max_settle_steps: 2,
+        time_subdivision: Some(ftx_drape::stepping::SubdivisionOptions {
+            max_halvings: 3,
+            max_trials: 200,
+        }),
         static_equilibrium: Some(ftx_drape::run::StaticEquilibriumOptions {
             correction_tolerance_m: 1e-15,
             max_newton_iterations: 1,
@@ -283,6 +287,11 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
             "0.001",
             "--max-settle-steps",
             "2",
+            "--time-subdivision",
+            "--subdivision-max-halvings",
+            "3",
+            "--subdivision-max-trials",
+            "200",
             "--static-equilibrium",
             "--static-tol-mm",
             "0.000000000001",
@@ -3500,7 +3509,16 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
 }
 
 #[test]
-fn seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape() {
+fn translated_seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape() {
+    occupied_root_continuation(false);
+}
+
+#[test]
+fn rotated_seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape() {
+    occupied_root_continuation(true);
+}
+
+fn occupied_root_continuation(rotate: bool) {
     use ftx_wasm::materials::scenario::on_model;
 
     let dir = setup();
@@ -3525,14 +3543,25 @@ fn seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape
     let study = json!({"schema":"ftx-material-study/1","variants":[{"key":"baseline",
         "changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
         "cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,"end_margin_mm":0.0}});
-    let scenario = json!({"schema":"ftx-drape-scenario/1",
+    let mut scenario = json!({"schema":"ftx-drape-scenario/1",
         "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
         "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000,
         "motion":{"schema":"ftx-drape-motion/1","keyframes":[
-            {"time_s":0.002,"arm_abduction_deg":35.0,"leg_pose":{"posture":"seated","fraction":0.0001}},
-            {"time_s":0.004,"arm_abduction_deg":35.0,"leg_pose":{"posture":"squat","fraction":0.0002}},
-            {"time_s":0.006,"arm_abduction_deg":35.0}],
+            {"time_s":0.002,"arm_abduction_deg":35.0,"leg_pose":{"posture":"seated","fraction":0.0001},
+                "root_translation_m":[0.00001,-0.00002,0.00003]},
+            {"time_s":0.004,"arm_abduction_deg":35.0,"leg_pose":{"posture":"squat","fraction":0.0002},
+                "root_translation_m":[0.00002,0.00001,-0.00001]},
+            {"time_s":0.006,"arm_abduction_deg":35.0,"root_translation_m":[0.0,0.0,0.0]},
+            {"time_s":0.008,"arm_abduction_deg":35.0}],
             "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000}});
+    if rotate {
+        for (i, rotation) in [[0.0, 0.0, 0.0001], [0.0, -0.0001, 0.0], [0.0, 0.0, 0.0]]
+            .into_iter()
+            .enumerate()
+        {
+            scenario["motion"]["keyframes"][i]["root_rotation_rad"] = json!(rotation);
+        }
+    }
     let portable: Value = serde_json::from_str(
         &on_model(
             &model,
@@ -3603,7 +3632,7 @@ fn seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape
     assert_eq!(motion["status"], "available", "{motion}");
     let motion = &motion["result"];
     let samples = motion["samples"].as_array().unwrap();
-    assert_eq!(samples.len(), 6);
+    assert_eq!(samples.len(), 8);
     assert_ne!(
         samples[1]["body_positions_m"],
         motion["initial_sample"]["body_positions_m"]
@@ -3616,13 +3645,30 @@ fn seated_and_squat_continuation_replays_native_and_portable_with_occupied_shape
         samples[5]["body_positions_m"],
         motion["initial_sample"]["body_positions_m"]
     );
+    assert_eq!(
+        samples[7]["body_positions_m"],
+        motion["initial_sample"]["body_positions_m"]
+    );
     for i in 0..2 {
         assert_eq!(
             motion["keyframes"][i]["leg_pose"],
             scenario["motion"]["keyframes"][i]["leg_pose"]
         );
     }
+    for i in 0..3 {
+        assert_eq!(
+            motion["keyframes"][i]["root_translation_m"],
+            scenario["motion"]["keyframes"][i]["root_translation_m"]
+        );
+    }
+    for i in 0..4 {
+        assert_eq!(
+            motion["keyframes"][i].get("root_rotation_rad"),
+            scenario["motion"]["keyframes"][i].get("root_rotation_rad")
+        );
+    }
     assert!(motion["keyframes"][2].get("leg_pose").is_none());
+    assert!(motion["keyframes"][3].get("root_translation_m").is_none());
     assert_eq!(motion["continuous_contact_checked"], true);
     assert_eq!(motion["physical_validation_claim"], false);
     assert_eq!(read(&dir.join("body-input.json")), body);

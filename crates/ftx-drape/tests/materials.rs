@@ -83,6 +83,99 @@ fn body() -> Body {
 }
 
 #[test]
+fn ordinary_subdivision_preserves_sewn_frames_and_shares_trials_with_settling() {
+    use ftx_drape::stepping::SubdivisionOptions;
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    let pattern = band(json!({"material":record(1.)}));
+    let options = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 3,
+        drape_steps: 3,
+        max_settle_steps: 2,
+        step: 0.001,
+        ..DrapeOptions::default()
+    };
+    let baseline = drape(&pattern, &json!({}), &body, &options, |_| {}).unwrap();
+    let selected = DrapeOptions {
+        time_subdivision: Some(SubdivisionOptions {
+            max_halvings: 8,
+            max_trials: 8,
+        }),
+        ..options
+    };
+    let run = drape(&pattern, &json!({}), &body, &selected, |_| {}).unwrap();
+    assert_eq!(run.fold.frames, baseline.fold.frames);
+    assert_eq!(
+        format!("{:?}", run.scene.solver),
+        format!("{:?}", baseline.scene.solver)
+    );
+    assert_eq!(
+        run.drape.steps, 5,
+        "falling fixture must use both settling intervals"
+    );
+    assert_eq!(run.report["numerical"]["time_subdivision"]["trials"], 8);
+    assert_eq!(
+        run.report["numerical"]["time_subdivision"]["accepted_substeps"],
+        8
+    );
+    assert_eq!(
+        run.report["numerical"]["time_subdivision"]["subdivided_nominal_intervals"],
+        0
+    );
+    assert_eq!(run.report["contact_diagnostics"]["accepted_samples"], 8);
+    let mut report = run.report;
+    report["numerical"]
+        .as_object_mut()
+        .unwrap()
+        .remove("time_subdivision");
+    for phase in ["sew", "drape"] {
+        for sample in report["numerical"][phase]["samples"]
+            .as_array_mut()
+            .unwrap()
+        {
+            let receipt = sample
+                .as_object_mut()
+                .unwrap()
+                .remove("time_subdivision")
+                .unwrap();
+            assert_eq!(receipt["duration_s"], options.step);
+            assert_eq!(receipt["trials"], 1);
+            assert_eq!(receipt["accepted"][0]["step_s"], options.step);
+            assert_eq!(receipt["accepted"][0]["end_s"], options.step);
+        }
+    }
+    report["contact_diagnostics"]["basis"] =
+        baseline.report["contact_diagnostics"]["basis"].clone();
+    assert_eq!(
+        report, baseline.report,
+        "all original numeric/material/gating fields remain exact"
+    );
+    let refused = drape(
+        &pattern,
+        &json!({}),
+        &body,
+        &DrapeOptions {
+            time_subdivision: Some(SubdivisionOptions {
+                max_trials: 6,
+                ..selected.time_subdivision.unwrap()
+            }),
+            ..selected
+        },
+        |_| {},
+    );
+    assert_eq!(
+        refused.err().unwrap().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
 fn qualification_identity_tracks_the_actual_body_and_hidden_material_properties() {
     use ftx_drape::qualify::{fabric_key, qualification_basis};
     let surface = body();

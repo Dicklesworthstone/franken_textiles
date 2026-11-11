@@ -50,6 +50,7 @@ pub struct Policy {
     pub max_search_nodes: usize,
     /// Qualified unloaded staging slots at each cell. Without `bounded_staging`, this must hold
     /// the complete garment quantity; the explicit bounded policy instead schedules reservations.
+    /// Explicit `bounded_staging.cell_capacities` replaces this fallback at every configured cell.
     pub staging_capacity: usize,
     /// Optional qualified finite buffers, with direct first-loading entry and final-unloading exit.
     /// Omission retains the complete-batch staging convention and its existing timing arithmetic.
@@ -1599,6 +1600,10 @@ pub(in crate::sewing) fn build(
     let global = policy.validate(options, copies)?;
     let staging = staging::Compiled::compile(policy)?;
     let uses_staging = staging.is_some();
+    let uses_cell_staging = policy
+        .bounded_staging
+        .as_ref()
+        .is_some_and(|staging| staging.cell_capacities.is_some());
     let source_seams: BTreeSet<_> = pattern
         .seams()
         .iter()
@@ -1684,7 +1689,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.copy_windows.is_some() {
+        schema: if uses_cell_staging {
+            "ftx-sewing-plan/33"
+        } else if policy.copy_windows.is_some() {
             "ftx-sewing-plan/31"
         } else if policy.operation_qualified_labor() {
             "ftx-sewing-plan/30"
@@ -2092,7 +2099,9 @@ pub(in crate::sewing) fn build(
         .map(|windows| windows.report(&baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if copy_windows.is_some() {
+        schema: if uses_cell_staging {
+            "ftx-sewing-routing/15"
+        } else if copy_windows.is_some() {
             "ftx-sewing-routing/14"
         } else if policy.operation_qualified_labor() {
             "ftx-sewing-routing/13"
@@ -2179,7 +2188,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.copy_windows.is_some() {
+        schema: if uses_cell_staging {
+            "ftx-sewing-production/21"
+        } else if policy.copy_windows.is_some() {
             "ftx-sewing-production/19"
         } else if policy.operation_qualified_labor() {
             "ftx-sewing-production/18"

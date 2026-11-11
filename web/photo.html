@@ -278,6 +278,22 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     supported. A path-based capture input or mask manifest must first be prepared with the native tools;
     this page does not read local paths or infer landmarks from a video. Input limit: 16 MiB; model limit: 512 MiB.</small></p>
   <details>
+    <summary>Declare or correct anatomical model targets</summary>
+    <p>Choose the model locations you intend to observe on the actual unfitted rest surface.
+      The shared native picker supports surface points, mesh vertices and named bone endpoints.
+      Start with an empty target map, define missing observed names, or correct existing definitions.
+      It does not infer anatomy from a photograph.</p>
+    <p><button id="bodyTargetsLoad" disabled>Open model target picker</button>
+      <button id="bodyTargetsCancel" disabled>Close picker / cancel unapplied targets</button></p>
+    <iframe id="bodyTargetsFrame" title="Unfitted anatomical model target picker" sandbox="allow-scripts allow-downloads"
+      style="width:100%;height:780px;border:1px solid #ccd5db" hidden></iframe>
+    <p id="bodyTargetsStatus" role="status" aria-live="polite">Open the current prepared input and exact model to declare targets.</p>
+    <pre id="bodyTargetsError" role="alert"></pre><div id="bodyTargetsDownloads" class="files"></div>
+    <p><small>Use the picker's explicit return button to check and apply all targets. Every observed
+      name must remain defined. Cameras, image bindings, observations, tape evidence and starts stay
+      fixed. Finish or close the picker before observing points, editing starts or fitting.</small></p>
+  </details>
+  <details>
     <summary>Observe landmarks and silhouette slices on original photographs</summary>
     <p>Add or correct 2D observations for the model targets already declared in this input. Verify an
       original photograph before clicking, or enter independently reviewed stored-pixel coordinates.

@@ -7,10 +7,24 @@
     if (download !== null) URL.revokeObjectURL(download);
     download = null; link.hidden = true; link.removeAttribute("href");
     draftLink.hidden = true; draftLink.removeAttribute("href");
+    byId("targetReturn").disabled = true;
   }
   try {
     const data = JSON.parse(byId("targetData").textContent);
     const original = data.annotations, observed = new Set(data.observed_names);
+    let bridgeToken = null;
+    function changed() {
+      if (data.portable && bridgeToken) window.parent.postMessage({type:"ftx-body-target-dirty", token:bridgeToken}, "*");
+    }
+    if (data.portable) {
+      byId("targetNativeLinks").hidden = true; byId("targetNativeApply").hidden = true;
+      byId("targetPortableApply").hidden = false;
+      window.addEventListener("message", event => {
+        if (event.source !== window.parent || bridgeToken !== null || event.data?.type !== "ftx-body-target-connect" ||
+            typeof event.data.token !== "string" || !/^[0-9a-f]{32}$/.test(event.data.token)) return;
+        bridgeToken = event.data.token; updateDownload();
+      });
+    }
     const vertices = data.mesh.vertices_m, faces = data.mesh.triangles;
     const bones = new Map(data.bones.map(b => [b.name, b]));
     if (!vertices.length || vertices.length > 100000 || !faces.length || faces.length > 200000 ||
@@ -88,9 +102,11 @@
       output.keypoints = Object.fromEntries(Object.entries(output.keypoints).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
       download = URL.createObjectURL(new Blob([JSON.stringify(output, null, 2) + "\n"], {type: "application/json"}));
       draftLink.href = download; draftLink.hidden = false;
-      if (needsReview || JSON.stringify(edited.keypoints) === JSON.stringify(original.keypoints)) return;
+      if (needsReview) return;
       try { checkTargets(edited.keypoints); }
       catch (error) { status.textContent = error.message + ". Save the applied draft to continue later."; return; }
+      byId("targetReturn").disabled = !data.portable || bridgeToken === null;
+      if (JSON.stringify(edited.keypoints) === JSON.stringify(original.keypoints)) return;
       link.href = download; link.hidden = false;
     }
     function location(target) {
@@ -203,7 +219,7 @@
       candidate = kind.startsWith("bone_") && bones.has(bone) ? {kind, bone} : null;
       definitions();
     }
-    function dirty() { pending = true; withdraw(); }
+    function dirty() { pending = true; changed(); withdraw(); }
     byId("targetName").addEventListener("input", dirty);
     byId("targetList").addEventListener("change", () => select(byId("targetList").value));
     byId("targetKind").addEventListener("change", () => { dirty(); boneCandidate(); });
@@ -220,7 +236,7 @@
         const proposed = Object.fromEntries([...Object.entries(edited.keypoints).filter(([n]) => n !== name), [name, candidate]]);
         // A draft may lack observed names; the completed handoff and native command require them all.
         checkTargets(proposed, false);
-        putTarget(name, candidate); selected = name; pending = false; needsReview = false; importPending = false; fillOptions(); select(name);
+        changed(); putTarget(name, candidate); selected = name; pending = false; needsReview = false; importPending = false; fillOptions(); select(name);
         status.textContent = "Applied " + name + ". " + Object.keys(edited.keypoints).length + " target(s).";
         updateDownload();
       } catch (error) { pending = true; status.textContent = error.message + ". No target or download published."; }
@@ -229,7 +245,7 @@
       withdraw();
       if (pending) { status.textContent = "Apply or cancel the pending target edit before removal."; return; }
       if (!selected || observed.has(selected)) { status.textContent = "An observed name must retain its target definition."; return; }
-      delete edited.keypoints[selected]; selected = ""; fillOptions(); select("");
+      changed(); delete edited.keypoints[selected]; selected = ""; fillOptions(); select("");
       status.textContent = "Removed the unobserved target."; updateDownload();
     });
     byId("cancelTarget").addEventListener("click", () => {
@@ -237,6 +253,7 @@
       select(selected); status.textContent = "Pending target edit cancelled; applied definitions are unchanged."; updateDownload();
     });
     byId("resetTargets").addEventListener("click", () => {
+      changed();
       withdraw(); edited = structuredClone(original); selected = ""; pending = false; needsReview = false; importPending = false; fillOptions(); select("");
       status.textContent = "All target changes reset to the original declaration.";
     });
@@ -250,10 +267,12 @@
     }
     const saved = byId("targetDraftFile");
     for (const event of ["focus", "click", "cancel"]) saved.addEventListener(event, () => {
+      changed();
       ++revision; reading = false; importPending = true; withdraw();
       status.textContent = "Current definitions retained. Choose saved targets, or Apply a target or Cancel pending edit to restore downloads.";
     });
     saved.addEventListener("change", async () => {
+      changed();
       const ticket = ++revision, file = saved.files[0];
       saved.value = ""; reading = false; importPending = true; withdraw();
       if (!file) { status.textContent = "No saved targets selected; current definitions retained."; return; }
@@ -315,6 +334,16 @@
       [byId("yaw").value, byId("pitch").value] = views[button.dataset.view]; queueRender();
     }));
     data.bones.forEach(bone => byId("targetBone").add(new Option(bone.name, bone.name)));
+    byId("targetReturn").addEventListener("click", () => {
+      if (!data.portable || !bridgeToken || pending || importPending || needsReview || reading) return;
+      try {
+        checkTargets(edited.keypoints);
+        window.parent.postMessage({type:"ftx-body-target-apply", token:bridgeToken,
+          annotations:{...original, keypoints:structuredClone(edited.keypoints)}}, "*");
+        byId("targetReturn").disabled = true;
+        status.textContent = "Checking these exact targets in the workbench. No fitted body or measurement was created.";
+      } catch (error) { status.textContent = error.message; }
+    });
     byId("previewDetails").textContent = JSON.stringify(data.preview, null, 2);
     fillOptions(); select(""); byId("targetEditor").hidden = false;
     status.textContent = "Choose a required or existing name, or name a new target. Inspect the unfitted surface before selecting a location.";

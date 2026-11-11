@@ -253,17 +253,50 @@ legs at that endpoint, including when returning from a preceding bend. Fractions
 absolute endpoint choices, not cumulative adjustments. Unknown postures and invalid fractions refuse.
 
 The existing seated posture uses hip −90° and knee +90°; squat uses hip −100°, knee +110° and foot
-−10°, about the source rest body's +X axis. The trunk stays upright and the model root stays fixed:
-these are prescribed joint movements, without inferred floor contact, chair support or root descent.
+−10°, about the source rest body's +X axis. The trunk stays upright. Joint rotations alone leave
+the model root fixed; no floor contact, chair support or root descent is inferred.
 Author short explicit increments through the desired bend and return. The shared solver retains
 its surface/contact checks, budgets and whole-trajectory rollback. These are the existing linear
 blend skinning poses, including their known crotch webbing and volume loss; adding a motion route
 does not qualify anatomical pose validity, real rise/seat ease or physical garment fit.
 
+An endpoint may additionally supply `"root_translation_m":[x,y,z]`. These three finite coordinates
+are an **absolute world-space displacement in metres**, with z up, from the selected body's fixed
+origin. The displacement applies to the complete posed source surface before the collision skin
+and its synthetic caps are derived. It combines with the endpoint's arm and leg choices without
+refitting the body or moving the cloth directly. The ordinary moving-collider solver produces the
+cloth response, contact/friction and all subsequent heat/coverage geometry.
+
+Omission or `null` means zero displacement at that endpoint, even after a translated endpoint;
+an explicit `[0,0,0]` also returns to the original origin and remains visible in the saved request
+and endpoint report. Offsets are never accumulated or inherited. A later hold must repeat the
+same translation as well as the same joint pose. For example,
+`{"time_s":0.002,"arm_abduction_deg":35.0,"root_translation_m":[0.00001,-0.00002,0.00003]}`
+is the small prescribed translation used in a synthetic continuation check, not a measured human
+movement. Source-model posing remains fixed to the same selected shape; the initial drape body
+and its display geometry still describe time zero. The motion viewer uses each accepted translated
+`body_positions_m` sample. Large or invalid paths retain the existing contact and work refusals.
+
+An optional `"root_rotation_rad":[rx,ry,rz]` adds an absolute whole-body orientation about the
+selected model's root origin. It is an **axis times angle rotation vector in radians**, with vector
+length at most pi; these components are not three Euler angles. For example, `[0,0,0.1]` rotates
+0.1 radians around world +Z. The source surface is rotated before applying `root_translation_m`;
+arm/leg poses, selected shape and occupied-body calibration stay unchanged. Omission, `null` or
+an explicit zero vector means identity at that endpoint. Repeating a translated or rotated hold
+therefore requires repeating both controls. Gravity, prescribed environment values and sourced
+incoming-flow velocities remain in their existing world frame.
+
+The guided workbench exposes translation and rotation independently. Add or Replace freezes the
+complete endpoint; typing in either set of fields does not alter the saved trajectory or an active
+request. Invalid or incomplete vectors refuse before replacing an endpoint. Saved named cases keep
+their exact requested transforms, and endpoint tables display the recorded rotation vectors.
+Use short turn increments: the solver still checks linear vertex chords, not circular rotation arcs.
+
 The same scenario JSON reaches both native material-study commands and the browser's scenario
-input. Reports retain each requested `leg_pose` beside its endpoint time, arm angle and exact
-collision geometry; motion comparisons reject a missing or changed requested leg posture. Existing
-arm-only inputs keep their standing behavior and serialized source identities. Calibrated nappy
+input. Reports retain each requested `leg_pose`, `root_translation_m` and `root_rotation_rad` beside
+its endpoint time, arm angle and exact collision geometry; motion comparisons reject a missing or
+changed requested posture, translation or rotation. Existing arm-only and translation-only inputs
+keep their previous behavior and serialized source identities. Calibrated nappy
 occupancy follows the same fixed occupied shape through every endpoint without recalibration.
 
 Between endpoints, the existing transactional motion kernel follows **linear body-vertex chords**,
@@ -398,12 +431,14 @@ qualify against its source material, and covered stacks retain their common char
 Pieces sharing one material column keep separate temperatures. Each value is uniform through its
 own sheet thickness; arbitrary initial depth profiles are not inferred.
 
-Independent-sheet `transient_surface` also accepts explicit
+Both dry policies also accept explicit
 `initial_instance_temperature_profiles_c`, a complete map of retained physical-instance names to
-inside-to-outside temperature arrays. Each array must contain exactly `cells_per_layer` values;
-missing/extra names or cells refuse. This mode is exclusive with `initial_instance_temperatures_c`.
-The legacy scalar remains required and finite but is unused, so it contributes neither heat nor
-reported extrema. For example, with two cells per sheet:
+temperature arrays in the original source material's inside-to-outside order. Each array must contain
+exactly `cells_per_layer` values for `transient_surface`, or `settings.cells_per_layer` values for
+`transient_coverage`; missing/extra names or cells refuse. This mode is exclusive with
+`initial_instance_temperatures_c`. The legacy scalar remains required, finite and at or above absolute
+zero but is unused, so it contributes neither heat nor reported extrema. For example, with two cells per
+independent sheet:
 
 ```json
 {
@@ -416,26 +451,34 @@ reported extrema. For example, with two cells per sheet:
 }
 ```
 
-Every cell retains its source material and reference mass. The existing thermal solver advances
-the full profile, and `ftx-motion-surface-initial-condition/2` records exact owners, keyed profiles,
-`cell_order: "inside_to_outside"`, model identity and actual extrema. Comparison independently
-integrates each initial-to-final cell enthalpy rather than substituting a scalar or profile average.
-Qualified dissipation heating and textile-water policies use the same state; free liquid initially
-shares the inside cell's temperature, including when coupled mass/momentum drives later motion.
-Profiles do not extend the moving body-coverage remapping contract or infer measured conditioning.
+For coverage, use the same profile map and put its cell count in `settings.cells_per_layer` instead
+of the example's top-level field. Every cell retains its source material and reference mass. The
+existing thermal solver advances the full profile. For independent sheets,
+`ftx-motion-surface-initial-condition/2` records exact owners, keyed profiles,
+`cell_order: "inside_to_outside"`, model identity and actual extrema. Independent-sheet comparisons
+integrate each initial-to-final cell enthalpy rather than
+substituting a scalar or profile average. Qualified sheet textile-water policies use the same state;
+free liquid initially shares the inside cell's temperature, including when coupled mass/momentum
+drives later motion. Authored profiles do not establish measured conditioning.
 
-For `transient_coverage`, each covered layer and its exposed remainder start at the same retained
-source-piece temperature. Subsequent movement uses the existing reference-mass enthalpy remap, so
-entering or leaving body coverage does not reset that temperature or lose stored heat. The result's
-`initial_condition` retains exact owners, resolved values, the source model and initial frame
-identities. Material/design comparisons include only actually applied initial temperatures in
-sample extrema; an unused fallback cannot create a false maximum or minimum. Final-temperature
-metrics continue to describe the final sample alone. Original motion-file input preserves these
-fields in the browser and named-case replay.
+For `transient_coverage`, each covered layer and its exposed remainder start from the same retained
+instance's source profile. Covered cell order reverses when the body faces the opposite side of the
+source material; exposed portions retain the original source order. Subsequent movement uses the
+existing reference-mass enthalpy remap, so entering or leaving coverage does not reinitialize temperatures.
+The result's profile `initial_condition` uses `ftx-motion-coverage-initial-condition/2` and records
+exact owners, keyed profiles, `cell_order: "inside_to_outside"`, source model and initial frame
+identities, and actual extrema. Comparison binds final geometry to retained motion and physical layers
+to source owners, integrates covered and exposed initial-to-final source enthalpy, and subtracts the
+separately reported `signed_remap_residual_j` to reconcile `physical_stored_change_j`.
+
+Material/design comparisons include only actually applied initial temperatures in sample extrema;
+an unused fallback cannot create a false maximum or minimum. Final-temperature metrics continue to
+describe the final sample alone. Omitting the profile field preserves existing scalar initialization
+and receipts. Original motion-file input preserves these fields in the browser and named-case replay.
 
 The same initialization supports separately requested plastic, Maxwell and irreversible bending
 heating in both sheet and coverage histories. Every active conversion observation qualifies the
-actual starting temperature of its retained source triangles, including covered and exposed
+actual starting temperature of every retained source cell, including covered and exposed
 portions; a fully overridden fallback is not substituted into that check. Accepted mechanical
 work is deposited through the existing source fractions and reference-mass enthalpy authority.
 Initial preparation work remains excluded. Material/design comparisons reconcile the initial

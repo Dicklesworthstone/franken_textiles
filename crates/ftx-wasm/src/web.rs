@@ -90,6 +90,17 @@ pub fn bundle_adjust(input: &str, iterations: &str) -> Result<String, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Open the shared unfitted anatomical target picker or apply source-bound model locations.
+///
+/// # Errors
+/// Invalid sources, stale hashes, invalid model targets or removal of an observed name.
+#[wasm_bindgen]
+pub fn body_fit_targets(model_bytes: &[u8], input: &str, edits: &str) -> Result<String, JsError> {
+    crate::body_fit::body_fit_targets(model_bytes, input, edits)
+        .map(|value| value.to_string())
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Prepare named body-fit initializations or apply bounded edits while keeping evidence fixed.
 /// An empty edit string returns the exact original prepared input.
 ///

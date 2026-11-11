@@ -657,6 +657,37 @@ test('guided scenarios preserve exact fit and heat sources and only author decla
   assert.equal(JSON.parse(build(off)).options.self_contact,null);
 });
 
+test('guided drape subdivision preserves the complete allowance and independent case budgets', async () => {
+  const {buildMaterialScenarioRequest:build,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const ordinary=scenarioState(), original=build(ordinary);
+  assert.equal(Object.hasOwn(JSON.parse(original).options,'time_subdivision'),false);
+  const saved=[];
+  for(const policy of [{max_halvings:0,max_trials:48},{max_halvings:8,max_trials:4096},{max_halvings:16,max_trials:65535}]) {
+    const input={...ordinary,maxVertexFrames:32000000,options:{...ordinary.options,max_settle_steps:16,time_subdivision:policy}};
+    const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+    assert.equal(JSON.stringify(input),before);assert.deepEqual(result.options.time_subdivision,policy);
+    assert.equal(result.max_vertex_frames,32000000,'Do not resize a case budget to fit the requested retry allowance');
+    assert.equal(Object.hasOwn(result,'max_motion_trials'),false,'Drape recovery cannot consume an invented motion allowance');
+    saved.push(raw);
+  }
+  const raw=matrix({maxEvaluations:4,cases:[{key:'short',scenario:saved[0]},{key:'retry',scenario:saved[2]}]});
+  assert.ok(raw.includes(saved[0]));assert.ok(raw.includes(saved[2]));
+  assert.deepEqual(JSON.parse(raw).cases.map(item=>item.scenario.options.time_subdivision),
+    [{max_halvings:0,max_trials:48},{max_halvings:16,max_trials:65535}]);
+  assert.equal(build(ordinary),original,'Preparing another policy cannot mutate the original disabled request');
+  assert.equal(JSON.parse(build({...ordinary,options:{...ordinary.options,time_subdivision:null}})).options.time_subdivision,null);
+});
+
+test('guided drape subdivision refuses malformed policies and undersized mandatory phase allowances', async () => {
+  const {buildMaterialScenarioRequest:build}=await modulePromise;
+  for(const policy of [[],{},false,8,{max_halvings:8},{max_trials:4096},
+    {max_halvings:8,max_trials:4096,tolerance:1},...[-1,17,0.5,'8',NaN,Infinity].map(max_halvings=>({max_halvings,max_trials:4096})),
+    ...[0,65536,1.5,'4096',NaN,Infinity,47].map(max_trials=>({max_halvings:8,max_trials}))]) {
+    const input=scenarioState();input.options.time_subdivision=policy;
+    assert.throws(()=>build(input),/Time subdivision/);
+  }
+});
+
 test('guided motion preserves ordered absolute endpoints and original scenario sources', async () => {
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:build}=await modulePromise;
   const request={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:25,leg_pose:{posture:'seated',fraction:0.5}},
@@ -672,6 +703,41 @@ test('guided motion preserves ordered absolute endpoints and original scenario s
   assert.equal(Object.hasOwn(result,'maxMotionTrials'),false);
   const omitted=motionState();delete omitted.max_sample_vertices;
   assert.equal(Object.hasOwn(JSON.parse(motion(omitted)),'max_sample_vertices'),false,'Omission retains the native 500000 default');
+});
+
+test('guided motion retains absolute root offsets and source tokens across authored and file routes', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const frames=[{time_s:0.1,arm_abduction_deg:35,root_translation_m:[0.02,-0.03,0.04]},
+    {time_s:0.2,arm_abduction_deg:45,leg_pose:{posture:'squat',fraction:0.5},root_translation_m:[0,0,0]},
+    {time_s:0.3,arm_abduction_deg:35},{time_s:0.4,arm_abduction_deg:35,root_translation_m:null}];
+  const input={...motionState(),keyframes:frames,max_step_s:0.1,max_trials:8},before=JSON.stringify(input);
+  const authored=motion(input);
+  assert.deepEqual(JSON.parse(authored).keyframes,frames);assert.equal(JSON.stringify(input),before);
+  for(const selected of [input,authored]) {
+    const raw=single({...scenarioState(),motion:selected,maxMotionTrials:64});
+    assert.deepEqual(JSON.parse(raw).motion.keyframes,frames);
+    const named=matrix({cases:[{key:'translated',scenario:raw}],maxEvaluations:2});
+    assert.deepEqual(JSON.parse(named).cases[0].scenario.motion.keyframes,frames);
+  }
+  const original=' {"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.1,"arm_abduction_deg":35,'+
+    '"root_translation_m":[-0.0,2e-3,-3e-3]}],"max_step_s":0.1,"max_trials":1,"max_pairs":1000,'+
+    '"transient_surface":{"source_value":18446744073709551615}}\r\n';
+  const raw=single({...scenarioState(),motion:original,maxMotionTrials:64});
+  assert.ok(raw.includes(original));assert.match(raw,/\[-0\.0,2e-3,-3e-3\]/);
+  assert.match(raw,/18446744073709551615/);
+});
+
+test('guided motion refuses malformed root vectors in both input routes without rewriting them', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  for(const root_translation_m of [undefined,{},false,1,'0,0,0',[],[0,0],[0,0,0,0],Array(3),
+    ...[0,1,2].flatMap(axis=>[NaN,Infinity,-Infinity,'0',null].map(value=>[0,0,0].map((x,i)=>i===axis?value:x)))]) {
+    const input={...motionState(),keyframes:[{...motionState().keyframes[0],root_translation_m}]};
+    assert.throws(()=>motion(input),/root translation/);
+    assert.throws(()=>single({...scenarioState(),motion:input,maxMotionTrials:64}),/root translation/);
+    // JSON omits undefined members; all other malformed source vectors must still refuse.
+    if(root_translation_m!==undefined) assert.throws(()=>single({...scenarioState(),
+      motion:JSON.stringify({schema:'ftx-drape-motion/1',...input}),maxMotionTrials:64}),/root translation/);
+  }
 });
 
 test('guided motion rejects ambiguous endpoints, invalid poses and unordered physical times', async () => {
@@ -1748,6 +1814,67 @@ test('finite and mixed objectives compose with separately requested scenario con
 const linkedFitSource = () => ' {\r\n"schema":"fabric-fit/1","points":[{"id":"length","kind":"vertical","instance":"front","from":"a","to":"d","body":"stature","body_scale":0.1,"target_mm":[-0.1,0.0,0.1]}],"source":{"seed":18446744073709551615,"x":-0.0,"value":1.0,"label":"é 🧵"}}\r\n';
 const linkedDesignInput = (changes = {}) => ({pieceIds:['front','lining'],axis:'y',atMm:50,multiplier:1,
   values:[0,5,10,15,20,25,30,35,40],maxDesigns:1,fitSpec:linkedFitSource(),...changes});
+
+const treatmentTransitionSource=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/kanat-ozdil-2026-denim-1-treatment.json'),'utf8');
+const guidedTreatmentSource=(mode='treat',pieces='{"front":"wash","lining":"wash"}')=>
+  ' \r\n{"schema":"ftx-pattern-treatment/1","mode":'+JSON.stringify(mode)+
+  ',"transitions":{"wash":'+treatmentTransitionSource+'},"pieces":'+pieces+',"seam_tolerance_mm":-0.0}\r\n';
+
+test('guided treatment steps retain original source bytes and mixed operation order in grid adaptive and named studies',async()=>{
+  const {buildMaterialStudyRequest:build,buildGuidedDesignAfterOperations:after}=await modulePromise;
+  const requests=[guidedTreatmentSource('compensate'),guidedTreatmentSource('treat')];
+  const operations=[{op:'treatment',request:requests[0]},{op:'true_seam',seam:'side',end:'end'},
+    {op:'treatment',request:requests[1]},{op:'cap_ease',piece:'front',seams:['side'],target_ratio:1.1}];
+  assert.deepEqual(after(operations,['front','lining'],['side']),operations);
+  for(const design of [linkedDesignInput(),multiDesignInput(),adaptiveDesignInput()]) {
+    const input={...state(),seamIds:['side'],design:{...design,after:operations}},before=JSON.stringify(input);
+    for(const context of [undefined,{drape:true,surface:false,matrix:{maxEvaluations:64,cases:[{key:'declared',surface:false}]}}]) {
+      const raw=build(input,context),result=JSON.parse(raw),search=result.design_adaptive??result.design_grid;
+      assert.deepEqual(search.after,operations.map(operation=>operation.op==='treatment'?
+        {op:'treatment',request:JSON.parse(operation.request)}:operation));
+      for(const request of requests)assert.ok(raw.includes(request),'Original treatment text must reach Rust intact');
+      assert.match(raw,/"seam_tolerance_mm":-0\.0/);assert.ok(raw.includes(treatmentTransitionSource));
+      assert.equal(JSON.stringify(input),before);assert.equal(Object.hasOwn(result,'seamIds'),false);
+    }
+  }
+  const onlyTreatment=[{op:'treatment',request:requests[1]}];
+  assert.deepEqual(after(onlyTreatment,['front','lining']),onlyTreatment,'Treatment does not require any seam identities');
+});
+
+test('guided treatment steps refuse unfrozen states invalid piece mappings and malformed requests without replacing sources',async()=>{
+  const {buildGuidedDesignAfterOperations:build}=await modulePromise;
+  const raw=guidedTreatmentSource(),valid=JSON.parse(raw);
+  const run=request=>build([{op:'treatment',request}],['front','lining']);
+  for(const request of [null,{},'null','[]','{bad',treatmentTransitionSource])assert.throws(()=>run(request));
+  const changes=[value=>{value.schema='ftx-material-treatment/1';},value=>{value.mode='wash';},
+    value=>{value.extra=true;},value=>{value.pieces={unknown:'wash'};},value=>{value.pieces={front:'missing'};},
+    value=>{value.pieces={};},value=>{value.pieces=[];},value=>{value.transitions={};},
+    value=>{value.transitions.extra=value.transitions.wash;},value=>{value.seam_tolerance_mm=-1;},
+    value=>{value.interfaces={};},value=>{value.transitions.wash.schema='other';},
+    value=>{delete value.transitions.wash.before.record;},value=>{delete value.transitions.wash.after.expected_sha256;},
+    value=>{value.transitions.wash.before.overrides={areal_density:{value:1,unit:'kg/m2'}};},
+    value=>{value.transitions.wash.after.sources={extra:{reference:'unlocked'}};},
+    value=>{value.transitions.wash.after.allow_estimates='yes';}];
+  for(const change of changes){const bad=structuredClone(valid);change(bad);assert.throws(()=>run(JSON.stringify(bad)));}
+  assert.equal(run(raw)[0].request,raw);
+  const special=guidedTreatmentSource('treat','{"__proto__":"wash"}');
+  assert.equal(build([{op:'treatment',request:special}],['__proto__'])[0].request,special);
+  assert.throws(()=>build([{op:'treatment',request:raw,extra:1}],['front','lining']),/unsupported/);
+});
+
+test('guided treatment steps preserve numeric source tokens and share native byte and operation allowances',async()=>{
+  const {buildMaterialStudyRequest:build,buildGuidedDesignAfterOperations:after}=await modulePromise;
+  // Transport-only records: the native authority must receive and qualify their exact bytes.
+  const raw='{"schema":"ftx-pattern-treatment/1","mode":"treat","pieces":{"front":"wash"},"transitions":{"wash":'+
+    '{"schema":"ftx-material-treatment/1","before":'+selection('before','a')+',"after":'+selection('after','b')+'}}}';
+  const operation={op:'treatment',request:raw};
+  const result=build({...state(),design:linkedDesignInput({after:[operation]})});
+  assert.ok(result.includes(raw));assert.match(result,/18446744073709551615/);assert.match(result,/"x":-0\.0/);
+  assert.throws(()=>after([{...operation,request:' '.repeat(256*1024)+raw}],['front']),/256 KiB/);
+  const padded={op:'treatment',request:' '.repeat(130*1024)+raw};
+  assert.throws(()=>build({...state(),design:linkedDesignInput({after:[padded,padded]})}),/256 KiB/);
+  assert.throws(()=>build({...state(),design:linkedDesignInput({after:Array(15).fill(operation)})}),/16 ordered alteration operations/);
+});
 
 test('linked design authoring retains exact fit and material sources with independent alteration targets', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
@@ -3529,3 +3656,44 @@ test('authored fit contracts enter existing linked and adaptive studies without 
   const adaptive=build(input,namedContext(undefined,12));assert.ok(adaptive.includes(raw));
   assert.deepEqual(JSON.parse(adaptive).design_fit.fit_spec,JSON.parse(raw));
 });
+test('guided root rotations retain exact absolute controls through source files and frozen cases', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const legacy=motion(motionState());
+  const frames=[
+    {time_s:0.25,arm_abduction_deg:30,leg_pose:{posture:'seated',fraction:0.1},root_translation_m:[0.01,-0.02,0.03],root_rotation_rad:[0.1,-0.2,0.3]},
+    {time_s:0.5,arm_abduction_deg:35,root_rotation_rad:[0,0,0]},
+    {time_s:0.75,arm_abduction_deg:35}];
+  const input={...motionState(),keyframes:frames},before=JSON.stringify(input);
+  assert.deepEqual(JSON.parse(motion(input)).keyframes,frames);
+  assert.equal(JSON.stringify(input),before);
+  const first=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  input.keyframes[0].root_rotation_rad[2]=0.4;
+  const second=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const saved=matrix({maxEvaluations:4,cases:[{key:'turn',scenario:first},{key:'further',scenario:second}]});
+  assert.deepEqual(JSON.parse(saved).cases.map(item=>item.scenario.motion.keyframes[0].root_rotation_rad[2]),[0.3,0.4]);
+  assert.ok(saved.includes(first));assert.ok(saved.includes(second));
+  for(const rotation of [[Math.PI,0,0],[0,0,0],[1e-200,0,0],null]) {
+    const value={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30,root_rotation_rad:rotation}]};
+    assert.deepEqual(JSON.parse(motion(value)).keyframes[0].root_rotation_rad,rotation);
+  }
+  const original=' {\r\n"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.25,"arm_abduction_deg":30.0,'+
+    '"root_rotation_rad":[-0.0,1e-200,0.1],"root_translation_m":[0.01,0.0,0.0]}],'+
+    '"max_step_s":0.125,"max_trials":128,"max_pairs":100000,"max_sample_vertices":500000}\r\n';
+  assert.ok(single({...scenarioState(),motion:original,maxMotionTrials:1024}).includes(original));
+  assert.equal(motion(motionState()),legacy);
+});
+
+test('guided and original-file motion refuse malformed or excessive root rotation vectors', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  for(const rotation of [false,1,'0,0,0',{},[],[0,0],[0,0,0,0],[0,'0',0],[0,null,0],
+    [NaN,0,0],[0,Infinity,0],[0,0,-Infinity],[Math.PI+1e-10,0,0],[2,2,2],[1e308,0,0]]) {
+    const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30,root_rotation_rad:rotation}]};
+    assert.throws(()=>motion(input),/root rotation/i);
+    if(Array.isArray(rotation)&&rotation.some(value=>typeof value==='number'&&!Number.isFinite(value)))continue;
+    const original=JSON.stringify({schema:'ftx-drape-motion/1',...input});
+    assert.throws(()=>single({...scenarioState(),motion:original,maxMotionTrials:1024}),/root rotation/i);
+  }
+  const wrong={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:30,root_rotation_deg:[0,0,5]}]};
+  assert.throws(()=>motion(wrong),/unsupported/);
+});
+

@@ -1,5 +1,20 @@
 # ftx-drape contract
 
+**Optional convergence-driven subdivision.** `DrapeOptions.time_subdivision` connects the existing
+transactional `Solver::step_subdivided` to ordinary sewing, gravity and settling. Explicit
+`max_halvings` and `max_trials` bound the whole run; every requested base interval needs at least
+one available trial. Only `NotConverged` causes deterministic chronological bisection. No source
+domain, tolerance, thickness, contact law or elapsed interval is relaxed. A complete nominal
+interval, its contact-offset ramp, caches, friction and material histories publish together, or
+refuse with no partial frame. Output geometry keeps the original equally spaced nominal clock.
+Optional per-interval receipts retain all accepted physical durations, solver reports, endpoint
+contact diagnostics and instantaneous speeds; energy values are never summed across step sizes.
+Quietness and declared-hold speed checks include every accepted physical endpoint. Scenario
+reservation charges the full trial allowance before running alternatives. Omission preserves the
+original path and report fields. Synthetic production-phase retry/rollback, ordinary sewn-frame
+replay and scenario-budget checks support numerical behavior; this is neither a time-discretization
+error controller nor a continuous-contact, material-validation or garment-fit claim.
+
 **Active-contact source requirements.** Uniform and per-piece drapes require body friction but
 do not require absent same-sheet friction when self-contact is disabled. Missing observations stay
 null in the source-bound mechanical report; no inactive interface is filled with zero. Supplied
@@ -109,6 +124,29 @@ Motion trials retain body topology and refit their geometry query indices using 
 FrankenSim `fs-query` algorithm pinned in `bvh.rs`; geometry and all indices publish together.
 Brute-force/rebuilt-body equivalence and actual sewn-cloth continuation tests cover this reuse;
 no runtime speedup or physical fit is inferred.
+
+Optional `root_translation_m: [x, y, z]` supplies the endpoint's absolute world-space displacement
+in metres from the selected body's fixed origin, after source posing. It transforms the complete
+source surface before collider extraction; initial collision/display geometry and body evidence
+remain the time-zero authority. Omitted/null offsets mean zero independently at each endpoint;
+explicit zero is retained and returns to the origin. The existing moving-body solver alone advances
+cloth, friction and constitutive history. Retained samples drive endpoint heat and coverage, and
+comparison admission checks the exact requested translation. Finite-vector admission, fixed-origin
+source replay, actual sewn-contact continuation/rollback, coverage recomputation and native/portable
+whole-report equality are covered by the existing motion/scenario test seams (`ftx-mv1`). No measured
+trajectory, floor support, anatomical movement or garment-fit truth is inferred from these inputs.
+
+Optional `root_rotation_rad: [rx, ry, rz]` supplies an absolute axis-times-angle rotation vector
+in radians, with norm at most π. The deterministic Rodrigues matrix rotates the fully posed source
+surface about its root-relative origin before the existing world translation and collider extraction.
+Omitted/null and explicit zero preserve the original geometry arithmetic; an omitted later rotation
+returns to the unrotated source pose, never carrying a prior turn forward. A scaled vector norm
+retains representable nonzero subnormal angles and rejects nonfinite or excessive inputs. Endpoint
+receipts and comparison admission bind the exact requested vector alongside translation and
+local-joint posture. Intermediate motion remains the same checked linear vertex chords, not a
+rotational arc. World gravity, fixed cloth constraints and authored environments are unchanged.
+Analytic principal-axis/source-geometry controls and occupied-shape continuation exercise the shared
+pose/contact path without establishing anatomical motion or measured garment response.
 
 **Declared simulation coverage.** `garment::simulation_scope` validates all instance and seam
 references and requires explicit placement on each instance whose `sim` is not false. Missing

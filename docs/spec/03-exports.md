@@ -893,7 +893,8 @@ Net sew-line shapes for a 3D sewing check, in GarmentCode's specification format
    `seam {id}: {error}` and skip; if either instance is excluded add `seam {id}: instance excluded from simulation (sim: false)`
    and skip. Then:
    - side fractions of internal segment boundaries: `ba` (side a, total length `la`), `bb_own` (side b);
-   - knots: `rev = seam.reverse` (default true); `na`, `nb` = notch fractions of each side (pattern-model rule: notches
+   - knots: `rev = seam.reverse` (default true; otherwise the canonical pattern's Python truthiness,
+     including false for explicit `null`, `0`, `""`, `[]` and `{}`); `na`, `nb` = notch fractions of each side (pattern-model rule: notches
      in the side's own direction, mirrored halves reversed, end notches within 1e−4 excluded); if `rev`,
      `nb = sorted(1 − f)`; knots `ka = [0, *na, 1]`, `kb = [0, *nb, 1]` when `na` is non-empty and the counts match,
      else `[0, 1]` each;
@@ -919,6 +920,15 @@ Net sew-line shapes for a 3D sewing check, in GarmentCode's specification format
    top-level `placement3d[instance id]` when present; `translation` = mm/10 rounded 4 (default `[0,0,0]`), `rotation`
    = XYZ degrees (default `[0,0,0]`). Loops stay CCW, so at rotation 0 the public side faces +z; back panels need
    rotation `[0, 180, 0]`.
+
+   Native collision correction: valid instance IDs such as `front.R` and `front_R` normalize to the same
+   panel name. Duplicate JSON keys would lose a physical panel and misdirect its stitches. Reserve every
+   ordinary normalized name first; in instance order the first panel keeps its name and later collisions
+   receive the first available `_2`, `_3`, … suffix that does not shadow a reserved or emitted name.
+   The final names are shared by panels, panel order, edge maps and stitch references. Only when a collision
+   occurs, `fabric_pattern_export.instance_map` records every final panel name → original instance ID.
+   Noncolliding exports retain their reference names and bytes. The existing `export_gc` conformance tests
+   cover distinct panel geometry and complete seam connectivity through export and native reimport.
 6. **Stitches**: for each paired side with `K` sub-segments, `k = 0..K−1`: pair `A[k]` with `B[K−1−k]` (rev) or `B[k]`;
    `[{"panel", "edge"}, {"panel", "edge"}]`, plus a third element `"right_wrong"` when not `rev` (GarmentCode's default
    `swap=True` already matches `reverse: true`).

@@ -84,6 +84,189 @@ fn finite_slots_require_their_own_source_and_consent_and_preserve_legacy_omissio
 }
 
 #[test]
+fn per_cell_capacities_preserve_omitted_bytes_and_require_the_complete_qualified_domain() {
+    let (pattern, raw) = fixture(2);
+    let raw = bounded(raw, 1);
+    let legacy = serde_json::to_value(build(&pattern, raw.clone()).unwrap()).unwrap();
+    assert!(
+        legacy["production"]["routing"]["bounded_staging"]
+            .get("cell_capacities")
+            .is_none()
+    );
+    let mut null = raw.clone();
+    null["production"]["routing"]["bounded_staging"]["cell_capacities"] = Value::Null;
+    assert_eq!(
+        legacy,
+        serde_json::to_value(build(&pattern, null).unwrap()).unwrap()
+    );
+
+    for capacities in [
+        json!({}),
+        json!({"cell-a":2}),
+        json!({"cell-a":2,"unknown-cell":1}),
+        json!({"cell-a":2,"cell-b":1,"unknown-cell":1}),
+        json!({"cell-a":0,"cell-b":1}),
+        json!({"cell-a":2,"cell-b":4097}),
+    ] {
+        let mut invalid = raw.clone();
+        invalid["production"]["routing"]["bounded_staging"]["cell_capacities"] = capacities;
+        let refusal = build(&pattern, invalid).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains("per-cell staging capacities"));
+    }
+    let mut explicit = raw.clone();
+    explicit["production"]["routing"]["bounded_staging"]["cell_capacities"] =
+        json!({"cell-a":1,"cell-b":1});
+    let same = serde_json::to_value(build(&pattern, explicit.clone()).unwrap()).unwrap();
+    for timeline in ["baseline", "selected"] {
+        assert_eq!(
+            legacy["production"]["routing"][timeline],
+            same["production"]["routing"][timeline]
+        );
+        assert_eq!(
+            legacy["production"]["routing"]["bounded_staging"][timeline],
+            same["production"]["routing"]["bounded_staging"][timeline]
+        );
+    }
+    explicit["production"]["routing"]["bounded_staging"]["allow_estimates"] = json!(false);
+    assert!(build(&pattern, explicit).is_err());
+}
+
+#[test]
+fn asymmetric_cell_buffers_admit_the_real_source_capacity_without_inventing_destination_slots() {
+    let (pattern, mut raw) = fixture(2);
+    raw["production"]["routing"]["cells"][0]["available_until_milliseconds"] = json!(9600);
+    raw["production"]["routing"]["transfer"]["available_at_milliseconds"] = json!(20000);
+    raw["production"]["routing"]["max_search_nodes"] = json!(4);
+    refresh_locks(&mut raw);
+    let mut raw = bounded(raw, 1);
+    raw["production"]["routing"]["bounded_staging"]["cell_capacities"] =
+        json!({"cell-a":2,"cell-b":1});
+    let program =
+        SewProgram::build(&pattern, &serde_json::from_value(raw.clone()).unwrap()).unwrap();
+    let production = program.plan.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    let slots = route.bounded_staging.as_ref().unwrap();
+    assert_eq!(program.plan.schema, "ftx-sewing-plan/33");
+    assert_eq!(production.schema, "ftx-sewing-production/21");
+    assert_eq!(route.schema, "ftx-sewing-routing/15");
+    assert_eq!(slots.schema, "ftx-sewing-routing-staging/3");
+    assert_eq!(slots.capacity, 1); // Authored fallback, not the effective capacity of cell A.
+    assert_eq!(
+        serde_json::to_value(&slots.cell_capacities).unwrap(),
+        json!({"cell-a":2,"cell-b":1})
+    );
+    assert_eq!(route.selected.makespan_milliseconds, 25800);
+    assert_eq!(program.stitches.len(), 120);
+    assert_eq!((route.search_nodes, route.work_used), (4, 12));
+    assert!(route.budget_exhausted && !route.optimality_proven);
+    for timeline in [&slots.baseline, &slots.selected] {
+        assert_eq!(timeline.peak_reserved_slots["cell-a"], 2);
+        assert_eq!(timeline.peak_reserved_slots["cell-b"], 1);
+        assert!(
+            timeline
+                .final_reserved_slots
+                .values()
+                .all(|&held| held == 0)
+        );
+    }
+    assert!(
+        route
+            .selected
+            .operations
+            .iter()
+            .filter(|op| op.cell == "cell-a")
+            .all(|op| { op.finish_milliseconds <= 9600 })
+    );
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+    // An unused, larger fallback cannot silently lend inventory to the restricted source cell.
+    raw["production"]["routing"]["staging_capacity"] = json!(4096);
+    raw["production"]["routing"]["bounded_staging"]["cell_capacities"] =
+        json!({"cell-a":1,"cell-b":2});
+    assert_eq!(
+        build(&pattern, raw).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn per_cell_limits_follow_eligible_and_reentrant_physical_cells() {
+    for eligible in [false, true] {
+        let (pattern, raw) = if eligible {
+            eligible_fixture(2)
+        } else {
+            reentrant()
+        };
+        let mut raw = bounded(raw, 1);
+        let capacities = if eligible {
+            json!({"cell-a":2,"cell-b":1,"cell-c":1})
+        } else {
+            json!({"cell-a":2,"cell-b":1})
+        };
+        raw["production"]["routing"]["bounded_staging"]["cell_capacities"] = capacities.clone();
+        let program = SewProgram::build(&pattern, &serde_json::from_value(raw).unwrap()).unwrap();
+        let route = program
+            .plan
+            .production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap();
+        let slots = route.bounded_staging.as_ref().unwrap();
+        assert_eq!(
+            route.selected.makespan_milliseconds,
+            if eligible { 9300 } else { 23200 }
+        );
+        assert_eq!(program.stitches.len(), if eligible { 100 } else { 200 });
+        for timeline in [&slots.baseline, &slots.selected] {
+            for (cell, &peak) in &timeline.peak_reserved_slots {
+                assert!(peak <= capacities[cell].as_u64().unwrap() as usize);
+                assert_eq!(timeline.final_reserved_slots[cell], 0);
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap())
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn material_comparisons_bind_unused_buffer_capacity_without_changing_feed() {
+    let (pattern, raw) = fixture(2);
+    let raw = bounded(raw, 1);
+    let evaluate = |capacities: Value| {
+        let mut options = raw.clone();
+        options["production"]["routing"]["bounded_staging"]["cell_capacities"] = capacities;
+        let request: ftx_export::material_study::Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1",
+            "variants":[{"key":"buffers","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}],
+            "sewing":options,
+            "comparison":{"basis":"nominal","objectives":[{"metric":"feed_seconds","direction":"minimize"}]}
+        })).unwrap();
+        serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap()
+    };
+    let first = evaluate(json!({"cell-a":2,"cell-b":1}));
+    let second = evaluate(json!({"cell-a":2,"cell-b":2}));
+    assert_eq!(first["comparison"]["frontier"], json!(["buffers"]));
+    assert_eq!(second["comparison"]["frontier"], json!(["buffers"]));
+    let first = &first["comparison"]["alternatives"][0];
+    let second = &second["comparison"]["alternatives"][0];
+    assert_eq!(first["readings"], second["readings"]);
+    assert!(first["input_protocol_sha256"].is_string());
+    assert_ne!(
+        first["input_protocol_sha256"],
+        second["input_protocol_sha256"]
+    );
+}
+
+#[test]
 fn independent_handoffs_reserve_both_cells_and_retain_a_complete_capped_replay() {
     let (pattern, mut raw) = fixture(3);
     raw["production"]["routing"]["transfer"]["transfers"][0]["milliseconds"] = json!(10000);

@@ -488,8 +488,19 @@ self.onmessage = async ({ data: msg }) => {
         if (!Number.isSafeInteger(settings.max_settle_steps) || settings.max_settle_steps < 0 || settings.max_settle_steps > 256) {
           throw Error("Maximum extra settling steps must be a whole number from 0 to 256.");
         }
+        if (msg.timeSubdivision !== undefined) {
+          const value = msg.timeSubdivision;
+          if (!value || typeof value !== "object" || Array.isArray(value) ||
+              Object.keys(value).length !== 2 || Object.keys(value).some(key => !["max_halvings", "max_trials"].includes(key)) ||
+              !Number.isSafeInteger(value.max_halvings) || value.max_halvings < 0 || value.max_halvings > 16 ||
+              !Number.isSafeInteger(value.max_trials) || value.max_trials < 1 || value.max_trials > 65535) {
+            throw Error("Time subdivision needs only max_halvings (whole 0–16) and max_trials (whole 1–65535).");
+          }
+          settings.time_subdivision = { max_halvings: value.max_halvings, max_trials: value.max_trials };
+        }
         const configured = (!imported && settings.arm_abduction_deg !== 35) ||
-          settings.legs !== "standing" || settings.leg_fraction !== 1 || settings.max_settle_steps !== 0;
+          settings.legs !== "standing" || settings.leg_fraction !== 1 || settings.max_settle_steps !== 0 ||
+          settings.time_subdivision !== undefined;
         if (configured && typeof ftx.fold_up_configured !== "function") {
           throw Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
         }
