@@ -74,6 +74,80 @@ fn validation_rejects_wrong_dimensions_booleans_and_nonpositive_sigma() {
 }
 
 #[test]
+fn nonpositive_catalogue_lengths_refuse_at_every_evidence_boundary() {
+    for name in NAMES.into_iter().filter(|name| !name.ends_with("_deg")) {
+        for value in [-500.0, -0.0, 0.0] {
+            assert!(make_record(name, value, 1.0, "MEASURED_TAPE", "tape", None, "").is_err());
+            let input = json!({"name":name,"value_mm":value,"sigma_mm":1.0,
+                "provenance":"MEASURED_TAPE","method":"tape"});
+            assert!(normalize_record(&input).is_err(), "{name} {value}");
+            assert!(fuse_one(name, std::slice::from_ref(&input), None, false).is_err());
+            let data = json!({"schema":"fabric-measurements/1","wearer":{},"records":[input]});
+            assert!(!validate(&data).is_empty(), "{name} {value}");
+            assert!(fuse(&data, true).is_err());
+        }
+    }
+    let mut prior = prior();
+    prior["value_mm"] = json!(0.0);
+    assert!(fuse_one("chest", &[], Some(&prior), true).is_err());
+    assert!(make_record("head-girth", -1.0, 1.0, "MEASURED_TAPE", "tape", None, "").is_err());
+    for value in [0.0, -920.0] {
+        let data = json!({"schema":"fabric-measurements/1","wearer":{"stature_mm":value},
+            "records":[record("stature",920.0,1.0,"MEASURED_TAPE")]});
+        assert!(!validate(&data).is_empty());
+        assert!(fuse(&data, true).is_err());
+    }
+}
+
+#[test]
+fn normalization_cannot_create_an_impossible_length_or_round_a_positive_one_to_zero() {
+    for value in [5.0, 10.0, 10.01] {
+        let input = make_record(
+            "waist",
+            value,
+            1.0,
+            "MEASURED_TAPE",
+            "tape",
+            Some("CPSC77:66-navel"),
+            "",
+        )
+        .unwrap();
+        let normalized = normalize_record(&input);
+        if value <= 10.0 {
+            assert!(normalized.is_err());
+        } else {
+            let (normalized, status) = normalized.unwrap();
+            assert_eq!(status, "normalized");
+            let fused = fuse_one("waist", std::slice::from_ref(&normalized), None, false)
+                .unwrap()
+                .unwrap();
+            assert_eq!(fused["value_mm"], normalized["value_mm"]);
+            assert_eq!(fused["sources"][0]["value_mm"], normalized["value_mm"]);
+        }
+    }
+    // Direct callers can supply uncanonicalized aliases: their source receipts keep tiny lengths.
+    let alias = json!({"name":"head-girth","value_mm":0.01,"sigma_mm":1.0,
+        "provenance":"MEASURED_TAPE","method":"tape"});
+    let fused = fuse_one("head-girth", &[alias], None, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(fused["value_mm"], 0.01);
+    assert_eq!(fused["sources"][0]["value_mm"], 0.01);
+
+    // Unknown application fields and signed angles have no catalogue length domain.
+    for name in ["shoulder_slope", "custom_offset", "custom_angle_deg"] {
+        for value in [-10.0, 0.0] {
+            let record = record(name, value, 1.0, "MEASURED_TAPE");
+            let data = json!({"schema":"fabric-measurements/1","wearer":{},"records":[record]});
+            assert!(validate(&data).is_empty());
+            let fused = fuse(&data, false).unwrap();
+            let key = format!("value_{}", ftx_measure::unit(name));
+            assert_eq!(fused["fused"][canonical_name(name)][key], value);
+        }
+    }
+}
+
+#[test]
 fn independent_sources_and_optional_prior_match_d5() {
     let tape = chest(550.0, 10.0, "MEASURED_TAPE");
     let photo = chest(570.0, 20.0, "PHOTO_ESTIMATED");

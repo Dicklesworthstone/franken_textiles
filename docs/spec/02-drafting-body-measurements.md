@@ -308,6 +308,17 @@ defaults `definition_id` to the catalogue's id (null for unknown names), stores 
    (pipe-joined).
 6. `fused` present and not an object → `fused must be an object`.
 
+**Native exception `measurement-positive-length`:** the reference's finite-only value checks
+permit zero or negative catalogue lengths to satisfy the readiness gate when their uncertainty
+is small. All catalogue quantities whose unit is `mm` must instead be strictly positive, including
+aliases and an explicit wearer stature. Apply this rule at record construction, document validation,
+normalization (also after a definition offset), and direct fusion admission. Invalid evidence is
+refused, never clamped, discarded in favour of a prior, or accepted from a stale fused cache.
+Signed/zero angles and unknown custom quantities retain their finite-value semantics. Positive
+out-of-chart values remain admissible with their existing advisories; this is no population bound.
+If decimal display rounding would erase a positive catalogue length, retain the unrounded positive
+value in the fused result and source entries, just as `fusion-positive-sigma` retains uncertainty.
+
 **parse_value(text, unit)**: regex `^\s*([-+]?\d+(?:\.\d+)?)\s*(mm|cm|m|in|inch|inches|"|deg|°)?\s*$`,
 case-insensitive. For unit `deg`: suffix must be empty, `deg` or `°`, else `'<text>': an angle, give degrees`.
 For lengths the unit is mandatory: factors mm 1, cm 10, m 1000, in/inch/inches/`"` 25.4; missing → `'<text>': give a

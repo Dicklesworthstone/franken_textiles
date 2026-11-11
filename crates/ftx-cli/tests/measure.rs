@@ -212,6 +212,49 @@ fn invalid_edits_preserve_original_bytes_and_refuse_ambiguous_units() {
 }
 
 #[test]
+fn nonpositive_lengths_refuse_add_fusion_and_readiness_without_publishing_evidence() {
+    let path = file("original.json");
+    init(&path);
+    let before = std::fs::read(&path).unwrap();
+    for value in ["0mm", "-49cm"] {
+        let result = run(&["add", &path, "--name", "head-girth", "--value", value], 3);
+        assert!(
+            result["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("positive")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+    for value in [0.0, -490.0] {
+        let invalid = file("invalid.json");
+        let document = json!({"schema":"fabric-measurements/1",
+            "wearer":{"stature_mm":920.0,"age_months":30.0},"taken_on":"2026-10-01",
+            "records":[{"name":"head","value_mm":value,"sigma_mm":1.0,
+                "provenance":"MEASURED_TAPE","method":"tape"}],
+            "fused":{"head":{"value_mm":490.0,"sigma_mm":1.0,
+                "primary_provenance":"MEASURED_TAPE","flags":[]}}});
+        let original = serde_json::to_vec(&document).unwrap();
+        std::fs::write(&invalid, &original).unwrap();
+        assert_eq!(run(&["validate", &invalid], 3)["result"]["valid"], false);
+        for command in ["fuse", "ready"] {
+            let output = file("must-not-exist.json");
+            let mut args = vec![command, invalid.as_str(), "--out", output.as_str()];
+            if command == "ready" {
+                args.extend(["--garment", "hat", "--as-of", "2026-10-12"]);
+            }
+            let result = run(&args, 3);
+            assert!(result.get("refusal").is_some());
+            assert!(result.get("result").is_none());
+            assert!(!PathBuf::from(&output).exists());
+            assert_eq!(std::fs::read(&invalid).unwrap(), original);
+        }
+        run(&["add", &invalid, "--name", "head", "--value", "49cm"], 3);
+        assert_eq!(std::fs::read(&invalid).unwrap(), original);
+    }
+}
+
+#[test]
 fn merging_files_and_clearing_stale_cache_keeps_original_evidence() {
     let first = file("first.json");
     let second = file("second.json");

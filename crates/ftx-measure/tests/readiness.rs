@@ -101,6 +101,38 @@ fn full_taped_bodice_and_tape_limited_advisories_match_spec() {
 }
 
 #[test]
+fn impossible_lengths_cannot_be_ready_or_hidden_by_cached_fusion_and_priors() {
+    for name in ["head", "head-girth"] {
+        for value in [-490.0, 0.0] {
+            let mut d = data(vec![tape("head", 490.0)]);
+            d["records"][0]["name"] = json!(name);
+            d["records"][0]["value_mm"] = json!(value);
+            d["fused"] = json!({"head":{"value_mm":490.0,"sigma_mm":1.0,
+                "primary_provenance":"MEASURED_TAPE","flags":[]}});
+            for use_priors in [false, true] {
+                let options = ReadinessOptions {
+                    use_priors,
+                    ..Default::default()
+                };
+                let refusal = readiness(&d, "hat", &options, TODAY).unwrap_err();
+                assert!(refusal.message.contains("positive"), "{}", refusal.message);
+            }
+        }
+    }
+    // A positive out-of-chart measurement still reports the original evidence and advisory.
+    let d = data(vec![tape("head", 700.0)]);
+    let r = check(&d, "hat");
+    assert_eq!(r["status"], "READY");
+    assert_eq!(r["items"][0]["value_mm"], 700.0);
+    assert!(
+        r["items"][0]["flags"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("VERIFY_OUT_OF_BOUNDS"))
+    );
+}
+
+#[test]
 fn reference_is_not_misreported_as_measured_even_when_sigma_meets_target() {
     let d = reference_wearer(920.0, Some(30.0), None, None).unwrap();
     for (kind, count) in [
