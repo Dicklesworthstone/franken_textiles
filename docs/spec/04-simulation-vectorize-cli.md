@@ -670,6 +670,13 @@ expected, pass, max_seam_gap_mm}], fabric_key, measurements_sha256}`, where `fab
 bending_Nm]` of the pattern's fabric (null when no pattern was given).
 
 Native reports also include `posed_chest_girth_mm` and `input_chest_mm` (null when absent).
+The native `qualification_basis` binds the exact posed collision vertices/triangles, arm angle,
+torso frame and chest landmark, plus the resolved uniform material snapshot, effective mass,
+stiffness, bending, compression and body-contact parameters. Per-piece material fields have no
+uniform material identity.
+
+Native `--arm-deg`, `--legs standing|seated|squat` and `--leg-fraction` use the same pose parser
+as `ftx drape` and `ftx round`. Band reports retain the selected leg posture and fraction.
 
 Each band prints the line `ease ±E mm: READING mean ring strain X %  contact C  shift S mm  -> PASS|FAIL (expected L)`.
 The run then prints `QUALIFIED` or `NOT QUALIFIED: do not let the sim gate on tightness for this body/fabric`. Exit
@@ -690,6 +697,11 @@ Check in order:
 | sha256 of the current measurements file ≠ recorded | `the measurements changed since the qualification run: rerun `fab qualify`` |
 | `fabric_key` ≠ the current pattern's | `the fabric changed since the qualification run: rerun `fab qualify`` |
 | otherwise | pass: `qualified for this body and fabric` |
+
+The native round additionally requires an `ftx` engine result with matching `qualification_basis`
+body and uniform-material SHA-256 values. Missing identities in older reports require a fresh
+qualification run. A different posed collider, material snapshot or body-contact policy keeps
+tightness advisory. Per-piece material assemblies require their own qualification coverage.
 
 ### 7.3 `gate_tightness(sim, qual)`
 

@@ -9,7 +9,10 @@
 use ftx_core::py::{repr_f64, round};
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::{BodyMeasure, Measurements, SCHEMA};
+use serde::Serialize;
 use serde_json::{Value, json};
+
+use crate::{material::MaterialInputs, run::DrapeBody};
 
 /// The three qualification chest-band eases (mm, spec 04 §7.1).
 pub const QUALIFY_EASES: [i32; 3] = [-20, 0, 20];
@@ -232,7 +235,57 @@ pub struct QualificationStatus {
     pub why: String,
 }
 
-/// Checks `WS/qualification/qualify.json` in exact spec 04 §7.2 order.
+fn digest(value: &impl Serialize) -> Result<String, Refusal> {
+    serde_json::to_vec(value)
+        .map(|bytes| ftx_core::receipt::sha256_hex(&bytes))
+        .map_err(|error| bad_input(error.to_string()))
+}
+
+/// Identity of the posed contact body and the uniform fabric exercised by chest-band qualification.
+/// Inputs must be the body and material admitted for the drape.
+///
+/// # Errors
+/// Missing torso/chest frames or serialization failure.
+pub fn qualification_basis(
+    body: &DrapeBody<'_>,
+    material: &MaterialInputs,
+) -> Result<Value, Refusal> {
+    let frame = body
+        .frames
+        .frame("torso")
+        .ok_or_else(|| bad_input("qualification needs the torso frame"))?;
+    let chest = body
+        .frames
+        .landmark_h("torso", "chest")
+        .ok_or_else(|| bad_input("qualification needs the chest landmark"))?;
+    let body_sha256 = digest(&(
+        body.collision,
+        body.arm_deg,
+        [frame.origin, frame.up, frame.front, frame.lat],
+        chest,
+    ))?;
+    let fabric = material.fabric;
+    let contact = material.options.contact;
+    let material_sha256 = if material.piece_fabrics.is_none() {
+        Some(digest(&json!([
+            material.report["record_sha256"],
+            fabric.areal_kg_m2,
+            fabric.tensile_n_m,
+            fabric.bending_nm,
+            material.options.compression,
+            contact.thickness,
+            contact.mu,
+            contact.dhat,
+            contact.kappa,
+            contact.eps_v
+        ]))?)
+    } else {
+        None
+    };
+    Ok(json!({"body_sha256":body_sha256,"material_sha256":material_sha256}))
+}
+
+/// Checks spec 04 §7.2 followed by native posed-body and uniform-material identity.
 #[must_use]
 pub fn check_qualification(
     qualify_doc: Option<Result<&Value, &str>>,
@@ -240,6 +293,7 @@ pub fn check_qualification(
     ws_display: &str,
     measurements_sha256: &str,
     current_fabric: Option<&Value>,
+    current_basis: &Value,
 ) -> QualificationStatus {
     let Some(doc_res) = qualify_doc else {
         return QualificationStatus {
@@ -285,15 +339,34 @@ pub fn check_qualification(
             why: "the fabric changed since the qualification run: rerun `ftx qualify`".into(),
         };
     }
-    if let Some(engine) = rec.get("engine").and_then(Value::as_str)
-        && engine != "ftx"
-    {
+    if rec["engine"] != "ftx" {
         return QualificationStatus {
             pass: false,
-            why: format!(
-                "qualified on the {engine} engine but this round runs on ftx: rerun `ftx qualify`"
-            ),
+            why: "qualification needs the ftx engine and current body/material identities: rerun `ftx qualify`".into(),
         };
+    }
+    if current_basis["material_sha256"].is_null() {
+        return QualificationStatus {
+            pass: false,
+            why: "this round has no uniform material qualification identity; per-piece assemblies need separate qualification coverage".into(),
+        };
+    }
+    for (key, label) in [
+        ("body_sha256", "posed collision body"),
+        ("material_sha256", "uniform material/body-contact policy"),
+    ] {
+        if current_basis[key]
+            .as_str()
+            .is_none_or(|hash| hash.len() != 64)
+            || rec["qualification_basis"][key] != current_basis[key]
+        {
+            return QualificationStatus {
+                pass: false,
+                why: format!(
+                    "the {label} is unqualified or changed since qualification: rerun `ftx qualify` with this body and fabric"
+                ),
+            };
+        }
     }
     QualificationStatus {
         pass: true,
@@ -449,12 +522,14 @@ mod tests {
     #[test]
     fn qualification_checks_every_condition_in_spec_order() {
         let fab = json!({"areal_g_m2": 260, "tensile_N_m": 8000, "bending_Nm": 3e-5});
+        let basis = json!({"body_sha256":"b".repeat(64),"material_sha256":"a".repeat(64)});
         let q = check_qualification(
             None,
             "ws/qualification/qualify.json",
             "ws",
             "abc",
             Some(&fab),
+            &basis,
         );
         assert!(!q.pass);
         assert!(q.why.contains("no qualification run"));
@@ -465,6 +540,7 @@ mod tests {
             "ws",
             "abc",
             Some(&fab),
+            &basis,
         );
         assert!(!q.pass);
         assert!(q.why.contains("is unreadable"));
@@ -477,17 +553,19 @@ mod tests {
             "ws",
             "abc",
             Some(&fab),
+            &basis,
         );
         assert!(!q.pass);
         assert!(q.why.contains("did not pass"));
 
-        let passed_doc = json!({"pass": true, "measurements_sha256": "abc", "fabric_key": [260, 8000, 3e-5], "engine": "ftx"});
+        let passed_doc = json!({"pass": true, "measurements_sha256": "abc", "fabric_key": [260, 8000, 3e-5], "engine": "ftx", "qualification_basis":basis});
         let q = check_qualification(
             Some(Ok(&passed_doc)),
             "ws/qualification/qualify.json",
             "ws",
             "different_sha",
             Some(&fab),
+            &basis,
         );
         assert!(!q.pass);
         assert!(q.why.contains("measurements changed"));
@@ -499,6 +577,7 @@ mod tests {
             "ws",
             "abc",
             Some(&other_fab),
+            &basis,
         );
         assert!(!q.pass);
         assert!(q.why.contains("fabric changed"));
@@ -509,9 +588,33 @@ mod tests {
             "ws",
             "abc",
             Some(&fab),
+            &basis,
         );
         assert!(ok.pass);
         assert!(ok.why.contains("qualified for this body and fabric"));
+
+        for changed in [
+            json!({}),
+            json!({"body_sha256":"c".repeat(64),"material_sha256":basis["material_sha256"]}),
+            json!({"body_sha256":basis["body_sha256"],"material_sha256":"d".repeat(64)}),
+            json!({"body_sha256":basis["body_sha256"],"material_sha256":null}),
+        ] {
+            let result = check_qualification(
+                Some(Ok(&passed_doc)),
+                "ws/qualification/qualify.json",
+                "ws",
+                "abc",
+                Some(&fab),
+                &changed,
+            );
+            assert!(!result.pass, "{changed}");
+        }
+        let mut legacy = passed_doc.clone();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("qualification_basis");
+        assert!(!check_qualification(Some(Ok(&legacy)), "q", "ws", "abc", Some(&fab), &basis).pass);
     }
 
     #[test]

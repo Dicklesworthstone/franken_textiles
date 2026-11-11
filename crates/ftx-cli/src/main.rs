@@ -67,7 +67,8 @@ const USAGE: &str = "usage:
             [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
-  ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--json]
+  ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
+              [--legs standing|seated|squat] [--leg-fraction F] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--model PATH] [--json]
   ftx render DRAPE_DIR [--res 960x540] [--json]
@@ -847,7 +848,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     let material_probe = Pattern::new(pat.clone());
     ftx_drape::garment::simulation_scope(&material_probe)?;
-    ftx_drape::material::resolve(&material_probe, &opts)?;
+    let material = ftx_drape::material::resolve(&material_probe, &opts)?;
     let meas_path = required(args, "measurements")?;
     let (meas, meas_bytes) = read_json(meas_path)?;
     let meas = current_measurements(meas)?;
@@ -888,6 +889,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     };
     run.report["body_contact_proxy"] = skin.contact_proxy_basis();
     let mut report = run.report.clone();
+    report["qualification_basis"] = ftx_drape::qualify::qualification_basis(&body, &material)?;
     if outfit.is_some() {
         report["outfit"]["input_file_sha256"] = json!(sha256_hex(&pattern_bytes));
     }

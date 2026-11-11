@@ -657,8 +657,7 @@ fn simulate(
             let qdoc_ref = qdoc_owned
                 .as_ref()
                 .map(|r| r.as_ref().map_err(String::as_str));
-            // spec 04 §7.2: the workspace measurements file's sha256, as `qualify` records it (and
-            // the skill's `fab qualify`), so either engine's qualification serves the other's round
+            // Native qualification also binds the actual posed collider and resolved material.
             let meas_sha = ftx_core::receipt::sha256_hex(measurements_file);
             let qual = ftx_drape::qualify::check_qualification(
                 qdoc_ref,
@@ -666,6 +665,7 @@ fn simulate(
                 &ws.display().to_string(),
                 &meas_sha,
                 pattern.get("fabric"),
+                &report["qualification_basis"],
             );
             if let Some(note) = ftx_drape::qualify::gate_tightness(&mut report, &qual) {
                 notes.push(note);
@@ -749,6 +749,8 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             "model",
             "body-fit",
             "arm-deg",
+            "legs",
+            "leg-fraction",
         ],
     )?;
     if args.positional.len() > 2 || (args.options.contains_key("ws") && args.positional.len() > 1) {
@@ -842,6 +844,13 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             )
         })?;
     let input_chest_mm = Measurements(data).value("chest").ok();
+    let body = DrapeBody {
+        frames: &frames,
+        collision: (&skin.vertices, &skin.triangles),
+        display: (&full.vertices, &full.triangles),
+        arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
+    };
+    let mut qualification_basis = Value::Null;
     let mut bands = Vec::with_capacity(QUALIFY_EASES.len());
     for ease in QUALIFY_EASES {
         let bpat = band_pattern_from_girth(
@@ -850,15 +859,12 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             DEFAULT_BAND_HEIGHT_MM,
             pat.get("fabric"),
         )?;
-        ftx_drape::material::resolve(&Pattern::new(bpat.clone()), &opts)?;
+        let material = ftx_drape::material::resolve(&Pattern::new(bpat.clone()), &opts)?;
+        if bands.is_empty() {
+            qualification_basis = ftx_drape::qualify::qualification_basis(&body, &material)?;
+        }
         bands.push((ease, bpat));
     }
-    let body = DrapeBody {
-        frames: &frames,
-        collision: (&skin.vertices, &skin.triangles),
-        display: (&full.vertices, &full.triangles),
-        arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
-    };
 
     // spec 04 §7.1: the measurements file's sha256 (what a round compares, whichever engine runs it)
     let meas_sha = ftx_core::receipt::sha256_hex(&meas_bytes);
@@ -896,6 +902,12 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
                     body.arm_deg
                 )),
             );
+            if !pose.legs.is_standing() {
+                b.insert("legs".into(), json!(pose.legs));
+            }
+            if pose.leg_fraction != 1.0 {
+                b.insert("leg_fraction".into(), json!(pose.leg_fraction));
+            }
             o.insert("body".into(), Value::Object(b));
         }
         let html = viewer(&run, &pattern, &body, super::VIEWER_TEMPLATE).map_err(bad_input)?;
@@ -939,6 +951,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         "measurements_sha256": meas_sha,
         "posed_chest_girth_mm": chest_girth_mm,
         "input_chest_mm": input_chest_mm,
+        "qualification_basis": qualification_basis,
         "fabric_key": fabric_key(pat.get("fabric")),
         "rows": rows,
         "pass": all_pass,

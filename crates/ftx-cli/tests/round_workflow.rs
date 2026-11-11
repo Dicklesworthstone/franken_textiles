@@ -400,6 +400,8 @@ fn report_rebuilds_review_html_without_adding_a_round_and_qualify_validates_inpu
     run(&dir, &["qualify", "ws", "--ws", "ws"], 3);
     run(&dir, &["qualify", "--ws", "ws", "--out", "custom"], 3);
     run(&dir, &["qualify", "--ws", "ws", "--arm-deg", "200"], 3);
+    run(&dir, &["qualify", "--ws", "ws", "--legs", "unknown"], 3);
+    run(&dir, &["qualify", "--ws", "ws", "--leg-fraction", "2"], 3);
     assert!(!dir.join("ws/qualification").exists());
 }
 
@@ -470,10 +472,100 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     )
     .unwrap();
     assert_eq!(sim["tightness_qualified"], q["pass"]);
+    assert_eq!(sim["qualification_basis"], q["qualification_basis"]);
+    for (number, arm_deg, legacy) in [(2, "55", false), (3, "35", true)] {
+        if legacy {
+            let mut old = q.clone();
+            old.as_object_mut().unwrap().remove("qualification_basis");
+            save(&dir.join("ws/qualification/qualify.json"), &old);
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args([
+                "round",
+                "ws",
+                "--sim",
+                "--sew",
+                "6",
+                "--drape",
+                "0",
+                "--arm-deg",
+                arm_deg,
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            matches!(output.status.code(), Some(0 | 2)),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let report = read(&dir.join(format!("ws/rounds/{number:03}/sim/sim_report.json")));
+        assert_eq!(report["tightness_qualified"], false, "{report}");
+        assert_eq!(
+            report["qualification_basis"]["material_sha256"],
+            q["qualification_basis"]["material_sha256"]
+        );
+        assert_eq!(
+            report["qualification_basis"]["body_sha256"] == q["qualification_basis"]["body_sha256"],
+            legacy
+        );
+    }
+    save(&dir.join("ws/qualification/qualify.json"), q);
+    let mut changed_pattern = read(&dir.join("p.json"));
+    let acquisition: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-friction-sliding.json"
+    ))
+    .unwrap();
+    changed_pattern["fabric"]["material"] = acquisition["target"]["materials"][0].clone();
+    for key in ["areal_g_m2", "tensile_N_m", "bending_Nm"] {
+        changed_pattern["fabric"]
+            .as_object_mut()
+            .unwrap()
+            .remove(key);
+    }
+    assert_ne!(
+        ftx_drape::qualify::fabric_key(changed_pattern.get("fabric")),
+        q["fabric_key"]
+    );
+    save(&dir.join("changed_material.json"), &changed_pattern);
+    let output = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "round",
+            "ws",
+            "--pattern",
+            "changed_material.json",
+            "--sim",
+            "--sew",
+            "6",
+            "--drape",
+            "0",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(output.status.code(), Some(0 | 2)),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report = read(&dir.join("ws/rounds/004/sim/sim_report.json"));
+    assert_eq!(report["tightness_qualified"], false);
+    assert_eq!(
+        report["qualification_basis"]["body_sha256"],
+        q["qualification_basis"]["body_sha256"]
+    );
+    assert_ne!(
+        report["qualification_basis"]["material_sha256"],
+        q["qualification_basis"]["material_sha256"]
+    );
     // Re-running qualify on the same workspace rotates the previous qualification directory.
     let out2 = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
-        .args(["qualify", "--ws", "ws", "--json"])
+        .args(["qualify", "--ws", "ws", "--pattern", "p.json", "--json"])
         .output()
         .unwrap();
     assert!(
@@ -485,4 +577,41 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         dir.join("ws/qualification.before-000/qualify.json")
             .is_file()
     );
+    let seated = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["qualify", "--ws", "ws", "--pattern", "p.json", "--json"])
+        .args(["--legs", "seated", "--leg-fraction", "0.5"])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(seated.status.code(), Some(0 | 2)),
+        "{}",
+        String::from_utf8_lossy(&seated.stderr)
+    );
+    let envelope: Value = serde_json::from_slice(&seated.stdout).unwrap();
+    let seated_q = &envelope["result"];
+    assert_ne!(
+        seated_q["qualification_basis"]["body_sha256"],
+        q["qualification_basis"]["body_sha256"]
+    );
+    let round = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["round", "ws", "--pattern", "p.json", "--sim", "--json"])
+        .args(["--sew", "6", "--drape", "0"])
+        .args(["--legs", "seated", "--leg-fraction", "0.5"])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(round.status.code(), Some(0 | 2)),
+        "{}\n{}",
+        String::from_utf8_lossy(&round.stderr),
+        String::from_utf8_lossy(&round.stdout)
+    );
+    let report = read(&dir.join("ws/rounds/005/sim/sim_report.json"));
+    assert_eq!(report["body"]["legs"], "seated");
+    assert_eq!(
+        report["qualification_basis"],
+        seated_q["qualification_basis"]
+    );
+    assert_eq!(report["tightness_qualified"], seated_q["pass"]);
 }

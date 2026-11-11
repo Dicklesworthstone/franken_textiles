@@ -301,7 +301,13 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
         String::from_utf8_lossy(&output.stderr)
     );
     let mut native = read(&dir.join("leg-fold/sim_report.json"));
-    for field in ["pattern", "wall_s", "measurements_sha256"] {
+    assert!(native["qualification_basis"].is_object());
+    for field in [
+        "pattern",
+        "wall_s",
+        "measurements_sha256",
+        "qualification_basis",
+    ] {
         native.as_object_mut().unwrap().remove(field);
     }
     assert_eq!(native, folded.report);
@@ -668,7 +674,14 @@ fn nappy_occupancy_preserves_bare_evidence_and_drives_native_portable_and_motion
     let mut native = read(&dir.join("nappy-fold/sim_report.json"));
     assert_eq!(native["body"]["nappy_occupancy"], *receipt);
     // Native tape summaries retain their documented display rounding; cloth state is exact.
-    for field in ["pattern", "wall_s", "measurements_sha256", "body"] {
+    assert!(native["qualification_basis"].is_object());
+    for field in [
+        "pattern",
+        "wall_s",
+        "measurements_sha256",
+        "qualification_basis",
+        "body",
+    ] {
         native.as_object_mut().unwrap().remove(field);
     }
     let mut portable_report = portable.report;
@@ -2598,7 +2611,13 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
         String::from_utf8_lossy(&out.stderr)
     );
     let mut native = read(&dir.join("sim/sim_report.json"));
-    for field in ["pattern", "wall_s", "measurements_sha256"] {
+    assert!(native["qualification_basis"].is_object());
+    for field in [
+        "pattern",
+        "wall_s",
+        "measurements_sha256",
+        "qualification_basis",
+    ] {
         native.as_object_mut().unwrap().remove(field);
     }
     assert_eq!(native, portable.report);

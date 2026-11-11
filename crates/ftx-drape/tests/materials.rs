@@ -83,6 +83,50 @@ fn body() -> Body {
 }
 
 #[test]
+fn qualification_identity_tracks_the_actual_body_and_hidden_material_properties() {
+    use ftx_drape::qualify::{fabric_key, qualification_basis};
+    let surface = body();
+    let mut body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.0,
+    };
+    let pattern = band(json!({"material":record(1.0)}));
+    let options = DrapeOptions::default();
+    let material = resolve(&pattern, &options).unwrap();
+    let first = qualification_basis(&body, &material).unwrap();
+    assert_eq!(first, qualification_basis(&body, &material).unwrap());
+    let mut changed = pattern.raw().clone();
+    changed["fabric"]["material"]["record"]["properties"]["friction_skin"]["value"] = json!(0.8);
+    assert_eq!(
+        fabric_key(changed.get("fabric")),
+        fabric_key(pattern.raw().get("fabric"))
+    );
+    let next = resolve(&Pattern::new(changed), &options).unwrap();
+    let second = qualification_basis(&body, &next).unwrap();
+    assert_eq!(first["body_sha256"], second["body_sha256"]);
+    assert_ne!(first["material_sha256"], second["material_sha256"]);
+    body.arm_deg = 45.0;
+    assert_ne!(
+        first["body_sha256"],
+        qualification_basis(&body, &material).unwrap()["body_sha256"]
+    );
+    body.arm_deg = 35.0;
+    let mut vertices = surface.vertices.clone();
+    vertices[0].x += 0.001;
+    body.collision = (&vertices, &surface.triangles);
+    assert_ne!(
+        first["body_sha256"],
+        qualification_basis(&body, &material).unwrap()["body_sha256"]
+    );
+    let mut per_piece = pattern.raw().clone();
+    per_piece["pieces"][0]["fabric"] = json!({"material":record(1.0)});
+    let material = resolve(&Pattern::new(per_piece), &options).unwrap();
+    assert!(qualification_basis(&body, &material).unwrap()["material_sha256"].is_null());
+}
+
+#[test]
 fn bounded_settling_replays_the_exact_source_bound_gravity_trajectory() {
     let surface = body();
     let body = DrapeBody {
