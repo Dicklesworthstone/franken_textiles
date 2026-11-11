@@ -469,7 +469,7 @@ const server = http.createServer((req, res) => {
         await page.fill('#studyCandidateName',key);await page.click('#addStudyCandidate');
       }
       assert.equal(await page.inputValue('#studyMode'),'guided');
-      assert.match(await page.textContent('#studyCandidateCount'),/3 frozen material choices/);
+      assert.match(await page.textContent('#studyCandidateCount'),/3 saved alternatives plus the original baseline/);
       await page.check('#guidedMass');await page.check('#guidedInventoryComplete');await page.check('#guidedMassGoal');
       const verify=async label=>{
         assert.equal(await run('study'),'');
@@ -526,7 +526,7 @@ const server = http.createServer((req, res) => {
         await page.click('#clearGuidedInventory');
         assert.equal(await page.isDisabled('#guidedInventoryComplete'),false);
         assert.equal(await page.isDisabled('#clearGuidedInventory'),true);
-        assert.match(await page.textContent('#studyCandidateCount'),/3 frozen material choices/);
+        assert.match(await page.textContent('#studyCandidateCount'),/3 saved alternatives plus the original baseline/);
         await page.check('#guidedInventoryComplete');
         assert.deepEqual((await verify(`cleared-${label}`)).report,ranged.report);
       }
@@ -543,7 +543,7 @@ const server = http.createServer((req, res) => {
       await input('patternFile',{...JSON.parse(original),meta:{note:'Changed synthetic source'}});
       assert.equal(await page.locator('a[download="material-study.json"]').count(),0);
       assert.equal(await page.locator('a[download="alternative-1-pattern.json"]').count(),0);
-      assert.match(await page.textContent('#studyCandidateCount'),/No comparison materials/);
+      assert.match(await page.textContent('#studyCandidateCount'),/No comparison alternatives added/);
       assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(m=>m==='GET'));
       console.log('PASS: guided Chromium shortlist matches complete native/WASM studies for default and named-piece assignments, independent cutting refusal and bounded assembly mass; exact identities/downloads, invalid-inventory recovery, advanced replay, input withdrawal and mobile layout verified. Synthetic software evidence only. Artifacts:',work);
       return;

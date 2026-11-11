@@ -127,17 +127,20 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
-    if matches!(action, "strip-experiment" | "strip-history") {
+    if matches!(
+        action,
+        "strip-experiment" | "strip-history" | "cylinder-experiment"
+    ) {
         known_options(args, "materials", &[])?;
         let [path] = &args.positional[2..] else {
             return Err(bad_input(
-                "usage: ftx materials strip-experiment|strip-history REQUEST.json",
+                "usage: ftx materials strip-experiment|strip-history|cylinder-experiment REQUEST.json",
             ));
         };
-        let result = if action == "strip-history" {
-            strip::history(path)?
-        } else {
-            strip::experiment(path)?
+        let result = match action {
+            "strip-history" => strip::history(path)?,
+            "cylinder-experiment" => strip::cylinder(path)?,
+            _ => strip::experiment(path)?,
         };
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));

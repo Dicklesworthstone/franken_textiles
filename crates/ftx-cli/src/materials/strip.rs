@@ -2,7 +2,7 @@
 use std::{fs::File, io::Read};
 
 use ftx_core::{Refusal, RefusalCode};
-use ftx_drape::strip;
+use ftx_drape::{cylinder, strip};
 use ftx_pattern::textile_import::catalog;
 use serde_json::{Value, json};
 
@@ -33,6 +33,11 @@ pub(super) fn experiment(path: &str) -> Result<Value, Refusal> {
 pub(super) fn history(path: &str) -> Result<Value, Refusal> {
     let input = serde_json::from_str(&read(path)?).map_err(invalid)?;
     serde_json::to_value(strip::history::evaluate(&input)?).map_err(invalid)
+}
+
+pub(super) fn cylinder(path: &str) -> Result<Value, Refusal> {
+    let input = serde_json::from_str(&read(path)?).map_err(invalid)?;
+    serde_json::to_value(cylinder::evaluate(&input)?).map_err(invalid)
 }
 
 pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {

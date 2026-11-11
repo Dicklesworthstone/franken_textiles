@@ -109,9 +109,30 @@ screen can select these observations; a request that requires mechanics or therm
 correctly refuses them until those measurements are supplied. Frozen selections replay against
 an empty catalog with their exact sources and checksums intact.
 
+## Cylindrical-holder forward experiment (`ftx-cylinder-experiment/1`)
+
+`ftx_drape::cylinder::evaluate` (`ftx materials cylinder-experiment REQUEST.json`, `ftx-materials
+cylinder-experiment REQUEST.json`, and browser `material_cylinder_experiment` / worker
+`cylinderExperiment`) implements the 3D cylindrical-holder forward boundary condition for source-qualified
+sheets (`260 × 110 mm` specimen wrapped around coaxial `R = 40 mm` holders, `50 mm` nominal free height
+plus explicit `pretension_displacement_m`, explicit tare force/torque subtraction, grain orientation
+`warp_axis`, sequential twist / compression / stretch-slip schedules with optional `clamp_slip_m` and
+`grip_slip_force_limit_n`, optional Maxwell/membrane-plastic/panel-bending-plastic histories, optional
+unloaded-thickness cloth self-contact, and automatic raw-timestamp vs `nominal_protocol` discrepancy
+auditing).
+
+Strict boundaries enforced by the forward experiment:
+- **Never `delta / nominal_height`**: inner-clamp separation is `nominal_free_height_m + pretension_displacement_m + axial_displacement_m - clamp_slip_m`; history-bearing laws must start at pristine unstretched separation and ramp pretension explicitly in time.
+- **No fabricated thickness or mechanics**: raw `fabric101-2026/*` records continue to refuse until constitutive moduli are explicitly supplied; enabling `self_contact` requires unloaded `thickness` and refuses presser-foot `reported_thickness`; axial compression below `nominal_free_height_m` requires positive `bending_rigidity` or a `BendingTensor`.
+- **No silent readiness or empirical claim**: `mechanics_readiness_promoted`, `fit_claim`, and `empirical_validation_claim` are all `false`. Inverse constitutive identification against external unbundled raw Fabric-101 curve archives and held-out physical specimens remains open under `ftx-tm2.1`.
+
 ## Focused checks
 
 `crates/ftx-pattern/tests/fabric101_catalog.rs` verifies the 96-row subset, exact representative
 measurements and units, source paths and field budgets, conflict handling, composition identity,
 immutable replay, stale-digest refusal, ordinary mass screening, and missing-physics refusal.
-The source implementation is `crates/ftx-pattern/src/material_catalog/fabric101.rs`.
+`crates/ftx-drape/src/cylinder.rs`, `crates/ftx-cli/tests/strip_experiment_workflow.rs`, and
+`tools/check_strip_wasm.cjs` verify closed-form uniaxial tension and `n_theta`-gon apothem torsion
+convergence, `L01` pretension/timestamp rate discrepancy auditing, Maxwell + plastic-bending dissipation,
+uncalibrated `fabric101-2026/l01` and `reported_thickness` refusals, and native/WASM/worker parity.
+The source catalog implementation is `crates/ftx-pattern/src/material_catalog/fabric101.rs`.

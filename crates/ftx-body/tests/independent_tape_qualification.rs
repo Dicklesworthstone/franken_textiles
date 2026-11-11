@@ -15,10 +15,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyFrames, DEFAULT_POSE_AUDIT_PAIR_BUDGET, Frame, Legs, N_TAPE,
-    Phenotype, Pose, PosedBody, TAPE_FIELDS, age_parameter_for_years, clothing_skin,
-    default_model_path, partial_tape_readings, pose_deltas, skin_mesh, tape_readings,
+    AnnyData, AnnyModel, BodyFrames, DEFAULT_POSE_AUDIT_PAIR_BUDGET, FREE, Frame, Legs,
+    N_PHENOTYPE, N_TAPE, Phenotype, Pose, PosedBody, TAPE_FIELDS, TapeTarget, Wearer,
+    age_parameter_for_years, clothing_skin, default_model_path, fit_stature, fit_tape, is_girth,
+    partial_tape_readings, pose_deltas, skin_mesh, tape_readings, tape_targets,
 };
+use ftx_core::RefusalCode;
 use ftx_core::Vec3;
 use ftx_core::receipt::sha256_hex;
 use serde_json::json;
@@ -1352,4 +1354,1263 @@ fn admitted_anny_posed_colliders_quantify_lbs_volume_loss_and_intersection_statu
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Independent `BodyFrames` / landmark / section-radius oracle
+// (zero code shared with `ftx_body::landmarks`)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+struct IndependentBodyFrames {
+    torso: Frame,
+    arm_r: Frame,
+    arm_l: Frame,
+    leg_r: Frame,
+    leg_l: Frame,
+    neck: Frame,
+    floor_z: f64,
+    tip_h: f64,
+    tip_h_l: f64,
+    upper_arm_radius: f64,
+    upper_arm_radius_l: f64,
+    arm_length: f64,
+    arm_length_l: f64,
+    head_bone: Vec3,
+    shoulder_joint_r: Vec3,
+    landmarks: BTreeMap<String, f64>,
+    leg_landmarks_l: [f64; 3],
+    torso_pts: Vec<Vec3>,
+    leg_r_pts: Vec<Vec3>,
+    leg_l_pts: Vec<Vec3>,
+}
+
+fn indep_frame_from_up(origin: Vec3, raw_up: Vec3) -> Frame {
+    let up = raw_up * (1.0 / raw_up.norm());
+    let neg_y = Vec3::new(0.0, -1.0, 0.0);
+    let proj = neg_y - up * neg_y.dot(up);
+    let front = proj * (1.0 / proj.norm());
+    let lat = Vec3::new(
+        up.y * front.z - up.z * front.y,
+        up.z * front.x - up.x * front.z,
+        up.x * front.y - up.y * front.x,
+    );
+    Frame {
+        origin,
+        up,
+        front,
+        lat,
+    }
+}
+
+fn indep_line_radial_and_h(p: Vec3, origin: Vec3, unit_dir: Vec3) -> (f64, f64) {
+    let rel = p - origin;
+    // Cross-product norm `||rel x unit_dir||` avoids `rel - unit_dir * h` projection code sharing.
+    let cx = rel.y * unit_dir.z - rel.z * unit_dir.y;
+    let cy = rel.z * unit_dir.x - rel.x * unit_dir.z;
+    let cz = rel.x * unit_dir.y - rel.y * unit_dir.x;
+    ((cx * cx + cy * cy + cz * cz).sqrt(), rel.dot(unit_dir))
+}
+
+/// Ancestor-climb membership check (`cur -> parent -> ... == ancestor`), independent of single-pass
+/// `descendants` bitset propagation in `ftx_body::landmarks`.
+fn has_bone_ancestor(parents: &[i64], mut bone_idx: usize, ancestor: usize) -> bool {
+    for _ in 0..=parents.len() {
+        if bone_idx == ancestor {
+            return true;
+        }
+        let Ok(next) = usize::try_from(parents[bone_idx]) else {
+            return false;
+        };
+        bone_idx = next;
+    }
+    false
+}
+
+fn independent_body_frames(model: &AnnyModel, posed: &PosedBody) -> IndependentBodyFrames {
+    let d = model.data();
+    let parents = &d.header.labels.bone_parents;
+    let b_idx = |name: &str| -> usize {
+        d.header
+            .labels
+            .bones
+            .iter()
+            .position(|b| b == name)
+            .unwrap_or_else(|| panic!("missing bone {name}"))
+    };
+    let arm_r_root = b_idx("upperarm01.R");
+    let arm_l_root = b_idx("upperarm01.L");
+    let leg_r_root = b_idx("upperleg01.R");
+    let leg_l_root = b_idx("upperleg01.L");
+    let arm_r_upper = [arm_r_root, b_idx("upperarm02.R")];
+    let arm_l_upper = [arm_l_root, b_idx("upperarm02.L")];
+
+    let k = d.header.counts.influences;
+    let verts_mm: Vec<Vec3> = posed.vertices.iter().map(|v| *v * 1000.0).collect();
+    let dom_bone: Vec<usize> = (0..verts_mm.len())
+        .map(|v| {
+            let w_slice = &d.vertex_bone_weights[v * k..(v + 1) * k];
+            let i_slice = &d.vertex_bone_indices[v * k..(v + 1) * k];
+            let mut best_slot = 0usize;
+            for slot in 1..k {
+                if w_slice[slot] > w_slice[best_slot] {
+                    best_slot = slot;
+                }
+            }
+            i_slice[best_slot] as usize
+        })
+        .collect();
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Part {
+        Torso,
+        ArmR,
+        ArmL,
+        LegR,
+        LegL,
+    }
+
+    let parts: Vec<Part> = dom_bone
+        .iter()
+        .map(|&b| {
+            if has_bone_ancestor(parents, b, arm_r_root) {
+                Part::ArmR
+            } else if has_bone_ancestor(parents, b, arm_l_root) {
+                Part::ArmL
+            } else if has_bone_ancestor(parents, b, leg_r_root) {
+                Part::LegR
+            } else if has_bone_ancestor(parents, b, leg_l_root) {
+                Part::LegL
+            } else {
+                Part::Torso
+            }
+        })
+        .collect();
+
+    let floor_z = verts_mm
+        .iter()
+        .map(|p| p.z)
+        .min_by(f64::total_cmp)
+        .expect("non-empty mesh");
+    let head_top_z = verts_mm
+        .iter()
+        .map(|p| p.z)
+        .max_by(f64::total_cmp)
+        .expect("non-empty mesh");
+
+    let waist_pts: Vec<Vec3> = d
+        .header
+        .waist_loop_final
+        .iter()
+        .map(|&vi| verts_mm[vi])
+        .collect();
+    let waist_z = waist_pts.iter().map(|p| p.z).sum::<f64>() / (waist_pts.len() as f64);
+    let y_min = waist_pts
+        .iter()
+        .map(|p| p.y)
+        .min_by(f64::total_cmp)
+        .unwrap();
+    let y_max = waist_pts
+        .iter()
+        .map(|p| p.y)
+        .max_by(f64::total_cmp)
+        .unwrap();
+    let y_c = 0.5 * (y_min + y_max);
+
+    let crotch_z = verts_mm
+        .iter()
+        .zip(&parts)
+        .filter(|(p, part)| **part == Part::Torso && p.x.abs() < 4.0 && p.z < waist_z)
+        .map(|(p, _)| p.z)
+        .min_by(f64::total_cmp)
+        .expect("crotch vertex");
+
+    let joint_mm = |name: &str| posed.bone_poses[b_idx(name)].t * 1000.0;
+    let shoulder_r = joint_mm("upperarm01.R");
+    let arm_r = indep_frame_from_up(shoulder_r, -posed.bone_poses[arm_r_root].m.col(1));
+    let mut r_vals_r: Vec<f64> = verts_mm
+        .iter()
+        .zip(&dom_bone)
+        .filter(|(_, b)| arm_r_upper.contains(b))
+        .map(|(p, _)| indep_line_radial_and_h(*p, arm_r.origin, arm_r.up).0)
+        .collect();
+    let mid_r = r_vals_r.len() / 2;
+    let (_, &mut upper_arm_radius, _) = r_vals_r.select_nth_unstable_by(mid_r, f64::total_cmp);
+    let tip_h = 0.8 * upper_arm_radius;
+
+    let armpit_z = verts_mm
+        .iter()
+        .zip(&dom_bone)
+        .filter(|(p, b)| {
+            arm_r_upper.contains(b) && p.x.abs() < shoulder_r.x.abs() + upper_arm_radius
+        })
+        .map(|(p, _)| p.z)
+        .min_by(f64::total_cmp)
+        .expect("armpit vertex");
+    let arm_length = (joint_mm("wrist.R") - shoulder_r).norm() + tip_h;
+
+    let shoulder_l = joint_mm("upperarm01.L");
+    let arm_l = indep_frame_from_up(shoulder_l, -posed.bone_poses[arm_l_root].m.col(1));
+    let mut r_vals_l: Vec<f64> = verts_mm
+        .iter()
+        .zip(&dom_bone)
+        .filter(|(_, b)| arm_l_upper.contains(b))
+        .map(|(p, _)| indep_line_radial_and_h(*p, arm_l.origin, arm_l.up).0)
+        .collect();
+    let mid_l = r_vals_l.len() / 2;
+    let (_, &mut upper_arm_radius_l, _) = r_vals_l.select_nth_unstable_by(mid_l, f64::total_cmp);
+    let tip_h_l = 0.8 * upper_arm_radius_l;
+    let arm_length_l = (joint_mm("wrist.L") - shoulder_l).norm() + tip_h_l;
+
+    let hip_r = joint_mm("upperleg01.R");
+    let ankle_r = joint_mm("foot.R");
+    let knee_r = joint_mm("lowerleg01.R");
+    let leg_r = indep_frame_from_up(Vec3::new(hip_r.x, y_c, crotch_z + 25.0), hip_r - ankle_r);
+
+    let hip_l = joint_mm("upperleg01.L");
+    let ankle_l = joint_mm("foot.L");
+    let knee_l = joint_mm("lowerleg01.L");
+    let leg_l = indep_frame_from_up(Vec3::new(hip_l.x, y_c, crotch_z + 25.0), hip_l - ankle_l);
+
+    let torso = Frame {
+        origin: Vec3::new(0.0, y_c, floor_z),
+        up: Vec3::new(0.0, 0.0, 1.0),
+        front: Vec3::new(0.0, -1.0, 0.0),
+        lat: Vec3::new(1.0, 0.0, 0.0),
+    };
+
+    let neck_origin = joint_mm("neck01");
+    let head_bone = joint_mm("head");
+    let neck = indep_frame_from_up(neck_origin, head_bone - neck_origin);
+
+    let shoulder_z = (shoulder_r + arm_r.up * tip_h).z;
+    let landmarks: BTreeMap<String, f64> = [
+        ("floor", 0.0),
+        ("ankle", ankle_r.z - floor_z),
+        ("calf", ankle_r.z + 0.6 * (knee_r.z - ankle_r.z) - floor_z),
+        ("knee", knee_r.z - floor_z),
+        ("crotch", crotch_z - floor_z),
+        ("hip", crotch_z + 0.45 * (waist_z - crotch_z) - floor_z),
+        ("waist", waist_z - floor_z),
+        ("chest", armpit_z - floor_z),
+        ("across_back", 0.5 * (armpit_z + shoulder_z) - floor_z),
+        ("shoulder", shoulder_z - floor_z),
+        ("snp", neck_origin.z - floor_z),
+        ("c7", neck_origin.z + 5.0 - floor_z),
+        ("head_top", head_top_z - floor_z),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+
+    let collect_part = |want: Part| -> Vec<Vec3> {
+        verts_mm
+            .iter()
+            .zip(&parts)
+            .filter(|(_, p)| **p == want)
+            .map(|(v, _)| *v)
+            .collect()
+    };
+
+    IndependentBodyFrames {
+        torso,
+        arm_r,
+        arm_l,
+        leg_r,
+        leg_l,
+        neck,
+        floor_z,
+        tip_h,
+        tip_h_l,
+        upper_arm_radius,
+        upper_arm_radius_l,
+        arm_length,
+        arm_length_l,
+        head_bone,
+        shoulder_joint_r: shoulder_r,
+        landmarks,
+        leg_landmarks_l: [
+            ankle_l.z - floor_z,
+            ankle_l.z + 0.6 * (knee_l.z - ankle_l.z) - floor_z,
+            knee_l.z - floor_z,
+        ],
+        torso_pts: collect_part(Part::Torso),
+        leg_r_pts: collect_part(Part::LegR),
+        leg_l_pts: collect_part(Part::LegL),
+    }
+}
+
+impl IndependentBodyFrames {
+    fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+        match part {
+            "torso" => self.landmarks.get(name).copied(),
+            "arm_R" => match name {
+                "shoulder_tip" => Some(self.tip_h),
+                "elbow" => Some(self.tip_h - 0.55 * self.arm_length),
+                "wrist" => Some(self.tip_h - self.arm_length),
+                _ => None,
+            },
+            "arm_L" => match name {
+                "shoulder_tip" => Some(self.tip_h_l),
+                "elbow" => Some(self.tip_h_l - 0.55 * self.arm_length_l),
+                "wrist" => Some(self.tip_h_l - self.arm_length_l),
+                _ => None,
+            },
+            "leg_R" => {
+                let z = self.floor_z + *self.landmarks.get(name)?;
+                Some(-(self.leg_r.origin.z - z) / self.leg_r.up.z)
+            }
+            "leg_L" => {
+                let h = match name {
+                    "ankle" => self.leg_landmarks_l[0],
+                    "calf" => self.leg_landmarks_l[1],
+                    "knee" => self.leg_landmarks_l[2],
+                    _ => *self.landmarks.get(name)?,
+                };
+                let z = self.floor_z + h;
+                Some(-(self.leg_l.origin.z - z) / self.leg_l.up.z)
+            }
+            _ => None,
+        }
+    }
+
+    fn section_radius(&self, part: &str, h: f64) -> f64 {
+        match part {
+            "torso" => {
+                let z = self.floor_z + h;
+                self.torso_pts
+                    .iter()
+                    .filter(|p| (p.z - z).abs() <= 10.0)
+                    .map(|p| p.x.hypot(p.y - self.torso.origin.y))
+                    .fold(0.0, f64::max)
+            }
+            "arm_R" => 1.15 * self.upper_arm_radius,
+            "arm_L" => 1.15 * self.upper_arm_radius_l,
+            "leg_R" | "leg_L" => {
+                let is_l = part == "leg_L";
+                let (fr, pts) = if is_l {
+                    (&self.leg_l, &self.leg_l_pts)
+                } else {
+                    (&self.leg_r, &self.leg_r_pts)
+                };
+                let mut best = pts
+                    .iter()
+                    .map(|p| indep_line_radial_and_h(*p, fr.origin, fr.up))
+                    .filter(|(_, ph)| (ph - h).abs() <= 10.0)
+                    .map(|(r, _)| r)
+                    .fold(0.0, f64::max);
+                let z = fr.origin.z + h * fr.up.z;
+                if z > fr.origin.z - 20.0 {
+                    best = self
+                        .torso_pts
+                        .iter()
+                        .filter(|p| {
+                            (if is_l { p.x >= 0.0 } else { p.x <= 0.0 }) && (p.z - z).abs() <= 10.0
+                        })
+                        .map(|p| indep_line_radial_and_h(*p, fr.origin, fr.up).0)
+                        .fold(best, f64::max);
+                }
+                best
+            }
+            _ => 0.0,
+        }
+    }
+}
+
+fn max_frame_diff(a: Frame, b: Frame) -> f64 {
+    (a.origin - b.origin)
+        .norm()
+        .max((a.up - b.up).norm())
+        .max((a.front - b.front).norm())
+        .max((a.lat - b.lat).norm())
+}
+
+fn assert_body_frames_match_independent(
+    cand: &BodyFrames,
+    indep: &IndependentBodyFrames,
+    ctx: &str,
+) -> f64 {
+    let mut worst = 0.0_f64;
+    for (name, cf, rf) in [
+        ("torso", cand.torso, indep.torso),
+        ("arm_R", cand.arm_r, indep.arm_r),
+        ("arm_L", cand.arm_l, indep.arm_l),
+        ("leg_R", cand.leg_r, indep.leg_r),
+        ("leg_L", cand.leg_l, indep.leg_l),
+        ("neck", cand.neck, indep.neck),
+    ] {
+        let d = max_frame_diff(cf, rf);
+        worst = worst.max(d);
+        assert!(d < 1e-11, "{ctx} frame {name} mismatch: {d:.3e}");
+        if name != "neck" {
+            assert_eq!(cand.frame(name), Some(cf));
+        }
+    }
+    for (label, cv, rv) in [
+        ("floor_z", cand.floor_z, indep.floor_z),
+        ("tip_h", cand.tip_h, indep.tip_h),
+        ("tip_h_l", cand.tip_h_l, indep.tip_h_l),
+        (
+            "upper_arm_radius",
+            cand.upper_arm_radius,
+            indep.upper_arm_radius,
+        ),
+        (
+            "upper_arm_radius_l",
+            cand.upper_arm_radius_l,
+            indep.upper_arm_radius_l,
+        ),
+        ("arm_length", cand.arm_length, indep.arm_length),
+        ("arm_length_l", cand.arm_length_l, indep.arm_length_l),
+        ("head_bone", (cand.head_bone - indep.head_bone).norm(), 0.0),
+        (
+            "shoulder_joint_r",
+            (cand.shoulder_joint_r - indep.shoulder_joint_r).norm(),
+            0.0,
+        ),
+    ] {
+        let d = (cv - rv).abs();
+        worst = worst.max(d);
+        assert!(d < 1e-11, "{ctx} scalar {label} mismatch: {d:.3e}");
+    }
+    assert_eq!(cand.landmarks.len(), indep.landmarks.len());
+    for (k, &cv) in &cand.landmarks {
+        let rv = indep.landmarks[k];
+        let d = (cv - rv).abs();
+        worst = worst.max(d);
+        assert!(d < 1e-11, "{ctx} landmark {k} mismatch: {d:.3e}");
+        assert_eq!(cand.landmark_h("torso", k), Some(cv));
+    }
+    for part in ["arm_R", "arm_L"] {
+        for lm in ["shoulder_tip", "elbow", "wrist"] {
+            let cv = cand.landmark_h(part, lm).unwrap();
+            let rv = indep.landmark_h(part, lm).unwrap();
+            let d = (cv - rv).abs();
+            worst = worst.max(d);
+            assert!(d < 1e-11, "{ctx} {part}.{lm} mismatch: {d:.3e}");
+        }
+    }
+    for part in ["leg_R", "leg_L"] {
+        for lm in ["ankle", "calf", "knee", "crotch", "hip", "waist"] {
+            let cv = cand.landmark_h(part, lm).unwrap();
+            let rv = indep.landmark_h(part, lm).unwrap();
+            let d = (cv - rv).abs();
+            worst = worst.max(d);
+            assert!(d < 1e-11, "{ctx} {part}.{lm} mismatch: {d:.3e}");
+        }
+    }
+    for (part, probe_levels) in [
+        ("torso", [100.0, 350.0, 500.0, 650.0]),
+        ("arm_R", [-200.0, -100.0, 0.0, 15.0]),
+        ("arm_L", [-200.0, -100.0, 0.0, 15.0]),
+        ("leg_R", [-300.0, -150.0, -20.0, 20.0]),
+        ("leg_L", [-300.0, -150.0, -20.0, 20.0]),
+    ] {
+        for h in probe_levels {
+            let cr = cand.section_radius(part, h);
+            let rr = indep.section_radius(part, h);
+            let d = (cr - rr).abs();
+            worst = worst.max(d);
+            assert!(
+                d < 1e-11,
+                "{ctx} section_radius({part}, {h}) mismatch: {d:.3e}"
+            );
+        }
+    }
+    worst
+}
+
+#[test]
+fn seeded_functional_landmark_and_collider_errors_fire_all_promised_refusals_and_asymmetric_frames_match()
+ {
+    let model = build_analytic_mannequin();
+    let params = model.params(Phenotype::default());
+    let rest = model.rest(&params).unwrap();
+    let mut posed = model
+        .pose(
+            &rest,
+            &pose_deltas(&model, &rest, &Pose::rest(), 1.0).unwrap(),
+        )
+        .unwrap();
+
+    // 1. Asymmetric limb geometry: widen left upper arm (+10 mm radially), lengthen left wrist
+    // downward (-25 mm), and lower left knee (-18 mm). Independent `BodyFrames` must track left
+    // and right frames, radii, and limb landmarks separately without mirroring right onto left.
+    let d = model.data();
+    let k = d.header.counts.influences;
+    let b_idx = |name: &str| {
+        d.header
+            .labels
+            .bones
+            .iter()
+            .position(|b| b == name)
+            .unwrap()
+    };
+    let arm_l_b = b_idx("upperarm01.L");
+    let wrist_l_b = b_idx("wrist.L");
+    let knee_l_b = b_idx("lowerleg01.L");
+    posed.bone_poses[wrist_l_b].t.z -= 0.025;
+    posed.bone_poses[knee_l_b].t.z -= 0.018;
+    let arm_l_joint = posed.bone_poses[arm_l_b].t;
+    for (vi, v) in posed.vertices.iter_mut().enumerate() {
+        let dom = (0..k).fold(0, |best, s| {
+            if d.vertex_bone_weights[vi * k + s] > d.vertex_bone_weights[vi * k + best] {
+                s
+            } else {
+                best
+            }
+        });
+        if d.vertex_bone_indices[vi * k + dom] as usize == arm_l_b {
+            v.x = arm_l_joint.x + (v.x - arm_l_joint.x) * 1.5;
+            v.y = arm_l_joint.y + (v.y - arm_l_joint.y) * 1.5;
+        }
+    }
+    let asym_cand = BodyFrames::new(&model, &posed).unwrap();
+    let asym_indep = independent_body_frames(&model, &posed);
+    assert_body_frames_match_independent(&asym_cand, &asym_indep, "analytic_asymmetric");
+    assert!(
+        (asym_cand.upper_arm_radius_l - 1.5 * asym_cand.upper_arm_radius).abs() < 1e-9,
+        "left upper-arm radius must reflect asymmetric left vertices independently"
+    );
+    assert!(
+        asym_cand.arm_length_l > asym_cand.arm_length + 25.0,
+        "left arm length must reflect asymmetric left wrist and tip_h_l"
+    );
+    assert!(
+        asym_cand.landmark_h("leg_L", "knee").unwrap()
+            < asym_cand.landmark_h("leg_R", "knee").unwrap() - 15.0,
+        "left knee landmark must reflect left lowerleg01 bone independently"
+    );
+
+    // 2. Seeded `BodyFrames` / landmark error controls:
+    // (a) Sagittal gap (`|x| >= 4 mm` for all torso vertices below waist) -> `DegenerateGeometry`.
+    let mut no_crotch_posed = posed.clone();
+    for v in &mut no_crotch_posed.vertices {
+        if v.x.abs() < 0.005 {
+            v.x = if v.x >= 0.0 { 0.010 } else { -0.010 };
+        }
+    }
+    let err_no_crotch = BodyFrames::new(&model, &no_crotch_posed).unwrap_err();
+    assert_eq!(err_no_crotch.code, RefusalCode::DegenerateGeometry);
+    assert!(err_no_crotch.message.contains("crotch"));
+
+    // 3. Seeded functional error controls:
+    // (a) Detached exterior distractor box beside torso does NOT corrupt outermost axis-containing
+    // torso functionals (`chest`, `waist`, `back_neck_to_waist`, `across_back`, `total_crotch_length`).
+    let clean_posed = model
+        .pose(
+            &rest,
+            &pose_deltas(&model, &rest, &Pose::rest(), 1.0).unwrap(),
+        )
+        .unwrap();
+    let clean_frames = BodyFrames::new(&model, &clean_posed).unwrap();
+    let base_faces: Vec<[usize; 3]> = d.faces.iter().map(|f| f.map(|i| i as usize)).collect();
+    let rest_h = model.anthropometry(&rest).height;
+    let clean_tape = tape_readings(&base_faces, rest_h, &clean_posed, &clean_frames).unwrap();
+
+    let mut distractor_posed = clean_posed.clone();
+    let mut distractor_faces = base_faces.clone();
+    let base_v = distractor_posed.vertices.len();
+    for z in [0.40, 0.90] {
+        for (x, y) in [(0.35, -0.05), (0.45, -0.05), (0.45, 0.05), (0.35, 0.05)] {
+            distractor_posed.vertices.push(Vec3::new(x, y, z));
+        }
+    }
+    for tri in [
+        [0, 2, 1],
+        [0, 3, 2],
+        [4, 5, 6],
+        [4, 6, 7],
+        [0, 1, 5],
+        [0, 5, 4],
+        [1, 2, 6],
+        [1, 6, 5],
+        [2, 3, 7],
+        [2, 7, 6],
+        [3, 0, 4],
+        [3, 4, 7],
+    ] {
+        distractor_faces.push(tri.map(|o| base_v + o));
+    }
+    let with_distractor =
+        tape_readings(&distractor_faces, rest_h, &distractor_posed, &clean_frames).unwrap();
+    for idx in [1usize, 2, 3, 14, 18, 19] {
+        assert!(
+            (with_distractor[idx] - clean_tape[idx]).abs() < 1e-9,
+            "detached distractor loop corrupted {}: got {}, want {}",
+            TAPE_FIELDS[idx],
+            with_distractor[idx],
+            clean_tape[idx]
+        );
+    }
+
+    // (b) Shifting the declared torso axis outside all section loops withdraws axis-containing
+    // functionals (`None`) and refuses complete `tape_readings`.
+    let mut off_axis_frames = clean_frames.clone();
+    off_axis_frames.torso.origin.x = 0.80 * 1000.0;
+    assert_eq!(
+        tape_readings(&base_faces, rest_h, &clean_posed, &off_axis_frames),
+        None
+    );
+    let off_axis_partial =
+        partial_tape_readings(&base_faces, rest_h, &clean_posed, &off_axis_frames);
+    for idx in [1usize, 2, 3, 14, 18, 19] {
+        assert_eq!(
+            off_axis_partial[idx], None,
+            "off-axis torso must withdraw {}",
+            TAPE_FIELDS[idx]
+        );
+    }
+
+    // (c) Non-finite landmark (`NaN`) withdraws dependent functionals cleanly without panic.
+    let mut nan_frames = clean_frames.clone();
+    nan_frames.landmarks.insert("waist".into(), f64::NAN);
+    assert_eq!(
+        tape_readings(&base_faces, rest_h, &clean_posed, &nan_frames),
+        None
+    );
+    let nan_partial = partial_tape_readings(&base_faces, rest_h, &clean_posed, &nan_frames);
+    assert_eq!(nan_partial[2], None); // waist
+    assert_eq!(nan_partial[4], None); // waist_height
+
+    // 4. Seeded `fit_stature` and `tape_targets` sigma refusal controls:
+    let err_stature_hi = fit_stature(
+        &model,
+        &Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 2500.0,
+            weight_kg: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err_stature_hi.code, RefusalCode::OutOfRange);
+
+    let err_stature_neg = fit_stature(
+        &model,
+        &Wearer {
+            years: -1.0,
+            gender: 0.5,
+            stature_mm: 1000.0,
+            weight_kg: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err_stature_neg.code, RefusalCode::OutOfRange);
+
+    for bad_sigma in [json!(0.0), json!(-2.5), json!(null), json!("bad")] {
+        let bad_doc = json!({
+            "fused": {
+                "waist": { "value_mm": 540.0, "sigma_mm": bad_sigma }
+            }
+        });
+        let err_sig = tape_targets(&bad_doc).unwrap_err();
+        assert_eq!(err_sig.code, RefusalCode::InvalidDocument);
+    }
+
+    // 5. Seeded contact-collider error controls on a watertight two-shell torso+arm mesh:
+    // Also verify `skin_mesh` catches zero-area step triangles on `build_analytic_mannequin`!
+    let err_zero_area = skin_mesh(&clean_posed.vertices, &d.faces).unwrap_err();
+    assert_eq!(err_zero_area.code, RefusalCode::DegenerateGeometry);
+    assert!(err_zero_area.message.contains("degenerate triangle"));
+
+    let box_shell = |x0: f64, x1: f64, y0: f64, y1: f64, z0: f64, z1: f64, base: u32| {
+        let verts = vec![
+            Vec3::new(x0, y0, z0),
+            Vec3::new(x1, y0, z0),
+            Vec3::new(x1, y1, z0),
+            Vec3::new(x0, y1, z0),
+            Vec3::new(x0, y0, z1),
+            Vec3::new(x1, y0, z1),
+            Vec3::new(x1, y1, z1),
+            Vec3::new(x0, y1, z1),
+        ];
+        // Outward-wound CCW faces (`volume > 0`).
+        let tris: Vec<[u32; 3]> = [
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
+        ]
+        .into_iter()
+        .map(|t| t.map(|i| base + i))
+        .collect();
+        (verts, tris)
+    };
+    let (mut col_verts, mut col_faces) = box_shell(-0.12, 0.12, -0.08, 0.08, 0.0, 0.60, 0);
+    // Attach a watertight lateral upper-arm tab on the right side (`x = -0.12..-0.22`) by
+    // pinching an outward tent on face `(3, 0, 4, 7)` or adding a manifold extruded cap on top:
+    // Extrude top face `(4, 5, 6, 7)` into a 2-tier prism (`z = 0.60..0.90`) so we can shear/fold
+    // the upper tier across the lower tier while keeping a single closed manifold!
+    col_faces.retain(|&t| t != [4, 5, 6] && t != [4, 6, 7]);
+    col_verts.extend([
+        Vec3::new(-0.10, -0.07, 0.90),
+        Vec3::new(0.10, -0.07, 0.90),
+        Vec3::new(0.10, 0.07, 0.90),
+        Vec3::new(-0.10, 0.07, 0.90),
+    ]);
+    col_faces.extend([
+        [4, 5, 9],
+        [4, 9, 8],
+        [5, 6, 10],
+        [5, 10, 9],
+        [6, 7, 11],
+        [6, 11, 10],
+        [7, 4, 8],
+        [7, 8, 11],
+        [8, 9, 10],
+        [8, 10, 11],
+    ]);
+
+    // (a) Open boundary / deleted face -> `DegenerateGeometry` (non-manifold edge).
+    let mut open_faces = col_faces.clone();
+    open_faces.pop();
+    let err_open = skin_mesh(&col_verts, &open_faces).unwrap_err();
+    assert_eq!(err_open.code, RefusalCode::DegenerateGeometry);
+
+    // (b) Inverted winding -> `InwardWound` (negative enclosed volume).
+    let inv_faces: Vec<[u32; 3]> = col_faces.iter().map(|&[a, b, c]| [a, c, b]).collect();
+    let err_inv = skin_mesh(&col_verts, &inv_faces).unwrap_err();
+    assert_eq!(err_inv.code, RefusalCode::InwardWound);
+
+    // (c) Self-intersecting posed collider -> `intersecting_pairs > 0` in `audit_self_intersections`.
+    let rest_skin = skin_mesh(&col_verts, &col_faces).unwrap();
+    let clean_audit = rest_skin
+        .audit_self_intersections(DEFAULT_POSE_AUDIT_PAIR_BUDGET)
+        .unwrap();
+    assert_eq!(clean_audit.intersecting_pairs, 0);
+
+    // Fold the upper tier (`vertices 8..12`) sideways & downward through the lower tier wall while
+    // keeping positive total enclosed volume and closed 2-manifold edge incidence!
+    let mut crossed_verts = col_verts.clone();
+    for v in &mut crossed_verts[8..12] {
+        v.x += 0.22;
+        v.z = 0.35;
+    }
+    let crossed_skin = skin_mesh(&crossed_verts, &col_faces).unwrap();
+    let crossed_rep = crossed_skin
+        .pose_geometry_against_rest(&rest_skin, DEFAULT_POSE_AUDIT_PAIR_BUDGET)
+        .unwrap();
+    assert!(
+        crossed_rep.self_intersections.intersecting_pairs > 0,
+        "seeded upper-tier fold through lower wall must be caught by exact triangle-pair intersection audit"
+    );
+    assert!(
+        crossed_rep
+            .self_intersections
+            .first_intersecting_pair
+            .is_some()
+    );
+
+    // (d) Pair-budget exhaustion -> `BudgetExceeded`.
+    let err_budget = rest_skin.audit_self_intersections(1).unwrap_err();
+    assert_eq!(err_budget.code, RefusalCode::BudgetExceeded);
+
+    // (e) >3% enclosed volume loss -> `lbs_volume_loss_advisory == true`.
+    let shrunk_verts: Vec<Vec3> = col_verts
+        .iter()
+        .map(|v| Vec3::new(v.x * 0.98, v.y * 0.98, v.z))
+        .collect();
+    let shrunk_skin = skin_mesh(&shrunk_verts, &col_faces).unwrap();
+    let shrunk_rep = shrunk_skin
+        .pose_geometry_against_rest(&rest_skin, DEFAULT_POSE_AUDIT_PAIR_BUDGET)
+        .unwrap();
+    assert!(shrunk_rep.volume_change_fraction < -0.03);
+    assert!(shrunk_rep.lbs_volume_loss_advisory);
+}
+
+#[test]
+#[ignore = "requires local Anny 0.6.1 .ftxbody cache"]
+fn admitted_anny_body_frames_landmarks_and_pose_domain_match_independent_oracle_and_quantify_heuristics()
+ {
+    let path = default_model_path().expect("default_model_path");
+    let data = AnnyData::read(&path, true).expect("verified Anny 0.6.1 .ftxbody");
+    let model = AnnyModel::from_data(data).expect("AnnyModel");
+    let faces: Vec<[usize; 3]> = model
+        .data()
+        .faces
+        .iter()
+        .map(|f| f.map(|i| i as usize))
+        .collect();
+
+    let cohorts = [
+        ("infant_0_5y", 0.5, 0.5, 0.50, 0.50, 0.50, 0.50),
+        ("toddler_2_5y_f", 2.5, 1.0, 0.50, 0.50, 0.50, 0.50),
+        ("child_7y_m", 7.0, 0.0, 0.65, 0.45, 0.50, 0.55),
+        ("teen_13y_f", 13.0, 1.0, 0.40, 0.60, 0.45, 0.50),
+        ("adult_30y_f", 30.0, 1.0, 0.55, 0.50, 0.50, 0.50),
+        ("adult_35y_heavy_m", 35.0, 0.0, 0.75, 0.85, 0.75, 0.45),
+    ];
+
+    let mut worst_frame_mm = 0.0_f64;
+    let mut worst_tape_from_indep_frames_mm = 0.0_f64;
+
+    for &(label, years, gender, height, weight, muscle, proportions) in &cohorts {
+        let params = model.params(Phenotype {
+            gender,
+            age: age_parameter_for_years(years),
+            height,
+            weight,
+            muscle,
+            proportions,
+        });
+        let rest = model.rest(&params).unwrap();
+        let rest_h = model.anthropometry(&rest).height;
+        let posed = model
+            .pose(
+                &rest,
+                &pose_deltas(&model, &rest, &Pose::drape(), 1.0).unwrap(),
+            )
+            .unwrap();
+
+        let cand_frames = BodyFrames::new(&model, &posed).unwrap();
+        let indep_frames = independent_body_frames(&model, &posed);
+        worst_frame_mm = worst_frame_mm.max(assert_body_frames_match_independent(
+            &cand_frames,
+            &indep_frames,
+            label,
+        ));
+
+        // End-to-end zero-shared-code chain: reconstruct a `BodyFrames` view from `indep_frames`
+        // landmarks/frames and compare `independent_tape_readings_21` to production `tape_readings`.
+        let mut bridged = cand_frames.clone();
+        bridged.torso = indep_frames.torso;
+        bridged.arm_r = indep_frames.arm_r;
+        bridged.arm_l = indep_frames.arm_l;
+        bridged.leg_r = indep_frames.leg_r;
+        bridged.leg_l = indep_frames.leg_l;
+        bridged.neck = indep_frames.neck;
+        bridged.floor_z = indep_frames.floor_z;
+        bridged.tip_h = indep_frames.tip_h;
+        bridged.tip_h_l = indep_frames.tip_h_l;
+        bridged.upper_arm_radius = indep_frames.upper_arm_radius;
+        bridged.upper_arm_radius_l = indep_frames.upper_arm_radius_l;
+        bridged.arm_length = indep_frames.arm_length;
+        bridged.arm_length_l = indep_frames.arm_length_l;
+        bridged.landmarks = indep_frames.landmarks.clone();
+        bridged.head_bone = indep_frames.head_bone;
+        bridged.shoulder_joint_r = indep_frames.shoulder_joint_r;
+
+        let cand_tape = tape_readings(&faces, rest_h, &posed, &cand_frames).unwrap();
+        let indep_tape = independent_tape_readings_21(&model, &faces, rest_h, &posed, &bridged);
+        for idx in 0..N_TAPE {
+            let d = (cand_tape[idx] - indep_tape[idx].unwrap()).abs();
+            worst_tape_from_indep_frames_mm = worst_tape_from_indep_frames_mm.max(d);
+            assert!(d < 1e-6, "{label}.{}: {d:.3e} mm", TAPE_FIELDS[idx]);
+        }
+
+        // Quantify skeletal-vs-heuristic landmark offsets on the 35° drape pose:
+        // - `shoulder` heuristic (`upperarm01.R + 0.8 * r * arm.up`) vs `upperarm01.R` joint head
+        //   and `clavicle.R` head;
+        // - `chest` armpit heuristic vs `upperarm01.R` joint height;
+        // - `crotch` sagittal skin minimum vs `upperleg01.R` hip-joint height.
+        let b_z = |bname: &str| {
+            let bi = model.bone_index(bname).unwrap();
+            posed.bone_poses[bi].t.z * 1000.0 - cand_frames.floor_z
+        };
+        let sh_joint_z = b_z("upperarm01.R");
+        let hip_joint_z = b_z("upperleg01.R");
+        let shoulder_tip_dz = cand_frames.landmarks["shoulder"] - sh_joint_z;
+        let armpit_below_joint = sh_joint_z - cand_frames.landmarks["chest"];
+        let hip_joint_above_crotch = hip_joint_z - cand_frames.landmarks["crotch"];
+        eprintln!(
+            "[ftx-onn.16] {label:17} landmarks: shoulder_tip-joint={shoulder_tip_dz:+5.1} mm, joint-armpit={armpit_below_joint:5.1} mm, hip_joint-crotch={hip_joint_above_crotch:5.1} mm, r_arm={:4.1} mm",
+            cand_frames.upper_arm_radius
+        );
+        // Physical ordering invariants across every age/shape cohort:
+        assert!(cand_frames.landmarks["ankle"] < cand_frames.landmarks["calf"]);
+        assert!(cand_frames.landmarks["calf"] < cand_frames.landmarks["knee"]);
+        assert!(cand_frames.landmarks["knee"] < cand_frames.landmarks["crotch"]);
+        assert!(cand_frames.landmarks["crotch"] < cand_frames.landmarks["hip"]);
+        assert!(cand_frames.landmarks["hip"] < cand_frames.landmarks["waist"]);
+        assert!(cand_frames.landmarks["waist"] < cand_frames.landmarks["chest"]);
+        assert!(cand_frames.landmarks["chest"] < cand_frames.landmarks["across_back"]);
+        assert!(cand_frames.landmarks["across_back"] < cand_frames.landmarks["shoulder"]);
+        assert!(cand_frames.landmarks["shoulder"] < cand_frames.landmarks["head_top"]);
+        assert!(shoulder_tip_dz > 5.0 && shoulder_tip_dz < 90.0);
+        assert!(armpit_below_joint > 5.0 && armpit_below_joint < 260.0);
+        assert!(hip_joint_above_crotch > 15.0 && hip_joint_above_crotch < 160.0);
+    }
+
+    // Pose-domain sweep on 2.5y toddler: quantify how `BodyFrames` landmarks move from `drape_35`
+    // across `standing_50`, `arms_up_150`, `seated`, and `squat` (explaining why flat-to-3D wrap
+    // uses standing A-pose `35°`/`50°` and reaches `arms_up`/`seated`/`squat` by pose continuation).
+    let toddler_params = model.params(Phenotype {
+        gender: 1.0,
+        age: age_parameter_for_years(2.5),
+        ..Phenotype::default()
+    });
+    let toddler_rest = model.rest(&toddler_params).unwrap();
+    let drape_posed = model
+        .pose(
+            &toddler_rest,
+            &pose_deltas(&model, &toddler_rest, &Pose::drape(), 1.0).unwrap(),
+        )
+        .unwrap();
+    let base_bf = BodyFrames::new(&model, &drape_posed).unwrap();
+
+    let mut standing_50 = Pose::a_pose(50.0);
+    standing_50.straight_arms = true;
+    let mut arms_up = Pose::arms_up();
+    arms_up.straight_arms = true;
+    let mut seated = Pose::drape();
+    seated.legs = Legs::Seated;
+    let mut squat = Pose::drape();
+    squat.legs = Legs::Squat;
+
+    for (pname, pose) in [
+        ("standing_50", standing_50),
+        ("arms_up_150", arms_up),
+        ("seated_1.00", seated),
+        ("squat_1.00", squat),
+    ] {
+        let p_posed = model
+            .pose(
+                &toddler_rest,
+                &pose_deltas(&model, &toddler_rest, &pose, 1.0).unwrap(),
+            )
+            .unwrap();
+        let bf = BodyFrames::new(&model, &p_posed).unwrap();
+        let indep_bf = independent_body_frames(&model, &p_posed);
+        assert_body_frames_match_independent(&bf, &indep_bf, pname);
+        eprintln!(
+            "[ftx-onn.16] toddler_2_5y pose {pname:12} vs drape_35: Δchest={:+6.1} mm, Δshoulder={:+6.1} mm, Δwaist={:+6.1} mm, Δcrotch={:+6.1} mm",
+            bf.landmarks["chest"] - base_bf.landmarks["chest"],
+            bf.landmarks["shoulder"] - base_bf.landmarks["shoulder"],
+            bf.landmarks["waist"] - base_bf.landmarks["waist"],
+            bf.landmarks["crotch"] - base_bf.landmarks["crotch"],
+        );
+        if pname == "standing_50" {
+            // Standing 50° A-pose keeps waist/crotch virtually unchanged (< 1 mm), while abducting
+            // the arm from 35° to 50° moves lower `upperarm02` vertices outside `|shoulder.x| + r`
+            // and shifts the `chest` armpit heuristic upward (+27.0 mm on 2.5y toddler), proving
+            // why `tape_readings` / `fit_tape` is pinned to the 35° `Pose::drape()` reference pose.
+            assert!((bf.landmarks["waist"] - base_bf.landmarks["waist"]).abs() < 1.0);
+            assert!((bf.landmarks["crotch"] - base_bf.landmarks["crotch"]).abs() < 1.0);
+            let d_chest = bf.landmarks["chest"] - base_bf.landmarks["chest"];
+            assert!(
+                d_chest > 15.0 && d_chest < 35.0,
+                "standing_50 Δchest = {d_chest:.2} mm"
+            );
+        }
+        if pname == "arms_up_150" {
+            // Raising arms to 150° flips `arm.up.z` negative (origin -> elbow points downward when
+            // arm points up), dropping `shoulder_tip` below `chest`: direct wrap in 150° is outside
+            // the standing A-pose placement domain!
+            assert!(
+                bf.landmarks["shoulder"] < bf.landmarks["chest"],
+                "arms_up_150 inverts shoulder_tip vs armpit height, confirming pose-ramp domain boundary"
+            );
+        }
+    }
+
+    eprintln!(
+        "[ftx-onn.16] Independent BodyFrames max |Δ| = {worst_frame_mm:.3e} mm; end-to-end independent frames+tape max |Δ| = {worst_tape_from_indep_frames_mm:.3e} mm"
+    );
+}
+
+#[test]
+#[ignore = "requires local Anny 0.6.1 .ftxbody cache"]
+fn admitted_anny_held_out_girth_and_length_fit_tape_cross_validation() {
+    let path = default_model_path().expect("default_model_path");
+    let data = AnnyData::read(&path, true).expect("verified Anny 0.6.1 .ftxbody");
+    let model = AnnyModel::from_data(data).expect("AnnyModel");
+    let faces: Vec<[usize; 3]> = model
+        .data()
+        .faces
+        .iter()
+        .map(|f| f.map(|i| i as usize))
+        .collect();
+    let pose = Pose::drape();
+
+    // Three non-midpoint cohorts with authored local-change perturbations so held-out `MODEL_FIT`
+    // predictions cannot trivially coast on the `0.5 / 0.0` prior mean.
+    type HeldOutCase<'a> = (&'a str, f64, f64, [f64; 4], [(&'a str, f64); 4]);
+    let cases: [HeldOutCase<'_>; 3] = [
+        (
+            "toddler_2_5y_perturbed",
+            2.5,
+            1.0,
+            [0.42, 0.64, 0.55, 0.45],
+            [
+                ("measure-waist-circ-incr", 0.22),
+                ("measure-bust-circ-incr", 0.18),
+                ("measure-upperleg-height-incr", -0.15),
+                ("measure-upperarm-length-incr", 0.14),
+            ],
+        ),
+        (
+            "child_7y_perturbed",
+            7.0,
+            0.0,
+            [0.62, 0.38, 0.48, 0.58],
+            [
+                ("measure-waist-circ-incr", -0.18),
+                ("measure-hips-circ-incr", -0.16),
+                ("measure-upperleg-height-incr", 0.18),
+                ("measure-lowerleg-height-incr", 0.12),
+            ],
+        ),
+        (
+            "adult_30y_perturbed",
+            30.0,
+            1.0,
+            [0.58, 0.66, 0.46, 0.56],
+            [
+                ("measure-bust-circ-incr", 0.24),
+                ("measure-hips-circ-incr", 0.20),
+                ("measure-napetowaist-dist-incr", -0.14),
+                ("measure-upperarm-circ-incr", 0.16),
+            ],
+        ),
+    ];
+
+    let eval_fit = |fit_params: &ftx_body::BodyParams,
+                    truth: &[f64; N_TAPE],
+                    fitted_mask: &[bool; N_TAPE]|
+     -> (f64, f64, f64, f64) {
+        let r_rest = model.rest(fit_params).unwrap();
+        let r_h = model.anthropometry(&r_rest).height;
+        let r_posed = model
+            .pose(&r_rest, &pose_deltas(&model, &r_rest, &pose, 1.0).unwrap())
+            .unwrap();
+        let r_frames = BodyFrames::new(&model, &r_posed).unwrap();
+        let pred = tape_readings(&faces, r_h, &r_posed, &r_frames).unwrap();
+
+        let (mut fit_sq, mut fit_max, mut fit_n) = (0.0, 0.0_f64, 0usize);
+        let (mut ho_sq, mut ho_max, mut ho_n) = (0.0, 0.0_f64, 0usize);
+        for idx in 0..N_TAPE {
+            let err = (pred[idx] - truth[idx]).abs();
+            if fitted_mask[idx] {
+                fit_sq += err * err;
+                fit_max = fit_max.max(err);
+                fit_n += 1;
+            } else {
+                ho_sq += err * err;
+                ho_max = ho_max.max(err);
+                ho_n += 1;
+            }
+        }
+        (
+            (fit_sq / fit_n as f64).sqrt(),
+            fit_max,
+            (ho_sq / ho_n as f64).sqrt(),
+            ho_max,
+        )
+    };
+
+    for &(label, years, gender, ph, ref locals) in &cases {
+        let mut p = model.params(Phenotype {
+            gender,
+            age: age_parameter_for_years(years),
+            height: ph[0],
+            weight: ph[1],
+            muscle: ph[2],
+            proportions: ph[3],
+        });
+        for &(lname, val) in locals {
+            p.local_changes[model.local_change_index(lname).unwrap()] = val;
+        }
+        let rest = model.rest(&p).unwrap();
+        let height_m = model.anthropometry(&rest).height;
+        let mass_kg = model.anthropometry(&rest).mass;
+        let posed = model
+            .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+            .unwrap();
+        let frames = BodyFrames::new(&model, &posed).unwrap();
+        let truth = tape_readings(&faces, height_m, &posed, &frames).unwrap();
+
+        // Regime A: Fit girths + stature (12 targets), hold out all 9 non-stature lengths/heights.
+        let mut mask_a = [false; N_TAPE];
+        let mut targets_a = Vec::new();
+        for (idx, &name) in TAPE_FIELDS.iter().enumerate() {
+            if name == "stature" || is_girth(name) {
+                mask_a[idx] = true;
+                targets_a.push(TapeTarget {
+                    name: name.to_string(),
+                    value_mm: truth[idx],
+                    sigma_mm: None,
+                });
+            }
+        }
+        let fit_a = fit_tape(
+            &model,
+            &Wearer {
+                years,
+                gender,
+                stature_mm: truth[0],
+                weight_kg: None,
+            },
+            &targets_a,
+            &pose,
+        )
+        .unwrap();
+        let (a_fit_rmse, a_fit_max, a_ho_rmse, a_ho_max) = eval_fit(&fit_a.params, &truth, &mask_a);
+        assert!(
+            a_fit_max <= 3.0,
+            "{label} Regime A fitted girths+stature max {a_fit_max:.2} mm > 3.0 mm"
+        );
+        assert!(
+            a_ho_max <= 35.0,
+            "{label} Regime A held-out length max {a_ho_max:.2} mm exceeded bound"
+        );
+
+        // Regime B1 (without weight_kg) & B2 (with weight_kg): Fit lengths/heights + stature (10
+        // targets), hold out all 11 girths.
+        let mut mask_b = [false; N_TAPE];
+        let mut targets_b = Vec::new();
+        for (idx, &name) in TAPE_FIELDS.iter().enumerate() {
+            if !is_girth(name) {
+                mask_b[idx] = true;
+                targets_b.push(TapeTarget {
+                    name: name.to_string(),
+                    value_mm: truth[idx],
+                    sigma_mm: None,
+                });
+            }
+        }
+        let fit_b_no_wt = fit_tape(
+            &model,
+            &Wearer {
+                years,
+                gender,
+                stature_mm: truth[0],
+                weight_kg: None,
+            },
+            &targets_b,
+            &pose,
+        )
+        .unwrap();
+        let (b1_fit_rmse, b1_fit_max, b1_ho_rmse, b1_ho_max) =
+            eval_fit(&fit_b_no_wt.params, &truth, &mask_b);
+
+        let fit_b_wt = fit_tape(
+            &model,
+            &Wearer {
+                years,
+                gender,
+                stature_mm: truth[0],
+                weight_kg: Some(mass_kg),
+            },
+            &targets_b,
+            &pose,
+        )
+        .unwrap();
+        let (b2_fit_rmse, b2_fit_max, b2_ho_rmse, b2_ho_max) =
+            eval_fit(&fit_b_wt.params, &truth, &mask_b);
+        assert!(b1_fit_max <= 3.5 && b2_fit_max <= 3.5);
+        assert!(b1_ho_max <= 35.0 && b2_ho_max <= 30.0);
+        if label != "adult_30y_perturbed" {
+            // Where global `weight` drives girth variation, adding `weight_kg` cuts held-out girth
+            // `MODEL_FIT` RMSE roughly in half; when localized bust/hip/arm blendshapes dominate
+            // (`adult_30y_perturbed`), global `weight_kg` alone cannot disambiguate local girths.
+            assert!(
+                b2_ho_rmse < b1_ho_rmse,
+                "{label}: adding weight_kg must improve held-out girth MODEL_FIT RMSE ({b2_ho_rmse:.2} vs {b1_ho_rmse:.2} mm)"
+            );
+        }
+
+        // Regime C: Fit core trunk (`stature`, `chest`, `waist`, `hip`), hold out all 17 limb/head/length readings.
+        let mut mask_c = [false; N_TAPE];
+        let mut targets_c = Vec::new();
+        for (idx, &name) in TAPE_FIELDS.iter().enumerate() {
+            if matches!(name, "stature" | "chest" | "waist" | "hip") {
+                mask_c[idx] = true;
+                targets_c.push(TapeTarget {
+                    name: name.to_string(),
+                    value_mm: truth[idx],
+                    sigma_mm: None,
+                });
+            }
+        }
+        let fit_c = fit_tape(
+            &model,
+            &Wearer {
+                years,
+                gender,
+                stature_mm: truth[0],
+                weight_kg: None,
+            },
+            &targets_c,
+            &pose,
+        )
+        .unwrap();
+        let (c_fit_rmse, c_fit_max, c_ho_rmse, c_ho_max) = eval_fit(&fit_c.params, &truth, &mask_c);
+        assert!(c_fit_max <= 3.0);
+
+        eprintln!(
+            "[ftx-onn.16] {label:22} held-out CV:\n  A (fit girths -> hold out 9 lengths):  fit RMSE={a_fit_rmse:4.2} max={a_fit_max:4.2} mm | held-out MODEL_FIT RMSE={a_ho_rmse:5.2} max={a_ho_max:5.2} mm\n  B1(fit lengths -> hold out 11 girths): fit RMSE={b1_fit_rmse:4.2} max={b1_fit_max:4.2} mm | held-out MODEL_FIT RMSE={b1_ho_rmse:5.2} max={b1_ho_max:5.2} mm\n  B2(lengths+wt  -> hold out 11 girths): fit RMSE={b2_fit_rmse:4.2} max={b2_fit_max:4.2} mm | held-out MODEL_FIT RMSE={b2_ho_rmse:5.2} max={b2_ho_max:5.2} mm\n  C (core trunk  -> hold out 17 fields): fit RMSE={c_fit_rmse:4.2} max={c_fit_max:4.2} mm | held-out MODEL_FIT RMSE={c_ho_rmse:5.2} max={c_ho_max:5.2} mm"
+        );
+        let _ = (FREE, N_PHENOTYPE);
+    }
+
+    // Independent public-prior 920 mm / 30-month toddler size-chart cross-validation (not drawn
+    // from Anny): fit core trunk (`stature=920`, `chest=540`, `waist=510`, `hip=550`) and compare
+    // Anny's `MODEL_FIT` predictions against the external chart's held-out lengths/girths.
+    let chart_92: [(&str, f64); N_TAPE] = [
+        ("stature", 920.0),
+        ("chest", 540.0),
+        ("waist", 510.0),
+        ("hip", 550.0),
+        ("waist_height", 530.0),
+        ("crotch_height", 372.5),
+        ("thigh", 310.0),
+        ("knee", 225.0),
+        ("calf", 215.0),
+        ("ankle", 150.0),
+        ("upper_arm", 165.0),
+        ("wrist", 120.0),
+        ("arm_length", 310.0),
+        ("knee_height", 231.0),
+        ("back_neck_to_waist", 235.0),
+        ("neck_base", 255.0),
+        ("head", 495.0),
+        ("shoulder_length", 75.0),
+        ("across_back", 225.0),
+        ("total_crotch_length", 435.0),
+        ("outseam", 540.0),
+    ];
+    let chart_truth: [f64; N_TAPE] = std::array::from_fn(|i| chart_92[i].1);
+    let mut chart_mask = [false; N_TAPE];
+    let mut chart_targets = Vec::new();
+    for (idx, &(name, val)) in chart_92.iter().enumerate() {
+        if matches!(name, "stature" | "chest" | "waist" | "hip") {
+            chart_mask[idx] = true;
+            chart_targets.push(TapeTarget {
+                name: name.to_string(),
+                value_mm: val,
+                sigma_mm: None,
+            });
+        }
+    }
+    let chart_fit = fit_tape(
+        &model,
+        &Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 920.0,
+            weight_kg: None,
+        },
+        &chart_targets,
+        &pose,
+    )
+    .unwrap();
+    let (ch_fit_rmse, ch_fit_max, ch_ho_rmse, ch_ho_max) =
+        eval_fit(&chart_fit.params, &chart_truth, &chart_mask);
+    eprintln!(
+        "[ftx-onn.16] chart_92cm_public_prior (fit trunk -> hold out 17 chart fields): fit RMSE={ch_fit_rmse:4.2} max={ch_fit_max:4.2} mm | held-out vs chart RMSE={ch_ho_rmse:5.2} max={ch_ho_max:5.2} mm"
+    );
+    assert!(ch_fit_max <= 3.0);
+    // Held-out `MODEL_FIT` vs external size chart naturally shows tens-of-mm discrepancies (which
+    // is precisely why `MODEL_FIT` never satisfies `readiness` and synthetic 21-target recovery
+    // must never be conflated with held-out population accuracy!).
+    assert!(ch_ho_max > 10.0 && ch_ho_max < 80.0);
 }

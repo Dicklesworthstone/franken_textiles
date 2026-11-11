@@ -1083,6 +1083,21 @@ fn eligible_routes_replay_actual_cell_choices_yarn_and_studies_through_both_nati
                 report
             );
         }
+        if windowed && let Some(capture) = std::env::var_os("FTX_ELIGIBLE_ROUTING_REPLAY") {
+            let capture = std::path::PathBuf::from(capture);
+            fs::create_dir_all(&capture).unwrap();
+            for name in [
+                "pattern.json",
+                "options.json",
+                "program.json",
+                "selection.json",
+                "selection-report.json",
+                "study.json",
+                "study-report.json",
+            ] {
+                fs::copy(directory.join(name), capture.join(name)).unwrap();
+            }
+        }
         eprintln!(
             "eligible routing replay (windowed={windowed}): {}",
             directory.display()

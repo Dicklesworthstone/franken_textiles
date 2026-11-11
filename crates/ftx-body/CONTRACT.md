@@ -151,7 +151,14 @@ qualification, browser fold and fitted-study reports records selected roots, syn
 rest-to-posed volume change. Full measurement/display skin is retained. No hand,
 foot, facial-contact, anatomical or real-fit qualification follows from these caps. The positive
 and detailed-source negative are in `ftx-drape/tests/kat_fitted.rs`.
-`examples/posed_skins.rs` writes the poses as OBJ for a look.
+`examples/posed_skins.rs` writes the poses as OBJ for a look. On the admitted Anny 0.6.1 mesh
+(`tests/independent_tape_qualification.rs`), `clothing_skin` is strictly intersection-free (`0` crossing
+pairs, `|ΔV/V_rest| ≤ 1.59 %`) across `rest`, `drape` (`35°`), `standing` (`50°`), `arms_up` (`150°`),
+`seated` up to `leg_fraction = 0.50`, and `squat` up to `0.50` (`2.5 y` toddler) or `0.25` (`30 y`
+adult). Deeper LBS flexion (`adult` `squat 0.50`: `12` pairs, `−2.03 %`; `toddler`/`adult` `seated` and
+`squat` `0.75–1.00`: `82–286` hip/knee crease pairs and `−2.64 %` to `−7.03 %` enclosed-volume loss)
+triggers `lbs_volume_loss_advisory` beyond `3 %` and refuses direct contact-collider start admission
+(`IntersectingStart`).
 
 **Frames and landmarks** (`BodyFrames`, definitions in the `landmarks.rs` table). On the posed body, in
 mm: floor, waist (Anny's waist loop), crotch, chest (the armpit), across back, hip, knee, calf, ankle,
@@ -164,12 +171,29 @@ radius. Left leg placement uses its own hip-to-ankle axis, ankle/calf/knee level
 vertices; shared torso levels retain their original definitions. Generated mirrored pattern
 instances keep the reference's right-then-reflect convention. Independent synthetic asymmetric
 joints and regions are exercised through actual `BodyFrames::new`, placement, wrap and roll in
-the drape scene tests; these establish side selection and geometric arithmetic, not anatomical
-or empirical fit accuracy. On the 92 cm
-reference toddler fitted to stature only: waist 525 mm (taped 530), crotch 394 (372.5), knee 248 (231),
-chest 617 (the reference's formula on the tape gives 635); fitted to the tape, waist and crotch land on
-the taped heights. The armpit (lowest upper-arm vertex by the torso) and the shoulder tip (0.8 ×
-upper-arm radius along the arm) stay heuristics.
+the drape scene tests and `tests/independent_tape_qualification.rs` (zero-shared-code
+`IndependentBodyFrames` + Dan Sunday winding + Jarvis-march 2D hull + polyline path oracle: all 21
+analytic closed-form functionals within `1e-9 mm`, `BodyFrames` within `1.14e-13 mm`, and end-to-end
+6-cohort × 21-functional readings within `2.27e-13 mm` on admitted Anny 0.6.1); these establish side
+selection and geometric/numerical fidelity, not real-person anatomical or empirical fit accuracy. On
+the 92 cm reference toddler fitted to stature only: waist 525 mm (taped 530), crotch 394 (372.5), knee
+248 (231), chest 617 (the reference's formula on the tape gives 635); fitted to the tape, waist and
+crotch land on the taped heights. Across `0.5–35 y` on the `35°` measurement pose, the `shoulder`
+heuristic (`0.8 × r_arm` along `arm.up`) sits `+14.8` to `+42.7 mm` above `upperarm01.R`, while the
+`chest` armpit heuristic (lowest `upperarm01/02` vertex within `|shoulder.x| + r_arm`) sits `66.2` to
+`194.4 mm` below `upperarm01.R` (`85.0 mm` at `2.5 y`) and rises `+27.0 mm` when abducted from `35°`
+to `50°` (`±5 mm` landmark shifts move `2.5 y` toddler `chest` `−4.09/+3.85 mm`, `waist` `+5.82/−5.31 mm`,
+`knee` `−1.86/+1.39 mm`). Raising arms to `150°` inverts `shoulder` below `chest`, and `seated`/`squat`
+drop torso levels `235–290 mm`: direct flat-to-3D `BodyFrames` wrap is therefore bounded to standing
+A-poses (`35°`/`50°`), whereas `150°`/`seated`/`squat` must be reached by pose ramp or motion
+continuation, and `tape_readings`/`fit_tape` is pinned to `Pose::drape()` (`35°`). Held-out `fit_tape`
+cross-validation (`tests/independent_tape_qualification.rs`) reports synthetic 21-target recovery
+separately from unmeasured `MODEL_FIT` extrapolation: fitting girths+stature holds out 9 lengths at
+`4.23–6.87 mm` RMSE (`max 17.19 mm`); fitting lengths+stature holds out 11 girths at `7.35–10.20 mm`
+RMSE (`3.98–5.21 mm` with `weight_kg` when global `weight` dominates, `8.85 mm` under localized
+bust/hip/arm blendshapes); and fitting core trunk (`stature`/`chest`/`waist`/`hip`) against the external
+92 cm public-prior chart leaves `24.24 mm` held-out RMSE (`max 69.90 mm`), confirming why `MODEL_FIT`
+never satisfies measurement readiness.
 
 **Data.** `tools/body-model/convert_anny.py` builds the model from the pinned package into a fresh cache,
 checks the installed files against the wheel's RECORD and every array against spec 05 §8.1, and writes a

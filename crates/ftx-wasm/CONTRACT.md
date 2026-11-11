@@ -473,9 +473,10 @@ and the worker. Replaced imports invalidate dependent results and reject stale a
 The workbench uses the ordinary composed-pattern drape route; it does not append the native
 `Prepared::drape` runtime garment-ownership report or claim successful physical dressing or fit.
 
-**Timed strips and current-geometry vapor.** `materials::strip_history` and `thermal::vapor_surface`
-are file-free adapters to the shared production consumers, exported as `material_strip_history`
-and `thermal_vapor_surface`. The material workbench retains complete state/source reports and
+**Timed strips, cylindrical holders, and current-geometry vapor.** `materials::strip_history`,
+`materials::cylinder_experiment`, and `thermal::vapor_surface`
+are file-free adapters to the shared production consumers, exported as `material_strip_history`,
+`material_cylinder_experiment`, and `thermal_vapor_surface` (interface stamp `ftx-wasm-interface/2026-11-11.2`). The material workbench retains complete state/source reports and
 exact Rust-generated replay JSON. New request files withdraw their own previous results; material,
 fit and geometry changes also withdraw draped vapor outputs. Scenario displays retain independent
 initial and motion-endpoint vapor outcomes. These controls do not create fitted selections, replace

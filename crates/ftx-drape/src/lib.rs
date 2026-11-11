@@ -21,6 +21,7 @@ mod bvh;
 pub mod cloth;
 pub mod collider;
 pub mod contact;
+pub mod cylinder;
 pub mod distance;
 pub mod eigen;
 pub mod elements;

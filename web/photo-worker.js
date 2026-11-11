@@ -7,7 +7,7 @@ self.onmessage = async ({data: m}) => {
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
     if((typeof ftx.initSync==="function" || "wasm_interface_stamp" in ftx) &&
-        (typeof ftx.wasm_interface_stamp!=="function" || ftx.wasm_interface_stamp()!=="ftx-wasm-interface/2026-11-11.1")) {
+        (typeof ftx.wasm_interface_stamp!=="function" || ftx.wasm_interface_stamp()!=="ftx-wasm-interface/2026-11-11.2")) {
       throw Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
     }
     if(m.op==="body-fit-starts" || m.op==="body-fit-observations") {

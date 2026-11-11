@@ -23,7 +23,7 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
   const pkg = process.env.FTX_WASM_PKG ? path.resolve(process.env.FTX_WASM_PKG) : path.join(root, 'web/pkg');
   const ftx = await import(pathToFileURL(path.join(pkg, 'ftx_wasm.js')).href);
   ftx.initSync({module: fs.readFileSync(path.join(pkg, 'ftx_wasm_bg.wasm'))});
-  for (const name of ['material_strip_acquisition', 'material_strip_experiment', 'material_calibrate_strip']) {
+  for (const name of ['material_strip_acquisition', 'material_strip_experiment', 'material_cylinder_experiment', 'material_calibrate_strip']) {
     assert.equal(typeof ftx[name], 'function', `Rebuild web/pkg: missing ${name}`);
   }
   const sent = [];
@@ -213,7 +213,40 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
     assert.equal('files' in refusal, false);
   }
 
-  console.log('PASS: compiled WASM + actual worker/native equality for complete source acquisitions, scalar and nonlinear inverse identification, exact frozen selections, production forward replay and rejected held-out CHECK reports.');
+  const cylinderFixture = path.join(root, 'tests/fixtures/materials/synthetic-cylinder-experiment.json');
+  const cylinderRun = await compare('cylinder-experiment', 'cylinderExperiment', 'material_cylinder_experiment', 'cylinder-experiment', cylinderFixture);
+  assert.equal(cylinderRun.nativeReport.schema, 'ftx-cylinder-experiment-report/1');
+  assert.equal(cylinderRun.nativeReport.mechanics_readiness_promoted, false);
+  assert.equal(cylinderRun.nativeReport.fit_claim, false);
+  assert.equal(cylinderRun.nativeReport.empirical_validation_claim, false);
+  assert.equal(cylinderRun.nativeReport.protocol_audit.discrepancies.length, 4);
+  assert.equal(artifact(cylinderRun.message, 'cylinder-experiment-replay.json'), cylinderRun.nativeReport.replay_request_json);
+  assert.ok(cylinderRun.nativeReport.states.at(-1).maxwell_dissipation_j > 0);
+  const missingPretension = JSON.stringify({
+    schema: 'ftx-cylinder-experiment/1',
+    material: {id: 'fabric101-2026/l01'},
+    fixture: {holder_radius_m: 0.04, specimen_width_m: 0.26, specimen_height_m: 0.11, nominal_free_height_m: 0.05, warp_axis: [0, 1], cells: [12, 4]},
+    loading: [{time_s: 0, axial_displacement_m: 0, rotation_deg: 0}]
+  });
+  const missingPreReq = ++sequence;
+  await context.self.onmessage({data: {type: 'cylinderExperiment', request: missingPreReq, stripRequest: missingPretension}});
+  assert.equal(sent.at(-1).type, 'error');
+  assert.match(sent.at(-1).message, /pretension_displacement_m/);
+
+  const uncalibratedL01 = JSON.stringify({
+    schema: 'ftx-cylinder-experiment/1',
+    material: {id: 'fabric101-2026/l01'},
+    fixture: {holder_radius_m: 0.04, specimen_width_m: 0.26, specimen_height_m: 0.11, nominal_free_height_m: 0.05, pretension_displacement_m: 0.00114125, warp_axis: [0, 1], cells: [12, 4]},
+    loading: [{time_s: 0, axial_displacement_m: 0, rotation_deg: 0}]
+  });
+  const cylRefusalReq = ++sequence;
+  await context.self.onmessage({data: {type: 'cylinderExperiment', request: cylRefusalReq, stripRequest: uncalibratedL01}});
+  const cylRefusal = sent.at(-1);
+  assert.equal(cylRefusal.request, cylRefusalReq);
+  assert.equal(cylRefusal.type, 'error');
+  assert.match(cylRefusal.message, /warp_stiffness/);
+
+  console.log('PASS: compiled WASM + actual worker/native equality for complete source acquisitions, scalar and nonlinear inverse identification, exact frozen selections, production forward strip + cylindrical-holder replay and rejected held-out CHECK reports.');
   console.log('Original source channels and independent shape, observation and output estimate permissions are preserved. Browser navigation and empirical material or garment fit are not asserted.');
   console.log('Synthetic rejection inputs retained at:', work);
 })().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; });

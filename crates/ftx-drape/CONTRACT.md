@@ -1094,6 +1094,19 @@ reactions/work, continuous Maxwell ramp/hold refinement, mass-dependent dynamics
 are in `tests/strip_history.rs`. This is constrained planar dynamics, not buckling, parameter fitting,
 measured coupon qualification, inferred heat or actual garment fit.
 
+**Cylindrical-holder forward experiment** (`cylinder`, `ftx-tm2.1` software core). `ftx-cylinder-experiment/1`
+evaluates a characterized 3D sheet wrapped on an isometric chord-radius welded cylinder (`R_mesh` such that
+`n_theta` chords sum to `2π R`, facet apothem `R_mesh cos(π / n_theta)`) between rigid coaxial lower/upper
+holder rings. Actual holder separation is `L_0 + Δz_pre + axial_displacement_m - clamp_slip_m` (never
+`Δz / L_0`); history-bearing runs must start at pristine unstretched `L_0` and integrate pretension, twist,
+compression and stretch-slip explicitly via backward Euler. Axial compression below `L_0` requires sourced
+`bending_rigidity` or `BendingTensor`; `self_contact` requires unloaded `thickness` (refusing presser-foot
+`reported_thickness`). Every accepted step reports `[N]` axial forces, `[N·m]` axial torques, tare-corrected
+channels, interior/global linear and angular momentum residuals, stored/kinetic energies, Maxwell and
+membrane/panel-bending plastic dissipation, and `ProtocolAudit` discrepancies against optional nominal
+rates/travel. `mechanics_readiness_promoted`, `fit_claim`, and `empirical_validation_claim` remain `false`;
+inverse constitutive identification against external raw Fabric-101 curve archives remains open under `ftx-tm2.1`.
+
 **Material-frame strain consumer** (`study::strain`, `ftx-ds2`). Optional scenario `material_strain`
 requests raw `[E11, E22, 2E12]` on explicitly selected retained instances or the whole retained garment.
 The ordinary production membrane gradients and welded triangle ownership define material axes;

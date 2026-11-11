@@ -66,15 +66,28 @@ ftx report ws --json
 ```
 
 Fail-closed operator boundaries enforced by this route (covered end-to-end in
-`crates/ftx-cli/tests/video_decode_workflow.rs`):
+`crates/ftx-cli/tests/video_decode_workflow.rs` and offline Chromium suites
+`tools/check_photo_web.cjs`, `tools/check_capture_setup.cjs`, `tools/check_capture_review.cjs`,
+`tools/check_body_targets.cjs`, and `tools/check_body_starts.cjs`):
 - Unmasked `video-decode` manifests cannot enter `video-select` (exit `3`).
-- Blurred or occluded windows are rejected before `capture-init-review`; occluded predeclared
-  `CHECK` ChArUco corners or >3 px sheet-pose reprojection residuals refuse `capture-init` (exit `3`).
-- Mutating `accepted-calibration.json`, source frames, masks, or `.ftxbody` bytes after preparation
-  refuses downstream commands (exit `3`) without publishing partial outputs.
-- Weak-parallax / missing-scale observations return `UNOBSERVABLE` (exit `2`, `solution: null`), and
+- `still-window` stationary multi-view candidates return `STILL_CANDIDATE` (exit `0`, human review
+  still required), whereas excessive fit-landmark or held-out `CHECK` landmark motion jitter returns
+  `REJECTED` (exit `2`).
+- Blurred or occluded windows are rejected before `capture-init-review`; `<4` predeclared held-out
+  ChArUco corners refuse `capture-review` (exit `3`), and occluded predeclared `CHECK` ChArUco
+  corners or >3 px sheet-pose reprojection residuals refuse `capture-init` (exit `3`).
+- Mutating `accepted-calibration.json`, `observations.json` (after `fit-starts`), source frames in
+  `masked/` (after `capture-review`), masks, or `.ftxbody` bytes after preparation refuses downstream
+  commands (`fit-starts`, `fit-body`, `body`, `round` — exit `3`) without publishing stale or
+  partial outputs.
+- Occluded or shifted held-out `CHECK` landmarks reject `fit-body` (`REJECTED`, exit `2`,
+  `solution: null`) while leaving the fitted `shape` trajectory bit-for-bit identical (proving
+  held-out `CHECK` observations never enter the optimization objective); stripping all held-out
+  image observations emits an explicit `"No held-out image observations were supplied."` advisory.
+- Weak-parallax / missing-scale observations return `UNOBSERVABLE` (exit `2`, `solution: null`),
   converged multistarts exceeding `max_shape_spread_fraction` return `AMBIGUOUS` (exit `2`,
-  `solution: null`); `ftx body --body-fit` and `ftx round --body-fit` refuse both.
+  `solution: null`), and exhausting `--max-evaluations` returns `BUDGET_STOP` (exit `4`,
+  `solution: null`); `ftx body --body-fit` and `ftx round --body-fit` refuse all three.
 - Accepted body predictions carry `MODEL_FIT` provenance and never promote `round` readiness to
   `READY` (`MEASUREMENTS_NOT_READY` until required `MEASURED_TAPE` records are supplied).
 

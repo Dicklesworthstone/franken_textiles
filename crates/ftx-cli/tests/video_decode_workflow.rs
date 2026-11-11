@@ -903,6 +903,80 @@ fn run_operator_pipeline(dir: &Path, raw_manifest: &str, fx: &OperatorFixture) {
     }
     assert!(dir.join("capture-review/prepared-input.json").is_file());
 
+    // Step 11b: Multi-view still-window check verifies stationary candidate vs excessive fit/CHECK motion.
+    let still_request = |fit_jitter_m: f64, check_jitter_m: f64| -> Value {
+        let landmarks = [
+            ("shoulder_l", Vec3::new(-0.18, 0.0, 0.88), "fit"),
+            ("shoulder_r", Vec3::new(0.18, 0.0, 0.88), "fit"),
+            ("waist_c", Vec3::new(0.0, 0.0, 0.58), "fit"),
+            ("check_sternum", Vec3::new(0.0, 0.0, 0.96), "held_out"),
+        ];
+        let frames: Vec<_> = [-0.40_f64, -0.14, 0.14, 0.40]
+            .into_iter()
+            .enumerate()
+            .map(|(i, cam_x)| {
+                let mut view_cam = fx.camera;
+                view_cam.center_m = Vec3::new(cam_x, -2.0, 0.70);
+                let late = i >= 2;
+                let pts: Vec<_> = landmarks
+                    .iter()
+                    .map(|(name, pt, part)| {
+                        let dx = if late {
+                            if *part == "held_out" {
+                                check_jitter_m
+                            } else {
+                                fit_jitter_m
+                            }
+                        } else {
+                            0.0
+                        };
+                        json!({
+                            "name": name,
+                            "pixel_px": view_cam.project(*pt + Vec3::new(dx, 0.0, 0.0)).unwrap(),
+                            "partition": part,
+                        })
+                    })
+                    .collect();
+                json!({
+                    "frame": {"stream": "operator-camera", "timestamp_us": i as u64 * 50_000},
+                    "camera": view_cam,
+                    "landmarks": pts,
+                })
+            })
+            .collect();
+        json!({
+            "schema": "ftx-still-window-input/1",
+            "metric_scale_source": "stationary A4 ChArUco board calibrated via ftx measure calibrate-camera",
+            "observation_evidence": "reviewed synthetic landmarks with held-out CHECK partition",
+            "max_motion_mm": 5.0,
+            "frames": frames,
+        })
+    };
+    save(&dir.join("still-stationary.json"), &still_request(0.0, 0.0));
+    let still_ok = cli(
+        dir,
+        "still-window",
+        "still-stationary.json",
+        &["--out", "still-candidate.json"],
+        0,
+    )["result"]
+        .clone();
+    assert_eq!(still_ok["status"], "STILL_CANDIDATE");
+    assert!(
+        still_ok["no_claim"]
+            .as_str()
+            .unwrap()
+            .contains("Human review")
+    );
+    for (tag, fit_m, check_m) in [
+        ("still-fit-jitter.json", 0.012, 0.0),
+        ("still-check-jitter.json", 0.0, 0.012),
+    ] {
+        save(&dir.join(tag), &still_request(fit_m, check_m));
+        let rej = cli(dir, "still-window", tag, &[], 2)["result"].clone();
+        assert_eq!(rej["status"], "REJECTED", "{tag}: {rej}");
+    }
+
     let mut observed = read_json(&dir.join("capture-review/capture.json"));
     for (w_idx, frame) in observed["fit"]["frames"]
         .as_array_mut()
@@ -1144,6 +1218,171 @@ fn run_operator_pipeline(dir: &Path, raw_manifest: &str, fx: &OperatorFixture) {
     );
     assert!(!dir.join("ambiguous-body").exists());
 
+    // Negative control 4 (occluded CHECK keypoint & missing held-out isolation):
+    // 4a. Shifting held-out keypoint p24 by +35 px (simulating partial occlusion on a CHECK view)
+    // leaves FIT residuals low but fails the independent CHECK gate -> REJECTED (exit 2, solution: null).
+    let mut occluded_req = read_json(&dir.join("start-authored/input.json"));
+    let p24 = occluded_req["fit"]["frames"][0]["keypoints"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|kp| kp["name"] == "p24" && kp["partition"] == "held_out")
+        .expect("held_out p24 present");
+    p24["pixel_px"][0] = json!(p24["pixel_px"][0].as_f64().unwrap() + 35.0);
+    save(&dir.join("occluded-check.json"), &occluded_req);
+    let occluded_res = cli(
+        dir,
+        "fit-body",
+        "occluded-check.json",
+        &[
+            "--model",
+            "model.ftxbody",
+            "--out",
+            "occluded-check-report.json",
+        ],
+        2,
+    )["result"]
+        .clone();
+    assert_eq!(occluded_res["status"], "REJECTED", "{occluded_res}");
+    assert!(occluded_res["solution"].is_null());
+    ftx(
+        dir,
+        &[
+            "body",
+            "--body-fit",
+            "occluded-check-report.json",
+            "--model",
+            "model.ftxbody",
+            "--out",
+            "occluded-body",
+        ],
+        3,
+    );
+    assert!(!dir.join("occluded-body").exists());
+
+    // 4b. Held-out isolation & advisory:
+    // - Supplying fewer than 4 held-out ChArUco corners refuses capture-review before sheet pose acquisition (exit 3).
+    // - Stripping held_out image keypoints surfaces the explicit "No held-out image observations were supplied." advisory,
+    //   and comparing clean vs occluded-CHECK attempts proves held-out points never enter the fit objective.
+    let mut bad_board_input = read_json(&dir.join("target-authored/input.json"));
+    bad_board_input["fit"]["frames"][0]["reference"]["held_out_corner_ids"] = json!([0, 6, 35]);
+    save(&dir.join("bad-board-input.json"), &bad_board_input);
+    cli(
+        dir,
+        "capture-review",
+        "bad-board-input.json",
+        &["--out", "bad-board-review"],
+        3,
+    );
+    assert!(!dir.join("bad-board-review").exists());
+
+    let mut no_held_out = read_json(&dir.join("start-authored/input.json"));
+    for frame in no_held_out["fit"]["frames"].as_array_mut().unwrap() {
+        for kp in frame["keypoints"].as_array_mut().unwrap() {
+            kp["partition"] = json!("fit");
+        }
+    }
+    save(&dir.join("no-held-out.json"), &no_held_out);
+    let no_held_res = cli(
+        dir,
+        "fit-body",
+        "no-held-out.json",
+        &[
+            "--model",
+            "model.ftxbody",
+            "--out",
+            "no-held-out-report.json",
+        ],
+        0,
+    )["result"]
+        .clone();
+    assert!(
+        no_held_res["advisories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a.as_str() == Some("No held-out image observations were supplied.")),
+        "{no_held_res}"
+    );
+
+    // Negative control 5 (evaluation budget refusal): --max-evaluations 1 stops with BUDGET_STOP
+    // (exit 4, solution: null) and cannot be reused as an accepted body.
+    let budget_res = cli(
+        dir,
+        "fit-body",
+        "start-authored/input.json",
+        &[
+            "--model",
+            "model.ftxbody",
+            "--max-evaluations",
+            "1",
+            "--out",
+            "budget-evals-report.json",
+        ],
+        4,
+    )["result"]
+        .clone();
+    assert_eq!(budget_res["status"], "BUDGET_STOP", "{budget_res}");
+    assert!(budget_res["solution"].is_null());
+    ftx(
+        dir,
+        &[
+            "body",
+            "--body-fit",
+            "budget-evals-report.json",
+            "--model",
+            "model.ftxbody",
+            "--out",
+            "budget-body",
+        ],
+        3,
+    );
+    assert!(!dir.join("budget-body").exists());
+
+    // Negative control 6 (edited upstream review artifacts invalidate downstream reuse):
+    // 6a. Editing observations.json after starts-authored.json was bound refuses stale fit-starts.
+    let obs_path = dir.join("observations.json");
+    let obs_original = std::fs::read(&obs_path).unwrap();
+    let mut obs_edited = obs_original.clone();
+    obs_edited.push(b'\n');
+    std::fs::write(&obs_path, obs_edited).unwrap();
+    cli(
+        dir,
+        "fit-starts",
+        "starts-authored.json",
+        &["--model", "model.ftxbody", "--out", "stale-starts-out"],
+        3,
+    );
+    assert!(!dir.join("stale-starts-out").exists());
+    std::fs::write(&obs_path, &obs_original).unwrap();
+
+    // 6b. Mutating a selected frame image on disk after capture-review refuses fit-body before
+    // publishing any mesh or report.
+    let first_selected_img = {
+        let prep = read_json(&dir.join("start-authored/input.json"));
+        let rel = prep["fit"]["frames"][0]["source"]["image"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let p = Path::new(&rel);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            dir.join("masked").join(p)
+        }
+    };
+    let img_original = std::fs::read(&first_selected_img).unwrap();
+    std::fs::write(&first_selected_img, b"corrupted-after-review").unwrap();
+    cli(
+        dir,
+        "fit-body",
+        "start-authored/input.json",
+        &["--model", "model.ftxbody", "--mesh-out", "stale-frame-fit"],
+        3,
+    );
+    assert!(!dir.join("stale-frame-fit").exists());
+    std::fs::write(&first_selected_img, &img_original).unwrap();
+
     // Step 14: Accepted multi-frame body fit on the complete path-bound operator input.
     let accepted = cli(
         dir,
@@ -1154,6 +1393,16 @@ fn run_operator_pipeline(dir: &Path, raw_manifest: &str, fx: &OperatorFixture) {
     )["result"]
         .clone();
     assert_eq!(accepted["status"], "ACCEPTED", "{accepted}");
+    // Verify strict held-out isolation: corrupting held_out p24 by +35 px in occluded-check.json
+    // did not alter the FIT optimization objective or converged shape on either multi-start attempt.
+    for (occ_attempt, acc_attempt) in occluded_res["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(accepted["attempts"].as_array().unwrap().iter())
+    {
+        assert_eq!(occ_attempt["shape"], acc_attempt["shape"]);
+    }
     assert_eq!(
         accepted["solution"]["anny_parameters"]["provenance"],
         "MODEL_FIT"

@@ -41,10 +41,10 @@ fn call(dir: &Path, input: &Value, main: bool) -> Result<Value, Value> {
     if main {
         command.args(["--json", "materials"]);
     }
-    let operation = if input["schema"] == "ftx-strip-history/1" {
-        "strip-history"
-    } else {
-        "strip-experiment"
+    let operation = match input["schema"].as_str() {
+        Some("ftx-strip-history/1") => "strip-history",
+        Some("ftx-cylinder-experiment/1") => "cylinder-experiment",
+        _ => "strip-experiment",
     };
     let output = command.arg(operation).arg(&path).output().unwrap();
     assert_eq!(fs::read_to_string(path).unwrap(), original);
@@ -246,6 +246,92 @@ fn joint_memory_replays_through_both_native_commands_and_the_portable_boundary()
         assert_eq!(call(&dir, &replay, main).unwrap(), expected);
         assert_eq!(
             call(&dir, &unqualified, main).unwrap_err(),
+            serde_json::to_value(&refusal).unwrap()
+        );
+    }
+}
+
+#[test]
+fn cylinder_experiment_replays_through_both_native_commands_and_wasm_and_refuses_uncalibrated_fabric101()
+ {
+    let text = include_str!("../../../tests/fixtures/materials/synthetic-cylinder-experiment.json");
+    let input: Value = serde_json::from_str(text).unwrap();
+    let request: ftx_drape::cylinder::Request = serde_json::from_str(text).unwrap();
+    let direct = ftx_drape::cylinder::evaluate(&request).unwrap();
+    assert_eq!(
+        direct.input_sha256,
+        sha256_hex(direct.replay_request_json.as_bytes())
+    );
+    assert!(!direct.mechanics_readiness_promoted);
+    assert!(!direct.fit_claim);
+    assert!(!direct.empirical_validation_claim);
+    assert_eq!(direct.protocol_audit.discrepancies.len(), 4);
+    let last = direct.states.last().unwrap();
+    assert!(last.maxwell_dissipation_j > 0.0);
+    assert!(direct.first_slip_time_s.is_some());
+
+    let replay: Value = serde_json::from_str(&direct.replay_request_json).unwrap();
+    let expected = serde_json::to_value(&direct).unwrap();
+    for source in [&input, &replay] {
+        let portable: Value = serde_json::from_str(
+            &ftx_wasm::materials::cylinder_experiment(&source.to_string()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(portable, expected);
+    }
+
+    let missing_pretension = json!({
+        "schema": "ftx-cylinder-experiment/1",
+        "material": {"id": "fabric101-2026/l01"},
+        "fixture": {
+            "holder_radius_m": 0.04,
+            "specimen_width_m": 0.26,
+            "specimen_height_m": 0.11,
+            "nominal_free_height_m": 0.05,
+            "warp_axis": [0.0, 1.0],
+            "cells": [12, 4]
+        },
+        "loading": [{"time_s": 0.0, "axial_displacement_m": 0.0, "rotation_deg": 0.0}]
+    });
+    assert!(
+        ftx_wasm::materials::cylinder_experiment(&missing_pretension.to_string())
+            .unwrap_err()
+            .message
+            .contains("pretension_displacement_m")
+    );
+
+    let uncalibrated = json!({
+        "schema": "ftx-cylinder-experiment/1",
+        "material": {"id": "fabric101-2026/l01"},
+        "fixture": {
+            "holder_radius_m": 0.04,
+            "specimen_width_m": 0.26,
+            "specimen_height_m": 0.11,
+            "nominal_free_height_m": 0.05,
+            "pretension_displacement_m": 0.00114125,
+            "warp_axis": [0.0, 1.0],
+            "cells": [12, 4]
+        },
+        "loading": [{"time_s": 0.0, "axial_displacement_m": 0.0, "rotation_deg": 0.0}]
+    });
+    let l01_req: ftx_drape::cylinder::Request =
+        serde_json::from_value(uncalibrated.clone()).unwrap();
+    let refusal = ftx_drape::cylinder::evaluate(&l01_req).unwrap_err();
+    assert!(refusal.message.contains("warp_stiffness"));
+    assert_eq!(
+        serde_json::to_value(
+            ftx_wasm::materials::cylinder_experiment(&uncalibrated.to_string()).unwrap_err()
+        )
+        .unwrap(),
+        serde_json::to_value(&refusal).unwrap()
+    );
+
+    let dir = directory();
+    for main in [false, true] {
+        assert_eq!(call(&dir, &input, main).unwrap(), expected);
+        assert_eq!(call(&dir, &replay, main).unwrap(), expected);
+        assert_eq!(
+            call(&dir, &uncalibrated, main).unwrap_err(),
             serde_json::to_value(&refusal).unwrap()
         );
     }

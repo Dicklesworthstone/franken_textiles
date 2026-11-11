@@ -438,9 +438,9 @@ missing predictions unavailable. Current targets retain their original evidence 
 no tolerance, refit, uncertainty estimate or readiness promotion is introduced. Failed
 simulations expose no success/source links. Ordinary tape-fitting output is unchanged.
 
-**Timed strips and draped vapor.** Both native material entry points accept
-`strip-history REQUEST.json` and `thermal-vapor-surface SIM_REPORT.json CONDITIONS.json`.
-They delegate to the production history and canonical vapor surface consumers, enforcing the same
+**Timed strips, cylindrical holders, and draped vapor.** Both native material entry points accept
+`strip-history REQUEST.json`, `cylinder-experiment REQUEST.json`, and `thermal-vapor-surface SIM_REPORT.json CONDITIONS.json`.
+They delegate to the production strip/cylinder history and canonical vapor surface consumers, enforcing the same
 64 MiB input limit, source policies, physical/numerical refusals and exact frozen replay as the library.
-Strip reactions exclude imposed-node/hardware inertia; sheet vapor totals remain conditional
-independent-sheet potentials. See the existing strip and vapor documents for examples and scope.
+Strip and cylinder reactions exclude imposed-node/hardware inertia; sheet vapor totals remain conditional
+independent-sheet potentials. See `docs/fabric101-materials.md` and the strip and vapor documents for examples and scope.

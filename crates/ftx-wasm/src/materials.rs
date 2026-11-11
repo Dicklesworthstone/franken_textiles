@@ -496,6 +496,27 @@ pub fn material_strip_history(input: &str) -> Result<String, wasm_bindgen::JsErr
     strip_history(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Run the production 3D shell on coaxial cylindrical holders with explicit pretension, tare,
+/// twist, compression, and clamp-slip offset/limit auditing.
+///
+/// # Errors
+/// Input budget, source/domain, loading-program, time/iteration budget or solver refusals.
+pub fn cylinder_experiment(input: &str) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    serde_json::to_string(&ftx_drape::cylinder::evaluate(&input)?).map_err(invalid)
+}
+
+/// Browser cylindrical-holder forward experiment through the shared production 3D shell solver.
+///
+/// # Errors
+/// Same refusals as [`cylinder_experiment`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_cylinder_experiment(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    cylinder_experiment(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Identify a source-qualified recovery spectrum using the same timed histories as native code.
 /// Observation consent and admission of fitted estimates remain independent policies.
 ///
