@@ -3482,15 +3482,21 @@ test('routed specialist cells show actual operations, serialized garment transfe
     ownedDetail.open=true;ownedDetail.handlers.toggle();assert.match(visibleText(ownedDetail),/<qualified pickup, carry and deposit>/);
     // Native reservations remain authoritative in every view. The independent mover reserves
     // both cells during each handoff; immediate worker-owned pickup/deposit needs no timed slot.
-    for(const [owned,stagingReport] of [[false,plain(report)],[true,plain(ownedReport)]]) {
+    for(const [owned,perCell,stagingReport] of [[false,false,plain(report)],[true,false,plain(ownedReport)],
+      [false,true,plain(report)],[true,true,plain(ownedReport)]]) {
       const stagingPlan=op==='sew'?stagingReport.plan:op==='study'?stagingReport.alternatives[0].sewing.result:
         stagingReport.manufacturing.alternatives[0].sewing.result;
       const stagingRoute=stagingPlan.production.routing;
-      stagingPlan.schema='ftx-sewing-plan/26';stagingPlan.production.schema='ftx-sewing-production/14';
-      stagingRoute.schema='ftx-sewing-routing/9';
+      stagingPlan.schema=perCell?'ftx-sewing-plan/33':'ftx-sewing-plan/26';
+      stagingPlan.production.schema=perCell?'ftx-sewing-production/21':'ftx-sewing-production/14';
+      stagingRoute.schema=perCell?'ftx-sewing-routing/15':'ftx-sewing-routing/9';
       const stagingPolicy={model:'finite_unloaded_cell_buffers/1',source:{note:'<qualified staging source café 🧵>'},
         method:'Synthetic buffer replay; no measured factory performance',conditions:{scope:'<unloaded garments>'},
         evidence:'estimated',allow_estimates:true};
+      // The complete native map overrides the scalar fallback, including its inventory order.
+      // An absent or null map keeps the legacy uniform-capacity view.
+      const cellCapacities=perCell?{finish:2,straight:3}:null;
+      if(perCell)stagingPolicy.cell_capacities=cellCapacities;
       stagingPlan.options.production.routing.staging_capacity=1;
       stagingPlan.options.production.routing.bounded_staging=stagingPolicy;
       const reservations=owned?[]:[
@@ -3500,7 +3506,8 @@ test('routed specialist cells show actual operations, serialized garment transfe
         {copy:1,cell:'finish',operation:'1/reinforce',kind:'before_loading',start_milliseconds:9600,finish_milliseconds:10300}];
       const stagingTimeline={reservations,peak_reserved_slots:{straight:owned?0:1,finish:owned?0:1},
         final_reserved_slots:{straight:0,finish:0}};
-      stagingRoute.bounded_staging={schema:'ftx-sewing-routing-staging/1',policy:stagingPolicy,capacity:1,
+      stagingRoute.bounded_staging={schema:perCell?'ftx-sewing-routing-staging/3':'ftx-sewing-routing-staging/1',
+        policy:stagingPolicy,capacity:1,...(perCell?{cell_capacities:cellCapacities}:owned?{cell_capacities:null}:{}),
         entry_exit_protocol:'first_loading_entry_final_unloading_exit/1',
         handoff_reservations:owned?'source_until_pickup_destination_from_deposit/1':
           'source_until_handoff_finish_destination_from_handoff_start/1',
@@ -3508,13 +3515,17 @@ test('routed specialist cells show actual operations, serialized garment transfe
       const stagingRaw=' '+JSON.stringify(stagingReport)+'\n';
       await p.e[op].onclick();p.emit(stagingReport,[{name:'bounded-staging-report.json',text:stagingRaw,mime:'application/json'}]);
       assert.deepEqual(plain(table('finite unloaded-garment staging').children.slice(2).map(row=>row.children.map(n=>n.textContent))),
-        ['straight','finish'].map(cell=>[cell,'1',owned?'0':'1',owned?'0':'1','0','0']));
+        Object.keys(cellCapacities||stagingTimeline.peak_reserved_slots).map(cell=>
+          [cell,String(cellCapacities?.[cell]||1),owned?'0':'1',owned?'0':'1','0','0']));
       assert.deepEqual(plain(table('selected staging reservations').children.slice(2).map(row=>row.children.map(n=>n.textContent))),owned?[]:[
         ['straight','0','0/join','After unloading','5.3','6'],['finish','0','0/reinforce','Before loading','5.3','6'],
         ['straight','1','1/join','After unloading','9.6','10.3'],['finish','1','1/reinforce','Before loading','9.6','10.3']]);
       assert.match(visibleText(s),/first loading and leaves for external storage at its final unloading/);
       assert.match(visibleText(s),/No inbound or outbound transport time is inferred/);
-      assert.match(visibleText(s),/enforced at 1 garment slots per cell/);
+      if(perCell) {
+        assert.match(visibleText(s),/enforced at the per-cell capacities shown in the staging table/);
+        assert.doesNotMatch(visibleText(s),/enforced at 1 garment slots per cell/);
+      } else assert.match(visibleText(s),/enforced at 1 garment slots per cell/);
       assert.match(visibleText(s),/Physical staging access, factory performance, seam quality and hardware execution require separate qualification/);
       if(owned) {
         assert.match(visibleText(s),/release the source slot at pickup and reserve a destination slot from deposit/);

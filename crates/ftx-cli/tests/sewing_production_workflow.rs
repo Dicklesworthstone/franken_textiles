@@ -338,6 +338,80 @@ fn copy_deadlines_replay_exact_native_and_portable_plans_and_refusals() {
 }
 
 #[test]
+fn per_cell_staging_capacities_replay_complete_jobs_through_native_and_portable_commands() {
+    let directory = workspace();
+    let mut options = routed_specialist_options();
+    let route = &mut options["production"]["routing"];
+    route["cells"][0]["available_until_milliseconds"] = json!(9600);
+    route["transfer"]["available_at_milliseconds"] = json!(20000);
+    route["staging_capacity"] = json!(1);
+    route["bounded_staging"] = json!({
+        "model":"finite_unloaded_cell_buffers/1",
+        "cell_capacities":{"cell-a":2,"cell-b":1},
+        "source":{"reference":"test:portable-per-cell-buffers","accessed_on":"2026-11-11",
+            "note":"Invented finite storage and arrival boundaries; no measured factory claim"},
+        "method":"Two source slots and one destination slot with first-load entry and final-unload exit; independent handoffs reserve both cells throughout movement",
+        "conditions":{},"evidence":"estimate","allow_estimates":true
+    });
+    refresh_routed_locks(&mut options);
+    let text = options.to_string();
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap());
+    let plan = &program["plan"];
+    let routing = &plan["production"]["routing"];
+    let slots = &routing["bounded_staging"];
+    assert_eq!(plan["schema"], "ftx-sewing-plan/33");
+    assert_eq!(slots["schema"], "ftx-sewing-routing-staging/3");
+    assert_eq!(slots["cell_capacities"], json!({"cell-a":2,"cell-b":1}));
+    assert_eq!(
+        slots["selected"]["peak_reserved_slots"],
+        json!({"cell-a":2,"cell-b":1})
+    );
+    assert_eq!(
+        slots["selected"]["final_reserved_slots"],
+        json!({"cell-a":0,"cell-b":0})
+    );
+    assert_eq!(
+        routing["selected"]["operations"].as_array().unwrap().len(),
+        4
+    );
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 120);
+    let replay = plan["options"].to_string();
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &replay).unwrap()),
+        *plan
+    );
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &replay).unwrap()),
+        program
+    );
+    for (name, content) in [
+        ("pattern.json", PATTERN),
+        ("options.json", text.as_str()),
+        ("replay.json", replay.as_str()),
+    ] {
+        fs::write(directory.join(name), content).unwrap();
+    }
+    for main in [false, true] {
+        assert_eq!(
+            run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+            *plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "replay.json"
+            ),
+            program
+        );
+    }
+    options["production"]["routing"]["bounded_staging"]["cell_capacities"] = json!({"cell-a":2});
+    assert!(ftx_wasm::manufacturing::sew_plan(PATTERN, &options.to_string()).is_err());
+}
+
+#[test]
 fn qualified_carrier_pools_replay_actual_stitches_and_material_studies_through_both_commands() {
     let directory = workspace();
     let mut options = routed_specialist_options();

@@ -20,7 +20,12 @@ pub struct Policy {
     /// `finite_unloaded_cell_buffers/1`; external input delivery and finished storage are outside
     /// the modeled boundary. Existing loading/unloading still cover every admitted operation.
     pub model: String,
-    /// Evidence for uniform capacity, the entry/exit boundary and the handoff reservation protocol.
+    /// Optional exact capacity for every configured physical cell, including unused alternatives.
+    /// Each value is independently covered by this policy's source and must be 1..4096. Omission
+    /// retains the route's uniform `staging_capacity`; an explicit map never borrows missing rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_capacities: Option<BTreeMap<String, usize>>,
+    /// Evidence for every declared capacity, the entry/exit boundary and the handoff protocol.
     pub source: Source,
     /// Qualification method; no unmeasured transport or blocked unloading duration is inferred.
     pub method: String,
@@ -65,12 +70,17 @@ pub struct Timeline {
 /// Explicit capacity and independent baseline/selected reservation evidence.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` one shared handoff boundary law; `/2` each selected carrier's qualified phase law.
+    /// `/1` one shared handoff boundary law; `/2` each selected carrier's qualified phase law;
+    /// `/3` independently declared capacities for every configured cell.
     pub schema: &'static str,
     /// Exact admitted capacity/boundary qualification.
     pub policy: Policy,
-    /// Uniform finite slot limit at each physical cell.
+    /// Authored uniform fallback, used only when `cell_capacities` is absent.
     pub capacity: usize,
+    /// Effective independently qualified limits, when explicitly supplied. These replace the
+    /// uniform fallback at every cell in both search construction and independent reservation replay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_capacities: Option<BTreeMap<String, usize>>,
     /// First loading enters the system; final unloading exits to external finished storage.
     pub entry_exit_protocol: &'static str,
     /// Exact owned pickup/deposit, or conservative full independent-mover reservations.
@@ -111,6 +121,7 @@ pub(super) enum Alignment {
 pub(super) struct Compiled {
     policy: Policy,
     capacity: usize,
+    capacities: Vec<usize>,
     cells: Vec<String>,
     route: Vec<RouteStep>,
     handoffs: BTreeMap<Option<String>, (Vec<Handoff>, bool)>,
@@ -132,9 +143,31 @@ impl Compiled {
         if policy.evidence == Evidence::Estimate && !policy.allow_estimates {
             return Err(bad("estimated staging needs its own explicit consent"));
         }
+        if let Some(capacities) = &policy.cell_capacities
+            && (capacities.len() != route.cells.len()
+                || route.cells.iter().any(|cell| {
+                    capacities
+                        .get(&cell.id)
+                        .is_none_or(|capacity| !(1..=4096).contains(capacity))
+                }))
+        {
+            return Err(bad(
+                "per-cell staging capacities must name every configured cell exactly once with a qualified limit in 1..4096",
+            ));
+        }
         Ok(Some(Self {
             policy: policy.clone(),
             capacity: route.staging_capacity,
+            capacities: route
+                .cells
+                .iter()
+                .map(|cell| {
+                    policy
+                        .cell_capacities
+                        .as_ref()
+                        .map_or(route.staging_capacity, |capacities| capacities[&cell.id])
+                })
+                .collect(),
             cells: route.cells.iter().map(|cell| cell.id.clone()).collect(),
             route: route.route.clone(),
             handoffs: route
@@ -286,6 +319,7 @@ impl Compiled {
         holds: &[Reservation],
         cell: usize,
     ) -> Result<Vec<(u64, Option<u64>)>, Refusal> {
+        let capacity = self.capacities[cell];
         let mut events = Vec::with_capacity(2 * holds.len());
         for hold in holds {
             if hold.start > MAX_EXACT_MILLISECONDS
@@ -311,20 +345,18 @@ impl Compiled {
         let mut previous = 0;
         let mut saturated = Vec::new();
         for (time, acquire) in events {
-            if previous < time && occupied == self.capacity {
+            if previous < time && occupied == capacity {
                 saturated.push((previous, Some(time)));
             }
             occupied = if acquire {
-                occupied
-                    .checked_add(1)
-                    .filter(|&next| next <= self.capacity)
+                occupied.checked_add(1).filter(|&next| next <= capacity)
             } else {
                 occupied.checked_sub(1)
             }
             .ok_or_else(|| bad("finite staging prefix violates its cell capacity"))?;
             previous = time;
         }
-        if occupied == self.capacity {
+        if occupied == capacity {
             saturated.push((previous, None));
         }
         Ok(saturated)
@@ -458,9 +490,14 @@ impl Compiled {
         events.sort_unstable();
         for (_, acquire, index) in events {
             let cell = &reservations[index].cell;
+            let capacity = self
+                .policy
+                .cell_capacities
+                .as_ref()
+                .map_or(self.capacity, |capacities| capacities[cell]);
             let held = occupied.get_mut(cell).expect("admitted staging cell");
             *held = if acquire {
-                held.checked_add(1).filter(|&next| next <= self.capacity)
+                held.checked_add(1).filter(|&next| next <= capacity)
             } else {
                 held.checked_sub(1)
             }
@@ -484,13 +521,16 @@ impl Compiled {
         selected: &RouteTimeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: if self.qualified_pool {
+            schema: if self.policy.cell_capacities.is_some() {
+                "ftx-sewing-routing-staging/3"
+            } else if self.qualified_pool {
                 "ftx-sewing-routing-staging/2"
             } else {
                 "ftx-sewing-routing-staging/1"
             },
             policy: self.policy.clone(),
             capacity: self.capacity,
+            cell_capacities: self.policy.cell_capacities.clone(),
             entry_exit_protocol: "first_loading_entry_final_unloading_exit/1",
             handoff_reservations: if self.qualified_pool {
                 "selected_carrier_source_boundaries/1"

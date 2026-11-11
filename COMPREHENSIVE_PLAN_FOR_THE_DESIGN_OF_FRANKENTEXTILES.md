@@ -5553,6 +5553,12 @@ cover intermediate output, incoming waits and actual selected cells. Independent
 both cell slots through their complete qualified handoff, while worker-owned transfers use their
 explicit pickup/deposit boundaries.
 
+An optional complete `bounded_staging.cell_capacities` map gives each configured physical cell
+its own qualified slot limit, including unused eligible alternatives. Search and independent replay
+use those limits without borrowing the uniform fallback or another cell's inventory. Original
+omitted/null requests retain uniform behavior; reports and all three browser views expose the
+effective limits, and material comparisons bind even unused capacity assumptions (`ftx-pb2.2.18`).
+
 Buffer delays recheck complete operation, fixture, worker, transfer and calendar constraints.
 Bounded dispatch retains complete incumbents and independently reconstructs capacity histories;
 undispatched releases remain conservative open tails. This advances `ftx-pb2.2` without claiming

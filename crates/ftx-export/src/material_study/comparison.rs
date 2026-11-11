@@ -2423,10 +2423,16 @@ impl Policy {
                     .production
                     .as_ref()
                     .and_then(|production| production.routing.as_ref())
-                    .is_some_and(|routing| routing.copy_windows.is_some()))
+                    .is_some_and(|routing| {
+                        routing.copy_windows.is_some()
+                            || routing
+                                .bounded_staging
+                                .as_ref()
+                                .is_some_and(|staging| staging.cell_capacities.is_some())
+                    }))
         {
-            // Arrival/deadline/calendar constraints and the complete candidate domain determine
-            // which usable recipe supplies these readings, including fixed feed/yarn objectives.
+            // Arrival/deadline/calendar and explicit cell-buffer constraints qualify the complete
+            // candidate domain, including decisions that request only fixed feed/yarn objectives.
             base = hash(&(
                 base,
                 ("deadline_constrained_sewing_selection", &selection.request),
@@ -2453,11 +2459,17 @@ impl Policy {
                 .and_then(|production| production.routing.as_ref())
                 .is_some_and(crate::sewing::production::routing::Policy::eligible)
                 || selection.request.route_candidates.iter().any(|candidate| {
-                    candidate.routing.eligible() || candidate.routing.copy_windows.is_some()
+                    candidate.routing.eligible()
+                        || candidate.routing.copy_windows.is_some()
+                        || candidate
+                            .routing
+                            .bounded_staging
+                            .as_ref()
+                            .is_some_and(|staging| staging.cell_capacities.is_some())
                 }))
         {
-            // The winner may be unconstrained even though an eligible or copy-window route was
-            // searched. Retain arrivals/deadlines and their qualification on unused candidates too.
+            // The winner may be unconstrained even though an eligible, copy-window or per-cell
+            // buffer route was searched. Retain qualification on unused candidates too.
             // Preserve every outer candidate, recipe and work cap that determined that decision.
             base = hash(&(base, ("eligible_route_selection", &selection.request)))?;
         }
@@ -2474,7 +2486,12 @@ impl Policy {
                             .as_ref()
                             .and_then(|production| production.routing.as_ref())
                             .is_some_and(|routing| {
-                                routing.eligible() || routing.copy_windows.is_some()
+                                routing.eligible()
+                                    || routing.copy_windows.is_some()
+                                    || routing
+                                        .bounded_staging
+                                        .as_ref()
+                                        .is_some_and(|staging| staging.cell_capacities.is_some())
                             })
                 }))
         {
@@ -2487,8 +2504,8 @@ impl Policy {
             })?;
             // Resource independence, availability, time resolution and every cell's source-bound
             // timing/fixture policy define this experiment, independent of textile protocol consent.
-            // Eligible routes optimize makespan before reporting feed/yarn. Copy windows constrain
-            // the admitted dispatch even on fixed routes. Both domains qualify every consumed plan,
+            // Eligible routes optimize makespan before reporting feed/yarn. Copy windows and explicit
+            // cell capacities constrain fixed routes too. These domains qualify every consumed plan,
             // including comparisons that request only feed or thread quantities. Parallel resource
             // calendars likewise change which complete assignment supplies those quantities.
             if let Some(routing) = &production.routing {

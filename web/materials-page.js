@@ -3120,8 +3120,10 @@ function sewingRoutedStaging(parent, routing, label) {
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const capacity = table(parent, `${label}: finite unloaded-garment staging`,
     ["Cell", "Capacity (garment slots)", "Baseline peak", "Selected peak", "Baseline final", "Selected final"]);
-  for (const [cell, peak] of Object.entries(report.selected?.peak_reserved_slots || {})) cells(capacity, [cell,
-    metric(report.capacity), metric(report.baseline?.peak_reserved_slots?.[cell]), metric(peak),
+  const capacities = report.cell_capacities || Object.fromEntries(
+    Object.keys(report.selected?.peak_reserved_slots || {}).map(cell => [cell, report.capacity]));
+  for (const [cell, slots] of Object.entries(capacities)) cells(capacity, [cell,
+    metric(slots), metric(report.baseline?.peak_reserved_slots?.[cell]), metric(report.selected?.peak_reserved_slots?.[cell]),
     metric(report.baseline?.final_reserved_slots?.[cell]), metric(report.selected?.final_reserved_slots?.[cell])]);
   const reservations = table(parent, `${label}: selected staging reservations`,
     ["Cell", "Garment copy", "Operation", "Reservation", "Reserved from (s)", "Available again (s)"]);
@@ -3391,7 +3393,8 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
       "empty approach uses the worker's travel qualification. " :
       report.transfer_pool ? "The declared independent transfer pool permits concurrent unloaded garment handoffs on different qualified resources. " :
         "One separately qualified transfer resource serializes unloaded garment handoffs; its source duration includes positioning, pickup, movement and deposit. ") +
-    (report.bounded_staging ? `Finite unloaded staging is enforced at ${metric(report.bounded_staging.capacity)} garment slots per cell. ` :
+    (report.bounded_staging?.cell_capacities ? "Finite unloaded staging is enforced at the per-cell capacities shown in the staging table. " :
+      report.bounded_staging ? `Finite unloaded staging is enforced at ${metric(report.bounded_staging.capacity)} garment slots per cell. ` :
       `Qualified staging has ${metric(policy?.staging_capacity)} garment slots. `) +
     "Stitch geometry and thread demand come from the actual assigned cell. Elapsed completion is distinct from summed machine and transfer work. " +
     "The proof covers the supplied route and dispatch model; it does not establish unrestricted factory optimality, measured seam quality or hardware authorization.";

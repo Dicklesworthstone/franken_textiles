@@ -1078,6 +1078,32 @@ smaller than the garment batch, but must be in `1..=4096`. The new policy requir
 `source`, `method`, optional `conditions`, `evidence`, and separate `allow_estimates` consent.
 Omission preserves the original complete-batch admission, schemas and timing arithmetic.
 
+For cells with different qualified storage, supply `bounded_staging.cell_capacities` as a
+complete map from configured cell ID to its own positive slot limit. The same source, method,
+conditioning and estimate consent must qualify every declared value and the reservation protocol.
+Every configured cell, including unused eligible alternatives, must appear exactly once; unknown,
+missing, zero or greater-than-4096 capacities refuse. For example:
+
+```json
+"cell_capacities": {"cell-a": 2, "cell-b": 1}
+```
+
+This map replaces the uniform fallback at every cell. The original `staging_capacity` remains a
+required valid fallback but supplies no additional inventory when an explicit map is present.
+Omission or `null` retains the original uniform behavior and serialized output. Both the bounded
+search and independent timeline sweep use the actual selected cell's limit, so a larger source
+buffer cannot lend its spare slots to the destination. No new transfer capacity or storage outside
+the declared first-loading/final-unloading boundary is inferred.
+
+Explicit per-cell limits use plan `/33`, production `/21`, routing `/15` and nested staging `/3`.
+The nested report's `cell_capacities` is the effective complete map; its `capacity` field records
+only the authored uniform fallback. Exact requests, source protocols, selected stitches and
+material-study comparisons retain the complete map even when some extra capacity is unused.
+In the synthetic two-copy regression, a joining cell closing at 9600 ms needs two slots while the
+independent carrier is unavailable until 20000 ms. A one-slot finishing buffer remains sufficient:
+the complete job finishes at 25800 ms, with independently replayed peaks of two and one. These
+declared software times and capacities do not establish measured factory storage or throughput.
+
 The policy qualifies a different modeled boundary: each copy enters directly at its first actual
 cell's loading start and leaves at its final unloading finish. External input queues, delivery and
 finished-output storage are outside these buffers. Their transport or handling costs are not
