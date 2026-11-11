@@ -1497,6 +1497,23 @@ const server = http.createServer((req, res) => {
     assert.notEqual(opticalResults[0].request_sha256,opticalResults[1].request_sha256);
     delete opticalStack.layers[0].record.optical_faces;
     assert.match((await browserSteady(opticalStack)).error,/no source-sheet optical face mapping/);
+    // Actual Chromium UI + worker + native equality for cylindrical-holder forward experiment and L01 refusal.
+    await page.locator('summary',{hasText:'Clamped-strip acquisitions and inverse identification'}).click();
+    await page.setInputFiles('#cylinderExperimentRequest',fixture('synthetic-cylinder-experiment.json'));
+    assert.equal(await run('cylinderExperiment'),'');
+    const cylReport = JSON.parse(await download('cylinder-experiment-report.json'));
+    const expectedCyl = JSON.parse(invoke('cylinder-experiment',fixture('synthetic-cylinder-experiment.json')));
+    assert.deepEqual(cylReport,expectedCyl);
+    assert.equal(await download('cylinder-experiment-input.json'),fs.readFileSync(fixture('synthetic-cylinder-experiment.json'),'utf8'));
+    assert.equal(await download('cylinder-experiment-replay.json'),cylReport.replay_request_json);
+    assert.match(await page.locator('#outputs').textContent(),/Cylindrical-holder reactions and energy history/);
+    assert.match(await page.locator('#outputs').textContent(),/Protocol discrepancies/);
+    const cylUncal = load('synthetic-cylinder-experiment.json');
+    cylUncal.material = {id:'fabric101-2026/l01'};
+    await input('cylinderExperimentRequest',cylUncal);
+    assert.equal(await page.locator('a[download="cylinder-experiment-report.json"]').count(),0);
+    assert.match(await run('cylinderExperiment'),/mechanical|uncalibrated|bending|stiffness/i);
+    assert.equal(await page.locator('a[download="cylinder-experiment-report.json"]').count(),0);
     const badModel = await worker({type:'fold',bytes:new ArrayBuffer(8),pattern:JSON.stringify(bound),fit:'{}',measurements:'{}',selfContactMm:2});
     assert.equal(badModel.type,'error');
     await page.setInputFiles('#patternFile',{name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{')});

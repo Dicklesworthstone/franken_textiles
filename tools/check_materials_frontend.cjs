@@ -14982,6 +14982,30 @@ test('timed strip page keeps prior material assignment and invalidates only its 
   p.e.stripHistoryRequest.handlers.change(); assert.equal(s.hidden,true);
 });
 
+test('cylindrical-holder page renders reaction force/torque, protocol discrepancies, and withdraws on input change', async () => {
+  const p=await pageModule(); await p.load(); await p.inspect('source-material');
+  const selection=p.e.selection.value, input='{"schema":"ftx-cylinder-experiment/1","value":-0.0}';
+  p.select('cylinderExperimentRequest',input); p.e.cylinderExperimentRequest.handlers.change();
+  await p.e.cylinderExperiment.onclick();
+  assert.equal(p.current().messages.at(-1).type,'cylinderExperiment');
+  assert.equal(p.current().messages.at(-1).stripRequest,input);
+  p.emit({schema:'ftx-cylinder-experiment-report/1',input_sha256:'cyl-sha',active_gauge_mass_kg:0.002,
+    newton_iterations:12,mechanics_readiness_promoted:false,model_scope:'synthetic cylinder scope',
+    protocol_audit:{wrapped_circumference_m:0.251,seam_overlap_width_m:0.009,mounted_free_height_m:0.055,
+      discrepancies:['twist rate 0.095 deg/s vs nominal 0.100 deg/s']},
+    input:{material:{id:'test'}},states:[{time_s:2,axial_displacement_m:-0.005,true_axial_extension_fraction:0.0,
+      rotation_deg:15,tare_adjusted_force_n:1.25,tare_adjusted_torque_nm:0.042,mid_radius_range_m:[0.039,0.041,0.04],
+      momentum_balance_residual_n:1e-10,stored_membrane_energy_j:0.015,stored_bending_energy_j:0.0004}]});
+  const s=section(p,'Cylindrical-holder forward experiment');
+  assert.match(visibleText(s),/Protocol discrepancies \(1\)/);
+  assert.match(visibleText(s),/Tare torque/);
+  const t=descendants(s).find(n=>n.tag==='table');
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+    ['2','-0.005','0','15','1.25','0.042','0.04','1e-10','0.015','0.0004']);
+  assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
+  p.e.cylinderExperimentRequest.handlers.change(); assert.equal(s.hidden,true);
+});
+
 test('drape vapor page uses retained original JSON and withdraws stale geometry results', async () => {
   const p=await pageModule(); await p.load(); await p.bind();
   for (const id of ['measurements','fit','body','vaporSurfaceConditions']) p.select(id);

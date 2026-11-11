@@ -11,7 +11,7 @@ const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew", "sewPreview"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "linearizeOrigin", "treatment", "vapor", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode", "bodyCheck"];
+  "stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode", "bodyCheck"];
 const selectionOperations = ["inspect", "pressure", "linearizeOrigin", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
@@ -207,7 +207,7 @@ for (const op of operations) {
     treatment: "Laundering and dimensional treatment", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
     thermalPoint: "Material at the stated temperature", thermalHistory: "Dry heating and cooling history",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
-    stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
+    stripHistory: "Strip loading and recovery", cylinderExperiment: "Cylindrical-holder forward experiment", vaporSurface: "Vapor transfer on this drape",
     stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", cutJob: "Complete mixed cutting job",
     stockIdentities: "Exact physical-stock identities", stockPrice: "Whole-item finite-stock prices", sewPreview: "Sewing operation preview",
     garmentcode: "Imported GarmentCode pattern — review required", bodyCheck: "Body target comparison" })[op] || op;
@@ -487,7 +487,7 @@ function controls() {
   $("calibrate").disabled ||= !has("calibrationRequest");
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
-  for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
+  for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
   const studyReady = guided ? studyCandidates.length > 0 && (!$("guidedDesign").checked || has("fit")) : has("studyRequest");
   const combinationsReady = guided || !$("combinationMode").checked || combinationGroups.size > 0;
   const studyInputsReady = !!source && studyReady && combinationsReady &&
@@ -4265,6 +4265,31 @@ function stripHistoryResult(parent, r) {
     model_scope: r.model_scope,
     next: "Download the original request, complete report and exact frozen replay below." };
 }
+function cylinderExperimentResult(parent, r) {
+  const note = document.createElement("p");
+  note.textContent = "A source-qualified fabric specimen wraps around rigid cylindrical holders with explicit pretension offset, " +
+    "tare subtraction and timestamped twist, compression or stretch-slip waypoints. Forward cylinder simulation audits protocol " +
+    "discrepancies and never promotes uncalibrated specimens to garment mechanics readiness.";
+  parent.append(note);
+  if (r.protocol_audit?.discrepancies?.length) {
+    const warn = document.createElement("p");
+    warn.textContent = `Protocol discrepancies (${r.protocol_audit.discrepancies.length}): ${r.protocol_audit.discrepancies.join("; ")}`;
+    parent.append(warn);
+  }
+  const states = table(parent, "Cylindrical-holder reactions and energy history", ["Time (s)", "Axial travel (m)",
+    "True axial ext.", "Twist (deg)", "Tare force (N)", "Tare torque (N·m)", "Mean mid-radius (m)",
+    "Momentum residual (N)", "Stored membrane (J)", "Stored bending (J)"]);
+  for (const state of r.states) cells(states, [state.time_s, state.axial_displacement_m, state.true_axial_extension_fraction,
+    state.rotation_deg, state.tare_adjusted_force_n, state.tare_adjusted_torque_nm, state.mid_radius_range_m?.[2],
+    state.momentum_balance_residual_n, state.stored_membrane_energy_j, state.stored_bending_energy_j].map(metric));
+  detail(parent, "Protocol audit, pretension and timestamp rates", r.protocol_audit);
+  detail(parent, "Frozen material, cylindrical holder and loading program", r.input);
+  return { schema: r.schema, input_sha256: r.input_sha256, steps: r.states.length,
+    active_gauge_mass_kg: r.active_gauge_mass_kg, newton_iterations: r.newton_iterations,
+    discrepancy_count: r.protocol_audit?.discrepancies?.length ?? 0,
+    mechanics_readiness_promoted: r.mechanics_readiness_promoted, model_scope: r.model_scope,
+    next: "Download the original request, complete report and exact frozen replay below." };
+}
 function stripResult(parent, op, r) {
   if (op === "stripAcquisition") {
     const curves = table(parent, "Original complete force acquisitions", ["Specimen", "Cut direction", "Original rows", "Archive entry", "Source SHA-256"]);
@@ -4399,6 +4424,7 @@ function show(op, msg, request) {
       op === "linearizeOrigin" ? originResult(s.comparison, r) :
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :
+      op === "cylinderExperiment" ? cylinderExperimentResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis,
         legs: r.body?.legs || "standing", leg_fraction: r.body?.leg_fraction ?? 1, settling: r.numerical?.settling,
@@ -5862,7 +5888,7 @@ async function execute(op) {
       msg.allowEstimates = $("calibrationEstimates").checked;
       msg.calibrationRequest = await read("calibrationRequest");
     }
-    else if (["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"].includes(op)) msg.stripRequest = await read(`${op}Request`);
+    else if (["stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit"].includes(op)) msg.stripRequest = await read(`${op}Request`);
     else if (op === "screen") msg.screenRequest = guidedScreenMode() ?
       buildMaterialScreenRequest(guidedScreenInput()) : await read("screenRequest");
     else if (op === "study" || op === "scenario") {
@@ -6866,7 +6892,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
-  stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
+  stripHistoryRequest:["stripHistory"], cylinderExperimentRequest:["cylinderExperiment"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
     if (Object.hasOwn(sheetConditionForms, id) && sheetConditionsMode(id) !== "file") { controls(); return; }

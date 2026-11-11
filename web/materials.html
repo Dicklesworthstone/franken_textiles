@@ -198,6 +198,12 @@ solver width or Poisson ratio is inferred.</p>
 The same cloth solver retains material history and inertia at each accepted step. Source-qualified mass
 and a supported membrane law are required; a grip history does not identify missing material properties.
 The complete report separates stored energy, free-vertex motion and physical dissipation.</p>
+<label>Cylindrical-holder request JSON (<code>ftx-cylinder-experiment/1</code>) <input id="cylinderExperimentRequest" type="file" accept=".json,application/json"></label>
+<button id="cylinderExperiment" data-command="cylinderExperiment" disabled>Simulate cylindrical-holder cycles</button>
+<p class="note">Wrap a source-qualified fabric around rigid cylindrical holders with explicit pretension offset,
+tare subtraction, grain orientation and timestamped twist, compression or stretch-slip waypoints.
+Reports upper/lower reaction force (N), axial reaction torque (N·m), protocol rate discrepancies and frozen replay JSON;
+never promotes uncalibrated catalog specimens to garment mechanics readiness.</p>
 <label>Inverse strip request JSON (<code>ftx-strip-calibration/1</code>) <input id="stripFitRequest" type="file" accept=".json,application/json"></label>
 <button id="stripFit" data-command="stripFit" disabled>Identify a candidate from grip measurements</button>
 <p class="note">Each request supplies its specimen, gauge, width, material-axis orientation and numerical controls.

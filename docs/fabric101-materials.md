@@ -112,8 +112,8 @@ an empty catalog with their exact sources and checksums intact.
 ## Cylindrical-holder forward experiment (`ftx-cylinder-experiment/1`)
 
 `ftx_drape::cylinder::evaluate` (`ftx materials cylinder-experiment REQUEST.json`, `ftx-materials
-cylinder-experiment REQUEST.json`, and browser `material_cylinder_experiment` / worker
-`cylinderExperiment`) implements the 3D cylindrical-holder forward boundary condition for source-qualified
+cylinder-experiment REQUEST.json`, browser `material_cylinder_experiment`, worker
+`cylinderExperiment`, and `web/materials.html` `#cylinderExperiment`) implements the 3D cylindrical-holder forward boundary condition for source-qualified
 sheets (`260 × 110 mm` specimen wrapped around coaxial `R = 40 mm` holders, `50 mm` nominal free height
 plus explicit `pretension_displacement_m`, explicit tare force/torque subtraction, grain orientation
 `warp_axis`, sequential twist / compression / stretch-slip schedules with optional `clamp_slip_m` and
@@ -131,8 +131,9 @@ Strict boundaries enforced by the forward experiment:
 `crates/ftx-pattern/tests/fabric101_catalog.rs` verifies the 96-row subset, exact representative
 measurements and units, source paths and field budgets, conflict handling, composition identity,
 immutable replay, stale-digest refusal, ordinary mass screening, and missing-physics refusal.
-`crates/ftx-drape/src/cylinder.rs`, `crates/ftx-cli/tests/strip_experiment_workflow.rs`, and
-`tools/check_strip_wasm.cjs` verify closed-form uniaxial tension and `n_theta`-gon apothem torsion
+`crates/ftx-drape/src/cylinder.rs`, `crates/ftx-cli/tests/strip_experiment_workflow.rs`,
+`tools/check_strip_wasm.cjs`, `tools/check_materials_frontend.cjs`, and `tools/check_materials_web.cjs`
+verify closed-form uniaxial tension and `n_theta`-gon apothem torsion
 convergence, `L01` pretension/timestamp rate discrepancy auditing, Maxwell + plastic-bending dissipation,
-uncalibrated `fabric101-2026/l01` and `reported_thickness` refusals, and native/WASM/worker parity.
+uncalibrated `fabric101-2026/l01` and `reported_thickness` refusals, and native/WASM/worker/`web/materials.html` UI parity.
 The source catalog implementation is `crates/ftx-pattern/src/material_catalog/fabric101.rs`.
