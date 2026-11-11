@@ -5689,6 +5689,19 @@ Native and portable scenarios and the guided workbench share the same bounded tr
 saved named cases, explicit zero returns and unchanged legacy requests. This advances `ftx-mv1`;
 prescribed movement does not establish measured anatomy, floor or chair support, or physical fit.
 
+### 25.194 Author anatomical targets in the local Photo Workbench
+
+The portable capture workflow now starts with explicit locations on the actual unfitted body model.
+Native and browser reviews share the same surface, vertex and bone-endpoint picker and geometry
+authority. Users can populate an empty target map or repair missing definitions for already-observed
+names, then continue through observation authoring, independent starts, preview and fitting.
+
+Source-bound application changes only model targets in Rust, preserving camera and image evidence,
+observations, tape constraints, starts and exact frame identities. Pending edits and source changes
+withdraw obsolete fits and garment handoffs. This completes the software authoring slice `ftx-bt1`;
+anatomical correspondence remains an operator declaration, separate from empirical body and garment
+qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

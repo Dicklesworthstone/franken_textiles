@@ -10,15 +10,17 @@ self.onmessage = async ({data: m}) => {
         (typeof ftx.wasm_interface_stamp!=="function" || ftx.wasm_interface_stamp()!=="ftx-wasm-interface/2026-11-11.1")) {
       throw Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
     }
-    if(m.op==="body-fit-starts" || m.op==="body-fit-observations") {
-      const observations=m.op==="body-fit-observations", editLimit=observations?256:64;
+    if(m.op==="body-fit-starts" || m.op==="body-fit-observations" || m.op==="body-fit-targets") {
+      const observations=m.op==="body-fit-observations", targets=m.op==="body-fit-targets", editLimit=observations || targets?256:64;
       if(typeof m.input!=="string" || new TextEncoder().encode(m.input).length>16*1024*1024 ||
           typeof m.edits!=="string" || new TextEncoder().encode(m.edits).length>editLimit*1024 ||
           !(m.model instanceof ArrayBuffer) || m.model.byteLength===0 || m.model.byteLength>512*1024*1024) {
         throw Error("Body editing needs prepared input up to 16 MiB, model up to 512 MiB and edits up to "+editLimit+" KiB.");
       }
-      self.postMessage({type:"progress",request:m.request,text:observations?"Checking the exact sources, declared targets and stored-pixel observations…":"Checking the exact model, source evidence and declared initialization bounds…"});
-      const report=ftx[observations?"body_fit_observations":"body_fit_starts"](new Uint8Array(m.model),m.input,m.edits);
+      const entry=targets?"body_fit_targets":observations?"body_fit_observations":"body_fit_starts";
+      if(typeof ftx[entry]!=="function") throw Error("Rebuild web/pkg: missing the requested body authoring engine.");
+      self.postMessage({type:"progress",request:m.request,text:targets?"Checking exact model targets and unfitted rest geometry…":observations?"Checking the exact sources, declared targets and stored-pixel observations…":"Checking the exact model, source evidence and declared initialization bounds…"});
+      const report=ftx[entry](new Uint8Array(m.model),m.input,m.edits);
       self.postMessage({type:"result",request:m.request,report});
       return;
     }

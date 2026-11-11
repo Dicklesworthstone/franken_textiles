@@ -107,7 +107,8 @@ fn long_frame_ids(input: &mut Value, first: u64) {
 #[test]
 fn portable_observation_authoring_reaches_start_editing_preview_and_actual_fitting() {
     use ftx_wasm::body_fit::{
-        BodyFitImage, body_fit_observations, body_fit_starts, fit_body, review_body_fit_start,
+        BodyFitImage, body_fit_observations, body_fit_starts, body_fit_targets, fit_body,
+        review_body_fit_start,
     };
     let (model, mut expected) = fixture();
     long_frame_ids(&mut expected, u64::MAX - 200_000);
@@ -126,11 +127,27 @@ fn portable_observation_authoring_reaches_start_editing_preview_and_actual_fitti
             "image_size_px":frame["image_size_px"],"rotation_cw_deg":90})
     }).collect::<Vec<_>>());
     let mut draft = expected.clone();
+    draft["model"]["keypoints"] = json!({});
     draft["fit"]["starts"] = json!([]);
     for frame in draft["fit"]["frames"].as_array_mut().unwrap() {
         frame["keypoints"] = json!([]);
     }
     let source = format!(" \r\n{draft}\r\n");
+    let targets = body_fit_targets(&model, &source, "").unwrap();
+    assert_eq!(targets["input"], source);
+    assert_eq!(targets["target_count"], 0);
+    let targeted = body_fit_targets(
+        &model,
+        &source,
+        &json!({
+        "input_sha256":targets["input_sha256"],"model_sha256":targets["model_sha256"],
+        "keypoints":expected["model"]["keypoints"]})
+        .to_string(),
+    )
+    .unwrap();
+    draft["model"]["keypoints"] = expected["model"]["keypoints"].clone();
+    let source = targeted["input"].as_str().unwrap().to_owned();
+    assert_eq!(serde_json::from_str::<Value>(&source).unwrap(), draft);
     let opened = body_fit_observations(&model, &source, "").unwrap();
     assert_eq!(opened["input"], source);
     assert_eq!(opened["body_fitted"], false);

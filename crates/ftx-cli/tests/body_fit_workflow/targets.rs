@@ -61,6 +61,7 @@ fn apply(dir: &Path, out: &str, code: i32) -> Value {
 
 #[test]
 fn targets_bootstrap_empty_map_without_rounding_source_timestamps() {
+    use ftx_wasm::body_fit::body_fit_targets;
     let dir = setup();
     let mut input = read(&dir, "input.json");
     let original_targets = input["model"]["keypoints"].clone();
@@ -74,6 +75,49 @@ fn targets_bootstrap_empty_map_without_rounding_source_timestamps() {
     input["model"]["keypoints"] = json!({});
     save(&dir, &input);
     let source_bytes = std::fs::read(dir.join("input.json")).unwrap();
+    let model = std::fs::read(dir.join("model.ftxbody")).unwrap();
+    let source = std::str::from_utf8(&source_bytes).unwrap();
+    let preview = body_fit_targets(&model, source, "").unwrap();
+    assert_eq!(preview["target_count"], 0);
+    assert_eq!(preview["input"], source);
+    let html = preview["editor_html"].as_str().unwrap();
+    let data: Value = serde_json::from_str(
+        html.split("<script type=\"application/json\" id=\"targetData\">")
+            .nth(1)
+            .unwrap()
+            .split("</script>")
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(data["observed_names"].as_array().unwrap().len(), 10);
+    assert_eq!(data["annotations"]["keypoints"], json!({}));
+    let mut edits = json!({"input_sha256":preview["input_sha256"],
+        "model_sha256":preview["model_sha256"],"keypoints":original_targets});
+    edits["keypoints"].as_object_mut().unwrap().remove("p0");
+    assert!(body_fit_targets(&model, source, &edits.to_string()).is_err());
+    edits["keypoints"] = original_targets.clone();
+    let repaired = body_fit_targets(&model, source, &edits.to_string()).unwrap();
+    let mut expected = input.clone();
+    expected["model"]["keypoints"] = original_targets.clone();
+    assert_eq!(
+        serde_json::from_str::<Value>(repaired["input"].as_str().unwrap()).unwrap(),
+        expected
+    );
+    for field in ["camera", "sigma", "start"] {
+        let mut invalid = input.clone();
+        match field {
+            "camera" => {
+                invalid["fit"]["frames"][0]["camera"]["intrinsics"]["focal_px"] = json!([0, 0])
+            }
+            "sigma" => invalid["fit"]["frames"][0]["keypoints"][0]["sigma_px"] = json!(0),
+            _ => invalid["fit"]["starts"][0]["shape"][0] = json!(0),
+        }
+        assert!(
+            body_fit_targets(&model, &invalid.to_string(), "").is_err(),
+            "{field}"
+        );
+    }
     review(&dir, "review", 0);
     assert_eq!(
         std::fs::read(dir.join("review/source-input.json")).unwrap(),
@@ -223,9 +267,12 @@ fn targets_editor_fixture_replays_a_corrected_capture_through_the_ordinary_fitte
 
 #[test]
 fn targets_annotations_refuse_stale_sources_and_invalid_model_locations_before_output() {
+    use ftx_wasm::body_fit::body_fit_targets;
     let dir = setup();
     review(&dir, "review", 0);
     let good = read(&dir, "review/body-targets.json");
+    let model_bytes = std::fs::read(dir.join("model.ftxbody")).unwrap();
+    let source = std::fs::read_to_string(dir.join("input.json")).unwrap();
     let cases = [
         ("missing-observation", Value::Null),
         ("outside-mesh", json!({"kind":"vertex","index":10})),
@@ -258,6 +305,12 @@ fn targets_annotations_refuse_stale_sources_and_invalid_model_locations_before_o
         write(&dir, "annotations.json", &invalid);
         apply(&dir, name, 3);
         assert!(!dir.join(name).exists(), "{name} published an output");
+        let edits = json!({"input_sha256":good["source_input_sha256"],
+            "model_sha256":good["model_sha256"],"keypoints":invalid["keypoints"]});
+        assert!(
+            body_fit_targets(&model_bytes, &source, &edits.to_string()).is_err(),
+            "{name}"
+        );
     }
     let mut invalid = good.clone();
     invalid["model_sha256"] = json!("0".repeat(64));
@@ -300,6 +353,7 @@ fn targets_annotations_refuse_stale_sources_and_invalid_model_locations_before_o
 
 #[test]
 fn targets_outputs_are_private_create_only_and_accept_all_native_target_kinds() {
+    use ftx_wasm::body_fit::body_fit_targets;
     let dir = setup();
     let original = std::fs::read(dir.join("input.json")).unwrap();
     review(&dir, "review", 0);
@@ -314,6 +368,68 @@ fn targets_outputs_are_private_create_only_and_accept_all_native_target_kinds() 
         read(&dir, "authored/input.json")["model"]["keypoints"],
         annotations["keypoints"]
     );
+    let model = std::fs::read(dir.join("model.ftxbody")).unwrap();
+    let source = std::str::from_utf8(&original).unwrap();
+    let portable = body_fit_targets(&model, source, "").unwrap();
+    let html = portable["editor_html"].as_str().unwrap();
+    let payload = html
+        .split("<script type=\"application/json\" id=\"targetData\">")
+        .nth(1)
+        .unwrap()
+        .split("</script>")
+        .next()
+        .unwrap();
+    let editor: Value = serde_json::from_str(payload).unwrap();
+    let native = read(&dir, "review/model.json");
+    for key in ["mesh", "bones", "preview"] {
+        assert_eq!(editor[key], native[key], "{key}");
+    }
+    assert_eq!(editor["annotations"]["source_input"], "");
+    assert!(
+        !html.contains("src=\"editor.js\""),
+        "portable review has no external script"
+    );
+    let edits = json!({"input_sha256":portable["input_sha256"],
+        "model_sha256":portable["model_sha256"],"keypoints":annotations["keypoints"]});
+    let edited = body_fit_targets(&model, source, &edits.to_string()).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(edited["input"].as_str().unwrap()).unwrap(),
+        read(&dir, "authored/input.json")
+    );
+    assert!(body_fit_targets(&model, &(source.to_owned() + "\n"), &edits.to_string()).is_err());
+    let mut stale = edits.clone();
+    stale["model_sha256"] = json!("0".repeat(64));
+    assert!(body_fit_targets(&model, source, &stale.to_string()).is_err());
+    stale = edits.clone();
+    stale["keypoints"] = json!({});
+    assert!(body_fit_targets(&model, source, &stale.to_string()).is_err());
+    stale = edits;
+    stale["fit"] = json!({"starts":[]});
+    assert!(body_fit_targets(&model, source, &stale.to_string()).is_err());
+    let hostile = "__FTX_TARGET_DATA____FTX_TARGET_SCRIPT____FTX_TARGET_CSP__</script><script>globalThis.targetInjection=1</script>";
+    let mut labelled: Value = serde_json::from_str(source).unwrap();
+    let target = labelled["model"]["keypoints"]
+        .as_object_mut()
+        .unwrap()
+        .remove("p9")
+        .unwrap();
+    labelled["model"]["keypoints"][hostile] = target.clone();
+    for frame in labelled["fit"]["frames"].as_array_mut().unwrap() {
+        frame["keypoints"][9]["name"] = json!(hostile);
+    }
+    let preview = body_fit_targets(&model, &labelled.to_string(), "").unwrap();
+    let html = preview["editor_html"].as_str().unwrap();
+    assert!(!html.contains("<script>globalThis.targetInjection"));
+    let data: Value = serde_json::from_str(
+        html.split("<script type=\"application/json\" id=\"targetData\">")
+            .nth(1)
+            .unwrap()
+            .split("</script>")
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(data["annotations"]["keypoints"][hostile], target);
     review(&dir, "review", 3);
     review(&dir, "input.json", 3);
     apply(&dir, "authored", 3);

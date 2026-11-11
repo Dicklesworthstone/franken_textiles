@@ -9,6 +9,7 @@ use std::{
 
 use ftx_core::{Mat3, Refusal, RefusalCode, Vec3};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::{
     Affine, AnnyModel, BodyFrames, BodyParams, Phenotype, Pose, PosedBody, RestBody, TAPE_FIELDS,
@@ -447,6 +448,56 @@ impl CorrespondenceModel {
     #[must_use]
     pub fn configuration(&self) -> &Configuration {
         &self.config
+    }
+
+    /// Original rest topology and named rig endpoints for explicit correspondence authoring.
+    /// Free shape controls use their declared midpoints; no pose, observation or tape is evaluated.
+    ///
+    /// # Errors
+    /// Empty or excessive topology, invalid model evaluation or nonfinite rest geometry.
+    pub fn target_preview(&self) -> Result<Value, Refusal> {
+        let counts = &self.model.data().header.counts;
+        if counts.vertices == 0 || counts.faces == 0 {
+            return Err(invalid(
+                "model target review requires a nonempty triangle mesh",
+            ));
+        }
+        if counts.vertices > 100_000 || counts.faces > 200_000 || counts.bones > 1024 {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "model target review supports at most 100000 vertices, 200000 triangles and 1024 bones",
+            ));
+        }
+        let shape: Vec<_> = self
+            .config
+            .shape_parameters
+            .iter()
+            .map(|p| p.lower + 0.5 * (p.upper - p.lower))
+            .collect();
+        let rest = self.model.rest(&self.parameters(&shape)?)?;
+        if rest
+            .vertices
+            .iter()
+            .chain(&rest.bone_heads)
+            .chain(&rest.bone_tails)
+            .any(|p| !p.is_finite())
+        {
+            return Err(invalid("model target review needs finite rest geometry"));
+        }
+        let preview = json!({"status":"UNFITTED", "pose":"unposed_rest", "units":"m",
+            "coordinates":"model_rest_z_up_faces_negative_y",
+            "age_years":self.config.age_years,"gender":self.config.gender,
+            "fixed_shape":self.config.fixed_shape,
+            "shape_values":self.config.shape_parameters.iter().zip(&shape).map(|(p,v)|
+                json!({"name":p.name,"value":v,"lower":p.lower,"upper":p.upper})).collect::<Vec<_>>(),
+            "basis":"Free shape parameters are at the midpoint of their declared bounds. No observation, start, fitted shape, root transform or articulated pose was used."});
+        let bones: Vec<_> = self.model.data().header.labels.bones.iter().enumerate()
+            .map(|(i, bone)| json!({"name":bone,"head_m":rest.bone_heads[i],"tail_m":rest.bone_tails[i]}))
+            .collect();
+        Ok(
+            json!({"model_sha256":self.config.model_sha256,"preview":preview,
+            "mesh":{"vertices_m":rest.vertices,"triangles":self.model.data().faces},"bones":bones}),
+        )
     }
 
     /// Expand shared shape values without changing fixed or unselected controls.

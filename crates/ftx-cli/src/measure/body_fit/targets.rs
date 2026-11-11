@@ -96,48 +96,9 @@ pub(super) fn review(args: &Args) -> Result<(Value, i32, String), Refusal> {
         keypoints: config.keypoints.clone(),
     };
     let model = model(required(args, "model")?, &config.model_sha256)?;
-    let counts = &model.data().header.counts;
-    if counts.vertices == 0 || counts.faces == 0 {
-        return Err(bad_input(
-            "model target review requires a nonempty triangle mesh",
-        ));
-    }
-    if counts.vertices > 100_000 || counts.faces > 200_000 || counts.bones > 1024 {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "model target review supports at most 100000 vertices, 200000 triangles and 1024 bones",
-        ));
-    }
     let adapter = Adapter::for_target_review(model, config, &annotations.model_sha256)?;
-    let shape: Vec<_> = adapter
-        .configuration()
-        .shape_parameters
-        .iter()
-        .map(|p| p.lower + 0.5 * (p.upper - p.lower))
-        .collect();
-    let rest = adapter.model().rest(&adapter.parameters(&shape)?)?;
-    if rest.vertices.iter().any(|p| !p.is_finite()) {
-        return Err(bad_input("model target review needs finite rest vertices"));
-    }
-    let preview = json!({"status":"UNFITTED", "pose":"unposed_rest", "units":"m",
-        "coordinates":"model_rest_z_up_faces_negative_y",
-        "age_years":adapter.configuration().age_years,"gender":adapter.configuration().gender,
-        "fixed_shape":adapter.configuration().fixed_shape,
-        "shape_values":adapter.configuration().shape_parameters.iter().zip(&shape).map(|(p,v)|
-            json!({"name":p.name,"value":v,"lower":p.lower,"upper":p.upper})).collect::<Vec<_>>(),
-        "basis":"Free shape parameters are at the midpoint of their declared bounds. No observation, start, fitted shape, root transform or articulated pose was used."});
-    let bones: Vec<_> = adapter
-        .model()
-        .data()
-        .header
-        .labels
-        .bones
-        .iter()
-        .enumerate()
-        .map(|(i, bone)| json!({"name":bone,"head_m":rest.bone_heads[i],"tail_m":rest.bone_tails[i]}))
-        .collect();
-    let geometry = json!({"model_sha256":annotations.model_sha256,"preview":preview,
-        "mesh":{"vertices_m":rest.vertices,"triangles":adapter.model().data().faces},"bones":bones});
+    let geometry = adapter.target_preview()?;
+    let preview = &geometry["preview"];
     let editor_data = json!({"annotations":annotations,"observed_names":names,
         "mesh":geometry["mesh"],"bones":geometry["bones"],"preview":preview});
     let mut bundle = Bundle::new();
@@ -277,27 +238,11 @@ fn page(data: &Value) -> Result<String, Refusal> {
     let payload = serde_json::to_string(data)
         .map_err(|e| bad_input(e.to_string()))?
         .replace('<', "\\u003c");
-    Ok(format!(
-        r##"<!doctype html><html lang="en"><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Author body model targets</title>
-<style>body{{font:16px system-ui;max-width:1200px;margin:2em auto;padding:0 1em}}p{{line-height:1.5}}canvas{{display:block;width:min(100%,calc(75vh * 9 / 7));height:auto;outline:1px solid #888;touch-action:none}}button,input,select{{font:inherit;padding:.3em}}label{{display:inline-block;margin:.4em}}fieldset{{margin:1em 0}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}[hidden]{{display:none!important}}.views button{{margin:.2em}}#targetStatus{{min-height:3em}}</style>
-<h1>Author body model targets</h1><p><strong>Unfitted model, rest pose.</strong> Free shape parameters are at the midpoint of their declared bounds; fixed shape, age and gender come from your declaration. The view does not use your photographs or a fitted body. Identify anatomy yourself, inspect it from several sides, and choose the exact model location you intend to observe.</p>
-<p>Surface picks choose the nearest triangle under the cursor and retain its barycentric weights. Vertex picks choose the closest corner of that visible triangle. Bone endpoints are rig locations and may lie inside the skin. No detector, anatomy or fit is inferred.</p>
-<p><a href="source-input.json">Original source input</a> · <a href="model.json">Native preview geometry</a> · <a href="review.json">Review details</a></p>
-<details><summary>Exact unfitted preview parameters</summary><pre id="previewDetails"></pre></details>
-<div id="targetEditor" hidden><div class="views"><button data-view="front">Front</button><button data-view="back">Back</button><button data-view="left">Wearer's left</button><button data-view="right">Wearer's right</button><button data-view="top">Top</button></div>
-<label>Turn <input id="yaw" type="range" min="-180" max="180" step="1" value="0"></label><label>Tilt <input id="pitch" type="range" min="-90" max="90" step="1" value="0"></label><label>Zoom <input id="zoom" type="range" min="0.5" max="6" step="0.1" value="1"></label>
-<canvas id="targetCanvas" width="900" height="700" aria-label="Unfitted body surface; click to select a correspondence"></canvas>
-<fieldset><legend>Declare a model target</legend><label>Existing or required name <select id="targetList"><option value="">New target</option></select></label><label>Name <input id="targetName" maxlength="256" autocomplete="off"></label><label>Location type <select id="targetKind"><option value="surface">Surface point</option><option value="vertex">Mesh vertex</option><option value="bone_head">Bone head</option><option value="bone_tail">Bone tail</option></select></label><label>Bone <select id="targetBone" disabled><option value="">Choose bone</option></select></label>
-<p>Click the visible surface for a vertex or surface point. Select a named rig bone for its head or tail. An existing observation's name cannot be removed or renamed here; its target definition can be corrected explicitly. All image observations and their FIT/CHECK assignments remain unchanged.</p>
-<pre id="targetDefinition">Choose a location.</pre><button id="applyTarget" type="button">Apply target</button> <button id="removeTarget" type="button" disabled>Remove target</button> <button id="cancelTarget" type="button">Cancel pending edit</button></fieldset>
-<p><label>Open saved target definitions <input id="targetDraftFile" type="file" accept=".json,application/json"></label> (same source and model; up to 256 KiB)</p>
-<p id="targetStatus" role="status"></p><p><button id="resetTargets" type="button">Reset all target changes</button> · <a id="targetDraftDownload" download="body-targets-draft.json" hidden>Save applied target draft</a> · <a id="targetDownload" download="body-targets.json" hidden>Download completed body-targets.json</a></p>
-<p>A draft saves applied definitions even while observed names are missing. Reopen it on this same review page to continue. Pending picks are not saved. Review loaded definitions and apply a target before completing the handoff. The native command still requires every observed name.</p>
-<p>Apply the download with <code>ftx measure body-targets body-targets.json --model MODEL --out NEW_DIR</code>. This checks the original source bytes and converted model again and writes <code>input.json</code> for ordinary capture review and fitting.</p></div>
-<noscript><p>The supplied local script is required to select targets. Original inputs and native preview geometry remain available above.</p></noscript>
-<script type="application/json" id="targetData">{payload}</script><script src="editor.js" defer></script></html>
-"##
-    ))
+    Ok(include_str!("target_review.html")
+        .replace("__FTX_TARGET_CSP__", "script-src 'self';")
+        .replace(
+            "__FTX_TARGET_SCRIPT__",
+            "<script src=\"editor.js\" defer></script>",
+        )
+        .replace("__FTX_TARGET_DATA__", &payload))
 }

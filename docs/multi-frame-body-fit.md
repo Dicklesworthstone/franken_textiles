@@ -87,6 +87,13 @@ hash and array checks, authored shape/pose controls, multistart agreement, held-
 observability gates are shared with the native command. Sampled inline silhouettes are supported.
 The browser does not fit cameras again or infer anatomical correspondences.
 
+The same page now supports the complete prepared-input authoring sequence: declare anatomical
+model targets, observe keypoints and silhouette slices, then edit starting values.
+Open the exact model and prepared input, select explicit model locations, and use the picker’s
+return button to apply them. Each step works on the current native-produced input snapshot, so
+target changes can continue directly into observations, start previews and fitting without a
+download/re-upload cycle. Each applied stage also offers the exact edited input as a download.
+
 For an existing reviewed capture, `ftx measure capture-review ... --out NEW_DIRECTORY` now also
 writes **`prepared-input.json`**. This is the immutable calibrated-observation snapshot already
 checked while creating that review. Its byte count and hash are retained under `prepared_input`
@@ -390,6 +397,34 @@ reset, another file choice or leaving the page cancel a pending read. After reop
 the definitions and apply a target; the completed download requires every observed name. The
 native command continues to refuse incomplete maps. Saving a draft does not validate anatomy
 or compute a fit, and unapplied picks remain unsaved.
+
+### Declare targets in the local photo page
+
+With a prepared `ftx-anny-body-fit-input/1` input, select it and its exact `.ftxbody` model in
+`web/photo.html`, expand **Declare or correct anatomical model targets**, and choose **Open model target
+picker**. This opens the same rest-mesh picker within the page. Vertex, surface and named bone
+endpoint selection use the same native geometry and validation. Empty or incomplete
+`model.keypoints` maps are allowed for review. Existing observed names with missing definitions
+appear as **needs definition** and must be resolved before returning the completed map. All
+camera, evidence, observation, start and budget checks still apply. Path-based capture input
+continues to use native `body-target-review`.
+
+Apply the individual target definitions in the picker, then choose **Use these targets in Photo
+Workbench** to validate the complete map against the exact current input and model. The page applies
+only `model.keypoints`; cameras, observations, FIT/CHECK roles, uncertainty, starts, source-image
+bindings and full-width frame timestamps stay unchanged. Continue with observations and starting
+values, then preview or fit using that same updated snapshot. Download `body-fit-input-edited.json`
+to save the prepared result. Portable target drafts retain the existing annotation format with
+an empty local source path; their exact source-byte and model hashes still bind them to this review.
+
+The picker is isolated in an opaque-origin iframe. Only its current window and random channel
+can return definitions, and Rust checks both source hashes before applying them. While it is open,
+finish or close it before using observation, start or fitting actions. **Close picker / cancel unapplied targets**
+discards unapplied definitions while preserving the last applied prepared snapshot. Opening or
+editing targets withdraws earlier previews, fits and garment handoffs; changing sources, cancelling
+or leaving the page prevents an old file read, worker or picker from publishing later. This is
+manual correspondence authoring, with no inferred anatomy, fitted person or measurement-readiness
+promotion. The ordinary wearer confirmation still applies when reusing any later accepted fit.
 
 ## Author and inspect starting poses before fitting
 

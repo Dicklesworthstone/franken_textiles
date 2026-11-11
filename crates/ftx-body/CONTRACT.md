@@ -202,6 +202,12 @@ from those same vertices and rig transforms. Initialization inspection shares th
 shape but does not evaluate independent tape functionals; unavailable tape anatomy cannot hide
 otherwise usable initial geometry. The fitter's measurement, sparse-point and ordinary posed
 paths keep their existing requested-tape admission.
+`target_preview` supplies the native and portable anatomical pickers with the same unfitted
+rest geometry at the declared free-shape bound midpoints. It retains original mesh topology,
+named rest-bone endpoints, fixed shape and explicit preview metadata. Nonempty finite geometry
+is required, bounded to 100,000 vertices, 200,000 triangles and 1,024 bones. This inspection
+does not evaluate tape functionals or change the authored configuration; target application
+still uses ordinary correspondence validation.
 The module has no camera, fitting solver, filesystem or measurement-crate dependency. Native and
 portable adapters implement the existing `ftx-measure::body_fit::BodyModel` trait; that engine retains
 all observability, multistart, held-out and work-budget gates. Configurations do not establish

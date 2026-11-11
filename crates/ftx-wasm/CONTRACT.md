@@ -54,6 +54,26 @@ garment handoff, and retains any separate accepted result independently. Source/
 cancel, delayed file reads and stale worker replies withdraw obsolete previews and image overlays.
 Held-out evidence stays fixed; inspecting it does not justify tuning starts to CHECK residuals.
 
+**Local anatomical target authoring.** `body_fit::body_fit_targets(model_bytes, input, edits)` and
+its wasm32 export open the same unfitted rest-mesh picker used by native `body-target-review`.
+The shared `CorrespondenceModel::target_preview` supplies actual vertex indices, triangles,
+bone endpoints and midpoint-shape metadata; no separate browser geometry or inference is used.
+An empty edit opens exact prepared source bytes, including an empty or incomplete target map.
+Opening adds unresolved observed names to the inspection layout only, so they can be explicitly
+defined without inventing locations; all ordinary camera, evidence, pixel, start and budget checks
+remain enforced. Explicit application replaces only `model.keypoints` and
+requires matching input/model SHA-256 bindings, all observed names, and ordinary target validation.
+Invalid indices, duplicate locations, unknown bones and invalid barycentric weights refuse.
+Every other JSON value, including exact u64 frame timestamps, remains in Rust; the returned edited
+input stays opaque in JavaScript. Limits are 16 MiB input, 512 MiB model and 256 KiB edits.
+The photo page embeds the shared picker in a script-only opaque-origin iframe with downloads
+enabled. An explicit return requires the current iframe window, a random one-use channel and
+matching source hashes. A current native result updates the common prepared snapshot and can
+continue into observation editing, start authoring and fitting. Pending definitions block those
+operations; closing the picker discards unapplied work, and source changes or page exit invalidate
+reads, worker replies and old channels. Targets do not establish anatomy, consent, an accepted body,
+measurement evidence or readiness. Existing accepted-body reuse still needs its wearer confirmation.
+
 **Local initialization authoring.** `body_fit::body_fit_starts(model_bytes, input, edits)` and its
 wasm32 export prepare named shape/pose controls from the same checked model and input. Empty edit
 text returns the original input bytes unchanged, including zero-start drafts. Explicit edits

@@ -2132,6 +2132,33 @@ downloads; reset restores the entire original keypoint lists. All other input va
 bindings stay fixed. Partial drafts are saveable; source preparation and point count do not establish
 body observability, fit acceptance or READY. The ordinary fitter retains all its original gates.
 
+### E.2 Portable anatomical target authoring (native extension)
+
+The local photo workbench may open the same unfitted model-target review used by
+`measure body-target-review`. It accepts an exact prepared `ftx-anny-body-fit-input/1`
+and its array-verified converted model, including an empty or incomplete target map. Opening
+may retain unresolved observed names for explicit definition: only the inspection layout adds
+those names, without invented target locations. Ordinary camera, evidence, pixel, start, bounds
+and aggregate-budget validation still applies. Completed application requires every definition.
+The shared model evaluator supplies the unposed rest mesh, original triangle indices and named
+bone endpoints at the declared shape-bound midpoints. The existing visible-triangle picker
+retains explicit vertex, surface barycentric or bone-endpoint definitions; it infers no anatomy.
+
+Applying targets requires the original input and model SHA-256 bindings and every already
+observed name. The ordinary correspondence validator rejects duplicate physical locations,
+invalid topology/weights/bones and excess targets. Rust replaces only `model.keypoints` in the
+original parsed document, preserving all other values and full unsigned frame timestamps.
+Cameras, image bindings, observation coordinates/sigmas/FIT-CHECK roles, tapes and starts stay
+fixed. Empty maps may be inspected but cannot be applied as a completed target declaration.
+
+The shared review runs in an isolated local iframe. An explicit apply action, current source
+window, per-review random channel and source hashes bind its return to the photo page. Pending
+changes withdraw previous fit/review/handoff results and block observation/start/fitting work
+until applied or cancelled. Source replacement and cancellation revoke the review and stale
+asynchronous messages cannot publish. A successful application becomes the same exact prepared
+snapshot consumed by the existing observation, start, preview and fitting adapters. No source
+photo is reread and no anatomical, physical-fit, uncertainty or measurement-readiness claim follows.
+
 ## F. Quirks to preserve (or change deliberately with a fixture update)
 
 - bisection has no bracket check and treats f = 0 as negative (C.0, 0.3).
