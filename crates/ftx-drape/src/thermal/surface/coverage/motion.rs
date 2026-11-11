@@ -730,6 +730,73 @@ impl Frame {
         Ok(state)
     }
 
+    /// Initialize every source triangle from its complete canonical inside-to-outside profile.
+    /// Covered layers reverse these cells when the body faces the other material side; exposed
+    /// remainders retain canonical source order. No temperature averaging or depth resizing occurs.
+    ///
+    /// # Errors
+    /// Missing/extra source triangles or cells, nonphysical temperatures, or a cell outside its
+    /// source material's domain or the covered stack's common characterized interval.
+    pub fn initial_profiles(&self, temperature_c: &[Vec<f64>]) -> Result<State, Refusal> {
+        if temperature_c.len() != self.cloth_triangle_count() {
+            return Err(invalid(
+                "initial coverage profiles must cover every retained source cloth triangle",
+            ));
+        }
+        let exposed = self
+            .exposed_fractions()
+            .into_iter()
+            .zip(&self.exposed_models)
+            .zip(temperature_c)
+            .map(|((fraction, model), profile)| {
+                if profile.len() != model.cells() {
+                    return Err(invalid(
+                        "initial coverage profile must contain every canonical source depth cell",
+                    ));
+                }
+                // Fully covered sources need the same domain admission as exposed sources.
+                for &value in profile {
+                    model.check_temperature(value)?;
+                }
+                Ok(if fraction > 0. {
+                    profile.clone()
+                } else {
+                    Vec::new()
+                })
+            })
+            .collect::<Result<Vec<_>, Refusal>>()?;
+        let temperatures = self
+            .coverage
+            .layout
+            .regions
+            .iter()
+            .zip(&self.reverse)
+            .map(|(region, reversed)| {
+                let mut row = Vec::new();
+                for (portion, &reverse) in region.layers.iter().zip(reversed) {
+                    let profile = &temperature_c[portion.cloth_triangle];
+                    if reverse {
+                        row.extend(profile.iter().rev().copied());
+                    } else {
+                        row.extend_from_slice(profile);
+                    }
+                }
+                row
+            })
+            .collect();
+        let state = State {
+            frame_sha256: self.sha256.clone(),
+            inner: CoverageState {
+                sha256: self.coverage.sha256.clone(),
+                temperatures,
+                orientation: None,
+            },
+            exposed,
+        };
+        self.check(&state)?;
+        Ok(state)
+    }
+
     fn check(&self, state: &State) -> Result<(), Refusal> {
         if state.frame_sha256 != self.sha256 || state.inner.sha256 != self.coverage.sha256 {
             return Err(invalid(

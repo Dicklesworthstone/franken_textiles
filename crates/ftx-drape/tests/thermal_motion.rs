@@ -711,6 +711,78 @@ fn patch_initialization_qualifies_covered_and_exposed_sources_and_preserves_unif
 }
 
 #[test]
+fn source_depth_profiles_follow_body_orientation_exposure_and_conservative_remapping() {
+    let profiles = [vec![35., 5., 20.]];
+    let mut current = one(3);
+    let mut state = current.initial_profiles(&profiles).unwrap();
+    assert_eq!(state.temperature_c(), &profiles);
+    let initial = 0.5 * (h(35.) + h(5.) + h(20.)) / 3.;
+    near(source_enthalpy(&current, &state), initial);
+    let reversed = frame(source(&selection()), tri(0.04), tri(0.08), &[[0, 2, 1]], 3);
+    let initialized = reversed.initial_profiles(&profiles).unwrap();
+    assert_eq!(initialized.temperature_c(), &[vec![20., 5., 35.]]);
+    let transfer = reversed.remap(&current, &state).unwrap();
+    assert_eq!(transfer.state.temperature_c(), initialized.temperature_c());
+    state = transfer.state;
+    current = reversed;
+    for (offset, cells) in [(0.5, 3), (2., 2), (0., 4), (0., 3)] {
+        let next = frame(
+            source(&selection()),
+            tri(0.04),
+            vec![v(offset, 0., 0.), v(offset + 1., 0., 0.), v(offset, 1., 0.)],
+            &[[0, 1, 2]],
+            cells,
+        );
+        let before = current.checkpoint(&state).unwrap();
+        let transfer = next.remap(&current, &state).unwrap();
+        near(source_enthalpy(&next, &transfer.state), initial);
+        near(transfer.balance.absolute_residual_j, 0.);
+        assert_eq!(current.checkpoint(&state).unwrap(), before);
+        current = next;
+        state = transfer.state;
+    }
+    let step = current.advance(&state, 0.1, &[boundary(20.)]).unwrap();
+    near(
+        source_enthalpy(&current, &step.clone().into_state()) - initial,
+        step.stored_change_j(),
+    );
+    near(step.stored_change_j(), 0.1 * step.net_heat_w());
+    let saved = current.checkpoint(&step.into_state()).unwrap();
+    let (restored, replay) = Frame::from_checkpoint(&saved).unwrap();
+    assert_eq!(restored.checkpoint(&replay).unwrap(), saved);
+}
+
+#[test]
+fn source_depth_profiles_require_complete_cells_and_each_material_temperature_domain() {
+    for offset in [0., 0.5, 2.] {
+        let frame = layered_frame(offset, 1., 2);
+        let uniform = frame.initial(20.).unwrap();
+        let profiles = frame
+            .initial_profiles(&[vec![20.; 2], vec![20.; 2]])
+            .unwrap();
+        assert_eq!(
+            frame.checkpoint(&uniform).unwrap(),
+            frame.checkpoint(&profiles).unwrap()
+        );
+        for bad in [
+            vec![],
+            vec![vec![20.; 2]],
+            vec![vec![20.; 2]; 3],
+            vec![vec![20.], vec![20.; 2]],
+            vec![vec![20.; 2], vec![20.; 3]],
+            vec![vec![20., f64::NAN], vec![20.; 2]],
+            vec![vec![20.; 2], vec![20., 61.]],
+            vec![vec![-0.1, 20.], vec![20.; 2]],
+        ] {
+            assert!(
+                frame.initial_profiles(&bad).is_err(),
+                "offset={offset}, {bad:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn nonuniform_identity_retains_cell_order_at_non_binary_depth_boundaries() {
     for n in [3, 7, 11, 31] {
         let f = one(n);

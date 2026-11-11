@@ -409,6 +409,126 @@ fn coverage_maxwell_and_mixed_sources_use_the_same_accepted_work_admission() {
     }
 }
 
+fn coverage_profile_case() -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = coverage_case(false);
+    let positions = m["samples"][0]["positions_m"].clone();
+    let body = json!([[0., 0., -1.], [1., 0., -1.], [0., 1., -1.]]);
+    m["samples"][0]["body_positions_m"] = body.clone();
+    m["body_triangles"] = json!([[0, 1, 2]]);
+    let h = &mut m["transient_coverage"]["result"];
+    h["request"]["initial_temperature_c"] = json!(999.);
+    h["request"]["initial_instance_temperature_profiles_c"] =
+        json!({"front":[10.,30.],"back":[35.,15.]});
+    h["request"]["body_triangle_ids"] = json!([0]);
+    h["request"]["instance_layers"] = json!({"front":"lining","back":"shell"});
+    h["initial_frame_sha256"] = json!("e".repeat(64));
+    h["initial_condition"] = json!({"schema":"ftx-motion-coverage-initial-condition/2",
+        "model_sha256":h["checkpoint"]["frame"]["source"]["sha256"],
+        "frame_sha256":h["initial_frame_sha256"],"instances":["front","back"],
+        "triangle_instance":[0,1],"cell_order":"inside_to_outside",
+        "instance_temperature_profiles_c":h["request"]["initial_instance_temperature_profiles_c"],
+        "temperature_range_c":[10.,35.]});
+    let frame = &mut h["checkpoint"]["frame"];
+    frame["schema"] = json!("ftx-thermal-motion-frame/1");
+    frame["sha256"] = json!("f".repeat(64));
+    frame["cloth_positions_m"] = positions;
+    frame["body_positions_m"] = body.clone();
+    frame["request"] = json!({"schema":"ftx-thermal-projection/1","cloth_layers":["lining","shell"],
+        "settings":{"cells_per_layer":2}});
+    frame["projection"] = json!({"layout":{"schema":"ftx-thermal-coverage-layout/1",
+        "cells_per_layer":2,"body_vertex_count":3,"body_triangles":[[0,1,2]],
+        "regions":[{"id":"overlap","body_triangle":0,"body_fraction":0.5,
+            "layers":[{"cloth_triangle":0,"fraction":0.25,"layer":"lining"},
+            {"cloth_triangle":1,"fraction":0.75,"layer":"shell"}]}]}});
+    h["checkpoint"]["schema"] = json!("ftx-thermal-motion-state/1");
+    // Each source gains 5 K: 2 * 0.001 m² * 0.2 kg/m² * 1000 J/(kg K) * 5 K = 2 J.
+    h["checkpoint"]["temperature_c"] = json!([[15., 35., 40., 20.]]);
+    h["checkpoint"]["exposed_temperature_c"] = json!([[15., 35.], [40., 20.]]);
+    h["checkpoint"]["sha256"] = json!(hash(&h["checkpoint"]).unwrap());
+    h["trace"][0]["frame_sha256"] = json!("f".repeat(64));
+    h["trace"][0]["body_positions_sha256"] = json!(hash(&body).unwrap());
+    h["trace"][0]["temperature_range_c"] = json!([15., 40.]);
+    d["scenario"]["motion"]["transient_coverage"] = h["request"].clone();
+    (a, d, s, m)
+}
+
+#[test]
+fn coverage_profiles_reconcile_independent_cell_enthalpy_and_refuse_tampered_owners_or_storage() {
+    let (a, d, s, m) = coverage_profile_case();
+    let admitted = admit_heat(&a, &d, &s, &m, Consumer::TransientCoverage).unwrap();
+    assert_eq!(admitted.range_c, [10., 40.]);
+    assert_eq!(admitted.final_range_c, [15., 40.]);
+    let mut remapped = m.clone();
+    let h = &mut remapped["transient_coverage"]["result"];
+    h["signed_remap_residual_j"] = json!(0.125);
+    h["absolute_remap_residual_j"] = json!(0.125);
+    for field in [
+        "outside_energy_j",
+        "net_boundary_energy_j",
+        "physical_stored_change_j",
+    ] {
+        let value = match field {
+            "outside_energy_j" => 3.125,
+            "net_boundary_energy_j" => -1.125,
+            _ => 1.875,
+        };
+        h[field] = json!(value);
+        h["trace"][0][field] = json!(value);
+    }
+    assert!(admit_heat(&a, &d, &s, &remapped, Consumer::TransientCoverage).is_ok());
+    for fault in 0..15 {
+        let mut changed = m.clone();
+        let h = &mut changed["transient_coverage"]["result"];
+        match fault {
+            0 => {
+                h["request"]["initial_instance_temperature_profiles_c"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("back");
+            }
+            1 => h["request"]["initial_instance_temperature_profiles_c"]["front"] = json!([10.]),
+            2 => h["request"]["initial_instance_temperatures_c"] = json!({"front":20.}),
+            3 => h["initial_condition"]["cell_order"] = json!("outside_to_inside"),
+            4 => h["checkpoint"]["temperature_c"][0][0] = json!(16.),
+            5 => h["checkpoint"]["exposed_temperature_c"][0] = json!([15.]),
+            6 => h["signed_remap_residual_j"] = json!(1.),
+            7 => h["checkpoint"]["frame"]["body_positions_m"][0][0] = json!(1.),
+            8 => {
+                h["checkpoint"]["frame"]["projection"]["layout"]["regions"][0]["layers"][0]["fraction"] =
+                    json!(1.25)
+            }
+            9 => {
+                h["request"]["initial_instance_temperature_profiles_c"]["back"] = json!([35., 100.])
+            }
+            10 => h["checkpoint"]["frame"]["request"]["cloth_layers"] = json!(["shell", "lining"]),
+            11 => {
+                h["checkpoint"]["frame"]["projection"]["layout"]["body_triangles"] =
+                    json!([[0, 2, 1]])
+            }
+            12 => {
+                h["checkpoint"]["frame"]["projection"]["layout"]["regions"][0]["body_triangle"] =
+                    json!(1)
+            }
+            13 => {
+                h["checkpoint"]["frame"]["projection"]["layout"]["regions"][0]["layers"][0]["layer"] =
+                    json!("shell")
+            }
+            _ => {
+                h["checkpoint"]["frame"]["projection"]["layout"]["regions"][0]["body_fraction"] =
+                    json!(1.25)
+            }
+        }
+        h["checkpoint"].as_object_mut().unwrap().remove("sha256");
+        h["checkpoint"]["sha256"] = json!(hash(&h["checkpoint"]).unwrap());
+        let mut descriptor = d.clone();
+        descriptor["scenario"]["motion"]["transient_coverage"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientCoverage).is_err(),
+            "fault {fault}"
+        );
+    }
+}
+
 fn same_law_case(second_work: f64) -> (Alternative, Value, Value, Value) {
     let (mut a, d, _, mut m) = coverage_case(false);
     let original = a.frozen_changes.as_ref().unwrap().default.as_ref().unwrap();

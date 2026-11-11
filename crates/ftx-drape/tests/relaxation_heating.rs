@@ -150,6 +150,66 @@ fn coverage_heat(result: &Value) -> &Value {
     &h["result"]
 }
 
+#[test]
+fn covered_depth_profiles_qualify_every_heated_cell_and_preserve_independent_mechanics() {
+    let mut front = maxwell(0.75);
+    front["record"]["properties"]["membrane_relaxation_heat_fraction"]["conditions"]["temperature_max_c"] =
+        json!("30");
+    let mut raw = garment(maxwell(0.5)).raw().clone();
+    raw["fabric"]["material"] = front;
+    let pattern = Pattern::new(raw);
+    let baseline = evaluate(&coverage_scenario(), &pattern);
+    let mut request = json!(coverage_scenario());
+    request["motion"]["transient_coverage"]["initial_temperature_c"] = json!(999.);
+    request["motion"]["transient_coverage"]["initial_instance_temperature_profiles_c"] =
+        json!({"front":[20.,25.],"back":[10.,15.]});
+    let result = evaluate(&serde_json::from_value(request.clone()).unwrap(), &pattern);
+    unchanged_mechanics(&baseline, &result);
+    let covered = coverage_heat(&result);
+    assert_eq!(
+        covered["initial_condition"]["temperature_range_c"],
+        json!([10., 25.])
+    );
+    let owners = result["drape"]["material"]["triangle_instance"]
+        .as_array()
+        .unwrap();
+    let stored = checkpoint_enthalpy_change_from(&covered["checkpoint"], |triangle| {
+        let instance =
+            &result["drape"]["material"]["instances"][owners[triangle].as_u64().unwrap() as usize];
+        if instance["instance"] == "front" {
+            22.5
+        } else {
+            12.5
+        }
+    });
+    assert!(
+        (stored
+            - covered["physical_stored_change_j"].as_f64().unwrap()
+            - covered["signed_remap_residual_j"].as_f64().unwrap())
+        .abs()
+            < 1e-10
+    );
+    // The first cell is admitted; the other cell independently escapes conversion qualification.
+    request["motion"]["transient_coverage"]["initial_instance_temperature_profiles_c"]["front"] =
+        json!([20., 40.]);
+    let failed = evaluate(&serde_json::from_value(request).unwrap(), &pattern);
+    unchanged_mechanics(&result, &failed);
+    assert_eq!(
+        failed["motion"]["result"]["transient_coverage"]["status"],
+        "refused"
+    );
+    assert!(
+        failed["motion"]["result"]["transient_coverage"]["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("conversion")
+    );
+    assert_eq!(
+        failed["motion"]["result"]["transient_surface"],
+        result["motion"]["result"]["transient_surface"]
+    );
+}
+
 // Independently integrate constant-capacity reference mass across covered portions and remaining
 // exposed cloth, without using solver-reported heat/storage or treating current area as mass.
 fn checkpoint_enthalpy_change(checkpoint: &Value) -> f64 {

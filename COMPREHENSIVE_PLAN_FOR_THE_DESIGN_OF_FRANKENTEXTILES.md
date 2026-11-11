@@ -5377,9 +5377,13 @@ The initial-state receipt binds source model, initial frame, retained owners and
 Ordinary material/design comparisons independently reconcile that receipt and include only used
 initial values in complete-history extrema. Unknown pieces, invalid source domains and unsupported
 dissipation combinations refuse without erasing independent drape or manufacturing consumers.
-Scalar-only requests keep their original serialization and calculations. This software increment
-is tracked by `ftx-ms2.20`; arbitrary initial depth profiles, wet coupling and measured garment
-temperature acceptance remain separate. See [material-scenario-studies.md](docs/material-scenario-studies.md).
+Scalar-only requests keep their original serialization and calculations. The scalar increment
+is tracked by `ftx-ms2.20`. Exact source inside-to-outside depth profiles are also supported for
+every retained physical instance (`ftx-ms2.32`), with body-facing reversal, complete thermal and
+active heat-conversion domain admission, and a versioned initial-state receipt. Comparisons
+independently reconstruct covered and exposed enthalpy and exclude signed remap residuals from
+physical storage. Wet coupling and measured garment temperature acceptance remain separate.
+See [material-scenario-studies.md](docs/material-scenario-studies.md).
 
 ### 25.174 Author body and garment-layer heat through ordinary workbench controls
 

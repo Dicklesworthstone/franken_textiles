@@ -50,6 +50,11 @@ pub struct Request {
     /// be nonempty; active dissipation conversions qualify each source triangle's applied value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_instance_temperatures_c: Option<BTreeMap<String, f64>>,
+    /// Alternatively, every retained physical instance's complete canonical inside-to-outside
+    /// profile, with exactly `settings.cells_per_layer` entries. Exclusive with scalar overrides;
+    /// the scalar fallback is unused. Actual body-facing orientation determines covered cell order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_instance_temperature_profiles_c: Option<BTreeMap<String, Vec<f64>>>,
     /// One spatially uniform pair of body-side/exterior films for each keyframe interval.
     pub boundaries: Vec<Film>,
     /// Optional exact interval schedule; null retains that interval's outside film. Each active
@@ -260,6 +265,14 @@ impl Request {
                 plastic::Heating::new_kind(run, &initial_patch_temperatures, plastic::Kind::Bending)
             })
             .transpose()?;
+        if self.initial_instance_temperature_profiles_c.is_some()
+            && (plastic.is_some() || relaxation.is_some() || bending.is_some())
+        {
+            let temperatures = frame.source_temperatures(&state)?;
+            for heating in [&plastic, &relaxation, &bending].into_iter().flatten() {
+                heating.check_temperatures(&temperatures)?;
+            }
+        }
         let bridge_authority = self
             .thermal_bridges
             .as_ref()
@@ -312,6 +325,22 @@ impl Request {
                 "initial coverage temperatures need 1..=65536 exact instance names and finite physical values",
             ));
         }
+        if let Some(profiles) = &self.initial_instance_temperature_profiles_c
+            && (self.initial_instance_temperatures_c.is_some()
+                || profiles.is_empty()
+                || profiles.len() > 65_536
+                || profiles.iter().any(|(id, cells)| {
+                    id.is_empty()
+                        || cells.len() != self.settings.cells_per_layer
+                        || cells
+                            .iter()
+                            .any(|value| !value.is_finite() || *value < -273.15)
+                }))
+        {
+            return Err(invalid(
+                "initial coverage profiles need complete canonical depth cells, physical temperatures and no scalar instance overrides",
+            ));
+        }
         Ok(())
     }
 
@@ -322,9 +351,12 @@ impl Request {
         instances: &[String],
         owners: &[usize],
     ) -> Result<InitialState, Refusal> {
-        let Some(overrides) = &self.initial_instance_temperatures_c else {
+        self.validate_initial_temperatures()?;
+        if self.initial_instance_temperatures_c.is_none()
+            && self.initial_instance_temperature_profiles_c.is_none()
+        {
             return Ok((frame.initial(self.initial_temperature_c)?, None, None));
-        };
+        }
         let retained = owners.iter().copied().collect::<BTreeSet<_>>();
         if instances.is_empty()
             || instances.len() > 196_608
@@ -341,6 +373,40 @@ impl Request {
             .iter()
             .map(|&owner| instances[owner].as_str())
             .collect::<BTreeSet<_>>();
+        if let Some(profiles) = &self.initial_instance_temperature_profiles_c {
+            if profiles.len() != retained.len()
+                || profiles
+                    .keys()
+                    .any(|id| !retained_names.contains(id.as_str()))
+            {
+                return Err(invalid(
+                    "initial coverage profiles need exactly every retained physical instance",
+                ));
+            }
+            let patch_profiles: Vec<_> = owners
+                .iter()
+                .map(|&owner| profiles[&instances[owner]].clone())
+                .collect();
+            let state = frame.initial_profiles(&patch_profiles)?;
+            let range = patch_profiles
+                .iter()
+                .flatten()
+                .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], &value| {
+                    [lo.min(value), hi.max(value)]
+                });
+            let receipt = json!({"schema":"ftx-motion-coverage-initial-condition/2",
+                "model_sha256":source.snapshot()["sha256"],"frame_sha256":frame.sha256(),
+                "instances":instances,"triangle_instance":owners,"cell_order":"inside_to_outside",
+                "instance_temperature_profiles_c":profiles,"temperature_range_c":range});
+            // Conversion constructors admit one value per source; start() additionally checks
+            // every actual depth cell against each active conversion's independent domain.
+            let first = patch_profiles.iter().map(|profile| profile[0]).collect();
+            return Ok((state, Some(receipt), Some(first)));
+        }
+        let overrides = self
+            .initial_instance_temperatures_c
+            .as_ref()
+            .expect("one explicit initial-state mode is present");
         if overrides
             .keys()
             .any(|id| !retained_names.contains(id.as_str()))

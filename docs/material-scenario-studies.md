@@ -398,12 +398,14 @@ qualify against its source material, and covered stacks retain their common char
 Pieces sharing one material column keep separate temperatures. Each value is uniform through its
 own sheet thickness; arbitrary initial depth profiles are not inferred.
 
-Independent-sheet `transient_surface` also accepts explicit
+Both dry policies also accept explicit
 `initial_instance_temperature_profiles_c`, a complete map of retained physical-instance names to
-inside-to-outside temperature arrays. Each array must contain exactly `cells_per_layer` values;
-missing/extra names or cells refuse. This mode is exclusive with `initial_instance_temperatures_c`.
-The legacy scalar remains required and finite but is unused, so it contributes neither heat nor
-reported extrema. For example, with two cells per sheet:
+temperature arrays in the original source material's inside-to-outside order. Each array must contain
+exactly `cells_per_layer` values for `transient_surface`, or `settings.cells_per_layer` values for
+`transient_coverage`; missing/extra names or cells refuse. This mode is exclusive with
+`initial_instance_temperatures_c`. The legacy scalar remains required, finite and at or above absolute
+zero but is unused, so it contributes neither heat nor reported extrema. For example, with two cells per
+independent sheet:
 
 ```json
 {
@@ -416,26 +418,34 @@ reported extrema. For example, with two cells per sheet:
 }
 ```
 
-Every cell retains its source material and reference mass. The existing thermal solver advances
-the full profile, and `ftx-motion-surface-initial-condition/2` records exact owners, keyed profiles,
-`cell_order: "inside_to_outside"`, model identity and actual extrema. Comparison independently
-integrates each initial-to-final cell enthalpy rather than substituting a scalar or profile average.
-Qualified dissipation heating and textile-water policies use the same state; free liquid initially
-shares the inside cell's temperature, including when coupled mass/momentum drives later motion.
-Profiles do not extend the moving body-coverage remapping contract or infer measured conditioning.
+For coverage, use the same profile map and put its cell count in `settings.cells_per_layer` instead
+of the example's top-level field. Every cell retains its source material and reference mass. The
+existing thermal solver advances the full profile. For independent sheets,
+`ftx-motion-surface-initial-condition/2` records exact owners, keyed profiles,
+`cell_order: "inside_to_outside"`, model identity and actual extrema. Independent-sheet comparisons
+integrate each initial-to-final cell enthalpy rather than
+substituting a scalar or profile average. Qualified sheet textile-water policies use the same state;
+free liquid initially shares the inside cell's temperature, including when coupled mass/momentum
+drives later motion. Authored profiles do not establish measured conditioning.
 
-For `transient_coverage`, each covered layer and its exposed remainder start at the same retained
-source-piece temperature. Subsequent movement uses the existing reference-mass enthalpy remap, so
-entering or leaving body coverage does not reset that temperature or lose stored heat. The result's
-`initial_condition` retains exact owners, resolved values, the source model and initial frame
-identities. Material/design comparisons include only actually applied initial temperatures in
-sample extrema; an unused fallback cannot create a false maximum or minimum. Final-temperature
-metrics continue to describe the final sample alone. Original motion-file input preserves these
-fields in the browser and named-case replay.
+For `transient_coverage`, each covered layer and its exposed remainder start from the same retained
+instance's source profile. Covered cell order reverses when the body faces the opposite side of the
+source material; exposed portions retain the original source order. Subsequent movement uses the
+existing reference-mass enthalpy remap, so entering or leaving coverage does not reinitialize temperatures.
+The result's profile `initial_condition` uses `ftx-motion-coverage-initial-condition/2` and records
+exact owners, keyed profiles, `cell_order: "inside_to_outside"`, source model and initial frame
+identities, and actual extrema. Comparison binds final geometry to retained motion and physical layers
+to source owners, integrates covered and exposed initial-to-final source enthalpy, and subtracts the
+separately reported `signed_remap_residual_j` to reconcile `physical_stored_change_j`.
+
+Material/design comparisons include only actually applied initial temperatures in sample extrema;
+an unused fallback cannot create a false maximum or minimum. Final-temperature metrics continue to
+describe the final sample alone. Omitting the profile field preserves existing scalar initialization
+and receipts. Original motion-file input preserves these fields in the browser and named-case replay.
 
 The same initialization supports separately requested plastic, Maxwell and irreversible bending
 heating in both sheet and coverage histories. Every active conversion observation qualifies the
-actual starting temperature of its retained source triangles, including covered and exposed
+actual starting temperature of every retained source cell, including covered and exposed
 portions; a fully overridden fallback is not substituted into that check. Accepted mechanical
 work is deposited through the existing source fractions and reference-mass enthalpy authority.
 Initial preparation work remains excluded. Material/design comparisons reconcile the initial
