@@ -2224,6 +2224,51 @@ fn shared_operator_calendars_keep_complete_feed_and_travel_inside_qualified_wind
 }
 
 #[test]
+fn shared_operator_late_clock_branches_preserve_a_complete_qualified_alternative() {
+    const LAST_MILLISECOND: u64 = 9_007_199_254_740_991;
+    // The fast configuration needs two separately ceiled 1334 ms feeds, 500 ms setup,
+    // 100 ms loading, 100 ms between passes and 200 ms final unloading: exactly 3568 ms.
+    // The slow first-cell seed cannot fit. Both its first-feed overflow and its remaining-work
+    // overflow are unavailable branches, not grounds to discard the complete fast-cell job.
+    for remaining in [5000, 6000] {
+        let (pattern, mut options) = heterogeneous();
+        options["production"]["production_copies"] = json!(1);
+        shared_operator(&mut options, 40000);
+        let opening = LAST_MILLISECOND - remaining;
+        operator_calendars(
+            &mut options,
+            json!({"synthetic-person":windows(&[[opening,LAST_MILLISECOND]])}),
+        );
+        let typed: SewOptions = serde_json::from_value(options).unwrap();
+        let program = SewProgram::build(&pattern, &typed).unwrap();
+        let report = program
+            .plan
+            .production
+            .as_ref()
+            .unwrap()
+            .parallel
+            .as_ref()
+            .unwrap();
+        let labor = report.shared_operator.as_ref().unwrap();
+        assert!(labor.baseline_replaced);
+        assert!(labor.search_complete && !labor.budget_exhausted);
+        assert_eq!(report.selected.makespan_milliseconds, opening + 3568);
+        assert!(report.selected.cells[0].copies.is_empty());
+        assert_eq!(report.selected.cells[1].copies, vec![0]);
+        assert_eq!(labor.selected.busy_milliseconds, 900);
+        assert_eq!(program.stitches.len(), 40);
+        assert!(labor.selected.steps.iter().all(|step| {
+            step.departure_milliseconds >= opening
+                && step.feed_finish_milliseconds <= LAST_MILLISECOND
+        }));
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &typed).unwrap()).unwrap()
+        );
+    }
+}
+
+#[test]
 fn shared_operator_calendars_preserve_shared_fixture_holds_and_bounded_complete_seeds() {
     let (pattern, mut options) = fixture(2);
     shared_fixtures(&mut options, 1);
