@@ -54,7 +54,7 @@ let guidedFitText = null;
 const guidedFitFields = ["Name", "Label", "Kind", "Instance", "From", "To", "Instances", "Line", "Vertex", "Landmark",
   "Dy", "Refs", "Scale", "Body", "BodyScale", "BodyOffset", "Minimum", "Nominal", "Maximum"];
 let guidedDesignRestartNames = [];
-let guidedDesignAfterSource = null, guidedDesignAfterProblem = "";
+let guidedDesignAfterSource = null, guidedDesignAfterProblem = "", guidedDesignAfterRead = 0;
 let guidedDesignCurrent = 0;
 let guidedDesignVertexSource = null, guidedDesignVertexProblem = "";
 let guidedDesignNomination = null;
@@ -429,11 +429,18 @@ function controls() {
   const afterActive = !!source && guided && $("guidedDesign").checked;
   if (afterActive) ensureGuidedDesignAfterSources();
   const capEase = $("guidedDesignAfterKind").value === "cap_ease";
-  $("guidedDesignAfterTrueFields").hidden = capEase;
+  const treatmentAfter = $("guidedDesignAfterKind").value === "treatment";
+  $("guidedDesignAfterTrueFields").hidden = capEase || treatmentAfter;
   $("guidedDesignAfterCapFields").hidden = !capEase;
-  for (const id of ["guidedDesignAfterKind", "guidedDesignAfterSeam", "guidedDesignAfterEnd", "guidedDesignAfterPiece",
+  $("guidedDesignAfterTreatmentFields").hidden = !treatmentAfter;
+  $("guidedDesignAfterTreatmentSource").textContent = has("treatmentRequest") ?
+    `Draft upload: ${$("treatmentRequest").files[0].name || "piece-treatment request"}. Add or Replace saves its original contents.` :
+    "Choose a piece-treatment request above before adding a treatment step.";
+  $("guidedDesignAfterKind").disabled = !afterActive;
+  for (const id of ["guidedDesignAfterSeam", "guidedDesignAfterEnd", "guidedDesignAfterPiece",
     "guidedDesignAfterSeams", "guidedDesignAfterRatio"]) $(id).disabled = !afterActive || !!guidedDesignAfterProblem;
-  $("guidedDesignAfterAdd").disabled = !afterActive || !!guidedDesignAfterProblem || guidedDesignAfter.length >= 16;
+  $("guidedDesignAfterAdd").disabled = !afterActive || (!treatmentAfter && !!guidedDesignAfterProblem) ||
+    (treatmentAfter && !has("treatmentRequest")) || guidedDesignAfter.length >= 16;
   $("guidedDesignAfterClear").disabled = !guidedDesignAfter.length;
   for (const { button, unavailable } of guidedDesignAfterButtons) button.disabled = !afterActive || unavailable;
   const stockMode = guidedStockMode(), cutting = $("guidedCutting").checked;
@@ -6000,16 +6007,19 @@ $("clearStudyCandidates").onclick = () => {
   studyCandidates.length = 0; showStudyCandidates();
   if (guidedStudyMode()) invalidate(["study", "scenario"], true); else controls();
 };
-$("studyMode").addEventListener("change", () => invalidate(["study", "scenario",
-  ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true));
+$("studyMode").addEventListener("change", () => {
+  ++guidedDesignAfterRead;
+  invalidate(["study", "scenario", ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true);
+});
 $("guidedDesignRestartAdd").onclick = () => saveGuidedDesignRestart();
 $("guidedDesignRestartClear").onclick = () => { guidedDesignRestarts.length = 0; changedGuidedDesignRestarts(); };
 $("guidedDesignAfterAdd").onclick = () => saveGuidedDesignAfter();
 $("guidedDesignAfterClear").onclick = () => { guidedDesignAfter.length = 0; changedGuidedDesignAfter(); };
 for (const id of ["guidedDesignAfterKind", "guidedDesignAfterSeam", "guidedDesignAfterEnd", "guidedDesignAfterPiece",
   "guidedDesignAfterSeams", "guidedDesignAfterRatio"]) {
-  $(id).addEventListener("change", controls);
-  if (id === "guidedDesignAfterRatio") $(id).addEventListener("input", controls);
+  const changed = () => { ++guidedDesignAfterRead; controls(); };
+  $(id).addEventListener("change", changed);
+  if (id === "guidedDesignAfterRatio") $(id).addEventListener("input", changed);
 }
 for (const id of ["guidedMaterialStrain", "guidedMaterialStrainScope", "guidedMaterialStrainInstances", "guidedMaterialStrainBudget"]) {
   $(id).addEventListener("change", changedGuidedScenarioDraft);
@@ -6184,6 +6194,7 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
   ...guidedTransportMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Direction`, `${prefix}MinimumLimit`, `${prefix}Limit`]),
   ...guidedRequired.map(([id]) => id)]) {
   const changed = () => {
+    if (["guidedDesign", "guidedDesignMode"].includes(id)) ++guidedDesignAfterRead;
     if (["studyTarget", "studyPieces"].includes(id) && !studyNeedsTarget()) { controls(); return; }
     if (id === "guidedDesignMaterial") {
       const key = $(id).value, original = guidedDesignMaterialSource(key);
@@ -6299,6 +6310,10 @@ function showGuidedDesignAfter() {
     const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
     label.textContent = `${index + 1}: ` + (operation.op === "true_seam" ?
       `true ${operation.seam}, B-side ${operation.end}.` :
+      operation.op === "treatment" ? (() => {
+        const request = JSON.parse(operation.request);
+        return `${request.mode === "treat" ? "apply qualified treatment" : "compensate cutting geometry"} on ${Object.keys(request.pieces).join(", ")}. Original request saved.`;
+      })() :
       `cap ease on ${operation.piece}, seams ${operation.seams.join(", ")}, total ratio ${operation.target_ratio}.`);
     row.append(label);
     const action = (title, handler, unavailable = false) => {
@@ -6323,20 +6338,24 @@ function showGuidedDesignAfter() {
     parent.append(row);
   }
   $("guidedDesignAfterSummary").textContent = guidedDesignAfter.length ?
-    `${guidedDesignAfter.length} ordered seam adjustments. These share the 16-operation limit with every linked site.` :
-    "No seam adjustments added. Linked alterations retain the original seam checks.";
+    `${guidedDesignAfter.length} ordered seam/treatment steps. These share the 16-operation limit with every linked site.` :
+    "No seam adjustments or treatment steps added. Linked alterations retain the original seam checks.";
 }
 function changedGuidedDesignAfter() {
+  ++guidedDesignAfterRead;
   showGuidedDesignAfter();
   if (guidedStudyMode() && $("guidedDesign").checked) invalidate(["study", "scenario"], true);
   else controls();
 }
-function saveGuidedDesignAfter(replacing = null) {
+async function saveGuidedDesignAfter(replacing = null) {
   if (!source || !guidedStudyMode() || !$("guidedDesign").checked) return;
+  const revision = ++guidedDesignAfterRead, originalSource = source, generation = epoch;
+  const current = () => revision === guidedDesignAfterRead && originalSource === source && generation === epoch &&
+    guidedStudyMode() && $("guidedDesign").checked;
   try {
     ensureGuidedDesignAfterSources();
-    if (guidedDesignAfterProblem) throw Error(guidedDesignAfterProblem);
     const kind = $("guidedDesignAfterKind").value;
+    if (guidedDesignAfterProblem && kind !== "treatment") throw Error(guidedDesignAfterProblem);
     let operation;
     if (kind === "true_seam") operation = { op: kind, seam: $("guidedDesignAfterSeam").value, end: $("guidedDesignAfterEnd").value };
     else if (kind === "cap_ease") {
@@ -6344,13 +6363,21 @@ function saveGuidedDesignAfter(replacing = null) {
       if (!ratio) throw Error("Declare a positive target total cap / armhole length ratio.");
       operation = { op: kind, piece: $("guidedDesignAfterPiece").value,
         seams: Array.from($("guidedDesignAfterSeams").selectedOptions, option => option.value), target_ratio: Number(ratio) };
-    } else throw Error("Choose seam truing or cap ease.");
+    } else if (kind === "treatment") {
+      const file = $("treatmentRequest").files[0];
+      if (!file) throw Error("Choose a qualified piece-treatment request under Laundering and dimensional treatment first.");
+      if (file.size > 256 * 1024) throw Error("Guided treatment request exceeds 256 KiB; no source was read.");
+      const data = await file.arrayBuffer();
+      if (!current()) return;
+      if (data.byteLength > 256 * 1024) throw Error("Guided treatment request exceeds 256 KiB.");
+      operation = { op: kind, request: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data) };
+    } else throw Error("Choose seam truing, cap ease or a qualified treatment.");
     const operations = guidedDesignAfter.slice(), index = replacing ? operations.indexOf(replacing) : -1;
     if (replacing && index < 0) throw Error("Choose a current adjustment to replace.");
     if (replacing) operations[index] = operation; else operations.push(operation);
     const retained = buildGuidedDesignAfterOperations(operations, source.pieces.map(piece => piece.id), guidedDesignSeamIds());
     guidedDesignAfter.splice(0, guidedDesignAfter.length, ...retained); changedGuidedDesignAfter();
-  } catch (e) { error(String(e.message || e)); }
+  } catch (e) { if (current()) error(String(e.message || e)); }
 }
 function refreshGuidedDesignRestartInputs() {
   const names = guidedDesignVariables.map(variable => variable.key);
@@ -6577,6 +6604,7 @@ function guidedDesignInput(number, inScenario) {
     ...(objective === "fit_band_violation_mm" ? {} : severalMaterials ? { materialKeys } : { materialKey }), ...(caseKey ? { caseKey } : {}) };
 }
 function resetGuidedDesign() {
+  ++guidedDesignAfterRead;
   $("guidedDesign").checked = false;
   $("guidedDesignPieces").replaceChildren();
   $("guidedDesignVertices").replaceChildren();
@@ -6869,6 +6897,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
   $(id).addEventListener("change", () => {
+    if (id === "treatmentRequest") ++guidedDesignAfterRead;
     if (Object.hasOwn(sheetConditionForms, id) && sheetConditionsMode(id) !== "file") { controls(); return; }
     let scenarioCasesLoading;
     if (id === "stockRequest") {
@@ -6893,6 +6922,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     const guidedProcessSource = guidedStudyMode() && ["cutOptions", "stockRequest", "stockPricing", "cutJobRequest",
       "sewOptions", "sewOptimize", "quotes", "market"].includes(id);
     invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 ||
+      id === "treatmentRequest" ||
       (studyBodyMode() === "preview" && ["drapeLegs", "drapeLegFraction"].includes(id)) ||
       ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions", "vaporSurfaceConditions"].includes(id));
     return scenarioCasesLoading;

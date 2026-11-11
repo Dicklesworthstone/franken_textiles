@@ -19137,7 +19137,7 @@ function guidedAfterDraft(p,operation) {
 }
 function guidedAfterAction(p,label) {
   const button=descendants(p.e.guidedDesignAfterList).find(node=>node.tag==='button'&&node.textContent===label);
-  assert.ok(button,label);assert.equal(button.disabled,false,label);button.onclick();
+  assert.ok(button,label);assert.equal(button.disabled,false,label);return button.onclick();
 }
 const guidedTrueSeam={op:'true_seam',seam:'side',end:'start'};
 const guidedCapEase={op:'cap_ease',piece:'front',seams:['side'],target_ratio:1.1};
@@ -19145,6 +19145,115 @@ function addGuidedAfter(p,operation) {
   const before=p.e.guidedDesignAfterList.children.length;guidedAfterDraft(p,operation);p.e.guidedDesignAfterAdd.onclick();
   assert.equal(p.e.guidedDesignAfterList.children.length,before+1,p.e.error.textContent);
 }
+
+const guidedTreatmentTransition=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/kanat-ozdil-2026-denim-1-treatment.json'),'utf8');
+const guidedTreatmentRequestSource=mode=>' \r\n{"schema":"ftx-pattern-treatment/1","mode":'+JSON.stringify(mode)+
+  ',"pieces":{"front":"wash","back":"wash"},"transitions":{"wash":'+guidedTreatmentTransition+'},"seam_tolerance_mm":-0.0}\r\n';
+function guidedTreatmentDraft(p,raw) {
+  guidedDesignField(p,'guidedDesignAfterKind','treatment','change');
+  p.select('treatmentRequest',raw);p.e.treatmentRequest.handlers.change();
+}
+async function addGuidedTreatment(p,raw) {
+  const before=p.e.guidedDesignAfterList.children.length;guidedTreatmentDraft(p,raw);
+  await p.e.guidedDesignAfterAdd.onclick();assert.equal(p.e.guidedDesignAfterList.children.length,before+1,p.e.error.textContent);
+}
+
+test('guided treatment stages preserve exact sources and ordered native requests in grid adaptive and named scenarios',async()=>{
+  for(const mode of ['grid','adaptive','named']) {
+    const setup=mode==='named'?await guidedScenarioSetup(false,guidedSeamPattern):await guidedDesignSetup(guidedSeamPattern);
+    const {p}=setup;
+    if(mode==='named'){configureGuidedDesign(p);guidedNamedCases(p);await saveGuidedCase(p,'declared pose');}
+    const before=guidedTreatmentRequestSource('compensate'),after=guidedTreatmentRequestSource('treat');
+    await addGuidedTreatment(p,before);addGuidedAfter(p,guidedTrueSeam);await addGuidedTreatment(p,after);
+    const displayed=descendants(p.e.guidedDesignAfterList).map(node=>node.textContent||'').join(' ');
+    assert.match(displayed,/compensate cutting geometry.*front, back/);
+    assert.match(displayed,/apply qualified treatment/);
+    if(mode==='adaptive') {
+      guidedDesignField(p,'guidedDesignMode','adaptive','change');guidedAdaptiveDomain(p,[0,10,0,5,1]);
+      guidedDesignField(p,'guidedDesignEvaluations','4');
+    }
+    const op=mode==='named'?'scenario':'study';await p.e[op].onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,op,p.e.error.textContent);assert.equal(sent.pattern,guidedSeamPattern);
+    const request=JSON.parse(sent.studyRequest),search=request.design_adaptive??request.design_grid;
+    assert.deepEqual(search.after,[{op:'treatment',request:JSON.parse(before)},guidedTrueSeam,{op:'treatment',request:JSON.parse(after)}]);
+    assert.ok(sent.studyRequest.includes(before));assert.ok(sent.studyRequest.includes(after));
+    assert.match(sent.studyRequest,/"seam_tolerance_mm":-0\.0/);
+    if(mode==='named') {
+      assert.equal(JSON.parse(sent.scenarioRequest).cases[0].key,'declared pose');continue;
+    }
+    assert.equal(sent.onBody,true);let freed=0;
+    const worker=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){freed++;}},
+      material_study_on_body:(_model,...args)=>{
+        assert.deepEqual(args,[sent.pattern,sent.studyRequest,setup.body]);
+        return JSON.stringify({...studyReport(),schema:'ftx-design-study-report/1'});
+      }}});
+    const response=await worker.send(sent);assert.equal(response.type,'result',response.message);assert.equal(freed,1);p.current().emit(response);
+    const link=descendants(section(p,'Fixed-pattern manufacturing alternatives')).find(node=>node.download==='study-request.json');
+    assert.equal(await p.blobs.get(link.href).text(),sent.studyRequest);
+  }
+});
+
+test('guided treatment saved stages outlive draft uploads while accepted edits cancel stale studies and clear on source replacement',async()=>{
+  const {p}=await guidedDesignSetup(guidedSeamPattern),before=guidedTreatmentRequestSource('compensate'),after=guidedTreatmentRequestSource('treat');
+  await addGuidedTreatment(p,before);await p.e.study.onclick();
+  const old=p.current(),sent=old.messages.at(-1);guidedTreatmentDraft(p,after);
+  assert.equal(old.dead,false,'Changing only the draft upload cannot replace an immutable saved stage');
+  p.emit(studyReport(),[{name:'study-request.json',text:sent.studyRequest}]);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,false);assert.ok(p.live.size);
+  await p.e.study.onclick();assert.ok(p.current().messages.at(-1).studyRequest.includes(before));
+  await guidedAfterAction(p,'Replace adjustment 1 from current controls');
+  assert.equal(old.dead,true);assert.equal(p.live.size,0);assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  old.emit({type:'result',request:sent.request,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(p.live.size,0);p.ready();await p.e.study.onclick();
+  assert.ok(p.current().messages.at(-1).studyRequest.includes(after));p.emit(studyReport());
+  addGuidedAfter(p,guidedTrueSeam);await guidedAfterAction(p,'Move adjustment 2 earlier');await p.e.study.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).studyRequest).design_grid.after,
+    [guidedTrueSeam,{op:'treatment',request:JSON.parse(after)}]);p.emit(studyReport());
+  await guidedAfterAction(p,'Remove adjustment 1');await p.e.study.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).studyRequest).design_grid.after,[{op:'treatment',request:JSON.parse(after)}]);
+  p.emit(studyReport());await p.load();assert.equal(p.e.guidedDesignAfterList.children.length,0);assert.equal(p.e.guidedDesign.checked,false);
+});
+
+test('guided treatment delayed file reads cannot attach to changed sources cancelled work or competing sequence edits',async()=>{
+  for(const change of ['upload','kind','clear','pattern','cancel','mode','add']) {
+    const {p}=await guidedDesignSetup(guidedSeamPattern),raw=guidedTreatmentRequestSource('treat'),delay=deferred();
+    guidedTreatmentDraft(p,raw);let reading=false;
+    p.e.treatmentRequest.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const saving=p.e.guidedDesignAfterAdd.onclick();assert.equal(reading,true,change);
+    if(change==='upload'){p.select('treatmentRequest',guidedTreatmentRequestSource('compensate'));p.e.treatmentRequest.handlers.change();}
+    else if(change==='kind')guidedDesignField(p,'guidedDesignAfterKind','true_seam','change');
+    else if(change==='clear')p.e.guidedDesignAfterClear.onclick();
+    else if(change==='pattern')await p.load();
+    else if(change==='cancel')p.e.cancel.onclick();
+    else if(change==='mode'){p.e.studyMode.value='file';p.e.studyMode.handlers.change();p.e.studyMode.value='guided';p.e.studyMode.handlers.change();}
+    else addGuidedAfter(p,guidedTrueSeam);
+    delay.resolve(raw);await saving;
+    assert.equal(p.e.guidedDesignAfterList.children.length,change==='add'?1:0,change);
+    assert.equal(p.e.error.hidden,true,change);
+  }
+});
+
+test('guided treatment rejects invalid bytes oversized reads and unqualified mappings while preserving saved stages',async()=>{
+  const {p}=await guidedDesignSetup(guidedSeamPattern),raw=guidedTreatmentRequestSource('treat');
+  await addGuidedTreatment(p,raw);
+  const malformed=Buffer.concat([Buffer.from('{"source":"'),Buffer.from([0xff]),Buffer.from('"}')]);
+  for(const data of [malformed,Buffer.from('\ufeff'+raw),Buffer.from(raw.replace('"front":"wash"','"missing":"wash"')),
+    Buffer.from(guidedTreatmentTransition)]) {
+    p.e.treatmentRequest.files=[new Blob([data])];p.e.treatmentRequest.handlers.change();
+    await p.e.guidedDesignAfterAdd.onclick();assert.equal(p.e.guidedDesignAfterList.children.length,1);
+    assert.equal(p.e.error.hidden,false);
+  }
+  for(const declared of [true,false]) {
+    let reads=0;p.e.treatmentRequest.files=[{size:declared?256*1024+1:2,
+      arrayBuffer:async()=>{reads++;return new ArrayBuffer(256*1024+1);}}];p.e.treatmentRequest.handlers.change();
+    await p.e.guidedDesignAfterAdd.onclick();assert.equal(reads,declared?0:1);assert.equal(p.e.guidedDesignAfterList.children.length,1);
+    assert.match(p.e.error.textContent,/256 KiB/);
+  }
+  await p.e.study.onclick();const sent=p.current().messages.at(-1);assert.ok(sent.studyRequest.includes(raw));
+  p.current().emit({type:'error',request:sent.request,message:'Native treatment source qualification refused'});
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);assert.equal(p.e.guidedDesignAfterList.children.length,1);
+  assert.match(p.e.error.textContent,/Native treatment source qualification refused/);
+});
 
 test('guided seam adjustments preserve ordered grid and adaptive requests through the selected-body worker',async()=>{
   for(const mode of ['grid','adaptive']) {

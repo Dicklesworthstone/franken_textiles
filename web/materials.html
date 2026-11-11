@@ -687,11 +687,12 @@ requires reviewing the saved points; their original coordinates stay visible unt
 and an earlier budget or retained-design stop can leave later points unvisited. Grid mode retains these points without using them.
 Multiple local searches do not prove a global optimum.</p>
 </fieldset>
-<fieldset><legend>Adjust seams after the linked alterations</legend>
-<p>Each candidate first applies every variable's linked sites, then runs these adjustments in their displayed order.
+<fieldset><legend>Adjust seams and apply treatment after the linked alterations</legend>
+<p>Each candidate first applies every variable's linked sites, then runs these steps in their displayed order.
 Use the original pattern's seam contracts and source pieces. No adjustment runs unless you add it.</p>
 <label>Adjustment <select id="guidedDesignAfterKind"><option value="true_seam">True a seam by moving its B-side endpoint</option>
-<option value="cap_ease">Adjust sleeve-cap height to a declared ease ratio</option></select></label>
+<option value="cap_ease">Adjust sleeve-cap height to a declared ease ratio</option>
+<option value="treatment">Apply qualified treatment or cutting compensation</option></select></label>
 <p id="guidedDesignAfterSourceStatus" class="note" role="status" hidden></p>
 <div id="guidedDesignAfterTrueFields" class="study-fields">
 <label>Original seam <select id="guidedDesignAfterSeam"><option value="">Choose an original seam</option></select></label>
@@ -703,10 +704,20 @@ Use the original pattern's seam contracts and source pieces. No adjustment runs 
 <label>Original cap/armhole seams <select id="guidedDesignAfterSeams" multiple size="4" aria-label="Original seams for cap ease"></select></label>
 <label>Target total cap / armhole length ratio <input id="guidedDesignAfterRatio" type="number" min="0" step="any" placeholder="Explicit positive ratio"></label>
 </div>
-<button id="guidedDesignAfterAdd" type="button" disabled>Add seam adjustment</button>
-<p id="guidedDesignAfterSummary" class="note" role="status">No seam adjustments added.</p>
+<div id="guidedDesignAfterTreatmentFields" hidden>
+<p><a href="#treatmentRequest">Choose a qualified piece-treatment request under Laundering and dimensional treatment</a>,
+then Add or Replace to save that exact request in this sequence. Its mode, source-piece assignments and independently
+qualified before/after materials remain unchanged. Choose another request to add another stage.</p>
+<p id="guidedDesignAfterTreatmentSource" class="note" role="status"></p>
+<p class="note">The fit targets apply to the final treated geometry. Place seam corrections before or after treatment explicitly.
+Later material choices must preserve each treated piece's final qualified material state; incompatible substitutions refuse.
+Replacing the upload prepares a new draft without changing saved stages. This applies the declared free dimensional change;
+it does not predict constrained shrinkage of an assembled garment.</p>
+</div>
+<button id="guidedDesignAfterAdd" type="button" disabled>Add post-alteration step</button>
+<p id="guidedDesignAfterSummary" class="note" role="status">No seam adjustments or treatment steps added.</p>
 <div id="guidedDesignAfterList"></div>
-<button id="guidedDesignAfterClear" type="button" disabled>Clear seam adjustments</button>
+<button id="guidedDesignAfterClear" type="button" disabled>Clear post-alteration steps</button>
 <p class="note">Editing the fields prepares an adjustment; Add or Replace changes the active sequence. Order matters.
 These operations share the 16-operation limit with every linked alteration site, in both grid and adaptive search.</p>
 <p class="note">Seam truing uses the existing bounded B-side endpoint slide. Cap ease changes cap height to the declared aggregate ratio;

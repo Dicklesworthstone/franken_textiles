@@ -170,6 +170,17 @@ screened/adaptive trials. Download links use the exact retained stage strings, i
 stages of a later-refused design. The final geometry/fit/binding result determines admission;
 merely displaying a stage never marks that candidate selected or physically validated.
 
+Guided grid and adaptive design searches can include the uploaded **pattern** treatment request
+as an ordered post-alteration step. Add or replace the step after choosing the request; the saved
+step retains its original source bytes independently of later uploads. Treatment, compensation,
+seam truing and cap-ease steps run in their displayed order after each trial's linked alterations.
+The native engine then checks the final treated dimensions against the selected body's fit
+contract and rebuilds the admitted manufacturing and scenario consumers. A material-only
+transition must first be supplied with explicit source-piece assignments in a pattern-treatment
+request. The browser does not invent that mapping, alter source observations or automatically
+repair seams. Editing the saved sequence cancels obsolete study results; replacing the source
+pattern clears the sequence.
+
 ## Evidence and remaining physical scope
 
 The built-in five denim pairs document construction, directional dimensional change, areal mass

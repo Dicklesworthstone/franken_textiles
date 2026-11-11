@@ -3530,6 +3530,9 @@ and replicated per-piece material/history records, not only selected candidates.
 Both native commands and the existing portable study interfaces use this same authority. Browser
 studies expose exact intermediate before/after/request downloads for alternatives and screened or
 adaptive trials, retaining final admission/refusal status and withdrawing obsolete links on edits.
+Guided grid and adaptive controls can also snapshot a complete source-qualified pattern-treatment
+request into their ordered post-alteration sequence. Each trial reaches the same final treated
+geometry, fit and material-state gates; later uploads cannot silently replace an authored step.
 The laundered-denim example can emit a complete comparison of untreated, treated, compensated and
 compensated-then-treated panels. This implements the software scope of `ftx-care1.3`; measured sewn
 restraint, process-dependent contact and held-out garment behavior remain under `ftx-care1`.

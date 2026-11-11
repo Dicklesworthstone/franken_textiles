@@ -1749,6 +1749,67 @@ const linkedFitSource = () => ' {\r\n"schema":"fabric-fit/1","points":[{"id":"le
 const linkedDesignInput = (changes = {}) => ({pieceIds:['front','lining'],axis:'y',atMm:50,multiplier:1,
   values:[0,5,10,15,20,25,30,35,40],maxDesigns:1,fitSpec:linkedFitSource(),...changes});
 
+const treatmentTransitionSource=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/kanat-ozdil-2026-denim-1-treatment.json'),'utf8');
+const guidedTreatmentSource=(mode='treat',pieces='{"front":"wash","lining":"wash"}')=>
+  ' \r\n{"schema":"ftx-pattern-treatment/1","mode":'+JSON.stringify(mode)+
+  ',"transitions":{"wash":'+treatmentTransitionSource+'},"pieces":'+pieces+',"seam_tolerance_mm":-0.0}\r\n';
+
+test('guided treatment steps retain original source bytes and mixed operation order in grid adaptive and named studies',async()=>{
+  const {buildMaterialStudyRequest:build,buildGuidedDesignAfterOperations:after}=await modulePromise;
+  const requests=[guidedTreatmentSource('compensate'),guidedTreatmentSource('treat')];
+  const operations=[{op:'treatment',request:requests[0]},{op:'true_seam',seam:'side',end:'end'},
+    {op:'treatment',request:requests[1]},{op:'cap_ease',piece:'front',seams:['side'],target_ratio:1.1}];
+  assert.deepEqual(after(operations,['front','lining'],['side']),operations);
+  for(const design of [linkedDesignInput(),multiDesignInput(),adaptiveDesignInput()]) {
+    const input={...state(),seamIds:['side'],design:{...design,after:operations}},before=JSON.stringify(input);
+    for(const context of [undefined,{drape:true,surface:false,matrix:{maxEvaluations:64,cases:[{key:'declared',surface:false}]}}]) {
+      const raw=build(input,context),result=JSON.parse(raw),search=result.design_adaptive??result.design_grid;
+      assert.deepEqual(search.after,operations.map(operation=>operation.op==='treatment'?
+        {op:'treatment',request:JSON.parse(operation.request)}:operation));
+      for(const request of requests)assert.ok(raw.includes(request),'Original treatment text must reach Rust intact');
+      assert.match(raw,/"seam_tolerance_mm":-0\.0/);assert.ok(raw.includes(treatmentTransitionSource));
+      assert.equal(JSON.stringify(input),before);assert.equal(Object.hasOwn(result,'seamIds'),false);
+    }
+  }
+  const onlyTreatment=[{op:'treatment',request:requests[1]}];
+  assert.deepEqual(after(onlyTreatment,['front','lining']),onlyTreatment,'Treatment does not require any seam identities');
+});
+
+test('guided treatment steps refuse unfrozen states invalid piece mappings and malformed requests without replacing sources',async()=>{
+  const {buildGuidedDesignAfterOperations:build}=await modulePromise;
+  const raw=guidedTreatmentSource(),valid=JSON.parse(raw);
+  const run=request=>build([{op:'treatment',request}],['front','lining']);
+  for(const request of [null,{},'null','[]','{bad',treatmentTransitionSource])assert.throws(()=>run(request));
+  const changes=[value=>{value.schema='ftx-material-treatment/1';},value=>{value.mode='wash';},
+    value=>{value.extra=true;},value=>{value.pieces={unknown:'wash'};},value=>{value.pieces={front:'missing'};},
+    value=>{value.pieces={};},value=>{value.pieces=[];},value=>{value.transitions={};},
+    value=>{value.transitions.extra=value.transitions.wash;},value=>{value.seam_tolerance_mm=-1;},
+    value=>{value.interfaces={};},value=>{value.transitions.wash.schema='other';},
+    value=>{delete value.transitions.wash.before.record;},value=>{delete value.transitions.wash.after.expected_sha256;},
+    value=>{value.transitions.wash.before.overrides={areal_density:{value:1,unit:'kg/m2'}};},
+    value=>{value.transitions.wash.after.sources={extra:{reference:'unlocked'}};},
+    value=>{value.transitions.wash.after.allow_estimates='yes';}];
+  for(const change of changes){const bad=structuredClone(valid);change(bad);assert.throws(()=>run(JSON.stringify(bad)));}
+  assert.equal(run(raw)[0].request,raw);
+  const special=guidedTreatmentSource('treat','{"__proto__":"wash"}');
+  assert.equal(build([{op:'treatment',request:special}],['__proto__'])[0].request,special);
+  assert.throws(()=>build([{op:'treatment',request:raw,extra:1}],['front','lining']),/unsupported/);
+});
+
+test('guided treatment steps preserve numeric source tokens and share native byte and operation allowances',async()=>{
+  const {buildMaterialStudyRequest:build,buildGuidedDesignAfterOperations:after}=await modulePromise;
+  // Transport-only records: the native authority must receive and qualify their exact bytes.
+  const raw='{"schema":"ftx-pattern-treatment/1","mode":"treat","pieces":{"front":"wash"},"transitions":{"wash":'+
+    '{"schema":"ftx-material-treatment/1","before":'+selection('before','a')+',"after":'+selection('after','b')+'}}}';
+  const operation={op:'treatment',request:raw};
+  const result=build({...state(),design:linkedDesignInput({after:[operation]})});
+  assert.ok(result.includes(raw));assert.match(result,/18446744073709551615/);assert.match(result,/"x":-0\.0/);
+  assert.throws(()=>after([{...operation,request:' '.repeat(256*1024)+raw}],['front']),/256 KiB/);
+  const padded={op:'treatment',request:' '.repeat(130*1024)+raw};
+  assert.throws(()=>build({...state(),design:linkedDesignInput({after:[padded,padded]})}),/256 KiB/);
+  assert.throws(()=>build({...state(),design:linkedDesignInput({after:Array(15).fill(operation)})}),/16 ordered alteration operations/);
+});
+
 test('linked design authoring retains exact fit and material sources with independent alteration targets', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const input={...state(),target:{scope:'pieces',ids:['lining']},
