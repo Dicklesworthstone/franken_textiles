@@ -4,7 +4,7 @@ use std::{collections::BTreeSet, path::Path};
 
 use ftx_body::{
     AnnyData, AnnyModel,
-    correspondence::{Configuration, CorrespondenceModel, Joint, Target},
+    correspondence::{Configuration, CorrespondenceModel, Target},
 };
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::body_fit::{
