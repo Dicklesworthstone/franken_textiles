@@ -10,13 +10,13 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:24px auto;paddin
 section{background:white;border:1px solid #ccd5db;border-radius:8px;padding:16px;margin:18px 0}
 h1,h2{line-height:1.2}label{display:inline-block;max-width:100%;margin:6px 14px 6px 0}input,select,button,textarea{font:inherit;padding:6px}
 input[type=file],select{max-width:100%;box-sizing:border-box}
-#bodyFitReview fieldset,#bodyStartsEditor fieldset,#bodyPointsEditor fieldset{min-inline-size:0}
+#bodyFitReview fieldset,#bodyStartsEditor fieldset,#bodyPointsEditor fieldset,#bodyCaptureEditor fieldset{min-inline-size:0}
 #bodyPointsEditor input{max-width:100%;box-sizing:border-box}#bodyPointsRows td{overflow-wrap:anywhere}#bodyPointsError{color:#a02020}
 #bodyStartsFields label{display:block;overflow-wrap:anywhere}#bodyStartsFields input{max-width:100%;box-sizing:border-box}
 button{cursor:pointer}button:disabled{cursor:default;opacity:.5}textarea{width:100%;box-sizing:border-box;font:14px monospace}
 canvas{display:block;width:100%;height:auto;cursor:crosshair}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px;border-bottom:1px solid #ddd}
-a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError,#sectionError,#bodyFitError,#bodyStartsError{color:#a02020}small{color:#42515a}
+a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError,#sectionError,#bodyFitError,#bodyStartsError,#bodyCaptureError{color:#a02020}small{color:#42515a}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -267,12 +267,89 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
 </section>
 <section>
   <h2>6. Fit one body shape across changing poses</h2>
-  <p>Fit the same Anny shape to prepared, calibrated observations from several frames, with a separate
-    pose for each frame and optional tape constraints. Load your converted body model and the original
-    <code>ftx-anny-body-fit-input/1</code> request. This runs the same bounded fitter as
+  <p>Fit the same Anny shape to calibrated observations from several photographs, with a separate
+    pose for each frame and optional tape constraints. Begin with local still photographs below, or load
+    an existing <code>ftx-anny-body-fit-input/1</code> request. This runs the same bounded fitter as
     <code>ftx measure fit-body</code>, locally in a cancellable worker.</p>
   <label>Converted Anny model <input id="bodyFitModel" type="file" accept=".ftxbody,application/octet-stream"></label>
-  <label>Prepared observations <input id="bodyFitInput" type="file" accept=".json,application/json"></label>
+  <details>
+    <summary>Start a body capture from local still photographs</summary>
+    <p>Prepare the calibrated cameras and an empty observation draft, then use the target, observation
+      and starting-value editors below. Choose 2–8 distinct photographs of the same wearer with the same
+      stationary upright ChArUco sheet visible. The checked calibration must describe the same lens,
+      oriented image size and recorded rotation. All image decoding and fitting stay in this browser.</p>
+    <label>Original PNG or JPEG photographs (2–8)
+      <input id="bodyCaptureImages" type="file" multiple accept=".png,.jpg,.jpeg,image/png,image/jpeg"></label>
+    <label>Checked camera calibration JSON
+      <input id="bodyCaptureCalibration" type="file" accept=".json,application/json"></label>
+    <label>Original printed calibration-sheet sidecar
+      <input id="bodyCaptureSheet" type="file" accept=".json,application/json"></label>
+    <div class="row">
+      <label>Calibration lens ID <input id="bodyCaptureLens" type="text" maxlength="256"></label>
+      <label>Rotation already applied to stored pixels
+        <select id="bodyCaptureRotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+      <label>Stationary reference ID <input id="bodyCaptureReference" type="text" maxlength="256"></label>
+    </div>
+    <div class="row">
+      <label>Board outer bottom-left x (m) <input id="bodyCaptureOriginX" type="number" step="any"></label>
+      <label>Board outer bottom-left z (m) <input id="bodyCaptureOriginZ" type="number" step="any"></label>
+    </div>
+    <label>Held-out sheet corner IDs, comma separated
+      <input id="bodyCaptureHeldOut" type="text" placeholder="For example: 0, 5, 10, 15" maxlength="4096"></label>
+    <p><small>Declare at least four CHECK corner IDs before acquisition and leave at least four other
+      corners for camera fitting. CHECK corners are excluded from fitting and must pass the same
+      reprojection check in every photograph. The sheet lies at world y = 0, with printed
+      right along +x and printed up along +z. Enter the same measured sheet origin for the whole capture.</small></p>
+    <label>Evidence that the same sheet stayed upright, flat and stationary
+      <textarea id="bodyCaptureStationary" maxlength="4096"></textarea></label>
+    <p><button id="bodyCaptureCatalogue" disabled>Load available model controls</button></p>
+    <div id="bodyCaptureEditor" hidden>
+      <p id="bodyCaptureModelSummary"></p>
+      <div class="row">
+        <label>Age in years (0–110) <input id="bodyCaptureAge" type="number" min="0" max="110" step="any"></label>
+        <label>Model gender coefficient (0–1) <input id="bodyCaptureGender" type="number" min="0" max="1" step="any"></label>
+      </div>
+      <p><small>Age and the Anny gender coefficient (0 male, 1 female) are explicit fixed model inputs.
+        They are not inferred from photographs.</small></p>
+      <fieldset><legend>Shared shape controls</legend>
+        <p>Choose each control to fix or fit and enter its values. At least one and at most twelve
+          shape controls must be fitted. Fitting bounds are exclusive. Unselected controls retain the
+          displayed model defaults; these are assumptions, not measurements.</p>
+        <label>Shape control <select id="bodyCaptureShapeName"></select></label>
+        <button id="bodyCaptureShapeAdd" disabled>Add shape control</button>
+        <div id="bodyCaptureShapes"></div>
+        <details><summary>Model shape defaults</summary><pre id="bodyCaptureDefaults"></pre></details>
+      </fieldset>
+      <fieldset><legend>Root placement and articulated motion</legend>
+        <p>All six root components begin explicitly fixed at zero. Choose the components to fit and
+          enter bounds in metres or radians. Root rotations are rotation-vector components, with a
+          combined fixed rotation length of at most π. Fit at least one and at most eighteen root or
+          joint controls; each photograph receives its own pose values in the starting-value editor.</p>
+        <div id="bodyCaptureRoots"></div>
+        <label>Articulated bone <select id="bodyCaptureJointName"></select></label>
+        <button id="bodyCaptureJointAdd" disabled>Add joint control</button>
+        <p><small>A joint axis must be an explicitly entered unit vector in that bone's local frame.
+          Unselected joints remain at rest. The page does not infer or normalize an axis.</small></p>
+        <div id="bodyCaptureJoints"></div>
+      </fieldset>
+      <label>Metric scale source <textarea id="bodyCaptureScale" maxlength="4096"></textarea></label>
+      <label>Evidence that these photographs belong to this capture and wearer
+        <textarea id="bodyCaptureEvidence" maxlength="4096"></textarea></label>
+    </div>
+    <p><button id="bodyCaptureRun" disabled>Prepare calibrated body draft</button>
+      <button id="bodyCaptureCancel" disabled>Cancel acquisition</button>
+      <button id="bodyCaptureClear" disabled>Clear generated capture draft</button></p>
+    <p id="bodyCaptureStatus" role="status" aria-live="polite">Select a model and load its available controls.</p>
+    <pre id="bodyCaptureError" role="alert"></pre><div id="bodyCaptureDownloads" class="files"></div>
+    <details><summary>Camera acquisition diagnostics</summary><pre id="bodyCaptureDiagnostics"></pre></details>
+    <p><small>Use already-oriented opaque PNG or JPEG bytes with absent or identity EXIF orientation;
+      the rotation setting records a prior pixel rotation and does not rotate images. Each image is
+      limited to 64 MiB and 16 million pixels; the batch to 128 million pixels. Calibration is limited
+      to 16 MiB and the sheet sidecar to 256 KiB. Distinct source streams use zero as their own clock
+      origin, so these stills establish no timing or synchrony. This creates no anatomical targets,
+      fitted body, measurement readiness, camera accuracy qualification or garment-fit claim.</small></p>
+  </details>
+  <label>Or load existing prepared observations <input id="bodyFitInput" type="file" accept=".json,application/json"></label>
   <p><small>The request declares the exact model hash, calibrated cameras, anatomical correspondences,
     FIT/CHECK roles, parameter bounds and every initialization. Reviewed inline silhouette slices are
     supported. A path-based capture input or mask manifest must first be prepared with the native tools;

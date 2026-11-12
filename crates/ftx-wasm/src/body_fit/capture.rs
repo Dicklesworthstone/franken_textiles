@@ -15,8 +15,7 @@ use ftx_measure::{
     body_fit::{self, BodyFitInput, BodyModel, CaptureImage, FitFrame, MetricObservation},
     camera::{Camera, Intrinsics},
     photo::{
-        MAX_PHOTO_PIXELS, capture::StationarySheet, detect_charuco,
-        intrinsics::checked_calibration,
+        MAX_PHOTO_PIXELS, capture::StationarySheet, detect_charuco, intrinsics::checked_calibration,
     },
     triangulate::FrameId,
 };
@@ -315,9 +314,7 @@ impl BodyCapture {
         }
         let choices: Choices = parse(choices_text, "body photo choices")?;
         let model_sha256 = sha256_hex(model_bytes);
-        if choices.schema != "ftx-body-photo-choices/1"
-            || choices.model_sha256 != model_sha256
-        {
+        if choices.schema != "ftx-body-photo-choices/1" || choices.model_sha256 != model_sha256 {
             return Err(invalid(
                 "capture choices require schema /1 and the exact converted model SHA-256",
             ));

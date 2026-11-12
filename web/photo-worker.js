@@ -1,7 +1,7 @@
 // One request per disposable worker. Calibration images are decoded sequentially; only retained
 // source observations reach the camera solver. Files never leave the local worker/browser.
 self.onmessage = async ({data: m}) => {
-  let photo, calibration, sheet, bodyImage;
+  let photo, calibration, sheet, bodyImage, bodyCapture;
   try {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
@@ -9,6 +9,54 @@ self.onmessage = async ({data: m}) => {
     if((typeof ftx.initSync==="function" || "wasm_interface_stamp" in ftx) &&
         (typeof ftx.wasm_interface_stamp!=="function" || ftx.wasm_interface_stamp()!=="ftx-wasm-interface/2026-11-12.1")) {
       throw Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
+    }
+    if(m.op==="body-capture-catalogue") {
+      if(!(m.model instanceof ArrayBuffer) || m.model.byteLength===0 || m.model.byteLength>512*1024*1024) {
+        throw Error("Choose a converted model up to 512 MiB.");
+      }
+      if(typeof ftx.body_capture_catalogue!=="function") throw Error("Rebuild web/pkg: missing the body capture catalogue.");
+      self.postMessage({type:"progress",request:m.request,text:"Checking the exact converted model and its available shape and pose controls…"});
+      const report=ftx.body_capture_catalogue(new Uint8Array(m.model));
+      self.postMessage({type:"result",request:m.request,report});
+      return;
+    }
+    if(m.op==="body-photo-capture") {
+      const bounded=(value,limit)=>typeof value==="string" && new TextEncoder().encode(value).length<=limit;
+      if(!bounded(m.manifest,256*1024) || !bounded(m.calibration,16*1024*1024) ||
+          !bounded(m.sheet,256*1024) || !bounded(m.choices,256*1024) ||
+          !m.modelFile || typeof m.modelFile.arrayBuffer!=="function" || !Number.isSafeInteger(m.modelFile.size) ||
+          m.modelFile.size<1 || m.modelFile.size>512*1024*1024 || !Array.isArray(m.images) || m.images.length<2 || m.images.length>8) {
+        throw Error("Still capture needs 2–8 images, a model up to 512 MiB, calibration up to 16 MiB and declarations up to 256 KiB each.");
+      }
+      if(typeof ftx.WebBodyCapture!=="function") throw Error("Rebuild web/pkg: missing the still-photo body capture engine.");
+      const supplied=new Map();
+      for(const image of m.images) {
+        if(!image || typeof image.id!=="string" || supplied.has(image.id) || !image.file ||
+            typeof image.file.arrayBuffer!=="function" || !Number.isSafeInteger(image.file.size) ||
+            image.file.size<1 || image.file.size>64*1024*1024) {
+          throw Error("Choose unique original images up to 64 MiB each.");
+        }
+        supplied.set(image.id,image.file);
+      }
+      bodyCapture=new ftx.WebBodyCapture(m.manifest,m.calibration,m.sheet);
+      const ids=JSON.parse(bodyCapture.image_ids());
+      if(!Array.isArray(ids) || ids.length!==supplied.size || new Set(ids).size!==ids.length || ids.some(id=>!supplied.has(id))) {
+        throw Error("Select exactly the source images declared by this capture.");
+      }
+      for(let index=0;index<ids.length;index++) {
+        const id=ids[index], file=supplied.get(id);
+        self.postMessage({type:"progress",request:m.request,text:`Checking stationary board in photograph ${index+1}/${ids.length}: ${id}`});
+        const bytes=new Uint8Array(await file.arrayBuffer());
+        if(bytes.byteLength!==file.size) throw Error("A capture image changed while it was being read.");
+        const diagnostics=JSON.parse(bodyCapture.add_image(id,bytes));
+        self.postMessage({type:"body-capture-view",request:m.request,image:id,done:index+1,total:ids.length,diagnostics});
+      }
+      self.postMessage({type:"progress",request:m.request,text:"Checking explicit model choices and preparing the source-bound draft…"});
+      const model=new Uint8Array(await m.modelFile.arrayBuffer());
+      if(model.byteLength!==m.modelFile.size) throw Error("The converted model changed while it was being read.");
+      const report=bodyCapture.finish(model,m.choices);
+      self.postMessage({type:"result",request:m.request,report});
+      return;
     }
     if(m.op==="body-fit-starts" || m.op==="body-fit-observations" || m.op==="body-fit-targets") {
       const observations=m.op==="body-fit-observations", targets=m.op==="body-fit-targets", editLimit=observations || targets?256:64;
@@ -150,5 +198,5 @@ self.onmessage = async ({data: m}) => {
     } else throw Error("Unknown photo operation");
   } catch(e) {
     self.postMessage({type:"error",request:m.request,message:String(e?.message || e)});
-  } finally { photo?.free(); calibration?.free(); sheet?.free(); bodyImage?.free(); }
+  } finally { photo?.free(); calibration?.free(); sheet?.free(); bodyImage?.free(); bodyCapture?.free(); }
 };

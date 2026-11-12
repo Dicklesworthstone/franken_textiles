@@ -29,6 +29,13 @@ stored pixels require EXIF absent/1 and the checked camera epoch's dimensions/ro
 One image is decoded per add and its pixels are released before the next. This adds no file
 access, automatic anatomical correspondence, empirical fit or readiness qualification.
 
+The Photo Workbench exposes actual model controls and source declarations, transfers image file
+handles to the worker and reads each photograph sequentially before loading the model for final
+preparation. A valid acquisition clears any previously selected manual prepared input. The exact
+returned draft enters existing target/observation/start editors; source edits, cancellation,
+replacement and page exit terminate obsolete work. Reset restores the original generated draft's
+known zero-start state; invalidation never falls back to an old manual file.
+
 **Local multi-frame Anny fitting.** `body_fit::fit_body(model_bytes, input, iterations,
 max_evaluations)` and wasm32 `fit_body` accept the original prepared
 `ftx-anny-body-fit-input/1` text and exact converted model bytes. Inputs are bounded to 16 MiB

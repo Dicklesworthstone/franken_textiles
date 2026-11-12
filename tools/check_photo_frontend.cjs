@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,bodyObservations=null,bodyTargets=null,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,bodyObservations=null,bodyTargets=null,bodyCaptureCatalogue=undefined,bodyCaptureClass=undefined,calibrationReport=cameraReport()}={}) {
   const sent=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -37,6 +37,14 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
     report(){return ' {"verified":"original image"}\r\n';}
     free(){assert.equal(this.freed,undefined);this.freed=true;}
   }
+  class WebBodyCapture {
+    constructor(manifest,calibration,sheet){this.manifest=JSON.parse(manifest);calls.push({kind:'body-capture',manifest,calibration,sheet});instances.push(this);}
+    image_ids(){return JSON.stringify(this.manifest.images);}
+    add_image(id,bytes){calls.push({kind:'body-capture-image',id,bytes:[...bytes]});return JSON.stringify({image:id,sheet_pose:{ok:true,held_out_points:1}});}
+    finish(model,choices){calls.push({kind:'body-capture-finish',model:[...model],choices});return JSON.stringify(bodyCaptureReport());}
+    free(){assert.equal(this.freed,undefined);this.freed=true;}
+  }
+  function body_capture_catalogue(model){calls.push({kind:'body-capture-catalogue',model:[...model]});return JSON.stringify(bodyCaptureCatalogueReport());}
   function camera_calibration(input,noise){calls.push({kind:'coordinates',input,noise});return JSON.stringify(calibrationReport);}
   function photo_section(width,depth,options){calls.push({kind:'section',width,depth,options});if(failSection)throw Error('section evidence refused');return JSON.stringify(sectionReport());}
   function triangulate(input,noise){calls.push({kind:'triangulate',input,noise});if(failTriangulation)throw Error('capture evidence refused');return JSON.stringify(triangulationReport());}
@@ -49,7 +57,7 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function review_body_fit_start(model,input,startIndex,frameIndex){calls.push({kind:'body-start-review',model:[...model],input,startIndex,frameIndex});if(failBodyStart)throw Error('no declared initialization at that index');return JSON.stringify(bodyStartFrameReport({start_index:Number(startIndex),frame_index:Number(frameIndex),start_count:4,frame_count:8}));}
   function review_body_fit_frame(model,report,frameIndex){calls.push({kind:'body-frame-review',model:[...model],report,frameIndex});if(failBodyReview)throw Error('full mesh keypoint disagrees with the accepted 3-pixel fit gate');return JSON.stringify(bodyFrameReport());}
   const context=vm.createContext({Uint8Array,ArrayBuffer,TextEncoder,JSON,Error,URL,self:{postMessage:m=>sent.push(m)}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body','body_fit_starts','body_fit_observations','body_fit_targets','review_body_fit_start','review_body_fit_frame'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','bundle_adjust','still_window','fit_body','body_fit_starts','body_fit_observations','body_fit_targets','review_body_fit_start','review_body_fit_frame','body_capture_catalogue','WebBodyCapture'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('WebBodyFitImage',bodyImageClass ?? WebBodyFitImage);
@@ -61,6 +69,8 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
     this.setExport('body_fit_starts',bodyStarts ?? body_fit_starts);
     this.setExport('body_fit_observations',bodyObservations ?? body_fit_observations);
     this.setExport('body_fit_targets',bodyTargets ?? body_fit_targets);
+    this.setExport('body_capture_catalogue',bodyCaptureCatalogue===undefined?body_capture_catalogue:bodyCaptureCatalogue);
+    this.setExport('WebBodyCapture',bodyCaptureClass===undefined?WebBodyCapture:bodyCaptureClass);
     this.setExport('review_body_fit_start',bodyStartReview ?? review_body_fit_start);
     this.setExport('review_body_fit_frame',review_body_fit_frame);
   },{context});
@@ -109,11 +119,11 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','bodyFitModel','bodyFitInput','bodyFitSaved','bodyFitReviewImage','bodyPointsImage'])if(e[id])e[id].type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','bodyFitModel','bodyFitInput','bodyFitSaved','bodyFitReviewImage','bodyPointsImage','bodyCaptureImages','bodyCaptureCalibration','bodyCaptureSheet'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images',geometryOperation:'triangulate',bundleIterations:'50'}))e[id].value=value;
   for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
   e.bodyFitIterations.value='50';e.bodyFitEvaluations.value='100000';
-  e.bodyFitStartIndex.value='1';e.bodyFitStartFrame.value='1';
+  e.bodyFitStartIndex.value='1';e.bodyFitStartFrame.value='1';e.bodyCaptureRotation.value='0';
   const workers=[],urls=new Map(),closed=[],windowEvents={},popups=[]; let serial=0;
   class Worker {
     constructor(){this.messages=[];workers.push(this);}
@@ -2735,3 +2745,177 @@ test('compiled WASM photo sections refuse missing consent, fabricated provenance
     assert.throws(()=>ftx.photo_section('\ufeff'+JSON.stringify(front),JSON.stringify(side),'{"same_wearer":true}'));
     assert.throws(()=>ftx.photo_section(JSON.stringify(front),JSON.stringify(side),' '.repeat(256*1024+1)),/budget|256 KiB|exceeds/i);
   });
+
+function bodyCaptureCatalogueReport(overrides={}) {
+  const roots=['root_x_m','root_y_m','root_z_m','root_rx_rad','root_ry_rad','root_rz_rad'];
+  return {schema:'ftx-body-capture-catalogue/1',body_fitted:false,model_sha256:'c'.repeat(64),catalogue:{
+    shapes:[{name:'height',lower:0,upper:1,default_value:0.5,unit:'dimensionless'},
+      {name:'local synthetic',lower:-1,upper:1,default_value:0,unit:'dimensionless'}],
+    roots:roots.map((name,index)=>({name,lower:index<3?-1e6:-Math.PI,upper:index<3?1e6:Math.PI,default_value:0,unit:index<3?'m':'rad'})),
+    joints:[{name:'synthetic elbow',index:1,parent_index:0,parent_name:'root'}],measurements:['stature']},...overrides};
+}
+function bodyCaptureReport(overrides={}) {
+  return {schema:'ftx-body-photo-capture-result/1',status:'CAPTURE_DRAFT',body_fitted:false,start_count:0,frame_count:2,
+    input:' {\r\n"schema":"ftx-anny-body-fit-input/1","retained_identity":18446744073709551615,"evidence":"λ"\r\n}\r\n',
+    input_sha256:'a'.repeat(64),model_sha256:'c'.repeat(64),acquisition:{frames:[{image:'front.png'},{image:'side.png'}]},...overrides};
+}
+function bodyCaptureRow(row) {
+  const descend=node=>[node,...node.children.flatMap(descend)], all=descend(row);
+  return {mode:all.find(node=>node.children.some(option=>option.value==='fit') && node.children.some(option=>option.value==='fixed')),
+    field:name=>{const input=all.find(node=>node.id?.endsWith('-'+name));assert.ok(input,'capture field '+name);return input;}};
+}
+function fitCaptureRow(row,lower,upper) {
+  const fields=bodyCaptureRow(row);fields.mode.value='fit';fields.mode.handlers.change();
+  fields.field('lower').value=String(lower);fields.field('upper').value=String(upper);fields.field('upper').handlers.input();
+}
+async function selectBodyCapture(p) {
+  if(!p.e.bodyFitModel.files.length)p.e.bodyFitModel.files=[file('original model','model.ftxbody')];
+  await p.e.bodyCaptureCatalogue.onclick();const worker=p.current();
+  assert.equal(worker.messages[0].op,'body-capture-catalogue');
+  await worker.emit({type:'result',request:worker.messages[0].request,report:JSON.stringify(bodyCaptureCatalogueReport())});
+  p.e.bodyCaptureImages.files=[file('front pixels','front.png'),file('side pixels','side.png')];
+  p.e.bodyCaptureCalibration.files=[file(' { "source_timestamp_us":18446744073709551615,"calibration":"λ" }\r\n','camera.json')];
+  p.e.bodyCaptureSheet.files=[file(' { "sheet":"original λ" }\r\n','sheet.json')];
+  for(const [name,value] of Object.entries({Lens:'declared lens',Reference:'stationary board',Rotation:'0',OriginX:'0',OriginZ:'0.2',
+    HeldOut:'0, 5, 10, 15',Stationary:'Synthetic upright flat stationary board evidence',Age:'5',Gender:'0.5',
+    Scale:'Printed 40 mm squares checked independently',Evidence:'Same synthetic capture and wearer'}))p.e['bodyCapture'+name].value=value;
+  p.e.bodyCaptureShapeName.value='height';p.e.bodyCaptureShapeName.handlers.change();p.e.bodyCaptureShapeAdd.onclick();
+  fitCaptureRow(p.e.bodyCaptureShapes.children[0],0.1,0.9);fitCaptureRow(p.e.bodyCaptureRoots.children[0],-2,2);
+  p.e.bodyCaptureImages.handlers.change();
+  assert.equal(p.e.bodyCaptureRun.disabled,false);
+}
+async function completeBodyCapture(p,report=bodyCaptureReport()) {
+  await p.e.bodyCaptureRun.onclick();const worker=p.current(),message=worker.messages[0];
+  assert.equal(message.op,'body-photo-capture');
+  const raw=typeof report==='string'?report:JSON.stringify(report);
+  await worker.emit({type:'result',request:message.request,report:raw});return {worker,message,raw};
+}
+
+test('still-photo capture worker acquires source files sequentially, preserves declarations and frees native state',async()=>{
+  const order=[],input=' { "original":18446744073709551615 }\r\n';
+  let freed=0;
+  class Capture {
+    constructor(manifest,calibration,sheet){order.push('construct');assert.equal(calibration,input);assert.equal(sheet,' sheet bytes ');this.ids=JSON.parse(manifest).images;}
+    image_ids(){return JSON.stringify(this.ids);}
+    add_image(id,bytes){order.push('decode '+id);assert.ok(bytes.length);return JSON.stringify({image:id,sheet_pose:{ok:true}});}
+    finish(model,choices){order.push('finish');assert.equal(new TextDecoder().decode(model),'model');assert.equal(choices,' exact choices ');return JSON.stringify(bodyCaptureReport());}
+    free(){freed++;}
+  }
+  const source=(name,bytes)=>({id:name,file:{name,size:bytes.length,arrayBuffer:async()=>{order.push('read '+name);return new TextEncoder().encode(bytes).buffer;}}});
+  const modelFile={size:5,arrayBuffer:async()=>{order.push('read model');return new TextEncoder().encode('model').buffer;}};
+  const w=await photoWorker({bodyCaptureClass:Capture});
+  const result=await w.send({request:41,op:'body-photo-capture',manifest:'{"images":["front.png","side.png"]}',
+    calibration:input,sheet:' sheet bytes ',choices:' exact choices ',images:[source('front.png','front'),source('side.png','side')],modelFile});
+  assert.equal(result.type,'result');assert.equal(JSON.parse(result.report).body_fitted,false);
+  assert.deepEqual(order,['construct','read front.png','decode front.png','read side.png','decode side.png','read model','finish']);
+  assert.equal(freed,1);assert.equal(w.sent.filter(message=>message.type==='body-capture-view').length,2);
+  const catalogue=await photoWorker();await catalogue.send({request:1,op:'body-capture-catalogue',model:new Uint8Array([1,2]).buffer});
+  assert.deepEqual(catalogue.calls[0],{kind:'body-capture-catalogue',model:[1,2]});
+});
+
+test('still-photo capture worker refuses stale APIs, mismatched sources and acquisition failures without reading later photos',async()=>{
+  let reads=0,freed=0;
+  const make=()=>({request:1,op:'body-photo-capture',manifest:'{"images":["front.png","side.png"]}',calibration:'{}',sheet:'{}',choices:'{}',
+    modelFile:{size:1,arrayBuffer:async()=>{reads++;return new Uint8Array([3]).buffer;}},
+    images:['front.png','side.png'].map(id=>({id,file:{size:1,arrayBuffer:async()=>{reads++;return new Uint8Array([1]).buffer;}}}))});
+  class Refused {
+    image_ids(){return '["front.png","side.png"]';}
+    add_image(){throw Error('held-out board check failed');}
+    finish(){throw Error('must not finish');}
+    free(){freed++;}
+  }
+  let w=await photoWorker({bodyCaptureClass:Refused});let result=await w.send(make());
+  assert.equal(result.type,'error');assert.match(result.message,/held-out/);assert.equal(reads,1);assert.equal(freed,1);
+  class Mismatch extends Refused {image_ids(){return '["front.png","missing.png"]';}}
+  reads=0;w=await photoWorker({bodyCaptureClass:Mismatch});result=await w.send(make());
+  assert.match(result.message,/exactly/);assert.equal(reads,0);assert.equal(freed,2);
+  w=await photoWorker({bodyCaptureClass:null});result=await w.send(make());
+  assert.match(result.message,/Rebuild web\/pkg/);assert.equal(reads,0);
+  w=await photoWorker({bodyCaptureCatalogue:null});result=await w.send({request:2,op:'body-capture-catalogue',model:new Uint8Array([1]).buffer});
+  assert.match(result.message,/Rebuild web\/pkg/);
+  const oversized=make();oversized.images[1].file.size=64*1024*1024+1;
+  w=await photoWorker();result=await w.send(oversized);assert.equal(result.type,'error');assert.equal(reads,0);assert.equal(w.instances.length,0);
+});
+
+test('still-photo capture page hands the exact generated draft to existing editors and never revives an old manual source',async()=>{
+  const p=await photoPage();selectBodyFit(p,' old prepared input ');
+  await selectBodyCapture(p);
+  const input=bodyCaptureReport().input;
+  const raw=JSON.stringify(bodyCaptureReport({acquisition:{calibration:{timestamp_us:'18446744073709551615'},frames:[]}}))
+    .replace('"timestamp_us":"18446744073709551615"','"timestamp_us":18446744073709551615');
+  const {message}=await completeBodyCapture(p,raw);
+  assert.equal(message.calibration,' { "source_timestamp_us":18446744073709551615,"calibration":"λ" }\r\n');
+  assert.equal(message.sheet,' { "sheet":"original λ" }\r\n');
+  assert.equal(message.modelFile,p.e.bodyFitModel.files[0]);
+  assert.equal(message.images[0].file,p.e.bodyCaptureImages.files[0]);
+  assert.deepEqual(JSON.parse(message.manifest).held_out_corner_ids,[0,5,10,15]);
+  const choices=JSON.parse(message.choices);
+  assert.deepEqual(choices.model.shapes,[{name:'height',choice:{mode:'fit',lower:0.1,upper:0.9}}]);
+  assert.equal(choices.model.roots.length,6);assert.deepEqual(choices.model.joints,[]);assert.deepEqual(choices.measurements,[]);
+  assert.equal(p.e.bodyFitInput.files.length,0);assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.e.bodyTargetsLoad.disabled,false);
+  const links=p.e.bodyCaptureDownloads.children;
+  assert.equal(await p.urls.get(links[0].href).text(),input);assert.equal(await p.urls.get(links[1].href).text(),raw);
+  p.e.bodyStartsReset.onclick();assert.equal(p.e.bodyFitRun.disabled,true,'resetting edits retains the known empty draft');
+  await p.e.bodyTargetsLoad.onclick();const target=p.current(),targetMessage=target.messages[0];
+  assert.equal(targetMessage.op,'body-fit-targets');assert.equal(targetMessage.input,input);
+  p.e.bodyCaptureOriginX.value='0.1';p.e.bodyCaptureOriginX.handlers.input();
+  assert.equal(target.dead,true);assert.equal(p.e.bodyFitInput.files.length,0);
+  assert.equal(p.e.bodyTargetsLoad.disabled,true);assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.e.bodyCaptureDownloads.children.length,0);
+  await target.emit({type:'result',request:targetMessage.request,report:JSON.stringify(bodyTargetsReport({input,start_count:0,target_count:0}))});
+  assert.equal(p.e.bodyTargetsFrame.hidden,true,'late editor reply cannot revive the discarded draft');
+});
+
+test('still-photo capture page requires explicit bounds and validates budgets before reading calibration or photographs',async()=>{
+  const p=await photoPage();await selectBodyCapture(p);
+  let reads=0;p.e.bodyCaptureCalibration.files=[{size:2,arrayBuffer:async()=>{reads++;return new TextEncoder().encode('{}').buffer;}}];
+  p.e.bodyCaptureAge.value='';await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/age/);
+  p.e.bodyCaptureAge.value='5';bodyCaptureRow(p.e.bodyCaptureRoots.children[0]).mode.value='fixed';
+  await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/fitted/);
+  fitCaptureRow(p.e.bodyCaptureRoots.children[0],-2,2);
+  p.e.bodyCaptureHeldOut.value='0,0';await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/unique/);
+  p.e.bodyCaptureHeldOut.value='0,5';await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/at least four/);
+  p.e.bodyCaptureHeldOut.value='0,5,10,15';p.e.bodyCaptureImages.files[1]={name:'side.png',size:64*1024*1024+1,arrayBuffer:async()=>{reads++;}};
+  await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/64 MiB/);
+  p.e.bodyCaptureImages.files[1]=file('side','front.png');await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/distinct/);
+  p.e.bodyCaptureImages.files[1]=file('side','side.png');
+  p.e.bodyCaptureJointName.value='synthetic elbow';p.e.bodyCaptureJointName.handlers.change();p.e.bodyCaptureJointAdd.onclick();
+  const joint=bodyCaptureRow(p.e.bodyCaptureJoints.children[0]);joint.mode.value='fit';joint.field('lower').value='-1';joint.field('upper').value='1';
+  await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/axis x/);
+});
+
+test('still-photo capture page cancels pending source reads, stale workers and source changes before accepting drafts',async()=>{
+  for(const change of ['cancel','photo','model','manual']) {
+    const p=await photoPage();await selectBodyCapture(p);
+    let release;p.e.bodyCaptureCalibration.files=[{size:2,arrayBuffer:()=>new Promise(resolve=>{release=resolve;})}];
+    const before=p.workers.length, pending=p.e.bodyCaptureRun.onclick();
+    if(change==='cancel')p.e.bodyCaptureCancel.onclick();
+    if(change==='photo')p.e.bodyCaptureImages.handlers.change();
+    if(change==='model')p.e.bodyFitModel.handlers.change();
+    if(change==='manual'){p.e.bodyFitInput.files=[file(' new prepared source ')];p.e.bodyFitInput.handlers.change();}
+    release(new TextEncoder().encode('{}').buffer);await pending;
+    assert.equal(p.workers.length,before,change);assert.equal(p.e.bodyCaptureDownloads.children.length,0,change);
+  }
+  const p=await photoPage();await selectBodyCapture(p);await p.e.bodyCaptureRun.onclick();
+  const old=p.current(),request=old.messages[0].request;
+  p.e.bodyCaptureCalibration.handlers.change();
+  await old.emit({type:'result',request,report:JSON.stringify(bodyCaptureReport())});
+  assert.equal(old.dead,true);assert.equal(p.e.bodyCaptureDownloads.children.length,0);assert.equal(p.e.bodyTargetsLoad.disabled,true);
+  await completeBodyCapture(p,bodyCaptureReport({body_fitted:true}));
+  assert.match(p.e.bodyCaptureError.textContent,/complete source-bound/);assert.equal(p.e.bodyTargetsLoad.disabled,true);
+});
+
+test('still-photo capture catalogue is bound to the selected model and cancelled model reads cannot publish controls',async()=>{
+  const p=await photoPage();let release;
+  p.e.bodyFitModel.files=[{size:1,arrayBuffer:()=>new Promise(resolve=>{release=resolve;})}];
+  const pending=p.e.bodyCaptureCatalogue.onclick();
+  p.e.bodyFitModel.files=[file('replacement model')];p.e.bodyFitModel.handlers.change();
+  release(new Uint8Array([1]).buffer);await pending;
+  assert.equal(p.workers.length,0);assert.equal(p.e.bodyCaptureEditor.hidden,true);
+  await p.e.bodyCaptureCatalogue.onclick();const old=p.current();
+  p.e.bodyFitModel.handlers.change();
+  await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify(bodyCaptureCatalogueReport())});
+  assert.equal(p.e.bodyCaptureEditor.hidden,true);assert.equal(p.e.bodyCaptureRun.disabled,true);
+  await p.e.bodyCaptureCatalogue.onclick();const current=p.current();
+  await current.emit({type:'result',request:current.messages[0].request,report:JSON.stringify(bodyCaptureCatalogueReport({schema:'wrong'}))});
+  assert.match(p.e.bodyCaptureError.textContent,/catalogue/);assert.equal(p.e.bodyCaptureEditor.hidden,true);
+});

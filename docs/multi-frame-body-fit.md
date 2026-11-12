@@ -93,6 +93,31 @@ Fail-closed operator boundaries enforced by this route (covered end-to-end in
 
 ## Prepare a body-fit draft from local still photographs
 
+In **Fit one body shape across changing poses**, select the converted model and expand
+**Start a body capture from local still photographs**:
+
+1. Choose the 2–8 original images, checked camera calibration and original printed sheet sidecar.
+   Enter the matching lens/rotation, stationary reference, measured board origin, at least four
+   predeclared held-out corner IDs (leaving at least four FIT corners) and placement evidence.
+2. Choose **Load available model controls**. Enter age and the Anny gender coefficient, select
+   shared shape controls, and choose fixed values or explicit fitting bounds. All six roots
+   begin fixed at zero; choose the roots or declared local-axis joints to fit in each frame.
+   At least one shared shape and one pose control must be fitted.
+3. Supply metric-scale and capture/wearer evidence, then choose **Prepare calibrated body draft**.
+   Photos are checked one at a time. Inspect the camera diagnostics; a refused source publishes
+   no new draft.
+4. Continue directly with the anatomical target, image-observation and starting-value editors
+   below. The initial draft has no targets, observations or starts; ordinary fitting requires
+   the completed evidence and at least two distinct initializations. The exact draft and
+   complete acquisition report are available as downloads.
+
+Beginning a valid acquisition replaces the selected prepared input and withdraws previous
+authoring results, fits and garment handoffs. Changing capture files, model choices or board
+declarations cancels work and invalidates a generated draft. Late reads and workers cannot
+republish it, and clearing or cancelling never falls back to an older prepared-file selection.
+Original photographs remain local; their encoded bytes are verified again when displayed
+beneath authored observations or a fitted frame.
+
 The portable `body_capture_catalogue` and incremental `BodyCapture` API can prepare the
 ordinary `ftx-anny-body-fit-input/1` directly from 2–8 local PNG/JPEG photographs. It uses the
 existing pure-Rust ChArUco detector and calibrated sheet-pose solver. Retain the exact converted

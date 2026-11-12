@@ -209,11 +209,7 @@ mod tests {
         assert!(sheet.reference(&missing, "r", "i", [640, 480], 0).is_err());
         let mut repeated = detected;
         repeated["reference"]["corners"][1]["id"] = json!(0);
-        assert!(
-            sheet
-                .reference(&repeated, "r", "i", [640, 480], 0)
-                .is_err()
-        );
+        assert!(sheet.reference(&repeated, "r", "i", [640, 480], 0).is_err());
         let board = json!({"board":{"squares_x":5,"squares_y":4,"square_mm":50.0}});
         for held in [vec![0, 0, 8, 11], vec![0, 3, 8, 12], vec![0, 3, 8]] {
             assert!(StationarySheet::new(&board, &held, Vec2::ZERO, "declared").is_err());
