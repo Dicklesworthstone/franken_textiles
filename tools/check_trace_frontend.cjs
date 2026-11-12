@@ -8,6 +8,7 @@ require('./check_stock_job_frontend.cjs');
 require('./check_compression_frontend.cjs');
 require('./check_photo_frontend.cjs');
 require('./check_video_masks_frontend.cjs');
+require('./check_body_draft_worker.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

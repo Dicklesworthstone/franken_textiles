@@ -1,5 +1,18 @@
 # ftx-drape contract
 
+**Initial drafting on an accepted body (plan §8).** `drafting::draft_on_model` resolves
+the intact accepted report through the existing `FittedBody` authority and supplies
+its canonical 35-degree `FlatFitBody` to all three pattern programs. Dimensions,
+landmarks, section radii and placement frames use that same selected shape. Missing
+required anatomy refuses; separate explicit hand/foot passage evidence supplies only
+the selected program's opening requirement. PRIOR_ONLY and MODEL_FIT passage sources
+refuse. Flat validation uses the same body; prediction uncertainty is not invented.
+The returned `ftx-body-draft/1` evidence records model readings, exact source-text hash,
+reference identity and original passage records, and the pattern binds that identity.
+Trouser body rise is the reference vertical waist-to-crotch distance, without an
+inferred seated allowance. Original measurements and readiness remain independent.
+No model fallback, image-pose reuse or physical-fit qualification is introduced.
+
 **Optional convergence-driven subdivision.** `DrapeOptions.time_subdivision` connects the existing
 transactional `Solver::step_subdivided` to ordinary sewing, gravity and settling. Explicit
 `max_halvings` and `max_trials` bound the whole run; every requested base interval needs at least

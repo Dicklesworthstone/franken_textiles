@@ -69,9 +69,30 @@ fn read_report(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
     Ok((report, data))
 }
 
+/// Read the exact accepted-report and model bytes once for shape consumers that do not refit.
+pub(super) fn accepted_inputs(args: &Args) -> Result<(AnnyModel, String, Vec<u8>), Refusal> {
+    let (report, report_bytes) = read_report(required(args, "body-fit")?)?;
+    let model_path = args
+        .options
+        .get("model")
+        .map(PathBuf::from)
+        .or_else(default_model_path)
+        .ok_or_else(|| bad_input("give --model for the accepted body fit"))?;
+    let model_bytes = bytes(&model_path, 512 * 1024 * 1024)?;
+    let hash = sha256_hex(&model_bytes);
+    if report["anny_configuration"]["model_sha256"].as_str() != Some(&hash) {
+        return Err(bad_input(
+            "body-fit model SHA-256 mismatch; no shape was reused or refitted",
+        ));
+    }
+    // Hash and parse the SAME bytes, including the model's array-hash checks.
+    let model = AnnyModel::from_data(AnnyData::from_bytes(&model_bytes, true)?)?;
+    Ok((model, hash, report_bytes))
+}
+
 /// The ordinary path stays unchanged. Import is opt-in and never falls back to fitting on failure.
 pub(super) fn prepare(args: &Args, measurements: Option<&Value>) -> Result<PreparedBody, Refusal> {
-    let Some(path) = args.options.get("body-fit") else {
+    let Some(_) = args.options.get("body-fit") else {
         let model = load_model(args)?;
         let measurements = measurements.ok_or_else(|| bad_input("--measurements is required"))?;
         let (wearer, fit) = fitted_body(&model, measurements)?;
@@ -94,22 +115,7 @@ pub(super) fn prepare(args: &Args, measurements: Option<&Value>) -> Result<Prepa
             source_bytes: None,
         });
     };
-    let (report, report_bytes) = read_report(path)?;
-    let model_path = args
-        .options
-        .get("model")
-        .map(PathBuf::from)
-        .or_else(default_model_path)
-        .ok_or_else(|| bad_input("give --model for the accepted body fit"))?;
-    let model_bytes = bytes(&model_path, 512 * 1024 * 1024)?;
-    let hash = sha256_hex(&model_bytes);
-    if report["anny_configuration"]["model_sha256"].as_str() != Some(&hash) {
-        return Err(bad_input(
-            "body-fit model SHA-256 mismatch; no shape was reused or refitted",
-        ));
-    }
-    // Hash and parse the SAME bytes: replacing the path mid-read cannot change the evaluated model.
-    let model = AnnyModel::from_data(AnnyData::from_bytes(&model_bytes, true)?)?;
+    let (model, hash, report_bytes) = accepted_inputs(args)?;
     let data = measurements.map(crate::round::measurements).transpose()?;
     let (shape, mut description) =
         accepted_shape::prepare(&model, &hash, &report_bytes, data.as_ref())?;

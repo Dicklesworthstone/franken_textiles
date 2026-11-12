@@ -1,15 +1,17 @@
-# Use an accepted image-fit shape for body export and draping
+# Use an accepted image-fit shape for drafting, body export and draping
 
-An accepted `ftx measure fit-body` report can now supply the actual body shape to
-`ftx body`, `ftx drape`, and simulated workspace rounds. This is explicit: without
+An accepted `ftx measure fit-body` report can supply the actual body shape to
+`ftx draft`, `ftx body`, `ftx drape`, and simulated workspace rounds. This is explicit: without
 `--body-fit`, the existing tape-fitting path is unchanged. With it, no tape fit,
 parameter rounding, fallback fit, or silent shape adjustment occurs.
 
 The browser workshop also accepts this saved report in its body panel. Select
 the same converted model, choose the accepted-fit report, and explicitly associate
-it with the current wearer. The report selects the checked and draped body; it does
-not change the flat draft or measurement-readiness verdict. Clearing the report
-restores tape fitting. A rejected replacement never falls back to a previous
+it with the current wearer. By default the report selects the checked and draped
+body. Select **Draft a new pattern from this accepted body** before drafting to also
+use its dimensions and placement frames for the initial pattern. Neither mode
+changes measurement readiness. Clearing the report restores tape fitting for body
+checks and draping; a selected body-derived draft requires a valid report. A rejected replacement never falls back to a previous
 shape or to tape fitting. The arm-angle control selects the ordinary drape pose,
 not an image-frame pose; a refused start remains a refusal at that angle.
 
@@ -47,6 +49,55 @@ consume the saved `ftx-body-fit/1` report, not the CLI's enclosing `ftx-cli/1` J
 the fit. Only the shared shape is reused: frame-specific translations, rotations
 and joint poses from the images are **not** garment placement poses. `body --pose`
 and `drape --arm-deg` select the usual native poses.
+
+## Initial patterns from the selected shape
+
+All three existing programs can use the accepted body explicitly:
+
+```sh
+ftx draft zouave_bolero --measurements measurements.json --out new-bolero \
+  --body-fit accepted-fit.json --model anny.ftxbody
+ftx draft zouave_trousers --measurements measurements.json --ws workspace \
+  --body-fit accepted-fit.json --model anny.ftxbody
+ftx draft fez --measurements measurements.json --out new-fez \
+  --body-fit accepted-fit.json --model anny.ftxbody
+```
+
+The programs retain their existing construction and style controls. Dimensions,
+landmarks, local section radii and placement origins come from the selected model's
+canonical 35-degree A-pose. Image-frame poses and the later drape arm-angle control
+do not change that drafting frame. Missing required model anatomy refuses instead
+of borrowing a size-chart dimension. The trouser `body_rise` is the model's vertical
+waist-to-crotch distance; it includes no inferred seated allowance. The program's
+authored `rise_ease` remains separate, and the recorded basis makes this explicit.
+
+A bolero also needs a separately supplied `hand_pass`; trousers need `foot_pass`.
+The body model does not infer these passage measurements. Automatically filled
+chart priors and MODEL_FIT records cannot satisfy them. The fez needs no passage
+measurement. Other supplied dimensions remain independent evidence and comparison
+targets; they cannot silently replace the explicitly selected shape.
+
+A standalone body-derived draft requires a fresh output directory. Alongside
+`pattern.json` and `fit_spec.json`, it writes `draft_body.json`, selected-body
+`validation.json`, and the exact original accepted-report bytes in `body_fit.json`.
+The pattern metadata binds the reference body, source hash and supplemental
+passage evidence. Workspace drafts save these in a new immutable round, preserving
+the original measurement file and calculating readiness from its original records.
+
+In the browser, open **Use a fitted body (optional)** before drafting, load the
+model and accepted report, confirm their wearer association, and enable the draft
+checkbox. Changing either source withdraws the old draft and its downloads.
+The result shows its MODEL_FIT basis and includes both source documents in the
+downloads and ZIP. The shared portable entry point is `page::run_on_body`; the
+WebAssembly binding is `run_on_body(WebBody, request, today, created, report)`.
+It performs flat validation against the same body used to construct the pattern.
+Imported and already altered patterns are not initial drafting programs.
+
+This adds explicit initial drafting; it does not automatically redraft existing
+patterns or promote predicted dimensions into measurement records. Synthetic
+regressions compare native and portable output, two distinct accepted shapes,
+preserved sources, unchanged readiness, refusals and output immutability. They do
+not establish anatomical accuracy or physical garment fit.
 
 ## Model and shape consistency
 

@@ -545,6 +545,31 @@ impl WebBody {
     }
 }
 
+/// Draft and check an initial pattern on an explicitly selected accepted shape.
+/// Original measurement evidence remains the separate readiness authority.
+///
+/// # Errors
+/// Invalid sources/model, unavailable body dimensions, or ordinary drafting/export refusals.
+#[wasm_bindgen]
+pub fn run_on_body(
+    body: &WebBody,
+    req: &str,
+    today: &str,
+    created: &str,
+    accepted_report: &str,
+) -> Result<WebRound, JsError> {
+    page::run_on_body(
+        &body.inner,
+        &body.source_sha256,
+        req,
+        today,
+        created,
+        accepted_report,
+    )
+    .map(|inner| WebRound { inner })
+    .map_err(|e| JsError::new(&e))
+}
+
 /// Check a body against the current round's targets, without running cloth or changing readiness.
 ///
 /// # Errors

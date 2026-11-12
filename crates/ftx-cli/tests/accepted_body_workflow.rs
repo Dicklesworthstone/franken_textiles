@@ -5,6 +5,8 @@
 mod adaptive;
 #[path = "accepted_body_workflow/consumer_adaptive.rs"]
 mod consumer_adaptive;
+#[path = "accepted_body_workflow/drafting.rs"]
+mod drafting;
 #[path = "accepted_body_workflow/outfit.rs"]
 mod outfit;
 #[path = "accepted_body_workflow/surface_water.rs"]
@@ -1938,6 +1940,7 @@ fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
 fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8> {
     // The placement case is an articulated closed prism; the original image-fit case is a box.
     // Both are synthetic analytic geometry, never a stand-in for anatomical acceptance.
+    let synthetic_head = local_changes.contains(&"synthetic-head-radius");
     let mut bones = vec!["root"];
     let mut parents = vec![-1];
     let mut heads = vec![0.0; 3];
@@ -1978,7 +1981,11 @@ fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8>
         }
         // The tape-fitting control deliberately has no neck/head surface. Its valid waist and
         // stature must remain usable; the empty local targets only provide the ordinary model API.
-        let neck_z = if local_changes.is_empty() { 0.9 } else { 2.0 };
+        let neck_z = if local_changes.is_empty() || synthetic_head {
+            0.9
+        } else {
+            2.0
+        };
         heads.extend([0.0, 0.0, neck_z, 0.0, 0.0, neck_z + 0.1]);
         tails.extend([0.0, 0.0, neck_z + 0.1, 0.0, 0.0, neck_z + 0.2]);
     }
@@ -1995,13 +2002,16 @@ fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8>
     let mut influences = Vec::new();
     let mut faces = Vec::new();
     if articulated {
+        // Keep the drafting fixture's upper two rings independent of arm articulation, so its
+        // head section is an exact regular polygon with a separately controlled radius.
+        let arm_ring = if synthetic_head { 1 } else { 3 };
         for (r, z) in [0.0, 0.4, 0.8, 1.0].into_iter().enumerate() {
             for i in 0..16 {
                 let (s, c) = ftx_core::det::sin_cos(f64::from(i) * std::f64::consts::TAU / 16.0);
                 vertices.extend([0.1 * c, 0.1 * s, z]);
-                influences.push(if r == 3 && [15, 0, 1].contains(&i) {
+                influences.push(if r == arm_ring && [15, 0, 1].contains(&i) {
                     1
-                } else if r == 3 && [7, 8, 9].contains(&i) {
+                } else if r == arm_ring && [7, 8, 9].contains(&i) {
                     5
                 } else if r == 0 && c > 0.5 {
                     9
@@ -2055,6 +2065,13 @@ fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8>
                 // radius by 10%. With coefficients s and s/2 its seat grows by exactly 15% * s.
                 for (i, vertex) in vertices.as_chunks::<3>().0.iter().enumerate() {
                     if vertex[2] <= 0.4 {
+                        blend_vertices.push(i as u32);
+                        delta.extend([sign * 0.1 * vertex[0], sign * 0.1 * vertex[1], 0.0]);
+                    }
+                }
+            } else if *name == "synthetic-head-radius" {
+                for (i, vertex) in vertices.as_chunks::<3>().0.iter().enumerate() {
+                    if vertex[2] >= 0.8 {
                         blend_vertices.push(i as u32);
                         delta.extend([sign * 0.1 * vertex[0], sign * 0.1 * vertex[1], 0.0]);
                     }

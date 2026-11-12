@@ -11,6 +11,46 @@ use serde_json::{Value, json};
 
 use super::{Args, bad_input, known_options, make_dir, read_json, required, workspace};
 
+struct BodyDraftEvidence {
+    body: Value,
+    validation: Value,
+    source: Vec<u8>,
+}
+
+fn prepare(
+    args: &Args,
+    program: &str,
+    measurements: &Value,
+    style: Option<&Value>,
+) -> Result<(Value, Value, Option<BodyDraftEvidence>), Refusal> {
+    if !args.options.contains_key("body-fit") {
+        if args.options.contains_key("model") {
+            return Err(bad_input("draft --model requires --body-fit"));
+        }
+        let (pattern, spec) = draft(program, measurements, style)?;
+        return Ok((pattern, spec, None));
+    }
+    let (model, hash, source) = super::body_source::accepted_inputs(args)?;
+    let text = std::str::from_utf8(&source).map_err(|e| bad_input(e.to_string()))?;
+    let drafted =
+        ftx_drape::drafting::draft_on_model(&model, &hash, program, measurements, text, style)?;
+    Ok((
+        drafted.pattern,
+        drafted.fit_spec,
+        Some(BodyDraftEvidence {
+            body: drafted.body,
+            validation: drafted.validation,
+            source,
+        }),
+    ))
+}
+
+fn save_body(dir: &std::path::Path, evidence: &BodyDraftEvidence) -> Result<(), Refusal> {
+    workspace::write_new(&dir.join("body_fit.json"), &evidence.source)?;
+    workspace::write_json(&dir.join("draft_body.json"), &evidence.body)?;
+    workspace::write_json(&dir.join("validation.json"), &evidence.validation)
+}
+
 fn write(path: &PathBuf, v: &Value) -> Result<(), Refusal> {
     std::fs::write(path, PyJson::from_value(v).dumps(Some(1)) + "\n")
         .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))
@@ -31,6 +71,8 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "as-of",
             "no-priors",
             "fabric",
+            "body-fit",
+            "model",
         ],
     )?;
     if args.positional.len() != 2 {
@@ -64,17 +106,17 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     };
     let out = PathBuf::from(required(args, "out")?);
     let fabric = super::fabric::load(args)?;
-    let (mut pat, spec) = draft(program, &meas, style.as_ref())?;
+    let (mut pat, spec, body) = prepare(args, program, &meas, style.as_ref())?;
     if let Some(selected) = &fabric {
         selected.apply(&mut pat)?;
     }
     let (pp, sp) = (out.join("pattern.json"), out.join("fit_spec.json"));
     let errs = Pattern::new(pat.clone()).structure_errors();
-    if let Some(selected) = &fabric {
+    if fabric.is_some() || body.is_some() {
         match std::fs::symlink_metadata(&out) {
             Ok(_) => {
                 return Err(bad_input(
-                    "draft --fabric requires a fresh output directory; existing evidence is never overwritten",
+                    "draft --fabric or --body-fit requires a fresh output directory; existing evidence is never overwritten",
                 ));
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -84,7 +126,12 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             make_dir(parent)?;
         }
         std::fs::create_dir(&out).map_err(|e| workspace::io_error(&out, e))?;
-        selected.save(&out)?;
+        if let Some(selected) = &fabric {
+            selected.save(&out)?;
+        }
+        if let Some(evidence) = &body {
+            save_body(&out, evidence)?;
+        }
         workspace::write_new(
             &sp,
             (PyJson::from_value(&spec).dumps(Some(1)) + "\n").as_bytes(),
@@ -98,12 +145,17 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         write(&pp, &pat)?;
         write(&sp, &spec)?;
     }
-    let result = json!({
+    let mut result = json!({
         "pattern": pp.display().to_string(),
         "fit_spec": sp.display().to_string(),
         "structure_errors": errs,
         "solved": pat["meta"].get("solved").cloned().unwrap_or(Value::Null),
     });
+    if body.is_some() {
+        result["draft_body"] = json!(out.join("draft_body.json"));
+        result["body_fit"] = json!(out.join("body_fit.json"));
+        result["validation"] = json!(out.join("validation.json"));
+    }
     let text = PyJson::from_value(&result).dumps(Some(1));
     Ok((result, if errs.is_empty() { 0 } else { 2 }, text))
 }
@@ -122,7 +174,7 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
         .map(|p| read_json(p).map(|x| x.0))
         .transpose()?;
     let fabric = super::fabric::load(args)?;
-    let (mut pat, spec) = draft(program, &evidence.value, style.as_ref())?;
+    let (mut pat, spec, body) = prepare(args, program, &evidence.value, style.as_ref())?;
     if let Some(selected) = &fabric {
         selected.apply(&mut pat)?;
     }
@@ -139,6 +191,9 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
     if let Some(selected) = &fabric {
         selected.save(&dir)?;
     }
+    if let Some(evidence) = &body {
+        save_body(&dir, evidence)?;
+    }
     workspace::write_json(&dir.join("pattern.json"), &pat)?;
     workspace::write_json(&dir.join("fit_spec.json"), &spec)?;
     workspace::write_new(&dir.join("measurements.json"), &evidence.bytes)?;
@@ -147,10 +202,15 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
     if !contract.exists() {
         workspace::write_json(&contract, &spec)?;
     }
-    let result = json!({"round":number,"dir":dir,"pattern":dir.join("pattern.json"),
+    let mut result = json!({"round":number,"dir":dir,"pattern":dir.join("pattern.json"),
         "fit_spec":dir.join("fit_spec.json"),"structure_errors":errs,
         "readiness":readiness,"measurement_note":note,"as_of":date,
         "solved":pat["meta"]["solved"]});
+    if body.is_some() {
+        result["draft_body"] = json!(dir.join("draft_body.json"));
+        result["body_fit"] = json!(dir.join("body_fit.json"));
+        result["validation"] = json!(dir.join("validation.json"));
+    }
     let text = format!(
         "{}{}\nround dir: {}{}",
         note.map_or(String::new(), |s| format!("NOTE: {s}\n")),

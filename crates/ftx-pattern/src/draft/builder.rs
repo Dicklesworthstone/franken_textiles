@@ -7,6 +7,7 @@ use ftx_core::py;
 use ftx_core::{Refusal, RefusalCode, Vec2};
 use serde_json::{Map, Value, json};
 
+use super::DraftBody;
 use super::form::Meas;
 pub use crate::SCHEMA;
 
@@ -265,6 +266,10 @@ pub fn mirror_seams(seams: &[Value]) -> Vec<Value> {
 /// `_size_label(meas)`: `<stature:.0f> mm stature`, or `custom`.
 #[must_use]
 pub fn size_label(m: Meas) -> String {
+    body_size_label(&m)
+}
+
+pub(super) fn body_size_label(m: &dyn DraftBody) -> String {
     m.get("stature").map_or_else(
         |_| "custom".into(),
         |s| format!("{} mm stature", py::fixed(s, 0)),

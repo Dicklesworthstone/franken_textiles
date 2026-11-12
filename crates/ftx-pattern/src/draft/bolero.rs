@@ -10,10 +10,11 @@ use ftx_core::{Curve, CurveKind, Refusal, RefusalCode, Vec2};
 use serde_json::{Map, Value, json};
 
 use super::builder::{
-    PieceBuilder, SCHEMA, bisect, len_cubic, merge_style, mirror_seams, num, pt, sf, size_label,
-    unit,
+    PieceBuilder, SCHEMA, bisect, body_size_label, len_cubic, merge_style, mirror_seams, num, pt,
+    sf, unit,
 };
-use super::form::{Meas, landmarks, section_radius};
+use super::DraftBody;
+use super::form::{Meas, landmarks};
 use super::geos;
 use crate::Pattern;
 
@@ -201,7 +202,19 @@ fn two_piece(b: &PieceBuilder, f: &PieceBuilder) -> Pattern {
 pub fn zouave_bolero(meas: &Value, style: Option<&Value>) -> Result<(Value, Value), Refusal> {
     let s = merge_style(&defaults(), style)?;
     let m = Meas(meas);
-    let l = landmarks(m)?;
+    // Preserve the reference's eager landmark validation and refusal order.
+    landmarks(m)?;
+    build(&m, s)
+}
+
+pub(super) fn on_body(
+    body: &dyn DraftBody,
+    style: Option<&Value>,
+) -> Result<(Value, Value), Refusal> {
+    build(body, merge_style(&defaults(), style)?)
+}
+
+fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Refusal> {
     let (chest, nb, sl) = (
         m.get("chest")?,
         m.get("neck_base")?,
@@ -214,13 +227,14 @@ pub fn zouave_bolero(meas: &Value, style: Option<&Value>) -> Result<(Value, Valu
         sl,
         wb: q + 5.0,
         wf: q - 5.0,
-        y_ua: (l.get("chest")? - l.get("waist")?) - sf(&s, "armhole_drop")?,
+        y_ua: (m.landmark_h("torso", "chest")? - m.landmark_h("torso", "waist")?)
+            - sf(&s, "armhole_drop")?,
         hem: sf(&s, "hem_y")?,
         y_cbn: bnw,
         y_snp: bnw + sf(&s, "back_neck_rise")?,
     };
     let neck_target = nb + sf(&s, "neckline_ease")?;
-    let y_ab = l.get("across_back")? - l.get("waist")?;
+    let y_ab = m.landmark_h("torso", "across_back")? - m.landmark_h("torso", "waist")?;
     let ab_target = m.get("across_back")? + sf(&s, "across_back_ease")?;
     let neckline = |k: f64, scoop: f64| -> Result<f64, Refusal> {
         let (b, f) = bodice(&s, &x, k, scoop)?;
@@ -249,7 +263,7 @@ pub fn zouave_bolero(meas: &Value, style: Option<&Value>) -> Result<(Value, Valu
         "title".into(),
         json!("Zouave bolero (open front, set-in sleeve)"),
     );
-    meta.insert("size_label".into(), json!(size_label(m)));
+    meta.insert("size_label".into(), json!(body_size_label(m)));
     meta.insert("origin".into(), json!("DRAFT"));
     meta.insert("round".into(), json!(0));
     meta.insert("sa_mm".into(), json!(10));
@@ -271,7 +285,7 @@ type Cubic = [Vec2; 4];
 
 /// `_bolero_finish`: the sleeve (cap solved to the armhole), seams, solved values, the fit spec, the braid.
 fn finish(
-    m: Meas,
+    m: &dyn DraftBody,
     s: &Map<String, Value>,
     pat: &mut Value,
     arm_f: f64,
@@ -350,7 +364,7 @@ fn finish(
     sv.line("under_b", "ua_b", "hem_b");
     sv.notch("n_cap_f", "cap_f", 0.45, "V");
     sv.notch("n_cap_b", "cap_b", 0.55, "double");
-    let radius = (bic / (2.0 * PI)).max(section_radius(m, "arm_R", 0.0)? + 6.0);
+    let radius = (bic / (2.0 * PI)).max(m.section_radius("arm_R", 0.0)? + 6.0);
     sv.set(
         "placement",
         json!({"part": "arm", "theta_deg": -90.0, "x0": ftx_core::py::round(xt, 3), "y0_landmark": "shoulder_tip",

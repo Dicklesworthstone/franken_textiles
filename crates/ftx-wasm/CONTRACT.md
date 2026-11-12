@@ -1,5 +1,19 @@
 # ftx-wasm
 
+**Initial drafting from an accepted shape.** `page::run_on_body(model, model_sha256,
+request, today, created, accepted_report_text)` and wasm32 `run_on_body(WebBody,
+request, today, created, accepted_report_text)` share the native accepted-body
+drafting authority. The request must select an existing drafting program, not an
+imported pattern. The 64 MiB request and 16 MiB report limits bound input text.
+The round drafts and flat-validates on the same canonical reference body, preserves
+the exact report bytes as `body_fit.json`, and includes `draft_body.json` and its
+MODEL_FIT basis in the result and ZIP. Original record fusion/readiness is unchanged.
+The workshop's explicit draft checkbox requires the current loaded model and an
+accepted report associated with the wearer. Source changes invalidate old drafts;
+worker refusals clear the old round before checking the replacement. Ordinary
+`page::run`, drafting defaults and altered/imported-pattern workflows retain their
+existing behavior. See `docs/reuse-body-fit.md` for passage and body-rise limits.
+
 **Still-photo capture drafts.** `body_fit::body_capture_catalogue(model_bytes)` returns the
 actual model's `ftx-body-capture-catalogue/1` and exact model hash, with `body_fitted: false`.
 `BodyCapture::new(manifest, calibration, sheet)`, `image_ids`, `add_image(id, bytes)` and

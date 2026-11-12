@@ -23,6 +23,7 @@ pub mod collider;
 pub mod contact;
 pub mod cylinder;
 pub mod distance;
+pub mod drafting;
 pub mod eigen;
 pub mod elements;
 pub mod garment;

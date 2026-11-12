@@ -1,5 +1,17 @@
 # ftx-cli contract
 
+**Initial drafting from an accepted shape.** `ftx draft PROGRAM --body-fit REPORT
+[--model PATH]` explicitly uses the selected accepted shape for dimensions and
+placement, through the shared drape/pattern drafting authority. Both `--out` and
+`--ws` modes retain existing style/material selection. `--model` alone refuses.
+Standalone output requires a new directory; workspace output reserves a new round
+only after source and drafting checks. Both preserve exact `body_fit.json` bytes
+and add `draft_body.json` plus flat `validation.json` on the selected body.
+Original measurement evidence and readiness are unchanged. Bolero hand passage and
+trouser foot passage require separate supplied evidence; unavailable anatomy and
+invalid model/report/demographic associations refuse without tape or chart fallback.
+See `docs/reuse-body-fit.md` for commands, the trouser rise basis and source limits.
+
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
 FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx draft`, `ftx validate`,
 `ftx drape`, `ftx qualify`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export`, `ftx check`, `ftx trace`,

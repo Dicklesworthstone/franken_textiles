@@ -402,12 +402,52 @@ fn has_fold_up(data: &Value) -> bool {
 /// draft or export the library refuses.
 #[allow(clippy::too_many_lines)]
 pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> {
+    run_selected(req_text, today, created, None)
+}
+
+/// Draft, validate and export against an explicitly selected accepted body. Measurement fusion and
+/// readiness still consume only the original evidence, and no model value is inserted into it.
+///
+/// # Errors
+/// Invalid or excessive source text, an imported pattern instead of a drafting program, invalid
+/// body/model association, missing passage values, or the ordinary draft/export refusals.
+pub fn run_on_body(
+    model: &ftx_body::AnnyModel,
+    model_sha256: &str,
+    req_text: &str,
+    today: &str,
+    created: &str,
+    accepted_report_text: &str,
+) -> Result<Round, String> {
+    if req_text.len() > 64 * 1024 * 1024 || accepted_report_text.len() > 16 * 1024 * 1024 {
+        return Err("body-derived draft inputs exceed their 64/16 MiB limits".into());
+    }
+    run_selected(
+        req_text,
+        today,
+        created,
+        Some((model, model_sha256, accepted_report_text)),
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_selected(
+    req_text: &str,
+    today: &str,
+    created: &str,
+    selected_body: Option<(&ftx_body::AnnyModel, &str, &str)>,
+) -> Result<Round, String> {
     let req = PyJson::parse(req_text)?;
     let field = |k: &str| req.get(k).cloned().unwrap_or(PyJson::Null);
     let body = field("body");
     let meas = body_file(&body, today)?;
     let pattern_in = field("pattern");
+    let mut draft_body = None;
+    let mut draft_validation = None;
     let (data, data_doc, spec) = if truthy(&pattern_in.to_value()) {
+        if selected_body.is_some() {
+            return Err("body-derived drafting needs a drafting program; an existing pattern is not redrafted".into());
+        }
         let spec = Some(field("fit_spec").to_value()).filter(truthy);
         (pattern_in.to_value(), pattern_in, spec)
     } else {
@@ -443,7 +483,22 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
             style.insert("nappy".into(), json!(true)); // seat over the nappy, a longer rise
         }
         let style = (!style.is_empty()).then_some(Value::Object(style));
-        let (d, s) = draft::draft(&program, &meas, style.as_ref()).map_err(msg)?;
+        let (d, s) = if let Some((model, hash, accepted)) = selected_body {
+            let drafted = ftx_drape::drafting::draft_on_model(
+                model,
+                hash,
+                &program,
+                &meas,
+                accepted,
+                style.as_ref(),
+            )
+            .map_err(msg)?;
+            draft_body = Some(drafted.body);
+            draft_validation = Some((drafted.validation, drafted.validation_table));
+            (drafted.pattern, drafted.fit_spec)
+        } else {
+            draft::draft(&program, &meas, style.as_ref()).map_err(msg)?
+        };
         let dd = PyJson::from_value(&d);
         (d, dd, Some(s))
     };
@@ -465,8 +520,15 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
         });
     }
     let spec = spec.unwrap_or_else(|| default_fit_spec(&pat, "generic"));
-    let val = validate(&pat, &spec, &Measurements(meas.clone()));
-    let val_v = serde_json::to_value(&val).map_err(|e| e.to_string())?;
+    let (val_v, table) = if let Some(selected) = draft_validation {
+        selected
+    } else {
+        let val = validate(&pat, &spec, &Measurements(meas.clone()));
+        (
+            serde_json::to_value(&val).map_err(|e| e.to_string())?,
+            format_table(&val),
+        )
+    };
     let flat = val_v["status"].as_str().unwrap_or("BLOCKED").to_string();
     let ready = round_readiness(&data, &meas, today);
     let ready_status = ready["status"]
@@ -485,6 +547,12 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
         ("validation.json".into(), doc(&PyJson::from_value(&val_v))),
         ("readiness.json".into(), doc(&PyJson::from_value(&ready))),
     ];
+    if let Some(evidence) = &draft_body {
+        files.push(("draft_body.json".into(), doc(&PyJson::from_value(evidence))));
+        if let Some((_, _, accepted)) = selected_body {
+            files.push(("body_fit.json".into(), accepted.as_bytes().to_vec()));
+        }
+    }
     let unscaled = data["meta"]["scale_status"] == "UNSCALED";
     let (exports, skip) = if flat == "BLOCKED" {
         (None, Some("skipped (validation BLOCKED)"))
@@ -568,7 +636,7 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
     let owned: Vec<(String, Vec<u8>)> = sorted.into_iter().cloned().collect();
     let zip = crate::zip::zip(&owned, created);
     let file = |name: &str| files.iter().find(|(n, _)| n == name).map(|(_, b)| b);
-    let key: Vec<PyJson> = KEY_FILES
+    let mut key: Vec<PyJson> = KEY_FILES
         .iter()
         .filter_map(|(suffix, label)| {
             let name = format!("{stem}{suffix}");
@@ -584,6 +652,20 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
             })
         })
         .collect();
+    if draft_body.is_some() {
+        for (name, label) in [
+            ("draft_body.json", "Draft body and model dimensions"),
+            ("body_fit.json", "Original accepted body fit"),
+        ] {
+            if let Some(bytes) = file(name) {
+                key.push(PyJson::dict(vec![
+                    ("label", PyJson::str(label)),
+                    ("name", PyJson::str(name)),
+                    ("bytes", PyJson::Int(bytes.len() as i64)),
+                ]));
+            }
+        }
+    }
     let svg = file(&format!("exports/{stem}_master_mm.svg"))
         .map(|b| String::from_utf8_lossy(b).into_owned());
     let meta = &data["meta"];
@@ -591,19 +673,23 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
         .as_str()
         .filter(|s| !s.is_empty())
         .map_or(stem.clone(), str::to_string);
-    let page = PyJson::dict(vec![
+    let mut page_items = vec![
         ("status", PyJson::str(status)),
         ("basis", basis),
         ("validation", PyJson::from_value(&val_v)),
         ("readiness", PyJson::from_value(&ready)),
         ("exports", exports.unwrap_or(PyJson::Null)),
-        ("table", PyJson::str(format_table(&val))),
+        ("table", PyJson::str(table)),
         ("solved", PyJson::from_value(&meta["solved"])),
         ("title", PyJson::str(title)),
         ("zip", PyJson::str(&zip_name)),
         ("files", PyJson::List(key)),
         ("preview_svg", svg.map_or(PyJson::Null, PyJson::Str)),
-    ]);
+    ];
+    if let Some(evidence) = draft_body {
+        page_items.push(("draft_body", PyJson::from_value(&evidence)));
+    }
+    let page = PyJson::dict(page_items);
     Ok(Round {
         page,
         files,

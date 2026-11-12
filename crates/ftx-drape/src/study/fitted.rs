@@ -229,6 +229,50 @@ impl BodyMeasure for FlatFitBody {
     }
 }
 
+impl ftx_pattern::draft::DraftBody for FlatFitBody {
+    fn get(&self, name: &str) -> Result<f64, Refusal> {
+        let value = if name == "body_rise" {
+            // Drafting rise is the vertical waist-to-crotch distance of this same reference
+            // body, not the chart's analytic form or a supplied target that was not fitted.
+            BodyMeasure::landmark_h(self, "torso", "waist").and_then(|waist| {
+                BodyMeasure::landmark_h(self, "torso", "crotch").map(|crotch| waist - crotch)
+            })
+        } else {
+            BodyMeasure::value(self, name)
+        }
+        .map_err(|_| invalid(format!("selected body has no drafting measurement '{name}'")))?;
+        if !value.is_finite() || value <= 0.0 {
+            return Err(invalid(format!(
+                "selected body drafting measurement '{name}' must be finite and positive"
+            )));
+        }
+        Ok(value)
+    }
+
+    fn landmark_h(&self, part: &str, name: &str) -> Result<f64, Refusal> {
+        BodyMeasure::landmark_h(self, part, name)
+            .map_err(|_| invalid(format!("selected body has no landmark '{part}/{name}'")))
+    }
+
+    fn frame_origin(&self, part: &str) -> Result<Vec3, Refusal> {
+        self.frames
+            .frame(part)
+            .map(|frame| frame.origin)
+            .filter(|origin| origin.is_finite())
+            .ok_or_else(|| invalid(format!("selected body has no part frame '{part}'")))
+    }
+
+    fn section_radius(&self, part: &str, h_mm: f64) -> Result<f64, Refusal> {
+        let radius = self.frames.section_radius(part, h_mm);
+        if !h_mm.is_finite() || !radius.is_finite() || radius <= 0.0 {
+            return Err(invalid(format!(
+                "selected body has no positive section radius for '{part}' at {h_mm} mm"
+            )));
+        }
+        Ok(radius)
+    }
+}
+
 impl FittedBody {
     /// Fit from tape once and prepare the standard straight-arm 35-degree drape pose.
     /// Uses the same model, fitting, trimming and landmark functions as the existing fold-up.

@@ -37,6 +37,24 @@ impl Meas<'_> {
     }
 }
 
+impl super::DraftBody for Meas<'_> {
+    fn get(&self, name: &str) -> Result<f64, Refusal> {
+        Meas::get(self, name)
+    }
+
+    fn landmark_h(&self, part: &str, name: &str) -> Result<f64, Refusal> {
+        landmark_h(*self, part, name)
+    }
+
+    fn frame_origin(&self, part: &str) -> Result<Vec3, Refusal> {
+        frame(*self, part).map(|frame| frame.origin)
+    }
+
+    fn section_radius(&self, part: &str, h_mm: f64) -> Result<f64, Refusal> {
+        section_radius(*self, part, h_mm)
+    }
+}
+
 fn missing(name: &str) -> Refusal {
     Refusal::new(
         RefusalCode::InvalidDocument,

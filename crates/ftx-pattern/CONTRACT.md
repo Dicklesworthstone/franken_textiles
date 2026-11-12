@@ -367,6 +367,17 @@ and the simulator's placement helpers (spec 02 B.6–B.7; the drape places piece
 taper refusal, which the style ranges make unreachable (the widest allowed sector is 314°); a braid line
 that comes back within twice its inset of itself (the curve would then need the buffer's other side).
 
+The native `draft_on_body(program, &dyn DraftBody, style)` entry point uses the same three programs
+with a selected dimension and geometry authority. `DraftBody` supplies named dimensions, part-frame
+landmarks, frame origins and actual section radii in millimetres; `form::Meas` adapts the analytic body.
+Missing model geometry is not replaced with analytic widths or supplied targets. The selected-body
+entry point refuses non-finite dimensions, landmarks and frames, and nonpositive dimensions or
+section radii. The legacy `draft` wrappers retain their analytic behavior and eager landmark refusal
+order. Body selection, source provenance and explicit passage evidence remain the caller's concern;
+the interface alone establishes neither measured wearer evidence nor physical fit. Unit regressions
+exercise selected levels/sections/axes, missing passage, invalid geometry and unchanged analytic
+results for all three reference wearers and programs.
+
 **Bounded thermal fits** (`material_thermal`, `tests/thermal_polynomial.rs`). A thermal series
 contains either reported temperature observations or an explicitly classified polynomial fit of
 maximum degree three. Coefficients are in ascending Celsius powers and canonical output units;

@@ -7,7 +7,8 @@ use ftx_core::py::round;
 use ftx_core::{Refusal, RefusalCode, Vec2};
 use serde_json::{Map, Value, json};
 
-use super::builder::{PieceBuilder, SCHEMA, merge_style, sf, size_label};
+use super::DraftBody;
+use super::builder::{PieceBuilder, SCHEMA, body_size_label, merge_style, sf};
 use super::form::Meas;
 
 /// The fez's style defaults (`FEZ_DEFAULTS`).
@@ -36,6 +37,13 @@ fn out_of_range(m: &str) -> Refusal {
 /// # Errors
 /// An unknown style key or one out of its range; a missing head girth.
 pub fn fez(meas: &Value, style: Option<&Value>) -> Result<(Value, Value), Refusal> {
+    on_body(&Meas(meas), style)
+}
+
+pub(super) fn on_body(
+    m: &dyn DraftBody,
+    style: Option<&Value>,
+) -> Result<(Value, Value), Refusal> {
     let s = merge_style(&defaults(), style)?;
     let (top_frac, height_frac, head_ease) = (
         sf(&s, "top_frac")?,
@@ -55,7 +63,6 @@ pub fn fez(meas: &Value, style: Option<&Value>) -> Result<(Value, Value), Refusa
     if !(-10.0..=40.0).contains(&head_ease) {
         return Err(out_of_range("head_ease must be in [-10, 40] mm"));
     }
-    let m = Meas(meas);
     let head = m.get("head")?;
     let d_head = head / PI;
     let r_base = (head + head_ease) / (2.0 * PI);
@@ -148,7 +155,7 @@ pub fn fez(meas: &Value, style: Option<&Value>) -> Result<(Value, Value), Refusa
 
     let mut meta = Map::new();
     meta.insert("title".into(), json!("Fez (one-piece crown, round tip)"));
-    meta.insert("size_label".into(), json!(size_label(m)));
+    meta.insert("size_label".into(), json!(body_size_label(m)));
     meta.insert("origin".into(), json!("DRAFT"));
     meta.insert("round".into(), json!(0));
     meta.insert("sa_mm".into(), json!(7));

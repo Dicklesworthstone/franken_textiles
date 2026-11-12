@@ -175,6 +175,27 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     </details>
   </section>
 
+  <section id="selectedBodySection">
+    <details>
+      <summary>Use a fitted body (optional)</summary>
+      <p>Load the converted body model to check targets or drape a garment. An accepted image-fit report
+        can also supply the dimensions and landmarks for a new pattern. All files stay local.</p>
+      <p class="row"><label>Body model <input type="file" id="bodyFile" accept=".ftxbody"></label></p>
+      <p class="mut">Use <code>anny-0.6.1-default.ftxbody</code>, made with
+        <code>tools/body-model/convert_anny.py</code>, or the exact model used for the accepted fit.</p>
+      <details><summary>Reuse an accepted image-fit shape</summary>
+        <p>Choose the saved <code>ftx-body-fit/1</code> report. Its model must match, and its accepted
+          shape is reused without tape refitting. Image-frame poses are not used for drafting or draping.</p>
+        <p><label>Accepted fit <input type="file" id="bodyFitFile" accept=".json,application/json"></label></p>
+        <p><label><input type="checkbox" id="bodyFitConsent"> I associate this fit with the current wearer</label></p>
+        <p><label><input type="checkbox" id="draftFromBody"> Draft a new pattern from this accepted body</label></p>
+        <p class="mut">The draft uses the model's dimensions in its reference pose. Boleros still need
+          a supplied hand-passage value; trousers need foot passage. Existing patterns are checked as
+          supplied. Model predictions do not add measured evidence or establish physical fit.</p>
+      </details>
+    </details>
+  </section>
+
   <section id="styleSection">
     <details>
       <summary>3. Style (optional)</summary>
@@ -191,6 +212,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     <h2 id="resTitle"></h2>
     <p><span id="resStatus" class="pill"></span></p>
     <p id="resBasis" class="mut"></p>
+    <p id="resDraftBody" class="mut" hidden></p>
     <div id="resGate"></div>
     <div id="resFiles" class="files"></div>
     <p><button id="chooseMaterials" type="button" disabled>Choose materials</button>
@@ -204,22 +226,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     <div>
       <h2 style="margin-top:14px">Check the fitted body</h2>
       <p class="mut">Compare the selected body with this round's targets before running cloth.
-        This also works for patterns with no fold-up placement. It needs the converted body model,
-        <code>anny-0.6.1-default.ftxbody</code> (about 150 MB, made by FrankenTextiles'
-        <code>tools/body-model/convert_anny.py</code>); the file stays in this page.
+        This also works for patterns with no fold-up placement. Select the model and optional accepted
+        report under <b>Use a fitted body</b> above.
         Body predictions remain MODEL_FIT; neither these differences nor an accepted shape establish physical fit.</p>
-      <p class="row"><label>Body model <input type="file" id="bodyFile" accept=".ftxbody"></label>
-        <button id="bodyCheckGo" disabled>Check body against targets</button></p>
-      <details><summary>Reuse an accepted image-fit shape</summary>
-        <p>Optional saved <code>ftx-body-fit/1</code> report from <code>ftx measure fit-body</code>.
-          This preserves its shape without tape refitting. It selects the checked and draped body;
-          the draft and measurement-readiness verdict remain separate. The model file must match.</p>
-        <p><label>Accepted fit <input type="file" id="bodyFitFile" accept=".json,application/json"></label></p>
-        <p><label><input type="checkbox" id="bodyFitConsent"> I associate this fit with the current wearer</label></p>
-        <p class="mut">Image poses are not reused for garment drapes.
-          A refused start needs review. Neither an accepted shape nor a settled drape establishes physical fit.
-          Clear the fit file to return to tape fitting.</p>
-      </details>
+      <p><button id="bodyCheckGo" disabled>Check body against targets</button></p>
       <div id="bodyCheckSummary"></div>
       <div id="bodyCheckFiles" class="files"></div>
     </div>
@@ -341,6 +351,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if(materialBodySources){materialBodySources=false;clearBodyImport();}
   }
   let editedPattern = null, editedFit = null, editedBodyProgram = null, previousAlteration = null, editedUrl = null;
+  const usesBodyDraft = () => $("draftFromBody").checked && program !== "audit" && editedPattern === null;
   let alterationBase = null, alterationRequest = 0, alterationBusy = false;
   let alterationSource = null, alterationSourceTargets = null, alterationSourceRequest = 0, alterationSourceBusy = false;
   let photoEvidence = null, photoImportProblem = null, photoToken = new URL(location.href).searchParams.get("photoImport");
@@ -471,6 +482,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("errorBox").classList.add("hidden");
     $("results").classList.remove("hidden");
     if (res.errors) {
+      $("resDraftBody").hidden = true;
       $("resTitle").textContent = "The pattern file has structure errors";
       $("resStatus").textContent = res.status; $("resStatus").className = "pill " + res.status;
       $("resBasis").textContent = ""; $("resGate").innerHTML = "<ul>" + res.errors.map((e) => `<li>${esc(e)}</li>`).join("") + "</ul>";
@@ -481,6 +493,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("resTitle").textContent = res.title;
     $("resStatus").textContent = res.status; $("resStatus").className = "pill " + res.status;
     $("resBasis").textContent = Object.entries(res.basis).map(([k, v]) => `${k}: ${v}`).join(" · ");
+    $("resDraftBody").hidden = !res.draft_body;
+    $("resDraftBody").textContent = res.draft_body
+      ? "Draft and flat validation use the selected body's MODEL_FIT dimensions in its reference pose. Measurement readiness is assessed separately from the original evidence; hand or foot passage retains its supplied source."
+      : "";
     const rd = res.readiness || {};
     let gate = "";
     if (rd.status === "NOT_READY") gate += `<p class="NOT_READY"><b>Measure these before cutting cloth:</b></p><ul>${rd.remeasure_request.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
@@ -521,6 +537,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   // a round or a fold-up has finished (successfully or not): tests wait on this counter
   function finished() { document.body.dataset.runs = String((+document.body.dataset.runs || 0) + 1); }
   function foldButton() {
+    $("draftFromBody").disabled = program === "audit" || editedPattern !== null;
     for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
     const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
       && (bodyFitText === null || $("bodyFitConsent").checked);
@@ -656,7 +673,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     foldRequest = ++nextRequest; folding = false;
     dropFold(); dropBodyCheck(); foldButton(); status("");
   }
-  function invalidateRound(keepAlteration = false) {
+  function invalidateRound(keepAlteration = false, keepBodyAssociation = false) {
     alterationRequest = ++nextRequest; alterationBusy = false;
     if (keepAlteration !== true) {
       alterationBase = null; alterationSource = alterationSourceTargets = null;
@@ -667,7 +684,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     roundRequest = ++nextRequest; foldable = false; bodyCheckable = false;
     materialSources = null; $("chooseMaterials").disabled = true;
     if (materialTransfer) materialTransfer.files = null;
-    if (bodyFitText !== null) $("bodyFitConsent").checked = false;
+    if (bodyFitText !== null && !keepBodyAssociation) $("bodyFitConsent").checked = false;
     urls.forEach((u) => URL.revokeObjectURL(u)); urls = [];
     $("results").classList.add("hidden"); $("resFiles").innerHTML = "";
     $("resPreview").removeAttribute("src"); $("foldBox").classList.add("hidden");
@@ -975,7 +992,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   });
   async function runRound() {
     // disable first: reading an uploaded file is async, and a second click would start a second run
-    invalidateRound();
+    invalidateRound(false, true);
     const request = roundRequest;
     $("go").disabled = true;
     $("results").classList.add("hidden"); $("errorBox").classList.add("hidden");
@@ -983,8 +1000,17 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     try {
       const req = await buildRequest();
       if (request !== roundRequest || dead) return;
+      const draftOnBody = usesBodyDraft();
+      if (draftOnBody && (!bodyLoaded || !bodyFitReady || bodyFitText === null)) {
+        throw Error("Load the exact body model and accepted-fit report before drafting from the body.");
+      }
+      if (draftOnBody && !$("bodyFitConsent").checked) {
+        throw Error("Associate the accepted fit with this wearer before drafting.");
+      }
       status("Drafting, checking and exporting…");
-      worker.postMessage({ type: "run", request, req });
+      worker.postMessage({ type: "run", request, req, ...(draftOnBody ? {
+        draftOnBody: true, body: bodyRequest, bodyFit: bodyFitText, bodyFitConsent: true
+      } : {}) });
     } catch (e) {
       if (request !== roundRequest || dead) return;
       $("go").disabled = false; showError(e.message); finished();
@@ -1025,7 +1051,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       receivedBodyFit = bodyFitText = null; bodyFitReady = true; ++bodyFitRead;
     }
     $("bodyFitConsent").checked = false;
-    showBodyImport(); invalidateFold();
+    showBodyImport(); bodySourceChanged(true);
   }
   $("clearBodyFitImport").addEventListener("click", clearBodyImport);
   window.addEventListener("pagehide", () => {clearTraceImport();clearBodyImport();});
@@ -1035,7 +1061,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (materialTransfer) materialTransfer.files = null;
     $("bodyFitConsent").checked = false;
     const request = bodyRequest = ++nextRequest;
-    bodyLoaded = false; invalidateFold();
+    bodyLoaded = false; bodySourceChanged(true);
     worker.postMessage({ type: "clearBody" });
     const f = $("bodyFile").files[0];
     if (!f) { status("Choose a body model to check or fold."); return; }
@@ -1060,7 +1086,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (materialTransfer) materialTransfer.files = null;
     const request = ++bodyFitRead;
     bodyFitText = null; bodyFitReady = false; $("bodyFitConsent").checked = false;
-    invalidateFold();
+    bodySourceChanged(true);
     const file = $("bodyFitFile").files[0];
     if (!file) { bodyFitReady = true; foldButton(); return; }
     try {
@@ -1076,11 +1102,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       showError(e.message); foldButton();
     }
   });
-  function bodySourceChanged() {
+  function bodySourceChanged(draftingSource = false) {
     if (materialTransfer) materialTransfer.files = null;
-    invalidateFold();
+    if (draftingSource && usesBodyDraft()) invalidateRound(false, true);
+    else invalidateFold();
   }
-  for (const id of ["bodyFitConsent", "bodyArmDeg"]) $(id).addEventListener("change",()=>{if(id==="bodyArmDeg")cancelMaterialImport();bodySourceChanged();});
+  $("draftFromBody").addEventListener("change",()=>invalidateRound(false, true));
+  for (const id of ["bodyFitConsent", "bodyArmDeg"]) $(id).addEventListener("change",()=>{if(id==="bodyArmDeg")cancelMaterialImport();bodySourceChanged(id==="bodyFitConsent");});
   $("bodyArmDeg").addEventListener("input",()=>{cancelMaterialImport();bodySourceChanged();});
   $("bodyCheckGo").addEventListener("click", () => {
     if ($("bodyCheckGo").disabled) return;

@@ -7,9 +7,10 @@ use ftx_core::{Refusal, RefusalCode, Vec2};
 use serde_json::{Map, Value, json};
 
 use super::builder::{
-    PieceBuilder, SCHEMA, bisect, merge_style, mirror_seams, num, sf, size_label, unit,
+    PieceBuilder, SCHEMA, bisect, body_size_label, merge_style, mirror_seams, num, sf, unit,
 };
-use super::form::{Meas, frame, landmark_h, landmarks, section_radius};
+use super::DraftBody;
+use super::form::{Meas, landmarks};
 use crate::Pattern;
 
 /// The trousers' style defaults (`TROUSER_DEFAULTS`).
@@ -42,11 +43,23 @@ fn one(pieces: Vec<Value>) -> Pattern {
 ///
 /// # Errors
 /// An unknown style key; a missing measurement; geometry that cannot be drafted.
-#[allow(clippy::too_many_lines)]
 pub fn zouave_trousers(meas: &Value, style: Option<&Value>) -> Result<(Value, Value), Refusal> {
     let s = merge_style(&defaults(), style)?;
     let m = Meas(meas);
-    let l = landmarks(m)?;
+    // Preserve the reference's eager landmark validation and refusal order.
+    landmarks(m)?;
+    build(&m, s)
+}
+
+pub(super) fn on_body(
+    body: &dyn DraftBody,
+    style: Option<&Value>,
+) -> Result<(Value, Value), Refusal> {
+    build(body, merge_style(&defaults(), style)?)
+}
+
+#[allow(clippy::too_many_lines)]
+fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Refusal> {
     let nappy = crate::doc::truthy(&s["nappy"]);
     let nappy_mm = if nappy { 20.0 } else { 0.0 };
     let seat_name = if nappy { "seat_over_nappy" } else { "hip" };
@@ -54,7 +67,7 @@ pub fn zouave_trousers(meas: &Value, style: Option<&Value>) -> Result<(Value, Va
     let quarter = (seat + sf(&s, "seat_ease")?) / 4.0;
     let fullness = sf(&s, "fullness")?;
     let (wf, wb) = (quarter - 10.0 + fullness, quarter + 10.0 + fullness);
-    let y_hip = l.get("hip")? - l.get("waist")?;
+    let y_hip = m.landmark_h("torso", "hip")? - m.landmark_h("torso", "waist")?;
     let y_cr = -(m.get("body_rise")? + sf(&s, "rise_ease")? + nappy_mm);
     let ext_f = sf(&s, "front_ext_frac")? * seat;
     let cuff_level = s["cuff_level"]
@@ -72,16 +85,16 @@ pub fn zouave_trousers(meas: &Value, style: Option<&Value>) -> Result<(Value, Va
     let hem_total = cuff_len * gather;
     let (hem_f, hem_b) = (0.47 * hem_total, 0.53 * hem_total);
     let cuff_h = sf(&s, "cuff_height")?;
-    let z_cuff_top = l.get(&cuff_level)? + cuff_h / 2.0;
-    let y_hem = (z_cuff_top - l.get("waist")?) - sf(&s, "blouse_drop")?;
-    let leg_fr = frame(m, "leg_R")?;
-    let h_waist = landmark_h(m, "leg_R", "waist")?;
+    let z_cuff_top = m.landmark_h("torso", &cuff_level)? + cuff_h / 2.0;
+    let y_hem = (z_cuff_top - m.landmark_h("torso", "waist")?) - sf(&s, "blouse_drop")?;
+    let leg_origin = m.frame_origin("leg_R")?;
+    let h_waist = m.landmark_h("leg_R", "waist")?;
     let mut r_wrap = f64::NEG_INFINITY;
     for y in ftx_core::np::linspace(y_hem, 20.0, 12) {
-        r_wrap = r_wrap.max(section_radius(m, "leg_R", h_waist + y)?);
+        r_wrap = r_wrap.max(m.section_radius("leg_R", h_waist + y)?);
     }
     r_wrap += 22.0;
-    let mid_deg = ftx_core::det::asin(1.0f64.min(leg_fr.origin.x.abs() / r_wrap)).to_degrees();
+    let mid_deg = ftx_core::det::asin(1.0f64.min(leg_origin.x.abs() / r_wrap)).to_degrees();
 
     let front_piece = || -> Result<Value, Refusal> {
         let mut p = PieceBuilder::new(
@@ -298,7 +311,7 @@ pub fn zouave_trousers(meas: &Value, style: Option<&Value>) -> Result<(Value, Va
         "title".into(),
         json!("Zouave full trousers (elastic casing, gathered into cuffs)"),
     );
-    meta.insert("size_label".into(), json!(size_label(m)));
+    meta.insert("size_label".into(), json!(body_size_label(m)));
     meta.insert("origin".into(), json!("DRAFT"));
     meta.insert("round".into(), json!(0));
     meta.insert("sa_mm".into(), json!(10));
