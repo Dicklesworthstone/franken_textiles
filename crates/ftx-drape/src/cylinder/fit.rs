@@ -436,7 +436,8 @@ fn validate_loading_counts(
             ));
         }
         let raw_count = (dt / controls.max_step_s).ceil().max(1.0);
-        if !raw_count.is_finite() || raw_count > controls.max_steps.saturating_sub(total_steps) as f64
+        if !raw_count.is_finite()
+            || raw_count > controls.max_steps.saturating_sub(total_steps) as f64
         {
             return Err(budget(
                 "cylinder calibration experiment exceeds controls.max_steps",
@@ -521,9 +522,9 @@ impl Budget<'_> {
 
         self.admit()?;
         let map_trial = |refusal: Refusal| match refusal.code {
-            RefusalCode::OutOfRange | RefusalCode::NotConverged | RefusalCode::DegenerateGeometry => {
-                ForwardFailure::Trial(refusal)
-            }
+            RefusalCode::OutOfRange
+            | RefusalCode::NotConverged
+            | RefusalCode::DegenerateGeometry => ForwardFailure::Trial(refusal),
             _ => ForwardFailure::Fatal(refusal),
         };
 
@@ -693,8 +694,14 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         ));
     }
     if input.material.membrane_relaxation.is_some()
-        || input.material.structure.contains_key("membrane_plasticity_model")
-        || input.material.structure.contains_key("bending_plasticity_model")
+        || input
+            .material
+            .structure
+            .contains_key("membrane_plasticity_model")
+        || input
+            .material
+            .structure
+            .contains_key("bending_plasticity_model")
     {
         return Err(invalid(
             "cylinder scalar calibration cannot erase existing viscoelastic or plastic history laws",
@@ -751,7 +758,10 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
             fits_membrane = true;
         }
         if !input.replace_existing
-            && input.material.properties.contains_key(target.parameter.key())
+            && input
+                .material
+                .properties
+                .contains_key(target.parameter.key())
         {
             return Err(invalid(format!(
                 "cylinder calibration would replace existing {}; explicit replace_existing is required",
@@ -782,18 +792,14 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
     let warp_bounds = match find_target(TargetKind::WarpStiffness) {
         Some(b) => b,
         None => {
-            let v = input
-                .material
-                .require("warp_stiffness", "N/m", allow_obs)?;
+            let v = input.material.require("warp_stiffness", "N/m", allow_obs)?;
             [v, v]
         }
     };
     let weft_bounds = match find_target(TargetKind::WeftStiffness) {
         Some(b) => b,
         None => {
-            let v = input
-                .material
-                .require("weft_stiffness", "N/m", allow_obs)?;
+            let v = input.material.require("weft_stiffness", "N/m", allow_obs)?;
             [v, v]
         }
     };
@@ -1021,11 +1027,7 @@ struct Evaluation {
     sse: f64,
 }
 
-fn append_observation_residuals(
-    obs: &Observation,
-    state: &State,
-    residuals: &mut Vec<f64>,
-) {
+fn append_observation_residuals(obs: &Observation, state: &State, residuals: &mut Vec<f64>) {
     if let Some(force) = &obs.force_n {
         residuals.push((state.tare_adjusted_force_n - force.value) / force.scale);
     }
@@ -1319,8 +1321,13 @@ fn search<const N: usize>(
                 target.push(0.0);
             }
             let scaled = lstsq(&rows, &target);
-            let mut step: [f64; N] =
-                std::array::from_fn(|k| if active[k] { 0.0 } else { scaled[k] / scales[k] });
+            let mut step: [f64; N] = std::array::from_fn(|k| {
+                if active[k] {
+                    0.0
+                } else {
+                    scaled[k] / scales[k]
+                }
+            });
             let max = step.iter().map(|v| v.abs()).fold(0.0, f64::max);
             if !max.is_finite() {
                 return Err(invalid("cylinder inverse step overflow"));
@@ -1396,7 +1403,9 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         3 => calibrate_n::<3>(input, baseline),
         4 => calibrate_n::<4>(input, baseline),
         5 => calibrate_n::<5>(input, baseline),
-        _ => Err(invalid("cylinder calibration supports 1..=5 target parameters")),
+        _ => Err(invalid(
+            "cylinder calibration supports 1..=5 target parameters",
+        )),
     }
 }
 
@@ -1437,9 +1446,8 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
         reasons.push("not all three bounded starts reached objective stationarity".into());
     }
     if p.iter().any(|v| *v <= 2e-4 || *v >= 1.0 - 2e-4) {
-        reasons.push(
-            "best fit lies at a parameter bound; expand justified bounds and repeat".into(),
-        );
+        reasons
+            .push("best fit lies at a parameter bound; expand justified bounds and repeat".into());
     }
     if pivot < input.policy.min_excitation_pivot {
         reasons.push(format!(
@@ -2009,7 +2017,9 @@ mod tests {
         let input = Input {
             schema: INPUT_SCHEMA.into(),
             material: synthetic_base_material(include_unloaded_thickness),
-            method: "Synthetic 3D cylindrical-holder warp/weft/bias twist-tension-compression recovery".into(),
+            method:
+                "Synthetic 3D cylindrical-holder warp/weft/bias twist-tension-compression recovery"
+                    .into(),
             conditions: BTreeMap::from([("temperature_c".into(), "21".into())]),
             fitted_on: "2026-11-11".into(),
             targets: vec![
@@ -2160,14 +2170,21 @@ mod tests {
                 max_forward_solves: 8192,
             },
         };
-        (input, [truth_mem[0], truth_mem[1], truth_mem[3], truth_bend])
+        (
+            input,
+            [truth_mem[0], truth_mem[1], truth_mem[3], truth_bend],
+        )
     }
 
     #[test]
     fn recovers_known_orthotropic_and_bending_parameters_without_fabricating_thickness() {
         let (input, expected) = build_synthetic_calibration(false);
         let report = calibrate(&input).expect("calibration succeeds");
-        assert!(report.accepted, "unexpected rejection: {:?}", report.reasons);
+        assert!(
+            report.accepted,
+            "unexpected rejection: {:?}",
+            report.reasons
+        );
         assert!(report.domain_replay_verified);
         assert_eq!(report.starts.len(), 3);
         assert!(report.starts.iter().all(|s| s.converged));
@@ -2205,7 +2222,10 @@ mod tests {
         assert!(rep_gated.accepted);
         let sel_gated = rep_gated.selection.as_ref().unwrap();
         assert!(!sel_gated.allow_estimates);
-        let snap_gated = textile_import::catalog().unwrap().resolve(sel_gated).unwrap();
+        let snap_gated = textile_import::catalog()
+            .unwrap()
+            .resolve(sel_gated)
+            .unwrap();
         assert!(snap_gated.mechanics().is_err());
 
         // With allow_estimates = true AND unloaded thickness + friction_skin, mechanics() succeeds

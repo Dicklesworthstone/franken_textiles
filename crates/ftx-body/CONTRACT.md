@@ -1,5 +1,13 @@
 # ftx-body contract
 
+**Capture model choices.** `correspondence::capture` owns the model catalogue and
+`ModelChoices::configuration` conversion shared by native capture setup and portable still-photo
+drafts. Shape names come from the actual loaded model; choices explicitly fix or bound each
+selected shape, all six roots and declared joint axes. Conversion retains the original native
+duplicate/unknown-root refusals and defaults. Callers still run the ordinary correspondence-model
+and capture-authoring admission against the model, observations and work bounds; this helper
+does not establish a fitted or observable body.
+
 **Purpose.** The Anny parametric body model (anny 0.6.1, the `create_fullbody_model` default
 configuration of `docs/spec/05` §0) evaluated in Rust: phenotype and local-change coefficients, rest shape
 and skeleton, local-bone forward kinematics, linear blend skinning, anthropometry, and the WHO

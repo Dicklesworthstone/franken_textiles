@@ -16,6 +16,9 @@ use crate::{
     age_parameter_for_years, partial_tape_readings, pose_deltas,
 };
 
+/// Shared explicit capture choices for native and portable workflows.
+pub mod capture;
+
 /// One authored scalar control; fitted values stay strictly inside these bounds.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

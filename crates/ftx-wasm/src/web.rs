@@ -101,6 +101,67 @@ pub fn body_fit_targets(model_bytes: &[u8], input: &str, edits: &str) -> Result<
         .map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// Read explicit capture controls from the exact local model before acquiring photographs.
+///
+/// # Errors
+/// Oversized or invalid converted model bytes.
+#[wasm_bindgen]
+pub fn body_capture_catalogue(model_bytes: &[u8]) -> Result<String, JsError> {
+    crate::body_fit::body_capture_catalogue(model_bytes)
+        .map(|value| value.to_string())
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+
+/// Incremental source-bound still-photo acquisition using the native camera authorities.
+/// This handle retains camera/source records, never decoded image pixels.
+#[wasm_bindgen]
+pub struct WebBodyCapture {
+    inner: crate::body_fit::BodyCapture,
+}
+
+#[wasm_bindgen]
+impl WebBodyCapture {
+    /// Freeze the complete photo selection, checked calibration and stationary printed board.
+    ///
+    /// # Errors
+    /// Invalid sources, declarations, held-out partitions or input budgets.
+    #[wasm_bindgen(constructor)]
+    pub fn new(manifest: &str, calibration: &str, sheet: &str) -> Result<Self, JsError> {
+        crate::body_fit::BodyCapture::new(manifest, calibration, sheet)
+            .map(|inner| Self { inner })
+            .map_err(|error| JsError::new(&error.to_string()))
+    }
+
+    /// Exact local image labels in the frozen acquisition order.
+    #[must_use]
+    pub fn image_ids(&self) -> String {
+        serde_json::json!(self.inner.image_ids()).to_string()
+    }
+
+    /// Decode and check one original photograph, releasing its pixels before returning.
+    ///
+    /// # Errors
+    /// Wrong source order, duplicate images, calibration mismatch, detection or camera refusal.
+    pub fn add_image(&mut self, image: &str, bytes: &[u8]) -> Result<String, JsError> {
+        self.inner
+            .add_image(image, bytes)
+            .map(|value| value.to_string())
+            .map_err(|error| JsError::new(&error.to_string()))
+    }
+
+    /// Construct the ordinary unfinished body-fit input from explicit model choices.
+    /// Targets, observations and starting values still require the existing authoring workflow.
+    ///
+    /// # Errors
+    /// Incomplete acquisition, stale model choices, invalid bounds or capture-authoring refusal.
+    pub fn finish(&self, model_bytes: &[u8], choices: &str) -> Result<String, JsError> {
+        self.inner
+            .finish(model_bytes, choices)
+            .map(|value| value.to_string())
+            .map_err(|error| JsError::new(&error.to_string()))
+    }
+}
+
 /// Prepare named body-fit initializations or apply bounded edits while keeping evidence fixed.
 /// An empty edit string returns the exact original prepared input.
 ///

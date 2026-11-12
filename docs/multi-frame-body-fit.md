@@ -91,6 +91,50 @@ Fail-closed operator boundaries enforced by this route (covered end-to-end in
 - Accepted body predictions carry `MODEL_FIT` provenance and never promote `round` readiness to
   `READY` (`MEASUREMENTS_NOT_READY` until required `MEASURED_TAPE` records are supplied).
 
+## Prepare a body-fit draft from local still photographs
+
+The portable `body_capture_catalogue` and incremental `BodyCapture` API can prepare the
+ordinary `ftx-anny-body-fit-input/1` directly from 2–8 local PNG/JPEG photographs. It uses the
+existing pure-Rust ChArUco detector and calibrated sheet-pose solver. Retain the exact converted
+`.ftxbody` model, original `fabric-calib-sheet/1` sidecar and checked camera-calibration report.
+All photographs must use that lens, image dimensions and declared clockwise rotation, with
+already-oriented stored pixels (EXIF orientation absent or 1).
+
+The manifest (`ftx-body-photo-capture/1`) declares the ordered, unique image names, lens and
+reference identities, rotation, stationary upright board's bottom-left world X/Z coordinates,
+evidence for that placement and the corner IDs reserved for independent CHECK before acquisition.
+The board remains in the world Y=0 plane. Every detected corner is retained; missing CHECK
+corners, fewer than four FIT corners, failed pose checks or a mismatched camera epoch refuse
+that image. Adding a refused image leaves the existing batch unchanged.
+
+Inspect the actual model catalogue, then supply `ftx-body-photo-choices/1`: exact model hash,
+age/gender, explicit fixed or bounded fitted shape controls, all six root choices and any
+declared joint axes. Supply metric-scale and observation evidence. Native capture setup and
+this API share the same catalogue and choice-to-model conversion. Ordinary model and capture
+admission still requires a fitted shape control and fitted pose control; bounds and anatomy
+are not inferred from image appearance.
+
+Add each image's original encoded bytes once and finish with the exact model and choices.
+A `ftx-body-photo-capture-result/1` result retains the exact prepared `input` JSON string,
+its hash, source declaration hashes, calibration, sheet, choices, detected corners, complete
+camera FIT/CHECK diagnostics and image bindings. Distinct files with identical decoded pixels
+refuse. Each still image has its own source clock: `still-image:<encoded-byte SHA-256>` at
+timestamp zero, paired with its decoded pixel hash. These identities do not assert exposure
+times, a synchronized burst or a static person; each frame has its own fitted pose.
+
+The successful result is an unfinished `CAPTURE_DRAFT` with `body_fitted: false`, empty
+anatomical targets/observations and no starts. Continue with the existing model-target picker,
+FIT/CHECK image observations and independent starting values before fitting. Preserve the
+returned input string exactly when downloading or passing it between these stages.
+Calibration uncertainty remains in the source receipt; it is not propagated into the body-fit
+objective by this acquisition step.
+
+Manifest, sheet and choices are each limited to 256 KiB; calibration, prepared input and
+complete result to 16 MiB; model to 512 MiB; each image to 64 MiB encoded and 16 million
+decoded pixels. Images are decoded and released one at a time, with at most eight frames and
+128 million pixels across the batch. File-backed native captures and clip/window selection
+retain their existing route.
+
 ## Fit prepared observations in the local browser
 
 The local photo page (`web/photo.html`), under **Fit one body shape across changing poses**, runs

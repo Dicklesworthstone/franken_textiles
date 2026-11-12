@@ -5,6 +5,7 @@
 
 pub mod acquisition;
 pub mod calibration_images;
+pub mod capture;
 mod camera;
 mod charuco;
 mod charuco_detect;

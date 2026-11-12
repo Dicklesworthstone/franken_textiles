@@ -735,10 +735,7 @@ fn unified_and_companion_material_subcommands_produce_identical_json_and_refusal
     );
 
     let resolved = assert_same_ok(&["resolve", "bound-u.json"]);
-    assert_eq!(
-        resolved["record_sha256"],
-        bound_unified["material_sha256"]
-    );
+    assert_eq!(resolved["record_sha256"], bound_unified["material_sha256"]);
 
     let quotes = json!({
         "schema": "ftx-textile-quotes/1",
@@ -845,29 +842,36 @@ fn unified_and_companion_material_subcommands_produce_identical_json_and_refusal
     let dry_stack = assert_same_ok(&["thermal", "thinsulate.json"]);
     assert_eq!(dry_stack["comfort_claim"], false);
 
-    let at_pos = assert_same_ok(&[
-        "thermal-at",
-        "nist/7282/aralite",
-        "25",
-        "--allow-estimates",
-    ]);
+    let at_pos = assert_same_ok(&["thermal-at", "nist/7282/aralite", "25", "--allow-estimates"]);
     assert_eq!(at_pos["temperature_c"], 25.0);
     assert_eq!(at_pos["comfort_claim"], false);
-    assert_same_refusal(&["thermal-at", "nist/7282/aralite", "25"], "invalid_document");
+    assert_same_refusal(
+        &["thermal-at", "nist/7282/aralite", "25"],
+        "invalid_document",
+    );
     // Negative Celsius must parse as a temperature (never an unknown flag) and refuse extrapolation identically.
     let neg_c = refused(
-        &invoke(false, &["thermal-at", "nist/7282/aralite", "-5", "--allow-estimates"]),
+        &invoke(
+            false,
+            &["thermal-at", "nist/7282/aralite", "-5", "--allow-estimates"],
+        ),
         false,
         "invalid_document",
     );
     let neg_u = refused(
-        &invoke(true, &["thermal-at", "nist/7282/aralite", "-5", "--allow-estimates"]),
+        &invoke(
+            true,
+            &["thermal-at", "nist/7282/aralite", "-5", "--allow-estimates"],
+        ),
         true,
         "invalid_document",
     );
     assert_eq!(neg_u["message"], neg_c["message"]);
     assert!(
-        !neg_u["message"].as_str().unwrap().contains("unknown option"),
+        !neg_u["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown option"),
         "negative temperature parsed as CLI option: {neg_u}"
     );
 

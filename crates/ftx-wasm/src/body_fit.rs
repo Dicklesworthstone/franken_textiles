@@ -1,5 +1,9 @@
 //! Prepared multi-frame observations fitted locally with the canonical Anny adapter and solver.
-//! File-backed capture acquisition remains native; local review accepts explicit source bytes only.
+//! Local still-photo capture and review accept explicit source bytes without filesystem paths.
+
+mod capture;
+
+pub use capture::{BodyCapture, body_capture_catalogue};
 
 use std::fmt::Write as _;
 

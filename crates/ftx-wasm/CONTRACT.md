@@ -1,5 +1,34 @@
 # ftx-wasm
 
+**Still-photo capture drafts.** `body_fit::body_capture_catalogue(model_bytes)` returns the
+actual model's `ftx-body-capture-catalogue/1` and exact model hash, with `body_fitted: false`.
+`BodyCapture::new(manifest, calibration, sheet)`, `image_ids`, `add_image(id, bytes)` and
+`finish(model_bytes, choices)` expose the shared native acquisition and model-choice authorities.
+wasm32 exports `body_capture_catalogue` and `WebBodyCapture` with those incremental methods.
+All reports cross JavaScript as JSON strings; the result's prepared `input` remains an exact
+string, with a checked hash, throughout later authoring.
+
+Strict `ftx-body-photo-capture/1` manifests declare 2–8 unique image IDs, the calibrated lens,
+rotation/reference, stationary upright board placement/evidence and predeclared CHECK corner IDs.
+Strict `ftx-body-photo-choices/1` binds actual model identity and explicit shape/root/joint
+choices plus scale/observation evidence. The native ChArUco detector and `StationarySheet`
+use every detected corner and retain the existing held-out pose checks; no residual-based point
+selection occurs. Original encoded bytes, decoded pixels, dimensions and rotation are bound
+per frame. Reencoded duplicates refuse; a failed add changes no retained batch state.
+Each still has a separate `still-image:<encoded_sha256>` source-clock origin at timestamp zero;
+neither acquisition time nor temporal synchrony is inferred.
+
+A successful `ftx-body-photo-capture-result/1` contains an ordinary prepared input, hashes,
+parsed original declarations, complete detection/camera receipts, explicit frame-identity and
+world-frame conventions, `CAPTURE_DRAFT` status and `body_fitted: false`. It has no targets,
+image observations or starts: existing native-authoritative editors must supply them.
+Calibration uncertainty is retained, not propagated into the objective. Manifest/sheet/choices
+are bounded to 256 KiB each, calibration/input/result to 16 MiB, model to 512 MiB, images to
+64 MiB encoded and 16 million pixels each, with at most 128 million total pixels. Already-oriented
+stored pixels require EXIF absent/1 and the checked camera epoch's dimensions/rotation.
+One image is decoded per add and its pixels are released before the next. This adds no file
+access, automatic anatomical correspondence, empirical fit or readiness qualification.
+
 **Local multi-frame Anny fitting.** `body_fit::fit_body(model_bytes, input, iterations,
 max_evaluations)` and wasm32 `fit_body` accept the original prepared
 `ftx-anny-body-fit-input/1` text and exact converted model bytes. Inputs are bounded to 16 MiB
@@ -11,8 +40,8 @@ bounds, calibration, evidence, observability, multistart, held-out and budget be
 The ordinary `ftx-body-fit/1` report retains exact full-width frame identities, original input
 hash, every attempt, residual and refusal; only accepted solutions contain reusable Anny
 parameters. Inline reviewed silhouette slices use the same native rules. File-backed capture
-inputs and separate mask paths are not followed; their acquisition remains native. No source
-photos are loaded, anatomy inferred, MODEL_FIT predictions promoted to evidence or physical-fit
+inputs and separate mask paths are not followed by this fitting entry point. Its source photos
+are not loaded, anatomy inferred, MODEL_FIT predictions promoted to evidence or physical-fit
 acceptance added. Native/portable integration uses independently authored articulated synthetic
 observations, held-out mutations, unobservable motion, capped solves and raster silhouettes.
 

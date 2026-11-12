@@ -5717,6 +5717,21 @@ authoritative. Independent geometry and occupied-shape replay regressions cover 
 identity returns. This advances `ftx-mv1.1`; prescribed turns do not establish anatomical paths,
 rotational arcs between endpoints, floor/chair support or physical garment qualification.
 
+### 25.196 Prepare body-fit drafts directly from local still photographs
+
+The portable capture path accepts 2–8 original photos, a checked lens calibration, the original
+printed ChArUco sheet and explicit stationary-board evidence. It shares native board coordinates,
+camera FIT/CHECK admission and actual-model control choices. Every image retains exact source
+identity; sequential decoding and fixed input budgets bound the work. Separate still clocks do
+not assert acquisition times or synchrony.
+
+The resulting ordinary prepared input is an unfinished draft. Existing model-target, image
+observation, initialization and fitting authorities remain responsible for the subsequent stages.
+The browser can connect this draft directly to those editors without a native preparation command.
+This advances `ftx-bc1`; synthetic end-to-end acquisition and refusal regressions accompany the
+implementation, with runtime validation recorded separately. No inferred anatomy, propagated
+calibration uncertainty, real-person accuracy or garment qualification is introduced.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

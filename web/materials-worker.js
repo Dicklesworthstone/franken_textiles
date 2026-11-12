@@ -1,7 +1,7 @@
 // The only network request loads the local application bundle. User evidence is never uploaded.
 // Every operation carries explicit inputs; no old pattern/drape survives a failed replacement.
 import init, * as ftx from "./pkg/ftx_wasm.js";
-const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-11.4";
+const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-12.1";
 let failure = null, active = null;
 const ready = init().then(() => {
   if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&

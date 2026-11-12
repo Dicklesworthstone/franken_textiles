@@ -7,7 +7,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, receipt::sha256_hex};
 use ftx_measure::body_fit::{BodyFitInput, FitFrame, FitStart, Keypoint, MetricObservation};
 use ftx_measure::camera::{Camera, Intrinsics};
 use ftx_measure::photo::intrinsics::checked_calibration;
-use ftx_measure::photo::{MAX_PHOTO_PIXELS, detect_charuco};
+use ftx_measure::photo::{MAX_PHOTO_PIXELS, capture::StationarySheet, detect_charuco};
 use ftx_measure::silhouette::Silhouette;
 use ftx_measure::triangulate::FrameId;
 use ftx_measure::video::FrameMetadata;
@@ -185,30 +185,12 @@ fn acquire_sheet(
         ));
     }
     let (sheet, sheet_bytes) = document(base, &declaration.sheet)?;
-    let count = |key: &str| {
-        sheet["board"][key]
-            .as_u64()
-            .filter(|n| (3..=64).contains(n))
-            .map(|n| n as usize)
-            .ok_or_else(|| bad_input("ChArUco sidecar needs integer board dimensions in 3..=64"))
-    };
-    let (columns, rows) = (count("squares_x")? - 1, count("squares_y")? - 1);
-    let total = columns * rows;
-    let held: BTreeSet<_> = declaration.held_out_corner_ids.iter().copied().collect();
-    if total > 512
-        || held.len() != declaration.held_out_corner_ids.len()
-        || held.len() < 4
-        || held.iter().any(|&id| id >= total)
-        || total - held.len() < 4
-    {
-        return Err(bad_input(
-            "declare at least four unique in-range held_out_corner_ids, leaving at least four FIT corners on a board with at most 512 corners",
-        ));
-    }
-    let square_m = sheet["board"]["square_mm"].as_f64().unwrap_or(f64::NAN) / 1000.0;
-    if !square_m.is_finite() || square_m <= 0.0 {
-        return Err(bad_input("ChArUco square_mm must be finite and positive"));
-    }
+    let board = StationarySheet::new(
+        &sheet,
+        &declaration.held_out_corner_ids,
+        declaration.board_bottom_left_xz_m,
+        &declaration.stationary_upright_evidence,
+    )?;
     let manifest = selection["source_manifest"]
         .as_str()
         .ok_or_else(|| bad_input("selected frame manifest has no local source path"))?;
@@ -236,37 +218,11 @@ fn acquire_sheet(
         ));
     }
     let detected = detect_charuco(&image.data, image.w, image.h, &sheet, Some(intrinsics))?;
-    let corners = detected["reference"]["corners"]
-        .as_array()
-        .ok_or_else(|| bad_input("ChArUco detector returned no corner array"))?;
-    let mut seen = BTreeSet::new();
-    let mut points = Vec::with_capacity(corners.len());
-    for corner in corners {
-        let id = corner["id"]
-            .as_u64()
-            .and_then(|n| usize::try_from(n).ok())
-            .filter(|id| *id < total && seen.insert(*id))
-            .ok_or_else(|| {
-                bad_input("ChArUco detector returned duplicate or out-of-range corners")
-            })?;
-        // Printed board y points down. The explicit outer bottom-left is a stationary metric
-        // origin; printed right/up define world +x/+z. No page margins or inferred gravity.
-        let origin = declaration.board_bottom_left_xz_m;
-        let xz = Vec2::new(
-            origin.x + (id % columns + 1) as f64 * square_m,
-            origin.y + (rows - id / columns) as f64 * square_m,
-        );
-        points.push(json!({"sheet_xz_m":xz,"pixel_px":corner["point_px"],
-            "held_out":held.contains(&id)}));
-    }
-    if !held.is_subset(&seen) || seen.len() - held.len() < 4 {
-        return Err(Refusal::new(RefusalCode::Unscaled,
-            "ChArUco capture needs every predeclared CHECK corner and at least four detected FIT corners")
-            .repair("retake a sharp unobstructed board; retain the original FIT/CHECK assignments"));
-    }
-    let reference = json!({"schema":"ftx-sheet-pose-input/1","reference_id":reference_id,
-        "image":name,"image_size_px":[image.w,image.h],
-        "rotation_applied_degrees":source["metadata"]["rotation_cw_deg"],"points":points});
+    let rotation = source["metadata"]["rotation_cw_deg"]
+        .as_u64()
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or_else(|| bad_input("selected frame has no valid rotation record"))?;
+    let reference = board.reference(&detected, reference_id, name, [image.w, image.h], rotation)?;
     let reference_bytes = serde_json::to_vec(&reference).map_err(|e| bad_input(e.to_string()))?;
     let mut normalized = serde_json::to_value(declaration).map_err(|e| bad_input(e.to_string()))?;
     let sheet_path = std::fs::canonicalize(local(base, &declaration.sheet)?)

@@ -5,8 +5,13 @@ use std::{
     path::Path,
 };
 
-use ftx_body::{AnnyData, AnnyModel, TAPE_FIELDS, correspondence::Parameter};
-use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
+use ftx_body::{
+    AnnyData, AnnyModel,
+    correspondence::capture::{
+        Catalogue, Choice, JointChoice, ModelChoices, NamedChoice, ROOTS, catalogue,
+    },
+};
+use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::{
     body_fit::{BodyModel, MetricObservation, prepare_capture_authoring},
     photo::intrinsics::checked_calibration,
@@ -15,51 +20,14 @@ use ftx_measure::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Adapter, Configuration, Joint, capture, review::Bundle};
+use super::{Adapter, Configuration, capture, review::Bundle};
 use crate::{Args, bad_input, known_options, required, workspace};
-
-const ROOTS: [&str; 6] = [
-    "root_x_m",
-    "root_y_m",
-    "root_z_m",
-    "root_rx_rad",
-    "root_ry_rad",
-    "root_rz_rad",
-];
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Source {
     path: String,
     sha256: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Control {
-    name: String,
-    lower: f64,
-    upper: f64,
-    default_value: f64,
-    unit: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Bone {
-    name: String,
-    index: usize,
-    parent_index: Option<usize>,
-    parent_name: Option<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Catalogue {
-    shapes: Vec<Control>,
-    roots: Vec<Control>,
-    joints: Vec<Bone>,
-    measurements: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -87,28 +55,6 @@ struct Setup {
     selection: Value,
     frames: Vec<Candidate>,
     catalogue: Catalogue,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-enum Choice {
-    Fixed { value: f64 },
-    Fit { lower: f64, upper: f64 },
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct NamedChoice {
-    name: String,
-    choice: Choice,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct JointChoice {
-    bone: String,
-    axis: Vec3,
-    choice: Choice,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -158,62 +104,6 @@ fn document(path: &Path) -> Result<(Source, Value, Vec<u8>), Refusal> {
         value,
         bytes,
     ))
-}
-
-fn catalogue(model: &AnnyModel) -> Catalogue {
-    let labels = &model.data().header.labels;
-    let mut shapes: Vec<_> = ["height", "weight", "muscle", "proportions"]
-        .into_iter()
-        .map(|name| Control {
-            name: name.into(),
-            lower: 0.0,
-            upper: 1.0,
-            default_value: 0.5,
-            unit: "dimensionless".into(),
-        })
-        .collect();
-    shapes.extend(labels.local_changes.iter().map(|name| Control {
-        name: name.clone(),
-        lower: -1.0,
-        upper: 1.0,
-        default_value: 0.0,
-        unit: "dimensionless".into(),
-    }));
-    let roots = ROOTS
-        .iter()
-        .enumerate()
-        .map(|(i, name)| {
-            let limit = if i < 3 { 1e6 } else { std::f64::consts::PI };
-            Control {
-                name: (*name).into(),
-                lower: -limit,
-                upper: limit,
-                default_value: 0.0,
-                unit: if i < 3 { "m" } else { "rad" }.into(),
-            }
-        })
-        .collect();
-    let joints = labels
-        .bones
-        .iter()
-        .enumerate()
-        .skip(1)
-        .map(|(index, name)| {
-            let parent_index = usize::try_from(labels.bone_parents[index]).ok();
-            Bone {
-                name: name.clone(),
-                index,
-                parent_name: parent_index.and_then(|i| labels.bones.get(i)).cloned(),
-                parent_index,
-            }
-        })
-        .collect();
-    Catalogue {
-        shapes,
-        roots,
-        joints,
-        measurements: TAPE_FIELDS.iter().map(|name| (*name).into()).collect(),
-    }
 }
 
 fn load(
@@ -440,111 +330,21 @@ pub(super) fn review(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn configuration(annotations: &Annotations, model_sha256: &str) -> Result<Configuration, Refusal> {
-    let age_years = annotations
-        .age_years
-        .ok_or_else(|| bad_input("choose age_years before constructing a capture"))?;
-    let gender = annotations
-        .gender
-        .ok_or_else(|| bad_input("choose gender before constructing a capture"))?;
-    let mut fixed_shape = BTreeMap::new();
-    let mut shape_parameters = Vec::new();
-    let mut names = BTreeSet::new();
-    for row in &annotations.shapes {
-        if !names.insert(&row.name) {
-            return Err(bad_input("duplicate shape choice"));
-        }
-        match row.choice {
-            Choice::Fixed { value } => {
-                fixed_shape.insert(row.name.clone(), value);
-            }
-            Choice::Fit { lower, upper } => shape_parameters.push(Parameter {
-                name: row.name.clone(),
-                lower,
-                upper,
-            }),
-        }
+    ModelChoices {
+        age_years: annotations.age_years,
+        gender: annotations.gender,
+        shapes: annotations.shapes.clone(),
+        roots: annotations.roots.clone(),
+        joints: annotations.joints.clone(),
     }
-    let mut translation = [0.0; 3];
-    let mut rotation = [0.0; 3];
-    let mut pose_parameters = Vec::new();
-    let mut names = BTreeSet::new();
-    if annotations.roots.len() != ROOTS.len() {
-        return Err(bad_input(
-            "declare exactly one fixed or fitted choice for each of the six root components",
-        ));
-    }
-    for row in &annotations.roots {
-        let index = ROOTS
-            .iter()
-            .position(|name| *name == row.name)
-            .ok_or_else(|| bad_input("unknown root component"))?;
-        if !names.insert(&row.name) {
-            return Err(bad_input("duplicate root choice"));
-        }
-        match row.choice {
-            Choice::Fixed { value } => {
-                let limit = if index < 3 { 1e6 } else { std::f64::consts::PI };
-                if !value.is_finite() || !(-limit..=limit).contains(&value) {
-                    return Err(bad_input(
-                        "fixed root value is outside its declared model domain",
-                    ));
-                }
-                if index < 3 {
-                    translation[index] = value;
-                } else {
-                    rotation[index - 3] = value;
-                }
-            }
-            Choice::Fit { lower, upper } => pose_parameters.push(Parameter {
-                name: row.name.clone(),
-                lower,
-                upper,
-            }),
-        }
-    }
-    let mut joints = BTreeMap::new();
-    for row in &annotations.joints {
-        let angle_rad = match row.choice {
-            Choice::Fixed { value } => value,
-            Choice::Fit { lower, upper } => {
-                pose_parameters.push(Parameter {
-                    name: format!("joint:{}", row.bone),
-                    lower,
-                    upper,
-                });
-                0.0
-            }
-        };
-        if joints
-            .insert(
-                row.bone.clone(),
-                Joint {
-                    axis: row.axis,
-                    angle_rad,
-                },
-            )
-            .is_some()
-        {
-            return Err(bad_input("duplicate joint choice"));
-        }
-    }
-    Ok(Configuration {
-        model_sha256: model_sha256.into(),
-        age_years,
-        gender,
-        fixed_shape,
-        shape_parameters,
-        root_translation_m: Vec3::new(translation[0], translation[1], translation[2]),
-        root_rotation_rad: Vec3::new(rotation[0], rotation[1], rotation[2]),
-        joints,
-        pose_parameters,
-        keypoints: BTreeMap::new(),
-        measurements: annotations
+    .configuration(
+        model_sha256,
+        &annotations
             .measurements
             .iter()
             .map(|observation| observation.name.clone())
-            .collect(),
-    })
+            .collect::<Vec<_>>(),
+    )
 }
 
 pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {

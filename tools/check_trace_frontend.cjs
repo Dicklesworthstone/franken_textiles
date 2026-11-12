@@ -247,7 +247,7 @@ test('load errors and image read limits do not hang the page or publish files', 
 });
 
 test('all four browser workers reject missing or mismatched wasm_interface_stamp on real web/pkg bundles and accept the matching stamp', async () => {
-  const EXPECTED_STAMP = 'ftx-wasm-interface/2026-11-11.4';
+  const EXPECTED_STAMP = 'ftx-wasm-interface/2026-11-12.1';
   for (const mode of ['missing', 'mismatch', 'match']) {
     const stampExport = mode === 'missing'
       ? {}
