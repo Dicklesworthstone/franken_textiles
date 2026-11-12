@@ -35,6 +35,23 @@ fn read<T: DeserializeOwned>(path: &str, remaining: &mut u64) -> Result<T, Refus
     serde_json::from_slice(&bytes(path, remaining)?).map_err(invalid)
 }
 
+fn read_body_request(input: &Value) -> Result<BodyRequest, Refusal> {
+    // Source records govern fitting and passage; keep the untouched input for the replay report.
+    // Fused-only callers deliberately supply their own targets and retain that contract.
+    let mut current = input.clone();
+    let measurements = if input["schema"] == "ftx-scenario-body/1" {
+        current.get_mut("measurements")
+    } else {
+        Some(&mut current)
+    };
+    if let Some(measurements) = measurements
+        && measurements.get("records").is_some()
+    {
+        *measurements = ftx_measure::fuse(measurements, true)?;
+    }
+    BodyRequest::read(&current)
+}
+
 fn prepare_fit_body(
     fitted: &FittedBody,
     model: &AnnyModel,
@@ -76,7 +93,7 @@ pub(super) fn manufacturing(
         policy.validate(&request, false)?;
     }
     let input: Value = read(body_input, &mut remaining)?;
-    let body = BodyRequest::read(&input)?;
+    let body = read_body_request(&input)?;
     let bytes = bytes(model, &mut (512 * 1024 * 1024))?;
     let digest = sha256_hex(&bytes);
     let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true)?)?;
@@ -137,7 +154,7 @@ pub(super) fn run(
     let bytes = bytes(model, &mut (512 * 1024 * 1024))?;
     let model_sha256 = sha256_hex(&bytes);
     let model = AnnyData::from_bytes(&bytes, false).and_then(AnnyModel::from_data);
-    let body_request = BodyRequest::read(&body_input);
+    let body_request = read_body_request(&body_input);
     let fitted = body_request
         .as_ref()
         .map_err(Clone::clone)
@@ -218,7 +235,7 @@ fn run_matrix(
 ) -> Result<Value, Refusal> {
     let model_sha256 = sha256_hex(&bytes);
     let model = AnnyData::from_bytes(&bytes, false).and_then(AnnyModel::from_data);
-    let body_request = BodyRequest::read(&body_input);
+    let body_request = read_body_request(&body_input);
     let fitted = body_request
         .as_ref()
         .map_err(Clone::clone)

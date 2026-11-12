@@ -1044,3 +1044,295 @@ fn selected_body_study_passage_refusals_never_substitute_priors_or_model_values(
         assert_eq!(row["cutting"]["status"], "refused");
     }
 }
+
+#[test]
+fn study_records_replace_stale_passage_caches_and_keep_original_replay_inputs() {
+    use ftx_wasm::materials::scenario::{manufacturing_on_model, on_model};
+
+    let (pattern, request, name, value) = passage_study_case("zouave_bolero");
+    let bytes = super::model_bytes_with_rig(true);
+    let hash = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let record = ftx_measure::make_record(
+        &name,
+        value,
+        2.0,
+        "MEASURED_TAPE",
+        "Synthetic current passage record",
+        None,
+        "",
+    )
+    .unwrap();
+    let mut raw = json!({"schema":"fabric-measurements/1","wearer":{},"records":[record],
+        "fused":{&name:{"value_mm":1.0,"sigma_mm":2.0,"flags":["PRIOR_ONLY"]}}});
+    let fresh = ftx_measure::fuse(&raw, true).unwrap();
+    let source = |measurements: &Value| {
+        json!({"schema":"ftx-scenario-body/1",
+        "accepted_body_fit":receipt(&hash),"measurements":measurements})
+    };
+    let evaluate = |body: &Value| -> Result<Value, ftx_core::Refusal> {
+        serde_json::from_str(&manufacturing_on_model(
+            &model,
+            &hash,
+            &pattern.to_string(),
+            &request.to_string(),
+            &body.to_string(),
+        )?)
+        .map_err(|error| {
+            ftx_core::Refusal::new(ftx_core::RefusalCode::InvalidDocument, error.to_string())
+        })
+    };
+    let expected = evaluate(&source(&fresh)).unwrap();
+    assert_eq!(
+        baseline(&expected)["design"]["fit"]["result"]["passed"],
+        true
+    );
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    save(&dir.join("pattern.json"), &pattern);
+    save(&dir.join("study.json"), &request);
+    for cache in [true, false] {
+        if !cache {
+            raw.as_object_mut().unwrap().remove("fused");
+        }
+        let input = source(&raw);
+        assert_eq!(evaluate(&input).unwrap(), expected);
+        save(&dir.join("body-input.json"), &input);
+        let original = std::fs::read(dir.join("body-input.json")).unwrap();
+        let output = invoke(
+            &dir,
+            &[
+                "materials",
+                "study-on-body",
+                "pattern.json",
+                "study.json",
+                "body-input.json",
+                "model.ftxbody",
+            ],
+            0,
+        );
+        let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(native["result"], expected);
+        assert_eq!(
+            std::fs::read(dir.join("body-input.json")).unwrap(),
+            original
+        );
+
+        let scenario = json!({"schema":"ftx-drape-scenario/1",
+            "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
+            "fit_spec":{},"max_mesh_points":3,"max_vertex_frames":1000});
+        let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,
+            "cases":[{"key":"first","scenario":scenario},{"key":"second","scenario":scenario}]});
+        for scenario in [&scenario, &matrix] {
+            let portable: Value = serde_json::from_str(
+                &on_model(
+                    &model,
+                    &hash,
+                    &pattern.to_string(),
+                    &request.to_string(),
+                    &scenario.to_string(),
+                    &input.to_string(),
+                    |_| {},
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                portable["manufacturing"]["alternatives"],
+                expected["alternatives"]
+            );
+            let descriptors: Vec<_> = if let Some(cases) = portable["cases"].as_array() {
+                cases.iter().map(|case| &case["scenario"]).collect()
+            } else {
+                vec![&portable["scenario"]]
+            };
+            for descriptor in descriptors {
+                assert_eq!(descriptor["body_input"], input);
+                assert_eq!(descriptor["measurements"], fresh);
+                assert_eq!(
+                    descriptor["body_fit"]["shape_source"]["kind"],
+                    "accepted_multi_frame_fit"
+                );
+                assert_eq!(
+                    descriptor["design_fit_body"]["supplemental_measurements"][&name]["source"],
+                    fresh["fused"][&name]
+                );
+            }
+            save(&dir.join("scenario.json"), scenario);
+            let output = invoke(
+                &dir,
+                &[
+                    "materials",
+                    "scenario-study",
+                    "pattern.json",
+                    "study.json",
+                    "scenario.json",
+                    "body-input.json",
+                    "model.ftxbody",
+                ],
+                0,
+            );
+            let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(native["result"], portable);
+        }
+    }
+
+    // An edited record wins even when the old cache would admit a now-too-small opening.
+    raw["fused"] = fresh["fused"].clone();
+    raw["records"][0]["value_mm"] = json!(value + 100.0);
+    let changed = evaluate(&source(&raw)).unwrap();
+    let fit = &baseline(&changed)["design"]["fit"]["result"];
+    assert_eq!(fit["validation"]["points"][0]["body_mm"], value + 100.0);
+    assert_eq!(fit["passed"], false);
+    assert_eq!(baseline(&changed)["cutting"]["status"], "refused");
+    raw["records"][0]["value_mm"] = json!(-1.0);
+    let error = evaluate(&source(&raw)).unwrap_err();
+    assert!(error.message.contains("invalid measurement file"));
+    save(&dir.join("body-input.json"), &source(&raw));
+    let output = invoke(
+        &dir,
+        &[
+            "materials",
+            "study-on-body",
+            "pattern.json",
+            "study.json",
+            "body-input.json",
+            "model.ftxbody",
+        ],
+        3,
+    );
+    let refused: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(refused["refusal"], serde_json::to_value(error).unwrap());
+
+    // An explicitly fused-only document still owns its supplied value and original evidence.
+    raw.as_object_mut().unwrap().remove("records");
+    raw["fused"][&name] = supplied_passage(value - 5.0);
+    let explicit = evaluate(&source(&raw)).unwrap();
+    assert_eq!(
+        baseline(&explicit)["design"]["fit"]["result"]["validation"]["points"][0]["body_mm"],
+        value - 5.0
+    );
+}
+
+#[test]
+fn study_tape_fitting_tracks_current_stature_records_in_native_and_portable_routes() {
+    use ftx_wasm::materials::scenario::{manufacturing_on_model, on_model};
+
+    let (pattern, request, name, value) = passage_study_case("zouave_trousers");
+    let bytes = model_bytes_with_locals(true, &ftx_body::FREE[ftx_body::N_PHENOTYPE..]);
+    let hash = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let stature = ftx_measure::make_record(
+        "stature",
+        1300.0,
+        2.0,
+        "MEASURED_TAPE",
+        "Synthetic stature",
+        None,
+        "",
+    )
+    .unwrap();
+    let passage = ftx_measure::make_record(
+        &name,
+        value,
+        2.0,
+        "MEASURED_TAPE",
+        "Synthetic independent passage",
+        None,
+        "",
+    )
+    .unwrap();
+    let mut raw = json!({"schema":"fabric-measurements/1","wearer":{"age_months":30.0,"sex":"F"},
+        "records":[stature,passage],"fused":{"stature":{"value_mm":1150.0,"sigma_mm":2.0}}});
+    let scenario = json!({"schema":"ftx-drape-scenario/1",
+        "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
+        "fit_spec":{},"max_mesh_points":3,"max_vertex_frames":1000});
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    save(&dir.join("pattern.json"), &pattern);
+    save(&dir.join("study.json"), &request);
+    save(&dir.join("scenario.json"), &scenario);
+    let mut previous_shape = None;
+    for (height, nested) in [(1300.0, false), (1400.0, true)] {
+        raw["records"][0]["value_mm"] = json!(height);
+        let fresh = ftx_measure::fuse(&raw, true).unwrap();
+        let input = if nested {
+            json!({"schema":"ftx-scenario-body/1","measurements":raw,"arm_abduction_deg":50.0})
+        } else {
+            raw.clone()
+        };
+        let portable: Value = serde_json::from_str(
+            &on_model(
+                &model,
+                &hash,
+                &pattern.to_string(),
+                &request.to_string(),
+                &scenario.to_string(),
+                &input.to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let descriptor = &portable["scenario"];
+        assert_eq!(descriptor["body_input"], input);
+        assert_eq!(descriptor["measurements"], fresh);
+        assert_eq!(descriptor["body_fit"]["shape_source"]["kind"], "tape_fit");
+        assert!(
+            (descriptor["body_fit"]["readings_mm"]["stature"]
+                .as_f64()
+                .unwrap()
+                - height)
+                .abs()
+                < 2.0
+        );
+        assert_eq!(
+            baseline(&portable["manufacturing"])["design"]["fit"]["result"]["passed"],
+            true
+        );
+        assert_eq!(
+            baseline(&portable["manufacturing"])["cutting"]["status"],
+            "available"
+        );
+        if let Some(previous) = previous_shape {
+            assert_ne!(descriptor["body_fit"]["shape_sha256"], previous);
+        }
+        previous_shape = Some(descriptor["body_fit"]["shape_sha256"].clone());
+        let direct: Value = serde_json::from_str(
+            &manufacturing_on_model(
+                &model,
+                &hash,
+                &pattern.to_string(),
+                &request.to_string(),
+                &input.to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            direct["alternatives"],
+            portable["manufacturing"]["alternatives"]
+        );
+        save(&dir.join("body-input.json"), &input);
+        let original = std::fs::read(dir.join("body-input.json")).unwrap();
+        let output = invoke(
+            &dir,
+            &[
+                "materials",
+                "scenario-study",
+                "pattern.json",
+                "study.json",
+                "scenario.json",
+                "body-input.json",
+                "model.ftxbody",
+            ],
+            0,
+        );
+        let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(native["result"], portable);
+        assert_eq!(
+            std::fs::read(dir.join("body-input.json")).unwrap(),
+            original
+        );
+    }
+}

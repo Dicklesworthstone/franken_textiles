@@ -18,6 +18,23 @@ use serde_json::{Value, json};
 
 use super::{budget, invalid};
 
+fn read_body_request(input: &Value) -> Result<BodyRequest, Refusal> {
+    // Source records govern fitting and passage; keep the untouched input for the replay report.
+    // Fused-only callers deliberately supply their own targets and retain that contract.
+    let mut current = input.clone();
+    let measurements = if input["schema"] == "ftx-scenario-body/1" {
+        current.get_mut("measurements")
+    } else {
+        Some(&mut current)
+    };
+    if let Some(measurements) = measurements
+        && measurements.get("records").is_some()
+    {
+        *measurements = ftx_measure::fuse(measurements, true)?;
+    }
+    BodyRequest::read(&current)
+}
+
 fn prepare_fit_body(
     fitted: &FittedBody,
     model: &AnnyModel,
@@ -64,7 +81,7 @@ pub fn manufacturing_on_model(
         policy.validate(&request, false)?;
     }
     let body: Value = serde_json::from_str(body_input).map_err(invalid)?;
-    let body = BodyRequest::read(&body)?;
+    let body = read_body_request(&body)?;
     let fitted = FittedBody::prepare(model, model_sha256, &body)?;
     let (reference, identity) =
         prepare_fit_body(&fitted, model, model_sha256, &body.measurements, fit_spec)?;
@@ -160,7 +177,7 @@ pub fn on_model(
     let body_input: Value = serde_json::from_str(measurements).map_err(invalid)?;
     scenario.validate()?;
     let prepared = PreparedInput::new(source, &scenario.options)?;
-    let body_request = BodyRequest::read(&body_input);
+    let body_request = read_body_request(&body_input);
     let fitted = body_request
         .as_ref()
         .map_err(Clone::clone)
@@ -306,7 +323,7 @@ fn on_model_matrix(
     let policies = matrix_policies(request, &matrix)?;
     let prepared = matrix.prepare(source)?;
     let body_input: Value = serde_json::from_str(measurements).map_err(invalid)?;
-    let body_request = BodyRequest::read(&body_input);
+    let body_request = read_body_request(&body_input);
     // Fit or select the common shape exactly once. Every case then owns a fresh session and
     // motion path; setup refusals remain case outcomes alongside the shared manufacturing study.
     let fitted = body_request

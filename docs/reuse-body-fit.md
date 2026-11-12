@@ -157,6 +157,13 @@ original measurements in its `ftx-scenario-body/1` body input. Use
 `ftx materials scenario-study` for manufacturing and numerical scenarios. The
 Material Workbench's body-constrained studies use the same portable path.
 
+When the supplied measurements contain original `records`, studies recompute
+their fused values before fitting, accepted-shape comparisons or passage checks.
+An old cache cannot override current records, and an invalid record refuses the
+body-dependent result. Explicit fused-only inputs retain their supplied targets.
+Scenario reports keep the original `body_input` for replay and separately record
+the current fused `measurements` used by the selected body.
+
 Bolero and trouser passage points retain their separate evidence: a point naming
 `hand_pass` or `foot_pass` requires that supplied value, just as initial drafting
 and ordinary selected-body validation do. Automatic chart priors and any used

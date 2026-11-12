@@ -5732,6 +5732,19 @@ This advances `ftx-bc1`; synthetic end-to-end acquisition and refusal regression
 implementation, with runtime validation recorded separately. No inferred anatomy, propagated
 calibration uncertainty, real-person accuracy or garment qualification is introduced.
 
+### 25.197 Preserve current independent evidence in selected-body design studies
+
+Body-constrained manufacturing, single-scenario and named-case studies reuse the exact selected
+shape for canonical dimensions and retain separately supplied hand/foot passage evidence when
+the garment's fit contract requires it. Source records are fused afresh before body preparation;
+an edited or missing cache cannot override those records. Explicit fused-only targets retain
+their existing contract, and replay keeps the original input separately from effective evidence.
+
+Actual bolero/trouser cuff checks and cutting admission exercise both native and portable routes,
+including missing or model-derived passage refusals and edited stature changing a tape-fit shape.
+This advances `ftx-ds2` and `ftx-ms2`; model-derived dimensions remain `MODEL_FIT`, and synthetic
+workflow checks do not establish anatomical accuracy or physical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
