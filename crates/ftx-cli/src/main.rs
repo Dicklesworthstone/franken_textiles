@@ -56,10 +56,10 @@ const USAGE: &str = "usage:
   ftx import garmentcode INPUT.json --out NEW_DIR [--annotations ANNOTATIONS.json] [--json]
   ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--fabric F.json] [--json]
   ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--fabric F.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
-            [--body-fit REPORT --model PATH] (draft from the accepted shape; MODEL_FIT, not new measurements)
-  ftx validate PATTERN --measurements M [--fit F] [--json]
+            [--model PATH] [--body-fit REPORT] (draft from a tape-fitted or accepted body; MODEL_FIT, not new measurements)
+  ftx validate PATTERN --measurements M [--fit F] [--model PATH] [--body-fit REPORT] [--flat-body] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
-            [--sim|--stills] [--body-fit REPORT] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N] [--res WIDTHxHEIGHT]
+            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
@@ -664,8 +664,58 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
     ))
 }
 
+struct SelectedFlatBody {
+    body: ftx_drape::drafting::PreparedPatternBody,
+    source: Option<Vec<u8>>,
+}
+
+fn selected_flat_body(
+    args: &Args,
+    pattern: &Value,
+    measurements: &Value,
+    spec: &Value,
+    selected: bool,
+) -> Result<Option<SelectedFlatBody>, Refusal> {
+    if !selected {
+        if pattern["meta"].get("draft_body").is_some() {
+            return Err(bad_input(
+                "this pattern was drafted on a selected body; supply --body-fit REPORT and/or --model PATH (or --flat-body for the default model) to validate on an explicit body source",
+            ));
+        }
+        return Ok(None);
+    }
+    let (model, hash, source) = body_source::selected_inputs(args)?;
+    let accepted = source
+        .as_deref()
+        .map(std::str::from_utf8)
+        .transpose()
+        .map_err(|e| bad_input(e.to_string()))?;
+    let passage: Vec<_> = ["hand_pass", "foot_pass"]
+        .into_iter()
+        .filter(|name| {
+            spec["points"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|point| point["body"].as_str() == Some(*name))
+        })
+        .collect();
+    let body = ftx_drape::drafting::PreparedPatternBody::prepare(
+        &model,
+        &hash,
+        measurements,
+        accepted,
+        &passage,
+    )?;
+    Ok(Some(SelectedFlatBody { body, source }))
+}
+
 fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "validate", &["measurements", "fit"])?;
+    known_options(
+        args,
+        "validate",
+        &["measurements", "fit", "model", "body-fit", "flat-body"],
+    )?;
     let pattern_path = args
         .positional
         .get(1)
@@ -673,9 +723,28 @@ fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let (pat, _) = read_json(pattern_path)?;
     let (meas, _) = read_json(required(args, "measurements")?)?;
     let spec = fit_spec(args)?;
-    let rep = validate(&Pattern::new(pat), &spec, &Measurements(meas));
-    let result = serde_json::to_value(&rep).unwrap_or(Value::Null);
-    Ok((result, rep.exit_code(), format_table(&rep)))
+    let selected = ["model", "body-fit", "flat-body"]
+        .iter()
+        .any(|key| args.options.contains_key(*key));
+    let meas = if selected {
+        current_measurements(meas)?
+    } else {
+        meas
+    };
+    let body = selected_flat_body(args, &pat, &meas, &spec, selected)?;
+    let pattern = Pattern::new(pat);
+    let rep = if let Some(selected) = &body {
+        validate(&pattern, &spec, &selected.body)
+    } else {
+        validate(&pattern, &spec, &Measurements(meas))
+    };
+    let mut result = serde_json::to_value(&rep).map_err(|e| bad_input(e.to_string()))?;
+    let mut text = format_table(&rep);
+    if let Some(selected) = body {
+        result["validation_body"] = selected.body.evidence();
+        text.push_str("\nFlat body: MODEL_FIT in the reference A-pose; original measurement evidence is unchanged.");
+    }
+    Ok((result, rep.exit_code(), text))
 }
 
 /// Validate settings before reading files, fitting the body or creating outputs.
@@ -829,6 +898,13 @@ fn write_drape_output(
 }
 
 fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    cmd_drape_bound(args, None)
+}
+
+fn cmd_drape_bound(
+    args: &Args,
+    expected_model_sha256: Option<&str>,
+) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "drape",
@@ -904,7 +980,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         params,
         description,
         source_bytes,
-    } = body_source::prepare(args, Some(&meas))?;
+    } = body_source::prepare_bound(args, Some(&meas), expected_model_sha256)?;
     let rest = model.rest(&params)?;
     let rest_skin = clothing_skin(&model, &rest.vertices)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;

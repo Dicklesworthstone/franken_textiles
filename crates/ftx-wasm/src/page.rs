@@ -409,8 +409,8 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
 /// readiness still consume only the original evidence, and no model value is inserted into it.
 ///
 /// # Errors
-/// Invalid or excessive source text, an imported pattern instead of a drafting program, invalid
-/// body/model association, missing passage values, or the ordinary draft/export refusals.
+/// Invalid or excessive source text, invalid body/model association, missing passage values,
+/// or the ordinary draft/validation/export refusals.
 pub fn run_on_body(
     model: &ftx_body::AnnyModel,
     model_sha256: &str,
@@ -419,7 +419,34 @@ pub fn run_on_body(
     created: &str,
     accepted_report_text: &str,
 ) -> Result<Round, String> {
-    if req_text.len() > 64 * 1024 * 1024 || accepted_report_text.len() > 16 * 1024 * 1024 {
+    run_on_selected_body(
+        model,
+        model_sha256,
+        req_text,
+        today,
+        created,
+        Some(accepted_report_text),
+    )
+}
+
+/// Draft or validate an existing pattern using one explicitly selected model body.
+/// Without an accepted report, the existing tape fitter supplies its reference shape.
+/// Original measurement evidence remains the separate readiness authority.
+///
+/// # Errors
+/// Excessive inputs, failed model fitting/admission, unavailable required geometry or passage
+/// evidence, and the ordinary pattern/export refusals.
+pub fn run_on_selected_body(
+    model: &ftx_body::AnnyModel,
+    model_sha256: &str,
+    req_text: &str,
+    today: &str,
+    created: &str,
+    accepted_report_text: Option<&str>,
+) -> Result<Round, String> {
+    if req_text.len() > 64 * 1024 * 1024
+        || accepted_report_text.is_some_and(|text| text.len() > 16 * 1024 * 1024)
+    {
         return Err("body-derived draft inputs exceed their 64/16 MiB limits".into());
     }
     run_selected(
@@ -435,7 +462,7 @@ fn run_selected(
     req_text: &str,
     today: &str,
     created: &str,
-    selected_body: Option<(&ftx_body::AnnyModel, &str, &str)>,
+    selected_body: Option<(&ftx_body::AnnyModel, &str, Option<&str>)>,
 ) -> Result<Round, String> {
     let req = PyJson::parse(req_text)?;
     let field = |k: &str| req.get(k).cloned().unwrap_or(PyJson::Null);
@@ -443,11 +470,9 @@ fn run_selected(
     let meas = body_file(&body, today)?;
     let pattern_in = field("pattern");
     let mut draft_body = None;
+    let mut validation_body = None;
     let mut draft_validation = None;
     let (data, data_doc, spec) = if truthy(&pattern_in.to_value()) {
-        if selected_body.is_some() {
-            return Err("body-derived drafting needs a drafting program; an existing pattern is not redrafted".into());
-        }
         let spec = Some(field("fit_spec").to_value()).filter(truthy);
         (pattern_in.to_value(), pattern_in, spec)
     } else {
@@ -484,7 +509,7 @@ fn run_selected(
         }
         let style = (!style.is_empty()).then_some(Value::Object(style));
         let (d, s) = if let Some((model, hash, accepted)) = selected_body {
-            let drafted = ftx_drape::drafting::draft_on_model(
+            let drafted = ftx_drape::drafting::draft_on_selected_model(
                 model,
                 hash,
                 &program,
@@ -493,6 +518,7 @@ fn run_selected(
                 style.as_ref(),
             )
             .map_err(msg)?;
+            validation_body = Some(drafted.body.clone());
             draft_body = Some(drafted.body);
             draft_validation = Some((drafted.validation, drafted.validation_table));
             (drafted.pattern, drafted.fit_spec)
@@ -519,9 +545,39 @@ fn run_selected(
             zip: Vec::new(),
         });
     }
+    if selected_body.is_none() && data["meta"].get("draft_body").is_some() {
+        return Err(
+            "This pattern was drafted on a model body. Load its model and explicitly select body-based flat checking; model-derived drafts cannot silently switch to analytic measurements."
+                .into(),
+        );
+    }
     let spec = spec.unwrap_or_else(|| default_fit_spec(&pat, "generic"));
     let (val_v, table) = if let Some(selected) = draft_validation {
         selected
+    } else if let Some((model, hash, accepted)) = selected_body {
+        let mut passage_names: Vec<_> = spec["points"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|point| point["body"].as_str())
+            .filter(|name| matches!(*name, "hand_pass" | "foot_pass"))
+            .collect();
+        passage_names.sort_unstable();
+        passage_names.dedup();
+        let selected = ftx_drape::drafting::PreparedPatternBody::prepare(
+            model,
+            hash,
+            &meas,
+            accepted,
+            &passage_names,
+        )
+        .map_err(msg)?;
+        let val = validate(&pat, &spec, &selected);
+        validation_body = Some(selected.evidence());
+        (
+            serde_json::to_value(&val).map_err(|e| e.to_string())?,
+            format_table(&val),
+        )
     } else {
         let val = validate(&pat, &spec, &Measurements(meas.clone()));
         (
@@ -549,9 +605,15 @@ fn run_selected(
     ];
     if let Some(evidence) = &draft_body {
         files.push(("draft_body.json".into(), doc(&PyJson::from_value(evidence))));
-        if let Some((_, _, accepted)) = selected_body {
-            files.push(("body_fit.json".into(), accepted.as_bytes().to_vec()));
-        }
+    }
+    if let Some(evidence) = &validation_body {
+        files.push((
+            "validation_body.json".into(),
+            doc(&PyJson::from_value(evidence)),
+        ));
+    }
+    if let Some((_, _, Some(accepted))) = selected_body {
+        files.push(("body_fit.json".into(), accepted.as_bytes().to_vec()));
     }
     let unscaled = data["meta"]["scale_status"] == "UNSCALED";
     let (exports, skip) = if flat == "BLOCKED" {
@@ -652,9 +714,13 @@ fn run_selected(
             })
         })
         .collect();
-    if draft_body.is_some() {
+    if validation_body.is_some() {
         for (name, label) in [
             ("draft_body.json", "Draft body and model dimensions"),
+            (
+                "validation_body.json",
+                "Flat-check body, dimensions and residuals",
+            ),
             ("body_fit.json", "Original accepted body fit"),
         ] {
             if let Some(bytes) = file(name) {
@@ -688,6 +754,9 @@ fn run_selected(
     ];
     if let Some(evidence) = draft_body {
         page_items.push(("draft_body", PyJson::from_value(&evidence)));
+    }
+    if let Some(evidence) = validation_body {
+        page_items.push(("validation_body", PyJson::from_value(&evidence)));
     }
     let page = PyJson::dict(page_items);
     Ok(Round {

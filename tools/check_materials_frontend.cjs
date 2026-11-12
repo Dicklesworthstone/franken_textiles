@@ -5542,6 +5542,12 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
       contains:x=>classes.has(x),toggle:(x,on)=>on?classes.add(x):classes.delete(x)};
     el.dataset={};el.querySelectorAll=()=>[];el.scrollIntoView=()=>{};
   }
+  let programs=[];
+  e.programs.querySelectorAll=()=>{
+    programs=[...e.programs.innerHTML.matchAll(/name="program" value="([^"]+)"/g)]
+      .map(([,value])=>Object.assign(new Element(),{value}));
+    return programs;
+  };
   e.stature.value='92';e.age.value='30';e.style.value='{}';
   const modes=['chart','tape','file'].map(value=>Object.assign(new Element(),{value,checked:value==='chart'}));
   const messages=[], live=new Map(),windowEvents={},openerMessages=[],popups=[];let worker, next=0;
@@ -5570,7 +5576,8 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
     emit({type:'bodyReady',request:last('body').request});};
   const dispatch=(id,event)=>e[id].handlers[event]?.();
-  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,engineReady,opener,openerMessages,windowEvents,popups,hasOpener:()=>!!context.window.opener};
+  return {e,modes,messages,live,emit,last,result,body,worker,dispatch,engineReady,opener,openerMessages,windowEvents,popups,
+    selectProgram:value=>programs.find(p=>p.value===value).handlers.change(),hasOpener:()=>!!context.window.opener};
 }
 const alterationTargets = {
   pieces:[{id:'front',vertices:['a','b'],edges:['hem','armhole']},{id:'sleeve',vertices:['ua','top'],edges:['cap','hem']}],
@@ -5681,6 +5688,35 @@ test('primary alteration undo retains a newly selected fit contract with the res
   const request=p.messages.findLast(m=>m.type==='run').req;
   assert.ok(request.includes('"pattern":'+alterationPattern));
   assert.ok(request.includes('"fit_spec":'+replacement),'Undo changes the pattern while retaining the current explicit fit source');
+});
+test('selected-body alterations and undo retain the same wearer association until sources or program change',async()=>{
+  const p=draftingPage(),raw=' {"status":"ACCEPTED","sequence":18446744073709551615,"probe":-0.0}\r\n';
+  await p.body();p.e.bodyFitFile.files=[new Blob([raw])];await p.e.bodyFitFile.handlers.change();
+  p.e.draftFromBody.checked=true;await p.e.draftFromBody.handlers.change();
+  p.e.bodyFitConsent.checked=true;await p.e.bodyFitConsent.handlers.change();
+  await p.e.go.handlers.click();const source=p.last('run');
+  assert.equal(source.draftOnBody,true);assert.equal(source.bodyFit,raw);assert.equal(source.bodyFitConsent,true);
+  p.result(undefined,{alterationSources:{pattern:alterationPattern,fit:alterationFit,targets:alterationTargets}});
+  p.e.alterOperation.value='move';await p.dispatch('alterOperation','change');
+  p.e.alterDx.value='0';p.e.alterDy.value='-1';await p.e.alterApply.handlers.click();
+  const msg=p.last('alter'),changed=alterationPattern.replace('"pieces":[]','"pieces":[],"altered":true');
+  p.emit({type:'altered',request:msg.request,round:msg.round,pattern:changed,fit:alterationFit,why:'Changed'});
+  await new Promise(resolve=>setImmediate(resolve));
+  const checked=p.last('run');assert.notEqual(checked.request,source.request);
+  assert.equal(checked.draftOnBody,true);assert.equal(checked.body,source.body);
+  assert.equal(checked.bodyFit,raw);assert.equal(checked.bodyFitConsent,true);
+  assert.equal(p.e.bodyFitConsent.checked,true);
+  assert.ok(p.messages.findLast(m=>m.type==='run').req.includes('"pattern":'+changed));
+  p.result(undefined,{alterationSources:{pattern:changed,fit:alterationFit,targets:alterationTargets}});
+  await p.e.undoAlter.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(p.messages.findLast(m=>m.type==='run').req.includes('"pattern":'+alterationPattern));
+  assert.equal(p.last('run').bodyFit,raw);assert.equal(p.last('run').bodyFitConsent,true);
+  assert.equal(p.e.undoAlter.disabled,true);
+  await p.dispatch('stature','input');assert.equal(p.e.bodyFitConsent.checked,false,'Wearer edits revoke the association');
+  p.e.bodyFitConsent.checked=true;await p.selectProgram('zouave_bolero');
+  assert.equal(p.e.bodyFitConsent.checked,false,'An explicit program replacement revokes the association');
+  p.e.bodyFitConsent.checked=true;p.e.patternFile.files=[new Blob([alterationPattern])];await p.dispatch('patternFile','change');
+  assert.equal(p.e.bodyFitConsent.checked,false,'An explicit pattern source replacement revokes the association');
 });
 test('primary alterations preserve drafted tape fields and hidden nappy semantics across adoption and later rechecks',async()=>{
   const p=await currentAlterationPage();
@@ -20886,6 +20922,45 @@ test('checked garment receiver preserves manual source replacements and clearing
     assert.equal(p.e.fitFile.files.length,1);assert.equal(p.e.measFile.files.length,1);
     if(replace==='model')assert.deepEqual([...new Uint8Array(p.last('body').bytes)],[7]);
     else assert.equal(p.e.bodyFitFile.files.length,1);
+  }
+});
+test('checked garment alterations and undo preserve evaluated measurements and body sources until explicit replacement',async()=>{
+  for(const mode of ['exports','tape-body','accepted-body']) {
+    const token='b'.repeat(32),p=draftingPage({materialToken:token}),withBody=mode!=='exports';
+    const data=checkedPacket(token,withBody);if(mode==='tape-body')data.evaluatedInputs.bodyFit=null;
+    await p.windowEvents.message({origin:'https://unit.invalid',source:p.opener,data});
+    if(withBody) {
+      p.emit({type:'bodyReady',request:p.last('body').request});
+      p.e.draftFromBody.checked=true;await p.e.draftFromBody.handlers.change();
+      p.e.bodyFitConsent.checked=mode==='accepted-body';await p.e.bodyFitConsent.handlers.change();
+    }
+    await p.e.go.handlers.click();const before=p.last('run');assert.ok(before,mode);
+    p.result(undefined,{alterationSources:{pattern:checkedPattern,fit:checkedFit,targets:alterationTargets}});
+    p.e.alterOperation.value='move';await p.dispatch('alterOperation','change');
+    p.e.alterDx.value='0';p.e.alterDy.value='-1';await p.e.alterApply.handlers.click();
+    const msg=p.last('alter'),changed=checkedPattern.replace('"pieces":','"altered":true,"pieces":');
+    p.emit({type:'altered',request:msg.request,round:msg.round,pattern:changed,fit:checkedFit,why:'Changed'});
+    await new Promise(resolve=>setImmediate(resolve));
+    const next=p.last('run');assert.notEqual(next.request,before.request,mode+': the altered round must be dispatched');
+    const request=p.messages.findLast(m=>m.type==='run').req;
+    assert.ok(request.includes('"pattern":'+changed));assert.ok(request.includes(checkedFit));assert.ok(request.includes(checkedEffective));
+    assert.equal(p.e.traceImportNote.hidden,true,'The old pattern handoff is replaced, while its evaluated sources remain');
+    assert.deepEqual(p.e.materialImportFiles.children.map(a=>a.download),['fit_spec.json','measurements.json']);
+    if(withBody) {
+      assert.equal(next.draftOnBody,true);assert.equal(next.body,before.body);
+      assert.equal(next.bodyFit,mode==='accepted-body'?checkedBodyFit:null);
+      assert.equal(next.bodyFitConsent,mode==='accepted-body');
+      assert.equal(p.messages.filter(m=>m.type==='body').length,1,'Alteration retains the evaluated model handle');
+    }
+    p.result(undefined,{alterationSources:{pattern:changed,fit:checkedFit,targets:alterationTargets}});
+    await p.e.undoAlter.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+    const restored=p.messages.findLast(m=>m.type==='run').req;
+    assert.ok(restored.includes('"pattern":'+checkedPattern));assert.ok(restored.includes(checkedEffective));
+    if(withBody)assert.equal(p.last('run').body,before.body);
+    p.e.patternFile.files=[new Blob([alterationPattern])];await p.dispatch('patternFile','change');
+    assert.equal(p.e.materialImportFiles.children.length,0,'An explicit pattern replacement clears received wearer evidence');
+    assert.equal(p.e.bodyFitImportFiles.children.length,0,'An explicit pattern replacement clears received model/report sources');
+    assert.equal(p.e.bodyFitConsent.checked,false);
   }
 });
 test('checked garment receiver refuses incomplete sources and cancels delayed installation without fallback or inherited consent',async()=>{

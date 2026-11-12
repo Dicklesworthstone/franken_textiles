@@ -1,17 +1,19 @@
-# Use an accepted image-fit shape for drafting, body export and draping
+# Use a selected model body for drafting, flat checks and draping
 
 An accepted `ftx measure fit-body` report can supply the actual body shape to
-`ftx draft`, `ftx body`, `ftx drape`, and simulated workspace rounds. This is explicit: without
-`--body-fit`, the existing tape-fitting path is unchanged. With it, no tape fit,
+`ftx draft`, `ftx validate`, `ftx body`, `ftx drape`, and workspace rounds. Selection
+is explicit. `draft --model` fits the supplied tape evidence on that model; adding
+`--body-fit` reuses the accepted shape instead. With an accepted report, no tape fit,
 parameter rounding, fallback fit, or silent shape adjustment occurs.
 
 The browser workshop also accepts this saved report in its body panel. Select
 the same converted model, choose the accepted-fit report, and explicitly associate
 it with the current wearer. By default the report selects the checked and draped
-body. Select **Draft a new pattern from this accepted body** before drafting to also
-use its dimensions and placement frames for the initial pattern. Neither mode
-changes measurement readiness. Clearing the report restores tape fitting for body
-checks and draping; a selected body-derived draft requires a valid report. A rejected replacement never falls back to a previous
+body. Select **Use this body for drafting and flat checks** to use its dimensions
+and placement frames for a new pattern, or to check an imported or altered pattern
+without changing its geometry. The checkbox also works with a model and tape
+evidence alone. Neither mode changes measurement readiness. Explicitly clearing
+the report selects tape fitting; an invalid or rejected replacement never falls back to a previous
 shape or to tape fitting. The arm-angle control selects the ordinary drape pose,
 not an image-frame pose; a refused start remains a refusal at that angle.
 
@@ -43,7 +45,11 @@ ftx round workspace --sim --body-fit accepted-fit.json --model anny.ftxbody
 ```
 
 `--stills` and the existing paired-sewing controls can also be used on rounds.
-`--body-fit` without `--sim` or `--stills` is refused by `round`. These commands
+A round without simulation can use `--model` or `--body-fit` for flat checking.
+For an ordinary pattern, existing simulated rounds keep their simulation-only
+body selection; add `--flat-body` to check the flat pattern on that body too. A
+model-derived pattern always requires an explicit body for its later flat checks.
+These commands
 consume the saved `ftx-body-fit/1` report, not the CLI's enclosing `ftx-cli/1` JSON.
 `--model` may be omitted when the converted default is the exact model used by
 the fit. Only the shared shape is reused: frame-specific translations, rotations
@@ -52,9 +58,11 @@ and `drape --arm-deg` select the usual native poses.
 
 ## Initial patterns from the selected shape
 
-All three existing programs can use the accepted body explicitly:
+All three existing programs can use either a tape-fitted model or an accepted body:
 
 ```sh
+ftx draft zouave_bolero --measurements measurements.json --out tape-bolero \
+  --model anny.ftxbody
 ftx draft zouave_bolero --measurements measurements.json --out new-bolero \
   --body-fit accepted-fit.json --model anny.ftxbody
 ftx draft zouave_trousers --measurements measurements.json --ws workspace \
@@ -62,6 +70,12 @@ ftx draft zouave_trousers --measurements measurements.json --ws workspace \
 ftx draft fez --measurements measurements.json --out new-fez \
   --body-fit accepted-fit.json --model anny.ftxbody
 ```
+
+The tape path uses the same wearer interpretation, target selection and fitter as
+the ordinary body and drape workflows. Supply the required age and tape evidence
+and a model with the supported fitting controls. It records the tape fit's
+residuals and source identity; it does not create an accepted image-fit report.
+Omitting both model flags retains the original analytic drafting path.
 
 The programs retain their existing construction and style controls. Dimensions,
 landmarks, local section radii and placement origins come from the selected model's
@@ -78,26 +92,61 @@ measurement. Other supplied dimensions remain independent evidence and compariso
 targets; they cannot silently replace the explicitly selected shape.
 
 A standalone body-derived draft requires a fresh output directory. Alongside
-`pattern.json` and `fit_spec.json`, it writes `draft_body.json`, selected-body
-`validation.json`, and the exact original accepted-report bytes in `body_fit.json`.
-The pattern metadata binds the reference body, source hash and supplemental
+`pattern.json` and `fit_spec.json`, it writes `draft_body.json`,
+`validation_body.json`, and selected-body `validation.json`. If an accepted report
+was supplied, its exact original bytes are saved in `body_fit.json`; the tape path
+creates no such file. The pattern metadata binds the reference body, model and
+input identity, any accepted source hash, and supplemental
 passage evidence. Workspace drafts save these in a new immutable round, preserving
 the original measurement file and calculating readiness from its original records.
 
 In the browser, open **Use a fitted body (optional)** before drafting, load the
-model and accepted report, confirm their wearer association, and enable the draft
-checkbox. Changing either source withdraws the old draft and its downloads.
-The result shows its MODEL_FIT basis and includes both source documents in the
-downloads and ZIP. The shared portable entry point is `page::run_on_body`; the
-WebAssembly binding is `run_on_body(WebBody, request, today, created, report)`.
-It performs flat validation against the same body used to construct the pattern.
-Imported and already altered patterns are not initial drafting programs.
+model, optionally select an accepted report and confirm its wearer association,
+then enable **Use this body for drafting and flat checks**. Changing a source
+withdraws the old result and its downloads. The result shows its MODEL_FIT basis
+and includes the body evidence and any original report in the downloads and ZIP.
+The shared portable entry point is `page::run_on_selected_body`; the WebAssembly
+binding is `run_on_selected_body(WebBody, request, today, created, optional_report)`.
+The existing accepted-report `run_on_body` entry points remain available.
+Each initial draft is flat-validated against the same body that constructed it.
 
 This adds explicit initial drafting; it does not automatically redraft existing
 patterns or promote predicted dimensions into measurement records. Synthetic
 regressions compare native and portable output, two distinct accepted shapes,
 preserved sources, unchanged readiness, refusals and output immutability. They do
 not establish anatomical accuracy or physical garment fit.
+
+## Recheck an imported or altered pattern
+
+Choose the intended body explicitly when checking existing geometry:
+
+```sh
+ftx validate pattern.json --measurements measurements.json --fit fit_spec.json \
+  --model anny.ftxbody --body-fit accepted-fit.json
+ftx round workspace --model anny.ftxbody --body-fit accepted-fit.json
+ftx round workspace --sim --flat-body --model anny.ftxbody \
+  --body-fit accepted-fit.json
+```
+
+Omit `--body-fit` to fit the supplied tape evidence on the selected model.
+`--flat-body` can also explicitly select the configured default model. Existing
+pattern geometry and historical `meta.draft_body` remain intact; the current
+check's reference body, passage evidence and residuals are returned as
+`validation_body`; workspace and browser rounds save them in `validation_body.json`.
+A model-derived pattern refuses an ordinary check without
+an explicit body selection, rather than silently using analytic dimensions.
+
+Workspace rounds admit the body before reserving their output and preserve any
+accepted report in the round. A combined flat check and simulation consume that
+same report snapshot. The simulation also verifies the model hash selected for
+the flat check; replacement of the model file produces a saved simulation refusal.
+The review shows the flat body's MODEL_FIT basis, residuals and source downloads,
+while readiness continues to use the original measurement evidence.
+
+The browser uses the same checkbox for initial drafting, imported patterns and
+the current altered pattern. Applying or undoing an alteration keeps the same
+wearer inputs and selected body for the next check. Replacing a measurement or
+body source still withdraws the old results and accepted-fit association.
 
 ## Model and shape consistency
 

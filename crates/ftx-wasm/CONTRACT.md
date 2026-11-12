@@ -1,18 +1,23 @@
 # ftx-wasm
 
-**Initial drafting from an accepted shape.** `page::run_on_body(model, model_sha256,
-request, today, created, accepted_report_text)` and wasm32 `run_on_body(WebBody,
-request, today, created, accepted_report_text)` share the native accepted-body
-drafting authority. The request must select an existing drafting program, not an
-imported pattern. The 64 MiB request and 16 MiB report limits bound input text.
-The round drafts and flat-validates on the same canonical reference body, preserves
-the exact report bytes as `body_fit.json`, and includes `draft_body.json` and its
-MODEL_FIT basis in the result and ZIP. Original record fusion/readiness is unchanged.
-The workshop's explicit draft checkbox requires the current loaded model and an
-accepted report associated with the wearer. Source changes invalidate old drafts;
-worker refusals clear the old round before checking the replacement. Ordinary
-`page::run`, drafting defaults and altered/imported-pattern workflows retain their
-existing behavior. See `docs/reuse-body-fit.md` for passage and body-rise limits.
+**Drafting and flat checks on a selected body.** `page::run_on_selected_body(model,
+model_sha256, request, today, created, optional_report)` and wasm32
+`run_on_selected_body(WebBody, request, today, created, optional_report)` share the
+native body authority. An absent report selects the ordinary tape fitter; a
+supplied report must pass accepted-shape admission without fallback. Existing
+accepted-only `run_on_body` entry points remain available. The 64 MiB request and
+16 MiB optional-report limits bound input text. Initial drafts and flat checks use
+the same canonical reference body; imported and altered patterns retain their
+geometry and historical drafting metadata. `validation_body.json` records the
+current MODEL_FIT basis; initial drafts also save `draft_body.json`, and accepted
+imports preserve exact `body_fit.json` bytes. Results and ZIPs include this evidence.
+Original record fusion/readiness is unchanged. The workshop checkbox requires the
+current loaded model and, for an imported report, its explicit wearer association.
+Alteration continuation retains the same inputs; source changes invalidate old
+results and association. Worker refusals clear the old round before checking a
+replacement. A model-derived pattern requires explicit selected-body checking.
+Ordinary analytic defaults remain available. See `docs/reuse-body-fit.md` for
+passage and body-rise limits.
 
 **Still-photo capture drafts.** `body_fit::body_capture_catalogue(model_bytes)` returns the
 actual model's `ftx-body-capture-catalogue/1` and exact model hash, with `body_fitted: false`.

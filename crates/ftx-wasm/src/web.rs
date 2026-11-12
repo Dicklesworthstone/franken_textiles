@@ -545,7 +545,7 @@ impl WebBody {
     }
 }
 
-/// Draft and check an initial pattern on an explicitly selected accepted shape.
+/// Draft or check a pattern on an explicitly selected accepted shape.
 /// Original measurement evidence remains the separate readiness authority.
 ///
 /// # Errors
@@ -565,6 +565,31 @@ pub fn run_on_body(
         today,
         created,
         accepted_report,
+    )
+    .map(|inner| WebRound { inner })
+    .map_err(|e| JsError::new(&e))
+}
+
+/// Draft or check a pattern on the selected body, fitted to tape when no accepted report is supplied.
+/// Existing patterns retain their geometry and original drafting identity.
+///
+/// # Errors
+/// Failed fitting/admission, unavailable required geometry/evidence, or pattern/export refusals.
+#[wasm_bindgen]
+pub fn run_on_selected_body(
+    body: &WebBody,
+    req: &str,
+    today: &str,
+    created: &str,
+    accepted_report: Option<String>,
+) -> Result<WebRound, JsError> {
+    page::run_on_selected_body(
+        &body.inner,
+        &body.source_sha256,
+        req,
+        today,
+        created,
+        accepted_report.as_deref(),
     )
     .map(|inner| WebRound { inner })
     .map_err(|e| JsError::new(&e))

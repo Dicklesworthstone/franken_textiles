@@ -106,6 +106,44 @@ fn imported_body(out: &mut String, body: &Value) {
     }
 }
 
+fn validation_body(out: &mut String, body: &Value) {
+    if !body.is_object() {
+        return;
+    }
+    out.push_str("<h3>Body used for flat validation — MODEL_FIT</h3>\
+        <p>Finished dimensions and ease were checked against this selected body's reference A-pose. \
+        Original measurement evidence and readiness remain separate. These model predictions do not \
+        establish physical garment fit.</p>");
+    let _ = write!(
+        out,
+        "<p>Shape source: {}. Model SHA-256: <code>{}</code>.</p>",
+        cell(&body["identity"]["reference"]["shape_source"]["kind"]),
+        cell(&body["identity"]["reference"]["model_sha256"])
+    );
+    let mut rows = body["body_fit"]["residuals"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for row in &mut rows {
+        for key in ["target_mm", "body_mm", "residual_mm"] {
+            if row[key].is_number() {
+                row[key] = Value::String(row[key].to_string());
+            }
+        }
+    }
+    table(
+        out,
+        "Selected body vs supplied targets — millimetres; residual = model minus target",
+        &Value::Array(rows),
+        &[
+            ("name", "Measurement"),
+            ("target_mm", "Supplied target"),
+            ("body_mm", "MODEL_FIT body"),
+            ("residual_mm", "Signed residual"),
+        ],
+    );
+}
+
 fn round_dir(value: &Value) -> Option<&str> {
     let dir = value.as_str()?;
     let (base, number) = dir.split_once('/')?;
@@ -279,6 +317,8 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                     ("measurements.json", "Fused measurements"),
                     ("readiness.json", "Readiness report"),
                     ("validation.json", "Validation report"),
+                    ("validation_body.json", "Flat validation body"),
+                    ("body_fit.json", "Original accepted body fit"),
                     ("round.json", "Round record"),
                 ] {
                     link(&mut out, ws, &format!("{dir}/{name}"), label)?;
@@ -301,6 +341,7 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
         for key in ["remeasure_request", "for_real_child", "advisories"] {
             list(&mut out, &ready[key]);
         }
+        validation_body(&mut out, &entry["validation_body"]);
         let val = &entry["validation"];
         list(&mut out, &val["structure_errors"]);
         list(&mut out, &val["completeness"]);

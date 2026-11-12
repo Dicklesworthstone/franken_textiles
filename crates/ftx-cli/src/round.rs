@@ -17,7 +17,13 @@ use super::{Args, bad_input, export, known_options, make_dir, read_json};
 mod report;
 mod stills;
 
-pub(super) const BOOLEAN_OPTIONS: &[&str] = &["export", "update-measurements", "sim", "stills"];
+pub(super) const BOOLEAN_OPTIONS: &[&str] = &[
+    "export",
+    "update-measurements",
+    "sim",
+    "stills",
+    "flat-body",
+];
 
 const SIM_OPTIONS: &[&str] = &[
     "sew",
@@ -336,6 +342,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "elastic-hold-steps",
             "model",
             "body-fit",
+            "flat-body",
             "self-contact-mm",
             "self-mu",
             "arm-deg",
@@ -367,7 +374,10 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let run_options = super::drape_options(args)?;
         super::two_start::options(args, &run_options)?;
         super::drape_pose(args)?;
-    } else if let Some(key) = SIM_OPTIONS.iter().find(|&&k| args.options.contains_key(k)) {
+    } else if let Some(key) = SIM_OPTIONS
+        .iter()
+        .find(|&&k| !matches!(k, "model" | "body-fit") && args.options.contains_key(k))
+    {
         return Err(bad_input(format!("--{key} requires --sim or --stills")));
     }
     let ws = PathBuf::from(&args.positional[1]);
@@ -386,7 +396,16 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     let body = WorkspaceBody::read(&ws, args)?;
     let data = measurements(&body.raw)?;
-    let (raw, placement_notes) = if Pattern::new(raw.clone()).structure_errors().is_empty() {
+    let drafted_on_body = raw["meta"].get("draft_body").is_some();
+    let supplied_body = args.options.contains_key("model") || args.options.contains_key("body-fit");
+    // Existing simulation-only source options keep their flat measurement authority. Explicit
+    // flat selection, or continuation of a model-derived draft, uses one selected body instead.
+    let selected_flat = args.options.contains_key("flat-body")
+        || (supplied_body && (!wants_sim || drafted_on_body));
+    let (raw, mut placement_notes) = if !selected_flat
+        && !drafted_on_body
+        && Pattern::new(raw.clone()).structure_errors().is_empty()
+    {
         infer_placements(&raw, &Measurements(data.clone()))?
     } else {
         (raw, Vec::new())
@@ -420,7 +439,23 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if !spec.is_object() || !spec["points"].is_array() {
         return Err(bad_input("fit spec must be an object with a points list"));
     }
-    let validation = validate(&pattern, &spec, &Measurements(data.clone()));
+    let selected = super::selected_flat_body(args, &raw, &data, &spec, selected_flat)?;
+    let raw = if let Some(selected) = &selected
+        && pattern.structure_errors().is_empty()
+    {
+        let (placed, notes) = infer_placements(&raw, &selected.body)?;
+        placement_notes.extend(notes);
+        placed
+    } else {
+        raw
+    };
+    let pattern = Pattern::new(raw.clone());
+    let validation = if let Some(selected) = &selected {
+        validate(&pattern, &spec, &selected.body)
+    } else {
+        validate(&pattern, &spec, &Measurements(data.clone()))
+    };
+    let validation_body = selected.as_ref().map(|selected| selected.body.evidence());
     let unscaled = raw["meta"]["scale_status"] == "UNSCALED";
     // Share the draft command's process-scoped lock; reject evidence/contract changes during
     // preflight rather than judging a body different from the one now owning the workspace.
@@ -462,6 +497,16 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         );
     }
     write_json(&rd.join("readiness.json"), &ready)?;
+    if let Some(selected) = &selected {
+        write_json(
+            &rd.join("validation_body.json"),
+            validation_body.as_ref().unwrap(),
+        )?;
+        if let Some(source) = &selected.source {
+            write_new(&rd.join("body_fit.json"), source)?;
+        }
+        notes.push("flat validation uses MODEL_FIT dimensions and landmarks in the reference A-pose; original measurement evidence and readiness are unchanged".into());
+    }
     let val = serde_json::to_value(&validation).map_err(|e| bad_input(e.to_string()))?;
     write_json(&rd.join("validation.json"), &val)?;
     for (file, dark) in [("preview.svg", false), ("preview_dark.svg", true)] {
@@ -478,6 +523,13 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             &body.bytes,
             validation.status(),
             unscaled,
+            selected
+                .as_ref()
+                .and_then(|selected| selected.source.as_ref())
+                .is_some(),
+            validation_body
+                .as_ref()
+                .and_then(|body| body["identity"]["reference"]["model_sha256"].as_str()),
             &mut notes,
         )?
     } else {
@@ -531,12 +583,18 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         exports.as_ref(),
         ready["status"].as_str().unwrap_or("NOT_CHECKED"),
     );
-    let basis = json!({"flat":validation.status(), "sim":sim_basis, "exports":export_basis, "measurements":ready["status"]});
-    let entry = json!({"round":n, "dir":format!("rounds/{n:03}"), "note":args.options.get("note").map_or("", String::as_str),
+    let mut basis = json!({"flat":validation.status(), "sim":sim_basis, "exports":export_basis, "measurements":ready["status"]});
+    if selected.is_some() {
+        basis["flat_body"] = json!("MODEL_FIT");
+    }
+    let mut entry = json!({"round":n, "dir":format!("rounds/{n:03}"), "note":args.options.get("note").map_or("", String::as_str),
         "auto_notes":notes, "status":state, "basis":basis, "readiness":ready, "exports":exports,
         "pattern_meta":raw["meta"], "fabric_override":fabric.as_ref().map(|f| f.receipt().clone()),
         "validation":val, "images":images, "rendering":rendering, "video":null, "viewer":viewer, "sim":sim, "at":at,
         "preview":format!("rounds/{n:03}/preview.svg"), "preview_dark":format!("rounds/{n:03}/preview_dark.svg")});
+    if let Some(body) = validation_body {
+        entry["validation_body"] = body;
+    }
     write_json(&rd.join("round.json"), &entry)?;
     append(&ws, &entry)?;
     report::publish(&ws)?;
@@ -597,6 +655,8 @@ fn simulate(
     measurements_file: &[u8],
     flat: &str,
     unscaled: bool,
+    retained_body_fit: bool,
+    expected_model_sha256: Option<&str>,
     notes: &mut Vec<String>,
 ) -> Result<SimOutcome, Refusal> {
     let skipped = if flat == "BLOCKED" {
@@ -622,6 +682,14 @@ fn simulate(
         .filter(|(k, _)| SIM_OPTIONS.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    if retained_body_fit {
+        // Flat validation and simulation must consume the same accepted report, even if the
+        // caller replaces the external report after this round's preflight.
+        options.insert(
+            "body-fit".into(),
+            rd.join("body_fit.json").to_string_lossy().into_owned(),
+        );
+    }
     for (key, path) in [
         ("measurements", rd.join("measurements.json")),
         ("fit", rd.join("fit_spec.json")),
@@ -638,16 +706,20 @@ fn simulate(
         values: Vec::new(),
         json: true,
     };
-    let outcome = super::cmd_drape(&drape_args).and_then(|(result, _, _)| {
-        let (mut report, _) = read_json(&rd.join("sim/sim_report.json").to_string_lossy())?;
-        if !report.is_object() || !report["gating"].is_array() || !report["settled"].is_boolean() {
-            return Err(bad_input(
-                "the new simulation did not produce a complete report",
-            ));
-        }
-        report["advisory"] = result["advisory"].clone();
-        Ok(report)
-    });
+    let outcome =
+        super::cmd_drape_bound(&drape_args, expected_model_sha256).and_then(|(result, _, _)| {
+            let (mut report, _) = read_json(&rd.join("sim/sim_report.json").to_string_lossy())?;
+            if !report.is_object()
+                || !report["gating"].is_array()
+                || !report["settled"].is_boolean()
+            {
+                return Err(bad_input(
+                    "the new simulation did not produce a complete report",
+                ));
+            }
+            report["advisory"] = result["advisory"].clone();
+            Ok(report)
+        });
     match outcome {
         Ok(mut report) => {
             let qpath = ws.join("qualification/qualify.json");

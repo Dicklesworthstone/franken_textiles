@@ -165,7 +165,10 @@ mod tests {
     }
 
     fn missing(name: &str) -> Refusal {
-        Refusal::new(RefusalCode::InvalidDocument, format!("source has no {name}"))
+        Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("source has no {name}"),
+        )
     }
 
     impl DraftBody for SelectedBody {
@@ -245,12 +248,8 @@ mod tests {
     #[test]
     fn selected_body_controls_bodice_levels_and_sleeve_reach() {
         let body = selected();
-        let (pattern, _) = draft_on_body(
-            "zouave_bolero",
-            &body,
-            Some(&json!({"soutache": false})),
-        )
-        .unwrap();
+        let (pattern, _) =
+            draft_on_body("zouave_bolero", &body, Some(&json!({"soutache": false}))).unwrap();
         assert_eq!(piece(&pattern, "back")["vertices"]["ua"][1], json!(98.0));
         assert_eq!(
             piece(&pattern, "sleeve")["placement"]["radius_mm"],
@@ -274,7 +273,10 @@ mod tests {
                 2
             ))
         );
-        assert_eq!(pattern["meta"]["solved"]["leg_to_cuff_top_mm"], json!(375.0));
+        assert_eq!(
+            pattern["meta"]["solved"]["leg_to_cuff_top_mm"],
+            json!(375.0)
+        );
     }
 
     #[test]
@@ -287,12 +289,8 @@ mod tests {
 
         let mut body = selected();
         body.values.remove("hand_pass");
-        let error = draft_on_body(
-            "zouave_bolero",
-            &body,
-            Some(&json!({"soutache": false})),
-        )
-        .unwrap_err();
+        let error =
+            draft_on_body("zouave_bolero", &body, Some(&json!({"soutache": false}))).unwrap_err();
         assert!(error.to_string().contains("hand_pass"));
         let mut body = selected();
         body.values.remove("foot_pass");
@@ -325,7 +323,11 @@ mod tests {
         assert!(draft_on_body("zouave_trousers", &body, None).is_err());
         body.radius = f64::INFINITY;
         assert!(draft_on_body("zouave_trousers", &body, None).is_err());
-        assert!(CheckedBody(&selected()).section_radius("leg_R", f64::NAN).is_err());
+        assert!(
+            CheckedBody(&selected())
+                .section_radius("leg_R", f64::NAN)
+                .is_err()
+        );
     }
 
     #[test]

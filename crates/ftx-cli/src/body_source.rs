@@ -72,28 +72,70 @@ fn read_report(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
 /// Read the exact accepted-report and model bytes once for shape consumers that do not refit.
 pub(super) fn accepted_inputs(args: &Args) -> Result<(AnnyModel, String, Vec<u8>), Refusal> {
     let (report, report_bytes) = read_report(required(args, "body-fit")?)?;
-    let model_path = args
-        .options
-        .get("model")
-        .map(PathBuf::from)
-        .or_else(default_model_path)
-        .ok_or_else(|| bad_input("give --model for the accepted body fit"))?;
-    let model_bytes = bytes(&model_path, 512 * 1024 * 1024)?;
-    let hash = sha256_hex(&model_bytes);
+    let (model, hash) = identified_model(args)?;
     if report["anny_configuration"]["model_sha256"].as_str() != Some(&hash) {
         return Err(bad_input(
             "body-fit model SHA-256 mismatch; no shape was reused or refitted",
         ));
     }
+    Ok((model, hash, report_bytes))
+}
+
+fn identified_model(args: &Args) -> Result<(AnnyModel, String), Refusal> {
+    identified_model_bound(args, None)
+}
+
+fn identified_model_bound(
+    args: &Args,
+    expected_model_sha: Option<&str>,
+) -> Result<(AnnyModel, String), Refusal> {
+    let model_path = args
+        .options
+        .get("model")
+        .map(PathBuf::from)
+        .or_else(default_model_path)
+        .ok_or_else(|| bad_input("give --model to select the fitted body model"))?;
+    let model_bytes = bytes(&model_path, 512 * 1024 * 1024)?;
+    let hash = sha256_hex(&model_bytes);
+    if expected_model_sha.is_some_and(|expected| expected != hash) {
+        return Err(bad_input(
+            "selected body model changed after flat validation; choose the intended model and run a new round",
+        ));
+    }
     // Hash and parse the SAME bytes, including the model's array-hash checks.
     let model = AnnyModel::from_data(AnnyData::from_bytes(&model_bytes, true)?)?;
-    Ok((model, hash, report_bytes))
+    Ok((model, hash))
+}
+
+/// Explicit selected-body inputs for drafting and flat validation. An absent report selects the
+/// ordinary tape fitter; a supplied report must pass admission and is never replaced by tape fitting.
+pub(super) fn selected_inputs(
+    args: &Args,
+) -> Result<(AnnyModel, String, Option<Vec<u8>>), Refusal> {
+    if args.options.contains_key("body-fit") {
+        accepted_inputs(args).map(|(model, hash, source)| (model, hash, Some(source)))
+    } else {
+        identified_model(args).map(|(model, hash)| (model, hash, None))
+    }
 }
 
 /// The ordinary path stays unchanged. Import is opt-in and never falls back to fitting on failure.
 pub(super) fn prepare(args: &Args, measurements: Option<&Value>) -> Result<PreparedBody, Refusal> {
+    prepare_bound(args, measurements, None)
+}
+
+/// A round that already checked a selected body must simulate those same model bytes.
+pub(super) fn prepare_bound(
+    args: &Args,
+    measurements: Option<&Value>,
+    expected_model_sha: Option<&str>,
+) -> Result<PreparedBody, Refusal> {
     let Some(_) = args.options.get("body-fit") else {
-        let model = load_model(args)?;
+        let model = if expected_model_sha.is_some() {
+            identified_model_bound(args, expected_model_sha)?.0
+        } else {
+            load_model(args)?
+        };
         let measurements = measurements.ok_or_else(|| bad_input("--measurements is required"))?;
         let (wearer, fit) = fitted_body(&model, measurements)?;
         let mut description = body_json(&wearer, &fit);
@@ -115,7 +157,13 @@ pub(super) fn prepare(args: &Args, measurements: Option<&Value>) -> Result<Prepa
             source_bytes: None,
         });
     };
-    let (model, hash, report_bytes) = accepted_inputs(args)?;
+    let (report, report_bytes) = read_report(required(args, "body-fit")?)?;
+    let (model, hash) = identified_model_bound(args, expected_model_sha)?;
+    if report["anny_configuration"]["model_sha256"].as_str() != Some(&hash) {
+        return Err(bad_input(
+            "body-fit model SHA-256 mismatch; no shape was reused or refitted",
+        ));
+    }
     let data = measurements.map(crate::round::measurements).transpose()?;
     let (shape, mut description) =
         accepted_shape::prepare(&model, &hash, &report_bytes, data.as_ref())?;
@@ -212,4 +260,51 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         0,
         text,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bound_model_refuses_replaced_bytes_before_parsing_or_fitting() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ftx-replaced-model-{}-{nonce}.ftxbody",
+            std::process::id()
+        ));
+        let original = b"original model snapshot";
+        fs::write(&path, original).unwrap();
+        let expected = sha256_hex(original);
+        let replacement = b"different model bytes, deliberately not a valid container";
+        fs::write(&path, replacement).unwrap();
+        let args = crate::parse(&[
+            "drape".into(),
+            "--model".into(),
+            path.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let refusal = match prepare_bound(&args, Some(&json!({})), Some(&expected)) {
+            Ok(_) => panic!("changed model bytes must not reach a tape fit"),
+            Err(refusal) => refusal,
+        };
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert!(
+            refusal
+                .message
+                .contains("model changed after flat validation")
+        );
+        assert_eq!(fs::read(&path).unwrap(), replacement);
+        let parse_error = identified_model_bound(&args, Some(&sha256_hex(replacement)))
+            .err()
+            .expect("matching the byte hash must still run ordinary model parsing");
+        assert!(
+            !parse_error
+                .message
+                .contains("changed after flat validation")
+        );
+    }
 }

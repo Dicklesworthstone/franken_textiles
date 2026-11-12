@@ -55,13 +55,13 @@ onmessage = async (ev) => {
       const requestText = typeof msg.req === "string" ? msg.req : JSON.stringify(msg.req);
       let round;
       if (msg.draftOnBody === true) {
-        if (!body || msg.body !== bodyRequest) throw Error("Load the current body model before drafting from its accepted shape.");
-        if (typeof msg.bodyFit !== "string" || !msg.bodyFit.length || msg.bodyFit.length > 16 * 1024 * 1024) {
-          throw Error("Choose an accepted body-fit report of at most 16 MiB before drafting from it.");
+        if (!body || msg.body !== bodyRequest) throw Error("Load the current body model before using it for pattern dimensions or flat checks.");
+        if (msg.bodyFit != null && (typeof msg.bodyFit !== "string" || !msg.bodyFit.length || msg.bodyFit.length > 16 * 1024 * 1024)) {
+          throw Error("An accepted body-fit report must be nonempty JSON text of at most 16 MiB.");
         }
-        if (msg.bodyFitConsent !== true) throw Error("Associate the accepted fit with this wearer before drafting.");
-        if (typeof ftx.run_on_body !== "function") throw Error("Rebuild web/pkg via ./tools/build_web.sh to draft from an accepted body.");
-        round = ftx.run_on_body(body, requestText, today, created, msg.bodyFit);
+        if (msg.bodyFit != null && msg.bodyFitConsent !== true) throw Error("Associate the accepted fit with this wearer before using it.");
+        if (typeof ftx.run_on_selected_body !== "function") throw Error("Rebuild web/pkg via ./tools/build_web.sh to draft or check patterns on a fitted body.");
+        round = ftx.run_on_selected_body(body, requestText, today, created, msg.bodyFit ?? undefined);
       } else {
         round = ftx.run(requestText, today, created);
       }

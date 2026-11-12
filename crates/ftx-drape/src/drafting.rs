@@ -1,4 +1,4 @@
-//! Initial patterns from the same accepted body used by garment studies and draping.
+//! Patterns from the same selected body used by garment studies and draping.
 //! Model dimensions stay predictions; hand/foot passage remains separate supplied evidence.
 
 use ftx_body::AnnyModel;
@@ -61,37 +61,124 @@ fn passage_evidence(measurements: &Value, name: &str) -> Result<Value, Refusal> 
     Ok(json!({"value_mm":value,"source":source}))
 }
 
-struct DraftingBody<'a> {
-    reference: &'a FlatFitBody,
+/// One immutable reference body for drafting and later flat checks.
+/// An accepted report reuses its shape; omission fits the supplied tape evidence once.
+/// Independent passage evidence is retained separately and never inferred from the model.
+pub struct PreparedPatternBody {
+    reference: FlatFitBody,
     passage: Map<String, Value>,
+    report: Value,
+    source_report_sha256: Option<String>,
 }
 
-impl DraftBody for DraftingBody<'_> {
+impl PreparedPatternBody {
+    /// Resolve the selected model in its canonical reference pose.
+    /// The caller must hash and parse the same original model bytes.
+    ///
+    /// # Errors
+    /// Invalid source/model/demographics, failed fitting, missing body geometry, or absent
+    /// independently supplied passage values. Only hand/foot passage may supplement the model.
+    pub fn prepare(
+        model: &AnnyModel,
+        model_sha256: &str,
+        measurements: &Value,
+        accepted_report_text: Option<&str>,
+        passage_names: &[&str],
+    ) -> Result<Self, Refusal> {
+        let mut request = json!({
+            "schema":"ftx-scenario-body/1", "measurements":measurements,
+            "arm_abduction_deg":35.0
+        });
+        if let Some(text) = accepted_report_text {
+            if text.len() > 16 * 1024 * 1024 {
+                return Err(Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "accepted body-fit report exceeds 16 MiB",
+                ));
+            }
+            request["accepted_body_fit"] =
+                serde_json::from_str(text).map_err(|e| invalid(format!("body-fit report: {e}")))?;
+        }
+        let selected = FittedBody::prepare(model, model_sha256, &BodyRequest::read(&request)?)?;
+        let reference = selected.flat_fit_body(model, model_sha256)?;
+        let mut passage = Map::new();
+        for &name in passage_names {
+            if !matches!(name, "hand_pass" | "foot_pass") {
+                return Err(invalid(format!(
+                    "only hand_pass and foot_pass may supplement a selected body, not '{name}'"
+                )));
+            }
+            passage.insert(name.into(), passage_evidence(measurements, name)?);
+        }
+        Ok(Self {
+            reference,
+            passage,
+            report: selected.report,
+            source_report_sha256: accepted_report_text.map(|text| sha256_hex(text.as_bytes())),
+        })
+    }
+
+    /// The selected shape, model/reference geometry and original passage sources.
+    #[must_use]
+    pub fn identity(&self) -> Value {
+        let mut identity = json!({"reference":self.reference.identity(),
+            "supplemental_measurements":self.passage});
+        if let Some(hash) = &self.source_report_sha256 {
+            identity["source_report_sha256"] = json!(hash);
+        }
+        identity
+    }
+
+    /// MODEL_FIT values and fitting residuals, separate from original measurement readiness.
+    #[must_use]
+    pub fn evidence(&self) -> Value {
+        let mut values = Map::new();
+        for name in self.reference.identity()["available_measurements"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .chain(std::iter::once("body_rise"))
+        {
+            if let Ok(value) = DraftBody::get(&self.reference, name) {
+                values.insert(name.into(), json!(value));
+            }
+        }
+        json!({"schema":"ftx-body-draft/1", "provenance":"MODEL_FIT",
+            "identity":self.identity(), "model_readings_mm":values, "body_fit":self.report,
+            "body_rise_basis":"Reference-pose vertical waist-to-crotch distance; no inferred seated allowance. The program's authored rise_ease remains separate.",
+            "no_claim":"Body dimensions and landmarks are model predictions in the selected shape's reference A-pose. Passage values retain their supplied evidence. Flat validation does not redraft existing patterns. Model predictions do not change measurements or readiness, supply uncertainty, or establish physical garment fit."})
+    }
+}
+
+impl DraftBody for PreparedPatternBody {
     fn get(&self, name: &str) -> Result<f64, Refusal> {
         if matches!(name, "hand_pass" | "foot_pass") {
             return self
                 .passage
                 .get(name)
                 .and_then(|value| value["value_mm"].as_f64())
-                .ok_or_else(|| invalid(format!("supply an explicit '{name}' passage measurement")));
+                .ok_or_else(|| {
+                    invalid(format!("supply an explicit '{name}' passage measurement"))
+                });
         }
-        DraftBody::get(self.reference, name)
+        DraftBody::get(&self.reference, name)
     }
 
     fn landmark_h(&self, part: &str, name: &str) -> Result<f64, Refusal> {
-        DraftBody::landmark_h(self.reference, part, name)
+        DraftBody::landmark_h(&self.reference, part, name)
     }
 
     fn frame_origin(&self, part: &str) -> Result<Vec3, Refusal> {
-        DraftBody::frame_origin(self.reference, part)
+        DraftBody::frame_origin(&self.reference, part)
     }
 
     fn section_radius(&self, part: &str, h_mm: f64) -> Result<f64, Refusal> {
-        DraftBody::section_radius(self.reference, part, h_mm)
+        DraftBody::section_radius(&self.reference, part, h_mm)
     }
 }
 
-impl BodyMeasure for DraftingBody<'_> {
+impl BodyMeasure for PreparedPatternBody {
     fn value(&self, name: &str) -> Result<f64, PyError> {
         DraftBody::get(self, name).map_err(|_| PyError::Key(name.into()))
     }
@@ -103,7 +190,7 @@ impl BodyMeasure for DraftingBody<'_> {
     }
 
     fn landmark_h(&self, part: &str, name: &str) -> Result<f64, PyError> {
-        BodyMeasure::landmark_h(self.reference, part, name)
+        BodyMeasure::landmark_h(&self.reference, part, name)
     }
 }
 
@@ -123,68 +210,58 @@ pub fn draft_on_model(
     accepted_report_text: &str,
     style: Option<&Value>,
 ) -> Result<Draft, Refusal> {
+    draft_on_selected_model(
+        model,
+        model_sha256,
+        program,
+        measurements,
+        Some(accepted_report_text),
+        style,
+    )
+}
+
+/// Draft on an explicitly selected model, fitted to tape evidence or reusing an accepted shape.
+/// The ordinary analytic drafting path remains separate and requires no model asset.
+///
+/// # Errors
+/// Invalid program, style or selected body, missing passage evidence, or an unsatisfied drafting solve.
+pub fn draft_on_selected_model(
+    model: &AnnyModel,
+    model_sha256: &str,
+    program: &str,
+    measurements: &Value,
+    accepted_report_text: Option<&str>,
+    style: Option<&Value>,
+) -> Result<Draft, Refusal> {
     if !PROGRAMS.contains(&program) {
         return Err(Refusal::new(
             RefusalCode::UnknownParameter,
             format!("unknown program {program:?}"),
         ));
     }
-    if accepted_report_text.len() > 16 * 1024 * 1024 {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "accepted body-fit report exceeds 16 MiB",
-        ));
-    }
-    let accepted: Value = serde_json::from_str(accepted_report_text)
-        .map_err(|e| invalid(format!("body-fit report: {e}")))?;
-    let request = BodyRequest::read(&json!({
-        "schema":"ftx-scenario-body/1", "measurements":measurements,
-        "accepted_body_fit":accepted, "arm_abduction_deg":35.0
-    }))?;
-    let selected = FittedBody::prepare(model, model_sha256, &request)?;
-    let reference = selected.flat_fit_body(model, model_sha256)?;
-    let mut passage = Map::new();
-    let passage_name = match program {
-        "zouave_bolero" => Some("hand_pass"),
-        "zouave_trousers" => Some("foot_pass"),
-        _ => None,
+    let passage_names: &[&str] = match program {
+        "zouave_bolero" => &["hand_pass"],
+        "zouave_trousers" => &["foot_pass"],
+        _ => &[],
     };
-    if let Some(name) = passage_name {
-        passage.insert(name.into(), passage_evidence(measurements, name)?);
-    }
-    let body = DraftingBody {
-        reference: &reference,
-        passage,
-    };
+    let body = PreparedPatternBody::prepare(
+        model,
+        model_sha256,
+        measurements,
+        accepted_report_text,
+        passage_names,
+    )?;
     let (mut pattern, fit_spec) = ftx_pattern::draft::draft_on_body(program, &body, style)?;
-    let identity = json!({"reference":reference.identity(),
-        "source_report_sha256":sha256_hex(accepted_report_text.as_bytes()),
-        "supplemental_measurements":body.passage});
-    pattern["meta"]["draft_body"] = identity.clone();
+    pattern["meta"]["draft_body"] = body.identity();
     let report = ftx_pattern::validate(&Pattern::new(pattern.clone()), &fit_spec, &body);
     let validation_table = ftx_pattern::format_table(&report);
     let validation = serde_json::to_value(report).map_err(|e| invalid(e.to_string()))?;
-    let mut values = Map::new();
-    for name in reference.identity()["available_measurements"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .chain(std::iter::once("body_rise"))
-    {
-        if let Ok(value) = DraftBody::get(&reference, name) {
-            values.insert(name.into(), json!(value));
-        }
-    }
     Ok(Draft {
         pattern,
         fit_spec,
         validation,
         validation_table,
-        body: json!({"schema":"ftx-body-draft/1", "provenance":"MODEL_FIT",
-            "identity":identity, "model_readings_mm":values, "body_fit":selected.report,
-            "body_rise_basis":"Reference-pose vertical waist-to-crotch distance; no inferred seated allowance. The program's authored rise_ease remains separate.",
-            "no_claim":"Pattern dimensions and placement come from the selected model in its reference A-pose. Passage values retain their supplied evidence. Model predictions do not change measurements or readiness, supply uncertainty, or establish physical garment fit."}),
+        body: body.evidence(),
     })
 }
 

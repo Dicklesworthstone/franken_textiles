@@ -14,7 +14,7 @@ use super::{Args, bad_input, known_options, make_dir, read_json, required, works
 struct BodyDraftEvidence {
     body: Value,
     validation: Value,
-    source: Vec<u8>,
+    source: Option<Vec<u8>>,
 }
 
 fn prepare(
@@ -23,17 +23,24 @@ fn prepare(
     measurements: &Value,
     style: Option<&Value>,
 ) -> Result<(Value, Value, Option<BodyDraftEvidence>), Refusal> {
-    if !args.options.contains_key("body-fit") {
-        if args.options.contains_key("model") {
-            return Err(bad_input("draft --model requires --body-fit"));
-        }
+    if !args.options.contains_key("body-fit") && !args.options.contains_key("model") {
         let (pattern, spec) = draft(program, measurements, style)?;
         return Ok((pattern, spec, None));
     }
-    let (model, hash, source) = super::body_source::accepted_inputs(args)?;
-    let text = std::str::from_utf8(&source).map_err(|e| bad_input(e.to_string()))?;
-    let drafted =
-        ftx_drape::drafting::draft_on_model(&model, &hash, program, measurements, text, style)?;
+    let (model, hash, source) = super::body_source::selected_inputs(args)?;
+    let text = source
+        .as_deref()
+        .map(std::str::from_utf8)
+        .transpose()
+        .map_err(|e| bad_input(e.to_string()))?;
+    let drafted = ftx_drape::drafting::draft_on_selected_model(
+        &model,
+        &hash,
+        program,
+        measurements,
+        text,
+        style,
+    )?;
     Ok((
         drafted.pattern,
         drafted.fit_spec,
@@ -46,8 +53,11 @@ fn prepare(
 }
 
 fn save_body(dir: &std::path::Path, evidence: &BodyDraftEvidence) -> Result<(), Refusal> {
-    workspace::write_new(&dir.join("body_fit.json"), &evidence.source)?;
+    if let Some(source) = &evidence.source {
+        workspace::write_new(&dir.join("body_fit.json"), source)?;
+    }
     workspace::write_json(&dir.join("draft_body.json"), &evidence.body)?;
+    workspace::write_json(&dir.join("validation_body.json"), &evidence.body)?;
     workspace::write_json(&dir.join("validation.json"), &evidence.validation)
 }
 
@@ -116,7 +126,7 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         match std::fs::symlink_metadata(&out) {
             Ok(_) => {
                 return Err(bad_input(
-                    "draft --fabric or --body-fit requires a fresh output directory; existing evidence is never overwritten",
+                    "draft with a selected fabric or body requires a fresh output directory; existing evidence is never overwritten",
                 ));
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -151,9 +161,12 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "structure_errors": errs,
         "solved": pat["meta"].get("solved").cloned().unwrap_or(Value::Null),
     });
-    if body.is_some() {
+    if let Some(evidence) = &body {
         result["draft_body"] = json!(out.join("draft_body.json"));
-        result["body_fit"] = json!(out.join("body_fit.json"));
+        result["validation_body"] = json!(out.join("validation_body.json"));
+        if evidence.source.is_some() {
+            result["body_fit"] = json!(out.join("body_fit.json"));
+        }
         result["validation"] = json!(out.join("validation.json"));
     }
     let text = PyJson::from_value(&result).dumps(Some(1));
@@ -206,9 +219,12 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
         "fit_spec":dir.join("fit_spec.json"),"structure_errors":errs,
         "readiness":readiness,"measurement_note":note,"as_of":date,
         "solved":pat["meta"]["solved"]});
-    if body.is_some() {
+    if let Some(evidence) = &body {
         result["draft_body"] = json!(dir.join("draft_body.json"));
-        result["body_fit"] = json!(dir.join("body_fit.json"));
+        result["validation_body"] = json!(dir.join("validation_body.json"));
+        if evidence.source.is_some() {
+            result["body_fit"] = json!(dir.join("body_fit.json"));
+        }
         result["validation"] = json!(dir.join("validation.json"));
     }
     let text = format!(

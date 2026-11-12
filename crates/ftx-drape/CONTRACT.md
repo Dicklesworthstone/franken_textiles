@@ -1,14 +1,19 @@
 # ftx-drape contract
 
-**Initial drafting on an accepted body (plan §8).** `drafting::draft_on_model` resolves
-the intact accepted report through the existing `FittedBody` authority and supplies
-its canonical 35-degree `FlatFitBody` to all three pattern programs. Dimensions,
+**Drafting and flat checks on a selected body (plan §8).**
+`drafting::PreparedPatternBody` resolves an optional intact accepted report through
+the existing `FittedBody` authority, or fits the supplied tape evidence when the
+report is absent. It owns one canonical 35-degree `FlatFitBody` for initial drafts
+and later validation. `draft_on_selected_model` supplies it to all three programs;
+the accepted-only `draft_on_model` wrapper remains available. Dimensions,
 landmarks, section radii and placement frames use that same selected shape. Missing
 required anatomy refuses; separate explicit hand/foot passage evidence supplies only
 the selected program's opening requirement. PRIOR_ONLY and MODEL_FIT passage sources
 refuse. Flat validation uses the same body; prediction uncertainty is not invented.
-The returned `ftx-body-draft/1` evidence records model readings, exact source-text hash,
-reference identity and original passage records, and the pattern binds that identity.
+The returned `ftx-body-draft/1` evidence records model readings, residuals,
+reference/model identity, original passage records and, when supplied, the exact
+accepted source-text hash. An initial pattern binds that identity; later validation
+returns separate evidence without changing existing geometry or drafting metadata.
 Trouser body rise is the reference vertical waist-to-crotch distance, without an
 inferred seated allowance. Original measurements and readiness remain independent.
 No model fallback, image-pose reuse or physical-fit qualification is introduced.

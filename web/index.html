@@ -178,8 +178,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   <section id="selectedBodySection">
     <details>
       <summary>Use a fitted body (optional)</summary>
-      <p>Load the converted body model to check targets or drape a garment. An accepted image-fit report
-        can also supply the dimensions and landmarks for a new pattern. All files stay local.</p>
+      <p>Load the converted body model to draft, check targets or drape a garment. The model fits the
+        current tape evidence, or reuses an accepted image-fit shape below. All files stay local.</p>
       <p class="row"><label>Body model <input type="file" id="bodyFile" accept=".ftxbody" disabled></label></p>
       <p class="mut">Use <code>anny-0.6.1-default.ftxbody</code>, made with
         <code>tools/body-model/convert_anny.py</code>, or the exact model used for the accepted fit.</p>
@@ -188,11 +188,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
           shape is reused without tape refitting. Image-frame poses are not used for drafting or draping.</p>
         <p><label>Accepted fit <input type="file" id="bodyFitFile" accept=".json,application/json"></label></p>
         <p><label><input type="checkbox" id="bodyFitConsent"> I associate this fit with the current wearer</label></p>
-        <p><label><input type="checkbox" id="draftFromBody"> Draft a new pattern from this accepted body</label></p>
-        <p class="mut">The draft uses the model's dimensions in its reference pose. Boleros still need
-          a supplied hand-passage value; trousers need foot passage. Existing patterns are checked as
-          supplied. Model predictions do not add measured evidence or establish physical fit.</p>
       </details>
+      <p><label><input type="checkbox" id="draftFromBody"> Use this body for drafting and flat checks</label></p>
+      <p class="mut">New patterns use the model's dimensions and placement in its reference pose.
+        Imported and altered patterns keep their geometry and are checked against that body.
+        Tape fitting needs the wearer's age and a supported model. Boleros still need a supplied
+        hand-passage value; trousers need foot passage. Model predictions do not add measured
+        evidence or establish physical fit.</p>
     </details>
   </section>
 
@@ -345,13 +347,15 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if(refuse) {materialImportProblem="Checked garment import was interrupted. Clear the material handoff, then select the intended sources.";
       $("traceImportText").textContent=materialImportProblem;}
   }
-  function clearTraceImport() {
+  function clearTraceImport(keepEvaluatedInputs = false) {
     cancelMaterialImport(false);if(traceToken)window.opener=null;tracedPattern=traceToken=null;$("traceImportNote").hidden=true;
-    receivedMaterialFit=receivedMaterialMeasurements=null;materialImportProblem=null;showMaterialInputs();
-    if(materialBodySources){materialBodySources=false;clearBodyImport();}
+    if (keepEvaluatedInputs !== true) {
+      receivedMaterialFit=receivedMaterialMeasurements=null;materialImportProblem=null;showMaterialInputs();
+      if(materialBodySources){materialBodySources=false;clearBodyImport();}
+    }
   }
   let editedPattern = null, editedFit = null, editedBodyProgram = null, previousAlteration = null, editedUrl = null;
-  const usesBodyDraft = () => $("draftFromBody").checked && program !== "audit" && editedPattern === null;
+  const usesSelectedBody = () => $("draftFromBody").checked;
   let alterationBase = null, alterationRequest = 0, alterationBusy = false;
   let alterationSource = null, alterationSourceTargets = null, alterationSourceRequest = 0, alterationSourceBusy = false;
   let photoEvidence = null, photoImportProblem = null, photoToken = new URL(location.href).searchParams.get("photoImport");
@@ -379,8 +383,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       `<label><input type="radio" name="program" value="${esc(k)}"${k === program ? " checked" : ""}>${esc(label)}</label>`).join("");
     $("programs").querySelectorAll("input").forEach((el) => el.addEventListener("change", () => { clearTraceImport(); clearEditedPattern(); program = el.value; onProgram(); }));
   }
-  function onProgram(keepBodyInputs = false) {
-    invalidateRound();
+  function onProgram(keepBodyInputs = false, keepBodyAssociation = false) {
+    invalidateRound(false, keepBodyAssociation === true);
     store.set("program", program);
     showBodyMode();
     const audit = program === "audit";
@@ -493,9 +497,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("resTitle").textContent = res.title;
     $("resStatus").textContent = res.status; $("resStatus").className = "pill " + res.status;
     $("resBasis").textContent = Object.entries(res.basis).map(([k, v]) => `${k}: ${v}`).join(" · ");
-    $("resDraftBody").hidden = !res.draft_body;
-    $("resDraftBody").textContent = res.draft_body
-      ? "Draft and flat validation use the selected body's MODEL_FIT dimensions in its reference pose. Measurement readiness is assessed separately from the original evidence; hand or foot passage retains its supplied source."
+    $("resDraftBody").hidden = !res.validation_body;
+    $("resDraftBody").textContent = res.validation_body
+      ? (res.draft_body ? "Draft and flat validation use " : "Flat validation uses ")
+        + "the selected body's MODEL_FIT dimensions in its reference pose. Measurement readiness is assessed separately from the original evidence; hand or foot passage retains its supplied source."
       : "";
     const rd = res.readiness || {};
     let gate = "";
@@ -538,7 +543,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   function finished() { document.body.dataset.runs = String((+document.body.dataset.runs || 0) + 1); }
   function foldButton() {
     $("bodyFile").disabled = !ready || dead;
-    $("draftFromBody").disabled = program === "audit" || editedPattern !== null;
+    $("draftFromBody").disabled = !ready || dead;
     for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
     const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
       && (bodyFitText === null || $("bodyFitConsent").checked);
@@ -753,7 +758,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   }
   function alterationEdited() {
     if (!alterationBase) return;
-    invalidateRound(true);
+    invalidateRound(true, true);
     $("alterStatus").textContent = "Pending alteration: prior checks, exports and drape withdrawn. Apply it, or Draft and check to keep the working pattern.";
   }
   function alterationOperation() {
@@ -861,7 +866,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       previousAlteration = {pattern:alterationBase.pattern};
       editedBodyProgram = bodyProgram();
       editedPattern = msg.pattern; editedFit = msg.fit;
-      clearTraceImport(); program = "audit"; renderPrograms(); onProgram(true);
+      clearTraceImport(true); program = "audit"; renderPrograms(); onProgram(true, true);
       showEditedPattern(msg.why);
       void runRound();
     } else if (msg.type === "bodyReady") {
@@ -1001,16 +1006,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     try {
       const req = await buildRequest();
       if (request !== roundRequest || dead) return;
-      const draftOnBody = usesBodyDraft();
-      if (draftOnBody && (!bodyLoaded || !bodyFitReady || bodyFitText === null)) {
-        throw Error("Load the exact body model and accepted-fit report before drafting from the body.");
+      const draftOnBody = usesSelectedBody();
+      if (draftOnBody && (!bodyLoaded || !bodyFitReady)) {
+        throw Error("Load the body model and finish reading any selected fit report before using body-based dimensions.");
       }
-      if (draftOnBody && !$("bodyFitConsent").checked) {
+      if (draftOnBody && bodyFitText !== null && !$("bodyFitConsent").checked) {
         throw Error("Associate the accepted fit with this wearer before drafting.");
       }
       status("Drafting, checking and exporting…");
       worker.postMessage({ type: "run", request, req, ...(draftOnBody ? {
-        draftOnBody: true, body: bodyRequest, bodyFit: bodyFitText, bodyFitConsent: true
+        draftOnBody: true, body: bodyRequest, bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked
       } : {}) });
     } catch (e) {
       if (request !== roundRequest || dead) return;
@@ -1105,7 +1110,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   });
   function bodySourceChanged(draftingSource = false) {
     if (materialTransfer) materialTransfer.files = null;
-    if (draftingSource && usesBodyDraft()) invalidateRound(false, true);
+    if (draftingSource && usesSelectedBody()) invalidateRound(false, true);
     else invalidateFold();
   }
   $("draftFromBody").addEventListener("change",()=>invalidateRound(false, true));

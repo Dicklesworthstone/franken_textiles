@@ -10,14 +10,15 @@ function worker({ missingBinding = false } = {}) {
   let refuse = false;
   const bytes = text => new TextEncoder().encode(text);
   const pattern = '{"meta":{},"pieces":[{"placement":{"part":"torso"}}]}';
-  const round = report => {
+  const round = (report, selected = false) => {
     const files = {
       'pattern.json': pattern, 'measurements.json': '{"records":[]}', 'fit_spec.json': '{}',
-      ...(report === undefined ? {} : { 'body_fit.json': report, 'draft_body.json': '{"provenance":"MODEL_FIT"}' }),
+      ...(selected ? { 'draft_body.json': '{"provenance":"MODEL_FIT"}', 'validation_body.json': '{"provenance":"MODEL_FIT"}' } : {}),
+      ...(report === undefined ? {} : { 'body_fit.json': report }),
     };
     const result = {
       page: () => JSON.stringify({ status: 'NOT_READY', zip: 'round.zip',
-        files: report === undefined ? [] : [{ name: 'body_fit.json' }, { name: 'draft_body.json' }] }),
+        files: Object.keys(files).filter(name => ['body_fit.json', 'draft_body.json', 'validation_body.json'].includes(name)).map(name => ({ name })) }),
       file: name => files[name] === undefined ? null : bytes(files[name]),
       zip: () => new Uint8Array([1, 2]), freed: false,
       free() { assert.equal(this.freed, false); this.freed = true; },
@@ -30,15 +31,16 @@ function worker({ missingBinding = false } = {}) {
       free() { assert.equal(this.freed, false); this.freed = true; }
     },
     run(...args) { calls.push({ method: 'run', args }); return round(); },
-    run_on_body(...args) {
-      calls.push({ method: 'run_on_body', args });
+    run_on_selected_body(...args) {
+      calls.push({ method: 'run_on_selected_body', args });
       if (refuse) throw Error('accepted shape refused');
-      return round(args[4]);
+      return round(args[4], true);
     },
+    run_on_body() { throw Error('stale accepted-only binding must not be used'); },
     alteration_targets: () => '{}',
     inspect_body(...args) { calls.push({ method: 'inspect_body', args }); return '{}'; },
   };
-  if (missingBinding) delete bindings.run_on_body;
+  if (missingBinding) delete bindings.run_on_selected_body;
   const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'worker.js'), 'utf8');
   const send = new Function('self', 'postMessage', 'TextDecoder', 'WebAssembly', 'bindings',
     'let onmessage;\n' + source + '\nftx = bindings;\nreturn data => onmessage({ data });')(
@@ -73,7 +75,7 @@ test('selected-body drafting forwards exact sources and returns downloadable evi
   assert.equal(result.res.status, 'NOT_READY');
   assert.equal(result.bodyCheckable, true);
   assert.equal(result.foldable, true);
-  assert.deepEqual(w.calls.map(call => call.method), ['run_on_body']);
+  assert.deepEqual(w.calls.map(call => call.method), ['run_on_selected_body']);
   assert.equal(w.calls[0].args[0], w.models[0]);
   assert.equal(w.calls[0].args[1], request);
   assert.equal(w.calls[0].args[4], accepted);
@@ -82,18 +84,37 @@ test('selected-body drafting forwards exact sources and returns downloadable evi
   assert.equal(w.rounds[0].freed, true);
 });
 
-test('missing model, stale model, absent report and missing association never fall back', async () => {
+test('missing model, stale model, malformed report and missing association never fall back', async () => {
   const absent = worker();
   assert.equal((await absent.send(draft())).type, 'error');
   assert.equal(absent.calls.length, 0);
   const w = await loaded();
-  for (const extra of [{ body: 0 }, { bodyFit: null }, { bodyFit: '' }, { bodyFitConsent: false }]) {
+  for (const extra of [{ body: 0 }, { bodyFit: 12 }, { bodyFit: '' }, { bodyFitConsent: false }]) {
     assert.equal((await w.send(draft(extra))).type, 'error');
   }
   assert.equal(w.calls.length, 0);
   const stale = await loaded({ missingBinding: true });
   assert.match((await stale.send(draft())).message, /Rebuild web\/pkg/);
   assert.equal(stale.calls.length, 0);
+});
+
+test('a selected model without an image report uses tape fitting and emits no invented report', async () => {
+  const w = await loaded();
+  const result = await w.send(draft({ bodyFit: null, bodyFitConsent: false }));
+  assert.equal(result.type, 'result');
+  assert.deepEqual(w.calls.map(call => call.method), ['run_on_selected_body']);
+  assert.equal(w.calls[0].args[4], undefined);
+  assert.equal(result.blobs['body_fit.json'], undefined);
+  assert.equal(new TextDecoder().decode(result.blobs['validation_body.json']), '{"provenance":"MODEL_FIT"}');
+});
+
+test('existing and altered pattern text reaches selected-body checking without JavaScript rewriting', async () => {
+  const w = await loaded();
+  const existing = '{ "pattern": {"meta":{"draft_body":{"source":"original"}},"pieces":[]}, "fit_spec":{} }';
+  const result = await w.send(draft({ req: existing }));
+  assert.equal(result.type, 'result');
+  assert.deepEqual(w.calls.map(call => call.method), ['run_on_selected_body']);
+  assert.equal(w.calls[0].args[1], existing);
 });
 
 test('a refused replacement withdraws the earlier garment and body-check source', async () => {
@@ -103,7 +124,7 @@ test('a refused replacement withdraws the earlier garment and body-check source'
   assert.match((await w.send(draft({ request: 3 }))).message, /accepted shape refused/);
   assert.equal((await w.send({ type: 'inspectBody', request: 4, round: 2, body: 1 })).type, 'error');
   assert.equal((await w.send({ type: 'fold', request: 5, round: 2, body: 1 })).type, 'error');
-  assert.deepEqual(w.calls.map(call => call.method), ['run_on_body', 'run_on_body']);
+  assert.deepEqual(w.calls.map(call => call.method), ['run_on_selected_body', 'run_on_selected_body']);
 });
 
 test('clearing the selected model invalidates subsequent body-derived drafting', async () => {
@@ -122,10 +143,12 @@ test('the model picker is disabled until the engine is ready and after a fatal e
   assert.equal(start >= 0 && end > start, true);
   const update = new Function('$', 'ready', 'dead', 'program', 'editedPattern', 'folding',
     'bodyChecking', 'bodyLoaded', 'bodyFitReady', 'bodyFitText', 'foldable', 'bodyCheckable',
-    page.slice(start, end) + '\nfoldButton();\nreturn $("bodyFile").disabled;');
+    page.slice(start, end) + '\nfoldButton();\nreturn [$("bodyFile").disabled,$("draftFromBody").disabled];');
   for (const [ready, dead, disabled] of [[false, false, true], [true, false, false], [true, true, true]]) {
     const elements = {};
     const element = id => elements[id] ??= { checked: false };
-    assert.equal(update(element, ready, dead, 'fez', null, false, false, false, true, null, false, false), disabled);
+    for (const [program, edited] of [['fez', null], ['audit', null], ['fez', 'altered pattern']]) {
+      assert.deepEqual(update(element, ready, dead, program, edited, false, false, false, true, null, false, false), [disabled, disabled]);
+    }
   }
 });

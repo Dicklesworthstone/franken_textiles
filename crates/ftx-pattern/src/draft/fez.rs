@@ -40,10 +40,7 @@ pub fn fez(meas: &Value, style: Option<&Value>) -> Result<(Value, Value), Refusa
     on_body(&Meas(meas), style)
 }
 
-pub(super) fn on_body(
-    m: &dyn DraftBody,
-    style: Option<&Value>,
-) -> Result<(Value, Value), Refusal> {
+pub(super) fn on_body(m: &dyn DraftBody, style: Option<&Value>) -> Result<(Value, Value), Refusal> {
     let s = merge_style(&defaults(), style)?;
     let (top_frac, height_frac, head_ease) = (
         sf(&s, "top_frac")?,

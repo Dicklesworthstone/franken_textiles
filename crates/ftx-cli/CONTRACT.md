@@ -1,16 +1,36 @@
 # ftx-cli contract
 
-**Initial drafting from an accepted shape.** `ftx draft PROGRAM --body-fit REPORT
-[--model PATH]` explicitly uses the selected accepted shape for dimensions and
-placement, through the shared drape/pattern drafting authority. Both `--out` and
-`--ws` modes retain existing style/material selection. `--model` alone refuses.
+**Initial drafting from a selected body.** `ftx draft PROGRAM --model PATH` fits
+the supplied tape evidence; `--body-fit REPORT [--model PATH]` reuses the selected
+accepted shape without refitting. Both supply dimensions and placement through
+the shared drape/pattern authority, retaining style/material selection in `--out`
+and `--ws` modes. Omitting both flags retains ordinary analytic drafting.
 Standalone output requires a new directory; workspace output reserves a new round
-only after source and drafting checks. Both preserve exact `body_fit.json` bytes
-and add `draft_body.json` plus flat `validation.json` on the selected body.
+only after source and drafting checks. Both add `draft_body.json`,
+`validation_body.json` and flat `validation.json` on the selected body. Accepted
+imports also preserve exact `body_fit.json` bytes; tape fits invent no such report.
 Original measurement evidence and readiness are unchanged. Bolero hand passage and
 trouser foot passage require separate supplied evidence; unavailable anatomy and
 invalid model/report/demographic associations refuse without tape or chart fallback.
 See `docs/reuse-body-fit.md` for commands, the trouser rise basis and source limits.
+
+**Later flat checks.** `ftx validate` and `ftx round` explicitly select a model body
+with `--model PATH` and/or `--body-fit REPORT`. They reuse the shared drafting body's
+reference A-pose dimensions and landmarks, including separately supplied hand/foot
+passage evidence when the fit contract requires it. A pattern carrying `meta.draft_body`
+requires an explicit body selection on later checks; it cannot silently revert to
+analytic measurements. Historical drafting identity stays intact, while the current
+body, model hash and residuals are recorded separately as `validation_body`.
+Rounds save `validation_body.json`, retain accepted report bytes as `body_fit.json`
+when supplied, and expose both in their review without changing measurement readiness.
+For ordinary patterns, existing `round --sim|--stills --model|--body-fit` keeps its
+simulation-only body selection. Add `--flat-body` to select that body for flat checks
+too; this flag can explicitly use the verified default model when no path is supplied.
+An accepted flat check and simulation consume the same retained report snapshot.
+Flat source/model admission happens before reserving a round; simulation rechecks
+the model hash against that selected flat body and records a refusal if the file
+changed. Model predictions establish neither new measured evidence nor physical
+garment fit.
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
 FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx draft`, `ftx validate`,

@@ -240,7 +240,11 @@ impl ftx_pattern::draft::DraftBody for FlatFitBody {
         } else {
             BodyMeasure::value(self, name)
         }
-        .map_err(|_| invalid(format!("selected body has no drafting measurement '{name}'")))?;
+        .map_err(|_| {
+            invalid(format!(
+                "selected body has no drafting measurement '{name}'"
+            ))
+        })?;
         if !value.is_finite() || value <= 0.0 {
             return Err(invalid(format!(
                 "selected body drafting measurement '{name}' must be finite and positive"

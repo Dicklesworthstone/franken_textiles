@@ -9,11 +9,11 @@ use ftx_core::polyline::horizontal_width;
 use ftx_core::{Curve, CurveKind, Refusal, RefusalCode, Vec2};
 use serde_json::{Map, Value, json};
 
+use super::DraftBody;
 use super::builder::{
     PieceBuilder, SCHEMA, bisect, body_size_label, len_cubic, merge_style, mirror_seams, num, pt,
     sf, unit,
 };
-use super::DraftBody;
 use super::form::{Meas, landmarks};
 use super::geos;
 use crate::Pattern;
