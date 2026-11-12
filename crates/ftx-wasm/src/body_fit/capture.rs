@@ -80,8 +80,10 @@ fn model(bytes: &[u8]) -> Result<AnnyModel, Refusal> {
 /// Oversized, invalid or array-unverified converted model bytes.
 pub fn body_capture_catalogue(model_bytes: &[u8]) -> Result<Value, Refusal> {
     let source = model(model_bytes)?;
-    Ok(json!({"schema":"ftx-body-capture-catalogue/1","model_sha256":sha256_hex(model_bytes),
-        "body_fitted":false,"catalogue":catalogue(&source)}))
+    Ok(
+        json!({"schema":"ftx-body-capture-catalogue/1","model_sha256":sha256_hex(model_bytes),
+        "body_fitted":false,"catalogue":catalogue(&source)}),
+    )
 }
 
 /// A frozen batch of two to eight still photos sharing one checked lens and stationary board.
@@ -342,7 +344,7 @@ impl BodyCapture {
         body_fit::validate_capture_images(&self.images, &fit.frames)?;
         let input = serde_json::to_string_pretty(&json!({"schema":"ftx-anny-body-fit-input/1",
             "model":adapter.inner.configuration(),"fit":fit,"capture_images":self.images}))
-            .map_err(|error| invalid(error.to_string()))?;
+        .map_err(|error| invalid(error.to_string()))?;
         if input.len() > MAX_JSON {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,

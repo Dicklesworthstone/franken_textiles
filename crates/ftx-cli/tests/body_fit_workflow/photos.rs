@@ -29,9 +29,7 @@ fn manifest() -> Value {
 }
 
 fn choices(truth: &Value) -> Value {
-    let fit = |p: &Value| {
-        json!({"name":p["name"],"choice":{"mode":"fit","lower":p["lower"],"upper":p["upper"]}})
-    };
+    let fit = |p: &Value| json!({"name":p["name"],"choice":{"mode":"fit","lower":p["lower"],"upper":p["upper"]}});
     let pose = truth["model"]["pose_parameters"].as_array().unwrap();
     json!({
         "schema": "ftx-body-photo-choices/1",
@@ -93,7 +91,10 @@ fn portable_photos_construct_source_bound_drafts_and_continue_through_fit_and_ch
     assert_eq!(prepared["start_count"], 0);
     assert_eq!(prepared["model_sha256"], sha256_hex(&model));
     assert_eq!(prepared["choices"], choices);
-    assert_eq!(prepared["choices_sha256"], sha256_hex(choices_text.as_bytes()));
+    assert_eq!(
+        prepared["choices_sha256"],
+        sha256_hex(choices_text.as_bytes())
+    );
     let acquisition = &prepared["acquisition"];
     assert_eq!(acquisition["manifest"], manifest);
     assert_eq!(
@@ -154,7 +155,10 @@ fn portable_photos_construct_source_bound_drafts_and_continue_through_fit_and_ch
     for (index, frame) in review["frames"].as_array().unwrap().iter().enumerate() {
         let receipt = frame["image_review"].as_str().unwrap();
         let image = BodyFitImage::new(&images[index], receipt).unwrap();
-        assert_eq!(image.report()["source_image"], draft["capture_images"][index]);
+        assert_eq!(
+            image.report()["source_image"],
+            draft["capture_images"][index]
+        );
         assert!(BodyFitImage::new(&images[1 - index], receipt).is_err());
     }
     let observations: Vec<_> = truth["fit"]["frames"]
@@ -274,14 +278,26 @@ fn portable_photos_refuse_duplicate_pixels_stale_sources_bad_controls_and_missin
     let mut capture = BodyCapture::new(&manifest.to_string(), &calibration, &sheet).unwrap();
     assert!(capture.finish(&model, &choices.to_string()).is_err());
     assert!(capture.add_image("unlisted.png", &images[0]).is_err());
-    capture.add_image("capture-frame-0.png", &images[0]).unwrap();
-    assert!(capture.add_image("capture-frame-0.png", &images[0]).is_err());
+    capture
+        .add_image("capture-frame-0.png", &images[0])
+        .unwrap();
+    assert!(
+        capture
+            .add_image("capture-frame-0.png", &images[0])
+            .is_err()
+    );
     let decoded = ftx_trace::raster::image::load_png(&images[0]).unwrap();
     let reencoded = ftx_trace::raster::image::encode_png_bgr(&decoded).unwrap();
     assert_ne!(sha256_hex(&reencoded), sha256_hex(&images[0]));
-    assert!(capture.add_image("capture-frame-1.png", &reencoded).is_err());
+    assert!(
+        capture
+            .add_image("capture-frame-1.png", &reencoded)
+            .is_err()
+    );
     assert!(capture.finish(&model, &choices.to_string()).is_err());
-    capture.add_image("capture-frame-1.png", &images[1]).unwrap();
+    capture
+        .add_image("capture-frame-1.png", &images[1])
+        .unwrap();
     let original = capture.finish(&model, &choices.to_string()).unwrap();
 
     let mut stale_model = model.clone();
@@ -299,7 +315,10 @@ fn portable_photos_refuse_duplicate_pixels_stale_sources_bad_controls_and_missin
     let mut bad = choices.clone();
     bad["model"]["joints"][0]["axis"] = json!([0.0, 0.0, 0.0]);
     assert!(capture.finish(&model, &bad.to_string()).is_err());
-    assert_eq!(capture.finish(&model, &choices.to_string()).unwrap(), original);
+    assert_eq!(
+        capture.finish(&model, &choices.to_string()).unwrap(),
+        original
+    );
 
     let mut bad = manifest.clone();
     bad["images"] = json!(["capture-frame-0.png", "capture-frame-0.png"]);
@@ -332,5 +351,8 @@ fn portable_photos_refuse_duplicate_pixels_stale_sources_bad_controls_and_missin
     assert!(fresh.finish(&model, &choices.to_string()).is_err());
     fresh.add_image("capture-frame-0.png", &images[0]).unwrap();
     fresh.add_image("capture-frame-1.png", &images[1]).unwrap();
-    assert_eq!(fresh.finish(&model, &choices.to_string()).unwrap(), original);
+    assert_eq!(
+        fresh.finish(&model, &choices.to_string()).unwrap(),
+        original
+    );
 }

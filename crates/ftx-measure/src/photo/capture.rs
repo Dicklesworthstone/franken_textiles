@@ -116,9 +116,11 @@ impl StationarySheet {
             )
             .repair("retake a sharp unobstructed board; retain the original FIT/CHECK assignments"));
         }
-        Ok(json!({"schema":"ftx-sheet-pose-input/1","reference_id":reference_id,
+        Ok(
+            json!({"schema":"ftx-sheet-pose-input/1","reference_id":reference_id,
             "image":image,"image_size_px":image_size_px,
-            "rotation_applied_degrees":rotation_cw_deg,"points":points}))
+            "rotation_applied_degrees":rotation_cw_deg,"points":points}),
+        )
     }
 }
 
@@ -137,11 +139,7 @@ mod tests {
                 principal_px: Vec2::new(320.0, 240.0),
                 distortion: Distortion::default(),
             },
-            world_to_camera: Mat3::from_rows([
-                [1.0, 0.0, 0.0],
-                [0.0, 0.0, -1.0],
-                [0.0, 1.0, 0.0],
-            ]),
+            world_to_camera: Mat3::from_rows([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]]),
             center_m: Vec3::new(0.0, -2.0, 0.3),
         };
         let corners: Vec<_> = (0..12)
@@ -155,8 +153,13 @@ mod tests {
             })
             .collect();
         (
-            StationarySheet::new(&sheet, &[0, 3, 8, 11], origin, "synthetic fixed upright board")
-                .unwrap(),
+            StationarySheet::new(
+                &sheet,
+                &[0, 3, 8, 11],
+                origin,
+                "synthetic fixed upright board",
+            )
+            .unwrap(),
             json!({"reference":{"corners":corners}}),
             camera,
         )

@@ -6,12 +6,13 @@
 // Use --bundle NATIVE_DIR for anchored refinement and transitions through the shared geometry tool.
 // Use --still-window NATIVE_DIR for sparse stationarity candidates and original native report replay.
 // Use --fit-body NATIVE_DIR for prepared multi-frame Anny fits and original native reports.
+// Use --body-photo NATIVE_DIR for the existing capture-setup photographs and native sheet cameras.
 const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
 const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
-const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", triangulationOnly=process.argv[2]==="--triangulate", bundleOnly=process.argv[2]==="--bundle", stillOnly=process.argv[2]==="--still-window", bodyFitOnly=process.argv[2]==="--fit-body", native=sectionOnly?null:process.argv[charucoOnly||triangulationOnly||bundleOnly||stillOnly||bodyFitOnly?3:2];
+const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", triangulationOnly=process.argv[2]==="--triangulate", bundleOnly=process.argv[2]==="--bundle", stillOnly=process.argv[2]==="--still-window", bodyFitOnly=process.argv[2]==="--fit-body", bodyPhotoOnly=process.argv[2]==="--body-photo", native=sectionOnly?null:process.argv[charucoOnly||triangulationOnly||bundleOnly||stillOnly||bodyFitOnly||bodyPhotoOnly?3:2];
 const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(web,"pkg");
-if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, --triangulate NATIVE_DIR, --bundle NATIVE_DIR, --still-window NATIVE_DIR, --fit-body NATIVE_DIR, or --section");
+if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, --triangulate NATIVE_DIR, --bundle NATIVE_DIR, --still-window NATIVE_DIR, --fit-body NATIVE_DIR, --body-photo NATIVE_DIR, or --section");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
 async function photoHandoff(browser,origin) {
   const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
@@ -413,6 +414,109 @@ async function bodyModelFileHandoff(browser,origin,received=false) {
     console.log(`PASS ${received?'received':'manual'} model handoff: selected File changed after load; source downloads and Materials retained the exact evaluated bytes.`);
   } finally {await context.close();}
 }
+async function bodyPhotoCaptureWorkflow(browser,origin) {
+  const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
+  const page=await context.newPage();page.setDefaultTimeout(60000);
+  page.on("pageerror",error=>errors.push(String(error)));
+  context.on("request",request=>requests.push({url:request.url(),method:request.method()}));
+  const read=name=>JSON.parse(fs.readFileSync(path.join(native,name),"utf8"));
+  const selections=read("expected-choices.json"), initial=read("constructed/input.json");
+  const reference=read("reference.json"), cameras=read("capture-review/review.json").capture_input.frames;
+  const images=initial.fit.frames.map(frame=>frame.source.image);
+  const download=async name=>{
+    const event=page.waitForEvent("download");await page.click('a[download="'+name+'"]');
+    const file=await event;assert.equal(await file.failure(),null);return fs.readFileSync(await file.path(),"utf8");
+  };
+  const choose=async(row,choice)=>{
+    await row.locator("select").selectOption(choice.mode);
+    if(choice.mode==="fixed") await row.locator('input[id$="-value"]').fill(String(choice.value));
+    else {
+      await row.locator('input[id$="-lower"]').fill(String(choice.lower));
+      await row.locator('input[id$="-upper"]').fill(String(choice.upper));
+    }
+  };
+  const acquire=async()=>{
+    await page.click("#bodyCaptureRun");
+    await page.waitForFunction(()=>/Prepared \d+ calibrated|No new capture draft/.test(document.getElementById("bodyCaptureStatus").textContent),null,{timeout:120000});
+  };
+  try {
+    await page.goto(origin+"/photo.html");
+    await page.setInputFiles("#bodyFitModel",path.join(native,"model.ftxbody"));
+    await page.locator("#bodyCaptureImages").evaluate(element=>{element.closest("details").open=true;});
+    await page.setInputFiles("#bodyCaptureImages",images.map(name=>path.join(native,name)));
+    await page.setInputFiles("#bodyCaptureCalibration",path.join(native,"capture-calibration.json"));
+    await page.setInputFiles("#bodyCaptureSheet",path.join(native,"capture-board.json"));
+    await page.fill("#bodyCaptureLens",initial.fit.frames[0].lens_id);
+    await page.fill("#bodyCaptureReference",initial.reference_id);
+    await page.fill("#bodyCaptureOriginX",String(reference.board_bottom_left_xz_m[0]));
+    await page.fill("#bodyCaptureOriginZ",String(reference.board_bottom_left_xz_m[1]));
+    await page.fill("#bodyCaptureHeldOut",reference.held_out_corner_ids.join(","));
+    await page.fill("#bodyCaptureStationary",reference.stationary_upright_evidence);
+    await page.click("#bodyCaptureCatalogue");
+    await page.waitForFunction(()=>!document.getElementById("bodyCaptureEditor").hidden ||
+      document.getElementById("bodyCaptureStatus").textContent==="Model controls were not loaded.");
+    assert.equal(await page.textContent("#bodyCaptureError"),"");
+    assert.match(await page.textContent("#bodyCaptureModelSummary"),new RegExp(initial.model.model_sha256));
+    await page.fill("#bodyCaptureAge",String(selections.age_years));
+    await page.fill("#bodyCaptureGender",String(selections.gender));
+    for(const [index,control] of selections.shapes.entries()) {
+      await page.selectOption("#bodyCaptureShapeName",control.name);await page.click("#bodyCaptureShapeAdd");
+      await choose(page.locator("#bodyCaptureShapes fieldset").nth(index),control.choice);
+    }
+    const roots=["root_x_m","root_y_m","root_z_m","root_rx_rad","root_ry_rad","root_rz_rad"];
+    for(const control of selections.roots) await choose(page.locator("#bodyCaptureRoots fieldset").nth(roots.indexOf(control.name)),control.choice);
+    for(const [index,control] of selections.joints.entries()) {
+      await page.selectOption("#bodyCaptureJointName",control.bone);await page.click("#bodyCaptureJointAdd");
+      const row=page.locator("#bodyCaptureJoints fieldset").nth(index);
+      for(const [axis,key] of ["axisX","axisY","axisZ"].entries()) await row.locator('input[id$="-'+key+'"]').fill(String(control.axis[axis]));
+      await choose(row,control.choice);
+    }
+    await page.fill("#bodyCaptureScale",selections.metric_scale_source);
+    await page.fill("#bodyCaptureEvidence",selections.observation_evidence);
+    await acquire();assert.equal(await page.textContent("#bodyCaptureError"),"");
+    const inputText=await download("body-fit-input-stills.json"), draft=JSON.parse(inputText);
+    const report=JSON.parse(await download("body-photo-capture.json"));
+    assert.equal(report.schema,"ftx-body-photo-capture-result/1");assert.equal(report.body_fitted,false);
+    assert.equal(report.input,inputText);assert.equal(report.input_sha256,sha256(inputText));
+    assert.equal(report.model_sha256,sha256(fs.readFileSync(path.join(native,"model.ftxbody"))));
+    assert.equal(report.start_count,0);assert.equal(report.frame_count,images.length);
+    assert.equal(draft.schema,"ftx-anny-body-fit-input/1");
+    assert.deepEqual(draft.model,{...initial.model,measurements:[]});
+    assert.deepEqual(draft.fit.starts,[]);assert.deepEqual(draft.fit.measurements,[]);
+    assert.equal(report.acquisition.calibration_sha256,sha256(fs.readFileSync(path.join(native,"capture-calibration.json"))));
+    assert.equal(report.acquisition.sheet_sha256,sha256(fs.readFileSync(path.join(native,"capture-board.json"))));
+    for(const [index,name] of images.entries()) {
+      const hash=sha256(fs.readFileSync(path.join(native,name))), frame={stream:"still-image:"+hash,timestamp_us:0};
+      assert.deepEqual(draft.fit.frames[index].frame,frame);
+      assert.deepEqual(draft.fit.frames[index].keypoints,[]);
+      assert.deepEqual(report.acquisition.frames[index].sheet_pose,cameras[index].sheet_pose,"Complete native/compiled-WASM sheet pose equality");
+      assert.deepEqual(draft.fit.frames[index].camera,cameras[index].sheet_pose.camera);
+      assert.deepEqual(draft.capture_images[index],{frame,image_name:name,image_sha256:hash,
+        image_size_px:draft.fit.frames[index].image_size_px,rotation_cw_deg:0});
+    }
+    assert.equal(await page.locator("#bodyFitInput").evaluate(element=>element.files.length),0,"No prepared request was uploaded");
+    await page.locator("#bodyTargetsLoad").evaluate(element=>{element.closest("details").open=true;});
+    await page.click("#bodyTargetsLoad");
+    await page.waitForFunction(()=>/Choose explicit model locations|Targets were not applied/.test(document.getElementById("bodyTargetsStatus").textContent));
+    assert.equal(await page.textContent("#bodyTargetsError"),"");
+    assert.equal(await page.locator("#bodyTargetsFrame").isVisible(),true,"Generated draft enters the ordinary target-authoring engine");
+    await page.click("#bodyTargetsCancel");
+    assert.equal(await download("body-fit-input-stills.json"),inputText);
+    // A second filename cannot turn one encoded image into two independent camera sources.
+    const repeated=fs.readFileSync(path.join(native,images[0]));
+    await page.setInputFiles("#bodyCaptureImages",[
+      {name:images[0],mimeType:"image/png",buffer:repeated},
+      {name:images[1],mimeType:"image/png",buffer:repeated},
+    ]);
+    assert.equal(await page.locator("#bodyCaptureDownloads a").count(),0);
+    await acquire();assert.match(await page.textContent("#bodyCaptureError"),/duplicate decoded capture image/);
+    assert.equal(await page.locator("#bodyCaptureDownloads a").count(),0);
+    assert.equal(await page.isDisabled("#bodyTargetsLoad"),true);
+    assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+    assert.deepEqual(errors,[]);assert.ok(requests.every(request=>request.url.startsWith(origin+"/")&&request.method==="GET"));
+    console.log("PASS still-photo capture: actual controls/worker/compiled WASM, existing rendered photos and native camera equality, exact source/input hashes, ordinary target-authoring handoff and duplicate-image refusal; no uploads or stored evidence.");
+  } finally {await context.close();}
+}
 async function bodyFitWorkflow(browser,origin) {
   const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
   const page=await context.newPage();page.setDefaultTimeout(60000);
@@ -723,6 +827,7 @@ const server=http.createServer((req,res)=>{
   };
   try {
     if(sectionOnly) {await sectionWorkflow(browser,origin);return;}
+    if(bodyPhotoOnly) {await bodyPhotoCaptureWorkflow(browser,origin);return;}
     if(bodyFitOnly) {await bodyFitWorkflow(browser,origin);await bodyModelFileHandoff(browser,origin);await bodyModelFileHandoff(browser,origin,true);return;}
     if(triangulationOnly||bundleOnly||stillOnly) {await triangulationWorkflow(browser,origin);return;}
     await page.goto(origin+"/photo.html");

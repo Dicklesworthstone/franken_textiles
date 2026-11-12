@@ -930,5 +930,6 @@ node tools/check_body_starts.cjs "$WORK/body-starts" "$WORK/body-starts-out" "$F
 node tools/check_body_targets.cjs "$WORK/body-targets" "$WORK/body-targets-out"
 node tools/check_capture_review.cjs "$WORK/capture-editor" "$WORK/capture-editor-out"
 node tools/check_capture_setup.cjs "$WORK/capture-setup" "$WORK/capture-setup-out" "$FTX_BIN"
+node tools/check_photo_web.cjs --body-photo "$WORK/capture-setup"
 
 echo "[check_all_web] PASS: all 19 frontend/WASM/Playwright suites passed (with_replays=$WITH_REPLAYS, work dir: $WORK)"

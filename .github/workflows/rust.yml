@@ -9,6 +9,20 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check lints
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Check all 9 pure-Node VM frontend and worker suites
+        if: ${{ !cancelled() }}
+        run: node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
+      - name: Check still-photo capture through body fitting
+        if: ${{ !cancelled() }}
+        run: cargo test -p ftx-cli --test body_fit_workflow --locked photos::
   material_heat:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -40,9 +54,6 @@ jobs:
           retention-days: 1
       - name: Check formatting
         run: cargo fmt --all --check
-      - name: Check lints
-        if: ${{ !cancelled() }}
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Package pinned tools for offline reproduction
         if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')) }}
         run: |
@@ -73,6 +84,9 @@ jobs:
           cargo test -p ftx-export --test cutting_program --test finite_cutting_program --test sewing --test sewing_assembly --test sewing_pressure --locked
           cargo test -p ftx-export --lib --locked material_study::cutting_effort::tests
           FTX_FINITE_KNIFE_REPLAY="$RUNNER_TEMP/ftx-finite-knife-replay" cargo test -p ftx-cli --test finite_stock_workflow --locked qualified_finite_and_mixed_knife_programs_replay_through_both_binaries
+      - name: Build browser bindings (wasm32 release)
+        if: ${{ !cancelled() }}
+        run: cargo build --locked --release --target wasm32-unknown-unknown -p ftx-wasm
       - name: Test
         if: ${{ !cancelled() }}
         env:
@@ -98,12 +112,6 @@ jobs:
       - name: Test supplier source adapters
         if: ${{ !cancelled() }}
         run: python3 -m unittest discover -s scripts -p 'test*.py' -v
-      - name: Build browser bindings (wasm32 release)
-        if: ${{ !cancelled() }}
-        run: cargo build --locked --release --target wasm32-unknown-unknown -p ftx-wasm
-      - name: Check all 9 pure-Node VM frontend and worker suites
-        if: ${{ !cancelled() }}
-        run: node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
       - name: Build and verify browser bundle (all 19 VM, WASM, and Playwright suites)
         if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[browser-bundle]')) }}
         env:
