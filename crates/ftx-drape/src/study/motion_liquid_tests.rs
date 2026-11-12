@@ -77,6 +77,11 @@ fn mapped_initial_phase_recoil_restores_whole_solver_and_replays_identically() {
     rollback_after_liquid_transfer(true, true, true, true, true, true, true);
 }
 
+#[test]
+fn source_pose_sampling_keeps_authored_liquid_intervals_and_rolls_back() {
+    rollback_with_source_sampling(true, true, false, true, false, false, false, true);
+}
+
 fn rollback_after_liquid_transfer(
     exchange: bool,
     prescribed: bool,
@@ -85,6 +90,29 @@ fn rollback_after_liquid_transfer(
     drainage: bool,
     recoil: bool,
     mapped_initial: bool,
+) {
+    rollback_with_source_sampling(
+        exchange,
+        prescribed,
+        phase_specific,
+        scheduled,
+        drainage,
+        recoil,
+        mapped_initial,
+        false,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rollback_with_source_sampling(
+    exchange: bool,
+    prescribed: bool,
+    phase_specific: bool,
+    scheduled: bool,
+    drainage: bool,
+    recoil: bool,
+    mapped_initial: bool,
+    source_sampling: bool,
 ) {
     let mut raw: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
@@ -286,7 +314,21 @@ fn rollback_after_liquid_transfer(
         }
         heat.surface_water = Some(serde_json::from_value(water).unwrap());
     }
-    let endpoints: Vec<Vec<_>> = [0.0001, 0.0002]
+    let heights = if source_sampling {
+        request.source_pose_sampling = Some(SourcePoseSampling {
+            max_step_s: 0.001,
+            max_segments: 4,
+        });
+        request
+            .source_steps()
+            .unwrap()
+            .iter()
+            .map(|step| step.time_s * 0.05)
+            .collect()
+    } else {
+        vec![0.0001, 0.0002]
+    };
+    let endpoints: Vec<Vec<_>> = heights
         .into_iter()
         .map(|z| vertices.iter().map(|p| *p + Vec3::new(0., 0., z)).collect())
         .collect();
@@ -410,6 +452,26 @@ fn rollback_after_liquid_transfer(
         assert!(thermal["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
     }
     let trace = thermal["trace"].as_array().unwrap();
+    if source_sampling {
+        assert_eq!(complete["source_pose_sampling"]["generated_segments"], 4);
+        assert_eq!(
+            complete["source_pose_sampling"]["source_times_s"],
+            json!([0.001, 0.002, 0.003, 0.004])
+        );
+        assert_eq!(
+            complete["source_pose_sampling"]["authored_interval_indices"],
+            json!([0, 0, 1, 1])
+        );
+        assert_eq!(complete["keyframes"].as_array().unwrap().len(), 2);
+        assert_eq!(complete["samples"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            trace
+                .iter()
+                .map(|sample| sample["interval_index"].clone())
+                .collect::<Vec<_>>(),
+            vec![json!(0), json!(0), json!(1), json!(1)]
+        );
+    }
     let first_interval: Vec<_> = trace.iter().filter(|r| r["interval_index"] == 0).collect();
     assert_eq!(first_interval.len(), 2);
     if mapped_initial && recoil {

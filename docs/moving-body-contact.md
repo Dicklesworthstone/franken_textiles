@@ -40,7 +40,7 @@ See `docs/material-scenario-studies.md` for source-model endpoint requests and t
 independent motion, steady-heat and transient-heat consumers.
 Those endpoint requests support separately declared arm angles and fractional seated/squat leg
 postures. They reuse the existing joint rotations and occupied source shape while retaining the
-standing sewn start, unchanged cloth history and all contact/rollback checks described below.
+selected initial pose, sewn cloth history and all contact/rollback checks described below.
 
 Source-model keyframes can also supply `root_translation_m: [x,y,z]` and
 `root_rotation_rad: [rx,ry,rz]`. These are absolute endpoint controls in the existing world frame
@@ -53,14 +53,73 @@ and its authored receipt. A later endpoint without a rotation returns to the unr
 without inheriting a previous turn. Finite-vector and magnitude admission use one deterministic
 rotation law with a scaled norm, so tiny nonzero vectors are not silently squared to zero.
 
-Root controls prescribe endpoint geometry only. The same checked linear vertex chords connect
-those endpoints; a large root turn does not request a rotational arc. Author short explicit
-increments for a turn. Gravity, fixed cloth constraints and independently authored world-frame
+By default, root controls prescribe endpoint geometry only. The same checked linear vertex chords
+connect those endpoints; a large root turn does not request a rotational arc. Author short explicit
+increments or request the source-pose sampling policy below. Gravity, fixed cloth constraints and independently authored world-frame
 environments retain their declared frames. Actual body/cloth positions feed the existing contact,
 coverage, vapor and qualified liquid-mass/heat paths at accepted samples. Initial placement,
 tape diagnostics and accepted body evidence are not moved or refitted. Endpoint reports retain the
 exact optional controls beside their computed geometry, and changing either control invalidates
 the retained source path.
+
+## Sampling the source pose between authored endpoints
+
+Material scenarios can request intermediate evaluations of the same selected source body:
+
+```json
+"motion": {
+  "schema": "ftx-drape-motion/1",
+  "keyframes": [
+    {"time_s": 0.1, "arm_abduction_deg": 55,
+     "root_rotation_rad": [0, 0, 1.5707963267948966]},
+    {"time_s": 0.2, "arm_abduction_deg": 35}
+  ],
+  "source_pose_sampling": {"max_step_s": 0.025, "max_segments": 16},
+  "max_step_s": 0.01,
+  "max_trials": 64,
+  "max_pairs": 100000,
+  "max_sample_vertices": 500000
+}
+```
+
+The first interval starts at the exact selected initial pose, including any seated/squat leg
+fraction. Each later interval starts at its previous authored endpoint. Supported source joint
+angles interpolate on their fixed rest-frame axes; each intermediate pose runs the original
+source model's forward kinematics and skinning on the unchanged shape. Root rotation follows the
+shortest unit-quaternion arc, so equivalent +π/−π endpoint orientations do not create an
+unrequested full turn. Root translation interpolates in the existing fixed world frame. The
+source surface is posed and transformed before collision-cap extraction. Neither matrices nor
+skin vertices are blended to manufacture an intermediate source pose.
+
+An interval of duration `d` is split into `ceil(d / source_pose_sampling.max_step_s - 1e-12)`
+equal segments. The small tolerance preserves integral ratios across floating-point arithmetic;
+authored endpoint times and their established source-pose evaluation are retained exactly. The
+sampling step must be finite in `1e-9..=1` seconds, and `max_segments` must be in `1..=512` across
+the **whole trajectory**. Any resulting interval below the mechanical kernel's `1e-9` second
+minimum, including loss of time resolution at a later timestamp, refuses before model work.
+This is a time-resolution policy, not an angular error guarantee: increase the source resolution
+explicitly for a large turn.
+
+Source sampling and the mechanical `max_step_s` serve different purposes. The former evaluates
+new source poses; the latter subdivides the checked vertex chord between two evaluated poses.
+The solver may take additional adaptive substeps on each short chord. The existing whole-path
+`max_trials`, pair-query cap and retained-sample allowance remain unchanged; the engine refuses
+an insufficient budget. Initial plus generated source geometry also must fit the existing
+2,000,000-vertex path limit. No policy raises another budget or drops intermediate geometry to
+finish a request.
+
+All accepted mechanical samples remain in the result. The optional `source_pose_sampling`
+receipt records the exact policy, `generated_segments`, generated `source_times_s` and zero-based
+`authored_interval_indices`. Original keyframe receipts remain one per authored endpoint.
+Thermal boundaries, liquid supply and independently qualified velocity schedules keep those
+original interval indices across every generated source segment. A late mechanical or coupled
+thermal refusal restores the entire pre-motion solver, including material and liquid histories.
+Omitting the sampling policy, or supplying null, retains the original endpoint-only path and
+serialized output.
+
+The swept checks still certify the accepted **short linear vertex chords**, subject to the
+existing numerical limits. Sampling does not turn them into exact curved-trajectory CCD or
+certify anatomical poses, a production-body motion benchmark, physical fit or comfort.
 
 ## Static scene admission
 

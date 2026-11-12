@@ -5745,6 +5745,20 @@ including missing or model-derived passage refusals and edited stature changing 
 This advances `ftx-ds2` and `ftx-ms2`; model-derived dimensions remain `MODEL_FIT`, and synthetic
 workflow checks do not establish anatomical accuracy or physical garment fit.
 
+### 25.198 Sample actual source poses through prescribed turns and bends
+
+Optional bounded source-pose sampling evaluates the same selected body between authored motion
+endpoints. Fixed-axis source joint rotations, shortest-arc root rotations and world translations
+generate each intermediate surface before collision extraction. The exact initial pose, selected
+shape, occupied nappy geometry and authored endpoints remain fixed; no intermediate body is refitted.
+
+The existing continuous-contact solver advances sewn cloth along the shorter vertex chords.
+Authored thermal/liquid intervals stay unchanged across generated segments, every accepted sample
+remains available, and source geometry, mechanical work and output budgets remain independent.
+Late failures retain whole-path rollback. Omitted policies preserve the original path identity.
+This advances `ftx-mv1.1`; sampled source geometry is not an exact curved collision sweep or evidence
+of anatomical motion, support-surface contact or physical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

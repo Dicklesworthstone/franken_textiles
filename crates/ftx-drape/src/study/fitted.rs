@@ -2,11 +2,11 @@
 use std::collections::BTreeMap;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, BodyParams, Legs, NappyOccupancy, Pose, SkinMesh, TAPE_FIELDS, Wearer,
-    accepted_shape::AcceptedShape, clothing_skin, fit_tape, partial_tape_readings, pose_deltas,
-    skin_mesh, tape_targets,
+    Affine, AnnyModel, BodyFrames, BodyParams, Legs, NappyOccupancy, Pose, RestBody, SkinMesh,
+    TAPE_FIELDS, Wearer, accepted_shape::AcceptedShape, clothing_skin, fit_tape, joint_rotations,
+    partial_tape_readings, pose_deltas, skin_mesh, tape_targets,
 };
-use ftx_core::{Refusal, Vec3};
+use ftx_core::{Mat3, Refusal, Vec3, det};
 use ftx_pattern::{instance::PyError, validate::BodyMeasure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -181,6 +181,8 @@ pub struct FittedBody {
     collision: SkinMesh,
     display: SkinMesh,
     arm_deg: f64,
+    // Motion begins at this exact selected pose, including legs; public report edits cannot alter it.
+    initial_pose: Pose,
     params: BodyParams,
     // This geometric proxy never replaces the source shape or inherits edits to the public report.
     nappy_occupancy: Option<NappyOccupancy>,
@@ -353,6 +355,7 @@ impl FittedBody {
             collision,
             display,
             arm_deg: request.arm_abduction_deg,
+            initial_pose: pose,
             params,
             nappy_occupancy: occupancy,
             model_sha256: model_sha256.into(),
@@ -429,8 +432,9 @@ impl FittedBody {
 
     /// Generate motion endpoints from the SAME selected shape, without fitting again. The caller
     /// supplies the model digest from its decoded bytes just as for `prepare`. Endpoint generation
-    /// uses Anny poses and optional absolute world translations; the motion solver interpolates
-    /// checked linear vertex chords between them. The selected body's initial geometry stays fixed.
+    /// uses Anny poses and optional absolute world transforms. Requested intermediate source poses
+    /// interpolate supported joint angles and shortest-arc root rotations, never skin vertices or
+    /// rotation matrices. The solver checks linear chords between the resulting source surfaces.
     ///
     /// # Errors
     /// Invalid/excessive trajectory, changed model identity or nonmatching collision topology.
@@ -446,11 +450,12 @@ impl FittedBody {
                 "motion must use the source-identified selected body model",
             ));
         }
+        let steps = request.source_steps()?;
         if self
             .collision
             .vertices
             .len()
-            .saturating_mul(request.keyframes.len() + 1)
+            .saturating_mul(steps.len() + 1)
             > 2_000_000
         {
             return Err(budget("motion endpoint body-vertex budget exceeded"));
@@ -460,8 +465,11 @@ impl FittedBody {
             .as_ref()
             .map_or(&self.params, |occupied| &occupied.params);
         let rest = model.rest(params)?;
-        let mut endpoints = Vec::with_capacity(request.keyframes.len());
-        for keyframe in &request.keyframes {
+        let mut endpoints = Vec::with_capacity(steps.len());
+        let mut previous_pose = self.initial_pose;
+        let mut previous_rotation = None;
+        let mut previous_translation = Vec3::ZERO;
+        for (interval, keyframe) in request.keyframes.iter().enumerate() {
             let mut pose = Pose::drape();
             pose.arm_abduction_deg = Some(keyframe.arm_abduction_deg);
             if let Some(legs) = keyframe.leg_pose {
@@ -472,33 +480,74 @@ impl FittedBody {
                 // Scale only the source leg rotations; arm abduction and straightening stay fixed.
                 pose.leg_fraction = legs.fraction;
             }
-            let mut posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
-            if let Some(rotation) = keyframe.root_rotation_matrix()? {
-                // Posed source vertices are root-relative. Rotate the complete surface about
-                // that origin before the existing world translation and collider cap extraction.
-                for vertex in &mut posed.vertices {
-                    *vertex = rotation.mul_vec(*vertex);
+            let interval_steps: Vec<_> = steps
+                .iter()
+                .filter(|step| step.interval == interval)
+                .collect();
+            let rotations = if interval_steps.len() > 1 {
+                Some((
+                    source_rotvecs(model, &rest, &previous_pose)?,
+                    source_rotvecs(model, &rest, &pose)?,
+                ))
+            } else {
+                None
+            };
+            let translation = keyframe.root_translation_m.map_or(Vec3::ZERO, Vec3::from);
+            for step in interval_steps {
+                let exact = step.fraction == 1.0;
+                let deltas = if exact {
+                    // Keep the established arithmetic at every authored endpoint, including the
+                    // absent-policy path, rather than reconstructing it from an interpolation.
+                    pose_deltas(model, &rest, &pose, 1.0)?
+                } else {
+                    let (from, to) = rotations.as_ref().expect("intermediate source poses");
+                    from.iter()
+                        .zip(to)
+                        .map(|(&from, &to)| {
+                            Affine::from_rotvec(lerp_vec(from, to, step.fraction), Vec3::ZERO)
+                        })
+                        .collect()
+                };
+                let mut posed = model.pose(&rest, &deltas)?;
+                let rotation = if exact || previous_rotation == keyframe.root_rotation_rad {
+                    keyframe.root_rotation_matrix()?
+                } else {
+                    Some(root_rotation_between(
+                        previous_rotation,
+                        keyframe.root_rotation_rad,
+                        step.fraction,
+                    ))
+                };
+                if let Some(rotation) = rotation {
+                    for vertex in &mut posed.vertices {
+                        *vertex = rotation.mul_vec(*vertex);
+                    }
                 }
-            }
-            if let Some([x, y, z]) = keyframe.root_translation_m
-                && (x != 0.0 || y != 0.0 || z != 0.0)
-            {
-                let displacement = Vec3::new(x, y, z);
-                // Transform the complete source surface before deriving collision caps. Every
-                // endpoint starts at the fixed source origin, without accumulating prior offsets.
-                for vertex in &mut posed.vertices {
-                    *vertex += displacement;
+                let displacement = if exact {
+                    translation
+                } else {
+                    lerp_vec(previous_translation, translation, step.fraction)
+                };
+                if displacement != Vec3::ZERO {
+                    // Transform the complete source surface before deriving collision caps. All
+                    // samples share the selected body's fixed root-relative source origin.
+                    for vertex in &mut posed.vertices {
+                        *vertex += displacement;
+                    }
                 }
+                let skin = clothing_skin(model, &posed.vertices)?;
+                if skin.triangles != self.collision.triangles
+                    || skin.source_vertex != self.collision.source_vertex
+                {
+                    return Err(invalid(
+                        "motion endpoints must preserve the selected collision source mapping and topology",
+                    ));
+                }
+                endpoints.push(skin.vertices);
             }
-            let skin = clothing_skin(model, &posed.vertices)?;
-            if skin.triangles != self.collision.triangles
-                || skin.source_vertex != self.collision.source_vertex
-            {
-                return Err(invalid(
-                    "motion endpoints must preserve the selected collision source mapping and topology",
-                ));
-            }
-            endpoints.push(skin.vertices);
+            previous_pose = pose;
+            previous_rotation = keyframe.root_rotation_rad;
+            previous_translation = translation;
         }
         motion::Path::new(request, self.body().collision, endpoints)
     }
@@ -513,6 +562,77 @@ impl FittedBody {
             arm_deg: self.arm_deg,
         }
     }
+}
+
+// Existing supported pose controls each rotate a bone on a fixed rest-frame axis. Interpolate
+// their scalar rotations in local coordinates, then run the ordinary source FK/LBS evaluation.
+fn source_rotvecs(model: &AnnyModel, rest: &RestBody, pose: &Pose) -> Result<Vec<Vec3>, Refusal> {
+    let mut rotations = vec![Vec3::ZERO; rest.bone_frames.len()];
+    for joint in joint_rotations(model, rest, pose)? {
+        rotations[joint.bone] = rest.bone_frames[joint.bone]
+            .m
+            .transpose()
+            .mul_vec(joint.axis)
+            * joint.angle;
+    }
+    Ok(rotations)
+}
+
+fn lerp_vec(from: Vec3, to: Vec3, fraction: f64) -> Vec3 {
+    if from == to {
+        from
+    } else {
+        from * (1.0 - fraction) + to * fraction
+    }
+}
+
+// Unit quaternions avoid the collapsed halfway geometry of a matrix/vertex blend and choose the
+// short orientation arc across the equivalent +pi/-pi rotation-vector boundary. Exact authored
+// endpoints continue through Keyframe::root_rotation_matrix above.
+fn root_rotation_between(from: Option<[f64; 3]>, to: Option<[f64; 3]>, fraction: f64) -> Mat3 {
+    fn quaternion(rotation: Option<[f64; 3]>) -> (f64, Vec3) {
+        let vector = rotation.map_or(Vec3::ZERO, Vec3::from);
+        let scale = vector.x.abs().max(vector.y.abs()).max(vector.z.abs());
+        if scale == 0.0 {
+            return (1.0, Vec3::ZERO);
+        }
+        let scaled = vector / scale;
+        let length = scaled.norm();
+        let (sin, cos) = det::sin_cos(scale * length * 0.5);
+        (cos, scaled * (sin / length))
+    }
+    let (a, av) = quaternion(from);
+    let (mut b, mut bv) = quaternion(to);
+    let mut dot = a * b + av.dot(bv);
+    if dot < 0.0 {
+        b = -b;
+        bv = -bv;
+        dot = -dot;
+    }
+    let (wa, wb) = if dot > 0.9995 {
+        (1.0 - fraction, fraction)
+    } else {
+        let angle = det::acos(dot.clamp(0.0, 1.0));
+        let denominator = det::sin_cos(angle).0;
+        (
+            det::sin_cos((1.0 - fraction) * angle).0 / denominator,
+            det::sin_cos(fraction * angle).0 / denominator,
+        )
+    };
+    let scalar = a * wa + b * wb;
+    let vector = av * wa + bv * wb;
+    let norm = (scalar * scalar + vector.dot(vector)).sqrt();
+    let scalar = scalar / norm;
+    let vector = vector / norm;
+    let rotate = |point: Vec3| {
+        let cross = vector.cross(point) * 2.0;
+        point + cross * scalar + vector.cross(cross)
+    };
+    Mat3::from_cols(
+        rotate(Vec3::new(1.0, 0.0, 0.0)),
+        rotate(Vec3::new(0.0, 1.0, 0.0)),
+        rotate(Vec3::new(0.0, 0.0, 1.0)),
+    )
 }
 
 // Shape estimation always uses the existing reference pose, independent of the requested pose.
@@ -947,6 +1067,114 @@ mod tests {
     }
 
     #[test]
+    fn source_root_sampling_follows_rigid_shortest_arcs_without_chord_collapse() {
+        let pi = std::f64::consts::PI;
+        let point = Vec3::new(0.2, 0.0, 0.3);
+        let half_turn = root_rotation_between(None, Some([0.0, 0.0, pi]), 0.5);
+        let midpoint = half_turn.mul_vec(point);
+        assert!((midpoint - Vec3::new(0.0, 0.2, 0.3)).norm() < 1e-15);
+        assert!((midpoint.norm() - point.norm()).abs() < 1e-15);
+        let old_chord_midpoint =
+            (point + Mat3::rotation(Vec3::new(0.0, 0.0, 1.0), pi).mul_vec(point)) * 0.5;
+        assert!((midpoint - old_chord_midpoint).norm() > 0.19);
+        let equivalent = root_rotation_between(Some([0.0, 0.0, pi]), Some([0.0, 0.0, -pi]), 0.5);
+        assert!((equivalent.mul_vec(point) - Vec3::new(-0.2, 0.0, 0.3)).norm() < 1e-15);
+        // Independent quaternion midpoint of orthogonal quarter turns: (sqrt(2/3), 1/sqrt(6), 1/sqrt(6), 0).
+        let mixed =
+            root_rotation_between(Some([pi / 2.0, 0.0, 0.0]), Some([0.0, pi / 2.0, 0.0]), 0.5);
+        assert!(
+            (mixed.mul_vec(Vec3::new(1.0, 0.0, 0.0)) - Vec3::new(2.0 / 3.0, 1.0 / 3.0, -2.0 / 3.0))
+                .norm()
+                < 1e-14
+        );
+        for rotation in [
+            half_turn,
+            equivalent,
+            mixed,
+            root_rotation_between(None, Some([1e-9, -2e-9, 3e-9]), 0.5),
+        ] {
+            let x = rotation.mul_vec(Vec3::new(1.0, 0.0, 0.0));
+            let y = rotation.mul_vec(Vec3::new(0.0, 1.0, 0.0));
+            let z = rotation.mul_vec(Vec3::new(0.0, 0.0, 1.0));
+            assert!((x.norm() - 1.0).abs() < 1e-14);
+            assert!((y.norm() - 1.0).abs() < 1e-14);
+            assert!(x.dot(y).abs() < 1e-14);
+            assert!((x.cross(y) - z).norm() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn sampled_source_poses_start_at_the_frozen_selected_legs_and_keep_exact_endpoints() {
+        let model = model();
+        let digest = "a".repeat(64);
+        let mut selected = request();
+        selected.legs = Legs::Seated;
+        selected.leg_fraction = 0.06;
+        let mut fitted = FittedBody::prepare(&model, &digest, &selected).unwrap();
+        let initial_collision = fitted.collision.vertices.clone();
+        let shape = fitted.report["shape_sha256"].clone();
+        fitted.report["pose"] =
+            json!({"legs":"standing","leg_fraction":0.0,"arm_abduction_deg":150.0});
+        let mut motion: motion::Request =
+            serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.004,"arm_abduction_deg":37.0,
+                "leg_pose":{"posture":"seated","fraction":0.02},
+                "root_rotation_rad":[0.0,0.0,std::f64::consts::FRAC_PI_2],
+                "root_translation_m":[0.01,-0.02,0.03]}],
+            "source_pose_sampling":{"max_step_s":0.002,"max_segments":2},
+            "max_step_s":0.002,"max_trials":8,"max_pairs":100000,"max_sample_vertices":10000}))
+            .unwrap();
+        let path = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_eq!(path.source_vertices().len(), 2);
+        let rest = model.rest(&fitted.params).unwrap();
+        let mut midpoint = Pose::drape();
+        midpoint.arm_abduction_deg = Some(36.0);
+        midpoint.legs = Legs::Seated;
+        midpoint.leg_fraction = 0.04;
+        let posed = model
+            .pose(&rest, &pose_deltas(&model, &rest, &midpoint, 1.0).unwrap())
+            .unwrap();
+        let rotation = Mat3::rotation(Vec3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_4);
+        let vertices: Vec<_> = posed
+            .vertices
+            .iter()
+            .map(|p| rotation.mul_vec(*p) + Vec3::new(0.005, -0.01, 0.015))
+            .collect();
+        let expected = clothing_skin(&model, &vertices).unwrap();
+        for (actual, expected) in path.source_vertices()[0].iter().zip(&expected.vertices) {
+            assert!(
+                (*actual - *expected).norm() < 1e-14,
+                "{actual:?} != {expected:?}"
+            );
+        }
+        // Exact endpoint generation remains byte-identical to the established endpoint-only path.
+        motion.source_pose_sampling = None;
+        let endpoint_only = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_eq!(
+            path.source_vertices()[1],
+            endpoint_only.source_vertices()[0]
+        );
+        assert_eq!(fitted.collision.vertices, initial_collision);
+        assert_eq!(fitted.report["shape_sha256"], shape);
+        midpoint.leg_fraction = 0.01; // A mistaken standing start would produce this midpoint.
+        let wrong = model
+            .pose(&rest, &pose_deltas(&model, &rest, &midpoint, 1.0).unwrap())
+            .unwrap();
+        let wrong: Vec<_> = wrong
+            .vertices
+            .iter()
+            .map(|p| rotation.mul_vec(*p) + Vec3::new(0.005, -0.01, 0.015))
+            .collect();
+        let wrong = clothing_skin(&model, &wrong).unwrap();
+        assert!(
+            path.source_vertices()[0]
+                .iter()
+                .zip(wrong.vertices)
+                .any(|(actual, wrong)| (*actual - wrong).norm() > 1e-5)
+        );
+    }
+
+    #[test]
     fn motion_endpoints_reuse_exact_selected_shape_and_match_direct_source_poses() {
         let model = model();
         let digest = "a".repeat(64);
@@ -1200,16 +1428,18 @@ mod tests {
         .unwrap();
         let original = run.scene.solver.clone();
         let count = body.collision.0.len() + original.x.len();
-        for (posture, hip, knee, foot, translation) in [
-            ("seated", -90.0_f64, 90.0_f64, 0.0_f64, None),
-            ("squat", -100.0, 110.0, -10.0, None),
+        for (posture, hip, knee, foot, translation, source_sampling) in [
+            ("seated", -90.0_f64, 90.0_f64, 0.0_f64, None, false),
+            ("squat", -100.0, 110.0, -10.0, None, false),
             (
                 "seated",
                 -90.0,
                 90.0,
                 0.0,
                 Some([0.00001, -0.00002, 0.00003]),
+                false,
             ),
+            ("seated", -90.0, 90.0, 0.0, None, true),
         ] {
             let mut requested = json!({"schema":"ftx-drape-motion/1",
                 "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.0,
@@ -1221,6 +1451,9 @@ mod tests {
             if let Some(translation) = translation {
                 requested["keyframes"][0]["root_translation_m"] = json!(translation);
                 requested["keyframes"][1]["root_translation_m"] = json!([0.0, 0.0, 0.0]);
+            }
+            if source_sampling {
+                requested["source_pose_sampling"] = json!({"max_step_s":0.001,"max_segments":4});
             }
             let request: motion::Request = serde_json::from_value(requested).unwrap();
             let path = fitted.motion_path(&model, &digest, &request).unwrap();
@@ -1253,9 +1486,15 @@ mod tests {
                 }
                 expected.push(clothing_skin(&model, &posed.vertices).unwrap().vertices);
             }
-            let independent =
-                motion::Path::new(&request, body.collision, expected.clone()).unwrap();
-            assert_eq!(path.sha256(), independent.sha256());
+            if source_sampling {
+                assert_eq!(path.source_vertices().len(), 4);
+                assert_eq!(path.source_vertices()[1], expected[0]);
+                assert_eq!(path.source_vertices()[3], expected[1]);
+            } else {
+                let independent =
+                    motion::Path::new(&request, body.collision, expected.clone()).unwrap();
+                assert_eq!(path.sha256(), independent.sha256());
+            }
             assert_ne!(expected[0], body.collision.0);
             assert_ne!(expected[0], expected[1]);
             // Arm-only omission and an explicit zero leg fraction retain the original geometry.
@@ -1267,7 +1506,7 @@ mod tests {
             let held = motion::Path::new(
                 &standing,
                 body.collision,
-                vec![body.collision.0.to_vec(); 2],
+                vec![body.collision.0.to_vec(); standing.source_steps().unwrap().len()],
             )
             .unwrap();
             assert_eq!(
@@ -1300,6 +1539,18 @@ mod tests {
                 json!(request.keyframes[0].leg_pose)
             );
             assert_eq!(continued["continuous_contact_checked"], true);
+            if source_sampling {
+                assert_eq!(continued["source_pose_sampling"]["generated_segments"], 4);
+                assert_eq!(
+                    continued["source_pose_sampling"]["authored_interval_indices"],
+                    json!([0, 0, 1, 1])
+                );
+                assert_eq!(continued["keyframes"].as_array().unwrap().len(), 2);
+                assert_eq!(continued["keyframes"][0]["sample_index"], 1);
+                assert_eq!(continued["keyframes"][1]["sample_index"], 3);
+            } else {
+                assert!(continued.get("source_pose_sampling").is_none());
+            }
             assert_eq!(
                 continued["keyframes"][0]["root_translation_m"],
                 json!(translation)

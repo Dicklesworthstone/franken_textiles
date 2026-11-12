@@ -40,8 +40,8 @@ pub struct LegPose {
     pub fraction: f64,
 }
 
-/// A source-model endpoint. Between endpoints the checked solver follows linear vertex chords,
-/// not an inferred anatomical joint trajectory. Use short pose increments to approximate a turn.
+/// A source-model endpoint. The checked solver follows linear vertex chords, optionally between
+/// additional evaluations of the source joint/root pose rather than only these authored endpoints.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Keyframe {
@@ -93,6 +93,24 @@ impl Keyframe {
     }
 }
 
+/// Explicit resolution of the source pose path, independent of mechanical solver subdivisions.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourcePoseSampling {
+    /// Maximum source-pose interval in seconds, finite and in 1e-9..=1.
+    pub max_step_s: f64,
+    /// Maximum generated segments across the entire authored trajectory, 1..=512.
+    pub max_segments: usize,
+}
+
+/// One generated endpoint, retaining its original thermal boundary-condition interval.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct SourceStep {
+    pub interval: usize,
+    pub time_s: f64,
+    pub fraction: f64,
+}
+
 /// Bounded prescribed motion following the scenario's fresh initial drape.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +130,11 @@ pub struct Request {
     /// Defaults to 500000; endpoint receipts also consume the session's geometry allowance.
     #[serde(default = "default_sample_vertices")]
     pub max_sample_vertices: usize,
+    /// Optional evaluation of intermediate poses on the same source body. Joint angles follow
+    /// their fixed source axes, root rotation follows the shortest quaternion arc, and root
+    /// translation is linear. The solver still checks short vertex chords between these poses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_pose_sampling: Option<SourcePoseSampling>,
     /// Optional independent-sheet transient temperatures on every accepted mechanical sample.
     /// Its explicit initial temperature applies at motion time zero, not during initial draping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,12 +200,81 @@ impl Request {
             minimum_trials += ((frame.time_s - previous) / self.max_step_s - 1e-12).ceil();
             previous = frame.time_s;
         }
+        if self.source_pose_sampling.is_some() {
+            previous = 0.0;
+            minimum_trials = 0.0;
+            for step in self.source_steps()? {
+                minimum_trials += ((step.time_s - previous) / self.max_step_s - 1e-12).ceil();
+                previous = step.time_s;
+            }
+        }
         if minimum_trials > self.max_trials as f64 {
             return Err(budget(
                 "motion requires more nominal substeps than max_trials",
             ));
         }
         Ok(())
+    }
+
+    // Called after the authored times have been admitted by validate(). No geometry is allocated
+    // until the global segment budget and representable duration of every sample are checked.
+    pub(super) fn source_steps(&self) -> Result<Vec<SourceStep>, Refusal> {
+        let Some(policy) = self.source_pose_sampling else {
+            return Ok(self
+                .keyframes
+                .iter()
+                .enumerate()
+                .map(|(interval, frame)| SourceStep {
+                    interval,
+                    time_s: frame.time_s,
+                    fraction: 1.0,
+                })
+                .collect());
+        };
+        if !policy.max_step_s.is_finite()
+            || !(1e-9..=1.0).contains(&policy.max_step_s)
+            || !(1..=512).contains(&policy.max_segments)
+        {
+            return Err(invalid(
+                "source-pose sampling needs a finite step in 1e-9..=1 s and max_segments in 1..=512",
+            ));
+        }
+        let mut steps = Vec::new();
+        let mut start = 0.0;
+        let mut previous = 0.0;
+        for (interval, frame) in self.keyframes.iter().enumerate() {
+            let count = ((frame.time_s - start) / policy.max_step_s - 1e-12).ceil();
+            if !count.is_finite()
+                || count < 1.0
+                || count > (policy.max_segments - steps.len()) as f64
+            {
+                return Err(budget(
+                    "source-pose sampling exceeds its whole-trajectory max_segments",
+                ));
+            }
+            let count = count as usize;
+            for k in 1..=count {
+                let fraction = k as f64 / count as f64;
+                let time_s = if k == count {
+                    frame.time_s
+                } else {
+                    start + (frame.time_s - start) * fraction
+                };
+                if !time_s.is_finite() || time_s - previous < 1e-9 {
+                    return Err(invalid(
+                        "source-pose sampling produces an unrepresentable or sub-1e-9 s mechanical interval",
+                    ));
+                }
+                steps.push(SourceStep {
+                    interval,
+                    time_s,
+                    fraction,
+                });
+                previous = time_s;
+            }
+            start = frame.time_s;
+        }
+        Ok(steps)
     }
 }
 
@@ -192,12 +284,15 @@ pub struct Path {
     initial_sha256: String,
     request_sha256: String,
     vertices: Vec<Vec<Vec3>>,
+    steps: Vec<SourceStep>,
     sha256: String,
 }
 
 impl Path {
     /// Bind endpoint geometry to an initial collision mesh. This is also the explicit seam for a
     /// caller with its own body model; source endpoint generation remains that caller's responsibility.
+    /// With source-pose sampling enabled, supply every equally spaced generated source endpoint,
+    /// in authored-interval order, rather than only the authored endpoints.
     ///
     /// # Errors
     /// Invalid policy, count, mesh or an excessive total of retained endpoint vertices.
@@ -207,7 +302,8 @@ impl Path {
         vertices: Vec<Vec<Vec3>>,
     ) -> Result<Self, Refusal> {
         request.validate()?;
-        if vertices.len() != request.keyframes.len()
+        let steps = request.source_steps()?;
+        if vertices.len() != steps.len()
             || initial.0.is_empty()
             || initial.0.len() > 196_608
             || initial.1.is_empty()
@@ -229,11 +325,16 @@ impl Path {
         }
         let initial_sha256 = hash(&initial)?;
         let request_sha256 = hash(request)?;
-        let sha256 = hash(&(&initial_sha256, &request_sha256, &vertices))?;
+        let sha256 = if request.source_pose_sampling.is_some() {
+            hash(&(&initial_sha256, &request_sha256, &vertices, &steps))?
+        } else {
+            hash(&(&initial_sha256, &request_sha256, &vertices))?
+        };
         Ok(Self {
             initial_sha256,
             request_sha256,
             vertices,
+            steps,
             sha256,
         })
     }
@@ -255,6 +356,11 @@ impl Path {
     #[must_use]
     pub fn sha256(&self) -> &str {
         &self.sha256
+    }
+
+    #[cfg(test)]
+    pub(super) fn source_vertices(&self) -> &[Vec<Vec3>] {
+        &self.vertices
     }
 }
 
@@ -438,7 +544,11 @@ fn evaluate_path(
     let mut pairs_tested = 0u64;
     let mut previous_time = 0.0;
     let mut accepted_time = 0.0;
-    for (i, frame) in request.keyframes.iter().enumerate() {
+    for (segment, step) in path.steps.iter().enumerate() {
+        let i = step.interval;
+        let frame = &request.keyframes[i];
+        let time_s = step.time_s;
+        let target = &path.vertices[segment];
         if remaining_trials == 0 || remaining_vertices < count {
             return Err(budget(
                 "whole-trajectory motion budget exhausted; no partial motion published",
@@ -464,14 +574,14 @@ fn evaluate_path(
             let mut index = samples.len();
             advance_body_coupled(
                 &mut run.scene.solver,
-                &path.vertices[i],
-                frame.time_s - previous_time,
+                target,
+                time_s - previous_time,
                 options,
                 capture,
                 history,
                 |solver, sample, history| {
-                    let time = if sample.time_s == frame.time_s - previous_time {
-                        frame.time_s
+                    let time = if sample.time_s == time_s - previous_time {
+                        time_s
                     } else {
                         previous_time + sample.time_s
                     };
@@ -483,8 +593,8 @@ fn evaluate_path(
         } else {
             advance_body_with_work(
                 &mut run.scene.solver,
-                &path.vertices[i],
-                frame.time_s - previous_time,
+                target,
+                time_s - previous_time,
                 options,
                 capture,
             )?
@@ -494,8 +604,8 @@ fn evaluate_path(
         pairs_tested += report.pairs_tested;
         for sample in report.samples {
             peak_strain = peak_strain.max(strain(&sample.cloth)?);
-            let time = if sample.time_s == frame.time_s - previous_time {
-                frame.time_s
+            let time = if sample.time_s == time_s - previous_time {
+                time_s
             } else {
                 previous_time + sample.time_s
             };
@@ -569,6 +679,10 @@ fn evaluate_path(
             }
             samples.push(retained);
         }
+        previous_time = time_s;
+        if time_s != frame.time_s {
+            continue;
+        }
         // Rebuild source-locked heat input from the NEW solver geometry; never patch an old receipt.
         let mut snapshot = json!({"material":run.report["material"],
             "steady_thermal_surface":crate::thermal::steady::surface::for_drape(&run.scene, &run.report["material"])});
@@ -581,15 +695,11 @@ fn evaluate_path(
             .as_ref()
             .map_or_else(omitted, |c| outcome(c.evaluate(&snapshot)));
         let coverage = scenario.coverage.as_ref().map_or_else(omitted, |c| {
-            outcome(coverage_at(
-                c,
-                &snapshot,
-                (&path.vertices[i], body.collision.1),
-            ))
+            outcome(coverage_at(c, &snapshot, (target, body.collision.1)))
         });
         let mut endpoint = json!({"time_s":frame.time_s,"arm_abduction_deg":frame.arm_abduction_deg,
             "sample_index":samples.len()-1,"positions_sha256":hash(&run.scene.solver.x)?,
-            "body_collision_sha256":hash(&(&path.vertices[i],body.collision.1))?,
+            "body_collision_sha256":hash(&(target,body.collision.1))?,
             "surface":surface,"coverage":coverage});
         if let Some(pose) = frame.leg_pose {
             endpoint["leg_pose"] = json!(pose);
@@ -608,12 +718,11 @@ fn evaluate_path(
                 initial
                     .as_ref()
                     .map_err(Clone::clone)
-                    .and_then(|r| r.with_positions(&run.scene.solver.x, &path.vertices[i]))
+                    .and_then(|r| r.with_positions(&run.scene.solver.x, target))
                     .and_then(|r| r.evaluate()),
             );
         }
         endpoints.push(endpoint);
-        previous_time = frame.time_s;
     }
     let mut result = json!({"schema":"ftx-drape-motion-result/1","path_sha256":path.sha256,
         "initial_positions_sha256":initial_positions_sha256,"initial_body_collision_sha256":path.initial_sha256,
@@ -634,6 +743,17 @@ fn evaluate_path(
         "fit_claim":false,"settledness_claim":false,
         "thermal_basis":"Independent steady endpoint snapshots, not transient temperatures or heat during motion.",
         "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
+    if let Some(policy) = request.source_pose_sampling {
+        result["source_pose_sampling"] = json!({
+            "max_step_s":policy.max_step_s,"max_segments":policy.max_segments,
+            "generated_segments":path.steps.len(),
+            "source_times_s":path.steps.iter().map(|step| step.time_s).collect::<Vec<_>>(),
+            "authored_interval_indices":path.steps.iter().map(|step| step.interval).collect::<Vec<_>>()
+        });
+        result["scope"] = json!(
+            "The same fixed source shape is evaluated at bounded, equally timed source poses: supported joint angles interpolate on their fixed source axes, root rotation follows the shortest quaternion arc, and translation is linear. Continuous contact is checked on the short vertex chords joining these poses, not on exact curved sweeps. All accepted substeps are retained; authored endpoints and thermal intervals remain unchanged. No anatomical, body self-intersection, empirical ride-up or fit qualification is inferred."
+        );
+    }
     if let Some(history) = material_strain {
         result["material_strain"] = outcome(history.map(|history| history.report(true)));
     }
@@ -731,6 +851,126 @@ fn evaluate_path(
 mod tests {
     use super::*;
     use crate::{PartFrame, scene::PartFrames};
+
+    #[test]
+    fn source_pose_sampling_preserves_legacy_identity_and_bounds_all_generated_work() {
+        let raw = json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.0},
+                {"time_s":0.005,"arm_abduction_deg":36.0}],
+            "max_step_s":0.003,"max_trials":2,"max_pairs":1000,
+            "max_sample_vertices":10000});
+        let legacy: Request = serde_json::from_value(raw.clone()).unwrap();
+        legacy.validate().unwrap();
+        let mut explicit_null = raw.clone();
+        explicit_null["source_pose_sampling"] = Value::Null;
+        let explicit_null: Request = serde_json::from_value(explicit_null).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&legacy).unwrap(),
+            serde_json::to_vec(&explicit_null).unwrap()
+        );
+        let vertices = vec![
+            Vec3::ZERO,
+            Vec3::new(0.1, 0.0, 0.0),
+            Vec3::new(0.0, 0.1, 0.0),
+        ];
+        let triangles = vec![[0, 1, 2]];
+        let initial = (vertices.as_slice(), triangles.as_slice());
+        let endpoints = vec![vertices.clone(); 2];
+        let old_digest = hash(&(
+            &hash(&initial).unwrap(),
+            &hash(&legacy).unwrap(),
+            &endpoints,
+        ))
+        .unwrap();
+        assert_eq!(
+            Path::new(&legacy, initial, endpoints.clone())
+                .unwrap()
+                .sha256(),
+            old_digest
+        );
+        assert_eq!(
+            Path::new(&explicit_null, initial, endpoints)
+                .unwrap()
+                .sha256(),
+            old_digest
+        );
+
+        let mut sampled = legacy.clone();
+        sampled.source_pose_sampling = Some(SourcePoseSampling {
+            max_step_s: 0.001,
+            max_segments: 5,
+        });
+        assert!(
+            sampled
+                .validate()
+                .unwrap_err()
+                .message
+                .contains("max_trials")
+        );
+        sampled.max_trials = 5;
+        sampled.validate().unwrap();
+        let steps = sampled.source_steps().unwrap();
+        assert_eq!(
+            steps.iter().map(|step| step.interval).collect::<Vec<_>>(),
+            vec![0, 0, 1, 1, 1]
+        );
+        for (step, expected) in steps.iter().zip([0.001, 0.002, 0.003, 0.004, 0.005]) {
+            assert!((step.time_s - expected).abs() < 1e-15);
+        }
+        assert_eq!(steps[1].time_s, sampled.keyframes[0].time_s);
+        assert_eq!(steps[4].time_s, sampled.keyframes[1].time_s);
+        assert!(Path::new(&sampled, initial, vec![vertices.clone(); 2]).is_err());
+        Path::new(&sampled, initial, vec![vertices.clone(); 5]).unwrap();
+        sampled.source_pose_sampling.as_mut().unwrap().max_segments = 4;
+        assert!(
+            sampled
+                .validate()
+                .unwrap_err()
+                .message
+                .contains("max_segments")
+        );
+        for invalid_step in [0.0, 1e-10, 1.01, f64::NAN, f64::INFINITY] {
+            sampled.source_pose_sampling = Some(SourcePoseSampling {
+                max_step_s: invalid_step,
+                max_segments: 5,
+            });
+            assert!(sampled.validate().is_err());
+        }
+        for invalid_count in [0, 513] {
+            sampled.source_pose_sampling = Some(SourcePoseSampling {
+                max_step_s: 0.001,
+                max_segments: invalid_count,
+            });
+            assert!(sampled.validate().is_err());
+        }
+        let mut unknown = raw;
+        unknown["source_pose_sampling"] = json!({"max_step_s":0.001,"max_segments":5,"guess":true});
+        assert!(serde_json::from_value::<Request>(unknown).is_err());
+
+        sampled.keyframes.truncate(1);
+        sampled.keyframes[0].time_s = 1.1e-9;
+        sampled.source_pose_sampling = Some(SourcePoseSampling {
+            max_step_s: 1e-9,
+            max_segments: 2,
+        });
+        assert!(sampled.validate().unwrap_err().message.contains("sub-1e-9"));
+        sampled.keyframes[0].time_s = 0.512;
+        sampled.max_step_s = 0.001;
+        sampled.max_trials = 512;
+        sampled.source_pose_sampling = Some(SourcePoseSampling {
+            max_step_s: 0.001,
+            max_segments: 512,
+        });
+        sampled.validate().unwrap();
+        let mut large_initial = vertices;
+        large_initial.resize(4000, Vec3::ZERO);
+        // Admission charges all generated source geometry before attempting to inspect it.
+        let refusal = match Path::new(&sampled, (&large_initial, &triangles), vec![vec![]; 512]) {
+            Ok(_) => panic!("excessive generated source geometry was admitted"),
+            Err(refusal) => refusal,
+        };
+        assert!(refusal.message.contains("geometry limits"));
+    }
 
     #[test]
     fn legacy_motion_pose_bytes_survive_and_leg_controls_are_bounded() {
