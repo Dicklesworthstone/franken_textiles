@@ -162,3 +162,12 @@ verify closed-form uniaxial tension and `n_theta`-gon apothem torsion
 convergence, 4-parameter orthotropic + compression-bending inverse recovery, unexcited/corrupted-`CHECK`/budget rejections, `L01` pretension/timestamp rate discrepancy auditing, Maxwell + plastic-bending dissipation,
 uncalibrated `fabric101-2026/l01` and `reported_thickness` refusals, and native/WASM/worker/`web/materials.html` UI parity.
 The source catalog implementation is `crates/ftx-pattern/src/material_catalog/fabric101.rs`.
+
+The refinement regressions keep the original recovery tolerances: 3% for warp, weft and shear
+stiffness, and 8% for bending rigidity. They also require all three starts to converge within the
+shared iteration caps, the optimized FIT error to equal the reported FIT error, and timed
+twist/compression predictions to agree with the unchanged public-forward truth on the same mesh
+(peak scaled residual below `1e-4`). A separate actual-solver control consumes the entire budget at
+an exactly stationary coarse solution and requires refinement to return `BudgetExceeded`. These
+checks establish numerical consistency and bounded execution; independent physical specimen
+and raw-curve qualification remain open.

@@ -298,9 +298,10 @@ mod tests {
                 .contains("model changed after flat validation")
         );
         assert_eq!(fs::read(&path).unwrap(), replacement);
-        let parse_error = identified_model_bound(&args, Some(&sha256_hex(replacement)))
-            .err()
-            .expect("matching the byte hash must still run ordinary model parsing");
+        let parse_error = match identified_model_bound(&args, Some(&sha256_hex(replacement))) {
+            Ok(_) => panic!("matching the byte hash must still run ordinary model parsing"),
+            Err(error) => error,
+        };
         assert!(
             !parse_error
                 .message
