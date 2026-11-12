@@ -124,16 +124,32 @@ auditing).
 Strict boundaries enforced by the forward experiment:
 - **Never `delta / nominal_height`**: inner-clamp separation is `nominal_free_height_m + pretension_displacement_m + axial_displacement_m - clamp_slip_m`; history-bearing laws must start at pristine unstretched separation and ramp pretension explicitly in time.
 - **No fabricated thickness or mechanics**: raw `fabric101-2026/*` records continue to refuse until constitutive moduli are explicitly supplied; enabling `self_contact` requires unloaded `thickness` and refuses presser-foot `reported_thickness`; axial compression below `nominal_free_height_m` requires positive `bending_rigidity` or a `BendingTensor`.
-- **No silent readiness or empirical claim**: `mechanics_readiness_promoted`, `fit_claim`, and `empirical_validation_claim` are all `false`. Inverse constitutive identification against external unbundled raw Fabric-101 curve archives and held-out physical specimens remains open under `ftx-tm2.1`.
+- **No silent readiness or empirical claim**: `mechanics_readiness_promoted`, `fit_claim`, and `empirical_validation_claim` are all `false`.
+
+## Cylindrical-holder inverse identification (`ftx-cylinder-calibration/1`)
+
+`ftx_drape::cylinder::fit::calibrate` (`ftx materials calibrate-cylinder REQUEST.json [--allow-estimates]`,
+`ftx-materials calibrate-cylinder REQUEST.json [--allow-estimates]`, browser `material_calibrate_cylinder`,
+worker `cylinderFit`, and `web/materials.html` `#cylinderFit`) identifies caller-declared scalar
+orthotropic membrane and/or bending parameters (`warp_stiffness`, `weft_stiffness`, `poisson_warp_weft`,
+`shear_stiffness`, `bending_rigidity`) from `FIT` cylindrical-holder acquisitions while solving the full
+3D `cylinder` forward model at every trial.
+
+Acceptance and publication gates enforced before any `Selection` is emitted:
+- **Three-start convergence & interior minimum**: deterministic starts (`0.2`, `0.5`, `0.8`) in the normalized parameter box must converge inside bounds without materially distinct equal-SSE minima.
+- **Excitation Gram pivot (`min_excitation_pivot`)**: normalized sensitivity Cholesky pivot at the optimum must exceed `policy.min_excitation_pivot` so unexcited moduli (for example weft stiffness under warp-only torsion) are rejected rather than guessed.
+- **Mesh doubling (`max_mesh_scaled`), held-out `CHECK`, and `fitted_green_strain_range` replay**: every `FIT` and independent `CHECK` experiment is replayed on both the declared `[n_theta, n_z]` mesh and `[2 * n_theta, 2 * n_z]`, held-out `CHECK` strains must remain inside `fitted_green_strain_range`, and a final `StrainDomain::Box` replay verifies the published material.
+- **No fabricated thickness or silent readiness**: identified quantities carry `Evidence::Estimate` and require explicit `--allow-estimates` (or request `allow_estimates: true` in the browser worker) to admit; presser-foot `reported_thickness` is never promoted to unloaded contact `thickness`, so sheets lacking unloaded thickness or body friction keep `mechanics()` unready (`simulation_ready: false`). External unbundled raw Fabric-101 curve archives (upstream `GongDeshan/Fabric_101_for_Wrinkles@510519be` has no repository license for raw archive redistribution) and physical held-out coupon validation remain open under `ftx-tm2.1`.
 
 ## Focused checks
 
 `crates/ftx-pattern/tests/fabric101_catalog.rs` verifies the 96-row subset, exact representative
 measurements and units, source paths and field budgets, conflict handling, composition identity,
 immutable replay, stale-digest refusal, ordinary mass screening, and missing-physics refusal.
-`crates/ftx-drape/src/cylinder.rs`, `crates/ftx-cli/tests/strip_experiment_workflow.rs`,
-`tools/check_strip_wasm.cjs`, `tools/check_materials_frontend.cjs`, and `tools/check_materials_web.cjs`
+`crates/ftx-drape/src/cylinder.rs`, `crates/ftx-drape/src/cylinder/fit.rs`,
+`crates/ftx-cli/tests/strip_experiment_workflow.rs`, `tools/check_strip_wasm.cjs`,
+`tools/check_materials_frontend.cjs`, and `tools/check_materials_web.cjs`
 verify closed-form uniaxial tension and `n_theta`-gon apothem torsion
-convergence, `L01` pretension/timestamp rate discrepancy auditing, Maxwell + plastic-bending dissipation,
+convergence, 4-parameter orthotropic + compression-bending inverse recovery, unexcited/corrupted-`CHECK`/budget rejections, `L01` pretension/timestamp rate discrepancy auditing, Maxwell + plastic-bending dissipation,
 uncalibrated `fabric101-2026/l01` and `reported_thickness` refusals, and native/WASM/worker/`web/materials.html` UI parity.
 The source catalog implementation is `crates/ftx-pattern/src/material_catalog/fabric101.rs`.

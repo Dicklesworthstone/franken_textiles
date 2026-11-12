@@ -1,7 +1,7 @@
 // The only network request loads the local application bundle. User evidence is never uploaded.
 // Every operation carries explicit inputs; no old pattern/drape survives a failed replacement.
 import init, * as ftx from "./pkg/ftx_wasm.js";
-const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-11.2";
+const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-11.4";
 let failure = null, active = null;
 const ready = init().then(() => {
   if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
@@ -365,16 +365,18 @@ self.onmessage = async ({ data: msg }) => {
       case "stripExperiment":
       case "stripHistory":
       case "cylinderExperiment":
-      case "stripFit": {
+      case "stripFit":
+      case "cylinderFit": {
         const api = ({ stripAcquisition: ftx.material_strip_acquisition,
           stripExperiment: ftx.material_strip_experiment, stripHistory: ftx.material_strip_history,
           cylinderExperiment: ftx.material_cylinder_experiment,
-          stripFit: ftx.material_calibrate_strip })[msg.type];
+          stripFit: ftx.material_calibrate_strip,
+          cylinderFit: ftx.material_calibrate_cylinder })[msg.type];
         if (typeof api !== "function") throw Error("Rebuild web/pkg: missing clamped-strip or cylinder engine.");
         // The dedicated request owns its output-estimate permission as well as observation
         // consent. Pass that explicit policy to the shared public calibration API without
         // rewriting the original bytes or converting grip extension to local strain.
-        if (msg.type === "stripFit") {
+        if (msg.type === "stripFit" || msg.type === "cylinderFit") {
           const input = json(msg.stripRequest);
           const allowEstimates = input.allow_estimates === undefined ? false : input.allow_estimates;
           if (typeof allowEstimates !== "boolean") throw Error("Declare allow_estimates as a boolean.");
@@ -383,7 +385,7 @@ self.onmessage = async ({ data: msg }) => {
         result = json(raw);
         const stem = ({ stripAcquisition: "strip-acquisition", stripExperiment: "strip-experiment",
           stripHistory: "strip-history", cylinderExperiment: "cylinder-experiment",
-          stripFit: "strip-calibration" })[msg.type];
+          stripFit: "strip-calibration", cylinderFit: "cylinder-calibration" })[msg.type];
         files = [file(`${stem}-report.json`, raw), file(`${stem}-input.json`, msg.stripRequest)];
         if (msg.type === "stripHistory" || msg.type === "cylinderExperiment") {
           if (typeof result.replay_request_json !== "string") throw Error(`Rebuild web/pkg: missing frozen ${stem} replay.`);
@@ -400,6 +402,19 @@ self.onmessage = async ({ data: msg }) => {
             files.push(file("strip-calibrated-selection.json", result.selection_json));
           } else if (result.selection !== null || result.selection_json !== null || result.material !== null) {
             throw Error("Rejected strip identification cannot publish a selection.");
+          }
+        }
+        if (msg.type === "cylinderFit") {
+          if (result.calibration?.schema !== "ftx-cylinder-calibration-report/1" || typeof result.calibration.accepted !== "boolean") {
+            throw Error("Rebuild web/pkg: incomplete cylinder calibration decision.");
+          }
+          if (result.calibration.accepted) {
+            if (typeof result.selection_json !== "string" || !result.selection || !result.material?.capabilities) {
+              throw Error("Rebuild web/pkg: missing accepted cylinder selection bridge.");
+            }
+            files.push(file("cylinder-calibrated-selection.json", result.selection_json));
+          } else if (result.selection !== null || result.selection_json !== null || result.material !== null) {
+            throw Error("Rejected cylinder identification cannot publish a selection.");
           }
         }
         break;

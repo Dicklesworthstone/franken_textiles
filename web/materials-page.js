@@ -11,8 +11,8 @@ const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew", "sewPreview"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "linearizeOrigin", "treatment", "vapor", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode", "bodyCheck"];
-const selectionOperations = ["inspect", "pressure", "linearizeOrigin", "calibrate", "stripFit"];
+  "stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit", "cylinderFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode", "bodyCheck"];
+const selectionOperations = ["inspect", "pressure", "linearizeOrigin", "calibrate", "stripFit", "cylinderFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let patternTransfer = null;
@@ -208,7 +208,7 @@ for (const op of operations) {
     thermalPoint: "Material at the stated temperature", thermalHistory: "Dry heating and cooling history",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", cylinderExperiment: "Cylindrical-holder forward experiment", vaporSurface: "Vapor transfer on this drape",
-    stripFit: "Clamped-strip identification", outfit: "Imported joint outfit", cutJob: "Complete mixed cutting job",
+    stripFit: "Clamped-strip identification", cylinderFit: "Cylindrical-holder identification", outfit: "Imported joint outfit", cutJob: "Complete mixed cutting job",
     stockIdentities: "Exact physical-stock identities", stockPrice: "Whole-item finite-stock prices", sewPreview: "Sewing operation preview",
     garmentcode: "Imported GarmentCode pattern — review required", bodyCheck: "Body target comparison" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
@@ -502,7 +502,7 @@ function controls() {
   $("calibrate").disabled ||= !has("calibrationRequest");
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
-  for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
+  for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit", "cylinderFit"]) $(op).disabled ||= !has(`${op}Request`);
   const studyReady = guided ? studyCandidates.length > 0 && (!$("guidedDesign").checked || has("fit")) : has("studyRequest");
   const combinationsReady = guided || !$("combinationMode").checked || combinationGroups.size > 0;
   const studyInputsReady = !!source && studyReady && combinationsReady &&
@@ -4136,6 +4136,7 @@ function measuredMechanicsResult(parent, r) {
 }
 function calibrationResult(parent, r) {
   if (r.calibration?.schema === "ftx-strip-calibration-report/1") return stripCalibrationResult(parent, r);
+  if (r.calibration?.schema === "ftx-cylinder-calibration-report/1") return cylinderCalibrationResult(parent, r);
   if (r.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1") return permanentStretchResult(parent, r);
   if (["ftx-swatch-calibration-report/1", "ftx-bending-calibration-report/1", "ftx-friction-calibration-report/1"].includes(r.calibration?.schema)) {
     return measuredMechanicsResult(parent, r);
@@ -4314,6 +4315,68 @@ function cylinderExperimentResult(parent, r) {
     mechanics_readiness_promoted: r.mechanics_readiness_promoted, model_scope: r.model_scope,
     next: "Download the original request, complete report and exact frozen replay below." };
 }
+function cylinderCalibrationResult(parent, r) {
+  const c = r.calibration;
+  const errors = table(parent, "Observed cylindrical-holder channel errors — independent partitions",
+    ["Partition", "Measured components", "Scaled RMS", "Scaled peak"]);
+  for (const [name, quality] of [["Fit", c.fit], ["Held out", c.check]]) {
+    cells(errors, [quality ? name : `${name}: not supplied`, metric(quality?.components),
+      metric(quality?.rms_scaled), metric(quality?.peak_scaled)]);
+  }
+  const params = table(parent, "Identified canonical shell parameters",
+    ["Property", "Unit", "Lower bound", "Candidate value", "Upper bound"]);
+  for (const [i, d] of (c.parameter_descriptors || []).entries()) {
+    cells(params, [d.key, d.unit, metric(d.bounds?.[0]), metric(c.parameters?.[i]), metric(d.bounds?.[1])]);
+  }
+  const domain = table(parent, "Observed material Green-strain range in FIT cylindrical fields",
+    ["Material direction", "Minimum Green strain", "Maximum Green strain"]);
+  for (const [i, axis] of ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"].entries()) {
+    cells(domain, [axis, ...(c.fitted_green_strain_range?.[i] || []).map(metric)]);
+  }
+  const work = table(parent, "Inverse solve, excitation and mesh diagnostics", ["Diagnostic", "Value"]);
+  for (const row of [
+    ["Identification outcome", c.accepted ? "ACCEPTED" : "NOT ACCEPTED"],
+    ["Stationary / attempted starts", `${c.starts.filter(s => s.converged).length} / ${c.starts.length}`],
+    ["Normalized excitation pivot", metric(c.excitation_pivot)],
+    ["Forward solves / limit", `${metric(c.forward_solves)} / ${metric(c.input.policy.max_forward_solves)}`],
+    ["Doubled-mesh change / limit", `${metric(c.mesh_change_peak_scaled)} / ${metric(c.input.policy.max_mesh_scaled)}`],
+    ["Enforced-domain replay", c.domain_replay_verified ? "Verified" : "Not verified"],
+    ["Garment mechanics ready", r.simulation_ready === true ? "Yes" : "No"]
+  ]) cells(work, row);
+  if (c.search_recovery) for (const row of [
+    ["Refused exploratory solves", metric(c.search_recovery.refused_forward_solves)],
+    ["Sensitivity interval halvings", metric(c.search_recovery.sensitivity_halvings)],
+    ["One-sided sensitivity columns", metric(c.search_recovery.one_sided_sensitivity_columns)]
+  ]) cells(work, row);
+  const predictions = table(parent, "Doubled-mesh cylindrical predictions and signed channel residuals",
+    ["Experiment / observation", "Partition", "Waypoint", "Tare force (N)", "Force residual (N)",
+      "Tare torque (N·m)", "Torque residual (N·m)", "Mean mid-radius (m)", "Mid-radius residual (m)"]);
+  for (const p of c.predictions || []) {
+    cells(predictions, [`${p.experiment} / ${p.observation}`, p.partition, metric(p.waypoint_index),
+      metric(p.state?.tare_adjusted_force_n), p.force_residual_n == null ? "Not observed" : metric(p.force_residual_n),
+      metric(p.state?.tare_adjusted_torque_nm), p.torque_residual_nm == null ? "Not observed" : metric(p.torque_residual_nm),
+      metric(p.state?.mid_radius_range_m?.[2]), p.mean_mid_radius_residual_m == null ? "Not observed" : metric(p.mean_mid_radius_residual_m)]);
+  }
+  if (c.reasons?.length) {
+    const reasons = document.createElement("p"); reasons.textContent = c.reasons.join(" "); parent.append(reasons);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Each prediction solves the 3D wrapped cylindrical shell with isometric polygon chord radius, " +
+    "explicit pretension offset, tare subtraction and prescribed axial/twist holder trajectories. " +
+    "Pressure-specific reported_thickness is never promoted to unloaded contact thickness, and missing body friction, " +
+    "rate dependence, hysteresis or unmodeled clamp slip remain uninferred.";
+  parent.append(note);
+  detail(parent, "Complete cylindrical calibration decision, starts, protocol audits and residuals", c);
+  return { response: "3D cylindrical-holder shell", status: c.accepted ? "ACCEPTED" : "NOT ACCEPTED",
+    held_out: c.check ? "Evaluated; inspect independent residuals and acceptance reasons" : "Not supplied",
+    input_sha256: c.input_sha256, material_id: r.selection?.id,
+    allow_estimates: r.selection?.allow_estimates,
+    simulation_ready: r.simulation_ready === true,
+    mechanical_coefficients_available: r.material?.capabilities.mechanical_coefficients?.ready === true,
+    mechanics_refusal: r.mechanics_refusal || r.material?.capabilities.mechanical_coefficients?.refusal,
+    next: r.selection ? "Review capabilities and missing contact properties, then assign the identified selection and bind the pattern." :
+      "Review the retained acquisition, excitation and check diagnostics. No identified selection is available to assign." };
+}
 function stripResult(parent, op, r) {
   if (op === "stripAcquisition") {
     const curves = table(parent, "Original complete force acquisitions", ["Specimen", "Cut direction", "Original rows", "Archive entry", "Source SHA-256"]);
@@ -4423,10 +4486,10 @@ function show(op, msg, request) {
       calibratedPair = r.interface_json;
       $("calibratedInterfaceSummary").textContent = `Calibrated pair: ${r.binding.interface.materials.join(" / ")}. Stage this pair after assigning those exact materials.`;
     }
-    if (op === "pressure" || op === "linearizeOrigin" || (op === "calibrate" && !pairCalibration) || op === "stripFit") {
+    if (op === "pressure" || op === "linearizeOrigin" || (op === "calibrate" && !pairCalibration) || op === "stripFit" || op === "cylinderFit") {
       clear(["thermalPoint"]);
       ++selectionRead; preparedBy = op;
-      if (typeof r.selection_json === "string" && (op !== "stripFit" || r.calibration?.accepted === true)) {
+      if (typeof r.selection_json === "string" && (!["stripFit", "cylinderFit"].includes(op) || r.calibration?.accepted === true)) {
         $("selection").value = r.selection_json;
         inspectResult(["pressure", "linearizeOrigin"].includes(op) ? r.inspection : r.material, r.selection_json);
       } else {
@@ -4449,6 +4512,7 @@ function show(op, msg, request) {
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "stripHistory" ? stripHistoryResult(s.comparison, r) :
       op === "cylinderExperiment" ? cylinderExperimentResult(s.comparison, r) :
+      op === "cylinderFit" ? cylinderCalibrationResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis,
         legs: r.body?.legs || "standing", leg_fraction: r.body?.leg_fraction ?? 1, settling: r.numerical?.settling,
@@ -5951,7 +6015,7 @@ async function execute(op) {
       msg.allowEstimates = $("calibrationEstimates").checked;
       msg.calibrationRequest = await read("calibrationRequest");
     }
-    else if (["stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit"].includes(op)) msg.stripRequest = await read(`${op}Request`);
+    else if (["stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit", "cylinderFit"].includes(op)) msg.stripRequest = await read(`${op}Request`);
     else if (op === "screen") msg.screenRequest = guidedScreenMode() ?
       buildMaterialScreenRequest(guidedScreenInput()) : await read("screenRequest");
     else if (op === "study" || op === "scenario") {
@@ -6932,7 +6996,7 @@ for (const id of [...originDomainFields.flat(), ...originRationaleFields, "origi
   });
 }
 for (const [id, operation] of [["compressionRequest", "pressure"], ["compressionLayer", "pressure"], ["calibrationRequest", "calibrate"],
-  ["calibrationMode", "calibrate"], ["calibrationEstimates", "calibrate"], ["stripFitRequest", "stripFit"]]) {
+  ["calibrationMode", "calibrate"], ["calibrationEstimates", "calibrate"], ["stripFitRequest", "stripFit"], ["cylinderFitRequest", "cylinderFit"]]) {
   $(id).addEventListener(id === "compressionLayer" ? "input" : "change", () => {
     if (preparedBy === operation) {
       resetOriginSource();

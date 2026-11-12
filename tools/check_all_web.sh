@@ -12,10 +12,12 @@ cd "$(dirname "$0")/.." || exit 1
 ROOT="$(pwd)"
 
 WITH_REPLAYS=0
+VM_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --with-replays) WITH_REPLAYS=1 ;;
-    *) echo "Usage: sh tools/check_all_web.sh [--with-replays]" >&2; exit 2 ;;
+    --vm-only) VM_ONLY=1 ;;
+    *) echo "Usage: sh tools/check_all_web.sh [--with-replays] [--vm-only]" >&2; exit 2 ;;
   esac
 done
 
@@ -32,70 +34,86 @@ sh tools/build_web.sh
 WASM_FILE="$TARGET_DIR/wasm32-unknown-unknown/release/ftx_wasm.wasm"
 wasm-bindgen --target nodejs --out-dir "$WORK/node-pkg" "$WASM_FILE"
 
+if cargo --list 2>/dev/null | grep -qw lbuild; then
+  CARGO_BUILD=lbuild
+  CARGO_TEST=ltest
+else
+  CARGO_BUILD=build
+  CARGO_TEST=test
+fi
+
 echo "[check_all_web] 2/5 Building native release ftx and ftx-materials..."
-cargo build --locked --release -p ftx-cli
+cargo "$CARGO_BUILD" --locked --release -p ftx-cli
 FTX_BIN="$TARGET_DIR/release/ftx"
 FTX_MATERIALS_BIN="$TARGET_DIR/release/ftx-materials"
 
 echo "[check_all_web] 3/5 Preparing synthetic offline browser editor fixtures..."
-FTX_BODY_START_DIR="$WORK/body-starts" cargo test --locked --release -p ftx-cli --test body_fit_workflow start_edits_editor_fixture_replays_the_complete_capture_through_the_fitter
-FTX_BODY_TARGET_DIR="$WORK/body-targets" cargo test --locked --release -p ftx-cli --test body_fit_workflow targets_editor_fixture_replays_a_corrected_capture_through_the_ordinary_fitter
-FTX_CAPTURE_EDITOR_DIR="$WORK/capture-editor" cargo test --locked --release -p ftx-cli --test body_fit_workflow capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_reference
-FTX_CAPTURE_SETUP_DIR="$WORK/capture-setup" cargo test --locked --release -p ftx-cli --test body_fit_workflow capture_setup_constructs_the_first_request_and_reaches_the_ordinary_fitter
+FTX_BODY_START_DIR="$WORK/body-starts" cargo "$CARGO_TEST" --locked --release -p ftx-cli --test body_fit_workflow start_edits_editor_fixture_replays_the_complete_capture_through_the_fitter
+FTX_BODY_TARGET_DIR="$WORK/body-targets" cargo "$CARGO_TEST" --locked --release -p ftx-cli --test body_fit_workflow targets_editor_fixture_replays_a_corrected_capture_through_the_ordinary_fitter
+FTX_CAPTURE_EDITOR_DIR="$WORK/capture-editor" cargo "$CARGO_TEST" --locked --release -p ftx-cli --test body_fit_workflow capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_reference
+FTX_CAPTURE_SETUP_DIR="$WORK/capture-setup" cargo "$CARGO_TEST" --locked --release -p ftx-cli --test body_fit_workflow capture_setup_constructs_the_first_request_and_reaches_the_ordinary_fitter
 
 if [ "$WITH_REPLAYS" -eq 1 ]; then
   echo "[check_all_web] 3b/5 Populating opt-in native->browser replay directories (--with-replays)..."
   FTX_PHOTO_WEB_FIXTURES="$WORK/photo-web-fixtures" \
-    cargo test --locked --release -p ftx-wasm --test photo retained_camera_uncertainty_reaches_browser_photo_measurements_without_resampling
+    cargo "$CARGO_TEST" --locked --release -p ftx-wasm --test photo retained_camera_uncertainty_reaches_browser_photo_measurements_without_resampling
   FTX_CAMERA_WEB_FIXTURES="$WORK/camera-web-fixtures" \
-    cargo test --locked --release -p ftx-wasm --test photo local_images_calibrate_through_shared_acquisition_and_replay_into_photo_measurement
+    cargo "$CARGO_TEST" --locked --release -p ftx-wasm --test photo local_images_calibrate_through_shared_acquisition_and_replay_into_photo_measurement
   FTX_EVIDENCE_REPLAY_DIR="$WORK/evidence-replay" \
-    cargo test --locked --release -p ftx-wasm --test page supplemental_photo_records_join_tape_through_ordinary_fusion_and_the_full_round
+    cargo "$CARGO_TEST" --locked --release -p ftx-wasm --test page supplemental_photo_records_join_tape_through_ordinary_fusion_and_the_full_round
   FTX_BODY_FIT_PORTABLE_DIR="$WORK/body-fit-portable" \
-    cargo test --locked --release -p ftx-cli --test body_fit_workflow prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engine
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test body_fit_workflow prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engine
   FTX_DESIGN_SCREENING_REPLAY="$WORK/design-screening" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow fit_screening_reaches_a_late_feasible_design_with_one_downstream_slot
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow fit_screening_reaches_a_late_feasible_design_with_one_downstream_slot
   FTX_BODY_CHECK_CAPTURE_DIR="$WORK/body-check" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow standalone_body_check_reuses_the_exact_shape_without_a_garment_or_tape_fallback
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow standalone_body_check_reuses_the_exact_shape_without_a_garment_or_tape_fallback
   FTX_MOTION_REPLAY="$WORK/motion-replay" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat
   FTX_JOINT_DESIGN_CAPTURE_DIR="$WORK/joint-design" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow independent_joint_polling_reaches_both_commands_and_exports_browser_replay
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow independent_joint_polling_reaches_both_commands_and_exports_browser_replay
   FTX_DESIGN_ADAPTIVE_REPLAY="$WORK/design-adaptive" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow adaptive_fit_finds_an_intermediate_design_in_native_and_portable_scenarios
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow adaptive_fit_finds_an_intermediate_design_in_native_and_portable_scenarios
   FTX_CONSUMER_ADAPTIVE_CAPTURE_DIR="$WORK/consumer-adaptive" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_budget_refusal
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_budget_refusal
   FTX_CONSUMER_ADAPTIVE_CAPTURE_DIR="$WORK/consumer-adaptive" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow independent_case_gates_preserve_signed_heat_tradeoffs_and_exact_native_outputs
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow independent_case_gates_preserve_signed_heat_tradeoffs_and_exact_native_outputs
   FTX_MOVING_BRIDGES_REPLAY="$WORK/moving-bridges" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow qualified_moving_bridges_reach_real_heat_objectives_native_portable_and_atomic_refusals
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow qualified_moving_bridges_reach_real_heat_objectives_native_portable_and_atomic_refusals
   FTX_THREAD_COST_REPLAY="$WORK/thread-cost" \
   FTX_CUT_AND_SEW_REPLAY="$WORK/cut-and-sew" \
-    cargo test --locked --release -p ftx-cli --test material_study_consumers -- --test-threads=1
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test material_study_consumers -- --test-threads=1
   FTX_FINITE_KNIFE_REPLAY="$WORK/finite-knife" \
-    cargo test --locked --release -p ftx-cli --test finite_stock_workflow qualified_finite_and_mixed_knife_programs_replay_through_both_binaries
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test finite_stock_workflow qualified_finite_and_mixed_knife_programs_replay_through_both_binaries
   FTX_KNIFE_PROGRAM_REPLAY="$WORK/knife-program" \
-    cargo test --locked --release -p ftx-cli --test cutting_workflow qualified_knife_paths_replay_through_both_commands_portable_api_and_material_studies
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test cutting_workflow qualified_knife_paths_replay_through_both_commands_portable_api_and_material_studies
   FTX_ROUTED_FIXTURE_REPLAY="$WORK/routed-fixtures" \
   FTX_ROUTING_REPLAY="$WORK/routing-replay" \
-    cargo test --locked --release -p ftx-export --test sewing_routing -- --test-threads=1
+    cargo "$CARGO_TEST" --locked --release -p ftx-export --test sewing_routing -- --test-threads=1
   FTX_ROUTED_FIXTURE_REPLAY="$WORK/routed-fixtures" \
   FTX_ELIGIBLE_ROUTING_REPLAY="$WORK/eligible-routing" \
-    cargo test --locked --release -p ftx-cli --test sewing_production_workflow -- --test-threads=1
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test sewing_production_workflow -- --test-threads=1
   FTX_COUPLED_WATER_ALTERNATIVES_REPLAY="$WORK/coupled-water-alternatives" \
   FTX_DEPTH_PROFILE_WATER_REPLAY="$WORK/depth-profile-water" \
   FTX_FINITE_VAPOR_RESERVOIR_REPLAY="$WORK/finite-vapor-reservoir" \
-    cargo test --locked --release -p ftx-cli --test accepted_body_workflow surface_water
+    cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow surface_water
 
-  node - "$FTX_BIN" "$WORK" "$ROOT" <<'EOF'
+  node - "$FTX_BIN" "$FTX_MATERIALS_BIN" "$WORK" "$ROOT" <<'EOF'
 const fs = require("node:fs"), path = require("node:path"), zlib = require("node:zlib");
 const { spawnSync } = require("node:child_process");
-const [ftx, work, root] = process.argv.slice(2);
+const [ftx, ftxMaterials, work, root] = process.argv.slice(2);
 
 function runFtx(args, allowedCodes = [0], cwd = root) {
   const r = spawnSync(ftx, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (!allowedCodes.includes(r.status)) {
     throw new Error(`ftx ${args.join(" ")} exited ${r.status}: ${r.stdout}\n${r.stderr}`);
+  }
+  return r.stdout;
+}
+
+function runFtxMaterials(args, allowedCodes = [0], cwd = root) {
+  const r = spawnSync(ftxMaterials, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  if (!allowedCodes.includes(r.status)) {
+    throw new Error(`ftx-materials ${args.join(" ")} exited ${r.status}: ${r.stdout}\n${r.stderr}`);
   }
   return r.stdout;
 }
@@ -414,6 +432,394 @@ if (fs.existsSync(admittedModel)) {
   const stdout = runFtx(["body", "--measurements", measPath, "--model", admittedModel, "--pose", "drape", "--out", path.join(bodyTapeDir, "body-out"), "--json"], [0], bodyTapeDir);
   fs.writeFileSync(path.join(bodyTapeDir, "native.stdout"), stdout);
 }
+
+const nodePkg = require(path.join(work, "node-pkg/ftx_wasm.js"));
+
+const acceptedRaw = fs.readFileSync(path.join(work, "motion-replay/accepted.json"), "utf8").trim();
+
+// 8. Configured leg-posture & settling fixture for FTX_POSE_CAPTURE_DIR
+{
+  const poseDir = path.join(work, "pose-capture");
+  fs.mkdirSync(poseDir, { recursive: true });
+  fs.copyFileSync(path.join(work, "consumer-adaptive/model.ftxbody"), path.join(poseDir, "model.ftxbody"));
+  fs.copyFileSync(path.join(work, "consumer-adaptive/pattern.json"), path.join(poseDir, "pattern.json"));
+  fs.writeFileSync(path.join(poseDir, "accepted.json"), acceptedRaw + "\n");
+  fs.writeFileSync(path.join(poseDir, "m.json"), JSON.stringify({ wearer: { stature_mm: 1111.0 } }, null, 2));
+  fs.writeFileSync(path.join(poseDir, "study.json"), JSON.stringify({
+    schema: "ftx-material-study/1",
+    variants: [{ key: "baseline", changes: { schema: "ftx-material-bindings/1" } }],
+  }, null, 2));
+  fs.writeFileSync(path.join(poseDir, "scenario.json"), JSON.stringify({
+    schema: "ftx-drape-scenario/1",
+    options: { spacing: 100.0, sew_steps: 3, drape_steps: 3, step: 0.001 },
+    fit_spec: {},
+    max_mesh_points: 4096,
+    max_vertex_frames: 1000000,
+    motion: {
+      schema: "ftx-drape-motion/1",
+      keyframes: [
+        { time_s: 0.002, arm_abduction_deg: 35.0, leg_pose: { posture: "seated", fraction: 0.002 } },
+        { time_s: 0.004, arm_abduction_deg: 35.0, leg_pose: { posture: "squat", fraction: 0.003 } },
+      ],
+      max_step_s: 0.001,
+      max_trials: 16,
+      max_pairs: 100000,
+      max_sample_vertices: 10000,
+    },
+  }, null, 2));
+  fs.writeFileSync(
+    path.join(poseDir, "body-input.json"),
+    `{"schema":"ftx-scenario-body/1","accepted_body_fit":${acceptedRaw},"measurements":{"wearer":{"stature_mm":1111.0}},"arm_abduction_deg":35.0,"legs":"seated","leg_fraction":0.001}\n`,
+  );
+  fs.writeFileSync(
+    path.join(poseDir, "leg-motion-report.json"),
+    runFtxMaterials(["scenario-study", "pattern.json", "study.json", "scenario.json", "body-input.json", "model.ftxbody"], [0], poseDir),
+  );
+  runFtx(["drape", "pattern.json", "--body-fit", "accepted.json", "--measurements", "m.json", "--model", "model.ftxbody", "--legs", "seated", "--leg-fraction", "0.001", "--max-settle-steps", "2", "--out", "leg-fold", "--json"], [0, 2], poseDir);
+}
+
+// 9 & 10. Ordinary tape arm-pose & preview-pose study fixtures (when admitted Anny model is present)
+if (fs.existsSync(admittedModel) && fs.existsSync(path.join(work, "body-check-tape/measurements.json"))) {
+  const tapeArmDir = path.join(work, "tape-arm");
+  fs.mkdirSync(tapeArmDir, { recursive: true });
+  const basePat = JSON.parse(fs.readFileSync(path.join(root, "tests/fixtures/materials/synthetic-scenario-pattern.json"), "utf8"));
+  const wrapRadius = 105.0;
+  const wrapWidth = 2 * Math.PI * wrapRadius;
+  basePat.pieces[0].vertices.b = [wrapWidth, 0.0];
+  basePat.pieces[0].vertices.c = [wrapWidth, 50.0];
+  basePat.pieces[0].vertices.d = [0.0, 50.0];
+  basePat.pieces[0].placement.radius_mm = wrapRadius;
+  basePat.pieces[0].placement.x0 = wrapWidth / 2.0;
+  fs.writeFileSync(path.join(tapeArmDir, "pattern.json"), JSON.stringify(basePat, null, 2));
+  fs.copyFileSync(path.join(work, "body-check-tape/measurements.json"), path.join(tapeArmDir, "full-measurements.json"));
+  fs.writeFileSync(path.join(tapeArmDir, "fit.json"), JSON.stringify({ schema: "fabric-fit/1", points: [] }, null, 2));
+  for (const deg of [35, 50]) {
+    runFtx(["drape", "pattern.json", "--measurements", "full-measurements.json", "--fit", "fit.json", "--model", admittedModel, "--arm-deg", String(deg), "--out", `full-native-${deg}`, "--json"], [0, 2], tapeArmDir);
+  }
+  fs.writeFileSync(
+    path.join(tapeArmDir, "full-native-0.stdout"),
+    runFtx(["drape", "pattern.json", "--measurements", "full-measurements.json", "--fit", "fit.json", "--model", admittedModel, "--arm-deg", "0", "--out", "full-native-0", "--json"], [3], tapeArmDir),
+  );
+
+  const previewDir = path.join(work, "preview-study");
+  fs.mkdirSync(previewDir, { recursive: true });
+  const previewPat = JSON.parse(fs.readFileSync(path.join(work, "design-screening/pattern.json"), "utf8"));
+  for (const piece of previewPat.pieces || []) {
+    if (piece.placement) piece.placement.radius_mm = 105.0;
+  }
+  fs.writeFileSync(path.join(previewDir, "pattern.json"), JSON.stringify(previewPat, null, 2));
+  const previewStudy = JSON.parse(fs.readFileSync(path.join(work, "design-screening/study.json"), "utf8"));
+  if (previewStudy.design_grid?.variables?.[0]) {
+    previewStudy.design_grid.variables[0].values_mm = [-10.0, -8.0, 0.0, 10.0];
+  }
+  fs.writeFileSync(path.join(previewDir, "study.json"), JSON.stringify(previewStudy, null, 2));
+  const primaryDoc = JSON.parse(fs.readFileSync(path.join(work, "body-check-tape/measurements.json"), "utf8"));
+  delete primaryDoc.wearer.reference;
+  delete primaryDoc.predictions;
+  primaryDoc.taken_on = "1970-01-01";
+  for (const r of primaryDoc.records || []) {
+    r.provenance = "MEASURED_TAPE";
+    r.method = "synthetic preview primary tape";
+    r.timestamp = "1970-01-01";
+    r.sigma_mm = Math.max(r.sigma_mm || 2.0, 2.0);
+  }
+  const primary = JSON.stringify(primaryDoc, null, 2);
+  const supplemental = JSON.stringify({
+    schema: "fabric-measurements/1",
+    taken_on: "1970-01-01",
+    wearer: { stature_mm: 920.0, age_months: 30.0 },
+    records: [{
+      name: "across_back",
+      value_mm: 225.0,
+      sigma_mm: 4.0,
+      provenance: "PHOTO_ESTIMATED",
+      method: "synthetic preview supplemental",
+      timestamp: "1970-01-01",
+      note: "synthetic preview fusion test",
+    }],
+  });
+  const pose = { arm_abduction_deg: 50, legs: "seated", leg_fraction: 0.001 };
+  const merged = nodePkg.measurement_file(
+    `{"mode":"file","measurements":${primary},"supplemental_measurements":${JSON.stringify([supplemental])},"supplemental_same_wearer":true}`,
+    "1970-01-01",
+  );
+  const bodyInput = `{"schema":"ftx-scenario-body/1","measurements":${merged},${JSON.stringify(pose).slice(1)}`;
+  const singleScenario = {
+    schema: "ftx-drape-scenario/1",
+    options: { spacing: 100.0, sew_steps: 20, drape_steps: 0, step: 0.001, max_settle_steps: 2 },
+    fit_spec: {},
+    max_mesh_points: 4096,
+    max_vertex_frames: 100000,
+  };
+  const matrixScenario = {
+    schema: "ftx-drape-scenario-matrix/1",
+    max_evaluations: 8,
+    cases: [{ key: "preview-case", scenario: singleScenario }],
+  };
+  fs.writeFileSync(path.join(previewDir, "primary.json"), primary);
+  fs.writeFileSync(path.join(previewDir, "supplemental.json"), supplemental);
+  fs.writeFileSync(path.join(previewDir, "pose.json"), JSON.stringify(pose));
+  fs.writeFileSync(path.join(previewDir, "body-input.json"), bodyInput);
+  fs.writeFileSync(path.join(previewDir, "single.json"), JSON.stringify(singleScenario, null, 2));
+  fs.writeFileSync(path.join(previewDir, "matrix.json"), JSON.stringify(matrixScenario, null, 2));
+  fs.writeFileSync(
+    path.join(previewDir, "manufacturing-native.json"),
+    runFtxMaterials(["study-on-body", "pattern.json", "study.json", "body-input.json", admittedModel], [0], previewDir),
+  );
+  fs.writeFileSync(
+    path.join(previewDir, "single-native.json"),
+    runFtxMaterials(["scenario-study", "pattern.json", "study.json", "single.json", "body-input.json", admittedModel], [0], previewDir),
+  );
+  fs.writeFileSync(
+    path.join(previewDir, "matrix-native.json"),
+    runFtxMaterials(["scenario-study", "pattern.json", "study.json", "matrix.json", "body-input.json", admittedModel], [0], previewDir),
+  );
+}
+
+// 11. Guided layered vapor & finite body-water fixtures (FTX_GUIDED_VAPOR_BODY & FTX_GUIDED_BODY_WATER_BODY)
+{
+  const vaporDir = path.join(work, "guided-vapor-body");
+  fs.mkdirSync(vaporDir, { recursive: true });
+  fs.copyFileSync(path.join(work, "consumer-adaptive/model.ftxbody"), path.join(vaporDir, "model.ftxbody"));
+  fs.writeFileSync(
+    path.join(vaporDir, "body-input.json"),
+    `{"schema":"ftx-scenario-body/1","accepted_body_fit":${acceptedRaw},"arm_abduction_deg":35.0}\n`,
+  );
+
+  // Inspect synthetic body OBJ triangles to find a vertical face (uncovered_area == 0) distinct from cap face 2
+  runFtx(["body", "--body-fit", path.join(work, "pose-capture/accepted.json"), "--model", "model.ftxbody", "--out", "body-probe", "--json"], [0], vaporDir);
+  const objLines = fs.readFileSync(path.join(vaporDir, "body-probe/body.obj"), "utf8").split(/\r?\n/);
+  const verts = [], faces = [];
+  for (const line of objLines) {
+    const parts = line.trim().split(/\s+/);
+    if (parts[0] === "v") verts.push([Number(parts[1]), Number(parts[2]), Number(parts[3])]);
+    else if (parts[0] === "f") faces.push(parts.slice(1, 4).map(tok => Number(tok.split("/")[0]) - 1));
+  }
+  let verticalTri = 0;
+  for (let i = 0; i < faces.length; i++) {
+    const [a, b, c] = faces[i].map(idx => verts[idx]);
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+    const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const norm = Math.hypot(nx, ny, nz);
+    if (norm > 0 && Math.abs(nz) < 0.1 * norm) { verticalTri = i; break; }
+  }
+  const triZMm = faces[verticalTri].map(idx => verts[idx][2] * 1000.0);
+  const lowZ = Math.min(...triZMm) - 50.0, highZ = Math.max(...triZMm) + 50.0;
+  const bodyDoc = JSON.parse(fs.readFileSync(path.join(vaporDir, "body-probe/body.json"), "utf8"));
+  const waistZ = (bodyDoc.landmarks_mm?.waist?.[2]) ?? 550.0;
+
+  const pat = JSON.parse(fs.readFileSync(path.join(root, "tests/fixtures/materials/synthetic-scenario-pattern.json"), "utf8"));
+  const width = 2 * Math.PI * 180.0;
+  pat.pieces[0].vertices.b = [width, 0.0];
+  pat.pieces[0].vertices.c = [width, highZ - lowZ];
+  pat.pieces[0].vertices.d = [0.0, highZ - lowZ];
+  pat.pieces[0].placement.radius_mm = 180.0;
+  pat.pieces[0].placement.x0 = width / 2.0;
+  pat.pieces[0].placement.y0 = waistZ - lowZ;
+  const props = pat.fabric.material.record.properties;
+  props.thickness.bounds = [0.00035, 0.00045];
+  props.thermal_conductivity = {
+    value: 0.05, bounds: [0.04, 0.06], unit: "W/(m*K)", source: "test", evidence: "estimate",
+    method: "Synthetic bounded conductivity", conditions: { conditioning: "synthetic dry coupon" },
+  };
+  props.vapor_resistance = {
+    value: 7.0, bounds: [6.0, 8.0], unit: "m2*Pa/W", source: "test", evidence: "estimate",
+    method: "Synthetic bounded Ret", conditions: { conditioning: "synthetic dry coupon" },
+  };
+  delete pat.fabric.material.expected_sha256;
+  pat.fabric.material = JSON.parse(nodePkg.material_inspect(JSON.stringify(pat.fabric.material))).selection;
+  fs.writeFileSync(path.join(vaporDir, "pattern.json"), JSON.stringify(pat, null, 2));
+
+  const coverageObj = {
+    body_triangle_ids: [verticalTri],
+    instance_layers: { band: "shell" },
+    settings: { max_distance_m: 0.2, min_normal_cosine: 0.1, separation_tolerance_m: 0.00001, interfaces: [], cells_per_layer: 1 },
+    conditions: { boundaries: [{ inside_c: 35.0, outside_c: 20.0, inside_resistance_m2_k_w: 0.1, outside_resistance_m2_k_w: 0.2 }] },
+  };
+  const vaporSurfaceObj = {
+    schema: "ftx-vapor-surface-conditions/1",
+    boundaries: [{ inside_vapor_pressure_pa: 2000.0, outside_vapor_pressure_pa: 1000.0, inside_film_resistance_m2_pa_w: 1.0, outside_film_resistance_m2_pa_w: 2.0, latent_heat_j_kg: 2500000.0 }],
+  };
+  const vaporCoverageObj = {
+    body_triangle_ids: [verticalTri],
+    instance_layers: { band: "shell" },
+    settings: { max_distance_m: 0.2, min_normal_cosine: 0.1, separation_tolerance_m: 0.00001, interfaces: [] },
+    conditions: { boundaries: [{ inside_vapor_pressure_pa: 2000.0, outside_vapor_pressure_pa: 1000.0, inside_film_resistance_m2_pa_w: 1.0, outside_film_resistance_m2_pa_w: 2.0, latent_heat_j_kg: 2500000.0 }] },
+  };
+  const motionObj = {
+    schema: "ftx-drape-motion/1",
+    keyframes: [{ time_s: 0.002, arm_abduction_deg: 35.1 }, { time_s: 0.004, arm_abduction_deg: 35.2 }],
+    max_step_s: 0.001,
+    max_trials: 16,
+    max_pairs: 100000,
+    max_sample_vertices: 10000,
+    vapor_coverage_history: { schema: "ftx-motion-vapor-coverage/1", integration: "composite_trapezoid", max_geometry_operations: 1000000 },
+  };
+  const scenarioObj = {
+    schema: "ftx-drape-scenario/1",
+    options: { spacing: 100.0, sew_steps: 120, drape_steps: 0, step: 0.04, max_settle_steps: 0 },
+    fit_spec: {},
+    max_mesh_points: 4096,
+    max_vertex_frames: 100000,
+    surface: {
+      schema: "ftx-steady-surface-conditions/1",
+      boundaries: [{ inside_c: 35.0, outside_c: 20.0, inside_resistance_m2_k_w: 0.1, outside_resistance_m2_k_w: 0.2 }],
+    },
+    vapor_coverage: vaporCoverageObj,
+  };
+  fs.writeFileSync(path.join(vaporDir, "coverage.json"), JSON.stringify(coverageObj));
+  fs.writeFileSync(path.join(vaporDir, "vapor-surface.json"), JSON.stringify(vaporSurfaceObj));
+  fs.writeFileSync(path.join(vaporDir, "vapor-coverage.json"), JSON.stringify(vaporCoverageObj));
+  fs.writeFileSync(path.join(vaporDir, "motion.json"), JSON.stringify(motionObj));
+  fs.writeFileSync(path.join(vaporDir, "scenario.json"), JSON.stringify(scenarioObj, null, 2));
+
+  // Probe once to read exact body_mesh_sha256 for wet_film
+  fs.writeFileSync(path.join(vaporDir, "probe-study.json"), JSON.stringify({
+    schema: "ftx-material-study/1",
+    variants: [{ key: "baseline", changes: { schema: "ftx-material-bindings/1" } }],
+  }));
+  const probeOut = JSON.parse(runFtxMaterials(["scenario-study", "pattern.json", "probe-study.json", "scenario.json", "body-input.json", "model.ftxbody"], [0], vaporDir));
+  const bodyMeshSha = probeOut.simulations[0].evaluation.result.vapor_coverage.result.body_mesh_sha256;
+  const bodyWaterMotion = structuredClone(motionObj);
+  bodyWaterMotion.vapor_coverage_history.wet_film = {
+    schema: "ftx-body-wet-film/1",
+    body_mesh_sha256: bodyMeshSha,
+    source: "test:explicit-body-water",
+    basis: "Synthetic initial film and constant body supply; no inferred wearer physiology",
+    initial_liquid_mass_kg: [1e-12],
+    supply_rate_kg_s: [1e-10],
+  };
+  fs.writeFileSync(path.join(vaporDir, "body-water-motion.json"), JSON.stringify(bodyWaterMotion));
+}
+
+// 12. Guided textile-water fixture (FTX_GUIDED_TEXTILE_WATER_BODY)
+{
+  const twDir = path.join(work, "guided-textile-water");
+  fs.mkdirSync(twDir, { recursive: true });
+  fs.copyFileSync(path.join(work, "consumer-adaptive/model.ftxbody"), path.join(twDir, "model.ftxbody"));
+  fs.writeFileSync(
+    path.join(twDir, "body-input.json"),
+    `{"schema":"ftx-scenario-body/1","accepted_body_fit":${acceptedRaw},"arm_abduction_deg":35.0}\n`,
+  );
+
+  const pat = JSON.parse(fs.readFileSync(path.join(root, "tests/fixtures/materials/synthetic-scenario-pattern.json"), "utf8"));
+  const width = 2 * Math.PI * 180.0;
+  pat.pieces[0].vertices.b[0] = width;
+  pat.pieces[0].vertices.c[0] = width;
+  pat.pieces[0].placement.radius_mm = 180.0;
+  pat.pieces[0].placement.x0 = width / 2.0;
+  const mat = pat.fabric.material;
+  mat.record.properties.specific_heat = { value: 1000.0, unit: "J/(kg*K)", source: "test", evidence: "estimate", method: "Synthetic textile water" };
+  mat.record.properties.vapor_resistance = { value: 8.0, unit: "m2*Pa/W", source: "test", evidence: "estimate", method: "Synthetic textile water" };
+  delete mat.expected_sha256;
+  const inspectedBase = JSON.parse(nodePkg.material_inspect(JSON.stringify(mat)));
+  pat.fabric.material = inspectedBase.selection;
+  const lockSha = inspectedBase.selection.expected_sha256;
+  fs.writeFileSync(path.join(twDir, "pattern.json"), JSON.stringify(pat, null, 2));
+
+  const incomp = structuredClone(mat);
+  incomp.id = incomp.record.id = "synthetic-incompatible-textile-water";
+  incomp.record.properties.vapor_resistance.value = 16.0;
+  const incompSel = JSON.parse(nodePkg.material_inspect(JSON.stringify(incomp))).selection;
+  fs.writeFileSync(path.join(twDir, "study.json"), JSON.stringify({
+    schema: "ftx-material-study/1",
+    variants: [
+      { key: "baseline", changes: { schema: "ftx-material-bindings/1" } },
+      { key: "incompatible-material", changes: { schema: "ftx-material-bindings/1", default: incompSel } },
+    ],
+  }, null, 2));
+
+  const makeWaterMotion = (keyframes, outsidePa, supplyRates, drainRates, vaporTemps) => ({
+    schema: "ftx-drape-motion/1",
+    keyframes,
+    max_step_s: 0.001,
+    max_trials: 8,
+    max_pairs: 100000,
+    max_sample_vertices: 100000,
+    transient_surface: {
+      schema: "ftx-motion-surface-heat/1",
+      initial_temperature_c: 20.0,
+      cells_per_layer: 1,
+      max_step_s: 0.00025,
+      max_cell_steps: 1000000,
+      boundaries: keyframes.map(() => ({ inside_c: 20.0, outside_c: 20.0, inside_resistance_m2_k_w: 1.0, outside_resistance_m2_k_w: 1.0 })),
+      surface_water: {
+        schema: "ftx-textile-surface-water/4",
+        model: "inner_cell_equilibrium_free_film_frozen_properties/1",
+        bindings: { band: { material_sha256: lockSha, initial_liquid_kg_m2: 0.001 } },
+        maximum_liquid_loading_kg_m2: 0.01,
+        liquid_specific_heat_j_kg_k: 4200.0,
+        latent_heat_j_kg: 2500000.0,
+        enthalpy_reference_c: 0.0,
+        wet_vapor_pressure_pa: [[-20.0, 0.0], [80.0, 10000.0]],
+        outside_vapor_pressure_pa: outsidePa,
+        inside_film_resistance_m2_pa_w: 1.0,
+        outside_film_resistance_m2_pa_w: 1.0,
+        supply: {
+          schema: "ftx-textile-liquid-supply/1",
+          bindings: { band: { rate_kg_m2_s: supplyRates, temperature_c: keyframes.map(() => 20.0) } },
+          source: { reference: "test:guided-textile-supply", accessed_on: "2026-11-03", note: "Synthetic supply" },
+          evidence: "estimate",
+          allow_estimates: true,
+          method: "Synthetic prescribed supply",
+        },
+        drainage: {
+          schema: "ftx-textile-liquid-drainage/1",
+          bindings: { band: { rate_kg_m2_s: drainRates } },
+          source: { reference: "test:guided-textile-drainage", accessed_on: "2026-11-03", note: "Synthetic drainage" },
+          evidence: "estimate",
+          allow_estimates: true,
+          method: "Synthetic prescribed drainage",
+          qualification: "Stock-limited removal at retained liquid temperature",
+        },
+        condensation: {
+          schema: "ftx-textile-condensation/1",
+          vapor_temperature_c: vaporTemps,
+          source: { reference: "test:guided-textile-condensation", accessed_on: "2026-11-03", note: "Synthetic condensation" },
+          evidence: "estimate",
+          allow_estimates: true,
+          method: "Synthetic reverse vapor closure",
+          qualification: "Reverse Ret network over [-20,80] C and [0,0.01] kg/m2",
+        },
+        source: { reference: "test:guided-textile-water", accessed_on: "2026-11-03", note: "Synthetic fluid evidence only" },
+        evidence: "estimate",
+        allow_estimates: true,
+        method: "Synthetic decision replay",
+        qualification: "Synthetic fixed dry thermal and vapor properties across [-20,80] C and [0,0.01] kg/m2",
+      },
+    },
+  });
+
+  const kfs3 = [
+    { time_s: 0.002, arm_abduction_deg: 35.1 },
+    { time_s: 0.003, arm_abduction_deg: 35.2 },
+    { time_s: 0.004, arm_abduction_deg: 35.3 },
+  ];
+  const fullMotion = makeWaterMotion(kfs3, [6000.0, 1000.0, 1000.0], [0.02, 0.02, 0.02], [0.01, 0.01, 0.01], [25.0, 20.0, 20.0]);
+  const prefixMotion = makeWaterMotion([kfs3[0]], [6000.0], [0.02], [0.01], [25.0]);
+  const lateMotion = makeWaterMotion(kfs3, [6000.0, 1000.0, 1000.0], [0.02, 0.02, 500.0], [0.01, 0.01, 0.01], [25.0, 20.0, 20.0]);
+
+  const baseScenario = {
+    schema: "ftx-drape-scenario/1",
+    options: { spacing: 100.0, sew_steps: 120, drape_steps: 0, step: 0.04, max_settle_steps: 0 },
+    fit_spec: {},
+    max_mesh_points: 4096,
+    max_vertex_frames: 100000,
+    surface: {
+      schema: "ftx-steady-surface-conditions/1",
+      boundaries: [{ inside_c: 35.0, outside_c: 20.0, inside_resistance_m2_k_w: 0.1, outside_resistance_m2_k_w: 0.2 }],
+    },
+    vapor_surface: {
+      schema: "ftx-vapor-surface-conditions/1",
+      boundaries: [{ inside_vapor_pressure_pa: 2000.0, outside_vapor_pressure_pa: 1000.0, inside_film_resistance_m2_pa_w: 1.0, outside_film_resistance_m2_pa_w: 2.0, latent_heat_j_kg: 2500000.0 }],
+    },
+  };
+  fs.writeFileSync(path.join(twDir, "motion.json"), JSON.stringify(fullMotion));
+  fs.writeFileSync(path.join(twDir, "scenario.json"), JSON.stringify({ ...baseScenario, motion: fullMotion }, null, 2));
+  fs.writeFileSync(path.join(twDir, "prefix-scenario.json"), JSON.stringify({ ...baseScenario, motion: prefixMotion }, null, 2));
+  fs.writeFileSync(path.join(twDir, "late-scenario.json"), JSON.stringify({ ...baseScenario, motion: lateMotion }, null, 2));
+}
 EOF
 fi
 
@@ -423,9 +829,13 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   ADMITTED_MODEL="${FTX_BODY_MODEL:-${HOME:-}/.cache/franken_textiles/anny-0.6.1-default.ftxbody}"
   BODY_CHECK_ENV_DIR=""
   BODY_CHECK_ENV_MODEL=""
+  TAPE_ARM_ENV_DIR=""
+  PREVIEW_STUDY_ENV_DIR=""
   if [ -f "$ADMITTED_MODEL" ] && [ -d "$WORK/body-check-tape" ]; then
     BODY_CHECK_ENV_DIR="$WORK/body-check-tape"
     BODY_CHECK_ENV_MODEL="$ADMITTED_MODEL"
+    TAPE_ARM_ENV_DIR="$WORK/tape-arm"
+    PREVIEW_STUDY_ENV_DIR="$WORK/preview-study"
   fi
   FTX_REAL_WASM=1 \
   FTX_GUIDED_SCENARIO_NATIVE="$FTX_MATERIALS_BIN" \
@@ -441,6 +851,13 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   FTX_GUIDED_MOTION_BODY="$WORK/consumer-adaptive" \
   FTX_GUIDED_SEAM_BODY="$WORK/consumer-adaptive" \
   FTX_GUIDED_CONTACT_BODY="$WORK/consumer-adaptive" \
+  FTX_GUIDED_VAPOR_BODY="$WORK/guided-vapor-body" \
+  FTX_GUIDED_BODY_WATER_BODY="$WORK/guided-vapor-body" \
+  FTX_GUIDED_TEXTILE_WATER_BODY="$WORK/guided-textile-water" \
+  FTX_POSE_CAPTURE_DIR="$WORK/pose-capture" \
+  FTX_TAPE_ARM_DIR="$TAPE_ARM_ENV_DIR" \
+  FTX_PREVIEW_STUDY_DIR="$PREVIEW_STUDY_ENV_DIR" \
+  FTX_ANNY_MODEL="$BODY_CHECK_ENV_MODEL" \
   FTX_PHOTO_WEB_FIXTURES="$WORK/photo-web-fixtures" \
   FTX_CAMERA_WEB_FIXTURES="$WORK/camera-web-fixtures" \
   FTX_BODY_FIT_PORTABLE_DIR="$WORK/body-fit-portable" \
@@ -472,6 +889,11 @@ fi
 node --experimental-vm-modules tools/check_materials_wasm.cjs --native "$FTX_MATERIALS_BIN"
 node --experimental-vm-modules tools/check_strip_wasm.cjs --native "$FTX_MATERIALS_BIN"
 node tools/check_sewing_wasm.cjs "$WORK/node-pkg/ftx_wasm.js" "$FTX_MATERIALS_BIN"
+
+if [ "$VM_ONLY" -eq 1 ]; then
+  echo "[check_all_web] PASS: VM + direct WASM suites passed (--vm-only, with_replays=$WITH_REPLAYS, work dir: $WORK)"
+  exit 0
+fi
 
 echo "[check_all_web] 5/5 Running all 7 headless Chromium Playwright E2E suites..."
 if [ -z "${CHROMIUM_EXECUTABLE:-}" ] && [ -z "${FTX_CHROMIUM_EXECUTABLE:-}" ]; then

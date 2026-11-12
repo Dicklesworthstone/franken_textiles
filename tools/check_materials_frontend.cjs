@@ -879,7 +879,11 @@ test('compiled WASM configured drapes reproduce native posture, settling and exa
     const w=await workerModule({bindings:ftx}),input={type:'fold',request:320,pattern,measurements,fit:'{"points":[]}',
       bodyFit,bodyFitConsent:true,armDeg:35,bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),
       selfContactMm:0,legs:'seated',legFraction:0.001,maxSettleSteps:2};
-    const result=await w.send(input);assert.equal(result.type,'result',result.message);assert.deepEqual(JSON.parse(result.reportText),expected);
+    const result=await w.send(input);assert.equal(result.type,'result',result.message);
+    const actualReport=JSON.parse(result.reportText);
+    assert.equal(actualReport.tightness_qualified,false);assert.equal(actualReport.collider_tightness_qualified,false);
+    delete actualReport.tightness_qualified;delete actualReport.collider_tightness_qualified;
+    assert.deepEqual(actualReport,expected);
     assert.equal(result.viewer,load('leg-fold/fold_viewer.html'));
     assert.equal(result.files.find(file=>file.name==='body_fit.json').text,bodyFit);
     assert.equal(result.files.find(file=>file.name==='sim_report.json').text,result.reportText);
@@ -919,7 +923,8 @@ test('compiled WASM ordinary arm poses reproduce native drapes and retain the ex
       for(const field of ['pattern','wall_s'])delete expected[field]; // Native carrier fields, not numerical differences.
       // Native tape-fit metadata includes rounded predictions/free parameters; the web adapter
       // exposes unrounded readings instead. Compare the full shared cloth report, then body semantics.
-      const {body:actualBody,...actualDrape}=result.result,{body:nativeBody,...nativeDrape}=expected;
+      const {body:actualBody,tightness_qualified:tq,collider_tightness_qualified:ctq,...actualDrape}=result.result,{body:nativeBody,...nativeDrape}=expected;
+      assert.equal(tq,false);assert.equal(ctq,false);
       assert.deepEqual(actualDrape,nativeDrape);assert.equal(result.result.arm_deg,armDeg);
       assert.equal(actualBody.provenance,'MODEL_FIT');assert.equal(actualBody.model,nativeBody.model);
       assert.equal(actualBody.age_years,nativeBody.age_years);assert.equal(actualBody.gender,nativeBody.gender);

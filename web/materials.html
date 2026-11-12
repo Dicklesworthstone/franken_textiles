@@ -213,6 +213,13 @@ This dedicated control uses the request's <code>allow_estimates</code> value to 
 Review candidate coefficients, held-out residuals, local sensitivity, mesh changes and any rejection reasons below.
 Only an accepted result publishes a frozen selection for section 2. These planar ideal-grip calculations do not identify
 wrinkling, grip slip, bending, rate dependence or hysteresis.</p>
+<label>Inverse cylindrical-holder request JSON (<code>ftx-cylinder-calibration/1</code>) <input id="cylinderFitRequest" type="file" accept=".json,application/json"></label>
+<button id="cylinderFit" data-command="cylinderFit" disabled>Identify a candidate from cylindrical-holder cycles</button>
+<p class="note">Identify caller-selected canonical orthotropic membrane and isotropic hinge-bending parameters against the
+3D cylindrical-holder shell model with isometric polygon chord radius, pretension offset, tare subtraction and held-out
+<code>CHECK</code> replay. Uses the request's <code>allow_estimates</code> flag to admit fitted outputs (default false);
+never promotes pressure-specific <code>reported_thickness</code> to unloaded contact <code>thickness</code> or fabricates
+missing body friction, hysteresis or clamp-slip mechanics.</p>
 </details>
 </section>
 <section id="materialPattern"><h2>2. Bind the same pattern</h2>

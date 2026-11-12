@@ -2,7 +2,7 @@
 // application module. One immutable traced sheet is kept until replacement or worker termination.
 import init, * as ftx from "./pkg/ftx_wasm.js";
 const { WebTrace } = ftx;
-const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-11.2";
+const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-11.4";
 
 let sheet = null;
 let loadFailure = null;
