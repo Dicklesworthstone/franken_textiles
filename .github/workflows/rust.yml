@@ -22,7 +22,8 @@ jobs:
         run: node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
       - name: Check still-photo capture through body fitting
         if: ${{ !cancelled() }}
-        run: cargo test -p ftx-cli --test body_fit_workflow --locked photos::
+        run: |
+          cargo test -p ftx-cli --test body_fit_workflow --locked photos::
   material_heat:
     runs-on: ubuntu-latest
     timeout-minutes: 15
