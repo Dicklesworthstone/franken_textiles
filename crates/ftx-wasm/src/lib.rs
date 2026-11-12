@@ -25,7 +25,7 @@ pub mod zip;
 /// `web/materials-worker.js`, `web/photo-worker.js`, and `web/trace-worker.js` so a stale local
 /// `web/pkg/` bundle fails fast with `./tools/build_web.sh` instead of cryptic mid-workflow schema
 /// errors.
-pub const WASM_INTERFACE_STAMP: &str = "ftx-wasm-interface/2026-11-11.2";
+pub const WASM_INTERFACE_STAMP: &str = "ftx-wasm-interface/2026-11-11.4";
 
 /// Return [`WASM_INTERFACE_STAMP`] for native and browser callers.
 #[must_use]

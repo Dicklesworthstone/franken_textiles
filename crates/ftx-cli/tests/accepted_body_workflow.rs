@@ -3162,6 +3162,7 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         std::fs::create_dir_all(&destination).unwrap();
         for name in [
             "model.ftxbody",
+            "accepted.json",
             "pattern.json",
             "study.json",
             "scenario.json",

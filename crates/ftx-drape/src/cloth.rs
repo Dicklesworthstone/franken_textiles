@@ -1403,7 +1403,47 @@ impl Solver {
         Ok(report)
     }
 
+    /// Implicit-Euler step from the accepted physical state `self.x` (`x_n`), optionally seeding
+    /// free DOFs of the Newton minimizer at `guess` without altering `x_n` in the inertia predictor
+    /// or post-step velocity `(x_{n+1} - x_n) / h`. Falls back to `step` when contact is active.
+    pub(crate) fn step_with_guess(
+        &mut self,
+        h: f64,
+        guess: Option<&[Vec3]>,
+    ) -> Result<SolveReport, Refusal> {
+        if guess.is_none() || self.contact.is_some() {
+            return self.step_at_body(h, None);
+        }
+        self.check_liquid_mass()?;
+        self.model.check_attached_mass()?;
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
+            return self.relaxing_step(h, None);
+        }
+        let mut trial = self.clone();
+        let report = trial.step_inner_with_guess(h, None, guess)?;
+        if trial.v.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "the cloth velocity became non-finite",
+            ));
+        }
+        *self = trial;
+        Ok(report)
+    }
+
     fn step_inner(&mut self, h: f64, body_start: Option<&[Vec3]>) -> Result<SolveReport, Refusal> {
+        self.step_inner_with_guess(h, body_start, None)
+    }
+
+    fn step_inner_with_guess(
+        &mut self,
+        h: f64,
+        body_start: Option<&[Vec3]>,
+        guess: Option<&[Vec3]>,
+    ) -> Result<SolveReport, Refusal> {
         self.model.check_panel_bending_domains(&self.x)?;
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
@@ -1436,6 +1476,24 @@ impl Solver {
                 c.update_lag_motion(&x0, &x0, h, Some(b));
             } else {
                 c.update_lag(&x0, &x0, h);
+            }
+        } else if let Some(g) = guess {
+            if g.len() != self.x.len() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "step warm-start length must match vertex count",
+                ));
+            }
+            for (i, (pos, cand)) in self.x.iter_mut().zip(g).enumerate() {
+                if self.free[3 * i].is_some() {
+                    pos.x = cand.x;
+                }
+                if self.free[3 * i + 1].is_some() {
+                    pos.y = cand.y;
+                }
+                if self.free[3 * i + 2].is_some() {
+                    pos.z = cand.z;
+                }
             }
         }
         let mut rep = match self.minimize(Some((&xt, h))) {

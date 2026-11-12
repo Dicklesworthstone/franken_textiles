@@ -56,7 +56,10 @@ mod relaxation_calibration;
 
 use calibration::{read, simulation_readiness};
 
-const USAGE: &str = "ftx-materials catalog [SEARCH]
+const USAGE: &str = "ftx-materials list
+ftx-materials catalog [SEARCH]
+ftx-materials freeze ID [--allow-estimates]
+ftx-materials compare FIRST_ID SECOND_ID [--allow-estimates]
 ftx-materials screen REQUEST.json
 ftx-materials study PATTERN.json REQUEST.json
 ftx-materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody
@@ -88,6 +91,7 @@ ftx-materials strip-experiment REQUEST.json
 ftx-materials strip-history REQUEST.json
 ftx-materials cylinder-experiment REQUEST.json
 ftx-materials calibrate-strip REQUEST.json [--allow-estimates]
+ftx-materials calibrate-cylinder REQUEST.json [--allow-estimates]
 ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
@@ -143,6 +147,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `strip-history` retains production membrane history and inertia through prescribed grip loading, holds and unloading, with separate stored energy and physical dissipation.
 `cylinder-experiment` runs the production 3D shell on coaxial cylindrical holders with explicit pretension, tare, twist, compression and clamp-slip offset/limit auditing, without promoting garment readiness.
 `calibrate-strip` identifies bounded coefficients from grip forces and optional measured widths; rejected candidates retain their diagnostics without a selection. --allow-estimates controls admission of fitted coefficients; the request separately owns allow_estimated_observations.
+`calibrate-cylinder` identifies bounded canonical membrane/bending coefficients from 3D cylindrical-holder force, torque and optional mid-radius observations with independent CHECK replay; rejected candidates retain their diagnostics without a selection, and reported_thickness is never promoted to unloaded contact thickness. --allow-estimates controls admission of fitted coefficients.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `calibrate-friction` identifies explicit pair/self/body kinetic coefficients from corrected steady sliding forces.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
@@ -265,6 +270,8 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["cylinder-experiment", path] => strips::cylinder(path),
         ["calibrate-strip", path] => strips::run(path, false),
         ["calibrate-strip", path, "--allow-estimates"] => strips::run(path, true),
+        ["calibrate-cylinder", path] => strips::calibrate_cylinder(path, false),
+        ["calibrate-cylinder", path, "--allow-estimates"] => strips::calibrate_cylinder(path, true),
         ["pressure-condition", path] => screening::pressure_condition(path),
         ["compression-stack", path] => screening::compression_stack(path),
         ["treatment", path] => screening::treatment(path),
@@ -372,6 +379,88 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         }
         ["calibrate", path] => calibration::run(path, false),
         ["calibrate", path, "--allow-estimates"] => calibration::run(path, true),
+        ["list"] => {
+            let db = catalog()?;
+            let mut entries: Vec<Value> = db
+                .materials
+                .iter()
+                .map(|m| {
+                    json!({"id":m.id, "name":m.name, "form":m.form,
+                        "mechanics_missing":m.missing_mechanics(), "properties":m.properties.len()})
+                })
+                .collect();
+            entries.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+            Ok(json!({"schema":"ftx-material-list/1","count":entries.len(),"materials":entries}))
+        }
+        ["freeze", id] | ["freeze", id, "--allow-estimates"] => {
+            let snapshot = catalog()?.resolve(&Selection {
+                id: (*id).into(),
+                allow_estimates: words.len() == 3,
+                ..Selection::default()
+            })?;
+            Ok(json!({
+                "schema": "ftx-material-selection/1",
+                "selection": snapshot.frozen_selection(),
+                "mechanics_missing": snapshot.material().missing_mechanics(),
+                "sha256": snapshot.sha256()
+            }))
+        }
+        ["compare", first_id, second_id]
+        | ["compare", first_id, second_id, "--allow-estimates"] => {
+            let db = catalog()?;
+            let permit = words.len() == 4;
+            let select = |id: &str| {
+                db.resolve(&Selection {
+                    id: id.into(),
+                    allow_estimates: permit,
+                    ..Selection::default()
+                })
+            };
+            let first = select(first_id)?;
+            let second = select(second_id)?;
+            let a = first.material();
+            let b = second.material();
+            let mut properties = serde_json::Map::new();
+            for (key, x) in &a.properties {
+                if let Some(y) = b.properties.get(key)
+                    && x.unit == y.unit
+                    && (permit
+                        || (x.evidence != ftx_pattern::materials::Evidence::Estimate
+                            && y.evidence != ftx_pattern::materials::Evidence::Estimate))
+                {
+                    properties.insert(
+                        key.clone(),
+                        json!({
+                            "unit": x.unit,
+                            "first": x.value,
+                            "second": y.value,
+                            "ratio_second_to_first": if x.value != 0.0 { Some(y.value / x.value) } else { None },
+                            "first_evidence": x.evidence,
+                            "second_evidence": y.evidence,
+                            "first_source": a.sources[&x.source],
+                            "second_source": b.sources[&y.source]
+                        }),
+                    );
+                }
+            }
+            Ok(json!({
+                "schema": "ftx-material-comparison/1",
+                "first": {
+                    "id": a.id,
+                    "sha256": first.sha256(),
+                    "mechanics_ready": first.mechanics().is_ok(),
+                    "missing_mechanics": a.missing_mechanics()
+                },
+                "second": {
+                    "id": b.id,
+                    "sha256": second.sha256(),
+                    "mechanics_ready": second.mechanics().is_ok(),
+                    "missing_mechanics": b.missing_mechanics()
+                },
+                "comparable_properties": properties,
+                "note": "Observed properties; not an inferred fit, safety or thermal-comfort rating."
+            }))
+        }
         ["catalog"] | ["catalog", _] => {
             let needle = words.get(1).copied().unwrap_or("").to_lowercase();
             let mut db = catalog()?;

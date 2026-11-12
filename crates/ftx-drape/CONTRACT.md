@@ -1142,8 +1142,18 @@ compression and stretch-slip explicitly via backward Euler. Axial compression be
 `reported_thickness`). Every accepted step reports `[N]` axial forces, `[N·m]` axial torques, tare-corrected
 channels, interior/global linear and angular momentum residuals, stored/kinetic energies, Maxwell and
 membrane/panel-bending plastic dissipation, and `ProtocolAudit` discrepancies against optional nominal
-rates/travel. `mechanics_readiness_promoted`, `fit_claim`, and `empirical_validation_claim` remain `false`;
-inverse constitutive identification against external raw Fabric-101 curve archives remains open under `ftx-tm2.1`.
+rates/travel. `mechanics_readiness_promoted`, `fit_claim`, and `empirical_validation_claim` remain `false`.
+
+**Cylindrical-holder inverse identification** (`cylinder::fit`, `ftx-tm2.1` software core).
+`ftx-cylinder-calibration/1` identifies caller-selected canonical scalar moduli (`warp_stiffness`,
+`weft_stiffness`, `poisson_warp_weft`, `shear_stiffness`, `bending_rigidity`) inside explicit positive-definite
+bounds by solving the actual 3D `cylinder` forward model across `FIT` experiments with 3-start projected
+Levenberg-Marquardt. Publication of `Evidence::Estimate` properties and a hash-locked `Selection` requires
+interior convergence of all 3 starts, normalized sensitivity Gram pivot `>= min_excitation_pivot`, coarse-to-2x
+mesh stability `<= max_mesh_scaled`, independent held-out `CHECK` residuals within policy and inside
+`fitted_green_strain_range`, and a final `StrainDomain::Box` replay. Presser-foot `reported_thickness` is never
+promoted to unloaded contact `thickness`; `fit_claim` and `empirical_validation_claim` remain `false`, and
+empirical calibration against external raw Fabric-101 curve archives and physical coupons remains open under `ftx-tm2.1`.
 
 **Material-frame strain consumer** (`study::strain`, `ftx-ds2`). Optional scenario `material_strain`
 requests raw `[E11, E22, 2E12]` on explicitly selected retained instances or the whole retained garment.

@@ -508,10 +508,10 @@ The workbench uses the ordinary composed-pattern drape route; it does not append
 `Prepared::drape` runtime garment-ownership report or claim successful physical dressing or fit.
 
 **Timed strips, cylindrical holders, and current-geometry vapor.** `materials::strip_history`,
-`materials::cylinder_experiment`, and `thermal::vapor_surface`
+`materials::cylinder_experiment`, `materials::calibrate_cylinder`, and `thermal::vapor_surface`
 are file-free adapters to the shared production consumers, exported as `material_strip_history`,
-`material_cylinder_experiment`, and `thermal_vapor_surface` (interface stamp `ftx-wasm-interface/2026-11-11.2`). The material workbench retains complete state/source reports and
-exact Rust-generated replay JSON. New request files withdraw their own previous results; material,
+`material_cylinder_experiment`, `material_calibrate_cylinder`, and `thermal_vapor_surface` (interface stamp `ftx-wasm-interface/2026-11-11.4`). The material workbench retains complete state/source reports and
+exact Rust-generated replay or conditional `Selection` JSON (`cylinderFit` adopts an accepted selection only when `calibration.accepted === true`, never promotes `reported_thickness` to unloaded contact `thickness`, and withdraws stale outputs on request changes). New request files withdraw their own previous results; material,
 fit and geometry changes also withdraw draped vapor outputs. Scenario displays retain independent
-initial and motion-endpoint vapor outcomes. These controls do not create fitted selections, replace
+initial and motion-endpoint vapor outcomes. Forward experiment controls do not create fitted selections, replace
 existing assignments, infer wearer evaporation or couple latent cooling into dry heat.

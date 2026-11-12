@@ -87,6 +87,7 @@ impl Prepared {
                         [
                             "local:ftx-strip-calibration/",
                             "local:ftx-strip-area-calibration/",
+                            "local:ftx-cylinder-calibration/",
                             "local:ftx-swatch-calibration/",
                             "local:ftx-nonlinear-swatch-calibration/",
                             "local:ftx-nonlinear-swatch-area-calibration/",

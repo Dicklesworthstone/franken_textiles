@@ -1,10 +1,15 @@
 //! Inspect the built-in sourced textile catalog and freeze selections for downstream physics.
 use super::{Args, bad_input, known_options};
 use ftx_core::{Refusal, RefusalCode};
+use ftx_drape::{material, run::DrapeOptions};
+use ftx_pattern::Pattern;
 use ftx_pattern::material_catalog::Selection;
+use ftx_pattern::material_cost::{QuoteBook, Scope};
+use ftx_pattern::materials::ThermalStack;
 use ftx_pattern::textile_import;
+use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{fs::OpenOptions, io::Write};
+use std::{fs::OpenOptions, io::Write, path::Path};
 
 #[path = "bin/material_workbench/bending.rs"]
 mod bending_calibration;
@@ -25,8 +30,101 @@ mod sewing_selection;
 mod stock;
 mod strip;
 mod thermal;
+#[path = "bin/material_workbench/coverage.rs"]
+mod thermal_coverage;
+#[path = "bin/material_workbench/motion.rs"]
+mod thermal_motion;
+#[path = "bin/material_workbench/projection.rs"]
+mod thermal_projection;
+#[path = "bin/material_workbench/surface.rs"]
+mod thermal_surface;
+#[path = "bin/material_workbench/thermal.rs"]
+mod thermal_transient;
 
 use calibration::{read, simulation_readiness};
+
+fn invalid(message: impl Into<String>) -> Refusal {
+    Refusal::new(RefusalCode::InvalidDocument, message)
+}
+
+fn io(path: &str, error: std::io::Error) -> Refusal {
+    Refusal::new(RefusalCode::Io, format!("{path}: {error}"))
+}
+
+fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMaterial, Refusal> {
+    if !raw.is_object() || !raw["fabric"].is_object() {
+        return Err(invalid(
+            "pattern needs an object-valued fabric with a material selection",
+        ));
+    }
+    if let Some(pieces) = raw["pieces"].as_array() {
+        for p in pieces {
+            if p.get("material").is_some_and(|m| !m.is_string())
+                || p.get("material_id").is_some()
+                || p["fabric"].get("material").is_some()
+                || p["fabric"].get("material_id").is_some()
+            {
+                return Err(invalid(
+                    "heterogeneous piece assignments need separate material requirements",
+                ));
+            }
+        }
+    }
+    textile_import::resolve_fabric(&raw["fabric"])?
+        .ok_or_else(|| invalid("pattern has no explicit material selection"))
+}
+
+fn bind_material(raw: Value, selection: &Selection, out: &str) -> Result<Value, Refusal> {
+    let pattern = Pattern::new(raw);
+    let errors = pattern.structure_errors();
+    if !errors.is_empty() {
+        return Err(invalid(errors.join("; ")));
+    }
+    let snapshot = textile_import::catalog()?.resolve(selection)?;
+    let mut raw = pattern.raw().clone();
+    let root = raw
+        .as_object_mut()
+        .ok_or_else(|| invalid("pattern must be an object"))?;
+    let fabric = root.entry("fabric").or_insert_with(|| json!({}));
+    let fabric = fabric
+        .as_object_mut()
+        .ok_or_else(|| invalid("fabric must be an object"))?;
+    for key in [
+        "areal_g_m2",
+        "tensile_N_m",
+        "bending_Nm",
+        "material_id",
+        "material",
+    ] {
+        fabric.remove(key);
+    }
+    fabric.insert(
+        "material".into(),
+        serde_json::to_value(snapshot.frozen_selection()).map_err(|e| invalid(e.to_string()))?,
+    );
+    selected(&raw)?;
+    let mut bytes = serde_json::to_vec_pretty(&raw).map_err(|e| invalid(e.to_string()))?;
+    bytes.push(b'\n');
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(Path::new(out))
+        .map_err(|e| io(out, e))?;
+    file.write_all(&bytes).map_err(|e| io(out, e))?;
+    Ok(json!({"out":out,"material_sha256":snapshot.sha256(),
+        "missing_mechanics":snapshot.material().missing_mechanics(),
+        "simulation_ready":simulation_readiness(&snapshot).is_ok(),"geometry_changed":false}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StackInput {
+    layers: Vec<Selection>,
+    area_m2: f64,
+    inside_c: f64,
+    outside_c: f64,
+    boundary_resistance_m2_k_w: f64,
+}
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
@@ -104,6 +202,139 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
+    if action == "catalog" {
+        known_options(args, "materials", &[])?;
+        if args.positional.len() > 3 {
+            return Err(bad_input("usage: ftx materials catalog [SEARCH] [--json]"));
+        }
+        let needle = args
+            .positional
+            .get(2)
+            .map_or_else(String::new, |s| s.to_lowercase());
+        let mut db = textile_import::catalog()?;
+        db.materials.retain(|m| {
+            m.id.to_lowercase().contains(&needle)
+                || m.name.to_lowercase().contains(&needle)
+                || m.composition
+                    .iter()
+                    .any(|c| c.fiber.to_lowercase().contains(&needle))
+        });
+        let result = serde_json::to_value(db).map_err(|e| bad_input(e.to_string()))?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "resolve" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials resolve PATTERN.json [--json]",
+            ));
+        };
+        let pattern = Pattern::new(read(path)?);
+        let result = material::resolve(&pattern, &DrapeOptions::default())?.report;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "bind" {
+        known_options(args, "materials", &[])?;
+        let [pattern, selection, out] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials bind PATTERN.json SELECTION.json NEW-PATTERN.json [--json]",
+            ));
+        };
+        let result = bind_material(read(pattern)?, &read(selection)?, out)?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "price" {
+        known_options(args, "materials", &[])?;
+        let [pattern, quotes, scope] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials price PATTERN.json QUOTES.json SCOPE.json [--json]",
+            ));
+        };
+        let m = selected(&read(pattern)?)?;
+        let evaluated = read::<QuoteBook>(quotes)?.evaluate(&m, &read::<Scope>(scope)?)?;
+        let result = serde_json::to_value(evaluated).map_err(|e| bad_input(e.to_string()))?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "thermal" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials thermal STACK.json [--json]",
+            ));
+        };
+        let input: StackInput = read(path)?;
+        let db = textile_import::catalog()?;
+        let layers = input
+            .layers
+            .iter()
+            .map(|s| db.resolve(s))
+            .collect::<Result<Vec<_>, _>>()?;
+        for layer in &layers {
+            layer.thermal_resistance()?;
+        }
+        let refs: Vec<_> = layers.iter().map(|l| l.material()).collect();
+        let dry = ThermalStack::evaluate(
+            &refs,
+            input.area_m2,
+            input.inside_c,
+            input.outside_c,
+            input.boundary_resistance_m2_k_w,
+            true,
+        )?;
+        let result = json!({
+            "dry_1d_stack": dry,
+            "layers": layers,
+            "comfort_claim": false,
+            "area_m2": input.area_m2,
+            "inside_c": input.inside_c,
+            "outside_c": input.outside_c,
+            "boundary_resistance_m2_k_w": input.boundary_resistance_m2_k_w,
+            "not_simulated": ["wind", "air gaps", "moisture", "compression", "human thermoregulation"]
+        });
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "thermal-at" {
+        known_options(args, "materials", &["allow-estimates"])?;
+        let [id, temperature] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials thermal-at ID TEMPERATURE-C [--allow-estimates] [--json]",
+            ));
+        };
+        let result = thermal_transient::point(
+            id,
+            temperature,
+            args.options.contains_key("allow-estimates"),
+        )?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "sew-svg" {
+        known_options(args, "materials", &[])?;
+        let [pattern, options, operation, out] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg [--json]",
+            ));
+        };
+        let pattern = Pattern::new(read::<Value>(pattern)?);
+        let options = read::<ftx_export::sewing::SewOptions>(options)?;
+        let svg = ftx_export::sewing::preview::svg(&pattern, &options, operation)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(out)
+            .map_err(|e| io(out, e))?;
+        file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
+        let result = json!({"out":out,"operation":operation,
+            "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
+            "hardware_execution_authorized":false});
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if action == "sew-cell-svg" {
         known_options(args, "materials", &[])?;
         let [pattern, options, cell, operation, out] = &args.positional[2..] else {
@@ -154,11 +385,12 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             | "calibrate-relaxation"
             | "calibrate-membrane-plasticity"
             | "calibrate-strip"
+            | "calibrate-cylinder"
     ) {
         known_options(args, "materials", &["allow-estimates"])?;
         let [path] = &args.positional[2..] else {
             return Err(bad_input(
-                "usage: ftx materials calibrate|calibrate-nonlinear SWATCHES.json | calibrate-bending COUPONS.json | calibrate-friction SLIDING.json | calibrate-relaxation HISTORIES.json | calibrate-membrane-plasticity HISTORIES.json | calibrate-strip ACQUISITION.json [--allow-estimates]",
+                "usage: ftx materials calibrate|calibrate-nonlinear SWATCHES.json | calibrate-bending COUPONS.json | calibrate-friction SLIDING.json | calibrate-relaxation HISTORIES.json | calibrate-membrane-plasticity HISTORIES.json | calibrate-strip|calibrate-cylinder REQUEST.json [--allow-estimates]",
             ));
         };
         let allow = args.options.contains_key("allow-estimates");
@@ -169,6 +401,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "calibrate-relaxation" => relaxation::run(path, allow)?,
             "calibrate-membrane-plasticity" => membrane_plasticity::run(path, allow)?,
             "calibrate-strip" => strip::run(path, allow)?,
+            "calibrate-cylinder" => strip::calibrate_cylinder(path, allow)?,
             _ => nonlinear::run(path, allow)?,
         };
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
@@ -257,7 +490,12 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     if matches!(
         action,
-        "thermal-compression"
+        "thermal-transient"
+            | "thermal-surface"
+            | "thermal-coverage"
+            | "thermal-map"
+            | "thermal-motion"
+            | "thermal-compression"
             | "thermal-vapor"
             | "thermal-vapor-coverage"
             | "thermal-vapor-coverage-history"
@@ -268,6 +506,15 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     ) {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
+            ("thermal-transient", [path]) => thermal_transient::run(path)?,
+            ("thermal-surface", [report, conditions]) => thermal_surface::run(report, conditions)?,
+            ("thermal-coverage", [report, mapping, conditions]) => {
+                thermal_coverage::run(report, mapping, conditions)?
+            }
+            ("thermal-map", [report, body, settings]) => {
+                thermal_projection::run(report, body, settings)?
+            }
+            ("thermal-motion", [schedule]) => thermal_motion::run(schedule)?,
             ("thermal-compression", [path]) => thermal::compression_history(path)?,
             ("thermal-vapor", [path]) => thermal::vapor(path)?,
             ("thermal-vapor-coverage", [path]) => thermal::vapor_coverage(path)?,
@@ -285,7 +532,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             }
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials thermal-compression HISTORY.json | thermal-vapor STACK.json | thermal-vapor-coverage REQUEST.json | thermal-vapor-coverage-history HISTORY.json | thermal-vapor-surface SIM_REPORT.json CONDITIONS.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
+                    "usage: ftx materials thermal-transient STACK.json | thermal-surface SIM_REPORT.json CONDITIONS.json | thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json | thermal-map SIM_REPORT.json BODY.obj PROJECTION.json | thermal-motion MOTION.json | thermal-compression HISTORY.json | thermal-vapor STACK.json | thermal-vapor-coverage REQUEST.json | thermal-vapor-coverage-history HISTORY.json | thermal-vapor-surface SIM_REPORT.json CONDITIONS.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
                 ));
             }
         };
@@ -419,7 +666,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             Ok((result, 0, text))
         }
         _ => Err(bad_input(
-            "usage: ftx materials [list|show ID|freeze ID|compare ID ID|thermal-steady STACK.json|thermal-steady-surface SIM_REPORT.json CONDITIONS.json|thermal-steady-coverage REQUEST.json]",
+            "usage: ftx materials [list|catalog [SEARCH]|show ID|freeze ID|compare FIRST_ID SECOND_ID|inspect SELECTION.json|resolve PATTERN.json|bind PATTERN.json SELECTION.json NEW-PATTERN.json|bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json|price PATTERN.json QUOTES.json SCOPE.json|screen REQUEST.json|study PATTERN.json REQUEST.json|study-on-body ...|scenario-study ...|calibrate* ...|strip-* ...|cylinder-experiment ...|thermal* ...|cut-* ...|stock-* ...|sew-* ...]",
         )),
     }
 }

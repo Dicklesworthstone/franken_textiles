@@ -256,9 +256,16 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   (`docs/outfit.md`). It does not resolve contact between garments or simulate their layers together.
 - `ftx sim-points SIMDIR --pattern P --measurements M [--json]`: inspects drafted vs settled z-levels of
   non-sleeve corners across the tail of `fold.pc2` (`docs/fold-inspection.md`).
-- `ftx materials list|show|validate|fit|thermal ... [--json]`: inspects and validates the material
-  catalogue, fits fabric parameters to cantilever/stretch tests, and computes dry/evaporative thermal
-  resistance (`docs/material-catalog.md`, `docs/material-calibration.md`, `docs/material-thermal.md`).
+- `ftx materials <subcommand> ... [--json]` and `ftx-materials <subcommand> ...`: share the same
+  source-qualified material, thermal, calibration, strip/cylinder, cutting, finite-stock and sewing
+  subcommand set (`list`, `catalog [SEARCH]`, `show ID`, `freeze ID`, `compare FIRST_ID SECOND_ID`,
+  `inspect`, `resolve`, `bind`, `bind-changes`, `price`, `screen`, `study`, `study-on-body`,
+  `scenario-study`, `pressure-condition`, `compression-stack`, `treatment`, `treatment-pattern`,
+  `calibrate*`, `linearize-origin`, `strip-*`, `cylinder-experiment`, `thermal*`, `cut-*`, `stock-*`,
+  `sew-*`). Only `show` retains each binary's documented top-level inspection envelope (`ftx-material-detail/1`
+  under `ftx materials show` vs `snapshot` + `selection` under `ftx-materials show`); every other shared
+  subcommand produces identical domain JSON (`docs/material-catalog.md`, `docs/material-calibration.md`,
+  `docs/material-thermal.md`).
 - `ftx materials inspect SELECTION.json [--json]` and `ftx-materials inspect SELECTION.json`:
   inspect an ID-based or self-contained selection through the same source/capability report as the
   browser. Inputs use the existing 64 MiB material limit. The file owns estimate consent and digest
@@ -439,8 +446,11 @@ no tolerance, refit, uncertainty estimate or readiness promotion is introduced. 
 simulations expose no success/source links. Ordinary tape-fitting output is unchanged.
 
 **Timed strips, cylindrical holders, and draped vapor.** Both native material entry points accept
-`strip-history REQUEST.json`, `cylinder-experiment REQUEST.json`, and `thermal-vapor-surface SIM_REPORT.json CONDITIONS.json`.
-They delegate to the production strip/cylinder history and canonical vapor surface consumers, enforcing the same
+`strip-history REQUEST.json`, `cylinder-experiment REQUEST.json`,
+`calibrate-cylinder REQUEST.json [--allow-estimates]`, and
+`thermal-vapor-surface SIM_REPORT.json CONDITIONS.json`.
+They delegate to the production strip/cylinder forward and inverse solvers and canonical vapor surface consumers, enforcing the same
 64 MiB input limit, source policies, physical/numerical refusals and exact frozen replay as the library.
-Strip and cylinder reactions exclude imposed-node/hardware inertia; sheet vapor totals remain conditional
-independent-sheet potentials. See `docs/fabric101-materials.md` and the strip and vapor documents for examples and scope.
+Strip and cylinder reactions exclude imposed-node/hardware inertia, cylinder calibration preserves separate
+observation vs output estimate gates without fabricating unloaded `thickness` from `reported_thickness`, and
+sheet vapor totals remain conditional independent-sheet potentials. See `docs/fabric101-materials.md` and the strip and vapor documents for examples and scope.

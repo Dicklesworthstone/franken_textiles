@@ -851,13 +851,14 @@ mod tests {
             "keyframes":[{"time_s":0.01,"arm_abduction_deg":35.0}],
             "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000});
         let legacy: Request = serde_json::from_value(source.clone()).unwrap();
-        assert!(legacy.keyframes[0].root_rotation_matrix().unwrap().is_none());
+        assert!(
+            legacy.keyframes[0]
+                .root_rotation_matrix()
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(serde_json::to_value(&legacy).unwrap(), source);
-        for rotation in [
-            [0.0; 3],
-            [0.0, 0.0, std::f64::consts::PI],
-            [0.1, -0.2, 0.3],
-        ] {
+        for rotation in [[0.0; 3], [0.0, 0.0, std::f64::consts::PI], [0.1, -0.2, 0.3]] {
             let mut value = source.clone();
             value["keyframes"][0]["root_rotation_rad"] = json!(rotation);
             let request: Request = serde_json::from_value(value.clone()).unwrap();

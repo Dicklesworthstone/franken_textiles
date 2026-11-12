@@ -628,3 +628,280 @@ fn raw_linen_rows_bind_with_mass_and_thickness_without_inventing_drape_readiness
     }
     assert_eq!(hashes[0], hashes[1]);
 }
+
+#[test]
+fn unified_and_companion_material_subcommands_produce_identical_json_and_refusals() {
+    let dir = workspace();
+    let invoke = |unified: bool, args: &[&str]| -> Output {
+        let mut cmd = Command::new(if unified {
+            env!("CARGO_BIN_EXE_ftx")
+        } else {
+            env!("CARGO_BIN_EXE_ftx-materials")
+        });
+        cmd.current_dir(&dir);
+        if unified {
+            cmd.args(["--json", "materials"]);
+        }
+        cmd.args(args).output().unwrap()
+    };
+    let assert_same_ok = |args: &[&str]| -> Value {
+        let companion = success(&invoke(false, args), false);
+        let unified = success(&invoke(true, args), true);
+        assert_eq!(unified, companion, "mismatch for {args:?}");
+        companion
+    };
+    let assert_same_refusal = |args: &[&str], code: &str| {
+        let companion = refused(&invoke(false, args), false, code);
+        let unified = refused(&invoke(true, args), true, code);
+        assert_eq!(unified["code"], companion["code"], "mismatch for {args:?}");
+    };
+
+    // 1. list, catalog, freeze, compare (newly symmetric across both binaries)
+    let list = assert_same_ok(&["list"]);
+    assert!(list["count"].as_u64().unwrap() > 10);
+    let catalog = assert_same_ok(&["catalog", "bamboo"]);
+    assert!(
+        catalog["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"] == "fiber/bamboo-viscose")
+    );
+    let frozen = assert_same_ok(&["freeze", "fs_il019_natural"]);
+    assert_eq!(frozen["schema"], "ftx-material-selection/1");
+    let compared = assert_same_ok(&[
+        "compare",
+        "fs_il019_natural",
+        "mit.raw-2013.08a",
+        "--allow-estimates",
+    ]);
+    assert_eq!(compared["schema"], "ftx-material-comparison/1");
+    assert_same_refusal(&["freeze", "missing-material-id"], "invalid_document");
+    assert_same_refusal(
+        &["compare", "fs_il019_natural", "missing-material-id"],
+        "invalid_document",
+    );
+
+    // 2. bind + resolve + price + sew-svg (newly wired in `ftx materials`)
+    let raw_pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+    ))
+    .unwrap();
+    let mut unbound = raw_pattern.clone();
+    unbound["fabric"] = json!({"areal_g_m2": 180.0, "user_note": "keep-note"});
+    for p in unbound["pieces"].as_array_mut().unwrap() {
+        p.as_object_mut().unwrap().remove("fabric");
+    }
+    write(&dir, "unbound.json", &serde_json::to_vec(&unbound).unwrap());
+    let swatch: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-swatch.json"
+    ))
+    .unwrap();
+    write(&dir, "swatch.json", &serde_json::to_vec(&swatch).unwrap());
+    let calibrated = assert_same_ok(&["calibrate", "swatch.json", "--allow-estimates"]);
+    write(
+        &dir,
+        "selection.json",
+        calibrated["selection_json"].as_str().unwrap().as_bytes(),
+    );
+
+    let bound_companion = success(
+        &invoke(
+            false,
+            &["bind", "unbound.json", "selection.json", "bound-c.json"],
+        ),
+        false,
+    );
+    let bound_unified = success(
+        &invoke(
+            true,
+            &["bind", "unbound.json", "selection.json", "bound-u.json"],
+        ),
+        true,
+    );
+    assert_eq!(
+        bound_unified["material_sha256"],
+        bound_companion["material_sha256"]
+    );
+    assert_eq!(bound_unified["simulation_ready"], true);
+    assert_eq!(
+        fs::read(dir.join("bound-u.json")).unwrap(),
+        fs::read(dir.join("bound-c.json")).unwrap()
+    );
+    // Existing destination must refuse without overwriting in both binaries.
+    assert_same_refusal(
+        &["bind", "unbound.json", "selection.json", "bound-u.json"],
+        "io",
+    );
+
+    let resolved = assert_same_ok(&["resolve", "bound-u.json"]);
+    assert_eq!(
+        resolved["record_sha256"],
+        bound_unified["material_sha256"]
+    );
+
+    let quotes = json!({
+        "schema": "ftx-textile-quotes/1",
+        "quotes": [{
+            "offer_id": "offer-1",
+            "material_id": calibrated["selection"]["id"],
+            "material_sha256": bound_unified["material_sha256"],
+            "supplier": "Synthetic Mill",
+            "sku": "SYN-001",
+            "price": 12.50,
+            "quantity": 1.0,
+            "unit": "square_meter",
+            "minimum_quantity": 1.0,
+            "order_increment": 0.5,
+            "currency": "USD",
+            "region": "US",
+            "quality": "first",
+            "terms": "ex-works",
+            "observed_on": "2026-10-15",
+            "available": true,
+            "source": "test:synthetic-quote",
+            "source_sha256": "0".repeat(64)
+        }]
+    });
+    let scope = json!({
+        "currency": "USD",
+        "region": "US",
+        "quality": "first",
+        "terms": "ex-works",
+        "as_of": "2026-10-20",
+        "max_age_days": 30,
+        "requirement": 1.25,
+        "basis": "area"
+    });
+    write(&dir, "quotes.json", &serde_json::to_vec(&quotes).unwrap());
+    write(&dir, "scope.json", &serde_json::to_vec(&scope).unwrap());
+    let priced = assert_same_ok(&["price", "bound-u.json", "quotes.json", "scope.json"]);
+    assert_eq!(priced["offers"].as_array().unwrap().len(), 1);
+    assert_eq!(priced["population_claim"], false);
+
+    write(
+        &dir,
+        "sew-pattern.json",
+        &serde_json::to_vec(&raw_pattern).unwrap(),
+    );
+    write(
+        &dir,
+        "sew-options.json",
+        include_bytes!("../../../tests/fixtures/materials/synthetic-sewing-options.json"),
+    );
+    let sew_plan = assert_same_ok(&["sew-plan", "sew-pattern.json", "sew-options.json"]);
+    let op_id = sew_plan["seams"][0]["pass"]["id"]
+        .as_str()
+        .or_else(|| sew_plan["seams"][0]["pass"]["seam"].as_str())
+        .unwrap();
+    let svg_c = success(
+        &invoke(
+            false,
+            &[
+                "sew-svg",
+                "sew-pattern.json",
+                "sew-options.json",
+                op_id,
+                "op-c.svg",
+            ],
+        ),
+        false,
+    );
+    let svg_u = success(
+        &invoke(
+            true,
+            &[
+                "sew-svg",
+                "sew-pattern.json",
+                "sew-options.json",
+                op_id,
+                "op-u.svg",
+            ],
+        ),
+        true,
+    );
+    assert_eq!(svg_u["svg_sha256"], svg_c["svg_sha256"]);
+    assert_eq!(
+        fs::read(dir.join("op-u.svg")).unwrap(),
+        fs::read(dir.join("op-c.svg")).unwrap()
+    );
+    assert_same_refusal(
+        &[
+            "sew-svg",
+            "sew-pattern.json",
+            "sew-options.json",
+            op_id,
+            "op-u.svg",
+        ],
+        "io",
+    );
+
+    // 3. thermal, thermal-at (including negative Celsius), thermal-transient, and thermal-surface
+    write(
+        &dir,
+        "thinsulate.json",
+        include_bytes!("../../../tests/fixtures/materials/thinsulate-static.json"),
+    );
+    let dry_stack = assert_same_ok(&["thermal", "thinsulate.json"]);
+    assert_eq!(dry_stack["comfort_claim"], false);
+
+    let at_pos = assert_same_ok(&[
+        "thermal-at",
+        "nist/7282/aralite",
+        "25",
+        "--allow-estimates",
+    ]);
+    assert_eq!(at_pos["temperature_c"], 25.0);
+    assert_eq!(at_pos["comfort_claim"], false);
+    assert_same_refusal(&["thermal-at", "nist/7282/aralite", "25"], "invalid_document");
+    // Negative Celsius must parse as a temperature (never an unknown flag) and refuse extrapolation identically.
+    let neg_c = refused(
+        &invoke(false, &["thermal-at", "nist/7282/aralite", "-5", "--allow-estimates"]),
+        false,
+        "invalid_document",
+    );
+    let neg_u = refused(
+        &invoke(true, &["thermal-at", "nist/7282/aralite", "-5", "--allow-estimates"]),
+        true,
+        "invalid_document",
+    );
+    assert_eq!(neg_u["message"], neg_c["message"]);
+    assert!(
+        !neg_u["message"].as_str().unwrap().contains("unknown option"),
+        "negative temperature parsed as CLI option: {neg_u}"
+    );
+
+    // 4. thermal-surface, thermal-coverage, thermal-map, and thermal-motion route symmetrically
+    assert_same_refusal(
+        &["thermal-surface", "missing-sim.json", "missing-cond.json"],
+        "io",
+    );
+    assert_same_refusal(
+        &[
+            "thermal-coverage",
+            "missing-sim.json",
+            "missing-cov.json",
+            "missing-cond.json",
+        ],
+        "io",
+    );
+    assert_same_refusal(
+        &[
+            "thermal-map",
+            "missing-sim.json",
+            "missing-body.obj",
+            "missing-proj.json",
+        ],
+        "io",
+    );
+    assert_same_refusal(&["thermal-motion", "missing-motion.json"], "io");
+
+    write(
+        &dir,
+        "transient.json",
+        include_bytes!("../../../tests/fixtures/materials/synthetic-thermal.json"),
+    );
+    let transient = assert_same_ok(&["thermal-transient", "transient.json"]);
+    assert_eq!(transient["comfort_claim"], false);
+    assert_eq!(transient["trace"].as_array().unwrap().len(), 5);
+}

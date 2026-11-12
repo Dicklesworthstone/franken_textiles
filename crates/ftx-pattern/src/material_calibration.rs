@@ -135,6 +135,7 @@ pub fn fitted_domain(material: &Material) -> Result<Option<StrainDomain>, Refusa
                             "local:ftx-swatch-calibration/",
                             "local:ftx-nonlinear-swatch-calibration/",
                             "local:ftx-strip-calibration/",
+                            "local:ftx-cylinder-calibration/",
                             "local:ftx-nonlinear-swatch-area-calibration/",
                             "local:ftx-strip-area-calibration/",
                         ]

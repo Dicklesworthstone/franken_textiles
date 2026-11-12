@@ -37,6 +37,9 @@ use serde_json::Value;
 
 use crate::{ClothModel, ContactParams, Membrane, SolveReport, Solver, grid};
 
+/// Bounded inverse parameter identification on the 3D cylindrical-holder shell.
+pub mod fit;
+
 /// Schema identifier of [`Request`].
 pub const REQUEST_SCHEMA: &str = "ftx-cylinder-experiment/1";
 /// Schema identifier of [`Report`].
@@ -570,6 +573,64 @@ fn set_upper_ring(
         positions[start + i] =
             Vec3::new(mesh_radius_m * cos_a, mesh_radius_m * sin_a, separation_m);
     }
+}
+
+pub(super) fn affine_cylinder_guess(
+    x_prev: &[Vec3],
+    n_theta: usize,
+    n_z: usize,
+    dz_m: f64,
+    drot_rad: f64,
+) -> Vec<Vec3> {
+    let mut guess = x_prev.to_vec();
+    let barrelled = if n_z >= 2 && x_prev.len() > n_theta {
+        let r0 = x_prev[0]
+            .x
+            .mul_add(x_prev[0].x, x_prev[0].y * x_prev[0].y)
+            .sqrt();
+        let r1 = x_prev[n_theta]
+            .x
+            .mul_add(x_prev[n_theta].x, x_prev[n_theta].y * x_prev[n_theta].y)
+            .sqrt();
+        r1 > r0 + 1e-4
+    } else {
+        false
+    };
+    for iz in 1..n_z {
+        let frac_rot = iz as f64 / n_z as f64;
+        let (frac_z, dr_m) = if dz_m < 0.0 && n_z >= 3 {
+            let fz = if barrelled {
+                let wb = 0.015_f64.mul_add(n_z as f64, 1.0);
+                (wb + (iz - 1) as f64) / ((n_z as f64) * 1.03)
+            } else {
+                frac_rot
+            };
+            let dr = (-0.55 * dz_m) * det::sin(PI * frac_rot);
+            (fz, dr)
+        } else {
+            (frac_rot, 0.0)
+        };
+        let (sin_d, cos_d) = det::sin_cos(frac_rot * drot_rad);
+        let shift_z = frac_z * dz_m;
+        for i in 0..n_theta {
+            let idx = iz * n_theta + i;
+            let p = x_prev[idx];
+            let r_prev = p.x.mul_add(p.x, p.y * p.y).sqrt();
+            let r_scale = if r_prev > 1e-12 {
+                (r_prev + dr_m) / r_prev
+            } else {
+                1.0
+            };
+            let px = p.x * r_scale;
+            let py = p.y * r_scale;
+            guess[idx] = Vec3::new(
+                px.mul_add(cos_d, -py * sin_d),
+                px.mul_add(sin_d, py * cos_d),
+                p.z + shift_z,
+            );
+        }
+    }
+    guess
 }
 
 fn median(mut values: Vec<f64>) -> Option<f64> {
@@ -1294,6 +1355,15 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
             let omega_rad_s = (curr_rot_rad - prev_rot_rad) / h;
 
             let old_velocity = solver.v.clone();
+            let guess = (domain.is_some() && self_contact.is_none() && !has_history).then(|| {
+                affine_cylinder_guess(
+                    &solver.x,
+                    n_theta,
+                    n_z,
+                    curr_sep - prev_sep,
+                    curr_rot_rad - prev_rot_rad,
+                )
+            });
             set_upper_ring(
                 &mut solver.x,
                 n_theta,
@@ -1302,7 +1372,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
                 curr_sep,
                 waypoint.rotation_deg,
             );
-            let numerical = solver.step(h)?;
+            let numerical = solver.step_with_guess(h, guess.as_deref())?;
             for i in 0..n_theta {
                 let idx = n_z * n_theta + i;
                 let p = solver.x[idx];

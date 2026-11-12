@@ -72,6 +72,38 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     )
 }
 
+pub(super) fn calibrate_cylinder(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
+    let mut input: cylinder::fit::Input = serde_json::from_str(&read(path)?).map_err(invalid)?;
+    // Output estimate admission is explicit command policy; observation evidence consent remains
+    // separately owned by input.allow_estimated_observations.
+    input.allow_estimates = allow_estimates;
+    let report = cylinder::fit::calibrate(&input)?;
+    if !report.accepted {
+        return Ok(
+            json!({"calibration":report,"selection":null,"selection_json":null,
+            "simulation_ready":false,"fit_claim":false,"empirical_validation_claim":false}),
+        );
+    }
+    let selection = report
+        .selection
+        .as_ref()
+        .ok_or_else(|| invalid("accepted cylinder fit lacks its frozen selection"))?;
+    let snapshot = catalog()?.resolve(selection)?;
+    let readiness = (|| {
+        snapshot.mechanics()?;
+        snapshot.membrane_relaxation()?;
+        snapshot.membrane_plasticity()?;
+        snapshot.bending_response()?;
+        snapshot.bending_plasticity()?;
+        Ok::<(), Refusal>(())
+    })();
+    Ok(
+        json!({"calibration":report,"selection":selection,"selection_json":report.selection_json,
+        "simulation_ready":readiness.is_ok(),"mechanics_refusal":readiness.err(),
+        "fit_claim":false,"empirical_validation_claim":false}),
+    )
+}
+
 pub(super) fn acquisition(path: &str) -> Result<Value, Refusal> {
     // Exact source text reaches the parser so its acquisition identity is not a JSON round trip.
     let input = read(path)?;
