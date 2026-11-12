@@ -705,3 +705,342 @@ fn accepted_drafting_never_clobbers_source_reports_or_completed_output() {
         );
     }
 }
+
+fn passage_study_case(program: &str) -> (Value, Value, String, f64) {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/oracle/draft/programs.json"
+    ))
+    .unwrap();
+    let case = fixtures["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == format!("{program}-920"))
+        .unwrap();
+    let pattern = case["output"]["pattern"].clone();
+    let mut fit = case["output"]["fit_spec"].clone();
+    let point = fit["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|point| point["id"] == "cuff_pass")
+        .unwrap()
+        .clone();
+    let name = point["body"].as_str().unwrap().to_owned();
+    let value = case["input"]["measurements"]["fused"][&name]["value_mm"]
+        .as_f64()
+        .unwrap();
+    // Keep the actual garment's passage selector, target band, seams and truing checks.
+    // The small model cannot establish the remaining full-body points; they are not claimed here.
+    fit["points"] = json!([point]);
+    let mut request: Value =
+        serde_json::from_str(include_str!("../../../../examples/design-study.json")).unwrap();
+    request.as_object_mut().unwrap().remove("sewing");
+    request["variants"].as_array_mut().unwrap().truncate(1);
+    request["variants"][0]["changes"]["default"]["record"]["properties"]["width"]["value"] =
+        json!(2.0);
+    request["design_fit"] = json!({"fit_spec":fit});
+    request["comparison"] = json!({"basis":"nominal","required_consumers":["cutting"],
+        "objectives":[{"metric":"stock_mass_kg","direction":"minimize"}]});
+    request["designs"] = if name == "hand_pass" {
+        json!([{"key":"wider-opening","operations":[
+            {"op":"move","piece":"sleeve","vertex":"hem_f","dx_mm":5.0,"dy_mm":0.0},
+            {"op":"move","piece":"sleeve","vertex":"hem_b","dx_mm":-5.0,"dy_mm":0.0}]}])
+    } else {
+        json!([{"key":"wider-opening","operations":[
+            {"op":"slash_spread","piece":"cuff","axis":"x","at_mm":100.0,"add_mm":10.0}]}])
+    };
+    (pattern, request, name, value)
+}
+
+fn supplied_passage(value: f64) -> Value {
+    json!({"unit":"mm","value_mm":value,"sigma_mm":2.0,
+        "primary_provenance":"MEASURED_TAPE","flags":[],
+        "sources":[{"provenance":"MEASURED_TAPE","used":true,"value_mm":value,
+            "method":"Synthetic independent passage observation","sigma_mm":2.0}]})
+}
+
+fn baseline(report: &Value) -> &Value {
+    report["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["design"]["key"] == "baseline")
+        .unwrap()
+}
+
+#[test]
+fn selected_body_studies_admit_actual_garment_passage_contracts_and_replay_manufacturing() {
+    use ftx_drape::{
+        drafting::PreparedPatternBody,
+        study::fitted::{BodyRequest, FittedBody},
+    };
+    use ftx_pattern::BodyMeasure;
+    use ftx_wasm::materials::scenario::{manufacturing_on_model, on_model};
+
+    let bytes = super::model_bytes_with_rig(true);
+    let hash = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    for program in ["zouave_bolero", "zouave_trousers"] {
+        let (pattern, request, name, value) = passage_study_case(program);
+        let evidence = supplied_passage(value);
+        let body_input = json!({"schema":"ftx-scenario-body/1",
+            "accepted_body_fit":receipt(&hash),"arm_abduction_deg":50.0,
+            "measurements":{"wearer":{"stature_mm":1111.0},"fused":{&name:evidence}}});
+        let original = body_input.clone();
+        let source = BodyRequest::read(&body_input).unwrap();
+        let fitted = FittedBody::prepare(&model, &hash, &source).unwrap();
+        let reference = fitted.flat_fit_body(&model, &hash).unwrap();
+        let prepared = PreparedPatternBody::from_fitted(
+            &model,
+            &hash,
+            &fitted,
+            &source.measurements,
+            &[&name],
+        )
+        .unwrap();
+        assert_eq!(prepared.value("stature").unwrap(), 1300.0);
+        assert_eq!(prepared.value(&name).unwrap(), value);
+        assert_eq!(prepared.sigma(&name), Some(2.0));
+        let mut identity = reference.identity().clone();
+        identity["supplemental_measurements"] = json!({&name:{"value_mm":value,"source":evidence}});
+        assert_eq!(prepared.flat_fit_identity(), identity);
+        assert!(
+            PreparedPatternBody::from_fitted(
+                &model,
+                &hash,
+                &fitted,
+                &source.measurements,
+                &["stature"]
+            )
+            .is_err()
+        );
+        let without_passage =
+            PreparedPatternBody::from_fitted(&model, &hash, &fitted, &source.measurements, &[])
+                .unwrap();
+        assert_eq!(without_passage.flat_fit_identity(), *reference.identity());
+
+        let portable: Value = serde_json::from_str(
+            &manufacturing_on_model(
+                &model,
+                &hash,
+                &pattern.to_string(),
+                &request.to_string(),
+                &body_input.to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let row = baseline(&portable);
+        assert_eq!(row["design"]["fit"]["result"]["body_identity"], identity);
+        assert_eq!(
+            row["design"]["fit"]["result"]["validation"]["points"][0]["body_mm"],
+            value
+        );
+        assert_eq!(
+            row["design"]["fit"]["result"]["passed"], true,
+            "{program}: {row}"
+        );
+        assert_eq!(row["binding"]["status"], "available", "{program}: {row}");
+        assert_eq!(row["cutting"]["status"], "available", "{program}: {row}");
+        save(&dir.join("pattern.json"), &pattern);
+        save(&dir.join("study.json"), &request);
+        save(&dir.join("body-input.json"), &body_input);
+        for (binary, prefix) in [
+            (
+                env!("CARGO_BIN_EXE_ftx"),
+                &["--json", "materials", "study-on-body"][..],
+            ),
+            (env!("CARGO_BIN_EXE_ftx-materials"), &["study-on-body"][..]),
+        ] {
+            let output = std::process::Command::new(binary)
+                .current_dir(&dir)
+                .args(prefix)
+                .args([
+                    "pattern.json",
+                    "study.json",
+                    "body-input.json",
+                    "model.ftxbody",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{} / {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(native.get("result").unwrap_or(&native), &portable);
+        }
+
+        // Manufacturing admission is independent of the deliberately tiny numerical mesh allowance.
+        let scenario = json!({"schema":"ftx-drape-scenario/1",
+            "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
+            "fit_spec":{},"max_mesh_points":3,"max_vertex_frames":1000});
+        let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,
+            "cases":[{"key":"first","scenario":scenario},{"key":"second","scenario":scenario}]});
+        for scenario in [&scenario, &matrix] {
+            let actual: Value = serde_json::from_str(
+                &on_model(
+                    &model,
+                    &hash,
+                    &pattern.to_string(),
+                    &request.to_string(),
+                    &scenario.to_string(),
+                    &body_input.to_string(),
+                    |_| {},
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                baseline(&actual["manufacturing"])["design"]["fit"],
+                row["design"]["fit"]
+            );
+            assert_eq!(
+                baseline(&actual["manufacturing"])["cutting"],
+                row["cutting"]
+            );
+            if let Some(cases) = actual["cases"].as_array() {
+                for case in cases {
+                    assert_eq!(case["scenario"]["design_fit_body"], identity);
+                }
+            } else {
+                assert_eq!(actual["scenario"]["design_fit_body"], identity);
+            }
+            save(&dir.join("scenario.json"), scenario);
+            let output = invoke(
+                &dir,
+                &[
+                    "materials",
+                    "scenario-study",
+                    "pattern.json",
+                    "study.json",
+                    "scenario.json",
+                    "body-input.json",
+                    "model.ftxbody",
+                ],
+                0,
+            );
+            let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(native["result"], actual);
+        }
+        assert_eq!(body_input, original);
+        assert_eq!(read(&dir.join("body-input.json")), original);
+    }
+}
+
+#[test]
+fn selected_body_study_passage_refusals_never_substitute_priors_or_model_values() {
+    use ftx_wasm::materials::scenario::{manufacturing_on_model, on_model};
+
+    let bytes = super::model_bytes_with_rig(true);
+    let hash = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    for program in ["zouave_bolero", "zouave_trousers"] {
+        let (pattern, request, name, value) = passage_study_case(program);
+        let body = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":receipt(&hash),
+            "measurements":{"fused":{&name:supplied_passage(value)}}});
+        save(&dir.join("pattern.json"), &pattern);
+        save(&dir.join("study.json"), &request);
+        for reason in ["missing", "prior", "model", "mixed"] {
+            let mut invalid = body.clone();
+            match reason {
+                "missing" => {
+                    invalid["measurements"]["fused"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(&name);
+                }
+                "prior" => invalid["measurements"]["fused"][&name]["flags"] = json!(["PRIOR_ONLY"]),
+                "model" => {
+                    invalid["measurements"]["fused"][&name]["primary_provenance"] =
+                        json!("MODEL_FIT")
+                }
+                _ => {
+                    invalid["measurements"]["fused"][&name]["sources"][0]["provenance"] =
+                        json!("MODEL_FIT")
+                }
+            }
+            let error = manufacturing_on_model(
+                &model,
+                &hash,
+                &pattern.to_string(),
+                &request.to_string(),
+                &invalid.to_string(),
+            )
+            .unwrap_err();
+            assert!(error.message.contains(&name), "{reason}: {error}");
+            save(&dir.join("body-input.json"), &invalid);
+            let output = invoke(
+                &dir,
+                &[
+                    "materials",
+                    "study-on-body",
+                    "pattern.json",
+                    "study.json",
+                    "body-input.json",
+                    "model.ftxbody",
+                ],
+                3,
+            );
+            let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(native["refusal"], serde_json::to_value(error).unwrap());
+
+            let scenario = json!({"schema":"ftx-drape-scenario/1",
+                "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
+                "fit_spec":{},"max_mesh_points":3,"max_vertex_frames":1000});
+            let refused: Value = serde_json::from_str(
+                &on_model(
+                    &model,
+                    &hash,
+                    &pattern.to_string(),
+                    &request.to_string(),
+                    &scenario.to_string(),
+                    &invalid.to_string(),
+                    |_| {},
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                refused["scenario"]["design_fit_setup_refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&name)
+            );
+            assert!(refused["scenario"]["design_fit_body"].is_null());
+            for row in refused["manufacturing"]["alternatives"].as_array().unwrap() {
+                assert_eq!(row["design"]["fit"]["status"], "refused");
+                assert_eq!(row["binding"]["status"], "refused");
+                assert_eq!(row["cutting"]["status"], "refused");
+            }
+        }
+        let mut larger = body;
+        larger["measurements"]["fused"][&name] = supplied_passage(value + 100.0);
+        let report: Value = serde_json::from_str(
+            &manufacturing_on_model(
+                &model,
+                &hash,
+                &pattern.to_string(),
+                &request.to_string(),
+                &larger.to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let row = baseline(&report);
+        assert_eq!(row["design"]["fit"]["result"]["passed"], false);
+        assert_eq!(
+            row["design"]["fit"]["result"]["validation"]["points"][0]["body_mm"],
+            value + 100.0
+        );
+        assert_eq!(row["binding"]["status"], "refused");
+        assert_eq!(row["cutting"]["status"], "refused");
+    }
+}

@@ -148,6 +148,31 @@ the current altered pattern. Applying or undoing an alteration keeps the same
 wearer inputs and selected body for the next check. Replacing a measurement or
 body source still withdraws the old results and accepted-fit association.
 
+## Continue into fit-driven material and manufacturing studies
+
+Selected-body studies use the same reference-pose geometry for their `design_fit`
+checks. Supply the ordinary `fabric-fit/1` contract in the study request and the
+original measurements in its `ftx-scenario-body/1` body input. Use
+`ftx materials study-on-body` for manufacturing alone, or
+`ftx materials scenario-study` for manufacturing and numerical scenarios. The
+Material Workbench's body-constrained studies use the same portable path.
+
+Bolero and trouser passage points retain their separate evidence: a point naming
+`hand_pass` or `foot_pass` requires that supplied value, just as initial drafting
+and ordinary selected-body validation do. Automatic chart priors and any used
+MODEL_FIT passage source refuse the fit-dependent study. A valid value outside
+the original ease band remains a failed fit check and cannot reach manufacturing
+or win a study comparison. Other body dimensions always come from the selected
+model, even when supplied tapes disagree.
+
+Each fit report binds the used passage value and its original source under
+`body_identity.supplemental_measurements`; scenario descriptors retain the same
+identity in `design_fit_body`. A study without passage points retains its previous
+identity. The study reuses its already selected body, without fitting again or
+changing its simulation pose. Source measurements, readiness and historical
+drafting metadata remain unchanged. These checks establish numerical fit-contract
+and manufacturing admission, not physical garment fit.
+
 ## Model and shape consistency
 
 The exact model-file SHA-256 must match both identities in the report. The model

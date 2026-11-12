@@ -17,6 +17,11 @@ returns separate evidence without changing existing geometry or drafting metadat
 Trouser body rise is the reference vertical waist-to-crotch distance, without an
 inferred seated allowance. Original measurements and readiness remain independent.
 No model fallback, image-pose reuse or physical-fit qualification is introduced.
+`PreparedPatternBody::from_fitted` gives material/design studies the same passage
+admission on their already selected `FittedBody`, with no second shape fit.
+`flat_fit_identity` retains the existing canonical model identity and adds only
+required independent passage evidence under `supplemental_measurements`.
+Unrelated measurement names cannot supplement or replace model dimensions.
 
 **Optional convergence-driven subdivision.** `DrapeOptions.time_subdivision` connects the existing
 transactional `Solver::step_subdivided` to ordinary sewing, gravity and settling. Explicit

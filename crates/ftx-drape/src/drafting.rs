@@ -100,6 +100,24 @@ impl PreparedPatternBody {
                 serde_json::from_str(text).map_err(|e| invalid(format!("body-fit report: {e}")))?;
         }
         let selected = FittedBody::prepare(model, model_sha256, &BodyRequest::read(&request)?)?;
+        let mut body =
+            Self::from_fitted(model, model_sha256, &selected, measurements, passage_names)?;
+        body.source_report_sha256 = accepted_report_text.map(|text| sha256_hex(text.as_bytes()));
+        Ok(body)
+    }
+
+    /// Reuse a study's already selected body without fitting its shape or changing its pose.
+    /// Only explicitly required hand/foot passage evidence may supplement its model readings.
+    ///
+    /// # Errors
+    /// Changed model identity, unavailable reference geometry, or missing/invalid passage evidence.
+    pub fn from_fitted(
+        model: &AnnyModel,
+        model_sha256: &str,
+        selected: &FittedBody,
+        measurements: &Value,
+        passage_names: &[&str],
+    ) -> Result<Self, Refusal> {
         let reference = selected.flat_fit_body(model, model_sha256)?;
         let mut passage = Map::new();
         for &name in passage_names {
@@ -113,9 +131,20 @@ impl PreparedPatternBody {
         Ok(Self {
             reference,
             passage,
-            report: selected.report,
-            source_report_sha256: accepted_report_text.map(|text| sha256_hex(text.as_bytes())),
+            report: selected.report.clone(),
+            source_report_sha256: None,
         })
+    }
+
+    /// Existing study body identity, extended only by the independent passage evidence used.
+    /// Requests without passage points retain their original identity and serialization.
+    #[must_use]
+    pub fn flat_fit_identity(&self) -> Value {
+        let mut identity = self.reference.identity().clone();
+        if !self.passage.is_empty() {
+            identity["supplemental_measurements"] = json!(self.passage);
+        }
+        identity
     }
 
     /// The selected shape, model/reference geometry and original passage sources.

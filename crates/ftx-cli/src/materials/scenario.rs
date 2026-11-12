@@ -3,6 +3,7 @@ use std::{fs::File, io::Read};
 
 use ftx_body::{AnnyData, AnnyModel};
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
+use ftx_drape::drafting::PreparedPatternBody;
 use ftx_drape::study::{
     Scenario, Session,
     fitted::{BodyRequest, FittedBody},
@@ -34,6 +35,26 @@ fn read<T: DeserializeOwned>(path: &str, remaining: &mut u64) -> Result<T, Refus
     serde_json::from_slice(&bytes(path, remaining)?).map_err(invalid)
 }
 
+fn prepare_fit_body(
+    fitted: &FittedBody,
+    model: &AnnyModel,
+    digest: &str,
+    measurements: &Value,
+    fit_spec: &Value,
+) -> Result<(PreparedPatternBody, Value), Refusal> {
+    let passage: Vec<_> = ["hand_pass", "foot_pass"]
+        .into_iter()
+        .filter(|name| {
+            fit_spec["points"]
+                .as_array()
+                .is_some_and(|points| points.iter().any(|point| point["body"] == *name))
+        })
+        .collect();
+    let body = PreparedPatternBody::from_fitted(model, digest, fitted, measurements, &passage)?;
+    let identity = body.flat_fit_identity();
+    Ok((body, identity))
+}
+
 /// Existing selected-body/flat-fit manufacturing, without a numerical scenario session.
 pub(super) fn manufacturing(
     pattern: &str,
@@ -44,11 +65,13 @@ pub(super) fn manufacturing(
     let mut remaining = 64 * 1024 * 1024;
     let source = ftx_pattern::Pattern::new(read(pattern, &mut remaining)?);
     let request: Request = read(request, &mut remaining)?;
-    if request.design_fit.is_none() {
-        return Err(invalid(
-            "selected-body manufacturing requires an explicit design_fit contract",
-        ));
-    }
+    let fit_spec = &request
+        .design_fit
+        .as_ref()
+        .ok_or_else(|| {
+            invalid("selected-body manufacturing requires an explicit design_fit contract")
+        })?
+        .fit_spec;
     if let Some(policy) = &request.comparison {
         policy.validate(&request, false)?;
     }
@@ -58,12 +81,13 @@ pub(super) fn manufacturing(
     let digest = sha256_hex(&bytes);
     let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true)?)?;
     let fitted = FittedBody::prepare(&model, &digest, &body)?;
-    let reference = fitted.flat_fit_body(&model, &digest)?;
+    let (reference, identity) =
+        prepare_fit_body(&fitted, &model, &digest, &body.measurements, fit_spec)?;
     serde_json::to_value(request.evaluate_with_fit_body(
         &source,
         Some(&Context {
             body: &reference,
-            identity: reference.identity(),
+            identity: &identity,
         }),
     )?)
     .map_err(invalid)
@@ -123,21 +147,23 @@ pub(super) fn run(
                 .map_err(Clone::clone)
                 .and_then(|model| FittedBody::prepare(model, &model_sha256, request))
         });
-    let fit_body = request.design_fit.as_ref().map(|_| {
+    let fit_body = request.design_fit.as_ref().map(|fit| {
         fitted.as_ref().map_err(Clone::clone).and_then(|fitted| {
-            model
-                .as_ref()
-                .map_err(Clone::clone)
-                .and_then(|model| fitted.flat_fit_body(model, &model_sha256))
+            model.as_ref().map_err(Clone::clone).and_then(|model| {
+                prepare_fit_body(
+                    fitted,
+                    model,
+                    &model_sha256,
+                    &body_request.as_ref().map_err(Clone::clone)?.measurements,
+                    &fit.fit_spec,
+                )
+            })
         })
     });
     let fit = fit_body
         .as_ref()
         .and_then(|body| body.as_ref().ok())
-        .map(|body| Context {
-            body,
-            identity: body.identity(),
-        });
+        .map(|(body, identity)| Context { body, identity });
     let body = fitted.as_ref().map(FittedBody::body).map_err(Clone::clone);
     let mut session = body
         .as_ref()
@@ -161,7 +187,7 @@ pub(super) fn run(
         .as_ref()
         .map_or(Value::Null, |body| body.report.clone());
     match &fit_body {
-        Some(Ok(body)) => descriptor["design_fit_body"] = body.identity().clone(),
+        Some(Ok((_, identity))) => descriptor["design_fit_body"] = identity.clone(),
         Some(Err(refusal)) => descriptor["design_fit_setup_refusal"] = json!(refusal),
         None => {}
     }
@@ -203,21 +229,23 @@ fn run_matrix(
                 .and_then(|model| FittedBody::prepare(model, &model_sha256, request))
         });
     // The reference-pose readings belong to the common selected shape, not a case's posed mesh.
-    let fit_body = request.design_fit.as_ref().map(|_| {
+    let fit_body = request.design_fit.as_ref().map(|fit| {
         fitted.as_ref().map_err(Clone::clone).and_then(|fitted| {
-            model
-                .as_ref()
-                .map_err(Clone::clone)
-                .and_then(|model| fitted.flat_fit_body(model, &model_sha256))
+            model.as_ref().map_err(Clone::clone).and_then(|model| {
+                prepare_fit_body(
+                    fitted,
+                    model,
+                    &model_sha256,
+                    &body_request.as_ref().map_err(Clone::clone)?.measurements,
+                    &fit.fit_spec,
+                )
+            })
         })
     });
     let fit = fit_body
         .as_ref()
         .and_then(|body| body.as_ref().ok())
-        .map(|body| Context {
-            body,
-            identity: body.identity(),
-        });
+        .map(|(body, identity)| Context { body, identity });
     let body = fitted.as_ref().map(FittedBody::body).map_err(Clone::clone);
     let mut sessions = matrix
         .cases
@@ -248,7 +276,7 @@ fn run_matrix(
             .as_ref()
             .map_or(Value::Null, |body| body.report.clone());
         match &fit_body {
-            Some(Ok(body)) => descriptor["design_fit_body"] = body.identity().clone(),
+            Some(Ok((_, identity))) => descriptor["design_fit_body"] = identity.clone(),
             Some(Err(refusal)) => descriptor["design_fit_setup_refusal"] = json!(refusal),
             None => {}
         }
