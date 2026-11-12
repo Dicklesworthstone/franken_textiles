@@ -113,3 +113,19 @@ test('clearing the selected model invalidates subsequent body-derived drafting',
   assert.equal((await w.send(draft())).type, 'error');
   assert.equal(w.calls.length, 0);
 });
+
+test('the model picker is disabled until the engine is ready and after a fatal error', () => {
+  const page = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.match(page, /id="bodyFile"[^>]*\bdisabled\b/);
+  const start = page.indexOf('  function foldButton()');
+  const end = page.indexOf('  function bodyFitSummary', start);
+  assert.equal(start >= 0 && end > start, true);
+  const update = new Function('$', 'ready', 'dead', 'program', 'editedPattern', 'folding',
+    'bodyChecking', 'bodyLoaded', 'bodyFitReady', 'bodyFitText', 'foldable', 'bodyCheckable',
+    page.slice(start, end) + '\nfoldButton();\nreturn $("bodyFile").disabled;');
+  for (const [ready, dead, disabled] of [[false, false, true], [true, false, false], [true, true, true]]) {
+    const elements = {};
+    const element = id => elements[id] ??= { checked: false };
+    assert.equal(update(element, ready, dead, 'fez', null, false, false, false, true, null, false, false), disabled);
+  }
+});

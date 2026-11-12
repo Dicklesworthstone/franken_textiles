@@ -546,7 +546,7 @@ async function standaloneBodyCheck(page, settle, work, nativeDir) {
   await page.setInputFiles("#bodyFile",modelPath);
   await page.waitForFunction(()=>!document.getElementById("bodyCheckGo").disabled,null,{timeout:120000});
   if(source) {
-    await page.locator("summary").filter({hasText:"Reuse an accepted image-fit shape"}).click();
+    await page.locator("#bodyFitFile").evaluate(e => { for (let p=e.parentElement; p; p=p.parentElement) if (p.tagName==="DETAILS") p.open=true; });
     await page.setInputFiles("#bodyFitFile",sourcePath);
     await page.waitForFunction(()=>/Fit report read/.test(document.getElementById("status").textContent));
     assert.equal(await page.isEnabled("#bodyCheckGo"),false);
@@ -1098,7 +1098,7 @@ async function offlineViewer(browser, file) {
       fs.mkdirSync(dir);
       fs.writeFileSync(path.join(dir, "round.zip"), await bytes("a[download$='.zip']"), {flag:"wx"});
       execFileSync("unzip", ["-q", "round.zip"], {cwd:dir});
-      await page.locator("details").filter({has:page.locator("#bodyFitFile")}).locator("summary").click();
+      await page.locator("#bodyFitFile").evaluate(e => { for (let p=e.parentElement; p; p=p.parentElement) if (p.tagName==="DETAILS") p.open=true; });
       await page.setInputFiles("#bodyFitFile", acceptedFit);
       await page.waitForFunction(() => /Fit report read/.test(document.getElementById("status").textContent));
       assert.equal(await page.locator("#foldGo").isDisabled(),true);

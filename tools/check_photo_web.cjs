@@ -385,7 +385,7 @@ async function bodyModelFileHandoff(browser,origin,received=false) {
       await page.waitForFunction(()=>document.getElementById('status').textContent==='Body model loaded.');
       await page.click('#go');
       await page.waitForFunction(()=>!document.getElementById('results').classList.contains('hidden'));
-      await page.locator('#bodyFitConsent').evaluate(e=>{e.closest('details').open=true;});
+      await page.locator('#bodyFitConsent').evaluate(e=>{for(let p=e.parentElement;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;});
       await page.check('#bodyFitConsent');
     }
     fs.writeFileSync(model,Buffer.from('changed after the worker loaded the model'));

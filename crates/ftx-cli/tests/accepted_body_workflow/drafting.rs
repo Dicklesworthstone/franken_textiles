@@ -11,6 +11,7 @@ const CREATED: &str = "2026-11-12T00:00:00";
 const HEAD_SHAPE: &str = "synthetic-head-radius";
 
 fn measurements(head: Option<f64>) -> Value {
+    // Omit age/stature here so automatic chart priors cannot supply missing test observations.
     let records: Vec<_> = head
         .map(|value| {
             ftx_measure::make_record(
@@ -27,7 +28,7 @@ fn measurements(head: Option<f64>) -> Value {
         .into_iter()
         .collect();
     json!({"schema":"fabric-measurements/1", "taken_on":TODAY,
-        "wearer":{"age_months":30,"sex":"F"}, "records":records,
+        "wearer":{"sex":"F"}, "records":records,
         "fused":{"head":{"value_mm":999.0,"sigma_mm":1.0}}})
 }
 

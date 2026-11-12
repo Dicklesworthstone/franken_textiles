@@ -2543,7 +2543,7 @@ mod tests {
     fn rejects_missing_check_unexcited_target_corrupted_check_and_respects_estimate_gate() {
         let (base, _) = build_synthetic_calibration(true);
 
-        // 1. With unloaded thickness + friction_skin, allow_estimates = false keeps mechanics() gated
+        // 1. Active body contact still requires explicit consent for identified estimates.
         let mut gated = base.clone();
         gated.allow_estimates = false;
         let rep_gated = calibrate(&gated).unwrap();
@@ -2554,16 +2554,18 @@ mod tests {
             .unwrap()
             .resolve(sel_gated)
             .unwrap();
-        assert!(snap_gated.mechanics().is_err());
+        assert!(snap_gated.mechanics_for_contacts(false).is_err());
 
-        // With allow_estimates = true AND unloaded thickness + friction_skin, mechanics() succeeds
+        // The fixture has no self-contact; missing same-sheet friction must stay unavailable.
         let rep_ready = calibrate(&base).unwrap();
         assert!(rep_ready.accepted);
         let snap_ready = textile_import::catalog()
             .unwrap()
             .resolve(rep_ready.selection.as_ref().unwrap())
             .unwrap();
-        assert!(snap_ready.mechanics().is_ok());
+        let ready = snap_ready.mechanics_for_contacts(false).unwrap();
+        assert_eq!(ready.friction_self, None);
+        assert!(snap_ready.mechanics().is_err());
 
         // 2. Missing CHECK experiment -> accepted == false, no selection published
         let mut no_check = base.clone();
