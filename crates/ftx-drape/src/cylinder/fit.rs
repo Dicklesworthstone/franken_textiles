@@ -5,8 +5,8 @@
 //! `shear_stiffness`, `bending_rigidity`) by solving the production 3D cylindrical-holder
 //! shell model (`super::Fixture`, isometric chord radius `R_mesh`, explicit `L_0 + Δz_pre + Δz - u_slip`,
 //! explicit force/torque tare offsets, and grain-axis rotation) across `FIT` experiments and
-//! verifying fixed-parameter predictions on independent held-out `CHECK` experiments and
-//! doubled `[2 * n_theta, 2 * n_z]` meshes.
+//! refining each coarse solution on doubled `[2 * n_theta, 2 * n_z]` meshes, then verifying
+//! fixed-parameter predictions on independent held-out `CHECK` experiments and both mesh levels.
 //! Independently qualified nonlinear membrane and directional panel-bending laws remain active
 //! when that response is not targeted; their original source observations are retained unchanged.
 //!
@@ -40,7 +40,7 @@ pub const INPUT_SCHEMA: &str = "ftx-cylinder-calibration/1";
 /// Schema identifier of [`Report`].
 pub const REPORT_SCHEMA: &str = "ftx-cylinder-calibration-report/1";
 
-const FIT_SCOPE: &str = "Bounded 3D cylindrical-holder inverse identification on an isometric chord-radius welded shell: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit force/torque tare subtraction, grain-rotated scalar or independently qualified nonlinear Green-strain membrane, scalar hinge and independently qualified directional panel bending, three-start projected Levenberg-Marquardt search, local sensitivity Gram-pivot check, coarse-to-doubled-mesh stability check, held-out CHECK verification and fitted Green-strain domain replay. Zero gravity. Identified coefficients are model estimates; unloaded contact thickness, skin friction, inside-clamp slip physics, moisture/thermal coupling and physical garment fit are never inferred.";
+const FIT_SCOPE: &str = "Bounded 3D cylindrical-holder inverse identification on an isometric chord-radius welded shell: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit force/torque tare subtraction, grain-rotated scalar or independently qualified nonlinear Green-strain membrane, scalar hinge and independently qualified directional panel bending, three-start projected Levenberg-Marquardt search with doubled-mesh refinement, sensitivity Gram-pivot check on the reported prediction mesh, coarse-to-doubled-mesh stability check, held-out CHECK verification and fitted Green-strain domain replay. Zero gravity. Identified coefficients are model estimates; unloaded contact thickness, skin friction, inside-clamp slip physics, moisture/thermal coupling and physical garment fit are never inferred.";
 
 /// Canonical scalar material property identifiable from cylindrical-holder experiments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -179,7 +179,7 @@ pub struct Policy {
     pub max_mesh_scaled: f64,
     /// Minimum column-normalized sensitivity Gram Cholesky pivot (`0 < pivot < 1`).
     pub min_excitation_pivot: f64,
-    /// Per-start Levenberg-Marquardt iteration cap (`1..=80`).
+    /// Per-start Levenberg-Marquardt iteration cap across coarse search and refinement (`1..=80`).
     pub max_iterations: usize,
     /// Aggregate static + dynamic Newton equilibrium solve cap (`1..=32768`).
     pub max_forward_solves: usize,
@@ -239,11 +239,11 @@ pub struct Start {
     pub initial_fraction: f64,
     /// Final physical parameter values in `input.targets` order.
     pub parameters: Vec<f64>,
-    /// Sum of squared scaled `FIT` residuals at this start's final point.
+    /// Sum of squared scaled `FIT` residuals on the doubled mesh at this start's final point.
     pub fit_sse: f64,
     /// Whether first-order stationarity (`gradient < 1e-6`) was reached before `max_iterations`.
     pub converged: bool,
-    /// Levenberg-Marquardt iterations executed.
+    /// Levenberg-Marquardt iterations executed across coarse search and refinement.
     pub iterations: usize,
 }
 
@@ -1297,14 +1297,15 @@ fn excitation<const N: usize>(j: &[[f64; N]]) -> f64 {
 fn search<const N: usize>(
     input: &Input,
     initial: f64,
+    mut p: [f64; N],
+    max_iterations: usize,
     budget: &mut Budget<'_>,
 ) -> Result<(Start, [f64; N]), Refusal> {
-    let mut p = [initial; N];
     let mut e = evaluate_fit(input, p, budget).map_err(ForwardFailure::refusal)?;
     let mut lambda = 1e-3_f64;
     let mut converged = false;
     let mut iterations = 0;
-    for _ in 0..input.policy.max_iterations {
+    for _ in 0..max_iterations {
         iterations += 1;
         let j = jacobian(input, p, budget, Some(&e))?;
         if gradient(p, &j, &e) < 1e-6 {
@@ -1406,8 +1407,8 @@ fn quality(values: &[f64]) -> Quality {
 ///
 /// Every trial solves the actual 3D cylindrical-holder model (`R_mesh` isometric chord wrap,
 /// `L_0 + Δz_pre + Δz - u_slip`, tare subtraction, and `warp_axis` rotation). Three deterministic
-/// starts, local sensitivity excitation, coarse-to-doubled-mesh stability, held-out `CHECK`
-/// verification, and `fitted_green_strain_range` replay are publication gates.
+/// starts refined on the reported doubled mesh, local sensitivity excitation, coarse-to-doubled-mesh
+/// stability, held-out `CHECK` verification, and `fitted_green_strain_range` replay are publication gates.
 ///
 /// # Errors
 /// Invalid geometry, source, evidence or parameter-box input, exhausted `max_forward_solves`,
@@ -1444,10 +1445,32 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
         recovery: SearchRecovery::default(),
     };
 
+    // Coarse discretization error can otherwise be absorbed into the material coefficients while
+    // the report describes a different, refined objective. Use coarse solutions only as initial
+    // coordinates for the prediction mesh; both stages share every original work limit.
+    let mut refined_input = input.clone();
+    for experiment in &mut refined_input.experiments {
+        experiment.fixture.cells = experiment.fixture.cells.map(|n| n * 2);
+    }
+
     let mut starts = Vec::with_capacity(3);
     let mut coordinates = Vec::with_capacity(3);
     for initial in [0.25, 0.5, 0.75] {
-        let (start, p) = search::<N>(input, initial, &mut budget)?;
+        let (coarse, p) = search::<N>(
+            input,
+            initial,
+            [initial; N],
+            input.policy.max_iterations,
+            &mut budget,
+        )?;
+        let (mut start, p) = search::<N>(
+            &refined_input,
+            initial,
+            p,
+            input.policy.max_iterations - coarse.iterations,
+            &mut budget,
+        )?;
+        start.iterations += coarse.iterations;
         starts.push(start);
         coordinates.push(p);
     }
@@ -1456,7 +1479,7 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
         .unwrap_or(0);
     let p = coordinates[best];
     let parameters = starts[best].parameters.clone();
-    let j = jacobian(input, p, &mut budget, None)?;
+    let j = jacobian(&refined_input, p, &mut budget, None)?;
     let pivot = excitation(&j);
 
     let mut reasons = Vec::new();
@@ -2505,6 +2528,87 @@ mod tests {
     }
 
     #[test]
+    fn refined_search_shares_the_coarse_forward_solve_budget() {
+        let mut input = fixed_law_input(false);
+        let baseline = resolve_baseline_and_validate(&input).unwrap();
+        let first_start_force = {
+            let mut budget = Budget {
+                used: 0,
+                limit: 2,
+                inherited_domain: None,
+                baseline: baseline.clone(),
+                input: &input,
+                recovery: SearchRecovery::default(),
+            };
+            let experiment = &input.experiments[0];
+            budget
+                .solve(experiment, &experiment.fixture, &[800.0])
+                .unwrap()
+                .waypoint_states[0]
+                .tare_adjusted_force_n
+        };
+        input.experiments[0].observations[0]
+            .force_n
+            .as_mut()
+            .unwrap()
+            .value = first_start_force;
+        input.policy.max_forward_solves = 2;
+
+        let mut budget = Budget {
+            used: 0,
+            limit: input.policy.max_forward_solves,
+            inherited_domain: None,
+            baseline,
+            input: &input,
+            recovery: SearchRecovery::default(),
+        };
+        let (coarse, _) = search(&input, 0.25, [0.25], 1, &mut budget).unwrap();
+        assert!(coarse.converged);
+        assert_eq!(coarse.fit_sse, 0.0);
+        assert_eq!(budget.used, 2);
+
+        // The exact coarse objective and its sensitivity consume the allowance. Refinement
+        // must refuse instead of resetting the counter or publishing the coarse coefficients.
+        assert_eq!(
+            calibrate(&input).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+    }
+
+    #[test]
+    fn timed_calibration_forward_matches_public_truth_on_the_same_mesh() {
+        let (input, parameters) = build_synthetic_calibration(false);
+        let baseline = resolve_baseline_and_validate(&input).unwrap();
+        let mut budget = Budget {
+            used: 0,
+            limit: input.policy.max_forward_solves,
+            inherited_domain: None,
+            baseline,
+            input: &input,
+            recovery: SearchRecovery::default(),
+        };
+        let mut residuals = Vec::new();
+        for experiment in &input.experiments {
+            let mut fixture = experiment.fixture.clone();
+            fixture.cells = fixture.cells.map(|n| n * 2);
+            let run = budget.solve(experiment, &fixture, &parameters).unwrap();
+            for obs in &experiment.observations {
+                append_observation_residuals(
+                    obs,
+                    &run.waypoint_states[obs.waypoint_index],
+                    &mut residuals,
+                );
+            }
+        }
+        // The public truth has no fitted-domain initial guess. Its reactions must still agree
+        // through timed twist reversal and compression at the declared Newton tolerances.
+        assert!(
+            quality(&residuals).peak_scaled < 1e-4,
+            "same-mesh forward residuals: {residuals:?}"
+        );
+    }
+
+    #[test]
     fn recovers_known_orthotropic_and_bending_parameters_without_fabricating_thickness() {
         let (input, expected) = build_synthetic_calibration(false);
         let report = calibrate(&input).expect("calibration succeeds");
@@ -2516,6 +2620,23 @@ mod tests {
         assert!(report.domain_replay_verified);
         assert_eq!(report.starts.len(), 3);
         assert!(report.starts.iter().all(|s| s.converged));
+        assert!(
+            report
+                .starts
+                .iter()
+                .all(|s| s.iterations <= input.policy.max_iterations)
+        );
+        let best_sse = report
+            .starts
+            .iter()
+            .map(|s| s.fit_sse)
+            .min_by(f64::total_cmp)
+            .unwrap();
+        let reported_sse = report.fit.rms_scaled.powi(2) * report.fit.components as f64;
+        assert!(
+            (best_sse - reported_sse).abs() < 1e-12,
+            "the stationary objective {best_sse} must equal the reported FIT objective {reported_sse}"
+        );
         for (i, (&got, &want)) in report.parameters.iter().zip(&expected).enumerate() {
             let rel = (got - want).abs() / want;
             let tol = if i < 3 { 0.03 } else { 0.08 };

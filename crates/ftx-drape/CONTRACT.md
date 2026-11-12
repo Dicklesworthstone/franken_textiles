@@ -1166,7 +1166,10 @@ rates/travel. `mechanics_readiness_promoted`, `fit_claim`, and `empirical_valida
 `ftx-cylinder-calibration/1` identifies caller-selected canonical scalar moduli (`warp_stiffness`,
 `weft_stiffness`, `poisson_warp_weft`, `shear_stiffness`, `bending_rigidity`) inside explicit positive-definite
 bounds by solving the actual 3D `cylinder` forward model across `FIT` experiments with 3-start projected
-Levenberg-Marquardt. Publication of `Evidence::Estimate` properties and a hash-locked `Selection` requires
+Levenberg-Marquardt. Each coarse solution initializes a search on the doubled prediction mesh, sharing
+the same per-start iteration and aggregate forward-solve limits. Final stationarity, objective values and
+sensitivity use that doubled mesh, so fitted coefficients cannot merely compensate for a coarse-grid
+error that is absent from the reported predictions. Publication of `Evidence::Estimate` properties and a hash-locked `Selection` requires
 interior convergence of all 3 starts, normalized sensitivity Gram pivot `>= min_excitation_pivot`, coarse-to-2x
 mesh stability `<= max_mesh_scaled`, independent held-out `CHECK` residuals within policy and inside
 `fitted_green_strain_range`, and a final `StrainDomain::Box` replay. Presser-foot `reported_thickness` is never
