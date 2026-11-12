@@ -135,6 +135,15 @@ orthotropic membrane and/or bending parameters (`warp_stiffness`, `weft_stiffnes
 `shear_stiffness`, `bending_rigidity`) from `FIT` cylindrical-holder acquisitions while solving the full
 3D `cylinder` forward model at every trial.
 
+When identifying scalar bending, an existing source-qualified nonlinear membrane stays active;
+it does not need duplicate scalar membrane properties. When identifying membrane parameters,
+an existing directional panel-bending law stays active, including compression experiments with
+zero scalar hinge rigidity. Every candidate, sensitivity, refined mesh, held-out observation and
+publication replay uses those same unchanged laws and their source/estimate/domain admission.
+Targeting scalar coefficients of an already declared nonlinear or directional response still
+refuses, as do unsupported history laws. Calibration cannot silently fit a scalar surrogate and
+then publish the coefficients alongside a different retained response.
+
 Acceptance and publication gates enforced before any `Selection` is emitted:
 - **Three-start convergence & interior minimum**: deterministic starts (`0.2`, `0.5`, `0.8`) in the normalized parameter box must converge inside bounds without materially distinct equal-SSE minima.
 - **Excitation Gram pivot (`min_excitation_pivot`)**: normalized sensitivity Cholesky pivot at the optimum must exceed `policy.min_excitation_pivot` so unexcited moduli (for example weft stiffness under warp-only torsion) are rejected rather than guessed.

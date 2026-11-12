@@ -7,6 +7,8 @@
 //! explicit force/torque tare offsets, and grain-axis rotation) across `FIT` experiments and
 //! verifying fixed-parameter predictions on independent held-out `CHECK` experiments and
 //! doubled `[2 * n_theta, 2 * n_z]` meshes.
+//! Independently qualified nonlinear membrane and directional panel-bending laws remain active
+//! when that response is not targeted; their original source observations are retained unchanged.
 //!
 //! Published coefficients remain `Evidence::Estimate` with explicit `fitted_green_strain_range`
 //! support. Unloaded contact `thickness` is never fabricated from presser-foot `reported_thickness`,
@@ -17,9 +19,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, Vec3, linalg::lstsq, receipt::sha256_hex};
 use ftx_pattern::{
+    material_bending::BendingTensor,
     material_calibration::{Partition, fitted_domain},
     material_catalog::Selection,
-    material_response::StrainDomain,
+    material_response::{CompiledMembrane, StrainDomain},
     materials::{Evidence, Form, Material, Quantity, Source},
     textile_import,
 };
@@ -37,7 +40,7 @@ pub const INPUT_SCHEMA: &str = "ftx-cylinder-calibration/1";
 /// Schema identifier of [`Report`].
 pub const REPORT_SCHEMA: &str = "ftx-cylinder-calibration-report/1";
 
-const FIT_SCOPE: &str = "Bounded 3D cylindrical-holder inverse identification on an isometric chord-radius welded shell: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit force/torque tare subtraction, grain-rotated orthotropic Green-strain membrane, scalar hinge bending, three-start projected Levenberg-Marquardt search, local sensitivity Gram-pivot check, coarse-to-doubled-mesh stability check, held-out CHECK verification and fitted Green-strain domain replay. Zero gravity. Identified coefficients are model estimates; unloaded contact thickness, skin friction, inside-clamp slip physics, moisture/thermal coupling and physical garment fit are never inferred.";
+const FIT_SCOPE: &str = "Bounded 3D cylindrical-holder inverse identification on an isometric chord-radius welded shell: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit force/torque tare subtraction, grain-rotated scalar or independently qualified nonlinear Green-strain membrane, scalar hinge and independently qualified directional panel bending, three-start projected Levenberg-Marquardt search, local sensitivity Gram-pivot check, coarse-to-doubled-mesh stability check, held-out CHECK verification and fitted Green-strain domain replay. Zero gravity. Identified coefficients are model estimates; unloaded contact thickness, skin friction, inside-clamp slip physics, moisture/thermal coupling and physical garment fit are never inferred.";
 
 /// Canonical scalar material property identifiable from cylindrical-holder experiments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -329,7 +332,7 @@ pub struct Report {
     pub model_scope: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Baseline {
     mass_kg_m2: f64,
     warp_n_m: f64,
@@ -337,21 +340,24 @@ struct Baseline {
     poisson: f64,
     shear_n_m: f64,
     bending_nm: f64,
+    membrane_response: Option<CompiledMembrane>,
+    panel_bending: Option<BendingTensor>,
     self_contact: Option<(f64, f64)>,
 }
 
 impl Baseline {
-    fn apply(mut self, targets: &[TargetParameter], values: &[f64]) -> Self {
+    fn apply(&self, targets: &[TargetParameter], values: &[f64]) -> Self {
+        let mut result = self.clone();
         for (target, &val) in targets.iter().zip(values) {
             match target.parameter {
-                TargetKind::WarpStiffness => self.warp_n_m = val,
-                TargetKind::WeftStiffness => self.weft_n_m = val,
-                TargetKind::PoissonWarpWeft => self.poisson = val,
-                TargetKind::ShearStiffness => self.shear_n_m = val,
-                TargetKind::BendingRigidity => self.bending_nm = val,
+                TargetKind::WarpStiffness => result.warp_n_m = val,
+                TargetKind::WeftStiffness => result.weft_n_m = val,
+                TargetKind::PoissonWarpWeft => result.poisson = val,
+                TargetKind::ShearStiffness => result.shear_n_m = val,
+                TargetKind::BendingRigidity => result.bending_nm = val,
             }
         }
-        self
+        result
     }
 }
 
@@ -496,9 +502,9 @@ impl Budget<'_> {
         let any_net_compression = experiment.loading.iter().any(|w| {
             fixture.pretension_displacement_m + w.axial_displacement_m - w.clamp_slip_m < -1e-12
         });
-        if any_net_compression && coeffs.bending_nm == 0.0 {
+        if any_net_compression && coeffs.bending_nm == 0.0 && coeffs.panel_bending.is_none() {
             return Err(invalid(
-                "cylinder axial compression below nominal_free_height_m requires positive bending_rigidity",
+                "cylinder axial compression below nominal_free_height_m requires positive bending_rigidity or a BendingTensor",
             )
             .into());
         }
@@ -535,9 +541,9 @@ impl Budget<'_> {
             membrane,
             coeffs.bending_nm,
             coeffs.mass_kg_m2,
-            None,
+            coeffs.membrane_response,
             domain,
-            None,
+            coeffs.panel_bending,
             None,
             None,
             None,
@@ -782,6 +788,26 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
 
     let allow_obs = input.allow_estimated_observations;
     let mass_kg_m2 = input.material.mechanical_areal_density(allow_obs)?;
+    let resolved = textile_import::catalog()?.resolve(&Selection {
+        id: input.material.id.clone(),
+        record: Some(input.material.clone()),
+        allow_estimates: allow_obs,
+        ..Selection::default()
+    })?;
+    // Untargeted constitutive laws are the same source-qualified authority used by the public
+    // forward experiment and the published selection, never a scalar surrogate during fitting.
+    let membrane_response = resolved.membrane_response()?;
+    let panel_bending = resolved.bending_response()?;
+    let reference_moduli = membrane_response
+        .as_ref()
+        .map(CompiledMembrane::reference_moduli)
+        .transpose()?;
+    let membrane_value = |index, key, unit| {
+        reference_moduli.map_or_else(
+            || input.material.require(key, unit, allow_obs),
+            |values| Ok(values[index]),
+        )
+    };
     let find_target = |kind: TargetKind| {
         input
             .targets
@@ -792,32 +818,28 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
     let warp_bounds = match find_target(TargetKind::WarpStiffness) {
         Some(b) => b,
         None => {
-            let v = input.material.require("warp_stiffness", "N/m", allow_obs)?;
+            let v = membrane_value(0, "warp_stiffness", "N/m")?;
             [v, v]
         }
     };
     let weft_bounds = match find_target(TargetKind::WeftStiffness) {
         Some(b) => b,
         None => {
-            let v = input.material.require("weft_stiffness", "N/m", allow_obs)?;
+            let v = membrane_value(1, "weft_stiffness", "N/m")?;
             [v, v]
         }
     };
     let nu_bounds = match find_target(TargetKind::PoissonWarpWeft) {
         Some(b) => b,
         None => {
-            let v = input
-                .material
-                .require("poisson_warp_weft", "1", allow_obs)?;
+            let v = membrane_value(2, "poisson_warp_weft", "1")?;
             [v, v]
         }
     };
     let shear_bounds = match find_target(TargetKind::ShearStiffness) {
         Some(b) => b,
         None => {
-            let v = input
-                .material
-                .require("shear_stiffness", "N/m", allow_obs)?;
+            let v = membrane_value(3, "shear_stiffness", "N/m")?;
             [v, v]
         }
     };
@@ -868,12 +890,6 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
 
     let needs_self_contact = input.experiments.iter().any(|e| e.fixture.self_contact);
     let self_contact = if needs_self_contact {
-        let resolved = textile_import::catalog()?.resolve(&Selection {
-            id: input.material.id.clone(),
-            record: Some(input.material.clone()),
-            allow_estimates: allow_obs,
-            ..Selection::default()
-        })?;
         let thickness_m = resolved.unloaded_thickness()?.value;
         let mu_self = input.material.require("friction_self", "1", allow_obs)?;
         if mu_self < 0.0 {
@@ -924,9 +940,9 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
             experiment.fixture.pretension_displacement_m + w.axial_displacement_m - w.clamp_slip_m
                 < -1e-12
         });
-        if any_net_compression && bending_bounds[0] <= 0.0 {
+        if any_net_compression && bending_bounds[0] <= 0.0 && panel_bending.is_none() {
             return Err(invalid(
-                "cylinder axial compression below nominal_free_height_m requires positive bending_rigidity across the entire search domain",
+                "cylinder axial compression below nominal_free_height_m requires positive bending_rigidity or a BendingTensor across the entire search domain",
             ));
         }
         let mut seen_waypoints = BTreeSet::new();
@@ -1011,6 +1027,8 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         poisson: 0.5 * (nu_bounds[0] + nu_bounds[1]),
         shear_n_m: 0.5 * (shear_bounds[0] + shear_bounds[1]),
         bending_nm: 0.5 * (bending_bounds[0] + bending_bounds[1]),
+        membrane_response,
+        panel_bending,
         self_contact,
     })
 }
@@ -1843,6 +1861,316 @@ mod tests {
             grip_slip_force_limit_n: None,
             refuse_unmodeled_slip: false,
         }
+    }
+
+    fn fixed_law_input(nonlinear_membrane: bool) -> Input {
+        let mut material = synthetic_base_material(false);
+        let quantity = |value, unit: &str| Quantity {
+            value,
+            unit: unit.into(),
+            evidence: Evidence::Measured,
+            source: "spec".into(),
+            method: "synthetic independent baseline law".into(),
+            conditions: BTreeMap::new(),
+            bounds: None,
+        };
+        for (key, value, unit) in [
+            ("warp_stiffness", 900.0, "N/m"),
+            ("weft_stiffness", 620.0, "N/m"),
+            ("shear_stiffness", 180.0, "N/m"),
+            ("bending_rigidity", 0.0, "N*m"),
+        ] {
+            material
+                .properties
+                .insert(key.into(), quantity(value, unit));
+        }
+        let target = if nonlinear_membrane {
+            let curve = |values: [[f64; 2]; 5]| {
+                json!({"points": values, "source": "spec", "evidence": "measured",
+                    "method": "synthetic independent nonlinear law"})
+            };
+            material.membrane_response = Some(
+                serde_json::from_value(json!({
+                    "model": "tabulated_green_strain/1",
+                    "interpolation": "piecewise_linear",
+                    "warp": curve([[-0.3,-270.0],[0.0,0.0],[0.02,18.0],[0.08,180.0],[0.5,1800.0]]),
+                    "weft": curve([[-0.3,-186.0],[0.0,0.0],[0.02,12.4],[0.08,124.0],[0.5,1240.0]]),
+                    "shear": curve([[-0.5,-180.0],[-0.04,-7.2],[0.0,0.0],[0.04,7.2],[0.5,180.0]]),
+                    "coupling": quantity(40.0, "N/m")
+                }))
+                .unwrap(),
+            );
+            // A tabulated membrane replaces these scalar observations in ordinary consumers.
+            for key in [
+                "warp_stiffness",
+                "weft_stiffness",
+                "poisson_warp_weft",
+                "shear_stiffness",
+            ] {
+                material.properties.remove(key);
+            }
+            TargetParameter {
+                parameter: TargetKind::BendingRigidity,
+                bounds: [0.001, 0.005],
+            }
+        } else {
+            material.structure.insert(
+                "bending_model".into(),
+                ftx_pattern::material_bending::MODEL.into(),
+            );
+            for (key, value) in [
+                ("bending_warp", 0.003),
+                ("bending_weft", 0.005),
+                ("bending_coupling", 0.0004),
+                ("bending_twist", 0.002),
+            ] {
+                material
+                    .properties
+                    .insert(key.into(), quantity(value, "N*m"));
+            }
+            TargetParameter {
+                parameter: TargetKind::WarpStiffness,
+                bounds: [600.0, 1400.0],
+            }
+        };
+        let mut fixture = base_fixture([0.0, 1.0]);
+        fixture.cells = [8, 4];
+        fixture.pretension_displacement_m = 0.0;
+        let experiment = |id: &str, partition, extension, rotation| Experiment {
+            id: id.into(),
+            fixture: fixture.clone(),
+            loading: vec![Waypoint {
+                time_s: 0.0,
+                axial_displacement_m: extension,
+                rotation_deg: rotation,
+                clamp_slip_m: 0.0,
+            }],
+            nominal_protocol: None,
+            source: if partition == Partition::Fit {
+                "fit_acq"
+            } else {
+                "check_acq"
+            }
+            .into(),
+            evidence: Evidence::Measured,
+            partition,
+            observations: vec![Observation {
+                id: format!("{id}-force"),
+                waypoint_index: 0,
+                force_n: Some(Channel {
+                    value: 0.0,
+                    scale: 1.0,
+                }),
+                torque_nm: None,
+                mean_mid_radius_m: None,
+            }],
+        };
+        Input {
+            schema: INPUT_SCHEMA.into(),
+            material,
+            method: "Synthetic independent fixed-law integration check".into(),
+            conditions: BTreeMap::new(),
+            fitted_on: "2026-11-12".into(),
+            targets: vec![target],
+            experiments: vec![
+                experiment("fit", Partition::Fit, 0.002, 3.0),
+                experiment("check", Partition::Check, 0.001, 1.0),
+            ],
+            admit_cylindrical_shell_model: true,
+            allow_estimated_observations: nonlinear_membrane,
+            replace_existing: true,
+            allow_estimates: true,
+            controls: Controls {
+                static_tolerance_m: 1e-9,
+                velocity_tolerance_m_s: 1e-8,
+                ..Controls::default()
+            },
+            policy: Policy {
+                max_rms_scaled: 0.2,
+                max_peak_scaled: 0.3,
+                max_mesh_scaled: 0.3,
+                min_excitation_pivot: 1e-4,
+                max_iterations: 40,
+                max_forward_solves: 2048,
+            },
+        }
+    }
+
+    #[test]
+    fn fixed_constitutive_laws_match_public_forward_and_published_replay() {
+        for nonlinear in [false, true] {
+            let input = fixed_law_input(nonlinear);
+            let baseline = resolve_baseline_and_validate(&input).unwrap();
+            let values = [if nonlinear { 0.0025 } else { 900.0 }];
+            let domain = StrainDomain::new([[-0.25, 0.4]; 3]).unwrap();
+            let published = publish(
+                &input,
+                &baseline,
+                "synthetic-fixed-law",
+                &values,
+                domain.ranges(),
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&published.membrane_response).unwrap(),
+                serde_json::to_value(&input.material.membrane_response).unwrap(),
+            );
+            assert_eq!(published.structure, input.material.structure);
+            for key in [
+                "bending_warp",
+                "bending_weft",
+                "bending_coupling",
+                "bending_twist",
+            ] {
+                assert_eq!(
+                    serde_json::to_value(published.properties.get(key)).unwrap(),
+                    serde_json::to_value(input.material.properties.get(key)).unwrap(),
+                );
+            }
+            let mut budget = Budget {
+                used: 0,
+                limit: 100,
+                inherited_domain: None,
+                baseline,
+                input: &input,
+                recovery: SearchRecovery::default(),
+            };
+            for experiment in &input.experiments {
+                for factor in [1, 2] {
+                    let mut fixture = experiment.fixture.clone();
+                    fixture.cells = fixture.cells.map(|n| n * factor);
+                    let fitted = budget.solve(experiment, &fixture, &values).unwrap();
+                    let replayed = budget
+                        .replay(experiment, &fixture, &values, domain)
+                        .unwrap();
+                    let forward = cylinder::evaluate(&cylinder::Request {
+                        schema: cylinder::REQUEST_SCHEMA.into(),
+                        material: Selection {
+                            id: published.id.clone(),
+                            record: Some(published.clone()),
+                            allow_estimates: true,
+                            ..Selection::default()
+                        },
+                        fixture,
+                        loading: experiment.loading.clone(),
+                        nominal_protocol: None,
+                        controls: input.controls.clone(),
+                    })
+                    .unwrap();
+                    for candidate in [&fitted.waypoint_states[0], &replayed.waypoint_states[0]] {
+                        let expected = &forward.states[0];
+                        assert!(
+                            (candidate.tare_adjusted_force_n - expected.tare_adjusted_force_n)
+                                .abs()
+                                < 1e-9,
+                            "nonlinear={nonlinear}, factor={factor}: force changed on publication"
+                        );
+                        assert!(
+                            (candidate.stored_membrane_energy_j
+                                - expected.stored_membrane_energy_j)
+                                .abs()
+                                < 1e-11
+                        );
+                        assert!(
+                            (candidate.stored_bending_energy_j - expected.stored_bending_energy_j)
+                                .abs()
+                                < 1e-11
+                        );
+                        for (a, b) in candidate.positions_m.iter().zip(&expected.positions_m) {
+                            for (a, b) in a.iter().zip(b) {
+                                assert!((a - b).abs() < 1e-10);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_laws_keep_evidence_domains_and_target_overwrite_refusals() {
+        let mut nonlinear = fixed_law_input(true);
+        nonlinear.allow_estimated_observations = false;
+        assert!(
+            resolve_baseline_and_validate(&nonlinear)
+                .err()
+                .unwrap()
+                .message
+                .contains("estimate consent")
+        );
+        nonlinear.allow_estimated_observations = true;
+        nonlinear.targets[0] = TargetParameter {
+            parameter: TargetKind::WarpStiffness,
+            bounds: [600.0, 1400.0],
+        };
+        assert!(
+            resolve_baseline_and_validate(&nonlinear)
+                .err()
+                .unwrap()
+                .message
+                .contains("cannot discard an existing nonlinear")
+        );
+
+        let mut narrow = fixed_law_input(true);
+        let law = narrow.material.membrane_response.as_mut().unwrap();
+        for (curve, stress) in [
+            (&mut law.warp, 0.09),
+            (&mut law.weft, 0.062),
+            (&mut law.shear, 0.018),
+        ] {
+            curve.points = vec![[-1e-4, -stress], [0.0, 0.0], [1e-4, stress]];
+        }
+        let baseline = resolve_baseline_and_validate(&narrow).unwrap();
+        let mut budget = Budget {
+            used: 0,
+            limit: 100,
+            inherited_domain: None,
+            baseline,
+            input: &narrow,
+            recovery: SearchRecovery::default(),
+        };
+        let experiment = &narrow.experiments[0];
+        assert!(
+            budget
+                .solve(experiment, &experiment.fixture, &[0.0025])
+                .is_err(),
+            "a fixed nonlinear law's source domain cannot disappear during a bending fit"
+        );
+
+        let mut directional = fixed_law_input(false);
+        directional
+            .material
+            .properties
+            .get_mut("bending_warp")
+            .unwrap()
+            .evidence = Evidence::Estimate;
+        assert!(resolve_baseline_and_validate(&directional).is_err());
+        directional.allow_estimated_observations = true;
+        assert!(resolve_baseline_and_validate(&directional).is_ok());
+        directional
+            .material
+            .properties
+            .get_mut("bending_warp")
+            .unwrap()
+            .source = "absent".into();
+        assert!(resolve_baseline_and_validate(&directional).is_err());
+        directional
+            .material
+            .properties
+            .get_mut("bending_warp")
+            .unwrap()
+            .source = "spec".into();
+        directional.targets[0] = TargetParameter {
+            parameter: TargetKind::BendingRigidity,
+            bounds: [0.001, 0.005],
+        };
+        assert!(
+            resolve_baseline_and_validate(&directional)
+                .err()
+                .unwrap()
+                .message
+                .contains("cannot discard an existing directional")
+        );
     }
 
     fn generate_truth_state(
