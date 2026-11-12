@@ -21193,3 +21193,101 @@ test('guided root rotation named cases keep independent snapshots after later po
   assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
 });
 
+test('guided source pose sampling freezes independent policies and invalidates active work',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  assert.equal(p.e.guidedMotionPoseSampling.checked,false);
+  assert.equal(p.e.guidedMotionPoseStep.disabled,true);
+  guidedRootRotationDraft(p,[0,0,0.5]);await addGuidedMotion(p,0.004,45,'seated',0.25);
+  p.e.guidedMotionPoseSampling.checked=true;p.e.guidedMotionPoseSampling.handlers.change();
+  p.e.guidedMotionPoseStep.value='0.001';p.e.guidedMotionPoseStep.handlers.input();
+  p.e.guidedMotionPoseSegments.value='8';p.e.guidedMotionPoseSegments.handlers.input();
+  assert.equal(p.e.guidedMotionPoseStep.disabled,false);
+  await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const policy=JSON.parse(sent.scenarioRequest).motion;
+  assert.deepEqual(policy.source_pose_sampling,{max_step_s:0.001,max_segments:8});
+  assert.equal(policy.keyframes.length,1);assert.equal(policy.max_trials,16);
+  p.e.guidedMotionPoseStep.value='0.002';p.e.guidedMotionPoseStep.handlers.input();
+  assert.equal(worker.dead,true);p.ready();
+  worker.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  await p.e.scenario.onclick();
+  assert.equal(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.source_pose_sampling.max_step_s,0.002);
+  assert.equal(policy.source_pose_sampling.max_step_s,0.001);
+  p.emit(scenarioReport());await p.load();
+  assert.equal(p.e.guidedMotionPoseSampling.checked,false);assert.equal(p.e.guidedMotionPoseSegments.disabled,true);
+});
+
+test('guided source pose sampling retains named cases and rejects insufficient segment limits',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
+  await addGuidedMotion(p,0.004,45);
+  p.e.guidedMotionPoseSampling.checked=true;p.e.guidedMotionPoseSampling.handlers.change();
+  p.e.guidedMotionPoseStep.value='0.001';p.e.guidedMotionPoseSegments.value='3';
+  await saveGuidedCase(p,'too-small');
+  assert.equal(p.e.guidedScenarioCases.children.length,0);assert.match(p.e.error.textContent,/segment allowance/);
+  p.e.guidedMotionPoseSegments.value='4';await saveGuidedCase(p,'sampled');
+  p.e.guidedMotionPoseSampling.checked=false;p.e.guidedMotionPoseSampling.handlers.change();
+  await saveGuidedCase(p,'endpoints');
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases[0].scenario.motion.source_pose_sampling,{max_step_s:0.001,max_segments:4});
+  assert.equal(Object.hasOwn(cases[1].scenario.motion,'source_pose_sampling'),false);
+  assert.match(visibleText(p.e.guidedScenarioCases),/source body poses at most 0.001 s apart/);
+});
+
+const guidedCompressionOriginal=' \r\n{"schema":"ftx-motion-surface-compression/1",'+
+  '"thermal_evidence":"Synthetic dry source and films, no conversion of work to heat.","bindings":{"front.R":{'+
+  '"material_sha256":"'+'a'.repeat(64)+'","preparation":{"schema":"ftx-material-compression/1","pressure_pa":-0.0},'+
+  '"direction":"loading","pressure_pa":[2.500e2]}}}\r\n';
+function guidedCompressionSource(p,raw=guidedCompressionOriginal) {
+  p.e.guidedMotionCompression.checked=true;p.e.guidedMotionCompression.handlers.change();
+  p.select('guidedMotionCompressionFile',raw);p.e.guidedMotionCompressionFile.handlers.change();
+}
+test('guided prescribed compression freezes source files and invalidates active histories',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  await addGuidedMotion(p,0.002,35);guidedCompressionSource(p);
+  assert.equal(p.e.guidedMotionCompressionFile.disabled,false);
+  await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(guidedCompressionOriginal));
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.transient_surface.prescribed_compression,JSON.parse(guidedCompressionOriginal));
+  const changed=guidedCompressionOriginal.replace('2.500e2','5.000e2');
+  p.select('guidedMotionCompressionFile',changed);p.e.guidedMotionCompressionFile.handlers.change();
+  assert.equal(worker.dead,true);p.ready();await p.e.scenario.onclick();
+  assert.ok(p.current().messages.at(-1).scenarioRequest.includes(changed));
+  p.emit(scenarioReport());await p.load();
+  assert.equal(p.e.guidedMotionCompression.checked,false);assert.equal(p.e.guidedMotionCompressionFile.disabled,true);
+});
+test('guided prescribed compression retains named cases and rejects unsupported heating',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  await addGuidedMotion(p,0.002,35);guidedCompressionSource(p);
+  p.e.guidedMotionHeatPlastic.checked=true;p.e.guidedMotionHeatPlastic.handlers.change();
+  await saveGuidedCase(p,'unsupported');assert.equal(p.e.guidedScenarioCases.children.length,0);
+  assert.match(p.e.error.textContent,/dry film-boundary/);
+  p.e.guidedMotionHeatPlastic.checked=false;p.e.guidedMotionHeatPlastic.handlers.change();await saveGuidedCase(p,'compressed');
+  p.e.guidedMotionCompression.checked=false;p.e.guidedMotionCompression.handlers.change();await saveGuidedCase(p,'dry');
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(guidedCompressionOriginal));
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.equal(cases[0].scenario.motion.transient_surface.prescribed_compression.bindings['front.R'].pressure_pa[0],250);
+  assert.equal(Object.hasOwn(cases[1].scenario.motion.transient_surface,'prescribed_compression'),false);
+  p.select('guidedMotionCompressionFile','{bad');p.e.guidedMotionCompressionFile.handlers.change();
+  assert.equal(p.current().dead,false);p.emit(scenarioReport());await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+test('motion results display retained source sampling and separate compression work',async()=>{
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioReport(),initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.motion=outcome({keyframes:[],samples:[],source_pose_sampling:{max_step_s:0.02,max_segments:16,generated_segments:8,
+    source_times_s:[0.02],authored_interval_indices:[0]},transient_surface:outcome({trace:[{temperature_range_c:[18,20]}],
+    prescribed_compression:{initial_instances:{'<panel>':{pressure_pa:0,thickness_m:0.02}},
+      final_instances:{'<panel>':{pressure_pa:500,thickness_m:0.01,reference_mass_kg:0.25,cumulative_normal_work_j:0.75}},
+      cumulative_normal_work_j:0.75,normal_work_to_heat_j:0,updates:[{interval_index:0}]}})});
+  await p.e.scenario.onclick();p.emit(report);const s=section(p,'Fresh drape and heat alternatives');
+  assert.match(visibleText(s),/8 intermediate source-pose segments/);
+  const table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='A: prescribed pressure and retained thermal mass');
+  assert.deepEqual(plain(table.children[2].children.map(n=>n.textContent)),['<panel>','0','500','0.02','0.01','0.25','0.75']);
+  assert.match(visibleText(s),/converted to heat: 0 J/);assert.match(visibleText(s),/Pressure is supplied explicitly/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+});
+

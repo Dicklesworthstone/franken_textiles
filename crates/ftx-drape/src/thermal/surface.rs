@@ -222,6 +222,58 @@ impl Surface {
             .any(|column| column.temperature_domain().is_some())
     }
 
+    // A qualified pressure adapter may change transport while retaining the exact reference-mass
+    // temperature cells. This is deliberately narrower than arbitrary material substitution:
+    // identical heat capacity alone could conceal a compensating change in mass and specific heat.
+    // Source/pressure qualification belongs to the adapter; this boundary checks storage exactly.
+    pub(crate) fn recondition_columns(
+        &self,
+        state: &SurfaceState,
+        replacements: Vec<(usize, DryThermalModel)>,
+    ) -> Result<(Self, SurfaceState), Refusal> {
+        if state.sha256 != self.sha256 {
+            return Err(invalid(
+                "conditioned thermal state belongs to another surface",
+            ));
+        }
+        let mut columns = self.columns.clone();
+        let mut used = BTreeSet::new();
+        for (index, next) in replacements {
+            let previous = self
+                .columns
+                .get(index)
+                .ok_or_else(|| invalid("conditioned thermal column is missing"))?;
+            if !used.insert(index)
+                || previous.variable.is_some()
+                || next.variable.is_some()
+                || previous.cells_per_layer != next.cells_per_layer
+                || previous.layers.len() != next.layers.len()
+                || previous.interfaces != next.interfaces
+                || previous.capacity != next.capacity
+            {
+                return Err(invalid(
+                    "conditioned heat needs unchanged cells, interfaces and constant reference heat capacity",
+                ));
+            }
+            for (old, new) in previous.layers.iter().zip(&next.layers) {
+                let mass = |layer: &ftx_pattern::material_catalog::ResolvedMaterial| {
+                    layer
+                        .material()
+                        .require("areal_density", "kg/m2", layer.allows_estimates())
+                };
+                if mass(old)? != mass(new)? {
+                    return Err(invalid(
+                        "conditioned heat cannot change a layer's reference areal mass",
+                    ));
+                }
+            }
+            columns[index] = next;
+        }
+        let next = Self::new(columns, self.vertex_count, self.patches.clone())?;
+        let temperature = next.initial_profiles(state.temperature_c())?;
+        Ok((next, temperature))
+    }
+
     /// Initialize every material cell to the same specified temperature. Changing a material
     /// requires initialization of a new state; remapping stored heat is an explicit separate problem.
     ///

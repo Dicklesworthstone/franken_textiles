@@ -3697,3 +3697,76 @@ test('guided and original-file motion refuse malformed or excessive root rotatio
   assert.throws(()=>motion(wrong),/unsupported/);
 });
 
+test('source pose sampling keeps authored endpoints heat intervals and source bytes intact', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,
+    buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const input={...motionState(),source_pose_sampling:{max_step_s:0.025,max_segments:20},
+    transient_surface:dryMotionHeat()},before=JSON.stringify(input),raw=motion(input);
+  assert.equal(JSON.stringify(input),before);
+  const parsed=JSON.parse(raw);
+  assert.deepEqual(parsed.keyframes,input.keyframes);
+  assert.deepEqual(parsed.transient_surface,input.transient_surface);
+  assert.deepEqual(parsed.source_pose_sampling,input.source_pose_sampling);
+  assert.equal(parsed.max_trials,input.max_trials);
+  const original=' \r\n'+raw.replace('"max_step_s":0.025','"max_step_s":0.0250')+'\r\n';
+  const saved=single({...scenarioState(),motion:original,maxMotionTrials:1024});
+  assert.ok(saved.includes(original));
+  const named=matrix({maxEvaluations:2,cases:[{key:'turn',scenario:saved}]});
+  assert.ok(named.includes(saved));
+  assert.equal(Object.hasOwn(JSON.parse(motion(motionState())),'source_pose_sampling'),false);
+});
+
+test('source pose sampling refuses malformed policies and exhausted segment allowances', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  for(const policy of [true,[],{}, {max_step_s:0.01},{max_step_s:0,max_segments:512},
+    {max_step_s:1.01,max_segments:512},{max_step_s:'0.01',max_segments:512},
+    {max_step_s:0.01,max_segments:24},{max_step_s:0.01,max_segments:513},
+    {max_step_s:0.01,max_segments:1.5},{max_step_s:0.01,max_segments:512,adaptive:true}]) {
+    const input={...motionState(),source_pose_sampling:policy};
+    assert.throws(()=>motion(input),/source pose sampling/i);
+    assert.throws(()=>single({...scenarioState(),motion:JSON.stringify({schema:'ftx-drape-motion/1',...input}),
+      maxMotionTrials:1024}),/source pose sampling/i);
+  }
+  assert.throws(()=>motion({...motionState(),keyframes:[{time_s:1.5e-9,arm_abduction_deg:30}],
+    source_pose_sampling:{max_step_s:1e-9,max_segments:2}}),/mechanical minimum/);
+});
+
+function motionCompressionInput() {
+  const preparation=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-compression.json'),'utf8'));
+  preparation.pressure_pa=0;
+  return {schema:'ftx-motion-surface-compression/1',thermal_evidence:'Synthetic fixed dry coefficients, films and prescribed pressure; no conversion of normal work to heat.',
+    bindings:{'front.R':{material_sha256:'a'.repeat(64),preparation,direction:'loading',pressure_pa:[250]}}};
+}
+test('prescribed compression keeps original acquisition bytes through motion and named cases',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const source=' \r\n'+JSON.stringify(motionCompressionInput()).replace('"pressure_pa":[250]','"pressure_pa":[2.500e2]')+'\r\n';
+  const input={...motionState(),transient_surface:dryMotionHeat()},before=JSON.stringify(input);
+  const built=motion(input,undefined,source);
+  assert.ok(built.includes(source));assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(JSON.parse(built).transient_surface.prescribed_compression,JSON.parse(source));
+  const first=single({...scenarioState(),motion:input,motionCompression:source,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const second=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const saved=matrix({maxEvaluations:4,cases:[{key:'compressed',scenario:first},{key:'dry',scenario:second}]});
+  assert.ok(saved.includes(source));assert.ok(saved.includes(first));
+  assert.equal(Object.hasOwn(JSON.parse(saved).cases[1].scenario.motion.transient_surface,'prescribed_compression'),false);
+  assert.ok(single({...scenarioState(),motion:built,maxMotionTrials:1024}).includes(built));
+});
+test('prescribed compression requires complete instance schedules and supported dry heat',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  const input={...motionState(),transient_surface:dryMotionHeat()};
+  for(const change of [v=>{v.schema='wrong';},v=>{v.bindings={};},v=>{v.bindings=[];},
+    v=>{v.bindings['front.R'].pressure_pa=[];},v=>{v.bindings['front.R'].pressure_pa=[-1];},
+    v=>{v.bindings['front.R'].material_sha256='missing';},v=>{v.bindings['front.R'].direction='auto';},
+    v=>{v.bindings['front.R'].preparation.schema='wrong';},v=>{v.thermal_evidence='';}]) {
+    const value=motionCompressionInput();change(value);
+    assert.throws(()=>motion(input,undefined,JSON.stringify(value)),/compression|compressed|pressure/i);
+  }
+  const source=JSON.stringify(motionCompressionInput());
+  assert.throws(()=>motion(motionState(),undefined,source),/independent-sheet heat/);
+  assert.throws(()=>motion({...input,transient_surface:{...input.transient_surface,
+    plastic_dissipation_heat:'uniform_reference_thickness'}},undefined,source),/dry film-boundary/);
+  assert.throws(()=>motion(input,{},source),/dry film-boundary/);
+  assert.throws(()=>single({...scenarioState(),motion:motion(input),motionCompression:source,maxMotionTrials:1024}),/complete policies/);
+  assert.throws(()=>single({...scenarioState(),motionCompression:source}),/authored motion/);
+});
+

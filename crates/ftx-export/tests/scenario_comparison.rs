@@ -753,6 +753,88 @@ fn root_rotations_must_match_every_requested_endpoint_before_motion_comparison()
 }
 
 #[test]
+fn source_pose_sampling_must_match_the_policy_and_retained_mechanical_sequence() {
+    let mut request = motion_request();
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut descriptor = motion_descriptor();
+    descriptor["scenario"]["motion"]["source_pose_sampling"] =
+        json!({"max_step_s":0.25,"max_segments":4});
+    for fault in [
+        "none", "missing", "step", "limit", "count", "time", "interval", "sample",
+    ] {
+        let report = request
+            .evaluate_with(&pattern, &descriptor, |key, pattern| {
+                let mut result = synthetic_motion(pattern, 5.);
+                let motion = &mut result["motion"]["result"];
+                let template = motion["samples"][0].clone();
+                motion["samples"] = json!([0.25, 0.5, 0.75, 1.].map(|time| {
+                    let mut sample = template.clone();
+                    sample["time_s"] = json!(time);
+                    sample
+                }));
+                motion["trials"] = json!(4);
+                motion["keyframes"][0]["sample_index"] = json!(1);
+                motion["keyframes"][1]["sample_index"] = json!(3);
+                motion["source_pose_sampling"] = json!({"max_step_s":0.25,"max_segments":4,
+                "generated_segments":4,"source_times_s":[0.25,0.5,0.75,1.],
+                "authored_interval_indices":[0,0,1,1]});
+                if key == "a" {
+                    match fault {
+                        "missing" => {
+                            motion
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("source_pose_sampling");
+                        }
+                        "step" => motion["source_pose_sampling"]["max_step_s"] = json!(0.5),
+                        "limit" => motion["source_pose_sampling"]["max_segments"] = json!(5),
+                        "count" => motion["source_pose_sampling"]["generated_segments"] = json!(3),
+                        "time" => {
+                            motion["source_pose_sampling"]["source_times_s"][0] = json!(0.125)
+                        }
+                        "interval" => {
+                            motion["source_pose_sampling"]["authored_interval_indices"][2] =
+                                json!(0)
+                        }
+                        "sample" => motion["samples"][0]["time_s"] = json!(0.125),
+                        _ => {}
+                    }
+                }
+                Ok(result)
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a", "b"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}"
+        );
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+    }
+    let legacy = request.evaluate_with(&pattern, &motion_descriptor(), |key, pattern| {
+        let mut result = synthetic_motion(pattern, 5.);
+        if key == "a" {
+            result["motion"]["result"]["source_pose_sampling"] =
+                json!({"max_step_s":0.5,"max_segments":2,"generated_segments":2,
+                    "source_times_s":[0.5,1.],"authored_interval_indices":[0,1]});
+        }
+        Ok(result)
+    }).unwrap();
+    assert_eq!(
+        serde_json::to_value(legacy).unwrap()["comparison"]["frontier"],
+        json!(["b"])
+    );
+}
+
+#[test]
 fn motion_comparison_requires_every_requested_leg_posture_and_fraction() {
     let request = motion_request();
     let pattern = Pattern::from_json(PATTERN).unwrap();

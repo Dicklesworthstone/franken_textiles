@@ -850,6 +850,21 @@ and RC tests, plateau/direction/source refusals, rollback and actual native/port
 cover the software composition; no inferred garment contact pressure, physical compression recovery,
 mechanical heating or empirical clothing warmth follows. See `docs/compressed-thermal-history.md`.
 
+**Prescribed compression on moving sheets** (`study::heat::compression`, bounded `ftx-cp2` / `ftx-tm5`
+slice). Optional `motion.transient_surface.prescribed_compression` binds exact original material
+records and physical instance IDs to complete pressure acquisitions and monotone interval schedules.
+The existing pressure conditioner/stack authority supplies each actual thermal column; the checked
+`Surface` transition preserves temperature cells, constant cell capacity and reference areal mass.
+Current accepted triangle area drives boundary exchange and the separately reported instantaneous
+normal branch work; reference area owns stored sensible heat. Per-instance pressure states remain
+independent even for the same original material. A failed pressure or later thermal advance rolls
+back the entire trial, and repeated samples within one interval do not count compression twice.
+Original source receipts, initial/final conditioned models and interval hashes support frozen replay
+and the ordinary motion heat objectives. Dry film-only `/1` refuses unqualified wet, exterior or
+dissipation-heating combinations; no contact-derived pressure, geometry feedback, branch reversal,
+work-to-heat conversion or physical compression claim follows. Tests: `study::heat::compression`;
+consumer contract: `docs/material-scenario-studies.md#prescribed-compression-during-moving-sheet-heat`.
+
 **Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
 `Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint
 body-area fractions and inside-to-outside layers. It checks both body and cloth allocation budgets,

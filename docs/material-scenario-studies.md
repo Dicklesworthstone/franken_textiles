@@ -531,6 +531,65 @@ remain necessary; a small energy residual alone proves neither physical accuracy
 The comparator's existing metric names still describe the initial static result. The separate
 motion metrics below compare signed cumulative energy and final cloth-cell temperatures.
 
+### Prescribed compression during moving-sheet heat
+
+`motion.transient_surface.prescribed_compression` connects an acquired pressure/thickness/transport
+branch to the actual moving independent-sheet history. This lets a scenario compare a declared
+loaded insulation state while continuing the same temperature cells through later pressure changes.
+The pressure is a supplied operating boundary; no contact force is divided by an assumed area.
+
+The optional object has schema `ftx-motion-surface-compression/1` and these fields:
+
+| Field | Required meaning |
+| --- | --- |
+| `thermal_evidence` | Explicit application evidence for constant dry thermal properties over the chosen temperature/time range, prescribed films/pressure, and omission of work-to-heat conversion. |
+| `bindings` | A nonempty map of at most 256 exact retained physical instance IDs. Unlisted instances use their ordinary dry thermal material. |
+| `bindings[id].material_sha256` | The exact original selected material hash, before pressure conditioning. |
+| `bindings[id].preparation` | A complete existing `ftx-material-compression/1` acquisition, including the original material, source-qualified samples and invariants, specimen/conditioning/branch, date and explicit estimate consent. Its `pressure_pa` is the known initial preload. |
+| `bindings[id].direction` | `loading` or `unloading` on that supplied monotone branch. A reversal needs independently acquired branch/history support and is refused here. |
+| `bindings[id].pressure_pa` | Exactly one finite, nonnegative prescribed pressure for each mechanical keyframe interval, within the qualified branch and declared direction. |
+
+The acquisition's complete normalized base record must match the actual selected material; naming
+a similar fabric or copying its hash is insufficient. Both `areal_density` and `specific_heat` must
+have independently sourced pressure-invariance declarations. Sampled storage, temperature-dependent
+thermal profiles and a silently changed reference mass are refused. See
+[pressure-conditioned materials](pressure-conditioned-materials.md) for acquisition/source rules and
+[compressed thermal histories](compressed-thermal-history.md) for the shared pressure and heat
+authorities. An original mechanical record may obtain thermal transport from its pressure samples;
+it need not pretend to have an uncompressed thermal observation.
+
+At the first accepted mechanical sample of each keyframe interval, the existing single-layer
+pressure solver conditions each bound sheet from its preceding pressure and the original acquisition.
+The next heat solve uses its exact frozen material selection. Repeated samples in that interval
+keep the same pressure state. Every temperature cell is transferred unchanged only after the thermal
+boundary verifies identical cell capacity and identical reference areal mass. Resistance exchanges
+heat over the accepted triangle's **current area**; storage remains attached to its **reference
+mass**. Different physical instances can therefore share an original fabric and follow different
+pressure schedules without sharing a temperature or conditioned-material state.
+
+Normal branch work is the acquired per-area integral over the actual current instance area, held
+fixed during the instantaneous pressure traverse. It has a separate signed ledger and contributes
+zero heat. This closure does not model lateral expansion during a squeeze, change garment geometry,
+infer mechanical/contact coefficients or establish a recovery-time law. A pressure/source/geometry
+or later thermal-budget failure rolls back pressure, source identity, temperatures and work together;
+the complete independent heat consumer refuses without publishing a partial pressure history.
+
+The result's ordinary `model` is the final conditioned thermal surface. Its
+`prescribed_compression` receipt includes the exact original `source_model`, complete conditioned
+`initial_model`, initial/final instance states, one `updates` entry per interval, interval model and
+material hashes, actual work areas and separate cumulative normal work. `normal_work_to_heat_j` is
+zero. Trace rows retain their active conditioned identities, so initial temperature/profile admission
+and final heat objectives can replay the same original sources and pressure path. Existing sheet
+heat metrics consume the resulting heat; normal work is not added to a thermal objective.
+
+Version `/1` uses the existing uniform dry film boundaries. It refuses combinations with exterior
+exchange, textile water, mechanical liquid coupling or dissipation heating because those source
+qualifications do not establish a pressure-conditioned combined law. Covered-body layered heat is
+a separate consumer and receives no inferred pressure field. Omission preserves the original dry
+history and receipt shape. Numerical conservation and synthetic pressure/RC answers establish this
+software composition; measured compression recovery and garment thermal performance remain separate
+qualification work.
+
 ### Qualified irreversible material heating
 
 Add `"plastic_dissipation_heat": "uniform_reference_thickness"` inside the existing

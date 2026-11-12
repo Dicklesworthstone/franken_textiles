@@ -407,9 +407,60 @@ function motionRootRotation(frame) {
   }
 }
 
+function motionPoseSampling(value, keyframes) {
+  if (value == null) return;
+  object(value, ["max_step_s", "max_segments"], ["max_step_s", "max_segments"], "Source pose sampling");
+  if (typeof value.max_step_s !== "number" || !Number.isFinite(value.max_step_s) ||
+      value.max_step_s < 1e-9 || value.max_step_s > 1 ||
+      !Number.isSafeInteger(value.max_segments) || value.max_segments < 1 || value.max_segments > 512) {
+    throw Error("Source pose sampling needs a finite step from 1e-9 to 1 second and an integer segment allowance from 1 to 512.");
+  }
+  let previous = 0, previousSource = 0, segments = 0;
+  for (const frame of keyframes) {
+    const count = Math.max(1, Math.ceil((frame.time_s - previous) / value.max_step_s - 1e-12));
+    segments += count;
+    if (segments > value.max_segments) throw Error("Source pose sampling exceeds its whole-trajectory segment allowance.");
+    for (let segment = 1; segment <= count; segment++) {
+      const time = segment === count ? frame.time_s : previous + (frame.time_s - previous) * (segment / count);
+      if (time - previousSource < 1e-9) throw Error("Source pose sampling produces a step below the mechanical minimum of 1e-9 seconds.");
+      previousSource = time;
+    }
+    previous = frame.time_s;
+  }
+}
+
+function motionCompressionSource(raw, keyframes) {
+  const value = sourceObject(raw, "Prescribed compression");
+  object(value, ["schema", "thermal_evidence", "bindings"], ["schema", "thermal_evidence", "bindings"], "Prescribed compression");
+  if (value.schema !== "ftx-motion-surface-compression/1") throw Error("Prescribed compression needs ftx-motion-surface-compression/1.");
+  name(value.thermal_evidence, "Compression thermal applicability evidence");
+  if (!value.bindings || typeof value.bindings !== "object" || Array.isArray(value.bindings)) {
+    throw Error("Compression bindings must name the exact retained physical garment instances.");
+  }
+  const bindings = Object.entries(value.bindings);
+  if (!bindings.length || bindings.length > 256) throw Error("Prescribed compression needs 1–256 explicit instance bindings.");
+  for (const [instance, binding] of bindings) {
+    name(instance, "Compressed physical instance");
+    object(binding, ["material_sha256", "preparation", "direction", "pressure_pa"],
+      ["material_sha256", "preparation", "direction", "pressure_pa"], "Compression binding");
+    if (typeof binding.material_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(binding.material_sha256) ||
+        !["loading", "unloading"].includes(binding.direction) ||
+        !binding.preparation || typeof binding.preparation !== "object" || Array.isArray(binding.preparation) ||
+        binding.preparation.schema !== "ftx-material-compression/1") {
+      throw Error("Each compressed instance needs its original material hash, complete pressure acquisition and loading or unloading direction.");
+    }
+    if (!Array.isArray(binding.pressure_pa) || binding.pressure_pa.length !== keyframes.length ||
+        binding.pressure_pa.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+      throw Error("Each compressed instance needs one finite nonnegative pressure in pascals per authored motion interval.");
+    }
+  }
+  // Source locks, pressure branches, invariant mass/capacity and thermal domains are checked in Rust.
+  // The original JSON text is inserted unchanged, including the source acquisition's numeric tokens.
+}
+
 /** Author prescribed endpoints around exact liquid policies; Rust owns physical admission and evolution. */
-export function buildMaterialMotionRequest(state, liquid = undefined) {
-  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "transient_surface", "transient_coverage"],
+export function buildMaterialMotionRequest(state, liquid = undefined, compression = undefined) {
+  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "source_pose_sampling", "transient_surface", "transient_coverage"],
     ["keyframes", "max_step_s", "max_trials", "max_pairs"], "Guided motion");
   if (!Array.isArray(state.keyframes) || !state.keyframes.length || state.keyframes.length > 16) {
     throw Error("Motion needs 1–16 explicitly authored endpoints.");
@@ -448,6 +499,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined) {
     previous = frame.time_s;
   }
   if (minimumTrials > state.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  motionPoseSampling(state.source_pose_sampling, state.keyframes);
   const heatingFields = ["plastic_dissipation_heat", "relaxation_dissipation_heat", "bending_plastic_dissipation_heat"];
   for (const [consumer, coverage] of [["transient_surface", false], ["transient_coverage", true]]) {
     if (!own(state, consumer)) continue;
@@ -570,12 +622,22 @@ export function buildMaterialMotionRequest(state, liquid = undefined) {
     }
   }
   let request;
-  if (liquid === undefined) request = JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
+  if (compression !== undefined) {
+    if (!own(state, "transient_surface")) throw Error("Prescribed compression requires authored independent-sheet heat.");
+    motionCompressionSource(compression, state.keyframes);
+    if (liquid !== undefined || [...heatingFields, "exterior_exchange"].some(field => state.transient_surface[field] != null)) {
+      throw Error("Prescribed compression currently requires dry film-boundary heat without liquid or deformation-heating policies.");
+    }
+  }
+  if (liquid === undefined && compression === undefined) request = JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
   else {
-    if (!own(state, "transient_surface")) throw Error("Original textile-water policies require authored independent-sheet heat.");
-    motionLiquidSources(liquid);
+    if (liquid !== undefined) {
+      if (!own(state, "transient_surface")) throw Error("Original textile-water policies require authored independent-sheet heat.");
+      motionLiquidSources(liquid);
+    }
+    const sources = { ...liquid, ...(compression === undefined ? {} : { prescribed_compression: compression }) };
     const heat = JSON.stringify(state.transient_surface).slice(0, -1) +
-      Object.entries(liquid).map(([key, raw]) => `,${JSON.stringify(key)}:${raw}`).join("") + "}";
+      Object.entries(sources).map(([key, raw]) => `,${JSON.stringify(key)}:${raw}`).join("") + "}";
     request = "{" + Object.entries({ schema: "ftx-drape-motion/1", ...state }).map(([key, value]) =>
       `${JSON.stringify(key)}:${key === "transient_surface" ? heat : JSON.stringify(value)}`).join(",") + "}";
   }
@@ -586,7 +648,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined) {
 function motionPolicy(value) {
   const required = ["schema", "keyframes", "max_step_s", "max_trials", "max_pairs"];
   const advanced = ["transient_surface", "transient_coverage", "vapor_coverage_history"];
-  object(value, [...required, "max_sample_vertices", ...advanced], required, "Prescribed motion");
+  object(value, [...required, "max_sample_vertices", "source_pose_sampling", ...advanced], required, "Prescribed motion");
   if (value.schema !== "ftx-drape-motion/1" || !Array.isArray(value.keyframes) ||
     !value.keyframes.length || value.keyframes.length > 16) {
     throw Error("Prescribed motion needs ftx-drape-motion/1 with 1–16 keyframes.");
@@ -619,6 +681,7 @@ function motionPolicy(value) {
     previous = frame.time_s;
   }
   if (minimumTrials > value.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  motionPoseSampling(value.source_pose_sampling, value.keyframes);
   for (const key of advanced) {
     if (value[key] != null && (typeof value[key] !== "object" || Array.isArray(value[key]))) {
       throw Error(`Motion ${key} must retain its original object or null.`);
@@ -673,7 +736,7 @@ function coveragePolicy(value, label, thermal = false) {
 /** Author one fresh drape with authored or original motion; source files remain verbatim and Rust owns numerical admission. */
 export function buildMaterialScenarioRequest(state) {
   object(state, ["fitSpec", "allowNoFit", "options", "maxMeshPoints", "maxVertexFrames", "surface",
-    "motion", "motionLiquid", "maxMotionTrials", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage"],
+    "motion", "motionLiquid", "motionCompression", "maxMotionTrials", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage"],
     ["allowNoFit", "options", "maxMeshPoints", "maxVertexFrames"], "Guided scenario");
   if (typeof state.allowNoFit !== "boolean") throw Error("Declare the numerical-only study without a fit contract explicitly.");
   let fitSpec = "{}";
@@ -748,9 +811,10 @@ export function buildMaterialScenarioRequest(state) {
   if (own(state, "motion")) {
     if (typeof state.motion === "string") {
       if (own(state, "motionLiquid")) throw Error("Original motion requests retain their complete policies; choose authored motion to compose separate liquid sources.");
+      if (own(state, "motionCompression")) throw Error("Original motion requests retain their complete policies; choose authored motion to compose a separate compression source.");
       motionPolicy(sourceObject(state.motion, "Prescribed motion"));
       motion = state.motion;
-    } else motion = buildMaterialMotionRequest(state.motion, state.motionLiquid);
+    } else motion = buildMaterialMotionRequest(state.motion, state.motionLiquid, state.motionCompression);
     if (!own(state, "maxMotionTrials")) {
       throw Error("Prescribed motion and its explicit integer scenario motion-trial budget must be supplied together.");
     }
@@ -761,6 +825,7 @@ export function buildMaterialScenarioRequest(state) {
     throw Error("A scenario motion-trial budget requires a prescribed motion request; both must be supplied together.");
   }
   if (own(state, "motionLiquid") && motion === undefined) throw Error("Original textile-water policies require authored motion and independent-sheet heat.");
+  if (own(state, "motionCompression") && motion === undefined) throw Error("Prescribed compression requires authored motion and independent-sheet heat.");
   if (own(state, "materialStrain")) materialStrainPolicy(sourceObject(state.materialStrain, "Material strain"));
   if (own(state, "contactLoads")) contactLoadsPolicy(sourceObject(state.contactLoads, "Body contact loads"));
   const parts = ['{"schema":"ftx-drape-scenario/1","options":', JSON.stringify(options), ',"fit_spec":', fitSpec,

@@ -352,6 +352,12 @@ function controls() {
   $("guidedVaporSurfaceFile").disabled ||= guidedVaporSurfaceMode() !== "file";
   $("guidedMotionForm").hidden = motionMode !== "form";
   $("guidedMotionFileField").hidden = motionMode !== "file";
+  const poseSampling = motionMode === "form" && $("guidedMotionPoseSampling").checked;
+  $("guidedMotionPoseSampling").disabled = !source || !guidedScenarioMode() || motionMode !== "form";
+  $("guidedMotionPoseSamplingControls").hidden = !poseSampling;
+  for (const id of ["guidedMotionPoseStep", "guidedMotionPoseSegments"]) {
+    $(id).disabled = !source || !guidedScenarioMode() || !poseSampling;
+  }
   for (const [domain, initials, buttons] of [["Heat", guidedMotionHeatInitials, guidedMotionHeatInitialButtons],
     ["Coverage", guidedMotionCoverageInitials, guidedMotionCoverageInitialButtons]]) {
     const prefix = `guidedMotion${domain}`, enabled = motionMode === "form" && $(prefix).checked;
@@ -376,6 +382,9 @@ function controls() {
     for (const button of buttons) button.disabled = !editInitials;
   }
   const editLiquid = !!source && guidedScenarioMode() && motionMode === "form" && $("guidedMotionHeat").checked;
+  $("guidedMotionCompression").disabled = !editLiquid;
+  $("guidedMotionCompressionFileField").hidden = !$("guidedMotionCompression").checked;
+  $("guidedMotionCompressionFile").disabled = !editLiquid || !$("guidedMotionCompression").checked;
   const liquidMode = $("guidedMotionWaterMode").value || "none";
   $("guidedMotionWaterMode").disabled = !editLiquid;
   for (const [mode, , file] of guidedMotionLiquidSources) {
@@ -1219,6 +1228,28 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       parent.append(range);
       detail(parent, `${key}: initial temperature source and retained triangle ownership (display only)`, initial);
     }
+    if (h?.prescribed_compression) {
+      const compression = h.prescribed_compression;
+      const pressure = table(parent, `${key}: prescribed pressure and retained thermal mass`,
+        ["Instance", "Initial pressure (Pa)", "Final pressure (Pa)", "Initial thickness (m)",
+          "Final thickness (m)", "Reference mass (kg)", "Signed normal work (J)"]);
+      for (const [instance, final] of Object.entries(compression.final_instances || {})) {
+        const initial = compression.initial_instances?.[instance];
+        cells(pressure, [instance, metric(initial?.pressure_pa), metric(final.pressure_pa),
+          metric(initial?.thickness_m), metric(final.thickness_m), metric(final.reference_mass_kg),
+          metric(final.cumulative_normal_work_j)]);
+      }
+      const scope = document.createElement("p");
+      scope.textContent = `Prescribed normal work: ${metric(compression.cumulative_normal_work_j)} J; ` +
+        `converted to heat: ${metric(compression.normal_work_to_heat_j)} J. ` +
+        "The acquired pressure branch changes each instance's dry thickness and heat transport. " +
+        "Temperature cells and reference mass carry through the pressure changes. " +
+        "Normal work uses the current accepted cloth area and remains separate from thermal energy. " +
+        "Pressure is supplied explicitly; it is not inferred from garment contact.";
+      parent.append(scope);
+      detail(parent, `${key}: original compression acquisitions and complete pressure history (display only)`, {
+        request: h.request?.prescribed_compression, result: compression });
+    }
     if (h?.thermal_bridges) {
       const bridges = h.thermal_bridges;
       const energy = table(parent, `${key}: seam and closure heat during motion`,
@@ -1621,6 +1652,15 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     transientHeatComparison(parent, row.key, result, initial?.motion || evaluation, requested);
     motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested, filePrefix);
     if (!result) continue;
+    if (result.source_pose_sampling) {
+      const sampling = result.source_pose_sampling, info = document.createElement("p");
+      info.textContent = `${row.key}: ${metric(sampling.generated_segments)} intermediate source-pose segments, ` +
+        `with at most ${metric(sampling.max_step_s)} s between source poses. ` +
+        "Joint and root rotations generate the body surfaces; collision checks follow each short vertex path. " +
+        "Authored endpoint times and thermal intervals remain unchanged.";
+      parent.append(info);
+      detail(parent, `${row.key}: retained source-pose sampling times and intervals (display only)`, sampling);
+    }
     const translated = result.keyframes.some(endpoint => Array.isArray(endpoint.root_translation_m));
     const rotated = result.keyframes.some(endpoint => Array.isArray(endpoint.root_rotation_rad));
     const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)", "Arm angle (degrees)", "Leg posture", "Leg fraction",
@@ -5333,6 +5373,12 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     max_pairs: number("guidedMotionPairs", "collision candidate allowance"),
     max_sample_vertices: number("guidedMotionVertices", "retained motion vertex allowance"),
   };
+  if ($("guidedMotionPoseSampling").checked) {
+    motion.source_pose_sampling = {
+      max_step_s: number("guidedMotionPoseStep", "maximum interval between source body poses"),
+      max_segments: number("guidedMotionPoseSegments", "source pose segment allowance"),
+    };
+  }
   if (includeHeat && $("guidedMotionHeat").checked) {
     const profiles = $("guidedMotionHeatInitialMode").value === "profiles";
     if (profiles && !guidedMotionHeatProfiles.size) throw Error("Save an initial temperature profile for every retained physical instance.");
@@ -5592,6 +5638,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const surface = $("guidedScenarioHeat").checked;
   const motionMode = guidedMotionMode(), materialStrain = $("guidedMaterialStrain").checked;
   const liquidMode = motionMode === "form" && $("guidedMotionHeat").checked ? ($("guidedMotionWaterMode").value || "none") : "none";
+  const compression = motionMode === "form" && $("guidedMotionHeat").checked && $("guidedMotionCompression").checked;
   if (!["none", ...guidedMotionLiquidSources.map(([mode]) => mode)].includes(liquidMode)) {
     throw Error("Choose no textile water, a direct policy, uncoupled alternatives or paired qualifications.");
   }
@@ -5649,6 +5696,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
     ...(surface ? [["surface", "heatConditions", "the selected section-3 sheet heat conditions"]] : []),
     ...(motionMode === "file" ? [["motion", "guidedMotionFile", "the original prescribed-motion request"]] : []),
+    ...(compression ? [["motionCompression", "guidedMotionCompressionFile", "the qualified pressure acquisition and interval schedule"]] : []),
     ...guidedMotionLiquidSources.filter(([mode]) => liquidMode === mode).map(([, key, id, label]) => [key, id, label]),
     ...(liquidMode === "direct" && $("guidedMotionWaterMechanical").checked ?
       [["mechanical_coupling", "guidedMotionWaterMechanicsFile", "the independent mechanical liquid qualification"]] : []),
@@ -5700,6 +5748,8 @@ function showGuidedScenarioDrafts() {
         `up to ${value.options.time_subdivision.max_halvings} halvings; ` : "") +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
+      (value.motion?.source_pose_sampling ? `source body poses at most ${value.motion.source_pose_sampling.max_step_s} s apart, ` +
+        `${value.motion.source_pose_sampling.max_segments} source segments allowed; ` : "") +
       `${value.material_strain ? `directional strain on ${value.material_strain.instances?.join(", ") || "all retained instances"}, ${value.material_strain.max_triangle_samples} triangle-samples` : "no directional strain request"}; ` +
       `${value.contact_loads ? `body contact loads on ${value.contact_loads.instances?.join(", ") || "all retained instances"}, ${value.contact_loads.max_vertex_samples} vertex-samples and ${value.contact_loads.max_pair_evaluations} pair evaluations` : "no body contact-load request"}; ` +
       `${value.coverage ? "retained steady body/layer heat" : "no steady body/layer heat"}; ` +
@@ -5708,6 +5758,7 @@ function showGuidedScenarioDrafts() {
       `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
       `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
       `${value.motion?.transient_surface ? "retained independent-sheet heat history" : "no sheet heat history"}; ` +
+      (value.motion?.transient_surface?.prescribed_compression ? "retained pressure-conditioned sheet heat; " : "") +
       `${value.motion?.transient_coverage ? "retained moving body/layer heat history" : "no moving body/layer heat history"}; ` +
       `${hasTextileWaterPolicy(value.motion?.transient_surface) ? "retained textile-water heat policy" : "no textile-water policy"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
@@ -6250,6 +6301,13 @@ $("guidedMotionSource").addEventListener("change", () => {
 $("guidedMotionFile").addEventListener("change", () => {
   if (guidedMotionMode() === "file") changedGuidedScenarioDraft(); else controls();
 });
+for (const id of ["guidedMotionCompression", "guidedMotionCompressionFile"]) {
+  $(id).addEventListener("change", () => {
+    if (guidedMotionMode() === "form" && $("guidedMotionHeat").checked &&
+        (id === "guidedMotionCompression" || $("guidedMotionCompression").checked)) changedGuidedScenarioDraft();
+    else controls();
+  });
+}
 for (const [id, active] of [
   ["guidedMotionWaterMode", () => true],
   ...guidedMotionLiquidSources.map(([mode, , file]) => [file, () => $("guidedMotionWaterMode").value === mode]),
@@ -6301,6 +6359,14 @@ for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs",
     else controls();
   };
   $(id).addEventListener("change", changed); $(id).addEventListener("input", changed);
+}
+for (const id of ["guidedMotionPoseSampling", "guidedMotionPoseStep", "guidedMotionPoseSegments"]) {
+  const changed = () => {
+    if (guidedMotionMode() === "form" && (id === "guidedMotionPoseSampling" || $("guidedMotionPoseSampling").checked)) changedGuidedMotionDraft();
+    else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (id !== "guidedMotionPoseSampling") $(id).addEventListener("input", changed);
 }
 for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "guidedMotionLegFraction",
   "guidedMotionTranslate", "guidedMotionRootX", "guidedMotionRootY", "guidedMotionRootZ",
@@ -6789,6 +6855,7 @@ function resetGuidedScenarios() {
   guidedScenarioDrafts.length = 0; guidedScenarioDraftSource = {};
   $("guidedScenarioCaseName").value = ""; showGuidedScenarioDrafts();
   guidedMotionKeyframes.length = 0; $("guidedScenarioMotion").checked = false; $("guidedMotionSource").value = "form";
+  $("guidedMotionPoseSampling").checked = false;
   $("guidedMotionHeatInitialMode").value = "uniform"; guidedMotionHeatProfiles.clear(); showGuidedMotionHeatProfiles();
   $("guidedMotionHeatProfileInstance").value = ""; $("guidedMotionHeatProfileValues").value = "";
   for (const [domain, initials] of [["Heat", guidedMotionHeatInitials], ["Coverage", guidedMotionCoverageInitials]]) {
@@ -6797,6 +6864,8 @@ function resetGuidedScenarios() {
     for (const suffix of ["Initial", "Instance", "InstanceInitial", "Inside", "Outside", "InsideFilm", "OutsideFilm"]) $(prefix + suffix).value = "";
   }
   $("guidedMotionWaterMode").value = "none"; $("guidedMotionWaterMechanical").checked = false;
+  $("guidedMotionCompression").checked = false; $("guidedMotionCompressionFile").value = "";
+  roundFiles.delete("guidedMotionCompressionFile");
   for (const id of [...guidedMotionLiquidSources.map(([, , file]) => file), "guidedMotionWaterMechanicsFile"]) {
     $(id).value = ""; roundFiles.delete(id);
   }

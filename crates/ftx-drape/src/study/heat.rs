@@ -18,6 +18,7 @@ use crate::{
     },
 };
 
+pub mod compression;
 pub mod coverage;
 mod plastic;
 pub mod surface_water;
@@ -73,6 +74,11 @@ pub struct SurfaceRequest {
     /// environment per keyframe interval; each sheet supplies its own exposed-face emissivity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exterior_exchange: Option<Vec<Exterior>>,
+    /// Optional source-qualified prescribed normal pressure, one value per keyframe interval and
+    /// exact retained instance. Changes dry thermal transport while preserving reference mass and
+    /// temperature cells; normal work is separate from heat and never inferred from contact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prescribed_compression: Option<compression::Request>,
     /// Opt-in irreversible membrane heating. Each active plastic material must independently
     /// qualify its conversion fraction and temperature domain; initial drape work is excluded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,12 +200,20 @@ impl SurfaceRequest {
     ) -> Result<SurfaceHistory, Refusal> {
         self.validate(keyframes.len())?;
         work.reserve(self.max_cell_steps)?;
+        let (model, compression) = if let Some(request) = &self.prescribed_compression {
+            let (model, compression) =
+                compression::Compression::start(request, run, self.cells_per_layer)?;
+            (model, Some(compression))
+        } else {
+            (run.thermal_surface(self.cells_per_layer)?, None)
+        };
         let mut history = SurfaceHistory::with_instances(
             self.clone(),
-            run.thermal_surface(self.cells_per_layer)?,
+            model,
             &run.scene.mesh.instances,
             &run.scene.triangle_owner,
         )?;
+        history.compression = compression;
         let initial_patch_temperatures = if self.plastic_dissipation_heat.is_some()
             || self.relaxation_dissipation_heat.is_some()
             || self.bending_plastic_dissipation_heat.is_some()
@@ -326,6 +340,22 @@ impl SurfaceRequest {
         }
         for &film in &self.boundaries {
             boundary(film)?;
+        }
+        if let Some(compression) = &self.prescribed_compression {
+            compression.validate(intervals)?;
+            if self.exterior_exchange.is_some()
+                || self.plastic_dissipation_heat.is_some()
+                || self.relaxation_dissipation_heat.is_some()
+                || self.bending_plastic_dissipation_heat.is_some()
+                || self.surface_water.is_some()
+                || self.surface_water_alternatives.is_some()
+                || self.coupled_water_alternatives.is_some()
+                || self.mechanical_coupling.is_some()
+            {
+                return Err(invalid(
+                    "prescribed compression /1 requires independent dry film boundaries; combined water, dissipation heating and exterior qualifications are not supplied",
+                ));
+            }
         }
         if let Some(exteriors) = &self.exterior_exchange {
             for (film, exterior) in self.boundaries.iter().zip(exteriors) {
@@ -494,6 +524,7 @@ pub(super) struct SurfaceHistory {
     plastic: Option<plastic::Heating>,
     relaxation: Option<plastic::Heating>,
     bending: Option<plastic::Heating>,
+    compression: Option<compression::Compression>,
     water: Option<surface_water::Water>,
     water_selection: Option<Value>,
     coupled_water_index: Option<usize>,
@@ -647,6 +678,7 @@ impl SurfaceHistory {
             plastic: None,
             relaxation: None,
             bending: None,
+            compression: None,
             water: None,
             water_selection: None,
             coupled_water_index: None,
@@ -799,7 +831,20 @@ impl SurfaceHistory {
     ) -> Result<(), Refusal> {
         // Temperature, liquid and every opted-in mechanical-source counter commit together only
         // after the complete accepted interval succeeds, including all event-driven substeps.
-        if self.water.is_some() {
+        if self.compression.is_some() {
+            let mut trial = self.clone();
+            trial.advance_inner(
+                positions,
+                time_s,
+                interval,
+                sample_index,
+                plastic_dissipation_j,
+                relaxation_dissipation_j,
+                bending_dissipation_j,
+            )?;
+            *self = trial;
+            Ok(())
+        } else if self.water.is_some() {
             let mut trial = self.clone();
             let outcome = trial.advance_inner(
                 positions,
@@ -851,6 +896,19 @@ impl SurfaceHistory {
             return Err(invalid(
                 "motion heat needs increasing accepted sample times and at most 512 samples",
             ));
+        }
+        if let Some(compression) = &mut self.compression
+            && let Some((model, state)) = compression.condition(
+                &self.model,
+                &self.state,
+                positions,
+                interval,
+                sample_index,
+                self.time_s,
+            )?
+        {
+            self.model = model;
+            self.state = state;
         }
         let film = *self
             .request
@@ -1148,6 +1206,9 @@ impl SurfaceHistory {
             sample["surface_water"] =
                 water.snapshot(self.state.temperature_c(), false, self.balance_error_j())?;
         }
+        if let Some(compression) = &self.compression {
+            sample["prescribed_compression"] = compression.summary();
+        }
         if let Some(heating) = &self.plastic {
             sample["plastic_dissipation_heat"] = heating.snapshot(false);
         }
@@ -1213,6 +1274,12 @@ impl SurfaceHistory {
             "scope":"One-way independent-sheet backward Euler on every accepted mechanical sample's current geometry. Storage follows reference mass. Boundary conditions are uniform in space and piecewise constant by keyframe interval; thermal substeps do not interpolate geometry. No inferred layer overlap, body heat loss, thermomechanical feedback, mechanical heating, moisture, comfort or empirical garment claim."});
         if let Some(initial_condition) = self.initial_condition {
             result["initial_condition"] = initial_condition;
+        }
+        if let Some(compression) = &self.compression {
+            result["prescribed_compression"] = compression.finish();
+            result["scope"] = json!(
+                "Independent-sheet backward Euler on accepted moving geometry with source-qualified prescribed compression changing dry thickness and transport by keyframe interval. Temperature cells and reference mass remain unchanged across pressure transitions. Normal branch work uses current accepted area and is kept separate from heat. No inferred contact pressure or contact area, geometry feedback, layer overlap, body heat loss, wet coupling, work-to-heat conversion, comfort or empirical garment claim."
+            );
         }
         if self.request.exterior_exchange.is_some() {
             result["exterior_exchange"] = json!({"convective_energy_j":self.convective_j,

@@ -69,6 +69,209 @@ fn inputs() -> (String, Value, Value) {
     (pattern, study, single)
 }
 
+#[test]
+fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions() {
+    let (pattern, mut study, mut single) = inputs();
+    let mut preparation: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/materials/synthetic-compression.json"
+    ))
+    .unwrap();
+    preparation["pressure_pa"] = json!(0.0);
+    let material = json!({"id":preparation["material"]["id"],"allow_estimates":true,
+        "record":preparation["material"]});
+    let selection: Selection = serde_json::from_value(material.clone()).unwrap();
+    let lock = Catalog::builtin()
+        .unwrap()
+        .resolve(&selection)
+        .unwrap()
+        .sha256()
+        .to_owned();
+    let mut changed_source = material.clone();
+    changed_source["record"]["sources"]["synthetic"]["note"] = json!(
+        "Different synthetic acquisition; the first source's pressure table cannot qualify it"
+    );
+    study["variants"] = json!([
+        {"key":"qualified","changes":{"schema":"ftx-material-bindings/1","default":material}},
+        {"key":"unmatched-source","changes":{"schema":"ftx-material-bindings/1","default":changed_source}}]);
+    study["comparison"] = json!({"basis":"nominal","required_consumers":["transient_surface"],
+        "objectives":[{"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]});
+    single["motion"]["keyframes"] = json!([
+        {"time_s":0.0005,"arm_abduction_deg":35.0},
+        {"time_s":0.001,"arm_abduction_deg":35.0}]);
+    single["motion"]["source_pose_sampling"] = json!({"max_step_s":0.00025,"max_segments":4});
+    let heat = &mut single["motion"]["transient_surface"];
+    heat.as_object_mut().unwrap().remove("surface_water");
+    heat["cells_per_layer"] = json!(2);
+    heat["initial_instance_temperature_profiles_c"] = json!({"band":[20.0,20.0]});
+    heat["boundaries"] = json!([
+        {"inside_c":20.0,"outside_c":20.0,"inside_resistance_m2_k_w":1.0,"outside_resistance_m2_k_w":1.0},
+        {"inside_c":20.0,"outside_c":20.0,"inside_resistance_m2_k_w":1.0,"outside_resistance_m2_k_w":1.0}]);
+    heat["prescribed_compression"] = json!({"schema":"ftx-motion-surface-compression/1",
+        "thermal_evidence":"Synthetic dry sheet at 20–25 C over 0.001 s, fixed reservoir films and acquired loading pressures 0–500 Pa; normal work remains separate from heat.",
+        "bindings":{"band":{"material_sha256":lock,"preparation":preparation,
+            "direction":"loading","pressure_pa":[250.0,500.0]}}});
+    let request: ftx_export::material_study::Request =
+        serde_json::from_value(study.clone()).unwrap();
+    let source_pattern = ftx_pattern::Pattern::from_json(&pattern).unwrap();
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_COMPRESSION_MOTION_REPLAY",
+        |report| {
+            let result = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+            let motion = &result["motion"];
+            assert_eq!(motion["status"], "available", "{motion}");
+            assert_eq!(
+                motion["result"]["source_pose_sampling"]["generated_segments"],
+                4
+            );
+            let outcome = &motion["result"]["transient_surface"];
+            assert_eq!(outcome["status"], "available", "{outcome}");
+            let heat = &outcome["result"];
+            let compression = &heat["prescribed_compression"];
+            assert_eq!(
+                compression["schema"],
+                "ftx-motion-surface-compression-result/1"
+            );
+            assert_eq!(compression["updates"].as_array().unwrap().len(), 2);
+            assert_eq!(
+                heat["initial_condition"]["schema"],
+                "ftx-motion-surface-initial-condition/2"
+            );
+            assert_eq!(
+                heat["initial_condition"]["model_sha256"],
+                compression["initial_model"]["sha256"]
+            );
+            let initial = &compression["initial_instances"]["band"];
+            let final_state = &compression["final_instances"]["band"];
+            assert_eq!(initial["material_sha256"], lock);
+            assert_eq!(final_state["material_sha256"], lock);
+            assert_eq!(initial["pressure_pa"], 0.0);
+            assert_eq!(final_state["pressure_pa"], 500.0);
+            assert_eq!(initial["thickness_m"], 0.02);
+            assert_eq!(final_state["thickness_m"], 0.01);
+            assert_eq!(
+                initial["reference_mass_kg"],
+                final_state["reference_mass_kg"]
+            );
+            assert!(initial["reference_mass_kg"].as_f64().unwrap() > 0.0);
+            assert_ne!(
+                initial["conditioned_material_sha256"],
+                final_state["conditioned_material_sha256"]
+            );
+            assert_eq!(compression["final_model_sha256"], heat["model"]["sha256"]);
+            assert!(compression["cumulative_normal_work_j"].as_f64().unwrap() > 0.0);
+            assert_eq!(compression["normal_work_to_heat_j"], 0.0);
+            assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+            let temperatures: Vec<_> = heat["final"]["temperature_c"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|row| row.as_array().unwrap())
+                .map(|value| value.as_f64().unwrap())
+                .collect();
+            let minimum = temperatures.iter().copied().min_by(f64::total_cmp).unwrap();
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "qualified")["readings"]["transient_surface_final_min_temperature_c"]
+                    ["value"],
+                minimum
+            );
+            if heat["request"]["boundaries"][0]["outside_c"] == 20.0 {
+                assert!(
+                    temperatures
+                        .iter()
+                        .all(|value| (*value - 20.0).abs() < 1e-10),
+                    "prescribed normal work must not become unexplained heat"
+                );
+            }
+            let unmatched =
+                &keyed(&report["simulations"], "unmatched-source")["evaluation"]["result"];
+            assert_eq!(unmatched["motion"]["status"], "available");
+            assert_eq!(
+                unmatched["motion"]["result"]["transient_surface"]["status"],
+                "refused"
+            );
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "unmatched-source")["eligible"],
+                false
+            );
+            // Replay the producer's retained outcomes through the decision boundary. A
+            // corrupted pressure/source/storage receipt cannot qualify the thermal objective,
+            // while the same independently useful manufacturing result stays available.
+            let mut original_manufacturing = None;
+            for fault in [
+                "unchanged",
+                "missing",
+                "pressure",
+                "mass",
+                "source",
+                "work-heat",
+            ] {
+                let replayed = request
+                    .evaluate_with(&source_pattern, &report["scenario"], |key, _| {
+                        let mut simulated =
+                            keyed(&report["simulations"], key)["evaluation"]["result"].clone();
+                        if key == "qualified" {
+                            let heat =
+                                &mut simulated["motion"]["result"]["transient_surface"]["result"];
+                            let receipt = &mut heat["prescribed_compression"];
+                            match fault {
+                                "unchanged" => {}
+                                "missing" => *receipt = Value::Null,
+                                "pressure" => {
+                                    receipt["updates"][0]["instances"]["band"]["pressure_pa"] =
+                                        json!(249.0);
+                                }
+                                "mass" => {
+                                    receipt["final_instances"]["band"]["reference_mass_kg"] =
+                                        json!(initial["reference_mass_kg"].as_f64().unwrap() + 1.0);
+                                }
+                                "source" => {
+                                    receipt["initial_instances"]["band"]["material_sha256"] =
+                                        json!("0".repeat(64));
+                                }
+                                "work-heat" => receipt["normal_work_to_heat_j"] = json!(1.0),
+                                _ => unreachable!(),
+                            }
+                        }
+                        Ok(simulated)
+                    })
+                    .unwrap();
+                let replayed = serde_json::to_value(replayed).unwrap();
+                let decision = keyed(&replayed["comparison"]["alternatives"], "qualified");
+                assert_eq!(
+                    decision["eligible"],
+                    fault == "unchanged",
+                    "{fault}: {decision}"
+                );
+                assert_eq!(
+                    decision["readings"]["transient_surface_final_min_temperature_c"].is_object(),
+                    fault == "unchanged",
+                    "{fault}: {decision}"
+                );
+                assert_eq!(
+                    replayed["comparison"]["frontier"],
+                    if fault == "unchanged" {
+                        json!(["qualified"])
+                    } else {
+                        json!([])
+                    }
+                );
+                for row in replayed["manufacturing"]["alternatives"]
+                    .as_array()
+                    .unwrap()
+                {
+                    assert_eq!(row["cutting"]["status"], "available", "{fault}: {row}");
+                }
+                let original =
+                    original_manufacturing.get_or_insert_with(|| replayed["manufacturing"].clone());
+                assert_eq!(&replayed["manufacturing"], original, "{fault}");
+            }
+        },
+    );
+}
+
 fn keyed<'a>(rows: &'a Value, key: &str) -> &'a Value {
     rows.as_array()
         .unwrap()
@@ -124,6 +327,10 @@ fn replay(
             .unwrap(),
         )
         .unwrap();
+        if let Some(capture) = &capture {
+            save(&capture.join(format!("{name}-scenario.json")), &scenario);
+            save(&capture.join(format!("{name}-report.json")), &report);
+        }
         assert_eq!(
             report["comparison"]["frontier"],
             json!(["qualified"]),
@@ -182,10 +389,6 @@ fn replay(
             );
             let native: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(native.get("result").unwrap_or(&native), &report);
-        }
-        if let Some(capture) = &capture {
-            save(&capture.join(format!("{name}-scenario.json")), &scenario);
-            save(&capture.join(format!("{name}-report.json")), &report);
         }
     }
 }

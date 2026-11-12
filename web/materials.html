@@ -1334,6 +1334,15 @@ Each endpoint gives an absolute arm and leg pose; selecting standing explicitly 
 </div>
 <p class="note">Each retained material must supply admitted conductivity, thickness and heat capacity. The initial temperature
 is an authored condition after the initial drape. Work limits bound computation; an unavailable heat result leaves independent results visible.</p>
+<fieldset><legend>Pressure-conditioned insulation</legend>
+<label><input id="guidedMotionCompression" type="checkbox"> Use qualified pressure histories for selected garment instances</label>
+<label id="guidedMotionCompressionFileField" hidden>Original pressure acquisition and interval schedule JSON
+<input id="guidedMotionCompressionFile" type="file" accept=".json,application/json"></label>
+<p class="note">Supply each instance's exact material, measured pressure/thickness and heat properties, initial preload,
+and one pressure per saved movement interval. The engine carries the existing temperatures and reference mass through
+qualified compression changes. Pressure is prescribed independently of body contact; normal compression work is reported separately from heat.
+This mode uses dry sheets with prescribed films. Liquid, deformation heating and exterior exchange require separate compatible qualifications.</p>
+</fieldset>
 <fieldset><legend>Heat from textile deformation</legend>
 <label><input id="guidedMotionHeatPlastic" type="checkbox"> Convert permanent in-plane deformation (plastic yield) to heat</label>
 <label><input id="guidedMotionHeatRelaxation" type="checkbox"> Convert time-dependent relaxation (Maxwell dashpots) to heat</label>
@@ -1593,14 +1602,25 @@ Disabling motion keeps this draft for return. Saving a named case freezes its ow
 <label>Collision candidate pairs per query <input id="guidedMotionPairs" type="number" min="1" max="1000000" step="1" value="100000"></label>
 <label>Retained body/cloth vertex allowance <input id="guidedMotionVertices" type="number" min="1" max="2000000" step="1" value="500000"></label>
 </div>
+<fieldset><legend>Body poses between saved endpoints</legend>
+<label><input id="guidedMotionPoseSampling" type="checkbox"> Evaluate intermediate poses from the selected body model</label>
+<div id="guidedMotionPoseSamplingControls" class="study-fields" hidden>
+<label>Maximum time between source poses (s) <input id="guidedMotionPoseStep" type="number" min="0.000000001" max="1" step="any" value="0.02"></label>
+<label>Source pose segments across the trajectory <input id="guidedMotionPoseSegments" type="number" min="1" max="512" step="1" value="256"></label>
+</div>
+<p class="note">The engine interpolates the model's joint and whole-body rotations before computing intermediate body surfaces.
+This supports turns and bends without requiring you to save every intermediate pose. Saved endpoint times and interval heat conditions stay fixed.
+The cloth solver checks short vertex paths between these source poses; smaller intervals may be needed for a particular movement.
+The existing collision, cloth-attempt and retained-geometry allowances still apply.</p>
+</fieldset>
 </div>
 <label id="guidedMotionFileField" hidden>Original motion JSON (<code>ftx-drape-motion/1</code>)
 <input id="guidedMotionFile" type="file" accept=".json,application/json"></label>
 <label>Motion attempts across this case's alternatives <input id="guidedScenarioMotionTrials" type="number" min="1" max="32768" step="1" value="4096"></label>
 <p class="note">The trajectory allowance includes failed subdivisions. The case allowance is shared across its alternatives and adaptive probes;
 active named cases share at most 32768 attempts. Budgets bound work without guaranteeing convergence.</p>
-<p class="note">The same sewn cloth continues with its velocities and material history. Use short pose increments: the solver follows checked
-body-vertex chords between endpoints, including any declared whole-body offsets, with no chair or floor support. These prescribed model poses do not establish
+<p class="note">The same sewn cloth continues with its velocities and material history. Use short pose increments or enable intermediate source poses:
+the solver follows checked body-vertex chords between the resulting poses, including any declared whole-body offsets, with no chair or floor support. These prescribed model poses do not establish
 anatomical movement accuracy or physical garment fit. A failed movement publishes no partial trajectory. Optional sheet heat is recomputed
 at endpoints as independent steady snapshots. The sheet heat option above separately carries textile temperature through the saved
 interval conditions, without a steady-sheet request. Moving body/layer heat separately follows covered and exposed reference material.

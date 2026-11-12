@@ -5759,6 +5759,22 @@ Late failures retain whole-path rollback. Omitted policies preserve the original
 This advances `ftx-mv1.1`; sampled source geometry is not an exact curved collision sweep or evidence
 of anatomical motion, support-surface contact or physical garment fit.
 
+### 25.199 Apply prescribed compression to moving independent-sheet heat
+
+Exact retained garment instances can now carry original pressure acquisitions and explicit
+monotone interval schedules into moving-sheet heat. The shared conditioner changes thermal
+thickness and transport while preserving the same temperature cells, reference mass and qualified
+constant heat capacity. Instances sharing one material can follow different pressures. Current
+accepted cloth area governs exchange and the declared instantaneous compression work; normal
+work remains separate from thermal energy, and failed transitions roll back together.
+
+The workbench composes original acquisition files with authored motion and freezes each named
+case. Comparison admission reuses the canonical conditioner, checks original/conditioned source
+identities and complete pressure history, and reconciles retained temperature storage and energy.
+Source-pose sampling is also exposed through the ordinary motion controls and result display.
+This advances `ftx-cp2` and `ftx-tm5`; contact-derived pressure, branch recovery, combined wet or
+work-heating laws and independent measured garment qualification remain separate open work.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

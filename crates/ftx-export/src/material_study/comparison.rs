@@ -18,6 +18,7 @@ mod heating_tests;
 mod material_strain;
 mod matrix;
 mod motion_bridges;
+mod motion_compression;
 mod steady_heat;
 mod surface_water;
 mod wet_film;
@@ -4112,7 +4113,97 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
             "motion comparison needs the final requested endpoint, without extra samples",
         ));
     }
+    admit_pose_sampling(request, motion, frames, samples)?;
     Ok(motion)
+}
+
+fn admit_pose_sampling(
+    request: &Value,
+    motion: &Value,
+    frames: &[Value],
+    samples: &[Value],
+) -> Result<(), Refusal> {
+    let fail = || {
+        invalid(
+            "motion source-pose sampling must retain the requested policy and every generated source endpoint",
+        )
+    };
+    let receipt = &motion["source_pose_sampling"];
+    let Some(policy) = request.get("source_pose_sampling").filter(|v| !v.is_null()) else {
+        return if receipt.is_null() {
+            Ok(())
+        } else {
+            Err(fail())
+        };
+    };
+    let step = finite(&policy["max_step_s"])
+        .filter(|s| (1e-9..=1.).contains(s))
+        .ok_or_else(fail)?;
+    let limit = policy["max_segments"]
+        .as_u64()
+        .filter(|n| (1..=512).contains(n))
+        .ok_or_else(fail)?;
+    if !policy.as_object().is_some_and(|o| o.len() == 2)
+        || receipt["max_step_s"] != policy["max_step_s"]
+        || receipt["max_segments"] != policy["max_segments"]
+    {
+        return Err(fail());
+    }
+    let times = receipt["source_times_s"].as_array().ok_or_else(fail)?;
+    let intervals = receipt["authored_interval_indices"]
+        .as_array()
+        .ok_or_else(fail)?;
+    if times.is_empty()
+        || times.len() > limit as usize
+        || times.len() != intervals.len()
+        || receipt["generated_segments"].as_u64() != Some(times.len() as u64)
+    {
+        return Err(fail());
+    }
+    let mut previous = 0.;
+    let mut previous_source = 0.;
+    let mut source_index = 0;
+    let mut sample_index = 0;
+    for (interval, frame) in frames.iter().enumerate() {
+        let end = finite(&frame["time_s"])
+            .filter(|t| *t > previous)
+            .ok_or_else(fail)?;
+        let count = ((end - previous) / step - 1e-12).ceil().max(1.) as usize;
+        if count > times.len().saturating_sub(source_index) {
+            return Err(fail());
+        }
+        for segment in 1..=count {
+            let time = finite(&times[source_index]).ok_or_else(fail)?;
+            let expected = if segment == count {
+                end
+            } else {
+                previous + (end - previous) * (segment as f64 / count as f64)
+            };
+            let tolerance = 32. * f64::EPSILON * expected.abs().max(1e-9);
+            if time - previous_source < 1e-9
+                || (time - expected).abs() > tolerance
+                || intervals[source_index].as_u64() != Some(interval as u64)
+            {
+                return Err(fail());
+            }
+            while sample_index < samples.len()
+                && finite(&samples[sample_index]["time_s"]).is_some_and(|t| t < time)
+            {
+                sample_index += 1;
+            }
+            if samples.get(sample_index).and_then(|s| finite(&s["time_s"])) != Some(time) {
+                return Err(fail());
+            }
+            sample_index += 1;
+            previous_source = time;
+            source_index += 1;
+        }
+        previous = end;
+    }
+    if source_index != times.len() {
+        return Err(fail());
+    }
+    Ok(())
 }
 
 fn finite(value: &Value) -> Option<f64> {
@@ -4520,6 +4611,7 @@ fn initial_heat_range(
     heat: &Value,
     request: &Value,
     coverage: bool,
+    compression: Option<&[ResolvedMaterial]>,
 ) -> Result<[f64; 2], Refusal> {
     let fail = || {
         invalid(
@@ -4560,10 +4652,19 @@ fn initial_heat_range(
     {
         return Err(fail());
     }
-    let materials = admit_heat_source(alternative, simulation, motion, heat, request, coverage)?;
-    let frame = &simulation["drape"]["thermal_surface"];
+    let materials = match compression {
+        Some(materials) => materials.to_vec(),
+        None => admit_heat_source(alternative, simulation, motion, heat, request, coverage)?,
+    };
+    let frame = if compression.is_some() {
+        &heat["prescribed_compression"]["source_model"]
+    } else {
+        &simulation["drape"]["thermal_surface"]
+    };
     let model = if coverage {
         &heat["checkpoint"]["frame"]["source"]
+    } else if compression.is_some() {
+        &heat["prescribed_compression"]["initial_model"]
     } else {
         &heat["model"]
     };
@@ -4788,7 +4889,17 @@ fn admit_heat<'a>(
     {
         return Err(fail("missing explicit interval boundary policy"));
     }
-    let mut range = initial_heat_range(alternative, simulation, motion, h, request, coverage)?;
+    let compression =
+        motion_compression::admit(alternative, simulation, motion, h, request, coverage)?;
+    let mut range = initial_heat_range(
+        alternative,
+        simulation,
+        motion,
+        h,
+        request,
+        coverage,
+        compression.as_deref(),
+    )?;
     let mut final_range = None;
     // Reuse this complete-history pass for every pressure criterion. The independent water
     // admission below must still reconcile every sampled inventory and enthalpy before these
@@ -4950,7 +5061,7 @@ fn admit_heat<'a>(
         coverage,
         &supplied,
     )?;
-    if heated || liquid.is_some() || bridged {
+    if heated || liquid.is_some() || bridged || compression.is_some() {
         for (i, (row, supplied)) in trace
             .iter()
             .chain(std::iter::once(h))
