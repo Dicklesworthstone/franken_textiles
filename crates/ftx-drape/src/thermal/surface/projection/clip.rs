@@ -1,5 +1,8 @@
 //! Convex planar partitions in dimensionless barycentric coordinates. No world-unit epsilon.
-use ftx_core::{Refusal, Vec2};
+use ftx_core::{
+    Refusal, Vec2,
+    exact::{Sign, orient2d},
+};
 
 use super::invalid;
 
@@ -51,6 +54,58 @@ pub(in crate::thermal::surface) fn ccw(mut p: Vec<Vec2>) -> Vec<Vec2> {
         p.reverse();
     }
     p
+}
+
+// Clipped polygons are convex by construction, but barycentric arithmetic can leave
+// almost-duplicate corners with an inward turn. The exact-sign hull removes only dents
+// admitted by the existing area-roundoff bound, without rounding coordinates or repairing
+// genuine nonconvexity. Both heat remapping and gap quadrature use this same authority.
+pub(in crate::thermal::surface) fn convex_roundoff(
+    p: &[Vec2],
+    work: &mut Work,
+) -> Result<(Vec<Vec2>, f64), Refusal> {
+    if !(3..=256).contains(&p.len())
+        || p.iter()
+            .any(|v| !v.is_finite() || v.x.abs() > 2. || v.y.abs() > 2.)
+    {
+        return Err(invalid("invalid bounded barycentric polygon"));
+    }
+    work.add(p.len() * 10)?;
+    let mut sorted = p.to_vec();
+    sorted.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    sorted.dedup();
+    let mut hull: Vec<Vec2> = Vec::new();
+    let mut append = |points: &mut dyn Iterator<Item = &Vec2>| {
+        let start = hull.len();
+        for &c in points {
+            while hull.len() >= start + 2 {
+                let a = hull[hull.len() - 2];
+                let b = hull[hull.len() - 1];
+                if orient2d([a.x, a.y], [b.x, b.y], [c.x, c.y]) == Sign::Positive {
+                    break;
+                }
+                hull.pop();
+            }
+            hull.push(c);
+        }
+        hull.pop();
+    };
+    append(&mut sorted.iter());
+    append(&mut sorted.iter().rev());
+    let original = area(p);
+    let corrected = area(&hull);
+    let delta = (corrected - original).abs();
+    if !original.is_finite()
+        || !corrected.is_finite()
+        || original <= 0.
+        || corrected <= 0.
+        || delta > 128. * f64::EPSILON * (1. + original.abs())
+    {
+        return Err(invalid(
+            "projection polygon is nonconvex beyond floating-point roundoff",
+        ));
+    }
+    Ok((hull, delta))
 }
 
 // Both half-polygons retain their parent's winding. Boundary-only intersections have zero area.

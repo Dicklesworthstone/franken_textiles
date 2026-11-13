@@ -7,11 +7,7 @@
 //! can leave/re-enter body coverage without a temperature reset. Physical heat exchange on those
 //! exposed faces is opt-in and requires explicit boundary conditions; no ambient state is inferred.
 
-use ftx_core::{
-    Refusal, Vec2, Vec3,
-    exact::{Sign, orient2d},
-    receipt::sha256_hex,
-};
+use ftx_core::{Refusal, Vec2, Vec3, receipt::sha256_hex};
 use ftx_pattern::material_optics::Side;
 use ftx_pattern::material_thermal::ThermalLaw;
 use serde::Serialize;
@@ -27,7 +23,7 @@ use crate::thermal::{
     steady::exterior::Exterior,
     surface::projection::{self, Projection, Request},
 };
-use projection::clip::{Work, area, bounds_overlap, intersection};
+use projection::clip::{Work, area, bounds_overlap, convex_roundoff, intersection};
 
 fn temperature_range(values: &[f64]) -> [f64; 2] {
     values
@@ -1379,17 +1375,15 @@ impl Frame {
                 if from_exposed < 0. && from_exposed.abs() <= tol {
                     from_exposed = 0.;
                 }
-                // Fully covered old material has no exposed donor. Independent inverse
-                // projections/clipping can leave a positive overlap deficit within the same
-                // allocation tolerance already admitted below. Keep the actual covered weights
-                // and received area: destination/donor allocation and enthalpy residuals must
-                // still report this roundoff. A missing or materially incomplete stencil fails.
-                if old_exposed[p.cloth_triangle] == 0.
-                    && received > 0.
-                    && from_exposed > 0.
-                    && from_exposed <= tol
-                {
-                    from_exposed = 0.;
+                // Independent projections/clipping can leave a tiny covered-overlap deficit.
+                // An exposed donor may already be exhausted (including fully covered sources):
+                // never charge it for more material than remains. Keep the actual covered weights
+                // and received area so the allocation and enthalpy receipts retain this roundoff.
+                // A missing covered stencil or a deficit beyond the existing tolerance still fails.
+                let available =
+                    (old_exposed[p.cloth_triangle] - exposed_used[p.cloth_triangle]).max(0.);
+                if from_exposed > available && received > 0. && from_exposed - available <= tol {
+                    from_exposed = available;
                 }
                 if from_exposed > 0. {
                     if old_exposed[p.cloth_triangle] <= 0.
@@ -1399,11 +1393,16 @@ impl Frame {
                             "newly covered cloth has no retained exposed thermal history",
                         ));
                     }
-                    exposed_used[p.cloth_triangle] += from_exposed;
-                    if exposed_used[p.cloth_triangle] > old_exposed[p.cloth_triangle] + tol {
+                    if from_exposed > available {
                         return Err(invalid(
                             "coverage consumes more exposed material than the source triangle owns",
                         ));
+                    }
+                    // An exact drain avoids a second rounding of (used + (owned - used)).
+                    if from_exposed == available {
+                        exposed_used[p.cloth_triangle] = old_exposed[p.cloth_triangle];
+                    } else {
+                        exposed_used[p.cloth_triangle] += from_exposed;
                     }
                     received += from_exposed;
                 }
@@ -1528,6 +1527,8 @@ impl Frame {
                 continue;
             }
             check_fraction(exposed_used[patch], old_exposed[patch])?;
+            donor_error += (exposed_used[patch] - old_exposed[patch]).abs()
+                * source.patches[patch].reference_area_m2;
             for &(s, k) in &donors[patch] {
                 let fraction = old.coverage.layout.regions[s].layers[k].fraction;
                 check_fraction(used[s][k], fraction)?;
@@ -1664,57 +1665,6 @@ impl Frame {
 }
 
 type MaterialPolygons = Vec<Vec<Vec<Vec2>>>;
-
-// Projection polygons are convex by construction, but inverse barycentric arithmetic can leave
-// almost-duplicate corners with an inward turn. Treating that tiny edge as an infinite clip line
-// can erase a finite donor wedge. An exact-sign hull removes only numerically insignificant dents;
-// it does not round coordinates, weaken the material-domain test or repair genuine nonconvexity.
-fn convex_roundoff(p: &[Vec2], work: &mut Work) -> Result<(Vec<Vec2>, f64), Refusal> {
-    if !(3..=256).contains(&p.len())
-        || p.iter()
-            .any(|v| !v.is_finite() || v.x.abs() > 2. || v.y.abs() > 2.)
-    {
-        return Err(invalid(
-            "invalid material-coordinate polygon for heat remapping",
-        ));
-    }
-    work.add(p.len() * 10)?;
-    let mut sorted = p.to_vec();
-    sorted.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
-    sorted.dedup();
-    let mut hull: Vec<Vec2> = Vec::new();
-    let mut append = |points: &mut dyn Iterator<Item = &Vec2>| {
-        let start = hull.len();
-        for &c in points {
-            while hull.len() >= start + 2 {
-                let a = hull[hull.len() - 2];
-                let b = hull[hull.len() - 1];
-                if orient2d([a.x, a.y], [b.x, b.y], [c.x, c.y]) == Sign::Positive {
-                    break;
-                }
-                hull.pop();
-            }
-            hull.push(c);
-        }
-        hull.pop();
-    };
-    append(&mut sorted.iter());
-    append(&mut sorted.iter().rev());
-    let original = area(p);
-    let corrected = area(&hull);
-    let delta = (corrected - original).abs();
-    if !original.is_finite()
-        || !corrected.is_finite()
-        || original <= 0.
-        || corrected <= 0.
-        || delta > 128. * f64::EPSILON * (1. + original.abs())
-    {
-        return Err(invalid(
-            "material polygon is nonconvex beyond floating-point roundoff",
-        ));
-    }
-    Ok((hull, delta))
-}
 
 fn check_fraction(received: f64, expected: f64) -> Result<(), Refusal> {
     // Explicit numerical allowance for the projection's bounded allocation-roundoff corrections.
@@ -1907,6 +1857,143 @@ mod tests {
         }
         assert_eq!(state.temperature_c(), &[vec![20.]]);
         assert!(state.exposed_temperature_c()[0].is_empty());
+    }
+
+    fn exposed_roundoff_frames() -> (Frame, Frame) {
+        use crate::thermal::{DryThermalModel, surface::Patch, surface::projection::Settings};
+        use ftx_pattern::{material_catalog::Selection, materials::Catalog};
+
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/materials/synthetic-variable-thermal.json"
+        )))
+        .unwrap();
+        let selection: Selection = serde_json::from_value(fixture["layers"][0].clone()).unwrap();
+        let source = Surface::new(
+            vec![
+                DryThermalModel::new(
+                    vec![Catalog::builtin().unwrap().resolve(&selection).unwrap()],
+                    vec![],
+                    2,
+                )
+                .unwrap(),
+            ],
+            3,
+            vec![Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            }],
+        )
+        .unwrap();
+        let frame = |body| {
+            Frame::new(
+                source.clone(),
+                vec![
+                    Vec3::new(0., 0., 0.04),
+                    Vec3::new(1., 0., 0.04),
+                    Vec3::new(0., 1., 0.04),
+                ],
+                body,
+                &[[0, 1, 2]],
+                Request {
+                    schema: "ftx-thermal-projection/1".into(),
+                    cloth_layers: vec!["shell".into()],
+                    settings: Settings {
+                        max_distance_m: 0.2,
+                        min_normal_cosine: 0.2,
+                        separation_tolerance_m: 1e-8,
+                        cells_per_layer: 2,
+                        interfaces: vec![],
+                    },
+                },
+            )
+            .unwrap()
+        };
+        let inset = 2_f64.powi(-20);
+        let old = frame(vec![
+            Vec3::ZERO,
+            Vec3::new(1. - inset, 0., 0.),
+            Vec3::new(0., 1. - inset, 0.),
+        ]);
+        let next = frame(vec![
+            Vec3::new(-0.5, 1., 0.),
+            Vec3::new(1., -0.5, 0.),
+            Vec3::new(1., 1., 0.),
+        ]);
+        assert_eq!(old.coverage.layout.regions.len(), 1);
+        assert_eq!(next.coverage.layout.regions.len(), 1);
+        assert!(old.exposed_fractions()[0] > 0.);
+        (old, next)
+    }
+
+    #[test]
+    fn exhausted_nonzero_exposed_donor_preserves_variable_cp_enthalpy_and_roundoff_receipt() {
+        let (old, mut next) = exposed_roundoff_frames();
+        let mut state = old.initial_profiles(&[vec![10., 20.]]).unwrap();
+        state.exposed[0] = vec![50., 40.];
+        let old_exposed = old.exposed_fractions()[0];
+        assert!(old_exposed < 2e-6);
+
+        // The public frames have disjoint exposed domains: the next covered region consumes
+        // the entire old exposed strip and uncovers a finite, previously covered corner.
+        // Perturb its allocation and total together by bounded projection-allocation roundoff.
+        // This does not create a donor: covered weights and the finite exposed stock stay fixed.
+        let correction = 2_f64.powi(-38);
+        next.coverage.layout.regions[0].layers[0].fraction += correction;
+        next.coverage.allocated[0] += correction;
+        let transfer = next.remap(&old, &state).unwrap();
+        assert!(transfer.balance.allocation_residual_m2 > 0.);
+        assert!(transfer.balance.allocation_residual_m2 < 1e-10);
+        assert_eq!(transfer.state.exposed_temperature_c(), &[vec![10., 20.]]);
+
+        // Independent primitive for the synthetic rho_A=0.2, Cp(T)=1000+20*T law.
+        let enthalpy = |t: f64| 200. * t + 2. * t * t;
+        let expected_before = 0.25
+            * ((1. - old_exposed) * (enthalpy(20.) - enthalpy(10.))
+                + old_exposed * (enthalpy(50.) + enthalpy(40.) - 2. * enthalpy(10.)));
+        assert!((transfer.balance.before_j - expected_before).abs() < 1e-9);
+        assert!(
+            transfer.balance.absolute_residual_j
+                <= 2e-9 * (1. + transfer.balance.before_j.abs() + transfer.balance.after_j.abs())
+        );
+        for (cell, (covered, exposed)) in [(10., 50.), (20., 40.)].into_iter().enumerate() {
+            let temperature = transfer.state.temperature_c()[0][cell];
+            assert!(temperature > covered && temperature < exposed);
+            let expected =
+                ((0.75 - old_exposed) * enthalpy(covered) + old_exposed * enthalpy(exposed)) / 0.75;
+            assert!((enthalpy(temperature) - expected).abs() < 1e-8);
+        }
+        assert_eq!(state.temperature_c(), &[vec![10., 20.]]);
+        assert_eq!(state.exposed_temperature_c(), &[vec![50., 40.]]);
+    }
+
+    #[test]
+    fn exposed_roundoff_cannot_cover_a_missing_stencil_or_a_finite_overdraw() {
+        let (old, next) = exposed_roundoff_frames();
+        let state = old.initial(20.).unwrap();
+        for missing_stencil in [false, true] {
+            let mut damaged = next.clone();
+            if missing_stencil {
+                for p in &mut damaged.projection.footprints[0].hits[0].cloth_polygon {
+                    p.x += 0.75;
+                    p.y += 0.75;
+                }
+                // Even a roundoff-sized excess cannot be supplied when there is no covered
+                // overlap at all. The exposed donor is nonzero but has a finite capacity.
+                let fraction = old.exposed_fractions()[0] + 2_f64.powi(-48);
+                damaged.coverage.layout.regions[0].layers[0].fraction = fraction;
+                damaged.coverage.allocated[0] = fraction;
+            } else {
+                damaged.coverage.layout.regions[0].layers[0].fraction += 1e-6;
+                damaged.coverage.allocated[0] += 1e-6;
+            }
+            let refusal = damaged.remap(&old, &state).unwrap_err();
+            assert_eq!(
+                refusal.message,
+                "coverage consumes more exposed material than the source triangle owns"
+            );
+        }
     }
 
     #[test]

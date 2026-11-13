@@ -156,12 +156,28 @@ pub fn orient2d(pa: [f64; 2], pb: [f64; 2], pc: [f64; 2]) -> Sign {
     if det >= errbound || -det >= errbound {
         return Sign::of(det);
     }
+    orient2d_determinant(pa, pb, pc).0
+}
+
+/// Exact sign and expansion estimate of the 2D orientation determinant.
+/// Error-free coordinate differences and products retain small determinants after cancellation;
+/// the scalar sums the nonoverlapping expansion components, with its exact sign returned separately.
+/// The certified arithmetic domain is the same as [`orient2d`].
+///
+/// # Panics
+/// On a non-finite coordinate or when the arithmetic leaves the finite range.
+#[must_use]
+pub fn orient2d_determinant(pa: [f64; 2], pb: [f64; 2], pc: [f64; 2]) -> (Sign, f64) {
+    assert!(
+        [pa, pb, pc].iter().flatten().all(|x| x.is_finite()),
+        "orient2d determinant requires finite coordinates"
+    );
     let ax = diff_expansion(pa[0], pc[0]);
     let ay = diff_expansion(pa[1], pc[1]);
     let bx = diff_expansion(pb[0], pc[0]);
     let by = diff_expansion(pb[1], pc[1]);
     let det_e = expansion_diff(&expansion_product(&ax, &by), &expansion_product(&ay, &bx));
-    Sign::of_i32(expansion_sign(&det_e))
+    (Sign::of_i32(expansion_sign(&det_e)), det_e.iter().sum())
 }
 
 /// Exact sign and rounded magnitude of `(2 radius)^2 - |b - a|^2` for circle admission.
@@ -431,6 +447,10 @@ mod tests {
                 orient2d(f(a), f(b), f(c)),
                 Sign::of_i32(want.signum() as i32)
             );
+            assert_eq!(
+                orient2d_determinant(f(a), f(b), f(c)),
+                (Sign::of_i32(want.signum() as i32), want as f64)
+            );
         }
         let (a, b) = ([0.1, 0.1], [0.7, 0.7]);
         let c = [0.3, 0.3];
@@ -439,6 +459,25 @@ mod tests {
         let down = [0.3, f64::from_bits(0.3f64.to_bits() - 1)];
         assert_eq!(orient2d(a, b, up), Sign::Positive);
         assert_eq!(orient2d(a, b, down), Sign::Negative);
+    }
+
+    #[test]
+    fn orientation_area_retains_a_positive_clipped_sliver_after_cancellation() {
+        let a = [0.127_392_531_745_136_7, 0.815_244_551_328_941_9];
+        let b = [0.898_078_160_511_793_5, 0.066_068_875_556_812_7];
+        let c = [0.701_143_321_012_369_6, 0.257_507_233_764_122_05];
+        let ordinary = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        assert!(ordinary < 0.);
+        let (sign, determinant) = orient2d_determinant(a, b, c);
+        assert_eq!(sign, Sign::Positive);
+        // Independent integer arithmetic on the exact binary64 coordinates gives this fraction.
+        let expected = 17_282_186_840_727_891_u128 as f64 / (1_u128 << 109) as f64;
+        assert_eq!(determinant, expected);
+        assert_eq!(
+            orient2d_determinant(b, a, c),
+            (Sign::Negative, -determinant)
+        );
+        assert_eq!(orient2d_determinant(b, c, a), (sign, determinant));
     }
 
     /// Lifted battery: on a small integer lattice the sign equals an i128 oracle's; every other

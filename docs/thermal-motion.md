@@ -223,6 +223,19 @@ roundoff created a microscopic inward edge whose infinite clipping plane discard
 finite donor wedge. Exact-sign convex hulls are admitted only when their area difference
 is within the stated floating-point bound; the original observation/map is never edited.
 
+An exposed donor can supply only its remaining reference-material fraction. If independent
+projections leave a covered-overlap deficit within the existing allocation tolerance, the
+remapper uses the actual available exposed material and retains the deficit in allocation
+and enthalpy residuals. It does not create an exposed donor or replace a missing spatial
+stencil. This also applies when a small but nonzero exposed fraction is completely consumed.
+
+Opted-in stagnant-gap conduction uses the same bounded convex-polygon correction before
+quadrature. Its fan areas use exact-sign expansion arithmetic so an almost-collinear positive
+triangle cannot acquire a negative integration weight through cancellation. A nonzero
+`gap_interfaces[].polygon_roundoff_m2` reports the corrected body area; original footprints
+remain available for replay. These numerical corrections do not admit contact, negative gaps,
+genuine concavity or missing material characterization.
+
 ## Limits and refusal boundaries
 
 There are at most 128 destination intervals, 100,000 total substeps, ten million combined
