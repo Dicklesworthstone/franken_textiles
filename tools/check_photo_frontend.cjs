@@ -2752,7 +2752,7 @@ function bodyCaptureCatalogueReport(overrides={}) {
     shapes:[{name:'height',lower:0,upper:1,default_value:0.5,unit:'dimensionless'},
       {name:'local synthetic',lower:-1,upper:1,default_value:0,unit:'dimensionless'}],
     roots:roots.map((name,index)=>({name,lower:index<3?-1e6:-Math.PI,upper:index<3?1e6:Math.PI,default_value:0,unit:index<3?'m':'rad'})),
-    joints:[{name:'synthetic elbow',index:1,parent_index:0,parent_name:'root'}],measurements:['stature']},...overrides};
+    joints:[{name:'synthetic elbow',index:1,parent_index:0,parent_name:'root'}],measurements:['stature','waist']},...overrides};
 }
 function bodyCaptureReport(overrides={}) {
   return {schema:'ftx-body-photo-capture-result/1',status:'CAPTURE_DRAFT',body_fitted:false,start_count:0,frame_count:2,
@@ -2918,4 +2918,114 @@ test('still-photo capture catalogue is bound to the selected model and cancelled
   await p.e.bodyCaptureCatalogue.onclick();const current=p.current();
   await current.emit({type:'result',request:current.messages[0].request,report:JSON.stringify(bodyCaptureCatalogueReport({schema:'wrong'}))});
   assert.match(p.e.bodyCaptureError.textContent,/catalogue/);assert.equal(p.e.bodyCaptureEditor.hidden,true);
+});
+
+function addCaptureTape(p,name,values={}) {
+  p.e.bodyCaptureMeasurementName.value=name;p.e.bodyCaptureMeasurementName.handlers.change();
+  p.e.bodyCaptureMeasurementAdd.onclick();
+  const row=p.e.bodyCaptureMeasurements.children.at(-1), fields=bodyCaptureRow(row);
+  const defaults={value_mm:'950',sigma_mm:'3',evidence:' Independent synthetic tape λ; defined rest-body length. ',partition:'fit'};
+  for(const [key,value] of Object.entries({...defaults,...values})) {
+    const input=fields.field(key);input.value=value;input.handlers[key==='partition'?'change':'input']();
+  }
+  return {row,fields};
+}
+test('still-photo tape controls retain independent FIT and CHECK observations in native metre units',async()=>{
+  const p=await photoPage();await selectBodyCapture(p);
+  assert.deepEqual(p.e.bodyCaptureMeasurementName.children.slice(1).map(option=>option.value),['stature','waist']);
+  const stature=addCaptureTape(p,'stature'),waist=addCaptureTape(p,'waist',{
+    value_mm:'520',sigma_mm:'2.5',evidence:'Held-out synthetic waist tape; kept out of fitting.',partition:'held_out'});
+  assert.deepEqual(p.e.bodyCaptureMeasurementName.children.map(option=>option.value),['']);
+  const {message}=await completeBodyCapture(p),choices=JSON.parse(message.choices);
+  assert.deepEqual(choices.measurements,[
+    {name:'stature',value_m:0.95,sigma_m:0.003,evidence:stature.fields.field('evidence').value,partition:'fit'},
+    {name:'waist',value_m:0.52,sigma_m:0.0025,evidence:waist.fields.field('evidence').value,partition:'held_out'}]);
+  assert.equal(choices.model_sha256,'c'.repeat(64));
+  assert.equal(p.e.bodyFitRun.disabled,true,'Tape constraints alone do not create a fitted body or starts');
+  assert.equal(p.e.bodyFitWorkbench.disabled,true);
+  // Removing one declaration keeps the other and permits its exact name to be selected again.
+  waist.row.children.find(element=>element.textContent==='Remove waist').onclick();
+  assert.equal(p.e.bodyCaptureMeasurements.children.length,1);
+  assert.deepEqual(p.e.bodyCaptureMeasurementName.children.map(option=>option.value),['','waist']);
+  assert.equal(stature.fields.field('value_mm').value,'950');
+  assert.equal(p.e.bodyCaptureDownloads.children.length,0);
+  const again=await completeBodyCapture(p);
+  assert.deepEqual(JSON.parse(again.message.choices).measurements,[choices.measurements[0]]);
+});
+test('still-photo tape inputs require positive values, native uncertainty bounds, evidence and an explicit role before source reads',async()=>{
+  const p=await photoPage();await selectBodyCapture(p);
+  const {fields}=addCaptureTape(p,'stature');
+  let reads=0;p.e.bodyCaptureCalibration.files=[{size:2,arrayBuffer:async()=>{reads++;return new TextEncoder().encode('{}').buffer;}}];
+  const baseline={value_mm:'950',sigma_mm:'3',evidence:'Independent synthetic stature tape',partition:'fit'};
+  for(const [key,value,pattern] of [
+    ['value_mm','',/finite/],['value_mm','0',/positive/],['value_mm','-1',/positive/],
+    ['value_mm','1e309',/finite/],['value_mm','1e-323',/positive/],
+    ['sigma_mm','0.0009',/uncertainty/],['sigma_mm','1001',/uncertainty/],['sigma_mm','NaN',/finite/],
+    ['evidence','  ',/evidence/],['evidence','λ'.repeat(2049),/4096 UTF-8 bytes/],
+    ['evidence','not\0valid',/evidence/],['partition','',/FIT or CHECK/],['partition','check',/FIT or CHECK/]
+  ]) {
+    for(const [name,original] of Object.entries(baseline))fields.field(name).value=original;
+    fields.field(key).value=value;fields.field(key).handlers[key==='partition'?'change':'input']();
+    await p.e.bodyCaptureRun.onclick();
+    assert.equal(reads,0,key+' '+value.slice(0,20));assert.match(p.e.bodyCaptureError.textContent,pattern);
+  }
+  for(const [name,original] of Object.entries(baseline))fields.field(name).value=original;
+  for(const [sigma,expected] of [['0.001',0.000001],['1000',1]]) {
+    fields.field('sigma_mm').value=sigma;fields.field('sigma_mm').handlers.input();
+    await p.e.bodyCaptureRun.onclick();
+    assert.equal(JSON.parse(p.current().messages[0].choices).measurements[0].sigma_m,expected);
+    p.e.bodyCaptureCancel.onclick();
+  }
+  assert.equal(reads,2);
+});
+test('still-photo tape changes withdraw generated drafts and cancel delayed reads and stale workers',async()=>{
+  for(const key of ['value_mm','sigma_mm','evidence','partition']) {
+    const p=await photoPage();await selectBodyCapture(p);const {fields}=addCaptureTape(p,'stature');
+    const {worker,message}=await completeBodyCapture(p);
+    assert.equal(p.e.bodyTargetsLoad.disabled,false);
+    fields.field(key).value=key==='partition'?'held_out':key==='evidence'?'Rechecked independent source':'4';
+    fields.field(key).handlers[key==='partition'?'change':'input']();
+    assert.equal(p.e.bodyTargetsLoad.disabled,true,key);assert.equal(p.e.bodyFitRun.disabled,true,key);
+    assert.equal(p.e.bodyCaptureDownloads.children.length,0,key);
+    await worker.emit({type:'result',request:message.request,report:JSON.stringify(bodyCaptureReport())});
+    assert.equal(p.e.bodyCaptureDownloads.children.length,0,key);
+  }
+  const p=await photoPage();await selectBodyCapture(p);const {fields}=addCaptureTape(p,'stature');
+  let release;p.e.bodyCaptureCalibration.files=[{size:2,arrayBuffer:()=>new Promise(resolve=>{release=resolve;})}];
+  const before=p.workers.length,pending=p.e.bodyCaptureRun.onclick();
+  for(const key of ['value_mm','sigma_mm','evidence','partition'])assert.equal(fields.field(key).disabled,true);
+  fields.field('evidence').value='Changed during acquisition';fields.field('evidence').handlers.input();
+  release(new TextEncoder().encode('{}').buffer);await pending;
+  assert.equal(p.workers.length,before);assert.equal(p.e.bodyCaptureDownloads.children.length,0);
+  assert.equal(fields.field('evidence').disabled,false);
+  p.e.bodyCaptureCalibration.handlers.cancel();
+  assert.equal(fields.field('evidence').value,'Changed during acquisition','Cancelled file choice retains current declarations');
+  p.e.bodyFitModel.files=[file('replacement','other.ftxbody')];p.e.bodyFitModel.handlers.change();
+  assert.equal(p.e.bodyCaptureMeasurements.children.length,0);assert.equal(p.e.bodyCaptureMeasurementAdd.disabled,true);
+});
+test('still-photo tape choices follow the checked catalogue and bound distinct declarations to 32',async()=>{
+  const p=await photoPage();p.e.bodyFitModel.files=[file('model')];
+  const catalogue=bodyCaptureCatalogueReport();
+  catalogue.catalogue.measurements=Array.from({length:33},(_,i)=>'synthetic-length-'+i);
+  await p.e.bodyCaptureCatalogue.onclick();const worker=p.current();
+  await worker.emit({type:'result',request:worker.messages[0].request,report:JSON.stringify(catalogue)});
+  p.e.bodyCaptureMeasurementName.value='unavailable';p.e.bodyCaptureMeasurementAdd.onclick();
+  assert.equal(p.e.bodyCaptureMeasurements.children.length,0);
+  for(const name of catalogue.catalogue.measurements) {
+    p.e.bodyCaptureMeasurementName.value=name;p.e.bodyCaptureMeasurementName.handlers.change();p.e.bodyCaptureMeasurementAdd.onclick();
+  }
+  assert.equal(p.e.bodyCaptureMeasurements.children.length,32);assert.equal(p.e.bodyCaptureMeasurementAdd.disabled,true);
+  p.e.bodyCaptureMeasurementName.value='synthetic-length-0';p.e.bodyCaptureMeasurementAdd.onclick();
+  assert.equal(p.e.bodyCaptureMeasurements.children.length,32);
+  p.e.bodyCaptureMeasurements.children[0].children.find(element=>element.textContent==='Remove synthetic-length-0').onclick();
+  p.e.bodyCaptureMeasurementName.value='synthetic-length-32';p.e.bodyCaptureMeasurementName.handlers.change();
+  assert.equal(p.e.bodyCaptureMeasurementAdd.disabled,false);
+  p.e.bodyCaptureMeasurementAdd.onclick();assert.equal(p.e.bodyCaptureMeasurements.children.length,32);
+  for(const names of [['stature','stature'],[' '],[null],['λ'.repeat(2049)]]) {
+    await p.e.bodyCaptureCatalogue.onclick();const current=p.current(),invalid=bodyCaptureCatalogueReport();
+    invalid.catalogue.measurements=names;
+    await current.emit({type:'result',request:current.messages[0].request,report:JSON.stringify(invalid)});
+    assert.match(p.e.bodyCaptureError.textContent,/invalid tape measurement names/);
+    assert.equal(p.e.bodyCaptureEditor.hidden,true);
+  }
 });

@@ -471,6 +471,14 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
       for(const [axis,key] of ["axisX","axisY","axisZ"].entries()) await row.locator('input[id$="-'+key+'"]').fill(String(control.axis[axis]));
       await choose(row,control.choice);
     }
+    assert.ok(selections.measurements.length>0,"The native fixture supplies independent tape evidence");
+    for(const [index,measurement] of selections.measurements.entries()) {
+      await page.selectOption("#bodyCaptureMeasurementName",measurement.name);await page.click("#bodyCaptureMeasurementAdd");
+      const row=page.locator("#bodyCaptureMeasurements fieldset").nth(index);
+      await row.locator('input[id$="-value_mm"]').fill(String(measurement.value_m*1000));
+      await row.locator('input[id$="-sigma_mm"]').fill(String(measurement.sigma_m*1000));
+      await row.locator("textarea").fill(measurement.evidence);await row.locator("select").selectOption(measurement.partition);
+    }
     await page.fill("#bodyCaptureScale",selections.metric_scale_source);
     await page.fill("#bodyCaptureEvidence",selections.observation_evidence);
     await acquire();assert.equal(await page.textContent("#bodyCaptureError"),"");
@@ -481,8 +489,9 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
     assert.equal(report.model_sha256,sha256(fs.readFileSync(path.join(native,"model.ftxbody"))));
     assert.equal(report.start_count,0);assert.equal(report.frame_count,images.length);
     assert.equal(draft.schema,"ftx-anny-body-fit-input/1");
-    assert.deepEqual(draft.model,{...initial.model,measurements:[]});
-    assert.deepEqual(draft.fit.starts,[]);assert.deepEqual(draft.fit.measurements,[]);
+    assert.deepEqual(draft.model,initial.model);
+    assert.deepEqual(draft.fit.starts,[]);assert.deepEqual(draft.fit.measurements,selections.measurements);
+    assert.deepEqual(report.choices.measurements,selections.measurements);
     assert.equal(report.acquisition.calibration_sha256,sha256(fs.readFileSync(path.join(native,"capture-calibration.json"))));
     assert.equal(report.acquisition.sheet_sha256,sha256(fs.readFileSync(path.join(native,"capture-board.json"))));
     for(const [index,name] of images.entries()) {

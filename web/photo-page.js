@@ -21,7 +21,7 @@ const bodyFitUrls = [];
 let bodyPreparedSource = null;
 let bodyCaptureWorker = null, bodyCaptureTicket = 0, bodyCaptureBusy = false;
 let bodyCaptureCatalogue = null, bodyCaptureModelFile = null, bodyCaptureGenerated = null, bodyCaptureRowId = 0;
-let bodyCaptureRows = {shapes:[],roots:[],joints:[]}, bodyCaptureInputs = [];
+let bodyCaptureRows = {shapes:[],roots:[],joints:[],measurements:[]}, bodyCaptureInputs = [];
 const bodyCaptureUrls = [];
 let bodyTargetsWorker = null, bodyTargetsTicket = 0, bodyTargetsBusy = false;
 let bodyTargetsView = null, bodyTargetsSource = null, bodyTargetsToken = null;
@@ -80,9 +80,10 @@ function controls() {
     row.value.disabled ||= row.mode.value!=="fixed";
     row.lower.disabled ||= row.mode.value!=="fit"; row.upper.disabled ||= row.mode.value!=="fit";
   }
-  for(const id of ["bodyCaptureShapeName","bodyCaptureJointName","bodyCaptureAge","bodyCaptureGender","bodyCaptureScale","bodyCaptureEvidence"]) $(id).disabled=captureLocked || !captureModel;
+  for(const id of ["bodyCaptureShapeName","bodyCaptureJointName","bodyCaptureMeasurementName","bodyCaptureAge","bodyCaptureGender","bodyCaptureScale","bodyCaptureEvidence"]) $(id).disabled=captureLocked || !captureModel;
   $("bodyCaptureShapeAdd").disabled=captureLocked || !captureModel || !$("bodyCaptureShapeName").value;
   $("bodyCaptureJointAdd").disabled=captureLocked || !captureModel || !$("bodyCaptureJointName").value || bodyCaptureRows.joints.length>=32;
+  $("bodyCaptureMeasurementAdd").disabled=captureLocked || !captureModel || !$("bodyCaptureMeasurementName").value || bodyCaptureRows.measurements.length>=32;
   const targetsBlocked=bodyCaptureBusy || bodyTargetsBusy || bodyTargetsView!==null;
   $("bodyTargetsLoad").disabled=targetsBlocked || bodyFitBusy || bodyStartsBusy || bodyStartsPending || bodyPointsBusy || bodyPointsPending ||
     !$("bodyFitModel").files.length || !bodyInputFile();
@@ -263,9 +264,9 @@ function clearBodyCapture(clearCatalogue=false) {
     $("bodyFitStatus").textContent="Generated capture input withdrawn. Prepare a new capture or choose prepared observations.";
   }
   if(clearCatalogue) {
-    bodyCaptureCatalogue=null; bodyCaptureModelFile=null; bodyCaptureRows={shapes:[],roots:[],joints:[]};
+    bodyCaptureCatalogue=null; bodyCaptureModelFile=null; bodyCaptureRows={shapes:[],roots:[],joints:[],measurements:[]};
     bodyCaptureInputs=[]; $("bodyCaptureShapes").replaceChildren(); $("bodyCaptureRoots").replaceChildren();
-    $("bodyCaptureJoints").replaceChildren(); $("bodyCaptureModelSummary").textContent="";
+    $("bodyCaptureJoints").replaceChildren(); $("bodyCaptureMeasurements").replaceChildren(); $("bodyCaptureModelSummary").textContent="";
   }
   controls();
 }
@@ -290,12 +291,13 @@ function captureOption(value,label) {
 }
 function refreshCaptureNames() {
   if(!bodyCaptureCatalogue) return;
-  for(const [id,kind,names] of [
-    ["bodyCaptureShapeName","shapes",bodyCaptureCatalogue.catalogue.shapes.map(item=>item.name)],
-    ["bodyCaptureJointName","joints",bodyCaptureCatalogue.catalogue.joints.map(item=>item.name)]
+  for(const [id,kind,names,label] of [
+    ["bodyCaptureShapeName","shapes",bodyCaptureCatalogue.catalogue.shapes.map(item=>item.name),"shape control"],
+    ["bodyCaptureJointName","joints",bodyCaptureCatalogue.catalogue.joints.map(item=>item.name),"bone"],
+    ["bodyCaptureMeasurementName","measurements",bodyCaptureCatalogue.catalogue.measurements,"tape measurement"]
   ]) {
     const select=$(id), selected=select.value, used=new Set(bodyCaptureRows[kind].map(row=>row.name));
-    select.replaceChildren(captureOption("","Choose a "+(kind==="shapes"?"shape control":"bone")));
+    select.replaceChildren(captureOption("","Choose a "+label));
     const available=names.filter(name=>!used.has(name));
     for(const name of available) select.append(captureOption(name,name));
     select.value=available.includes(selected)?selected:"";
@@ -337,6 +339,38 @@ function addCaptureControl(kind,control) {
   bodyCaptureRows[kind].push(row);
   $("bodyCapture"+({shapes:"Shapes",roots:"Roots",joints:"Joints"}[kind])).append(fieldset);
 }
+function addCaptureMeasurement(name) {
+  const row={name}, fieldset=document.createElement("fieldset"), legend=document.createElement("legend");
+  legend.textContent=name; fieldset.append(legend); row.element=fieldset;
+  const field=(key,label,element)=>{
+    element.id="bodyCapture-"+(++bodyCaptureRowId)+"-"+key;
+    const parent=document.createElement("label"); parent.htmlFor=element.id; parent.textContent=label+" ";
+    parent.append(element); fieldset.append(parent); bodyCaptureInputs.push(element); row[key]=element;
+    element.addEventListener(element.type==="number" || key==="evidence"?"input":"change",changeBodyCapture);
+    return element;
+  };
+  for(const [key,label] of [["value_mm","Measured value (mm)"],["sigma_mm","Uncertainty σ (mm)"]]) {
+    const input=document.createElement("input"); input.type="number"; input.step="any"; input.min=key==="sigma_mm"?"0.001":"0";
+    if(key==="sigma_mm") input.max="1000";
+    field(key,label,input);
+  }
+  const evidence=document.createElement("textarea"); evidence.maxLength=4096;
+  field("evidence","Independent tape evidence and measurement definition",evidence);
+  const partition=document.createElement("select");
+  partition.append(captureOption("","Choose FIT or CHECK"),captureOption("fit","FIT — constrain shared shape"),
+    captureOption("held_out","CHECK — independent validation"));
+  field("partition","Role",partition);
+  const remove=document.createElement("button"); remove.type="button"; remove.textContent="Remove "+name;
+  remove.onclick=()=>{
+    if(bodyCaptureBusy || bodyCaptureOtherBusy()) return;
+    changeBodyCapture(); bodyCaptureRows.measurements=bodyCaptureRows.measurements.filter(item=>item!==row);
+    $("bodyCaptureMeasurements").replaceChildren(...bodyCaptureRows.measurements.map(item=>item.element));
+    bodyCaptureInputs=bodyCaptureInputs.filter(input=>!Object.values(row).includes(input) && input!==remove);
+    refreshCaptureNames();
+  };
+  fieldset.append(remove); bodyCaptureInputs.push(remove);
+  bodyCaptureRows.measurements.push(row); $("bodyCaptureMeasurements").append(fieldset);
+}
 function checkedCaptureCatalogue(text) {
   const value=JSON.parse(text), catalogue=value?.catalogue, hash=value?.model_sha256;
   const roots=["root_x_m","root_y_m","root_z_m","root_rx_rad","root_ry_rad","root_rz_rad"];
@@ -355,6 +389,10 @@ function checkedCaptureCatalogue(text) {
   }
   if(new Set(catalogue.joints.map(joint=>joint.name)).size!==catalogue.joints.length ||
       catalogue.joints.some(joint=>typeof joint.name!=="string" || !joint.name)) throw Error("The model catalogue contains invalid joint names.");
+  if(new Set(catalogue.measurements).size!==catalogue.measurements.length ||
+      catalogue.measurements.some(name=>typeof name!=="string" || !name.trim() || new Blob([name]).size>4096)) {
+    throw Error("The model catalogue contains invalid tape measurement names.");
+  }
   return value;
 }
 async function loadBodyCaptureCatalogue() {
@@ -432,6 +470,19 @@ function captureDeclarations(images) {
       gender:captureNumber($("bodyCaptureGender").value,"model gender coefficient",0,1),shapes,roots,joints},
     metric_scale_source:captureText("bodyCaptureScale","the metric scale source"),
     observation_evidence:captureText("bodyCaptureEvidence","capture and wearer evidence"),measurements:[]};
+  if(bodyCaptureRows.measurements.length>32) throw Error("Declare at most 32 independent tape measurements.");
+  choices.measurements=bodyCaptureRows.measurements.map(row=>{
+    if(!bodyCaptureCatalogue.catalogue.measurements.includes(row.name)) throw Error("Choose an available tape measurement.");
+    const value_m=captureNumber(row.value_mm.value,row.name+" measured value in mm")/1000;
+    const sigma_m=captureNumber(row.sigma_mm.value,row.name+" uncertainty in mm",0.001,1000)/1000;
+    if(value_m<=0) throw Error("The measured value for "+row.name+" must be positive.");
+    const evidence=row.evidence.value, partition=row.partition.value;
+    if(!evidence.trim() || evidence.includes("\0") || new Blob([evidence]).size>4096) {
+      throw Error("Enter independent tape evidence for "+row.name+" (up to 4096 UTF-8 bytes).");
+    }
+    if(!["fit","held_out"].includes(partition)) throw Error("Choose FIT or CHECK for "+row.name+".");
+    return {name:row.name,value_m,sigma_m,evidence,partition};
+  });
   const result={manifest:JSON.stringify(manifest),choices:JSON.stringify(choices)};
   if(new Blob([result.manifest]).size>256*1024 || new Blob([result.choices]).size>256*1024) throw Error("Capture declarations exceed 256 KiB.");
   return result;
@@ -1888,7 +1939,13 @@ $("bodyCaptureJointAdd").onclick=()=>{
   if(!bone || bodyCaptureRows.joints.some(row=>row.name===name)) return;
   changeBodyCapture(); addCaptureControl("joints",{name,unit:"rad",lower:-Math.PI,upper:Math.PI}); refreshCaptureNames();
 };
-for(const id of ["bodyCaptureShapeName","bodyCaptureJointName"]) $(id).addEventListener("change",controls);
+$("bodyCaptureMeasurementAdd").onclick=()=>{
+  if(bodyCaptureBusy || bodyCaptureOtherBusy() || !bodyCaptureCatalogue || bodyCaptureRows.measurements.length>=32) return;
+  const name=$("bodyCaptureMeasurementName").value;
+  if(!bodyCaptureCatalogue.catalogue.measurements.includes(name) || bodyCaptureRows.measurements.some(row=>row.name===name)) return;
+  changeBodyCapture(); addCaptureMeasurement(name); refreshCaptureNames();
+};
+for(const id of ["bodyCaptureShapeName","bodyCaptureJointName","bodyCaptureMeasurementName"]) $(id).addEventListener("change",controls);
 for(const id of ["bodyCaptureLens","bodyCaptureReference","bodyCaptureOriginX","bodyCaptureOriginZ","bodyCaptureHeldOut",
   "bodyCaptureStationary","bodyCaptureAge","bodyCaptureGender","bodyCaptureScale","bodyCaptureEvidence"]) {
   $(id).addEventListener("input",changeBodyCapture);

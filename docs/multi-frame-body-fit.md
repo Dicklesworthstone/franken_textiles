@@ -102,7 +102,12 @@ In **Fit one body shape across changing poses**, select the converted model and 
 2. Choose **Load available model controls**. Enter age and the Anny gender coefficient, select
    shared shape controls, and choose fixed values or explicit fitting bounds. All six roots
    begin fixed at zero; choose the roots or declared local-axis joints to fit in each frame.
-   At least one shared shape and one pose control must be fitted.
+   At least one shared shape and one pose control must be fitted. Optionally add independent tape
+   measurements from the checked model's catalogue: enter measured length and uncertainty in
+   millimetres, retain the source/measurement definition, and choose FIT or CHECK explicitly.
+   FIT measurements constrain shared shape; CHECK measurements only assess it. A FIT stature can
+   help resolve shape/depth ambiguity. Up to 32 distinct observations are converted to the native
+   metre units; no model prediction or chart value is supplied as tape evidence.
 3. Supply metric-scale and capture/wearer evidence, then choose **Prepare calibrated body draft**.
    Photos are checked one at a time. Inspect the camera diagnostics; a refused source publishes
    no new draft.

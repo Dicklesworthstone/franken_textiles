@@ -5792,6 +5792,19 @@ source, pressure, temperature or work state. This advances `ftx-cp2` and `ftx-tm
 inferred contact pressure, time-dependent recovery, wet/compressed law, work heating or independent
 measured garment qualification.
 
+### 25.201 Use independent tape evidence in fresh photo captures
+
+The local still-photo capture controls now admit optional independent tape observations from the
+actual model's catalogue. Explicit measured lengths, uncertainties, source/measurement definitions
+and FIT or CHECK roles enter the existing native body-fit preparation path. Millimetres cross one
+boundary into metres; no model estimate or chart prior is supplied as measured evidence.
+
+Source/model changes clear obsolete declarations, while edits withdraw generated drafts and later
+fit/garment results. Saved captures retain the original observations, and CHECK values remain outside
+the fitting objective. This extends the ordinary `ftx-bc1` workflow without changing fitting or garment
+readiness thresholds. Synthetic frontend and native-fixture replay checks remain separate from
+independent body accuracy and real garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

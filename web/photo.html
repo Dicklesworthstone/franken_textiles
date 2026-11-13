@@ -332,6 +332,18 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
           Unselected joints remain at rest. The page does not infer or normalize an axis.</small></p>
         <div id="bodyCaptureJoints"></div>
       </fieldset>
+      <fieldset><legend>Optional independent tape measurements</legend>
+        <p>Use measurements taken from this wearer to constrain shared body shape or check the result.
+          A FIT stature measurement can help resolve shape and camera-depth ambiguity.
+          CHECK measurements stay out of fitting. Choose each role before fitting and retain it.</p>
+        <label>Tape measurement <select id="bodyCaptureMeasurementName"></select></label>
+        <button id="bodyCaptureMeasurementAdd" disabled>Add tape measurement</button>
+        <div id="bodyCaptureMeasurements"></div>
+        <p><small>Enter measured lengths and their uncertainty in millimetres; the engine receives metres.
+          Use independent tape evidence and describe how it was measured. Model predictions and size-chart
+          values are not tape evidence. At most 32 distinct measurements; these constraints do not make
+          the garment measurement gate READY.</small></p>
+      </fieldset>
       <label>Metric scale source <textarea id="bodyCaptureScale" maxlength="4096"></textarea></label>
       <label>Evidence that these photographs belong to this capture and wearer
         <textarea id="bodyCaptureEvidence" maxlength="4096"></textarea></label>
