@@ -429,19 +429,55 @@ function motionPoseSampling(value, keyframes) {
   }
 }
 
+function motionCompressionBranch(change, instance, direction) {
+  object(change, ["entry", "transitions"], ["entry", "transitions"], "Compression branch change");
+  const entry = object(change.entry,
+    ["schema", "gap_m", "reference_area_m2", "direction", "layers", "allow_estimates"],
+    ["schema", "gap_m", "reference_area_m2", "direction", "layers", "allow_estimates"], "Compression branch entry");
+  if (entry.schema !== "ftx-compression-stack/1" || entry.reference_area_m2 !== 1 ||
+      typeof entry.gap_m !== "number" || !Number.isFinite(entry.gap_m) || entry.gap_m <= 0 ||
+      !["loading", "unloading"].includes(entry.direction) || entry.direction === direction ||
+      entry.allow_estimates !== true || !Array.isArray(entry.layers) || entry.layers.length !== 1) {
+    throw Error("A compression branch entry needs the opposite direction, a positive current gap, unit reference area and explicit path-model estimate consent for one retained instance.");
+  }
+  const layer = object(entry.layers[0], ["id", "preparation"], ["id", "preparation"], "Compression branch layer");
+  if (layer.id !== instance || !layer.preparation || typeof layer.preparation !== "object" ||
+      Array.isArray(layer.preparation) || layer.preparation.schema !== "ftx-material-compression/1") {
+    throw Error("A compression branch must retain its exact physical instance and complete new pressure acquisition.");
+  }
+  nonnegative(layer.preparation.pressure_pa, "Compression branch entry pressure");
+  object(change.transitions, [instance], [instance], "Compression branch source links");
+  const link = object(change.transitions[instance], ["source", "evidence", "method", "conditions"],
+    ["source", "evidence", "method", "conditions"], "Compression branch source link");
+  name(link.source, "Compression branch source"); name(link.method, "Compression branch method");
+  if (!["measured", "published", "estimate"].includes(link.evidence) || !link.conditions ||
+      typeof link.conditions !== "object" || Array.isArray(link.conditions) ||
+      Object.values(link.conditions).some(value => typeof value !== "string")) {
+    throw Error("Compression branch links need a declared evidence class and original string-valued source conditions.");
+  }
+  for (const key of ["specimen", "conditioning", "from_loading_branch", "to_loading_branch", "pressure_pa"]) {
+    name(link.conditions[key], `Compression branch ${key} condition`);
+  }
+  return entry.direction;
+}
+
 function motionCompressionSource(raw, keyframes) {
   const value = sourceObject(raw, "Prescribed compression");
   object(value, ["schema", "thermal_evidence", "bindings"], ["schema", "thermal_evidence", "bindings"], "Prescribed compression");
-  if (value.schema !== "ftx-motion-surface-compression/1") throw Error("Prescribed compression needs ftx-motion-surface-compression/1.");
+  if (!["ftx-motion-surface-compression/1", "ftx-motion-surface-compression/2"].includes(value.schema)) {
+    throw Error("Prescribed compression needs ftx-motion-surface-compression/1 or /2.");
+  }
+  const cyclic = value.schema === "ftx-motion-surface-compression/2";
   name(value.thermal_evidence, "Compression thermal applicability evidence");
   if (!value.bindings || typeof value.bindings !== "object" || Array.isArray(value.bindings)) {
     throw Error("Compression bindings must name the exact retained physical garment instances.");
   }
   const bindings = Object.entries(value.bindings);
   if (!bindings.length || bindings.length > 256) throw Error("Prescribed compression needs 1–256 explicit instance bindings.");
+  let joins = 0;
   for (const [instance, binding] of bindings) {
     name(instance, "Compressed physical instance");
-    object(binding, ["material_sha256", "preparation", "direction", "pressure_pa"],
+    object(binding, ["material_sha256", "preparation", "direction", "pressure_pa", ...(cyclic ? ["branch_changes"] : [])],
       ["material_sha256", "preparation", "direction", "pressure_pa"], "Compression binding");
     if (typeof binding.material_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(binding.material_sha256) ||
         !["loading", "unloading"].includes(binding.direction) ||
@@ -453,8 +489,28 @@ function motionCompressionSource(raw, keyframes) {
         binding.pressure_pa.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
       throw Error("Each compressed instance needs one finite nonnegative pressure in pascals per authored motion interval.");
     }
+    if (own(binding, "branch_changes") && (!Array.isArray(binding.branch_changes) ||
+        binding.branch_changes.length !== keyframes.length)) {
+      throw Error("Compression branch_changes needs one entry per authored interval; use null only inside the array to continue a branch.");
+    }
+    if (cyclic) {
+      let direction = binding.direction, previous = binding.preparation.pressure_pa;
+      nonnegative(previous, "Initial compression pressure");
+      for (const [interval, pressure] of binding.pressure_pa.entries()) {
+        const change = binding.branch_changes?.[interval];
+        if (change != null) {
+          direction = motionCompressionBranch(change, instance, direction);
+          joins++;
+        }
+        if (direction === "loading" ? pressure < previous : pressure > previous) {
+          throw Error("Compression pressure must follow the active branch direction; every reversal needs its own qualified branch change.");
+        }
+        previous = pressure;
+      }
+    }
   }
-  // Source locks, pressure branches, invariant mass/capacity and thermal domains are checked in Rust.
+  if (cyclic && !joins) throw Error("Compression version /2 needs at least one explicit acquired branch change.");
+  // Rust checks source locks, pressure/thickness joins, invariant storage and thermal domains.
   // The original JSON text is inserted unchanged, including the source acquisition's numeric tokens.
 }
 

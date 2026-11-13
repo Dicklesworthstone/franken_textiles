@@ -5775,6 +5775,23 @@ Source-pose sampling is also exposed through the ordinary motion controls and re
 This advances `ftx-cp2` and `ftx-tm5`; contact-derived pressure, branch recovery, combined wet or
 work-heating laws and independent measured garment qualification remain separate open work.
 
+### 25.200 Carry source-qualified compression cycles through moving garment heat
+
+Explicit acquired branch changes extend prescribed independent-sheet pressure histories into
+loading, unloading and reloading. The same material-stack authority used by standalone thermal
+histories verifies the original specimen, conditioning, consent, actual join pressure and every
+layer's thickness with zero entry work. Temperature cells and reference mass continue unchanged;
+signed normal work uses the accepted current cloth area and remains separate from sensible heat.
+
+Versioned interval schedules retain each original acquisition and transition receipt. Material and
+design comparisons independently replay the path before admitting heat objectives, and a refused
+thermal history preserves independent mechanical and manufacturing outcomes. The existing browser
+source control retains exact inputs through authored motion and frozen named cases and exposes
+the chronological branch joins. Missing evidence or late thermal failures cannot activate partial
+source, pressure, temperature or work state. This advances `ftx-cp2` and `ftx-tm5`; it adds no
+inferred contact pressure, time-dependent recovery, wet/compressed law, work heating or independent
+measured garment qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

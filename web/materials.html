@@ -1340,7 +1340,11 @@ is an authored condition after the initial drape. Work limits bound computation;
 <input id="guidedMotionCompressionFile" type="file" accept=".json,application/json"></label>
 <p class="note">Supply each instance's exact material, measured pressure/thickness and heat properties, initial preload,
 and one pressure per saved movement interval. The engine carries the existing temperatures and reference mass through
-qualified compression changes. Pressure is prescribed independently of body contact; normal compression work is reported separately from heat.
+qualified compression changes. For acquired loading, unloading and reloading paths, use
+<code>ftx-motion-surface-compression/2</code> with one <code>branch_changes</code> entry per interval:
+<code>null</code> continues the current branch; a change supplies its complete new acquisition and source-qualified
+join at the preceding pressure and thickness. Original source files remain unchanged in saved cases and replay.
+Pressure is prescribed independently of body contact; normal compression work is reported separately from heat.
 This mode uses dry sheets with prescribed films. Liquid, deformation heating and exterior exchange require separate compatible qualifications.</p>
 </fieldset>
 <fieldset><legend>Heat from textile deformation</legend>

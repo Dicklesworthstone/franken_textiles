@@ -1239,11 +1239,30 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
           metric(initial?.thickness_m), metric(final.thickness_m), metric(final.reference_mass_kg),
           metric(final.cumulative_normal_work_j)]);
       }
+      const joins = [];
+      for (const update of compression.updates || []) {
+        for (const [instance, state] of Object.entries(update.instances || {})) {
+          if (state.branch_change) joins.push({ update, instance, join: state.branch_change });
+        }
+      }
+      if (joins.length) {
+        const branches = table(parent, `${key}: acquired compression branch changes`,
+          ["Interval (1-based)", "Accepted sample time (s)", "Instance", "Source branch", "Destination branch",
+            "Direction", "Join pressure (Pa)", "Join thickness (m)", "Source", "Evidence"]);
+        for (const { update, instance, join } of joins) {
+          const link = join.change?.transitions?.[instance], entry = join.entry_compression;
+          cells(branches, [Number.isInteger(update.interval_index) ? String(update.interval_index + 1) : "Unknown",
+            metric(update.time_s), instance, link?.conditions?.from_loading_branch || "Unknown",
+            link?.conditions?.to_loading_branch || "Unknown", join.change?.entry?.direction || "Unknown",
+            metric(entry?.pressure_pa), metric(entry?.thickness_m), link?.source || "Unknown", link?.evidence || "Unknown"]);
+        }
+      }
       const scope = document.createElement("p");
       scope.textContent = `Prescribed normal work: ${metric(compression.cumulative_normal_work_j)} J; ` +
         `converted to heat: ${metric(compression.normal_work_to_heat_j)} J. ` +
-        "The acquired pressure branch changes each instance's dry thickness and heat transport. " +
+        "The active acquired pressure branch changes each instance's dry thickness and heat transport. " +
         "Temperature cells and reference mass carry through the pressure changes. " +
+        (joins.length ? "Each branch change retains its independent source link and joins at the preceding pressure and thickness without resetting temperature or adding heat. " : "") +
         "Normal work uses the current accepted cloth area and remains separate from thermal energy. " +
         "Pressure is supplied explicitly; it is not inferred from garment contact.";
       parent.append(scope);
@@ -5758,7 +5777,10 @@ function showGuidedScenarioDrafts() {
       `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
       `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
       `${value.motion?.transient_surface ? "retained independent-sheet heat history" : "no sheet heat history"}; ` +
-      (value.motion?.transient_surface?.prescribed_compression ? "retained pressure-conditioned sheet heat; " : "") +
+      (value.motion?.transient_surface?.prescribed_compression ? "retained pressure-conditioned sheet heat; " +
+        (value.motion.transient_surface.prescribed_compression.schema === "ftx-motion-surface-compression/2" ?
+          `${Object.values(value.motion.transient_surface.prescribed_compression.bindings || {}).reduce((sum, binding) =>
+            sum + (Array.isArray(binding?.branch_changes) ? binding.branch_changes.filter(change => change !== null).length : 0), 0)} acquired branch changes; ` : "") : "") +
       `${value.motion?.transient_coverage ? "retained moving body/layer heat history" : "no moving body/layer heat history"}; ` +
       `${hasTextileWaterPolicy(value.motion?.transient_surface) ? "retained textile-water heat policy" : "no textile-water policy"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;

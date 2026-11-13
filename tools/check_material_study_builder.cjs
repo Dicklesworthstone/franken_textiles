@@ -3770,3 +3770,89 @@ test('prescribed compression requires complete instance schedules and supported 
   assert.throws(()=>single({...scenarioState(),motionCompression:source}),/authored motion/);
 });
 
+function motionCompressionCycle() {
+  const value=motionCompressionInput(),binding=value.bindings['front.R'];
+  value.schema='ftx-motion-surface-compression/2';binding.pressure_pa=[500,0,250];
+  // New synthetic source controls for request validation; no physical branch is inferred.
+  for(const quantity of Object.values(binding.preparation.material.properties)) delete quantity.conditions.loading_branch;
+  const change=(direction,pressure,gap,from,to)=>{
+    const preparation=JSON.parse(JSON.stringify(binding.preparation));
+    preparation.pressure_pa=pressure;preparation.loading_branch=to;
+    for(const sample of preparation.samples) for(const quantity of Object.values(sample.properties)) quantity.conditions.loading_branch=to;
+    for(const invariant of Object.values(preparation.invariants)) invariant.conditions.loading_branch=to;
+    return {entry:{schema:'ftx-compression-stack/1',gap_m:gap,reference_area_m2:1,direction,
+      layers:[{id:'front.R',preparation}],allow_estimates:true},transitions:{'front.R':{
+      source:'synthetic',evidence:'estimate',method:'Explicit invented cycle and dry dwell for request-authoring checks only.',
+      conditions:{specimen:preparation.specimen,conditioning:preparation.conditioning,
+        from_loading_branch:from,to_loading_branch:to,pressure_pa:String(pressure)}}}};
+  };
+  binding.branch_changes=[null,change('unloading',500,0.01,'loading','unloading-after-500'),
+    change('loading',0,0.02,'unloading-after-500','loading')];
+  return value;
+}
+function cyclicCompressionMotion() {
+  return {...motionState(),keyframes:[0.25,0.5,0.75].map(time_s=>({time_s,arm_abduction_deg:30})),
+    transient_surface:{...dryMotionHeat(),boundaries:Array.from({length:3},()=>({...dryMotionHeat().boundaries[0]}))}};
+}
+test('acquired compression cycles preserve exact sources across independent instances cases and saved replay',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
+    buildWorkbenchStudyBundle:save,parseWorkbenchStudyBundle:load}=await modulePromise;
+  const cycle=motionCompressionCycle();
+  cycle.bindings['front.L']={...motionCompressionInput().bindings['front.R'],pressure_pa:[0,250,500],branch_changes:[null,null,null]};
+  const original=' \r\n'+JSON.stringify(cycle).replace('"pressure_pa":[500,0,250]','"pressure_pa":[5.000e2,-0.0,2.500e2]')+'\r\n';
+  const input=cyclicCompressionMotion(),before=JSON.stringify(input),raw=motion(input,undefined,original);
+  assert.ok(raw.includes(original));assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(JSON.parse(raw).transient_surface.prescribed_compression,JSON.parse(original));
+  const scenario=single({...scenarioState(),motion:input,motionCompression:original,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const cases=matrix({maxEvaluations:4,cases:[{key:'cycle',scenario},{key:'dry',scenario:single({
+    ...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000})}]});
+  assert.ok(cases.includes(original));assert.ok(cases.includes(scenario));
+  assert.equal(Object.hasOwn(JSON.parse(cases).cases[1].scenario.motion.transient_surface,'prescribed_compression'),false);
+  const replay={type:'scenario',pattern:workbenchPattern,studyRequest:workbenchRequest().studyRequest,
+    scenarioRequest:cases,measurements:workbenchBody};
+  assert.equal(load(save(replay,workbenchModel())).request.scenarioRequest,cases);
+  cycle.bindings['front.R'].branch_changes[1].transitions['front.R'].method='later edit';
+  assert.ok(raw.includes('Explicit invented cycle'));assert.equal(raw.includes('later edit'),false);
+  delete cycle.bindings['front.L'].branch_changes;
+  assert.doesNotThrow(()=>motion(input,undefined,JSON.stringify(cycle)),'Unchanged monotone instances can omit branch_changes');
+});
+test('acquired compression cycles refuse ambiguous versions and incomplete interval changes',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise,input=cyclicCompressionMotion();
+  for(const mutate of [v=>{v.schema='ftx-motion-surface-compression/1';},
+    v=>{delete v.bindings['front.R'].branch_changes;},v=>{v.bindings['front.R'].branch_changes=null;},
+    v=>{v.bindings['front.R'].branch_changes=[];},v=>{v.bindings['front.R'].branch_changes=[null,null,null];},
+    v=>{v.bindings['front.R'].branch_changes=[null,{},null];},v=>{v.bindings['front.R'].branch_changes[1]=false;},
+    v=>{v.bindings['front.R'].branch_changes[1].entry.direction='loading';},
+    v=>{v.bindings['front.R'].branch_changes[2]=null;},v=>{v.bindings['front.R'].pressure_pa[0]=-1;},
+    v=>{v.bindings['front.R'].preparation.pressure_pa=null;}]) {
+    const value=motionCompressionCycle();mutate(value);
+    assert.throws(()=>motion(input,undefined,JSON.stringify(value)),/compression|pressure|branch/i);
+  }
+  for(const field of [null,[null]]) {
+    const legacy=motionCompressionInput();legacy.bindings['front.R'].branch_changes=field;
+    assert.throws(()=>motion({...motionState(),transient_surface:dryMotionHeat()},undefined,JSON.stringify(legacy)),/Compression binding/);
+  }
+  const noChanges=motionCompressionCycle();noChanges.bindings['front.R'].pressure_pa=[0,250,500];
+  noChanges.bindings['front.R'].branch_changes=[null,null,null];
+  assert.throws(()=>motion(input,undefined,JSON.stringify(noChanges)),/at least one/);
+});
+test('acquired compression branch entries retain exact instance ownership and explicit source links',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise,input=cyclicCompressionMotion();
+  for(const mutate of [c=>{c.extra=true;},c=>{c.entry.schema='wrong';},c=>{c.entry.gap_m=0;},
+    c=>{c.entry.gap_m='0.01';},c=>{c.entry.reference_area_m2=0.25;},c=>{c.entry.allow_estimates=false;},
+    c=>{delete c.entry.allow_estimates;},c=>{c.entry.layers=[];},c=>{c.entry.layers.push(c.entry.layers[0]);},
+    c=>{c.entry.layers[0].id='another-instance';},c=>{c.entry.layers[0].preparation.schema='wrong';},
+    c=>{c.entry.layers[0].preparation.pressure_pa='500';},c=>{c.transitions={};},c=>{c.transitions=null;},
+    c=>{c.transitions.other=c.transitions['front.R'];},c=>{c.transitions['front.R'].source='';},
+    c=>{c.transitions['front.R'].evidence='inferred';},c=>{c.transitions['front.R'].method='';},
+    c=>{c.transitions['front.R'].conditions=[];},c=>{c.transitions['front.R'].conditions.pressure_pa=500;},
+    c=>{delete c.transitions['front.R'].conditions.from_loading_branch;}]) {
+    const value=motionCompressionCycle();mutate(value.bindings['front.R'].branch_changes[1]);
+    assert.throws(()=>motion(input,undefined,JSON.stringify(value)),/compression|pressure|branch/i);
+  }
+  const deferred=motionCompressionCycle(),join=deferred.bindings['front.R'].branch_changes[1];
+  join.entry.gap_m=0.009;join.transitions['front.R'].source='unknown-source';
+  const source=JSON.stringify(deferred);
+  assert.ok(motion(input,undefined,source).includes(source),'Rust owns source applicability and the exact physical pressure/thickness join');
+});
+
