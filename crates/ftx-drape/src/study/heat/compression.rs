@@ -194,7 +194,9 @@ impl Request {
                     }
                     Control::Gap { gap_m } => {
                         if !gap_m.is_finite() || gap_m <= 0. {
-                            return Err(invalid("prescribed clearance must be positive and finite"));
+                            return Err(invalid(
+                                "prescribed clearance must be positive and finite",
+                            ));
                         }
                         // The shared inverse authority checks direction against the actual solved
                         // pressure at execution; an authored gap is never treated as a pressure.
@@ -706,10 +708,10 @@ mod tests {
 
     fn history_from(compression: Request) -> SurfaceHistory {
         let binding = &compression.bindings["sheet"];
-        let intervals = binding.pressure_pa.as_ref().map_or_else(
-            || binding.controls.as_ref().unwrap().len(),
-            Vec::len,
-        );
+        let intervals = binding
+            .pressure_pa
+            .as_ref()
+            .map_or_else(|| binding.controls.as_ref().unwrap().len(), Vec::len);
         let record = selected(&binding.preparation);
         let policy: SurfaceRequest = serde_json::from_value(json!({
             "schema":"ftx-motion-surface-heat/1","initial_temperature_c":0.,
@@ -921,7 +923,10 @@ mod tests {
             close(update["pressure_pa"].as_f64().unwrap(), expected_pressure);
             close(update["closure_residual_m"].as_f64().unwrap(), 0.);
         }
-        close(compression["cumulative_normal_work_j"].as_f64().unwrap(), 1.5625);
+        close(
+            compression["cumulative_normal_work_j"].as_f64().unwrap(),
+            1.5625,
+        );
         close(
             compression["final_instances"]["sheet"]["reference_mass_kg"]
                 .as_f64()
@@ -975,8 +980,16 @@ mod tests {
                 pressure.state.temperature_c()[0][0],
             );
             close(
-                history.compression.as_ref().unwrap().cumulative_normal_work_j,
-                pressure.compression.as_ref().unwrap().cumulative_normal_work_j,
+                history
+                    .compression
+                    .as_ref()
+                    .unwrap()
+                    .cumulative_normal_work_j,
+                pressure
+                    .compression
+                    .as_ref()
+                    .unwrap()
+                    .cumulative_normal_work_j,
             );
         }
         let result = history.finish("path", "initial", 4.).unwrap();
@@ -1665,14 +1678,20 @@ mod tests {
                 .unwrap(),
             1.5625,
         );
-        assert_eq!(report["prescribed_compression"]["normal_work_to_heat_j"], 0.);
+        assert_eq!(
+            report["prescribed_compression"]["normal_work_to_heat_j"],
+            0.
+        );
         close(
             report["prescribed_compression"]["final_instances"]["sheet"]["reference_mass_kg"]
                 .as_f64()
                 .unwrap(),
             0.025,
         );
-        assert_eq!(report["final"]["exterior_exchange"]["convective_heat_w"], 0.);
+        assert_eq!(
+            report["final"]["exterior_exchange"]["convective_heat_w"],
+            0.
+        );
         assert_eq!(report["exterior_exchange"]["radiative_energy_j"], 0.);
     }
 
@@ -1726,13 +1745,12 @@ mod tests {
             "../../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
         ))
         .unwrap();
-        let radiation = serde_json::from_value(fixture["exterior_exchange"]["radiation"].clone())
-            .unwrap();
+        let radiation =
+            serde_json::from_value(fixture["exterior_exchange"]["radiation"].clone()).unwrap();
         history.request.exterior_exchange.as_mut().unwrap()[0].radiation = Some(radiation);
         assert!(history.request.validate(2).is_err());
         history.request.exterior_exchange.as_mut().unwrap()[0].radiation = None;
         history.request.boundaries[0].outside_resistance_m2_k_w = 0.2;
         assert!(history.request.validate(2).is_err());
     }
-
 }

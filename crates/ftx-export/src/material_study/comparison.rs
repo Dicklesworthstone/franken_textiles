@@ -4457,12 +4457,13 @@ fn coverage_profile_storage(
     heat: &Value,
     motion: &Value,
     patches: &[Value],
-    owners: &[Value],
+    ownership: (&[Value], &[Value]),
     profiles: &[Vec<f64>],
     laws: &[ftx_pattern::material_thermal::ThermalLaw],
     cells: usize,
 ) -> Result<f64, Refusal> {
     let fail = || invalid("covered initial profiles need complete final material enthalpy");
+    let (owners, instances) = ownership;
     let checkpoint = &heat["checkpoint"];
     let frame = &checkpoint["frame"];
     let layout = &frame["projection"]["layout"];
@@ -4483,8 +4484,9 @@ fn coverage_profile_storage(
         .iter()
         .map(|owner| {
             let index = vapor_index(owner)?;
-            let id = heat["initial_condition"]["instances"][index]
-                .as_str()
+            let id = instances
+                .get(index)
+                .and_then(Value::as_str)
                 .ok_or_else(fail)?;
             request["instance_layers"][id]
                 .as_str()
@@ -4661,10 +4663,10 @@ fn initial_heat_range(
     } else {
         &simulation["drape"]["thermal_surface"]
     };
-    let model = if coverage {
-        &heat["checkpoint"]["frame"]["source"]
-    } else if compression.is_some() {
+    let model = if compression.is_some() {
         &heat["prescribed_compression"]["initial_model"]
+    } else if coverage {
+        &heat["checkpoint"]["frame"]["source"]
     } else {
         &heat["model"]
     };
@@ -4776,7 +4778,7 @@ fn initial_heat_range(
                 heat,
                 motion,
                 patches,
-                owners,
+                (owners, instances),
                 &temperatures,
                 &laws,
                 cells,

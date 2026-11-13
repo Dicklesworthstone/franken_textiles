@@ -267,12 +267,11 @@ impl Surface {
                 ));
             }
             for (old, new) in previous.layers.iter().zip(&next.layers) {
-                for (key, unit) in [
-                    ("areal_density", "kg/m2"),
-                    ("specific_heat", "J/(kg*K)"),
-                ] {
+                for (key, unit) in [("areal_density", "kg/m2"), ("specific_heat", "J/(kg*K)")] {
                     let quantity = |layer: &ftx_pattern::material_catalog::ResolvedMaterial| {
-                        layer.material().require(key, unit, layer.allows_estimates())
+                        layer
+                            .material()
+                            .require(key, unit, layer.allows_estimates())
                     };
                     if quantity(old)? != quantity(new)? {
                         return Err(invalid(

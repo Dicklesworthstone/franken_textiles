@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    Budget, DissipationHeatDistribution, PlasticHeatDistribution, boundary, budget, compression, hash,
-    invalid, plastic,
+    Budget, DissipationHeatDistribution, PlasticHeatDistribution, boundary, budget, compression,
+    hash, invalid, plastic,
 };
 use crate::{
     motion::DissipationCapture,
@@ -638,7 +638,7 @@ impl History {
                 cloth,
                 interval,
                 sample_index,
-                time_s,
+                self.time_s,
             )? {
                 self.source = source;
                 true

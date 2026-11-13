@@ -71,26 +71,74 @@ fn inputs() -> (String, Value, Value) {
 
 #[test]
 fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions() {
-    prescribed_compression_workflow(false, false, false);
+    prescribed_compression_workflow(false, false, false, false);
 }
 
 #[test]
 fn cyclic_compression_heat_replays_native_portable_and_named_case_decisions() {
-    prescribed_compression_workflow(true, false, false);
+    prescribed_compression_workflow(true, false, false, false);
 }
 
 #[test]
 fn compressed_convection_heat_replays_native_portable_and_named_case_decisions() {
-    prescribed_compression_workflow(true, false, true);
+    prescribed_compression_workflow(true, false, true, false);
 }
 
 #[test]
 fn clearance_controlled_convection_replays_native_portable_and_named_case_decisions() {
-    prescribed_compression_workflow(false, true, true);
+    prescribed_compression_workflow(false, true, true, false);
 }
 
-fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: bool) {
-    let (pattern, mut study, mut single) = inputs();
+#[test]
+fn prescribed_coverage_compression_replays_native_portable_and_named_case_decisions() {
+    prescribed_compression_workflow(false, false, false, true);
+}
+
+#[test]
+fn cyclic_coverage_compression_replays_native_portable_and_named_case_decisions() {
+    prescribed_compression_workflow(true, false, false, true);
+}
+
+#[test]
+fn clearance_controlled_coverage_compression_replays_native_portable_and_named_case_decisions() {
+    prescribed_compression_workflow(false, true, false, true);
+}
+
+fn prescribed_compression_workflow(
+    cyclic: bool,
+    controlled: bool,
+    convection: bool,
+    coverage: bool,
+) {
+    let (mut pattern, mut study, mut single) = inputs();
+    let consumer = if coverage {
+        "transient_coverage"
+    } else {
+        "transient_surface"
+    };
+    let metric = if coverage {
+        "transient_coverage_final_min_temperature_c"
+    } else {
+        "transient_surface_final_min_temperature_c"
+    };
+    if coverage {
+        // Two separate sewn rings share one material, but only the inner ring is compressed.
+        // Their physical layer identities and temperatures remain independent throughout motion.
+        let mut source: Value = serde_json::from_str(&pattern).unwrap();
+        let mut outer = source["pieces"][0].clone();
+        let width = std::f64::consts::TAU * 210.0;
+        outer["id"] = json!("outer");
+        outer["vertices"]["b"][0] = json!(width);
+        outer["vertices"]["c"][0] = json!(width);
+        outer["placement"]["radius_mm"] = json!(210.0);
+        outer["placement"]["x0"] = json!(width / 2.0);
+        source["pieces"].as_array_mut().unwrap().push(outer);
+        source["seams"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"outer-join","a":"outer/right","b":"outer/left"}));
+        pattern = source.to_string();
+    }
     let mut preparation: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-compression.json"
     ))
@@ -126,8 +174,8 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
     study["variants"] = json!([
         {"key":"qualified","changes":{"schema":"ftx-material-bindings/1","default":material}},
         {"key":"unmatched-source","changes":{"schema":"ftx-material-bindings/1","default":changed_source}}]);
-    study["comparison"] = json!({"basis":"nominal","required_consumers":["transient_surface"],
-        "objectives":[{"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]});
+    study["comparison"] = json!({"basis":"nominal","required_consumers":[consumer],
+        "objectives":[{"metric":metric,"direction":"minimize"}]});
     let pressures = if cyclic {
         vec![500.0, 250.0, 0.0, 250.0]
     } else {
@@ -196,6 +244,67 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
             "Synthetic constant dry coefficients over 0–40 C and 0–500 Pa; independently prescribed convection, reference storage retained and normal work excluded from heat"
         );
     }
+    if coverage {
+        use ftx_drape::study::fitted::{BodyRequest, FittedBody};
+
+        let bytes = model_bytes_with_rig(true);
+        let digest = sha256_hex(&bytes);
+        let model =
+            ftx_body::AnnyModel::from_data(ftx_body::AnnyData::from_bytes(&bytes, true).unwrap())
+                .unwrap();
+        let body_input = json!({"schema":"ftx-scenario-body/1",
+            "accepted_body_fit":receipt(&digest),"arm_abduction_deg":35.0});
+        let selected =
+            FittedBody::prepare(&model, &digest, &BodyRequest::read(&body_input).unwrap()).unwrap();
+        let body = selected.body();
+        // Keep a real partial body domain so the checkpoint must retain both covered and
+        // exposed material. Selecting half by coordinates is independent of mesh index ordering.
+        let body_ids: Vec<_> = body
+            .collision
+            .1
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| {
+                face.iter()
+                    .map(|&index| body.collision.0[index].x)
+                    .sum::<f64>()
+                    > 0.0
+            })
+            .map(|(index, _)| index)
+            .collect();
+        assert!(!body_ids.is_empty());
+        let sheet = single["motion"]
+            .as_object_mut()
+            .unwrap()
+            .remove("transient_surface")
+            .unwrap();
+        let mut settings = json!({"max_distance_m":0.15,"min_normal_cosine":0.9,
+            "separation_tolerance_m":0.00001,"cells_per_layer":2,
+            "interfaces":[{"inner":"lining","outer":"shell","resistance_m2_k_w":0.1,
+                "basis":"Explicit synthetic interlayer film; no inferred air-gap law"}]});
+        if !cyclic {
+            // Exercise the optional face-gap source receipt as well as the fixed interface.
+            // This deliberately broad synthetic domain is not a convection-onset estimate.
+            settings["interfaces"][0]["stagnant_gap"] = json!({
+                "conductivity_w_m_k":0.025,
+                "source":{"reference":"test:synthetic-coverage-gas","accessed_on":"2026-11-13",
+                    "note":"Invented arithmetic fixture; no measured atmosphere or garment claim"},
+                "conditions":"Synthetic constant gas; conduction-only software replay",
+                "gap_range_m":[0.001,0.15],"relative_tolerance":1e-4,
+                "allow_conduction_only_approximation":true});
+        }
+        single["coverage"]["body_triangle_ids"] = json!(body_ids);
+        single["coverage"]["instance_layers"] = json!({"band":"lining","outer":"shell"});
+        single["coverage"]["settings"] = settings.clone();
+        single["motion"]["transient_coverage"] = json!({
+            "schema":"ftx-motion-coverage-heat/1","body_triangle_ids":body_ids,
+            "instance_layers":{"band":"lining","outer":"shell"},"settings":settings,
+            "initial_temperature_c":20.0,
+            "initial_instance_temperature_profiles_c":{"band":[20.0,20.0],"outer":[20.0,20.0]},
+            "boundaries":sheet["boundaries"],"exposed_boundaries":vec![Value::Null;intervals],
+            "max_step_s":0.00025,"max_cell_steps":1000000,"max_geometry_operations":2000000,
+            "prescribed_compression":sheet["prescribed_compression"]});
+    }
     let request: ftx_export::material_study::Request =
         serde_json::from_value(study.clone()).unwrap();
     let source_pattern = ftx_pattern::Pattern::from_json(&pattern).unwrap();
@@ -203,7 +312,15 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
         &pattern,
         &study,
         single,
-        if controlled {
+        if coverage {
+            if controlled {
+                "FTX_CLEARANCE_COVERAGE_REPLAY"
+            } else if cyclic {
+                "FTX_CYCLIC_COMPRESSION_COVERAGE_REPLAY"
+            } else {
+                "FTX_COMPRESSION_COVERAGE_REPLAY"
+            }
+        } else if controlled {
             "FTX_CLEARANCE_CONVECTION_MOTION_REPLAY"
         } else if convection {
             "FTX_COMPRESSION_CONVECTION_MOTION_REPLAY"
@@ -220,7 +337,7 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
                 motion["result"]["source_pose_sampling"]["generated_segments"],
                 2 * intervals
             );
-            let outcome = &motion["result"]["transient_surface"];
+            let outcome = &motion["result"][consumer];
             assert_eq!(outcome["status"], "available", "{outcome}");
             let heat = &outcome["result"];
             let compression = &heat["prescribed_compression"];
@@ -237,7 +354,11 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
             assert_eq!(compression["updates"].as_array().unwrap().len(), intervals);
             assert_eq!(
                 heat["initial_condition"]["schema"],
-                "ftx-motion-surface-initial-condition/2"
+                if coverage {
+                    "ftx-motion-coverage-initial-condition/2"
+                } else {
+                    "ftx-motion-surface-initial-condition/2"
+                }
             );
             assert_eq!(
                 heat["initial_condition"]["model_sha256"],
@@ -294,10 +415,11 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
                 assert_eq!(updates[1]["instances"]["band"]["thickness_m"], 0.012);
                 assert_eq!(updates[2]["instances"]["band"]["thickness_m"], 0.02);
             }
-            assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
             if convection {
                 assert_eq!(heat["exterior_exchange"]["radiative_energy_j"], 0.0);
-                let convective = heat["exterior_exchange"]["convective_energy_j"].as_f64().unwrap();
+                let convective = heat["exterior_exchange"]["convective_energy_j"]
+                    .as_f64()
+                    .unwrap();
                 assert!((heat["outside_energy_j"].as_f64().unwrap() - convective).abs() < 1e-10);
                 assert!(convective.abs() > 1e-10);
                 for sample in heat["trace"].as_array().unwrap() {
@@ -305,17 +427,53 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
                     assert!(sample["prescribed_compression"].is_object());
                 }
             }
-            let temperatures: Vec<_> = heat["final"]["temperature_c"]
-                .as_array()
-                .unwrap()
-                .iter()
+            assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+            let state_fields = if coverage {
+                let frame = &heat["checkpoint"]["frame"];
+                assert_eq!(heat["model"], frame["source"]);
+                assert_eq!(
+                    frame["projection"]["gap_interfaces"]
+                        .as_array()
+                        .is_some_and(|gaps| !gaps.is_empty()),
+                    !cyclic
+                );
+                assert!(heat["final_field"]["covered_area_m2"].as_f64().unwrap() > 0.0);
+                assert!(
+                    frame["projection"]["layout"]["regions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|region| region["layers"].as_array().unwrap().len() == 2)
+                );
+                assert!(
+                    heat["checkpoint"]["exposed_temperature_c"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|row| !row.as_array().unwrap().is_empty())
+                );
+                assert!(
+                    (heat["physical_stored_change_j"].as_f64().unwrap()
+                        - heat["net_boundary_energy_j"].as_f64().unwrap())
+                    .abs()
+                        < 1e-8
+                );
+                vec![
+                    &heat["checkpoint"]["temperature_c"],
+                    &heat["checkpoint"]["exposed_temperature_c"],
+                ]
+            } else {
+                vec![&heat["final"]["temperature_c"]]
+            };
+            let temperatures: Vec<_> = state_fields
+                .into_iter()
+                .flat_map(|field| field.as_array().unwrap())
                 .flat_map(|row| row.as_array().unwrap())
                 .map(|value| value.as_f64().unwrap())
                 .collect();
             let minimum = temperatures.iter().copied().min_by(f64::total_cmp).unwrap();
             assert_eq!(
-                keyed(&report["comparison"]["alternatives"], "qualified")["readings"]["transient_surface_final_min_temperature_c"]
-                    ["value"],
+                keyed(&report["comparison"]["alternatives"], "qualified")["readings"][metric]["value"],
                 minimum
             );
             if heat["request"]["boundaries"][0]["outside_c"] == 20.0 {
@@ -329,10 +487,7 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
             let unmatched =
                 &keyed(&report["simulations"], "unmatched-source")["evaluation"]["result"];
             assert_eq!(unmatched["motion"]["status"], "available");
-            assert_eq!(
-                unmatched["motion"]["result"]["transient_surface"]["status"],
-                "refused"
-            );
+            assert_eq!(unmatched["motion"]["result"][consumer]["status"], "refused");
             assert_eq!(
                 keyed(&report["comparison"]["alternatives"], "unmatched-source")["eligible"],
                 false
@@ -358,6 +513,15 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
             if controlled {
                 faults.push("control");
             }
+            if coverage {
+                faults.extend([
+                    "stale-checkpoint-source",
+                    "stale-projection-source",
+                    "covered-temperature",
+                    "exposed-temperature",
+                    "initial-source",
+                ]);
+            }
             for fault in faults {
                 let replayed = request
                     .evaluate_with(&source_pattern, &report["scenario"], |key, _| {
@@ -365,7 +529,7 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
                             keyed(&report["simulations"], key)["evaluation"]["result"].clone();
                         if key == "qualified" {
                             let heat =
-                                &mut simulated["motion"]["result"]["transient_surface"]["result"];
+                                &mut simulated["motion"]["result"][consumer]["result"];
                             let receipt = &mut heat["prescribed_compression"];
                             match fault {
                                 "unchanged" => {}
@@ -407,7 +571,51 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
                                 "schema" => {
                                     receipt["schema"] = json!("ftx-motion-surface-compression-result/1");
                                 }
+                                "stale-checkpoint-source" => {
+                                    heat["checkpoint"]["frame"]["source"] =
+                                        heat["prescribed_compression"]["initial_model"].clone();
+                                }
+                                "stale-projection-source" => {
+                                    heat["checkpoint"]["frame"]["projection"]["input_sha256"] =
+                                        json!("0".repeat(64));
+                                }
+                                "covered-temperature" | "exposed-temperature" => {
+                                    let field = if fault == "covered-temperature" {
+                                        "temperature_c"
+                                    } else {
+                                        "exposed_temperature_c"
+                                    };
+                                    for row in heat["checkpoint"][field].as_array_mut().unwrap() {
+                                        for cell in row.as_array_mut().unwrap() {
+                                            *cell = json!(cell.as_f64().unwrap() + 1.0);
+                                        }
+                                    }
+                                    // Keep the range and checkpoint digest internally consistent:
+                                    // admission must detect the changed material enthalpy itself.
+                                    let range = ["temperature_c", "exposed_temperature_c"]
+                                        .into_iter()
+                                        .flat_map(|field| heat["checkpoint"][field].as_array().unwrap())
+                                        .flat_map(|row| row.as_array().unwrap())
+                                        .map(|cell| cell.as_f64().unwrap())
+                                        .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], value| {
+                                            [lo.min(value), hi.max(value)]
+                                        });
+                                    heat["trace"].as_array_mut().unwrap().last_mut().unwrap()
+                                        ["temperature_range_c"] = json!(range);
+                                }
+                                "initial-source" => {
+                                    heat["initial_condition"]["model_sha256"] =
+                                        heat["model"]["sha256"].clone();
+                                }
                                 _ => unreachable!(),
+                            }
+                            if coverage && fault != "unchanged" {
+                                // A recomputed wrapper digest cannot bless stale source geometry
+                                // or forged covered/exposed enthalpy.
+                                let checkpoint = &mut heat["checkpoint"];
+                                checkpoint.as_object_mut().unwrap().remove("sha256");
+                                checkpoint["sha256"] =
+                                    json!(sha256_hex(&serde_json::to_vec(checkpoint).unwrap()));
                             }
                         }
                         Ok(simulated)
@@ -421,7 +629,7 @@ fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: b
                     "{fault}: {decision}"
                 );
                 assert_eq!(
-                    decision["readings"]["transient_surface_final_min_temperature_c"].is_object(),
+                    decision["readings"][metric].is_object(),
                     fault == "unchanged",
                     "{fault}: {decision}"
                 );
@@ -520,10 +728,16 @@ fn replay(
             .unwrap();
     let body = json!({"schema":"ftx-scenario-body/1", "accepted_body_fit":receipt(&digest),
         "arm_abduction_deg":35.0});
-    let mut warm = single.clone();
-    warm["motion"]["transient_surface"]["boundaries"][0]["outside_c"] = json!(25.);
-    if let Some(exteriors) = warm["motion"]["transient_surface"]["exterior_exchange"].as_array_mut()
+    let consumer = if single["motion"]["transient_coverage"].is_object()
+        && !single["motion"]["transient_surface"].is_object()
     {
+        "transient_coverage"
+    } else {
+        "transient_surface"
+    };
+    let mut warm = single.clone();
+    warm["motion"][consumer]["boundaries"][0]["outside_c"] = json!(25.);
+    if let Some(exteriors) = warm["motion"][consumer]["exterior_exchange"].as_array_mut() {
         exteriors[0]["air_c"] = json!(25.);
     }
     let matrix = json!({"schema":"ftx-drape-scenario-matrix/1", "max_evaluations":2 * study["variants"].as_array().unwrap().len(),
@@ -568,7 +782,7 @@ fn replay(
                 .iter()
                 .map(|row| {
                     let motion = &row["evaluation"]["result"]["motion"];
-                    let thermal = &motion["result"]["transient_surface"];
+                    let thermal = &motion["result"][consumer];
                     json!({"key":row["key"],"evaluation_status":row["evaluation"]["status"],
                     "motion_status":motion["status"],"thermal_status":thermal["status"],
                     "thermal_refusal":thermal["refusal"]})

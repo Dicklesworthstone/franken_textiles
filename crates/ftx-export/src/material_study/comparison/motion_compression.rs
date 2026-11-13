@@ -136,12 +136,15 @@ fn admit_convection(
         .ok_or_else(fail)?;
     let boundaries = vapor_array(request, "boundaries")?;
     if boundaries.len() != intervals
-        || environments.iter().zip(boundaries).any(|(environment, film)| {
-            !environment.is_object()
-                || !environment["radiation"].is_null()
-                || film["outside_resistance_m2_k_w"] != 0.
-                || film["outside_c"] != environment["air_c"]
-        })
+        || environments
+            .iter()
+            .zip(boundaries)
+            .any(|(environment, film)| {
+                !environment.is_object()
+                    || !environment["radiation"].is_null()
+                    || film["outside_resistance_m2_k_w"] != 0.
+                    || film["outside_c"] != environment["air_c"]
+            })
     {
         return Err(fail());
     }
@@ -178,6 +181,99 @@ fn admit_convection(
     Ok(())
 }
 
+// Projection hashes contain a typed request, whose field order is part of the production
+// receipt. These private views reproduce that serialization only; geometry and gap integration
+// remain with the coverage producer.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectionRequest {
+    schema: String,
+    cloth_layers: Vec<String>,
+    settings: ProjectionSettings,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectionSettings {
+    max_distance_m: f64,
+    min_normal_cosine: f64,
+    separation_tolerance_m: f64,
+    cells_per_layer: usize,
+    interfaces: Vec<ProjectionInterface>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectionInterface {
+    inner: String,
+    outer: String,
+    resistance_m2_k_w: f64,
+    basis: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stagnant_gap: Option<GapConduction>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GapConduction {
+    conductivity_w_m_k: f64,
+    source: ftx_pattern::materials::Source,
+    conditions: String,
+    gap_range_m: [f64; 2],
+    relative_tolerance: f64,
+    allow_conduction_only_approximation: bool,
+}
+
+// A final projection made before conditioning must not accompany the newly conditioned source,
+// even when a caller rewrites the outer checkpoint digest. This verifies the existing source,
+// geometry, request and derived-layout identities; it does not rerun projection or certify heat.
+fn admit_coverage_frame(heat: &Value, model: &Value) -> Result<(), Refusal> {
+    let frame = &heat["checkpoint"]["frame"];
+    let projection = &frame["projection"];
+    let layout = &projection["layout"];
+    let request: ProjectionRequest =
+        serde_json::from_value(frame["request"].clone()).map_err(|_| fail())?;
+    let cloth: Vec<Vec3> =
+        serde_json::from_value(frame["cloth_positions_m"].clone()).map_err(|_| fail())?;
+    let body: Vec<Vec3> =
+        serde_json::from_value(frame["body_positions_m"].clone()).map_err(|_| fail())?;
+    let faces: Vec<[usize; 3]> =
+        serde_json::from_value(layout["body_triangles"].clone()).map_err(|_| fail())?;
+    let projection_hash = hash(&(model, &cloth, &body, &faces, &request))?;
+    let mut mapping_basis = format!(
+        "Local-normal geometric projection /1; input {projection_hash}; mid-surface separation is not an air-gap resistance"
+    );
+    if request
+        .settings
+        .interfaces
+        .iter()
+        .any(|i| i.stagnant_gap.is_some())
+    {
+        mapping_basis.push_str("; opted-in interlayer stagnant-gas conduction uses frozen textile face thickness and parallel gap integration; see full projection request and gap diagnostics");
+    }
+    let coverage_hash = hash(&json!({
+        "schema":"ftx-thermal-coverage/1", "source":model, "layout":layout,
+        "scope":"declared disjoint fractional coverage; independent series columns; no inferred geometric overlaps",
+        "geometry_policy":"layer resistance uses current cloth area; enthalpy uses allocated reference mass; films/interfaces use covered body area",
+        "bare_policy":"unallocated body fraction exchanges through declared films; no tissue storage",
+        "unmapped_cloth_policy":"excluded and reported",
+        "comfort_claim":false, "empirical_validation_claim":false
+    }))?;
+    let frame_hash = hash(&(
+        "ftx-thermal-motion-frame/1",
+        coverage_hash,
+        &projection_hash,
+    ))?;
+    if frame["source"] != *model
+        || projection["input_sha256"] != projection_hash
+        || layout["mapping_basis"] != mapping_basis
+        || frame["sha256"] != frame_hash
+    {
+        return Err(fail());
+    }
+    Ok(())
+}
+
 /// Return the admitted initial conditioned materials for instance/profile initialization.
 pub(super) fn admit(
     alternative: &Alternative,
@@ -205,8 +301,7 @@ pub(super) fn admit(
         Some("ftx-motion-surface-compression/3") => (false, true),
         _ => return Err(fail()),
     };
-    if coverage
-        || !policy.as_object().is_some_and(|o| o.len() == 3)
+    if !policy.as_object().is_some_and(|o| o.len() == 3)
         || !policy["thermal_evidence"]
             .as_str()
             .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
@@ -219,6 +314,7 @@ pub(super) fn admit(
                 "ftx-motion-surface-compression-result/1"
             }
         || receipt["normal_work_to_heat_j"] != 0.
+        || (coverage && !request["exterior_exchange"].is_null())
         || request
             .get("exterior_exchange")
             .filter(|value| !value.is_null())
@@ -230,6 +326,8 @@ pub(super) fn admit(
                 })
             })
         || [
+            "exposed_exterior_exchange",
+            "thermal_bridges",
             "plastic_dissipation_heat",
             "relaxation_dissipation_heat",
             "bending_plastic_dissipation_heat",
@@ -265,8 +363,16 @@ pub(super) fn admit(
         .ok_or_else(fail)?
         .values()
         .any(|binding| {
-            let schedule = if controlled { "controls" } else { "pressure_pa" };
-            let reserved = if controlled { "pressure_pa" } else { "controls" };
+            let schedule = if controlled {
+                "controls"
+            } else {
+                "pressure_pa"
+            };
+            let reserved = if controlled {
+                "pressure_pa"
+            } else {
+                "controls"
+            };
             binding.get(reserved).is_some()
                 || !binding[schedule]
                     .as_array()
@@ -288,7 +394,12 @@ pub(super) fn admit(
     {
         return Err(fail());
     }
-    let cells = vapor_index(&request["cells_per_layer"])?;
+    let requested_cells = if coverage {
+        &request["settings"]["cells_per_layer"]
+    } else {
+        &request["cells_per_layer"]
+    };
+    let cells = vapor_index(requested_cells)?;
     let initial_columns = vapor_array(initial_model, "columns")?;
     let updates = vapor_array(receipt, "updates")?;
     if !(1..=256).contains(&bindings.len())
@@ -296,7 +407,7 @@ pub(super) fn admit(
         || source["schema"] != "ftx-motion-compression-source/1"
         || source["material_report_sha256"] != hash(report)?
         || receipt["material_report_sha256"] != source["material_report_sha256"]
-        || source["cells_per_layer"] != request["cells_per_layer"]
+        || &source["cells_per_layer"] != requested_cells
         || initial_model["schema"] != "ftx-thermal-surface/1"
         || initial_model["patches"] != source["patches"]
         || initial_model["vertex_count"] != source["vertex_count"]
@@ -376,7 +487,7 @@ pub(super) fn admit(
             _ => return Err(fail()),
         };
         if retained_record != original
-            || initial["cells_per_layer"] != request["cells_per_layer"]
+            || &initial["cells_per_layer"] != requested_cells
             || !vapor_array(initial, "interface_resistance_m2_k_w")?.is_empty()
             || vapor_array(initial, "layers")?.len() != 1
         {
@@ -593,6 +704,8 @@ pub(super) fn admit(
                 if next["cell_capacity_j_m2_k"] != model["columns"][column]["cell_capacity_j_m2_k"]
                     || quantity(&selected, "areal_density", "kg/m2")?
                         != quantity(&materials[column], "areal_density", "kg/m2")?
+                    || quantity(&selected, "specific_heat", "J/(kg*K)")?
+                        != quantity(&materials[column], "specific_heat", "J/(kg*K)")?
                 {
                     return Err(fail());
                 }
@@ -615,6 +728,7 @@ pub(super) fn admit(
     }
     if interval + 1 != updates.len()
         || model != heat["model"]
+        || (coverage && model != heat["checkpoint"]["frame"]["source"])
         || receipt["final_model_sha256"] != model["sha256"]
         || receipt["final_instances"] != Value::Object(states)
         || receipt["cumulative_normal_work_j"] != total
@@ -624,10 +738,6 @@ pub(super) fn admit(
     // Independently integrate retained final cells against their actual initial owner profiles.
     // Pressure changes transport only; no normal work is permitted to become thermal storage.
     let profiles = initial_heat_profiles(request, instances, cells)?;
-    let final_profiles = vapor_array(&heat["final"], "temperature_c")?;
-    if final_profiles.len() != patches.len() {
-        return Err(fail());
-    }
     let laws = materials
         .iter()
         .map(|m| {
@@ -637,6 +747,29 @@ pub(super) fn admit(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if coverage {
+        admit_coverage_frame(heat, &model)?;
+        let storage = coverage_profile_storage(
+            heat,
+            motion,
+            patches,
+            (owners, instances),
+            &profiles,
+            &laws,
+            cells,
+        )?;
+        if !heat_near(
+            storage,
+            finite(&heat["physical_stored_change_j"]).ok_or_else(fail)?,
+        ) {
+            return Err(fail());
+        }
+        return Ok(Some(materials));
+    }
+    let final_profiles = vapor_array(&heat["final"], "temperature_c")?;
+    if final_profiles.len() != patches.len() {
+        return Err(fail());
+    }
     let mut storage = 0.;
     let mut final_range = [f64::INFINITY, f64::NEG_INFINITY];
     for ((patch, &owner), final_cells) in patches.iter().zip(&owner_indices).zip(final_profiles) {

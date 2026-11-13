@@ -887,6 +887,21 @@ unattainable gaps and unqualified reversal refuse. Temperature/storage, signed n
 whole-interval rollback retain the preceding contracts; source/pressure fields in versions `/1`
 and `/2` preserve their original serialized form.
 
+**Prescribed compression on moving layered coverage** (`study::heat::coverage`). Optional
+`motion.transient_coverage.prescribed_compression` uses the same source-qualified pressure,
+clearance and acquired-branch authority independently of sheet heat. The conditioned source reaches
+current-geometry projection, including layer thickness and qualified stagnant-gas gaps. A narrowly
+qualified remap preserves reference mass and specific heat independently and transfers covered and
+exposed enthalpy in material coordinates; ordinary remapping still refuses changed source identities.
+Bound instances retain independent histories even when their original material is shared. Work occurs
+once per authored interval and remains separate from heat. A late failure rolls back the whole interval,
+including branch state, projection, thermal state and counters. Final `model` and checkpoint source
+agree; comparisons independently rebuild projection identities and retained material storage.
+This coverage consumer requires dry film boundaries (or explicit adiabatic exposed cloth), and refuses
+exterior exchange, thermal bridges and dissipation heating until their combined qualifications exist.
+Separate wet-sheet or mechanical histories retain their established domains. Tests cover gap changes,
+cover/expose/re-cover transfer, rollback and native/portable pressure, cycle and clearance replay.
+
 **Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
 `Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint
 body-area fractions and inside-to-outside layers. It checks both body and cloth allocation budgets,

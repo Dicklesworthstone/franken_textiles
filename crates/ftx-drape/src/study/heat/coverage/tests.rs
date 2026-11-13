@@ -791,7 +791,6 @@ fn declared_exterior_survives_full_partial_full_partial_coverage_with_heat_intac
     assert_eq!(frame.checkpoint(&state).unwrap(), out["checkpoint"]);
 }
 
-
 // Original pressure acquisition, two physical layers sharing one source, and an independently
 // declared stagnant gas. All coefficients and geometry below are synthetic known answers.
 fn compression_history() -> (History, Vec<Vec3>) {
@@ -840,8 +839,16 @@ fn compression_history() -> (History, Vec<Vec3>) {
         &names,
         &[0, 1],
         vec![
-            Patch { vertices: [0, 1, 2], reference_area_m2: 0.5, column: 0 },
-            Patch { vertices: [3, 4, 5], reference_area_m2: 0.5, column: 0 },
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [3, 4, 5],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
         ],
         6,
         2,
@@ -908,6 +915,7 @@ fn coverage_compression_changes_actual_gap_once_and_keeps_normal_work_out_of_hea
     assert!((gap.surface_gap_m[0] - 0.0275).abs() < 1e-12);
     assert!((gap.resistance_m2_k_w - 1.1).abs() < 1e-10);
     let first = history.compression.as_ref().unwrap().finish();
+    assert_eq!(first["updates"][0]["time_s"], 0.);
     // Each half-square-metre layer uses its own complete pressure traverse.
     assert!((first["cumulative_normal_work_j"].as_f64().unwrap() - 1.5625).abs() < 1e-12);
     assert_eq!(first["final_instances"]["lining:0"]["pressure_pa"], 500.);
@@ -927,9 +935,33 @@ fn coverage_compression_changes_actual_gap_once_and_keeps_normal_work_out_of_hea
     assert!(!history.frame.has_exposed_cloth());
     let report = history.finish("path", "initial", 0.4).unwrap();
     assert_eq!(report["model"], report["checkpoint"]["frame"]["source"]);
-    assert_eq!(report["prescribed_compression"]["updates"].as_array().unwrap().len(), 3);
-    assert!((report["prescribed_compression"]["cumulative_normal_work_j"].as_f64().unwrap() - 2.5).abs() < 1e-12);
-    assert_eq!(report["prescribed_compression"]["normal_work_to_heat_j"], 0.);
+    assert_eq!(
+        report["prescribed_compression"]["updates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        report["prescribed_compression"]["updates"][1]["time_s"],
+        0.2
+    );
+    assert_eq!(
+        report["prescribed_compression"]["updates"][2]["time_s"],
+        0.3
+    );
+    assert!(
+        (report["prescribed_compression"]["cumulative_normal_work_j"]
+            .as_f64()
+            .unwrap()
+            - 2.5)
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(
+        report["prescribed_compression"]["normal_work_to_heat_j"],
+        0.
+    );
     assert!(report["physical_stored_change_j"].as_f64().unwrap().abs() < 1e-9);
     assert!(report["net_boundary_energy_j"].as_f64().unwrap().abs() < 1e-9);
     assert!(report["balance_error_j"].as_f64().unwrap().abs() < 1e-9);
@@ -990,7 +1022,10 @@ fn compression_coverage_rolls_back_pressure_geometry_temperature_and_work_on_lat
             .advance(&cloth, &body(0.), 0.1, 0, 0, None, None, None)
             .is_err()
     );
-    assert_eq!(history.frame.checkpoint(&history.state).unwrap(), checkpoint);
+    assert_eq!(
+        history.frame.checkpoint(&history.state).unwrap(),
+        checkpoint
+    );
     assert_eq!(history.source.snapshot(), source);
     assert_eq!(history.compression.as_ref().unwrap().finish(), compression);
     assert_eq!(history.geometry_operations, operations);
@@ -1000,7 +1035,13 @@ fn compression_coverage_rolls_back_pressure_geometry_temperature_and_work_on_lat
     history
         .advance(&cloth, &body(0.), 0.1, 0, 0, None, None, None)
         .unwrap();
-    assert_eq!(history.compression.as_ref().unwrap().finish()["updates"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        history.compression.as_ref().unwrap().finish()["updates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -1037,5 +1078,10 @@ fn compression_coverage_requires_independent_storage_and_film_qualification() {
         })
         .unwrap();
     let next = DryThermalModel::new(vec![changed], vec![], 2).unwrap();
-    assert!(history.source.reconditioned_columns(vec![(0, next)]).is_err());
+    assert!(
+        history
+            .source
+            .reconditioned_columns(vec![(0, next)])
+            .is_err()
+    );
 }
