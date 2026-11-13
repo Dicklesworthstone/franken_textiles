@@ -16873,16 +16873,19 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 
-test('compiled WASM prescribed and cyclic compression replay native commands and named scenarios',
-  {skip:process.env.FTX_REAL_WASM!=='1'||!(process.env.FTX_COMPRESSION_MOTION_REPLAY||process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY)},async()=>{
+test('compiled WASM prescribed cyclic and clearance compression replay native commands and qualified convection scenarios',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!(process.env.FTX_COMPRESSION_MOTION_REPLAY||process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY||
+    process.env.FTX_COMPRESSION_CONVECTION_MOTION_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY)},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
     const worker=await workerModule({bindings:ftx}),previousProgress=globalThis.ftxProgress;
     globalThis.ftxProgress=()=>{};
     try {
-      for(const [dir,cyclic] of [[process.env.FTX_COMPRESSION_MOTION_REPLAY,false],
-        [process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY,true]].filter(([dir])=>dir)) {
+      for(const [dir,cyclic,controlled,convection] of [[process.env.FTX_COMPRESSION_MOTION_REPLAY,false,false,false],
+        [process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY,true,false,false],
+        [process.env.FTX_COMPRESSION_CONVECTION_MOTION_REPLAY,true,false,true],
+        [process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY,false,true,true]].filter(([dir])=>dir)) {
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8'),bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         const pattern=input('pattern.json'),studyRequest=input('study.json'),measurements=input('body-input.json');
         for(const name of ['single','matrix']) {
@@ -16900,8 +16903,8 @@ test('compiled WASM prescribed and cyclic compression replay native commands and
             const heat=motion.result.transient_surface.result,compression=heat.prescribed_compression;
             const authored=sources[index].motion.transient_surface.prescribed_compression,binding=authored.bindings.band;
             assert.deepEqual(heat.request.prescribed_compression,authored);
-            assert.equal(compression.schema,`ftx-motion-surface-compression-result/${cyclic?2:1}`);
-            assert.equal(compression.updates.length,binding.pressure_pa.length);
+            assert.equal(compression.schema,`ftx-motion-surface-compression-result/${controlled?3:cyclic?2:1}`);
+            assert.equal(compression.updates.length,controlled?binding.controls.length:binding.pressure_pa.length);
             assert.equal(compression.normal_work_to_heat_j,0);
             assert.equal(compression.initial_instances.band.reference_mass_kg,compression.final_instances.band.reference_mass_kg);
             assert.ok(compression.initial_instances.band.reference_mass_kg>0);
@@ -16909,7 +16912,17 @@ test('compiled WASM prescribed and cyclic compression replay native commands and
             const joins=[];
             for(const [interval,update] of compression.updates.entries()) {
               const state=update.instances.band;
-              assert.equal(state.pressure_pa,binding.pressure_pa[interval]);
+              if(controlled) {
+                const control=binding.controls[interval];
+                assert.deepEqual(state.control,control);
+                assert.ok(Number.isFinite(state.closure_residual_m));
+                assert.ok(Math.abs(state.closure_residual_m)<1e-10);
+                if(control.kind==='pressure')assert.equal(state.pressure_pa,control.pressure_pa);
+                else {
+                  assert.ok(Math.abs(state.thickness_m-control.gap_m)<1e-10);
+                  assert.ok(Math.abs(state.pressure_pa-250)<1e-10,'The 0.015 m synthetic clearance solves the independently specified 250 Pa state');
+                }
+              } else assert.equal(state.pressure_pa,binding.pressure_pa[interval]);
               if(state.branch_change) {
                 joins.push(interval);
                 assert.deepEqual(state.branch_change.change,binding.branch_changes[interval]);
@@ -16920,7 +16933,14 @@ test('compiled WASM prescribed and cyclic compression replay native commands and
             }
             assert.deepEqual(joins,cyclic?[1,3]:[]);
             assert.ok(Math.abs(heat.balance_error_j)<1e-8);
-            if(name==='single'||index===0) {
+            if(convection) {
+              assert.deepEqual(heat.request.exterior_exchange,sources[index].motion.transient_surface.exterior_exchange);
+              assert.equal(heat.exterior_exchange.radiative_energy_j,0);
+              assert.ok(Math.abs(heat.exterior_exchange.convective_energy_j)>1e-10);
+              assert.ok(Math.abs(heat.outside_energy_j-heat.exterior_exchange.convective_energy_j)<1e-10);
+              assert.ok(heat.trace.every(sample=>sample.exterior_exchange.radiative_heat_w===0 && sample.prescribed_compression));
+            }
+            if(heat.request.boundaries[0].outside_c===20) {
               assert.ok(heat.final.temperature_c.flat().every(temperature=>Math.abs(temperature-20)<1e-10),
                 'Prescribed branch work cannot heat the equal-temperature fixture');
             }
@@ -21429,3 +21449,110 @@ test('motion results display chronological acquired compression joins without co
   assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
 });
 
+
+
+function guidedClearanceCompressionSource() {
+  const value=JSON.parse(guidedCompressionCycleSource()),binding=value.bindings['front.R'];
+  value.schema='ftx-motion-surface-compression/3';delete binding.pressure_pa;
+  binding.controls=[{kind:'gap',gap_m:0.01},{kind:'pressure',pressure_pa:0},{kind:'gap',gap_m:0.015}];
+  return ' \r\n'+JSON.stringify(value).replace('"controls":[{"kind":"gap","gap_m":0.01},{"kind":"pressure","pressure_pa":0},{"kind":"gap","gap_m":0.015}]',
+    '"controls":[{"kind":"gap","gap_m":1.000e-2},{"kind":"pressure","pressure_pa":-0.0},{"kind":"gap","gap_m":1.500e-2}]')+'\r\n';
+}
+test('guided controlled compression preserves original gap and pressure sources with qualified convection and cancels obsolete reads',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p,35,999,0.1,0.2);
+  const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:5,coefficient:7});
+  for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
+  const raw=guidedClearanceCompressionSource();guidedCompressionSource(p,raw);
+  await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(raw));
+  const heat=JSON.parse(sent.scenarioRequest).motion.transient_surface;
+  assert.deepEqual(heat.prescribed_compression,JSON.parse(raw));
+  assert.deepEqual(heat.exterior_exchange,[exterior,exterior,exterior]);
+  assert.deepEqual(heat.boundaries.map(row=>[row.outside_c,row.outside_resistance_m2_k_w]),[[5,0],[5,0],[5,0]]);
+  const changed=raw.replace('Explicit synthetic source link','Explicit revised synthetic source link');
+  p.select('guidedMotionCompressionFile',changed);p.e.guidedMotionCompressionFile.handlers.change();
+  assert.equal(worker.dead,true);p.ready();
+  const delay=deferred();p.e.guidedMotionCompressionFile.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const current=p.current(),before=current.messages.length,running=p.e.scenario.onclick();
+  p.select('guidedMotionCompressionFile',raw);p.e.guidedMotionCompressionFile.handlers.change();
+  delay.resolve(changed);await running;
+  assert.equal(current.messages.length,before,'A cancelled source read cannot dispatch the replaced declaration');
+  p.ready();await p.e.scenario.onclick();assert.ok(p.current().messages.at(-1).scenarioRequest.includes(raw));
+});
+test('guided controlled compression freezes named convection cases and preserves their source joins independently of later drafts',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:12,coefficient:4});
+  for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
+  const raw=guidedClearanceCompressionSource();guidedCompressionSource(p,raw);await saveGuidedCase(p,'clearance-cycle');
+  assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
+  assert.match(visibleText(p.e.guidedScenarioCases),/2 acquired branch changes/);
+  p.e.guidedMotionCompression.checked=false;p.e.guidedMotionCompression.handlers.change();await saveGuidedCase(p,'uncompressed');
+  await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1),cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(raw));
+  assert.deepEqual(cases[0].scenario.motion.transient_surface.prescribed_compression,JSON.parse(raw));
+  assert.deepEqual(cases.map(row=>row.scenario.motion.transient_surface.exterior_exchange),[
+    [exterior,exterior,exterior],[exterior,exterior,exterior]]);
+  assert.equal(Object.hasOwn(cases[1].scenario.motion.transient_surface,'prescribed_compression'),false);
+  p.select('guidedMotionCompressionFile','{invalid later draft');p.e.guidedMotionCompressionFile.handlers.change();
+  assert.equal(worker.dead,false);p.emit(scenarioReport());await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+test('guided controlled compression refuses unsupported heating and malformed controls without dispatch',async()=>{
+  for(const policy of ['radiation','water','deformation']) {
+    const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+    authorExterior(p,'guidedMotionHeatExterior',{radiation:policy==='radiation'?'explicit':'none'});
+    for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
+    guidedCompressionSource(p,guidedClearanceCompressionSource());
+    if(policy==='water')guidedLiquidSource(p);
+    if(policy==='deformation'){p.e.guidedMotionHeatPlastic.checked=true;p.e.guidedMotionHeatPlastic.handlers.change();}
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before,policy);
+    assert.match(p.e.error.textContent,/without radiation, liquid or deformation-heating/);
+  }
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
+  for(const [change,pattern] of [
+    [binding=>{binding.pressure_pa=[500,0,250];},/Compression binding has missing or unsupported fields/],
+    [binding=>{binding.controls.pop();},/per authored motion interval/],
+    [binding=>{binding.controls[0].gap_m=0;},/finite and positive/],
+    [binding=>{binding.controls[1]={kind:'pressure',pressure_pa:0,gap_m:0.02};},/Compression pressure control has missing or unsupported fields/]
+  ]) {
+    const invalid=JSON.parse(guidedClearanceCompressionSource());change(invalid.bindings['front.R']);
+    guidedCompressionSource(p,JSON.stringify(invalid));const before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+    assert.match(p.e.error.textContent,pattern);
+  }
+});
+test('controlled compression results display chronological requested controls and native solved states with separate source work',async()=>{
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioReport(),initial=report.simulations.find(row=>row.key==='A').evaluation.result,
+    request=JSON.parse(guidedClearanceCompressionSource()),binding=request.bindings['front.R'];
+  const pressures=[500,0,250],thickness=[0.01,0.02,0.015],work=[0.5,-0.25,0.09375],residual=[-1e-9,0,2e-10];
+  initial.motion=outcome({keyframes:[],samples:[],transient_surface:outcome({request:{prescribed_compression:request},
+    trace:[{temperature_range_c:[18,20]}],prescribed_compression:{schema:'ftx-motion-surface-compression-result/3',
+      initial_instances:{'front.R':{pressure_pa:0,thickness_m:0.02}},
+      final_instances:{'front.R':{pressure_pa:250,thickness_m:0.015,reference_mass_kg:0.025,cumulative_normal_work_j:0.34375}},
+      cumulative_normal_work_j:0.34375,normal_work_to_heat_j:0,
+      updates:binding.controls.map((control,index)=>({interval_index:index,time_s:(index+1)*0.002,
+        instances:{'front.R':{control,pressure_pa:pressures[index],thickness_m:thickness[index],
+          closure_residual_m:residual[index],normal_work_j:work[index],
+          ...(binding.branch_changes[index]?{branch_change:{change:binding.branch_changes[index],
+            entry_compression:{pressure_pa:pressures[index-1],thickness_m:thickness[index-1],external_work_j:0}}}:{})}}}))}})});
+  await p.e.scenario.onclick();p.emit(report);const s=section(p,'Fresh drape and heat alternatives');
+  const table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='A: declared compression controls and solved states');
+  assert.ok(table);
+  assert.deepEqual(plain(table.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['1','0.002','front.R','Clearance','Not prescribed','0.01','500','0.01','-1e-9','0.5'],
+    ['2','0.004','front.R','Pressure','0','Not prescribed','0','0.02','0','-0.25'],
+    ['3','0.006','front.R','Clearance','Not prescribed','0.015','250','0.015','2e-10','0.09375']]);
+  const mass=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='A: controlled compression and retained thermal mass');
+  assert.deepEqual(plain(mass.children[2].children.map(n=>n.textContent)),['front.R','0','250','0.02','0.015','0.025','0.34375']);
+  const joins=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='A: acquired compression branch changes');
+  assert.deepEqual(plain(joins.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['2','0.004','front.R','loading','unloading-after-500','unloading','500','0.01','<synthetic branch source>','estimate'],
+    ['3','0.006','front.R','unloading-after-500','loading','loading','0','0.02','<synthetic branch source>','estimate']]);
+  assert.match(visibleText(s),/Prescribed normal work: 0.34375 J; converted to heat: 0 J/);
+  assert.match(visibleText(s),/neither control infers pressure from garment contact/);
+  assert.match(visibleText(s),/original compression acquisitions and complete control history/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+});

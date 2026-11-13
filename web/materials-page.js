@@ -1230,7 +1230,8 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     }
     if (h?.prescribed_compression) {
       const compression = h.prescribed_compression;
-      const pressure = table(parent, `${key}: prescribed pressure and retained thermal mass`,
+      const controlled = compression.schema === "ftx-motion-surface-compression-result/3";
+      const pressure = table(parent, `${key}: ${controlled ? "controlled compression" : "prescribed pressure"} and retained thermal mass`,
         ["Instance", "Initial pressure (Pa)", "Final pressure (Pa)", "Initial thickness (m)",
           "Final thickness (m)", "Reference mass (kg)", "Signed normal work (J)"]);
       for (const [instance, final] of Object.entries(compression.final_instances || {})) {
@@ -1240,9 +1241,20 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
           metric(final.cumulative_normal_work_j)]);
       }
       const joins = [];
+      const controls = controlled ? table(parent, `${key}: declared compression controls and solved states`,
+        ["Interval (1-based)", "Accepted sample time (s)", "Instance", "Control", "Prescribed pressure (Pa)",
+          "Prescribed clearance (m)", "Solved pressure (Pa)", "Actual thickness (m)", "Clearance residual (m)", "Signed normal work (J)"]) : null;
       for (const update of compression.updates || []) {
         for (const [instance, state] of Object.entries(update.instances || {})) {
           if (state.branch_change) joins.push({ update, instance, join: state.branch_change });
+          if (controls) {
+            const control = state.control;
+            cells(controls, [Number.isInteger(update.interval_index) ? String(update.interval_index + 1) : "Unknown",
+              metric(update.time_s), instance, control?.kind === "gap" ? "Clearance" : control?.kind === "pressure" ? "Pressure" : "Unknown",
+              control?.kind === "pressure" ? metric(control.pressure_pa) : "Not prescribed",
+              control?.kind === "gap" ? metric(control.gap_m) : "Not prescribed",
+              metric(state.pressure_pa), metric(state.thickness_m), metric(state.closure_residual_m), metric(state.normal_work_j)]);
+          }
         }
       }
       if (joins.length) {
@@ -1264,9 +1276,10 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         "Temperature cells and reference mass carry through the pressure changes. " +
         (joins.length ? "Each branch change retains its independent source link and joins at the preceding pressure and thickness without resetting temperature or adding heat. " : "") +
         "Normal work uses the current accepted cloth area and remains separate from thermal energy. " +
-        "Pressure is supplied explicitly; it is not inferred from garment contact.";
+        (controlled ? "Pressure is prescribed or solved from declared clearance on the qualified source branch; neither control infers pressure from garment contact." :
+          "Pressure is supplied explicitly; it is not inferred from garment contact.");
       parent.append(scope);
-      detail(parent, `${key}: original compression acquisitions and complete pressure history (display only)`, {
+      detail(parent, `${key}: original compression acquisitions and complete ${controlled ? "control" : "pressure"} history (display only)`, {
         request: h.request?.prescribed_compression, result: compression });
     }
     if (h?.thermal_bridges) {
@@ -5715,7 +5728,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
     ...(surface ? [["surface", "heatConditions", "the selected section-3 sheet heat conditions"]] : []),
     ...(motionMode === "file" ? [["motion", "guidedMotionFile", "the original prescribed-motion request"]] : []),
-    ...(compression ? [["motionCompression", "guidedMotionCompressionFile", "the qualified pressure acquisition and interval schedule"]] : []),
+    ...(compression ? [["motionCompression", "guidedMotionCompressionFile", "the qualified compression acquisition and interval controls"]] : []),
     ...guidedMotionLiquidSources.filter(([mode]) => liquidMode === mode).map(([, key, id, label]) => [key, id, label]),
     ...(liquidMode === "direct" && $("guidedMotionWaterMechanical").checked ?
       [["mechanical_coupling", "guidedMotionWaterMechanicsFile", "the independent mechanical liquid qualification"]] : []),
@@ -5778,7 +5791,7 @@ function showGuidedScenarioDrafts() {
       `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
       `${value.motion?.transient_surface ? "retained independent-sheet heat history" : "no sheet heat history"}; ` +
       (value.motion?.transient_surface?.prescribed_compression ? "retained pressure-conditioned sheet heat; " +
-        (value.motion.transient_surface.prescribed_compression.schema === "ftx-motion-surface-compression/2" ?
+        (["ftx-motion-surface-compression/2", "ftx-motion-surface-compression/3"].includes(value.motion.transient_surface.prescribed_compression.schema) ?
           `${Object.values(value.motion.transient_surface.prescribed_compression.bindings || {}).reduce((sum, binding) =>
             sum + (Array.isArray(binding?.branch_changes) ? binding.branch_changes.filter(change => change !== null).length : 0), 0)} acquired branch changes; ` : "") : "") +
       `${value.motion?.transient_coverage ? "retained moving body/layer heat history" : "no moving body/layer heat history"}; ` +

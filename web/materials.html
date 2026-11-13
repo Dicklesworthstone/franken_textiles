@@ -1334,18 +1334,22 @@ Each endpoint gives an absolute arm and leg pose; selecting standing explicitly 
 </div>
 <p class="note">Each retained material must supply admitted conductivity, thickness and heat capacity. The initial temperature
 is an authored condition after the initial drape. Work limits bound computation; an unavailable heat result leaves independent results visible.</p>
-<fieldset><legend>Pressure-conditioned insulation</legend>
-<label><input id="guidedMotionCompression" type="checkbox"> Use qualified pressure histories for selected garment instances</label>
-<label id="guidedMotionCompressionFileField" hidden>Original pressure acquisition and interval schedule JSON
+<fieldset><legend>Compression-conditioned insulation</legend>
+<label><input id="guidedMotionCompression" type="checkbox"> Use qualified compression histories for selected garment instances</label>
+<label id="guidedMotionCompressionFileField" hidden>Original compression acquisition and interval schedule JSON
 <input id="guidedMotionCompressionFile" type="file" accept=".json,application/json"></label>
 <p class="note">Supply each instance's exact material, measured pressure/thickness and heat properties, initial preload,
-and one pressure per saved movement interval. The engine carries the existing temperatures and reference mass through
-qualified compression changes. For acquired loading, unloading and reloading paths, use
-<code>ftx-motion-surface-compression/2</code> with one <code>branch_changes</code> entry per interval:
-<code>null</code> continues the current branch; a change supplies its complete new acquisition and source-qualified
-join at the preceding pressure and thickness. Original source files remain unchanged in saved cases and replay.
-Pressure is prescribed independently of body contact; normal compression work is reported separately from heat.
-This mode uses dry sheets with prescribed films. Liquid, deformation heating and exterior exchange require separate compatible qualifications.</p>
+and one control per saved movement interval. The engine carries the existing temperatures and reference mass through
+qualified compression changes. Version <code>ftx-motion-surface-compression/1</code> prescribes pressure on one branch.
+For acquired loading, unloading and reloading paths, use version <code>/2</code> with one
+<code>branch_changes</code> entry per interval: <code>null</code> continues the current branch; a change supplies its
+complete new acquisition and source-qualified join at the preceding pressure and thickness.
+Version <code>/3</code> replaces <code>pressure_pa</code> with <code>controls</code>: each interval explicitly uses
+<code>{"kind":"pressure","pressure_pa":250}</code> or <code>{"kind":"gap","gap_m":0.015}</code>.
+Clearance controls solve pressure from the acquired branch. Original source files remain unchanged in saved cases and replay.
+Neither control infers pressure from body contact; normal compression work is reported separately from heat.
+Use dry sheets with prescribed films or a separately qualified convection-only exterior.
+Radiation, liquid and deformation heating still require compatible pressure-conditioned qualifications.</p>
 </fieldset>
 <fieldset><legend>Heat from textile deformation</legend>
 <label><input id="guidedMotionHeatPlastic" type="checkbox"> Convert permanent in-plane deformation (plastic yield) to heat</label>

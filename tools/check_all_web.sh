@@ -97,6 +97,8 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   FTX_FINITE_VAPOR_RESERVOIR_REPLAY="$WORK/finite-vapor-reservoir" \
   FTX_COMPRESSION_MOTION_REPLAY="$WORK/compression-motion" \
   FTX_CYCLIC_COMPRESSION_MOTION_REPLAY="$WORK/cyclic-compression-motion" \
+  FTX_COMPRESSION_CONVECTION_MOTION_REPLAY="$WORK/compression-convection-motion" \
+  FTX_CLEARANCE_CONVECTION_MOTION_REPLAY="$WORK/clearance-convection-motion" \
     cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow surface_water
 
   node - "$FTX_BIN" "$FTX_MATERIALS_BIN" "$WORK" "$ROOT" <<'EOF'
@@ -886,6 +888,8 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   FTX_FINITE_VAPOR_RESERVOIR_REPLAY="$WORK/finite-vapor-reservoir" \
   FTX_COMPRESSION_MOTION_REPLAY="$WORK/compression-motion" \
   FTX_CYCLIC_COMPRESSION_MOTION_REPLAY="$WORK/cyclic-compression-motion" \
+  FTX_COMPRESSION_CONVECTION_MOTION_REPLAY="$WORK/compression-convection-motion" \
+  FTX_CLEARANCE_CONVECTION_MOTION_REPLAY="$WORK/clearance-convection-motion" \
     node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
 else
   FTX_REAL_WASM=1 FTX_GUIDED_SCENARIO_NATIVE="$FTX_MATERIALS_BIN" node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs

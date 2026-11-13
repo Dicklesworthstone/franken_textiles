@@ -5816,8 +5816,13 @@ Separately qualified convection-only environments now reach the pressure-conditi
 Comparison admission independently repeats compression and reconciles every exterior power/energy
 record with outside heat before admitting thermal objectives. Radiation, wet laws and work heating
 require their own combined qualifications. This advances `ftx-cp2`, `ftx-tm5` and `ftx-ms2`;
-numerical/source regressions do not establish contact-derived pressure, layered body coverage,
-time-dependent recovery or independently measured garment performance.
+numerical/source regressions do not establish contact-derived pressure, time-dependent recovery
+or independently measured garment performance.
+
+The guided workbench retains original pressure/clearance schedules and qualified convection through
+single scenarios, frozen named cases and replay downloads. Chronological result tables distinguish
+requested controls from solved pressure, actual thickness and clearance residuals, with acquired
+branch joins shown alongside them. Source edits and cancellation withdraw obsolete results.
 
 ## Appendix A. Sources
 

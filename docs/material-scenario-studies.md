@@ -632,6 +632,14 @@ history and receipt shape. Numerical conservation and synthetic pressure/RC answ
 software composition; time-dependent recovery and measured garment thermal performance remain separate
 qualification work.
 
+In the guided workbench, enable **Compression-conditioned insulation** and load the original
+compression JSON beside the authored motion intervals. Version `/3` preserves pressure and clearance
+controls, acquisition text and qualified branch changes exactly through single studies, saved named
+cases and replay downloads. Convection-only environments use the existing explicit exterior controls.
+The result table shows each declared control beside its solved pressure, actual thickness, clearance
+residual and signed work; acquired branch joins retain their own chronological source table. Editing
+or replacing a compression source cancels obsolete work and withdraws its results.
+
 ### Qualified irreversible material heating
 
 Add `"plastic_dissipation_heat": "uniform_reference_thickness"` inside the existing

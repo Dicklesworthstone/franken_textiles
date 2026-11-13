@@ -3856,3 +3856,93 @@ test('acquired compression branch entries retain exact instance ownership and ex
   assert.ok(motion(input,undefined,source).includes(source),'Rust owns source applicability and the exact physical pressure/thickness join');
 });
 
+
+function controlledCompressionInput() {
+  const value=motionCompressionCycle(),binding=value.bindings['front.R'];
+  value.schema='ftx-motion-surface-compression/3';delete binding.pressure_pa;
+  binding.controls=[{kind:'pressure',pressure_pa:500},{kind:'gap',gap_m:0.02},{kind:'pressure',pressure_pa:250}];
+  return value;
+}
+test('mixed pressure and clearance controls retain original acquisitions and frozen named cases',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
+    buildWorkbenchStudyBundle:save,parseWorkbenchStudyBundle:load}=await modulePromise;
+  const source=controlledCompressionInput();
+  source.bindings['front.L']={...motionCompressionInput().bindings['front.R'],
+    controls:[{kind:'gap',gap_m:0.02},{kind:'gap',gap_m:0.015},{kind:'pressure',pressure_pa:500}]};
+  delete source.bindings['front.L'].pressure_pa;
+  const original=' \r\n'+JSON.stringify(source).replace('"gap_m":0.015','"gap_m":1.500e-2')+'\r\n';
+  const input=cyclicCompressionMotion(),before=JSON.stringify(input),raw=motion(input,undefined,original);
+  assert.ok(raw.includes(original));assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(JSON.parse(raw).transient_surface.prescribed_compression,JSON.parse(original));
+  const scenario=single({...scenarioState(),motion:input,motionCompression:original,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const cases=matrix({maxEvaluations:4,cases:[{key:'compressed',scenario},{key:'dry',scenario:single({
+    ...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000})}]});
+  assert.ok(cases.includes(original));assert.ok(cases.includes(scenario));
+  assert.equal(Object.hasOwn(JSON.parse(cases).cases[1].scenario.motion.transient_surface,'prescribed_compression'),false);
+  const replay={type:'scenario',pattern:workbenchPattern,studyRequest:workbenchRequest().studyRequest,
+    scenarioRequest:cases,measurements:workbenchBody};
+  assert.equal(load(save(replay,workbenchModel())).request.scenarioRequest,cases);
+  source.bindings['front.R'].controls[0].pressure_pa=400;
+  assert.ok(raw.includes('"pressure_pa":500'));assert.equal(raw.includes('"pressure_pa":400'),false);
+});
+test('mixed compression controls reject ambiguous schemas fields and unsupported clearances',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise,input=cyclicCompressionMotion();
+  for(const mutate of [
+    v=>{v.schema='ftx-motion-surface-compression/2';},
+    v=>{v.bindings['front.R'].pressure_pa=null;},
+    v=>{v.bindings['front.R'].pressure_pa=[500,0,250];},
+    v=>{v.bindings['front.R'].controls=null;},
+    v=>{v.bindings['front.R'].controls=[];},
+    v=>{delete v.bindings['front.R'].controls;},
+    v=>{v.bindings['front.R'].controls[0]=null;},
+    v=>{v.bindings['front.R'].controls[0]={kind:'auto',gap_m:0.01};},
+    v=>{v.bindings['front.R'].controls[0]={kind:'pressure',pressure_pa:500,gap_m:0.01};},
+    v=>{v.bindings['front.R'].controls[0]={kind:'gap',gap_m:0.01,pressure_pa:500};},
+    v=>{v.bindings['front.R'].controls[0]={kind:'gap',gap_m:0};},
+    v=>{v.bindings['front.R'].controls[0]={kind:'gap',gap_m:-0.01};},
+    v=>{v.bindings['front.R'].controls[0]={kind:'gap',gap_m:'0.01'};},
+    v=>{v.bindings['front.R'].controls[0]={kind:'gap',gap_m:NaN};},
+    v=>{v.bindings['front.R'].controls[0]={kind:'pressure',pressure_pa:-1};},
+    v=>{v.bindings['front.R'].controls[0]={kind:'pressure',pressure_pa:'500'};},
+    v=>{v.bindings['front.R'].branch_changes=null;},
+  ]) {
+    const value=controlledCompressionInput();mutate(value);
+    assert.throws(()=>motion(input,undefined,JSON.stringify(value)),/compression|pressure|clearance/i);
+  }
+  const consecutive=controlledCompressionInput(),binding=consecutive.bindings['front.R'];
+  delete binding.branch_changes;
+  binding.controls=[{kind:'gap',gap_m:0.02},{kind:'gap',gap_m:0.015},{kind:'gap',gap_m:0.016}];
+  assert.throws(()=>motion(input,undefined,JSON.stringify(consecutive)),/branch direction/);
+  binding.controls[2]={kind:'gap',gap_m:0.01};
+  assert.doesNotThrow(()=>motion(input,undefined,JSON.stringify(consecutive)));
+  binding.controls=[{kind:'pressure',pressure_pa:250},{kind:'pressure',pressure_pa:200},{kind:'pressure',pressure_pa:500}];
+  assert.throws(()=>motion(input,undefined,JSON.stringify(consecutive)),/branch direction/);
+  binding.controls=[{kind:'pressure',pressure_pa:250},{kind:'gap',gap_m:0.03},{kind:'pressure',pressure_pa:0}];
+  assert.doesNotThrow(()=>motion(input,undefined,JSON.stringify(consecutive)),
+    'The canonical acquired branch, not browser interpolation, admits or refuses mixed-control physical transitions');
+});
+test('compressed motion composes qualified convection without radiation or inferred weather',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const source=' \n'+JSON.stringify(motionCompressionInput())+'\n';
+  const environment=exteriorPolicy(),input={...motionState(),transient_surface:{
+    ...dryMotionHeat(),exterior_exchange:[environment]}};
+  const before=JSON.stringify(input),raw=motion(input,undefined,source);
+  assert.ok(raw.includes(source));assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(JSON.parse(raw).transient_surface.exterior_exchange,[environment]);
+  const saved=single({...scenarioState(),motion:input,motionCompression:source,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const cases=matrix({maxEvaluations:2,cases:[{key:'compressed-air',scenario:saved}]});
+  assert.ok(cases.includes(source));assert.ok(cases.includes(saved));
+  for(const radiation of [{ambient_c:-15,emissivity_property:'emissivity',exposed_face:'public',allow_opaque_gray_approximation:true},
+    {ambient_c:-15,automatic_material_face:true,allow_opaque_gray_approximation:true}]) {
+    const changed=structuredClone(input);changed.transient_surface.exterior_exchange[0].radiation=radiation;
+    assert.throws(()=>motion(changed,undefined,source),/without radiation/);
+  }
+  for(const mutate of [v=>{v.transient_surface.exterior_exchange[0].convection_source.note='';},
+    v=>{v.transient_surface.exterior_exchange[0].allow_estimates=false;},
+    v=>{v.transient_surface.exterior_exchange[0].air_c=10;},
+    v=>{v.transient_surface.boundaries[0].outside_resistance_m2_k_w=0.2;}]) {
+    const changed=structuredClone(input);mutate(changed);assert.throws(()=>motion(changed,undefined,source));
+  }
+  environment.convection_w_m2_k=40;
+  assert.equal(JSON.parse(saved).motion.transient_surface.exterior_exchange[0].convection_w_m2_k,8);
+});

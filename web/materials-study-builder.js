@@ -464,9 +464,10 @@ function motionCompressionBranch(change, instance, direction) {
 function motionCompressionSource(raw, keyframes) {
   const value = sourceObject(raw, "Prescribed compression");
   object(value, ["schema", "thermal_evidence", "bindings"], ["schema", "thermal_evidence", "bindings"], "Prescribed compression");
-  if (!["ftx-motion-surface-compression/1", "ftx-motion-surface-compression/2"].includes(value.schema)) {
-    throw Error("Prescribed compression needs ftx-motion-surface-compression/1 or /2.");
+  if (!["ftx-motion-surface-compression/1", "ftx-motion-surface-compression/2", "ftx-motion-surface-compression/3"].includes(value.schema)) {
+    throw Error("Prescribed compression needs ftx-motion-surface-compression/1, /2 or /3.");
   }
+  const controlled = value.schema === "ftx-motion-surface-compression/3";
   const cyclic = value.schema === "ftx-motion-surface-compression/2";
   name(value.thermal_evidence, "Compression thermal applicability evidence");
   if (!value.bindings || typeof value.bindings !== "object" || Array.isArray(value.bindings)) {
@@ -477,41 +478,61 @@ function motionCompressionSource(raw, keyframes) {
   let joins = 0;
   for (const [instance, binding] of bindings) {
     name(instance, "Compressed physical instance");
-    object(binding, ["material_sha256", "preparation", "direction", "pressure_pa", ...(cyclic ? ["branch_changes"] : [])],
-      ["material_sha256", "preparation", "direction", "pressure_pa"], "Compression binding");
+    const schedule = controlled ? "controls" : "pressure_pa";
+    object(binding, ["material_sha256", "preparation", "direction", schedule, ...(cyclic || controlled ? ["branch_changes"] : [])],
+      ["material_sha256", "preparation", "direction", schedule], "Compression binding");
     if (typeof binding.material_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(binding.material_sha256) ||
         !["loading", "unloading"].includes(binding.direction) ||
         !binding.preparation || typeof binding.preparation !== "object" || Array.isArray(binding.preparation) ||
         binding.preparation.schema !== "ftx-material-compression/1") {
       throw Error("Each compressed instance needs its original material hash, complete pressure acquisition and loading or unloading direction.");
     }
-    if (!Array.isArray(binding.pressure_pa) || binding.pressure_pa.length !== keyframes.length ||
-        binding.pressure_pa.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
-      throw Error("Each compressed instance needs one finite nonnegative pressure in pascals per authored motion interval.");
+    if (!Array.isArray(binding[schedule]) || binding[schedule].length !== keyframes.length) {
+      throw Error("Each compressed instance needs one pressure or clearance control per authored motion interval.");
     }
     if (own(binding, "branch_changes") && (!Array.isArray(binding.branch_changes) ||
         binding.branch_changes.length !== keyframes.length)) {
       throw Error("Compression branch_changes needs one entry per authored interval; use null only inside the array to continue a branch.");
     }
-    if (cyclic) {
-      let direction = binding.direction, previous = binding.preparation.pressure_pa;
-      nonnegative(previous, "Initial compression pressure");
-      for (const [interval, pressure] of binding.pressure_pa.entries()) {
-        const change = binding.branch_changes?.[interval];
-        if (change != null) {
-          direction = motionCompressionBranch(change, instance, direction);
-          joins++;
-        }
-        if (direction === "loading" ? pressure < previous : pressure > previous) {
+    let direction = binding.direction, previousPressure = binding.preparation.pressure_pa, previousGap;
+    nonnegative(previousPressure, "Initial compression pressure");
+    for (const [interval, input] of binding[schedule].entries()) {
+      const change = binding.branch_changes?.[interval];
+      if (change != null) {
+        direction = motionCompressionBranch(change, instance, direction);
+        joins++;
+      }
+      const control = controlled ? input : { kind: "pressure", pressure_pa: input };
+      if (controlled) {
+        if (control?.kind === "pressure") {
+          object(control, ["kind", "pressure_pa"], ["kind", "pressure_pa"], "Compression pressure control");
+          nonnegative(control.pressure_pa, "Compression pressure");
+        } else if (control?.kind === "gap") {
+          object(control, ["kind", "gap_m"], ["kind", "gap_m"], "Compression clearance control");
+          if (typeof control.gap_m !== "number" || !Number.isFinite(control.gap_m) || control.gap_m <= 0) {
+            throw Error("Compression clearance must be finite and positive in metres.");
+          }
+        } else throw Error("Compression control must explicitly prescribe pressure or gap.");
+      } else nonnegative(input, "Compression pressure");
+      if (control.kind === "pressure") {
+        if (previousPressure !== undefined && (direction === "loading" ? control.pressure_pa < previousPressure : control.pressure_pa > previousPressure)) {
           throw Error("Compression pressure must follow the active branch direction; every reversal needs its own qualified branch change.");
         }
-        previous = pressure;
+        previousPressure = control.pressure_pa;
+        previousGap = undefined;
+      } else {
+        if (previousGap !== undefined && (direction === "loading" ? control.gap_m > previousGap : control.gap_m < previousGap)) {
+          throw Error("Compression clearance must follow the active branch direction; every reversal needs its own qualified branch change.");
+        }
+        previousGap = control.gap_m;
+        previousPressure = undefined;
       }
     }
   }
   if (cyclic && !joins) throw Error("Compression version /2 needs at least one explicit acquired branch change.");
-  // Rust checks source locks, pressure/thickness joins, invariant storage and thermal domains.
-  // The original JSON text is inserted unchanged, including the source acquisition's numeric tokens.
+  // Rust solves pressure from clearance and checks every mixed-control traverse against the actual
+  // current branch state. The browser never estimates pressure, interpolates acquisitions or adds consent.
+  // Original JSON is inserted unchanged, including the source acquisition's numeric tokens.
 }
 
 /** Author prescribed endpoints around exact liquid policies; Rust owns physical admission and evolution. */
@@ -681,8 +702,9 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
   if (compression !== undefined) {
     if (!own(state, "transient_surface")) throw Error("Prescribed compression requires authored independent-sheet heat.");
     motionCompressionSource(compression, state.keyframes);
-    if (liquid !== undefined || [...heatingFields, "exterior_exchange"].some(field => state.transient_surface[field] != null)) {
-      throw Error("Prescribed compression currently requires dry film-boundary heat without liquid or deformation-heating policies.");
+    if (liquid !== undefined || heatingFields.some(field => state.transient_surface[field] != null) ||
+        state.transient_surface.exterior_exchange?.some(exterior => exterior?.radiation != null)) {
+      throw Error("Prescribed compression requires dry film-boundary or qualified convection heat without radiation, liquid or deformation-heating policies.");
     }
   }
   if (liquid === undefined && compression === undefined) request = JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
