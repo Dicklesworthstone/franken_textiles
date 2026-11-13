@@ -84,6 +84,7 @@ fn drape_poses_match_the_package() {
         let pose = Pose {
             leg_fraction: 1.0,
             arm_abduction_deg: inp["arm_abduction_deg"].as_f64(),
+            arm_pose: None,
             legs: match inp["legs"].as_str().unwrap() {
                 "standing" => Legs::Standing,
                 "seated" => Legs::Seated,

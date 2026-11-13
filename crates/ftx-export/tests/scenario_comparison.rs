@@ -542,6 +542,7 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
         "endpoint_count",
         "index",
         "pose",
+        "arm_pose",
         "leg_pose",
         "root_translation",
         "root_rotation",
@@ -573,6 +574,10 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
                     }
                     "index" => m["keyframes"][1]["sample_index"] = json!(0),
                     "pose" => m["keyframes"][1]["arm_abduction_deg"] = json!(44.),
+                    "arm_pose" => {
+                        m["keyframes"][1]["arm_pose"] =
+                            json!({"left_abduction_deg":44.0,"right_abduction_deg":35.0})
+                    }
                     "leg_pose" => {
                         m["keyframes"][1]["leg_pose"] = json!({"posture":"seated","fraction":0.5})
                     }
@@ -602,6 +607,60 @@ fn partial_stale_and_unchecked_motion_cannot_win_even_with_protocol_override() {
         assert_eq!(
             report["manufacturing"]["alternatives"][0]["cutting"]["status"],
             "available"
+        );
+    }
+}
+
+#[test]
+fn independent_arm_angles_must_match_every_requested_endpoint_before_comparison() {
+    let mut request = motion_request();
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut descriptor = motion_descriptor();
+    let arms = json!({"left_abduction_deg":70.0,"right_abduction_deg":25.0});
+    descriptor["scenario"]["motion"]["keyframes"][0]["arm_pose"] = arms.clone();
+    for fault in [
+        "none",
+        "missing",
+        "null",
+        "left",
+        "right",
+        "swapped",
+        "inherited",
+    ] {
+        let report = request
+            .evaluate_with(&pattern, &descriptor, |key, pattern| {
+                let mut result = synthetic_motion(pattern, 5.0);
+                let frames = &mut result["motion"]["result"]["keyframes"];
+                frames[0]["arm_pose"] = arms.clone();
+                if key == "a" {
+                    match fault {
+                        "missing" => {
+                            frames[0].as_object_mut().unwrap().remove("arm_pose");
+                        }
+                        "null" => frames[0]["arm_pose"] = Value::Null,
+                        "left" => frames[0]["arm_pose"]["left_abduction_deg"] = json!(71.0),
+                        "right" => frames[0]["arm_pose"]["right_abduction_deg"] = json!(26.0),
+                        "swapped" => {
+                            frames[0]["arm_pose"] =
+                                json!({"left_abduction_deg":25.0,"right_abduction_deg":70.0});
+                        }
+                        "inherited" => frames[1]["arm_pose"] = arms.clone(),
+                        _ => {}
+                    }
+                }
+                Ok(result)
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a", "b"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}"
         );
     }
 }

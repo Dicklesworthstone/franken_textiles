@@ -68,11 +68,44 @@ impl Legs {
     }
 }
 
+/// Absolute abduction of each arm from vertical, using the source model's left/right bone names.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArmPose {
+    /// Left arm angle from vertical, in degrees, 0..=180.
+    pub left_abduction_deg: f64,
+    /// Right arm angle from vertical, in degrees, 0..=180.
+    pub right_abduction_deg: f64,
+}
+
+impl ArmPose {
+    /// Check both absolute arm angles before evaluating a model.
+    ///
+    /// # Errors
+    /// Non-finite or out-of-range abduction of either arm.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        for (side, deg) in [
+            ("left", self.left_abduction_deg),
+            ("right", self.right_abduction_deg),
+        ] {
+            if !(0.0..=180.0).contains(&deg) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("{side} arm abduction {deg}° is outside 0–180°"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A drape pose.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pose {
     /// Abduction of both arms from vertical (degrees, 0–180); `None` keeps the rest arms.
     pub arm_abduction_deg: Option<f64>,
+    /// Optional absolute left/right angles overriding the common arm abduction.
+    pub arm_pose: Option<ArmPose>,
     /// Leg posture.
     pub legs: Legs,
     /// Fraction of the selected leg rotations, 0..=1. Arms are not scaled by this control.
@@ -92,6 +125,7 @@ impl Pose {
     pub fn rest() -> Self {
         Self {
             arm_abduction_deg: None,
+            arm_pose: None,
             legs: Legs::Standing,
             leg_fraction: 1.0,
             straight_arms: false,
@@ -103,6 +137,7 @@ impl Pose {
     pub fn a_pose(deg: f64) -> Self {
         Self {
             arm_abduction_deg: Some(deg),
+            arm_pose: None,
             legs: Legs::Standing,
             leg_fraction: 1.0,
             straight_arms: false,
@@ -120,6 +155,7 @@ impl Pose {
     pub fn seated() -> Self {
         Self {
             arm_abduction_deg: Some(Self::A_POSE_DEG),
+            arm_pose: None,
             legs: Legs::Seated,
             leg_fraction: 1.0,
             straight_arms: false,
@@ -131,6 +167,7 @@ impl Pose {
     pub fn squat() -> Self {
         Self {
             arm_abduction_deg: Some(Self::A_POSE_DEG),
+            arm_pose: None,
             legs: Legs::Squat,
             leg_fraction: 1.0,
             straight_arms: false,
@@ -158,6 +195,9 @@ impl Pose {
                 RefusalCode::OutOfRange,
                 format!("arm abduction {deg}° is outside 0–180°"),
             ));
+        }
+        if let Some(arms) = self.arm_pose {
+            arms.validate()?;
         }
         if !(0.0..=1.0).contains(&self.leg_fraction) {
             return Err(Refusal::new(
@@ -219,17 +259,22 @@ pub fn joint_rotations(
 ) -> Result<Vec<JointRotation>, Refusal> {
     pose.validate()?;
     let mut out = Vec::new();
-    if let Some(deg) = pose.arm_abduction_deg {
-        for label in ["upperarm01.L", "upperarm01.R"] {
-            let b = bone(model, label)?;
-            let d = rest.bone_frames[b].m.col(1).normalized();
-            let theta0 = det::acos((-d.z).clamp(-1.0, 1.0));
-            out.push(JointRotation {
-                bone: b,
-                axis: d.cross(Vec3::new(0.0, 0.0, -1.0)).normalized(),
-                angle: theta0 - deg.to_radians(),
-            });
-        }
+    let angles = pose.arm_pose.map_or([pose.arm_abduction_deg; 2], |arms| {
+        [
+            Some(arms.left_abduction_deg),
+            Some(arms.right_abduction_deg),
+        ]
+    });
+    for (label, deg) in ["upperarm01.L", "upperarm01.R"].into_iter().zip(angles) {
+        let Some(deg) = deg else { continue };
+        let b = bone(model, label)?;
+        let d = rest.bone_frames[b].m.col(1).normalized();
+        let theta0 = det::acos((-d.z).clamp(-1.0, 1.0));
+        out.push(JointRotation {
+            bone: b,
+            axis: d.cross(Vec3::new(0.0, 0.0, -1.0)).normalized(),
+            angle: theta0 - deg.to_radians(),
+        });
     }
     if pose.straight_arms {
         for side in ["L", "R"] {

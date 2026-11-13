@@ -35,7 +35,10 @@ fn model_bytes() -> Vec<u8> {
 #[test]
 fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
     use ftx_body::{Legs, Phenotype, Pose, clothing_skin, joint_rotations, pose_deltas};
-    use ftx_drape::study::fitted::{BodyRequest, FittedBody};
+    use ftx_drape::study::{
+        fitted::{BodyRequest, FittedBody},
+        motion,
+    };
 
     let bytes = model_bytes_with_rig(true);
     let digest = sha256_hex(&bytes);
@@ -137,9 +140,18 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
         "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
         "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000,
         "motion":{"schema":"ftx-drape-motion/1","keyframes":[
-            {"time_s":0.002,"arm_abduction_deg":35.0,"leg_pose":{"posture":"seated","fraction":0.002}},
-            {"time_s":0.004,"arm_abduction_deg":35.0,"leg_pose":{"posture":"squat","fraction":0.003}}],
+            {"time_s":0.002,"arm_abduction_deg":35.0,
+                "arm_pose":{"left_abduction_deg":35.001,"right_abduction_deg":34.999},
+                "leg_pose":{"posture":"seated","fraction":0.002}},
+            {"time_s":0.004,"arm_abduction_deg":35.0,
+                "arm_pose":{"left_abduction_deg":34.998,"right_abduction_deg":35.002},
+                "leg_pose":{"posture":"squat","fraction":0.003}},
+            {"time_s":0.006,"arm_abduction_deg":35.003,
+                "leg_pose":{"posture":"squat","fraction":0.003}}],
+            "source_pose_sampling":{"max_step_s":0.001,"max_segments":6},
             "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000}});
+    let motion_request: motion::Request =
+        serde_json::from_value(scenario["motion"].clone()).unwrap();
     let portable: Value = serde_json::from_str(
         &ftx_wasm::materials::scenario::on_model(
             &model,
@@ -176,14 +188,53 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
         moving["final_positions_sha256"],
         moving["initial_positions_sha256"]
     );
-    for (i, (legs, fraction)) in [(Legs::Seated, 0.002), (Legs::Squat, 0.003)]
-        .into_iter()
-        .enumerate()
+    assert_eq!(moving["source_pose_sampling"]["generated_segments"], 6);
+    assert_eq!(
+        moving["path_sha256"],
+        selected
+            .motion_path(&model, &digest, &motion_request)
+            .unwrap()
+            .sha256()
+    );
+    let source_samples = moving["source_pose_sampling"]["source_times_s"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|time| {
+            let sample = moving["samples"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|sample| sample["time_s"] == *time)
+                .unwrap();
+            serde_json::from_value(sample["body_positions_m"].clone()).unwrap()
+        })
+        .collect();
+    let retained_path =
+        motion::Path::new(&motion_request, selected.body().collision, source_samples).unwrap();
+    assert_eq!(moving["path_sha256"], retained_path.sha256());
+    for (i, (legs, fraction)) in [
+        (Legs::Seated, 0.002),
+        (Legs::Squat, 0.003),
+        (Legs::Squat, 0.003),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let endpoint = &moving["keyframes"][i];
         assert_eq!(endpoint["leg_pose"]["posture"], json!(legs));
         assert_eq!(endpoint["leg_pose"]["fraction"], fraction);
+        let key = &motion_request.keyframes[i];
+        assert_eq!(endpoint["arm_abduction_deg"], key.arm_abduction_deg);
+        if let Some(arms) = key.arm_pose {
+            assert_eq!(endpoint["arm_pose"], json!(arms));
+            assert_ne!(arms.left_abduction_deg, arms.right_abduction_deg);
+        } else {
+            assert!(endpoint.get("arm_pose").is_none());
+        }
         let mut pose = Pose::drape();
+        pose.arm_abduction_deg = Some(key.arm_abduction_deg);
+        pose.arm_pose = key.arm_pose;
         pose.legs = legs;
         pose.leg_fraction = fraction;
         let posed = model
@@ -192,10 +243,28 @@ fn leg_postures_reach_native_portable_and_continuing_cloth_without_refitting() {
         let skin = clothing_skin(&model, &posed.vertices).unwrap();
         let sample = &moving["samples"][endpoint["sample_index"].as_u64().unwrap() as usize];
         assert_eq!(sample["body_positions_m"], json!(skin.vertices));
+        assert_eq!(
+            endpoint["body_collision_sha256"],
+            sha256_hex(
+                &serde_json::to_vec(&(&skin.vertices, selected.body().collision.1)).unwrap()
+            )
+        );
         assert_ne!(
             sample["body_positions_m"],
             moving["initial_sample"]["body_positions_m"]
         );
+        if i == 2 {
+            // An omitted pair restores this endpoint's scalar on both arms. Retaining the
+            // previous asymmetric pair would move the fixture's actual weighted arm vertices.
+            pose.arm_pose = motion_request.keyframes[1].arm_pose;
+            let stale = model
+                .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+                .unwrap();
+            assert_ne!(
+                skin.vertices,
+                clothing_skin(&model, &stale.vertices).unwrap().vertices
+            );
+        }
     }
     assert_eq!(moving["physical_validation_claim"], false);
     let dir = setup();

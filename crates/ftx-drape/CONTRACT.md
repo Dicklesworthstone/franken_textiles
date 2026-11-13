@@ -148,6 +148,15 @@ FrankenSim `fs-query` algorithm pinned in `bvh.rs`; geometry and all indices pub
 Brute-force/rebuilt-body equivalence and actual sewn-cloth continuation tests cover this reuse;
 no runtime speedup or physical fit is inferred.
 
+Optional `arm_pose: {left_abduction_deg, right_abduction_deg}` supplies a complete pair of finite
+absolute angles in `0..180` degrees, overriding the endpoint's required common arm angle.
+Omission/null means that endpoint's symmetric angle, never an inherited earlier pair. The shared
+body pose law applies each named side on its existing source axis; source-pose sampling interpolates
+those rotations independently. Initial static placement stays symmetric. Optional serialization
+preserves legacy request bytes and geometry; receipts retain explicit pairs, and comparison
+admission rejects changed, swapped, missing or inherited endpoint pairs. Source-direction and
+one-side-isolation checks exercise the law without asserting anatomical reach or garment fit.
+
 Optional `root_translation_m: [x, y, z]` supplies the endpoint's absolute world-space displacement
 in metres from the selected body's fixed origin, after source posing. It transforms the complete
 source surface before collider extraction; initial collision/display geometry and body evidence

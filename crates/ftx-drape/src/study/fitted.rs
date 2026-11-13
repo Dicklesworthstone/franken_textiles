@@ -472,6 +472,7 @@ impl FittedBody {
         for (interval, keyframe) in request.keyframes.iter().enumerate() {
             let mut pose = Pose::drape();
             pose.arm_abduction_deg = Some(keyframe.arm_abduction_deg);
+            pose.arm_pose = keyframe.arm_pose;
             if let Some(legs) = keyframe.leg_pose {
                 pose.legs = match legs.posture {
                     motion::LegPosture::Seated => Legs::Seated,
@@ -1175,6 +1176,109 @@ mod tests {
     }
 
     #[test]
+    fn independent_arm_motion_follows_source_sides_and_returns_to_each_symmetric_endpoint() {
+        use ftx_body::drape::ArmPose;
+
+        let model = model();
+        let digest = "a".repeat(64);
+        let fitted = FittedBody::prepare(&model, &digest, &request()).unwrap();
+        let original_report = fitted.report.clone();
+        let original_collision = fitted.collision.vertices.clone();
+        let rest = model.rest(&fitted.params).unwrap();
+        let mut asymmetric = Pose::drape();
+        asymmetric.arm_pose = Some(ArmPose {
+            left_abduction_deg: 70.0,
+            right_abduction_deg: 25.0,
+        });
+        let posed = model
+            .pose(
+                &rest,
+                &pose_deltas(&model, &rest, &asymmetric, 1.0).unwrap(),
+            )
+            .unwrap();
+        // Independent direction check: each named source bone must reach its own authored angle.
+        for (side, angle) in [("L", 70.0_f64), ("R", 25.0_f64)] {
+            let bone = model.bone_index(&format!("upperarm01.{side}")).unwrap();
+            let sign = rest.bone_frames[bone].m.col(1).x.signum();
+            let (sin, cos) = det::sin_cos(angle.to_radians());
+            let expected = Vec3::new(sign * sin, 0.0, -cos);
+            assert!((posed.bone_poses[bone].m.col(1) - expected).norm() < 1e-14);
+        }
+        asymmetric.arm_pose.as_mut().unwrap().left_abduction_deg = 45.0;
+        let changed = model
+            .pose(
+                &rest,
+                &pose_deltas(&model, &rest, &asymmetric, 1.0).unwrap(),
+            )
+            .unwrap();
+        let mut changed_left = false;
+        let mut unchanged_right = false;
+        for (i, &bone) in model.data().vertex_bone_indices.iter().enumerate() {
+            if bone == 5 {
+                changed_left |= changed.vertices[i] != posed.vertices[i];
+            } else {
+                assert_eq!(changed.vertices[i], posed.vertices[i]);
+                unchanged_right |= bone == 1;
+            }
+        }
+        assert!(changed_left && unchanged_right);
+
+        let mut motion: motion::Request =
+            serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.004,"arm_abduction_deg":35.0,
+                "arm_pose":{"left_abduction_deg":37.0,"right_abduction_deg":35.0}},
+                {"time_s":0.008,"arm_abduction_deg":36.0}],
+            "source_pose_sampling":{"max_step_s":0.002,"max_segments":4},
+            "max_step_s":0.002,"max_trials":8,"max_pairs":100000,"max_sample_vertices":10000}))
+            .unwrap();
+        let sampled = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_eq!(sampled.source_vertices().len(), 4);
+        for (actual, (left, right)) in sampled.source_vertices().iter().zip([
+            (36.0, 35.0),
+            (37.0, 35.0),
+            (36.5, 35.5),
+            (36.0, 36.0),
+        ]) {
+            let mut expected = Pose::drape();
+            expected.arm_pose = Some(ArmPose {
+                left_abduction_deg: left,
+                right_abduction_deg: right,
+            });
+            let posed = model
+                .pose(&rest, &pose_deltas(&model, &rest, &expected, 1.0).unwrap())
+                .unwrap();
+            let skin = clothing_skin(&model, &posed.vertices).unwrap();
+            assert_eq!(skin.triangles, fitted.collision.triangles);
+            assert_eq!(skin.source_vertex, fitted.collision.source_vertex);
+            for (actual, expected) in actual.iter().zip(skin.vertices) {
+                assert!((*actual - expected).norm() < 1e-14);
+            }
+        }
+        motion.source_pose_sampling = None;
+        let endpoints = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_eq!(sampled.source_vertices()[1], endpoints.source_vertices()[0]);
+        assert_eq!(sampled.source_vertices()[3], endpoints.source_vertices()[1]);
+        let asymmetric_hash = endpoints.sha256().to_owned();
+        motion.keyframes[0].arm_pose = None;
+        let legacy = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_ne!(legacy.sha256(), asymmetric_hash);
+        assert_eq!(legacy.source_vertices()[0], original_collision);
+        assert_eq!(legacy.source_vertices()[1], endpoints.source_vertices()[1]);
+        let mut explicit_null = serde_json::to_value(&motion).unwrap();
+        explicit_null["keyframes"][0]["arm_pose"] = Value::Null;
+        let explicit_null: motion::Request = serde_json::from_value(explicit_null).unwrap();
+        assert_eq!(
+            fitted
+                .motion_path(&model, &digest, &explicit_null)
+                .unwrap()
+                .sha256(),
+            legacy.sha256()
+        );
+        assert_eq!(fitted.report, original_report);
+        assert_eq!(fitted.collision.vertices, original_collision);
+    }
+
+    #[test]
     fn motion_endpoints_reuse_exact_selected_shape_and_match_direct_source_poses() {
         let model = model();
         let digest = "a".repeat(64);
@@ -1454,13 +1558,17 @@ mod tests {
             }
             if source_sampling {
                 requested["source_pose_sampling"] = json!({"max_step_s":0.001,"max_segments":4});
+                requested["keyframes"][0]["arm_pose"] =
+                    json!({"left_abduction_deg":35.001,"right_abduction_deg":35.0});
             }
             let request: motion::Request = serde_json::from_value(requested).unwrap();
             let path = fitted.motion_path(&model, &digest, &request).unwrap();
-            // Independently spell out the source joint angles, retaining all original arm deltas.
+            // Independently spell out the leg angles while retaining the requested arm deltas.
             let mut expected = Vec::new();
             for key in &request.keyframes {
-                let mut deltas = pose_deltas(&model, &rest, &Pose::drape(), 1.0).unwrap();
+                let mut arms = Pose::drape();
+                arms.arm_pose = key.arm_pose;
+                let mut deltas = pose_deltas(&model, &rest, &arms, 1.0).unwrap();
                 for side in ["L", "R"] {
                     for (name, degrees) in
                         [("upperleg01", hip), ("lowerleg01", knee), ("foot", foot)]
@@ -1500,6 +1608,7 @@ mod tests {
             // Arm-only omission and an explicit zero leg fraction retain the original geometry.
             let mut standing = request.clone();
             for key in &mut standing.keyframes {
+                key.arm_pose = None;
                 key.leg_pose = None;
                 key.root_translation_m = None;
             }
@@ -1539,6 +1648,11 @@ mod tests {
                 json!(request.keyframes[0].leg_pose)
             );
             assert_eq!(continued["continuous_contact_checked"], true);
+            assert_eq!(
+                continued["keyframes"][0]["arm_pose"],
+                json!(request.keyframes[0].arm_pose)
+            );
+            assert!(continued["keyframes"][1].get("arm_pose").is_none());
             if source_sampling {
                 assert_eq!(continued["source_pose_sampling"]["generated_segments"], 4);
                 assert_eq!(

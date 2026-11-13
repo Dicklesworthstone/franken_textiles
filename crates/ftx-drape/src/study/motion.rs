@@ -49,6 +49,10 @@ pub struct Keyframe {
     pub time_s: f64,
     /// Straight-arm angle from vertical, in degrees, 0..=180.
     pub arm_abduction_deg: f64,
+    /// Optional absolute left/right angles overriding the common arm angle. Omission/null
+    /// returns both arms to this endpoint's common angle, never the previous override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arm_pose: Option<ftx_body::drape::ArmPose>,
     /// Optional seated/squat leg rotation. Omission keeps standing legs at this endpoint;
     /// this is not an increment from the previous endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -180,6 +184,9 @@ impl Request {
                 return Err(invalid(
                     "motion needs increasing times through 60 s and finite standing angles in 0..=180 degrees",
                 ));
+            }
+            if let Some(arms) = frame.arm_pose {
+                arms.validate()?;
             }
             if frame.leg_pose.is_some_and(|pose| {
                 !pose.fraction.is_finite() || !(0.0..=1.0).contains(&pose.fraction)
@@ -701,6 +708,9 @@ fn evaluate_path(
             "sample_index":samples.len()-1,"positions_sha256":hash(&run.scene.solver.x)?,
             "body_collision_sha256":hash(&(target,body.collision.1))?,
             "surface":surface,"coverage":coverage});
+        if let Some(arms) = frame.arm_pose {
+            endpoint["arm_pose"] = json!(arms);
+        }
         if let Some(pose) = frame.leg_pose {
             endpoint["leg_pose"] = json!(pose);
         }
@@ -1010,6 +1020,56 @@ mod tests {
                 fraction,
             });
             assert!(request.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn independent_arm_angles_preserve_legacy_bytes_and_require_both_bounded_sides() {
+        let source = json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.01,"arm_abduction_deg":35.0}],
+            "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000});
+        let legacy: Request = serde_json::from_value(source.clone()).unwrap();
+        assert!(legacy.keyframes[0].arm_pose.is_none());
+        let mut explicit_null = source.clone();
+        explicit_null["keyframes"][0]["arm_pose"] = Value::Null;
+        let explicit_null: Request = serde_json::from_value(explicit_null).unwrap();
+        assert_eq!(serde_json::to_value(&legacy).unwrap(), source);
+        assert_eq!(
+            serde_json::to_vec(&legacy).unwrap(),
+            serde_json::to_vec(&explicit_null).unwrap()
+        );
+        for (left, right) in [(0.0, 180.0), (180.0, 0.0), (70.0, 25.0)] {
+            let mut value = source.clone();
+            value["keyframes"][0]["arm_pose"] =
+                json!({"left_abduction_deg":left,"right_abduction_deg":right});
+            let request: Request = serde_json::from_value(value.clone()).unwrap();
+            request.validate().unwrap();
+            assert_eq!(serde_json::to_value(&request).unwrap(), value);
+            for bad in [-0.01, 180.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                for side in ["left", "right"] {
+                    let mut invalid = request.clone();
+                    let arms = invalid.keyframes[0].arm_pose.as_mut().unwrap();
+                    if side == "left" {
+                        arms.left_abduction_deg = bad;
+                    } else {
+                        arms.right_abduction_deg = bad;
+                    }
+                    let refusal = invalid.validate().unwrap_err();
+                    assert_eq!(refusal.code, ftx_core::RefusalCode::OutOfRange);
+                    assert!(refusal.message.contains(side));
+                }
+            }
+        }
+        for arms in [
+            json!({"left_abduction_deg":40.0}),
+            json!({"right_abduction_deg":40.0}),
+            json!({"left_abduction_deg":null,"right_abduction_deg":40.0}),
+            json!({"left_abduction_deg":40.0,"right_abduction_deg":40.0,"elbow_deg":0.0}),
+            json!("40,40"),
+        ] {
+            let mut value = source.clone();
+            value["keyframes"][0]["arm_pose"] = arms;
+            assert!(serde_json::from_value::<Request>(value).is_err());
         }
     }
 

@@ -41,6 +41,11 @@ independent motion, steady-heat and transient-heat consumers.
 Those endpoint requests support separately declared arm angles and fractional seated/squat leg
 postures. They reuse the existing joint rotations and occupied source shape while retaining the
 selected initial pose, sewn cloth history and all contact/rollback checks described below.
+An optional `arm_pose: {left_abduction_deg, right_abduction_deg}` gives each named source arm its
+own absolute angle in `0..180` degrees. The complete pair overrides the endpoint's common
+`arm_abduction_deg`; omission/null restores that endpoint's common angle on both sides. Source
+sampling interpolates the two existing per-side rotations independently. The request example and
+workbench controls are described in `docs/material-scenario-studies.md`.
 
 Source-model keyframes can also supply `root_translation_m: [x,y,z]` and
 `root_rotation_rad: [rx,ry,rz]`. These are absolute endpoint controls in the existing world frame

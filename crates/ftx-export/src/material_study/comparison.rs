@@ -4093,6 +4093,7 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
         if endpoint["time_s"] != frame["time_s"]
             || endpoint["time_s"] != sample["time_s"]
             || endpoint["arm_abduction_deg"] != frame["arm_abduction_deg"]
+            || endpoint["arm_pose"] != frame["arm_pose"]
             || endpoint["leg_pose"] != frame["leg_pose"]
             || endpoint["root_translation_m"] != frame["root_translation_m"]
             || endpoint["root_rotation_rad"] != frame["root_rotation_rad"]

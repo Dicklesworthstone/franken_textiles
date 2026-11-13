@@ -119,6 +119,13 @@ elbow is bent about 46° with the forearm forward, so `upperarm02` turns onto `u
 `lowerarm01` onto `upperarm02`'s, and a straight sleeve can contain the arm (a bent-elbow start crossed the
 forearm). A ramp scales every φ by t.
 
+`Pose.arm_pose: Option<ArmPose>` can override the common abduction with explicit
+`left_abduction_deg` and `right_abduction_deg`. Each angle is finite and in `0..180` and applies
+to its named source bone on the same rest-world axis. It does not change straightening or leg
+rotations. Omission retains the existing joint order, arithmetic and geometry. Initial body
+requests and garment placement retain their symmetric angle; material-study motion opts into
+independent sides after the initial drape.
+
 The independent `Pose.leg_fraction` (finite, inclusive 0..1; default 1) scales only the selected
 seated/squat hip, knee and ankle rotations. Arms retain their specified abduction and straightening,
 so small explicit flexion endpoints do not inadvertently move the arms back toward rest. Zero is
