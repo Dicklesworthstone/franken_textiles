@@ -3857,6 +3857,107 @@ test('acquired compression branch entries retain exact instance ownership and ex
 });
 
 
+test('layered pressure histories preserve exact acquisitions without requesting independent-sheet heat',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  const coverage=await guidedMovingCoverageHeat();
+  coverage.initial_instance_temperatures_c={'front.R':10,'lining.R':35};
+  const input={...motionState(),transient_coverage:coverage},before=JSON.stringify(input);
+  const original=' \r\n'+JSON.stringify(motionCompressionInput()).replace('"pressure_pa":[250]','"pressure_pa":[2.500e2]')+'\r\n';
+  const raw=motion(input,undefined,original,'transient_coverage'),parsed=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(original));
+  assert.equal(Object.hasOwn(parsed,'transient_surface'),false);
+  assert.deepEqual(parsed.transient_coverage.prescribed_compression,JSON.parse(original));
+  assert.deepEqual(parsed.transient_coverage.initial_instance_temperatures_c,coverage.initial_instance_temperatures_c);
+  const scenario=single({...scenarioState(),motion:input,motionCompression:original,
+    motionCompressionTarget:'transient_coverage',maxMotionTrials:1024});
+  assert.ok(scenario.includes(raw));assert.equal(Object.hasOwn(JSON.parse(scenario),'motionCompressionTarget'),false);
+});
+
+test('pressure targets preserve the legacy sheet default and independently select either or both histories',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise;
+  const input={...motionState(),transient_surface:dryMotionHeat(),transient_coverage:await guidedMovingCoverageHeat()};
+  const original=' '+JSON.stringify(motionCompressionInput())+'\n';
+  for(const target of [undefined,'transient_surface','transient_coverage','both']) {
+    const raw=motion(input,undefined,original,target),value=JSON.parse(raw);
+    for(const consumer of ['transient_surface','transient_coverage']) {
+      const selected=target==='both'||consumer===(target===undefined?'transient_surface':target);
+      assert.equal(Object.hasOwn(value[consumer],'prescribed_compression'),selected);
+      if(!selected)assert.deepEqual(value[consumer],input[consumer]);
+    }
+    assert.equal(raw.split(original).length-1,target==='both'?2:1);
+  }
+  assert.equal(motion(input,undefined,original),motion(input,undefined,original,'transient_surface'));
+});
+
+test('layered pressure cycles freeze branch schedules and consumer choices through named replay',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
+    buildWorkbenchStudyBundle:save,parseWorkbenchStudyBundle:load}=await modulePromise;
+  const input=cyclicCompressionMotion(),coverage=await guidedMovingCoverageHeat();
+  coverage.boundaries=Array.from({length:3},()=>({...coverage.boundaries[0]}));
+  coverage.exposed_boundaries=[null,{...coverage.boundaries[0]},null];
+  input.transient_coverage=coverage;
+  input.source_pose_sampling={max_step_s:0.125,max_segments:6};
+  const original=' \r\n'+JSON.stringify(motionCompressionCycle()).replace('"pressure_pa":[500,0,250]','"pressure_pa":[5.000e2,-0.0,2.500e2]')+'\r\n';
+  const authored=target=>single({...scenarioState(),motion:input,motionCompression:original,
+    motionCompressionTarget:target,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const layered=authored('transient_coverage'),both=authored('both');
+  const cases=matrix({maxEvaluations:4,cases:[{key:'layered',scenario:layered},{key:'both',scenario:both}]});
+  const values=JSON.parse(cases).cases;
+  assert.equal(Object.hasOwn(values[0].scenario.motion.transient_surface,'prescribed_compression'),false);
+  assert.deepEqual(values[1].scenario.motion.transient_coverage.prescribed_compression,JSON.parse(original));
+  assert.equal(values[1].scenario.motion.transient_coverage.prescribed_compression.bindings['front.R'].branch_changes.length,3);
+  assert.equal(values[1].scenario.motion.source_pose_sampling.max_segments,6);
+  assert.ok(cases.includes(layered));assert.ok(cases.includes(both));
+  const replay={type:'scenario',pattern:workbenchPattern,studyRequest:workbenchRequest().studyRequest,
+    scenarioRequest:cases,measurements:workbenchBody};
+  assert.equal(load(save(replay,workbenchModel())).request.scenarioRequest,cases);
+  assert.ok(motion(input,undefined,original,'both').includes(original));
+});
+
+test('compression targets refuse missing heat sources and never silently ignore a requested target',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  const original=JSON.stringify(motionCompressionInput()),input={...motionState(),transient_surface:dryMotionHeat()};
+  for(const target of [null,false,{},'coverage','all']) {
+    assert.throws(()=>motion(input,undefined,original,target),/compression target/);
+  }
+  assert.throws(()=>motion(input,undefined,undefined,'transient_surface'),/original pressure acquisition/);
+  assert.throws(()=>motion(input,undefined,original,'transient_coverage'),/moving body\/layer heat/);
+  assert.throws(()=>motion(input,undefined,original,'both'),/moving body\/layer heat/);
+  const coverage=await guidedMovingCoverageHeat();
+  assert.throws(()=>motion({...motionState(),transient_coverage:coverage},undefined,original),/independent-sheet heat/);
+  assert.throws(()=>single({...scenarioState(),motionCompressionTarget:'transient_coverage'}),/authored motion/);
+  assert.throws(()=>single({...scenarioState(),motion:motion(input),motionCompressionTarget:'transient_surface',maxMotionTrials:1024}),/complete policies/);
+});
+
+test('layered compression admits only supported target policies and preserves unrelated dry histories',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise;
+  const original=JSON.stringify(motionCompressionInput()),coverage=await guidedMovingCoverageHeat();
+  const input={...motionState(),transient_surface:dryMotionHeat(),transient_coverage:coverage};
+  for(const field of ['plastic_dissipation_heat','relaxation_dissipation_heat','bending_plastic_dissipation_heat']) {
+    const heated={...input,transient_coverage:{...coverage,[field]:'uniform_reference_thickness'}};
+    assert.throws(()=>motion(heated,undefined,original,'transient_coverage'),/dry film-boundary/);
+    assert.doesNotThrow(()=>motion(heated,undefined,original),'Unselected coverage keeps its independent qualified heating');
+  }
+  const exterior=exteriorPolicy(),film={...coverage.boundaries[0],outside_c:exterior.air_c,outside_resistance_m2_k_w:0};
+  for(const field of ['exterior_exchange','exposed_exterior_exchange']) {
+    const changed={...coverage,[field]:[exterior]};
+    if(field==='exterior_exchange') {
+      changed.boundaries=[film];changed.bare_boundaries=[{...coverage.boundaries[0]}];
+    } else changed.exposed_boundaries=[film];
+    assert.doesNotThrow(()=>motion({...input,transient_coverage:changed}));
+    assert.throws(()=>motion({...input,transient_coverage:changed},undefined,original,'transient_coverage'),/dry film-boundary/);
+  }
+  assert.throws(()=>motion(input,{},original,'transient_coverage'),/liquid|water/i);
+  const water=' {"schema":"ftx-textile-surface-water/5","bindings":{"front.R":{"material_sha256":"'+
+    'a'.repeat(64)+'","initial_liquid_kg_m2":1.25000e-2}}}\r\n';
+  const liquid={surface_water:water},raw=motion(input,liquid,original,'transient_coverage'),value=JSON.parse(raw);
+  assert.ok(raw.includes(water));assert.ok(raw.includes(original));
+  assert.deepEqual(value.transient_surface.surface_water,JSON.parse(water));
+  assert.equal(Object.hasOwn(value.transient_surface,'prescribed_compression'),false);
+  assert.deepEqual(value.transient_coverage.prescribed_compression,JSON.parse(original));
+  assert.throws(()=>motion(input,liquid,original,'both'),/dry film-boundary/);
+});
+
 function controlledCompressionInput() {
   const value=motionCompressionCycle(),binding=value.bindings['front.R'];
   value.schema='ftx-motion-surface-compression/3';delete binding.pressure_pa;
@@ -3945,4 +4046,127 @@ test('compressed motion composes qualified convection without radiation or infer
   }
   environment.convection_w_m2_k=40;
   assert.equal(JSON.parse(saved).motion.transient_surface.exterior_exchange[0].convection_w_m2_k,8);
+});
+
+function motionCompressionControls() {
+  const value=motionCompressionInput(),binding=value.bindings['front.R'];
+  value.schema='ftx-motion-surface-compression/3';
+  delete binding.pressure_pa;binding.controls=[{kind:'gap',gap_m:0.015}];
+  return value;
+}
+
+test('explicit clearance and pressure controls preserve original branch sources and selected consumers through saved replay',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
+    buildWorkbenchStudyBundle:save,parseWorkbenchStudyBundle:load}=await modulePromise;
+  const policy=motionCompressionCycle(),binding=policy.bindings['front.R'];
+  policy.schema='ftx-motion-surface-compression/3';delete binding.pressure_pa;
+  binding.controls=[{kind:'pressure',pressure_pa:500},{kind:'gap',gap_m:0.02},{kind:'pressure',pressure_pa:250}];
+  policy.bindings['front.L']={...motionCompressionControls().bindings['front.R'],
+    controls:[{kind:'gap',gap_m:0.02},{kind:'pressure',pressure_pa:250},{kind:'gap',gap_m:0.01}]};
+  const original=' \r\n'+JSON.stringify(policy).replace('"kind":"pressure","pressure_pa":500',
+    '"kind":"pressure","pressure_pa":5.000e2').replace('"kind":"gap","gap_m":0.02',
+    '"kind":"gap","gap_m":2.000e-2')+'\r\n';
+  const input=cyclicCompressionMotion(),coverage=await guidedMovingCoverageHeat();
+  coverage.boundaries=Array.from({length:3},()=>({...coverage.boundaries[0]}));
+  coverage.exposed_boundaries=[null,{...coverage.boundaries[0]},null];input.transient_coverage=coverage;
+  const before=JSON.stringify(input);
+  for(const target of [undefined,'transient_surface','transient_coverage','both']) {
+    const raw=motion(input,undefined,original,target),value=JSON.parse(raw);
+    assert.equal(raw.split(original).length-1,target==='both'?2:1);
+    for(const consumer of ['transient_surface','transient_coverage']) {
+      const selected=target==='both'||consumer===(target===undefined?'transient_surface':target);
+      if(selected)assert.deepEqual(value[consumer].prescribed_compression,JSON.parse(original));
+      else assert.deepEqual(value[consumer],input[consumer]);
+    }
+  }
+  const authored=target=>single({...scenarioState(),motion:input,motionCompression:original,
+    motionCompressionTarget:target,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const layered=authored('transient_coverage'),both=authored('both');
+  const cases=matrix({maxEvaluations:4,cases:[{key:'clearance layers',scenario:layered},{key:'clearance both',scenario:both}]});
+  assert.ok(cases.includes(layered));assert.ok(cases.includes(both));assert.ok(cases.includes(original));
+  const replay={type:'scenario',pattern:workbenchPattern,studyRequest:workbenchRequest().studyRequest,
+    scenarioRequest:cases,measurements:workbenchBody};
+  assert.equal(load(save(replay,workbenchModel())).request.scenarioRequest,cases);
+  binding.branch_changes[1].transitions['front.R'].method='later edit';
+  assert.equal(cases.includes('later edit'),false);assert.equal(JSON.stringify(input),before);
+});
+
+test('compression control versions require exact complete schedules and explicit qualified branch changes',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise;
+  const input={...motionState(),transient_surface:dryMotionHeat()};
+  for(const mutate of [b=>{delete b.controls;},b=>{b.controls=null;},b=>{b.controls=[];},
+    b=>{b.controls.push({kind:'pressure',pressure_pa:500});},b=>{b.controls=[null];},b=>{b.controls=[1];},
+    b=>{b.controls=[{kind:'inferred',gap_m:0.015}];},b=>{delete b.controls[0].gap_m;},
+    b=>{b.controls[0].gap_m=0;},b=>{b.controls[0].gap_m=-0.01;},b=>{b.controls[0].gap_m='0.015';},
+    b=>{b.controls[0].gap_m=null;},b=>{b.controls[0].pressure_pa=250;},
+    b=>{b.controls=[{kind:'pressure',pressure_pa:-1}];},b=>{b.controls=[{kind:'pressure',pressure_pa:'250'}];},
+    b=>{b.controls=[{kind:'pressure',pressure_pa:250,gap_m:0.015}];},b=>{b.controls[0].automatic=true;},
+    b=>{b.pressure_pa=null;},b=>{b.pressure_pa=[];},b=>{b.pressure_pa=[250];},
+    b=>{b.branch_changes=null;},b=>{b.branch_changes=[];},b=>{b.branch_changes=[false];},
+    b=>{b.preparation.pressure_pa=null;}]) {
+    const policy=motionCompressionControls();mutate(policy.bindings['front.R']);
+    assert.throws(()=>motion(input,undefined,JSON.stringify(policy)),/compression|compressed|pressure|branch/i);
+  }
+  for(const policy of [motionCompressionInput(),motionCompressionCycle()]) {
+    const current=policy.schema.endsWith('/2')?cyclicCompressionMotion():input;
+    for(const controls of [null,[],[{kind:'gap',gap_m:0.015}]]) {
+      policy.bindings['front.R'].controls=controls;
+      assert.throws(()=>motion(current,undefined,JSON.stringify(policy)),/Compression binding/);
+    }
+  }
+  const policy=motionCompressionControls(),binding=policy.bindings['front.R'];
+  binding.branch_changes=[null];
+  assert.doesNotThrow(()=>motion(input,undefined,JSON.stringify(policy)),'Version /3 does not require a reversal');
+  binding.controls=[{kind:'pressure',pressure_pa:0}];
+  assert.doesNotThrow(()=>motion(input,undefined,JSON.stringify(policy)),'Explicit zero pressure is a valid boundary');
+  const cycle=motionCompressionCycle(),cyclic=cycle.bindings['front.R'];
+  cycle.schema='ftx-motion-surface-compression/3';delete cyclic.pressure_pa;
+  cyclic.controls=[{kind:'pressure',pressure_pa:500},{kind:'pressure',pressure_pa:0},{kind:'gap',gap_m:0.015}];
+  const raw=JSON.stringify(cycle);
+  for(const mutate of [b=>{b.branch_changes[1]=null;},b=>{b.branch_changes[1].entry.direction='loading';},
+    b=>{b.branch_changes[1].entry.layers[0].id='other';},b=>{b.branch_changes[1].transitions={};}]) {
+    const changed=JSON.parse(raw);mutate(changed.bindings['front.R']);
+    assert.throws(()=>motion(cyclicCompressionMotion(),undefined,JSON.stringify(changed)),/compression|pressure|branch/i);
+  }
+  assert.doesNotThrow(()=>motion(cyclicCompressionMotion(),undefined,raw));
+});
+
+test('clearance controls defer solved pressure and physical branch qualification to Rust',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise;
+  const policy=motionCompressionControls(),binding=policy.bindings['front.R'];
+  binding.controls=[{kind:'gap',gap_m:0.017},{kind:'pressure',pressure_pa:250},{kind:'gap',gap_m:0.013}];
+  const original=JSON.stringify(policy),raw=motion(cyclicCompressionMotion(),undefined,original);
+  assert.ok(raw.includes(original));assert.deepEqual(JSON.parse(raw).transient_surface.prescribed_compression,policy);
+  binding.controls=[{kind:'pressure',pressure_pa:500},{kind:'pressure',pressure_pa:250},{kind:'gap',gap_m:0.013}];
+  assert.throws(()=>motion(cyclicCompressionMotion(),undefined,JSON.stringify(policy)),/active branch direction/);
+});
+
+test('compressed sheet convection remains qualified and independent of film-only coverage targets',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  for(const policy of [motionCompressionInput(),motionCompressionCycle(),motionCompressionControls()]) {
+    const intervals=policy.bindings['front.R'].pressure_pa?.length||policy.bindings['front.R'].controls.length;
+    const input=cyclicCompressionMotion(),coverage=await guidedMovingCoverageHeat();
+    input.keyframes=input.keyframes.slice(0,intervals);
+    input.transient_surface.boundaries=input.transient_surface.boundaries.slice(0,intervals);
+    input.transient_surface.exterior_exchange=Array.from({length:intervals},(_,i)=>exteriorPolicy({
+      convection_w_m2_k:8+i,radiation:null}));
+    coverage.boundaries=Array.from({length:intervals},()=>({...coverage.boundaries[0]}));
+    coverage.exposed_boundaries=Array(intervals).fill(null);input.transient_coverage=coverage;
+    const original=' \r\n'+JSON.stringify(policy)+'\r\n',before=JSON.stringify(input);
+    for(const target of [undefined,'transient_surface','transient_coverage','both']) {
+      const raw=motion(input,undefined,original,target);
+      assert.ok(raw.includes(original));assert.deepEqual(JSON.parse(raw).transient_surface.exterior_exchange,
+        input.transient_surface.exterior_exchange);
+    }
+    const scenario=single({...scenarioState(),motion:input,motionCompression:original,
+      motionCompressionTarget:'both',maxMotionTrials:1024,maxVertexFrames:32000000});
+    assert.deepEqual(JSON.parse(scenario).motion.transient_surface.exterior_exchange,input.transient_surface.exterior_exchange);
+    assert.equal(JSON.stringify(input),before);
+    input.transient_surface.exterior_exchange[0].radiation={ambient_c:0,automatic_material_face:true,
+      allow_opaque_gray_approximation:true};
+    assert.doesNotThrow(()=>motion(input,undefined,original,'transient_coverage'),'Unselected sheet radiation remains independent');
+    for(const target of [undefined,'transient_surface','both']) {
+      assert.throws(()=>motion(input,undefined,original,target),/convection-only/);
+    }
+  }
 });

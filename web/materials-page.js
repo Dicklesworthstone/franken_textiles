@@ -382,9 +382,13 @@ function controls() {
     for (const button of buttons) button.disabled = !editInitials;
   }
   const editLiquid = !!source && guidedScenarioMode() && motionMode === "form" && $("guidedMotionHeat").checked;
-  $("guidedMotionCompression").disabled = !editLiquid;
+  const editCompression = !!source && guidedScenarioMode() && motionMode === "form" &&
+    ($("guidedMotionHeat").checked || $("guidedMotionCoverage").checked);
+  $("guidedMotionCompression").disabled = !editCompression;
   $("guidedMotionCompressionFileField").hidden = !$("guidedMotionCompression").checked;
-  $("guidedMotionCompressionFile").disabled = !editLiquid || !$("guidedMotionCompression").checked;
+  $("guidedMotionCompressionTargetField").hidden = !$("guidedMotionCompression").checked;
+  $("guidedMotionCompressionTarget").disabled = !editCompression || !$("guidedMotionCompression").checked;
+  $("guidedMotionCompressionFile").disabled = !editCompression || !$("guidedMotionCompression").checked;
   const liquidMode = $("guidedMotionWaterMode").value || "none";
   $("guidedMotionWaterMode").disabled = !editLiquid;
   for (const [mode, , file] of guidedMotionLiquidSources) {
@@ -5670,7 +5674,8 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   const surface = $("guidedScenarioHeat").checked;
   const motionMode = guidedMotionMode(), materialStrain = $("guidedMaterialStrain").checked;
   const liquidMode = motionMode === "form" && $("guidedMotionHeat").checked ? ($("guidedMotionWaterMode").value || "none") : "none";
-  const compression = motionMode === "form" && $("guidedMotionHeat").checked && $("guidedMotionCompression").checked;
+  const compression = motionMode === "form" && ($("guidedMotionHeat").checked || $("guidedMotionCoverage").checked) &&
+    $("guidedMotionCompression").checked;
   if (!["none", ...guidedMotionLiquidSources.map(([mode]) => mode)].includes(liquidMode)) {
     throw Error("Choose no textile water, a direct policy, uncoupled alternatives or paired qualifications.");
   }
@@ -5699,6 +5704,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     };
   }
   if (motionMode === "form") Object.assign(input, guidedMotionInput());
+  if (compression) input.motionCompressionTarget = $("guidedMotionCompressionTarget").value || "transient_surface";
   if (motionMode === "file") input.maxMotionTrials = number("guidedScenarioMotionTrials", "case motion-attempt allowance");
   if (materialStrain) {
     const scope = $("guidedMaterialStrainScope").value || "all";
@@ -5790,10 +5796,13 @@ function showGuidedScenarioDrafts() {
       `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
       `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
       `${value.motion?.transient_surface ? "retained independent-sheet heat history" : "no sheet heat history"}; ` +
-      (value.motion?.transient_surface?.prescribed_compression ? "retained pressure-conditioned sheet heat; " +
-        (["ftx-motion-surface-compression/2", "ftx-motion-surface-compression/3"].includes(value.motion.transient_surface.prescribed_compression.schema) ?
-          `${Object.values(value.motion.transient_surface.prescribed_compression.bindings || {}).reduce((sum, binding) =>
-            sum + (Array.isArray(binding?.branch_changes) ? binding.branch_changes.filter(change => change !== null).length : 0), 0)} acquired branch changes; ` : "") : "") +
+      [["transient_surface", "sheet heat"], ["transient_coverage", "body/layer heat"]].map(([consumer, label]) => {
+        const pressure = value.motion?.[consumer]?.prescribed_compression;
+        return pressure ? `retained pressure-conditioned ${label}; ` +
+          (["ftx-motion-surface-compression/2", "ftx-motion-surface-compression/3"].includes(pressure.schema) ?
+            `${Object.values(pressure.bindings || {}).reduce((sum, binding) =>
+              sum + (Array.isArray(binding?.branch_changes) ? binding.branch_changes.filter(change => change !== null).length : 0), 0)} acquired branch changes; ` : "") : "";
+      }).join("") +
       `${value.motion?.transient_coverage ? "retained moving body/layer heat history" : "no moving body/layer heat history"}; ` +
       `${hasTextileWaterPolicy(value.motion?.transient_surface) ? "retained textile-water heat policy" : "no textile-water policy"}; ` +
       `${item.comparison && JSON.parse(item.comparison) !== null ? "retained case comparison" : "shared comparison at run time"}.`;
@@ -6336,9 +6345,9 @@ $("guidedMotionSource").addEventListener("change", () => {
 $("guidedMotionFile").addEventListener("change", () => {
   if (guidedMotionMode() === "file") changedGuidedScenarioDraft(); else controls();
 });
-for (const id of ["guidedMotionCompression", "guidedMotionCompressionFile"]) {
+for (const id of ["guidedMotionCompression", "guidedMotionCompressionFile", "guidedMotionCompressionTarget"]) {
   $(id).addEventListener("change", () => {
-    if (guidedMotionMode() === "form" && $("guidedMotionHeat").checked &&
+    if (guidedMotionMode() === "form" && ($("guidedMotionHeat").checked || $("guidedMotionCoverage").checked) &&
         (id === "guidedMotionCompression" || $("guidedMotionCompression").checked)) changedGuidedScenarioDraft();
     else controls();
   });
@@ -6900,6 +6909,7 @@ function resetGuidedScenarios() {
   }
   $("guidedMotionWaterMode").value = "none"; $("guidedMotionWaterMechanical").checked = false;
   $("guidedMotionCompression").checked = false; $("guidedMotionCompressionFile").value = "";
+  $("guidedMotionCompressionTarget").value = "transient_surface";
   roundFiles.delete("guidedMotionCompressionFile");
   for (const id of [...guidedMotionLiquidSources.map(([, , file]) => file), "guidedMotionWaterMechanicsFile"]) {
     $(id).value = ""; roundFiles.delete(id);

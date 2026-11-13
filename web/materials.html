@@ -1322,20 +1322,12 @@ Choose numerical force limits explicitly; no safe-fit threshold is supplied.</p>
 <div id="guidedMotionForm">
 <p>Save 1–16 endpoints on the selected body shape. Times are cumulative seconds after the initial drape.
 Each endpoint gives an absolute arm and leg pose; selecting standing explicitly returns the legs to standing.</p>
-<label><input id="guidedMotionHeat" type="checkbox"> Track independent-sheet heat through this movement</label>
-<fieldset id="guidedMotionHeatSettings" hidden><legend>Sheet heat initial state and work limits</legend>
-<label>Initial temperature arrangement <select id="guidedMotionHeatInitialMode"><option value="uniform">Uniform through each sheet</option>
-<option value="profiles">Explicit profile through every retained sheet</option></select></label>
-<div class="study-fields">
-<label id="guidedMotionHeatDefaultField">Default initial textile temperature (°C) <input id="guidedMotionHeatInitial" type="number" min="-273.15" step="any" placeholder="Explicit initial condition"></label>
-<label>Cells through each sheet <input id="guidedMotionHeatCells" type="number" min="1" max="64" step="1" value="4"></label>
-<label>Maximum thermal substep (s) <input id="guidedMotionHeatStep" type="number" min="0.000000001" max="1" step="any" value="0.01"></label>
-<label>Temperature-cell advances per history <input id="guidedMotionHeatBudget" type="number" min="1" max="10000000" step="1" value="100000"></label>
-</div>
-<p class="note">Each retained material must supply admitted conductivity, thickness and heat capacity. The initial temperature
-is an authored condition after the initial drape. Work limits bound computation; an unavailable heat result leaves independent results visible.</p>
 <fieldset><legend>Compression-conditioned insulation</legend>
-<label><input id="guidedMotionCompression" type="checkbox"> Use qualified compression histories for selected garment instances</label>
+<label><input id="guidedMotionCompression" type="checkbox"> Use qualified pressure or clearance histories for selected garment instances</label>
+<label id="guidedMotionCompressionTargetField" hidden>Apply the compression history to
+<select id="guidedMotionCompressionTarget"><option value="transient_surface">Independent-sheet heat</option>
+<option value="transient_coverage">Moving body/layer heat</option>
+<option value="both">Both heat histories</option></select></label>
 <label id="guidedMotionCompressionFileField" hidden>Original compression acquisition and interval schedule JSON
 <input id="guidedMotionCompressionFile" type="file" accept=".json,application/json"></label>
 <p class="note">Supply each instance's exact material, measured pressure/thickness and heat properties, initial preload,
@@ -1348,9 +1340,23 @@ Version <code>/3</code> replaces <code>pressure_pa</code> with <code>controls</c
 <code>{"kind":"pressure","pressure_pa":250}</code> or <code>{"kind":"gap","gap_m":0.015}</code>.
 Clearance controls solve pressure from the acquired branch. Original source files remain unchanged in saved cases and replay.
 Neither control infers pressure from body contact; normal compression work is reported separately from heat.
-Use dry sheets with prescribed films or a separately qualified convection-only exterior.
-Radiation, liquid and deformation heating still require compatible pressure-conditioned qualifications.</p>
+For body/layer heat, current conditioned thickness changes the covered layers and gaps while covered and exposed cloth retain one thermal state.
+Select each heat history explicitly. Both modes admit dry textiles with prescribed films; independent-sheet
+heat also admits separately qualified convection. Compressed body/layer heat requires films, including an
+explicit film or adiabatic choice for exposed cloth. Wet laws, deformation heating and radiation require compatible compression qualifications.</p>
 </fieldset>
+<label><input id="guidedMotionHeat" type="checkbox"> Track independent-sheet heat through this movement</label>
+<fieldset id="guidedMotionHeatSettings" hidden><legend>Sheet heat initial state and work limits</legend>
+<label>Initial temperature arrangement <select id="guidedMotionHeatInitialMode"><option value="uniform">Uniform through each sheet</option>
+<option value="profiles">Explicit profile through every retained sheet</option></select></label>
+<div class="study-fields">
+<label id="guidedMotionHeatDefaultField">Default initial textile temperature (°C) <input id="guidedMotionHeatInitial" type="number" min="-273.15" step="any" placeholder="Explicit initial condition"></label>
+<label>Cells through each sheet <input id="guidedMotionHeatCells" type="number" min="1" max="64" step="1" value="4"></label>
+<label>Maximum thermal substep (s) <input id="guidedMotionHeatStep" type="number" min="0.000000001" max="1" step="any" value="0.01"></label>
+<label>Temperature-cell advances per history <input id="guidedMotionHeatBudget" type="number" min="1" max="10000000" step="1" value="100000"></label>
+</div>
+<p class="note">Each retained material must supply admitted conductivity, thickness and heat capacity. The initial temperature
+is an authored condition after the initial drape. Work limits bound computation; an unavailable heat result leaves independent results visible.</p>
 <fieldset><legend>Heat from textile deformation</legend>
 <label><input id="guidedMotionHeatPlastic" type="checkbox"> Convert permanent in-plane deformation (plastic yield) to heat</label>
 <label><input id="guidedMotionHeatRelaxation" type="checkbox"> Convert time-dependent relaxation (Maxwell dashpots) to heat</label>

@@ -21507,7 +21507,7 @@ test('guided controlled compression refuses unsupported heating and malformed co
     if(policy==='deformation'){p.e.guidedMotionHeatPlastic.checked=true;p.e.guidedMotionHeatPlastic.handlers.change();}
     const before=p.current().messages.length;await p.e.scenario.onclick();
     assert.equal(p.current().messages.length,before,policy);
-    assert.match(p.e.error.textContent,/without radiation, liquid or deformation-heating/);
+    assert.match(p.e.error.textContent,policy==='radiation'?/without radiation/:/without liquid or deformation-heating/);
   }
   const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
   for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
@@ -21555,4 +21555,96 @@ test('controlled compression results display chronological requested controls an
   assert.match(visibleText(s),/neither control infers pressure from garment contact/);
   assert.match(visibleText(s),/original compression acquisitions and complete control history/);
   assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+});
+
+
+test('guided layered compression works without sheet heat and cancels obsolete target choices',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedCoverageHeatControls(p);
+  guidedMovingTopology(p);guidedCoverageHeatFilm(p);
+  p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();
+  await addGuidedMotion(p,0.002,35);guidedCompressionSource(p);
+  p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
+  assert.equal(p.e.guidedMotionHeat.checked,false);assert.equal(p.e.guidedMotionCompressionFile.disabled,false);
+  assert.equal(p.e.guidedMotionCompressionTarget.disabled,false);
+  await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(guidedCompressionOriginal));
+  const motion=JSON.parse(sent.scenarioRequest).motion;
+  assert.equal(Object.hasOwn(motion,'transient_surface'),false);
+  assert.deepEqual(motion.transient_coverage.prescribed_compression,JSON.parse(guidedCompressionOriginal));
+  p.e.guidedMotionCompressionTarget.value='transient_surface';p.e.guidedMotionCompressionTarget.handlers.change();
+  assert.equal(worker.dead,true);p.ready();
+  worker.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  const before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/independent-sheet heat/);
+  p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+  p.emit(scenarioReport());await p.load();
+  assert.equal(p.e.guidedMotionCompression.checked,false);
+  assert.equal(p.e.guidedMotionCompressionTarget.value,'transient_surface');
+  assert.equal(p.e.guidedMotionCompressionTarget.disabled,true);
+});
+
+test('guided pressure targets freeze independently across named sheet and layered histories',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);await guidedDissipationHistories(p);
+  const source=JSON.parse(guidedCompressionOriginal),binding=source.bindings['front.R'];
+  source.schema='ftx-motion-surface-compression/3';delete binding.pressure_pa;
+  binding.controls=[{kind:'gap',gap_m:0.015}];
+  const original=' \r\n'+JSON.stringify(source).replace('"gap_m":0.015','"gap_m":1.500e-2')
+    .replace('"pressure_pa":0','"pressure_pa":-0.0')+'\r\n';
+  guidedCompressionSource(p,original);await saveGuidedCase(p,'sheets');
+  p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
+  await saveGuidedCase(p,'layers');
+  p.e.guidedMotionCompressionTarget.value='both';p.e.guidedMotionCompressionTarget.handlers.change();
+  await saveGuidedCase(p,'both');
+  assert.match(visibleText(p.e.guidedScenarioCases),/retained pressure-conditioned body\/layer heat/);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(original));
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.equal(cases.length,3);
+  for(const [index,targets] of [['0',['transient_surface']],['1',['transient_coverage']],['2',['transient_surface','transient_coverage']]]) {
+    const motion=cases[index].scenario.motion;
+    for(const consumer of ['transient_surface','transient_coverage']) {
+      assert.equal(Object.hasOwn(motion[consumer],'prescribed_compression'),targets.includes(consumer));
+      if(targets.includes(consumer))assert.deepEqual(motion[consumer].prescribed_compression,source);
+    }
+  }
+  p.select('guidedMotionCompressionFile','{bad');p.e.guidedMotionCompressionFile.handlers.change();
+  assert.equal(p.current().dead,false,'Saved named cases retain their own exact acquisitions and target consumers');
+  p.emit(scenarioReport());await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided layered compression snapshots the selected target before reading original source bytes',async()=>{
+  const {p}=await guidedScenarioSetup();await guidedDissipationHistories(p);guidedCompressionSource(p);
+  p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
+  const read=deferred();
+  p.e.guidedMotionCompressionFile.files=[{name:'pressure.json',size:Buffer.byteLength(guidedCompressionOriginal),arrayBuffer:()=>read.promise}];
+  const pending=p.e.scenario.onclick();
+  p.e.guidedMotionCompressionTarget.value='both'; // No edit event: the pending request owns its captured target.
+  read.resolve(utf8Buffer(guidedCompressionOriginal));await pending;
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const motion=JSON.parse(sent.scenarioRequest).motion;
+  assert.equal(Object.hasOwn(motion.transient_surface,'prescribed_compression'),false);
+  assert.deepEqual(motion.transient_coverage.prescribed_compression,JSON.parse(guidedCompressionOriginal));
+  p.e.guidedMotionCompressionTarget.handlers.change();assert.equal(p.current().dead,false);
+  p.ready();await p.e.scenario.onclick();
+  const next=JSON.parse(p.current().messages.at(-1).scenarioRequest).motion;
+  assert.deepEqual(next.transient_surface.prescribed_compression,next.transient_coverage.prescribed_compression);
+});
+
+test('guided layered compression refuses unqualified heating without losing its independent sheet history',async()=>{
+  const {p}=await guidedScenarioSetup();await guidedDissipationHistories(p);guidedCompressionSource(p);
+  p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
+  guidedDissipationChoice(p,'Coverage','Plastic',true);
+  const before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/dry film-boundary/);
+  guidedDissipationChoice(p,'Coverage','Plastic',false);
+  guidedDissipationChoice(p,'Heat','Plastic',true);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const motion=JSON.parse(sent.scenarioRequest).motion;
+  assert.equal(motion.transient_surface.plastic_dissipation_heat,'uniform_reference_thickness');
+  assert.equal(Object.hasOwn(motion.transient_surface,'prescribed_compression'),false);
+  assert.deepEqual(motion.transient_coverage.prescribed_compression,JSON.parse(guidedCompressionOriginal));
 });

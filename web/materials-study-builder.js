@@ -536,7 +536,7 @@ function motionCompressionSource(raw, keyframes) {
 }
 
 /** Author prescribed endpoints around exact liquid policies; Rust owns physical admission and evolution. */
-export function buildMaterialMotionRequest(state, liquid = undefined, compression = undefined) {
+export function buildMaterialMotionRequest(state, liquid = undefined, compression = undefined, compressionTarget = undefined) {
   object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "source_pose_sampling", "transient_surface", "transient_coverage"],
     ["keyframes", "max_step_s", "max_trials", "max_pairs"], "Guided motion");
   if (!Array.isArray(state.keyframes) || !state.keyframes.length || state.keyframes.length > 16) {
@@ -699,25 +699,51 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
     }
   }
   let request;
+  let compressedConsumers = [];
+  if (compression === undefined && compressionTarget !== undefined) {
+    throw Error("A compression target requires an original pressure acquisition and interval schedule.");
+  }
   if (compression !== undefined) {
-    if (!own(state, "transient_surface")) throw Error("Prescribed compression requires authored independent-sheet heat.");
-    motionCompressionSource(compression, state.keyframes);
-    if (liquid !== undefined || heatingFields.some(field => state.transient_surface[field] != null) ||
-        state.transient_surface.exterior_exchange?.some(exterior => exterior?.radiation != null)) {
-      throw Error("Prescribed compression requires dry film-boundary or qualified convection heat without radiation, liquid or deformation-heating policies.");
+    const target = compressionTarget === undefined ? "transient_surface" : compressionTarget;
+    if (!["transient_surface", "transient_coverage", "both"].includes(target)) {
+      throw Error("Choose independent-sheet heat, moving body/layer heat or both as the compression target.");
     }
+    compressedConsumers = target === "both" ? ["transient_surface", "transient_coverage"] : [target];
+    for (const consumer of compressedConsumers) {
+      if (!own(state, consumer)) throw Error(consumer === "transient_surface" ?
+        "Prescribed compression requires authored independent-sheet heat." :
+        "Prescribed compression requires authored moving body/layer heat.");
+      const heat = state[consumer];
+      if ((consumer === "transient_surface" && liquid !== undefined) ||
+          heatingFields.some(field => heat[field] != null)) {
+        throw Error("Prescribed compression requires dry film-boundary heat or qualified sheet convection, without liquid or deformation-heating policies.");
+      }
+      if (consumer === "transient_coverage" &&
+          ["exterior_exchange", "exposed_exterior_exchange"].some(field => heat[field] != null)) {
+        throw Error("Moving body/layer compression currently requires dry film-boundary heat without exterior exchange.");
+      }
+      if (consumer === "transient_surface" && heat.exterior_exchange?.some(exterior => exterior.radiation != null)) {
+        throw Error("Compressed independent-sheet exterior exchange must be convection-only, without radiation.");
+      }
+    }
+    motionCompressionSource(compression, state.keyframes);
   }
   if (liquid === undefined && compression === undefined) request = JSON.stringify({ schema: "ftx-drape-motion/1", ...state });
   else {
+    const sources = {};
     if (liquid !== undefined) {
       if (!own(state, "transient_surface")) throw Error("Original textile-water policies require authored independent-sheet heat.");
       motionLiquidSources(liquid);
+      sources.transient_surface = { ...liquid };
     }
-    const sources = { ...liquid, ...(compression === undefined ? {} : { prescribed_compression: compression }) };
-    const heat = JSON.stringify(state.transient_surface).slice(0, -1) +
-      Object.entries(sources).map(([key, raw]) => `,${JSON.stringify(key)}:${raw}`).join("") + "}";
+    for (const consumer of compressedConsumers) {
+      sources[consumer] = { ...sources[consumer], prescribed_compression: compression };
+    }
+    const heat = Object.fromEntries(Object.entries(sources).map(([consumer, original]) => [consumer,
+      JSON.stringify(state[consumer]).slice(0, -1) +
+      Object.entries(original).map(([key, raw]) => `,${JSON.stringify(key)}:${raw}`).join("") + "}"]));
     request = "{" + Object.entries({ schema: "ftx-drape-motion/1", ...state }).map(([key, value]) =>
-      `${JSON.stringify(key)}:${key === "transient_surface" ? heat : JSON.stringify(value)}`).join(",") + "}";
+      `${JSON.stringify(key)}:${own(heat, key) ? heat[key] : JSON.stringify(value)}`).join(",") + "}";
   }
   bytes(request, MAX_REQUEST_BYTES, "Guided motion request exceeds 16 MiB.");
   return request;
@@ -814,7 +840,7 @@ function coveragePolicy(value, label, thermal = false) {
 /** Author one fresh drape with authored or original motion; source files remain verbatim and Rust owns numerical admission. */
 export function buildMaterialScenarioRequest(state) {
   object(state, ["fitSpec", "allowNoFit", "options", "maxMeshPoints", "maxVertexFrames", "surface",
-    "motion", "motionLiquid", "motionCompression", "maxMotionTrials", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage"],
+    "motion", "motionLiquid", "motionCompression", "motionCompressionTarget", "maxMotionTrials", "materialStrain", "contactLoads", "coverage", "vaporSurface", "vaporCoverage"],
     ["allowNoFit", "options", "maxMeshPoints", "maxVertexFrames"], "Guided scenario");
   if (typeof state.allowNoFit !== "boolean") throw Error("Declare the numerical-only study without a fit contract explicitly.");
   let fitSpec = "{}";
@@ -889,10 +915,10 @@ export function buildMaterialScenarioRequest(state) {
   if (own(state, "motion")) {
     if (typeof state.motion === "string") {
       if (own(state, "motionLiquid")) throw Error("Original motion requests retain their complete policies; choose authored motion to compose separate liquid sources.");
-      if (own(state, "motionCompression")) throw Error("Original motion requests retain their complete policies; choose authored motion to compose a separate compression source.");
+      if (own(state, "motionCompression") || own(state, "motionCompressionTarget")) throw Error("Original motion requests retain their complete policies; choose authored motion to compose a separate compression source.");
       motionPolicy(sourceObject(state.motion, "Prescribed motion"));
       motion = state.motion;
-    } else motion = buildMaterialMotionRequest(state.motion, state.motionLiquid, state.motionCompression);
+    } else motion = buildMaterialMotionRequest(state.motion, state.motionLiquid, state.motionCompression, state.motionCompressionTarget);
     if (!own(state, "maxMotionTrials")) {
       throw Error("Prescribed motion and its explicit integer scenario motion-trial budget must be supplied together.");
     }
@@ -903,7 +929,9 @@ export function buildMaterialScenarioRequest(state) {
     throw Error("A scenario motion-trial budget requires a prescribed motion request; both must be supplied together.");
   }
   if (own(state, "motionLiquid") && motion === undefined) throw Error("Original textile-water policies require authored motion and independent-sheet heat.");
-  if (own(state, "motionCompression") && motion === undefined) throw Error("Prescribed compression requires authored motion and independent-sheet heat.");
+  if ((own(state, "motionCompression") || own(state, "motionCompressionTarget")) && motion === undefined) {
+    throw Error("Prescribed compression requires authored motion and its selected heat history.");
+  }
   if (own(state, "materialStrain")) materialStrainPolicy(sourceObject(state.materialStrain, "Material strain"));
   if (own(state, "contactLoads")) contactLoadsPolicy(sourceObject(state.contactLoads, "Body contact loads"));
   const parts = ['{"schema":"ftx-drape-scenario/1","options":', JSON.stringify(options), ',"fit_spec":', fitSpec,

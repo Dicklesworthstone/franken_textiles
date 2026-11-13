@@ -531,12 +531,15 @@ remain necessary; a small energy residual alone proves neither physical accuracy
 The comparator's existing metric names still describe the initial static result. The separate
 motion metrics below compare signed cumulative energy and final cloth-cell temperatures.
 
-### Prescribed compression during moving-sheet heat
+### Prescribed compression during moving sheet heat
 
 `motion.transient_surface.prescribed_compression` connects an acquired pressure/thickness/transport
-branch to the actual moving independent-sheet history. This lets a scenario compare a declared
-loaded insulation state while continuing the same temperature cells through later pressure changes.
-The pressure is a supplied operating boundary; no contact force is divided by an assumed area.
+branch to moving independent-sheet heat. The same optional object at
+`motion.transient_coverage.prescribed_compression` conditions the actual moving body/layer history,
+including covered cloth and exposed remainders. Either consumer can opt in independently.
+This lets a scenario compare a declared loaded insulation state while carrying its reference-material
+thermal state through later pressure changes. Pressure is a supplied operating boundary; no contact
+force is divided by an assumed area.
 
 The optional object uses `ftx-motion-surface-compression/1` for a monotone acquired pressure branch,
 `/2` for an explicit source-qualified sequence of loading, unloading and reloading branches, or `/3`
@@ -588,11 +591,18 @@ the original acquisition. A clearance control solves pressure from the actual ac
 branch; it does not substitute the garment/body separation or a contact-force estimate. Unattainable
 clearances, nonunique inverse pressure and undeclared direction reversals refuse. Switching control
 kind does not change the active source branch. The next heat solve uses its exact frozen selection. Repeated samples in that interval
-keep the same pressure state. Every temperature cell is transferred unchanged only after the thermal
-boundary verifies identical cell capacity and identical reference areal mass. Resistance exchanges
-heat over the accepted triangle's **current area**; storage remains attached to its **reference
-mass**. Different physical instances can therefore share an original fabric and follow different
-pressure schedules without sharing a temperature or conditioned-material state.
+keep the same pressure state. Independent-sheet temperature cells transfer unchanged only after
+the thermal boundary verifies identical cell capacity and identical reference areal mass.
+For layered coverage, the existing projection recomputes body coverage, layer thickness and gaps
+from the conditioned surface at the current cloth/body geometry. A narrowly qualified transport
+change then remaps covered and exposed enthalpy in reference-material coordinates; ordinary remapping
+still rejects a changed source model. Changing resistance or thickness supplies no environmental
+heat and cannot reset newly covered cloth to a body or ambient temperature.
+
+Resistance exchanges heat over the accepted **current area**; storage remains attached to
+**reference mass**. Different physical instances can share an original fabric and follow different
+pressure schedules without sharing a temperature or conditioned-material state. Layered remapping
+retains its existing first-order mixing and geometric refusal boundaries.
 
 Normal branch work is the acquired per-area integral over the actual current instance area, held
 fixed during the instantaneous pressure traverse. It has a separate signed ledger and contributes
@@ -606,8 +616,10 @@ The result's ordinary `model` is the final conditioned thermal surface. Its
 `initial_model`, initial/final instance states, one `updates` entry per interval, interval model and
 material hashes, actual work areas and separate cumulative normal work. `normal_work_to_heat_j` is
 zero. Trace rows retain their active conditioned identities, so initial temperature/profile admission
-and final heat objectives can replay the same original sources and pressure path. Existing sheet
-heat metrics consume the resulting heat; normal work is not added to a thermal objective.
+and final heat objectives can replay the same original sources and pressure path. Layered results
+also retain the final source in `checkpoint.frame.source`, with projection, coverage, frame and state
+identities bound to that conditioned surface. Existing sheet or coverage heat metrics consume the
+resulting heat; normal work is not added to a thermal objective.
 Versions `/2` and `/3` additionally retain each authored branch change and its independently
 reconstructed zero-work entry receipt at the actual transition interval. Version `/3` uses
 `ftx-motion-surface-compression-result/3`; every update retains its exact requested `control`,
@@ -616,29 +628,40 @@ comparisons replay those joins through the same material authority before admitt
 objectives; missing or altered branch/source/state receipts withhold the affected thermal
 result while independent manufacturing remains available.
 
-All three versions use the existing uniform dry films or a separately qualified convection-only
-`exterior_exchange` schedule. Each environment must qualify its coefficient, source, estimate consent
-and surface-temperature domain for the stated geometry, motion and compressed state. The outside film
-must be zero and `outside_c` must equal that interval's `air_c`. Current accepted area sets convection;
-pressure-conditioned transport and retained reference mass set the heat response. Explicit zero
-convection is allowed. Source/domain or late heat failure rolls back the complete pressure and heat
-interval. Comparisons reconcile every convective power/energy receipt with the outside heat ledger
-and require zero radiative exchange before admitting a thermal objective.
+All three versions use the existing uniform dry films. Independent-sheet compression also admits
+a separately qualified convection-only `exterior_exchange` schedule. Each environment must qualify
+its coefficient, source, estimate consent and surface-temperature domain for the stated geometry,
+motion and compressed state. The outside film must be zero and `outside_c` must equal that interval's
+`air_c`. Current accepted area sets convection; pressure-conditioned transport and retained reference
+mass set the heat response. Explicit zero convection is allowed. Source/domain or late heat failure
+rolls back the complete pressure and heat interval. Comparisons reconcile every convective power/energy
+receipt with the outside heat ledger and require zero radiative exchange before admitting a thermal
+objective.
 
-Radiation, textile water, mechanical liquid coupling and dissipation heating remain refused: these
-acquisitions do not establish the corresponding pressure-conditioned combined laws. Covered-body layered heat is
-a separate consumer and receives no inferred pressure field. Omission preserves the original dry
-history and receipt shape. Numerical conservation and synthetic pressure/RC answers establish this
-software composition; time-dependent recovery and measured garment thermal performance remain separate
+Compressed coverage retains explicit film or adiabatic choices for exposed cloth. Exterior exchange,
+seam/closure bridges and dissipation heating require compatible pressure qualifications and remain
+refused within that coverage history. Independent-sheet compression still refuses radiation, its
+textile-water and liquid-coupling options, and dissipation heating. A separately requested wet-sheet
+or mechanical history keeps its own domain; compressed coverage still models dry thermal storage
+and supplies no wet/compressed law. Omission preserves the original
+dry history and receipt shape. Numerical conservation and synthetic pressure/RC answers establish
+software behavior; time-dependent recovery and measured garment thermal performance remain separate
 qualification work.
 
-In the guided workbench, enable **Compression-conditioned insulation** and load the original
-compression JSON beside the authored motion intervals. Version `/3` preserves pressure and clearance
-controls, acquisition text and qualified branch changes exactly through single studies, saved named
-cases and replay downloads. Convection-only environments use the existing explicit exterior controls.
-The result table shows each declared control beside its solved pressure, actual thickness, clearance
-residual and signed work; acquired branch joins retain their own chronological source table. Editing
-or replacing a compression source cancels obsolete work and withdraws its results.
+In the Material Workbench's authored-motion controls, enable **Compression-conditioned insulation**,
+choose **Independent-sheet heat**, **Moving body/layer heat**, or **Both heat histories**, and load
+the original compression acquisition/schedule, including explicit pressure or clearance controls.
+Enable the corresponding heat histories and save their
+interval boundaries as usual. The existing sheet-only default remains unchanged. The selected
+consumer and exact source bytes freeze with each named case and replay download; changing either
+withdraws obsolete active results. Each history reports its own work and heat ledger, so requesting
+both does not add their energies together.
+Version `/3` preserves pressure and clearance controls, acquisition text and qualified branch changes
+exactly through single studies, saved named cases and replay downloads. Convection-only environments
+for independent sheets use the existing explicit exterior controls. The result table shows each
+declared control beside its solved pressure, actual thickness, clearance residual and signed work;
+acquired branch joins retain their own chronological source table. Editing or replacing a compression
+source cancels obsolete work and withdraws its results.
 
 ### Qualified irreversible material heating
 

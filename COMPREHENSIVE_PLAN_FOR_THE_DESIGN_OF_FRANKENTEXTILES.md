@@ -5824,6 +5824,22 @@ single scenarios, frozen named cases and replay downloads. Chronological result 
 requested controls from solved pressure, actual thickness and clearance residuals, with acquired
 branch joins shown alongside them. Source edits and cancellation withdraw obsolete results.
 
+### 25.203 Carry prescribed compression through moving layered body heat
+
+The existing acquired pressure, clearance and branch histories now condition moving body/layer coverage as
+well as independent sheets. Each exact physical instance retains its reference mass and specific
+heat while conditioned thickness reaches the actual layer projection and declared air gaps.
+Covered and exposed enthalpy transfer through the existing material-coordinate remapper; ordinary
+source substitution remains refused. Pressure, geometry, temperatures and separate normal work
+advance atomically, once per authored interval even when source poses add intermediate samples.
+
+Material and design comparisons replay the original acquisitions, pressure transitions and final
+conditioned source/coverage identities before admitting thermal objectives. The workbench explicitly
+targets sheet heat, layered heat or both and freezes that choice with its original source bytes.
+This advances `ftx-cp2`, `ftx-tm5` and `ftx-ms2`; film-boundary numerical composition does not establish
+contact-derived pressure, a combined wet/compressed law, normal-work heating, time-dependent recovery
+or independently measured garment performance.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
