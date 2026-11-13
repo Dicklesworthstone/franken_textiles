@@ -21201,6 +21201,83 @@ test('time subdivision handoffs reject malformed policies and legacy packets cle
   await q.windowEvents.message({origin:'https://unit.invalid',source:q.opener,data:{type:'ftx-round-sources',token,files,drapeSettings:checkedSettings}});
   assert.equal(q.e.splitTimeSteps.checked,false);assert.equal(q.e.timeMaxTrials.disabled,true);
 });
+function guidedIndependentArmsDraft(p,left,right,enabled=true) {
+  p.e.guidedMotionIndependentArms.checked=enabled;p.e.guidedMotionIndependentArms.handlers.change();
+  for(const [side,angle] of [['Left',left],['Right',right]]) {
+    p.e['guidedMotionArm'+side].value=String(angle);p.e['guidedMotionArm'+side].handlers.input();
+  }
+}
+
+test('guided independent arms preserve saved endpoints and display actual sides with symmetric returns',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  assert.equal(p.e.guidedMotionIndependentArms.checked,false);
+  assert.ok(p.e.guidedMotionArmLeft.disabled&&p.e.guidedMotionArmRight.disabled);
+  guidedIndependentArmsDraft(p,70,25);await addGuidedMotion(p,0.002,35,'seated',0.1);
+  guidedIndependentArmsDraft(p,90,80,false);await addGuidedMotion(p,0.004,40);
+  guidedIndependentArmsDraft(p,0,180);await addGuidedMotion(p,0.006,35);
+  const expected=[{time_s:0.002,arm_abduction_deg:35,leg_pose:{posture:'seated',fraction:0.1},
+    arm_pose:{left_abduction_deg:70,right_abduction_deg:25}},
+    {time_s:0.004,arm_abduction_deg:40},
+    {time_s:0.006,arm_abduction_deg:35,arm_pose:{left_abduction_deg:0,right_abduction_deg:180}}];
+  assert.match(visibleText(p.e.guidedMotionKeyframes),/left arm 70°, right arm 25°/);
+  assert.match(visibleText(p.e.guidedMotionKeyframes),/arms 40°/);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.keyframes,expected);
+  const report=scenarioReport();report.scenario.scenario=JSON.parse(sent.scenarioRequest);
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({duration_s:0.006,
+    samples:[{},{},{}],trials:6,path_sha256:'independent-source-arms',metrics:{max_absolute_edge_strain_pct:1.25},
+    keyframes:expected.map(frame=>({...frame,surface:omitted(),coverage:omitted()}))});
+  guidedIndependentArmsDraft(p,10,20);
+  p.emit(report,[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const result=section(p,'Fresh drape and heat alternatives');
+  const table=descendants(result).find(node=>node.tag==='table'&&node.children[0].textContent.startsWith('A: endpoint'));
+  assert.ok(table);assert.deepEqual(table.children[1].children.slice(1,3).map(node=>node.textContent),
+    ['Left arm angle (degrees)','Right arm angle (degrees)']);
+  assert.deepEqual(table.children.slice(2).map(row=>row.children.slice(1,3).map(node=>node.textContent)),
+    [['70','25'],['40','40'],['0','180']]);
+  const download=descendants(result).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);
+});
+
+test('guided independent arms refuse invalid replacements without losing saved work and reset with the source',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  guidedIndependentArmsDraft(p,70,25);await addGuidedMotion(p,0.002,35);
+  await p.e.scenario.onclick();const old=p.current(),original=old.messages.at(-1).scenarioRequest;
+  for(const [left,right] of [['',25],[70,''],[-0.01,25],[70,180.01],['Infinity',25]]) {
+    guidedIndependentArmsDraft(p,left,right);assert.equal(old.dead,false);
+    await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+    assert.equal(old.dead,false);assert.equal(p.e.guidedMotionKeyframes.children.length,1);
+    assert.match(p.e.error.textContent,/arm (pose|angle)/i);
+  }
+  guidedIndependentArmsDraft(p,80,30);assert.equal(old.dead,false);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  assert.equal(old.dead,true);p.ready();await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.keyframes[0].arm_pose,
+    {left_abduction_deg:80,right_abduction_deg:30});
+  assert.deepEqual(JSON.parse(original).motion.keyframes[0].arm_pose,{left_abduction_deg:70,right_abduction_deg:25});
+  p.emit(scenarioReport());await p.load();
+  assert.equal(p.e.guidedMotionIndependentArms.checked,false);
+  assert.equal(p.e.guidedMotionArmLeft.value,'');assert.equal(p.e.guidedMotionArmRight.value,'');
+  assert.ok(p.e.guidedMotionArmLeft.disabled&&p.e.guidedMotionArmRight.disabled);
+});
+
+test('guided independent arm named cases freeze their sides after later draft replacement',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
+  guidedIndependentArmsDraft(p,70,25);await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'left-reach');
+  guidedIndependentArmsDraft(p,25,70);guidedMotionDraft(p,0.004,36,'squat',0.2);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await saveGuidedCase(p,'right-reach');
+  guidedIndependentArmsDraft(p,90,90);await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).cases.map(item=>[item.key,item.scenario.motion.keyframes[0].arm_pose]),
+    [['left-reach',{left_abduction_deg:70,right_abduction_deg:25}],['right-reach',{left_abduction_deg:25,right_abduction_deg:70}]]);
+  const worker=p.current();guidedIndependentArmsDraft(p,35,35,false);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');p.e.clearMotionKeyframes.onclick();
+  assert.equal(worker.dead,false);
+  p.emit(scenarioReport());await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
 function guidedRootRotationDraft(p,rotation,enabled=true) {
   p.e.guidedMotionRotate.checked=enabled;p.e.guidedMotionRotate.handlers.change();
   for(const [index,axis] of ['X','Y','Z'].entries()) {

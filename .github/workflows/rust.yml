@@ -41,7 +41,7 @@ jobs:
           cargo test -p ftx-wasm --test material_scenario --locked surface_water::distinct_initial_temperatures_reach_heated_sheet_and_coverage_decisions -- --exact
           cargo test -p ftx-drape --test thermal_coverage_exterior --locked
   native:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

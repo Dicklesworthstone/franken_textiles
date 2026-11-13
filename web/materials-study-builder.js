@@ -388,6 +388,16 @@ function motionLiquidSources(sources) {
   // Parsed objects are never serialized back over the original qualification text.
 }
 
+function motionArmPose(frame) {
+  if (!own(frame, "arm_pose") || frame.arm_pose === null) return;
+  const fields = ["left_abduction_deg", "right_abduction_deg"];
+  const arms = object(frame.arm_pose, fields, fields, "Motion arm pose");
+  if (fields.some(side => typeof arms[side] !== "number" || !Number.isFinite(arms[side]) ||
+      arms[side] < 0 || arms[side] > 180)) {
+    throw Error("Motion arm pose needs finite absolute left and right angles from 0 to 180 degrees.");
+  }
+}
+
 function motionRootTranslation(frame) {
   if (!own(frame, "root_translation_m") || frame.root_translation_m === null) return;
   const offset = frame.root_translation_m;
@@ -554,7 +564,8 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
   }
   let previous = 0, minimumTrials = 0;
   for (const frame of state.keyframes) {
-    object(frame, ["time_s", "arm_abduction_deg", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
+    object(frame, ["time_s", "arm_abduction_deg", "arm_pose", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
+    motionArmPose(frame);
     motionRootTranslation(frame);
     motionRootRotation(frame);
     if (typeof frame.time_s !== "number" || !Number.isFinite(frame.time_s) || frame.time_s > 60 ||
@@ -768,7 +779,8 @@ function motionPolicy(value) {
   }
   let previous = 0, minimumTrials = 0;
   for (const frame of value.keyframes) {
-    object(frame, ["time_s", "arm_abduction_deg", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion keyframe");
+    object(frame, ["time_s", "arm_abduction_deg", "arm_pose", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion keyframe");
+    motionArmPose(frame);
     motionRootTranslation(frame);
     motionRootRotation(frame);
     if (!Number.isFinite(frame.time_s) || frame.time_s > 60 || frame.time_s - previous < 1e-9 ||

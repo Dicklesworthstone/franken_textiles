@@ -244,6 +244,30 @@ is an explicit hold. Endpoint skins are generated once from the exact selected s
 source-model digest. No tape fit or accepted-shape adjustment occurs between endpoints or materials.
 Collision topology and vertex order must remain unchanged.
 
+For independent arm movement, supply the complete optional `arm_pose` pair at an endpoint:
+
+```json
+"keyframes": [
+  {"time_s": 0.004, "arm_abduction_deg": 35.0,
+   "arm_pose": {"left_abduction_deg": 35.1, "right_abduction_deg": 35.0}},
+  {"time_s": 0.008, "arm_abduction_deg": 35.2}
+]
+```
+
+Both side angles are absolute degrees from vertical, finite and in `0..180`, using the source
+model's own left/right bone names. The pair overrides the still-required common
+`arm_abduction_deg` at that endpoint. Omission or `null` uses that endpoint's common angle for
+**both** arms; the second endpoint above therefore returns to a symmetric 35.2° pose. An
+asymmetric hold must repeat the pair. Partial pairs, extra fields and invalid angles refuse.
+The existing per-side abduction axes, straightening and source skinning remain the authority;
+optional source-pose sampling interpolates each side independently. Initial garment placement
+remains symmetric, and the selected body shape is unchanged.
+
+The guided workbench's independent-arm checkbox exposes both angles. Add or Replace saves the
+pair with its endpoint; unsaved field edits leave saved endpoints and named cases unchanged.
+Result tables show each side's recorded angle, including symmetric returns. These controls add
+prescribed one-arm movement without qualifying anatomical reach, sleeve clearance or physical fit.
+
 Each keyframe may also supply `"leg_pose":{"posture":"seated","fraction":0.25}` or the
 same object with `"posture":"squat"`. The finite fraction must be in `0..1`; zero retains
 the standing legs and one applies the existing model's complete posture. Intermediate fractions
@@ -293,9 +317,9 @@ their exact requested transforms, and endpoint tables display the recorded rotat
 Use short turn increments: the solver still checks linear vertex chords, not circular rotation arcs.
 
 The same scenario JSON reaches both native material-study commands and the browser's scenario
-input. Reports retain each requested `leg_pose`, `root_translation_m` and `root_rotation_rad` beside
+input. Reports retain each requested `arm_pose`, `leg_pose`, `root_translation_m` and `root_rotation_rad` beside
 its endpoint time, arm angle and exact collision geometry; motion comparisons reject a missing or
-changed requested posture, translation or rotation. Existing arm-only and translation-only inputs
+changed requested arm pair, posture, translation or rotation. Existing symmetric-arm and translation-only inputs
 keep their previous behavior and serialized source identities. Calibrated nappy
 occupancy follows the same fixed occupied shape through every endpoint without recalibration.
 

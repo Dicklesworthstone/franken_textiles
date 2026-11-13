@@ -3656,6 +3656,46 @@ test('authored fit contracts enter existing linked and adaptive studies without 
   const adaptive=build(input,namedContext(undefined,12));assert.ok(adaptive.includes(raw));
   assert.deepEqual(JSON.parse(adaptive).design_fit.fit_spec,JSON.parse(raw));
 });
+test('independent arm angles retain absolute pairs original bytes and frozen named cases', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const legacy=motion(motionState()),frames=[
+    {time_s:0.25,arm_abduction_deg:35,arm_pose:{left_abduction_deg:70,right_abduction_deg:25},leg_pose:{posture:'seated',fraction:0.1}},
+    {time_s:0.5,arm_abduction_deg:40},{time_s:0.75,arm_abduction_deg:30,arm_pose:null}];
+  const input={...motionState(),keyframes:frames},before=JSON.stringify(input),authored=motion(input);
+  assert.deepEqual(JSON.parse(authored).keyframes,frames);assert.equal(JSON.stringify(input),before);
+  const first=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  input.keyframes[0].arm_pose.left_abduction_deg=80;
+  const second=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const saved=matrix({maxEvaluations:4,cases:[{key:'reach',scenario:first},{key:'further',scenario:second}]});
+  assert.deepEqual(JSON.parse(saved).cases.map(item=>item.scenario.motion.keyframes[0].arm_pose.left_abduction_deg),[70,80]);
+  assert.ok(saved.includes(first));assert.ok(saved.includes(second));
+  const original=' {\r\n"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.25,"arm_abduction_deg":35.0,'+
+    '"arm_pose":{"left_abduction_deg":-0.0,"right_abduction_deg":1.80e2}}],'+
+    '"max_step_s":0.125,"max_trials":128,"max_pairs":100000,"max_sample_vertices":500000}\r\n';
+  const retained=single({...scenarioState(),motion:original,maxMotionTrials:1024});
+  assert.ok(retained.includes(original));assert.match(retained,/"left_abduction_deg":-0\.0,"right_abduction_deg":1\.80e2/);
+  assert.equal(motion(motionState()),legacy);
+});
+
+test('guided and original motion require both independent arm angles in their finite range', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  const valid={left_abduction_deg:35,right_abduction_deg:40};
+  for(const arm_pose of [undefined,false,1,'35,40',[],[35,40],{},
+    {left_abduction_deg:35},{right_abduction_deg:40},{...valid,elbow_deg:0},
+    ...['left_abduction_deg','right_abduction_deg'].flatMap(side=>[-0.01,180.01,NaN,Infinity,-Infinity,null,'35']
+      .map(value=>({...valid,[side]:value})))]) {
+    const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:35,arm_pose}]};
+    assert.throws(()=>motion(input),/arm pose/i);
+    assert.throws(()=>single({...scenarioState(),motion:input,maxMotionTrials:1024}),/arm pose/i);
+    if(arm_pose!==undefined) assert.throws(()=>single({...scenarioState(),
+      motion:JSON.stringify({schema:'ftx-drape-motion/1',...input}),maxMotionTrials:1024}),/arm pose/i);
+  }
+  for(const arms of [{left_abduction_deg:0,right_abduction_deg:180},{left_abduction_deg:180,right_abduction_deg:0},null]) {
+    const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:35,arm_pose:arms}]};
+    assert.deepEqual(JSON.parse(motion(input)).keyframes[0].arm_pose,arms);
+  }
+});
+
 test('guided root rotations retain exact absolute controls through source files and frozen cases', async () => {
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
   const legacy=motion(motionState());

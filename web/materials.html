@@ -1461,10 +1461,17 @@ The engine checks exact retained ownership and each material's thermal domain.</
 </fieldset>
 <div class="study-fields">
 <label>Endpoint time (s) <input id="guidedMotionTime" type="number" min="0.000000001" max="60" step="any" placeholder="Cumulative time"></label>
-<label>Arm angle from vertical (°) <input id="guidedMotionArm" type="number" min="0" max="180" step="any" placeholder="0–180"></label>
+<label>Common arm angle from vertical (°) <input id="guidedMotionArm" type="number" min="0" max="180" step="any" placeholder="0–180"></label>
 <label>Leg posture <select id="guidedMotionLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
 <label>Fraction of seated or squat pose <input id="guidedMotionLegFraction" type="number" min="0" max="1" step="any" value="1" disabled></label>
 </div>
+<label><input id="guidedMotionIndependentArms" type="checkbox"> Set different left and right arm angles at this endpoint</label>
+<div class="study-fields">
+<label>Left arm angle from vertical (°) <input id="guidedMotionArmLeft" type="number" min="0" max="180" step="any" placeholder="0–180" disabled></label>
+<label>Right arm angle from vertical (°) <input id="guidedMotionArmRight" type="number" min="0" max="180" step="any" placeholder="0–180" disabled></label>
+</div>
+<p class="note">These absolute angles override the common angle for this endpoint. Left and right follow the body's own sides.
+An unchecked endpoint uses its common angle for both arms. Use Add or Replace to save the pair; editing these fields leaves saved endpoints unchanged.</p>
 <label><input id="guidedMotionTranslate" type="checkbox"> Move the whole body at this endpoint</label>
 <div class="study-fields">
 <label>World X displacement (m) <input id="guidedMotionRootX" type="number" step="any" value="0" disabled></label>
