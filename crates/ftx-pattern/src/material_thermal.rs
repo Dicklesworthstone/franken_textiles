@@ -409,6 +409,20 @@ impl ThermalLaw {
         positive(self.mass * self.specific_heat.at(t)?, "thermal capacity")
     }
 
+    /// Temperature-independent areal capacity for a source-qualified scalar specific heat.
+    /// Curves and polynomial fits return `None`, even when sampled values happen to agree.
+    /// A variable transport law still limits the valid temperature interval.
+    ///
+    /// # Errors
+    /// Out-of-domain temperature or nonphysical/overflowed constant capacity.
+    pub fn constant_capacity_at(&self, t: f64) -> Result<Option<f64>, Refusal> {
+        self.check_temperature(t)?;
+        match &self.specific_heat {
+            Law::Constant(value) => positive(self.mass * value, "thermal capacity").map(Some),
+            Law::Curve(_) => Ok(None),
+        }
+    }
+
     /// Change in sensible heat per undeformed area, J/m², using the integrated specific-heat law.
     ///
     /// # Errors

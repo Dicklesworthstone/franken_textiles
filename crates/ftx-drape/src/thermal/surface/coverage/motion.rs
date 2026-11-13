@@ -1345,6 +1345,7 @@ impl Frame {
         let mut exposed_used = vec![0.; source.patches.len()];
         let mut output = Vec::new();
         let mut destination_error = 0.;
+        let mut covered_allocation_residual = vec![0.; source.patches.len()];
         for (r, region) in self.coverage.layout.regions.iter().enumerate() {
             let mut values = Vec::new();
             for (l, p) in region.layers.iter().enumerate() {
@@ -1406,9 +1407,17 @@ impl Frame {
                     }
                     received += from_exposed;
                 }
-                check_fraction(received, p.fraction)?;
-                destination_error += (received - p.fraction).abs()
-                    * source.patches[p.cloth_triangle].reference_area_m2;
+                check_fraction(received, p.fraction).map_err(|mut refusal| {
+                    refusal.message.push_str(&format!(
+                        "; destination region {r}, layer {l}, source patch {}",
+                        p.cloth_triangle
+                    ));
+                    refusal
+                })?;
+                let residual = received - p.fraction;
+                covered_allocation_residual[p.cloth_triangle] += residual;
+                destination_error +=
+                    residual.abs() * source.patches[p.cloth_triangle].reference_area_m2;
                 let law = &laws[source.patches[p.cloth_triangle].column];
                 for j in 0..m {
                     let mut inputs = Vec::new();
@@ -1461,6 +1470,12 @@ impl Frame {
                     "exposed material allocation underflow during remap",
                 ));
             }
+            // Audit the material complement before removing already-admitted negative roundoff
+            // remainders from the thermal stencil. Their signed values account for material used
+            // by covered recipients; replacing them with zero must not inflate this ledger.
+            // Temperature mixing still uses only positive donors, and both its actual allocation
+            // discrepancy and every bounded donor overdraw remain visible in the balance below.
+            let mut signed_received = old_remaining;
             let old_remaining = old_remaining.max(0.);
             let mut covered_remaining = Vec::new();
             let mut received = old_remaining;
@@ -1473,11 +1488,32 @@ impl Frame {
                         "covered material allocation underflow during remap",
                     ));
                 }
+                signed_received += remaining;
+                donor_error += (-remaining).max(0.) * source.patches[patch].reference_area_m2;
                 let remaining = remaining.max(0.);
                 received += remaining;
                 covered_remaining.push((s, k, remaining));
             }
-            check_fraction(received, expected)?;
+            if !signed_received.is_finite() || signed_received <= 0. {
+                return Err(invalid(format!(
+                    "exposed complement for source patch {patch} has no finite positive thermal donor"
+                )));
+            }
+            // Covered recipients have already passed their individual allocation checks. Their
+            // signed discrepancies belong to this same material ledger: covered received plus
+            // signed complement equals the old stock. Include those checked discrepancies in
+            // this audit instead of treating them as a second, independent complement error.
+            // This changes no overlap/mixing weight; destination_error retains the actual error.
+            check_fraction(
+                signed_received + covered_allocation_residual[patch],
+                expected,
+            )
+            .map_err(|mut refusal| {
+                refusal
+                    .message
+                    .push_str(&format!("; exposed complement for source patch {patch}"));
+                refusal
+            })?;
             destination_error +=
                 (received - expected).abs() * source.patches[patch].reference_area_m2;
             donor_error += ((old_remaining + exposed_used[patch]) - old_exposed[patch]).abs()
@@ -1526,12 +1562,22 @@ impl Frame {
             if new_exposed[patch] > 0. {
                 continue;
             }
-            check_fraction(exposed_used[patch], old_exposed[patch])?;
+            check_fraction(exposed_used[patch], old_exposed[patch]).map_err(|mut refusal| {
+                refusal.message.push_str(&format!(
+                    "; consumed exposed donor for source patch {patch}"
+                ));
+                refusal
+            })?;
             donor_error += (exposed_used[patch] - old_exposed[patch]).abs()
                 * source.patches[patch].reference_area_m2;
             for &(s, k) in &donors[patch] {
                 let fraction = old.coverage.layout.regions[s].layers[k].fraction;
-                check_fraction(used[s][k], fraction)?;
+                check_fraction(used[s][k], fraction).map_err(|mut refusal| {
+                    refusal.message.push_str(&format!(
+                        "; consumed covered donor region {s}, layer {k}, source patch {patch}"
+                    ));
+                    refusal
+                })?;
                 donor_error +=
                     (used[s][k] - fraction).abs() * source.patches[patch].reference_area_m2;
             }
@@ -1720,6 +1766,28 @@ fn depth(i: usize, n: usize, reverse: bool) -> [f64; 2] {
     [i as f64 / n as f64, (i + 1) as f64 / n as f64]
 }
 
+#[derive(Default)]
+struct CompensatedSum {
+    sum: f64,
+    correction: f64,
+}
+
+impl CompensatedSum {
+    fn add(&mut self, value: f64) {
+        let next = self.sum + value;
+        self.correction += if self.sum.abs() >= value.abs() {
+            (self.sum - next) + value
+        } else {
+            (value - next) + self.sum
+        };
+        self.sum = next;
+    }
+
+    fn total(self) -> f64 {
+        self.sum + self.correction
+    }
+}
+
 fn mix(
     law: &ThermalLaw,
     inputs: &[(f64, f64)],
@@ -1732,7 +1800,7 @@ fn mix(
     work.add(inputs.len())?;
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
-    let mut weight = 0.;
+    let mut weight = CompensatedSum::default();
     for &(w, t) in inputs {
         if !w.is_finite() || w <= 0. {
             return Err(invalid("invalid enthalpy transfer weight"));
@@ -1740,50 +1808,70 @@ fn mix(
         law.check_temperature(t)?;
         lo = lo.min(t);
         hi = hi.max(t);
-        weight += w;
+        weight.add(w);
     }
+    let weight = weight.total();
     if !weight.is_finite() || weight <= 0. {
         return Err(invalid("enthalpy transfer weight overflow"));
     }
+    work.add(1)?;
+    let constant_capacity = law.constant_capacity_at(lo)?;
     if lo == hi {
         return Ok(lo);
     }
     // Curve integration visits its knots. Bound this work too, not just the number of stencil
-    // entries, so a long characterization table cannot evade the remap budget.
-    work.add(
-        knots
-            .checked_mul(inputs.len() + 132)
-            .ok_or_else(|| invalid("remap work overflow"))?,
-    )?;
+    // entries, so a long characterization table cannot evade the remap budget. A source scalar
+    // Cp has an algebraic inverse and performs no bisections, even if conductivity is a curve.
+    let inverse_work = if constant_capacity.is_some() {
+        inputs.len().checked_add(4)
+    } else {
+        knots.checked_mul(inputs.len() + 132)
+    }
+    .ok_or_else(|| invalid("remap work overflow"))?;
+    work.add(inverse_work)?;
     let zero = lo;
-    let target = inputs
-        .iter()
-        .map(|&(w, t)| Ok((w / weight) * law.sensible_change(zero, t)?))
-        .collect::<Result<Vec<_>, Refusal>>()?
-        .iter()
-        .sum::<f64>();
+    let mut target = CompensatedSum::default();
+    for &(w, t) in inputs {
+        target.add((w / weight) * law.sensible_change(zero, t)?);
+    }
+    let target = target.total();
     if !target.is_finite() {
         return Err(invalid("enthalpy average overflow"));
     }
-    // Positive Cp gives a strictly monotone inverse. Bracket by donor temperatures, not by an
-    // extrapolated material domain; 128 bounded bisections preserve the donor maximum principle.
-    for _ in 0..128 {
-        let t = lo / 2. + hi / 2.;
-        if t == lo || t == hi {
-            break;
+    let (t, error) = if let Some(capacity) = constant_capacity {
+        let t = zero + target / capacity;
+        if !t.is_finite() {
+            return Err(invalid("enthalpy inverse overflow"));
         }
-        if law.sensible_change(zero, t)? < target {
-            lo = t;
+        // Rounding at an endpoint must not create a temperature outside the donor interval.
+        // The same enthalpy residual check below still applies to the bounded analytic result.
+        let t = t.clamp(lo, hi);
+        (t, (law.sensible_change(zero, t)? - target).abs())
+    } else {
+        // Positive Cp gives a strictly monotone inverse. Bracket by donor temperatures, not by
+        // an extrapolated domain; 128 bounded bisections preserve the donor maximum principle.
+        for _ in 0..128 {
+            let t = lo / 2. + hi / 2.;
+            if t == lo || t == hi {
+                break;
+            }
+            if law.sensible_change(zero, t)? < target {
+                lo = t;
+            } else {
+                hi = t;
+            }
+        }
+        let error_lo = (law.sensible_change(zero, lo)? - target).abs();
+        let error_hi = (law.sensible_change(zero, hi)? - target).abs();
+        if error_lo <= error_hi {
+            (lo, error_lo)
         } else {
-            hi = t;
+            (hi, error_hi)
         }
-    }
-    let error_lo = (law.sensible_change(zero, lo)? - target).abs();
-    let error_hi = (law.sensible_change(zero, hi)? - target).abs();
-    let t = if error_lo <= error_hi { lo } else { hi };
+    };
     let tolerance = 256. * f64::EPSILON * law.capacity_at(t)? * (1. + zero.abs() + t.abs())
         + 1e-12 * (1. + target.abs());
-    if !tolerance.is_finite() || error_lo.min(error_hi) > tolerance {
+    if !tolerance.is_finite() || error > tolerance {
         return Err(invalid("enthalpy inverse did not converge"));
     }
     Ok(t)
@@ -1792,6 +1880,78 @@ fn mix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mixing_law(constant_cp: bool) -> ThermalLaw {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/materials/synthetic-variable-thermal.json"
+        )))
+        .unwrap();
+        let mut material: ftx_pattern::materials::Material =
+            serde_json::from_value(fixture["layers"][0]["record"].clone()).unwrap();
+        let response = material.thermal_response.as_mut().unwrap();
+        response.conductivity.as_mut().unwrap().points[1].mean *= 2.;
+        if constant_cp {
+            response.specific_heat = None;
+            let mut cp = material.properties["areal_density"].clone();
+            cp.value = 1000.;
+            cp.unit = "J/(kg*K)".into();
+            material.properties.insert("specific_heat".into(), cp);
+        }
+        ThermalLaw::from_material(&material, true).unwrap()
+    }
+
+    #[test]
+    fn scalar_cp_mixture_uses_linear_work_and_retains_transport_temperature_domain() {
+        let law = mixing_law(true);
+        assert_eq!(law.constant_capacity_at(20.).unwrap(), Some(200.));
+        assert_ne!(
+            law.resistance_at(0.).unwrap(),
+            law.resistance_at(60.).unwrap()
+        );
+        let mut work = Work::limited(32);
+        let t = mix(&law, &[(1., 10.), (3., 50.)], 1, &mut work).unwrap();
+        assert_eq!(t, 40.);
+        assert_eq!(law.sensible_change(10., t).unwrap(), 6000.);
+        assert!(work.0 <= 32);
+        for t in [-1., 61., f64::NAN, f64::INFINITY] {
+            assert!(mix(&law, &[(1., 20.), (1., t)], 1, &mut Work::default()).is_err());
+        }
+        for weight in [0., -1., f64::NAN, f64::INFINITY] {
+            assert!(mix(&law, &[(1., 20.), (weight, 40.)], 1, &mut Work::default()).is_err());
+        }
+    }
+
+    #[test]
+    fn scalar_cp_mixture_preserves_many_small_donors_in_either_order() {
+        let law = mixing_law(true);
+        // Individually these cold weights round away when added naively to the hot weight.
+        // Together they have a resolved effect on the enthalpy and resulting temperature.
+        let mut inputs = vec![(2_f64.powi(-55), 10.); 4096];
+        inputs.insert(0, (1., 50.));
+        let forward = mix(&law, &inputs, 1, &mut Work::default()).unwrap();
+        inputs.reverse();
+        let reverse = mix(&law, &inputs, 1, &mut Work::default()).unwrap();
+        let expected = 10. + 40. / (1. + 2_f64.powi(-43));
+        assert_eq!(forward, reverse);
+        assert!((forward - expected).abs() <= 2. * f64::EPSILON * expected);
+        assert!(forward < 50. - 1e-12);
+    }
+
+    #[test]
+    fn curved_cp_mixture_keeps_the_bounded_nonlinear_enthalpy_inverse() {
+        let law = mixing_law(false);
+        assert_eq!(law.constant_capacity_at(20.).unwrap(), None);
+        let inputs = [(1., 10.), (3., 50.)];
+        assert!(mix(&law, &inputs, 2, &mut Work::limited(32)).is_err());
+        let t = mix(&law, &inputs, 2, &mut Work::default()).unwrap();
+        // H(T) = 200*T + 2*T^2, so the weighted H is 11800 J/m2. The arithmetic
+        // temperature average is 40 C and cannot conserve this characterized heat law.
+        let expected = (134_400_f64.sqrt() - 200.) / 4.;
+        assert!((t - expected).abs() < 1e-12);
+        assert!((law.sensible_change(10., t).unwrap() - 9600.).abs() < 1e-9);
+        assert!(t > 40. && t < 50.);
+    }
 
     #[test]
     fn covered_roundoff_allowance_cannot_supply_a_missing_spatial_donor() {
@@ -1994,6 +2154,152 @@ mod tests {
                 "coverage consumes more exposed material than the source triangle owns"
             );
         }
+    }
+
+    #[test]
+    fn signed_donor_remainders_preserve_a_small_exposed_complement_and_its_residuals() {
+        let (base, _) = exposed_roundoff_frames();
+        let frame = |body, faces: &[[usize; 3]]| {
+            Frame::new(
+                base.coverage.source.clone(),
+                base.cloth.clone(),
+                body,
+                faces,
+                base.request.clone(),
+            )
+            .unwrap()
+        };
+        let old = frame(
+            vec![
+                Vec3::ZERO,
+                Vec3::new(1., 0., 0.),
+                Vec3::new(0., 1., 0.),
+                Vec3::new(0.5, 0., 0.),
+            ],
+            &[[0, 3, 2], [3, 1, 2]],
+        );
+        let overlap = 2_f64.powi(-45);
+        let uncovered = 2_f64.powi(-30);
+        let next = frame(
+            vec![
+                Vec3::ZERO,
+                Vec3::new(1. - uncovered, 0., 0.),
+                Vec3::new(0., 1., 0.),
+                Vec3::new(0.5, 0., 0.),
+                Vec3::new(0.5 - overlap, 0., 0.),
+            ],
+            &[[0, 3, 2], [4, 1, 2]],
+        );
+        assert_eq!(old.coverage.layout.regions.len(), 2);
+        assert_eq!(next.coverage.layout.regions.len(), 2);
+        assert_eq!(old.exposed_fractions(), vec![0.]);
+        let expected = next.exposed_fractions()[0];
+        assert!((expected - (uncovered - overlap)).abs() < f64::EPSILON);
+
+        // Public projection already admits this microscopic overlap between neighboring body
+        // faces. The two donor remainders are -overlap and +uncovered. Their signed sum closes
+        // the allocation ledger, but clamping the first before checking exceeds the unchanged
+        // complement tolerance. Neither source fractions nor retained footprints are patched.
+        assert!(uncovered - expected > 5e-10 * expected + 64. * f64::EPSILON);
+        let mut state = old.initial_profiles(&[vec![10., 20.]]).unwrap();
+        state.inner.temperatures[1] = vec![50., 40.];
+        let transfer = next.remap(&old, &state).unwrap();
+        assert_eq!(transfer.state.temperature_c()[0], vec![10., 20.]);
+        assert_eq!(transfer.state.exposed_temperature_c(), &[vec![50., 40.]]);
+        for (cell, (cold, hot)) in [(10., 50.), (20., 40.)].into_iter().enumerate() {
+            let mixed = transfer.state.temperature_c()[1][cell];
+            assert!(mixed > cold && mixed < hot);
+        }
+        assert!(transfer.balance.allocation_residual_m2 > 0.);
+        assert!(
+            (transfer.balance.allocation_residual_m2 - 0.5 * overlap).abs() < 4. * f64::EPSILON
+        );
+        // Independent primitive for the existing synthetic areal Cp(T) law. The tiny
+        // positive-only mixing discrepancy stays visible rather than being reset to zero.
+        let enthalpy = |t: f64| 200. * t + 2. * t * t;
+        let before = 0.125 * (enthalpy(20.) + enthalpy(50.) + enthalpy(40.) - 3. * enthalpy(10.));
+        assert!((transfer.balance.before_j - before).abs() < 1e-9);
+        assert!(transfer.balance.absolute_residual_j > 0.);
+        assert!(
+            transfer.balance.absolute_residual_j
+                <= 2e-9 * (1. + transfer.balance.before_j.abs() + transfer.balance.after_j.abs())
+        );
+        assert_eq!(state.temperature_c(), &[vec![10., 20.], vec![50., 40.]]);
+        assert!(state.exposed_temperature_c()[0].is_empty());
+    }
+
+    #[test]
+    fn checked_covered_deficits_remain_in_the_exposed_complement_ledger() {
+        let (base, _) = exposed_roundoff_frames();
+        let frame = |intervals: &[(f64, f64)]| {
+            let mut body = vec![Vec3::new(0., 1., 0.)];
+            let mut faces = Vec::new();
+            for &(start, end) in intervals {
+                let i = body.len();
+                body.extend([Vec3::new(start, 0., 0.), Vec3::new(end, 0., 0.)]);
+                faces.push([i, i + 1, 0]);
+            }
+            Frame::new(
+                base.coverage.source.clone(),
+                base.cloth.clone(),
+                body,
+                &faces,
+                base.request.clone(),
+            )
+            .unwrap()
+        };
+        let overlap = 2_f64.powi(-45);
+        let gap = 2_f64.powi(-20);
+        let half_exposed = 2_f64.powi(-31);
+        let old = frame(&[(0., 0.5), (0.5 - overlap, 1. - gap)]);
+        let next = frame(&[(0., 0.5 - half_exposed), (0.5 + half_exposed, 1.)]);
+        assert_eq!(old.coverage.layout.regions.len(), 2);
+        assert_eq!(next.coverage.layout.regions.len(), 2);
+        assert!((old.exposed_fractions()[0] - (gap - overlap)).abs() < f64::EPSILON);
+        let expected = next.exposed_fractions()[0];
+        assert!((expected - 2. * half_exposed).abs() < f64::EPSILON);
+        assert!(overlap > 5e-10 * expected + 64. * f64::EPSILON);
+
+        // The old projection admits a microscopic overlap between two body faces. Moving the
+        // exposed strip onto that overlap leaves positive old donors totaling e + overlap.
+        // The new right region covers the old gap, but the exposed stock is only gap - overlap.
+        // Its individually checked deficit is -overlap, so the complete material ledger closes.
+        // Exact rational intersections give the same discrepancy; no fraction or footprint is
+        // patched here, and improving area precision cannot remove it.
+        let mut state = old.initial_profiles(&[vec![10., 20.]]).unwrap();
+        state.inner.temperatures[1] = vec![50., 40.];
+        let transfer = next.remap(&old, &state).unwrap();
+        assert_eq!(transfer.state.temperature_c()[0], vec![10., 20.]);
+        for (cell, (cold, hot)) in [(10., 50.), (20., 40.)].into_iter().enumerate() {
+            for mixed in [
+                transfer.state.temperature_c()[1][cell],
+                transfer.state.exposed_temperature_c()[0][cell],
+            ] {
+                assert!(mixed > cold && mixed < hot);
+            }
+        }
+        // Both the covered deficit and the positive exposed discrepancy remain in the receipt.
+        assert!(transfer.balance.allocation_residual_m2 > 0.);
+        assert!((transfer.balance.allocation_residual_m2 - overlap).abs() < 8. * f64::EPSILON);
+        let enthalpy = |t: f64| 200. * t + 2. * t * t;
+        let before = 0.25
+            * ((0.5 + gap - overlap) * (enthalpy(20.) - enthalpy(10.))
+                + (0.5 - gap + overlap) * (enthalpy(50.) + enthalpy(40.) - 2. * enthalpy(10.)));
+        assert!((transfer.balance.before_j - before).abs() < 1e-9);
+        assert!(transfer.balance.absolute_residual_j > 0.);
+        assert!(
+            transfer.balance.absolute_residual_j
+                <= 2e-9 * (1. + transfer.balance.before_j.abs() + transfer.balance.after_j.abs())
+        );
+        assert_eq!(state.temperature_c(), &[vec![10., 20.], vec![50., 40.]]);
+        assert_eq!(state.exposed_temperature_c(), &[vec![10., 20.]]);
+
+        // A covered residual is an audit term, never a donor. These destinations consume all
+        // old material even though the new layout retains a microscopic exposed fraction.
+        let without_donor = frame(&[(0., 0.5), (0.5, 1. - 2_f64.powi(-48))]);
+        assert!(without_donor.exposed_fractions()[0] > 0.);
+        let refusal = without_donor.remap(&old, &state).unwrap_err();
+        assert!(refusal.message.contains("no finite positive thermal donor"));
     }
 
     #[test]

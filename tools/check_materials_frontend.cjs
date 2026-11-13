@@ -16902,7 +16902,17 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
             assert.equal(motion.status,'available');assert.equal(motion.result.transient_surface.status,'available');
             const heat=motion.result.transient_surface.result,compression=heat.prescribed_compression;
             const authored=sources[index].motion.transient_surface.prescribed_compression,binding=authored.bindings.band;
-            assert.deepEqual(heat.request.prescribed_compression,authored);
+            // Both receipts serialize the typed policy, including material defaults absent from
+            // the authored JSON. Exact source-file bytes are checked separately below.
+            const requested=report.scenario.scenario.motion.transient_surface.prescribed_compression;
+            assert.deepEqual(heat.request.prescribed_compression,requested);
+            assert.equal(requested.schema,authored.schema);
+            assert.equal(requested.thermal_evidence,authored.thermal_evidence);
+            assert.deepEqual(Object.keys(requested.bindings),Object.keys(authored.bindings));
+            for(const field of ['material_sha256','direction','pressure_pa','controls']) {
+              assert.deepEqual(requested.bindings.band[field],binding[field]);
+            }
+            assert.deepEqual(requested.bindings.band.preparation.material.sources,binding.preparation.material.sources);
             assert.equal(compression.schema,`ftx-motion-surface-compression-result/${controlled?3:cyclic?2:1}`);
             assert.equal(compression.updates.length,controlled?binding.controls.length:binding.pressure_pa.length);
             assert.equal(compression.normal_work_to_heat_j,0);
@@ -16925,7 +16935,7 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
               } else assert.equal(state.pressure_pa,binding.pressure_pa[interval]);
               if(state.branch_change) {
                 joins.push(interval);
-                assert.deepEqual(state.branch_change.change,binding.branch_changes[interval]);
+                assert.deepEqual(state.branch_change.change,requested.bindings.band.branch_changes[interval]);
                 assert.equal(state.branch_change.entry_compression.external_work_j,0);
                 assert.equal(state.branch_change.entry_compression.pressure_pa,compression.updates[interval-1].instances.band.pressure_pa);
                 assert.equal(state.branch_change.entry_compression.thickness_m,compression.updates[interval-1].instances.band.thickness_m);

@@ -202,6 +202,11 @@ within the donor temperature range. It is a first-order mixing operation: coarse
 loses unresolved gradients, and remapping back cannot recreate them. Projection and
 remap accuracy must be studied separately from physical time-step refinement.
 
+Source-qualified scalar specific heat uses an analytic inverse with compensated donor
+sums and linear stencil work charges. Temperature-dependent specific heat retains bounded
+nonlinear inversion; both paths enforce the same enthalpy residual and common source
+temperature domain, including any interval imposed by variable conductivity.
+
 Each trace entry reports interval heat separately from remap diagnostics:
 
 - `physical_stored_change_j` and `net_boundary_energy_j` are the time-integrated heat
@@ -228,6 +233,17 @@ projections leave a covered-overlap deficit within the existing allocation toler
 remapper uses the actual available exposed material and retains the deficit in allocation
 and enthalpy residuals. It does not create an exposed donor or replace a missing spatial
 stencil. This also applies when a small but nonzero exposed fraction is completely consumed.
+
+The exposed-complement audit uses signed donor remainders after each donor passes its own
+allocation check. Small, already-admitted covered overdraws therefore remain in that ledger.
+Each covered recipient also retains its signed received-minus-requested allocation after
+passing the unchanged local check. The complement audit includes those checked discrepancies
+in the same source-material ledger; it does not treat them as new complement errors. The raw
+signed complement must still have a finite, positive donor before that audit adjustment.
+Only positive remainders supply temperature-mixing weights. The balance reports both the
+actual positive-weight allocation discrepancy and bounded donor overdraw; the independent
+material-local enthalpy check remains in force. Positivity handling does not erase residuals
+or supply a missing thermal donor.
 
 Opted-in stagnant-gap conduction uses the same bounded convex-polygon correction before
 quadrature. Its fan areas use exact-sign expansion arithmetic so an almost-collinear positive

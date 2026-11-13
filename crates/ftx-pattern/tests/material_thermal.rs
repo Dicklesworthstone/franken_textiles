@@ -141,6 +141,36 @@ fn enthalpy_uses_reference_mass_and_not_endpoint_heat_capacity() {
 }
 
 #[test]
+fn scalar_capacity_preserves_transport_domain_and_rejects_capacity_overflow() {
+    let curved = ThermalLaw::from_material(&record(), true).unwrap();
+    assert_eq!(curved.constant_capacity_at(20.).unwrap(), None);
+
+    let mut m = record();
+    m.thermal_response.as_mut().unwrap().specific_heat = None;
+    let mut cp = m.properties["areal_density"].clone();
+    cp.value = 1000.;
+    cp.unit = "J/(kg*K)".into();
+    m.properties.insert("specific_heat".into(), cp);
+    let law = ThermalLaw::from_material(&m, true).unwrap();
+    assert_eq!(law.constant_capacity_at(20.).unwrap(), Some(200.));
+    assert_eq!(law.domain(), Some([0., 50.]));
+    assert_ne!(
+        law.resistance_at(0.).unwrap(),
+        law.resistance_at(50.).unwrap()
+    );
+    for t in [-1., 51., f64::NAN, f64::INFINITY] {
+        assert!(law.constant_capacity_at(t).is_err());
+    }
+
+    for (mass, specific_heat) in [(f64::MAX, 1000.), (1e-300, 1e-300)] {
+        m.properties.get_mut("areal_density").unwrap().value = mass;
+        m.properties.get_mut("specific_heat").unwrap().value = specific_heat;
+        let law = ThermalLaw::from_material(&m, true).unwrap();
+        assert!(law.constant_capacity_at(20.).is_err());
+    }
+}
+
+#[test]
 fn different_property_ranges_intersect_and_never_extend_one_another() {
     let mut m = record();
     let k = m
