@@ -1504,7 +1504,7 @@ impl Frame {
             // signed complement equals the old stock. Include those checked discrepancies in
             // this audit instead of treating them as a second, independent complement error.
             // This changes no overlap/mixing weight; destination_error retains the actual error.
-            check_fraction(
+            check_fraction_residual(
                 signed_received + covered_allocation_residual[patch],
                 expected,
             )
@@ -1713,6 +1713,16 @@ impl Frame {
 type MaterialPolygons = Vec<Vec<Vec<Vec2>>>;
 
 fn check_fraction(received: f64, expected: f64) -> Result<(), Refusal> {
+    check_fraction_residual(received, expected)?;
+    if expected != 0. && received <= 0. {
+        return Err(invalid("destination has no thermal donor"));
+    }
+    Ok(())
+}
+
+// Allocation closeness also applies to the audit-adjusted complement, whose signed residual
+// correction is not a thermal donor. The caller checks positive actual stock separately.
+fn check_fraction_residual(received: f64, expected: f64) -> Result<(), Refusal> {
     // Explicit numerical allowance for the projection's bounded allocation-roundoff corrections.
     // Never normalize away a genuinely entering/leaving portion or a spatial gap.
     if !received.is_finite() || (received - expected).abs() > 5e-10 * expected + 64. * f64::EPSILON
@@ -1720,12 +1730,6 @@ fn check_fraction(received: f64, expected: f64) -> Result<(), Refusal> {
         return Err(invalid(format!(
             "material allocation changed unexpectedly (received {received:.17e}, expected {expected:.17e})",
         )));
-    }
-    if expected == 0. {
-        return Ok(());
-    }
-    if received <= 0. {
-        return Err(invalid("destination has no thermal donor"));
     }
     Ok(())
 }
@@ -1880,6 +1884,45 @@ fn mix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rounded_complement_audit_does_not_erase_positive_thermal_donors() {
+        let actual = f64::EPSILON;
+        let expected = f64::EPSILON;
+        check_fraction(actual, expected).unwrap();
+        // A checked covered residual can cancel a microscopic audit value, while the actual
+        // stencil still owns positive material and nonuniform thermal history.
+        let covered_residual = -actual;
+        assert_eq!(actual + covered_residual, 0.);
+        check_fraction_residual(actual + covered_residual, expected).unwrap();
+        let law = mixing_law(true);
+        let mixed = mix(
+            &law,
+            &[(actual / 4., 10.), (actual * 0.75, 50.)],
+            1,
+            &mut Work::default(),
+        )
+        .unwrap();
+        assert_eq!(mixed, 40.);
+        assert_eq!(law.sensible_change(10., mixed).unwrap(), 6000.);
+
+        for adjusted in [0., -f64::EPSILON] {
+            check_fraction_residual(adjusted, expected).unwrap();
+            // The same values still cannot stand in for an actual donor.
+            assert_eq!(
+                check_fraction(adjusted, expected).unwrap_err().message,
+                "destination has no thermal donor"
+            );
+        }
+        for adjusted in [
+            128. * f64::EPSILON,
+            -128. * f64::EPSILON,
+            f64::NAN,
+            f64::INFINITY,
+        ] {
+            assert!(check_fraction_residual(adjusted, expected).is_err());
+        }
+    }
 
     fn mixing_law(constant_cp: bool) -> ThermalLaw {
         let fixture: Value = serde_json::from_str(include_str!(concat!(

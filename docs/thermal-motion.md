@@ -240,6 +240,8 @@ Each covered recipient also retains its signed received-minus-requested allocati
 passing the unchanged local check. The complement audit includes those checked discrepancies
 in the same source-material ledger; it does not treat them as new complement errors. The raw
 signed complement must still have a finite, positive donor before that audit adjustment.
+The adjusted value is checked for finite allocation error; a rounded zero or tiny negative
+audit value cannot erase the separately checked positive stock and its thermal history.
 Only positive remainders supply temperature-mixing weights. The balance reports both the
 actual positive-weight allocation discrepancy and bounded donor overdraw; the independent
 material-local enthalpy check remains in force. Positivity handling does not erase residuals

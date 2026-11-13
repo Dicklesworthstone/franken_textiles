@@ -296,13 +296,16 @@ fn prescribed_compression_workflow(
         single["coverage"]["body_triangle_ids"] = json!(body_ids);
         single["coverage"]["instance_layers"] = json!({"band":"lining","outer":"shell"});
         single["coverage"]["settings"] = settings.clone();
+        // This is a whole-trajectory budget. The four-interval cyclic path performs twice
+        // the accepted geometry/remap steps of the two-interval pressure/clearance paths.
+        // Keep the same explicit allowance per interval without changing production limits.
         single["motion"]["transient_coverage"] = json!({
             "schema":"ftx-motion-coverage-heat/1","body_triangle_ids":body_ids,
             "instance_layers":{"band":"lining","outer":"shell"},"settings":settings,
             "initial_temperature_c":20.0,
             "initial_instance_temperature_profiles_c":{"band":[20.0,20.0],"outer":[20.0,20.0]},
             "boundaries":sheet["boundaries"],"exposed_boundaries":vec![Value::Null;intervals],
-            "max_step_s":0.00025,"max_cell_steps":1000000,"max_geometry_operations":2000000,
+            "max_step_s":0.00025,"max_cell_steps":1000000,"max_geometry_operations":1_000_000 * intervals,
             "prescribed_compression":sheet["prescribed_compression"]});
     }
     let request: ftx_export::material_study::Request =
