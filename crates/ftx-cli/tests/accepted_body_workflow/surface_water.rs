@@ -71,12 +71,35 @@ fn inputs() -> (String, Value, Value) {
 
 #[test]
 fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions() {
+    prescribed_compression_workflow(false);
+}
+
+#[test]
+fn cyclic_compression_heat_replays_native_portable_and_named_case_decisions() {
+    prescribed_compression_workflow(true);
+}
+
+fn prescribed_compression_workflow(cyclic: bool) {
     let (pattern, mut study, mut single) = inputs();
     let mut preparation: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-compression.json"
     ))
     .unwrap();
     preparation["pressure_pa"] = json!(0.0);
+    if cyclic {
+        // These synthetic reference observations explicitly apply to both acquired branches.
+        // Branch-specific source observations cannot be transferred by renaming the branch.
+        for property in preparation["material"]["properties"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            property["conditions"]
+                .as_object_mut()
+                .unwrap()
+                .remove("loading_branch");
+        }
+    }
     let material = json!({"id":preparation["material"]["id"],"allow_estimates":true,
         "record":preparation["material"]});
     let selection: Selection = serde_json::from_value(material.clone()).unwrap();
@@ -95,21 +118,44 @@ fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions(
         {"key":"unmatched-source","changes":{"schema":"ftx-material-bindings/1","default":changed_source}}]);
     study["comparison"] = json!({"basis":"nominal","required_consumers":["transient_surface"],
         "objectives":[{"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]});
-    single["motion"]["keyframes"] = json!([
-        {"time_s":0.0005,"arm_abduction_deg":35.0},
-        {"time_s":0.001,"arm_abduction_deg":35.0}]);
-    single["motion"]["source_pose_sampling"] = json!({"max_step_s":0.00025,"max_segments":4});
+    let pressures = if cyclic {
+        vec![500.0, 250.0, 0.0, 250.0]
+    } else {
+        vec![250.0, 500.0]
+    };
+    let intervals = pressures.len();
+    // Binary-exact interval boundaries keep the four-leg sampling budget independent of
+    // decimal subtraction rounding; this does not relax the mechanical or thermal solve.
+    let interval_s = if cyclic { 1.0 / 2048.0 } else { 0.0005 };
+    single["motion"]["keyframes"] = json!(
+        (1..=intervals)
+            .map(|index| json!({"time_s":index as f64 * interval_s,"arm_abduction_deg":35.0}))
+            .collect::<Vec<_>>()
+    );
+    single["motion"]["source_pose_sampling"] =
+        json!({"max_step_s":interval_s / 2.0,"max_segments":2 * intervals});
     let heat = &mut single["motion"]["transient_surface"];
     heat.as_object_mut().unwrap().remove("surface_water");
     heat["cells_per_layer"] = json!(2);
     heat["initial_instance_temperature_profiles_c"] = json!({"band":[20.0,20.0]});
-    heat["boundaries"] = json!([
-        {"inside_c":20.0,"outside_c":20.0,"inside_resistance_m2_k_w":1.0,"outside_resistance_m2_k_w":1.0},
-        {"inside_c":20.0,"outside_c":20.0,"inside_resistance_m2_k_w":1.0,"outside_resistance_m2_k_w":1.0}]);
+    heat["boundaries"] = json!(vec![
+        json!({"inside_c":20.0,"outside_c":20.0,"inside_resistance_m2_k_w":1.0,"outside_resistance_m2_k_w":1.0});
+        intervals
+    ]);
     heat["prescribed_compression"] = json!({"schema":"ftx-motion-surface-compression/1",
-        "thermal_evidence":"Synthetic dry sheet at 20–25 C over 0.001 s, fixed reservoir films and acquired loading pressures 0–500 Pa; normal work remains separate from heat.",
+        "thermal_evidence":"Synthetic dry sheet at 20–25 C over 0.002 s, fixed reservoir films and acquired pressures 0–500 Pa; normal work remains separate from heat.",
         "bindings":{"band":{"material_sha256":lock,"preparation":preparation,
-            "direction":"loading","pressure_pa":[250.0,500.0]}}});
+            "direction":"loading","pressure_pa":pressures}}});
+    if cyclic {
+        let compression = &mut heat["prescribed_compression"];
+        compression["schema"] = json!("ftx-motion-surface-compression/2");
+        compression["bindings"]["band"]["branch_changes"] = json!([
+            null,
+            compression_branch_change(&preparation, true),
+            null,
+            compression_branch_change(&preparation, false)
+        ]);
+    }
     let request: ftx_export::material_study::Request =
         serde_json::from_value(study.clone()).unwrap();
     let source_pattern = ftx_pattern::Pattern::from_json(&pattern).unwrap();
@@ -117,14 +163,18 @@ fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions(
         &pattern,
         &study,
         single,
-        "FTX_COMPRESSION_MOTION_REPLAY",
+        if cyclic {
+            "FTX_CYCLIC_COMPRESSION_MOTION_REPLAY"
+        } else {
+            "FTX_COMPRESSION_MOTION_REPLAY"
+        },
         |report| {
             let result = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
             let motion = &result["motion"];
             assert_eq!(motion["status"], "available", "{motion}");
             assert_eq!(
                 motion["result"]["source_pose_sampling"]["generated_segments"],
-                4
+                2 * intervals
             );
             let outcome = &motion["result"]["transient_surface"];
             assert_eq!(outcome["status"], "available", "{outcome}");
@@ -132,9 +182,13 @@ fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions(
             let compression = &heat["prescribed_compression"];
             assert_eq!(
                 compression["schema"],
-                "ftx-motion-surface-compression-result/1"
+                if cyclic {
+                    "ftx-motion-surface-compression-result/2"
+                } else {
+                    "ftx-motion-surface-compression-result/1"
+                }
             );
-            assert_eq!(compression["updates"].as_array().unwrap().len(), 2);
+            assert_eq!(compression["updates"].as_array().unwrap().len(), intervals);
             assert_eq!(
                 heat["initial_condition"]["schema"],
                 "ftx-motion-surface-initial-condition/2"
@@ -148,9 +202,15 @@ fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions(
             assert_eq!(initial["material_sha256"], lock);
             assert_eq!(final_state["material_sha256"], lock);
             assert_eq!(initial["pressure_pa"], 0.0);
-            assert_eq!(final_state["pressure_pa"], 500.0);
+            assert_eq!(
+                final_state["pressure_pa"],
+                if cyclic { 250.0 } else { 500.0 }
+            );
             assert_eq!(initial["thickness_m"], 0.02);
-            assert_eq!(final_state["thickness_m"], 0.01);
+            assert_eq!(
+                final_state["thickness_m"],
+                if cyclic { 0.015 } else { 0.01 }
+            );
             assert_eq!(
                 initial["reference_mass_kg"],
                 final_state["reference_mass_kg"]
@@ -163,6 +223,31 @@ fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions(
             assert_eq!(compression["final_model_sha256"], heat["model"]["sha256"]);
             assert!(compression["cumulative_normal_work_j"].as_f64().unwrap() > 0.0);
             assert_eq!(compression["normal_work_to_heat_j"], 0.0);
+            if cyclic {
+                let updates = compression["updates"].as_array().unwrap();
+                for (index, sign) in [1.0, -1.0, -1.0, 1.0].into_iter().enumerate() {
+                    let state = &updates[index]["instances"]["band"];
+                    assert!(sign * state["normal_work_j"].as_f64().unwrap() > 0.0);
+                    assert_eq!(state["reference_mass_kg"], initial["reference_mass_kg"]);
+                    if index == 1 || index == 3 {
+                        let join = &state["branch_change"];
+                        assert_eq!(join["entry_compression"]["external_work_j"], 0.0);
+                        assert_eq!(
+                            join["entry_compression"]["pressure_pa"],
+                            updates[index - 1]["instances"]["band"]["pressure_pa"]
+                        );
+                        assert_eq!(
+                            join["change"],
+                            heat["request"]["prescribed_compression"]["bindings"]["band"]["branch_changes"]
+                                [index]
+                        );
+                    } else {
+                        assert!(state.get("branch_change").is_none());
+                    }
+                }
+                assert_eq!(updates[1]["instances"]["band"]["thickness_m"], 0.012);
+                assert_eq!(updates[2]["instances"]["band"]["thickness_m"], 0.02);
+            }
             assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
             let temperatures: Vec<_> = heat["final"]["temperature_c"]
                 .as_array()
@@ -200,14 +285,18 @@ fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions(
             // corrupted pressure/source/storage receipt cannot qualify the thermal objective,
             // while the same independently useful manufacturing result stays available.
             let mut original_manufacturing = None;
-            for fault in [
+            let mut faults = vec![
                 "unchanged",
                 "missing",
                 "pressure",
                 "mass",
                 "source",
                 "work-heat",
-            ] {
+            ];
+            if cyclic {
+                faults.extend(["branch-source", "branch-entry", "missing-branch", "schema"]);
+            }
+            for fault in faults {
                 let replayed = request
                     .evaluate_with(&source_pattern, &report["scenario"], |key, _| {
                         let mut simulated =
@@ -232,6 +321,21 @@ fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions(
                                         json!("0".repeat(64));
                                 }
                                 "work-heat" => receipt["normal_work_to_heat_j"] = json!(1.0),
+                                "branch-source" => {
+                                    receipt["updates"][1]["instances"]["band"]["branch_change"]
+                                        ["change"]["transitions"]["band"]["source"] = json!("absent");
+                                }
+                                "branch-entry" => {
+                                    receipt["updates"][1]["instances"]["band"]["branch_change"]
+                                        ["entry_compression"]["external_work_j"] = json!(1.0);
+                                }
+                                "missing-branch" => {
+                                    receipt["updates"][1]["instances"]["band"]
+                                        .as_object_mut().unwrap().remove("branch_change");
+                                }
+                                "schema" => {
+                                    receipt["schema"] = json!("ftx-motion-surface-compression-result/1");
+                                }
                                 _ => unreachable!(),
                             }
                         }
@@ -270,6 +374,55 @@ fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions(
             }
         },
     );
+}
+
+fn compression_branch_change(original: &Value, unloading: bool) -> Value {
+    let mut preparation = original.clone();
+    let (from, to, direction, pressure, thickness) = if unloading {
+        ("loading", "unloading-after-500", "unloading", 500.0, 0.01)
+    } else {
+        ("unloading-after-500", "loading", "loading", 0.0, 0.02)
+    };
+    preparation["pressure_pa"] = json!(pressure);
+    preparation["loading_branch"] = json!(to);
+    if unloading {
+        // An independently declared synthetic unloading path retains 12 mm at 250 Pa,
+        // whereas the original loading branch has 15 mm there. Its closed loop is 0.75 J/m².
+        let mut middle = preparation["samples"][0].clone();
+        middle["pressure_pa"] = json!(250.0);
+        middle["properties"]["thickness"]["value"] = json!(12.0);
+        middle["properties"]["thickness"]
+            .as_object_mut()
+            .unwrap()
+            .remove("bounds");
+        middle["properties"]["thermal_resistance"]["value"] = json!(0.3);
+        for property in middle["properties"].as_object_mut().unwrap().values_mut() {
+            property["conditions"]["pressure_pa"] = json!("250");
+        }
+        preparation["samples"]
+            .as_array_mut()
+            .unwrap()
+            .insert(1, middle);
+    }
+    for sample in preparation["samples"].as_array_mut().unwrap() {
+        for property in sample["properties"].as_object_mut().unwrap().values_mut() {
+            property["conditions"]["loading_branch"] = json!(to);
+        }
+    }
+    for invariant in preparation["invariants"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        invariant["conditions"]["loading_branch"] = json!(to);
+    }
+    json!({"entry":{"schema":"ftx-compression-stack/1","gap_m":thickness,
+        "reference_area_m2":1.0,"direction":direction,"allow_estimates":true,
+        "layers":[{"id":"band","preparation":preparation}]},
+        "transitions":{"band":{"source":"synthetic","evidence":"estimate",
+            "method":"Explicit invented loading/unloading/reloading links; no measured textile recovery",
+            "conditions":{"specimen":original["specimen"],"conditioning":original["conditioning"],
+                "from_loading_branch":from,"to_loading_branch":to,"pressure_pa":pressure.to_string()}}}})
 }
 
 fn keyed<'a>(rows: &'a Value, key: &str) -> &'a Value {

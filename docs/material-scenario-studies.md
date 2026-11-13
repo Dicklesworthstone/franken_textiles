@@ -538,7 +538,8 @@ branch to the actual moving independent-sheet history. This lets a scenario comp
 loaded insulation state while continuing the same temperature cells through later pressure changes.
 The pressure is a supplied operating boundary; no contact force is divided by an assumed area.
 
-The optional object has schema `ftx-motion-surface-compression/1` and these fields:
+The optional object uses `ftx-motion-surface-compression/1` for a monotone acquired branch,
+or `/2` for an explicit source-qualified sequence of loading, unloading and reloading branches:
 
 | Field | Required meaning |
 | --- | --- |
@@ -546,8 +547,27 @@ The optional object has schema `ftx-motion-surface-compression/1` and these fiel
 | `bindings` | A nonempty map of at most 256 exact retained physical instance IDs. Unlisted instances use their ordinary dry thermal material. |
 | `bindings[id].material_sha256` | The exact original selected material hash, before pressure conditioning. |
 | `bindings[id].preparation` | A complete existing `ftx-material-compression/1` acquisition, including the original material, source-qualified samples and invariants, specimen/conditioning/branch, date and explicit estimate consent. Its `pressure_pa` is the known initial preload. |
-| `bindings[id].direction` | `loading` or `unloading` on that supplied monotone branch. A reversal needs independently acquired branch/history support and is refused here. |
+| `bindings[id].direction` | `loading` or `unloading` on the initial supplied monotone branch. |
 | `bindings[id].pressure_pa` | Exactly one finite, nonnegative prescribed pressure for each mechanical keyframe interval, within the qualified branch and declared direction. |
+| `bindings[id].branch_changes` | Version `/2` only: an optional array with exactly one entry per keyframe interval. A `null` entry continues the active branch; an object supplies the original `entry` acquisition and `transitions` evidence for a reversal before that interval's pressure is applied. The whole field cannot be `null`. |
+
+Version `/2` requires at least one actual branch change across its bindings; other bound instances
+may continue their original monotone schedules. Each change uses the same `BranchChange` contract
+as [cyclic compressed thermal histories](cyclic-compression-heat.md). Its `entry` is a
+`ftx-compression-stack/1` input with one layer whose ID is the exact retained instance ID,
+`reference_area_m2: 1`, the opposite direction, and the actual current clearance and preload.
+The unit area keeps acquisition work in J/m²; the garment's accepted area supplies the later
+work multiplier. The one matching `transitions[id]` receipt must identify the original source,
+evidence, method, specimen, conditioning, old branch, new branch and actual reversal pressure.
+
+The shared material authority verifies that both branches meet at the current pressure and
+thickness with zero entry travel and work, unchanged original material and reference mass, and
+unchanged evidence consent. Every replacement independently qualifies pressure-invariant areal
+mass and specific heat. A branch name or a numerical intersection alone is insufficient. The
+same active branch continues through later `null` entries until another qualified join; no
+automatic return to the initial loading branch occurs. A change at the first interval is allowed
+only if its independently qualified join matches the original preload within numerical
+representation tolerance. Version `/1` rejects the new field, including an explicit `null`.
 
 The acquisition's complete normalized base record must match the actual selected material; naming
 a similar fabric or copying its hash is insufficient. Both `areal_density` and `specific_heat` must
@@ -581,13 +601,18 @@ material hashes, actual work areas and separate cumulative normal work. `normal_
 zero. Trace rows retain their active conditioned identities, so initial temperature/profile admission
 and final heat objectives can replay the same original sources and pressure path. Existing sheet
 heat metrics consume the resulting heat; normal work is not added to a thermal objective.
+A version-2 result additionally retains each authored branch change and its independently
+reconstructed zero-work entry receipt at the actual transition interval. Material and design
+comparisons replay those joins through the same material authority before admitting heat
+objectives; missing or altered branch/source/state receipts withhold the affected thermal
+result while independent manufacturing remains available.
 
-Version `/1` uses the existing uniform dry film boundaries. It refuses combinations with exterior
+Both versions use the existing uniform dry film boundaries. They refuse combinations with exterior
 exchange, textile water, mechanical liquid coupling or dissipation heating because those source
 qualifications do not establish a pressure-conditioned combined law. Covered-body layered heat is
 a separate consumer and receives no inferred pressure field. Omission preserves the original dry
 history and receipt shape. Numerical conservation and synthetic pressure/RC answers establish this
-software composition; measured compression recovery and garment thermal performance remain separate
+software composition; time-dependent recovery and measured garment thermal performance remain separate
 qualification work.
 
 ### Qualified irreversible material heating

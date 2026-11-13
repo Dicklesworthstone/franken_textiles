@@ -267,3 +267,14 @@ The existing pressure-qualified sewing path retains its independent loaded-stack
 dynamic pressure/loft coupling nor moisture, recovery or empirical garment performance.
 See [Pressure-conditioned materials](../pressure-conditioned-materials.md) for the runnable native and
 browser workflow, full qualification rules and synthetic known answers.
+
+Explicit acquired-branch changes use `material_compression::stack::qualify_branch_change`,
+shared by standalone compressed thermal histories, moving-sheet heat and material-study replay.
+The original material, specimen, conditioning, consent, layer order and reference mass stay fixed;
+an independently sourced transition identifies both branches and the actual reversal pressure.
+Every layer must join at its current thickness with zero entry travel and work. Thermal consumers
+add their own unchanged cell-capacity and pressure-invariant storage checks. Moving-sheet schema
+`ftx-motion-surface-compression/2` binds such joins to authored intervals and exact physical
+instances, while version `/1` retains its original monotone contract. This allows declared
+loading/unloading/reloading histories without inferring a recovery-time law, contact pressure,
+mechanical heating, wet-material qualification or empirical garment performance.

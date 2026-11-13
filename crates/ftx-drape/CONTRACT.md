@@ -861,9 +861,18 @@ independent even for the same original material. A failed pressure or later ther
 back the entire trial, and repeated samples within one interval do not count compression twice.
 Original source receipts, initial/final conditioned models and interval hashes support frozen replay
 and the ordinary motion heat objectives. Dry film-only `/1` refuses unqualified wet, exterior or
-dissipation-heating combinations; no contact-derived pressure, geometry feedback, branch reversal,
+dissipation-heating combinations; no contact-derived pressure, geometry feedback,
 work-to-heat conversion or physical compression claim follows. Tests: `study::heat::compression`;
 consumer contract: `docs/material-scenario-studies.md#prescribed-compression-during-moving-sheet-heat`.
+
+Version `/2` adds explicit acquired loading/unloading/reloading joins before authored intervals.
+The canonical material-stack authority verifies source links, actual pressure and each layer's
+thickness, unchanged material/specimen/conditioning/consent and zero entry work; the surface still
+owns invariant reference mass and cell heat capacity. Each interval retains its exact branch
+transition and zero-work entry receipt. Null schedule entries continue the current branch; missing
+or stale sources, malformed version/schedule fields and late heat failures refuse transactionally.
+Version `/1` retains its original fields and result identity. This extends declared path support,
+not time-dependent recovery, geometric squeeze feedback or empirical garment qualification.
 
 **Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
 `Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint

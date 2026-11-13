@@ -4,14 +4,14 @@
 //! common normal pressure are explicit assumptions, not inferred garment contact topology.
 //! External work integrates that branch; it is NOT identified as stored energy or generated heat.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 
 use super::{Input as Preparation, Report as Conditioned, condition, invalid, rows, text_ok};
 use crate::material_catalog::normalize;
-use crate::materials::Source;
+use crate::materials::{Evidence, Source};
 
 /// Input schema for an inverse, fixed-reference-area compression calculation.
 pub const SCHEMA: &str = "ftx-compression-stack/1";
@@ -56,6 +56,32 @@ pub struct Input {
     /// estimated observations, retained properties and interpolated final material quantities.
     #[serde(default)]
     pub allow_estimates: bool,
+}
+
+/// Source receipt connecting two acquired branches of the same specimen and loading history.
+/// A numerical intersection alone does not qualify a reversal or a recovery-time law.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransitionEvidence {
+    /// Source key in the unchanged original material record.
+    pub source: String,
+    /// Estimated links need both branches' explicit estimate consent.
+    pub evidence: Evidence,
+    /// Protocol establishing the reversal, including peak, cycle and dwell applicability.
+    pub method: String,
+    /// Must match specimen, conditioning, from/to loading branches and current pressure_pa.
+    pub conditions: BTreeMap<String, String>,
+}
+
+/// Explicit replacement acquisition at the current state, with no entry travel or work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BranchChange {
+    /// Opposite branch at the current clearance and preload. Physical layer order, area,
+    /// original material/specimen/conditioning and estimate consent must remain unchanged.
+    pub entry: Input,
+    /// One independently supplied source link per unchanged physical layer ID.
+    pub transitions: BTreeMap<String, TransitionEvidence>,
 }
 
 /// Per-layer result, with an ordinary immutable selection for all existing material consumers.
@@ -360,6 +386,122 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
 /// prescribed boundary; conditioned layer thickness bounds remain available independently.
 pub fn at_pressure(input: &Input, pressure_pa: f64) -> Result<Report, Refusal> {
     evaluate(input, Some(pressure_pa))
+}
+
+// Representation agreement only; this cannot fit or shift acquired branches to make them join.
+fn same(a: f64, b: f64) -> bool {
+    a.is_finite() && b.is_finite() && (a - b).abs() <= 128.0 * f64::EPSILON * a.abs().max(b.abs())
+}
+
+/// Admit a source-qualified reversal from an existing canonical stack state.
+/// `current` must be the caller's retained or freshly evaluated result on `previous`'s active
+/// acquisitions. Each layer joins at its actual pressure and thickness with zero travel/work;
+/// a thermal consumer must independently enforce unchanged heat capacity and cell ownership.
+/// Known-pressure entry uses the forward authority, admitting a flat thickness branch without
+/// asking its inverse to infer the already prescribed pressure. Otherwise the original inverse
+/// admission, including its nonuniqueness refusals, remains authoritative.
+///
+/// # Errors
+/// Changed physical/source identity, unqualified source links, wrong direction, discontinuous
+/// layer state, changed reference mass, or any refused acquired-branch evaluation.
+pub fn qualify_branch_change(
+    previous: &Input,
+    current: &Report,
+    change: &BranchChange,
+    known_pressure_entry: bool,
+) -> Result<Report, Refusal> {
+    let next = &change.entry;
+    if previous.direction == next.direction
+        || previous.reference_area_m2 != next.reference_area_m2
+        || previous.allow_estimates != next.allow_estimates
+        || previous.layers.len() != next.layers.len()
+        || previous.layers.len() != current.layers.len()
+        || change.transitions.len() != next.layers.len()
+        || !same(next.gap_m, current.thickness_m)
+    {
+        return Err(invalid(
+            "branch reversal needs opposite direction, unchanged area/layers/consent, current gap and one source link per layer",
+        ));
+    }
+    for ((prior, next), retained) in previous
+        .layers
+        .iter()
+        .zip(&next.layers)
+        .zip(&current.layers)
+    {
+        let (a, b) = (&prior.preparation, &next.preparation);
+        if prior.id != next.id
+            || prior.id != retained.id
+            || a.specimen != b.specimen
+            || a.conditioning != b.conditioning
+            || a.allow_estimates != b.allow_estimates
+            || a.loading_branch == b.loading_branch
+            || !same(b.pressure_pa, current.pressure_pa)
+            || serde_json::to_vec(&a.material).map_err(|e| invalid(e.to_string()))?
+                != serde_json::to_vec(&b.material).map_err(|e| invalid(e.to_string()))?
+        {
+            return Err(invalid(
+                "branch reversal cannot change original material, physical layer order, specimen, conditioning, consent or current pressure",
+            ));
+        }
+        let link = change
+            .transitions
+            .get(&prior.id)
+            .ok_or_else(|| invalid("missing physical layer's branch transition receipt"))?;
+        if !a.material.sources.contains_key(&link.source)
+            || !text_ok(&link.method)
+            || link.conditions.len() > 64
+            || link
+                .conditions
+                .iter()
+                .any(|(k, v)| !text_ok(k) || !text_ok(v))
+            || (link.evidence == Evidence::Estimate && !a.allow_estimates)
+        {
+            return Err(invalid(
+                "branch transition needs a resolved source, method, bounded conditions and admitted evidence",
+            ));
+        }
+        for (key, expected) in [
+            ("specimen", &a.specimen),
+            ("conditioning", &a.conditioning),
+            ("from_loading_branch", &a.loading_branch),
+            ("to_loading_branch", &b.loading_branch),
+        ] {
+            if link.conditions.get(key) != Some(expected) {
+                return Err(invalid(format!("branch transition must match {key}")));
+            }
+        }
+        if !link
+            .conditions
+            .get("pressure_pa")
+            .and_then(|p| p.parse::<f64>().ok())
+            .is_some_and(|p| same(p, current.pressure_pa))
+        {
+            return Err(invalid(
+                "branch transition must qualify the actual reversal pressure",
+            ));
+        }
+    }
+    let entry = if known_pressure_entry {
+        at_pressure(next, current.pressure_pa)?
+    } else {
+        close(next)?
+    };
+    if entry.pressure_pa != entry.initial_pressure_pa
+        || entry.external_work_j != 0.0
+        || entry
+            .layers
+            .iter()
+            .any(|layer| layer.external_work_j_m2 != 0.0)
+        || entry.layers.iter().zip(&current.layers).any(|(a, b)| {
+            !same(a.thickness_m, b.thickness_m) || a.reference_mass_kg != b.reference_mass_kg
+        })
+    {
+        return Err(invalid(
+            "new branch must meet every layer at current pressure with zero entry travel/work; summed thickness alone is insufficient",
+        ));
+    }
+    Ok(entry)
 }
 
 fn evaluate(input: &Input, prescribed_pressure: Option<f64>) -> Result<Report, Refusal> {

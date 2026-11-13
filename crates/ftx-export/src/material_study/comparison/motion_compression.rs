@@ -11,6 +11,8 @@ struct Binding {
     preparation: material_compression::Input,
     direction: stack::Direction,
     pressure_pa: Vec<f64>,
+    #[serde(default)]
+    branch_changes: Option<Vec<Option<stack::BranchChange>>>,
 }
 
 fn fail() -> Refusal {
@@ -32,6 +34,22 @@ fn quantity(material: &ResolvedMaterial, name: &str, unit: &str) -> Result<f64, 
     material
         .material()
         .require(name, unit, material.allows_estimates())
+}
+
+fn invariant_storage(preparation: &material_compression::Input) -> Result<(), Refusal> {
+    if !preparation.allow_estimates
+        || preparation.material.thermal_response.is_some()
+        || ["areal_density", "specific_heat"].iter().any(|name| {
+            !preparation.invariants.contains_key(*name)
+                || preparation
+                    .samples
+                    .iter()
+                    .any(|sample| sample.properties.contains_key(*name))
+        })
+    {
+        return Err(fail());
+    }
+    Ok(())
 }
 
 fn resolved(catalog: &Catalog, value: &Value) -> Result<ResolvedMaterial, Refusal> {
@@ -103,13 +121,22 @@ pub(super) fn admit(
             Err(fail())
         };
     };
+    let cyclic = match policy["schema"].as_str() {
+        Some("ftx-motion-surface-compression/1") => false,
+        Some("ftx-motion-surface-compression/2") => true,
+        _ => return Err(fail()),
+    };
     if coverage
-        || policy["schema"] != "ftx-motion-surface-compression/1"
         || !policy.as_object().is_some_and(|o| o.len() == 3)
         || !policy["thermal_evidence"]
             .as_str()
             .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
-        || receipt["schema"] != "ftx-motion-surface-compression-result/1"
+        || receipt["schema"]
+            != if cyclic {
+                "ftx-motion-surface-compression-result/2"
+            } else {
+                "ftx-motion-surface-compression-result/1"
+            }
         || receipt["normal_work_to_heat_j"] != 0.
         || [
             "exterior_exchange",
@@ -140,6 +167,30 @@ pub(super) fn admit(
     let positions = vapor_array(simulation, "positions_m")?;
     let samples = vapor_array(motion, "samples")?;
     let endpoints = vapor_array(motion, "keyframes")?;
+    // A present null field must not silently downgrade a requested branch policy. Version /1
+    // retains its original contract, including refusal of fields belonging only to /2.
+    if policy["bindings"]
+        .as_object()
+        .ok_or_else(fail)?
+        .values()
+        .any(|binding| {
+            binding.get("branch_changes").is_some_and(|changes| {
+                !cyclic
+                    || !changes
+                        .as_array()
+                        .is_some_and(|v| v.len() == endpoints.len())
+            })
+        })
+        || (cyclic
+            && !bindings.values().any(|binding| {
+                binding
+                    .branch_changes
+                    .as_ref()
+                    .is_some_and(|changes| changes.iter().any(Option::is_some))
+            }))
+    {
+        return Err(fail());
+    }
     let cells = vapor_index(&request["cells_per_layer"])?;
     let initial_columns = vapor_array(initial_model, "columns")?;
     let updates = vapor_array(receipt, "updates")?;
@@ -211,6 +262,7 @@ pub(super) fn admit(
     let mut materials = Vec::new();
     let mut selections = Vec::new();
     let mut states = serde_json::Map::new();
+    let mut active = BTreeMap::new();
     for (column, ((original, initial), id)) in columns
         .iter()
         .zip(initial_columns)
@@ -237,8 +289,6 @@ pub(super) fn admit(
         if let Some(binding) = bindings.get(id) {
             if id.len() > 512
                 || binding.material_sha256 != material.sha256()
-                || !binding.preparation.allow_estimates
-                || binding.preparation.material.thermal_response.is_some()
                 || binding.pressure_pa.len() != endpoints.len()
                 || hash(&ftx_pattern::material_catalog::normalize(
                     &binding.preparation.material,
@@ -246,17 +296,7 @@ pub(super) fn admit(
             {
                 return Err(fail());
             }
-            for name in ["areal_density", "specific_heat"] {
-                if !binding.preparation.invariants.contains_key(name)
-                    || binding
-                        .preparation
-                        .samples
-                        .iter()
-                        .any(|s| s.properties.contains_key(name))
-                {
-                    return Err(fail());
-                }
-            }
+            invariant_storage(&binding.preparation)?;
             selected = catalog
                 .resolve(&material_compression::condition(&binding.preparation)?.selection)?;
             if conditioned_column(initial, &selected, cells)? != *initial
@@ -280,6 +320,10 @@ pub(super) fn admit(
                 "conditioned_material_sha256":selected.sha256(),"pressure_pa":binding.preparation.pressure_pa,
                 "thickness_m":quantity(&selected,"thickness","m")?,"reference_area_m2":area,
                 "reference_mass_kg":mass,"cumulative_normal_work_j":0.}));
+            active.insert(
+                id.to_owned(),
+                (binding.preparation.clone(), binding.direction),
+            );
         } else if initial["layers"][0] != *original {
             return Err(fail());
         }
@@ -348,19 +392,37 @@ pub(super) fn admit(
                 let column = vapor_index(&state["column"])?;
                 let previous_pressure = finite(&state["pressure_pa"]).ok_or_else(fail)?;
                 let pressure = binding.pressure_pa[interval];
-                let mut preparation = binding.preparation.clone();
-                preparation.pressure_pa = previous_pressure;
-                let input = stack::Input {
+                let (preparation, direction) = active.get_mut(id).ok_or_else(fail)?;
+                let mut current_preparation = preparation.clone();
+                current_preparation.pressure_pa = previous_pressure;
+                let mut input = stack::Input {
                     schema: stack::SCHEMA.into(),
                     gap_m: finite(&state["thickness_m"]).ok_or_else(fail)?,
                     reference_area_m2: 1.,
-                    direction: binding.direction,
+                    direction: *direction,
                     layers: vec![stack::Layer {
                         id: id.clone(),
-                        preparation,
+                        preparation: current_preparation,
                     }],
-                    allow_estimates: binding.preparation.allow_estimates,
+                    allow_estimates: preparation.allow_estimates,
                 };
+                let branch_change = binding
+                    .branch_changes
+                    .as_ref()
+                    .and_then(|changes| changes[interval].as_ref())
+                    .map(|change| {
+                        if change.entry.layers.len() != 1 || change.entry.layers[0].id != *id {
+                            return Err(fail());
+                        }
+                        invariant_storage(&change.entry.layers[0].preparation)?;
+                        let current = stack::at_pressure(&input, previous_pressure)?;
+                        let entry = stack::qualify_branch_change(&input, &current, change, true)?;
+                        *preparation = change.entry.layers[0].preparation.clone();
+                        *direction = change.entry.direction;
+                        input = change.entry.clone();
+                        Ok(json!({"change": change, "entry_compression": entry}))
+                    })
+                    .transpose()?;
                 let compressed = stack::at_pressure(&input, pressure)?;
                 let layer = &compressed.layers[0];
                 let selected = catalog.resolve(&layer.conditioned.selection)?;
@@ -402,6 +464,9 @@ pub(super) fn admit(
                 receipt["work_area_m2"] = json!(area);
                 receipt["normal_work_j"] = json!(work);
                 receipt["compression_input_sha256"] = json!(compressed.input_sha256);
+                if let Some(change) = branch_change {
+                    receipt["branch_change"] = change;
+                }
                 expected.insert(id.clone(), receipt);
                 let next = conditioned_column(&model["columns"][column], &selected, cells)?;
                 if next["cell_capacity_j_m2_k"] != model["columns"][column]["cell_capacity_j_m2_k"]
