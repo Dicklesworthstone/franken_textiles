@@ -21,6 +21,7 @@ use crate::{
     run::DrapeRun,
     thermal::{
         DryThermalModel,
+        compression::Control,
         surface::{Patch, Surface, SurfaceState, io::retained_materials},
     },
 };
@@ -36,9 +37,22 @@ pub struct Binding {
     pub preparation: material_compression::Input,
     /// Initial monotone acquired branch. Version 2 may explicitly replace it at a qualified join.
     pub direction: stack::Direction,
-    /// One prescribed pressure, Pa, for each mechanical keyframe interval.
-    pub pressure_pa: Vec<f64>,
-    /// Version 2 only: exactly one entry per interval; null continues the active branch.
+    /// Versions 1 and 2: one prescribed pressure, Pa, for each mechanical keyframe interval.
+    /// Omit for version 3; even an empty or null legacy schedule is not a second control.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "pressures"
+    )]
+    pub pressure_pa: Option<Vec<f64>>,
+    /// Version 3 only: one explicit pressure or clearance boundary per keyframe interval.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "controls"
+    )]
+    pub controls: Option<Vec<Control>>,
+    /// Versions 2 and 3: exactly one entry per interval; null continues the active branch.
     /// A present change joins a single-layer unit-area source stack at the CURRENT state before
     /// this interval's pressure is applied. The whole field cannot be null or imply a recovery law.
     #[serde(
@@ -47,6 +61,31 @@ pub struct Binding {
         deserialize_with = "branch_changes"
     )]
     pub branch_changes: Option<Vec<Option<stack::BranchChange>>>,
+}
+
+fn pressures<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<f64>>, D::Error> {
+    Vec::<f64>::deserialize(deserializer).map(Some)
+}
+
+fn controls<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<Control>>, D::Error> {
+    Vec::<Control>::deserialize(deserializer).map(Some)
+}
+
+impl Binding {
+    fn control(&self, interval: usize) -> Result<Control, Refusal> {
+        match (&self.pressure_pa, &self.controls) {
+            (Some(pressures), None) => pressures
+                .get(interval)
+                .map(|&pressure_pa| Control::Pressure { pressure_pa }),
+            (None, Some(controls)) => controls.get(interval).copied(),
+            _ => None,
+        }
+        .ok_or_else(|| invalid("compression needs exactly one control for this interval"))
+    }
 }
 
 fn branch_changes<'de, D: serde::Deserializer<'de>>(
@@ -59,7 +98,8 @@ fn branch_changes<'de, D: serde::Deserializer<'de>>(
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// `ftx-motion-surface-compression/1` for one monotone branch, or /2 for qualified reversals.
+    /// `ftx-motion-surface-compression/1` for prescribed pressure on one monotone branch, /2
+    /// for qualified reversals, or /3 for explicit pressure/clearance controls with optional joins.
     pub schema: String,
     /// Explicit application evidence for constant dry thermal coefficients, temperature/time
     /// range, prescribed pressure and films, and omission of normal-work conversion into heat.
@@ -72,18 +112,32 @@ pub struct Request {
 impl Request {
     pub(super) fn validate(&self, intervals: usize) -> Result<(), Refusal> {
         let cyclic = self.schema == "ftx-motion-surface-compression/2";
-        if (!cyclic && self.schema != "ftx-motion-surface-compression/1")
+        let controlled = self.schema == "ftx-motion-surface-compression/3";
+        if (!cyclic && !controlled && self.schema != "ftx-motion-surface-compression/1")
             || self.thermal_evidence.trim().is_empty()
             || self.thermal_evidence.len() > 4096
             || !(1..=256).contains(&self.bindings.len())
             || !(1..=16).contains(&intervals)
         {
             return Err(invalid(
-                "prescribed compression needs schema /1 or /2, explicit thermal evidence and 1..256 bindings",
+                "prescribed compression needs schema /1, /2 or /3, explicit thermal evidence and 1..256 bindings",
             ));
         }
         let mut joined = false;
         for (id, binding) in &self.bindings {
+            let invalid_schedule = if controlled {
+                binding.pressure_pa.is_some()
+                    || binding
+                        .controls
+                        .as_ref()
+                        .is_none_or(|controls| controls.len() != intervals)
+            } else {
+                binding.controls.is_some()
+                    || binding
+                        .pressure_pa
+                        .as_ref()
+                        .is_none_or(|pressures| pressures.len() != intervals)
+            };
             if id.is_empty()
                 || id.len() > 512
                 || binding.material_sha256.len() != 64
@@ -91,20 +145,20 @@ impl Request {
                     .material_sha256
                     .bytes()
                     .all(|c| c.is_ascii_hexdigit())
-                || binding.pressure_pa.len() != intervals
+                || invalid_schedule
                 || binding
                     .branch_changes
                     .as_ref()
-                    .is_some_and(|changes| !cyclic || changes.len() != intervals)
+                    .is_some_and(|changes| (!cyclic && !controlled) || changes.len() != intervals)
             {
                 return Err(invalid(
-                    "compression needs exact instance/material identities, one pressure per interval, explicit path-model estimate consent and constant thermal storage",
+                    "compression needs exact instance/material identities, one schema-qualified control per interval, explicit path-model estimate consent and constant thermal storage",
                 ));
             }
             check_storage(&binding.preparation)?;
-            let mut previous = binding.preparation.pressure_pa;
+            let mut previous = Some(binding.preparation.pressure_pa);
             let mut direction = binding.direction;
-            for (interval, &pressure) in binding.pressure_pa.iter().enumerate() {
+            for interval in 0..intervals {
                 if let Some(change) = binding
                     .branch_changes
                     .as_ref()
@@ -123,18 +177,30 @@ impl Request {
                     direction = change.entry.direction;
                     joined = true;
                 }
-                if !pressure.is_finite()
-                    || pressure < 0.
-                    || match direction {
-                        stack::Direction::Loading => pressure < previous,
-                        stack::Direction::Unloading => pressure > previous,
+                match binding.control(interval)? {
+                    Control::Pressure { pressure_pa } => {
+                        if !pressure_pa.is_finite()
+                            || pressure_pa < 0.
+                            || previous.is_some_and(|previous| match direction {
+                                stack::Direction::Loading => pressure_pa < previous,
+                                stack::Direction::Unloading => pressure_pa > previous,
+                            })
+                        {
+                            return Err(invalid(
+                                "prescribed pressure must remain on its declared monotone source branch",
+                            ));
+                        }
+                        previous = Some(pressure_pa);
                     }
-                {
-                    return Err(invalid(
-                        "prescribed pressure must remain on its declared monotone source branch",
-                    ));
+                    Control::Gap { gap_m } => {
+                        if !gap_m.is_finite() || gap_m <= 0. {
+                            return Err(invalid("prescribed clearance must be positive and finite"));
+                        }
+                        // The shared inverse authority checks direction against the actual solved
+                        // pressure at execution; an authored gap is never treated as a pressure.
+                        previous = None;
+                    }
                 }
-                previous = pressure;
             }
         }
         if cyclic && !joined {
@@ -191,6 +257,7 @@ struct Instance {
 #[derive(Clone, Debug)]
 pub(super) struct Compression {
     cyclic: bool,
+    controlled: bool,
     source_model: Value,
     initial_model: Value,
     initial_instances: Value,
@@ -379,6 +446,7 @@ impl Compression {
         let initial_instances = instance_snapshot(&instances);
         let compression = Self {
             cyclic: request.schema == "ftx-motion-surface-compression/2",
+            controlled: request.schema == "ftx-motion-surface-compression/3",
             source_model,
             model_sha256: initial_model["sha256"]
                 .as_str()
@@ -460,11 +528,7 @@ impl Compression {
         let mut replacements = Vec::new();
         let mut updates = BTreeMap::new();
         for (id, instance) in &mut self.instances {
-            let pressure = *instance
-                .binding
-                .pressure_pa
-                .get(interval)
-                .ok_or_else(|| invalid("compression has no pressure for this interval"))?;
+            let control = instance.binding.control(interval)?;
             let previous_pressure = instance.state.pressure_pa;
             let mut preparation = instance.preparation.clone();
             preparation.pressure_pa = previous_pressure;
@@ -498,7 +562,14 @@ impl Compression {
             } else {
                 None
             };
-            let compressed = stack::at_pressure(&input, pressure)?;
+            let compressed = match control {
+                Control::Pressure { pressure_pa } => stack::at_pressure(&input, pressure_pa)?,
+                Control::Gap { gap_m } => {
+                    input.gap_m = gap_m;
+                    stack::close(&input)?
+                }
+            };
+            let pressure = compressed.pressure_pa;
             let layer = &compressed.layers[0];
             let material = empty_catalog().resolve(&layer.conditioned.selection)?;
             let mut area = 0.;
@@ -528,6 +599,10 @@ impl Compression {
             update["work_area_m2"] = json!(area);
             update["normal_work_j"] = json!(work);
             update["compression_input_sha256"] = json!(compressed.input_sha256);
+            if self.controlled {
+                update["control"] = json!(control);
+                update["closure_residual_m"] = json!(compressed.closure_residual_m);
+            }
             if let Some(change) = branch_change {
                 update["branch_change"] = change;
             }
@@ -557,7 +632,8 @@ impl Compression {
     }
 
     pub(super) fn finish(&self) -> Value {
-        json!({"schema":if self.cyclic { "ftx-motion-surface-compression-result/2" }
+        json!({"schema":if self.controlled { "ftx-motion-surface-compression-result/3" }
+        else if self.cyclic { "ftx-motion-surface-compression-result/2" }
         else { "ftx-motion-surface-compression-result/1" },
         "material_report_sha256":self.source_model["material_report_sha256"],
         "source_model":self.source_model,"initial_model":self.initial_model,
@@ -565,7 +641,9 @@ impl Compression {
         "final_instances":instance_snapshot(&self.instances),
         "final_model_sha256":self.model_sha256,
         "cumulative_normal_work_j":self.cumulative_normal_work_j,"normal_work_to_heat_j":0.,
-        "scope":if self.cyclic {
+        "scope":if self.controlled {
+            "Explicit uniform pressure or rigid-face clearance per retained instance on source-qualified dry branches. Clearance uses the shared inverse stack authority; every optional reversal preserves actual pressure, thickness, reference mass and temperature cells with zero entry work. Each instantaneous traverse uses current accepted area held fixed during that traverse; subsequent heat storage follows unchanged reference mass. No contact-derived pressure or gap, geometry feedback, inferred recovery-time or minor-loop law, wet law, work-to-heat conversion or empirical garment claim."
+        } else if self.cyclic {
             "Prescribed uniform pressure per retained instance on explicitly joined source-qualified dry branches. Every reversal preserves actual pressure, thickness, reference mass and temperature cells with zero entry work. Each instantaneous traverse uses current accepted area held fixed during that traverse; subsequent heat storage follows unchanged reference mass. No inferred recovery-time or minor-loop law, contact pressure, geometry feedback, wet law, work-to-heat conversion or empirical garment claim."
         } else {
             "Prescribed uniform pressure per retained instance on its qualified monotone dry branch. Each instantaneous traverse uses current accepted area held fixed during that traverse; subsequent heat storage follows unchanged reference mass. No pressure inferred from contact, geometry feedback, branch reversal, wet law, work-to-heat conversion or empirical garment claim."
@@ -618,7 +696,8 @@ mod tests {
                 material_sha256: record.sha256().into(),
                 preparation,
                 direction: stack::Direction::Loading,
-                pressure_pa: pressures,
+                pressure_pa: Some(pressures),
+                controls: None,
                 branch_changes: None,
             })]),
         };
@@ -627,7 +706,10 @@ mod tests {
 
     fn history_from(compression: Request) -> SurfaceHistory {
         let binding = &compression.bindings["sheet"];
-        let intervals = binding.pressure_pa.len();
+        let intervals = binding.pressure_pa.as_ref().map_or_else(
+            || binding.controls.as_ref().unwrap().len(),
+            Vec::len,
+        );
         let record = selected(&binding.preparation);
         let policy: SurfaceRequest = serde_json::from_value(json!({
             "schema":"ftx-motion-surface-heat/1","initial_temperature_c":0.,
@@ -742,7 +824,7 @@ mod tests {
             .unwrap();
         request.schema = "ftx-motion-surface-compression/2".into();
         let binding = request.bindings.get_mut("sheet").unwrap();
-        binding.pressure_pa = vec![500., 250., 0., 250.];
+        binding.pressure_pa = Some(vec![500., 250., 0., 250.]);
         // This synthetic experiment's original observations explicitly apply on both branches.
         // A real branch-restricted observation cannot be transferred by renaming its source.
         for quantity in binding.preparation.material.properties.values_mut() {
@@ -787,6 +869,194 @@ mod tests {
         let capacity_rate = 25. / seconds;
         let conductance = 2. * area / resistance;
         (capacity_rate * old + conductance * 40.) / (capacity_rate + 2. * conductance)
+    }
+
+    fn controlled_request(controls: Vec<Control>) -> Request {
+        let mut request = fixture(vec![0.; controls.len()])
+            .request
+            .prescribed_compression
+            .unwrap();
+        request.schema = "ftx-motion-surface-compression/3".into();
+        let binding = request.bindings.get_mut("sheet").unwrap();
+        binding.pressure_pa = None;
+        binding.controls = Some(controls);
+        request
+    }
+
+    #[test]
+    fn clearance_and_pressure_controls_share_actual_heat_mass_and_branch_work() {
+        let controls = vec![
+            Control::Gap { gap_m: 0.015 },
+            Control::Pressure { pressure_pa: 500. },
+        ];
+        let mut history = history_from(controlled_request(controls.clone()));
+        let mut pressure = fixture(vec![250., 500.]);
+        let mut expected = 0.;
+        for (interval, (area, resistance)) in [(1., 0.375), (0.5, 0.25)].into_iter().enumerate() {
+            let time = (interval + 1) as f64;
+            history
+                .advance(&geometry(area), time, interval, interval, None, None, None)
+                .unwrap();
+            pressure
+                .advance(&geometry(area), time, interval, interval, None, None, None)
+                .unwrap();
+            expected = expected_step(expected, area, resistance, 1.);
+            close(history.state.temperature_c()[0][0], expected);
+            close(
+                history.state.temperature_c()[0][0],
+                pressure.state.temperature_c()[0][0],
+            );
+            close(history.stored_j, 25. * expected);
+            close(history.balance_error_j(), 0.);
+        }
+        let result = history.finish("path", "initial", 2.).unwrap();
+        let compression = &result["prescribed_compression"];
+        assert_eq!(
+            compression["schema"],
+            "ftx-motion-surface-compression-result/3"
+        );
+        for (interval, expected_pressure) in [250., 500.].into_iter().enumerate() {
+            let update = &compression["updates"][interval]["instances"]["sheet"];
+            assert_eq!(update["control"], json!(controls[interval]));
+            close(update["pressure_pa"].as_f64().unwrap(), expected_pressure);
+            close(update["closure_residual_m"].as_f64().unwrap(), 0.);
+        }
+        close(compression["cumulative_normal_work_j"].as_f64().unwrap(), 1.5625);
+        close(
+            compression["final_instances"]["sheet"]["reference_mass_kg"]
+                .as_f64()
+                .unwrap(),
+            0.025,
+        );
+        assert_eq!(compression["normal_work_to_heat_j"], 0.);
+        assert!(
+            result["request"]["prescribed_compression"]["bindings"]["sheet"]
+                .get("pressure_pa")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn mixed_controls_keep_qualified_reversals_and_roll_back_late_heat_failure() {
+        let mut request = cyclic_request();
+        request.schema = "ftx-motion-surface-compression/3".into();
+        let binding = request.bindings.get_mut("sheet").unwrap();
+        binding.pressure_pa = None;
+        binding.controls = Some(vec![
+            Control::Pressure { pressure_pa: 500. },
+            Control::Gap { gap_m: 0.012 },
+            Control::Pressure { pressure_pa: 0. },
+            Control::Gap { gap_m: 0.015 },
+        ]);
+        let mut history = history_from(request);
+        let mut pressure = history_from(cyclic_request());
+        for interval in 0..4 {
+            let time = (interval + 1) as f64;
+            let area = [1., 0.5, 2., 0.25][interval];
+            if interval == 1 {
+                history.request.max_cell_steps = history.cell_steps;
+                let accepted = physical_state(&history);
+                assert!(
+                    history
+                        .advance(&geometry(area), time, interval, interval, None, None, None)
+                        .is_err()
+                );
+                assert_eq!(physical_state(&history), accepted);
+                history.request.max_cell_steps = 100;
+            }
+            history
+                .advance(&geometry(area), time, interval, interval, None, None, None)
+                .unwrap();
+            pressure
+                .advance(&geometry(area), time, interval, interval, None, None, None)
+                .unwrap();
+            close(
+                history.state.temperature_c()[0][0],
+                pressure.state.temperature_c()[0][0],
+            );
+            close(
+                history.compression.as_ref().unwrap().cumulative_normal_work_j,
+                pressure.compression.as_ref().unwrap().cumulative_normal_work_j,
+            );
+        }
+        let result = history.finish("path", "initial", 4.).unwrap();
+        for interval in [1, 3] {
+            let update =
+                &result["prescribed_compression"]["updates"][interval]["instances"]["sheet"];
+            assert_eq!(
+                update["branch_change"]["entry_compression"]["external_work_j"],
+                0.
+            );
+            close(update["closure_residual_m"].as_f64().unwrap(), 0.);
+        }
+    }
+
+    #[test]
+    fn clearance_domain_and_direction_failures_preserve_the_last_accepted_state() {
+        for control in [
+            Control::Gap { gap_m: 0.025 },
+            Control::Gap { gap_m: 0.018 },
+            Control::Pressure { pressure_pa: 200. },
+        ] {
+            let mut history = history_from(controlled_request(vec![
+                Control::Gap { gap_m: 0.015 },
+                control,
+            ]));
+            history
+                .advance(&geometry(1.), 1., 0, 0, None, None, None)
+                .unwrap();
+            let accepted = physical_state(&history);
+            assert!(
+                history
+                    .advance(&geometry(0.5), 2., 1, 1, None, None, None)
+                    .is_err()
+            );
+            assert_eq!(physical_state(&history), accepted);
+        }
+    }
+
+    #[test]
+    fn control_schedules_are_schema_specific_complete_and_never_null() {
+        let source = controlled_request(vec![Control::Gap { gap_m: 0.015 }]);
+        source.validate(1).unwrap();
+        let raw = serde_json::to_value(&source).unwrap();
+        assert_eq!(
+            serde_json::to_value(serde_json::from_value::<Request>(raw.clone()).unwrap()).unwrap(),
+            raw
+        );
+        for case in 0..13 {
+            let mut invalid = raw.clone();
+            match case {
+                0 => invalid["bindings"]["sheet"]["pressure_pa"] = json!([]),
+                1 => invalid["bindings"]["sheet"]["pressure_pa"] = Value::Null,
+                2 => invalid["bindings"]["sheet"]["controls"] = Value::Null,
+                3 => invalid["bindings"]["sheet"]["controls"] = json!([]),
+                4 => invalid["bindings"]["sheet"]["controls"][0]["pressure_pa"] = json!(250.),
+                5 => invalid["bindings"]["sheet"]["controls"][0]["gap_m"] = json!(0.),
+                6 => invalid["bindings"]["sheet"]["controls"][0]["kind"] = json!("inferred"),
+                7 => invalid["schema"] = json!("ftx-motion-surface-compression/1"),
+                8 => invalid["schema"] = json!("ftx-motion-surface-compression/2"),
+                9 => invalid["bindings"]["sheet"]["branch_changes"] = Value::Null,
+                10 => invalid["bindings"]["sheet"]["branch_changes"] = json!([]),
+                11 => {
+                    invalid = serde_json::to_value(
+                        fixture(vec![250.]).request.prescribed_compression.unwrap(),
+                    )
+                    .unwrap();
+                    invalid["bindings"]["sheet"]["controls"] = Value::Null;
+                }
+                _ => {
+                    invalid = serde_json::to_value(
+                        fixture(vec![250.]).request.prescribed_compression.unwrap(),
+                    )
+                    .unwrap();
+                    invalid["bindings"]["sheet"]["controls"] = json!([]);
+                }
+            }
+            if let Ok(request) = serde_json::from_value::<Request>(invalid) {
+                assert!(request.validate(1).is_err(), "case {case}");
+            }
+        }
     }
 
     #[test]
@@ -1137,7 +1407,7 @@ mod tests {
         let mut history = fixture(vec![250.]);
         let mut request = history.request.prescribed_compression.clone().unwrap();
         let mut second = request.bindings["sheet"].clone();
-        second.pressure_pa[0] = 500.;
+        second.pressure_pa.as_mut().unwrap()[0] = 500.;
         request.bindings.insert("other".into(), second);
         let record = selected(&request.bindings["sheet"].preparation);
         let names = vec!["sheet".into(), "other".into()];
@@ -1252,9 +1522,9 @@ mod tests {
         assert_eq!(history.state.temperature_c(), temperatures);
         assert_eq!(history.time_s, 1.);
         let mut request = history.request.prescribed_compression.unwrap();
-        request.bindings.get_mut("sheet").unwrap().pressure_pa = vec![250., 200.];
+        request.bindings.get_mut("sheet").unwrap().pressure_pa = Some(vec![250., 200.]);
         assert!(request.validate(2).is_err());
-        request.bindings.get_mut("sheet").unwrap().pressure_pa = vec![250., 500.];
+        request.bindings.get_mut("sheet").unwrap().pressure_pa = Some(vec![250., 500.]);
         request
             .bindings
             .get_mut("sheet")
@@ -1324,4 +1594,145 @@ mod tests {
                 .is_err()
         );
     }
+    fn convection(air_c: f64, coefficient: f64) -> crate::thermal::steady::exterior::Exterior {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+        ))
+        .unwrap();
+        let mut exterior: crate::thermal::steady::exterior::Exterior =
+            serde_json::from_value(fixture["exterior_exchange"].clone()).unwrap();
+        exterior.air_c = air_c;
+        exterior.convection_w_m2_k = coefficient;
+        exterior.convection_conditions =
+            "Synthetic independent moving sheet over the acquired dry pressure range".into();
+        exterior.radiation = None;
+        exterior
+    }
+
+    #[test]
+    fn compressed_convection_preserves_reference_storage_and_current_area_exchange() {
+        let mut history = fixture(vec![250., 500., 500.]);
+        let environments = vec![convection(0., 4.), convection(10., 2.), convection(20., 0.)];
+        for (film, exterior) in history.request.boundaries.iter_mut().zip(&environments) {
+            film.inside_resistance_m2_k_w = 0.1;
+            film.outside_c = exterior.air_c;
+        }
+        history.request.exterior_exchange = Some(environments.clone());
+        history.request.validate(3).unwrap();
+        let mut temperature = 0.;
+        let mut outside_energy = 0.;
+        let mut inside_energy = 0.;
+        for (interval, (area, resistance)) in [(1., 0.375), (0.5, 0.25), (0.25, 0.25)]
+            .into_iter()
+            .enumerate()
+        {
+            let exterior = &environments[interval];
+            // Independent one-cell RC answer. Capacity follows 0.25 m2 of source mass;
+            // conductance uses accepted area and the conditioned half-cell resistance.
+            let inside = area / (0.5 * resistance + 0.1);
+            let outside = if exterior.convection_w_m2_k == 0. {
+                0.
+            } else {
+                area / (0.5 * resistance + 1. / exterior.convection_w_m2_k)
+            };
+            temperature = (25. * temperature + inside * 40. + outside * exterior.air_c)
+                / (25. + inside + outside);
+            outside_energy += outside * (temperature - exterior.air_c);
+            inside_energy += inside * (40. - temperature);
+            history
+                .advance(
+                    &geometry(area),
+                    (interval + 1) as f64,
+                    interval,
+                    interval,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            close(history.state.temperature_c()[0][0], temperature);
+            close(history.stored_j, 25. * temperature);
+            close(history.outside_j, outside_energy);
+            close(history.convective_j, outside_energy);
+            close(history.inside_j, inside_energy);
+            close(history.radiative_j, 0.);
+            close(history.balance_error_j(), 0.);
+        }
+        let report = history.finish("path", "initial", 3.).unwrap();
+        close(
+            report["prescribed_compression"]["cumulative_normal_work_j"]
+                .as_f64()
+                .unwrap(),
+            1.5625,
+        );
+        assert_eq!(report["prescribed_compression"]["normal_work_to_heat_j"], 0.);
+        close(
+            report["prescribed_compression"]["final_instances"]["sheet"]["reference_mass_kg"]
+                .as_f64()
+                .unwrap(),
+            0.025,
+        );
+        assert_eq!(report["final"]["exterior_exchange"]["convective_heat_w"], 0.);
+        assert_eq!(report["exterior_exchange"]["radiative_energy_j"], 0.);
+    }
+
+    #[test]
+    fn compressed_convection_refuses_unqualified_exchange_and_rolls_back_a_late_failure() {
+        let mut history = fixture(vec![250., 500.]);
+        for film in &mut history.request.boundaries {
+            film.outside_c = 5.;
+        }
+        history.request.exterior_exchange = Some(vec![convection(5., 3.); 2]);
+        history.request.validate(2).unwrap();
+        history
+            .advance(&geometry(1.), 1., 0, 0, None, None, None)
+            .unwrap();
+        let before = physical_state(&history);
+        let convective = history.convective_j;
+        let radiative = history.radiative_j;
+        for fault in ["source", "consent", "domain"] {
+            let mut rejected = history.clone();
+            let exterior = &mut rejected.request.exterior_exchange.as_mut().unwrap()[1];
+            match fault {
+                "source" => exterior.convection_source.note.clear(),
+                "consent" => exterior.allow_estimates = false,
+                "domain" => exterior.surface_temperature_range_c = [-80., -70.],
+                _ => unreachable!(),
+            }
+            assert!(
+                rejected
+                    .advance(&geometry(1.), 2., 1, 1, None, None, None)
+                    .is_err(),
+                "{fault}"
+            );
+            assert_eq!(physical_state(&rejected), before, "{fault}");
+            assert_eq!(rejected.convective_j, convective, "{fault}");
+            assert_eq!(rejected.radiative_j, radiative, "{fault}");
+            rejected.request = history.request.clone();
+            rejected
+                .advance(&geometry(1.), 2., 1, 1, None, None, None)
+                .unwrap();
+            assert_eq!(rejected.compression.as_ref().unwrap().updates.len(), 2);
+            close(
+                rejected
+                    .compression
+                    .as_ref()
+                    .unwrap()
+                    .cumulative_normal_work_j,
+                2.5,
+            );
+        }
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+        ))
+        .unwrap();
+        let radiation = serde_json::from_value(fixture["exterior_exchange"]["radiation"].clone())
+            .unwrap();
+        history.request.exterior_exchange.as_mut().unwrap()[0].radiation = Some(radiation);
+        assert!(history.request.validate(2).is_err());
+        history.request.exterior_exchange.as_mut().unwrap()[0].radiation = None;
+        history.request.boundaries[0].outside_resistance_m2_k_w = 0.2;
+        assert!(history.request.validate(2).is_err());
+    }
+
 }

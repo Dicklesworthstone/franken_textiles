@@ -860,8 +860,12 @@ normal branch work; reference area owns stored sensible heat. Per-instance press
 independent even for the same original material. A failed pressure or later thermal advance rolls
 back the entire trial, and repeated samples within one interval do not count compression twice.
 Original source receipts, initial/final conditioned models and interval hashes support frozen replay
-and the ordinary motion heat objectives. Dry film-only `/1` refuses unqualified wet, exterior or
-dissipation-heating combinations; no contact-derived pressure, geometry feedback,
+and the ordinary motion heat objectives. All versions admit dry films or separately qualified
+convection-only exterior exchange; actual pressure-conditioned transport reaches the same heat solver.
+Exterior source/consent/temperature domains and zero-film/air consistency remain required. Comparison
+admission reconciles complete convection energy and power against outside-boundary heat and refuses
+radiative receipts. Wet, radiation and dissipation-heating combinations still require compatible
+pressure-conditioned laws; no contact-derived pressure, geometry feedback,
 work-to-heat conversion or physical compression claim follows. Tests: `study::heat::compression`;
 consumer contract: `docs/material-scenario-studies.md#prescribed-compression-during-moving-sheet-heat`.
 
@@ -873,6 +877,15 @@ transition and zero-work entry receipt. Null schedule entries continue the curre
 or stale sources, malformed version/schedule fields and late heat failures refuse transactionally.
 Version `/1` retains its original fields and result identity. This extends declared path support,
 not time-dependent recovery, geometric squeeze feedback or empirical garment qualification.
+
+Version `/3` replaces the legacy pressure array with one explicit pressure or rigid-face clearance
+control per interval, with optional source-qualified branch changes. The same `stack::at_pressure`
+or `stack::close` authority computes each state; controls never infer contact pressure or separation.
+Updates retain the exact control, solved pressure/thickness and closure residual for independent
+comparison replay. Cross-schema fields, simultaneous controls, nonunique inverse pressure,
+unattainable gaps and unqualified reversal refuse. Temperature/storage, signed normal work and
+whole-interval rollback retain the preceding contracts; source/pressure fields in versions `/1`
+and `/2` preserve their original serialized form.
 
 **Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
 `Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint

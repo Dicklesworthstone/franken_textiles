@@ -10,9 +10,19 @@ struct Binding {
     material_sha256: String,
     preparation: material_compression::Input,
     direction: stack::Direction,
-    pressure_pa: Vec<f64>,
+    #[serde(default)]
+    pressure_pa: Option<Vec<f64>>,
+    #[serde(default)]
+    controls: Option<Vec<Control>>,
     #[serde(default)]
     branch_changes: Option<Vec<Option<stack::BranchChange>>>,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum Control {
+    Gap { gap_m: f64 },
+    Pressure { pressure_pa: f64 },
 }
 
 fn fail() -> Refusal {
@@ -100,6 +110,74 @@ fn surface_hash(model: &mut Value) -> Result<(), Refusal> {
     Ok(())
 }
 
+// Compression may change transport, but convection-only exterior exchange is still the entire
+// outside boundary. Reconcile that separate receipt with the physical ledger at every sample.
+fn admit_convection(
+    heat: &Value,
+    request: &Value,
+    trace: &[Value],
+    intervals: usize,
+) -> Result<(), Refusal> {
+    let Some(environments) = request
+        .get("exterior_exchange")
+        .filter(|value| !value.is_null())
+    else {
+        if !heat["exterior_exchange"].is_null()
+            || !heat["final"]["exterior_exchange"].is_null()
+            || trace.iter().any(|row| !row["exterior_exchange"].is_null())
+        {
+            return Err(fail());
+        }
+        return Ok(());
+    };
+    let environments = environments
+        .as_array()
+        .filter(|values| values.len() == intervals)
+        .ok_or_else(fail)?;
+    let boundaries = vapor_array(request, "boundaries")?;
+    if boundaries.len() != intervals
+        || environments.iter().zip(boundaries).any(|(environment, film)| {
+            !environment.is_object()
+                || !environment["radiation"].is_null()
+                || film["outside_resistance_m2_k_w"] != 0.
+                || film["outside_c"] != environment["air_c"]
+        })
+    {
+        return Err(fail());
+    }
+    for row in trace.iter().chain(std::iter::once(heat)) {
+        let exterior = &row["exterior_exchange"];
+        if !heat_near(
+            finite(&exterior["convective_energy_j"]).ok_or_else(fail)?,
+            finite(&row["outside_energy_j"]).ok_or_else(fail)?,
+        ) || finite(&exterior["radiative_energy_j"]) != Some(0.)
+        {
+            return Err(fail());
+        }
+    }
+    let final_field = &heat["final"];
+    for row in trace.iter().chain(std::iter::once(final_field)) {
+        let exterior = &row["exterior_exchange"];
+        if !heat_near(
+            finite(&exterior["convective_heat_w"]).ok_or_else(fail)?,
+            finite(&row["outside_heat_w"]).ok_or_else(fail)?,
+        ) || finite(&exterior["radiative_heat_w"]) != Some(0.)
+            || finite(&exterior["balance_residual_w"]).is_none()
+        {
+            return Err(fail());
+        }
+    }
+    let last = trace.last().ok_or_else(fail)?;
+    if heat["exterior_exchange"]["convective_energy_j"]
+        != last["exterior_exchange"]["convective_energy_j"]
+        || final_field["exterior_exchange"]["convective_heat_w"]
+            != last["exterior_exchange"]["convective_heat_w"]
+    {
+        return Err(fail());
+    }
+    Ok(())
+}
+
 /// Return the admitted initial conditioned materials for instance/profile initialization.
 pub(super) fn admit(
     alternative: &Alternative,
@@ -121,9 +199,10 @@ pub(super) fn admit(
             Err(fail())
         };
     };
-    let cyclic = match policy["schema"].as_str() {
-        Some("ftx-motion-surface-compression/1") => false,
-        Some("ftx-motion-surface-compression/2") => true,
+    let (cyclic, controlled) = match policy["schema"].as_str() {
+        Some("ftx-motion-surface-compression/1") => (false, false),
+        Some("ftx-motion-surface-compression/2") => (true, false),
+        Some("ftx-motion-surface-compression/3") => (false, true),
         _ => return Err(fail()),
     };
     if coverage
@@ -132,14 +211,25 @@ pub(super) fn admit(
             .as_str()
             .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
         || receipt["schema"]
-            != if cyclic {
+            != if controlled {
+                "ftx-motion-surface-compression-result/3"
+            } else if cyclic {
                 "ftx-motion-surface-compression-result/2"
             } else {
                 "ftx-motion-surface-compression-result/1"
             }
         || receipt["normal_work_to_heat_j"] != 0.
+        || request
+            .get("exterior_exchange")
+            .filter(|value| !value.is_null())
+            .is_some_and(|value| {
+                value.as_array().is_none_or(|environments| {
+                    environments
+                        .iter()
+                        .any(|environment| !environment["radiation"].is_null())
+                })
+            })
         || [
-            "exterior_exchange",
             "plastic_dissipation_heat",
             "relaxation_dissipation_heat",
             "bending_plastic_dissipation_heat",
@@ -167,19 +257,26 @@ pub(super) fn admit(
     let positions = vapor_array(simulation, "positions_m")?;
     let samples = vapor_array(motion, "samples")?;
     let endpoints = vapor_array(motion, "keyframes")?;
-    // A present null field must not silently downgrade a requested branch policy. Version /1
-    // retains its original contract, including refusal of fields belonging only to /2.
+    admit_convection(heat, request, trace, endpoints.len())?;
+    // A present null field must not silently downgrade a requested branch or boundary policy.
+    // Legacy schemas retain their original contracts and reject fields belonging only to /3.
     if policy["bindings"]
         .as_object()
         .ok_or_else(fail)?
         .values()
         .any(|binding| {
-            binding.get("branch_changes").is_some_and(|changes| {
-                !cyclic
-                    || !changes
-                        .as_array()
-                        .is_some_and(|v| v.len() == endpoints.len())
-            })
+            let schedule = if controlled { "controls" } else { "pressure_pa" };
+            let reserved = if controlled { "pressure_pa" } else { "controls" };
+            binding.get(reserved).is_some()
+                || !binding[schedule]
+                    .as_array()
+                    .is_some_and(|values| values.len() == endpoints.len())
+                || binding.get("branch_changes").is_some_and(|changes| {
+                    (!cyclic && !controlled)
+                        || !changes
+                            .as_array()
+                            .is_some_and(|values| values.len() == endpoints.len())
+                })
         })
         || (cyclic
             && !bindings.values().any(|binding| {
@@ -289,7 +386,6 @@ pub(super) fn admit(
         if let Some(binding) = bindings.get(id) {
             if id.len() > 512
                 || binding.material_sha256 != material.sha256()
-                || binding.pressure_pa.len() != endpoints.len()
                 || hash(&ftx_pattern::material_catalog::normalize(
                     &binding.preparation.material,
                 )?)? != hash(material.material())?
@@ -391,7 +487,21 @@ pub(super) fn admit(
                 let state = states.get_mut(id).ok_or_else(fail)?;
                 let column = vapor_index(&state["column"])?;
                 let previous_pressure = finite(&state["pressure_pa"]).ok_or_else(fail)?;
-                let pressure = binding.pressure_pa[interval];
+                let control = if controlled {
+                    *binding
+                        .controls
+                        .as_ref()
+                        .and_then(|controls| controls.get(interval))
+                        .ok_or_else(fail)?
+                } else {
+                    Control::Pressure {
+                        pressure_pa: *binding
+                            .pressure_pa
+                            .as_ref()
+                            .and_then(|pressures| pressures.get(interval))
+                            .ok_or_else(fail)?,
+                    }
+                };
                 let (preparation, direction) = active.get_mut(id).ok_or_else(fail)?;
                 let mut current_preparation = preparation.clone();
                 current_preparation.pressure_pa = previous_pressure;
@@ -423,7 +533,14 @@ pub(super) fn admit(
                         Ok(json!({"change": change, "entry_compression": entry}))
                     })
                     .transpose()?;
-                let compressed = stack::at_pressure(&input, pressure)?;
+                let compressed = match control {
+                    Control::Pressure { pressure_pa } => stack::at_pressure(&input, pressure_pa)?,
+                    Control::Gap { gap_m } => {
+                        input.gap_m = gap_m;
+                        stack::close(&input)?
+                    }
+                };
+                let pressure = compressed.pressure_pa;
                 let layer = &compressed.layers[0];
                 let selected = catalog.resolve(&layer.conditioned.selection)?;
                 let mut area = 0.;
@@ -464,6 +581,10 @@ pub(super) fn admit(
                 receipt["work_area_m2"] = json!(area);
                 receipt["normal_work_j"] = json!(work);
                 receipt["compression_input_sha256"] = json!(compressed.input_sha256);
+                if controlled {
+                    receipt["control"] = json!(control);
+                    receipt["closure_residual_m"] = json!(compressed.closure_residual_m);
+                }
                 if let Some(change) = branch_change {
                     receipt["branch_change"] = change;
                 }

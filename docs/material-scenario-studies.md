@@ -538,8 +538,9 @@ branch to the actual moving independent-sheet history. This lets a scenario comp
 loaded insulation state while continuing the same temperature cells through later pressure changes.
 The pressure is a supplied operating boundary; no contact force is divided by an assumed area.
 
-The optional object uses `ftx-motion-surface-compression/1` for a monotone acquired branch,
-or `/2` for an explicit source-qualified sequence of loading, unloading and reloading branches:
+The optional object uses `ftx-motion-surface-compression/1` for a monotone acquired pressure branch,
+`/2` for an explicit source-qualified sequence of loading, unloading and reloading branches, or `/3`
+for explicit pressure or clearance controls on those same acquired branches:
 
 | Field | Required meaning |
 | --- | --- |
@@ -548,11 +549,14 @@ or `/2` for an explicit source-qualified sequence of loading, unloading and relo
 | `bindings[id].material_sha256` | The exact original selected material hash, before pressure conditioning. |
 | `bindings[id].preparation` | A complete existing `ftx-material-compression/1` acquisition, including the original material, source-qualified samples and invariants, specimen/conditioning/branch, date and explicit estimate consent. Its `pressure_pa` is the known initial preload. |
 | `bindings[id].direction` | `loading` or `unloading` on the initial supplied monotone branch. |
-| `bindings[id].pressure_pa` | Exactly one finite, nonnegative prescribed pressure for each mechanical keyframe interval, within the qualified branch and declared direction. |
-| `bindings[id].branch_changes` | Version `/2` only: an optional array with exactly one entry per keyframe interval. A `null` entry continues the active branch; an object supplies the original `entry` acquisition and `transitions` evidence for a reversal before that interval's pressure is applied. The whole field cannot be `null`. |
+| `bindings[id].pressure_pa` | Versions `/1` and `/2`: exactly one finite, nonnegative prescribed pressure for each mechanical keyframe interval, within the qualified branch and declared direction. Omit entirely for `/3`. |
+| `bindings[id].controls` | Version `/3` only: exactly one `{ "kind": "pressure", "pressure_pa": 250 }` or `{ "kind": "gap", "gap_m": 0.015 }` for each keyframe interval. A gap must be finite and positive, in metres. |
+| `bindings[id].branch_changes` | Versions `/2` and `/3`: an optional array with exactly one entry per keyframe interval. A `null` entry continues the active branch; an object supplies the original `entry` acquisition and `transitions` evidence for a reversal before that interval's control is applied. The whole field cannot be `null`. |
 
 Version `/2` requires at least one actual branch change across its bindings; other bound instances
-may continue their original monotone schedules. Each change uses the same `BranchChange` contract
+may continue their original monotone schedules. Version `/3` permits a monotone history without any
+joins, or the same explicitly qualified reversals. It never accepts a second `pressure_pa` schedule,
+even an empty array or `null`; earlier versions reject `controls`, including `null`. Each change uses the same `BranchChange` contract
 as [cyclic compressed thermal histories](cyclic-compression-heat.md). Its `entry` is a
 `ftx-compression-stack/1` input with one layer whose ID is the exact retained instance ID,
 `reference_area_m2: 1`, the opposite direction, and the actual current clearance and preload.
@@ -579,8 +583,11 @@ authorities. An original mechanical record may obtain thermal transport from its
 it need not pretend to have an uncompressed thermal observation.
 
 At the first accepted mechanical sample of each keyframe interval, the existing single-layer
-pressure solver conditions each bound sheet from its preceding pressure and the original acquisition.
-The next heat solve uses its exact frozen material selection. Repeated samples in that interval
+pressure or inverse-clearance solver conditions each bound sheet from its preceding pressure and
+the original acquisition. A clearance control solves pressure from the actual acquired thickness
+branch; it does not substitute the garment/body separation or a contact-force estimate. Unattainable
+clearances, nonunique inverse pressure and undeclared direction reversals refuse. Switching control
+kind does not change the active source branch. The next heat solve uses its exact frozen selection. Repeated samples in that interval
 keep the same pressure state. Every temperature cell is transferred unchanged only after the thermal
 boundary verifies identical cell capacity and identical reference areal mass. Resistance exchanges
 heat over the accepted triangle's **current area**; storage remains attached to its **reference
@@ -601,15 +608,25 @@ material hashes, actual work areas and separate cumulative normal work. `normal_
 zero. Trace rows retain their active conditioned identities, so initial temperature/profile admission
 and final heat objectives can replay the same original sources and pressure path. Existing sheet
 heat metrics consume the resulting heat; normal work is not added to a thermal objective.
-A version-2 result additionally retains each authored branch change and its independently
-reconstructed zero-work entry receipt at the actual transition interval. Material and design
+Versions `/2` and `/3` additionally retain each authored branch change and its independently
+reconstructed zero-work entry receipt at the actual transition interval. Version `/3` uses
+`ftx-motion-surface-compression-result/3`; every update retains its exact requested `control`,
+canonical solved pressure/thickness and `closure_residual_m` (zero for prescribed pressure). Material and design
 comparisons replay those joins through the same material authority before admitting heat
 objectives; missing or altered branch/source/state receipts withhold the affected thermal
 result while independent manufacturing remains available.
 
-Both versions use the existing uniform dry film boundaries. They refuse combinations with exterior
-exchange, textile water, mechanical liquid coupling or dissipation heating because those source
-qualifications do not establish a pressure-conditioned combined law. Covered-body layered heat is
+All three versions use the existing uniform dry films or a separately qualified convection-only
+`exterior_exchange` schedule. Each environment must qualify its coefficient, source, estimate consent
+and surface-temperature domain for the stated geometry, motion and compressed state. The outside film
+must be zero and `outside_c` must equal that interval's `air_c`. Current accepted area sets convection;
+pressure-conditioned transport and retained reference mass set the heat response. Explicit zero
+convection is allowed. Source/domain or late heat failure rolls back the complete pressure and heat
+interval. Comparisons reconcile every convective power/energy receipt with the outside heat ledger
+and require zero radiative exchange before admitting a thermal objective.
+
+Radiation, textile water, mechanical liquid coupling and dissipation heating remain refused: these
+acquisitions do not establish the corresponding pressure-conditioned combined laws. Covered-body layered heat is
 a separate consumer and receives no inferred pressure field. Omission preserves the original dry
 history and receipt shape. Numerical conservation and synthetic pressure/RC answers establish this
 software composition; time-dependent recovery and measured garment thermal performance remain separate

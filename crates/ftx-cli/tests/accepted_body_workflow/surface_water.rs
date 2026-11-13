@@ -71,15 +71,25 @@ fn inputs() -> (String, Value, Value) {
 
 #[test]
 fn prescribed_compression_heat_replays_native_portable_and_named_case_decisions() {
-    prescribed_compression_workflow(false);
+    prescribed_compression_workflow(false, false, false);
 }
 
 #[test]
 fn cyclic_compression_heat_replays_native_portable_and_named_case_decisions() {
-    prescribed_compression_workflow(true);
+    prescribed_compression_workflow(true, false, false);
 }
 
-fn prescribed_compression_workflow(cyclic: bool) {
+#[test]
+fn compressed_convection_heat_replays_native_portable_and_named_case_decisions() {
+    prescribed_compression_workflow(true, false, true);
+}
+
+#[test]
+fn clearance_controlled_convection_replays_native_portable_and_named_case_decisions() {
+    prescribed_compression_workflow(false, true, true);
+}
+
+fn prescribed_compression_workflow(cyclic: bool, controlled: bool, convection: bool) {
     let (pattern, mut study, mut single) = inputs();
     let mut preparation: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-compression.json"
@@ -156,6 +166,36 @@ fn prescribed_compression_workflow(cyclic: bool) {
             compression_branch_change(&preparation, false)
         ]);
     }
+    if controlled {
+        let compression = &mut heat["prescribed_compression"];
+        compression["schema"] = json!("ftx-motion-surface-compression/3");
+        let binding = &mut compression["bindings"]["band"];
+        binding.as_object_mut().unwrap().remove("pressure_pa");
+        binding["controls"] = json!([
+            {"kind":"gap","gap_m":0.015},
+            {"kind":"pressure","pressure_pa":500.0}
+        ]);
+    }
+    if convection {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+        ))
+        .unwrap();
+        let mut exterior = fixture["exterior_exchange"].clone();
+        exterior.as_object_mut().unwrap().remove("radiation");
+        exterior["air_c"] = json!(5.0);
+        exterior["convection_conditions"] = json!(
+            "Synthetic prescribed coefficient over the entire declared motion and pressure domain; no wind correlation or empirical claim"
+        );
+        heat["exterior_exchange"] = json!(vec![exterior; intervals]);
+        for film in heat["boundaries"].as_array_mut().unwrap() {
+            film["outside_c"] = json!(5.0);
+            film["outside_resistance_m2_k_w"] = json!(0.0);
+        }
+        heat["prescribed_compression"]["thermal_evidence"] = json!(
+            "Synthetic constant dry coefficients over 0–40 C and 0–500 Pa; independently prescribed convection, reference storage retained and normal work excluded from heat"
+        );
+    }
     let request: ftx_export::material_study::Request =
         serde_json::from_value(study.clone()).unwrap();
     let source_pattern = ftx_pattern::Pattern::from_json(&pattern).unwrap();
@@ -163,7 +203,11 @@ fn prescribed_compression_workflow(cyclic: bool) {
         &pattern,
         &study,
         single,
-        if cyclic {
+        if controlled {
+            "FTX_CLEARANCE_CONVECTION_MOTION_REPLAY"
+        } else if convection {
+            "FTX_COMPRESSION_CONVECTION_MOTION_REPLAY"
+        } else if cyclic {
             "FTX_CYCLIC_COMPRESSION_MOTION_REPLAY"
         } else {
             "FTX_COMPRESSION_MOTION_REPLAY"
@@ -182,7 +226,9 @@ fn prescribed_compression_workflow(cyclic: bool) {
             let compression = &heat["prescribed_compression"];
             assert_eq!(
                 compression["schema"],
-                if cyclic {
+                if controlled {
+                    "ftx-motion-surface-compression-result/3"
+                } else if cyclic {
                     "ftx-motion-surface-compression-result/2"
                 } else {
                     "ftx-motion-surface-compression-result/1"
@@ -249,6 +295,16 @@ fn prescribed_compression_workflow(cyclic: bool) {
                 assert_eq!(updates[2]["instances"]["band"]["thickness_m"], 0.02);
             }
             assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+            if convection {
+                assert_eq!(heat["exterior_exchange"]["radiative_energy_j"], 0.0);
+                let convective = heat["exterior_exchange"]["convective_energy_j"].as_f64().unwrap();
+                assert!((heat["outside_energy_j"].as_f64().unwrap() - convective).abs() < 1e-10);
+                assert!(convective.abs() > 1e-10);
+                for sample in heat["trace"].as_array().unwrap() {
+                    assert_eq!(sample["exterior_exchange"]["radiative_heat_w"], 0.0);
+                    assert!(sample["prescribed_compression"].is_object());
+                }
+            }
             let temperatures: Vec<_> = heat["final"]["temperature_c"]
                 .as_array()
                 .unwrap()
@@ -296,6 +352,12 @@ fn prescribed_compression_workflow(cyclic: bool) {
             if cyclic {
                 faults.extend(["branch-source", "branch-entry", "missing-branch", "schema"]);
             }
+            if convection {
+                faults.extend(["environment", "convection-ledger"]);
+            }
+            if controlled {
+                faults.push("control");
+            }
             for fault in faults {
                 let replayed = request
                     .evaluate_with(&source_pattern, &report["scenario"], |key, _| {
@@ -321,6 +383,15 @@ fn prescribed_compression_workflow(cyclic: bool) {
                                         json!("0".repeat(64));
                                 }
                                 "work-heat" => receipt["normal_work_to_heat_j"] = json!(1.0),
+                                "environment" => {
+                                    heat["request"]["exterior_exchange"][0]["convection_w_m2_k"] = json!(30.0);
+                                }
+                                "convection-ledger" => {
+                                    heat["exterior_exchange"]["convective_energy_j"] = json!(1000.0);
+                                }
+                                "control" => {
+                                    heat["request"]["prescribed_compression"]["bindings"]["band"]["controls"][0]["gap_m"] = json!(0.014);
+                                }
                                 "branch-source" => {
                                     receipt["updates"][1]["instances"]["band"]["branch_change"]
                                         ["change"]["transitions"]["band"]["source"] = json!("absent");
@@ -451,6 +522,10 @@ fn replay(
         "arm_abduction_deg":35.0});
     let mut warm = single.clone();
     warm["motion"]["transient_surface"]["boundaries"][0]["outside_c"] = json!(25.);
+    if let Some(exteriors) = warm["motion"]["transient_surface"]["exterior_exchange"].as_array_mut()
+    {
+        exteriors[0]["air_c"] = json!(25.);
+    }
     let matrix = json!({"schema":"ftx-drape-scenario-matrix/1", "max_evaluations":2 * study["variants"].as_array().unwrap().len(),
         "cases":[{"key":"equal-reservoirs","scenario":single},{"key":"warm-outside","scenario":warm}]});
     let dir = setup();

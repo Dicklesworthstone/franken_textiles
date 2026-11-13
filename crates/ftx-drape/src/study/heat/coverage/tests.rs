@@ -823,7 +823,12 @@ fn compression_history() -> (History, Vec<Vec3>) {
                     material_sha256: material.sha256().into(),
                     preparation: preparation.clone(),
                     direction: stack::Direction::Loading,
-                    pressure_pa: if index == 0 { vec![500.; 3] } else { vec![250., 500., 500.] },
+                    pressure_pa: Some(if index == 0 {
+                        vec![500.; 3]
+                    } else {
+                        vec![250., 500., 500.]
+                    }),
+                    controls: None,
                     branch_changes: None,
                 })
             })

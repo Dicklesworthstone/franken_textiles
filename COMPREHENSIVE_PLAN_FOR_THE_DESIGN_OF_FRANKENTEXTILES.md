@@ -5805,6 +5805,20 @@ the fitting objective. This extends the ordinary `ftx-bc1` workflow without chan
 readiness thresholds. Synthetic frontend and native-fixture replay checks remain separate from
 independent body accuracy and real garment fit.
 
+### 25.202 Control moving insulation by clearance and qualified convection
+
+Moving independent-sheet heat now accepts an explicit pressure or clearance for each retained
+instance and authored interval. The existing acquired-branch authority solves clearance, preserves
+qualified load/unload joins and retains original controls beside solved pressure and thickness.
+The same temperature cells, reference mass, current-area work and transactional rollback continue.
+
+Separately qualified convection-only environments now reach the pressure-conditioned columns.
+Comparison admission independently repeats compression and reconciles every exterior power/energy
+record with outside heat before admitting thermal objectives. Radiation, wet laws and work heating
+require their own combined qualifications. This advances `ftx-cp2`, `ftx-tm5` and `ftx-ms2`;
+numerical/source regressions do not establish contact-derived pressure, layered body coverage,
+time-dependent recovery or independently measured garment performance.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

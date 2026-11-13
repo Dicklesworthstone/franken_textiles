@@ -74,7 +74,7 @@ pub struct SurfaceRequest {
     /// environment per keyframe interval; each sheet supplies its own exposed-face emissivity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exterior_exchange: Option<Vec<Exterior>>,
-    /// Optional source-qualified prescribed normal pressure, one value per keyframe interval and
+    /// Optional source-qualified pressure or clearance, one control per keyframe interval and
     /// exact retained instance. Changes dry thermal transport while preserving reference mass and
     /// temperature cells; normal work is separate from heat and never inferred from contact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -343,7 +343,10 @@ impl SurfaceRequest {
         }
         if let Some(compression) = &self.prescribed_compression {
             compression.validate(intervals)?;
-            if self.exterior_exchange.is_some()
+            if self
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|exteriors| exteriors.iter().any(|e| e.radiation.is_some()))
                 || self.plastic_dissipation_heat.is_some()
                 || self.relaxation_dissipation_heat.is_some()
                 || self.bending_plastic_dissipation_heat.is_some()
@@ -353,7 +356,7 @@ impl SurfaceRequest {
                 || self.mechanical_coupling.is_some()
             {
                 return Err(invalid(
-                    "prescribed compression /1 requires independent dry film boundaries; combined water, dissipation heating and exterior qualifications are not supplied",
+                    "prescribed compression requires independent dry films or qualified convection; combined water, dissipation heating and radiation qualifications are not supplied",
                 ));
             }
         }
