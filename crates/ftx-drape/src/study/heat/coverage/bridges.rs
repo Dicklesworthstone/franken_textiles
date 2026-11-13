@@ -87,6 +87,7 @@ pub struct Request {
     pub qualifications: Vec<Qualification>,
 }
 
+#[derive(Clone)]
 pub(super) struct Authority {
     source: SteadySurface,
     model_sha256: String,

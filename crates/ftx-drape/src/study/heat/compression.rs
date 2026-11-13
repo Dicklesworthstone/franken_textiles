@@ -261,7 +261,7 @@ impl Compression {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn from_retained(
+    pub(super) fn from_retained(
         request: &Request,
         records: &[ResolvedMaterial],
         instance_names: &[String],
@@ -326,9 +326,12 @@ impl Compression {
                     "reference area",
                 )?;
                 let mass = positive(quantity(&material, "areal_density", "kg/m2")?, "areal mass")?;
-                if mass != quantity(source, "areal_density", "kg/m2")? {
+                if mass != quantity(source, "areal_density", "kg/m2")?
+                    || quantity(&material, "specific_heat", "J/(kg*K)")?
+                        != quantity(source, "specific_heat", "J/(kg*K)")?
+                {
                     return Err(invalid(
-                        "compression cannot change the selected reference mass",
+                        "compression cannot change the selected reference mass or specific heat",
                     ));
                 }
                 instances.insert(
@@ -402,6 +405,47 @@ impl Compression {
         sample_index: usize,
         time_s: f64,
     ) -> Result<Option<(Surface, SurfaceState)>, Refusal> {
+        self.condition_with(
+            model,
+            positions,
+            interval,
+            sample_index,
+            time_s,
+            |model, replacements| model.recondition_columns(state, replacements),
+        )
+    }
+
+    pub(super) fn condition_source(
+        &mut self,
+        model: &Surface,
+        positions: &[Vec3],
+        interval: usize,
+        sample_index: usize,
+        time_s: f64,
+    ) -> Result<Option<Surface>, Refusal> {
+        self.condition_with(
+            model,
+            positions,
+            interval,
+            sample_index,
+            time_s,
+            |model, replacements| Ok((model.reconditioned_columns(replacements)?, ())),
+        )
+        .map(|next| next.map(|(model, ())| model))
+    }
+
+    fn condition_with<T>(
+        &mut self,
+        model: &Surface,
+        positions: &[Vec3],
+        interval: usize,
+        sample_index: usize,
+        time_s: f64,
+        recondition: impl FnOnce(
+            &Surface,
+            Vec<(usize, DryThermalModel)>,
+        ) -> Result<(Surface, T), Refusal>,
+    ) -> Result<Option<(Surface, T)>, Refusal> {
         if self.last_interval == Some(interval) {
             return Ok(None);
         }
@@ -493,7 +537,7 @@ impl Compression {
                 DryThermalModel::new(vec![material], vec![], self.cells_per_layer)?,
             ));
         }
-        let (next, temperature) = model.recondition_columns(state, replacements)?;
+        let (next, temperature) = recondition(model, replacements)?;
         self.model_sha256 = next.snapshot()["sha256"]
             .as_str()
             .expect("surface identity")

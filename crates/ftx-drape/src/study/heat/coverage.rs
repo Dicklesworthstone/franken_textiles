@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    Budget, DissipationHeatDistribution, PlasticHeatDistribution, boundary, budget, hash, invalid,
-    plastic,
+    Budget, DissipationHeatDistribution, PlasticHeatDistribution, boundary, budget, compression, hash,
+    invalid, plastic,
 };
 use crate::{
     motion::DissipationCapture,
@@ -55,6 +55,11 @@ pub struct Request {
     /// the scalar fallback is unused. Actual body-facing orientation determines covered cell order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_instance_temperature_profiles_c: Option<BTreeMap<String, Vec<f64>>>,
+    /// Optional source-qualified pressure history for exact retained physical instances. Thermal
+    /// thickness and face gaps follow the conditioned source; reference mass, specific heat and
+    /// covered/exposed enthalpy persist. Normal work stays separate from heat and is not contact pressure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prescribed_compression: Option<compression::Request>,
     /// One spatially uniform pair of body-side/exterior films for each keyframe interval.
     pub boundaries: Vec<Film>,
     /// Optional exact interval schedule; null retains that interval's outside film. Each active
@@ -106,6 +111,7 @@ impl Request {
         intervals: usize,
         work: &mut Budget,
     ) -> Result<History, Refusal> {
+        self.validate_compression(intervals)?;
         if let Some(bridges) = &self.thermal_bridges {
             bridges.validate()?;
             if self
@@ -203,7 +209,13 @@ impl Request {
         // Even a later compile/remap failure consumes this conservative session reservation.
         work.reserve(self.max_cell_steps)?;
         work.reserve_geometry(self.max_geometry_operations)?;
-        let source = run.thermal_surface(self.settings.cells_per_layer)?;
+        let (source, compression) = if let Some(request) = &self.prescribed_compression {
+            let (source, compression) =
+                compression::Compression::start(request, run, self.settings.cells_per_layer)?;
+            (source, Some(compression))
+        } else {
+            (run.thermal_surface(self.settings.cells_per_layer)?, None)
+        };
         let triangles: Vec<_> = self.body_triangle_ids.iter().map(|&i| body.1[i]).collect();
         let projection = projection::Request {
             schema: "ftx-thermal-projection/1".into(),
@@ -287,6 +299,7 @@ impl Request {
             state,
             initial_frame_sha256,
             initial_condition,
+            compression,
             geometry_operations,
             time_s: 0.,
             cell_steps: 0,
@@ -311,6 +324,24 @@ impl Request {
             bridge_authority,
             bridge_j: 0.,
         })
+    }
+
+    fn validate_compression(&self, intervals: usize) -> Result<(), Refusal> {
+        if let Some(compression) = &self.prescribed_compression {
+            compression.validate(intervals)?;
+            if self.exterior_exchange.is_some()
+                || self.exposed_exterior_exchange.is_some()
+                || self.plastic_dissipation_heat.is_some()
+                || self.relaxation_dissipation_heat.is_some()
+                || self.bending_plastic_dissipation_heat.is_some()
+                || self.thermal_bridges.is_some()
+            {
+                return Err(invalid(
+                    "coverage compression requires film boundaries and independently constant dry storage; exterior, dissipation and bridge combinations need joint qualification",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn validate_initial_temperatures(&self) -> Result<(), Refusal> {
@@ -448,6 +479,7 @@ fn exterior_boundary(film: Film, exterior: &Exterior) -> Result<(), Refusal> {
     Ok(())
 }
 
+#[derive(Clone)]
 pub(in crate::study) struct History {
     request: Request,
     source: Surface,
@@ -457,6 +489,7 @@ pub(in crate::study) struct History {
     state: State,
     initial_frame_sha256: String,
     initial_condition: Option<Value>,
+    compression: Option<compression::Compression>,
     geometry_operations: usize,
     time_s: f64,
     cell_steps: usize,
@@ -527,6 +560,47 @@ impl History {
         relaxation_dissipation_j: Option<&[f64]>,
         bending_dissipation_j: Option<&[f64]>,
     ) -> Result<(), Refusal> {
+        if self.compression.is_none() {
+            return self.advance_inner(
+                cloth,
+                body,
+                time_s,
+                interval,
+                sample_index,
+                plastic_dissipation_j,
+                relaxation_dissipation_j,
+                bending_dissipation_j,
+            );
+        }
+        // Pressure/branch state, geometry, covered/exposed temperatures and work commit together.
+        // A late gap, thermal-domain or budget refusal leaves the complete accepted history intact.
+        let mut trial = self.clone();
+        trial.advance_inner(
+            cloth,
+            body,
+            time_s,
+            interval,
+            sample_index,
+            plastic_dissipation_j,
+            relaxation_dissipation_j,
+            bending_dissipation_j,
+        )?;
+        *self = trial;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn advance_inner(
+        &mut self,
+        cloth: &[Vec3],
+        body: &[Vec3],
+        time_s: f64,
+        interval: usize,
+        sample_index: usize,
+        plastic_dissipation_j: Option<&[f64]>,
+        relaxation_dissipation_j: Option<&[f64]>,
+        bending_dissipation_j: Option<&[f64]>,
+    ) -> Result<(), Refusal> {
         let seconds = time_s - self.time_s;
         if !time_s.is_finite() || seconds <= 0. || self.trace.len() >= 512 {
             return Err(invalid(
@@ -558,6 +632,22 @@ impl History {
             .exposed_exterior_exchange
             .as_ref()
             .and_then(|v| v[interval].clone());
+        let reconditioned = if let Some(compression) = &mut self.compression {
+            if let Some(source) = compression.condition_source(
+                &self.source,
+                cloth,
+                interval,
+                sample_index,
+                time_s,
+            )? {
+                self.source = source;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         let next = Frame::new(
             self.source.clone(),
             cloth.to_vec(),
@@ -588,7 +678,11 @@ impl History {
         let remap = if next.sha256() == self.frame.sha256() {
             None
         } else {
-            let transfer = next.remap(&self.frame, &self.state)?;
+            let transfer = if reconditioned {
+                next.remap_reconditioned(&self.frame, &self.state)?
+            } else {
+                next.remap(&self.frame, &self.state)?
+            };
             self.geometry(transfer.balance.operations)?;
             self.signed_remap_j += transfer.balance.residual_j;
             self.absolute_remap_j += transfer.balance.absolute_residual_j;
@@ -825,9 +919,12 @@ impl History {
             "covered_area_m2":self.final_field["covered_area_m2"],
             "bare_energy_j":self.bare_j,"net_boundary_energy_j":self.net_j,"physical_stored_change_j":self.stored_j,
             "signed_remap_residual_j":self.signed_remap_j,"balance_error_j":self.stored_j-self.net_j-self.supplied_heat_j()});
-        if heated || bridge_sample.is_some() {
+        if heated || bridge_sample.is_some() || self.compression.is_some() {
             sample["inside_energy_j"] = json!(self.total_inside_j()?);
             sample["outside_energy_j"] = json!(self.total_outside_j()?);
+        }
+        if let Some(compression) = &self.compression {
+            sample["prescribed_compression"] = compression.summary();
         }
         if let Some(interval) = bridge_sample {
             let mut accounting = self.bridge_accounting()?;
@@ -906,6 +1003,13 @@ impl History {
             "scope":"One-way transient heat on the explicit collision-body domain with first-order source-material enthalpy remap at each accepted cloth/body sample. Remap has no elapsed time; heat substeps use the sample's right-endpoint geometry. Reference mass and exposed-sheet storage persist. Bare parallel paths store no energy. No anatomical coverage certification, human thermoregulation, mechanical heating, moisture, two-way coupling or empirical warmth claim."});
         if let Some(initial) = &self.initial_condition {
             result["initial_condition"] = initial.clone();
+        }
+        if let Some(compression) = &self.compression {
+            result["model"] = self.source.snapshot();
+            result["prescribed_compression"] = compression.finish();
+            result["scope"] = json!(
+                "Transient film-boundary heat on moving layered body coverage with explicitly source-qualified prescribed compression. Conditioned thickness changes source-face gaps and transport; fixed reference mass, specific heat and covered/exposed enthalpy persist through conservative remap. Signed normal work uses accepted current cloth area once per authored interval and stays separate from heat. No inferred contact pressure, mechanical geometry feedback, recovery-time law, moisture, work heating, physiological or empirical garment claim."
+            );
         }
         if let Some(authority) = &self.bridge_authority {
             let mut bridge = self.bridge_accounting()?;

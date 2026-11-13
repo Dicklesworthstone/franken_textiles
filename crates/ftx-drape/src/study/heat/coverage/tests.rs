@@ -75,6 +75,7 @@ fn history() -> (History, Vec<Vec3>) {
         initial_temperature_c: 10.,
         initial_instance_temperatures_c: None,
         initial_instance_temperature_profiles_c: None,
+        prescribed_compression: None,
         boundaries: vec![film; 4],
         exterior_exchange: None,
         bare_boundaries: None,
@@ -95,6 +96,7 @@ fn history() -> (History, Vec<Vec3>) {
         projection,
         initial_frame_sha256: frame.sha256().to_owned(),
         initial_condition: None,
+        compression: None,
         geometry_operations: frame.projection().geometry_operations,
         state: frame.initial(10.).unwrap(),
         frame,
@@ -787,4 +789,248 @@ fn declared_exterior_survives_full_partial_full_partial_coverage_with_heat_intac
     );
     let (frame, state) = Frame::from_checkpoint(&out["checkpoint"]).unwrap();
     assert_eq!(frame.checkpoint(&state).unwrap(), out["checkpoint"]);
+}
+
+
+// Original pressure acquisition, two physical layers sharing one source, and an independently
+// declared stagnant gas. All coefficients and geometry below are synthetic known answers.
+fn compression_history() -> (History, Vec<Vec3>) {
+    use ftx_pattern::material_compression::{self, stack};
+    let (mut history, mut cloth) = two_instance_history();
+    let mut preparation: material_compression::Input = serde_json::from_str(include_str!(
+        "../../../../../../tests/fixtures/materials/synthetic-compression.json"
+    ))
+    .unwrap();
+    preparation.pressure_pa = 0.;
+    let material = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: preparation.material.id.clone(),
+            record: Some(preparation.material.clone()),
+            allow_estimates: true,
+            ..Selection::default()
+        })
+        .unwrap();
+    let names = ["lining:0".to_string(), "shell:0".to_string()];
+    let policy = compression::Request {
+        schema: "ftx-motion-surface-compression/1".into(),
+        thermal_evidence: "Synthetic fixed mass/Cp, pressure/film and gas closure; no physical qualification or normal-work heating.".into(),
+        bindings: names
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                (id.clone(), compression::Binding {
+                    material_sha256: material.sha256().into(),
+                    preparation: preparation.clone(),
+                    direction: stack::Direction::Loading,
+                    pressure_pa: if index == 0 { vec![500.; 3] } else { vec![250., 500., 500.] },
+                    branch_changes: None,
+                })
+            })
+            .collect(),
+    };
+    let (source, compressed) = compression::Compression::from_retained(
+        &policy,
+        &[material],
+        &names,
+        &[0, 1],
+        vec![
+            Patch { vertices: [0, 1, 2], reference_area_m2: 0.5, column: 0 },
+            Patch { vertices: [3, 4, 5], reference_area_m2: 0.5, column: 0 },
+        ],
+        6,
+        2,
+        "a".repeat(64),
+    )
+    .unwrap();
+    for (index, point) in cloth.iter_mut().enumerate() {
+        point.z = if index < 3 { 0.03 } else { 0.07 };
+    }
+    history.projection.settings.cells_per_layer = 2;
+    history.projection.settings.interfaces[0].stagnant_gap = Some(
+        serde_json::from_value(json!({
+            "conductivity_w_m_k":0.025,
+            "source":{"reference":"test:synthetic-gas","accessed_on":"2026-11-12",
+                "note":"Declared arithmetic fixture, not measured atmosphere"},
+            "conditions":"Synthetic constant gas; no convection or radiation",
+            "gap_range_m":[0.005,0.05],"relative_tolerance":1e-4,
+            "allow_conduction_only_approximation":true
+        }))
+        .unwrap(),
+    );
+    history.request.settings = history.projection.settings.clone();
+    history.request.instance_layers = BTreeMap::from([
+        (names[0].clone(), "lining".into()),
+        (names[1].clone(), "shell".into()),
+    ]);
+    history.request.initial_temperature_c = 20.;
+    let film = Film {
+        inside_c: 20.,
+        outside_c: 20.,
+        inside_resistance_m2_k_w: 0.1,
+        outside_resistance_m2_k_w: 0.2,
+    };
+    history.request.boundaries = vec![film; 3];
+    history.request.exposed_boundaries = vec![Some(film); 3];
+    history.request.exposed_exterior_exchange = None;
+    history.request.prescribed_compression = Some(policy);
+    history.request.validate_compression(3).unwrap();
+    history.source = source;
+    history.frame = Frame::new(
+        history.source.clone(),
+        cloth.clone(),
+        body(0.),
+        &history.triangles,
+        history.projection.clone(),
+    )
+    .unwrap();
+    history.initial_frame_sha256 = history.frame.sha256().to_owned();
+    history.geometry_operations = history.frame.projection().geometry_operations;
+    history.state = history.frame.initial(20.).unwrap();
+    history.compression = Some(compressed);
+    (history, cloth)
+}
+
+#[test]
+fn coverage_compression_changes_actual_gap_once_and_keeps_normal_work_out_of_heat() {
+    let (mut history, cloth) = compression_history();
+    let original = &history.frame.projection().gap_interfaces[0];
+    assert!((original.surface_gap_m[0] - 0.02).abs() < 1e-12);
+    history
+        .advance(&cloth, &body(0.), 0.1, 0, 0, None, None, None)
+        .unwrap();
+    let gap = &history.frame.projection().gap_interfaces[0];
+    assert!((gap.surface_gap_m[0] - 0.0275).abs() < 1e-12);
+    assert!((gap.resistance_m2_k_w - 1.1).abs() < 1e-10);
+    let first = history.compression.as_ref().unwrap().finish();
+    // Each half-square-metre layer uses its own complete pressure traverse.
+    assert!((first["cumulative_normal_work_j"].as_f64().unwrap() - 1.5625).abs() < 1e-12);
+    assert_eq!(first["final_instances"]["lining:0"]["pressure_pa"], 500.);
+    assert_eq!(first["final_instances"]["shell:0"]["pressure_pa"], 250.);
+    history
+        .advance(&cloth, &body(0.), 0.2, 0, 1, None, None, None)
+        .unwrap();
+    assert_eq!(history.compression.as_ref().unwrap().finish(), first);
+    // The same material becomes wholly exposed, then returns to covered layered storage.
+    history
+        .advance(&cloth, &body(2.), 0.3, 1, 2, None, None, None)
+        .unwrap();
+    assert!(history.frame.has_exposed_cloth());
+    history
+        .advance(&cloth, &body(0.), 0.4, 2, 3, None, None, None)
+        .unwrap();
+    assert!(!history.frame.has_exposed_cloth());
+    let report = history.finish("path", "initial", 0.4).unwrap();
+    assert_eq!(report["model"], report["checkpoint"]["frame"]["source"]);
+    assert_eq!(report["prescribed_compression"]["updates"].as_array().unwrap().len(), 3);
+    assert!((report["prescribed_compression"]["cumulative_normal_work_j"].as_f64().unwrap() - 2.5).abs() < 1e-12);
+    assert_eq!(report["prescribed_compression"]["normal_work_to_heat_j"], 0.);
+    assert!(report["physical_stored_change_j"].as_f64().unwrap().abs() < 1e-9);
+    assert!(report["net_boundary_energy_j"].as_f64().unwrap().abs() < 1e-9);
+    assert!(report["balance_error_j"].as_f64().unwrap().abs() < 1e-9);
+    for row in report["trace"].as_array().unwrap() {
+        for temperature in row["temperature_range_c"].as_array().unwrap() {
+            assert!((temperature.as_f64().unwrap() - 20.).abs() < 1e-10);
+        }
+    }
+}
+
+#[test]
+fn conditioned_coverage_transfer_preserves_depth_profiles_without_relaxing_ordinary_remap() {
+    let (mut history, cloth) = compression_history();
+    let state = history
+        .frame
+        .initial_profiles(&[vec![10., 30.], vec![40., 20.]])
+        .unwrap();
+    let source = history
+        .compression
+        .as_mut()
+        .unwrap()
+        .condition_source(&history.source, &cloth, 0, 0, 0.1)
+        .unwrap()
+        .unwrap();
+    let next = Frame::new(
+        source,
+        cloth,
+        body(0.),
+        &history.triangles,
+        history.projection.clone(),
+    )
+    .unwrap();
+    assert!(next.remap(&history.frame, &state).is_err());
+    let transfer = next.remap_reconditioned(&history.frame, &state).unwrap();
+    for (actual, expected) in transfer
+        .state
+        .temperature_c()
+        .iter()
+        .flatten()
+        .zip(state.temperature_c().iter().flatten())
+    {
+        assert!((actual - expected).abs() < 1e-10);
+    }
+    assert!(transfer.balance.residual_j.abs() < 1e-10);
+    assert!(transfer.balance.absolute_residual_j < 1e-10);
+}
+
+#[test]
+fn compression_coverage_rolls_back_pressure_geometry_temperature_and_work_on_late_failure() {
+    let (mut history, cloth) = compression_history();
+    let checkpoint = history.frame.checkpoint(&history.state).unwrap();
+    let source = history.source.snapshot();
+    let compression = history.compression.as_ref().unwrap().finish();
+    let operations = history.geometry_operations;
+    history.request.max_step_s = 1e-9;
+    assert!(
+        history
+            .advance(&cloth, &body(0.), 0.1, 0, 0, None, None, None)
+            .is_err()
+    );
+    assert_eq!(history.frame.checkpoint(&history.state).unwrap(), checkpoint);
+    assert_eq!(history.source.snapshot(), source);
+    assert_eq!(history.compression.as_ref().unwrap().finish(), compression);
+    assert_eq!(history.geometry_operations, operations);
+    assert_eq!(history.time_s, 0.);
+    assert!(history.trace.is_empty());
+    history.request.max_step_s = 0.25;
+    history
+        .advance(&cloth, &body(0.), 0.1, 0, 0, None, None, None)
+        .unwrap();
+    assert_eq!(history.compression.as_ref().unwrap().finish()["updates"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn compression_coverage_requires_independent_storage_and_film_qualification() {
+    let (history, _) = compression_history();
+    let mut request = history.request.clone();
+    request.exterior_exchange = Some(vec![None; 3]);
+    assert!(request.validate_compression(3).is_err());
+    request = history.request.clone();
+    request
+        .prescribed_compression
+        .as_mut()
+        .unwrap()
+        .bindings
+        .get_mut("lining:0")
+        .unwrap()
+        .preparation
+        .invariants
+        .remove("specific_heat");
+    assert!(request.validate_compression(3).is_err());
+    // Equal mass*Cp cannot conceal an unqualified exchange of reference material.
+    let snapshot = history.source.snapshot();
+    let mut record: ftx_pattern::materials::Material =
+        serde_json::from_value(snapshot["columns"][0]["layers"][0]["authored"].clone()).unwrap();
+    record.properties.get_mut("areal_density").unwrap().value *= 2.;
+    record.properties.get_mut("specific_heat").unwrap().value *= 0.5;
+    let changed = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: record.id.clone(),
+            record: Some(record),
+            allow_estimates: true,
+            ..Selection::default()
+        })
+        .unwrap();
+    let next = DryThermalModel::new(vec![changed], vec![], 2).unwrap();
+    assert!(history.source.reconditioned_columns(vec![(0, next)]).is_err());
 }

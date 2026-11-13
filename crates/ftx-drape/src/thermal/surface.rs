@@ -236,6 +236,17 @@ impl Surface {
                 "conditioned thermal state belongs to another surface",
             ));
         }
+        let next = self.reconditioned_columns(replacements)?;
+        let temperature = next.initial_profiles(state.temperature_c())?;
+        Ok((next, temperature))
+    }
+
+    // Shared with covered/exposed state transfer. Only transport may change; source qualification
+    // remains the pressure adapter's responsibility. Unchanged neighboring columns keep their laws.
+    pub(crate) fn reconditioned_columns(
+        &self,
+        replacements: Vec<(usize, DryThermalModel)>,
+    ) -> Result<Self, Refusal> {
         let mut columns = self.columns.clone();
         let mut used = BTreeSet::new();
         for (index, next) in replacements {
@@ -256,22 +267,23 @@ impl Surface {
                 ));
             }
             for (old, new) in previous.layers.iter().zip(&next.layers) {
-                let mass = |layer: &ftx_pattern::material_catalog::ResolvedMaterial| {
-                    layer
-                        .material()
-                        .require("areal_density", "kg/m2", layer.allows_estimates())
-                };
-                if mass(old)? != mass(new)? {
-                    return Err(invalid(
-                        "conditioned heat cannot change a layer's reference areal mass",
-                    ));
+                for (key, unit) in [
+                    ("areal_density", "kg/m2"),
+                    ("specific_heat", "J/(kg*K)"),
+                ] {
+                    let quantity = |layer: &ftx_pattern::material_catalog::ResolvedMaterial| {
+                        layer.material().require(key, unit, layer.allows_estimates())
+                    };
+                    if quantity(old)? != quantity(new)? {
+                        return Err(invalid(
+                            "conditioned heat cannot change a layer's reference areal mass or specific heat",
+                        ));
+                    }
                 }
             }
             columns[index] = next;
         }
-        let next = Self::new(columns, self.vertex_count, self.patches.clone())?;
-        let temperature = next.initial_profiles(state.temperature_c())?;
-        Ok((next, temperature))
+        Self::new(columns, self.vertex_count, self.patches.clone())
     }
 
     /// Initialize every material cell to the same specified temperature. Changing a material

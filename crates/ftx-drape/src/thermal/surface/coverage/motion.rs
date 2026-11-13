@@ -1256,6 +1256,44 @@ impl Frame {
                 "remap requires unchanged source material, cloth topology and layer identities",
             ));
         }
+        self.transfer_state(old, state)
+    }
+
+    // Intentional transport conditioning has a separate entrance from ordinary motion remap.
+    // Rebuild from the old topology and qualify every changed column's constant reference storage;
+    // identical mass*Cp alone is insufficient. Unchanged temperature-dependent neighbors remain
+    // valid. The pressure adapter independently admits the original acquisition and branch.
+    pub(crate) fn remap_reconditioned(
+        &self,
+        old: &Self,
+        state: &State,
+    ) -> Result<Transfer, Refusal> {
+        old.check(state)?;
+        let source = &self.coverage.source;
+        let previous = &old.coverage.source;
+        if self.request.cloth_layers != old.request.cloth_layers
+            || source.columns.len() != previous.columns.len()
+        {
+            return Err(invalid(
+                "conditioned remap requires unchanged physical layers and material ownership",
+            ));
+        }
+        let replacements = source
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(index, column)| column.snapshot() != previous.columns[*index].snapshot())
+            .map(|(index, column)| (index, column.clone()))
+            .collect();
+        if previous.reconditioned_columns(replacements)?.sha256 != source.sha256 {
+            return Err(invalid(
+                "conditioned remap cannot change cloth topology, reference areas or storage",
+            ));
+        }
+        self.transfer_state(old, state)
+    }
+
+    fn transfer_state(&self, old: &Self, state: &State) -> Result<Transfer, Refusal> {
         let source = &self.coverage.source;
         let laws = source
             .columns
