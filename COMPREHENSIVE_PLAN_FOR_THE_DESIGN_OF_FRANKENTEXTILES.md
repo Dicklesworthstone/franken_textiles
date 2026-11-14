@@ -5899,6 +5899,21 @@ This advances `ftx-onn.32` through its software child `ftx-onn.33`; independent 
 validation, print/flatness, correlated detector errors, motion and total measurement uncertainty
 remain separate requirements. Synthetic analytical and workflow checks cannot establish wearer fit.
 
+### 25.207 Minimize actual sewing feed across qualified specialist routes
+
+An explicit routed-feed objective minimizes the sum of each selected operation's separately ceiled
+feed milliseconds across the complete production batch. It can select a slower-finishing route with
+less actual feed work, while an optional inclusive completion deadline keeps the production result
+usable. Every cell, worker, transfer, fixture, staging, calendar and source qualification continues to
+govern feasibility. The raw-seconds selector retains its original meaning.
+
+Bounded search keeps a complete feasible incumbent and reports its feed proof separately from
+makespan optimality. An independently relaxed remaining-feed bound supports pruning without treating
+capacity or timing constraints as optional feasibility rules. Exact feed scores, source policies and
+inherited deadlines survive recipe selection, material-study reporting and portable replay. Synthetic
+routing, rounding, deadline, budget and stale-source regressions accompany this extension of
+`ftx-pb2.2`; no measured factory throughput or physical sewing qualification follows.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

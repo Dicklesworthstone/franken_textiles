@@ -33,11 +33,16 @@ const MAX_EXACT_MILLISECONDS: u64 = 9_007_199_254_740_991;
 pub struct Policy {
     /// `fixed_operation_route/1` or explicit `eligible_operation_route/1` machine alternatives.
     pub model: String,
-    /// `minimize_makespan`, or `minimize_thread_observed_order_cost` for eligible-cell assignment.
+    /// `minimize_makespan`, `minimize_feed_milliseconds`, or
+    /// `minimize_thread_observed_order_cost` for eligible-cell assignment.
     pub objective: String,
     /// Complete-order evaluation budget and optional inclusive deadline for cost search.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_order_search: Option<ThreadOrderSearch>,
+    /// Exact summed feed objective and optional inclusive job deadline, using the existing
+    /// dispatch budget. Exclusive with thread-order search and required for feed minimization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed_time_search: Option<FeedTimeSearch>,
     /// `ceil_operation_feed_milliseconds/1`; each actual feed is ceiled separately.
     pub time_basis: String,
     /// `unloaded_between_operations/1`, or explicit
@@ -107,6 +112,32 @@ pub struct ThreadOrderSearch {
     /// Every retained cost-directed schedule must finish within this inclusive job-origin clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_deadline_milliseconds: Option<u64>,
+}
+
+/// Sum the separately ceiled operation-feed milliseconds across the complete routed batch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeedTimeSearch {
+    /// Inclusive latest final unloading from the job origin; it never replaces resource windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
+}
+
+/// Exact feed-work objective, separate from elapsed completion and unrounded feed seconds.
+#[derive(Clone, Debug, Serialize)]
+pub struct FeedTimeReport {
+    /// Inclusive authored or inherited completion limit, when supplied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
+    /// Sum of each selected operation's independently ceiled feed duration, across every copy.
+    pub selected_feed_milliseconds: u64,
+    /// Sum of independent minimum feed durations, relaxing every resource and timing constraint.
+    pub lower_bound_feed_milliseconds: u64,
+    /// The incumbent reaches the independent lower bound, beyond the restricted dispatch scope.
+    pub lower_bound_attained: bool,
+    /// All improving declared append-dispatch choices were explored or validly pruned, or the
+    /// independent lower bound was reached. This is not a minimum elapsed-completion proof.
+    pub optimality_proven: bool,
 }
 
 /// Complete-order search evidence, separate from the selected schedule's makespan proof.
@@ -315,6 +346,9 @@ pub struct Report {
     /// Optional complete-order assignment objective and its independent bounded-search evidence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_order_search: Option<ThreadOrderReport>,
+    /// Exact whole-batch feed objective and its own proof; absent for existing route objectives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_time_search: Option<FeedTimeReport>,
     /// Complete copy-major seed, or selected replacement if resources/windows excluded that seed.
     pub baseline: Timeline,
     /// Best complete feasible dispatch found within the admitted budget.
@@ -409,6 +443,21 @@ impl Policy {
         self.objective == "minimize_thread_observed_order_cost"
     }
 
+    pub(crate) fn feed_directed(&self) -> bool {
+        self.objective == "minimize_feed_milliseconds"
+    }
+
+    fn completion_deadline(&self) -> Option<u64> {
+        self.thread_order_search
+            .as_ref()
+            .and_then(|search| search.completion_deadline_milliseconds)
+            .or_else(|| {
+                self.feed_time_search
+                    .as_ref()
+                    .and_then(|search| search.completion_deadline_milliseconds)
+            })
+    }
+
     /// Reserve bounded search and two complete exact replays, independent of whether a seed is valid.
     ///
     /// # Errors
@@ -442,6 +491,16 @@ impl Policy {
         }
         if let Some(windows) = &self.copy_windows {
             windows.validate(copies)?;
+        }
+        if self
+            .feed_time_search
+            .as_ref()
+            .and_then(|search| search.completion_deadline_milliseconds)
+            .is_some_and(|limit| limit > MAX_EXACT_MILLISECONDS)
+        {
+            return Err(budget(
+                "feed-time route search needs an exact nonnegative millisecond deadline",
+            ));
         }
         self.max_search_nodes
             .checked_add(2 * expanded)
@@ -482,8 +541,11 @@ impl Policy {
         if !matches!(
             self.model.as_str(),
             "fixed_operation_route/1" | "eligible_operation_route/1"
-        ) || !(self.objective == "minimize_makespan" && self.thread_order_search.is_none()
+        ) || !((self.objective == "minimize_makespan"
+            || self.feed_directed() && self.feed_time_search.is_some())
+            && self.thread_order_search.is_none()
             || self.cost_directed() && self.eligible() && self.thread_order_search.is_some())
+            || self.feed_directed() != self.feed_time_search.is_some()
             || self.time_basis != "ceil_operation_feed_milliseconds/1"
             || !(self.protocol == "unloaded_between_operations/1" || self.retained_fixtures())
             || self.independence != independence
@@ -736,6 +798,8 @@ struct State {
     last: Vec<Option<usize>>,
     transfer_ready: [u64; transfer_pool::MAX_RESOURCES],
     makespan: u64,
+    /// Counted only for the explicit feed objective; other search arithmetic stays unchanged.
+    feed_milliseconds: u64,
     reservations: Vec<fixtures::Reservation>,
     labor: Option<labor::State>,
     staging: Vec<staging::Reservation>,
@@ -791,6 +855,7 @@ impl Prepared<'_> {
                     .map_or(0, |carrier| u64::from(carrier.available_at_milliseconds))
             }),
             makespan: 0,
+            feed_milliseconds: 0,
             reservations: Vec::new(),
             labor: self.labor.as_ref().map(labor::Compiled::initial),
             staging: Vec::new(),
@@ -1098,6 +1163,16 @@ impl Prepared<'_> {
             next.transfer_ready[carrier_index] = finish;
         }
         next.makespan = next.makespan.max(finish);
+        if self.policy.feed_directed() {
+            let Some(feed) = next
+                .feed_milliseconds
+                .checked_add(task.feed)
+                .filter(|&value| value <= MAX_EXACT_MILLISECONDS)
+            else {
+                return Ok(None);
+            };
+            next.feed_milliseconds = feed;
+        }
         if let Some(arrival) = arrival {
             self.labor
                 .as_ref()
@@ -1363,6 +1438,49 @@ struct Search<'a, 'b> {
     lower: u64,
     best: Option<(u64, Vec<Dispatch>)>,
     cost: Option<CostSearch<'a>>,
+    feed: Option<FeedSearch>,
+}
+
+struct FeedSearch {
+    minimum_remaining: Vec<u64>,
+    lower: u64,
+    best: Option<u64>,
+}
+
+impl FeedSearch {
+    fn new(prepared: &Prepared<'_>) -> Result<Self, Refusal> {
+        let mut minimum_remaining = vec![0; prepared.choices.len() + 1];
+        for route in (0..prepared.choices.len()).rev() {
+            let minimum = prepared.choices[route]
+                .iter()
+                .map(|&task| prepared.tasks[task].feed)
+                .min()
+                .expect("admitted nonempty route domain");
+            minimum_remaining[route] = add(minimum, minimum_remaining[route + 1])?;
+        }
+        let lower =
+            (0..prepared.copies).try_fold(0, |total, _| add(total, minimum_remaining[0]))?;
+        Ok(Self {
+            minimum_remaining,
+            lower,
+            best: None,
+        })
+    }
+
+    fn bound(&self, state: &State) -> Option<u64> {
+        state
+            .next
+            .iter()
+            .try_fold(state.feed_milliseconds, |total, &next| {
+                total
+                    .checked_add(self.minimum_remaining[next])
+                    .filter(|&sum| sum <= MAX_EXACT_MILLISECONDS)
+            })
+    }
+
+    fn lower_attained(&self) -> bool {
+        self.best == Some(self.lower)
+    }
 }
 
 struct CostSearch<'a> {
@@ -1436,9 +1554,7 @@ impl Search<'_, '_> {
         if self
             .prepared
             .policy
-            .thread_order_search
-            .as_ref()
-            .and_then(|policy| policy.completion_deadline_milliseconds)
+            .completion_deadline()
             .is_some_and(|deadline| state.makespan > deadline)
         {
             return;
@@ -1457,6 +1573,11 @@ impl Search<'_, '_> {
             if cost.exhausted {
                 self.complete = false;
             }
+        } else if let Some(feed) = &mut self.feed {
+            if feed.best.is_none_or(|old| state.feed_milliseconds < old) {
+                feed.best = Some(state.feed_milliseconds);
+                self.best = Some((state.makespan, path.to_vec()));
+            }
         } else if self
             .best
             .as_ref()
@@ -1474,18 +1595,24 @@ impl Search<'_, '_> {
         if self
             .prepared
             .policy
-            .thread_order_search
-            .as_ref()
-            .and_then(|policy| policy.completion_deadline_milliseconds)
+            .completion_deadline()
             .is_some_and(|deadline| state.makespan > deadline)
         {
             return Ok(());
         }
         if self.cost.is_none()
+            && self.feed.is_none()
             && self
                 .best
                 .as_ref()
                 .is_some_and(|(finish, _)| state.makespan >= *finish || *finish == self.lower)
+        {
+            return Ok(());
+        }
+        if let Some(feed) = &self.feed
+            && feed
+                .bound(state)
+                .is_none_or(|bound| feed.best.is_some_and(|best| bound >= best))
         {
             return Ok(());
         }
@@ -1523,11 +1650,13 @@ impl Search<'_, '_> {
                         if self.cost.as_ref().is_some_and(|cost| cost.exhausted) {
                             return Ok(());
                         }
-                        if self.cost.is_none()
-                            && self
-                                .best
-                                .as_ref()
-                                .is_some_and(|(finish, _)| *finish == self.lower)
+                        if self.feed.as_ref().is_some_and(FeedSearch::lower_attained)
+                            || self.cost.is_none()
+                                && self.feed.is_none()
+                                && self
+                                    .best
+                                    .as_ref()
+                                    .is_some_and(|(finish, _)| *finish == self.lower)
                         {
                             return Ok(());
                         }
@@ -1689,7 +1818,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if uses_cell_staging {
+        schema: if policy.feed_directed() {
+            "ftx-sewing-plan/34"
+        } else if uses_cell_staging {
             "ftx-sewing-plan/33"
         } else if policy.copy_windows.is_some() {
             "ftx-sewing-plan/31"
@@ -1934,11 +2065,9 @@ pub(in crate::sewing) fn build(
         }
     }
     let seed_complete = seed_path.len() == copies * count
-        && policy.thread_order_search.as_ref().is_none_or(|search| {
-            search
-                .completion_deadline_milliseconds
-                .is_none_or(|deadline| seed.makespan <= deadline)
-        });
+        && policy
+            .completion_deadline()
+            .is_none_or(|deadline| seed.makespan <= deadline);
     let mut search = Search {
         prepared: &prepared,
         used: seed_used,
@@ -1967,6 +2096,10 @@ pub(in crate::sewing) fn build(
                 best_cost: None,
             }
         }),
+        feed: policy
+            .feed_directed()
+            .then(|| FeedSearch::new(&prepared))
+            .transpose()?,
     };
     if seed_complete {
         search.consider(&seed, &seed_path);
@@ -1979,7 +2112,9 @@ pub(in crate::sewing) fn build(
         ));
     };
     let search_nodes = search.used;
-    let search_complete = search.complete || (search.cost.is_none() && best_finish == lower);
+    let search_complete = search.complete
+        || search.feed.as_ref().is_some_and(FeedSearch::lower_attained)
+        || search.cost.is_none() && search.feed.is_none() && best_finish == lower;
     let thread_order_search = search.cost.as_ref().map(|cost| ThreadOrderReport {
         currency: cost.currency.clone(),
         completion_deadline_milliseconds: policy
@@ -1996,6 +2131,13 @@ pub(in crate::sewing) fn build(
             && cost.unresolved == 0
             && !cost.exhausted,
     });
+    let feed_time_search = search.feed.as_ref().map(|feed| FeedTimeReport {
+        completion_deadline_milliseconds: policy.completion_deadline(),
+        selected_feed_milliseconds: feed.best.expect("complete feed-directed incumbent"),
+        lower_bound_feed_milliseconds: feed.lower,
+        lower_bound_attained: feed.lower_attained(),
+        optimality_proven: search_complete,
+    });
     drop(search);
     let selected = prepared.replay(&selected_path)?;
     let baseline = prepared.replay(if seed_complete {
@@ -2006,6 +2148,13 @@ pub(in crate::sewing) fn build(
     if selected.makespan_milliseconds != best_finish {
         return Err(bad(
             "routed incumbent changed during exact timeline reconstruction",
+        ));
+    }
+    if feed_time_search.as_ref().is_some_and(|feed| {
+        feed.selected_feed_milliseconds != selected.scheduled_feed_milliseconds
+    }) {
+        return Err(bad(
+            "routed feed objective changed during exact timeline reconstruction",
         ));
     }
     let identity_order = ordering::Report {
@@ -2099,7 +2248,9 @@ pub(in crate::sewing) fn build(
         .map(|windows| windows.report(&baseline, &selected))
         .transpose()?;
     let report = Report {
-        schema: if uses_cell_staging {
+        schema: if policy.feed_directed() {
+            "ftx-sewing-routing/16"
+        } else if uses_cell_staging {
             "ftx-sewing-routing/15"
         } else if copy_windows.is_some() {
             "ftx-sewing-routing/14"
@@ -2140,6 +2291,7 @@ pub(in crate::sewing) fn build(
         availability_calendars: policy.availability_calendars.clone(),
         copy_windows,
         thread_order_search,
+        feed_time_search,
         baseline,
         selected,
         baseline_replaced: !seed_complete,
@@ -2188,7 +2340,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if uses_cell_staging {
+        schema: if policy.feed_directed() {
+            "ftx-sewing-production/22"
+        } else if uses_cell_staging {
             "ftx-sewing-production/21"
         } else if policy.copy_windows.is_some() {
             "ftx-sewing-production/19"

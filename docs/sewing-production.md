@@ -1373,6 +1373,39 @@ protocol identity. They establish this bounded software model, not measured fact
 physical seam quality or hardware authorization. Optional local and shared inventories follow the
 selected cell for every actual operation; retained lifecycles pair their actual owning anchors.
 
+## Minimize occupied feed through qualified specialist routes
+
+Set a fixed or eligible route's `objective` to `minimize_feed_milliseconds` and add
+`feed_time_search: {}` to minimize the sum of each actual operation's separately ceiled feed
+milliseconds across the complete batch. The optional
+`feed_time_search.completion_deadline_milliseconds` limits final unloading inclusively. It remains
+independent of every cell, worker, carrier, per-copy and calendar window. All original material,
+recipe, fixture, staging and handling qualifications still apply. Thread-cost search is exclusive
+with this objective.
+
+This choice can favor a cell that occupies its needle for less time but becomes available later.
+Raw continuous-feed seconds, scheduled integer feed and elapsed batch completion remain separate
+readings. In particular, rounding the batch's raw feed once does not reproduce the sum of the
+individually scheduled durations.
+
+Search reuses the existing dispatch allowance and complete copy-major seed. A minimum-feed suffix
+for each remaining route stage supplies a conservative bound that relaxes resource contention;
+it does not establish assignment feasibility. Equal scores retain the first complete schedule.
+Budget exhaustion retains a complete incumbent with an unproved objective.
+`routing.feed_time_search` reports the selected integer score, independent lower bound, whether
+that bound was reached, and the feed proof in the declared dispatch scope. The existing
+`routing.optimality_proven` continues to describe makespan only.
+
+The ordinary recipe selector accepts `objective: minimize_routed_feed_milliseconds` with schema
+`ftx-sewing-selection/8` for recipe alternatives, or `/6` for complete authored route alternatives.
+Every route must request the matching feed objective. An outer completion deadline tightens each
+route's own limit before searching; it never loosens an existing one. Reports preserve exact
+`scheduled_feed_milliseconds` and `feed_optimality_proven` on each trial and
+`selected_scheduled_feed_milliseconds` for the winner. Material studies retain the same score and
+complete source protocol, and selected options replay through ordinary stitches and previews.
+Existing `minimize_feed_seconds` retains its original raw-seconds semantics. These conditional
+numerical decisions do not qualify measured factory throughput or authorize hardware execution.
+
 ## Several specialist cells with fewer attending workers
 
 With model `exclusive_full_operation_attendance/1`, optional

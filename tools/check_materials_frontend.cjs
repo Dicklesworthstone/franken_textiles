@@ -683,6 +683,31 @@ test('direct sewing selection retains exact requests and selected options and ne
   }
 });
 
+test('direct routed feed selection preserves version eight requests and integer objective receipts', async () => {
+  const pattern=' {"original":-0.0}\n';
+  const request=' {"schema":"ftx-sewing-selection/8","objective":"minimize_routed_feed_milliseconds",'+
+    '"options":{"production":{"routing":{"objective":"minimize_feed_milliseconds",'+
+    '"feed_time_search":{"completion_deadline_milliseconds":18446744073709551615}}}},"max_plan_evaluations":1.0}\r\n';
+  const options=' {"chosen":1.0,"seed":18446744073709551615}\n';
+  for(const selected of [true,false]) {
+    const selection={report:{schema:'ftx-sewing-selection-report/8',
+      selected_scheduled_feed_milliseconds:selected?9007199254740991:null,
+      trials:[{scheduled_feed_milliseconds:9007199254740991,feed_optimality_proven:false}]},
+      selected_options_json:selected?options:null};
+    const raw=JSON.stringify(selection),program=' {"schema":"ftx-sewing-program/1","stitches":[]}\n';
+    let calls=0;
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+      sew_select:(p,r)=>{assert.equal(p,pattern);assert.equal(r,request);return raw;},
+      sew_stitches:(p,o)=>{calls++;assert.equal(p,pattern);assert.equal(o,options);return program;}}});
+    const result=await w.send({type:'sew',request:82,pattern,options:request,selectRecipes:true});
+    assert.equal(result.type,'result',result.message);assert.deepEqual(plain(result.result.selection),selection);
+    assert.equal(result.files.find(f=>f.name==='sewing-selection-request.json').text,request);
+    assert.equal(result.files.find(f=>f.name==='sewing-selection.json').text,raw);
+    assert.equal(calls,selected?1:0);
+    assert.equal(result.files.some(f=>f.name==='selected-sewing-options.json'),selected);
+  }
+});
+
 test('sewing preview worker preserves exact source bytes and dispatches the explicitly chosen operation and cell', async () => {
   const pattern=' {"source":-0.0,"seed":18446744073709551615}\n', options=' {"qualified":1.0,"label":"évidence"}\n';
   for(const cell of [undefined,'<specialist cell>']) {
@@ -3937,6 +3962,21 @@ test('eligible routed cells show idle choices, actual copy counts and bounded pr
     detail.open=true;detail.handlers.toggle();assert.match(visibleText(detail),/<eligible source lock>/);
     const download=descendants(s).find(n=>n.download==='eligible-route.json');
     assert.equal(await p.blobs.get(download.href).text(),raw);downloads.push(download.href);
+    assert.equal(table('routed feed-work objective and proof'),undefined);
+    routing.feed_time_search={selected_feed_milliseconds:5336,lower_bound_feed_milliseconds:5336,
+      lower_bound_attained:true,optimality_proven:true,completion_deadline_milliseconds:7036};
+    await p.e[op].onclick();p.emit(report);
+    assert.deepEqual(plain(table('routed feed-work objective and proof').children[2].children.map(n=>n.textContent)),
+      ['5336','5336','true','true','7036']);
+    assert.match(visibleText(s),/feed and minimum completion-time proofs are independent/);
+    assert.match(visibleText(s),/minimum completion time is not proved/);
+    assert.doesNotMatch(visibleText(s),/Minimum completion time proved/);
+    routing.feed_time_search={selected_feed_milliseconds:5336,lower_bound_feed_milliseconds:5000,
+      lower_bound_attained:false,optimality_proven:false};
+    await p.e[op].onclick();p.emit(report);
+    assert.deepEqual(plain(table('routed feed-work objective and proof').children[2].children.map(n=>n.textContent)),
+      ['5336','5000','false','false','None declared']);
+    delete routing.feed_time_search;
     assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
   }
   p.e.sewOptions.handlers.change();p.e.studyRequest.handlers.change();
@@ -11361,6 +11401,50 @@ test('authored sewing routes remain visible with their bounded search and refuse
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('routed feed recipe searches display exact scheduled work and separate bounded proof in study views', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const exact=studyRow('exact clock'),bounded=studyRow('bounded route'),missing=studyRow('unresolved');
+  exact.sewing_selection=outcome({schema:'ftx-sewing-selection-report/8',
+    request:{schema:'ftx-sewing-selection/8',objective:'minimize_routed_feed_milliseconds'},
+    selected_choices:{hem:'qualified'},selected_scheduled_feed_milliseconds:9007199254740991,
+    search_complete:true,budget_exhausted:false,optimality_proven:true,unresolved_trials:0,
+    trials:[{choices:{hem:'qualified'},feed_seconds:9007199254740.99,scheduled_feed_milliseconds:9007199254740991,feed_optimality_proven:true}]});
+  bounded.sewing_selection=outcome({schema:'ftx-sewing-selection-report/8',
+    request:{schema:'ftx-sewing-selection/6',objective:'minimize_routed_feed_milliseconds'},
+    selected_route:'<eligible>',selected_choices:{},selected_scheduled_feed_milliseconds:2,
+    search_complete:false,budget_exhausted:true,optimality_proven:false,unresolved_trials:1,
+    trials:[{route_choice:'<eligible>',choices:{},feed_seconds:0.0011,scheduled_feed_milliseconds:2,feed_optimality_proven:false}]});
+  missing.sewing_selection=outcome({schema:'ftx-sewing-selection-report/8',
+    request:{schema:'ftx-sewing-selection/8',objective:'minimize_routed_feed_milliseconds'},
+    selected_choices:null,selected_scheduled_feed_milliseconds:null,
+    search_complete:true,budget_exhausted:false,optimality_proven:false,unresolved_trials:1,
+    trials:[{choices:{hem:'missing'},feed_seconds:0.001,objective_unavailable:{message:'Missing <route> timing'}},
+      {choices:{hem:'refused'},refusal:{message:'Changed qualified cell source'}},
+      {choices:{hem:'late'},feed_seconds:0.001,scheduled_feed_milliseconds:1,feed_optimality_proven:true,
+        completion_deadline:{status:'excluded',limit_milliseconds:100,selected_makespan_milliseconds:200,
+          lower_bound_makespan_milliseconds:200,timing_optimality_proven:true,reason:'Complete route misses deadline'}}]});
+  for(const op of ['study','scenario']) {
+    await p.e[op].onclick();const report=studyReport([exact,bounded,missing]);
+    p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+    assert.deepEqual(plain(table('Routed feed-work recipe search').children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      ['exact clock','9007199254740991','true','0'],['bounded route','2','false','1'],['unresolved','Unknown','false','1']]);
+    assert.deepEqual(plain(table('Scheduled feed work by recipe and route').children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      ['exact clock','hem: qualified','9007199254740991','9007199254740.99','true','Complete candidate','Inspect retained route timing'],
+      ['bounded route','<eligible>; Original recipes','2','0.0011','false','Complete candidate','Inspect retained route timing'],
+      ['unresolved','hem: missing','Unknown','0.001','Unknown','Unresolved','Missing <route> timing'],
+      ['unresolved','hem: refused','Unknown','Unknown','Unknown','Plan refused','Changed qualified cell source'],
+      ['unresolved','hem: late','1','0.001','true','Misses deadline (proved)','Complete route misses deadline']]);
+    assert.match(visibleText(s),/summed integer millisecond feed durations of actual assigned operations/);
+    assert.match(visibleText(s),/Raw feed seconds and elapsed completion are separate quantities/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('thread-cost recipe selection displays only the canonical complete incumbent and its proof scope', async () => {
   const p = await pageModule(); await p.load(); p.select('studyRequest', '{}');
   const selected = studyRow('least cost'), bounded = studyRow('bounded cost'), missing = studyRow('unpriced');
@@ -16873,22 +16957,25 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 
-test('compiled WASM prescribed cyclic and clearance compression replay native commands and qualified sheet and layered convection scenarios',
+test('compiled WASM prescribed cyclic and clearance compression replay native commands and qualified sheet and layered exterior scenarios',
   {skip:process.env.FTX_REAL_WASM!=='1'||!(process.env.FTX_COMPRESSION_MOTION_REPLAY||process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY||
     process.env.FTX_COMPRESSION_CONVECTION_MOTION_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY||
-    process.env.FTX_CYCLIC_CONVECTION_COVERAGE_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY)},async()=>{
+    process.env.FTX_CYCLIC_CONVECTION_COVERAGE_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY||
+    process.env.FTX_COMPRESSION_RADIATION_MOTION_REPLAY||process.env.FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY)},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
     const worker=await workerModule({bindings:ftx}),previousProgress=globalThis.ftxProgress;
     globalThis.ftxProgress=()=>{};
     try {
-      for(const [dir,cyclic,controlled,convection,coverage] of [[process.env.FTX_COMPRESSION_MOTION_REPLAY,false,false,false],
+      for(const [dir,cyclic,controlled,convection,coverage,radiation] of [[process.env.FTX_COMPRESSION_MOTION_REPLAY,false,false,false],
         [process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY,true,false,false],
         [process.env.FTX_COMPRESSION_CONVECTION_MOTION_REPLAY,true,false,true],
         [process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY,false,true,true],
         [process.env.FTX_CYCLIC_CONVECTION_COVERAGE_REPLAY,true,false,true,true],
-        [process.env.FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY,false,true,true,true]].filter(([dir])=>dir)) {
+        [process.env.FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY,false,true,true,true],
+        [process.env.FTX_COMPRESSION_RADIATION_MOTION_REPLAY,true,false,true,false,true],
+        [process.env.FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY,false,true,true,true,true]].filter(([dir])=>dir)) {
         const consumer=coverage?'transient_coverage':'transient_surface';
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8'),bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         const pattern=input('pattern.json'),studyRequest=input('study.json'),measurements=input('body-input.json');
@@ -16949,27 +17036,38 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
             assert.ok(Math.abs(heat.balance_error_j)<1e-8);
             if(convection) {
               assert.deepEqual(heat.request.exterior_exchange,sources[index].motion[consumer].exterior_exchange);
-              assert.equal(heat.exterior_exchange.radiative_energy_j,0);
+              if(radiation) assert.ok(heat.exterior_exchange.radiative_energy_j>0);
+              else assert.equal(heat.exterior_exchange.radiative_energy_j,0);
               assert.ok(Math.abs(heat.exterior_exchange.convective_energy_j)>1e-10);
               if(coverage) {
                 assert.deepEqual(heat.request.exposed_exterior_exchange,sources[index].motion[consumer].exposed_exterior_exchange);
-                assert.equal(heat.exposed_exterior_exchange.radiative_energy_j,0);
+                if(radiation) assert.ok(heat.exposed_exterior_exchange.radiative_energy_j>0);
+                else assert.equal(heat.exposed_exterior_exchange.radiative_energy_j,0);
                 assert.equal(heat.outside_energy_paths.bare_j,heat.bare_energy_j);
                 assert.ok(Math.abs(Object.values(heat.outside_energy_paths).reduce((a,b)=>a+b,0)-heat.outside_energy_j)<1e-8);
                 assert.ok(heat.trace.every(sample=>sample.prescribed_compression &&
                   Math.abs(Object.values(sample.outside_energy_paths).reduce((a,b)=>a+b,0)-sample.outside_energy_j)<1e-8));
-                assert.ok(heat.trace.every(sample=>!sample.exterior_exchange||sample.exterior_exchange.radiative_heat_w===0));
-                assert.ok(heat.trace.every(sample=>!sample.exposed_exterior_exchange||sample.exposed_exterior_exchange.radiative_heat_w===0));
+                if(radiation) {
+                  assert.equal(heat.outside_energy_paths.covered_radiative_j,heat.exterior_exchange.radiative_energy_j);
+                  assert.equal(heat.outside_energy_paths.exposed_radiative_j,heat.exposed_exterior_exchange.radiative_energy_j);
+                  assert.equal(heat.final_field.outside_power_paths.covered_radiative_w,0,
+                    'Earlier covered radiation remains in its energy ledger after the final film interval');
+                } else {
+                  assert.ok(heat.trace.every(sample=>!sample.exterior_exchange||sample.exterior_exchange.radiative_heat_w===0));
+                  assert.ok(heat.trace.every(sample=>!sample.exposed_exterior_exchange||sample.exposed_exterior_exchange.radiative_heat_w===0));
+                }
                 assert.deepEqual(heat.outside_energy_paths,heat.trace.at(-1).outside_energy_paths);
                 assert.deepEqual(heat.final_field.outside_power_paths,heat.trace.at(-1).outside_power_paths);
                 assert.equal(heat.final_field.outside_power_paths.covered_convection_w,0);
                 assert.notEqual(heat.outside_energy_paths.covered_convection_j,0,'Earlier covered convection remains after the final film interval');
               } else {
-                assert.ok(Math.abs(heat.outside_energy_j-heat.exterior_exchange.convective_energy_j)<1e-10);
-                assert.ok(heat.trace.every(sample=>sample.exterior_exchange.radiative_heat_w===0 && sample.prescribed_compression));
+                assert.ok(Math.abs(heat.outside_energy_j-heat.exterior_exchange.convective_energy_j-
+                  heat.exterior_exchange.radiative_energy_j)<1e-10);
+                assert.ok(heat.trace.every(sample=>sample.prescribed_compression));
+                if(!radiation) assert.ok(heat.trace.every(sample=>sample.exterior_exchange.radiative_heat_w===0));
               }
             }
-            if(!coverage&&heat.request.boundaries[0].outside_c===20) {
+            if(!coverage&&!radiation&&heat.request.boundaries[0].outside_c===20) {
               assert.ok(heat.final.temperature_c.flat().every(temperature=>Math.abs(temperature-20)<1e-10),
                 'Prescribed branch work cannot heat the equal-temperature fixture');
             }

@@ -2431,6 +2431,38 @@ function sewingSelection(parent, alternatives) {
         "Cutting costs, setup time and undeclared supplier bundles are outside this objective.";
       parent.append(scope);
     }
+    const feedSearches = alternatives.filter(row =>
+      available(row.sewing_selection)?.request?.objective === "minimize_routed_feed_milliseconds");
+    if (feedSearches.length) {
+      const milliseconds = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : "Unknown";
+      const selected = table(parent, "Routed feed-work recipe search",
+        ["Alternative", "Selected scheduled feed work (ms)", "Listed feed minimum proved", "Unresolved trials"]);
+      const trials = table(parent, "Scheduled feed work by recipe and route",
+        ["Alternative", "Route and recipes", "Scheduled feed work (ms)", "Raw feed work (s)",
+          "Feed minimum proved", "Availability", "Reason"]);
+      for (const row of feedSearches) {
+        const result = available(row.sewing_selection);
+        cells(selected, [row.key, milliseconds(result.selected_scheduled_feed_milliseconds),
+          String(result.optimality_proven), metric(result.unresolved_trials)]);
+        for (const trial of result.trials || []) {
+          const recipes = Object.entries(trial.choices || {})
+            .map(([operation, recipe]) => operation + ": " + recipe).join("; ") || "Original recipes";
+          cells(trials, [row.key, [trial.route_choice, recipes].filter(Boolean).join("; "),
+            milliseconds(trial.scheduled_feed_milliseconds), metric(trial.feed_seconds),
+            trial.feed_optimality_proven == null ? "Unknown" : String(trial.feed_optimality_proven),
+            trial.refusal ? "Plan refused" : trial.objective_unavailable || trial.scheduled_feed_milliseconds == null ?
+              "Unresolved" : trial.completion_deadline?.status === "excluded" ? "Misses deadline (proved)" :
+              trial.completion_deadline?.status === "unresolved" ? "Deadline unresolved" : "Complete candidate",
+            trial.refusal?.message || trial.objective_unavailable?.message ||
+              trial.completion_deadline?.reason || "Inspect retained route timing"]);
+        }
+      }
+      const scope = document.createElement("p");
+      scope.textContent = "This objective minimizes the summed integer millisecond feed durations of actual assigned operations. " +
+        "Raw feed seconds and elapsed completion are separate quantities. A retained candidate can be usable before its feed minimum " +
+        "is proved; unresolved trials prevent proof across all declared recipes and routes.";
+      parent.append(scope);
+    }
     const deadlineSearches = alternatives.filter(row => {
       const result = available(row.sewing_selection);
       return result?.request?.completion_deadline_milliseconds != null ||
@@ -3415,6 +3447,21 @@ function sewingRouting(parent, plan, label = "Selected sewing plan") {
     metric(seconds(timeline?.makespan_milliseconds)), metric(timeline?.feed_seconds),
     metric(seconds(timeline?.scheduled_feed_milliseconds)), metric(seconds(timeline?.setup_milliseconds)),
     metric(seconds(timeline?.handling_milliseconds)), metric(seconds(timeline?.transfer_milliseconds))]);
+  if (report.feed_time_search) {
+    const search = report.feed_time_search;
+    const milliseconds = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : "Unavailable";
+    const feed = table(parent, label + ": routed feed-work objective and proof",
+      ["Selected scheduled feed work (ms)", "Independent feed lower bound (ms)", "Lower bound attained",
+        "Feed minimum proved", "Inclusive completion deadline (ms)"]);
+    cells(feed, [milliseconds(search.selected_feed_milliseconds), milliseconds(search.lower_bound_feed_milliseconds),
+      String(search.lower_bound_attained), String(search.optimality_proven),
+      search.completion_deadline_milliseconds == null ? "None declared" : milliseconds(search.completion_deadline_milliseconds)]);
+    const scope = document.createElement("p");
+    scope.textContent = "Scheduled feed work sums the integer millisecond feed durations of actual assigned operations. " +
+      "Raw feed seconds and elapsed completion remain separate quantities. A declared completion deadline restricts admissible " +
+      "complete schedules; feed and minimum completion-time proofs are independent.";
+    parent.append(scope);
+  }
   if (report.thread_order_search) {
     const search = report.thread_order_search;
     const cost = table(parent, `${label}: routed thread-order cost and proof`,

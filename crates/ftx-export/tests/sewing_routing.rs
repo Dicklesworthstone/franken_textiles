@@ -4075,6 +4075,264 @@ fn eligible_recipe_selection_scores_makespan_and_refuses_unoptimized_feed_or_cos
     }
 }
 
+fn feed_fixture() -> (Pattern, Value) {
+    let (pattern, mut options) = eligible_fixture(1);
+    let route = &mut options["production"]["routing"];
+    route["objective"] = json!("minimize_feed_milliseconds");
+    route["feed_time_search"] = json!({});
+    // The lower-feed path is available later. Minimizing occupied feed must not silently
+    // become the existing elapsed-completion objective or prune a later but cheaper assignment.
+    route["cells"][2]["available_at_milliseconds"] = json!(5000);
+    route["cells"][2]["available_until_milliseconds"] = json!(20000);
+    refresh_locks(&mut options);
+    (pattern, options)
+}
+
+fn feed_selection(options: &Value) -> Value {
+    json!({"schema":"ftx-sewing-selection/6","options":options,
+        "objective":"minimize_routed_feed_milliseconds","max_plan_evaluations":2,
+        "route_candidates":[{"id":"same-qualified-route","routing":options["production"]["routing"]}]})
+}
+
+#[test]
+fn routed_feed_minimizes_actual_occupied_work_separately_from_completion() {
+    let (pattern, options) = feed_fixture();
+    let plan = build(&pattern, options.clone()).unwrap();
+    let production = plan.production.as_ref().unwrap();
+    let route = production.routing.as_ref().unwrap();
+    let feed = route.feed_time_search.as_ref().unwrap();
+    assert_eq!(
+        (plan.schema, production.schema, route.schema),
+        (
+            "ftx-sewing-plan/34",
+            "ftx-sewing-production/22",
+            "ftx-sewing-routing/16"
+        )
+    );
+    assert_eq!(route.baseline.scheduled_feed_milliseconds, 6000);
+    assert_eq!(route.baseline.makespan_milliseconds, 8800);
+    assert_eq!(route.selected.scheduled_feed_milliseconds, 4000);
+    assert_eq!(route.selected.makespan_milliseconds, 12000);
+    assert_eq!(feed.selected_feed_milliseconds, 4000);
+    assert_eq!(feed.lower_bound_feed_milliseconds, 4000);
+    assert!(feed.optimality_proven && feed.lower_bound_attained && route.search_complete);
+    assert!(!route.optimality_proven);
+    assert_eq!(plan.total_stitch_intervals(), 40);
+    assert_eq!(plan.total_feed_seconds(), 4.0);
+    let program = SewProgram::build(&pattern, &plan.options).unwrap();
+    assert_eq!(program.stitches.len(), 40);
+    assert!(
+        program
+            .stitches
+            .iter()
+            .all(|stitch| { matches!(stitch.cell.as_deref(), Some("cell-c" | "cell-b")) })
+    );
+    assert_eq!(
+        serde_json::to_value(SewPlan::build(&pattern, &plan.options).unwrap()).unwrap(),
+        serde_json::to_value(&plan).unwrap()
+    );
+
+    let mut fastest = options;
+    fastest["production"]["routing"]["objective"] = json!("minimize_makespan");
+    fastest["production"]["routing"]
+        .as_object_mut()
+        .unwrap()
+        .remove("feed_time_search");
+    let fastest = build(&pattern, fastest).unwrap();
+    assert_eq!(fastest.parallel_makespan_seconds(), Some(8.8));
+    assert_eq!(fastest.total_feed_seconds(), 6.0);
+    assert!(
+        !serde_json::to_value(&fastest).unwrap()["production"]["routing"]
+            .as_object()
+            .unwrap()
+            .contains_key("feed_time_search")
+    );
+}
+
+#[test]
+fn routed_feed_deadlines_and_budget_preserve_complete_resource_admission() {
+    let (pattern, options) = feed_fixture();
+    for (deadline, feed_ms, finish) in
+        [(12000, 4000, 12000), (11999, 6000, 8800), (8800, 6000, 8800)]
+    {
+        let mut request = options.clone();
+        request["production"]["routing"]["feed_time_search"]["completion_deadline_milliseconds"] =
+            json!(deadline);
+        let plan = build(&pattern, request).unwrap();
+        let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+        let feed = route.feed_time_search.as_ref().unwrap();
+        assert_eq!(feed.selected_feed_milliseconds, feed_ms);
+        assert_eq!(route.selected.makespan_milliseconds, finish);
+        assert_eq!(feed.completion_deadline_milliseconds, Some(deadline));
+        assert!(feed.optimality_proven);
+        assert_eq!(feed.lower_bound_attained, feed_ms == 4000);
+    }
+    let mut impossible = options.clone();
+    impossible["production"]["routing"]["feed_time_search"]["completion_deadline_milliseconds"] =
+        json!(8799);
+    assert_eq!(
+        build(&pattern, impossible).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+
+    let mut limited = options;
+    limited["production"]["routing"]["max_search_nodes"] = json!(2);
+    let plan = build(&pattern, limited).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert_eq!(route.selected.operations.len(), 2);
+    assert_eq!(route.selected.scheduled_feed_milliseconds, 6000);
+    assert_eq!(route.search_nodes, 2);
+    assert!(route.budget_exhausted && !route.search_complete);
+    assert!(!route.feed_time_search.as_ref().unwrap().optimality_proven);
+}
+
+#[test]
+fn routed_feed_relaxes_optional_cell_capacity_without_claiming_attained_bound() {
+    let (pattern, mut options) = eligible_fixture(2);
+    options["production"]["routing"]["objective"] = json!("minimize_feed_milliseconds");
+    options["production"]["routing"]["feed_time_search"] = json!({});
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let feed = route.feed_time_search.as_ref().unwrap();
+    // Each first-stage cell can finish only one garment within its source window. The only
+    // complete assignment uses 40 + 20 first-stage stitches and 20 on each second stage.
+    assert_eq!(feed.selected_feed_milliseconds, 10000);
+    assert_eq!(feed.lower_bound_feed_milliseconds, 8000);
+    assert!(feed.optimality_proven && !feed.lower_bound_attained);
+    assert!(route.baseline_replaced && route.search_complete);
+    assert_eq!(route.selected.operations.len(), 4);
+    assert_eq!(plan.total_stitch_intervals(), 100);
+    assert_eq!(
+        route
+            .selected
+            .operations
+            .iter()
+            .filter(|operation| operation.cell == "cell-a")
+            .count(),
+        1
+    );
+    assert_eq!(
+        route
+            .selected
+            .operations
+            .iter()
+            .filter(|operation| operation.cell == "cell-c")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn routed_feed_selection_replays_exact_per_operation_rounding_and_inherited_deadline() {
+    use ftx_export::sewing_selection::{Request, select_json};
+
+    let (pattern, mut options) = feed_fixture();
+    for (cell, operation) in [(1, "reinforce"), (2, "join")] {
+        let cell = &mut options["production"]["routing"]["cells"][cell];
+        cell["configuration"]["recipes"][operation]["stitches_per_minute"] = json!(603.0);
+    }
+    refresh_locks(&mut options);
+    let mut raw = feed_selection(&options);
+    let selected = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(selected.schema, "ftx-sewing-selection-report/8");
+    assert_eq!(selected.selected_route.as_deref(), Some("template"));
+    assert_eq!(selected.selected_scheduled_feed_milliseconds, Some(3982));
+    assert!(selected.selected_objective_seconds.is_none());
+    assert!(selected.optimality_proven && selected.unresolved_trials == 0);
+    let plan = selected.selected_plan.as_ref().unwrap();
+    assert_eq!((plan.total_feed_seconds() * 1000.0).ceil() as u64, 3981);
+    assert_eq!(selected.trials[0].scheduled_feed_milliseconds, Some(3982));
+    assert_eq!(selected.trials[0].feed_optimality_proven, Some(true));
+    assert!(selected.trials[0].ordering_optimality_proven.is_none());
+    let portable: Value =
+        serde_json::from_str(&select_json(&pattern.raw().to_string(), &raw.to_string()).unwrap())
+            .unwrap();
+    assert_eq!(portable["report"], serde_json::to_value(&selected).unwrap());
+    let replay: SewOptions =
+        serde_json::from_str(portable["selected_options_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_value(SewProgram::build(&pattern, &replay).unwrap()).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &plan.options).unwrap()).unwrap()
+    );
+    raw["completion_deadline_milliseconds"] = json!(8800);
+    let constrained = serde_json::from_value::<Request>(raw)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(constrained.selected_scheduled_feed_milliseconds, Some(5991));
+    assert!(constrained.optimality_proven);
+    let route = constrained
+        .selected_plan
+        .as_ref()
+        .unwrap()
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        route
+            .feed_time_search
+            .as_ref()
+            .unwrap()
+            .completion_deadline_milliseconds,
+        Some(8800)
+    );
+    assert_eq!(route.selected.makespan_milliseconds, 8791);
+}
+
+#[test]
+fn routed_feed_selection_keeps_unproved_trials_and_original_source_refusals() {
+    use ftx_export::sewing_selection::Request;
+
+    let (pattern, mut options) = feed_fixture();
+    options["production"]["routing"]["max_search_nodes"] = json!(2);
+    let mut raw = feed_selection(&options);
+    let bounded = serde_json::from_value::<Request>(raw.clone())
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert_eq!(bounded.selected_scheduled_feed_milliseconds, Some(6000));
+    assert_eq!(bounded.unresolved_trials, 2);
+    assert!(bounded.search_complete && !bounded.optimality_proven);
+    assert!(bounded.selected_plan.is_some());
+    let alternate = &mut raw["route_candidates"][0]["routing"]["cells"][2];
+    alternate["configuration"]["recipes"]["join"]["stitches_per_minute"] = json!(500.0);
+    let stale = serde_json::from_value::<Request>(raw)
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
+    assert!(stale.selected_plan.is_some());
+    assert_eq!(
+        stale.trials[1].refusal.as_ref().unwrap().code,
+        RefusalCode::InvalidDocument
+    );
+    assert!(stale.trials[1].scheduled_feed_milliseconds.is_none());
+
+    for (field, value) in [
+        ("feed_time_search", Value::Null),
+        ("thread_order_search", json!({"max_order_evaluations":1})),
+    ] {
+        let mut invalid = options.clone();
+        invalid["production"]["routing"][field] = value;
+        assert_eq!(
+            build(&pattern, invalid).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+    }
+    let mut invalid = options;
+    invalid["production"]["routing"]["feed_time_search"]["completion_deadline_milliseconds"] =
+        json!(9007199254740992u64);
+    assert_eq!(
+        build(&pattern, invalid).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+}
+
 fn check_copy_window_protocol(outer: bool, recipe_only: bool) {
     use ftx_export::material_study::Request;
 

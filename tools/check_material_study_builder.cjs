@@ -257,6 +257,24 @@ test('sewing-only selection studies preserve exact recipe searches and do not in
   assert.throws(()=>build({...input,sewingSelection:'{"options":null}'}),/complete template options/);
 });
 
+test('routed feed selection preserves exact recipe and route objective sources in ordinary studies', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  for(const schema of ['ftx-sewing-selection/8','ftx-sewing-selection/6']) {
+    const input=state();delete input.cutting;
+    input.sewingSelection=' {"schema":"'+schema+'","objective":"minimize_routed_feed_milliseconds",'+
+      '"options":{"production":{"routing":{"objective":"minimize_feed_milliseconds",'+
+      '"feed_time_search":{"completion_deadline_milliseconds":18446744073709551615}}}},"max_plan_evaluations":1.0}\r\n';
+    input.objectives=[{metric:'sewing_parallel_makespan_seconds',direction:'minimize'}];
+    input.requiredConsumers=['sewing'];
+    const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+    assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(input.sewingSelection));
+    assert.equal(result.sewing_selection.schema,schema);
+    assert.equal(result.sewing_selection.objective,'minimize_routed_feed_milliseconds');
+    assert.match(raw,/18446744073709551615/);assert.match(raw,/"max_plan_evaluations":1\.0/);
+    assert.equal(Object.hasOwn(result,'sewing'),false);assert.equal(Object.hasOwn(result,'cutting'),false);
+  }
+});
+
 test('manufacturing objectives and required consumers cannot omit their source inputs', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const goal=metric=>[{metric,direction:'minimize'}];

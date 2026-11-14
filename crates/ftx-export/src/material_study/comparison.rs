@@ -2441,6 +2441,15 @@ impl Policy {
         }
         if (consumers.contains(&Consumer::Sewing) || thread)
             && let Some(selection) = row.sewing_selection.value()
+            && selection.request.objective
+                == crate::sewing_selection::Objective::MinimizeRoutedFeedMilliseconds
+        {
+            // Exact feed selection retains every candidate and inner completion requirement,
+            // even when the selected fixed route contributes only raw feed or thread readings.
+            base = hash(&(base, ("routed_feed_selection", &selection.request)))?;
+        }
+        if (consumers.contains(&Consumer::Sewing) || thread)
+            && let Some(selection) = row.sewing_selection.value()
             && selection.request.schema == "ftx-sewing-selection/6"
             && selection.request.objective
                 == crate::sewing_selection::Objective::MinimizeThreadObservedOrderCost
@@ -2488,6 +2497,7 @@ impl Policy {
                             .and_then(|production| production.routing.as_ref())
                             .is_some_and(|routing| {
                                 routing.eligible()
+                                    || routing.feed_directed()
                                     || routing.copy_windows.is_some()
                                     || routing
                                         .bounded_staging

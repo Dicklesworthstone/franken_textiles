@@ -81,6 +81,9 @@ pub struct Selection {
     pub selected_route: Option<String>,
     /// Selected objective, including qualified setup time when requested by the selector.
     pub selected_objective_seconds: Option<f64>,
+    /// Exact summed operation-feed milliseconds, only for the explicit routed-feed objective.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_scheduled_feed_milliseconds: Option<u64>,
     /// Complete canonical thread order cost for a cost-directed search; never a partial total.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_thread_order_cost: Option<f64>,
@@ -180,6 +183,7 @@ pub(super) fn evaluate(
         selected_choices,
         selected_route,
         selected_objective_seconds,
+        selected_scheduled_feed_milliseconds,
         selected_thread_order_cost,
         objective_currency,
         selected_plan,
@@ -221,6 +225,7 @@ pub(super) fn evaluate(
                 selected_choices,
                 selected_route,
                 selected_objective_seconds,
+                selected_scheduled_feed_milliseconds,
                 selected_thread_order_cost,
                 objective_currency,
                 unresolved_trials,
