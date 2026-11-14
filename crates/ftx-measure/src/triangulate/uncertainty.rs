@@ -13,10 +13,49 @@ use super::{FrameId, Partition, TriangulationInput, TriangulationReport};
 use crate::invalid;
 
 mod lens;
+mod pose;
+mod sheet;
 pub use lens::{
     LensGroupSensitivity, LensNoiseGroup, LensNoiseInput, LensUncertainTriangulationReport,
     LensUncertaintyReport, triangulate_with_lens_noise,
 };
+pub use pose::{
+    FrameSheetCornerNoise, SheetCornerNoiseInput, SheetFrameSensitivity,
+    SheetUncertainTriangulationReport, SheetUncertaintyReport, triangulate_with_sheet_noise,
+};
+pub use sheet::FrameSheetPose;
+
+/// Require one original sheet acquisition per FIT frame when both lens-induced poses and
+/// sheet-corner precision are requested. Equal baseline cameras alone cannot identify the
+/// source estimator: different corner observations can fit the same camera.
+///
+/// # Errors
+/// Incomplete, duplicate or differing sheet sources in a combined request are refused.
+pub fn validate_camera_noise_sources(
+    lens: &LensNoiseInput,
+    sheet: &SheetCornerNoiseInput,
+) -> Result<(), Refusal> {
+    if let Some(poses) = &lens.sheet_poses {
+        let sources: BTreeMap<_, _> = poses
+            .iter()
+            .map(|pose| (&pose.frame, &pose.report))
+            .collect();
+        let corners: BTreeMap<_, _> = sheet
+            .observations
+            .iter()
+            .map(|observation| (&observation.frame, &observation.report))
+            .collect();
+        if sources.len() != poses.len()
+            || corners.len() != sheet.observations.len()
+            || sources != corners
+        {
+            return Err(invalid(
+                "combined lens and sheet noise must retain the same complete sheet-pose reports for every FIT frame",
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Declared isotropic one-sigma click uncertainty for one fitting frame.
 #[derive(Clone, Debug, Serialize, Deserialize)]

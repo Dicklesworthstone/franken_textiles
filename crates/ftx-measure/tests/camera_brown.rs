@@ -450,9 +450,19 @@ fn triangulation_replays_lens_sources_and_refuses_reused_or_unqualified_calibrat
             calibration: json!(calibration),
             frames: input.observations.iter().map(|v| v.frame.clone()).collect(),
         }],
+        sheet_poses: None,
     };
     let result = triangulate_with_lens_noise(&input, &evidence).unwrap();
     assert_eq!(result.conditional_lens_uncertainty.status, "AVAILABLE");
+    assert_eq!(
+        result.conditional_lens_uncertainty.schema,
+        "ftx-triangulation-lens-uncertainty/1"
+    );
+    assert!(
+        json!(result.conditional_lens_uncertainty.input)
+            .get("sheet_poses")
+            .is_none()
+    );
     assert!((result.triangulation.point_m.unwrap() - point).norm() < 1e-9);
     let mut reversed = evidence.clone();
     reversed.groups[0].frames.reverse();
@@ -505,6 +515,191 @@ fn triangulation_replays_lens_sources_and_refuses_reused_or_unqualified_calibrat
             .contains("available declared-noise covariance"),
         "{error}"
     );
+}
+
+#[test]
+fn shared_lens_replays_sheet_poses_and_refuses_changed_camera_sources() {
+    use ftx_measure::{
+        camera::Camera,
+        photo::intrinsics::uncertainty::calibrate_camera_with_uncertainty,
+        triangulate::{
+            Capture, Observation, TriangulationInput,
+            uncertainty::{
+                FrameSheetPose, LensNoiseGroup, LensNoiseInput, triangulate_with_lens_noise,
+            },
+        },
+    };
+    let calibration = calibrate_camera_with_uncertainty(&fixture(), &noise(0.25)).unwrap();
+    let lens = calibration.solution.as_ref().unwrap().intrinsics;
+    let point = Vec3::new(0.12, 0.4, 0.95);
+    let mut poses = Vec::new();
+    let input = TriangulationInput {
+        schema: "ftx-triangulation-input/1".into(),
+        metric_scale_source: "Synthetic same stationary metric sheet, exact coordinate frame"
+            .into(),
+        capture: Capture::StillWindow {
+            start_us: 0,
+            end_us: 1,
+            evidence: "Synthetic stationary point".into(),
+        },
+        observations: [-0.5, 0.5]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let known = Camera {
+                    intrinsics: lens,
+                    world_to_camera: Mat3::from_rows([
+                        [1.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0],
+                        [0.0, 1.0, 0.0],
+                    ]),
+                    center_m: Vec3::new(x, -2.0, 1.0),
+                };
+                let points: Vec<_> = [(-0.6, 0.5), (0.6, 0.5), (0.6, 1.5), (-0.6, 1.5), (0.0, 1.0)]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(j, (x, z))| json!({
+                        "sheet_xz_m":[x,z], "pixel_px":known.project(Vec3::new(x,0.0,z)).unwrap(),
+                        "held_out":j == 4,
+                    }))
+                    .collect();
+                let report = Camera::sheet_pose_report(&json!({
+                    "schema":"ftx-sheet-pose-input/1", "reference_id":"synthetic-stationary-sheet",
+                    "intrinsics":lens, "image_size_px":[1600,1200], "rotation_applied_degrees":0,
+                    "points":points,
+                }))
+                .unwrap();
+                assert_eq!(report["ok"], true, "{report}");
+                let frame = FrameId {
+                    stream: "synthetic-measurement".into(),
+                    timestamp_us: i as u64,
+                };
+                let camera = serde_json::from_value(report["camera"].clone()).unwrap();
+                poses.push(FrameSheetPose {
+                    frame: frame.clone(),
+                    report,
+                });
+                Observation {
+                    frame,
+                    camera,
+                    pixel_px: known.project(point).unwrap(),
+                    partition: Partition::Fit,
+                }
+            })
+            .collect(),
+    };
+    let evidence = LensNoiseInput {
+        schema: "ftx-triangulation-lens-noise/2".into(),
+        independence_evidence:
+            "Separate synthetic calibration acquisition, exact sheet and landmark pixels".into(),
+        groups: vec![LensNoiseGroup {
+            key: "shared".into(),
+            calibration: json!(calibration),
+            frames: input
+                .observations
+                .iter()
+                .map(|view| view.frame.clone())
+                .collect(),
+        }],
+        sheet_poses: Some(poses),
+    };
+    let result = triangulate_with_lens_noise(&input, &evidence).unwrap();
+    assert_eq!(
+        result.conditional_lens_uncertainty.status, "AVAILABLE",
+        "{:?}",
+        result.conditional_lens_uncertainty.flags
+    );
+    assert_eq!(
+        result.conditional_lens_uncertainty.schema,
+        "ftx-triangulation-lens-uncertainty/2"
+    );
+    assert!((result.triangulation.point_m.unwrap() - point).norm() < 1e-8);
+    assert_eq!(
+        json!(result.triangulation),
+        json!(ftx_measure::triangulate::triangulate(&input).unwrap())
+    );
+
+    let mut reordered = evidence.clone();
+    reordered.sheet_poses.as_mut().unwrap().reverse();
+    reordered.groups[0].frames.reverse();
+    assert_eq!(
+        json!(result),
+        json!(triangulate_with_lens_noise(&input, &reordered).unwrap())
+    );
+
+    // Native sheet-pose --calibration reports retain this independently replayed
+    // annotation. Equal numerical intrinsics do not erase its physical lens identity.
+    let digest = |value: &serde_json::Value| {
+        ftx_core::receipt::sha256_hex(&serde_json::to_vec(value).unwrap())
+    };
+    let mut annotated = evidence.clone();
+    let calibration = &evidence.groups[0].calibration;
+    for pose in annotated.sheet_poses.as_mut().unwrap() {
+        let mut reference = pose.report["input"].clone();
+        reference.as_object_mut().unwrap().remove("intrinsics");
+        pose.report["intrinsics_source"] = json!({
+            "schema":"ftx-camera-calibration/1", "report_sha256":digest(calibration),
+            "reference_input_sha256":digest(&reference), "lens_id":calibration["input"]["lens_id"],
+            "recomputed":true, "input":calibration["input"], "no_claim":calibration["no_claim"],
+        });
+    }
+    let native_sources = triangulate_with_lens_noise(&input, &annotated).unwrap();
+    assert_eq!(native_sources.conditional_lens_uncertainty.status, "AVAILABLE");
+    assert_eq!(
+        json!(native_sources.conditional_lens_uncertainty.covariance_m2),
+        json!(result.conditional_lens_uncertainty.covariance_m2)
+    );
+    let mut other_calibration = calibration.clone();
+    other_calibration["input"]["lens_id"] = json!("another-physical-lens");
+    for pose in annotated.sheet_poses.as_mut().unwrap() {
+        pose.report["intrinsics_source"]["report_sha256"] = json!(digest(&other_calibration));
+        pose.report["intrinsics_source"]["lens_id"] = other_calibration["input"]["lens_id"].clone();
+        pose.report["intrinsics_source"]["input"] = other_calibration["input"].clone();
+    }
+    let error = triangulate_with_lens_noise(&input, &annotated).unwrap_err();
+    assert!(error.message.contains("declared physical lens"), "{error}");
+
+    // An old consumer's fixed-pose mode cannot silently discard new pose evidence.
+    let mut wrong_schema = evidence.clone();
+    wrong_schema.schema = "ftx-triangulation-lens-noise/1".into();
+    assert!(triangulate_with_lens_noise(&input, &wrong_schema).is_err());
+    let mut missing = evidence.clone();
+    missing.sheet_poses = None;
+    assert!(triangulate_with_lens_noise(&input, &missing).is_err());
+    missing.sheet_poses = Some(Vec::new());
+    assert!(triangulate_with_lens_noise(&input, &missing).is_err());
+
+    let mut stale = input.clone();
+    stale.observations[0].camera.center_m.x += 0.001;
+    assert!(triangulate_with_lens_noise(&stale, &evidence).is_err());
+    let mut forged = evidence.clone();
+    forged.sheet_poses.as_mut().unwrap()[0].report["camera"]["center_m"][0] = json!(12.0);
+    assert!(triangulate_with_lens_noise(&input, &forged).is_err());
+
+    for (field, value) in [
+        ("reference_id", json!("a-different-stationary-sheet")),
+        ("image_size_px", json!([1601, 1200])),
+        ("rotation_applied_degrees", json!(180)),
+    ] {
+        let mut mismatch = evidence.clone();
+        let pose = &mut mismatch.sheet_poses.as_mut().unwrap()[0];
+        pose.report["input"][field] = value;
+        pose.report = Camera::sheet_pose_report(&pose.report["input"]).unwrap();
+        assert!(
+            triangulate_with_lens_noise(&input, &mismatch).is_err(),
+            "{field}"
+        );
+    }
+
+    let mut bad_check = evidence;
+    let pose = &mut bad_check.sheet_poses.as_mut().unwrap()[0];
+    let x = pose.report["input"]["points"][4]["pixel_px"][0]
+        .as_f64()
+        .unwrap();
+    pose.report["input"]["points"][4]["pixel_px"][0] = json!(x + 10.0);
+    pose.report = Camera::sheet_pose_report(&pose.report["input"]).unwrap();
+    assert_eq!(pose.report["ok"], false);
+    assert!(triangulate_with_lens_noise(&input, &bad_check).is_err());
 }
 
 #[test]

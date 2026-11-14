@@ -1,6 +1,7 @@
-//! Shared-lens precision with explicitly fixed camera poses. A retained calibration is replayed
-//! before its covariance may perturb all of its fitting views together. Different lens groups
-//! contribute independently only under the caller's explicit acquisition-independence assertion.
+//! Shared-lens precision with fixed or source-replayed sheet camera poses. A retained calibration
+//! is replayed before its covariance may perturb all of its fitting views together. Sheet-derived
+//! poses follow that same perturbation rather than adding an independent covariance. Different
+//! lens groups contribute independently only under the caller's explicit acquisition assertion.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::super::{FrameId, Partition, TriangulationInput, TriangulationReport};
+use super::sheet::{FrameSheetPose, PreparedSheetPoses, prepare_sheet_poses};
 use crate::{
     camera::Intrinsics,
     invalid,
@@ -32,13 +34,17 @@ pub struct LensNoiseGroup {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LensNoiseInput {
-    /// Must be `ftx-triangulation-lens-noise/1`.
+    /// `/1` fixes the supplied poses; `/2` re-solves their original metric sheet observations.
     pub schema: String,
-    /// Basis for independence between calibration groups and measurement clicks. Supplied camera
-    /// poses are treated as exact; their uncertainty and dependence on the lens are excluded.
+    /// Basis for independence between calibration groups, measurement clicks and sheet corners.
+    /// The metric sheet coordinates stay exact; separate sheet-corner noise is not propagated.
     pub independence_evidence: String,
     /// 1–8 groups covering every FIT frame exactly once, with distinct calibrated lens identities.
     pub groups: Vec<LensNoiseGroup>,
+    /// Exact accepted sheet-pose reports for every FIT camera. Required by `/2`, forbidden by `/1`.
+    /// Absence retains the original serialized `/1` input and source identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_poses: Option<Vec<FrameSheetPose>>,
 }
 
 /// First-order response to a complete correlated lens, not independent per-camera errors.
@@ -59,10 +65,10 @@ pub struct LensGroupSensitivity {
     pub covariance_m2: Mat3,
 }
 
-/// Conditional first-order lens contribution. Camera poses and metric scale remain fixed.
+/// Conditional first-order lens contribution. Metric reference coordinates remain fixed.
 #[derive(Clone, Debug, Serialize)]
 pub struct LensUncertaintyReport {
-    /// `ftx-triangulation-lens-uncertainty/1`.
+    /// `/1` for fixed cameras, `/2` for lens-dependent poses from retained sheet observations.
     pub schema: &'static str,
     /// AVAILABLE or UNAVAILABLE; numerical failure never publishes a zero covariance.
     pub status: &'static str,
@@ -78,7 +84,7 @@ pub struct LensUncertaintyReport {
     pub sensitivities: Vec<LensGroupSensitivity>,
     /// The numerical or parent-geometry reason for unavailable uncertainty.
     pub flags: Vec<String>,
-    /// Conditional scope, including the explicit exclusion of lens/pose dependence.
+    /// Conditional scope, distinguishing fixed poses from their declared lens dependence.
     pub no_claim: &'static str,
 }
 
@@ -102,20 +108,28 @@ struct PreparedGroup {
     image_size_px: [u32; 2],
 }
 
+struct Prepared {
+    input: LensNoiseInput,
+    groups: Vec<PreparedGroup>,
+    sheet_poses: Option<PreparedSheetPoses>,
+}
+
 fn canonical_bytes(value: &impl Serialize) -> Result<Vec<u8>, Refusal> {
     serde_json::to_vec(value).map_err(|error| invalid(error.to_string()))
 }
 
-fn prepare(
-    input: &TriangulationInput,
-    noise: &LensNoiseInput,
-) -> Result<(LensNoiseInput, Vec<PreparedGroup>), Refusal> {
-    if noise.schema != "ftx-triangulation-lens-noise/1"
+fn prepare(input: &TriangulationInput, noise: &LensNoiseInput) -> Result<Prepared, Refusal> {
+    let valid_mode = match noise.schema.as_str() {
+        "ftx-triangulation-lens-noise/1" => noise.sheet_poses.is_none(),
+        "ftx-triangulation-lens-noise/2" => noise.sheet_poses.is_some(),
+        _ => false,
+    };
+    if !valid_mode
         || !super::super::text_present(&noise.independence_evidence)
         || !(1..=8).contains(&noise.groups.len())
     {
         return Err(invalid(
-            "lens noise requires schema /1, explicit calibration/measurement independence evidence and 1–8 lens groups",
+            "lens noise requires schema /1 without sheet poses or /2 with complete sheet poses, explicit acquisition independence evidence and 1–8 lens groups",
         ));
     }
     if canonical_bytes(noise)?.len() > 16 * 1024 * 1024 {
@@ -132,6 +146,14 @@ fn prepare(
         .collect();
     let mut sorted = noise.clone();
     sorted.groups.sort_by(|a, b| a.key.cmp(&b.key));
+    let sheet_poses = sorted
+        .sheet_poses
+        .as_mut()
+        .map(|poses| {
+            poses.sort_by(|a, b| a.frame.cmp(&b.frame));
+            prepare_sheet_poses(input, poses)
+        })
+        .transpose()?;
     let mut keys = BTreeSet::new();
     let mut assigned = BTreeSet::new();
     for group in &mut sorted.groups {
@@ -196,9 +218,29 @@ fn prepare(
         let factor = uncertainty.covariance_factor()?;
         let expected = json!(uncertainty.intrinsics);
         for frame in &group.frames {
+            let source_lens_id = sorted
+                .sheet_poses
+                .as_ref()
+                .and_then(|poses| poses.iter().find(|pose| &pose.frame == frame))
+                .and_then(|pose| pose.report["intrinsics_source"]["lens_id"].as_str());
+            if source_lens_id.is_some_and(|lens_id| lens_id != checked.input.lens_id) {
+                return Err(invalid(format!(
+                    "lens group {:?}: the sheet pose's declared physical lens must match its assigned calibration lens_id",
+                    group.key,
+                )));
+            }
             if json!(fit[frame]) != expected {
                 return Err(invalid(format!(
                     "lens group {:?}: every assigned camera must use the exact replayed intrinsics and certified lens domain",
+                    group.key,
+                )));
+            }
+            if let Some(sheets) = &sheet_poses
+                && (sheets.image_size_px(frame)? != checked.input.image_size_px
+                    || sheets.rotation_applied_degrees(frame)? != checked.input.rotation_cw_deg)
+            {
+                return Err(invalid(format!(
+                    "lens group {:?}: sheet poses must retain the calibration's exact image size and applied rotation",
                     group.key,
                 )));
             }
@@ -213,7 +255,11 @@ fn prepare(
             image_size_px: checked.input.image_size_px,
         });
     }
-    Ok((sorted, prepared))
+    Ok(Prepared {
+        input: sorted,
+        groups: prepared,
+        sheet_poses,
+    })
 }
 
 fn shift(mut k: Intrinsics, direction: [f64; 9], step: f64) -> Result<Intrinsics, Refusal> {
@@ -231,12 +277,21 @@ fn shift(mut k: Intrinsics, direction: [f64; 9], step: f64) -> Result<Intrinsics
     Ok(k)
 }
 
+// The normalization belongs to the original accepted geometry. Every re-solved sheet camera
+// uses this same origin and scale, so a changed lens cannot redefine the differential frame.
+struct SheetResponse<'a> {
+    poses: &'a PreparedSheetPoses,
+    origin: Vec3,
+    scale: f64,
+}
+
 fn derivative(
     input: &TriangulationInput,
     indices: &[usize],
     group: &PreparedGroup,
     direction: [f64; 9],
     step: f64,
+    sheet: Option<&SheetResponse<'_>>,
 ) -> Result<Vec3, Refusal> {
     let high = shift(group.uncertainty.intrinsics, direction, step)?;
     let low = shift(group.uncertainty.intrinsics, direction, -step)?;
@@ -249,7 +304,13 @@ fn derivative(
     let sample = |k| {
         let mut trial = input.clone();
         for &index in indices {
-            trial.observations[index].camera.intrinsics = k;
+            let view = &mut trial.observations[index];
+            if let Some(sheet) = sheet {
+                let pose = sheet.poses.pose(&view.frame)?;
+                view.camera = pose.normalized_camera(k, &pose.pixels, sheet.origin, sheet.scale)?;
+            } else {
+                view.camera.intrinsics = k;
+            }
         }
         let result = super::super::triangulate(&trial)?;
         result.point_m.ok_or_else(|| {
@@ -269,6 +330,7 @@ fn derivative(
 fn propagate(
     input: &TriangulationInput,
     groups: &[PreparedGroup],
+    sheet_poses: Option<&PreparedSheetPoses>,
 ) -> Result<(Mat3, Vec3, Vec<LensGroupSensitivity>), Refusal> {
     let mut normalized = input.clone();
     normalized
@@ -288,6 +350,11 @@ fn propagate(
     for view in &mut normalized.observations {
         view.camera.center_m = (view.camera.center_m - origin) / scale;
     }
+    let sheet = sheet_poses.map(|poses| SheetResponse {
+        poses,
+        origin,
+        scale,
+    });
     let mut covariance = [[0.0; 3]; 3];
     let mut sensitivities = Vec::with_capacity(groups.len());
     for group in groups {
@@ -323,8 +390,22 @@ fn propagate(
                     "lens covariance perturbation is not representable",
                 ));
             }
-            let coarse = derivative(&normalized, &indices, group, direction, step)?;
-            let fine = derivative(&normalized, &indices, group, direction, step * 0.5)?;
+            let coarse = derivative(
+                &normalized,
+                &indices,
+                group,
+                direction,
+                step,
+                sheet.as_ref(),
+            )?;
+            let fine = derivative(
+                &normalized,
+                &indices,
+                group,
+                direction,
+                step * 0.5,
+                sheet.as_ref(),
+            )?;
             let change = (coarse - fine).norm();
             let size = fine.norm().max(1e-12);
             if !change.is_finite() || !size.is_finite() || change > 1e-3 * size {
@@ -377,7 +458,8 @@ fn propagate(
 
 /// Replay complete calibration evidence and propagate its full covariance through the actual
 /// triangulation estimator, perturbing all cameras of a shared lens jointly. The point and its
-/// acceptance gates remain unchanged. Extrinsics, metric scale and capture conditions stay fixed.
+/// acceptance gates remain unchanged. Version `/1` fixes extrinsics; `/2` re-solves the same metric
+/// sheet observations under each shared-lens perturbation. Metric scale and capture stay fixed.
 ///
 /// # Errors
 /// Malformed/oversized evidence, unavailable calibration covariance, reused calibration FIT images,
@@ -389,9 +471,17 @@ pub fn triangulate_with_lens_noise(
     noise: &LensNoiseInput,
 ) -> Result<LensUncertainTriangulationReport, Refusal> {
     let triangulation = super::super::triangulate(input)?;
-    let (input, groups) = prepare(&triangulation.input, noise)?;
+    let Prepared {
+        input,
+        groups,
+        sheet_poses,
+    } = prepare(&triangulation.input, noise)?;
     let mut report = LensUncertaintyReport {
-        schema: "ftx-triangulation-lens-uncertainty/1",
+        schema: if sheet_poses.is_some() {
+            "ftx-triangulation-lens-uncertainty/2"
+        } else {
+            "ftx-triangulation-lens-uncertainty/1"
+        },
         status: "UNAVAILABLE",
         input_sha256: sha256_hex(&canonical_bytes(&input)?),
         input,
@@ -399,14 +489,18 @@ pub fn triangulate_with_lens_noise(
         sigma_m: None,
         sensitivities: Vec::new(),
         flags: Vec::new(),
-        no_claim: "First-order conditional lens contribution with fixed supplied camera poses and metric scale. Shared-lens errors remain correlated across fitting frames; distinct calibration groups and measurement clicks are assumed independent as declared. Camera-pose uncertainty and lens-pose correlations are excluded, including for poses previously estimated using this lens. Also excludes click noise, scale, synchronization, motion, correspondence, print/flatness, lens drift and other systematic errors. Not total measurement uncertainty, real-camera accuracy or physical body/garment fit.",
+        no_claim: if sheet_poses.is_some() {
+            "First-order conditional lens contribution through source-replayed sheet camera poses, with exact metric sheet coordinates and fixed observed sheet pixels. Direct lens and induced pose changes remain one correlated contribution across fitting frames; distinct calibration acquisitions, sheet corners and measurement clicks are independent as declared. Excludes independent sheet-corner and landmark-click noise, metric-scale and print/flatness error, synchronization, motion, correspondence, lens drift and other systematic errors. Not total measurement uncertainty, real-camera accuracy or physical body/garment fit."
+        } else {
+            "First-order conditional lens contribution with fixed supplied camera poses and metric scale. Shared-lens errors remain correlated across fitting frames; distinct calibration groups and measurement clicks are assumed independent as declared. Camera-pose uncertainty and lens-pose correlations are excluded, including for poses previously estimated using this lens. Also excludes click noise, scale, synchronization, motion, correspondence, print/flatness, lens drift and other systematic errors. Not total measurement uncertainty, real-camera accuracy or physical body/garment fit."
+        },
     };
     if triangulation.point_m.is_none() {
         report
             .flags
             .push("Triangulation did not publish an accepted point".into());
     } else {
-        match propagate(&triangulation.input, &groups) {
+        match propagate(&triangulation.input, &groups, sheet_poses.as_ref()) {
             Ok((covariance, sigma, sensitivities)) => {
                 report.status = "AVAILABLE";
                 report.covariance_m2 = Some(covariance);
@@ -425,7 +519,9 @@ pub fn triangulate_with_lens_noise(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera::Camera;
     use crate::photo::intrinsics::CornerNoise;
+    use ftx_core::Vec2;
 
     fn group(input: &TriangulationInput, covariance: [[f64; 9]; 9]) -> PreparedGroup {
         let uncertainty = IntrinsicUncertainty {
@@ -482,6 +578,166 @@ mod tests {
         }
     }
 
+    fn sheet_fixture(scale: f64, shift: Vec3) -> (TriangulationInput, Vec<FrameSheetPose>) {
+        let (mut input, _) = super::super::tests::fixture();
+        let point = Vec3::new(0.12, 0.4, 0.95) * scale + shift;
+        let sheet = [
+            Vec2::new(-0.6, 0.5),
+            Vec2::new(0.6, 0.5),
+            Vec2::new(0.6, 1.5),
+            Vec2::new(-0.6, 1.5),
+            Vec2::new(0.0, 1.0),
+        ];
+        let mut poses = Vec::new();
+        for view in &mut input.observations {
+            view.camera.intrinsics.principal_px = Vec2::new(800.0, 600.0);
+            view.camera.center_m = view.camera.center_m * scale + shift;
+            view.pixel_px = view.camera.project(point).unwrap();
+            if view.partition == Partition::Fit {
+                let points: Vec<_> = sheet
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let p = *p * scale + Vec2::new(shift.x, shift.z);
+                        json!({
+                            "sheet_xz_m":p,
+                            "pixel_px":view.camera.project(Vec3::new(p.x, 0.0, p.y)).unwrap(),
+                            "held_out":i == 4,
+                        })
+                    })
+                    .collect();
+                let report = Camera::sheet_pose_report(&json!({
+                    "schema":"ftx-sheet-pose-input/1", "reference_id":"synthetic-shared-sheet",
+                    "intrinsics":view.camera.intrinsics, "image_size_px":[1600,1200],
+                    "rotation_applied_degrees":0, "points":points,
+                }))
+                .unwrap();
+                assert_eq!(report["ok"], true, "{report}");
+                view.camera = serde_json::from_value(report["camera"].clone()).unwrap();
+                poses.push(FrameSheetPose {
+                    frame: view.frame.clone(),
+                    report,
+                });
+            }
+        }
+        (input, poses)
+    }
+
+    #[test]
+    fn source_sheet_poses_match_independent_focal_and_principal_point_responses() {
+        let (input, poses) = sheet_fixture(1.0, Vec3::ZERO);
+        let prepared = prepare_sheet_poses(&input, &poses).unwrap();
+        let mut normalized = input.clone();
+        normalized
+            .observations
+            .retain(|view| view.partition == Partition::Fit);
+        let origin = normalized.observations[0].camera.center_m;
+        let scale = (normalized.observations[1].camera.center_m - origin).norm();
+        for view in &mut normalized.observations {
+            view.camera.center_m = (view.camera.center_m - origin) / scale;
+        }
+        let response = SheetResponse {
+            poses: &prepared,
+            origin,
+            scale,
+        };
+        let group = group(&input, covariance());
+        // With the sheet at Y=0, common focal changes move a sheet-derived camera's
+        // distance by d/f. Triangulated Y therefore changes by Y/f, not (d+Y)/f.
+        // A common principal-point shift similarly acts on height above the sheet:
+        // dX/dcx=-Y/f, dZ/dcy=Y/f. These follow the pinhole/disparity equations.
+        // Changing fx alone makes the algebraic homography's rigid projection average
+        // the unequal axis norms. Its response is (-X,Y,Z)/(2f), about the ORIGINAL
+        // sheet origin. Re-centering sheet coordinates before that projection changes
+        // this estimator; normalizing only its recovered camera preserves it.
+        for (direction, expected, fixed) in [
+            (
+                [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                Vec3::new(0.0, 0.4 / 800.0, 0.0),
+                Vec3::new(0.0, 2.4 / 800.0, 0.0),
+            ),
+            (
+                [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                Vec3::new(-0.4 / 800.0, 0.0, 0.0),
+                Vec3::new(-2.4 / 800.0, 0.0, 0.0),
+            ),
+            (
+                [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                Vec3::new(0.0, 0.0, 0.4 / 800.0),
+                Vec3::new(0.0, 0.0, 2.4 / 800.0),
+            ),
+            (
+                [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                Vec3::new(-0.12 / 1600.0, 0.4 / 1600.0, 0.95 / 1600.0),
+                Vec3::new(0.0, 2.4 / 800.0, -0.05 / 800.0),
+            ),
+        ] {
+            let actual = derivative(
+                &normalized,
+                &[0, 1],
+                &group,
+                direction,
+                0.01,
+                Some(&response),
+            )
+            .unwrap()
+                * scale;
+            assert!(
+                (actual - expected).norm() < 1e-8,
+                "{actual:?} != {expected:?}"
+            );
+            let independent =
+                derivative(&normalized, &[0, 1], &group, direction, 0.01, None).unwrap() * scale;
+            assert!(
+                (independent - fixed).norm() < 1e-8,
+                "{independent:?} != {fixed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_sheet_covariance_preserves_metric_scale_and_held_out_isolation() {
+        let (input, poses) = sheet_fixture(1.0, Vec3::ZERO);
+        let prepared = prepare_sheet_poses(&input, &poses).unwrap();
+        let original = propagate(&input, &[group(&input, covariance())], Some(&prepared))
+            .unwrap()
+            .0;
+        for scale in [0.01, 2.5, 100.0] {
+            let (moved, poses) = sheet_fixture(scale, Vec3::ZERO);
+            let prepared = prepare_sheet_poses(&moved, &poses).unwrap();
+            let actual = propagate(&moved, &[group(&moved, covariance())], Some(&prepared))
+                .unwrap()
+                .0;
+            assert_matrix(
+                actual,
+                Mat3::from_rows(
+                    original
+                        .rows
+                        .map(|row| row.map(|value| value * scale * scale)),
+                ),
+                2e-9 * scale * scale,
+            );
+        }
+
+        let mut changed = input;
+        changed.observations[2].pixel_px.y += 0.5;
+        let mut changed_poses = poses;
+        for source in &mut changed_poses {
+            source.report["input"]["points"][4]["pixel_px"][0] = json!(
+                source.report["input"]["points"][4]["pixel_px"][0]
+                    .as_f64()
+                    .unwrap()
+                    + 0.25
+            );
+            source.report = Camera::sheet_pose_report(&source.report["input"]).unwrap();
+        }
+        let prepared = prepare_sheet_poses(&changed, &changed_poses).unwrap();
+        let actual = propagate(&changed, &[group(&changed, covariance())], Some(&prepared))
+            .unwrap()
+            .0;
+        assert_matrix(actual, original, 0.0);
+    }
+
     #[test]
     fn shared_lens_matches_closed_form_all_brown_modes_and_covariance_cross_terms() {
         let (input, _) = super::super::tests::fixture();
@@ -518,7 +774,8 @@ mod tests {
                     value
                 })
             }));
-            let (actual, _, groups) = propagate(&input, &[group(&input, covariance)]).unwrap();
+            let (actual, _, groups) =
+                propagate(&input, &[group(&input, covariance)], None).unwrap();
             assert_matrix(actual, expected, 2e-10);
             assert_eq!(actual.rows[0][1].is_sign_negative(), sign > 0.0);
             assert_eq!(actual.rows[0][1], actual.rows[1][0]);
@@ -533,12 +790,14 @@ mod tests {
         let mut covariance =
             std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1e-12 } else { 0.0 }));
         covariance[2][2] = 1.0;
-        let shared = propagate(&input, &[group(&input, covariance)]).unwrap().0;
+        let shared = propagate(&input, &[group(&input, covariance)], None)
+            .unwrap()
+            .0;
         let mut left = group(&input, covariance);
         let mut right = group(&input, covariance);
         left.frames.truncate(1);
         right.frames.remove(0);
-        let independent = propagate(&input, &[left, right]).unwrap().0;
+        let independent = propagate(&input, &[left, right], None).unwrap().0;
         // Shared cx shifts X by -depth/f and cancels disparity. Two independent cx errors
         // shift X by -depth/(2f) each and depth by ±depth²/(f*baseline).
         assert!((shared.rows[0][0] - 6.25e-6).abs() < 1e-10);
@@ -550,7 +809,9 @@ mod tests {
     #[test]
     fn covariance_follows_world_rotation_translation_and_metric_scale() {
         let (input, _) = super::super::tests::fixture();
-        let original = propagate(&input, &[group(&input, covariance())]).unwrap().0;
+        let original = propagate(&input, &[group(&input, covariance())], None)
+            .unwrap()
+            .0;
         let rotation = Mat3::rotation(Vec3::new(1.0, 2.0, -0.5).normalized(), 0.31);
         let expected = rotation * original * rotation.transpose();
         for scale in [0.001, 2.5, 1000.0] {
@@ -560,7 +821,9 @@ mod tests {
                     + Vec3::new(1200.0, -900.0, 40.0);
                 view.camera.world_to_camera = view.camera.world_to_camera * rotation.transpose();
             }
-            let actual = propagate(&moved, &[group(&moved, covariance())]).unwrap().0;
+            let actual = propagate(&moved, &[group(&moved, covariance())], None)
+                .unwrap()
+                .0;
             assert_matrix(
                 actual,
                 Mat3::from_rows(
@@ -576,7 +839,9 @@ mod tests {
     #[test]
     fn held_out_values_do_not_enter_lens_derivatives_and_domain_failure_is_unavailable() {
         let (mut input, _) = super::super::tests::fixture();
-        let original = propagate(&input, &[group(&input, covariance())]).unwrap().0;
+        let original = propagate(&input, &[group(&input, covariance())], None)
+            .unwrap()
+            .0;
         input.observations[2].pixel_px.y += 0.5;
         assert!(
             super::super::super::triangulate(&input)
@@ -584,7 +849,9 @@ mod tests {
                 .point_m
                 .is_some()
         );
-        let changed = propagate(&input, &[group(&input, covariance())]).unwrap().0;
+        let changed = propagate(&input, &[group(&input, covariance())], None)
+            .unwrap()
+            .0;
         assert_matrix(changed, original, 0.0);
         for view in &mut input.observations {
             view.camera.intrinsics.distortion.max_radius = 0.25 + 1e-8;
@@ -595,7 +862,7 @@ mod tests {
                 .point_m
                 .is_some()
         );
-        let error = propagate(&input, &[group(&input, covariance())]).unwrap_err();
+        let error = propagate(&input, &[group(&input, covariance())], None).unwrap_err();
         assert!(error.message.contains("lens"), "{error}");
     }
 }

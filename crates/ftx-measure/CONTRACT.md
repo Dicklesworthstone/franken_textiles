@@ -186,6 +186,26 @@ lens/pose correlation, motion, systematic error and physical accuracy remain unq
 Native and portable consumers can retain both click and lens components without reporting
 their sum as total measurement uncertainty.
 
+Opt-in lens-noise `/2` adds exact original `ftx-sheet-pose/1` reports for every FIT frame.
+The ordinary sheet authority replays source/held-out admission and exact camera identity;
+all frames share one stationary reference ID and each lens group's image size/rotation.
+Each correlated lens mode refits its sheet cameras before the existing estimator, preserving
+the direct lens and induced-pose dependence. Legacy `/1` serialization and results stay fixed.
+The native optional `intrinsics_source` annotation is admitted only after replaying its
+calibration input and checking lens/settings; original-byte hashes remain retained provenance.
+
+`triangulate_with_sheet_noise` separately propagates declared independent isotropic FIT
+sheet-corner errors with fixed intrinsics/metric coordinates. Complete frame sources, positive
+finite sigmas up to 1000 px, explicit independence evidence, 16 MiB input and aggregate limits
+of 256 FIT/1024 retained sheet points bound admission and work. CHECK points never enter
+derivatives. Original corner indices, per-frame Jacobians/covariances and source identities
+remain inspectable. Both engines use fixed metric normalization, checked differential steps
+and transactional complete-or-unavailable covariance, leaving original geometry/gates unchanged.
+Analytic stereo and focal/principal-point answers, frame/scale invariance, source refusal and
+native/portable replay cover software behavior. Sheet pixels (lens term), intrinsics (sheet
+term), metric reference, capture assumptions and independent empirical accuracy retain their
+separate scope; no total uncertainty, readiness, body measurement or fit claim is introduced.
+
 **Anchored joint bundle refinement (FTX-20).** `bundle::adjust` jointly refines all camera
 extrinsics and free landmark positions against sigma-weighted fit pixel residuals. Fixed
 metric controls define the gauge and absolute scale; intrinsics and lens distortion remain

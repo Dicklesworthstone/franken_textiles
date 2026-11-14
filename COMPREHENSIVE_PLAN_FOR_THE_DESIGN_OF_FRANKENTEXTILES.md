@@ -5883,6 +5883,22 @@ changing-coverage, refusal, rollback and native/portable regression cases accomp
 `ftx-cp2`, `ftx-tm5` and `ftx-ms2`. Numerical checks do not establish measured optical/compression
 behavior, wet/compressed response, contact-derived pressure, recovery time or physical garment fit.
 
+### 25.206 Propagate original sheet-camera evidence into landmark precision
+
+Shared-lens triangulation now has an explicit source-pose mode: original accepted stationary-sheet
+reports bind every FIT camera, and each correlated lens mode refits those cameras before repeating
+the existing landmark estimator. A separate declared sheet-corner noise component differentiates
+the original fitted corner observations with intrinsics and metric reference coordinates fixed.
+Both paths preserve the original point and all geometry/held-out gates, retain exact source and
+sensitivity receipts, and report unavailable precision without publishing partial covariance.
+
+Native and portable photo consumers expose the components separately. Combined requests retain
+one exact sheet source per frame; the workbench preserves original inputs for replay and withdraws
+stale results on source edits or cancellation. The existing fixed-pose lens mode remains available.
+This advances `ftx-onn.32` through its software child `ftx-onn.33`; independent physical camera/body
+validation, print/flatness, correlated detector errors, motion and total measurement uncertainty
+remain separate requirements. Synthetic analytical and workflow checks cannot establish wearer fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
