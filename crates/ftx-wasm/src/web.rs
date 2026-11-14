@@ -147,7 +147,8 @@ pub fn body_capture_catalogue(model_bytes: &[u8]) -> Result<String, JsError> {
 }
 
 /// Incremental source-bound still-photo acquisition using the native camera authorities.
-/// This handle retains camera/source records, never decoded image pixels.
+/// This handle retains camera/source records and at most one pending derived PNG, never
+/// decoded image pixels between calls.
 #[wasm_bindgen]
 pub struct WebBodyCapture {
     inner: crate::body_fit::BodyCapture,
@@ -181,6 +182,14 @@ impl WebBodyCapture {
             .add_image(image, bytes)
             .map(|value| value.to_string())
             .map_err(|error| JsError::new(&error.to_string()))
+    }
+
+    /// Take the most recent rectified PNG and release its retained bytes.
+    /// Its name, hash and dimensions are in the addition receipt's rectification image record.
+    /// Empty means rectification was disabled or the PNG was already taken.
+    #[must_use]
+    pub fn take_image(&mut self) -> Vec<u8> {
+        self.inner.take_image()
     }
 
     /// Construct the ordinary unfinished body-fit input from explicit model choices.

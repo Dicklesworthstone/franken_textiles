@@ -13,13 +13,13 @@ use ftx_body::{
 use ftx_core::{Refusal, RefusalCode, Vec2, receipt::sha256_hex};
 use ftx_measure::{
     body_fit::{self, BodyFitInput, BodyModel, CaptureImage, FitFrame, MetricObservation},
-    camera::{Camera, Intrinsics},
+    camera::{Camera, Intrinsics, rectification::Rectification},
     photo::{
         MAX_PHOTO_PIXELS, capture::StationarySheet, detect_charuco, intrinsics::checked_calibration,
     },
     triangulate::FrameId,
 };
-use ftx_trace::raster::image::load_photo_with_limit;
+use ftx_trace::raster::image::{Bgr, encode_png_bgr, load_photo_with_limit};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -34,6 +34,8 @@ const MAX_DECLARATION: usize = 256 * 1024;
 struct Manifest {
     schema: String,
     images: Vec<String>,
+    #[serde(default)]
+    rectify: bool,
     lens_id: String,
     rotation_cw_deg: u16,
     reference_id: String,
@@ -87,7 +89,8 @@ pub fn body_capture_catalogue(model_bytes: &[u8]) -> Result<Value, Refusal> {
 }
 
 /// A frozen batch of two to eight still photos sharing one checked lens and stationary board.
-/// Successful additions retain source identities, camera diagnostics and no image pixels.
+/// Successful additions retain source identities and camera diagnostics. Opt-in rectification
+/// retains one derived PNG until it is taken; decoded pixels are released after each addition.
 /// Each still image has its own source stream and zero clock origin; no capture time is inferred.
 pub struct BodyCapture {
     manifest: Manifest,
@@ -95,11 +98,14 @@ pub struct BodyCapture {
     sheet: Value,
     intrinsics: Intrinsics,
     image_size_px: [u32; 2],
+    rectification: Option<Rectification>,
+    pending_image: Option<Vec<u8>>,
     sources: Value,
     frames: Vec<FitFrame>,
     images: Vec<CaptureImage>,
     receipts: Vec<Value>,
     pixels: BTreeSet<String>,
+    rectified_pixels: BTreeSet<String>,
 }
 
 impl BodyCapture {
@@ -169,6 +175,10 @@ impl BodyCapture {
             .as_ref()
             .ok_or_else(|| invalid("checked calibration has no solution"))?
             .intrinsics;
+        let rectification = manifest
+            .rectify
+            .then(|| Rectification::new(intrinsics, image_size_px))
+            .transpose()?;
         let board = StationarySheet::new(
             &sheet,
             &manifest.held_out_corner_ids,
@@ -195,11 +205,14 @@ impl BodyCapture {
             sheet,
             intrinsics,
             image_size_px,
+            rectification,
+            pending_image: None,
             sources,
             frames: Vec::new(),
             images: Vec::new(),
             receipts: Vec::new(),
             pixels: BTreeSet::new(),
+            rectified_pixels: BTreeSet::new(),
         })
     }
 
@@ -214,8 +227,14 @@ impl BodyCapture {
     ///
     /// # Errors
     /// Unknown/repeated/out-of-order source, invalid image, unapplied EXIF rotation, wrong size,
-    /// duplicate decoded pixels, detector or calibrated-pose refusal, or a missing/failed CHECK.
+    /// duplicate decoded pixels, detector or calibrated-pose refusal, a missing/failed CHECK,
+    /// or a previous rectified PNG that has not been taken.
     pub fn add_image(&mut self, id: &str, bytes: &[u8]) -> Result<Value, Refusal> {
+        if self.pending_image.is_some() {
+            return Err(invalid(
+                "take the previous rectified image before adding another capture image",
+            ));
+        }
         let next = self
             .manifest
             .images
@@ -264,28 +283,66 @@ impl BodyCapture {
                 pose["reprojection"]
             )));
         }
-        let camera = serde_json::from_value(pose["camera"].clone())
+        let original_camera: Camera = serde_json::from_value(pose["camera"].clone())
             .map_err(|error| invalid(format!("invalid checked sheet camera: {error}")))?;
         let image_sha256 = sha256_hex(bytes);
         let frame = FrameId {
             stream: format!("still-image:{image_sha256}"),
             timestamp_us: 0,
         };
-        let source = CaptureImage {
+        let mut source = CaptureImage {
             frame: frame.clone(),
             image_name: id.into(),
             image_sha256: image_sha256.clone(),
             image_size_px: self.image_size_px,
             rotation_cw_deg: self.manifest.rotation_cw_deg,
         };
-        source.validate()?;
-        let receipt = json!({"frame":frame,"image":id,"image_sha256":image_sha256,
+        let mut receipt = json!({"frame":frame,"image":id,"image_sha256":image_sha256,
             "pixels_bgr_sha256":pixels_sha256,"image_input":decoded,
             "sheet_pose":pose,"detection":detected});
+        // Board admission belongs to the original pixels and calibrated lens. Rectification
+        // only changes image coordinates; it never refits the accepted metric camera pose.
+        let mut camera = original_camera;
+        let mut pending_image = None;
+        let mut rectified_pixels_sha256 = None;
+        if let Some(rectification) = &self.rectification {
+            let size = rectification.image_size_px();
+            let rectified = Bgr {
+                w: size[0] as usize,
+                h: size[1] as usize,
+                data: rectification.rectify_bgr(&image.data)?,
+            };
+            let pixels = sha256_hex(&rectified.data);
+            if self.rectified_pixels.contains(&pixels) {
+                return Err(invalid(
+                    "duplicate rectified capture pixels: differences outside the retained crop do not provide another authored view",
+                ));
+            }
+            let png = encode_png_bgr(&rectified).map_err(invalid)?;
+            source.image_name = format!("rectified-{image_sha256}.png");
+            source.image_sha256 = sha256_hex(&png);
+            source.image_size_px = size;
+            camera.intrinsics = rectification.intrinsics();
+            receipt["rectification"] = json!({
+                "schema":"ftx-capture-rectification/1",
+                "source_camera":original_camera,
+                "source_image_size_px":self.image_size_px,
+                "crop_origin_px":rectification.crop_origin_px(),
+                "image_size_px":size,
+                "camera":camera,
+                "image":source,
+                "pixels_bgr_sha256":pixels,
+                "sampling":"Bilinear interpolation of encoded BGR samples at integer destination pixel centres; no extrapolation, padding, resizing or additional rotation.",
+                "no_claim":"Derived coordinates retain the original accepted sheet pose and lens domain. No new independent camera evidence, anatomical contour, measurement accuracy or calibration-uncertainty propagation is established.",
+            });
+            pending_image = Some(png);
+            rectified_pixels_sha256 = Some(pixels);
+        }
+        source.validate()?;
         self.frames.push(FitFrame {
             frame,
             camera,
-            image_size_px: self.image_size_px,
+            image_size_px: source.image_size_px,
             rotation_cw_deg: self.manifest.rotation_cw_deg,
             keypoints: Vec::new(),
             silhouette: None,
@@ -293,7 +350,19 @@ impl BodyCapture {
         self.images.push(source);
         self.receipts.push(receipt.clone());
         self.pixels.insert(pixels_sha256);
+        if let Some(pixels) = rectified_pixels_sha256 {
+            self.rectified_pixels.insert(pixels);
+        }
+        self.pending_image = pending_image;
         Ok(receipt)
+    }
+
+    /// Take the exact derived PNG for the most recently added image, releasing its retained bytes.
+    /// The addition receipt's rectification image record supplies its name, hash and dimensions.
+    /// Empty means rectification was disabled or this image has already been taken.
+    #[must_use]
+    pub fn take_image(&mut self) -> Vec<u8> {
+        self.pending_image.take().unwrap_or_default()
     }
 
     /// Construct the ordinary prepared input with source-bound cameras and explicit model choices.
@@ -303,6 +372,11 @@ impl BodyCapture {
     /// Incomplete capture, changed/invalid model bytes, malformed choices, out-of-domain controls,
     /// missing evidence, source-image mismatch or the existing body-fit authoring/budget guards.
     pub fn finish(&self, model_bytes: &[u8], choices_text: &str) -> Result<Value, Refusal> {
+        if self.pending_image.is_some() {
+            return Err(invalid(
+                "take the final rectified image before constructing the prepared input",
+            ));
+        }
         if self.frames.len() != self.manifest.images.len() {
             return Err(invalid(
                 "add every declared capture image before constructing the prepared input",
@@ -362,7 +436,12 @@ impl BodyCapture {
         acquisition["corner_selection"] = json!(
             "all detected corners; every predeclared CHECK required; no pose-dependent trimming"
         );
-        let report = json!({"schema":"ftx-body-photo-capture-result/1","status":"CAPTURE_DRAFT",
+        let schema = if self.manifest.rectify {
+            "ftx-body-photo-capture-result/2"
+        } else {
+            "ftx-body-photo-capture-result/1"
+        };
+        let report = json!({"schema":schema,"status":"CAPTURE_DRAFT",
             "body_fitted":false,"input_sha256":sha256_hex(input.as_bytes()),"input":input,
             "model_sha256":model_sha256,"start_count":0,"frame_count":self.frames.len(),
             "acquisition":acquisition,"choices":parse::<Value>(choices_text,"body photo choices")?,

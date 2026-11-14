@@ -56,6 +56,121 @@ fn input(report: &Value) -> Value {
     serde_json::from_str(text).unwrap()
 }
 
+fn brown_pixel(x: f64, y: f64) -> [f64; 2] {
+    let r2 = x * x + y * y;
+    let radial = 1.0 + 0.12 * r2 - 0.035 * r2 * r2 + 0.009 * r2 * r2 * r2;
+    [
+        1050.0 * (x * radial + 0.004 * x * y - 0.0015 * (r2 + 2.0 * x * x)) + 790.0,
+        1000.0 * (y * radial + 0.002 * (r2 + 2.0 * y * y) - 0.003 * x * y) + 610.0,
+    ]
+}
+
+fn brown_calibration() -> Value {
+    use ftx_measure::photo::intrinsics::{CalibrationInput, calibrate_camera};
+
+    // Independent polynomial observations, as in the existing Brown calibration known answer.
+    // The capture images below are separate raster acquisitions, never calibration views.
+    let controls: Vec<_> = (0..48)
+        .map(|i| {
+            json!({"id":format!("p{i:02}"),
+                "sheet_xz_m":[(i % 8) as f64 * 0.06 - 0.21, (i / 8) as f64 * 0.06 - 0.15]})
+        })
+        .collect();
+    let base = Mat3::from_rows([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]]);
+    let poses = [
+        (0.35, 0.12, -0.18, -0.10, 0.80),
+        (-0.45, 0.3, 0.16, 0.13, 0.75),
+        (0.2, -0.55, -0.12, 0.18, 0.85),
+        (-0.3, -0.25, 0.23, -0.14, 0.8),
+        (0.5, -0.4, 0.03, -0.04, 0.66),
+        (-0.2, 0.5, -0.24, 0.06, 0.9),
+    ];
+    let views: Vec<_> = poses
+        .iter()
+        .enumerate()
+        .map(|(i, &(a, b, tx, ty, tz))| {
+            let rotation = Mat3::rotation(Vec3::new(1.0, 0.0, 0.0), a)
+                * Mat3::rotation(Vec3::new(0.0, 1.0, 0.0), b)
+                * base;
+            let corners: Vec<_> = controls
+                .iter()
+                .enumerate()
+                .map(|(j, point)| {
+                    let q = rotation.mul_vec(Vec3::new(
+                        point["sheet_xz_m"][0].as_f64().unwrap(),
+                        0.0,
+                        point["sheet_xz_m"][1].as_f64().unwrap(),
+                    )) + Vec3::new(tx, ty, tz);
+                    json!({"id":point["id"],"pixel_px":brown_pixel(q.x / q.z, q.y / q.z),
+                        "partition":if [0,7,40,47].contains(&j) {"held_out"} else {"fit"}})
+                })
+                .collect();
+            json!({"frame":{"stream":"independent-brown-calibration","timestamp_us":i * 100000},
+                "partition":if i == 5 {"held_out"} else {"fit"},"corners":corners})
+        })
+        .collect();
+    let input: CalibrationInput = serde_json::from_value(json!({
+        "schema":"ftx-camera-calibration-input/1","image_model":"brown5_zero_skew",
+        "lens_id":"synthetic-brown","pinhole_evidence":"",
+        "distortion_fit":{"model_evidence":"Independent polynomial lens; synthetic test only",
+            "max_radius":0.9,"max_iterations":80},
+        "reference_evidence":"Synthetic 60 mm planar grid","image_size_px":[1600,1200],
+        "rotation_cw_deg":0,"controls":controls,"views":views,
+    }))
+    .unwrap();
+    let report = calibrate_camera(&input).unwrap();
+    assert_eq!(report.status, "ACCEPTED");
+    json!(report)
+}
+
+fn brown_capture_images(sheet: &Value, sheet_png: &[u8]) -> Vec<Vec<u8>> {
+    let page = ftx_trace::raster::image::load_png(sheet_png).unwrap();
+    let board = &sheet["board"];
+    let width_m = board["size_mm"][0].as_f64().unwrap() / 1000.0;
+    let height_m = board["size_mm"][1].as_f64().unwrap() / 1000.0;
+    let mut image = Gray::filled(1600, 1200, 80);
+    // The known camera is at (0,-1,0.1875), facing the stationary y=0 board. A fixed-point
+    // inverse of the authored polynomial is independent of the candidate Newton inverse.
+    // This generous raster region includes the entire known board and its white surround.
+    for y in 250..900 {
+        for x in 850..1450 {
+            let (xd, yd) = ((x as f64 - 790.0) / 1050.0, (y as f64 - 610.0) / 1000.0);
+            let (mut u, mut v) = (xd, yd);
+            for _ in 0..35 {
+                let r2 = u * u + v * v;
+                let radial = 1.0 + 0.12 * r2 - 0.035 * r2 * r2 + 0.009 * r2 * r2 * r2;
+                u = (xd - 0.004 * u * v + 0.0015 * (r2 + 2.0 * u * u)) / radial;
+                v = (yd - 0.002 * (r2 + 2.0 * v * v) + 0.003 * u * v) / radial;
+            }
+            let lx = u - 0.15;
+            let ly = 0.10 + height_m - (0.1875 - v);
+            image.data[y * image.w + x] =
+                if (0.0..width_m).contains(&lx) && (0.0..height_m).contains(&ly) {
+                    let px = (board["origin_px"][0].as_f64().unwrap()
+                        + lx / width_m * board["size_px"][0].as_f64().unwrap())
+                    .floor() as usize;
+                    let py = (board["origin_px"][1].as_f64().unwrap()
+                        + ly / height_m * board["size_px"][1].as_f64().unwrap())
+                    .floor() as usize;
+                    page.data[(py * page.w + px) * 3]
+                } else {
+                    255
+                };
+        }
+    }
+    (0..2)
+        .map(|index| {
+            // Distinct original exposures; no camera or body information is inferred here.
+            for y in 590..610 {
+                for x in 290..310 {
+                    image.data[y * image.w + x] = if index == 0 { 0 } else { 200 };
+                }
+            }
+            encode_png_gray(&image)
+        })
+        .collect()
+}
+
 #[test]
 fn portable_photos_construct_source_bound_drafts_and_continue_through_fit_and_check() {
     let (dir, model, truth) = sources();
@@ -355,4 +470,296 @@ fn portable_photos_refuse_duplicate_pixels_stale_sources_bad_controls_and_missin
         fresh.finish(&model, &choices.to_string()).unwrap(),
         original
     );
+}
+
+fn known_silhouette(points: &[Vec2], at: f64) -> Vec<[f64; 2]> {
+    // Direct intersections of the synthetic fixture's authored triangles with one horizontal
+    // line. This test does not call the production silhouette projection or coverage merger.
+    let mut segments = Vec::new();
+    for triangle in [
+        [0, 1, 2],
+        [1, 3, 2],
+        [1, 8, 9],
+        [4, 6, 7],
+        [4, 7, 5],
+        [0, 4, 5],
+        [0, 5, 1],
+        [2, 3, 7],
+        [2, 7, 6],
+        [0, 2, 6],
+        [0, 6, 4],
+        [1, 5, 7],
+        [1, 7, 3],
+    ] {
+        let mut crossings = Vec::new();
+        for edge in 0..3 {
+            let a = points[triangle[edge]];
+            let b = points[triangle[(edge + 1) % 3]];
+            assert_ne!(a.y, at);
+            if (a.y < at) != (b.y < at) {
+                crossings.push((b.x * (at - a.y) + a.x * (b.y - at)) / (b.y - a.y));
+            }
+        }
+        if crossings.len() == 2 {
+            crossings.sort_by(f64::total_cmp);
+            segments.push([crossings[0], crossings[1]]);
+        }
+    }
+    segments.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    let mut intervals: Vec<[f64; 2]> = Vec::new();
+    for [lo, hi] in segments {
+        if let Some(last) = intervals.last_mut()
+            && lo <= last[1] + 1e-9
+        {
+            last[1] = last[1].max(hi);
+        } else {
+            intervals.push([lo, hi]);
+        }
+    }
+    assert!(!intervals.is_empty());
+    intervals
+}
+
+#[test]
+fn brown_photo_rectification_preserves_source_poses_and_enables_silhouette_body_fitting() {
+    let dir = setup();
+    let (model, truth) = fixture_scaled(0.25);
+    std::fs::write(dir.join("model.ftxbody"), &model).unwrap();
+    let calibration = brown_calibration().to_string();
+    let sheet = ftx_trace::calibration_sheet::render(
+        "a4",
+        22.0,
+        16.0,
+        ftx_trace::calibration_sheet::DEFAULT_DICTIONARY,
+    )
+    .unwrap();
+    let images = brown_capture_images(&sheet.sidecar, &sheet.png);
+    let sheet_text = sheet.sidecar_json();
+    let sheet_text = std::str::from_utf8(&sheet_text).unwrap();
+    let mut original_manifest = manifest();
+    original_manifest["images"] = json!(["raw-0.png", "raw-1.png"]);
+    original_manifest["lens_id"] = json!("synthetic-brown");
+    let mut manifest = original_manifest.clone();
+    manifest["rectify"] = json!(true);
+    let choices = choices(&truth);
+    let choices_text = choices.to_string();
+    let mut raw =
+        BodyCapture::new(&original_manifest.to_string(), &calibration, sheet_text).unwrap();
+    let mut rectified = BodyCapture::new(&manifest.to_string(), &calibration, sheet_text).unwrap();
+    assert!(rectified.take_image().is_empty());
+    let mut derived = Vec::new();
+    for (index, name) in rectified.image_ids().iter().enumerate() {
+        let original = raw.add_image(name, &images[index]).unwrap();
+        let result = rectified.add_image(name, &images[index]).unwrap();
+        assert_eq!(result["sheet_pose"], original["sheet_pose"]);
+        assert_eq!(result["detection"], original["detection"]);
+        assert_eq!(result["image_sha256"], sha256_hex(&images[index]));
+        assert!(rectified.finish(&model, &choices_text).is_err());
+        assert!(rectified.add_image(name, &images[index]).is_err());
+        let png = rectified.take_image();
+        assert!(!png.is_empty());
+        assert!(rectified.take_image().is_empty());
+        let transform = &result["rectification"];
+        let source = &transform["image"];
+        assert_eq!(source["image_sha256"], sha256_hex(&png));
+        assert_ne!(source["image_sha256"], result["image_sha256"]);
+        assert_eq!(source["frame"], result["frame"]);
+        assert_eq!(transform["source_camera"], result["sheet_pose"]["camera"]);
+        for field in ["world_to_camera", "center_m"] {
+            assert_eq!(
+                transform["camera"][field],
+                transform["source_camera"][field]
+            );
+        }
+        let pixels = ftx_trace::raster::image::load_png(&png).unwrap();
+        assert_eq!(source["image_size_px"], json!([pixels.w, pixels.h]));
+        assert_eq!(transform["pixels_bgr_sha256"], sha256_hex(&pixels.data));
+        let camera: Camera = serde_json::from_value(transform["camera"].clone()).unwrap();
+        ftx_measure::silhouette::require_rectified(&camera).unwrap();
+        assert_eq!(
+            transform["camera"]["intrinsics"]["distortion"]["max_radius"],
+            transform["source_camera"]["intrinsics"]["distortion"]["max_radius"]
+        );
+        assert!(pixels.w < 1600 || pixels.h < 1200);
+        derived.push((source["image_name"].as_str().unwrap().to_owned(), png));
+    }
+    let prepared = rectified.finish(&model, &choices_text).unwrap();
+    assert_eq!(prepared["schema"], "ftx-body-photo-capture-result/2");
+    assert_eq!(prepared["status"], "CAPTURE_DRAFT");
+    let draft = input(&prepared);
+    let raw_prepared = raw.finish(&model, &choices_text).unwrap();
+    assert_eq!(raw_prepared["schema"], "ftx-body-photo-capture-result/1");
+    let target_edits = |source: &Value| {
+        json!({"input_sha256":source["input_sha256"],"model_sha256":source["model_sha256"],
+            "keypoints":truth["model"]["keypoints"]})
+    };
+    let raw_targets = body_fit_targets(
+        &model,
+        raw_prepared["input"].as_str().unwrap(),
+        &target_edits(&raw_prepared).to_string(),
+    )
+    .unwrap();
+    let targets = body_fit_targets(
+        &model,
+        prepared["input"].as_str().unwrap(),
+        &target_edits(&prepared).to_string(),
+    )
+    .unwrap();
+    let raw_review =
+        body_fit_observations(&model, raw_targets["input"].as_str().unwrap(), "").unwrap();
+    assert!(
+        raw_review["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|frame| { frame["silhouette_editable"] == false })
+    );
+    let review = body_fit_observations(&model, targets["input"].as_str().unwrap(), "").unwrap();
+    for (index, frame) in review["frames"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(frame["silhouette_editable"], true);
+        assert_eq!(frame["keypoints"], json!([]));
+        let receipt = frame["image_review"].as_str().unwrap();
+        let image = BodyFitImage::new(&derived[index].1, receipt).unwrap();
+        assert_eq!(
+            image.report()["source_image"],
+            draft["capture_images"][index]
+        );
+        assert!(BodyFitImage::new(&images[index], receipt).is_err());
+        assert!(BodyFitImage::new(&derived[1 - index].1, receipt).is_err());
+    }
+    let observations: Vec<_> = truth["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| {
+            let crop = &prepared["acquisition"]["frames"][index]["rectification"]["crop_origin_px"];
+            let mut points = frame["keypoints"].clone();
+            for point in points.as_array_mut().unwrap() {
+                // Author new observations in the derived pixels using the independently known
+                // pinhole projection. No existing measurements or weights are transformed.
+                point["pixel_px"] = json!([
+                    1050.0 * (point["pixel_px"][0].as_f64().unwrap() - 640.0) / 1000.0
+                        + 790.0 - crop[0].as_f64().unwrap(),
+                    point["pixel_px"][1].as_f64().unwrap() - 480.0
+                        + 610.0 - crop[1].as_f64().unwrap(),
+                ]);
+            }
+            let projected: Vec<Vec2> = points
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|point| serde_json::from_value(point["pixel_px"].clone()).unwrap())
+                .collect();
+            let at = (projected[0].y + projected[4].y) / 2.0 + 0.123;
+            let silhouette = json!({"evidence":"Independent synthetic projected triangle intersections; no clothing or anatomical qualification",
+                "lines":[{"axis":"horizontal","at_px":at,"intervals_px":known_silhouette(&projected,at),
+                    "sigma_px":1.0,"partition":if index == 0 {"fit"} else {"held_out"}}]});
+            json!({"frame_index":index,"keypoints":points,
+                "silhouette_edit":{"action":"replace","silhouette":silhouette}})
+        })
+        .collect();
+    let observed = body_fit_observations(
+        &model,
+        targets["input"].as_str().unwrap(),
+        &json!({"input_sha256":targets["input_sha256"],"model_sha256":targets["model_sha256"],
+            "frames":observations})
+        .to_string(),
+    )
+    .unwrap();
+    let starts: Vec<_> = truth["fit"]["starts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|start| {
+            json!({"shape":start["shape"],"poses":start["poses"].as_array().unwrap().iter()
+                .enumerate().map(|(i,pose)|json!({"frame_index":i,"values":pose["values"]})).collect::<Vec<_>>()})
+        })
+        .collect();
+    let initialized = body_fit_starts(
+        &model,
+        observed["input"].as_str().unwrap(),
+        &json!({"input_sha256":observed["input_sha256"],"model_sha256":observed["model_sha256"],"starts":starts})
+            .to_string(),
+    )
+    .unwrap();
+    save(&dir, &input(&initialized));
+    let native = run(
+        &dir,
+        &["--iterations", "50", "--max-evaluations", "100000"],
+        0,
+    );
+    let portable = fit_body(
+        &model,
+        initialized["input"].as_str().unwrap(),
+        "50",
+        "100000",
+    )
+    .unwrap();
+    assert_eq!(native["result"], portable);
+    assert_eq!(portable["status"], "ACCEPTED");
+    assert!(
+        portable["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|attempt| {
+                attempt["checks"].as_array().unwrap().iter().any(|check| {
+                    check["name"].as_str().unwrap().contains("silhouette")
+                        && check["passed"] == true
+                })
+            })
+    );
+
+    // Different raw pixels only outside the certified crop do not constitute another view.
+    let mut duplicate = BodyCapture::new(&manifest.to_string(), &calibration, sheet_text).unwrap();
+    duplicate.add_image("raw-0.png", &images[0]).unwrap();
+    let _ = duplicate.take_image();
+    let mut outside = ftx_trace::raster::image::load_png(&images[0]).unwrap();
+    outside.data[..3].fill(220);
+    let outside = ftx_trace::raster::image::encode_png_bgr(&outside).unwrap();
+    let error = duplicate.add_image("raw-1.png", &outside).unwrap_err();
+    assert!(error.message.contains("duplicate rectified"), "{error}");
+    assert!(duplicate.take_image().is_empty());
+    duplicate.add_image("raw-1.png", &images[1]).unwrap();
+    let _ = duplicate.take_image();
+    assert_eq!(duplicate.finish(&model, &choices_text).unwrap(), prepared);
+
+    if let Ok(directory) = std::env::var("FTX_BODY_RECTIFICATION_FIXTURES") {
+        use std::io::Write;
+        let directory = Path::new(&directory);
+        std::fs::create_dir_all(directory).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(directory.join(name))
+                .unwrap()
+                .write_all(bytes)
+                .unwrap();
+        };
+        write("manifest.json", manifest.to_string().as_bytes());
+        write("calibration.json", calibration.as_bytes());
+        write("sheet.json", sheet_text.as_bytes());
+        write("choices.json", choices_text.as_bytes());
+        write("model.ftxbody", &model);
+        write("raw-0.png", &images[0]);
+        write("raw-1.png", &images[1]);
+        write(
+            "prepared.json",
+            prepared["input"].as_str().unwrap().as_bytes(),
+        );
+        write("capture-result.json", prepared.to_string().as_bytes());
+        write(
+            "targets.json",
+            target_edits(&prepared).to_string().as_bytes(),
+        );
+        write(
+            "targeted.json",
+            targets["input"].as_str().unwrap().as_bytes(),
+        );
+        for (name, png) in &derived {
+            write(name, png);
+        }
+    }
 }

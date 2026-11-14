@@ -55,6 +55,20 @@ returned draft enters existing target/observation/start editors; source edits, c
 replacement and page exit terminate obsolete work. Reset restores the original generated draft's
 known zero-start state; invalidation never falls back to an old manual file.
 
+Optional `rectify: true` in the fresh-capture manifest derives actual pinhole PNGs before any
+targets, image observations or starts are authored. Detection and camera FIT/CHECK admission
+still use the original Brown image and checked calibration. The shared bounded Rust rectifier
+retains those extrinsics, focal lengths and certified radius, crops unsupported borders and shifts
+the principal point. Each addition receipt records both cameras, source/output dimensions, crop,
+exact output PNG identity and decoded pixel hash. Original still-clock identities remain unchanged.
+`take_image()` returns and releases that exact PNG; it must be drained before the next addition or
+`finish`. A duplicate original or derived raster refuses transactionally. The opt-in result uses
+`ftx-body-photo-capture-result/2` and binds its ordinary prepared input to the derived PNGs.
+Omitted/false rectification retains the original `/1` behavior. Callers must retain the exact PNGs
+and review crop coverage before authoring silhouettes. This does not transform existing annotations,
+infer contours or propagate
+calibration uncertainty; ordinary silhouette and body-fit acceptance remain unchanged.
+
 **Local multi-frame Anny fitting.** `body_fit::fit_body(model_bytes, input, iterations,
 max_evaluations)` and wasm32 `fit_body` accept the original prepared
 `ftx-anny-body-fit-input/1` text and exact converted model bytes. Inputs are bounded to 16 MiB
