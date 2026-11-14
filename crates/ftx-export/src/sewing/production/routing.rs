@@ -2150,9 +2150,10 @@ pub(in crate::sewing) fn build(
             "routed incumbent changed during exact timeline reconstruction",
         ));
     }
-    if feed_time_search.as_ref().is_some_and(|feed| {
-        feed.selected_feed_milliseconds != selected.scheduled_feed_milliseconds
-    }) {
+    if feed_time_search
+        .as_ref()
+        .is_some_and(|feed| feed.selected_feed_milliseconds != selected.scheduled_feed_milliseconds)
+    {
         return Err(bad(
             "routed feed objective changed during exact timeline reconstruction",
         ));

@@ -765,7 +765,9 @@ impl Request {
                             .production
                             .as_ref()
                             .and_then(|production| production.routing.as_ref())
-                            .ok_or_else(|| invalid("admitted routed feed recipe lost its schedule"))?;
+                            .ok_or_else(|| {
+                                invalid("admitted routed feed recipe lost its schedule")
+                            })?;
                         let feed = route.feed_time_search.as_ref().ok_or_else(|| {
                             invalid("admitted routed feed recipe lost its objective proof")
                         })?;

@@ -242,7 +242,7 @@ pub struct FitFrame {
     pub rotation_cw_deg: u16,
     /// Fit and independently held-out evidence, with unique correspondence names.
     pub keypoints: Vec<Keypoint>,
-    /// Optional fixed scanlines from an oriented, rectified body mask. Absence preserves /1 JSON.
+    /// Optional fixed scanlines in the camera's original oriented pixels. Absence preserves /1 JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silhouette: Option<Silhouette>,
 }
@@ -483,6 +483,10 @@ pub struct FitCheck {
     pub limit: f64,
     /// Whether this observation passes its independent acceptance gate.
     pub passed: bool,
+    /// Optional Brown silhouette endpoint enclosure included in the pixel gate, conditional on
+    /// prepared normalized vertices. Raw residual remains separate; no camera uncertainty claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_error_bound_px: Option<f64>,
 }
 
 /// Every initialization is retained; no unsuccessful run is silently excluded.
@@ -668,8 +672,7 @@ fn canonical(
     for frame in &mut input.frames {
         frame.camera.validate()?;
         if let Some(silhouette) = &mut frame.silhouette {
-            silhouette.validate(frame.image_size_px)?;
-            silhouette::require_rectified(&frame.camera)?;
+            silhouette::validate_observation(&frame.camera, frame.image_size_px, silhouette)?;
             silhouette.canonicalize();
         }
         if !text(&frame.frame.stream)
@@ -919,6 +922,7 @@ fn checks(
                 residual: error,
                 limit: 3.0,
                 passed: error.is_some_and(|e| e <= 3.0),
+                prediction_error_bound_px: None,
             });
         }
         if let Some(s) = &frame.silhouette {
@@ -939,6 +943,7 @@ fn checks(
                     residual: line.boundary_error_px,
                     limit: 3.0,
                     passed: line.passed,
+                    prediction_error_bound_px: line.prediction_error_bound_px,
                 });
             }
         }
@@ -954,6 +959,7 @@ fn checks(
             residual: error.is_finite().then_some(error),
             limit: 3.0 * obs.sigma_m,
             passed: error <= 3.0 * obs.sigma_m,
+            prediction_error_bound_px: None,
         });
     }
     Ok(out)
@@ -1159,7 +1165,16 @@ pub fn fit_body(
     }
     report.advisories.push("Cameras, lens parameters and tape definitions are fixed; their systematic uncertainty is not estimated.".into());
     if input.frames.iter().any(|f| f.silhouette.is_some()) {
-        report.advisories.push("Silhouettes are checked only on supplied rectified scanlines, not over the entire mask. Segmentation, clothing, occlusion and contour correlation are caller assumptions; contour weights are not a calibrated independent-noise model.".into());
+        let coordinates = if input.frames.iter().any(|frame| {
+            frame.silhouette.is_some()
+                && (frame.camera.intrinsics.distortion.radial != [0.0; 3]
+                    || frame.camera.intrinsics.distortion.tangential != [0.0; 2])
+        }) {
+            "calibrated"
+        } else {
+            "rectified"
+        };
+        report.advisories.push(format!("Silhouettes are checked only on supplied {coordinates} scanlines, not over the entire mask. Segmentation, clothing, occlusion and contour correlation are caller assumptions; contour weights are not a calibrated independent-noise model."));
     } else {
         report
             .advisories

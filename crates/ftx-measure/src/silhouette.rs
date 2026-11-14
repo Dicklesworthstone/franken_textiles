@@ -1,4 +1,4 @@
-//! Sampled silhouette evidence for calibrated, rectified images (FTX-21).
+//! Sampled silhouette evidence in the calibrated camera's original oriented pixels (FTX-21).
 //! The projection is the union of mesh triangles, not a convex hull or a list of visible vertices.
 //! Fixed image scanlines preserve gaps and self-occlusion while giving a fixed-size fit residual.
 
@@ -6,6 +6,8 @@ use ftx_core::{Refusal, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{camera::Camera, invalid, triangulate::Partition};
+
+mod distorted;
 
 /// A posed surface in the same metre, z-up world frame as the camera.
 /// Triangle winding is irrelevant to silhouette coverage; open surfaces are permitted.
@@ -41,7 +43,7 @@ impl Axis {
     }
 }
 
-/// Foreground runs on one fixed line in an already oriented, rectified image.
+/// Foreground runs on one fixed line in the calibrated, already oriented image.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scanline {
@@ -131,6 +133,31 @@ pub fn require_rectified(camera: &Camera) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Admit original silhouette coordinates without resampling or changing their camera model.
+/// Every observed Brown foreground endpoint must invert inside the certified lens disk.
+/// Empty slices contain no observed foreground point; pinhole admission remains unchanged.
+pub fn validate_observation(
+    camera: &Camera,
+    image_size_px: [u32; 2],
+    silhouette: &Silhouette,
+) -> Result<(), Refusal> {
+    silhouette.validate(image_size_px)?;
+    camera.validate()?;
+    let d = camera.intrinsics.distortion;
+    if d.radial != [0.0; 3] || d.tangential != [0.0; 2] {
+        for line in &silhouette.lines {
+            for &along in line.intervals_px.iter().flatten() {
+                let point = match line.axis {
+                    Axis::Horizontal => Vec2::new(along, line.at_px),
+                    Axis::Vertical => Vec2::new(line.at_px, along),
+                };
+                camera.intrinsics.bearing(point)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// One sampled-line comparison, retaining the actual predicted coverage for diagnostics.
 #[derive(Clone, Debug, Serialize)]
 pub struct LineComparison {
@@ -153,6 +180,11 @@ pub struct LineComparison {
     pub symmetric_difference_px: f64,
     /// Fixed 3-pixel boundary gate; mismatched empty/nonempty lines always fail.
     pub passed: bool,
+    /// Brown crossing enclosure for each predicted endpoint, conditional on the prepared normalized
+    /// pinhole vertices. The gate includes it; this is not a camera/calibration uncertainty or a
+    /// bound on summed coverage-length error. Omitted on the unchanged zero-distortion path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_error_bound_px: Option<f64>,
 }
 
 fn union(mut intervals: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
@@ -298,6 +330,7 @@ fn line_comparison(line: &Scanline, predicted: Vec<[f64; 2]>) -> Result<LineComp
         boundary_error_px: error,
         symmetric_difference_px: missing + extra,
         passed: error.is_some_and(|e| e <= 3.0),
+        prediction_error_bound_px: None,
     })
 }
 
@@ -313,8 +346,7 @@ pub fn compare(
     silhouette: &Silhouette,
     partition: Option<Partition>,
 ) -> Result<Vec<LineComparison>, Refusal> {
-    silhouette.validate(image_size_px)?;
-    require_rectified(camera)?;
+    validate_observation(camera, image_size_px, silhouette)?;
     let mut lines: Vec<_> = silhouette
         .lines
         .iter()
@@ -330,6 +362,26 @@ pub fn compare(
         return Err(invalid(
             "silhouette mesh is empty or exceeds the surface/scanline budget",
         ));
+    }
+    let d = camera.intrinsics.distortion;
+    if d.radial != [0.0; 3] || d.tangential != [0.0; 2] {
+        return distorted::coverage(mesh, camera, &lines)?
+            .into_iter()
+            .zip(lines)
+            .map(|((intervals, bound), line)| {
+                let mut comparison = line_comparison(line, intervals)?;
+                comparison.prediction_error_bound_px = Some(bound);
+                comparison.passed = comparison.boundary_error_px.is_some_and(|error| {
+                    let upper = if bound == 0.0 {
+                        error
+                    } else {
+                        (error + bound).next_up()
+                    };
+                    upper <= 3.0
+                });
+                Ok(comparison)
+            })
+            .collect();
     }
     let pixels: Vec<_> = mesh
         .vertices_m
@@ -377,7 +429,7 @@ pub fn compare(
 pub struct MaskSample {
     /// Horizontal row or vertical column.
     pub axis: Axis,
-    /// Zero-based row/column in the already oriented, rectified mask.
+    /// Zero-based row/column in the calibrated camera's already oriented mask.
     pub index: u32,
     /// Contour-location weight, in full-resolution pixels.
     pub sigma_px: f64,

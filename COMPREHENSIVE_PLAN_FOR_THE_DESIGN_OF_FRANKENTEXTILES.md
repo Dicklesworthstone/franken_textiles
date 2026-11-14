@@ -5914,6 +5914,21 @@ inherited deadlines survive recipe selection, material-study reporting and porta
 routing, rounding, deadline, budget and stale-source regressions accompany this extension of
 `ftx-pb2.2`; no measured factory throughput or physical sewing qualification follows.
 
+### 25.208 Fit body silhouettes in original calibrated images
+
+Sampled body contours can retain the original oriented pixels of a certified Brown camera.
+The same camera law maps the complete triangle coverage through curved projected boundaries;
+shared interior edges cancel while weighted winding preserves gaps and overlapping surfaces.
+Bounded interval root isolation retains multiple crossings without replacing curves by chords.
+Every published contour carries an explicit numerical endpoint bound, which contributes to the
+existing three-pixel acceptance gate. Unresolved topology or exhausted work publishes no contour.
+
+Original foreground endpoints must lie in the calibrated inverse domain. FIT and CHECK roles,
+source evidence, contour weights, body-model identities and independent frame poses remain fixed;
+the zero-distortion comparison retains its existing calculation. This extends the software capture
+and fitting path through `ftx-bc1.brown`. It does not infer segmentation, clothing or anatomical
+correspondence, propagate lens uncertainty into a body fit, or establish physical wearer accuracy.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

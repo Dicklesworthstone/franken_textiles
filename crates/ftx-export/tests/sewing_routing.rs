@@ -4152,9 +4152,11 @@ fn routed_feed_minimizes_actual_occupied_work_separately_from_completion() {
 #[test]
 fn routed_feed_deadlines_and_budget_preserve_complete_resource_admission() {
     let (pattern, options) = feed_fixture();
-    for (deadline, feed_ms, finish) in
-        [(12000, 4000, 12000), (11999, 6000, 8800), (8800, 6000, 8800)]
-    {
+    for (deadline, feed_ms, finish) in [
+        (12000, 4000, 12000),
+        (11999, 6000, 8800),
+        (8800, 6000, 8800),
+    ] {
         let mut request = options.clone();
         request["production"]["routing"]["feed_time_search"]["completion_deadline_milliseconds"] =
             json!(deadline);

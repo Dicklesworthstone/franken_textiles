@@ -565,8 +565,7 @@ fn compression_exterior_workflow(
                     );
                 } else {
                     assert!(
-                        (heat["outside_energy_j"].as_f64().unwrap() - convective - radiative)
-                            .abs()
+                        (heat["outside_energy_j"].as_f64().unwrap() - convective - radiative).abs()
                             < 1e-10
                     );
                 }

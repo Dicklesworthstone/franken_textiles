@@ -43,8 +43,26 @@ and exercise each local points/surface budget boundary and callback refusal.
 Silhouette-capable adapters implement `BodyModel::surface` with world-space triangles. The
 default trait method refuses silhouette input, leaving keypoint-only callers unchanged.
 Projected triangle unions keep limb gaps, merge overlapping surfaces and discard internal mesh
-edges. Scanlines require rectified images and zero lens distortion; they are not approximations
-to curved lens-distorted edges. Each line contributes signed boundary distances in both
+edges. Scanlines use the camera's original oriented pixels. The zero-distortion path preserves
+its original straight-edge arithmetic and serialized results. For Brown lenses, every positive-z
+triangle remains inside the certified normalized disk when its vertices do: both are convex.
+The shared Brown coordinate law maps each edge to a polynomial of degree at most seven.
+Consistently oriented triangle edges cancel algebraically; signed crossings of the remaining
+curves recover the union through positive winding, including multiple crossings of one edge,
+shared vertices, exact tangencies and coincident lines. No image, mask or keypoint is rectified
+or resampled, and no curved boundary is replaced by a chord.
+
+Outward-rounded scaled Bernstein coefficients and dyadic subdivisions enclose the crossings.
+Uncertain projected orientation or crossing order is refused instead of dropping a triangle
+or smoothing away a thin component. Every published boundary enclosure is at most 1e-9 pixel
+wide, conditional on the already prepared normalized pinhole vertices. The optional
+`prediction_error_bound_px` retains each line's maximum endpoint radius in comparisons and fit
+checks. Acceptance adds that radius conservatively to the raw symmetric boundary residual before
+applying the same 3-pixel gate. It is not propagated calibration uncertainty or a bound on summed
+foreground-length errors. Observed foreground endpoints must invert through the camera's existing
+certified lens domain; empty/background scanlines add no invented foreground observation.
+
+Each line contributes signed boundary distances in both
 directions and the signed foreground-length difference, weighted by its contour sigma.
 Sixteen reverse-boundary slots are zero-padded, so residual dimensions depend only on the
 input, never on changing predicted coverage topology. Missing/extra coverage is diagnostic,
@@ -69,7 +87,10 @@ Only the requested lines are checked: acceptance does not certify the unsampled 
 segmentation, clothing, occlusion and correlated contour errors remain caller assumptions.
 Limits per frame are 64 unique lines, eight observed and eight predicted intervals per line, 100,000 surface
 vertices, 200,000 triangles and eight million triangle/line tests per evaluation. Excess is
-refused rather than subsampled. `silhouette::sample_mask` imports explicit slices from binary
+refused rather than subsampled. Brown evaluation additionally has one million deterministic
+work units (32 per retained polynomial edge, one per root-isolation/refinement node) and at most
+60 dyadic subdivisions. Exhaustion or unresolved numerical topology publishes no partial contour.
+`silhouette::sample_mask` imports explicit slices from binary
 0/255 masks with integer pixel centers and half-pixel run boundaries; border foreground,
 soft masks and excess components are refused. No resampling or threshold inference occurs.
 
@@ -87,5 +108,8 @@ are separate consumers of this boundary. Cameras/lens calibration, correspondenc
 metric-reference uncertainty, full-mask fitting, external inference and real-photo validation
 remain outside the numerical core implemented here. `tests/body_silhouette.rs` shows a shape
 variable that is unobservable from keypoints alone and recovered from silhouettes, with
-held-out independence and rejection. `tests/silhouette.rs` checks analytic triangle projection,
-coverage gaps/overlaps, mask boundaries and invalid inputs.
+held-out independence and rejection, including independent radial-camera panel recovery without
+changing its original observations. `tests/silhouette.rs` checks analytic straight and curved
+triangle projection, double crossings, tangencies, coverage gaps/overlaps, mask boundaries and
+invalid inputs. Numerical kernel tests retain high-degree roots, bounded work and explicit
+refusal of unresolved thin-component topology.

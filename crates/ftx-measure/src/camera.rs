@@ -9,6 +9,27 @@ use super::invalid;
 
 pub mod rectification;
 
+/// The same Brown coordinate law for points and bounded polynomial image edges.
+/// Keep the scalar operation order: existing camera projections are replay authorities.
+pub(crate) fn brown_projection<T>(x: T, y: T, radial: [f64; 3], tangential: [f64; 2]) -> [T; 2]
+where
+    T: Clone + From<f64> + std::ops::Add<Output = T> + std::ops::Mul<Output = T>,
+{
+    let [k1, k2, k3] = radial;
+    let [p1, p2] = tangential;
+    let r2 = x.clone() * x.clone() + y.clone() * y.clone();
+    let scale = T::from(1.0)
+        + r2.clone() * (T::from(k1) + r2.clone() * (T::from(k2) + r2.clone() * T::from(k3)));
+    [
+        x.clone() * scale.clone()
+            + T::from(2.0 * p1) * x.clone() * y.clone()
+            + T::from(p2) * (r2.clone() + T::from(2.0) * x.clone() * x.clone()),
+        y.clone() * scale
+            + T::from(p1) * (r2 + T::from(2.0) * y.clone() * y.clone())
+            + T::from(2.0 * p2) * x * y,
+    ]
+}
+
 /// Brown radial/tangential distortion in normalized camera coordinates (not pixels).
 /// The declared disk is conservatively certified injective before inversion is allowed.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -80,10 +101,8 @@ impl Distortion {
         let [p1, p2] = self.tangential;
         let radial = 1.0 + r2 * (k1 + r2 * (k2 + r2 * k3));
         let slope = k1 + r2 * (2.0 * k2 + 3.0 * r2 * k3);
-        let distorted = Vec2::new(
-            x * radial + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x),
-            y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y,
-        );
+        let [image_x, image_y] = brown_projection(x, y, self.radial, self.tangential);
+        let distorted = Vec2::new(image_x, image_y);
         let jacobian = [
             radial + 2.0 * x * x * slope + 2.0 * p1 * y + 6.0 * p2 * x,
             2.0 * x * y * slope + 2.0 * p1 * x + 2.0 * p2 * y,
@@ -398,6 +417,33 @@ mod tests {
             / (2.0 * h);
         assert!((dx - Vec2::new(a, b)).norm() < 1e-9);
         assert!((dy - Vec2::new(b, c)).norm() < 1e-9);
+    }
+
+    #[test]
+    fn shared_polynomial_law_preserves_original_scalar_projection_bits() {
+        for radial in [[0.; 3], [-0.02, 0.004, 0.001], [0.15, 0.004, 0.001]] {
+            let lens = Distortion {
+                radial,
+                tangential: [0.002, -0.003],
+                max_radius: 2.,
+            };
+            for x in [-0.75, -0.4, -0.0, 0.15, 0.65] {
+                for y in [-0.65, -0.2, 0.0, 0.45, 0.75] {
+                    // The scalar expression before polynomial support, including its operation order.
+                    let [k1, k2, k3] = radial;
+                    let [p1, p2] = lens.tangential;
+                    let r2 = x * x + y * y;
+                    let r = 1. + r2 * (k1 + r2 * (k2 + r2 * k3));
+                    let expected = Vec2::new(
+                        x * r + 2. * p1 * x * y + p2 * (r2 + 2. * x * x),
+                        y * r + p1 * (r2 + 2. * y * y) + 2. * p2 * x * y,
+                    );
+                    let result = lens.distort(Vec2::new(x, y)).unwrap();
+                    assert_eq!(result.x.to_bits(), expected.x.to_bits());
+                    assert_eq!(result.y.to_bits(), expected.y.to_bits());
+                }
+            }
+        }
     }
 
     #[test]

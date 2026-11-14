@@ -121,6 +121,78 @@ fn scene() -> (Panel, BodyFitInput) {
         },
     )
 }
+
+fn brown_scene() -> (Panel, BodyFitInput) {
+    let (model, mut input) = scene();
+    for (frame, root_x) in input.frames.iter_mut().zip([-0.1, 0.1]) {
+        frame.camera.intrinsics.distortion.radial[0] = 0.5;
+        let normalized_x = root_x / 3.;
+        frame.keypoints[0].pixel_px.x =
+            100. + 300. * normalized_x * (1. + 0.5 * normalized_x * normalized_x);
+        let silhouette = frame.silhouette.as_mut().unwrap();
+        silhouette.evidence = "independent analytic radial projection of a moving panel".into();
+        for line in &mut silhouette.lines {
+            // On each vertical panel edge x is constant. Solve the monotone scalar cubic
+            // y*(1 + (x*x+y*y)/2) = observed_y independently of the camera/contour kernel.
+            line.intervals_px[0] = [-0.3, 0.3].map(|offset| {
+                let x = (root_x + offset) / 3.;
+                let target = (line.at_px - 100.) / 300.;
+                let (mut lo, mut hi) = (-1. / 6., 1. / 6.);
+                for _ in 0..64 {
+                    let y = (lo + hi) * 0.5;
+                    if y * (1. + 0.5 * (x * x + y * y)) < target {
+                        lo = y;
+                    } else {
+                        hi = y;
+                    }
+                }
+                let y = (lo + hi) * 0.5;
+                100. + 300. * x * (1. + 0.5 * (x * x + y * y))
+            });
+        }
+    }
+    (model, input)
+}
+
+#[test]
+fn original_brown_silhouettes_recover_shared_width_without_rectifying_observations() {
+    let (model, mut input) = brown_scene();
+    let original = serde_json::to_value(&input).unwrap();
+    let baseline = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(baseline.status, "ACCEPTED", "{baseline:#?}");
+    assert_eq!(serde_json::to_value(&input).unwrap(), original);
+    let solution = baseline.solution.as_ref().unwrap();
+    assert!((solution.shape[0] - 0.6).abs() < 1e-7);
+    for check in baseline.attempts.iter().flat_map(|attempt| &attempt.checks) {
+        if check.name.starts_with("silhouette:") {
+            assert!(
+                check
+                    .prediction_error_bound_px
+                    .is_some_and(|bound| (0. ..=1e-9).contains(&bound))
+            );
+        } else {
+            assert!(check.prediction_error_bound_px.is_none());
+        }
+    }
+    for (pose, truth) in solution.poses.iter().zip([-0.1, 0.1]) {
+        assert!((pose.values[0] - truth).abs() < 1e-7);
+    }
+    input.frames.reverse();
+    for frame in &mut input.frames {
+        frame.silhouette.as_mut().unwrap().lines.reverse();
+    }
+    assert_eq!(
+        serde_json::to_value(&baseline).unwrap(),
+        serde_json::to_value(fit_body(&input, &model, &FitOptions::default()).unwrap()).unwrap()
+    );
+    input.frames[0].silhouette.as_mut().unwrap().lines[1].intervals_px[0][1] += 5.;
+    let rejected = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(rejected.status, "REJECTED", "{rejected:#?}");
+    assert!(rejected.solution.is_none());
+    for (changed, original) in rejected.attempts.iter().zip(baseline.attempts) {
+        assert_eq!(changed.cost_history, original.cost_history);
+    }
+}
 #[test]
 fn silhouette_resolves_a_shape_variable_not_constrained_by_keypoints() {
     let (model, input) = scene();
@@ -203,7 +275,7 @@ fn silhouette_budget_stops_and_malformed_evidence_publish_no_body() {
         .clear();
     assert!(fit_body(&input, &model, &FitOptions::default()).is_err());
     let (model, mut input) = scene();
-    input.frames[0].camera.intrinsics.distortion.radial[0] = 0.01;
+    input.frames[0].camera.intrinsics.distortion.radial[0] = -0.5;
     assert!(fit_body(&input, &model, &FitOptions::default()).is_err());
 }
 

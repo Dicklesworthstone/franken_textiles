@@ -422,9 +422,9 @@ mod tests {
             let mut heights = [0; 4];
             let mut stack = Vec::new();
             for y in 0..3 {
-                for x in 0..4 {
-                    heights[x] = if supported(x as u32, y) {
-                        heights[x] + 1
+                for (x, height) in heights.iter_mut().enumerate() {
+                    *height = if supported(x as u32, y) {
+                        *height + 1
                     } else {
                         0
                     };

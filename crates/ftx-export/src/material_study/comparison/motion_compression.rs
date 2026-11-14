@@ -197,8 +197,7 @@ fn admit_exterior(
         if time <= previous_time
             || (environment["convection_w_m2_k"] == 0.
                 && (power[0] != 0. || energy[0] != previous[0]))
-            || (environment["radiation"].is_null()
-                && (power[1] != 0. || energy[1] != previous[1]))
+            || (environment["radiation"].is_null() && (power[1] != 0. || energy[1] != previous[1]))
         {
             return Err(fail());
         }
@@ -221,7 +220,11 @@ fn admit_exterior(
             return Err(fail());
         }
     }
-    for field in ["convective_heat_w", "radiative_heat_w", "balance_residual_w"] {
+    for field in [
+        "convective_heat_w",
+        "radiative_heat_w",
+        "balance_residual_w",
+    ] {
         if final_field["exterior_exchange"][field] != last["exterior_exchange"][field] {
             return Err(fail());
         }
@@ -320,8 +323,12 @@ fn qualify_optics(material: &ResolvedMaterial, request: &Value) -> Result<(), Re
             )?;
             let range = vapor_array(environment, "surface_temperature_range_c")?;
             if range.len() != 2
-                || finite(&range[0]).ok_or_else(fail)?.max(optical.temperature_range_c[0])
-                    > finite(&range[1]).ok_or_else(fail)?.min(optical.temperature_range_c[1])
+                || finite(&range[0])
+                    .ok_or_else(fail)?
+                    .max(optical.temperature_range_c[0])
+                    > finite(&range[1])
+                        .ok_or_else(fail)?
+                        .min(optical.temperature_range_c[1])
             {
                 return Err(fail());
             }
@@ -395,8 +402,10 @@ fn exterior_power(value: &Value, convection: f64, radiation: f64) -> Result<(), 
     if !heat_near(
         finite(&value["convective_heat_w"]).ok_or_else(fail)?,
         convection,
-    ) || !heat_near(finite(&value["radiative_heat_w"]).ok_or_else(fail)?, radiation)
-        || finite(&value["balance_residual_w"]).is_none()
+    ) || !heat_near(
+        finite(&value["radiative_heat_w"]).ok_or_else(fail)?,
+        radiation,
+    ) || finite(&value["balance_residual_w"]).is_none()
     {
         return Err(fail());
     }
@@ -407,8 +416,10 @@ fn exterior_energy(value: &Value, convection: f64, radiation: f64) -> Result<(),
     if !heat_near(
         finite(&value["convective_energy_j"]).ok_or_else(fail)?,
         convection,
-    ) || !heat_near(finite(&value["radiative_energy_j"]).ok_or_else(fail)?, radiation)
-    {
+    ) || !heat_near(
+        finite(&value["radiative_energy_j"]).ok_or_else(fail)?,
+        radiation,
+    ) {
         return Err(fail());
     }
     Ok(())
@@ -560,7 +571,13 @@ fn admit_coverage_exterior(
         return Err(fail());
     }
     for (field, path, radiation, any, current) in [
-        ("exterior_exchange", 3, 5, any_covered, covered[intervals - 1]),
+        (
+            "exterior_exchange",
+            3,
+            5,
+            any_covered,
+            covered[intervals - 1],
+        ),
         (
             "exposed_exterior_exchange",
             4,

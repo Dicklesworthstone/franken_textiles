@@ -1330,9 +1330,7 @@ fn coverage_compression_radiation_matches_independent_two_cell_balance() {
             (a * g + middle * f) / determinant,
         ];
         let convective = 5. * (face - 5.);
-        let radiative = 0.8
-            * 5.670_374_419e-8
-            * ((face + 273.15).powi(4) - (263.15_f64).powi(4));
+        let radiative = 0.8 * 5.670_374_419e-8 * ((face + 273.15).powi(4) - (263.15_f64).powi(4));
         (temperatures, convective, radiative)
     };
     let (mut lo, mut hi) = (-80., 80.);
@@ -1481,7 +1479,12 @@ fn compressed_radiation_qualifies_hidden_sources_and_rolls_back_late_optical_ref
     hidden.as_object_mut().unwrap().remove("sha256");
     hidden["sha256"] = json!(hash(&hidden).unwrap());
     let hidden = Surface::from_snapshot(&hidden).unwrap();
-    assert!(history.request.validate_compression_sources(&hidden).is_err());
+    assert!(
+        history
+            .request
+            .validate_compression_sources(&hidden)
+            .is_err()
+    );
     history
         .advance(&cloth, &body(0.), 0.1, 0, 0, None, None, None)
         .unwrap();
@@ -1642,11 +1645,7 @@ fn compression_coverage_admits_complete_sources_and_refuses_unqualified_face_map
             match mutation {
                 0 => {
                     exterior.radiation = Some(serde_json::from_value(radiation.clone()).unwrap());
-                    exterior
-                        .radiation
-                        .as_mut()
-                        .unwrap()
-                        .automatic_material_face = true;
+                    exterior.radiation.as_mut().unwrap().automatic_material_face = true;
                 }
                 1 => exterior.convection_source.reference.clear(),
                 2 => exterior.convection_source.note.clear(),

@@ -702,7 +702,8 @@ pub(super) mod tests {
         ))
         .unwrap();
         let observed = fixture["layers"][0]["record"]["properties"]["emissivity"].clone();
-        let mut optical: ftx_pattern::materials::Quantity = serde_json::from_value(observed).unwrap();
+        let mut optical: ftx_pattern::materials::Quantity =
+            serde_json::from_value(observed).unwrap();
         optical.conditions.extend([
             ("specimen".into(), input.specimen.clone()),
             ("conditioning".into(), input.conditioning.clone()),
@@ -713,7 +714,10 @@ pub(super) mod tests {
             "Synthetic pressure-independent optical coefficient; no measured textile claim".into();
         invariant.conditions = optical.conditions.clone();
         input.invariants.insert("emissivity".into(), invariant);
-        input.material.properties.insert("emissivity".into(), optical);
+        input
+            .material
+            .properties
+            .insert("emissivity".into(), optical);
         input
     }
 
@@ -1717,10 +1721,12 @@ pub(super) mod tests {
             // Independently eliminate the one reference-mass cell, then solve its exterior
             // face balance using the unfactored fourth-power law. Capacity is 25 J/K and dt=1 s.
             let state = |face: f64| {
-                let cell = (25. * temperature + inside * 40. + outside * face)
-                    / (25. + inside + outside);
+                let cell =
+                    (25. * temperature + inside * 40. + outside * face) / (25. + inside + outside);
                 let convection = area * exterior.convection_w_m2_k * (face - exterior.air_c);
-                let radiation = area * 0.8 * 5.670_374_419e-8
+                let radiation = area
+                    * 0.8
+                    * 5.670_374_419e-8
                     * ((face + 273.15).powi(4) - (enclosure + 273.15).powi(4));
                 (cell, convection, radiation)
             };
