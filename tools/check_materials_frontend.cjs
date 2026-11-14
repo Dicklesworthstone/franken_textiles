@@ -16988,6 +16988,8 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
           assert.equal(output.type,'result',output.message);
           assert.deepEqual(output.result,JSON.parse(input(`${name}-report.json`)));
           assert.deepEqual(output.result.comparison.frontier,['qualified']);
+          // Manufacturing is shared by the complete matrix, outside its individual cases.
+          assert.ok(output.result.manufacturing.alternatives.every(row=>row.cutting.status==='available'));
           if(name==='matrix') assert.deepEqual(output.result.comparison.case_order,['equal-reservoirs','warm-outside']);
           for(const [index,report] of (name==='single'?[output.result]:output.result.cases).entries()) {
             const result=report.simulations.find(row=>row.key==='qualified').evaluation.result,motion=result.motion;
@@ -17075,7 +17077,6 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
             const unmatched=report.simulations.find(row=>row.key==='unmatched-source').evaluation.result.motion;
             assert.equal(unmatched.status,'available');assert.equal(unmatched.result[consumer].status,'refused');
             assert.equal(report.comparison.alternatives.find(row=>row.key==='unmatched-source').eligible,false);
-            assert.ok(report.manufacturing.alternatives.every(row=>row.cutting.status==='available'));
           }
           for(const [file,raw] of [['original-pattern.json',pattern],['study-request.json',studyRequest],
             ['scenario-request.json',scenarioRequest],['body-input.json',measurements]]) {
