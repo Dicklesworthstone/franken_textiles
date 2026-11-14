@@ -352,7 +352,8 @@ const WEIGHT_SIGMA_MIN_KG: f64 = 0.1;
 /// Prior 1σ of a phenotype parameter about the population middle (0.5) and of a local change about 0:
 /// the scanned shape space explains a body before the authored blend shapes adjust it.
 const PRIOR_SIGMA_PHENOTYPE: f64 = 0.5;
-/// See [`PRIOR_SIGMA_PHENOTYPE`].
+/// Local-change prior at the unmodified model template's stature. Absolute authored offsets
+/// require this scale to follow the requested body's stature, not its changing fitted height.
 const PRIOR_SIGMA_LOCAL: f64 = 0.35;
 /// Central-difference step in the parameters.
 const FD_STEP: f64 = 1e-3;
@@ -360,6 +361,49 @@ const FD_STEP: f64 = 1e-3;
 const MAX_ITERATIONS: usize = 40;
 /// Stop once an accepted step lowers the cost by less than this fraction.
 const REL_GAIN_STOP: f64 = 1e-5;
+
+// Local targets are absolute displacements authored on the MakeHuman template (spec 05 §3).
+// This is dimensionless numerical regularization, not a measured population distribution.
+fn local_prior_sigma(template: &[Vec3], stature_mm: f64) -> Result<f64, Refusal> {
+    if !stature_mm.is_finite() || stature_mm <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "local shape regularization needs a finite positive requested stature",
+        ));
+    }
+    if template.is_empty() || template.iter().any(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "local shape regularization needs a finite nonempty model template",
+        ));
+    }
+    let lo = template.iter().map(|p| p.z).fold(f64::INFINITY, f64::min);
+    let hi = template
+        .iter()
+        .map(|p| p.z)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let reference_mm = (hi - lo) * 1000.0;
+    if !reference_mm.is_finite() || reference_mm <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "local shape regularization needs a finite positive model-template stature",
+        ));
+    }
+    let sigma = PRIOR_SIGMA_LOCAL * (stature_mm / reference_mm);
+    let inverse = 1.0 / sigma;
+    let maximum_penalty = (N_FREE - N_PHENOTYPE) as f64 * (LOCAL_LIMIT * inverse).powi(2);
+    if !sigma.is_finite()
+        || sigma <= 0.0
+        || !maximum_penalty.is_finite()
+        || maximum_penalty <= 0.0
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "body-to-template stature ratio gives an unrepresentable local shape penalty",
+        ));
+    }
+    Ok(sigma)
+}
 
 /// The fullest (`max`) or narrowest girth `g(h)` over `lo..=hi` in [`SEARCH_STEP_MM`] steps.
 fn extreme(lo: f64, hi: f64, max: bool, g: impl Fn(f64) -> Option<f64>) -> Option<f64> {
@@ -796,6 +840,8 @@ impl TapeFit {
 /// Fits the body of `wearer` (age and gender set; its stature fitted unless `targets` has one, its
 /// weight when known) to `targets` on `pose`. Each residual is scaled by the larger of the target's
 /// reported sigma and the explicit per-functional fitting floor. Missing sigma preserves the floor.
+/// Local shape regularization scales with the selected target stature relative to the unmodified
+/// model template's stature. This scale stays fixed throughout fitting; phenotype priors are unchanged.
 /// A stature outside the height-only initialization range starts from its nearest endpoint; the
 /// full bounded fit can still use proportions and local lengths. Original targets and residuals
 /// remain unchanged, including any discrepancy the complete model cannot resolve.
@@ -826,6 +872,7 @@ pub fn fit_tape(
         .iter()
         .find(|r| r.field == 0)
         .map_or(wearer.stature_mm, |r| r.target);
+    let local_sigma = local_prior_sigma(&model.data().template_vertices, stature)?;
     let (start, _) = stature_start(
         model,
         &Wearer {
@@ -878,7 +925,9 @@ pub fn fit_tape(
         free,
         mut readings,
         iterations,
-    } = optimize_tape(&rows, base.height, |th| read(th, needs_posed_tapes))?;
+    } = optimize_tape(&rows, base.height, local_sigma, |th| {
+        read(th, needs_posed_tapes)
+    })?;
     if !needs_posed_tapes {
         readings = read(&free, true)?;
     }
@@ -1026,6 +1075,7 @@ fn bounded_tape_step(a: &[[f64; N_FREE]], b: &[f64], th: &[f64; N_FREE]) -> Opti
 fn optimize_tape(
     rows: &[TapeRow],
     initial_height: f64,
+    local_sigma: f64,
     read: impl Fn(&[f64; N_FREE]) -> Result<[Option<f64>; N_TAPE + 1], Refusal>,
 ) -> Result<TapeSolution, Refusal> {
     let pheno = |j: usize| j < N_PHENOTYPE;
@@ -1034,7 +1084,7 @@ fn optimize_tape(
         if pheno(j) {
             PRIOR_SIGMA_PHENOTYPE
         } else {
-            PRIOR_SIGMA_LOCAL
+            local_sigma
         }
     };
     let clamp = |th: [f64; N_FREE]| -> [f64; N_FREE] {
@@ -1342,6 +1392,103 @@ mod tests {
     }
 
     #[test]
+    fn local_shape_prior_follows_template_and_requested_body_size() {
+        let template = [Vec3::new(0.0, 0.0, -0.5), Vec3::new(0.0, 0.0, 0.5)];
+        assert_eq!(local_prior_sigma(&template, 1000.0).unwrap(), PRIOR_SIGMA_LOCAL);
+        assert_eq!(local_prior_sigma(&template, 500.0).unwrap(), 0.5 * PRIOR_SIGMA_LOCAL);
+        assert_eq!(local_prior_sigma(&template, 2000.0).unwrap(), 2.0 * PRIOR_SIGMA_LOCAL);
+        for scale in [0.5, 2.0, 1e-100, 1e100] {
+            let scaled = template.map(|p| p * scale);
+            assert_eq!(
+                local_prior_sigma(&scaled, 500.0 * scale).unwrap(),
+                0.5 * PRIOR_SIGMA_LOCAL,
+                "changing the common geometric scale cannot change dimensionless regularization"
+            );
+        }
+        let translated = template.map(|p| p + Vec3::new(7.0, -3.0, 11.0));
+        assert_eq!(local_prior_sigma(&translated, 500.0).unwrap(), 0.5 * PRIOR_SIGMA_LOCAL);
+        let model = stature_test_model();
+        assert_eq!(
+            local_prior_sigma(&model.data().template_vertices, 900.0).unwrap(),
+            PRIOR_SIGMA_LOCAL,
+            "use the authored template, not the 950 mm default phenotype or fitted seed"
+        );
+    }
+
+    #[test]
+    fn local_shape_prior_refuses_invalid_or_unrepresentable_scales() {
+        let template = [Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0)];
+        for stature in [
+            0.0,
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            f64::MAX,
+        ] {
+            assert_eq!(
+                local_prior_sigma(&template, stature).unwrap_err().code,
+                RefusalCode::OutOfRange
+            );
+        }
+        for invalid in [
+            vec![],
+            vec![Vec3::ZERO],
+            vec![Vec3::ZERO, Vec3::new(0.0, 0.0, f64::NAN)],
+            vec![Vec3::ZERO, Vec3::new(f64::INFINITY, 0.0, 1.0)],
+            vec![Vec3::new(0.0, 0.0, -f64::MAX), Vec3::new(0.0, 0.0, f64::MAX)],
+            vec![Vec3::ZERO, Vec3::new(0.0, 0.0, 1e306)],
+        ] {
+            assert_eq!(
+                local_prior_sigma(&invalid, 500.0).unwrap_err().code,
+                RefusalCode::DegenerateGeometry
+            );
+        }
+    }
+
+    #[test]
+    fn size_scaled_local_prior_preserves_relative_deformations_in_the_tape_solve() {
+        let template = [Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0)];
+        let mut normalized = Vec::new();
+        for size in [0.25, 0.5, 1.0, 2.0] {
+            let wearer = Wearer {
+                years: 2.5,
+                gender: 0.5,
+                stature_mm: 1000.0 * size,
+                weight_kg: None,
+            };
+            let rows = tape_rows(
+                &wearer,
+                &[TapeTarget {
+                    name: "waist".into(),
+                    value_mm: 540.0 * size,
+                    sigma_mm: Some(50.0 * size),
+                }],
+            )
+            .unwrap();
+            let sigma = local_prior_sigma(&template, wearer.stature_mm).unwrap();
+            // The authored local target always moves the section by 100 q mm. The independent
+            // body and measurement error scale together, so q / size has the same optimum.
+            let expected = 100.0 * 40.0 * size
+                / (10_000.0 + (50.0 * size).powi(2) / sigma.powi(2));
+            for initial_height in [0.1, 0.9] {
+                let fit = optimize_tape(&rows, initial_height, sigma, |th| {
+                    let mut readings = [None; N_TAPE + 1];
+                    readings[0] = Some(wearer.stature_mm + 100.0 * (th[0] - 0.5));
+                    readings[2] = Some(500.0 * size + 100.0 * th[N_PHENOTYPE]);
+                    Ok(readings)
+                })
+                .unwrap();
+                assert!((fit.free[N_PHENOTYPE] - expected).abs() < 1e-7);
+                assert!((fit.free[0] - 0.5).abs() < 1e-7);
+                normalized.push(fit.free[N_PHENOTYPE] / size);
+            }
+        }
+        assert!(normalized.iter().all(|v| (v - normalized[0]).abs() < 1e-7));
+    }
+
+    #[test]
     fn full_tape_fit_reaches_lengths_outside_the_height_only_seed_range() {
         let model = stature_test_model();
         let local_index = FREE
@@ -1364,7 +1511,7 @@ mod tests {
             assert_eq!(start.phenotype.height, endpoint);
             assert_eq!(achieved, 900.0 + 100.0 * endpoint);
             let rows = tape_rows(&wearer, &[]).unwrap();
-            let fit = optimize_tape(&rows, start.phenotype.height, |th| {
+            let fit = optimize_tape(&rows, start.phenotype.height, PRIOR_SIGMA_LOCAL, |th| {
                 let mut params = model.params(Phenotype {
                     height: th[0],
                     ..Phenotype::default()
@@ -1553,7 +1700,7 @@ mod tests {
             // Analytic one-parameter body: chest and waist share a 500 + 100 q mm section.
             // Contradictory targets force the production LM solver to use both declared scales.
             // The exact optimum follows by differentiating the weighted quadratic plus q's prior.
-            let result = optimize_tape(&rows, 0.5, |th| {
+            let result = optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| {
                 let mut readings = [Some(500.0); N_TAPE + 1];
                 readings[0] = Some(920.0);
                 readings[1] = Some(500.0 + 100.0 * th[N_PHENOTYPE]);
@@ -1609,8 +1756,8 @@ mod tests {
             readings[2] = Some(500.0 + 100.0 * th[N_PHENOTYPE]);
             readings
         };
-        let complete = optimize_tape(&rows, 0.5, |th| Ok(read(th, true))).unwrap();
-        let partial = optimize_tape(&rows, 0.5, |th| Ok(read(th, false))).unwrap();
+        let complete = optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, true))).unwrap();
+        let partial = optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, false))).unwrap();
         assert_eq!(complete.free, partial.free);
         assert_eq!(complete.iterations, partial.iterations);
         assert_eq!(partial.readings[0], Some(wearer.stature_mm));
@@ -1629,7 +1776,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let error = optimize_tape(&requested, 0.5, |th| Ok(read(th, false)))
+        let error = optimize_tape(&requested, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, false)))
             .err()
             .expect("a missing requested head must refuse");
         assert_eq!(error.code, RefusalCode::DegenerateGeometry);
@@ -1644,7 +1791,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        let error = optimize_tape(&weighted_rows, 0.5, |th| Ok(read(th, false)))
+        let error = optimize_tape(&weighted_rows, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, false)))
             .err()
             .expect("a supplied weight remains a required constraint");
         assert_eq!(error.code, RefusalCode::DegenerateGeometry);
@@ -1658,7 +1805,7 @@ mod tests {
             Some(f64::NAN),
             Some(f64::INFINITY),
         ] {
-            let error = optimize_tape(&rows, 0.5, |th| {
+            let error = optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| {
                 let mut readings = read(th, false);
                 readings[2] = value;
                 Ok(readings)
@@ -1688,7 +1835,7 @@ mod tests {
         )
         .unwrap();
         let solve = |upper_limit: f64| {
-            optimize_tape(&rows, 0.5, |th| {
+            optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| {
                 let mut readings = [None; N_TAPE + 1];
                 readings[0] = Some(wearer.stature_mm);
                 let q = th[N_PHENOTYPE];

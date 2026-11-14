@@ -190,6 +190,45 @@ fn reachable_stature_outside_the_height_only_range_is_fitted() {
 
 #[test]
 #[ignore = "needs the converted Anny model"]
+fn explicit_stature_target_selects_the_same_fixed_local_regularization() {
+    let model = model();
+    let wearer = Wearer {
+        years: 2.5,
+        gender: 0.5,
+        stature_mm: 920.0,
+        weight_kg: None,
+    };
+    let waist = TapeTarget {
+        name: "waist".into(),
+        value_mm: 530.0,
+        sigma_mm: None,
+    };
+    let fallback = fit_tape(&model, &wearer, std::slice::from_ref(&waist), &Pose::drape()).unwrap();
+    let explicit = fit_tape(
+        &model,
+        &Wearer {
+            stature_mm: 600.0,
+            ..wearer
+        },
+        &[
+            TapeTarget {
+                name: "stature".into(),
+                value_mm: 920.0,
+                sigma_mm: None,
+            },
+            waist,
+        ],
+        &Pose::drape(),
+    )
+    .unwrap();
+    assert_eq!(explicit.free, fallback.free);
+    assert_eq!(explicit.readings, fallback.readings);
+    assert_eq!(explicit.residuals, fallback.residuals);
+    assert_eq!(explicit.iterations, fallback.iterations);
+}
+
+#[test]
+#[ignore = "needs the converted Anny model"]
 fn the_reference_toddler_is_fitted() {
     let model = model();
     let wearer = Wearer {

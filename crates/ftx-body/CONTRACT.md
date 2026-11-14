@@ -70,8 +70,18 @@ reordering. `fit_stature` bisects the height parameter to a stature. `fit_tape` 
 (central differences, step 1e-3; stops when a step gains less than 1e-5 of the cost) over four phenotype
 parameters (height, weight, muscle, proportions; prior 1σ = 0.5 about 0.5) and nineteen local changes
 (fifteen `measure-*`, `measure-neck-circ-incr`, `measure-shoulder-dist-incr`, and both head scales, so the
-prior spreads a head change evenly; prior 1σ = 0.35 about 0: the scanned shape space explains the body
-before the authored blend shapes adjust it). Each measurement residual and its Jacobian row use the
+prior spreads a head change evenly). Local targets are absolute displacements authored on the
+MakeHuman template, so their prior scale about zero is `0.35 × selected_stature / template_stature`.
+The reference is the exact loaded template's `max(z) − min(z)`, with the metre-to-millimetre
+conversion at this boundary; no population height is inferred. The selected stature uses the same
+explicit tape-target precedence as fitting, otherwise the wearer stature. This scale is frozen before
+optimization and cannot weaken as an iteration changes fitted height. At the template's stature it
+preserves the original 0.35 scale; proportionately smaller bodies receive proportionately smaller
+absolute local allowances. Invalid, zero or numerically unrepresentable scales refuse. This is a
+numerical regularization policy, not a measured anatomical distribution or posterior uncertainty.
+The four phenotype prior scales and existing parameter bounds stay fixed. Calibrated photo fitting
+has no shape prior and retains its independent evidence, observability and multistart gates.
+Each measurement residual and its Jacobian row use the
 larger of its supplied `sigma_mm` and the existing functional fitting floor: 3 mm per girth and 2 mm
 per length, except 5 mm for shoulder length, across back and total crotch length and 8 mm for the
 outseam (`fit_sigma`: readings that rest on where a measurer puts the tape, whose catalogue tape σ is
