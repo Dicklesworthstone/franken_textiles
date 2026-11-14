@@ -1165,6 +1165,59 @@ fn analytic_articulated_mannequin_recovers_all_21_closed_form_tape_functionals_a
 }
 
 #[test]
+fn photo_tape_subsets_match_all_functionals_and_keep_authored_order() {
+    use ftx_body::correspondence::{Configuration, CorrespondenceModel};
+
+    let model = build_analytic_mannequin();
+    let params = model.params(Phenotype {
+        age: age_parameter_for_years(30.0),
+        ..Phenotype::default()
+    });
+    let rest = model.rest(&params).unwrap();
+    let height = model.anthropometry(&rest).height;
+    let posed = model
+        .pose(
+            &rest,
+            &pose_deltas(&model, &rest, &Pose::a_pose(35.0), 1.0).unwrap(),
+        )
+        .unwrap();
+    let frames = BodyFrames::new(&model, &posed).unwrap();
+    let faces: Vec<_> = model
+        .data()
+        .faces
+        .iter()
+        .map(|f| f.map(|i| i as usize))
+        .collect();
+    let complete = tape_readings(&faces, height, &posed, &frames).unwrap();
+    let mut subsets: Vec<Vec<usize>> = (0..N_TAPE).map(|i| vec![i]).collect();
+    subsets.extend([
+        vec![],
+        (0..N_TAPE).rev().collect(),
+        vec![20, 0, 2, 6, 10, 15, 17, 18, 19],
+        vec![13, 5, 0, 12, 4],
+    ]);
+    for fields in subsets {
+        let names: Vec<_> = fields.iter().map(|&i| TAPE_FIELDS[i]).collect();
+        // This is a synthetic in-memory adapter identity, not an acquisition/asset receipt.
+        let hash = "a".repeat(64);
+        let config: Configuration = serde_json::from_value(json!({
+            "model_sha256": hash, "age_years": 30.0, "gender": 0.5,
+            "shape_parameters": [{"name":"height","lower":0.0,"upper":1.0}],
+            "pose_parameters": [{"name":"root_y_m","lower":-1.0,"upper":1.0}],
+            "keypoints": {"synthetic_vertex":{"kind":"vertex","index":0}},
+            "measurements": names,
+        }))
+        .unwrap();
+        let adapter = CorrespondenceModel::new(model.clone(), config, &hash).unwrap();
+        let expected: Vec<_> = fields.iter().map(|&i| complete[i] / 1000.0).collect();
+        assert_eq!(adapter.measurements(&[0.5]).unwrap(), expected, "{names:?}");
+        // A separate image pose uses the same independent rest-body readings and cache.
+        assert!(!adapter.points(&[0.5], &[0.25]).unwrap().is_empty());
+        assert_eq!(adapter.measurements(&[0.5]).unwrap(), expected, "{names:?}");
+    }
+}
+
+#[test]
 #[ignore = "requires local Anny 0.6.1 .ftxbody cache"]
 fn admitted_anny_all_21_tape_functionals_match_independent_jarvis_winding_slicer_and_bound_landmark_perturbations()
  {

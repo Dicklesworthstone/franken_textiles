@@ -626,86 +626,150 @@ pub fn partial_tape_readings(
     posed: &PosedBody,
     frames: &BodyFrames,
 ) -> [Option<f64>; N_TAPE] {
+    selected_tape_readings(faces, rest_height_m, posed, frames, &[true; N_TAPE])
+}
+
+// Fitting repeatedly needs only its authored targets. Keep their exact tape definitions here,
+// sharing each required frame/slicer, and leave unrequested readings absent. Full diagnostics
+// use the same authority with every field selected after the fitted parameters are fixed.
+pub(crate) fn selected_tape_readings(
+    faces: &[[usize; 3]],
+    rest_height_m: f64,
+    posed: &PosedBody,
+    frames: &BodyFrames,
+    selected: &[bool; N_TAPE],
+) -> [Option<f64>; N_TAPE] {
     let lm = |n: &str| frames.landmarks.get(n).copied().filter(|v| v.is_finite());
+    let wants = |indices: &[usize]| indices.iter().any(|&i| selected[i]);
+    let mut readings = [None; N_TAPE];
+    for (i, value) in [
+        (0, Some(rest_height_m * 1000.0)),
+        (4, lm("waist")),
+        (5, lm("crotch")),
+        (12, Some(frames.arm_length)),
+        (13, lm("knee")),
+    ] {
+        if selected[i] {
+            readings[i] = value.filter(|v| v.is_finite() && *v > 0.0);
+        }
+    }
+    if !wants(&[1, 2, 3, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20]) {
+        return readings;
+    }
     let mm: Vec<Vec3> = posed.vertices.iter().map(|v| *v * 1000.0).collect();
     // Torso sections retain their shared axis and the original tape arithmetic.
     let axis = [frames.torso.origin.x, frames.torso.origin.y];
-    let torso = Slicer::new(&mm, faces, SLAB_MM);
-    let g = |h: f64| torso.girth(frames.floor_z + h, axis);
-    let hip = (|| {
-        let (waist_h, crotch_h) = (lm("waist")?, lm("crotch")?);
-        extreme(crotch_h + 0.2 * (waist_h - crotch_h), waist_h, true, g)
-    })();
-    let frame = |f: &crate::landmarks::Frame| in_frame(&mm, f.origin, f.lat, f.front, f.up);
-    let (leg, arm) = (frame(&frames.leg_r), frame(&frames.arm_r));
-    let (legs, arms) = (
-        Slicer::new(&leg, faces, SLAB_MM),
-        Slicer::new(&arm, faces, SLAB_MM),
-    );
-    // Limb axes can pass beside the surface; preserve the qualified nearest-loop selection.
-    let gl = |h: f64| legs.girth_near(h, [0.0, 0.0]);
-    let ga = |h: f64| arms.girth_near(h, [0.0, 0.0]);
-    let lh = |n: &str| frames.landmark_h("leg_R", n).filter(|v| v.is_finite());
-    let thigh = lh("crotch").and_then(|h| extreme(h - 40.0, h - 5.0, true, gl));
-    let calf = (|| {
-        let (knee, ankle) = (lh("knee")?, lh("ankle")?);
-        let shin = knee - ankle;
-        extreme(ankle + 0.3 * shin, knee - 0.1 * shin, true, gl)
-    })();
-    let ankle = (|| {
-        let (knee, ankle) = (lh("knee")?, lh("ankle")?);
-        extreme(ankle + 10.0, ankle + 0.25 * (knee - ankle), false, gl)
-    })();
-    let tip = frames.tip_h;
-    let upper_arm = ga(tip - 0.275 * frames.arm_length);
-    let wrist = ga(tip - frames.arm_length);
-    // A missing spine section does not invalidate unrelated circumference readings.
-    let back = (|| {
-        let (waist_h, c7_h) = (lm("waist")?, lm("c7")?);
-        let mut back = 0.0;
-        let mut prev: Option<(f64, f64)> = None;
-        let mut h = waist_h;
-        loop {
-            let y = torso.back_point(frames.floor_z + h, axis)?;
-            if let Some((ph, py)) = prev {
-                back += ftx_core::det::hypot(h - ph, y - py);
-            }
-            prev = Some((h, y));
-            if h >= c7_h {
-                break;
-            }
-            h = (h + SEARCH_STEP_MM).min(c7_h);
+    let torso = wants(&[1, 2, 3, 14, 16, 17, 18, 20]).then(|| Slicer::new(&mm, faces, SLAB_MM));
+    if let Some(torso) = &torso {
+        let g = |h: f64| torso.girth(frames.floor_z + h, axis);
+        if selected[1] {
+            readings[1] = lm("chest").and_then(|h| g(h - CHEST_BELOW_ARMPIT_MM));
         }
-        Some(back)
-    })();
-    let neck = crate::tape::neck_base(&mm, faces, frames);
-    let shoulders = neck.and_then(|(_, snp)| {
-        crate::tape::shoulder_and_optional_back(&mm, faces, &torso, frames, snp)
-    });
-    [
-        Some(rest_height_m * 1000.0),
-        lm("chest").and_then(|h| g(h - CHEST_BELOW_ARMPIT_MM)),
-        lm("waist").and_then(g),
-        hip,
-        lm("waist"),
-        lm("crotch"),
-        thigh,
-        lh("knee").and_then(gl),
-        calf,
-        ankle,
-        upper_arm,
-        wrist,
-        Some(frames.arm_length),
-        lm("knee"),
-        back,
-        neck.map(|(girth, _)| girth),
-        crate::tape::head_girth(&torso, frames),
-        shoulders.map(|(length, _)| length),
-        shoulders.and_then(|(_, back)| back),
-        crate::tape::crotch_length(&mm, faces, frames),
-        crate::tape::outseam(&torso, frames),
-    ]
-    .map(|value| value.filter(|v| v.is_finite() && *v > 0.0))
+        if selected[2] {
+            readings[2] = lm("waist").and_then(g);
+        }
+        if selected[3] {
+            readings[3] = (|| {
+                let (waist_h, crotch_h) = (lm("waist")?, lm("crotch")?);
+                extreme(crotch_h + 0.2 * (waist_h - crotch_h), waist_h, true, g)
+            })();
+        }
+        // A missing spine section does not invalidate unrelated circumference readings.
+        if selected[14] {
+            readings[14] = (|| {
+                let (waist_h, c7_h) = (lm("waist")?, lm("c7")?);
+                let mut back = 0.0;
+                let mut prev: Option<(f64, f64)> = None;
+                let mut h = waist_h;
+                loop {
+                    let y = torso.back_point(frames.floor_z + h, axis)?;
+                    if let Some((ph, py)) = prev {
+                        back += ftx_core::det::hypot(h - ph, y - py);
+                    }
+                    prev = Some((h, y));
+                    if h >= c7_h {
+                        break;
+                    }
+                    h = (h + SEARCH_STEP_MM).min(c7_h);
+                }
+                Some(back)
+            })();
+        }
+        if selected[16] {
+            readings[16] = crate::tape::head_girth(torso, frames);
+        }
+        if selected[20] {
+            readings[20] = crate::tape::outseam(torso, frames);
+        }
+    }
+    let frame = |f: &crate::landmarks::Frame| in_frame(&mm, f.origin, f.lat, f.front, f.up);
+    // Limb axes can pass beside the surface; preserve the qualified nearest-loop selection.
+    if wants(&[6, 7, 8, 9]) {
+        let leg = frame(&frames.leg_r);
+        let legs = Slicer::new(&leg, faces, SLAB_MM);
+        let gl = |h: f64| legs.girth_near(h, [0.0, 0.0]);
+        let lh = |n: &str| frames.landmark_h("leg_R", n).filter(|v| v.is_finite());
+        if selected[6] {
+            readings[6] = lh("crotch").and_then(|h| extreme(h - 40.0, h - 5.0, true, gl));
+        }
+        if selected[7] {
+            readings[7] = lh("knee").and_then(gl);
+        }
+        if selected[8] {
+            readings[8] = (|| {
+                let (knee, ankle) = (lh("knee")?, lh("ankle")?);
+                let shin = knee - ankle;
+                extreme(ankle + 0.3 * shin, knee - 0.1 * shin, true, gl)
+            })();
+        }
+        if selected[9] {
+            readings[9] = (|| {
+                let (knee, ankle) = (lh("knee")?, lh("ankle")?);
+                extreme(ankle + 10.0, ankle + 0.25 * (knee - ankle), false, gl)
+            })();
+        }
+    }
+    if wants(&[10, 11]) {
+        let arm = frame(&frames.arm_r);
+        let arms = Slicer::new(&arm, faces, SLAB_MM);
+        let ga = |h: f64| arms.girth_near(h, [0.0, 0.0]);
+        let tip = frames.tip_h;
+        if selected[10] {
+            readings[10] = ga(tip - 0.275 * frames.arm_length);
+        }
+        if selected[11] {
+            readings[11] = ga(tip - frames.arm_length);
+        }
+    }
+    if wants(&[15, 17, 18]) {
+        let neck = crate::tape::neck_base(&mm, faces, frames);
+        if selected[15] {
+            readings[15] = neck.map(|(girth, _)| girth);
+        }
+        if wants(&[17, 18]) {
+            let shoulders = neck.and_then(|(_, snp)| {
+                crate::tape::shoulder_and_optional_back(
+                    &mm,
+                    faces,
+                    torso
+                        .as_ref()
+                        .expect("shoulder readings require torso sections"),
+                    frames,
+                    snp,
+                )
+            });
+            if selected[17] {
+                readings[17] = shoulders.map(|(length, _)| length);
+            }
+            if selected[18] {
+                readings[18] = shoulders.and_then(|(_, back)| back);
+            }
+        }
+    }
+    if selected[19] {
+        readings[19] = crate::tape::crotch_length(&mm, faces, frames);
+    }
+    readings.map(|value| value.filter(|v| v.is_finite() && *v > 0.0))
 }
 
 /// One measurement to fit: a name of [`TAPE_FIELDS`], value and optional source uncertainty (mm).
@@ -898,35 +962,28 @@ pub fn fit_tape(
         }
         p
     };
-    let needs_posed_tapes = rows.iter().any(|row| row.field > 0 && row.field < N_TAPE);
-    // Height and mass do not use posed sections. Keep model/pose/frame admission on every
-    // evaluation, and defer only the unused tape functionals until the final diagnostics.
-    let read =
-        |th: &[f64; N_FREE], include_tapes: bool| -> Result<[Option<f64>; N_TAPE + 1], Refusal> {
-            let rest = model.rest(&params_of(th))?;
-            let anthro = model.anthropometry(&rest);
-            let posed = model.pose(&rest, &pose_deltas(model, &rest, pose, 1.0)?)?;
-            let frames = BodyFrames::new(model, &posed)?;
-            let t = if include_tapes {
-                partial_tape_readings(&faces, anthro.height, &posed, &frames)
-            } else {
-                let mut t = [None; N_TAPE];
-                t[0] = Some(anthro.height * 1000.0);
-                t
-            };
-            Ok(std::array::from_fn(|k| {
-                if k < N_TAPE { t[k] } else { Some(anthro.mass) }
-            }))
-        };
+    let requested = std::array::from_fn(|k| rows.iter().any(|row| row.field == k));
+    // Keep model/pose/frame admission on every evaluation, but compute only the tape functionals
+    // entering the objective. Unrequested diagnostics are evaluated once at the final parameters.
+    let read = |th: &[f64; N_FREE],
+                selected: &[bool; N_TAPE]|
+     -> Result<[Option<f64>; N_TAPE + 1], Refusal> {
+        let rest = model.rest(&params_of(th))?;
+        let anthro = model.anthropometry(&rest);
+        let posed = model.pose(&rest, &pose_deltas(model, &rest, pose, 1.0)?)?;
+        let frames = BodyFrames::new(model, &posed)?;
+        let t = selected_tape_readings(&faces, anthro.height, &posed, &frames, selected);
+        Ok(std::array::from_fn(|k| {
+            if k < N_TAPE { t[k] } else { Some(anthro.mass) }
+        }))
+    };
     let TapeSolution {
         free,
         mut readings,
         iterations,
-    } = optimize_tape(&rows, base.height, local_sigma, |th| {
-        read(th, needs_posed_tapes)
-    })?;
-    if !needs_posed_tapes {
-        readings = read(&free, true)?;
+    } = optimize_tape(&rows, base.height, local_sigma, |th| read(th, &requested))?;
+    if requested.iter().any(|requested| !requested) {
+        readings = read(&free, &[true; N_TAPE])?;
     }
     let residuals = rows
         .iter()
@@ -1875,8 +1932,7 @@ mod tests {
         assert_eq!(restricted.readings[16], None);
     }
 
-    #[test]
-    fn seat_girth_reads_the_fullest_section_in_the_seat_band() {
+    fn tapered_torso_fixture() -> (Vec<[usize; 3]>, PosedBody, BodyFrames) {
         // A vertical square prism from z = 0 to z = 0.2 m with side 0.10 m (perimeter 400 mm),
         // widened at z = 0.10 m to side 0.12 m (perimeter 480 mm).
         let ring = |z: f64, half: f64| {
@@ -1913,7 +1969,7 @@ mod tests {
         let mut landmarks = std::collections::BTreeMap::new();
         landmarks.insert("crotch".to_string(), 20.0);
         landmarks.insert("waist".to_string(), 180.0);
-        let mut frames = BodyFrames {
+        let frames = BodyFrames {
             floor_z: 0.0,
             landmarks,
             torso: dummy,
@@ -1935,6 +1991,12 @@ mod tests {
             leg_points_l: Vec::new(),
             leg_landmarks_l: [0.0; 3],
         };
+        (faces, posed, frames)
+    }
+
+    #[test]
+    fn seat_girth_reads_the_fullest_section_in_the_seat_band() {
+        let (faces, posed, mut frames) = tapered_torso_fixture();
         let girth = seat_girth(&faces, &posed, &frames).expect("seat girth");
         assert!((girth - 480.0).abs() < 1e-6, "got {girth}");
 
@@ -1966,5 +2028,122 @@ mod tests {
         assert_eq!(no_waist[3], None);
         assert_eq!(no_waist[4], None);
         assert_eq!(no_waist[5], Some(20.0));
+    }
+
+    #[test]
+    fn requested_tape_subsets_retain_exact_values_and_independent_missing_sections() {
+        let (faces, posed, mut frames) = tapered_torso_fixture();
+        frames.landmarks.extend([
+            ("chest".into(), 170.0),
+            ("c7".into(), 190.0),
+            ("head_top".into(), 200.0),
+            ("knee".into(), 100.0),
+            ("ankle".into(), 20.0),
+        ]);
+        frames.arm_length = 80.0;
+        frames.tip_h = 190.0;
+        frames.neck.origin.z = 150.0;
+        frames.torso_points = posed.vertices.iter().map(|v| *v * 1000.0).collect();
+        let all = partial_tape_readings(&faces, 0.2, &posed, &frames);
+        let mut selections: Vec<_> = (0..N_TAPE)
+            .map(|i| std::array::from_fn(|j| i == j))
+            .collect();
+        selections.extend([
+            [false; N_TAPE],
+            [true; N_TAPE],
+            std::array::from_fn(|i| i % 2 == 0),
+            std::array::from_fn(|i| [0, 2, 6, 10, 15, 18, 19, 20].contains(&i)),
+            std::array::from_fn(|i| [0, 4, 5, 12, 13].contains(&i)),
+        ]);
+        for selection in &selections {
+            let readings = selected_tape_readings(&faces, 0.2, &posed, &frames, selection);
+            for i in 0..N_TAPE {
+                assert_eq!(
+                    readings[i],
+                    if selection[i] { all[i] } else { None },
+                    "{} changed in subset {selection:?}",
+                    TAPE_FIELDS[i],
+                );
+            }
+        }
+        let selection = std::array::from_fn(|i| [0, 1, 2, 3, 4, 5].contains(&i));
+        frames.landmarks.remove("waist");
+        let readings = selected_tape_readings(&faces, f64::NAN, &posed, &frames, &selection);
+        assert_eq!(readings[0], None);
+        assert_eq!(readings[1], all[1]);
+        assert_eq!(&readings[2..5], &[None; 3]);
+        assert_eq!(readings[5], all[5]);
+
+        // Scalar/landmark requests are independent of surface geometry, and empty requests
+        // publish no invented zeroes even when there is no surface to sample.
+        let empty = PosedBody {
+            vertices: Vec::new(),
+            bone_poses: Vec::new(),
+            transforms: Vec::new(),
+        };
+        let scalar = std::array::from_fn(|i| [0, 4, 5, 12, 13].contains(&i));
+        let readings = selected_tape_readings(&[], 0.2, &empty, &frames, &scalar);
+        assert_eq!(readings[0], Some(200.0));
+        assert_eq!(readings[4], None);
+        assert_eq!(readings[5], Some(20.0));
+        assert_eq!(readings[12], Some(80.0));
+        assert_eq!(readings[13], Some(100.0));
+        assert_eq!(
+            selected_tape_readings(&[], 0.2, &empty, &frames, &[false; N_TAPE]),
+            [None; N_TAPE],
+        );
+    }
+
+    #[test]
+    fn sparse_tape_objective_matches_full_functionals_through_actual_surface_probes() {
+        let (faces, posed, frames) = tapered_torso_fixture();
+        let wearer = Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 200.0,
+            weight_kg: None,
+        };
+        let rows = tape_rows(
+            &wearer,
+            &[TapeTarget {
+                name: "waist".into(),
+                value_mm: 450.0,
+                sigma_mm: Some(5.0),
+            }],
+        )
+        .unwrap();
+        let requested = std::array::from_fn(|i| rows.iter().any(|row| row.field == i));
+        let read = |th: &[f64; N_FREE], selected: &[bool; N_TAPE]| {
+            let mut body = posed.clone();
+            // Independent geometry: scaling both transverse axes makes the 416 mm waist
+            // exactly 416 * (1 + q/4), while stature and every other scalar stay fixed.
+            let scale = 1.0 + th[N_PHENOTYPE] / 4.0;
+            for vertex in &mut body.vertices {
+                vertex.x *= scale;
+                vertex.y *= scale;
+            }
+            let values = selected_tape_readings(&faces, 0.2, &body, &frames, selected);
+            Ok(std::array::from_fn(|i| {
+                if i < N_TAPE { values[i] } else { Some(1.0) }
+            }))
+        };
+        let complete = optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| {
+            read(th, &[true; N_TAPE])
+        })
+        .unwrap();
+        let sparse =
+            optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| read(th, &requested)).unwrap();
+        assert_eq!(sparse.free, complete.free);
+        assert_eq!(sparse.iterations, complete.iterations);
+        assert_eq!(sparse.readings[2], complete.readings[2]);
+        let expected = 104.0 * (450.0 - 416.0)
+            / (104.0_f64.powi(2) + 5.0_f64.powi(2) / PRIOR_SIGMA_LOCAL.powi(2));
+        assert!((sparse.free[N_PHENOTYPE] - expected).abs() < 1e-7);
+        assert_eq!(sparse.readings[3], None);
+        assert!(complete.readings[3].is_some());
+        assert_eq!(
+            read(&sparse.free, &[true; N_TAPE]).unwrap(),
+            complete.readings
+        );
     }
 }

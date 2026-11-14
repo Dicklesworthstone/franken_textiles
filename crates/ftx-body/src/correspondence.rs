@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    Affine, AnnyModel, BodyFrames, BodyParams, Phenotype, Pose, PosedBody, RestBody, TAPE_FIELDS,
-    age_parameter_for_years, partial_tape_readings, pose_deltas,
+    Affine, AnnyModel, BodyFrames, BodyParams, N_TAPE, Phenotype, Pose, PosedBody, RestBody,
+    TAPE_FIELDS, age_parameter_for_years, fit::selected_tape_readings, pose_deltas,
 };
 
 /// Shared explicit capture choices for native and portable workflows.
@@ -137,6 +137,7 @@ pub struct CorrespondenceModel {
     joints: Vec<(usize, Vec3, f64)>,
     targets: Vec<ResolvedTarget>,
     selected_vertices: Vec<usize>,
+    tape_selection: [bool; N_TAPE],
     cache: RefCell<Option<Cache>>,
 }
 
@@ -428,6 +429,12 @@ impl CorrespondenceModel {
         {
             return Err(invalid("unknown or duplicate Anny tape functional"));
         }
+        let tape_selection = std::array::from_fn(|i| {
+            config
+                .measurements
+                .iter()
+                .any(|name| name == TAPE_FIELDS[i])
+        });
         Ok(Self {
             model,
             config,
@@ -437,6 +444,7 @@ impl CorrespondenceModel {
             joints,
             targets,
             selected_vertices,
+            tape_selection,
             cache: RefCell::new(None),
         })
     }
@@ -568,8 +576,10 @@ impl CorrespondenceModel {
                 .iter()
                 .map(|f| f.map(|v| v as usize))
                 .collect();
-            // Missing unrequested anatomy must not discard independent usable tape targets.
-            let tape = partial_tape_readings(&faces, height, &posed, &frames);
+            // Only authored constraints are needed for each shape probe. Missing unrequested
+            // anatomy cannot discard independent usable targets or force unrelated surface scans.
+            let tape =
+                selected_tape_readings(&faces, height, &posed, &frames, &self.tape_selection);
             for (name, value) in self.config.measurements.iter().zip(&mut metrics) {
                 *value =
                     tape[TAPE_FIELDS.iter().position(|n| *n == name).unwrap()].ok_or_else(|| {

@@ -278,9 +278,14 @@ only available predictions. Square-frustum, analytic-optimizer and articulated-p
 regressions cover these boundaries; they do not establish new anatomical validity, uncertainty
 or measurement readiness.
 
-Stature/weight-only solves retain model, pose and frame admission on every evaluation, while
-deferring unused posed tape functionals. All final independently available tape diagnostics are
-evaluated once at the fitted parameters; other tape-target solves retain their complete reading path.
+Tape fitting retains model, pose and frame admission on every evaluation while computing only
+the requested tape functionals and their shared geometry dependencies. Landmark-only targets
+need no surface slicing; a waist target needs no limb, neck, head or longitudinal tape scans.
+All final independently available tape diagnostics are evaluated once at the fitted parameters.
+Photo fitting uses the same demand-driven authority for its explicitly requested independent
+tape constraints, preserving their authored order, cache behavior and missing-target refusals.
+Neither path changes the requested functionals, fit objective, uncertainty weights or acceptance
+thresholds; complete-diagnostic callers retain all 21 readings.
 
 **Units and frames.** Metres, +Z up, the body faces −Y, +X is the body's left. Rest bodies sit in the
 template frame (soles near z = −0.82 m); posed bodies are root-relative. Nothing is grounded here.
