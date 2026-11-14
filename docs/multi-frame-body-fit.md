@@ -99,6 +99,9 @@ In **Fit one body shape across changing poses**, select the converted model and 
 1. Choose the 2–8 original images, checked camera calibration and original printed sheet sidecar.
    Enter the matching lens/rotation, stationary reference, measured board origin, at least four
    predeclared held-out corner IDs (leaving at least four FIT corners) and placement evidence.
+   For a Brown-distorted lens, select **Correct lens distortion for silhouette editing** to derive
+   supported pinhole images. Review the corrected crop before authoring; the body regions you intend
+   to observe must remain visible. The corrected PNGs are offered as downloads with the draft.
 2. Choose **Load available model controls**. Enter age and the Anny gender coefficient, select
    shared shape controls, and choose fixed values or explicit fitting bounds. All six roots
    begin fixed at zero; choose the roots or declared local-axis joints to fit in each frame.
@@ -120,8 +123,10 @@ Beginning a valid acquisition replaces the selected prepared input and withdraws
 authoring results, fits and garment handoffs. Changing capture files, model choices or board
 declarations cancels work and invalidates a generated draft. Late reads and workers cannot
 republish it, and clearing or cancelling never falls back to an older prepared-file selection.
-Original photographs remain local; their encoded bytes are verified again when displayed
-beneath authored observations or a fitted frame.
+Photographs remain local; the exact image bytes bound to the draft are verified again when displayed
+beneath authored observations or a fitted frame. With lens correction enabled, these are the derived
+PNGs. The page supplies them automatically to the image editor; selecting an original distorted
+photo instead refuses the image check.
 
 The portable `body_capture_catalogue` and incremental `BodyCapture` API can prepare the
 ordinary `ftx-anny-body-fit-input/1` directly from 2–8 local PNG/JPEG photographs. It uses the
@@ -151,6 +156,27 @@ camera FIT/CHECK diagnostics and image bindings. Distinct files with identical d
 refuse. Each still image has its own source clock: `still-image:<encoded-byte SHA-256>` at
 timestamp zero, paired with its decoded pixel hash. These identities do not assert exposure
 times, a synchronized burst or a static person; each frame has its own fitted pose.
+
+For optional fresh-capture correction, add `"rectify": true` to the manifest before adding any
+images. Camera detection and FIT/CHECK acceptance still run on each original distorted photo.
+The shared Rust rectifier chooses the largest fully supported crop of the original-sized pinhole
+grid and samples the source by bilinear interpolation. Focal lengths, the accepted camera pose and
+the certified lens radius are unchanged; the principal point shifts by the crop origin and Brown
+coefficients become zero. Unsupported borders are discarded, with no padding or extrapolation.
+This makes the resulting camera and actual raster suitable for the existing silhouette editor.
+
+After every successful `add_image`, call `take_image()` to receive the exact derived PNG before
+adding the next source or calling `finish`. Each addition receipt's `rectification` describes the
+original and derived cameras, crop, dimensions, encoded image hash and decoded pixel hash. Keep
+each PNG under its recorded `image.image_name`. The final opt-in report uses
+`ftx-body-photo-capture-result/2`; its prepared input binds those PNGs while frame identities and
+acquisition evidence still name the originals. Files differing only outside the retained crop do
+not become independent views. Omitting the option retains the original `/1` result and images.
+
+Correction applies only while preparing a fresh draft. Previously authored points, masks, weights
+and starts are not moved to new coordinates. Author new observations on the corrected images, and
+review that cropping has preserved the body regions you need. The ordinary native `fit-body`
+command and portable fitter consume the resulting prepared input without a separate fit mode.
 
 The successful result is an unfinished `CAPTURE_DRAFT` with `body_fitted: false`, empty
 anatomical targets/observations and no starts. Continue with the existing model-target picker,

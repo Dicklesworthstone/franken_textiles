@@ -379,8 +379,10 @@ intrinsic covariance. Views from one declared lens share its full correlated per
 independently calibrated lens groups require separate acquisition identities and an explicit
 independence basis. The actual pixel-refined estimator supplies the derivatives, retaining its
 ordinary geometry and held-out gates. Click and lens precision remain separate conditional
-components: camera poses and metric scale are fixed, so this does not account for pose/lens
-correlation, motion, systematic error or empirical capture accuracy. See `docs/triangulation.md`.
+components. The original lens mode holds poses fixed; the source-pose mode jointly refits the
+original sheet cameras for every correlated lens perturbation. Independently declared sheet-corner
+noise supplies a separate camera component. Metric scale remains fixed, and none of these components
+accounts for motion, systematic error or empirical capture accuracy. See `docs/triangulation.md`.
 
 Order of the port (research file 08): conventions and receipts → camera core (distortion, projection, plane
 homography, similarity fits, gated triangulation, RANSAC plane, homography scale and focal search) → frame
@@ -5928,6 +5930,26 @@ source evidence, contour weights, body-model identities and independent frame po
 the zero-distortion comparison retains its existing calculation. This extends the software capture
 and fitting path through `ftx-bc1.brown`. It does not infer segmentation, clothing or anatomical
 correspondence, propagate lens uncertainty into a body fit, or establish physical wearer accuracy.
+
+### 25.209 Fit silhouettes from corrected fresh Brown-camera photographs
+
+Fresh still-photo capture can now derive actual pinhole PNGs before anatomical targets, image
+observations or starts are authored. Original Brown images and calibration continue to supply board
+detection and camera FIT/CHECK acceptance. A bounded shared Rust rectifier preserves the accepted
+extrinsics, focal lengths and certified lens domain, finds the largest supported crop and records
+its principal-point shift. Bilinear samples require source support; missing borders are never filled.
+
+The exact derived image bytes and dimensions become the ordinary prepared input's image bindings,
+while original source-image identities and acquisition evidence remain intact. The browser streams each
+PNG once, offers exact downloads and reuses existing image verification and silhouette authoring.
+Every derived file is withdrawn on source changes or cancellation. Duplicate corrected pixels do
+not become independent views. Existing annotations are never silently moved between coordinate
+systems; crop coverage and new observations remain explicit user decisions.
+
+This advances the body-photo route in §25.196 and plan §§9.4/10.2. Synthetic checks cover independent
+Brown mapping, crop selection, source-pose preservation, exact image identity and native/portable
+silhouette fitting. Runtime outcomes are recorded with `ftx-onn.34`. Rectification supplies neither
+anatomical segmentation nor calibration-uncertainty propagation, real-wearer accuracy or physical fit.
 
 ## Appendix A. Sources
 

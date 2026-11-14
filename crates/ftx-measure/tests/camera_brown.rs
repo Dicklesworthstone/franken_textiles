@@ -645,7 +645,10 @@ fn shared_lens_replays_sheet_poses_and_refuses_changed_camera_sources() {
         });
     }
     let native_sources = triangulate_with_lens_noise(&input, &annotated).unwrap();
-    assert_eq!(native_sources.conditional_lens_uncertainty.status, "AVAILABLE");
+    assert_eq!(
+        native_sources.conditional_lens_uncertainty.status,
+        "AVAILABLE"
+    );
     assert_eq!(
         json!(native_sources.conditional_lens_uncertainty.covariance_m2),
         json!(result.conditional_lens_uncertainty.covariance_m2)

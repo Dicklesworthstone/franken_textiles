@@ -338,7 +338,11 @@ mod tests {
     use ftx_core::Vec2;
     use serde_json::json;
 
-    fn fixture(point: Vec3, scale: f64, shift: Vec2) -> (TriangulationInput, SheetCornerNoiseInput) {
+    fn fixture(
+        point: Vec3,
+        scale: f64,
+        shift: Vec2,
+    ) -> (TriangulationInput, SheetCornerNoiseInput) {
         let intrinsics = Intrinsics {
             focal_px: Vec2::new(800., 800.),
             principal_px: Vec2::new(800., 600.),
@@ -349,11 +353,7 @@ mod tests {
         for (i, x) in [-0.5, 0.5, 0.].into_iter().enumerate() {
             let known = Camera {
                 intrinsics,
-                world_to_camera: Mat3::from_rows([
-                    [1., 0., 0.],
-                    [0., 0., -1.],
-                    [0., 1., 0.],
-                ]),
+                world_to_camera: Mat3::from_rows([[1., 0., 0.], [0., 0., -1.], [0., 1., 0.]]),
                 center_m: Vec3::new(x * scale + shift.x, -2. * scale, shift.y),
             };
             let corners: Vec<_> = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5), (0.1, 0.2)]
@@ -412,12 +412,14 @@ mod tests {
         )
     }
 
-    fn available(input: &TriangulationInput, noise: &SheetCornerNoiseInput) -> SheetUncertaintyReport {
+    fn available(
+        input: &TriangulationInput,
+        noise: &SheetCornerNoiseInput,
+    ) -> SheetUncertaintyReport {
         let result = triangulate_with_sheet_noise(input, noise).unwrap();
         assert_eq!(result.triangulation.status, "ACCEPTED");
         assert_eq!(
-            result.conditional_sheet_uncertainty.status,
-            "AVAILABLE",
+            result.conditional_sheet_uncertainty.status, "AVAILABLE",
             "{:?}",
             result.conditional_sheet_uncertainty.flags,
         );
@@ -425,10 +427,23 @@ mod tests {
     }
 
     fn assert_scaled(actual: Mat3, expected: Mat3, factor: f64, tolerance: f64) {
-        let norm = expected.rows.iter().flatten().map(|v| v.abs()).fold(0., f64::max) * factor;
-        for (actual, expected) in actual.rows.iter().flatten().zip(expected.rows.iter().flatten()) {
-            assert!((actual - expected * factor).abs() < tolerance * norm,
-                "{actual} != {expected} * {factor}");
+        let norm = expected
+            .rows
+            .iter()
+            .flatten()
+            .map(|v| v.abs())
+            .fold(0., f64::max)
+            * factor;
+        for (actual, expected) in actual
+            .rows
+            .iter()
+            .flatten()
+            .zip(expected.rows.iter().flatten())
+        {
+            assert!(
+                (actual - expected * factor).abs() < tolerance * norm,
+                "{actual} != {expected} * {factor}"
+            );
         }
     }
 
@@ -443,11 +458,8 @@ mod tests {
         // has variance sigma²/(2*f²), with zero cross covariance. Calibrated pose recovery
         // leaves these center projections unchanged to first order. Stereo then gives the
         // ordinary f=800, baseline=1, depth=2 covariance with half the one-pixel variance.
-        let expected = Mat3::from_rows([
-            [1.5625e-6, 0., 0.],
-            [0., 2.5e-5, 0.],
-            [0., 0., 1.5625e-6],
-        ]);
+        let expected =
+            Mat3::from_rows([[1.5625e-6, 0., 0.], [0., 2.5e-5, 0.], [0., 0., 1.5625e-6]]);
         assert_scaled(report.covariance_m2.unwrap(), expected, 1., 1e-5);
         assert_eq!(report.sensitivities.len(), 2);
         for frame in &report.sensitivities {
@@ -472,7 +484,12 @@ mod tests {
         let doubled = available(&input, &noise).covariance_m2.unwrap();
         assert_scaled(doubled, base, 4., 1e-10);
         let (scaled, noise) = fixture(point, 7., Vec2::ZERO);
-        assert_scaled(available(&scaled, &noise).covariance_m2.unwrap(), base, 49., 1e-3);
+        assert_scaled(
+            available(&scaled, &noise).covariance_m2.unwrap(),
+            base,
+            49.,
+            1e-3,
+        );
     }
 
     #[test]
@@ -481,10 +498,16 @@ mod tests {
         let original = triangulate_with_sheet_noise(&input, &noise).unwrap();
         input.observations.reverse();
         noise.observations.reverse();
-        assert_eq!(json!(original), json!(triangulate_with_sheet_noise(&input, &noise).unwrap()));
+        assert_eq!(
+            json!(original),
+            json!(triangulate_with_sheet_noise(&input, &noise).unwrap())
+        );
         input.observations[0].pixel_px.x += 0.2;
         let landmark_check = available(&input, &noise);
-        assert_eq!(json!(original.conditional_sheet_uncertainty), json!(landmark_check));
+        assert_eq!(
+            json!(original.conditional_sheet_uncertainty),
+            json!(landmark_check)
+        );
         let source = &mut noise.observations[0].report["input"];
         let pixel = source["points"][4]["pixel_px"][0].as_f64().unwrap();
         source["points"][4]["pixel_px"][0] = json!(pixel + 0.2);
@@ -529,14 +552,18 @@ mod tests {
         for field in ["camera", "reprojection", "flags", "no_claim", "unexpected"] {
             let mut bad = noise.clone();
             bad.observations[0].report[field] = Value::Null;
-            assert!(triangulate_with_sheet_noise(&input, &bad).is_err(), "{field}");
+            assert!(
+                triangulate_with_sheet_noise(&input, &bad).is_err(),
+                "{field}"
+            );
         }
         let mut changed = input.clone();
         changed.observations[0].camera.center_m.x += 1e-7;
         assert!(triangulate_with_sheet_noise(&changed, &noise).is_err());
         let mut bad = noise.clone();
         bad.observations[1].report["input"]["reference_id"] = json!("different-sheet");
-        bad.observations[1].report = Camera::sheet_pose_report(&bad.observations[1].report["input"]).unwrap();
+        bad.observations[1].report =
+            Camera::sheet_pose_report(&bad.observations[1].report["input"]).unwrap();
         assert!(triangulate_with_sheet_noise(&input, &bad).is_err());
         let mut bad = noise;
         let source = &mut bad.observations[0].report["input"];
@@ -562,7 +589,12 @@ mod tests {
         assert_eq!(result.conditional_sheet_uncertainty.status, "UNAVAILABLE");
         assert!(result.conditional_sheet_uncertainty.covariance_m2.is_none());
         assert!(result.conditional_sheet_uncertainty.sigma_m.is_none());
-        assert!(result.conditional_sheet_uncertainty.sensitivities.is_empty());
+        assert!(
+            result
+                .conditional_sheet_uncertainty
+                .sensitivities
+                .is_empty()
+        );
     }
 
     #[test]
@@ -574,13 +606,19 @@ mod tests {
             point["pixel_px"][0] = json!(point["pixel_px"][0].as_f64().unwrap() - 800.);
         }
         noise.observations[0].report = Camera::sheet_pose_report(source).unwrap();
-        input.observations[0].camera = serde_json::from_value(noise.observations[0].report["camera"].clone()).unwrap();
+        input.observations[0].camera =
+            serde_json::from_value(noise.observations[0].report["camera"].clone()).unwrap();
         input.observations[0].pixel_px.x -= 800.;
         let result = triangulate_with_sheet_noise(&input, &noise).unwrap();
         assert!(result.triangulation.point_m.is_some());
         assert_eq!(result.conditional_sheet_uncertainty.status, "UNAVAILABLE");
         assert!(result.conditional_sheet_uncertainty.covariance_m2.is_none());
-        assert!(result.conditional_sheet_uncertainty.sensitivities.is_empty());
+        assert!(
+            result
+                .conditional_sheet_uncertainty
+                .sensitivities
+                .is_empty()
+        );
     }
 
     #[test]
@@ -599,7 +637,9 @@ mod tests {
         let (input, mut noise) = fixture(Vec3::ZERO, 1., Vec2::ZERO);
         let held_out = noise.observations[0].report["input"]["points"][4].clone();
         noise.observations[0].report["input"]["points"]
-            .as_array_mut().unwrap().extend(std::iter::repeat_n(held_out, 1024));
+            .as_array_mut()
+            .unwrap()
+            .extend(std::iter::repeat_n(held_out, 1024));
         let error = triangulate_with_sheet_noise(&input, &noise).unwrap_err();
         assert_eq!(error.code, RefusalCode::BudgetExceeded);
     }

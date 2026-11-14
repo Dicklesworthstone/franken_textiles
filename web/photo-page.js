@@ -23,6 +23,7 @@ let bodyCaptureWorker = null, bodyCaptureTicket = 0, bodyCaptureBusy = false;
 let bodyCaptureCatalogue = null, bodyCaptureModelFile = null, bodyCaptureGenerated = null, bodyCaptureRowId = 0;
 let bodyCaptureRows = {shapes:[],roots:[],joints:[],measurements:[]}, bodyCaptureInputs = [];
 const bodyCaptureUrls = [];
+const bodyCapturePendingImages = new Map();
 let bodyTargetsWorker = null, bodyTargetsTicket = 0, bodyTargetsBusy = false;
 let bodyTargetsView = null, bodyTargetsSource = null, bodyTargetsToken = null;
 const bodyTargetsUrls = [];
@@ -103,7 +104,8 @@ function controls() {
   $("bodyFitAcceptedReviewControls").hidden=!bodyFitSources;
   const reviewImageUnavailable=bodyCaptureBusy || bodyFitBusy || bodyReviewBusy || !bodyReviewValue?.source_image;
   $("bodyFitReviewImage").disabled=reviewImageUnavailable;
-  $("bodyFitReviewImageRun").disabled=reviewImageUnavailable || bodyReviewImageBusy || !$("bodyFitReviewImage").files.length;
+  $("bodyFitReviewImageRun").disabled=reviewImageUnavailable || bodyReviewImageBusy ||
+    !($("bodyFitReviewImage").files.length || capturedBodyImage(bodyReviewValue?.source_image?.image_name));
   $("bodyFitReviewImageClear").disabled=!bodyReviewImageBusy && !bodyReviewBitmap && !$("bodyFitReviewImage").files.length;
   $("bodyStartsLoad").disabled=startsBlocked || pointsBlocked || bodyFitBusy || bodyStartsView!==null || !$("bodyFitModel").files.length || !bodyInputFile();
   $("bodyStartsEditor").hidden=bodyStartsView===null;
@@ -128,7 +130,8 @@ function controls() {
   $("bodyPointsCancel").disabled=!bodyPointsBusy && !bodyPointsPending;
   $("bodyPointsReset").disabled=!bodyPointsView && !bodyPointsBusy;
   $("bodyPointsImage").disabled=pointsLocked || !pointFrame?.image_review;
-  $("bodyPointsImageRun").disabled=pointsLocked || bodyPointsImageBusy || !pointFrame?.image_review || !$("bodyPointsImage").files.length;
+  $("bodyPointsImageRun").disabled=pointsLocked || bodyPointsImageBusy || !pointFrame?.image_review ||
+    !($("bodyPointsImage").files.length || capturedBodyImage(pointFrame?.image_name));
   $("bodyPointsImageClear").disabled=!bodyPointsImageBusy && !bodyPointsBitmap && !$("bodyPointsImage").files.length;
   const silhouette=bodyPointsDraft[bodyPointsSelected]?.silhouette, slice=silhouette?.lines[Number($("bodySilhouetteLine").value)];
   const silhouetteLocked=pointsLocked || pointFrame?.silhouette_editable!==true;
@@ -257,6 +260,7 @@ function bodyCaptureOtherBusy() {
 }
 function stopBodyCapture() {
   ++bodyCaptureTicket; bodyCaptureWorker?.terminate(); bodyCaptureWorker=null; bodyCaptureBusy=false;
+  bodyCapturePendingImages.clear();
 }
 function clearBodyCapture(clearCatalogue=false) {
   stopBodyCapture(); revoke(bodyCaptureUrls); $("bodyCaptureDownloads").replaceChildren();
@@ -276,6 +280,22 @@ function clearBodyCapture(clearCatalogue=false) {
 function changeBodyCapture() {
   clearBodyCapture();
   $("bodyCaptureStatus").textContent="Capture sources or declarations changed. Prepare a new calibrated draft from the complete form.";
+}
+function capturedBodyImage(name) {
+  const source=bodyCaptureGenerated;
+  if(!source || source.modelFile!==$("bodyFitModel").files[0] || bodyInputFile()!==source.file) return null;
+  return source.derivedFiles.get(name)?.file || (!source.rectified && source.originalFiles.get(name)) || null;
+}
+function captureImageIdentity(image) {
+  if(!image || typeof image.image_name!=="string" || !/^rectified-[0-9a-f]{64}\.png$/.test(image.image_name) ||
+      typeof image.image_sha256!=="string" || !/^[0-9a-f]{64}$/.test(image.image_sha256) ||
+      !Array.isArray(image.image_size_px) || image.image_size_px.length!==2 ||
+      image.image_size_px.some(value=>!Number.isSafeInteger(value) || value<2) ||
+      image.image_size_px[0]*image.image_size_px[1]>16000000 || ![0,90,180,270].includes(image.rotation_cw_deg) ||
+      typeof image.frame?.stream!=="string" || image.frame.timestamp_us!==0) {
+    throw Error("The engine did not return a complete corrected capture image binding.");
+  }
+  return JSON.stringify([image.image_name,image.image_sha256,image.image_size_px,image.rotation_cw_deg,image.frame.stream,image.frame.timestamp_us]);
 }
 function captureNumber(value,label,lower=-Infinity,upper=Infinity) {
   const number=Number(value);
@@ -458,6 +478,7 @@ function captureDeclarations(images) {
       captureNumber($("bodyCaptureOriginX").value,"board origin x in metres"),
       captureNumber($("bodyCaptureOriginZ").value,"board origin z in metres")],
     stationary_upright_evidence:captureText("bodyCaptureStationary","stationary upright sheet evidence")};
+  if($("bodyCaptureRectify").checked) manifest.rectify=true;
   const shapes=bodyCaptureRows.shapes.map(row=>({name:row.name,choice:captureChoice(row)}));
   const roots=bodyCaptureRows.roots.map(row=>({name:row.name,choice:captureChoice(row)}));
   const joints=bodyCaptureRows.joints.map(row=>({bone:row.name,
@@ -494,6 +515,7 @@ async function runBodyCapture() {
   if(bodyCaptureBusy || bodyCaptureOtherBusy()) return;
   const modelFile=$("bodyFitModel").files[0], calibrationFile=$("bodyCaptureCalibration").files[0], sheetFile=$("bodyCaptureSheet").files[0];
   const images=Array.from($("bodyCaptureImages").files);
+  const rectify=$("bodyCaptureRectify").checked===true;
   let id=bodyCaptureTicket;
   const fail=error=>{
     if(id!==bodyCaptureTicket) return;
@@ -524,6 +546,18 @@ async function runBodyCapture() {
     current.onmessage=({data:m})=>{
       if(current!==bodyCaptureWorker || m.request!==bodyCaptureTicket) return;
       if(m.type==="progress") {$("bodyCaptureStatus").textContent=m.text;return;}
+      if(m.type==="body-capture-image") {
+        try {
+          if(!rectify || !images.some(file=>file.name===m.sourceImage) || bodyCapturePendingImages.has(m.sourceImage) ||
+              !(m.png instanceof ArrayBuffer) || !m.png.byteLength || m.png.byteLength>128*1024*1024) {
+            throw Error("The engine returned an unexpected or incomplete corrected photograph.");
+          }
+          const identity=captureImageIdentity(m.image);
+          const file=Object.assign(new Blob([m.png],{type:"image/png"}),{name:m.image.image_name});
+          bodyCapturePendingImages.set(m.sourceImage,{file,image:m.image,identity});
+        } catch(error) {fail(error);}
+        return;
+      }
       if(m.type==="body-capture-view") {
         $("bodyCaptureStatus").textContent="Checked photograph "+m.done+"/"+m.total+": "+m.image;
         $("bodyCaptureDiagnostics").textContent+=JSON.stringify(m.diagnostics)+"\n"; return;
@@ -533,20 +567,47 @@ async function runBodyCapture() {
       try {
         if(typeof m.report!=="string" || new Blob([m.report]).size>16*1024*1024) throw Error("Capture result exceeds 16 MiB.");
         const view=JSON.parse(m.report);
-        if(view.schema!=="ftx-body-photo-capture-result/1" || view.status!=="CAPTURE_DRAFT" || view.body_fitted!==false ||
+        if(view.schema!==(rectify?"ftx-body-photo-capture-result/2":"ftx-body-photo-capture-result/1") || view.status!=="CAPTURE_DRAFT" || view.body_fitted!==false ||
             view.start_count!==0 || view.frame_count!==images.length || typeof view.input!=="string" ||
             new Blob([view.input]).size>16*1024*1024 || !/^[0-9a-f]{64}$/.test(view.input_sha256) ||
             view.model_sha256!==modelHash || !view.acquisition) {
           throw Error("The engine did not return a complete source-bound capture draft.");
         }
+        const derivedFiles=new Map();
+        if(rectify) {
+          if(!Array.isArray(view.acquisition.frames) || view.acquisition.frames.length!==images.length || bodyCapturePendingImages.size!==images.length) {
+            throw Error("The corrected capture is missing one or more source-bound PNG files.");
+          }
+          for(const [index,frame] of view.acquisition.frames.entries()) {
+            const pending=bodyCapturePendingImages.get(images[index].name), correction=frame.rectification, image=correction?.image;
+            if(frame.image!==images[index].name || correction?.schema!=="ftx-capture-rectification/1" ||
+                captureImageIdentity(image)!==pending?.identity || image.image_name!=="rectified-"+frame.image_sha256+".png" ||
+                image.frame.stream!=="still-image:"+frame.image_sha256 || derivedFiles.has(image.image_name)) {
+              throw Error("The corrected photograph does not match the completed capture binding.");
+            }
+            derivedFiles.set(image.image_name,pending);
+          }
+        } else if(bodyCapturePendingImages.size || view.acquisition.frames?.some(frame=>frame.rectification)) {
+          throw Error("The engine corrected capture pixels without the requested option.");
+        }
         const file=Object.assign(new Blob([view.input],{type:"application/json"}),{name:"body-fit-input-stills.json"});
         stopBodyCapture(); bodyCaptureGenerated={file,modelFile,report:m.report,input:view.input,
-          input_sha256:view.input_sha256,model_sha256:view.model_sha256};
+          input_sha256:view.input_sha256,model_sha256:view.model_sha256,rectified:rectify,derivedFiles,
+          originalFiles:new Map(images.map(file=>[file.name,file]))};
         bodyPreparedSource=null; keepBodyInput(view,view.input,file,modelFile);
         link($("bodyCaptureDownloads"),view.input,"body-fit-input-stills.json","application/json",bodyCaptureUrls);
         link($("bodyCaptureDownloads"),m.report,"body-photo-capture.json","application/json",bodyCaptureUrls);
+        for(const {file} of derivedFiles.values()) link($("bodyCaptureDownloads"),file,file.name,"image/png",bodyCaptureUrls);
+        if(rectify) {
+          link($("bodyCaptureDownloads"),manifest,"body-photo-manifest.json","application/json",bodyCaptureUrls);
+          link($("bodyCaptureDownloads"),choices,"body-photo-choices.json","application/json",bodyCaptureUrls);
+          link($("bodyCaptureDownloads"),calibration,"body-photo-calibration.json","application/json",bodyCaptureUrls);
+          link($("bodyCaptureDownloads"),sheet,"body-photo-sheet.json","application/json",bodyCaptureUrls);
+        }
         $("bodyCaptureDiagnostics").textContent=m.report;
-        $("bodyCaptureStatus").textContent="Prepared "+view.frame_count+" calibrated source-bound frames. Declare anatomical model targets, observe image points or silhouettes, then author at least two distinct starts.";
+        $("bodyCaptureStatus").textContent="Prepared "+view.frame_count+" calibrated source-bound frames. "+
+          (rectify?"Corrected photographs are ready below. Review the cropped views before marking landmarks or silhouettes, and download the PNG copies with the input. ":"")+
+          "Declare anatomical model targets, observe image points or silhouettes, then author at least two distinct starts.";
         $("bodyFitStatus").textContent="The generated capture draft is active. It contains no inferred targets or starting values; continue with the editors below.";
         controls();
       } catch(error) {fail(error);}
@@ -923,7 +984,9 @@ function renderBodyPoints() {
   $("bodyPointsFrame").value=String(bodyPointsSelected);
   $("bodyPointsTarget").value=bodyPointsView?.targets.some(t=>t.name===selected)?selected:"";
   const frame=bodyPointsView?.frames[bodyPointsSelected];
-  $("bodyPointsImageSource").textContent=frame?.image_review?"Original capture: "+frame.image_name+". Stored pixels are already oriented ("+frame.rotation_cw_deg+"° recorded).":
+  $("bodyPointsImageSource").textContent=frame?.image_review?"Capture photograph: "+frame.image_name+". "+
+    (capturedBodyImage(frame.image_name)?"The matching capture image is ready to verify here. ":"")+
+    "Stored pixels are already oriented ("+frame.rotation_cw_deg+"° recorded).":
     "This frame has no original-image binding. Enter independently reviewed coordinates in its stored pixel space.";
   renderBodyPointForm();
   renderBodySilhouette();
@@ -1128,14 +1191,15 @@ async function runBodyPoints(apply=false) {
   } catch(error) {fail(error);}
 }
 async function runBodyPointsImage() {
-  const frame=bodyPointsView?.frames[bodyPointsSelected], file=$("bodyPointsImage").files[0];
+  const frame=bodyPointsView?.frames[bodyPointsSelected];
+  const file=$("bodyPointsImage").files[0] || capturedBodyImage(frame?.image_name);
   if(bodyPointsImageBusy || bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending || !frame?.image_review) return;
   withdrawBodyPointsImage(false); const id=bodyPointsImageTicket;
   const fail=error=>{if(id!==bodyPointsImageTicket)return;withdrawBodyPointsImage(false);
     $("bodyPointsImageStatus").textContent="Photograph refused: "+String(error.message || error);};
   try {
-    if(!file || !file.size || file.size>128*1024*1024 || frame.image_size_px[0]*frame.image_size_px[1]>40000000) throw Error("Choose an original PNG or JPEG up to 128 MiB and 40 million pixels.");
-    bodyPointsImageBusy=true; controls(); $("bodyPointsImageStatus").textContent="Verifying original encoded pixels…";
+    if(!file || !file.size || file.size>128*1024*1024 || frame.image_size_px[0]*frame.image_size_px[1]>40000000) throw Error("Choose the matching PNG or JPEG up to 128 MiB and 40 million pixels.");
+    bodyPointsImageBusy=true; controls(); $("bodyPointsImageStatus").textContent="Verifying the input-bound photograph…";
     const image=await file.arrayBuffer(); if(id!==bodyPointsImageTicket)return;
     const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); bodyPointsImageWorker=current;
     current.onmessage=async({data:m})=>{
@@ -1151,7 +1215,7 @@ async function runBodyPointsImage() {
         if(id!==bodyPointsImageTicket) {bitmap.close();return;}
         if(bitmap.width!==frame.image_size_px[0] || bitmap.height!==frame.image_size_px[1]) {bitmap.close();throw Error("Photograph dimensions disagree with the stored frame.");}
         bodyPointsBitmap=bitmap; bodyPointsImageBusy=false; drawBodyPoints(); controls();
-        $("bodyPointsImageStatus").textContent="Verified original pixels; "+frame.rotation_cw_deg+"° rotation already applied. Choose a target to place a landmark, or explicitly pick a silhouette interval. No additional rotation or lens transform is performed.";
+        $("bodyPointsImageStatus").textContent="Verified input-bound pixels; "+frame.rotation_cw_deg+"° rotation already applied. Choose a target to place a landmark, or explicitly pick a silhouette interval. No additional rotation or lens transform is performed.";
       } catch(error) {fail(error);}
     };
     current.onerror=error=>{if(current===bodyPointsImageWorker)fail(error);};
@@ -1301,7 +1365,8 @@ function publishBodyReview(text,index,startIndex=null) {
   bodyReviewValue=v; bodyReviewText=text; drawBodyReview();
   $("bodyFitReviewHeading").textContent=initial?"Declared initialization — no fitted body":"Inspect an accepted frame";
   $("bodyFitReviewImageSource").textContent=v.source_image?
-    "Original capture: "+v.source_image.image_name+". Choose the original PNG or JPEG below to inspect it behind the projections.":
+    "Capture photograph: "+v.source_image.image_name+". "+(capturedBodyImage(v.source_image.image_name)?
+      "The matching capture image is ready to verify here.":"Choose the matching PNG or JPEG below to inspect it behind the projections."):
     "This frame has no retained original-image identity. Photograph review requires a capture-backed prepared input or saved capture report.";
   const name=(initial?"body-fit-start-"+String(startIndex).padStart(4,"0")+"-frame-":"body-fit-frame-")+String(index).padStart(4,"0");
   link($("bodyFitReviewDownloads"),text,name+".json","application/json",bodyReviewUrls);
@@ -1332,7 +1397,8 @@ function publishBodyReview(text,index,startIndex=null) {
 }
 async function runBodyReviewImage() {
   if(bodyReviewImageBusy || bodyReviewBusy || bodyFitBusy || !bodyReviewText || !bodyReviewValue?.source_image) return;
-  const file=$("bodyFitReviewImage").files[0], review=bodyReviewText, value=bodyReviewValue;
+  const file=$("bodyFitReviewImage").files[0] || capturedBodyImage(bodyReviewValue?.source_image?.image_name);
+  const review=bodyReviewText, value=bodyReviewValue;
   withdrawBodyReviewImage(false); const id=bodyReviewImageTicket;
   const fail=error=>{
     if(id!==bodyReviewImageTicket || review!==bodyReviewText) return;
@@ -1343,9 +1409,9 @@ async function runBodyReviewImage() {
   try {
     if(!file || file.size===0 || file.size>128*1024*1024 || new Blob([review]).size>16*1024*1024 ||
         value.image_size_px[0]*value.image_size_px[1]>40000000) {
-      throw Error("Choose an original PNG or JPEG up to 128 MiB and 40 million pixels, with a frame review up to 16 MiB.");
+      throw Error("Choose the matching PNG or JPEG up to 128 MiB and 40 million pixels, with a frame review up to 16 MiB.");
     }
-    bodyReviewImageBusy=true; controls(); $("bodyFitReviewImageStatus").textContent="Reading the selected original photograph…";
+    bodyReviewImageBusy=true; controls(); $("bodyFitReviewImageStatus").textContent="Reading the input-bound photograph…";
     const image=await file.arrayBuffer();
     if(id!==bodyReviewImageTicket || review!==bodyReviewText) return;
     const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); bodyReviewImageWorker=current;
@@ -1361,7 +1427,7 @@ async function runBodyReviewImage() {
         const [w,h]=value.image_size_px;
         if(decoded.width!==w || decoded.height!==h) {decoded.close();throw Error("The verified photograph preview does not match the frame's stored pixel dimensions.");}
         bodyReviewBitmap=decoded; bodyReviewImageBusy=false; drawBodyReview(); controls();
-        $("bodyFitReviewImageStatus").textContent="Verified original capture photograph: "+value.source_image.image_name+". "+
+        $("bodyFitReviewImageStatus").textContent="Verified capture photograph: "+value.source_image.image_name+". "+
           w+" × "+h+" stored pixels; "+value.rotation_cw_deg+"° clockwise rotation already applied. SHA-256 "+
           value.source_image.image_sha256+(isStartReview()?". Visual inspection does not fit or accept a body.":". Visual inspection does not change the accepted fit.");
       } catch(error) {fail(error);}
@@ -1952,7 +2018,7 @@ $("cameraRun").onclick=runCamera;
 $("bodyCaptureCatalogue").onclick=loadBodyCaptureCatalogue;
 $("bodyCaptureRun").onclick=runBodyCapture;
 $("bodyCaptureCancel").onclick=()=>{
-  stopBodyCapture(); controls(); $("bodyCaptureStatus").textContent="Capture acquisition cancelled; no new draft published.";
+  clearBodyCapture(); $("bodyCaptureStatus").textContent="Capture acquisition cancelled; no new draft published.";
 };
 $("bodyCaptureClear").onclick=()=>{
   clearBodyCapture(); $("bodyCaptureStatus").textContent="Generated capture draft cleared. Current source choices remain available for a new acquisition.";
@@ -1981,6 +2047,7 @@ for(const id of ["bodyCaptureLens","bodyCaptureReference","bodyCaptureOriginX","
   $(id).addEventListener("input",changeBodyCapture);
 }
 $("bodyCaptureRotation").addEventListener("change",changeBodyCapture);
+$("bodyCaptureRectify").addEventListener("change",changeBodyCapture);
 for(const id of ["bodyCaptureImages","bodyCaptureCalibration","bodyCaptureSheet"]) {
   $(id).addEventListener("change",changeBodyCapture);
   for(const event of ["click","cancel"]) $(id).addEventListener(event,()=>{

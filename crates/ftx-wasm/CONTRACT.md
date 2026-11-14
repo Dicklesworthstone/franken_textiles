@@ -64,9 +64,10 @@ exact output PNG identity and decoded pixel hash. Original still-clock identitie
 `take_image()` returns and releases that exact PNG; it must be drained before the next addition or
 `finish`. A duplicate original or derived raster refuses transactionally. The opt-in result uses
 `ftx-body-photo-capture-result/2` and binds its ordinary prepared input to the derived PNGs.
-Omitted/false rectification retains the original `/1` behavior. Callers must retain the exact PNGs
-and review crop coverage before authoring silhouettes. This does not transform existing annotations,
-infer contours or propagate
+Omitted/false rectification retains the original `/1` behavior. The page transfers each PNG once,
+offers its exact download and automatically supplies it to existing image verification and authoring.
+Source edits/cancellation withdraw all derived files. The user must review crop coverage before
+authoring silhouettes. This does not transform existing annotations, infer contours or propagate
 calibration uncertainty; ordinary silhouette and body-fit acceptance remain unchanged.
 
 **Local multi-frame Anny fitting.** `body_fit::fit_body(model_bytes, input, iterations,

@@ -297,6 +297,11 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       <input id="bodyCaptureCalibration" type="file" accept=".json,application/json"></label>
     <label>Original printed calibration-sheet sidecar
       <input id="bodyCaptureSheet" type="file" accept=".json,application/json"></label>
+    <label><input id="bodyCaptureRectify" type="checkbox"> Correct lens distortion for silhouette editing</label>
+    <p><small>This creates corrected PNG copies and crops unsupported edges. Review each corrected
+      photograph before marking the wearer; anything outside the crop is unavailable. Your original
+      photographs remain the calibration and sheet-check sources. Download the corrected copies
+      with the prepared input to reopen this capture later.</small></p>
     <div class="row">
       <label>Calibration lens ID <input id="bodyCaptureLens" type="text" maxlength="256"></label>
       <label>Rotation already applied to stored pixels
@@ -396,20 +401,21 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       fixed. Finish or close the picker before observing points, editing starts or fitting.</small></p>
   </details>
   <details>
-    <summary>Observe landmarks and silhouette slices on original photographs</summary>
+    <summary>Observe landmarks and silhouette slices on capture photographs</summary>
     <p>Add or correct 2D observations for the model targets already declared in this input. Verify an
-      original photograph before clicking, or enter independently reviewed stored-pixel coordinates.
+      input-bound photograph before clicking, or enter independently reviewed stored-pixel coordinates.
       New points need an explicit uncertainty and FIT/CHECK role; existing roles and uncertainties stay fixed.</p>
     <p><button id="bodyPointsLoad" disabled>Open observations</button></p>
     <div id="bodyPointsEditor" hidden>
       <label>Frame <select id="bodyPointsFrame"></select></label>
       <label>Declared target <select id="bodyPointsTarget"></select></label>
       <p id="bodyPointsDefinition"></p><p id="bodyPointsImageSource"></p>
-      <label>Original photograph <input id="bodyPointsImage" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
+      <label>Capture photograph (optional for a capture prepared here)
+        <input id="bodyPointsImage" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
       <p><button id="bodyPointsImageRun" disabled>Verify and show photograph</button>
         <button id="bodyPointsImageClear" disabled>Clear photograph</button></p>
       <p id="bodyPointsImageStatus" role="status" aria-live="polite"></p>
-      <canvas id="bodyPointsCanvas" hidden aria-label="Verified original capture with observed landmarks and silhouette slices"></canvas>
+      <canvas id="bodyPointsCanvas" hidden aria-label="Verified capture with observed landmarks and silhouette slices"></canvas>
       <fieldset><legend>Selected point in stored pixels</legend>
         <label>X <input id="bodyPointsX" type="number" step="any" min="0" disabled></label>
         <label>Y <input id="bodyPointsY" type="number" step="any" min="0" disabled></label>
@@ -516,8 +522,8 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       <h3 id="bodyFitReviewHeading">Inspect an accepted frame</h3>
       <p>Orange circles and thick contours show observations; blue crosses and thin contours show
         model projections. Labels keep FIT/CHECK roles.
-        The drawing uses the original oriented pixel coordinates. For capture-backed fits, you can
-        select the original photograph below to inspect it behind the projections.</p>
+        The drawing uses the input's stored pixel coordinates. For capture-backed fits, verify the
+        matching original or corrected photograph below to inspect it behind the projections.</p>
       <div id="bodyFitAcceptedReviewControls" hidden>
         <label>Accepted frame <select id="bodyFitReviewFrame" disabled></select></label>
         <p><button id="bodyFitReviewRun" disabled>Inspect accepted frame and prepare mesh</button></p>
@@ -527,10 +533,11 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       <p id="bodyFitReviewStatus" role="status" aria-live="polite"></p>
       <pre id="bodyFitReviewError" role="alert"></pre>
       <fieldset>
-        <legend>Optional original photograph</legend>
+        <legend>Optional capture photograph</legend>
         <p id="bodyFitReviewImageSource">Inspect a frame to check whether its original capture photograph is available.</p>
-        <label>Original capture PNG or JPEG <input id="bodyFitReviewImage" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" disabled></label>
-        <p><button id="bodyFitReviewImageRun" disabled>Verify and show original photograph</button>
+        <label>Matching PNG or JPEG (optional for a capture prepared here)
+          <input id="bodyFitReviewImage" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" disabled></label>
+        <p><button id="bodyFitReviewImageRun" disabled>Verify and show photograph</button>
           <button id="bodyFitReviewImageClear" disabled>Clear photograph / cancel loading</button></p>
         <p><small>The exact source bytes and stored dimensions are checked locally before display.
           The recorded rotation is already applied; the image is not rotated again.

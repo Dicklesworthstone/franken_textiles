@@ -39,6 +39,10 @@ self.onmessage = async ({data: m}) => {
         supplied.set(image.id,image.file);
       }
       bodyCapture=new ftx.WebBodyCapture(m.manifest,m.calibration,m.sheet);
+      const rectify=JSON.parse(m.manifest).rectify===true;
+      if(rectify && typeof bodyCapture.take_image!=="function") {
+        throw Error("Rebuild web/pkg: missing calibrated capture image correction.");
+      }
       const ids=JSON.parse(bodyCapture.image_ids());
       if(!Array.isArray(ids) || ids.length!==supplied.size || new Set(ids).size!==ids.length || ids.some(id=>!supplied.has(id))) {
         throw Error("Select exactly the source images declared by this capture.");
@@ -49,6 +53,25 @@ self.onmessage = async ({data: m}) => {
         const bytes=new Uint8Array(await file.arrayBuffer());
         if(bytes.byteLength!==file.size) throw Error("A capture image changed while it was being read.");
         const diagnostics=JSON.parse(bodyCapture.add_image(id,bytes));
+        if(rectify) {
+          const correction=diagnostics.rectification, image=correction?.image;
+          if(correction?.schema!=="ftx-capture-rectification/1" || !image ||
+              typeof image.image_name!=="string" || !/^rectified-[0-9a-f]{64}\.png$/.test(image.image_name) ||
+              !/^[0-9a-f]{64}$/.test(image.image_sha256) ||
+              !Array.isArray(image.image_size_px) || image.image_size_px.length!==2 ||
+              image.image_size_px.some(value=>!Number.isSafeInteger(value) || value<2) ||
+              image.image_size_px[0]*image.image_size_px[1]>16000000) {
+            throw Error("The engine did not return a complete corrected capture image binding.");
+          }
+          const png=bodyCapture.take_image();
+          if(!(png instanceof Uint8Array) || png.byteLength===0 || png.byteLength>128*1024*1024) {
+            throw Error("The engine did not return the corrected capture PNG.");
+          }
+          const output=png.byteOffset===0 && png.byteLength===png.buffer.byteLength?png:png.slice();
+          self.postMessage({type:"body-capture-image",request:m.request,sourceImage:id,image,png:output.buffer},[output.buffer]);
+        } else if(diagnostics.rectification) {
+          throw Error("The engine corrected capture pixels without the requested option.");
+        }
         self.postMessage({type:"body-capture-view",request:m.request,image:id,done:index+1,total:ids.length,diagnostics});
       }
       self.postMessage({type:"progress",request:m.request,text:"Checking explicit model choices and preparing the source-bound draft…"});
@@ -89,7 +112,7 @@ self.onmessage = async ({data: m}) => {
           !(m.image instanceof ArrayBuffer) || m.image.byteLength===0 || m.image.byteLength>128*1024*1024) {
         throw Error("Frame image review needs the original review up to 16 MiB and an original image up to 128 MiB.");
       }
-      self.postMessage({type:"progress",request:m.request,text:"Checking the original capture image hash and already-oriented pixels…"});
+      self.postMessage({type:"progress",request:m.request,text:"Checking the input-bound image hash and already-oriented pixels…"});
       bodyImage=new ftx.WebBodyFitImage(new Uint8Array(m.image),m.review);
       const preview=bodyImage.preview(),report=bodyImage.report();
       self.postMessage({type:"result",request:m.request,preview,report},[preview.buffer]);

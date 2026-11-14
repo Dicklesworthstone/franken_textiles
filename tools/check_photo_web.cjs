@@ -8,6 +8,7 @@
 // Use --still-window NATIVE_DIR for sparse stationarity candidates and original native report replay.
 // Use --fit-body NATIVE_DIR for prepared multi-frame Anny fits and original native reports.
 // Use --body-photo NATIVE_DIR for the existing capture-setup photographs and native sheet cameras.
+// Add --rectify with FTX_BODY_RECTIFICATION_FIXTURES captures for corrected PNG and silhouette authoring.
 const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
 const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
@@ -472,12 +473,18 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
   page.on("pageerror",error=>errors.push(String(error)));
   context.on("request",request=>requests.push({url:request.url(),method:request.method()}));
   const read=name=>JSON.parse(fs.readFileSync(path.join(native,name),"utf8"));
-  const selections=read("expected-choices.json"), initial=read("constructed/input.json");
-  const reference=read("reference.json"), cameras=read("capture-review/review.json").capture_input.frames;
-  const images=initial.fit.frames.map(frame=>frame.source.image);
-  const download=async name=>{
+  const rectify=process.argv.includes("--rectify"), expected=rectify?read("capture-result.json"):null;
+  const choices=rectify?read("choices.json"):null;
+  const selections=rectify?{...choices.model,metric_scale_source:choices.metric_scale_source,
+    observation_evidence:choices.observation_evidence,measurements:choices.measurements || []}:read("expected-choices.json");
+  const initial=read(rectify?"prepared.json":"constructed/input.json");
+  const reference=read(rectify?"manifest.json":"reference.json");
+  const cameras=rectify?expected.acquisition.frames:read("capture-review/review.json").capture_input.frames;
+  const images=rectify?reference.images:initial.fit.frames.map(frame=>frame.source.image);
+  const calibrationName=rectify?"calibration.json":"capture-calibration.json",sheetName=rectify?"sheet.json":"capture-board.json";
+  const download=async(name,encoding="utf8")=>{
     const event=page.waitForEvent("download");await page.click('a[download="'+name+'"]');
-    const file=await event;assert.equal(await file.failure(),null);return fs.readFileSync(await file.path(),"utf8");
+    const file=await event;assert.equal(await file.failure(),null);return fs.readFileSync(await file.path(),encoding);
   };
   const choose=async(row,choice)=>{
     await row.locator("select").selectOption(choice.mode);
@@ -491,15 +498,32 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
     await page.click("#bodyCaptureRun");
     await page.waitForFunction(()=>/Prepared \d+ calibrated|No new capture draft/.test(document.getElementById("bodyCaptureStatus").textContent),null,{timeout:120000});
   };
+  const applyTargets=async input=>{
+    const targets=read("targets.json"),picker=page.frameLocator("#bodyTargetsFrame");
+    const annotations={schema:"ftx-body-targets/1",source_input:"",source_input_sha256:sha256(input),
+      model_sha256:sha256(fs.readFileSync(path.join(native,"model.ftxbody"))),keypoints:targets.keypoints};
+    await picker.locator("#targetDraftFile").setInputFiles({name:"body-targets.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify(annotations))});
+    await picker.locator("#targetStatus").filter({hasText:/applied targets restored|Saved targets not loaded/}).waitFor();
+    assert.match(await picker.locator("#targetStatus").textContent(),/applied targets restored/);
+    const first=Object.keys(targets.keypoints).sort()[0];
+    await picker.locator("#targetList").selectOption(first);await picker.locator("#applyTarget").click();
+    assert.match(await picker.locator("#targetStatus").textContent(),new RegExp("Applied "+first));
+    await picker.locator("#targetReturn").click();
+    await page.waitForFunction(()=>/^Applied \d+ checked model targets|Targets were not applied/.test(document.getElementById("bodyTargetsStatus").textContent));
+    assert.equal(await page.textContent("#bodyTargetsError"),"");
+    return download("body-fit-input-edited.json");
+  };
   try {
     await page.goto(origin+"/photo.html");
     await page.setInputFiles("#bodyFitModel",path.join(native,"model.ftxbody"));
     await page.locator("#bodyCaptureImages").evaluate(element=>{element.closest("details").open=true;});
     await page.setInputFiles("#bodyCaptureImages",images.map(name=>path.join(native,name)));
-    await page.setInputFiles("#bodyCaptureCalibration",path.join(native,"capture-calibration.json"));
-    await page.setInputFiles("#bodyCaptureSheet",path.join(native,"capture-board.json"));
-    await page.fill("#bodyCaptureLens",initial.fit.frames[0].lens_id);
-    await page.fill("#bodyCaptureReference",initial.reference_id);
+    await page.setInputFiles("#bodyCaptureCalibration",path.join(native,calibrationName));
+    await page.setInputFiles("#bodyCaptureSheet",path.join(native,sheetName));
+    if(rectify) await page.check("#bodyCaptureRectify");
+    await page.fill("#bodyCaptureLens",rectify?reference.lens_id:initial.fit.frames[0].lens_id);
+    await page.fill("#bodyCaptureReference",rectify?reference.reference_id:initial.reference_id);
+    if(rectify) await page.selectOption("#bodyCaptureRotation",String(reference.rotation_cw_deg));
     await page.fill("#bodyCaptureOriginX",String(reference.board_bottom_left_xz_m[0]));
     await page.fill("#bodyCaptureOriginZ",String(reference.board_bottom_left_xz_m[1]));
     await page.fill("#bodyCaptureHeldOut",reference.held_out_corner_ids.join(","));
@@ -523,7 +547,7 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
       for(const [axis,key] of ["axisX","axisY","axisZ"].entries()) await row.locator('input[id$="-'+key+'"]').fill(String(control.axis[axis]));
       await choose(row,control.choice);
     }
-    assert.ok(selections.measurements.length>0,"The native fixture supplies independent tape evidence");
+    if(!rectify) assert.ok(selections.measurements.length>0,"The native fixture supplies independent tape evidence");
     for(const [index,measurement] of selections.measurements.entries()) {
       await page.selectOption("#bodyCaptureMeasurementName",measurement.name);await page.click("#bodyCaptureMeasurementAdd");
       const row=page.locator("#bodyCaptureMeasurements fieldset").nth(index);
@@ -536,7 +560,7 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
     await acquire();assert.equal(await page.textContent("#bodyCaptureError"),"");
     const inputText=await download("body-fit-input-stills.json"), draft=JSON.parse(inputText);
     const report=JSON.parse(await download("body-photo-capture.json"));
-    assert.equal(report.schema,"ftx-body-photo-capture-result/1");assert.equal(report.body_fitted,false);
+    assert.equal(report.schema,rectify?"ftx-body-photo-capture-result/2":"ftx-body-photo-capture-result/1");assert.equal(report.body_fitted,false);
     assert.equal(report.input,inputText);assert.equal(report.input_sha256,sha256(inputText));
     assert.equal(report.model_sha256,sha256(fs.readFileSync(path.join(native,"model.ftxbody"))));
     assert.equal(report.start_count,0);assert.equal(report.frame_count,images.length);
@@ -544,15 +568,22 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
     assert.deepEqual(draft.model,initial.model);
     assert.deepEqual(draft.fit.starts,[]);assert.deepEqual(draft.fit.measurements,selections.measurements);
     assert.deepEqual(report.choices.measurements,selections.measurements);
-    assert.equal(report.acquisition.calibration_sha256,sha256(fs.readFileSync(path.join(native,"capture-calibration.json"))));
-    assert.equal(report.acquisition.sheet_sha256,sha256(fs.readFileSync(path.join(native,"capture-board.json"))));
+    assert.equal(report.acquisition.calibration_sha256,sha256(fs.readFileSync(path.join(native,calibrationName))));
+    assert.equal(report.acquisition.sheet_sha256,sha256(fs.readFileSync(path.join(native,sheetName))));
     for(const [index,name] of images.entries()) {
       const hash=sha256(fs.readFileSync(path.join(native,name))), frame={stream:"still-image:"+hash,timestamp_us:0};
       assert.deepEqual(draft.fit.frames[index].frame,frame);
       assert.deepEqual(draft.fit.frames[index].keypoints,[]);
       assert.deepEqual(report.acquisition.frames[index].sheet_pose,cameras[index].sheet_pose,"Complete native/compiled-WASM sheet pose equality");
-      assert.deepEqual(draft.fit.frames[index].camera,cameras[index].sheet_pose.camera);
-      assert.deepEqual(draft.capture_images[index],{frame,image_name:name,image_sha256:hash,
+      assert.deepEqual(draft.fit.frames[index].camera,rectify?cameras[index].rectification.camera:cameras[index].sheet_pose.camera);
+      if(rectify) {
+        const image=report.acquisition.frames[index].rectification.image;
+        assert.deepEqual(image,expected.acquisition.frames[index].rectification.image);
+        assert.deepEqual(draft.capture_images[index],image);assert.equal(image.frame.stream,frame.stream);
+        const png=await download(image.image_name,null);
+        assert.deepEqual(png,fs.readFileSync(path.join(native,image.image_name)),"Exact native/Chromium corrected PNG bytes");
+        assert.equal(sha256(png),image.image_sha256);
+      } else assert.deepEqual(draft.capture_images[index],{frame,image_name:name,image_sha256:hash,
         image_size_px:draft.fit.frames[index].image_size_px,rotation_cw_deg:0});
     }
     assert.equal(await page.locator("#bodyFitInput").evaluate(element=>element.files.length),0,"No prepared request was uploaded");
@@ -561,8 +592,57 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
     await page.waitForFunction(()=>/Choose explicit model locations|Targets were not applied/.test(document.getElementById("bodyTargetsStatus").textContent));
     assert.equal(await page.textContent("#bodyTargetsError"),"");
     assert.equal(await page.locator("#bodyTargetsFrame").isVisible(),true,"Generated draft enters the ordinary target-authoring engine");
-    await page.click("#bodyTargetsCancel");
+    if(rectify) assert.equal(await applyTargets(inputText),fs.readFileSync(path.join(native,"targeted.json"),"utf8"),
+      "The actual picker applies the native anatomical definitions before observation authoring");
+    else await page.click("#bodyTargetsCancel");
     assert.equal(await download("body-fit-input-stills.json"),inputText);
+    if(rectify) {
+      assert.equal(inputText,fs.readFileSync(path.join(native,"prepared.json"),"utf8"),"The fresh corrected draft equals native preparation");
+      assert.equal(await download("body-photo-calibration.json"),fs.readFileSync(path.join(native,"calibration.json"),"utf8"));
+      assert.equal(await download("body-photo-sheet.json"),fs.readFileSync(path.join(native,"sheet.json"),"utf8"));
+      await page.locator("#bodyPointsLoad").evaluate(element=>{element.closest("details").open=true;});
+      await page.click("#bodyPointsLoad");
+      await page.waitForFunction(()=>!document.getElementById("bodyPointsEditor").hidden || document.getElementById("bodyPointsError").textContent);
+      assert.equal(await page.textContent("#bodyPointsError"),"");
+      assert.equal(await page.locator("#bodyPointsImage").evaluate(element=>element.files.length),0);
+      assert.equal(await page.isDisabled("#bodyPointsImageRun"),false,"Current corrected PNG is available without re-upload");
+      assert.equal(await page.isDisabled("#bodySilhouetteAdd"),false,"Native rectified camera enables ordinary silhouette authoring");
+      await page.click("#bodyPointsImageRun");
+      await page.waitForFunction(()=>/Verified input-bound pixels|Photograph refused/.test(document.getElementById("bodyPointsImageStatus").textContent));
+      assert.match(await page.textContent("#bodyPointsImageStatus"),/Verified input-bound pixels/);
+      const size=draft.fit.frames[0].image_size_px;
+      assert.deepEqual(await page.locator("#bodyPointsCanvas").evaluate(canvas=>[canvas.width,canvas.height]),size);
+      assert.equal(await page.locator("#bodyPointsCanvas").isVisible(),true);
+      await page.setInputFiles("#bodyPointsImage",path.join(native,images[0]));await page.click("#bodyPointsImageRun");
+      await page.waitForFunction(()=>/Photograph refused/.test(document.getElementById("bodyPointsImageStatus").textContent));
+      assert.match(await page.textContent("#bodyPointsImageStatus"),/SHA-256 mismatch/);
+      assert.equal(await page.locator("#bodyPointsCanvas").isVisible(),false,"Raw acquisition pixels cannot masquerade as corrected pixels");
+      await page.click("#bodyPointsImageClear");await page.click("#bodyPointsImageRun");
+      await page.waitForFunction(()=>/Verified input-bound pixels/.test(document.getElementById("bodyPointsImageStatus").textContent));
+      await page.click("#bodySilhouetteAdd");await page.selectOption("#bodySilhouetteAxis","horizontal");
+      await page.fill("#bodySilhouetteAt",String(Math.floor(size[1]/2)));await page.fill("#bodySilhouetteSigma","1.5");
+      await page.selectOption("#bodySilhouettePartition","fit");
+      await page.fill("#bodySilhouetteIntervals",Math.floor(size[0]/4)+", "+Math.floor(3*size[0]/4));
+      await page.fill("#bodySilhouetteEvidence","Synthetic corrected image; manually declared browser contour, no physical fit claim.");
+      await page.click("#bodyPointsApply");
+      await page.waitForFunction(()=>/^Applied |Observations were not applied/.test(document.getElementById("bodyPointsStatus").textContent));
+      assert.equal(await page.textContent("#bodyPointsError"),"");
+      const edited=JSON.parse(await download("body-fit-input-observations.json"));
+      assert.deepEqual(edited.capture_images,draft.capture_images);assert.equal(edited.fit.frames[0].silhouette.lines.length,1);
+      await page.uncheck("#bodyCaptureRectify");
+      assert.equal(await page.locator("#bodyCaptureDownloads a").count(),0);assert.equal(await page.locator("#bodyPointsCanvas").isVisible(),false);
+      assert.equal(await page.isDisabled("#bodyPointsLoad"),true);
+      await acquire();assert.equal(await page.textContent("#bodyCaptureError"),"");
+      assert.equal(JSON.parse(await download("body-photo-capture.json")).schema,"ftx-body-photo-capture-result/1");
+      await page.click("#bodyTargetsLoad");
+      await page.waitForFunction(()=>/Choose explicit model locations|Targets were not applied/.test(document.getElementById("bodyTargetsStatus").textContent));
+      assert.equal(await page.textContent("#bodyTargetsError"),"");
+      await applyTargets(await download("body-fit-input-stills.json"));
+      await page.click("#bodyPointsLoad");
+      await page.waitForFunction(()=>!document.getElementById("bodyPointsEditor").hidden || document.getElementById("bodyPointsError").textContent);
+      assert.equal(await page.textContent("#bodyPointsError"),"");assert.equal(await page.isDisabled("#bodySilhouetteAdd"),true,"Original Brown pixels remain unavailable for silhouette slices");
+      await page.check("#bodyCaptureRectify");
+    }
     // A second filename cannot turn one encoded image into two independent camera sources.
     const repeated=fs.readFileSync(path.join(native,images[0]));
     await page.setInputFiles("#bodyCaptureImages",[
@@ -575,7 +655,8 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
     assert.equal(await page.isDisabled("#bodyTargetsLoad"),true);
     assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
     assert.deepEqual(errors,[]);assert.ok(requests.every(request=>request.url.startsWith(origin+"/")&&request.method==="GET"));
-    console.log("PASS still-photo capture: actual controls/worker/compiled WASM, existing rendered photos and native camera equality, exact source/input hashes, ordinary target-authoring handoff and duplicate-image refusal; no uploads or stored evidence.");
+    console.log(rectify?"PASS corrected still-photo capture: actual Brown acquisition and native camera/PNG parity, automatic verified image review, ordinary silhouette editing, raw-image refusal, opt-out invalidation and duplicate-source refusal; no uploads or stored evidence.":
+      "PASS still-photo capture: actual controls/worker/compiled WASM, existing rendered photos and native camera equality, exact source/input hashes, ordinary target-authoring handoff and duplicate-image refusal; no uploads or stored evidence.");
   } finally {await context.close();}
 }
 async function bodyFitWorkflow(browser,origin) {
@@ -709,7 +790,7 @@ async function bodyFitWorkflow(browser,origin) {
     await page.selectOption('#bodyPointsTarget',observation.name);
     assert.equal(await page.isDisabled('#bodyPointsSigma'),true);assert.equal(await page.isDisabled('#bodyPointsPartition'),true);
     await page.setInputFiles('#bodyPointsImage',path.join(native,captureCase.image));await page.click('#bodyPointsImageRun');
-    await page.waitForFunction(()=>/Verified original pixels|Photograph refused/.test(document.getElementById('bodyPointsImageStatus').textContent));
+    await page.waitForFunction(()=>/Verified input-bound pixels|Photograph refused/.test(document.getElementById('bodyPointsImageStatus').textContent));
     assert.match(await page.textContent('#bodyPointsImageStatus'),/90° rotation already applied/);
     const bounds=await page.locator('#bodyPointsCanvas').boundingBox();assert.ok(bounds);
     const click={clientX:Math.floor(bounds.x+bounds.width*.35),clientY:Math.floor(bounds.y+bounds.height*.45)};

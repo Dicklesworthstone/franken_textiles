@@ -495,7 +495,6 @@ fn lens_noise_preserves_no_clobber_and_strict_portable_optional_inputs() {
     );
 }
 
-
 fn sheet_camera_case(dir: &Path) -> (Value, Value, Value, Value) {
     let (mut input, click, mut lens) = lens_case(dir);
     let target = Vec3::new(0.05, 0.4, 1.25);
@@ -653,7 +652,10 @@ fn sheet_camera_uncertainty_replays_native_and_portable_with_separate_components
     assert_eq!(uncertainty["input"], sheet);
     assert_eq!(uncertainty["sensitivities"].as_array().unwrap().len(), 2);
     for sensitivity in uncertainty["sensitivities"].as_array().unwrap() {
-        assert_eq!(sensitivity["fit_point_indices"].as_array().unwrap().len(), 8);
+        assert_eq!(
+            sensitivity["fit_point_indices"].as_array().unwrap().len(),
+            8
+        );
         assert_eq!(
             sensitivity["jacobians_m_per_px"].as_array().unwrap().len(),
             8
@@ -865,7 +867,10 @@ fn native_calibration_annotated_sheet_sources_replay_in_both_camera_components()
             assert_eq!(report["conditional_uncertainty"]["status"], "AVAILABLE");
             report
         } else {
-            save(&dir.0.join("calibration.json"), retained_brown_calibration());
+            save(
+                &dir.0.join("calibration.json"),
+                retained_brown_calibration(),
+            );
             retained_brown_calibration().clone()
         };
         assert_eq!(
@@ -941,8 +946,14 @@ fn native_calibration_annotated_sheet_sources_replay_in_both_camera_components()
         )
         .unwrap();
         assert_eq!(portable, native);
-        assert_eq!(native["conditional_lens_uncertainty"]["status"], "AVAILABLE");
-        assert_eq!(native["conditional_sheet_uncertainty"]["status"], "AVAILABLE");
+        assert_eq!(
+            native["conditional_lens_uncertainty"]["status"],
+            "AVAILABLE"
+        );
+        assert_eq!(
+            native["conditional_sheet_uncertainty"]["status"],
+            "AVAILABLE"
+        );
     }
 }
 
@@ -1018,7 +1029,6 @@ fn camera_noise_documents_are_bounded_before_parse_and_outputs_never_clobber_sou
     }
 }
 
-
 #[test]
 fn requested_sheet_uncertainty_preserves_geometry_when_precision_is_unavailable() {
     let dir = Scratch::new();
@@ -1088,13 +1098,8 @@ fn requested_sheet_uncertainty_preserves_geometry_when_precision_is_unavailable(
     );
     for bad in [" ".to_owned(), "{}".to_owned(), format!("\u{feff}{sheet}")] {
         assert!(
-            ftx_wasm::photo::triangulate_with_camera_noise(
-                &input.to_string(),
-                "",
-                "",
-                &bad,
-            )
-            .is_err()
+            ftx_wasm::photo::triangulate_with_camera_noise(&input.to_string(), "", "", &bad,)
+                .is_err()
         );
     }
     let oversized = " ".repeat(16 * 1024 * 1024 + 1);

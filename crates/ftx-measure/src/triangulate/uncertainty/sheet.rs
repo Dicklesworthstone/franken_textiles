@@ -98,7 +98,8 @@ fn replay_intrinsics_source(
             .distortion_fit
             .as_ref()
             .is_some_and(|fit| fit.corner_noise.is_none())
-        && source.no_claim == "Local nonlinear Brown calibration; conditional corner-noise precision is reported separately and does not establish total calibration accuracy, global optimality or real-wearer fit. Sheet-local poses are not a common world frame when the sheet moves.";
+        && source.no_claim
+            == "Local nonlinear Brown calibration; conditional corner-noise precision is reported separately and does not establish total calibration accuracy, global optimality or real-wearer fit. Sheet-local poses are not a common world frame when the sheet moves.";
     if checked.status != "ACCEPTED"
         || (source.no_claim != checked.no_claim && !separate_noise_claim)
         || checked.solution.as_ref().is_none_or(|solution| {
