@@ -118,26 +118,35 @@ fn range([lo, hi]: [f64; 2]) -> Result<[f64; 2], Refusal> {
     Ok([lo, hi])
 }
 
+impl Exterior {
+    // Convection qualification is independent of current material exposure. A complete schedule
+    // can admit its source and domain before geometry selects any active outer textile face.
+    pub(crate) fn validate_convection(&self) -> Result<[f64; 2], Refusal> {
+        temperature(self.air_c)?;
+        nonnegative("prescribed convection coefficient", self.convection_w_m2_k)?;
+        let domain = range(self.surface_temperature_range_c)?;
+        let s = &self.convection_source;
+        if s.reference.trim().is_empty()
+            || s.note.trim().is_empty()
+            || s.accessed_on.len() != 10
+            || self.convection_conditions.trim().is_empty()
+            || (self.convection_evidence == Evidence::Estimate && !self.allow_estimates)
+        {
+            return Err(invalid(
+                "exterior convection needs a source, conditions and explicit estimate consent",
+            ));
+        }
+        Ok(domain)
+    }
+}
+
 impl<'a> Exchange<'a> {
     pub(in crate::thermal) fn on_side(
         input: &'a Exterior,
         outer: &ResolvedMaterial,
         side: Side,
     ) -> Result<Self, Refusal> {
-        temperature(input.air_c)?;
-        nonnegative("prescribed convection coefficient", input.convection_w_m2_k)?;
-        let mut domain = range(input.surface_temperature_range_c)?;
-        let s = &input.convection_source;
-        if s.reference.trim().is_empty()
-            || s.note.trim().is_empty()
-            || s.accessed_on.len() != 10
-            || input.convection_conditions.trim().is_empty()
-            || (input.convection_evidence == Evidence::Estimate && !input.allow_estimates)
-        {
-            return Err(invalid(
-                "exterior convection needs a source, conditions and explicit estimate consent",
-            ));
-        }
+        let mut domain = input.validate_convection()?;
         let mut emissivity = 0.0;
         let mut emissivity_bounds = None;
         let mut material_face = None;

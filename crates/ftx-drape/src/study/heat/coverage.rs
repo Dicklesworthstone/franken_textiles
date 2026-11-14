@@ -306,6 +306,8 @@ impl Request {
             thermal_steps: 0,
             inside_j: 0.,
             outside_j: 0.,
+            covered_film_j: 0.,
+            exposed_film_j: 0.,
             covered_convective_j: 0.,
             covered_radiative_j: 0.,
             exposed_convective_j: 0.,
@@ -329,19 +331,65 @@ impl Request {
     fn validate_compression(&self, intervals: usize) -> Result<(), Refusal> {
         if let Some(compression) = &self.prescribed_compression {
             compression.validate(intervals)?;
-            if self.exterior_exchange.is_some()
-                || self.exposed_exterior_exchange.is_some()
+            if self
+                .exterior_exchange
+                .iter()
+                .chain(self.exposed_exterior_exchange.iter())
+                .flatten()
+                .flatten()
+                .any(|exterior| exterior.radiation.is_some())
                 || self.plastic_dissipation_heat.is_some()
                 || self.relaxation_dissipation_heat.is_some()
                 || self.bending_plastic_dissipation_heat.is_some()
                 || self.thermal_bridges.is_some()
             {
                 return Err(invalid(
-                    "coverage compression requires film boundaries and independently constant dry storage; exterior, dissipation and bridge combinations need joint qualification",
+                    "coverage compression requires independent dry films or qualified convection and constant storage; radiation, dissipation and bridge combinations need joint qualification",
                 ));
+            }
+            for exterior in self
+                .exterior_exchange
+                .iter()
+                .chain(self.exposed_exterior_exchange.iter())
+                .flatten()
+                .flatten()
+            {
+                exterior.validate_convection()?;
+            }
+            for (interval, exterior) in self.exterior_exchange.iter().flatten().enumerate() {
+                if exterior.is_some() {
+                    let film = self.boundaries.get(interval).ok_or_else(|| {
+                        invalid("compression exterior interval is missing its covered boundary")
+                    })?;
+                    let bare = self
+                        .bare_boundaries
+                        .as_ref()
+                        .and_then(|films| films.get(interval))
+                        .copied()
+                        .flatten()
+                        .ok_or_else(|| invalid("compression exterior needs explicit bare-body films in every active interval"))?;
+                    boundary(bare)?;
+                    let resistance = bare.inside_resistance_m2_k_w + bare.outside_resistance_m2_k_w;
+                    if bare.inside_c != film.inside_c || !resistance.is_finite() || resistance <= 0.
+                    {
+                        return Err(invalid(
+                            "compression exterior bare films must share the body temperature and retain positive finite resistance, including at zero bare area",
+                        ));
+                    }
+                }
             }
         }
         Ok(())
+    }
+
+    fn compression_exterior(&self) -> bool {
+        self.prescribed_compression.is_some()
+            && self
+                .exterior_exchange
+                .iter()
+                .chain(self.exposed_exterior_exchange.iter())
+                .flatten()
+                .any(Option::is_some)
     }
 
     fn validate_initial_temperatures(&self) -> Result<(), Refusal> {
@@ -496,6 +544,8 @@ pub(in crate::study) struct History {
     thermal_steps: usize,
     inside_j: f64,
     outside_j: f64,
+    covered_film_j: f64,
+    exposed_film_j: f64,
     covered_convective_j: f64,
     covered_radiative_j: f64,
     exposed_convective_j: f64,
@@ -748,6 +798,7 @@ impl History {
         // Move each state into the next step; only the last field is retained/formatted for output.
         let mut first = Some(self.state.clone());
         let mut last: Option<Step> = None;
+        let retain_outside_paths = self.request.compression_exterior();
         for substep in 0..count {
             let current = first
                 .take()
@@ -798,6 +849,21 @@ impl History {
             }
             self.inside_j += dt * step.inside_heat_w();
             self.outside_j += dt * step.outside_heat_w();
+            if retain_outside_paths {
+                if step.heat().exterior_exchange.is_none() {
+                    // Sum actual textile regions, avoiding cancellation against large bare films.
+                    self.covered_film_j += dt
+                        * step
+                            .heat()
+                            .regions
+                            .iter()
+                            .map(|region| region.outside_heat_w)
+                            .sum::<f64>();
+                }
+                if step.exposed_exterior_exchange().is_none() {
+                    self.exposed_film_j += dt * step.exposed_outside_heat_w();
+                }
+            }
             if let Some(e) = &step.heat().exterior_exchange {
                 self.covered_convective_j += dt * e.convective_heat_w;
                 self.covered_radiative_j += dt * e.radiative_heat_w;
@@ -813,6 +879,7 @@ impl History {
             last = Some(step);
         }
         let last = last.ok_or_else(|| invalid("missing final coverage heat field"))?;
+        let outside_heat_w = last.outside_heat_w();
         let heat = last.heat();
         self.final_field = json!({"body_area_m2":heat.body_area_m2,"covered_area_m2":heat.covered_area_m2,
             "bare_heat_w":heat.bare_heat_w,"body_inside_heat_w":heat.inside_heat_w,"body_outside_heat_w":heat.outside_heat_w,
@@ -824,6 +891,27 @@ impl History {
         if let Some(e) = last.exposed_exterior_exchange() {
             self.final_field["exposed_exterior_exchange"] = json!(e);
             self.final_field["exposed_temperature_c"] = json!(last.exposed_temperature_c());
+        }
+        if retain_outside_paths {
+            let covered = heat.exterior_exchange.as_ref();
+            let exposed = last.exposed_exterior_exchange();
+            self.final_field["outside_power_paths"] = json!({
+                "covered_film_w": if covered.is_none() {
+                    heat.regions.iter().map(|region| region.outside_heat_w).sum::<f64>()
+                } else { 0. },
+                "exposed_film_w": if exposed.is_none() { last.exposed_outside_heat_w() } else { 0. },
+                "bare_w": heat.bare_heat_w,
+                "covered_convection_w": covered.map_or(0., |exchange| exchange.convective_heat_w),
+                "exposed_convection_w": exposed.map_or(0., |exchange| exchange.convective_heat_w)
+            });
+            if self.final_field["outside_power_paths"]
+                .as_object()
+                .expect("computed outside paths")
+                .values()
+                .any(|value| value.as_f64().is_none())
+            {
+                return Err(invalid("motion coverage outside path power overflows"));
+            }
         }
         if heated {
             self.final_field["supplied_heat_j"] = json!(last.supplied_heat_j());
@@ -881,6 +969,8 @@ impl History {
         if [
             self.inside_j,
             self.outside_j,
+            self.covered_film_j,
+            self.exposed_film_j,
             self.covered_convective_j,
             self.covered_radiative_j,
             self.exposed_convective_j,
@@ -926,6 +1016,11 @@ impl History {
         if let Some(compression) = &self.compression {
             sample["prescribed_compression"] = compression.summary();
         }
+        if retain_outside_paths {
+            sample["outside_energy_paths"] = self.outside_energy_paths();
+            sample["outside_power_paths"] = self.final_field["outside_power_paths"].clone();
+            sample["outside_heat_w"] = json!(outside_heat_w);
+        }
         if let Some(interval) = bridge_sample {
             let mut accounting = self.bridge_accounting()?;
             accounting["interval"] = interval;
@@ -970,6 +1065,16 @@ impl History {
         crate::thermal::steady::coverage::bridges::add(self.outside_j, self.bridge_j)
     }
 
+    fn outside_energy_paths(&self) -> Value {
+        json!({
+            "covered_film_j": self.covered_film_j,
+            "exposed_film_j": self.exposed_film_j,
+            "bare_j": self.bare_j,
+            "covered_convection_j": self.covered_convective_j,
+            "exposed_convection_j": self.exposed_convective_j
+        })
+    }
+
     fn bridge_accounting(&self) -> Result<Value, Refusal> {
         Ok(
             json!({"baseline_inside_energy_j":self.inside_j,"baseline_outside_energy_j":self.outside_j,
@@ -1010,6 +1115,12 @@ impl History {
             result["scope"] = json!(
                 "Transient film-boundary heat on moving layered body coverage with explicitly source-qualified prescribed compression. Conditioned thickness changes source-face gaps and transport; fixed reference mass, specific heat and covered/exposed enthalpy persist through conservative remap. Signed normal work uses accepted current cloth area once per authored interval and stays separate from heat. No inferred contact pressure, mechanical geometry feedback, recovery-time law, moisture, work heating, physiological or empirical garment claim."
             );
+            if self.request.compression_exterior() {
+                result["outside_energy_paths"] = self.outside_energy_paths();
+                result["scope"] = json!(
+                    "Transient dry-film or separately source-qualified convection heat on moving layered body coverage with prescribed compression. Only the actual outer covered textile face exchanges with its environment; exposed source cloth and bare-body films retain independent boundaries. Conditioned thickness changes face gaps and transport while reference mass, specific heat and covered/exposed enthalpy persist. Signed normal work stays separate from heat. No inferred contact pressure, radiation, wet law, recovery-time law, work heating, physiological or empirical garment claim."
+                );
+            }
         }
         if let Some(authority) = &self.bridge_authority {
             let mut bridge = self.bridge_accounting()?;

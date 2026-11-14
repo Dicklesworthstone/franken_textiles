@@ -906,10 +906,17 @@ Bound instances retain independent histories even when their original material i
 once per authored interval and remains separate from heat. A late failure rolls back the whole interval,
 including branch state, projection, thermal state and counters. Final `model` and checkpoint source
 agree; comparisons independently rebuild projection identities and retained material storage.
-This coverage consumer requires dry film boundaries (or explicit adiabatic exposed cloth), and refuses
-exterior exchange, thermal bridges and dissipation heating until their combined qualifications exist.
+This coverage consumer accepts dry film boundaries, explicit adiabatic exposed cloth and separately
+qualified convection-only covered/exposed schedules. Every declared convection source and domain is
+admitted even when its active area is zero; covered convection requires explicit bare-body films.
+Pressure-conditioned thickness enters the same exterior solver after conservative remapping. Optional
+`outside_energy_paths` and `outside_power_paths` distinguish covered/exposed convection, covered/exposed
+films and bare-body films through mixed intervals, without counting normal work as heat. Film-only
+histories retain their original report shape. Radiation, thermal bridges and dissipation heating still
+require compatible pressure qualifications and remain refused within this coverage history.
 Separate wet-sheet or mechanical histories retain their established domains. Tests cover gap changes,
-cover/expose/re-cover transfer, rollback and native/portable pressure, cycle and clearance replay.
+cover/expose/re-cover transfer, independent film/RC answers, signed exterior paths, rollback and
+native/portable pressure, cycle and clearance replay.
 
 **Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
 `Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint
