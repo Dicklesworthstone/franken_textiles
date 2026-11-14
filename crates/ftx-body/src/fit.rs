@@ -392,10 +392,7 @@ fn local_prior_sigma(template: &[Vec3], stature_mm: f64) -> Result<f64, Refusal>
     let sigma = PRIOR_SIGMA_LOCAL * (stature_mm / reference_mm);
     let inverse = 1.0 / sigma;
     let maximum_penalty = (N_FREE - N_PHENOTYPE) as f64 * (LOCAL_LIMIT * inverse).powi(2);
-    if !sigma.is_finite()
-        || sigma <= 0.0
-        || !maximum_penalty.is_finite()
-        || maximum_penalty <= 0.0
+    if !sigma.is_finite() || sigma <= 0.0 || !maximum_penalty.is_finite() || maximum_penalty <= 0.0
     {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
@@ -1394,9 +1391,18 @@ mod tests {
     #[test]
     fn local_shape_prior_follows_template_and_requested_body_size() {
         let template = [Vec3::new(0.0, 0.0, -0.5), Vec3::new(0.0, 0.0, 0.5)];
-        assert_eq!(local_prior_sigma(&template, 1000.0).unwrap(), PRIOR_SIGMA_LOCAL);
-        assert_eq!(local_prior_sigma(&template, 500.0).unwrap(), 0.5 * PRIOR_SIGMA_LOCAL);
-        assert_eq!(local_prior_sigma(&template, 2000.0).unwrap(), 2.0 * PRIOR_SIGMA_LOCAL);
+        assert_eq!(
+            local_prior_sigma(&template, 1000.0).unwrap(),
+            PRIOR_SIGMA_LOCAL
+        );
+        assert_eq!(
+            local_prior_sigma(&template, 500.0).unwrap(),
+            0.5 * PRIOR_SIGMA_LOCAL
+        );
+        assert_eq!(
+            local_prior_sigma(&template, 2000.0).unwrap(),
+            2.0 * PRIOR_SIGMA_LOCAL
+        );
         for scale in [0.5, 2.0, 1e-100, 1e100] {
             let scaled = template.map(|p| p * scale);
             assert_eq!(
@@ -1406,7 +1412,10 @@ mod tests {
             );
         }
         let translated = template.map(|p| p + Vec3::new(7.0, -3.0, 11.0));
-        assert_eq!(local_prior_sigma(&translated, 500.0).unwrap(), 0.5 * PRIOR_SIGMA_LOCAL);
+        assert_eq!(
+            local_prior_sigma(&translated, 500.0).unwrap(),
+            0.5 * PRIOR_SIGMA_LOCAL
+        );
         let model = stature_test_model();
         assert_eq!(
             local_prior_sigma(&model.data().template_vertices, 900.0).unwrap(),
@@ -1437,7 +1446,10 @@ mod tests {
             vec![Vec3::ZERO],
             vec![Vec3::ZERO, Vec3::new(0.0, 0.0, f64::NAN)],
             vec![Vec3::ZERO, Vec3::new(f64::INFINITY, 0.0, 1.0)],
-            vec![Vec3::new(0.0, 0.0, -f64::MAX), Vec3::new(0.0, 0.0, f64::MAX)],
+            vec![
+                Vec3::new(0.0, 0.0, -f64::MAX),
+                Vec3::new(0.0, 0.0, f64::MAX),
+            ],
             vec![Vec3::ZERO, Vec3::new(0.0, 0.0, 1e306)],
         ] {
             assert_eq!(
@@ -1470,8 +1482,7 @@ mod tests {
             let sigma = local_prior_sigma(&template, wearer.stature_mm).unwrap();
             // The authored local target always moves the section by 100 q mm. The independent
             // body and measurement error scale together, so q / size has the same optimum.
-            let expected = 100.0 * 40.0 * size
-                / (10_000.0 + (50.0 * size).powi(2) / sigma.powi(2));
+            let expected = 100.0 * 40.0 * size / (10_000.0 + (50.0 * size).powi(2) / sigma.powi(2));
             for initial_height in [0.1, 0.9] {
                 let fit = optimize_tape(&rows, initial_height, sigma, |th| {
                     let mut readings = [None; N_TAPE + 1];
@@ -1756,8 +1767,10 @@ mod tests {
             readings[2] = Some(500.0 + 100.0 * th[N_PHENOTYPE]);
             readings
         };
-        let complete = optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, true))).unwrap();
-        let partial = optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, false))).unwrap();
+        let complete =
+            optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, true))).unwrap();
+        let partial =
+            optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, false))).unwrap();
         assert_eq!(complete.free, partial.free);
         assert_eq!(complete.iterations, partial.iterations);
         assert_eq!(partial.readings[0], Some(wearer.stature_mm));
@@ -1791,9 +1804,11 @@ mod tests {
             &[],
         )
         .unwrap();
-        let error = optimize_tape(&weighted_rows, 0.5, PRIOR_SIGMA_LOCAL, |th| Ok(read(th, false)))
-            .err()
-            .expect("a supplied weight remains a required constraint");
+        let error = optimize_tape(&weighted_rows, 0.5, PRIOR_SIGMA_LOCAL, |th| {
+            Ok(read(th, false))
+        })
+        .err()
+        .expect("a supplied weight remains a required constraint");
         assert_eq!(error.code, RefusalCode::DegenerateGeometry);
         assert!(error.message.contains("weight"));
 

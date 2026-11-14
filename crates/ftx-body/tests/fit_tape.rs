@@ -203,7 +203,13 @@ fn explicit_stature_target_selects_the_same_fixed_local_regularization() {
         value_mm: 530.0,
         sigma_mm: None,
     };
-    let fallback = fit_tape(&model, &wearer, std::slice::from_ref(&waist), &Pose::drape()).unwrap();
+    let fallback = fit_tape(
+        &model,
+        &wearer,
+        std::slice::from_ref(&waist),
+        &Pose::drape(),
+    )
+    .unwrap();
     let explicit = fit_tape(
         &model,
         &Wearer {

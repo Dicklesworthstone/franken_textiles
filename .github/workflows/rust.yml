@@ -17,6 +17,9 @@ jobs:
       - name: Check lints
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Check body fitting and local shape priors
+        if: ${{ !cancelled() }}
+        run: cargo test -p ftx-body --lib --test fit_tape --locked
       - name: Check all 9 pure-Node VM frontend and worker suites
         if: ${{ !cancelled() }}
         run: node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
