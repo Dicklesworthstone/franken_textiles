@@ -205,6 +205,26 @@ held-out gates remain authoritative. A valid point with unavailable requested co
 both statuses. Exact input, optional noise and report text are downloaded without JavaScript
 rewriting frame timestamps. Results create no measurement record, READY state or body-fit claim.
 
+**Camera-source precision.** `photo::triangulate_with_lens_noise(input, click_noise, lens_noise)`
+and its matching wasm32 export preserve the original geometry/click behavior when lens evidence
+is empty. The native `ftx-triangulation-lens-noise/1` input holds supplied camera poses fixed;
+`/2` re-solves the retained original sheet observations for each shared-lens perturbation.
+Metric reference coordinates remain exact in both modes. Complete accepted calibration reports
+are recomputed before their full correlated covariance is used.
+
+`photo::triangulate_with_camera_noise(input, click_noise, lens_noise, sheet_noise)` and its
+matching four-string wasm32 export add independent sheet-corner precision from
+`ftx-triangulation-sheet-noise/1`. Empty sheet evidence delegates exactly to the existing lens
+wrapper. Each lens/sheet JSON document is bounded to 16 MiB before parsing; geometry and click
+inputs keep the 256 KiB limit. When lens-induced poses and sheet-corner noise are both requested,
+the retained sheet reports must match exactly for every FIT frame before any estimate runs.
+Native source replay, original FIT/CHECK partitions, corner budgets and geometric guards remain
+authoritative. The parent geometry and optional click report stay unchanged; lens and sheet
+results appear as separate `conditional_lens_uncertainty` and `conditional_sheet_uncertainty`
+fields. Requested numerical failures remain UNAVAILABLE without partial or zero covariance.
+The components are not summed, and they do not cover metric print error, motion, model mismatch
+or total measurement accuracy.
+
 **Photo section estimates.** `photo::photo_section` and the wasm32 `photo_section(width_source,
 depth_source, options)` export delegate to the shared `ftx-measure` source-qualified section
 engine. Exact original measurement and option texts survive in `section_sources`; native fusion,

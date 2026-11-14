@@ -3,6 +3,7 @@
 // Use --section for the standalone synthetic front/side section and Workbench handoff workflow.
 // Use --charuco NATIVE_DIR for a printed dictionary's real photo controls and native report replay.
 // Use --triangulate NATIVE_DIR for exact prepared inputs and original native geometry reports.
+// Use --camera-noise NATIVE_DIR for sheet-corner and shared-lens camera-pose uncertainty replay.
 // Use --bundle NATIVE_DIR for anchored refinement and transitions through the shared geometry tool.
 // Use --still-window NATIVE_DIR for sparse stationarity candidates and original native report replay.
 // Use --fit-body NATIVE_DIR for prepared multi-frame Anny fits and original native reports.
@@ -10,9 +11,9 @@
 const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
 const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
-const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", triangulationOnly=process.argv[2]==="--triangulate", bundleOnly=process.argv[2]==="--bundle", stillOnly=process.argv[2]==="--still-window", bodyFitOnly=process.argv[2]==="--fit-body", bodyPhotoOnly=process.argv[2]==="--body-photo", native=sectionOnly?null:process.argv[charucoOnly||triangulationOnly||bundleOnly||stillOnly||bodyFitOnly||bodyPhotoOnly?3:2];
+const root=path.resolve(__dirname,".."), web=path.join(root,"web"), sectionOnly=process.argv[2]==="--section", charucoOnly=process.argv[2]==="--charuco", triangulationOnly=process.argv[2]==="--triangulate", cameraNoiseOnly=process.argv[2]==="--camera-noise", bundleOnly=process.argv[2]==="--bundle", stillOnly=process.argv[2]==="--still-window", bodyFitOnly=process.argv[2]==="--fit-body", bodyPhotoOnly=process.argv[2]==="--body-photo", native=sectionOnly?null:process.argv[charucoOnly||triangulationOnly||cameraNoiseOnly||bundleOnly||stillOnly||bodyFitOnly||bodyPhotoOnly?3:2];
 const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(web,"pkg");
-if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, --triangulate NATIVE_DIR, --bundle NATIVE_DIR, --still-window NATIVE_DIR, --fit-body NATIVE_DIR, --body-photo NATIVE_DIR, or --section");
+if(!native && !sectionOnly) throw Error("Supply native captures, --charuco NATIVE_DIR, --triangulate NATIVE_DIR, --camera-noise NATIVE_DIR, --bundle NATIVE_DIR, --still-window NATIVE_DIR, --fit-body NATIVE_DIR, --body-photo NATIVE_DIR, or --section");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
 async function photoHandoff(browser,origin) {
   const context=await browser.newContext({userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"}),errors=[],requests=[];
@@ -217,6 +218,57 @@ async function triangulationWorkflow(browser,origin) {
   };
   try {
     await page.goto(origin+"/photo.html");
+    if(cameraNoiseOnly) {
+      await page.setInputFiles("#triangulationInput",source("camera-input.json"));
+      for(const [click,lens,name] of [[false,false,"sheet-result.json"],[true,false,"sheet-click-result.json"],[false,true,"lens-sheet-result.json"],[true,true,"all-result.json"]]) {
+        await page.setInputFiles("#triangulationNoise",click?source("click-noise.json"):[]);
+        await page.setInputFiles("#triangulationLensNoise",lens?source("lens-noise.json"):[]);
+        await page.setInputFiles("#triangulationSheetNoise",source("sheet-noise.json"));await run();
+        assert.equal(await page.isVisible("#triangulationResult"),true,await page.textContent("#triangulationError"));
+        const report=await download("triangulation.json");
+        assert.deepEqual(parse(report),parse(fs.readFileSync(source(name),"utf8")),name+" complete native camera-noise report equality");
+        assert.equal(await page.textContent("#triangulationReport"),report);
+        for(const [saved,original] of [["triangulation-input.json","camera-input.json"],["triangulation-sheet-noise.json","sheet-noise.json"],
+          ...(click?[["triangulation-click-noise.json","click-noise.json"]]:[]),...(lens?[["triangulation-lens-noise.json","lens-noise.json"]]:[])]) {
+          assert.equal(await download(saved),fs.readFileSync(source(original),"utf8"));
+        }
+        assert.equal(await page.locator("#triangulationDownloads a").count(),3+Number(click)+Number(lens));
+        assert.match(await page.textContent("#triangulationPrecision"),/Conditional sheet-corner uncertainty: AVAILABLE/);
+        assert.match(await page.textContent("#triangulationPrecision"),/Sheet-only covariance/);
+        if(lens)assert.match(await page.textContent("#triangulationPrecision"),/Camera poses are replayed.*one shared-lens component/);
+        assert.equal(await page.isDisabled("#openWorkbench"),true);
+      }
+      await page.setViewportSize({width:390,height:844});
+      await page.click("#triangulationClearSheetNoise");assert.equal(await page.isVisible("#triangulationResult"),false);
+      assert.equal(await page.locator("#triangulationDownloads a").count(),0);
+      for(const bad of [{name:"invalid-sheet.json",mimeType:"application/json",buffer:Buffer.from("{}")},
+        {name:"empty-sheet.json",mimeType:"application/json",buffer:Buffer.alloc(0)},
+        {name:"bad-utf8-sheet.json",mimeType:"application/json",buffer:Buffer.from([255])},
+        {name:"oversized-sheet.json",mimeType:"application/json",buffer:Buffer.alloc(16*1024*1024+1,32)}]) {
+        await page.setInputFiles("#triangulationSheetNoise",bad);await run();
+        assert.equal(await page.isVisible("#triangulationResult"),false);assert.equal(await page.locator("#triangulationDownloads a").count(),0);
+        assert.notEqual(await page.textContent("#triangulationError"),"");
+      }
+      await page.setInputFiles("#triangulationSheetNoise",source("sheet-noise.json"));
+      let release,arrived;const reached=new Promise(resolve=>{arrived=resolve;});
+      const hold=route=>{release=route;arrived();};await context.route("**/ftx_wasm_bg.wasm",hold);
+      const requested=page.waitForRequest(request=>request.url().endsWith("/ftx_wasm_bg.wasm"),{timeout:30000});
+      await page.click("#triangulationRun");await requested;await reached;
+      await page.click("#triangulationClearSheetNoise");
+      await release.continue().catch(()=>{});await context.unroute("**/ftx_wasm_bg.wasm",hold);
+      assert.equal(await page.isVisible("#triangulationResult"),false);assert.equal(await page.locator("#triangulationDownloads a").count(),0);
+      await page.setInputFiles("#triangulationSheetNoise",source("sheet-noise.json"));await run();
+      assert.deepEqual(parse(await download("triangulation.json")),parse(fs.readFileSync(source("all-result.json"),"utf8")));
+      await page.selectOption("#geometryOperation","bundle-adjust");
+      for(const id of ["triangulationNoise","triangulationLensNoise","triangulationSheetNoise"]) {
+        assert.equal(await page.inputValue("#"+id),"");assert.equal(await page.isDisabled("#"+id),true);
+      }
+      assert.equal(await page.isVisible("#triangulationResult"),false);assert.equal(await page.locator("#triangulationDownloads a").count(),0);
+      assert.deepEqual(errors,[]);assert.ok(requests.every(request=>request.url.startsWith(origin+"/")&&request.method==="GET"));
+      assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+      console.log("PASS camera noise: four complete native/WASM reports, exact four-source replay, separate sheet/lens/click components, re-solved lens-dependent poses, invalid sources, edit cancellation, desktop/mobile controls, no measurement promotion/uploads/storage/page errors.");
+      return;
+    }
     if(stillOnly) {
       await page.setInputFiles("#triangulationNoise",{name:"old-noise.json",mimeType:"application/json",buffer:Buffer.from("{}")});
       await page.selectOption("#geometryOperation","bundle-adjust");await page.fill("#bundleIterations","1.5");await page.selectOption("#geometryOperation","still-window");
@@ -838,7 +890,7 @@ const server=http.createServer((req,res)=>{
     if(sectionOnly) {await sectionWorkflow(browser,origin);return;}
     if(bodyPhotoOnly) {await bodyPhotoCaptureWorkflow(browser,origin);return;}
     if(bodyFitOnly) {await bodyFitWorkflow(browser,origin);await bodyModelFileHandoff(browser,origin);await bodyModelFileHandoff(browser,origin,true);return;}
-    if(triangulationOnly||bundleOnly||stillOnly) {await triangulationWorkflow(browser,origin);return;}
+    if(triangulationOnly||cameraNoiseOnly||bundleOnly||stillOnly) {await triangulationWorkflow(browser,origin);return;}
     await page.goto(origin+"/photo.html");
     if(charucoOnly) {
       const sheetName=fs.existsSync(path.join(native,'calib-sheet-letter.json'))?'calib-sheet-letter':'calib-sheet-a4';

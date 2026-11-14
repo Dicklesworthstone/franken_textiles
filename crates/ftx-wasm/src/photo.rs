@@ -10,6 +10,7 @@ use ftx_measure::photo::{
     intrinsics::{calibrate_document, uncertainty::CalibrationNoise},
     measure_photo,
 };
+use ftx_measure::triangulate::uncertainty::{LensNoiseInput, SheetCornerNoiseInput};
 use ftx_trace::raster::image::{Bgr, encode_png_bgr, load_photo_with_limit};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -66,7 +67,8 @@ pub fn triangulate(input: &str, click_noise: &str) -> Result<Value, Refusal> {
 
 /// Calibrated landmark geometry with separately reported click and shared-lens uncertainty.
 /// Complete accepted calibration reports are replayed before any covariance is used. Lens
-/// groups vary jointly across their FIT frames, conditional on fixed camera poses and scale.
+/// groups vary jointly across their FIT frames: `/1` fixes supplied camera poses; `/2` re-solves
+/// their original sheet observations for each lens perturbation. Metric scale remains fixed.
 /// Empty evidence selects the corresponding original geometry-only or click-only behavior.
 /// The two components are not summed into a total measurement uncertainty.
 ///
@@ -94,6 +96,63 @@ pub fn triangulate_with_lens_noise(
             serde_json::to_value(result.conditional_lens_uncertainty)
                 .map_err(|e| invalid(e.to_string()))?;
     }
+    Ok(report)
+}
+
+/// Calibrated landmark geometry with separate click, shared-lens and sheet-corner precision.
+/// Complete source reports are replayed by the native estimators; combined lens-dependent pose
+/// and sheet-corner evidence must retain the same original reports for every FIT frame. Empty
+/// sheet evidence preserves the existing lens wrapper behavior. No components are summed into
+/// total measurement uncertainty, and the original geometry and click report remain unchanged.
+///
+/// # Errors
+/// Input/click JSON above 256 KiB, lens/sheet JSON above 16 MiB each, or the shared source,
+/// calibration, capture and geometry guards refuse. Numerical failure remains UNAVAILABLE.
+pub fn triangulate_with_camera_noise(
+    input: &str,
+    click_noise: &str,
+    lens_noise: &str,
+    sheet_noise: &str,
+) -> Result<Value, Refusal> {
+    if sheet_noise.is_empty() {
+        return triangulate_with_lens_noise(input, click_noise, lens_noise);
+    }
+    if lens_noise.len() > ftx_measure::photo::acquisition::MAX_CALIBRATION_JSON_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "triangulation lens-noise JSON exceeds 16 MiB",
+        ));
+    }
+    if sheet_noise.len() > ftx_measure::photo::acquisition::MAX_CALIBRATION_JSON_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "triangulation sheet-noise JSON exceeds 16 MiB",
+        ));
+    }
+    let lens: Option<LensNoiseInput> = if lens_noise.is_empty() {
+        None
+    } else {
+        Some(serde_json::from_str(lens_noise).map_err(|e| invalid(e.to_string()))?)
+    };
+    let sheet: SheetCornerNoiseInput =
+        serde_json::from_str(sheet_noise).map_err(|e| invalid(e.to_string()))?;
+    if let Some(lens) = &lens {
+        ftx_measure::triangulate::uncertainty::validate_camera_noise_sources(lens, &sheet)?;
+    }
+    let mut report = triangulate(input, click_noise)?;
+    let input = parse(input)?;
+    if let Some(lens) = &lens {
+        let result =
+            ftx_measure::triangulate::uncertainty::triangulate_with_lens_noise(&input, lens)?;
+        report["conditional_lens_uncertainty"] =
+            serde_json::to_value(result.conditional_lens_uncertainty)
+                .map_err(|e| invalid(e.to_string()))?;
+    }
+    let result =
+        ftx_measure::triangulate::uncertainty::triangulate_with_sheet_noise(&input, &sheet)?;
+    report["conditional_sheet_uncertainty"] =
+        serde_json::to_value(result.conditional_sheet_uncertainty)
+            .map_err(|e| invalid(e.to_string()))?;
     Ok(report)
 }
 

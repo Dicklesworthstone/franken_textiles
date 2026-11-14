@@ -1,8 +1,9 @@
 //! Calibrated multi-view coordinates; no decoder, image detector or guessed metric scale.
 
-use ftx_core::{Refusal, RefusalCode};
+use ftx_core::Refusal;
 use ftx_measure::triangulate::uncertainty::{
-    ClickNoiseInput, LensNoiseInput, triangulate_with_click_noise, triangulate_with_lens_noise,
+    ClickNoiseInput, LensNoiseInput, SheetCornerNoiseInput, triangulate_with_click_noise,
+    triangulate_with_lens_noise, triangulate_with_sheet_noise, validate_camera_noise_sources,
 };
 use ftx_measure::triangulate::{TriangulationInput, triangulate};
 use serde_json::Value;
@@ -14,9 +15,27 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "measure triangulate",
-        &["out", "click-noise", "lens-noise"],
+        &["out", "click-noise", "lens-noise", "sheet-noise"],
     )?;
     let path = single(args, "triangulate")?;
+    // Bound retained calibration/pose sources before parsing or performing any solves.
+    let lens_noise: Option<LensNoiseInput> = option(args, "lens-noise")
+        .map(|path| {
+            let (value, _) = super::intrinsics::read_document(path)?;
+            serde_json::from_value(value)
+                .map_err(|e| bad_input(format!("invalid triangulation lens-noise input: {e}")))
+        })
+        .transpose()?;
+    let sheet_noise: Option<SheetCornerNoiseInput> = option(args, "sheet-noise")
+        .map(|path| {
+            let (value, _) = super::intrinsics::read_document(path)?;
+            serde_json::from_value(value)
+                .map_err(|e| bad_input(format!("invalid triangulation sheet-noise input: {e}")))
+        })
+        .transpose()?;
+    if let (Some(lens), Some(sheet)) = (&lens_noise, &sheet_noise) {
+        validate_camera_noise_sources(lens, sheet)?;
+    }
     let input: TriangulationInput = serde_json::from_value(read_json(path)?.0)
         .map_err(|e| bad_input(format!("invalid triangulation input: {e}")))?;
     let (report, uncertainty) = if let Some(path) = option(args, "click-noise") {
@@ -30,23 +49,24 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         (triangulate(&input)?, None)
     };
-    let lens_uncertainty = if let Some(path) = option(args, "lens-noise") {
-        let (value, bytes) = read_json(path)?;
-        if bytes.len() > ftx_measure::photo::acquisition::MAX_CALIBRATION_JSON_BYTES {
-            return Err(Refusal::new(
-                RefusalCode::BudgetExceeded,
-                "triangulation lens-noise JSON exceeds 16 MiB",
-            ));
-        }
-        let noise: LensNoiseInput = serde_json::from_value(value)
-            .map_err(|e| bad_input(format!("invalid triangulation lens-noise input: {e}")))?;
-        Some(triangulate_with_lens_noise(&input, &noise)?.conditional_lens_uncertainty)
-    } else {
-        None
-    };
+    let lens_uncertainty = lens_noise
+        .as_ref()
+        .map(|noise| {
+            triangulate_with_lens_noise(&input, noise).map(|r| r.conditional_lens_uncertainty)
+        })
+        .transpose()?;
+    let sheet_uncertainty = sheet_noise
+        .as_ref()
+        .map(|noise| {
+            triangulate_with_sheet_noise(&input, noise).map(|r| r.conditional_sheet_uncertainty)
+        })
+        .transpose()?;
     let code = if report.point_m.is_some()
         && uncertainty.as_ref().is_none_or(|u| u.status == "AVAILABLE")
         && lens_uncertainty
+            .as_ref()
+            .is_none_or(|u| u.status == "AVAILABLE")
+        && sheet_uncertainty
             .as_ref()
             .is_none_or(|u| u.status == "AVAILABLE")
     {
@@ -95,8 +115,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             uncertainty.status
         ));
         if let Some(sigma) = uncertainty.sigma_m {
+            let basis = if uncertainty.input.schema == "ftx-triangulation-lens-noise/2" {
+                "source-replayed sheet camera poses"
+            } else {
+                "fixed camera poses"
+            };
             text.push_str(&format!(
-                "\nLens-only one-sigma with fixed camera poses [m]: [{:.9}, {:.9}, {:.9}]",
+                "\nLens-only one-sigma with {basis} [m]: [{:.9}, {:.9}, {:.9}]",
                 sigma.x, sigma.y, sigma.z
             ));
         }
@@ -105,6 +130,24 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         text.push_str(&format!("\n{}", uncertainty.no_claim));
         value["conditional_lens_uncertainty"] =
+            serde_json::to_value(uncertainty).map_err(|e| bad_input(e.to_string()))?;
+    }
+    if let Some(uncertainty) = sheet_uncertainty {
+        text.push_str(&format!(
+            "\nCONDITIONAL SHEET-CORNER UNCERTAINTY: {}",
+            uncertainty.status
+        ));
+        if let Some(sigma) = uncertainty.sigma_m {
+            text.push_str(&format!(
+                "\nSheet-corner one-sigma with fixed lens and metric sheet [m]: [{:.9}, {:.9}, {:.9}]",
+                sigma.x, sigma.y, sigma.z
+            ));
+        }
+        for flag in &uncertainty.flags {
+            text.push_str(&format!("\n  {flag}"));
+        }
+        text.push_str(&format!("\n{}", uncertainty.no_claim));
+        value["conditional_sheet_uncertainty"] =
             serde_json::to_value(uncertainty).map_err(|e| bad_input(e.to_string()))?;
     }
     if let Some(path) = option(args, "out") {

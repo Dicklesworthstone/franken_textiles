@@ -232,19 +232,26 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <label>Optional click-noise evidence (<code>ftx-click-noise/1</code>)
       <input id="triangulationNoise" type="file" accept=".json,application/json"></label>
     <button id="triangulationClearNoise" disabled>Remove click-noise evidence</button>
-    <label>Optional shared-lens calibration evidence (<code>ftx-triangulation-lens-noise/1</code>, up to 16 MiB)
+    <label>Optional shared-lens calibration evidence (<code>ftx-triangulation-lens-noise/1</code> or <code>/2</code>, up to 16 MiB)
       <input id="triangulationLensNoise" type="file" accept=".json,application/json"></label>
     <button id="triangulationClearLensNoise" disabled>Remove lens calibration evidence</button>
     <p><small>Assign all FIT views using one calibrated lens to the same group, with its complete saved calibration report
-      and explicit independence evidence. The engine rechecks the calibration and exact lens parameters.</small></p>
-    <p><small>Click and lens uncertainty are separate conditional components. Camera poses and metric scale stay fixed;
-      pose/lens correlation, motion and systematic error are excluded. Missing uncertainty remains unavailable.</small></p>
+      and explicit independence evidence. Version /1 holds camera poses fixed. Version /2 also retains every original
+      sheet-pose report and re-solves those poses when the shared lens changes, preserving their dependence.</small></p>
+    <label>Optional sheet-corner noise evidence (<code>ftx-triangulation-sheet-noise/1</code>, up to 16 MiB)
+      <input id="triangulationSheetNoise" type="file" accept=".json,application/json"></label>
+    <button id="triangulationClearSheetNoise" disabled>Remove sheet-corner evidence</button>
+    <p><small>Supply the original sheet-pose report and independent corner pixel sigma for every FIT view.
+      The engine rechecks each camera and propagates sheet-corner noise through its pose at fixed lens parameters.</small></p>
+    <p><small>Click, shared-lens and sheet-corner uncertainty are separate conditional components; they are not added into
+      a total accuracy estimate. Metric scale, print error, motion and systematic error remain excluded.
+      Missing uncertainty remains unavailable.</small></p>
   </div>
   <div id="geometryBundleControls" hidden>
     <label>Maximum accepted refinement steps <input id="bundleIterations" type="number" min="1" max="100" step="1" value="50"></label>
     <p>Joint refinement requires at least four well-spread fixed metric controls in every camera.
       Use the same stationary reference and world frame throughout. Initial camera and landmark guesses are not observations.</p>
-    <p><small>Each observation supplies its own pixel sigma. Switching to joint refinement clears the separate click and lens evidence selections.
+    <p><small>Each observation supplies its own pixel sigma. Switching to joint refinement clears the separate click, lens and sheet evidence selections.
       Intrinsics stay fixed; no camera covariance or global optimum is established. Failed or budget-stopped solves publish no optimized geometry.</small></p>
   </div>
   <div id="geometryStillControls" hidden>
@@ -254,14 +261,15 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       reprojection checks can reject motion or weak geometry. A passing candidate still requires human review:
       it does not create reviewed capture evidence, verify untracked anatomy or establish measurement accuracy.</small></p>
   </div>
-  <p><small>Each input file is limited to 256 KiB. Review the complete native report before using any geometry.</small></p>
+  <p><small>Geometry and click-noise files are each limited to 256 KiB; lens and sheet evidence files are each limited to 16 MiB.
+    Review the complete native report before using any geometry.</small></p>
   <p><button id="triangulationRun" disabled>Triangulate landmark</button>
     <button id="triangulationCancel" disabled>Cancel geometry calculation</button></p>
   <p id="triangulationStatus" role="status" aria-live="polite">Choose calibrated observations.</p>
   <pre id="triangulationError" role="alert"></pre>
   <div id="triangulationResult" hidden>
     <h3>Conditional geometry</h3>
-    <p id="triangulationSummary"></p><p id="triangulationPoint" style="white-space:pre-line"></p><p id="triangulationPrecision"></p>
+    <p id="triangulationSummary"></p><p id="triangulationPoint" style="white-space:pre-line"></p><p id="triangulationPrecision" style="white-space:pre-line"></p>
     <p id="triangulationFlags"></p>
     <p>This is geometry evidence, not a tape or photo measurement record, body fit or READY status.
       Review every FIT and held-out residual and the capture assumptions in the complete report.</p>
