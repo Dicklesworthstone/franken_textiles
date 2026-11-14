@@ -473,20 +473,39 @@ function motionCompressionBranch(change, instance, direction) {
 
 function motionCompressionSource(raw, keyframes) {
   const value = sourceObject(raw, "Prescribed compression");
-  object(value, ["schema", "thermal_evidence", "bindings"], ["schema", "thermal_evidence", "bindings"], "Prescribed compression");
-  if (!["ftx-motion-surface-compression/1", "ftx-motion-surface-compression/2", "ftx-motion-surface-compression/3"].includes(value.schema)) {
-    throw Error("Prescribed compression needs ftx-motion-surface-compression/1, /2 or /3.");
+  const regional = value.schema === "ftx-motion-surface-compression/4", entriesKey = regional ? "regions" : "bindings";
+  object(value, ["schema", "thermal_evidence", entriesKey], ["schema", "thermal_evidence", entriesKey], "Prescribed compression");
+  if (!["ftx-motion-surface-compression/1", "ftx-motion-surface-compression/2", "ftx-motion-surface-compression/3", "ftx-motion-surface-compression/4"].includes(value.schema)) {
+    throw Error("Prescribed compression needs ftx-motion-surface-compression/1, /2, /3 or /4.");
   }
-  const controlled = value.schema === "ftx-motion-surface-compression/3";
+  const controlled = regional || value.schema === "ftx-motion-surface-compression/3";
   const cyclic = value.schema === "ftx-motion-surface-compression/2";
   name(value.thermal_evidence, "Compression thermal applicability evidence");
-  if (!value.bindings || typeof value.bindings !== "object" || Array.isArray(value.bindings)) {
-    throw Error("Compression bindings must name the exact retained physical garment instances.");
+  if (!value[entriesKey] || typeof value[entriesKey] !== "object" || Array.isArray(value[entriesKey])) {
+    throw Error(regional ? "Compression regions must be an object of named physical-instance regions." :
+      "Compression bindings must name the exact retained physical garment instances.");
   }
-  const bindings = Object.entries(value.bindings);
-  if (!bindings.length || bindings.length > 256) throw Error("Prescribed compression needs 1–256 explicit instance bindings.");
+  const bindings = Object.entries(value[entriesKey]);
+  if (!bindings.length || bindings.length > 256) throw Error(`Prescribed compression needs 1–256 explicit ${regional ? "regions" : "instance bindings"}.`);
   let joins = 0;
-  for (const [instance, binding] of bindings) {
+  for (const [id, entry] of bindings) {
+    let instance = id, binding = entry;
+    if (regional) {
+      name(id, "Compression region");
+      object(entry, ["instance", "selector", "binding"], ["instance", "selector", "binding"], "Compression region");
+      instance = entry.instance; binding = entry.binding;
+      name(instance, "Compressed physical instance");
+      if (bytes(id) > 512 || bytes(instance) > 512) throw Error("Compression region and physical instance names must fit within 512 bytes.");
+      const selector = object(entry.selector, ["kind", "polygon_mm"], ["kind", "polygon_mm"], "Compression region selector");
+      if (selector.kind !== "whole_triangle_centroid" || !Array.isArray(selector.polygon_mm) ||
+          selector.polygon_mm.length < 3 || selector.polygon_mm.length > 32 ||
+          selector.polygon_mm.some(point => !Array.isArray(point) || point.length !== 2 ||
+            point.some(coordinate => typeof coordinate !== "number" || !Number.isFinite(coordinate) || Math.abs(coordinate) > 1000000))) {
+        throw Error("Compression regions need whole_triangle_centroid selection and 3–32 finite rest-coordinate vertices within ±1000000 mm.");
+      }
+      // Rust validates convexity and selects disjoint whole retained triangles in the declared rest
+      // coordinates. Region names never replace the physical layer IDs in source-qualified joins.
+    }
     name(instance, "Compressed physical instance");
     const schedule = controlled ? "controls" : "pressure_pa";
     object(binding, ["material_sha256", "preparation", "direction", schedule, ...(cyclic || controlled ? ["branch_changes"] : [])],

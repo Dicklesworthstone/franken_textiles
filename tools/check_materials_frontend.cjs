@@ -16961,7 +16961,8 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
   {skip:process.env.FTX_REAL_WASM!=='1'||!(process.env.FTX_COMPRESSION_MOTION_REPLAY||process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY||
     process.env.FTX_COMPRESSION_CONVECTION_MOTION_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY||
     process.env.FTX_CYCLIC_CONVECTION_COVERAGE_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY||
-    process.env.FTX_COMPRESSION_RADIATION_MOTION_REPLAY||process.env.FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY)},async()=>{
+    process.env.FTX_COMPRESSION_RADIATION_MOTION_REPLAY||process.env.FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY||
+    process.env.FTX_REGIONAL_COMPRESSION_MOTION_REPLAY||process.env.FTX_REGIONAL_COMPRESSION_COVERAGE_REPLAY)},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
@@ -17075,6 +17076,67 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
             assert.equal(unmatched.status,'available');assert.equal(unmatched.result[consumer].status,'refused');
             assert.equal(report.comparison.alternatives.find(row=>row.key==='unmatched-source').eligible,false);
             assert.ok(report.manufacturing.alternatives.every(row=>row.cutting.status==='available'));
+          }
+          for(const [file,raw] of [['original-pattern.json',pattern],['study-request.json',studyRequest],
+            ['scenario-request.json',scenarioRequest],['body-input.json',measurements]]) {
+            assert.equal(output.files.find(item=>item.name===file).text,raw);
+          }
+        }
+      }
+      for(const [dir,consumer] of [[process.env.FTX_REGIONAL_COMPRESSION_MOTION_REPLAY,'transient_surface'],
+        [process.env.FTX_REGIONAL_COMPRESSION_COVERAGE_REPLAY,'transient_coverage']].filter(([dir])=>dir)) {
+        const input=name=>fs.readFileSync(path.join(dir,name),'utf8'),bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
+        const pattern=input('pattern.json'),studyRequest=input('study.json'),measurements=input('body-input.json');
+        for(const name of ['single','matrix']) {
+          const scenarioRequest=input(`${name}-scenario.json`);
+          const output=await worker.send({type:'scenario',request:182,pattern,studyRequest,scenarioRequest,measurements,
+            bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+          assert.equal(output.type,'result',output.message);
+          assert.deepEqual(output.result,JSON.parse(input(`${name}-report.json`)));
+          assert.deepEqual(output.result.comparison.frontier,['qualified']);
+          if(name==='matrix')assert.deepEqual(output.result.comparison.case_order,['equal-reservoirs','warm-outside']);
+          for(const report of name==='single'?[output.result]:output.result.cases) {
+            const motion=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion;
+            assert.equal(motion.status,'available');assert.equal(motion.result[consumer].status,'available');
+            const heat=motion.result[consumer].result,compression=heat.prescribed_compression;
+            const request=report.scenario.scenario.motion[consumer].prescribed_compression;
+            assert.equal(compression.schema,'ftx-motion-surface-compression-result/4');
+            assert.equal(compression.source_model.schema,'ftx-motion-compression-source/2');
+            assert.deepEqual(heat.request.prescribed_compression,request);
+            assert.deepEqual(Object.keys(compression.initial_regions),Object.keys(request.regions).sort());
+            const selected=[];
+            for(const [id,region] of Object.entries(request.regions)) {
+              const before=compression.initial_regions[id],after=compression.final_regions[id];
+              assert.equal(before.instance,'band');assert.equal(after.instance,region.instance);
+              assert.deepEqual(after.source_triangles,before.source_triangles);
+              assert.ok(before.source_triangles.length>0);selected.push(...before.source_triangles);
+              assert.equal(after.reference_mass_kg,before.reference_mass_kg);assert.ok(before.reference_mass_kg>0);
+              assert.equal(compression.source_model.column_regions[before.column],id);
+              for(const [interval,update] of compression.updates.entries()) {
+                const state=update.regions[id],control=region.binding.controls[interval];
+                assert.deepEqual(state.control,control);assert.equal(state.instance,region.instance);
+                if(control.kind==='pressure')assert.equal(state.pressure_pa,control.pressure_pa);
+                else assert.ok(Math.abs(state.thickness_m-control.gap_m)<1e-10);
+              }
+            }
+            assert.ok(compression.remainders.band.source_triangles.length>0);
+            for(const [instance,remainder] of Object.entries(compression.remainders)) {
+              assert.ok(remainder.source_triangles.length>0);selected.push(...remainder.source_triangles);
+              assert.equal(compression.source_model.column_instances[remainder.column],instance);
+              assert.equal(compression.source_model.column_regions[remainder.column],null);
+              assert.equal(compression.source_model.columns[remainder.column].sha256,remainder.material_sha256);
+              assert.deepEqual(heat.model.columns[remainder.column],compression.initial_model.columns[remainder.column]);
+              for(const triangle of remainder.source_triangles) {
+                assert.equal(compression.source_model.patches[triangle].column,remainder.column);
+                assert.equal(compression.source_model.instances[compression.source_model.triangle_instance[triangle]],instance);
+              }
+            }
+            assert.equal(new Set(selected).size,selected.length);
+            assert.equal(selected.length,compression.source_model.patches.length);
+            assert.equal(compression.normal_work_to_heat_j,0);assert.equal(compression.final_model_sha256,heat.model.sha256);
+            const unmatched=report.simulations.find(row=>row.key==='unmatched-source').evaluation.result.motion;
+            assert.equal(unmatched.status,'available');assert.equal(unmatched.result[consumer].status,'refused');
+            assert.equal(report.comparison.alternatives.find(row=>row.key==='unmatched-source').eligible,false);
           }
           for(const [file,raw] of [['original-pattern.json',pattern],['study-request.json',studyRequest],
             ['scenario-request.json',scenarioRequest],['body-input.json',measurements]]) {
@@ -21667,6 +21729,68 @@ function guidedClearanceCompressionSource() {
   return ' \r\n'+JSON.stringify(value).replace('"controls":[{"kind":"gap","gap_m":0.01},{"kind":"pressure","pressure_pa":0},{"kind":"gap","gap_m":0.015}]',
     '"controls":[{"kind":"gap","gap_m":1.000e-2},{"kind":"pressure","pressure_pa":-0.0},{"kind":"gap","gap_m":1.500e-2}]')+'\r\n';
 }
+function guidedRegionalCompressionSource() {
+  const value=JSON.parse(guidedClearanceCompressionSource()),binding=value.bindings['front.R'],second=structuredClone(binding);
+  delete second.branch_changes;
+  second.controls=[{kind:'pressure',pressure_pa:0},{kind:'pressure',pressure_pa:250},{kind:'gap',gap_m:0.01}];
+  const regions={shoulder:{instance:'front.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[40,0],[40,100],[0,100]]},binding},
+    waistband:{instance:'front.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[60,0],[100,0],[100,100],[60,100]]},binding:second}};
+  return ' \r\n'+JSON.stringify({schema:'ftx-motion-surface-compression/4',thermal_evidence:value.thermal_evidence,regions})
+    .replace('"gap_m":0.015','"gap_m":1.500e-2')+'\r\n';
+}
+test('guided regional compression freezes independent same-instance controls and cancels replaced sources',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
+  for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
+  const raw=guidedRegionalCompressionSource();guidedCompressionSource(p,raw);
+  await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(raw));
+  const compression=JSON.parse(sent.scenarioRequest).motion.transient_surface.prescribed_compression;
+  assert.deepEqual(compression,JSON.parse(raw));
+  assert.deepEqual(Object.values(compression.regions).map(region=>region.instance),['front.R','front.R']);
+  const changed=raw.replace('"instance":"front.R"','"instance":"front.L"');
+  p.select('guidedMotionCompressionFile',changed);p.e.guidedMotionCompressionFile.handlers.change();
+  assert.equal(worker.dead,true);p.ready();
+  await p.e.scenario.onclick();assert.match(p.e.error.textContent,/exact physical instance/);
+  guidedCompressionSource(p,raw);guidedNamedCases(p);await saveGuidedCase(p,'regional');
+  assert.match(visibleText(p.e.guidedScenarioCases),/2 independent compression regions; 2 acquired branch changes/);
+  p.select('guidedMotionCompressionFile','{later invalid edit');p.e.guidedMotionCompressionFile.handlers.change();
+  await p.e.scenario.onclick();const saved=p.current().messages.at(-1);
+  assert.equal(saved.type,'scenario',p.e.error.textContent);assert.ok(saved.scenarioRequest.includes(raw));
+});
+test('regional compression displays separate histories original-material remainder and physical branch source joins',async()=>{
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioReport(),initial=report.simulations.find(row=>row.key==='A').evaluation.result,
+    request=JSON.parse(guidedRegionalCompressionSource()),binding=request.regions.shoulder.binding;
+  const region=(ids,area,mass,pressure,thickness,work)=>({instance:'front.R',source_triangles:ids,
+    reference_area_m2:area,reference_mass_kg:mass,pressure_pa:pressure,thickness_m:thickness,cumulative_normal_work_j:work});
+  const start={shoulder:region([0],0.01,0.025,0,0.02,0),waistband:region([1,2],0.02,0.05,0,0.02,0)},
+    finish={shoulder:region([0],0.01,0.025,250,0.015,0.34375),waistband:region([1,2],0.02,0.05,500,0.01,0.5)};
+  initial.motion=outcome({keyframes:[],samples:[],transient_surface:outcome({request:{prescribed_compression:request},
+    trace:[{temperature_range_c:[18,20]}],prescribed_compression:{schema:'ftx-motion-surface-compression-result/4',
+      initial_regions:start,final_regions:finish,remainders:{'front.R':{column:2,source_triangles:[3],
+        material_sha256:'a'.repeat(64),reference_area_m2:0.03,reference_mass_kg:0.075}},
+      cumulative_normal_work_j:0.84375,normal_work_to_heat_j:0,updates:[{interval_index:1,time_s:0.004,regions:{
+        shoulder:{control:binding.controls[1],pressure_pa:0,thickness_m:0.02,closure_residual_m:0,normal_work_j:-0.25,
+          branch_change:{change:binding.branch_changes[1],entry_compression:{pressure_pa:500,thickness_m:0.01}}},
+        waistband:{control:request.regions.waistband.binding.controls[1],pressure_pa:250,thickness_m:0.015,
+          closure_residual_m:0,normal_work_j:0.125}}}]}})});
+  await p.e.scenario.onclick();p.emit(report);const s=section(p,'Fresh drape and heat alternatives');
+  const rows=caption=>{const t=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.ok(t,caption);return plain(t.children.slice(2).map(row=>row.children.map(n=>n.textContent)));};
+  assert.deepEqual(rows('A: regional controlled compression and retained thermal mass'),[
+    ['shoulder','front.R','1','0.01','0','250','0.02','0.015','0.025','0.34375'],
+    ['waistband','front.R','2','0.02','0','500','0.02','0.01','0.05','0.5']]);
+  assert.deepEqual(rows('A: uncompressed original-material remainder'),[['front.R','1','0.03','0.075','a'.repeat(64)]]);
+  assert.deepEqual(rows('A: declared compression controls and solved states'),[
+    ['2','0.004','shoulder','front.R','Pressure','0','Not prescribed','0','0.02','0','-0.25'],
+    ['2','0.004','waistband','front.R','Pressure','250','Not prescribed','250','0.015','0','0.125']]);
+  assert.deepEqual(rows('A: acquired compression branch changes'),[
+    ['2','0.004','shoulder','front.R','loading','unloading-after-500','unloading','500','0.01','<synthetic branch source>','estimate']]);
+  assert.match(visibleText(s),/whole triangles by their centroids; triangle edges are not clipped/);
+  assert.match(visibleText(s),/unselected remainder retains its original material without compression conditioning/);
+  assert.match(visibleText(s),/Prescribed normal work: 0.84375 J; converted to heat: 0 J/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+});
 test('guided controlled compression preserves original gap and pressure sources with explicit radiation and cancels obsolete reads',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p,35,999,0.1,0.2);
   const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:5,coefficient:7,radiation:'explicit'});

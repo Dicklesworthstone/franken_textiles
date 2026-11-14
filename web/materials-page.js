@@ -1237,27 +1237,41 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     }
     if (h?.prescribed_compression) {
       const compression = h.prescribed_compression;
-      const controlled = compression.schema === "ftx-motion-surface-compression-result/3";
-      const pressure = table(parent, `${key}: ${controlled ? "controlled compression" : "prescribed pressure"} and retained thermal mass`,
-        ["Instance", "Initial pressure (Pa)", "Final pressure (Pa)", "Initial thickness (m)",
+      const regional = compression.schema === "ftx-motion-surface-compression-result/4";
+      const controlled = regional || compression.schema === "ftx-motion-surface-compression-result/3";
+      const finalStates = regional ? compression.final_regions : compression.final_instances;
+      const initialStates = regional ? compression.initial_regions : compression.initial_instances;
+      const pressure = table(parent, `${key}: ${regional ? "regional controlled compression" : controlled ? "controlled compression" : "prescribed pressure"} and retained thermal mass`,
+        [...(regional ? ["Region", "Instance", "Selected triangles", "Reference area (m²)"] : ["Instance"]), "Initial pressure (Pa)", "Final pressure (Pa)", "Initial thickness (m)",
           "Final thickness (m)", "Reference mass (kg)", "Signed normal work (J)"]);
-      for (const [instance, final] of Object.entries(compression.final_instances || {})) {
-        const initial = compression.initial_instances?.[instance];
-        cells(pressure, [instance, metric(initial?.pressure_pa), metric(final.pressure_pa),
+      for (const [id, final] of Object.entries(finalStates || {})) {
+        const initial = initialStates?.[id];
+        cells(pressure, [...(regional ? [id, final.instance || "Unknown", metric(final.source_triangles?.length), metric(final.reference_area_m2)] : [id]),
+          metric(initial?.pressure_pa), metric(final.pressure_pa),
           metric(initial?.thickness_m), metric(final.thickness_m), metric(final.reference_mass_kg),
           metric(final.cumulative_normal_work_j)]);
       }
+      if (regional && Object.keys(compression.remainders || {}).length) {
+        const remainders = table(parent, `${key}: uncompressed original-material remainder`,
+          ["Instance", "Retained triangles", "Reference area (m²)", "Reference mass (kg)", "Original material SHA-256"]);
+        for (const [instance, remainder] of Object.entries(compression.remainders)) {
+          cells(remainders, [instance, metric(remainder.source_triangles?.length), metric(remainder.reference_area_m2),
+            metric(remainder.reference_mass_kg), remainder.material_sha256 || "Unknown"]);
+        }
+      }
       const joins = [];
       const controls = controlled ? table(parent, `${key}: declared compression controls and solved states`,
-        ["Interval (1-based)", "Accepted sample time (s)", "Instance", "Control", "Prescribed pressure (Pa)",
+        ["Interval (1-based)", "Accepted sample time (s)", ...(regional ? ["Region", "Instance"] : ["Instance"]), "Control", "Prescribed pressure (Pa)",
           "Prescribed clearance (m)", "Solved pressure (Pa)", "Actual thickness (m)", "Clearance residual (m)", "Signed normal work (J)"]) : null;
       for (const update of compression.updates || []) {
-        for (const [instance, state] of Object.entries(update.instances || {})) {
-          if (state.branch_change) joins.push({ update, instance, join: state.branch_change });
+        for (const [id, state] of Object.entries((regional ? update.regions : update.instances) || {})) {
+          const instance = regional ? initialStates?.[id]?.instance || finalStates?.[id]?.instance || "Unknown" : id;
+          const identity = regional ? [id, instance] : [instance];
+          if (state.branch_change) joins.push({ update, identity, instance, join: state.branch_change });
           if (controls) {
             const control = state.control;
             cells(controls, [Number.isInteger(update.interval_index) ? String(update.interval_index + 1) : "Unknown",
-              metric(update.time_s), instance, control?.kind === "gap" ? "Clearance" : control?.kind === "pressure" ? "Pressure" : "Unknown",
+              metric(update.time_s), ...identity, control?.kind === "gap" ? "Clearance" : control?.kind === "pressure" ? "Pressure" : "Unknown",
               control?.kind === "pressure" ? metric(control.pressure_pa) : "Not prescribed",
               control?.kind === "gap" ? metric(control.gap_m) : "Not prescribed",
               metric(state.pressure_pa), metric(state.thickness_m), metric(state.closure_residual_m), metric(state.normal_work_j)]);
@@ -1266,12 +1280,12 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       }
       if (joins.length) {
         const branches = table(parent, `${key}: acquired compression branch changes`,
-          ["Interval (1-based)", "Accepted sample time (s)", "Instance", "Source branch", "Destination branch",
+          ["Interval (1-based)", "Accepted sample time (s)", ...(regional ? ["Region", "Instance"] : ["Instance"]), "Source branch", "Destination branch",
             "Direction", "Join pressure (Pa)", "Join thickness (m)", "Source", "Evidence"]);
-        for (const { update, instance, join } of joins) {
+        for (const { update, identity, instance, join } of joins) {
           const link = join.change?.transitions?.[instance], entry = join.entry_compression;
           cells(branches, [Number.isInteger(update.interval_index) ? String(update.interval_index + 1) : "Unknown",
-            metric(update.time_s), instance, link?.conditions?.from_loading_branch || "Unknown",
+            metric(update.time_s), ...identity, link?.conditions?.from_loading_branch || "Unknown",
             link?.conditions?.to_loading_branch || "Unknown", join.change?.entry?.direction || "Unknown",
             metric(entry?.pressure_pa), metric(entry?.thickness_m), link?.source || "Unknown", link?.evidence || "Unknown"]);
         }
@@ -1279,7 +1293,10 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       const scope = document.createElement("p");
       scope.textContent = `Prescribed normal work: ${metric(compression.cumulative_normal_work_j)} J; ` +
         `converted to heat: ${metric(compression.normal_work_to_heat_j)} J. ` +
-        "The active acquired pressure branch changes each instance's dry thickness and heat transport. " +
+        (regional ? "Each named region has its own acquired pressure branch and thermal column on the original physical instance. " +
+          "Rest-coordinate polygons select whole triangles by their centroids; triangle edges are not clipped. " +
+          "The unselected remainder retains its original material without compression conditioning. " :
+          "The active acquired pressure branch changes each instance's dry thickness and heat transport. ") +
         "Temperature cells and reference mass carry through the pressure changes. " +
         (joins.length ? "Each branch change retains its independent source link and joins at the preceding pressure and thickness without resetting temperature or adding heat. " : "") +
         "Normal work uses the current accepted cloth area and remains separate from thermal energy. " +
@@ -5889,9 +5906,12 @@ function showGuidedScenarioDrafts() {
       `${value.motion?.transient_surface ? "retained independent-sheet heat history" : "no sheet heat history"}; ` +
       [["transient_surface", "sheet heat"], ["transient_coverage", "body/layer heat"]].map(([consumer, label]) => {
         const pressure = value.motion?.[consumer]?.prescribed_compression;
+        const regional = pressure?.schema === "ftx-motion-surface-compression/4";
+        const bindings = regional ? Object.values(pressure.regions || {}).map(region => region.binding) : Object.values(pressure?.bindings || {});
         return pressure ? `retained pressure-conditioned ${label}; ` +
-          (["ftx-motion-surface-compression/2", "ftx-motion-surface-compression/3"].includes(pressure.schema) ?
-            `${Object.values(pressure.bindings || {}).reduce((sum, binding) =>
+          (regional ? `${bindings.length} independent compression regions; ` : "") +
+          (["ftx-motion-surface-compression/2", "ftx-motion-surface-compression/3", "ftx-motion-surface-compression/4"].includes(pressure.schema) ?
+            `${bindings.reduce((sum, binding) =>
               sum + (Array.isArray(binding?.branch_changes) ? binding.branch_changes.filter(change => change !== null).length : 0), 0)} acquired branch changes; ` : "") : "";
       }).join("") +
       `${value.motion?.transient_coverage ? "retained moving body/layer heat history" : "no moving body/layer heat history"}; ` +

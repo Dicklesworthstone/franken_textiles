@@ -652,7 +652,58 @@ comparisons replay those joins through the same material authority before admitt
 objectives; missing or altered branch/source/state receipts withhold the affected thermal
 result while independent manufacturing remains available.
 
-All three versions use the existing uniform dry films. Independent-sheet and layered compression also
+Version `/4` supplies **different prescribed histories within one intact physical piece**. It replaces
+`bindings` with a `regions` map of 1–256 unique names; omit `bindings` completely, including an empty
+object or `null`. Each region has these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `instance` | The exact retained physical garment instance. Several regions may name the same instance. |
+| `selector.kind` | Exactly `whole_triangle_centroid`. |
+| `selector.polygon_mm` | A convex polygon of 3–32 distinct vertices, in either winding, without repeating the closing vertex. |
+| `binding` | The complete existing `/3` binding: exact original material hash/acquisition, initial direction, explicit per-interval pressure or clearance controls, and any qualified branch changes. |
+
+For example, this selector describes one rectangular material region:
+
+```json
+{
+  "kind": "whole_triangle_centroid",
+  "polygon_mm": [[20, 100], [60, 100], [60, 240], [20, 240]]
+}
+```
+
+The coordinates are the physical instance's flat millimetres after mirroring and `sim_scale`, before
+grain rotation, wrapping and welding. The example coordinates are illustrative geometry, not a
+measured contact footprint. Coordinates must lie within ±1,000,000 mm; nonzero magnitudes below
+1e-100 are outside the supported exact-predicate domain. Selection uses the original retained
+mathematical triangle centroids once, using exact orientation with boundary centroids included.
+Displayed centroid coordinates are rounded; they do not decide membership. The selected material triangles then
+follow the cloth through motion. Regions do not slide over the current world-space cloth.
+
+This is a **whole-triangle approximation**: triangles are not clipped at polygon edges. Review the
+reported selected triangles and reference areas; refining the mesh can change the approximation.
+Empty regions and regions selecting the same retained triangle refuse. A shared budget limits the
+total candidate-triangle × polygon-edge tests to 16,777,216.
+
+Each region gets its own conditioned thermal column and acquired history. A region's name does not
+replace the physical instance ID in a branch-change stack layer or `transitions` map. Unselected
+triangles retain their owner's exact original material and thermal state in an explicit remainder.
+That original material must independently supply its thermal properties: the remainder cannot
+borrow a pressure acquisition or be silently conditioned at zero/preload. An entirely selected
+owner has no remainder. Region boundaries do not create new mechanical pieces or body-coverage
+layers, and the existing owner-based initial temperatures and depth profiles keep their meaning.
+
+The `/4` result retains `initial_regions`, `final_regions`, `updates[].regions` and `remainders`.
+Its `ftx-motion-compression-source/2` snapshot includes original flat triangles and the
+`column_regions` map so comparison admission reconstructs the exact partition and independently
+replays material identities, controls, work and storage. Reference area owns mass; actual current
+selected area multiplies the acquired normal work. Both independent-sheet and moving layered heat
+use the existing solvers and whole-history rollback. The guided browser accepts the same original
+regional source file for either heat consumer, preserves it through saved named cases, and displays
+region histories and unchanged remainders separately. No contact area, force-derived pressure,
+geometric compression feedback or physical insulation qualification is inferred.
+
+All four versions use the existing uniform dry films. Independent-sheet and layered compression also
 admit separately qualified convection and opaque-gray radiation through `exterior_exchange`.
 Each environment must qualify its coefficient, source, estimate consent and surface-temperature domain
 for the stated geometry, motion and compressed state. The outside film must be zero and `outside_c`

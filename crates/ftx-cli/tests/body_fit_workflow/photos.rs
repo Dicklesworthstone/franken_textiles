@@ -607,13 +607,21 @@ fn brown_photo_rectification_preserves_source_poses_and_enables_silhouette_body_
     .unwrap();
     let raw_review =
         body_fit_observations(&model, raw_targets["input"].as_str().unwrap(), "").unwrap();
-    assert!(
-        raw_review["frames"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|frame| { frame["silhouette_editable"] == false })
-    );
+    let raw_draft = input(&raw_prepared);
+    for (index, frame) in raw_review["frames"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(frame["silhouette_editable"], true);
+        assert_eq!(
+            raw_draft["fit"]["frames"][index]["camera"],
+            prepared["acquisition"]["frames"][index]["rectification"]["source_camera"]
+        );
+        let receipt = frame["image_review"].as_str().unwrap();
+        let image = BodyFitImage::new(&images[index], receipt).unwrap();
+        assert_eq!(
+            image.report()["source_image"],
+            raw_draft["capture_images"][index]
+        );
+        assert!(BodyFitImage::new(&derived[index].1, receipt).is_err());
+    }
     let review = body_fit_observations(&model, targets["input"].as_str().unwrap(), "").unwrap();
     for (index, frame) in review["frames"].as_array().unwrap().iter().enumerate() {
         assert_eq!(frame["silhouette_editable"], true);

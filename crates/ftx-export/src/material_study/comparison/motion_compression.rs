@@ -1,8 +1,8 @@
 //! Admit prescribed pressure histories through the existing material conditioner. Normal work
 //! remains a separate ledger; this checks source and state continuity without running heat again.
 use super::*;
-use ftx_core::Vec3;
-use ftx_pattern::material_compression::{self, stack};
+use ftx_core::{Vec2, Vec3};
+use ftx_pattern::material_compression::{self, regions, stack};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +16,147 @@ struct Binding {
     controls: Option<Vec<Control>>,
     #[serde(default)]
     branch_changes: Option<Vec<Option<stack::BranchChange>>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegionalBinding {
+    instance: String,
+    selector: regions::Selector,
+    binding: Binding,
+}
+
+// Reconstruct the fixed partition independently from the retained flat triangles. Source hashes
+// alone cannot establish that a renamed column or altered selector owns the claimed cloth.
+fn regional_columns(
+    requested: &BTreeMap<String, RegionalBinding>,
+    source: &Value,
+    instances: &[Value],
+    owners: &[usize],
+    patches: &[Value],
+) -> Result<Vec<Option<String>>, Refusal> {
+    let flat: Vec<[Vec2; 3]> =
+        serde_json::from_value(source["rest_triangles_mm"].clone()).map_err(|_| fail())?;
+    if flat.len() != patches.len() {
+        return Err(fail());
+    }
+    for (triangle, patch) in flat.iter().zip(patches) {
+        regions::triangle_centroid_mm(*triangle)?;
+        let [a, b, c] = *triangle;
+        let area = 0.5 * (b - a).cross(c - a).abs() * 1e-6;
+        let reference = finite(&patch["reference_area_m2"]).ok_or_else(fail)?;
+        if !area.is_finite()
+            || area <= 0.
+            || reference <= 0.
+            || (area - reference).abs() > 1e-10 * area.max(reference)
+        {
+            return Err(fail());
+        }
+    }
+    let mut retained: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (index, &owner) in owners.iter().enumerate() {
+        retained.entry(owner).or_default().push(index);
+    }
+    let instance_owners = retained
+        .keys()
+        .map(|&owner| {
+            instances
+                .get(owner)
+                .and_then(Value::as_str)
+                .map(|id| (id, owner))
+                .ok_or_else(fail)
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let mut edge_tests = 0_usize;
+    let selectors = requested
+        .iter()
+        .map(|(id, region)| {
+            if id.trim().is_empty()
+                || id.len() > 512
+                || region.instance.trim().is_empty()
+                || region.instance.len() > 512
+                || !instance_owners.contains_key(region.instance.as_str())
+            {
+                return Err(fail());
+            }
+            let owner = instance_owners[region.instance.as_str()];
+            edge_tests = edge_tests
+                .checked_add(
+                    retained[&owner]
+                        .len()
+                        .checked_mul(region.selector.polygon_mm.len())
+                        .ok_or_else(fail)?,
+                )
+                .filter(|&count| count <= regions::MAX_REGION_EDGE_TESTS)
+                .ok_or_else(fail)?;
+            Ok((
+                id.as_str(),
+                regions::PreparedSelector::new(&region.selector)?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, Refusal>>()?;
+    let mut assignment = vec![usize::MAX; patches.len()];
+    let mut column_instances = Vec::new();
+    let mut column_regions = Vec::new();
+    for (owner, owned) in retained {
+        let instance = instances
+            .get(owner)
+            .and_then(Value::as_str)
+            .ok_or_else(fail)?;
+        for (id, region) in requested
+            .iter()
+            .filter(|(_, region)| region.instance == instance)
+        {
+            let selector = &selectors[id.as_str()];
+            let selected = owned
+                .iter()
+                .map(|&index| {
+                    selector
+                        .contains_triangle_centroid(flat[index])
+                        .map(|yes| (index, yes))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let selected: Vec<_> = selected
+                .into_iter()
+                .filter_map(|(index, yes)| yes.then_some(index))
+                .collect();
+            if selected.is_empty()
+                || selected
+                    .iter()
+                    .any(|&index| assignment[index] != usize::MAX)
+            {
+                return Err(fail());
+            }
+            let column = column_instances.len();
+            column_instances.push(region.instance.clone());
+            column_regions.push(Some(id.clone()));
+            for index in selected {
+                assignment[index] = column;
+            }
+        }
+        let remainder: Vec<_> = owned
+            .into_iter()
+            .filter(|&index| assignment[index] == usize::MAX)
+            .collect();
+        if !remainder.is_empty() {
+            let column = column_instances.len();
+            column_instances.push(instance.to_owned());
+            column_regions.push(None);
+            for index in remainder {
+                assignment[index] = column;
+            }
+        }
+    }
+    if source["column_instances"] != json!(column_instances)
+        || source["column_regions"] != json!(column_regions)
+        || patches
+            .iter()
+            .zip(assignment)
+            .any(|(patch, column)| patch["column"].as_u64() != Some(column as u64))
+    {
+        return Err(fail());
+    }
+    Ok(column_regions)
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -702,7 +843,7 @@ fn admit_coverage_frame(heat: &Value, model: &Value) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// Return the admitted initial conditioned materials for instance/profile initialization.
+/// Return the admitted initial materials by thermal column; physical owner profiles stay separate.
 pub(super) fn admit(
     alternative: &Alternative,
     simulation: &Value,
@@ -723,10 +864,11 @@ pub(super) fn admit(
             Err(fail())
         };
     };
-    let (cyclic, controlled) = match policy["schema"].as_str() {
-        Some("ftx-motion-surface-compression/1") => (false, false),
-        Some("ftx-motion-surface-compression/2") => (true, false),
-        Some("ftx-motion-surface-compression/3") => (false, true),
+    let (cyclic, controlled, regional) = match policy["schema"].as_str() {
+        Some("ftx-motion-surface-compression/1") => (false, false, false),
+        Some("ftx-motion-surface-compression/2") => (true, false, false),
+        Some("ftx-motion-surface-compression/3") => (false, true, false),
+        Some("ftx-motion-surface-compression/4") => (false, true, true),
         _ => return Err(fail()),
     };
     if !policy.as_object().is_some_and(|o| o.len() == 3)
@@ -734,7 +876,9 @@ pub(super) fn admit(
             .as_str()
             .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
         || receipt["schema"]
-            != if controlled {
+            != if regional {
+                "ftx-motion-surface-compression-result/4"
+            } else if controlled {
                 "ftx-motion-surface-compression-result/3"
             } else if cyclic {
                 "ftx-motion-surface-compression-result/2"
@@ -758,8 +902,27 @@ pub(super) fn admit(
     {
         return Err(fail());
     }
-    let bindings: BTreeMap<String, Binding> =
-        serde_json::from_value(policy["bindings"].clone()).map_err(|_| fail())?;
+    let region_bindings: BTreeMap<String, RegionalBinding> = if regional {
+        serde_json::from_value(policy["regions"].clone()).map_err(|_| fail())?
+    } else {
+        BTreeMap::new()
+    };
+    let legacy_bindings: BTreeMap<String, Binding> = if regional {
+        BTreeMap::new()
+    } else {
+        serde_json::from_value(policy["bindings"].clone()).map_err(|_| fail())?
+    };
+    let bindings: BTreeMap<String, &Binding> = if regional {
+        region_bindings
+            .iter()
+            .map(|(id, region)| (id.clone(), &region.binding))
+            .collect()
+    } else {
+        legacy_bindings
+            .iter()
+            .map(|(id, binding)| (id.clone(), binding))
+            .collect()
+    };
     let source = &receipt["source_model"];
     let initial_model = &receipt["initial_model"];
     let report = &simulation["drape"]["material"];
@@ -779,11 +942,16 @@ pub(super) fn admit(
     }
     // A present null field must not silently downgrade a requested branch or boundary policy.
     // Legacy schemas retain their original contracts and reject fields belonging only to /3.
-    if policy["bindings"]
+    if policy[if regional { "regions" } else { "bindings" }]
         .as_object()
         .ok_or_else(fail)?
         .values()
         .any(|binding| {
+            let binding = if regional {
+                &binding["binding"]
+            } else {
+                binding
+            };
             let schedule = if controlled {
                 "controls"
             } else {
@@ -825,7 +993,12 @@ pub(super) fn admit(
     let updates = vapor_array(receipt, "updates")?;
     if !(1..=256).contains(&bindings.len())
         || !(1..=16).contains(&endpoints.len())
-        || source["schema"] != "ftx-motion-compression-source/1"
+        || source["schema"]
+            != if regional {
+                "ftx-motion-compression-source/2"
+            } else {
+                "ftx-motion-compression-source/1"
+            }
         || source["material_report_sha256"] != hash(report)?
         || receipt["material_report_sha256"] != source["material_report_sha256"]
         || &source["cells_per_layer"] != requested_cells
@@ -869,13 +1042,21 @@ pub(super) fn admit(
         .iter()
         .map(|&i| instances.get(i).ok_or_else(fail))
         .collect::<Result<Vec<_>, _>>()?;
-    if expected_ids.iter().copied().ne(column_instances.iter())
-        || bindings
-            .keys()
-            .any(|id| !column_instances.iter().any(|v| v.as_str() == Some(id)))
-    {
-        return Err(fail());
-    }
+    let column_regions = if regional {
+        regional_columns(&region_bindings, source, instances, &owner_indices, patches)?
+    } else {
+        if expected_ids.iter().copied().ne(column_instances.iter())
+            || bindings
+                .keys()
+                .any(|id| !column_instances.iter().any(|v| v.as_str() == Some(id)))
+        {
+            return Err(fail());
+        }
+        column_instances
+            .iter()
+            .map(|id| id.as_str().map(str::to_owned))
+            .collect()
+    };
     let catalog = Catalog {
         schema: CATALOG_SCHEMA.into(),
         materials: vec![],
@@ -891,6 +1072,7 @@ pub(super) fn admit(
     let mut materials = Vec::new();
     let mut selections = Vec::new();
     let mut states = serde_json::Map::new();
+    let mut remainders = serde_json::Map::new();
     let mut active = BTreeMap::new();
     for (column, ((original, initial), id)) in columns
         .iter()
@@ -898,7 +1080,8 @@ pub(super) fn admit(
         .zip(column_instances)
         .enumerate()
     {
-        let id = id.as_str().ok_or_else(fail)?;
+        let instance = id.as_str().ok_or_else(fail)?;
+        let state_id = column_regions.get(column).ok_or_else(fail)?.as_deref();
         let material = resolved(&catalog, original)?;
         let retained_record = match report["basis"].as_str() {
             Some("characterized_record") if report["record_sha256"] == material.sha256() => {
@@ -915,7 +1098,9 @@ pub(super) fn admit(
             return Err(fail());
         }
         let mut selected = material.clone();
-        if let Some(binding) = bindings.get(id) {
+        if let Some((id, binding)) =
+            state_id.and_then(|id| bindings.get(id).map(|binding| (id, *binding)))
+        {
             if id.len() > 512
                 || binding.material_sha256 != material.sha256()
                 || hash(&ftx_pattern::material_catalog::normalize(
@@ -944,16 +1129,46 @@ pub(super) fn admit(
             if !area.is_finite() || area <= 0. || !mass.is_finite() || mass <= 0. {
                 return Err(fail());
             }
-            states.insert(id.into(), json!({"column":column,"material_sha256":material.sha256(),
+            let mut state = json!({"column":column,"material_sha256":material.sha256(),
                 "conditioned_material_sha256":selected.sha256(),"pressure_pa":binding.preparation.pressure_pa,
                 "thickness_m":quantity(&selected,"thickness","m")?,"reference_area_m2":area,
-                "reference_mass_kg":mass,"cumulative_normal_work_j":0.}));
+                "reference_mass_kg":mass,"cumulative_normal_work_j":0.});
+            if regional {
+                state["instance"] = json!(instance);
+                state["source_triangles"] = json!(owned_patches[column]);
+            }
+            states.insert(id.into(), state);
             active.insert(
                 id.to_owned(),
                 (binding.preparation.clone(), binding.direction),
             );
-        } else if initial["layers"][0] != *original {
-            return Err(fail());
+        } else {
+            if initial["layers"][0] != *original {
+                return Err(fail());
+            }
+            if regional {
+                material.material().require_dry_mass_transport()?;
+                if material.material().thermal_response.is_none()
+                    && conditioned_column(initial, &material, cells)? != *initial
+                {
+                    return Err(fail());
+                }
+                let area = owned_patches[column].iter().try_fold(0., |sum, &index| {
+                    finite(&patches[index]["reference_area_m2"])
+                        .map(|area| sum + area)
+                        .ok_or_else(fail)
+                })?;
+                let mass = area * quantity(&material, "areal_density", "kg/m2")?;
+                if !area.is_finite() || area <= 0. || !mass.is_finite() || mass <= 0. {
+                    return Err(fail());
+                }
+                remainders.insert(
+                    instance.into(),
+                    json!({"column":column,
+                    "source_triangles":owned_patches[column],"material_sha256":material.sha256(),
+                    "reference_area_m2":area,"reference_mass_kg":mass}),
+                );
+            }
         }
         qualify_optics(&selected, request)?;
         selections.push(json!(material.frozen_selection()));
@@ -987,7 +1202,13 @@ pub(super) fn admit(
             return Err(fail());
         }
     }
-    if receipt["initial_instances"] != Value::Object(states.clone()) {
+    if receipt[if regional {
+        "initial_regions"
+    } else {
+        "initial_instances"
+    }] != Value::Object(states.clone())
+        || (regional && receipt["remainders"] != Value::Object(remainders))
+    {
         return Err(fail());
     }
     let mut model = initial_model.clone();
@@ -1017,6 +1238,11 @@ pub(super) fn admit(
             }
             let mut expected = serde_json::Map::new();
             for (id, binding) in &bindings {
+                let instance = if regional {
+                    &region_bindings.get(id).ok_or_else(fail)?.instance
+                } else {
+                    id
+                };
                 let state = states.get_mut(id).ok_or_else(fail)?;
                 let column = vapor_index(&state["column"])?;
                 let previous_pressure = finite(&state["pressure_pa"]).ok_or_else(fail)?;
@@ -1044,7 +1270,7 @@ pub(super) fn admit(
                     reference_area_m2: 1.,
                     direction: *direction,
                     layers: vec![stack::Layer {
-                        id: id.clone(),
+                        id: instance.clone(),
                         preparation: current_preparation,
                     }],
                     allow_estimates: preparation.allow_estimates,
@@ -1054,7 +1280,8 @@ pub(super) fn admit(
                     .as_ref()
                     .and_then(|changes| changes[interval].as_ref())
                     .map(|change| {
-                        if change.entry.layers.len() != 1 || change.entry.layers[0].id != *id {
+                        if change.entry.layers.len() != 1 || change.entry.layers[0].id != *instance
+                        {
                             return Err(fail());
                         }
                         invariant_storage(&change.entry.layers[0].preparation)?;
@@ -1135,16 +1362,15 @@ pub(super) fn admit(
                 model["columns"][column] = next;
             }
             surface_hash(&mut model)?;
-            if update["instances"] != Value::Object(expected)
+            if update[if regional { "regions" } else { "instances" }] != Value::Object(expected)
                 || update["model_sha256"] != model["sha256"]
             {
                 return Err(fail());
             }
         }
-        if row["prescribed_compression"]
-            != json!({"model_sha256":model["sha256"],
-            "instances":states,"cumulative_normal_work_j":total})
-        {
+        let mut summary = json!({"model_sha256":model["sha256"],"cumulative_normal_work_j":total});
+        summary[if regional { "regions" } else { "instances" }] = json!(states);
+        if row["prescribed_compression"] != summary {
             return Err(fail());
         }
         previous_time = finite(&sample["time_s"]).ok_or_else(fail)?;
@@ -1153,7 +1379,11 @@ pub(super) fn admit(
         || model != heat["model"]
         || (coverage && model != heat["checkpoint"]["frame"]["source"])
         || receipt["final_model_sha256"] != model["sha256"]
-        || receipt["final_instances"] != Value::Object(states)
+        || receipt[if regional {
+            "final_regions"
+        } else {
+            "final_instances"
+        }] != Value::Object(states)
         || receipt["cumulative_normal_work_j"] != total
     {
         return Err(fail());
@@ -1219,4 +1449,90 @@ pub(super) fn admit(
         return Err(fail());
     }
     Ok(Some(materials))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn case() -> (BTreeMap<String, RegionalBinding>, Value) {
+        let preparation: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/materials/synthetic-compression.json"
+        ))
+        .unwrap();
+        let region = |x: f64| {
+            serde_json::from_value(json!({"instance":"band",
+                "selector":{"kind":"whole_triangle_centroid",
+                    "polygon_mm":[[x,0.],[x+2.,0.],[x+2.,2.],[x,2.]]},
+                "binding":{"material_sha256":"a".repeat(64),"preparation":preparation,
+                    "direction":"loading","controls":[{"kind":"pressure","pressure_pa":250.}]}}))
+            .unwrap()
+        };
+        let requested =
+            BTreeMap::from([("left".into(), region(0.)), ("right".into(), region(10.))]);
+        let source = json!({"instances":["band"],"triangle_instance":[0,0,0],
+            "column_instances":["band","band","band"],"column_regions":["left","right",null],
+            "rest_triangles_mm":[[[0.,0.],[1.,0.],[0.,1.]],
+                [[10.,0.],[11.,0.],[10.,1.]],[[5.,0.],[6.,0.],[5.,1.]]],
+            "patches":[{"column":0,"reference_area_m2":5e-7},
+                {"column":1,"reference_area_m2":5e-7},{"column":2,"reference_area_m2":5e-7}]});
+        (requested, source)
+    }
+
+    fn check(
+        requested: &BTreeMap<String, RegionalBinding>,
+        source: &Value,
+    ) -> Result<Vec<Option<String>>, Refusal> {
+        let owners =
+            serde_json::from_value::<Vec<usize>>(source["triangle_instance"].clone()).unwrap();
+        regional_columns(
+            requested,
+            source,
+            source["instances"].as_array().unwrap(),
+            &owners,
+            source["patches"].as_array().unwrap(),
+        )
+    }
+
+    #[test]
+    fn regional_columns_reconstruct_same_owner_regions_and_original_remainder() {
+        let (requested, source) = case();
+        assert_eq!(
+            check(&requested, &source).unwrap(),
+            vec![Some("left".into()), Some("right".into()), None]
+        );
+    }
+
+    #[test]
+    fn regional_columns_refuse_changed_geometry_ownership_or_partition_even_with_fresh_hashes() {
+        let (requested, source) = case();
+        for edit in 0..7 {
+            let mut changed = source.clone();
+            match edit {
+                0 => changed["column_regions"] = json!(["right", "left", null]),
+                1 => changed["patches"][0]["column"] = json!(1),
+                2 => changed["patches"][2]["reference_area_m2"] = json!(1e-6),
+                3 => changed["rest_triangles_mm"][2] = json!([[5., 0.], [5., 0.], [5., 0.]]),
+                4 => changed["rest_triangles_mm"][0] = changed["rest_triangles_mm"][1].clone(),
+                5 => changed["triangle_instance"][0] = json!(1),
+                6 => changed["column_instances"][0] = json!("left"),
+                _ => unreachable!(),
+            }
+            changed["sha256"] = json!(hash(&changed).unwrap());
+            assert!(check(&requested, &changed).is_err(), "edit {edit}");
+        }
+    }
+
+    #[test]
+    fn regional_columns_refuse_empty_or_overlapping_selectors() {
+        for overlap in [false, true] {
+            let (mut requested, source) = case();
+            requested.get_mut("right").unwrap().selector.polygon_mm = if overlap {
+                requested["left"].selector.polygon_mm.clone()
+            } else {
+                vec![Vec2::new(20., 0.), Vec2::new(21., 0.), Vec2::new(20., 1.)]
+            };
+            assert!(check(&requested, &source).is_err());
+        }
+    }
 }

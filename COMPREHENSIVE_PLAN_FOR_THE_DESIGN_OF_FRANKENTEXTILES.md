@@ -5957,6 +5957,26 @@ Brown mapping, crop selection, source-pose preservation, exact image identity an
 silhouette fitting. Runtime outcomes are recorded with `ftx-onn.34`. Rectification supplies neither
 anatomical segmentation nor calibration-uncertainty propagation, real-wearer accuracy or physical fit.
 
+### 25.210 Preserve local compression histories within an intact garment piece
+
+Named convex polygons in physical flat-material coordinates can select fixed whole-triangle regions
+of one garment instance. Each region follows its own original acquired pressure or clearance history
+through motion, with physical stack-layer identity retained independently of the region name.
+Unselected triangles keep their original qualified thermal material and temperature state. Explicit
+centroid selection, finite geometry and work budgets, disjoint ownership and complete remainders
+make the approximation inspectable without changing mechanical topology or inventing contact area.
+
+Independent-sheet and layered body heat reuse their existing solvers, projection and conservative
+state transfer. Reference area owns mass; actual current selected area owns the separate normal-work
+ledger. Retained source triangles and column maps let material/design comparison reconstruct the
+partition and replay all histories. Guided requests and frozen named cases carry the same declarations
+and display independent region states and original-material remainders.
+
+This advances `ftx-cp2` and `ftx-tm5` through software child `ftx-cp2.regions`. Independent centroid,
+area/work, heat/storage, refusal and native/portable replay checks cover the implemented closure.
+Measured contact-pressure inference, exact subtriangle footprints, wet/compressed coupling,
+geometric squeeze feedback, recovery-time laws and empirical garment qualification remain separate.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

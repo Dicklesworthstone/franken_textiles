@@ -104,6 +104,8 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   FTX_CLEARANCE_CONVECTION_MOTION_REPLAY="$WORK/clearance-convection-motion" \
   FTX_COMPRESSION_RADIATION_MOTION_REPLAY="$WORK/compression-radiation-motion" \
   FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY="$WORK/compression-radiation-coverage" \
+  FTX_REGIONAL_COMPRESSION_MOTION_REPLAY="$WORK/regional-compression-motion" \
+  FTX_REGIONAL_COMPRESSION_COVERAGE_REPLAY="$WORK/regional-compression-coverage" \
     cargo "$CARGO_TEST" --locked --release -p ftx-cli --test accepted_body_workflow surface_water
 
   node - "$FTX_BIN" "$FTX_MATERIALS_BIN" "$WORK" "$ROOT" <<'EOF'
@@ -900,6 +902,8 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   FTX_CLEARANCE_CONVECTION_MOTION_REPLAY="$WORK/clearance-convection-motion" \
   FTX_COMPRESSION_RADIATION_MOTION_REPLAY="$WORK/compression-radiation-motion" \
   FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY="$WORK/compression-radiation-coverage" \
+  FTX_REGIONAL_COMPRESSION_MOTION_REPLAY="$WORK/regional-compression-motion" \
+  FTX_REGIONAL_COMPRESSION_COVERAGE_REPLAY="$WORK/regional-compression-coverage" \
     node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
 else
   FTX_REAL_WASM=1 FTX_GUIDED_SCENARIO_NATIVE="$FTX_MATERIALS_BIN" FTX_TRIANGULATION_LENS_FIXTURES="$WORK/triangulation-lens-fixtures" FTX_TRIANGULATION_CAMERA_FIXTURES="$WORK/triangulation-camera-fixtures" FTX_BODY_RECTIFICATION_FIXTURES="$WORK/body-rectification" node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs

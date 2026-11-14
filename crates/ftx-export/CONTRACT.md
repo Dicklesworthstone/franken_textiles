@@ -825,6 +825,18 @@ qualified water and liquid/mechanical histories. Existing uniform and scalar per
 retain their original semantics. This extends independent-sheet initialization only, without
 coverage profile remapping, a new material law or empirical garment evidence.
 
+**Regional compression replay.** Motion compression `/4` accepts named pressure/clearance histories
+on disjoint whole-triangle regions of one physical garment instance. Admission reconstructs the
+partition from source `/2` flat triangles with the shared bounded convex selector, verifies finite
+geometry/reference areas, exact physical ownership and original material assignments, and rebuilds
+region and remainder columns in their deterministic order. Region state IDs remain separate from
+physical stack-layer IDs. Initial/final states, acquired joins, interval controls, actual work areas,
+reference storage and trace identities replay through the existing pressure authority. An unselected
+remainder must retain its original qualified material; it cannot inherit a region's conditioned law.
+Altered source maps or histories refuse the dependent heat comparison while independent consumers
+remain available. Existing whole-instance `/1`–`/3` results retain their contracts. Native/portable
+single and named-case fixtures use the existing `accepted_body_workflow::surface_water` seam.
+
 Radiative comparisons retain the methods, conditions, units and evidence of the actual requested
 emissivity observations by source piece, including arbitrary property names and source-bearing
 automatic optical mappings. Independent sheets use only their positive mapped face; steady

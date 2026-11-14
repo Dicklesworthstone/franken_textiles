@@ -124,6 +124,459 @@ fn compressed_coverage_radiation_replays_native_portable_and_named_case_decision
     compression_exterior_workflow(false, true, true, true, true);
 }
 
+#[test]
+fn regional_compression_replays_native_portable_and_named_case_decisions() {
+    for coverage in [false, true] {
+        regional_compression_workflow(coverage);
+    }
+}
+
+fn regional_compression_workflow(coverage: bool) {
+    let (mut pattern, mut study, mut single) = inputs();
+    let consumer = if coverage {
+        "transient_coverage"
+    } else {
+        "transient_surface"
+    };
+    let metric = if coverage {
+        "transient_coverage_final_min_temperature_c"
+    } else {
+        "transient_surface_final_min_temperature_c"
+    };
+    let width = std::f64::consts::TAU * 180.0;
+    if coverage {
+        let mut source: Value = serde_json::from_str(&pattern).unwrap();
+        let mut outer = source["pieces"][0].clone();
+        let outer_width = std::f64::consts::TAU * 210.0;
+        outer["id"] = json!("outer");
+        outer["vertices"]["b"][0] = json!(outer_width);
+        outer["vertices"]["c"][0] = json!(outer_width);
+        outer["placement"]["radius_mm"] = json!(210.0);
+        outer["placement"]["x0"] = json!(outer_width / 2.0);
+        source["pieces"].as_array_mut().unwrap().push(outer);
+        source["seams"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"outer-join","a":"outer/right","b":"outer/left"}));
+        pattern = source.to_string();
+    }
+    // The original source independently supplies unloaded resistance and storage. The
+    // unselected remainder must retain that exact material, not a zero-pressure derivative.
+    let mut preparation: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/materials/synthetic-compression.json"
+    ))
+    .unwrap();
+    preparation["pressure_pa"] = json!(0.0);
+    let material = json!({"id":preparation["material"]["id"],"allow_estimates":true,
+        "record":preparation["material"]});
+    let selected: Selection = serde_json::from_value(material.clone()).unwrap();
+    let original = Catalog::builtin().unwrap().resolve(&selected).unwrap();
+    let lock = original.sha256().to_owned();
+    let original = serde_json::to_value(original).unwrap();
+    let mut changed_source = material.clone();
+    changed_source["record"]["sources"]["synthetic"]["note"] =
+        json!("Different synthetic acquisition; regional pressure evidence cannot qualify it");
+    study["variants"] = json!([
+        {"key":"qualified","changes":{"schema":"ftx-material-bindings/1","default":material}},
+        {"key":"unmatched-source","changes":{"schema":"ftx-material-bindings/1","default":changed_source}}]);
+    study["comparison"] = json!({"basis":"nominal","required_consumers":[consumer],
+        "objectives":[{"metric":metric,"direction":"minimize"}]});
+    let rectangle = |left: f64, right: f64| {
+        json!({"kind":"whole_triangle_centroid",
+            "polygon_mm":[[left,0.0],[right,0.0],[right,20.0],[left,20.0]]})
+    };
+    let binding = json!({"material_sha256":lock,"preparation":preparation,
+        "direction":"loading"});
+    let mut pressure = binding.clone();
+    pressure["controls"] = json!([
+        {"kind":"pressure","pressure_pa":250.0},
+        {"kind":"pressure","pressure_pa":500.0}
+    ]);
+    let mut clearance = binding;
+    clearance["controls"] = json!([
+        {"kind":"gap","gap_m":0.018},
+        {"kind":"gap","gap_m":0.015}
+    ]);
+    single["motion"]["keyframes"] = json!([
+        {"time_s":0.0005,"arm_abduction_deg":35.0},
+        {"time_s":0.001,"arm_abduction_deg":35.0}
+    ]);
+    single["motion"]["source_pose_sampling"] = json!({"max_step_s":0.00025,"max_segments":4});
+    let heat = &mut single["motion"]["transient_surface"];
+    heat.as_object_mut().unwrap().remove("surface_water");
+    heat["cells_per_layer"] = json!(2);
+    heat["initial_instance_temperature_profiles_c"] = json!({"band":[20.0,20.0]});
+    heat["boundaries"] = json!(vec![
+        json!({"inside_c":20.0,"outside_c":5.0,
+        "inside_resistance_m2_k_w":1.0,"outside_resistance_m2_k_w":1.0});
+        2
+    ]);
+    heat["prescribed_compression"] = json!({"schema":"ftx-motion-surface-compression/4",
+    "thermal_evidence":"Synthetic constant dry coefficients over 0–40 C and 0–500 Pa for 0.001 s; explicit films, independently prescribed regional controls and no normal-work conversion to heat.",
+    "regions":{
+        "pressure-zone":{"instance":"band","selector":rectangle(0.0,0.3*width),"binding":pressure},
+        "clearance-zone":{"instance":"band","selector":rectangle(0.6*width,0.9*width),"binding":clearance}
+    }});
+    if coverage {
+        use ftx_drape::study::fitted::{BodyRequest, FittedBody};
+
+        let bytes = model_bytes_with_rig(true);
+        let digest = sha256_hex(&bytes);
+        let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+        let body_input = json!({"schema":"ftx-scenario-body/1",
+            "accepted_body_fit":receipt(&digest),"arm_abduction_deg":35.0});
+        let selected =
+            FittedBody::prepare(&model, &digest, &BodyRequest::read(&body_input).unwrap()).unwrap();
+        let body = selected.body();
+        let body_ids: Vec<_> = body
+            .collision
+            .1
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| {
+                face.iter()
+                    .map(|&index| body.collision.0[index].x)
+                    .sum::<f64>()
+                    > 0.0
+            })
+            .map(|(index, _)| index)
+            .collect();
+        assert!(!body_ids.is_empty());
+        let sheet = single["motion"]
+            .as_object_mut()
+            .unwrap()
+            .remove("transient_surface")
+            .unwrap();
+        let settings = json!({"max_distance_m":0.15,"min_normal_cosine":0.9,
+            "separation_tolerance_m":0.00001,"cells_per_layer":2,
+            "interfaces":[{"inner":"lining","outer":"shell","resistance_m2_k_w":0.1,
+                "basis":"Explicit synthetic interlayer film; no inferred air-gap law"}]});
+        single["coverage"]["body_triangle_ids"] = json!(body_ids);
+        single["coverage"]["instance_layers"] = json!({"band":"lining","outer":"shell"});
+        single["coverage"]["settings"] = settings.clone();
+        single["motion"]["transient_coverage"] = json!({
+            "schema":"ftx-motion-coverage-heat/1","body_triangle_ids":body_ids,
+            "instance_layers":{"band":"lining","outer":"shell"},"settings":settings,
+            "initial_temperature_c":20.0,
+            "initial_instance_temperature_profiles_c":{"band":[20.0,20.0],"outer":[20.0,20.0]},
+            "boundaries":sheet["boundaries"],"exposed_boundaries":[null,null],
+            "max_step_s":0.00025,"max_cell_steps":1000000,"max_geometry_operations":2000000,
+            "prescribed_compression":sheet["prescribed_compression"]});
+    }
+    let request: ftx_export::material_study::Request =
+        serde_json::from_value(study.clone()).unwrap();
+    let source_pattern = ftx_pattern::Pattern::from_json(&pattern).unwrap();
+    let shared_manufacturing = std::cell::RefCell::new(None::<Value>);
+    replay(
+        &pattern,
+        &study,
+        single.clone(),
+        if coverage {
+            "FTX_REGIONAL_COMPRESSION_COVERAGE_REPLAY"
+        } else {
+            "FTX_REGIONAL_COMPRESSION_MOTION_REPLAY"
+        },
+        |report| {
+            let motion =
+                &keyed(&report["simulations"], "qualified")["evaluation"]["result"]["motion"];
+            assert_eq!(motion["status"], "available", "{motion}");
+            let outcome = &motion["result"][consumer];
+            assert_eq!(outcome["status"], "available", "{outcome}");
+            let heat = &outcome["result"];
+            let compression = &heat["prescribed_compression"];
+            assert_eq!(
+                compression["schema"],
+                "ftx-motion-surface-compression-result/4"
+            );
+            let source = &compression["source_model"];
+            assert_eq!(source["schema"], "ftx-motion-compression-source/2");
+            let patches = source["patches"].as_array().unwrap();
+            assert_eq!(
+                source["rest_triangles_mm"].as_array().unwrap().len(),
+                patches.len()
+            );
+            assert_eq!(
+                source["columns"].as_array().unwrap().len(),
+                if coverage { 4 } else { 3 }
+            );
+            assert_eq!(
+                heat["initial_condition"]["model_sha256"],
+                compression["initial_model"]["sha256"]
+            );
+            assert_eq!(compression["final_model_sha256"], heat["model"]["sha256"]);
+            assert_eq!(compression["normal_work_to_heat_j"], 0.0);
+            assert_eq!(compression["updates"].as_array().unwrap().len(), 2);
+
+            // Reconstruct the selection from retained flat coordinates, independently of the
+            // producer's region lists. Every patch belongs to exactly one region or remainder.
+            let mut assigned = std::collections::BTreeSet::new();
+            for (name, region) in compression["final_regions"].as_object().unwrap() {
+                assert_eq!(region["instance"], "band");
+                let initial = &compression["initial_regions"][name];
+                assert_eq!(initial["pressure_pa"], 0.0);
+                assert_eq!(initial["material_sha256"], lock);
+                assert_eq!(region["material_sha256"], lock);
+                assert_eq!(initial["reference_mass_kg"], region["reference_mass_kg"]);
+                assert_eq!(initial["source_triangles"], region["source_triangles"]);
+                let column = region["column"].as_u64().unwrap() as usize;
+                assert_eq!(source["column_instances"][column], "band");
+                assert_eq!(source["column_regions"][column], *name);
+                let (left, right, pressure, thickness, resistance) = if name == "pressure-zone" {
+                    (0.0, 0.3 * width, 500.0, 0.01, 0.25)
+                } else {
+                    assert_eq!(name, "clearance-zone");
+                    (0.6 * width, 0.9 * width, 250.0, 0.015, 0.375)
+                };
+                let expected: Vec<_> = patches
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| {
+                        let owner = source["triangle_instance"][*index].as_u64().unwrap() as usize;
+                        let triangle = source["rest_triangles_mm"][*index].as_array().unwrap();
+                        let x = triangle.iter().map(|p| p[0].as_f64().unwrap()).sum::<f64>() / 3.0;
+                        source["instances"][owner] == "band" && x >= left && x <= right
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                assert!(expected.len() > 1);
+                assert_eq!(region["source_triangles"], json!(expected));
+                let area: f64 = expected
+                    .iter()
+                    .map(|&i| {
+                        assert!(assigned.insert(i));
+                        assert_eq!(patches[i]["column"], column);
+                        patches[i]["reference_area_m2"].as_f64().unwrap()
+                    })
+                    .sum();
+                assert!((region["reference_area_m2"].as_f64().unwrap() - area).abs() < 1e-14);
+                assert!((region["reference_mass_kg"].as_f64().unwrap() - 0.1 * area).abs() < 1e-14);
+                assert!((region["pressure_pa"].as_f64().unwrap() - pressure).abs() < 1e-8);
+                assert!((region["thickness_m"].as_f64().unwrap() - thickness).abs() < 1e-12);
+                let final_layer = &heat["model"]["columns"][column]["layers"][0];
+                assert_eq!(final_layer["sha256"], region["conditioned_material_sha256"]);
+                assert!(
+                    (final_layer["normalized"]["properties"]["thermal_resistance"]["value"]
+                        .as_f64()
+                        .unwrap()
+                        - resistance)
+                        .abs()
+                        < 1e-12
+                );
+            }
+            assert_eq!(compression["final_regions"].as_object().unwrap().len(), 2);
+            for remainder in compression["remainders"].as_object().unwrap().values() {
+                let column = remainder["column"].as_u64().unwrap() as usize;
+                assert_eq!(remainder["material_sha256"], lock);
+                assert!(source["column_regions"][column].is_null());
+                assert_eq!(source["columns"][column], original);
+                assert_eq!(heat["model"]["columns"][column]["layers"][0], original);
+                let mut area = 0.0;
+                for index in remainder["source_triangles"].as_array().unwrap() {
+                    let index = index.as_u64().unwrap() as usize;
+                    assert!(assigned.insert(index));
+                    assert_eq!(patches[index]["column"], column);
+                    area += patches[index]["reference_area_m2"].as_f64().unwrap();
+                }
+                assert!((remainder["reference_area_m2"].as_f64().unwrap() - area).abs() < 1e-14);
+                assert!(
+                    (remainder["reference_mass_kg"].as_f64().unwrap() - 0.1 * area).abs() < 1e-14
+                );
+            }
+            assert_eq!(assigned.len(), patches.len());
+            let remainder = &compression["remainders"]["band"];
+            let band_area = width * 20.0e-6;
+            assert!(remainder["reference_area_m2"].as_f64().unwrap() > 0.3 * band_area);
+            let band_mass = compression["final_regions"]
+                .as_object()
+                .unwrap()
+                .values()
+                .map(|region| region["reference_mass_kg"].as_f64().unwrap())
+                .sum::<f64>()
+                + remainder["reference_mass_kg"].as_f64().unwrap();
+            assert!((band_mass - 0.1 * band_area).abs() < 1e-12);
+
+            // Integrate the known straight branch independently: work per area is
+            // average pressure × lost thickness. Only selected CURRENT triangle area counts.
+            let mut total_work = 0.0;
+            for (interval, update) in compression["updates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+            {
+                let sample = update["sample_index"].as_u64().unwrap() as usize;
+                let positions: Vec<ftx_core::Vec3> = serde_json::from_value(
+                    motion["result"]["samples"][sample]["positions_m"].clone(),
+                )
+                .unwrap();
+                for (name, work_per_area) in [
+                    ("pressure-zone", [0.625, 1.875][interval]),
+                    ("clearance-zone", [0.1, 0.525][interval]),
+                ] {
+                    let state = &update["regions"][name];
+                    let initial = &compression["initial_regions"][name];
+                    assert_eq!(state["reference_mass_kg"], initial["reference_mass_kg"]);
+                    assert_eq!(
+                        state["control"],
+                        heat["request"]["prescribed_compression"]["regions"][name]["binding"]["controls"]
+                            [interval]
+                    );
+                    let area: f64 = initial["source_triangles"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|index| {
+                            let index = index.as_u64().unwrap() as usize;
+                            let vertices: [usize; 3] =
+                                serde_json::from_value(patches[index]["vertices"].clone()).unwrap();
+                            let [a, b, c] = vertices.map(|i| positions[i]);
+                            0.5 * (b - a).cross(c - a).norm()
+                        })
+                        .sum();
+                    assert!((state["work_area_m2"].as_f64().unwrap() - area).abs() < 1e-14);
+                    let expected_work = work_per_area * area;
+                    assert!(
+                        (state["normal_work_j"].as_f64().unwrap() - expected_work).abs() < 1e-11
+                    );
+                    total_work += expected_work;
+                }
+            }
+            assert!(
+                (compression["cumulative_normal_work_j"].as_f64().unwrap() - total_work).abs()
+                    < 1e-11
+            );
+            assert!(total_work > 0.0);
+            assert!(heat["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+            let fields = if coverage {
+                assert!(heat["final_field"]["covered_area_m2"].as_f64().unwrap() > 0.0);
+                assert!(
+                    heat["checkpoint"]["frame"]["projection"]["layout"]["regions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|region| region["layers"].as_array().unwrap().len() == 2)
+                );
+                assert!(
+                    (heat["physical_stored_change_j"].as_f64().unwrap()
+                        - heat["net_boundary_energy_j"].as_f64().unwrap())
+                    .abs()
+                        < 1e-8
+                );
+                vec![
+                    &heat["checkpoint"]["temperature_c"],
+                    &heat["checkpoint"]["exposed_temperature_c"],
+                ]
+            } else {
+                let outer_mean = |state: &Value| {
+                    let values = state["source_triangles"].as_array().unwrap();
+                    values
+                        .iter()
+                        .map(|index| {
+                            let i = index.as_u64().unwrap() as usize;
+                            heat["final"]["temperature_c"][i][1].as_f64().unwrap()
+                        })
+                        .sum::<f64>()
+                        / values.len() as f64
+                };
+                let pressure_temperature =
+                    outer_mean(&compression["final_regions"]["pressure-zone"]);
+                let clearance_temperature =
+                    outer_mean(&compression["final_regions"]["clearance-zone"]);
+                let original_temperature = outer_mean(remainder);
+                assert!((pressure_temperature - clearance_temperature).abs() > 1e-9);
+                assert!((clearance_temperature - original_temperature).abs() > 1e-9);
+                vec![&heat["final"]["temperature_c"]]
+            };
+            let minimum = fields
+                .into_iter()
+                .flat_map(|field| field.as_array().unwrap())
+                .flat_map(|row| row.as_array().unwrap())
+                .map(|value| value.as_f64().unwrap())
+                .min_by(f64::total_cmp)
+                .unwrap();
+            assert!(minimum < 20.0);
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "qualified")["readings"][metric]["value"],
+                minimum
+            );
+            let unmatched =
+                &keyed(&report["simulations"], "unmatched-source")["evaluation"]["result"];
+            assert_eq!(unmatched["motion"]["status"], "available");
+            assert_eq!(unmatched["motion"]["result"][consumer]["status"], "refused");
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "unmatched-source")["eligible"],
+                false
+            );
+
+            // Rehashing a forged region/source assignment cannot qualify the thermal decision.
+            let forged = request.evaluate_with(&source_pattern, &report["scenario"], |key, _| {
+                let mut result = keyed(&report["simulations"], key)["evaluation"]["result"].clone();
+                if key == "qualified" {
+                    let compression = &mut result["motion"]["result"][consumer]["result"]["prescribed_compression"];
+                    let column = compression["final_regions"]["pressure-zone"]["column"].as_u64().unwrap() as usize;
+                    let source = &mut compression["source_model"];
+                    source["column_regions"][column] = json!("clearance-zone");
+                    source.as_object_mut().unwrap().remove("sha256");
+                    source["sha256"] = json!(sha256_hex(&serde_json::to_vec(source).unwrap()));
+                }
+                Ok(result)
+            }).unwrap();
+            let forged = serde_json::to_value(forged).unwrap();
+            assert_eq!(forged["comparison"]["frontier"], json!([]));
+            // Matrix cases omit the shared manufacturing report. Retain the single
+            // report's exact result so every case still checks unchanged manufacturing.
+            let mut shared = shared_manufacturing.borrow_mut();
+            if let Some(manufacturing) = report.get("manufacturing") {
+                let expected = shared.get_or_insert_with(|| manufacturing.clone());
+                assert_eq!(&*expected, manufacturing);
+            }
+            assert_eq!(
+                &forged["manufacturing"],
+                shared.as_ref().expect("single report precedes named cases")
+            );
+        },
+    );
+    if !coverage {
+        let bytes = model_bytes_with_rig(true);
+        let digest = sha256_hex(&bytes);
+        let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+        let body = json!({"schema":"ftx-scenario-body/1",
+            "accepted_body_fit":receipt(&digest),"arm_abduction_deg":35.0});
+        for (fault, selector) in [
+            ("overlap", rectangle(0.0, 0.3 * width)),
+            ("empty", rectangle(width + 10.0, width + 20.0)),
+        ] {
+            let mut invalid = single.clone();
+            invalid["motion"][consumer]["prescribed_compression"]["regions"]["clearance-zone"]["selector"] =
+                selector;
+            let report: Value = serde_json::from_str(
+                &ftx_wasm::materials::scenario::on_model(
+                    &model,
+                    &digest,
+                    &pattern,
+                    &study.to_string(),
+                    &invalid.to_string(),
+                    &body.to_string(),
+                    |_| {},
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let outcome = &keyed(&report["simulations"], "qualified")["evaluation"]["result"]["motion"]
+                ["result"][consumer];
+            assert_eq!(outcome["status"], "refused", "{fault}: {outcome}");
+            assert_eq!(
+                report["comparison"]["frontier"],
+                json!([]),
+                "{fault}: {report}"
+            );
+            for row in report["manufacturing"]["alternatives"].as_array().unwrap() {
+                assert_eq!(row["cutting"]["status"], "available", "{fault}: {row}");
+            }
+        }
+    }
+}
+
 fn prescribed_compression_workflow(
     cyclic: bool,
     controlled: bool,

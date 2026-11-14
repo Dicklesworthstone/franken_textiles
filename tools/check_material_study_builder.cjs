@@ -4024,6 +4024,60 @@ function controlledCompressionInput() {
   binding.controls=[{kind:'pressure',pressure_pa:500},{kind:'gap',gap_m:0.02},{kind:'pressure',pressure_pa:250}];
   return value;
 }
+function regionalCompressionInput() {
+  const first=controlledCompressionInput().bindings['front.R'],second=structuredClone(first);
+  delete second.branch_changes;
+  second.controls=[{kind:'pressure',pressure_pa:0},{kind:'gap',gap_m:0.015},{kind:'pressure',pressure_pa:500}];
+  return {schema:'ftx-motion-surface-compression/4',thermal_evidence:'Synthetic regional controls; unchanged dry remainder.',regions:{
+    shoulder:{instance:'front.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[40,0],[40,100],[0,100]]},binding:first},
+    waistband:{instance:'front.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[60,0],[100,0],[100,100],[60,100]]},binding:second}}};
+}
+test('regional compression retains independent controls on one physical instance through exact saved replay',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
+    buildWorkbenchStudyBundle:save,parseWorkbenchStudyBundle:load}=await modulePromise;
+  const value=regionalCompressionInput(),original=' \r\n'+JSON.stringify(value)
+    .replace('"polygon_mm":[[0,0],[40,0]','"polygon_mm":[[-0.0,0],[4.000e1,0]')
+    .replace('"gap_m":0.015','"gap_m":1.500e-2')+'\r\n';
+  const input=cyclicCompressionMotion(),coverage=await guidedMovingCoverageHeat();
+  coverage.boundaries=Array.from({length:3},()=>({...coverage.boundaries[0]}));
+  coverage.exposed_boundaries=[null,null,null];input.transient_coverage=coverage;
+  const before=JSON.stringify(input);
+  for(const target of ['transient_surface','transient_coverage','both']) {
+    const raw=motion(input,undefined,original,target);assert.ok(raw.includes(original));
+    for(const consumer of ['transient_surface','transient_coverage']) {
+      assert.equal(Object.hasOwn(JSON.parse(raw)[consumer],'prescribed_compression'),target==='both'||target===consumer);
+      if(target==='both'||target===consumer)assert.deepEqual(JSON.parse(raw)[consumer].prescribed_compression,JSON.parse(original));
+    }
+  }
+  assert.equal(JSON.stringify(input),before);
+  const scenario=single({...scenarioState(),motion:input,motionCompression:original,motionCompressionTarget:'both',
+    maxMotionTrials:1024,maxVertexFrames:32000000});
+  const cases=matrix({maxEvaluations:2,cases:[{key:'same garment, separate regions',scenario}]});
+  const replay={type:'scenario',pattern:workbenchPattern,studyRequest:workbenchRequest().studyRequest,
+    scenarioRequest:cases,measurements:workbenchBody};
+  assert.ok(cases.includes(original));assert.equal(load(save(replay,workbenchModel())).request.scenarioRequest,cases);
+  value.regions.shoulder.instance='later instance';value.regions.waistband.binding.controls[0].pressure_pa=123;
+  assert.equal(cases.includes('later instance'),false);assert.equal(cases.includes('"pressure_pa":123'),false);
+});
+test('regional compression rejects ambiguous region declarations and keeps source joins keyed to the physical instance',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise,input=cyclicCompressionMotion();
+  for(const mutate of [v=>{v.bindings={};},v=>{delete v.regions;},v=>{v.regions={};},v=>{v.regions=[];},
+    v=>{v.regions.shoulder.instance='';},v=>{v.regions.shoulder.instance='x'.repeat(513);},
+    v=>{v.regions.shoulder.selector.kind='clipped_area';},v=>{v.regions.shoulder.selector.polygon_mm=[[0,0],[1,1]];},
+    v=>{v.regions.shoulder.selector.polygon_mm[0]=[0,0,0];},v=>{v.regions.shoulder.selector.polygon_mm[0]=[1000001,0];},
+    v=>{v.regions.shoulder.selector.polygon_mm=Array.from({length:33},()=>[0,0]);},
+    v=>{v.regions.shoulder.binding.controls.pop();},v=>{v.regions.shoulder.binding.pressure_pa=[500,0,250];},
+    v=>{v.regions.shoulder.binding.branch_changes[1].entry.layers[0].id='shoulder';},
+    v=>{const c=v.regions.shoulder.binding.branch_changes[1];c.transitions={shoulder:c.transitions['front.R']};}]) {
+    const value=regionalCompressionInput();mutate(value);
+    assert.throws(()=>motion(input,undefined,JSON.stringify(value)),/compression|compressed|physical|branch/i);
+  }
+  const value=regionalCompressionInput();
+  assert.doesNotThrow(()=>motion(input,undefined,JSON.stringify(value)));
+  value.regions.waistband.selector.polygon_mm=value.regions.shoulder.selector.polygon_mm;
+  assert.doesNotThrow(()=>motion(input,undefined,JSON.stringify(value)),
+    'The retained mesh and Rust selector determine overlap; browser authoring never invents triangle membership');
+});
 test('mixed pressure and clearance controls retain original acquisitions and frozen named cases',async()=>{
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
     buildWorkbenchStudyBundle:save,parseWorkbenchStudyBundle:load}=await modulePromise;
