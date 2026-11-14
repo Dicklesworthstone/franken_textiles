@@ -48,6 +48,54 @@ included among the noise inputs:
 {"schema":"ftx-click-noise/1","evidence":"Synthetic one-pixel assumption; not camera accuracy","observations":[{"frame":{"stream":"synthetic-left","timestamp_us":1000000},"sigma_px":1},{"frame":{"stream":"synthetic-right","timestamp_us":1000000},"sigma_px":1}]}
 ```
 
+## Shared lens calibration uncertainty
+
+The optional `--lens-noise` input carries the full nine-parameter Brown-lens covariance from
+saved camera calibrations through the same pixel-refined triangulation estimator:
+
+```sh
+ftx measure triangulate triangulation-input.json --lens-noise triangulation-lens-noise.json --json
+ftx measure triangulate triangulation-input.json --click-noise triangulation-click-noise.json --lens-noise triangulation-lens-noise.json --out triangulation-result.json
+```
+
+Use `ftx-triangulation-lens-noise/1` with these fields:
+
+| Field | Required content |
+|---|---|
+| `schema` | `ftx-triangulation-lens-noise/1` |
+| `independence_evidence` | The basis for treating calibration acquisitions and measurement clicks as independent, and different lens groups as independent |
+| `groups` | One to eight groups, covering every FIT frame exactly once |
+| `groups[].key` | A unique name for this shared lens group |
+| `groups[].calibration` | The complete saved `ftx-camera-calibration/1` report from an accepted Brown-lens calibration with available intrinsic covariance; use the report itself, not its CLI envelope |
+| `groups[].frames` | The exact `(stream, timestamp_us)` identities of the FIT observations using that lens |
+
+Retain one group for all frames using the same calibrated lens. Group order and frame order
+are canonicalized. Every camera in the group must match the replayed lens exactly, including
+its certified radius; rescaled or approximately matching intrinsics refuse. The calibration
+report is recomputed from its retained source observations and declared corner noise. Edited
+covariance, unavailable calibration uncertainty, reused lens identities, overlapping fitting
+acquisitions and CHECK/unknown/missing frame assignments refuse. The complete lens-noise
+document is limited to 16 MiB. Independence evidence is a caller assertion, not proof that
+detector errors or physical acquisitions are independent.
+
+Each covariance mode perturbs all cameras in its lens group together. This retains correlations
+between focal lengths, principal point and distortion, and the dependence shared by views using
+one lens. Checked central differences at two step sizes rerun the actual FIT-only estimator;
+the report retains group contributions, mode sensitivities and canonical source identities.
+The accepted point and all original geometry checks stay unchanged.
+
+`conditional_lens_uncertainty` reports AVAILABLE with covariance in square metres and marginal
+one-sigma values in metres, or UNAVAILABLE with null covariance and explanatory flags. Requested
+but unavailable uncertainty gives CLI exit 2 while preserving usable geometry. Invalid evidence
+gives exit 3 without writing output. Supplying both flags retains the original click component
+and the new lens component separately; no total uncertainty field is inferred.
+
+This is **conditional intrinsic-lens precision with camera centers and rotations held fixed**.
+Even when poses were originally estimated using the same lens, their uncertainty and correlation
+with that lens are not propagated here. Metric-scale error, reference print/flatness error, lens
+drift, synchronization, motion and correspondence error also remain outside this estimate.
+These components do not establish real-camera accuracy, a body measurement sigma or physical fit.
+
 ## Input contract
 
 `ftx-triangulation-input/1` describes one landmark with 1–128 observations. At least two

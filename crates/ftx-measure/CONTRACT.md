@@ -170,6 +170,22 @@ inputs produce typed refusals. Reports retain the full input receipt and disting
 from held-out errors. No measurement sigma, fused record, READY status or body-fit claim is
 created. See `docs/triangulation.md` for the CLI, schema and remaining FTX-20 work.
 
+`triangulate::uncertainty::triangulate_with_lens_noise` propagates the full correlated
+Brown-lens covariance through that same estimator. An explicit
+`ftx-triangulation-lens-noise/1` request partitions every FIT frame into at most eight
+independent lens groups. Each group retains a complete accepted calibration report, which
+the existing calibration authority recomputes before matching its exact intrinsics and
+certified domain. Shared-lens views vary together along each covariance mode; CHECK views
+never enter the derivatives. Complete frame assignment, unique lens identities and disjoint
+calibration/measurement fitting observations are required, with caller-supplied independence
+evidence. Canonical source identities and per-group contributions remain inspectable.
+Checked finite differences at two step sizes return either a complete conditional covariance
+or UNAVAILABLE with null covariance; they never change the original geometry or its gates.
+Camera centers, rotations, scale and capture assumptions stay fixed. Camera-pose uncertainty,
+lens/pose correlation, motion, systematic error and physical accuracy remain unqualified.
+Native and portable consumers can retain both click and lens components without reporting
+their sum as total measurement uncertainty.
+
 **Anchored joint bundle refinement (FTX-20).** `bundle::adjust` jointly refines all camera
 extrinsics and free landmark positions against sigma-weighted fit pixel residuals. Fixed
 metric controls define the gauge and absolute scale; intrinsics and lens distortion remain

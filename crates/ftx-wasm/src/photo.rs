@@ -64,6 +64,39 @@ pub fn triangulate(input: &str, click_noise: &str) -> Result<Value, Refusal> {
     report.map_err(|e| invalid(e.to_string()))
 }
 
+/// Calibrated landmark geometry with separately reported click and shared-lens uncertainty.
+/// Complete accepted calibration reports are replayed before any covariance is used. Lens
+/// groups vary jointly across their FIT frames, conditional on fixed camera poses and scale.
+/// Empty evidence selects the corresponding original geometry-only or click-only behavior.
+/// The two components are not summed into a total measurement uncertainty.
+///
+/// # Errors
+/// Input/click JSON above 256 KiB, lens JSON above 16 MiB, or the canonical source, lens-group,
+/// calibration, capture and geometry guards refuse. Unstable derivatives remain diagnostics.
+pub fn triangulate_with_lens_noise(
+    input: &str,
+    click_noise: &str,
+    lens_noise: &str,
+) -> Result<Value, Refusal> {
+    if lens_noise.len() > ftx_measure::photo::acquisition::MAX_CALIBRATION_JSON_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "triangulation lens-noise JSON exceeds 16 MiB",
+        ));
+    }
+    let mut report = triangulate(input, click_noise)?;
+    if !lens_noise.is_empty() {
+        let input = parse(input)?;
+        let noise = serde_json::from_str(lens_noise).map_err(|e| invalid(e.to_string()))?;
+        let result =
+            ftx_measure::triangulate::uncertainty::triangulate_with_lens_noise(&input, &noise)?;
+        report["conditional_lens_uncertainty"] =
+            serde_json::to_value(result.conditional_lens_uncertainty)
+                .map_err(|e| invalid(e.to_string()))?;
+    }
+    Ok(report)
+}
+
 /// Source-qualified section girth or tape-based coefficient calibration using the shared native
 /// measurement engine. An empty depth source reuses a combined width/depth document.
 ///

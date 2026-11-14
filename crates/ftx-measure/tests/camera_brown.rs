@@ -395,6 +395,119 @@ fn noise(sigma_px: f64) -> ftx_measure::photo::intrinsics::uncertainty::Calibrat
 }
 
 #[test]
+fn triangulation_replays_lens_sources_and_refuses_reused_or_unqualified_calibrations() {
+    use ftx_measure::{
+        camera::Camera,
+        photo::intrinsics::uncertainty::calibrate_camera_with_uncertainty,
+        triangulate::{
+            Capture, Observation, TriangulationInput,
+            uncertainty::{LensNoiseGroup, LensNoiseInput, triangulate_with_lens_noise},
+        },
+    };
+    let calibration = calibrate_camera_with_uncertainty(&fixture(), &noise(0.25)).unwrap();
+    let lens = calibration.solution.as_ref().unwrap().intrinsics;
+    let point = Vec3::new(0.0, 0.0, 1.0);
+    let input = TriangulationInput {
+        schema: "ftx-triangulation-input/1".into(),
+        metric_scale_source: "Synthetic one-metre baseline".into(),
+        capture: Capture::StillWindow {
+            start_us: 0,
+            end_us: 1,
+            evidence: "Synthetic stationary point".into(),
+        },
+        observations: [-0.5, 0.5]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let camera = Camera {
+                    intrinsics: lens,
+                    world_to_camera: Mat3::from_rows([
+                        [1.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0],
+                        [0.0, 1.0, 0.0],
+                    ]),
+                    center_m: Vec3::new(x, -2.0, 1.0),
+                };
+                Observation {
+                    frame: FrameId {
+                        stream: "synthetic-measurement".into(),
+                        timestamp_us: i as u64,
+                    },
+                    camera,
+                    pixel_px: camera.project(point).unwrap(),
+                    partition: Partition::Fit,
+                }
+            })
+            .collect(),
+    };
+    let evidence = LensNoiseInput {
+        schema: "ftx-triangulation-lens-noise/1".into(),
+        independence_evidence:
+            "Independent synthetic calibration acquisition and clicks, with exact supplied poses"
+                .into(),
+        groups: vec![LensNoiseGroup {
+            key: "shared".into(),
+            calibration: json!(calibration),
+            frames: input.observations.iter().map(|v| v.frame.clone()).collect(),
+        }],
+    };
+    let result = triangulate_with_lens_noise(&input, &evidence).unwrap();
+    assert_eq!(result.conditional_lens_uncertainty.status, "AVAILABLE");
+    assert!((result.triangulation.point_m.unwrap() - point).norm() < 1e-9);
+    let mut reversed = evidence.clone();
+    reversed.groups[0].frames.reverse();
+    assert_eq!(
+        json!(result.conditional_lens_uncertainty),
+        json!(
+            triangulate_with_lens_noise(&input, &reversed)
+                .unwrap()
+                .conditional_lens_uncertainty
+        )
+    );
+
+    let mut split = evidence.clone();
+    let mut second = split.groups[0].clone();
+    second.key = "other".into();
+    second.frames.remove(0);
+    split.groups[0].frames.truncate(1);
+    split.groups.push(second);
+    assert!(triangulate_with_lens_noise(&input, &split).is_err());
+    // Changing the name cannot turn the same fitted calibration corners into independent noise.
+    split.groups[1].calibration["input"]["lens_id"] = json!("renamed-same-acquisition");
+    let error = triangulate_with_lens_noise(&input, &split).unwrap_err();
+    assert!(
+        error.message.contains("reuse fitting calibration frames"),
+        "{error}"
+    );
+
+    let mut reused = input.clone();
+    let mut reused_noise = evidence.clone();
+    for (view, frame) in reused
+        .observations
+        .iter_mut()
+        .zip(&mut reused_noise.groups[0].frames)
+    {
+        view.frame.stream = "synthetic-brown".into();
+        *frame = view.frame.clone();
+    }
+    let error = triangulate_with_lens_noise(&reused, &reused_noise).unwrap_err();
+    assert!(
+        error.message.contains("triangulation FIT images"),
+        "{error}"
+    );
+
+    let mut unqualified = evidence;
+    unqualified.groups[0].calibration = json!(calibrate_camera(&fixture()).unwrap());
+    let error = triangulate_with_lens_noise(&input, &unqualified).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("available declared-noise covariance"),
+        "{error}"
+    );
+}
+
+#[test]
 fn covariance_is_nonzero_at_perfect_fit_scales_with_noise_and_preserves_geometry() {
     use ftx_measure::photo::intrinsics::uncertainty::calibrate_camera_with_uncertainty;
     let input = fixture();

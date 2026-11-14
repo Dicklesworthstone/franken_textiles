@@ -1,7 +1,9 @@
 //! Calibrated multi-view coordinates; no decoder, image detector or guessed metric scale.
 
-use ftx_core::Refusal;
-use ftx_measure::triangulate::uncertainty::{ClickNoiseInput, triangulate_with_click_noise};
+use ftx_core::{Refusal, RefusalCode};
+use ftx_measure::triangulate::uncertainty::{
+    ClickNoiseInput, LensNoiseInput, triangulate_with_click_noise, triangulate_with_lens_noise,
+};
 use ftx_measure::triangulate::{TriangulationInput, triangulate};
 use serde_json::Value;
 
@@ -9,7 +11,11 @@ use super::{option, photo, single};
 use crate::{Args, bad_input, known_options, read_json};
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "measure triangulate", &["out", "click-noise"])?;
+    known_options(
+        args,
+        "measure triangulate",
+        &["out", "click-noise", "lens-noise"],
+    )?;
     let path = single(args, "triangulate")?;
     let input: TriangulationInput = serde_json::from_value(read_json(path)?.0)
         .map_err(|e| bad_input(format!("invalid triangulation input: {e}")))?;
@@ -24,8 +30,25 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         (triangulate(&input)?, None)
     };
+    let lens_uncertainty = if let Some(path) = option(args, "lens-noise") {
+        let (value, bytes) = read_json(path)?;
+        if bytes.len() > ftx_measure::photo::acquisition::MAX_CALIBRATION_JSON_BYTES {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "triangulation lens-noise JSON exceeds 16 MiB",
+            ));
+        }
+        let noise: LensNoiseInput = serde_json::from_value(value)
+            .map_err(|e| bad_input(format!("invalid triangulation lens-noise input: {e}")))?;
+        Some(triangulate_with_lens_noise(&input, &noise)?.conditional_lens_uncertainty)
+    } else {
+        None
+    };
     let code = if report.point_m.is_some()
         && uncertainty.as_ref().is_none_or(|u| u.status == "AVAILABLE")
+        && lens_uncertainty
+            .as_ref()
+            .is_none_or(|u| u.status == "AVAILABLE")
     {
         0
     } else {
@@ -64,6 +87,24 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         text.push_str(&format!("\n{}", uncertainty.no_claim));
         value["conditional_click_uncertainty"] =
+            serde_json::to_value(uncertainty).map_err(|e| bad_input(e.to_string()))?;
+    }
+    if let Some(uncertainty) = lens_uncertainty {
+        text.push_str(&format!(
+            "\nCONDITIONAL LENS UNCERTAINTY: {}",
+            uncertainty.status
+        ));
+        if let Some(sigma) = uncertainty.sigma_m {
+            text.push_str(&format!(
+                "\nLens-only one-sigma with fixed camera poses [m]: [{:.9}, {:.9}, {:.9}]",
+                sigma.x, sigma.y, sigma.z
+            ));
+        }
+        for flag in &uncertainty.flags {
+            text.push_str(&format!("\n  {flag}"));
+        }
+        text.push_str(&format!("\n{}", uncertainty.no_claim));
+        value["conditional_lens_uncertainty"] =
             serde_json::to_value(uncertainty).map_err(|e| bad_input(e.to_string()))?;
     }
     if let Some(path) = option(args, "out") {

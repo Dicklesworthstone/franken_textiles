@@ -128,7 +128,7 @@ const USAGE: &str = "usage:
   ftx measure girth-from-section (--from FILE | --width-mm W --depth-mm D) [--level waist|chest|hip]
       [--sigma-width-mm SW] [--sigma-depth-mm SD] [--k K] [--k-sigma SK] [--k-ratio R] [--k-ratio-sigma SR]
       [--clothing-mm C] [--tape-girth-mm T] [--sigma-tape-mm ST] [--name NAME] [--out FILE] [--json]
-  ftx measure triangulate FILE [--click-noise JSON] [--out FILE] [--json]
+  ftx measure triangulate FILE [--click-noise JSON] [--lens-noise JSON] [--out FILE] [--json]
   ftx measure bundle-adjust FILE [--iterations N] [--out FILE] [--json]
   ftx measure fit-body FILE --model PATH [--out REPORT | --mesh-out NEW_DIR]
       [--iterations N] [--max-evaluations N] [--silhouettes MANIFEST] [--json]

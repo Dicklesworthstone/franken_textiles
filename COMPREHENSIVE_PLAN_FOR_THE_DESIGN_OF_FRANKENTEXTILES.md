@@ -374,6 +374,14 @@ moving camera. A toddler moves, so body measurement is **not** structure-from-mo
    length (the drone skill's fixture shows a 5 mm lens change and a 10 % width change moving landmarks
    identically); the multistart pattern reports such ambiguity instead of picking one.
 
+Calibrated landmark triangulation also propagates an explicitly supplied, source-replayed
+intrinsic covariance. Views from one declared lens share its full correlated perturbation;
+independently calibrated lens groups require separate acquisition identities and an explicit
+independence basis. The actual pixel-refined estimator supplies the derivatives, retaining its
+ordinary geometry and held-out gates. Click and lens precision remain separate conditional
+components: camera poses and metric scale are fixed, so this does not account for pose/lens
+correlation, motion, systematic error or empirical capture accuracy. See `docs/triangulation.md`.
+
 Order of the port (research file 08): conventions and receipts → camera core (distortion, projection, plane
 homography, similarity fits, gated triangulation, RANSAC plane, homography scale and focal search) → frame
 selection → factor graph and bundle adjustment → ambiguity tools → mesh checks, plane slices and silhouette

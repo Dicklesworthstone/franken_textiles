@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 use super::{FrameId, Partition, TriangulationInput, TriangulationReport};
 use crate::invalid;
 
+mod lens;
+pub use lens::{
+    LensGroupSensitivity, LensNoiseGroup, LensNoiseInput, LensUncertainTriangulationReport,
+    LensUncertaintyReport, triangulate_with_lens_noise,
+};
+
 /// Declared isotropic one-sigma click uncertainty for one fitting frame.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -286,7 +292,7 @@ mod tests {
     use crate::triangulate::{Capture, Observation};
     use ftx_core::Vec2;
 
-    fn fixture() -> (TriangulationInput, ClickNoiseInput) {
+    pub(super) fn fixture() -> (TriangulationInput, ClickNoiseInput) {
         let point = Vec3::new(0.0, 0.0, 1.0);
         let observations: Vec<_> = [-0.5, 0.5, 0.0]
             .into_iter()

@@ -54,6 +54,13 @@ fn factor(u: &IntrinsicUncertainty) -> Result<Vec<Vec<f64>>, Refusal> {
     Ok(l)
 }
 
+impl IntrinsicUncertainty {
+    /// Shared admission and factorization for consumers of the full correlated lens covariance.
+    pub(crate) fn covariance_factor(&self) -> Result<Vec<Vec<f64>>, Refusal> {
+        factor(self)
+    }
+}
+
 impl PhotoScale {
     /// Attach a first-order Brown-lens covariance from an independent calibration acquisition.
     /// Requires this exact lens and a usable ChArUco scale. Does not invent a noise model or
@@ -69,7 +76,7 @@ impl PhotoScale {
                 "independent calibration evidence is required for additive lens uncertainty",
             ));
         }
-        factor(uncertainty)?;
+        uncertainty.covariance_factor()?;
         let c = self.calibration.as_mut().ok_or_else(|| {
             Refusal::new(
                 RefusalCode::Unscaled,
@@ -137,7 +144,7 @@ impl Modes {
         let Some(u) = &c.intrinsic_uncertainty else {
             return Ok(None);
         };
-        let l = factor(u)?;
+        let l = u.covariance_factor()?;
         let Samples::Charuco {
             observed, board, ..
         } = &c.samples

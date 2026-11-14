@@ -79,6 +79,22 @@ pub fn triangulate(input: &str, click_noise: &str) -> Result<String, JsError> {
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Triangulate a landmark with optional click and source-replayed shared-lens uncertainty.
+/// Camera poses and metric scale remain fixed; the reported components are separate.
+///
+/// # Errors
+/// The shared input budgets, calibration replay, lens grouping and geometry guards refuse.
+#[wasm_bindgen]
+pub fn triangulate_with_lens_noise(
+    input: &str,
+    click_noise: &str,
+    lens_noise: &str,
+) -> Result<String, JsError> {
+    crate::photo::triangulate_with_lens_noise(input, click_noise, lens_noise)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Refine anchored camera/landmark geometry with a text-parsed native iteration limit.
 ///
 /// # Errors
