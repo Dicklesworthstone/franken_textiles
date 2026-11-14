@@ -494,3 +494,614 @@ fn lens_noise_preserves_no_clobber_and_strict_portable_optional_inputs() {
         RefusalCode::BudgetExceeded
     );
 }
+
+
+fn sheet_camera_case(dir: &Path) -> (Value, Value, Value, Value) {
+    let (mut input, click, mut lens) = lens_case(dir);
+    let target = Vec3::new(0.05, 0.4, 1.25);
+    let mut poses = Vec::new();
+    let mut observations = Vec::new();
+    for view in input["observations"].as_array_mut().unwrap() {
+        let known: Camera = serde_json::from_value(view["camera"].clone()).unwrap();
+        let points: Vec<_> = [0.5, 1.0, 1.5]
+            .into_iter()
+            .flat_map(|z| [-0.6, 0.0, 0.6].into_iter().map(move |x| (x, z)))
+            .enumerate()
+            .map(|(i, (x, z))| {
+                json!({
+                    "sheet_xz_m":[x,z],
+                    "pixel_px":known.project(Vec3::new(x,0.0,z)).unwrap(),
+                    "held_out":i == 4,
+                })
+            })
+            .collect();
+        let report = Camera::sheet_pose_report(&json!({
+            "schema":"ftx-sheet-pose-input/1",
+            "reference_id":"synthetic-stationary-camera-noise-sheet",
+            "intrinsics":known.intrinsics,
+            "image_size_px":[1600,1200],
+            "rotation_applied_degrees":0,
+            "points":points,
+        }))
+        .unwrap();
+        assert_eq!(report["ok"], true, "{report}");
+        // The original known camera generates all landmark observations; the retained
+        // report supplies the exactly replayable estimated camera for each view.
+        view["camera"] = report["camera"].clone();
+        view["pixel_px"] = json!(known.project(target).unwrap());
+        if view["partition"] == "fit" {
+            poses.push(json!({"frame":view["frame"],"report":report}));
+            observations.push(json!({
+                "frame":view["frame"],"report":report,"sigma_px":0.25,
+            }));
+        }
+    }
+    lens["schema"] = json!("ftx-triangulation-lens-noise/2");
+    lens["independence_evidence"] = json!(
+        "Independent synthetic calibration acquisition; common physical lens across sheet-pose and landmark images"
+    );
+    lens["sheet_poses"] = json!(poses);
+    let sheet = json!({
+        "schema":"ftx-triangulation-sheet-noise/1",
+        "independence_evidence":"Synthetic independent sheet-corner axes, frames, calibration acquisition and landmark clicks; metric sheet fixed",
+        "observations":observations,
+    });
+    save(&dir.join("input.json"), &input);
+    save(&dir.join("lens.json"), &lens);
+    save(&dir.join("sheet.json"), &sheet);
+    (input, click, lens, sheet)
+}
+
+#[test]
+fn sheet_camera_uncertainty_replays_native_and_portable_with_separate_components() {
+    let dir = Scratch::new();
+    let (input, click, lens, sheet) = sheet_camera_case(&dir.0);
+    let original = ["input.json", "click.json", "lens.json", "sheet.json"]
+        .map(|name| (name, std::fs::read(dir.0.join(name)).unwrap()));
+    let plain = run(&dir.0, &[], 0)["result"].clone();
+    let click_only = run(&dir.0, &["--click-noise", "click.json"], 0)["result"].clone();
+    let lens_only = run(&dir.0, &["--lens-noise", "lens.json"], 0)["result"].clone();
+    let sheet_only = run(&dir.0, &["--sheet-noise", "sheet.json"], 0)["result"].clone();
+    let sheet_click = run(
+        &dir.0,
+        &["--sheet-noise", "sheet.json", "--click-noise", "click.json"],
+        0,
+    )["result"]
+        .clone();
+    let lens_sheet = run(
+        &dir.0,
+        &["--sheet-noise", "sheet.json", "--lens-noise", "lens.json"],
+        0,
+    )["result"]
+        .clone();
+    let all = run(
+        &dir.0,
+        &[
+            "--sheet-noise",
+            "sheet.json",
+            "--click-noise",
+            "click.json",
+            "--lens-noise",
+            "lens.json",
+            "--out",
+            "point.json",
+        ],
+        0,
+    )["result"]
+        .clone();
+    assert_eq!(read(&dir.0.join("point.json")), all);
+    let input_text = input.to_string();
+    let click_text = click.to_string();
+    let lens_text = lens.to_string();
+    let sheet_text = sheet.to_string();
+    for (native, clicks, lenses) in [
+        (&sheet_only, "", ""),
+        (&sheet_click, click_text.as_str(), ""),
+        (&lens_sheet, "", lens_text.as_str()),
+        (&all, click_text.as_str(), lens_text.as_str()),
+    ] {
+        let portable = ftx_wasm::photo::triangulate_with_camera_noise(
+            &input_text,
+            clicks,
+            lenses,
+            &sheet_text,
+        )
+        .unwrap();
+        assert_eq!(portable, *native);
+        assert_eq!(
+            native["conditional_sheet_uncertainty"],
+            sheet_only["conditional_sheet_uncertainty"]
+        );
+        let mut geometry = native.clone();
+        for component in [
+            "conditional_click_uncertainty",
+            "conditional_lens_uncertainty",
+            "conditional_sheet_uncertainty",
+        ] {
+            geometry.as_object_mut().unwrap().remove(component);
+        }
+        assert_eq!(geometry, plain);
+        assert!(native.get("total_uncertainty").is_none());
+        assert!(native.get("records").is_none());
+    }
+    assert_eq!(
+        all["conditional_click_uncertainty"],
+        click_only["conditional_click_uncertainty"]
+    );
+    assert_eq!(
+        sheet_click["conditional_click_uncertainty"],
+        click_only["conditional_click_uncertainty"]
+    );
+    assert_eq!(
+        all["conditional_lens_uncertainty"],
+        lens_only["conditional_lens_uncertainty"]
+    );
+    assert_eq!(
+        lens_sheet["conditional_lens_uncertainty"],
+        lens_only["conditional_lens_uncertainty"]
+    );
+    assert_eq!(
+        all["conditional_lens_uncertainty"]["schema"],
+        "ftx-triangulation-lens-uncertainty/2"
+    );
+    let uncertainty = &all["conditional_sheet_uncertainty"];
+    assert_eq!(
+        uncertainty["schema"],
+        "ftx-triangulation-sheet-uncertainty/1"
+    );
+    assert_eq!(uncertainty["status"], "AVAILABLE");
+    assert_eq!(uncertainty["input"], sheet);
+    assert_eq!(uncertainty["sensitivities"].as_array().unwrap().len(), 2);
+    for sensitivity in uncertainty["sensitivities"].as_array().unwrap() {
+        assert_eq!(sensitivity["fit_point_indices"].as_array().unwrap().len(), 8);
+        assert_eq!(
+            sensitivity["jacobians_m_per_px"].as_array().unwrap().len(),
+            8
+        );
+    }
+    for (actual, expected) in plain["point_m"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip([0.05, 0.4, 1.25])
+    {
+        assert!((actual.as_f64().unwrap() - expected).abs() < 1e-8);
+    }
+    let human = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir.0)
+        .args([
+            "measure",
+            "triangulate",
+            "input.json",
+            "--lens-noise",
+            "lens.json",
+            "--sheet-noise",
+            "sheet.json",
+        ])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let text = String::from_utf8(human.stdout).unwrap();
+    assert!(text.contains("source-replayed sheet camera poses"));
+    assert!(text.contains("CONDITIONAL SHEET-CORNER UNCERTAINTY: AVAILABLE"));
+    assert!(text.contains("fixed lens and metric sheet"));
+    for (name, bytes) in original {
+        assert_eq!(std::fs::read(dir.0.join(name)).unwrap(), bytes);
+    }
+    if let Ok(directory) = std::env::var("FTX_TRIANGULATION_CAMERA_FIXTURES") {
+        use std::io::Write;
+        let directory = Path::new(&directory);
+        std::fs::create_dir_all(directory).unwrap();
+        for (name, value) in [
+            ("camera-input.json", &input),
+            ("click-noise.json", &click),
+            ("lens-noise.json", &lens),
+            ("sheet-noise.json", &sheet),
+            ("sheet-result.json", &sheet_only),
+            ("sheet-click-result.json", &sheet_click),
+            ("lens-sheet-result.json", &lens_sheet),
+            ("all-result.json", &all),
+        ] {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(directory.join(name))
+                .unwrap()
+                .write_all(&serde_json::to_vec_pretty(value).unwrap())
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn sheet_camera_sources_refuse_stale_incomplete_or_tampered_evidence_before_writing() {
+    let dir = Scratch::new();
+    let (input, _, _, sheet) = sheet_camera_case(&dir.0);
+    for variant in [
+        "stale-camera",
+        "tampered-report",
+        "missing",
+        "duplicate",
+        "held-out-frame",
+        "no-evidence",
+        "no-pose-report",
+    ] {
+        let mut changed_input = input.clone();
+        let mut changed = sheet.clone();
+        match variant {
+            "stale-camera" => {
+                changed_input["observations"][0]["camera"]["center_m"][0] = json!(-0.39);
+            }
+            "tampered-report" => {
+                changed["observations"][0]["report"]["camera"]["center_m"][0] = json!(-0.39);
+            }
+            "missing" => {
+                let _ = changed["observations"].as_array_mut().unwrap().pop();
+            }
+            "duplicate" => {
+                changed["observations"][1] = changed["observations"][0].clone();
+            }
+            "held-out-frame" => {
+                changed["observations"][1]["frame"] = input["observations"][2]["frame"].clone();
+            }
+            "no-evidence" => changed["independence_evidence"] = json!(" "),
+            _ => {
+                let _ = changed["observations"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("report");
+            }
+        }
+        save(&dir.0.join("input.json"), &changed_input);
+        save(&dir.0.join("sheet.json"), &changed);
+        run(
+            &dir.0,
+            &["--sheet-noise", "sheet.json", "--out", "new/point.json"],
+            3,
+        );
+        assert!(!dir.0.join("new").exists(), "{variant}");
+        assert!(
+            ftx_wasm::photo::triangulate_with_camera_noise(
+                &changed_input.to_string(),
+                "",
+                "",
+                &changed.to_string(),
+            )
+            .is_err(),
+            "{variant}"
+        );
+    }
+}
+
+#[test]
+fn combined_camera_components_require_the_same_original_sheet_reports() {
+    let dir = Scratch::new();
+    let (input, _, lens, mut sheet) = sheet_camera_case(&dir.0);
+    let original = sheet["observations"][0]["report"].clone();
+    let mut source = original["input"].clone();
+    let check = source["points"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|point| point["held_out"] == true)
+        .unwrap();
+    check["pixel_px"][0] = json!(check["pixel_px"][0].as_f64().unwrap() + 0.1);
+    let changed = Camera::sheet_pose_report(&source).unwrap();
+    assert_eq!(changed["ok"], true);
+    // A CHECK corner never steers the camera. Equal numeric cameras therefore do
+    // not establish that two uncertainty components refer to the same acquisition.
+    assert_eq!(changed["camera"], original["camera"]);
+    assert_ne!(changed, original);
+    sheet["observations"][0]["report"] = changed;
+    save(&dir.0.join("sheet.json"), &sheet);
+    run(&dir.0, &["--sheet-noise", "sheet.json"], 0);
+    run(
+        &dir.0,
+        &[
+            "--lens-noise",
+            "lens.json",
+            "--sheet-noise",
+            "sheet.json",
+            "--out",
+            "new/point.json",
+        ],
+        3,
+    );
+    assert!(!dir.0.join("new").exists());
+    assert!(
+        ftx_wasm::photo::triangulate_with_camera_noise(
+            &input.to_string(),
+            "",
+            &lens.to_string(),
+            &sheet.to_string(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn native_calibration_annotated_sheet_sources_replay_in_both_camera_components() {
+    for separate_corner_noise in [false, true] {
+        let dir = Scratch::new();
+        let (input, click, mut lens, mut sheet) = sheet_camera_case(&dir.0);
+        let calibration = if separate_corner_noise {
+            let mut source = retained_brown_calibration()["input"].clone();
+            let _ = source["distortion_fit"]
+                .as_object_mut()
+                .unwrap()
+                .remove("corner_noise");
+            save(&dir.0.join("calibration-input.json"), &source);
+            save(
+                &dir.0.join("corner-noise.json"),
+                &json!({
+                    "schema":"ftx-calibration-corner-noise/1",
+                    "sigma_px":0.2,
+                    "evidence":"Synthetic independent per-coordinate noise",
+                    "independence_evidence":"Independent axes, corners and synthetic calibration frames",
+                }),
+            );
+            let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+                .current_dir(&dir.0)
+                .args([
+                    "measure",
+                    "calibrate-camera",
+                    "calibration-input.json",
+                    "--corner-noise",
+                    "corner-noise.json",
+                    "--out",
+                    "calibration.json",
+                    "--json",
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{} / {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let report = read(&dir.0.join("calibration.json"));
+            assert_eq!(report["conditional_uncertainty"]["status"], "AVAILABLE");
+            report
+        } else {
+            save(&dir.0.join("calibration.json"), retained_brown_calibration());
+            retained_brown_calibration().clone()
+        };
+        assert_eq!(
+            calibration["solution"]["intrinsics"],
+            retained_brown_calibration()["solution"]["intrinsics"]
+        );
+        lens["groups"][0]["calibration"] = calibration.clone();
+        let count = sheet["observations"].as_array().unwrap().len();
+        for i in 0..count {
+            let mut reference = sheet["observations"][i]["report"]["input"].clone();
+            let _ = reference.as_object_mut().unwrap().remove("intrinsics");
+            let reference_name = format!("reference-{i}.json");
+            let report_name = format!("pose-{i}.json");
+            save(&dir.0.join(&reference_name), &reference);
+            let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+                .current_dir(&dir.0)
+                .args([
+                    "measure",
+                    "sheet-pose",
+                    "--reference",
+                    &reference_name,
+                    "--calibration",
+                    "calibration.json",
+                    "--lens-id",
+                    "synthetic-shared-brown",
+                    "--out",
+                    &report_name,
+                    "--json",
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{} / {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let report = read(&dir.0.join(report_name));
+            assert_eq!(report["ok"], true);
+            assert_eq!(
+                report["intrinsics_source"]["lens_id"],
+                "synthetic-shared-brown"
+            );
+            assert_eq!(report["intrinsics_source"]["input"], calibration["input"]);
+            assert_eq!(
+                report["camera"],
+                sheet["observations"][i]["report"]["camera"]
+            );
+            lens["sheet_poses"][i]["report"] = report.clone();
+            sheet["observations"][i]["report"] = report;
+        }
+        save(&dir.0.join("lens.json"), &lens);
+        save(&dir.0.join("sheet.json"), &sheet);
+        let native = run(
+            &dir.0,
+            &[
+                "--click-noise",
+                "click.json",
+                "--lens-noise",
+                "lens.json",
+                "--sheet-noise",
+                "sheet.json",
+            ],
+            0,
+        )["result"]
+            .clone();
+        let portable = ftx_wasm::photo::triangulate_with_camera_noise(
+            &input.to_string(),
+            &click.to_string(),
+            &lens.to_string(),
+            &sheet.to_string(),
+        )
+        .unwrap();
+        assert_eq!(portable, native);
+        assert_eq!(native["conditional_lens_uncertainty"]["status"], "AVAILABLE");
+        assert_eq!(native["conditional_sheet_uncertainty"]["status"], "AVAILABLE");
+    }
+}
+
+#[test]
+fn camera_noise_documents_are_bounded_before_parse_and_outputs_never_clobber_sources() {
+    let dir = Scratch::new();
+    sheet_camera_case(&dir.0);
+    std::fs::hard_link(dir.0.join("sheet.json"), dir.0.join("sheet-alias.json")).unwrap();
+    let original = ["input.json", "click.json", "lens.json", "sheet.json"]
+        .map(|name| (name, std::fs::read(dir.0.join(name)).unwrap()));
+    for name in [
+        "input.json",
+        "click.json",
+        "lens.json",
+        "sheet.json",
+        "sheet-alias.json",
+    ] {
+        run(
+            &dir.0,
+            &[
+                "--click-noise",
+                "click.json",
+                "--lens-noise",
+                "lens.json",
+                "--sheet-noise",
+                "sheet.json",
+                "--out",
+                name,
+            ],
+            3,
+        );
+    }
+    for (name, bytes) in original {
+        assert_eq!(std::fs::read(dir.0.join(name)).unwrap(), bytes);
+    }
+    run(
+        &dir.0,
+        &["--sheet-noise", "sheet.json", "--out", "point.json"],
+        0,
+    );
+    let point = std::fs::read(dir.0.join("point.json")).unwrap();
+    run(
+        &dir.0,
+        &["--sheet-noise", "sheet.json", "--out", "point.json"],
+        3,
+    );
+    assert_eq!(std::fs::read(dir.0.join("point.json")).unwrap(), point);
+
+    // Sparse malformed JSON exercises the file-size guard before JSON parsing.
+    let oversized = dir.0.join("oversized.json");
+    std::fs::write(&oversized, b"{").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&oversized)
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    std::fs::write(dir.0.join("malformed.json"), b"{").unwrap();
+    for flag in ["--lens-noise", "--sheet-noise"] {
+        let out = run(
+            &dir.0,
+            &[flag, "oversized.json", "--out", "new/point.json"],
+            4,
+        );
+        assert_eq!(out["refusal"]["code"], json!(RefusalCode::BudgetExceeded));
+        assert!(!dir.0.join("new").exists());
+        run(
+            &dir.0,
+            &[flag, "malformed.json", "--out", "new/point.json"],
+            3,
+        );
+        assert!(!dir.0.join("new").exists());
+    }
+}
+
+
+#[test]
+fn requested_sheet_uncertainty_preserves_geometry_when_precision_is_unavailable() {
+    let dir = Scratch::new();
+    let (mut input, click, lens, mut sheet) = sheet_camera_case(&dir.0);
+    assert_eq!(
+        ftx_wasm::photo::triangulate_with_camera_noise(
+            &input.to_string(),
+            &click.to_string(),
+            &lens.to_string(),
+            "",
+        )
+        .unwrap(),
+        ftx_wasm::photo::triangulate_with_lens_noise(
+            &input.to_string(),
+            &click.to_string(),
+            &lens.to_string(),
+        )
+        .unwrap()
+    );
+    for frame in sheet["observations"].as_array_mut().unwrap() {
+        frame["sigma_px"] = json!(1e-300);
+    }
+    save(&dir.0.join("sheet.json"), &sheet);
+    let plain = run(&dir.0, &[], 0)["result"].clone();
+    let reported = run(
+        &dir.0,
+        &["--sheet-noise", "sheet.json", "--out", "unavailable.json"],
+        2,
+    )["result"]
+        .clone();
+    assert_eq!(reported["status"], "ACCEPTED");
+    assert_eq!(reported["point_m"], plain["point_m"]);
+    let uncertainty = &reported["conditional_sheet_uncertainty"];
+    assert_eq!(uncertainty["status"], "UNAVAILABLE");
+    assert!(uncertainty["covariance_m2"].is_null());
+    assert!(uncertainty["sigma_m"].is_null());
+    assert!(uncertainty["sensitivities"].as_array().unwrap().is_empty());
+    assert_eq!(reported, read(&dir.0.join("unavailable.json")));
+    assert_eq!(
+        reported,
+        ftx_wasm::photo::triangulate_with_camera_noise(
+            &input.to_string(),
+            "",
+            "",
+            &sheet.to_string(),
+        )
+        .unwrap()
+    );
+    input["observations"][2]["pixel_px"][0] = json!(50.0);
+    save(&dir.0.join("input.json"), &input);
+    let rejected = run(&dir.0, &["--sheet-noise", "sheet.json"], 2);
+    assert_eq!(rejected["result"]["status"], "REJECTED");
+    assert!(rejected["result"]["point_m"].is_null());
+    assert_eq!(
+        rejected["result"]["conditional_sheet_uncertainty"]["status"],
+        "UNAVAILABLE"
+    );
+    assert_eq!(
+        rejected["result"],
+        ftx_wasm::photo::triangulate_with_camera_noise(
+            &input.to_string(),
+            "",
+            "",
+            &sheet.to_string(),
+        )
+        .unwrap()
+    );
+    for bad in [" ".to_owned(), "{}".to_owned(), format!("\u{feff}{sheet}")] {
+        assert!(
+            ftx_wasm::photo::triangulate_with_camera_noise(
+                &input.to_string(),
+                "",
+                "",
+                &bad,
+            )
+            .is_err()
+        );
+    }
+    let oversized = " ".repeat(16 * 1024 * 1024 + 1);
+    assert_eq!(
+        ftx_wasm::photo::triangulate_with_camera_noise(&input.to_string(), "", "", &oversized)
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+}

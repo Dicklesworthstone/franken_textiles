@@ -192,7 +192,9 @@ all frames share one stationary reference ID and each lens group's image size/ro
 Each correlated lens mode refits its sheet cameras before the existing estimator, preserving
 the direct lens and induced-pose dependence. Legacy `/1` serialization and results stay fixed.
 The native optional `intrinsics_source` annotation is admitted only after replaying its
-calibration input and checking lens/settings; original-byte hashes remain retained provenance.
+calibration input and checking lens/settings. In lens `/2`, that canonical calibration input must
+also match the assigned group's original acquisition; equal numeric intrinsics alone are insufficient.
+Original-byte hashes remain retained provenance.
 
 `triangulate_with_sheet_noise` separately propagates declared independent isotropic FIT
 sheet-corner errors with fixed intrinsics/metric coordinates. Complete frame sources, positive

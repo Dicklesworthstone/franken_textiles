@@ -14,7 +14,7 @@ use super::sheet::{FrameSheetPose, PreparedSheetPoses, prepare_sheet_poses};
 use crate::{
     camera::Intrinsics,
     invalid,
-    photo::intrinsics::{IntrinsicUncertainty, checked_calibration},
+    photo::intrinsics::{CalibrationInput, IntrinsicUncertainty, checked_calibration},
 };
 
 /// One calibration shared by all of the listed fitting cameras.
@@ -218,16 +218,30 @@ fn prepare(input: &TriangulationInput, noise: &LensNoiseInput) -> Result<Prepare
         let factor = uncertainty.covariance_factor()?;
         let expected = json!(uncertainty.intrinsics);
         for frame in &group.frames {
-            let source_lens_id = sorted
+            let source = sorted
                 .sheet_poses
                 .as_ref()
                 .and_then(|poses| poses.iter().find(|pose| &pose.frame == frame))
-                .and_then(|pose| pose.report["intrinsics_source"]["lens_id"].as_str());
-            if source_lens_id.is_some_and(|lens_id| lens_id != checked.input.lens_id) {
-                return Err(invalid(format!(
-                    "lens group {:?}: the sheet pose's declared physical lens must match its assigned calibration lens_id",
-                    group.key,
-                )));
+                .and_then(|pose| pose.report.get("intrinsics_source"));
+            if let Some(source) = source {
+                // The sheet authority has already replayed this annotation. Compare its
+                // complete typed input: identical lens values do not identify the acquisition
+                // whose estimator covariance may be propagated through this pose.
+                let source_input: CalibrationInput =
+                    serde_json::from_value(source["input"].clone())
+                        .map_err(|error| invalid(error.to_string()))?;
+                if source_input.lens_id != checked.input.lens_id {
+                    return Err(invalid(format!(
+                        "lens group {:?}: the sheet pose's declared physical lens must match its assigned calibration lens_id",
+                        group.key,
+                    )));
+                }
+                if canonical_bytes(&source_input)? != canonical_bytes(&checked.input)? {
+                    return Err(invalid(format!(
+                        "lens group {:?}: the sheet pose's original calibration acquisition must match its assigned complete calibration input",
+                        group.key,
+                    )));
+                }
             }
             if json!(fit[frame]) != expected {
                 return Err(invalid(format!(

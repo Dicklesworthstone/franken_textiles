@@ -525,7 +525,8 @@ fn shared_lens_replays_sheet_poses_and_refuses_changed_camera_sources() {
         triangulate::{
             Capture, Observation, TriangulationInput,
             uncertainty::{
-                FrameSheetPose, LensNoiseGroup, LensNoiseInput, triangulate_with_lens_noise,
+                FrameSheetCornerNoise, FrameSheetPose, LensNoiseGroup, LensNoiseInput,
+                SheetCornerNoiseInput, triangulate_with_lens_noise, triangulate_with_sheet_noise,
             },
         },
     };
@@ -649,6 +650,59 @@ fn shared_lens_replays_sheet_poses_and_refuses_changed_camera_sources() {
         json!(native_sources.conditional_lens_uncertainty.covariance_m2),
         json!(result.conditional_lens_uncertainty.covariance_m2)
     );
+    // A different retained acquisition can reproduce identical lens values. Recompute it
+    // and regenerate its native sheet reports, so refusal cannot rely on a stale payload.
+    let mut alternate_input: CalibrationInput =
+        serde_json::from_value(calibration["input"].clone()).unwrap();
+    alternate_input.reference_evidence =
+        "A separately retained synthetic reference acquisition with the same metric grid".into();
+    let alternate_report =
+        calibrate_camera_with_uncertainty(&alternate_input, &noise(0.25)).unwrap();
+    assert_eq!(alternate_report.status, "ACCEPTED");
+    let alternate_calibration = json!(alternate_report);
+    assert_eq!(
+        alternate_calibration["solution"]["intrinsics"],
+        calibration["solution"]["intrinsics"]
+    );
+    assert_ne!(alternate_calibration["input"], calibration["input"]);
+    let mut mismatched_acquisition = annotated.clone();
+    for pose in mismatched_acquisition.sheet_poses.as_mut().unwrap() {
+        let mut reference = pose.report["input"].clone();
+        pose.report = Camera::sheet_pose_report(&reference).unwrap();
+        assert_eq!(pose.report["ok"], true);
+        reference.as_object_mut().unwrap().remove("intrinsics");
+        pose.report["intrinsics_source"] = json!({
+            "schema":"ftx-camera-calibration/1", "report_sha256":digest(&alternate_calibration),
+            "reference_input_sha256":digest(&reference),
+            "lens_id":alternate_calibration["input"]["lens_id"], "recomputed":true,
+            "input":alternate_calibration["input"], "no_claim":alternate_calibration["no_claim"],
+        });
+    }
+    let sheet_noise = SheetCornerNoiseInput {
+        schema: "ftx-triangulation-sheet-noise/1".into(),
+        independence_evidence:
+            "Independent synthetic sheet and landmark pixels, separate calibration acquisition"
+                .into(),
+        observations: mismatched_acquisition
+            .sheet_poses
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|pose| FrameSheetCornerNoise {
+                frame: pose.frame.clone(),
+                report: pose.report.clone(),
+                sigma_px: 0.25,
+            })
+            .collect(),
+    };
+    let sheet_only = triangulate_with_sheet_noise(&input, &sheet_noise).unwrap();
+    assert_eq!(sheet_only.triangulation.status, "ACCEPTED");
+    let error = triangulate_with_lens_noise(&input, &mismatched_acquisition).unwrap_err();
+    assert!(
+        error.message.contains("original calibration acquisition"),
+        "{error}"
+    );
+
     let mut other_calibration = calibration.clone();
     other_calibration["input"]["lens_id"] = json!("another-physical-lens");
     for pose in annotated.sheet_poses.as_mut().unwrap() {

@@ -53,6 +53,7 @@ FTX_BODY_TARGET_DIR="$WORK/body-targets" cargo "$CARGO_TEST" --locked --release 
 FTX_CAPTURE_EDITOR_DIR="$WORK/capture-editor" cargo "$CARGO_TEST" --locked --release -p ftx-cli --test body_fit_workflow capture_editor_fixture_rejects_bad_check_and_keeps_a_positive_native_reference
 FTX_CAPTURE_SETUP_DIR="$WORK/capture-setup" cargo "$CARGO_TEST" --locked --release -p ftx-cli --test body_fit_workflow capture_setup_constructs_the_first_request_and_reaches_the_ordinary_fitter
 FTX_TRIANGULATION_LENS_FIXTURES="$WORK/triangulation-lens-fixtures" cargo "$CARGO_TEST" --locked --release -p ftx-cli --test triangulation_workflow shared_lens_uncertainty_replays_native_and_portable_without_changing_clicks_or_geometry
+FTX_TRIANGULATION_CAMERA_FIXTURES="$WORK/triangulation-camera-fixtures" cargo "$CARGO_TEST" --locked --release -p ftx-cli --test triangulation_workflow sheet_camera_uncertainty_replays_native_and_portable_with_separate_components
 
 if [ "$WITH_REPLAYS" -eq 1 ]; then
   echo "[check_all_web] 3b/5 Populating opt-in native->browser replay directories (--with-replays)..."
@@ -868,6 +869,7 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   FTX_PHOTO_WEB_FIXTURES="$WORK/photo-web-fixtures" \
   FTX_CAMERA_WEB_FIXTURES="$WORK/camera-web-fixtures" \
   FTX_TRIANGULATION_LENS_FIXTURES="$WORK/triangulation-lens-fixtures" \
+  FTX_TRIANGULATION_CAMERA_FIXTURES="$WORK/triangulation-camera-fixtures" \
   FTX_BODY_FIT_PORTABLE_DIR="$WORK/body-fit-portable" \
   FTX_TRIANGULATION_FIXTURES="$WORK/triangulation-fixtures" \
   FTX_BUNDLE_FIXTURES="$WORK/bundle-fixtures" \
@@ -898,7 +900,7 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY="$WORK/compression-radiation-coverage" \
     node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
 else
-  FTX_REAL_WASM=1 FTX_GUIDED_SCENARIO_NATIVE="$FTX_MATERIALS_BIN" FTX_TRIANGULATION_LENS_FIXTURES="$WORK/triangulation-lens-fixtures" node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
+  FTX_REAL_WASM=1 FTX_GUIDED_SCENARIO_NATIVE="$FTX_MATERIALS_BIN" FTX_TRIANGULATION_LENS_FIXTURES="$WORK/triangulation-lens-fixtures" FTX_TRIANGULATION_CAMERA_FIXTURES="$WORK/triangulation-camera-fixtures" node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
 fi
 node --experimental-vm-modules tools/check_materials_wasm.cjs --native "$FTX_MATERIALS_BIN"
 node --experimental-vm-modules tools/check_strip_wasm.cjs --native "$FTX_MATERIALS_BIN"
@@ -945,5 +947,6 @@ node tools/check_body_targets.cjs "$WORK/body-targets" "$WORK/body-targets-out"
 node tools/check_capture_review.cjs "$WORK/capture-editor" "$WORK/capture-editor-out"
 node tools/check_capture_setup.cjs "$WORK/capture-setup" "$WORK/capture-setup-out" "$FTX_BIN"
 node tools/check_photo_web.cjs --body-photo "$WORK/capture-setup"
+node tools/check_photo_web.cjs --camera-noise "$WORK/triangulation-camera-fixtures"
 
 echo "[check_all_web] PASS: all 19 frontend/WASM/Playwright suites passed (with_replays=$WITH_REPLAYS, work dir: $WORK)"
