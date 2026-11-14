@@ -1,7 +1,7 @@
 # ftx-measure
 
 Measurement evidence in millimetres (degrees only for angle names), per spec 02 Part A.
-No images, personal data, body-model dependency, I/O or runtime Python. Catalogue and chart
+No image decoding, retained personal data, body-model dependency, I/O or runtime Python. Catalogue and chart
 constants come from the specification, not a new oracle. Records retain provenance,
 definition and one-sigma uncertainty. Repeats of the same method are correlated: they never
 reduce uncertainty. Incompatible definitions are excluded, not silently fused. Disagreement
@@ -147,6 +147,18 @@ Brown–Conrady calibration and its certified lens domain. Exact synthetic pose/
 off-plane held-out projection and analytic-Jacobian finite differences are tested in
 `photo::camera::tests`. This is an algebraic calibrated-pose slice, not unknown-focal
 calibration, image detection, noisy-PnP parity, bundle adjustment or a real-wearer fit claim.
+
+**Supported image rectification.** `camera::rectification::Rectification` maps an already-oriented
+Brown-camera BGR raster to a cropped pinhole image. It retains the original focal lengths and
+certified lens radius, shifts the principal point by the crop origin and clears only the Brown
+coefficients. The largest supported rectangle of the original-sized virtual grid is selected in
+linear pixel work with linear row storage; ties prefer the topmost, leftmost, then widest crop.
+Every output sample has an in-image bilinear footprint; no padding, coordinate clamping or lens
+extrapolation fills missing support. Identity lenses copy retained bytes exactly. Inputs are
+limited to 16 million pixels, output is at least 2 by 2, and arbitrary point transforms check
+their own continuous support. Camera extrinsics, calibration acceptance and image encoding belong
+to the caller. Independent polynomial/ramp checks, a known radial crop and exhaustive small-mask
+rectangle comparisons cover the numerical mapping; this does not establish physical accuracy.
 
 **Calibrated 3D geometry** (plan §10.2, FTX-20). `camera` provides oriented-image intrinsics,
 polynomial Brown distortion and bounded certified inversion; rotations must be right-handed

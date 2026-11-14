@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::invalid;
 
+pub mod rectification;
+
 /// Brown radial/tangential distortion in normalized camera coordinates (not pixels).
 /// The declared disk is conservatively certified injective before inversion is allowed.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
