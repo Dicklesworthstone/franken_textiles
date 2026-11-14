@@ -134,8 +134,12 @@ self.onmessage = async ({data: m}) => {
       return;
     }
     if(m.op==="triangulate") {
-      self.postMessage({type:"progress",request:m.request,text:"Checking calibrated rays, held-out views and declared click uncertainty…"});
-      const report=ftx.triangulate(m.input,m.noise);
+      if(m.lensNoise!==undefined && typeof m.lensNoise!=="string") throw Error("Shared-lens evidence must be original JSON text.");
+      if(m.lensNoise && typeof ftx.triangulate_with_lens_noise!=="function") throw Error("Rebuild web/pkg: missing shared-lens triangulation uncertainty.");
+      self.postMessage({type:"progress",request:m.request,text:m.lensNoise?
+        "Rechecking saved calibrations and propagating shared-lens uncertainty through the calibrated rays…":
+        "Checking calibrated rays, held-out views and declared click uncertainty…"});
+      const report=m.lensNoise?ftx.triangulate_with_lens_noise(m.input,m.noise,m.lensNoise):ftx.triangulate(m.input,m.noise);
       self.postMessage({type:"result",request:m.request,report});
       return;
     }

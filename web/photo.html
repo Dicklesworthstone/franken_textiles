@@ -232,14 +232,19 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <label>Optional click-noise evidence (<code>ftx-click-noise/1</code>)
       <input id="triangulationNoise" type="file" accept=".json,application/json"></label>
     <button id="triangulationClearNoise" disabled>Remove click-noise evidence</button>
-    <p><small>Click uncertainty is conditional on fixed cameras, scale and capture;
-      it excludes calibration error, motion and systematic error. Missing uncertainty remains unavailable.</small></p>
+    <label>Optional shared-lens calibration evidence (<code>ftx-triangulation-lens-noise/1</code>, up to 16 MiB)
+      <input id="triangulationLensNoise" type="file" accept=".json,application/json"></label>
+    <button id="triangulationClearLensNoise" disabled>Remove lens calibration evidence</button>
+    <p><small>Assign all FIT views using one calibrated lens to the same group, with its complete saved calibration report
+      and explicit independence evidence. The engine rechecks the calibration and exact lens parameters.</small></p>
+    <p><small>Click and lens uncertainty are separate conditional components. Camera poses and metric scale stay fixed;
+      pose/lens correlation, motion and systematic error are excluded. Missing uncertainty remains unavailable.</small></p>
   </div>
   <div id="geometryBundleControls" hidden>
     <label>Maximum accepted refinement steps <input id="bundleIterations" type="number" min="1" max="100" step="1" value="50"></label>
     <p>Joint refinement requires at least four well-spread fixed metric controls in every camera.
       Use the same stationary reference and world frame throughout. Initial camera and landmark guesses are not observations.</p>
-    <p><small>Each observation supplies its own pixel sigma. Switching to joint refinement clears the separate click-noise selection.
+    <p><small>Each observation supplies its own pixel sigma. Switching to joint refinement clears the separate click and lens evidence selections.
       Intrinsics stay fixed; no camera covariance or global optimum is established. Failed or budget-stopped solves publish no optimized geometry.</small></p>
   </div>
   <div id="geometryStillControls" hidden>

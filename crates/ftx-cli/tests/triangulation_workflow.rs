@@ -329,7 +329,7 @@ fn shared_lens_uncertainty_replays_native_and_portable_without_changing_clicks_o
     for (name, bytes) in original {
         assert_eq!(std::fs::read(dir.0.join(name)).unwrap(), bytes);
     }
-    if let Ok(directory) = std::env::var("FTX_PHOTO_WEB_FIXTURES") {
+    if let Ok(directory) = std::env::var("FTX_TRIANGULATION_LENS_FIXTURES") {
         use std::io::Write;
         let directory = Path::new(&directory);
         std::fs::create_dir_all(directory).unwrap();

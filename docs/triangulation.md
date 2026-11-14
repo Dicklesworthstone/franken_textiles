@@ -23,22 +23,36 @@ replace evidence or an earlier report, including through symlink/hard-link alias
 ## Local browser route
 
 Open `web/photo.html` after building and serving the browser bundle. Under **Reconstruct landmarks
-from calibrated views**, choose **One landmark with fixed cameras**, select the same prepared input and, optionally, an `ftx-click-noise/1`
-document declaring an independent positive pixel sigma for every FIT frame. Each file is limited to
-256 KiB. The existing Rust engines run in a disposable local worker; no source is uploaded.
-Download the complete report and exact original input/noise files for native replay:
+from calibrated views**, choose **One landmark with fixed cameras**, select the same prepared input and,
+optionally, an `ftx-click-noise/1` document declaring an independent positive pixel sigma for every FIT
+frame. Input and click-noise files are limited to 256 KiB each. The separate shared-lens evidence
+control accepts `ftx-triangulation-lens-noise/1` up to 16 MiB, retaining complete calibration reports
+and the exact assignment of FIT frames to shared lenses. The existing Rust engines run in a
+disposable local worker; no source is uploaded. Download the complete report and exact original
+input/noise files for native replay:
 
 ```sh
 ftx measure triangulate triangulation-input.json --click-noise triangulation-click-noise.json --json
 ```
 
-Omit `--click-noise` when none was selected. Conditional click uncertainty differentiates the actual
+Omit `--click-noise` when none was selected; add `--lens-noise triangulation-lens-noise.json` when
+shared-lens evidence was selected. The page displays the components separately and preserves valid
+geometry when either requested covariance is unavailable. An older bundle cannot silently ignore a
+selected lens input: rebuild it with `tools/build_web.sh` when the engine reports a missing entry point.
+Conditional click uncertainty differentiates the actual
 pixel-refined estimator with fixed cameras, scale and capture assumptions. Available covariance
 does not include calibration, scale, motion or systematic error. Valid geometry and unavailable
 requested covariance remain separately visible; neither becomes a measurement sigma or fused record.
-Changing either source, removing noise, cancelling or leaving the page withdraws that tool's reports
+Changing any source, removing either noise input, cancelling or leaving the page withdraws that tool's reports
 and downloads. Other photo evidence is independent. Frame timestamps and original numeric text are
 preserved in downloads; display summaries do not rewrite the report.
+
+The standard `tools/check_all_web.sh` runner captures the synthetic shared-lens native results and
+compares both lens-only and click-plus-lens reports with the actual compiled WASM export. Its
+`FTX_TRIANGULATION_LENS_FIXTURES` capture is separate from other photo fixtures. DOM/worker regressions
+also exercise original-byte replay, unavailable covariance, source-size limits, cancellation during
+file reads, source removal, operation changes and stale bundles. These are numerical and workflow
+checks, not physical camera qualification.
 
 For `docs/examples/triangulation.json`, this optional noise file uses a synthetic one-pixel
 assumption. A real acquisition needs its own supported click evidence; the held-out view is not
