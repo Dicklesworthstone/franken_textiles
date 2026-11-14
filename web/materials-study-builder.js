@@ -727,14 +727,22 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
       const heat = state[consumer];
       if ((consumer === "transient_surface" && liquid !== undefined) ||
           heatingFields.some(field => heat[field] != null)) {
-        throw Error("Prescribed compression requires dry film-boundary heat or qualified sheet convection, without liquid or deformation-heating policies.");
+        throw Error("Prescribed compression requires dry film-boundary heat or qualified convection, without liquid or deformation-heating policies.");
       }
-      if (consumer === "transient_coverage" &&
-          ["exterior_exchange", "exposed_exterior_exchange"].some(field => heat[field] != null)) {
-        throw Error("Moving body/layer compression currently requires dry film-boundary heat without exterior exchange.");
+      const exchanges = consumer === "transient_coverage" ?
+        ["exterior_exchange", "exposed_exterior_exchange"] : ["exterior_exchange"];
+      if (exchanges.some(field => heat[field]?.some(exterior => exterior?.radiation != null))) {
+        throw Error("Compressed textile exterior exchange must be convection-only, without radiation.");
       }
-      if (consumer === "transient_surface" && heat.exterior_exchange?.some(exterior => exterior.radiation != null)) {
-        throw Error("Compressed independent-sheet exterior exchange must be convection-only, without radiation.");
+      if (consumer === "transient_coverage") {
+        heat.exterior_exchange?.forEach((exterior, index) => {
+          if (exterior == null) return;
+          const bare = heat.bare_boundaries[index];
+          const resistance = bare.inside_resistance_m2_k_w + bare.outside_resistance_m2_k_w;
+          if (bare.inside_c !== heat.boundaries[index].inside_c || !Number.isFinite(resistance) || resistance <= 0) {
+            throw Error("Compressed covered convection needs bare-body films with the same body temperature and a finite positive total resistance.");
+          }
+        });
       }
     }
     motionCompressionSource(compression, state.keyframes);

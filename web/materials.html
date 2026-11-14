@@ -1341,9 +1341,11 @@ Version <code>/3</code> replaces <code>pressure_pa</code> with <code>controls</c
 Clearance controls solve pressure from the acquired branch. Original source files remain unchanged in saved cases and replay.
 Neither control infers pressure from body contact; normal compression work is reported separately from heat.
 For body/layer heat, current conditioned thickness changes the covered layers and gaps while covered and exposed cloth retain one thermal state.
-Select each heat history explicitly. Both modes admit dry textiles with prescribed films; independent-sheet
-heat also admits separately qualified convection. Compressed body/layer heat requires films, including an
-explicit film or adiabatic choice for exposed cloth. Wet laws, deformation heating and radiation require compatible compression qualifications.</p>
+Select each heat history explicitly. Both modes admit dry textiles with prescribed films or separately
+qualified convection. Body/layer heat keeps covered-cloth and exposed-cloth conditions independent;
+each interval can use convection, films or explicitly adiabatic exposed cloth. Covered convection
+requires separate bare-body films. The retained energy history distinguishes these paths from normal
+compression work. Wet laws, deformation heating and radiation require compatible compression qualifications.</p>
 </fieldset>
 <label><input id="guidedMotionHeat" type="checkbox"> Track independent-sheet heat through this movement</label>
 <fieldset id="guidedMotionHeatSettings" hidden><legend>Sheet heat initial state and work limits</legend>

@@ -5840,6 +5840,24 @@ This advances `ftx-cp2`, `ftx-tm5` and `ftx-ms2`; film-boundary numerical compos
 contact-derived pressure, a combined wet/compressed law, normal-work heating, time-dependent recovery
 or independently measured garment performance.
 
+### 25.204 Exchange heat with changing air across compressed moving layers
+
+Prescribed pressure, clearance and acquired branch histories now compose with separately qualified
+convection on moving body/layer coverage. Covered outer cloth, exposed source cloth and bare-body films
+retain independent boundary declarations; each interval can return to films or explicitly adiabatic
+exposed cloth. Complete sources, temperature domains and consistent bare-body reservoirs are admitted
+before motion can expose a previously hidden path. The same conditioned layer projection and conservative
+material-coordinate transfer carry the retained temperatures and reference mass.
+
+Five signed outside heat paths preserve covered/exposed film and convection exchange separately from
+bare-body heat and prescribed normal work. Material/design comparison checks complete cumulative and
+sampled accounting, including convection retained after a later film interval. Browser controls retain
+the original acquisitions, separate interval conditions, named cases and exact replay inputs, and show
+the returned path energies and final powers. Independent RC/film-equivalence, changing-coverage, source
+refusal, rollback and native/portable regressions accompany this extension of `ftx-cp2`, `ftx-tm5` and
+`ftx-ms2`. Radiation, wet/compressed laws, contact-derived pressure, recovery time and independently
+measured garment performance remain separate qualification work.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

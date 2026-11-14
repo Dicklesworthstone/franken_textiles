@@ -1289,6 +1289,21 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       detail(parent, `${key}: original compression acquisitions and complete ${controlled ? "control" : "pressure"} history (display only)`, {
         request: h.request?.prescribed_compression, result: compression });
     }
+    if (h?.outside_energy_paths) {
+      const energy = h.outside_energy_paths, power = h.final_field?.outside_power_paths;
+      const paths = table(parent, `${key}: outside heat paths during compressed motion`,
+        ["Boundary path", "Signed energy (J)", "Final outward power (W)"]);
+      for (const [label, field] of [["Covered cloth: convection", "covered_convection"],
+        ["Exposed cloth: convection", "exposed_convection"], ["Covered cloth: films", "covered_film"],
+        ["Exposed cloth: films", "exposed_film"], ["Bare body: films", "bare"]]) {
+        cells(paths, [label, metric(energy[field + "_j"]), metric(power?.[field + "_w"])]);
+      }
+      const scope = document.createElement("p");
+      scope.textContent = "Positive exterior values carry heat outward; negative values supply heat. " +
+        "Covered and exposed cloth retain their independently qualified interval conditions. " +
+        "Bare-body films remain separate from cloth exchange, and compression work is reported separately from all thermal paths.";
+      parent.append(scope);
+    }
     if (h?.thermal_bridges) {
       const bridges = h.thermal_bridges;
       const energy = table(parent, `${key}: seam and closure heat during motion`,

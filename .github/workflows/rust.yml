@@ -111,6 +111,8 @@ jobs:
           FTX_MOVING_BRIDGES_REPLAY: ${{ runner.temp }}/ftx-moving-bridges-replay
           FTX_COMPRESSION_CONVECTION_MOTION_REPLAY: ${{ runner.temp }}/ftx-compression-convection-motion-replay
           FTX_CLEARANCE_CONVECTION_MOTION_REPLAY: ${{ runner.temp }}/ftx-clearance-convection-motion-replay
+          FTX_CYCLIC_CONVECTION_COVERAGE_REPLAY: ${{ runner.temp }}/ftx-cyclic-convection-coverage-replay
+          FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY: ${{ runner.temp }}/ftx-clearance-convection-coverage-replay
         run: cargo test --workspace --locked
       - name: Test supplier source adapters
         if: ${{ !cancelled() }}
@@ -139,6 +141,8 @@ jobs:
           FTX_MOVING_BRIDGES_REPLAY: ${{ runner.temp }}/ftx-moving-bridges-replay
           FTX_COMPRESSION_CONVECTION_MOTION_REPLAY: ${{ runner.temp }}/ftx-compression-convection-motion-replay
           FTX_CLEARANCE_CONVECTION_MOTION_REPLAY: ${{ runner.temp }}/ftx-clearance-convection-motion-replay
+          FTX_CYCLIC_CONVECTION_COVERAGE_REPLAY: ${{ runner.temp }}/ftx-cyclic-convection-coverage-replay
+          FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY: ${{ runner.temp }}/ftx-clearance-convection-coverage-replay
           NPM_CONFIG_USER_AGENT: "OpenAI File Downloader, XaiImageApiFetch/1.0"
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
         run: |

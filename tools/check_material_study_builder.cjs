@@ -3985,7 +3985,9 @@ test('layered compression admits only supported target policies and preserves un
       changed.boundaries=[film];changed.bare_boundaries=[{...coverage.boundaries[0]}];
     } else changed.exposed_boundaries=[film];
     assert.doesNotThrow(()=>motion({...input,transient_coverage:changed}));
-    assert.throws(()=>motion({...input,transient_coverage:changed},undefined,original,'transient_coverage'),/dry film-boundary/);
+    assert.doesNotThrow(()=>motion({...input,transient_coverage:changed},undefined,original,'transient_coverage'));
+    changed[field][0]={...exterior,radiation:{ambient_c:-15,automatic_material_face:true,allow_opaque_gray_approximation:true}};
+    assert.throws(()=>motion({...input,transient_coverage:changed},undefined,original,'transient_coverage'),/without radiation/);
   }
   assert.throws(()=>motion(input,{},original,'transient_coverage'),/liquid|water/i);
   const water=' {"schema":"ftx-textile-surface-water/5","bindings":{"front.R":{"material_sha256":"'+
@@ -4086,6 +4088,73 @@ test('compressed motion composes qualified convection without radiation or infer
   }
   environment.convection_w_m2_k=40;
   assert.equal(JSON.parse(saved).motion.transient_surface.exterior_exchange[0].convection_w_m2_k,8);
+});
+
+test('layered compression preserves mixed convection and film intervals through exact named replay',async()=>{
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
+    buildWorkbenchStudyBundle:save,parseWorkbenchStudyBundle:load}=await modulePromise;
+  const input=cyclicCompressionMotion(),coverage=await guidedMovingCoverageHeat(),film=coverage.boundaries[0];
+  const covered=exteriorPolicy(),exposed=exteriorPolicy({air_c:30,convection_w_m2_k:4});
+  coverage.boundaries=[{...film,outside_c:covered.air_c,outside_resistance_m2_k_w:0},{...film},{...film}];
+  coverage.exterior_exchange=[covered,null,null];
+  coverage.bare_boundaries=[{...film},null,null];
+  coverage.exposed_boundaries=[{...film},{...film,outside_c:exposed.air_c,outside_resistance_m2_k_w:0},null];
+  coverage.exposed_exterior_exchange=[null,exposed,null];
+  input.transient_coverage=coverage;
+  const original=' \r\n'+JSON.stringify(controlledCompressionInput()).replace('"gap_m":0.02','"gap_m":2.000e-2')+'\r\n';
+  const before=JSON.stringify(input),raw=motion(input,undefined,original,'transient_coverage'),value=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(original));
+  assert.deepEqual(value.transient_coverage,{...coverage,prescribed_compression:JSON.parse(original)});
+  assert.deepEqual(value.transient_surface,input.transient_surface);
+  const scenario=single({...scenarioState(),motion:input,motionCompression:original,
+    motionCompressionTarget:'transient_coverage',maxMotionTrials:1024,maxVertexFrames:32000000});
+  const cases=matrix({maxEvaluations:4,cases:[{key:'mixed boundaries',scenario},{key:'dry baseline',scenario:single({
+    ...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000})}]});
+  const replay={type:'scenario',pattern:workbenchPattern,studyRequest:workbenchRequest().studyRequest,
+    scenarioRequest:cases,measurements:workbenchBody};
+  assert.ok(cases.includes(original));assert.equal(load(save(replay,workbenchModel())).request.scenarioRequest,cases);
+  covered.convection_w_m2_k=99;exposed.convection_source.note='later edit';
+  assert.equal(JSON.parse(scenario).motion.transient_coverage.exterior_exchange[0].convection_w_m2_k,8);
+  assert.equal(cases.includes('later edit'),false);
+});
+
+test('layered compression qualifies each exterior path and permits explicitly inactive schedules',async()=>{
+  const {buildMaterialMotionRequest:motion}=await modulePromise;
+  const original=JSON.stringify(controlledCompressionInput()),coverage=await guidedMovingCoverageHeat();
+  const film=coverage.boundaries[0],exterior=exteriorPolicy();
+  coverage.boundaries=Array.from({length:3},()=>({...film}));
+  coverage.exposed_boundaries=[null,{...film},null];
+  coverage.exterior_exchange=[null,null,null];coverage.bare_boundaries=[null,null,null];
+  coverage.exposed_exterior_exchange=[null,null,null];
+  const input={...cyclicCompressionMotion(),transient_coverage:coverage};
+  assert.doesNotThrow(()=>motion(input,undefined,original,'transient_coverage'));
+  for(const field of ['exterior_exchange','exposed_exterior_exchange']) {
+    const candidate=structuredClone(input),heat=candidate.transient_coverage;
+    heat[field][1]=structuredClone(exterior);
+    const boundaries=field==='exterior_exchange'?'boundaries':'exposed_boundaries';
+    heat[boundaries][1]={...film,outside_c:exterior.air_c,outside_resistance_m2_k_w:0};
+    if(field==='exterior_exchange')heat.bare_boundaries[1]={...film};
+    assert.doesNotThrow(()=>motion(candidate,undefined,original,'transient_coverage'));
+    for(const mutate of [h=>{h[field][1].radiation={ambient_c:-15,automatic_material_face:true,allow_opaque_gray_approximation:true};},
+      h=>{h[field][1].convection_source.note='';},h=>{h[field][1].allow_estimates=false;},
+      h=>{h[boundaries][1].outside_resistance_m2_k_w=0.1;},h=>{h[boundaries][1].outside_c=123;}]) {
+      const bad=structuredClone(candidate);mutate(bad.transient_coverage);
+      assert.throws(()=>motion(bad,undefined,original,'transient_coverage'));
+    }
+    if(field==='exterior_exchange') {
+      for(const mutate of [bare=>{bare.inside_c+=1;},
+        bare=>{bare.inside_resistance_m2_k_w=0;bare.outside_resistance_m2_k_w=0;},
+        bare=>{bare.inside_resistance_m2_k_w=Number.MAX_VALUE;bare.outside_resistance_m2_k_w=Number.MAX_VALUE;}]) {
+        const bad=structuredClone(candidate);mutate(bad.transient_coverage.bare_boundaries[1]);
+        assert.throws(()=>motion(bad,undefined,original,'transient_coverage'),/same body temperature and a finite positive/);
+      }
+      heat.bare_boundaries[1]=null;
+      assert.throws(()=>motion(candidate,undefined,original,'transient_coverage'),/bare-body films/);
+    } else {
+      heat.exposed_boundaries[1]=null;
+      assert.throws(()=>motion(candidate,undefined,original,'transient_coverage'),/explicit exposed film conditions/);
+    }
+  }
 });
 
 function motionCompressionControls() {

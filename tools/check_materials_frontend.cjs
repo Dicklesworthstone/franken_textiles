@@ -16873,19 +16873,23 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
     } finally {globalThis.ftxProgress=previousProgress;}
   });
 
-test('compiled WASM prescribed cyclic and clearance compression replay native commands and qualified convection scenarios',
+test('compiled WASM prescribed cyclic and clearance compression replay native commands and qualified sheet and layered convection scenarios',
   {skip:process.env.FTX_REAL_WASM!=='1'||!(process.env.FTX_COMPRESSION_MOTION_REPLAY||process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY||
-    process.env.FTX_COMPRESSION_CONVECTION_MOTION_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY)},async()=>{
+    process.env.FTX_COMPRESSION_CONVECTION_MOTION_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY||
+    process.env.FTX_CYCLIC_CONVECTION_COVERAGE_REPLAY||process.env.FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY)},async()=>{
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
     const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
     const worker=await workerModule({bindings:ftx}),previousProgress=globalThis.ftxProgress;
     globalThis.ftxProgress=()=>{};
     try {
-      for(const [dir,cyclic,controlled,convection] of [[process.env.FTX_COMPRESSION_MOTION_REPLAY,false,false,false],
+      for(const [dir,cyclic,controlled,convection,coverage] of [[process.env.FTX_COMPRESSION_MOTION_REPLAY,false,false,false],
         [process.env.FTX_CYCLIC_COMPRESSION_MOTION_REPLAY,true,false,false],
         [process.env.FTX_COMPRESSION_CONVECTION_MOTION_REPLAY,true,false,true],
-        [process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY,false,true,true]].filter(([dir])=>dir)) {
+        [process.env.FTX_CLEARANCE_CONVECTION_MOTION_REPLAY,false,true,true],
+        [process.env.FTX_CYCLIC_CONVECTION_COVERAGE_REPLAY,true,false,true,true],
+        [process.env.FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY,false,true,true,true]].filter(([dir])=>dir)) {
+        const consumer=coverage?'transient_coverage':'transient_surface';
         const input=name=>fs.readFileSync(path.join(dir,name),'utf8'),bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
         const pattern=input('pattern.json'),studyRequest=input('study.json'),measurements=input('body-input.json');
         for(const name of ['single','matrix']) {
@@ -16899,12 +16903,12 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
           if(name==='matrix') assert.deepEqual(output.result.comparison.case_order,['equal-reservoirs','warm-outside']);
           for(const [index,report] of (name==='single'?[output.result]:output.result.cases).entries()) {
             const result=report.simulations.find(row=>row.key==='qualified').evaluation.result,motion=result.motion;
-            assert.equal(motion.status,'available');assert.equal(motion.result.transient_surface.status,'available');
-            const heat=motion.result.transient_surface.result,compression=heat.prescribed_compression;
-            const authored=sources[index].motion.transient_surface.prescribed_compression,binding=authored.bindings.band;
+            assert.equal(motion.status,'available');assert.equal(motion.result[consumer].status,'available');
+            const heat=motion.result[consumer].result,compression=heat.prescribed_compression;
+            const authored=sources[index].motion[consumer].prescribed_compression,binding=authored.bindings.band;
             // Both receipts serialize the typed policy, including material defaults absent from
             // the authored JSON. Exact source-file bytes are checked separately below.
-            const requested=report.scenario.scenario.motion.transient_surface.prescribed_compression;
+            const requested=report.scenario.scenario.motion[consumer].prescribed_compression;
             assert.deepEqual(heat.request.prescribed_compression,requested);
             assert.equal(requested.schema,authored.schema);
             assert.equal(requested.thermal_evidence,authored.thermal_evidence);
@@ -16944,18 +16948,33 @@ test('compiled WASM prescribed cyclic and clearance compression replay native co
             assert.deepEqual(joins,cyclic?[1,3]:[]);
             assert.ok(Math.abs(heat.balance_error_j)<1e-8);
             if(convection) {
-              assert.deepEqual(heat.request.exterior_exchange,sources[index].motion.transient_surface.exterior_exchange);
+              assert.deepEqual(heat.request.exterior_exchange,sources[index].motion[consumer].exterior_exchange);
               assert.equal(heat.exterior_exchange.radiative_energy_j,0);
               assert.ok(Math.abs(heat.exterior_exchange.convective_energy_j)>1e-10);
-              assert.ok(Math.abs(heat.outside_energy_j-heat.exterior_exchange.convective_energy_j)<1e-10);
-              assert.ok(heat.trace.every(sample=>sample.exterior_exchange.radiative_heat_w===0 && sample.prescribed_compression));
+              if(coverage) {
+                assert.deepEqual(heat.request.exposed_exterior_exchange,sources[index].motion[consumer].exposed_exterior_exchange);
+                assert.equal(heat.exposed_exterior_exchange.radiative_energy_j,0);
+                assert.equal(heat.outside_energy_paths.bare_j,heat.bare_energy_j);
+                assert.ok(Math.abs(Object.values(heat.outside_energy_paths).reduce((a,b)=>a+b,0)-heat.outside_energy_j)<1e-8);
+                assert.ok(heat.trace.every(sample=>sample.prescribed_compression &&
+                  Math.abs(Object.values(sample.outside_energy_paths).reduce((a,b)=>a+b,0)-sample.outside_energy_j)<1e-8));
+                assert.ok(heat.trace.every(sample=>!sample.exterior_exchange||sample.exterior_exchange.radiative_heat_w===0));
+                assert.ok(heat.trace.every(sample=>!sample.exposed_exterior_exchange||sample.exposed_exterior_exchange.radiative_heat_w===0));
+                assert.deepEqual(heat.outside_energy_paths,heat.trace.at(-1).outside_energy_paths);
+                assert.deepEqual(heat.final_field.outside_power_paths,heat.trace.at(-1).outside_power_paths);
+                assert.equal(heat.final_field.outside_power_paths.covered_convection_w,0);
+                assert.notEqual(heat.outside_energy_paths.covered_convection_j,0,'Earlier covered convection remains after the final film interval');
+              } else {
+                assert.ok(Math.abs(heat.outside_energy_j-heat.exterior_exchange.convective_energy_j)<1e-10);
+                assert.ok(heat.trace.every(sample=>sample.exterior_exchange.radiative_heat_w===0 && sample.prescribed_compression));
+              }
             }
-            if(heat.request.boundaries[0].outside_c===20) {
+            if(!coverage&&heat.request.boundaries[0].outside_c===20) {
               assert.ok(heat.final.temperature_c.flat().every(temperature=>Math.abs(temperature-20)<1e-10),
                 'Prescribed branch work cannot heat the equal-temperature fixture');
             }
             const unmatched=report.simulations.find(row=>row.key==='unmatched-source').evaluation.result.motion;
-            assert.equal(unmatched.status,'available');assert.equal(unmatched.result.transient_surface.status,'refused');
+            assert.equal(unmatched.status,'available');assert.equal(unmatched.result[consumer].status,'refused');
             assert.equal(report.comparison.alternatives.find(row=>row.key==='unmatched-source').eligible,false);
             assert.ok(report.manufacturing.alternatives.every(row=>row.cutting.status==='available'));
           }
@@ -21734,4 +21753,91 @@ test('guided layered compression refuses unqualified heating without losing its 
   assert.equal(motion.transient_surface.plastic_dissipation_heat,'uniform_reference_thickness');
   assert.equal(Object.hasOwn(motion.transient_surface,'prescribed_compression'),false);
   assert.deepEqual(motion.transient_coverage.prescribed_compression,JSON.parse(guidedCompressionOriginal));
+});
+
+test('guided layered compression saves independent mixed weather intervals and invalidates changed source files',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
+  p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();
+  guidedCoverageHeatFilm(p,'Exposed',18,9,0.2,0.3);
+  const covered=authorExterior(p,'guidedMotionCoverageExterior',{air:5,coefficient:7});
+  const exposed=authorExterior(p,'guidedMotionExposedExterior',{air:25,coefficient:3});
+  const bare=authorBareFilms(p,'guidedMotionCoverageBare',[35,2,0.2,0.4]);
+  await addGuidedMotion(p,0.002,35);
+  for(const prefix of ['guidedMotionCoverageExterior','guidedMotionExposedExterior']) {
+    p.e[prefix+'Enabled'].checked=false;p.e[prefix+'Enabled'].handlers.change();
+  }
+  await addGuidedMotion(p,0.004,35);
+  p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();
+  const later=authorExterior(p,'guidedMotionCoverageExterior',{air:30,coefficient:4});
+  await addGuidedMotion(p,0.006,35);
+  const original=guidedClearanceCompressionSource();guidedCompressionSource(p,original);
+  p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
+  await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(original));
+  const motion=JSON.parse(sent.scenarioRequest).motion,heat=motion.transient_coverage;
+  assert.equal(Object.hasOwn(motion,'transient_surface'),false);
+  assert.deepEqual(heat.exterior_exchange,[covered,null,later]);
+  assert.deepEqual(heat.exposed_exterior_exchange,[exposed,null,null]);
+  assert.deepEqual(heat.bare_boundaries,[bare,null,bare]);
+  assert.deepEqual(heat.boundaries.map(row=>[row.outside_c,row.outside_resistance_m2_k_w]),[[5,0],[5,0.2],[30,0]]);
+  assert.equal(heat.exposed_boundaries[1].outside_resistance_m2_k_w,0.3);
+  assert.equal(heat.exposed_boundaries[2],null);
+  const changed=original.replace('Explicit synthetic source link','Changed synthetic source link');
+  p.select('guidedMotionCompressionFile',changed);p.e.guidedMotionCompressionFile.handlers.change();
+  assert.equal(worker.dead,true);p.ready();
+  worker.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'obsolete.json',text:'{}'}]});
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  await p.e.scenario.onclick();assert.ok(p.current().messages.at(-1).scenarioRequest.includes(changed));
+});
+
+test('guided layered convection cases retain exact compression acquisitions after later weather edits',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
+  guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
+  p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();
+  const exterior=authorExterior(p,'guidedMotionCoverageExterior',{air:5,coefficient:7});
+  authorBareFilms(p,'guidedMotionCoverageBare',[35,5,0.2,0.4]);await addGuidedMotion(p,0.002,35);
+  guidedCompressionSource(p);p.e.guidedMotionCompressionTarget.value='transient_coverage';
+  p.e.guidedMotionCompressionTarget.handlers.change();await saveGuidedCase(p,'cold convection');
+  assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
+  p.e.guidedMotionCoverageExteriorEnabled.checked=false;p.e.guidedMotionCoverageExteriorEnabled.handlers.change();
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await saveGuidedCase(p,'film boundary');
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1),cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.equal(cases.length,2);
+  assert.deepEqual(cases[0].scenario.motion.transient_coverage.exterior_exchange,[exterior]);
+  assert.equal(Object.hasOwn(cases[1].scenario.motion.transient_coverage,'exterior_exchange'),false);
+  for(const row of cases)assert.deepEqual(row.scenario.motion.transient_coverage.prescribed_compression,JSON.parse(guidedCompressionOriginal));
+  p.select('guidedMotionCompressionFile','{obsolete draft');p.e.guidedMotionCompressionFile.handlers.change();
+  assert.equal(p.current().dead,false);p.emit(scenarioReport());await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided layered compression refuses radiation on either exterior path before dispatch',async()=>{
+  for(const [domain,radiation] of [['Coverage','automatic'],['Exposed','explicit']]) {
+    const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+    guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
+    p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();
+    guidedCoverageHeatFilm(p,'Exposed');authorBareFilms(p,'guidedMotionCoverageBare');
+    authorExterior(p,'guidedMotion'+domain+'Exterior',{radiation});
+    await addGuidedMotion(p,0.002,35);guidedCompressionSource(p);
+    p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
+    const before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/without radiation/);
+  }
+});
+
+test('compressed coverage results show signed exterior paths separately from normal work',async()=>{
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioReport(),initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.motion=outcome({keyframes:[],samples:[],transient_coverage:outcome({trace:[{temperature_range_c:[18,20]}],
+    outside_energy_paths:{covered_convection_j:2,exposed_convection_j:-0.3,covered_film_j:1.2,exposed_film_j:0.4,bare_j:2.8},
+    final_field:{outside_power_paths:{covered_convection_w:-4,exposed_convection_w:0,covered_film_w:0,exposed_film_w:0,bare_w:5}},
+    prescribed_compression:{initial_instances:{},final_instances:{},cumulative_normal_work_j:0.75,normal_work_to_heat_j:0,updates:[]}})});
+  await p.e.scenario.onclick();p.emit(report);const result=section(p,'Fresh drape and heat alternatives');
+  const paths=descendants(result).find(n=>n.tag==='table'&&n.children[0].textContent==='A: outside heat paths during compressed motion');
+  assert.ok(paths);assert.deepEqual(plain(paths.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['Covered cloth: convection','2','-4'],['Exposed cloth: convection','-0.3','0'],
+    ['Covered cloth: films','1.2','0'],['Exposed cloth: films','0.4','0'],['Bare body: films','2.8','5']]);
+  assert.match(visibleText(result),/Prescribed normal work: 0.75 J; converted to heat: 0 J/);
+  assert.match(visibleText(result),/negative values supply heat/);
 });
