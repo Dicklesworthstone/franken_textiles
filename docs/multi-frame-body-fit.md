@@ -99,8 +99,9 @@ In **Fit one body shape across changing poses**, select the converted model and 
 1. Choose the 2–8 original images, checked camera calibration and original printed sheet sidecar.
    Enter the matching lens/rotation, stationary reference, measured board origin, at least four
    predeclared held-out corner IDs (leaving at least four FIT corners) and placement evidence.
-   For a Brown-distorted lens, select **Correct lens distortion for silhouette editing** to derive
-   supported pinhole images. Review the corrected crop before authoring; the body regions you intend
+   Brown-calibrated photographs support silhouette editing in their original pixels. Optionally
+   select **Correct lens distortion for silhouette editing** to derive supported pinhole images.
+   Review the corrected crop before authoring; the body regions you intend
    to observe must remain visible. The corrected PNGs are offered as downloads with the draft.
 2. Choose **Load available model controls**. Enter age and the Anny gender coefficient, select
    shared shape controls, and choose fixed values or explicit fitting bounds. All six roots
@@ -376,7 +377,7 @@ The first command needs no body model. It reruns selection and camera checks, co
 selected images, and overlays the supplied points at stored image coordinates without another
 rotation or rectification. The table shows every name, FIT/CHECK assignment, pixel, sigma and
 authored model target. Supplied silhouettes are shown as observed scanlines after the
-existing rectified-camera and interval checks. Imported mask constraints remain read-only;
+existing calibrated-camera, lens-domain and interval checks. Imported mask constraints remain read-only;
 inline constraints can be authored or corrected as described below. Dashed lines show sampled slices; thick segments
 show foreground, and empty slices explicitly assert background. Every slice retains its original
 FIT/CHECK role, axis, position, sigma and evidence. This does not validate the segmentation,
@@ -422,7 +423,7 @@ its previously downloaded `capture-edited.json` (at most 16 MiB). The editor res
 and editable inline silhouettes, including incomplete work, added or removed observations, and
 their explicitly authored FIT/CHECK roles and uncertainties. It requires the same complete source
 bindings, ordered frames, cameras, model targets, measurements, starts and other fit settings.
-Imported mask constraints and frames without a checked rectified camera remain read-only for
+Imported mask constraints and frames without a checked calibrated camera remain read-only for
 silhouettes. Review restored labels, coordinates and roles before using the edited prepared
 snapshot or generating a new native review; loading a draft does not run the fitter or qualify
 its evidence.
@@ -1002,7 +1003,8 @@ image before picking endpoints, or enter coordinates directly in its stored pixe
 
 Contour edits are explicit: replacing the slices changes only that frame's manual silhouette;
 removing all its contours requires the removal control. Frames with imported mask receipts remain
-read-only, as do distorted-camera frames. Existing slices keep their declared role and uncertainty
+read-only. Checked Brown cameras permit manual contours in their original oriented pixels.
+Existing slices keep their declared role and uncertainty
 when endpoints are corrected. Switching frames retains drafts; cancelling pending observations
 restores the last applied snapshot. Pending edits invalidate previews, fitting results and garment
 handoffs until applied or cancelled, and stale worker replies cannot replace newer work.
@@ -1029,14 +1031,15 @@ Run `capture-review` on that downloaded document in a new output directory, then
 capture to the ordinary fitter. Source identities, calibration and model-target definitions remain
 unchanged, and the native fitter still owns observability, optimization and acceptance.
 
-Authoring is available only for checked cameras with zero radial and tangential distortion.
-Rectify the images, keypoints and calibration together before generating the review; the page
-cannot rectify them. Frames supplied by a silhouette-mask manifest remain read-only so edits
+Authoring uses the checked camera attached to the original oriented pixels. Brown radial and
+tangential distortion are preserved, and every foreground endpoint must lie in the certified
+lens domain. Do not zero lens coefficients or rectify only part of the evidence. Frames supplied
+by a silhouette-mask manifest remain read-only so edits
 cannot replace or detach their source-bound evidence. Other frames may use explicit inline slices.
 Choose held-out lines before fitting. A plausible outline, a successful download or agreement on
 the sampled lines does not establish anatomical correctness or physical fit.
 
-## Silhouettes from rectified masks
+## Silhouettes from calibrated masks
 
 Review these constraints before loading a body model or fitting:
 
@@ -1066,7 +1069,7 @@ The mask manifest has this structure; frame identities must match the fitting re
 ```json
 {
   "schema": "ftx-body-silhouettes/1",
-  "evidence": "Reviewed segmentation and rectification receipt; describe clothing/occluders",
+  "evidence": "Reviewed segmentation in original calibrated pixels; describe clothing/occluders",
   "frames": [
     {
       "frame": {"stream": "camera-1", "timestamp_us": 133333},
@@ -1088,10 +1091,12 @@ and foreground touching an image border are refused. No resizing, threshold gues
 segmentation inference or coordinate rotation is performed. Pixel centers are integer indices;
 a foreground run at centers `i..j` has boundaries `i-0.5` and `j+0.5`.
 
-**Rectify the mask, keypoints and camera calibration together before using silhouettes.**
-The camera must have zero distortion coefficients. Otherwise projected triangle edges are
-curved and cannot be represented by this straight-edge scanline implementation. Merely zeroing
-coefficients without rectifying the evidence invalidates the measurement assumptions.
+**Keep the mask, keypoints and calibrated camera in the same original oriented pixel frame.**
+Brown lenses use curved projected boundaries when comparing the actual triangle union with the
+supplied scanlines. The image and observed intervals are not resampled. Foreground endpoints and
+projected surfaces outside the certified lens domain refuse. Rectified inputs with zero distortion
+retain their existing straight-edge calculation; zeroing coefficients without rectifying the
+evidence invalidates the measurement assumptions.
 
 Choose fit/held-out rows and columns before fitting. Up to 64 distinct slices and eight
 foreground intervals per slice are supported, in both the observation and prediction;

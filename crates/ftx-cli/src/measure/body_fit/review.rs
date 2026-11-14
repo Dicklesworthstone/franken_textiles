@@ -157,7 +157,7 @@ fn observed_silhouette(frame: &FitFrame) -> Result<(String, String), Refusal> {
     let Some(observed) = &frame.silhouette else {
         return Ok((String::new(), String::new()));
     };
-    silhouette::require_rectified(&frame.camera)?;
+    silhouette::validate_observation(&frame.camera, frame.image_size_px, observed)?;
     observed.validate(frame.image_size_px)?;
     let mut svg = String::new();
     let mut text = format!(
@@ -297,15 +297,15 @@ fn silhouette_editability(frame: &FitFrame, capture: &Value) -> (bool, &'static 
             "Imported mask samples are read-only. Correct their original source and prepare a new review.",
         );
     }
-    if silhouette::require_rectified(&frame.camera).is_err() {
+    if frame.camera.validate().is_err() {
         return (
             false,
-            "Silhouette authoring requires a valid camera with zero lens distortion. Rectify the image, keypoints and calibration together; do not just zero coefficients.",
+            "Silhouette authoring requires a valid calibrated camera. Keep the image, keypoints and contours in the original oriented coordinates associated with that lens.",
         );
     }
     (
         true,
-        "The checked camera permits sampled silhouettes. Confirm that image, keypoints and calibration share the same rectified coordinates.",
+        "The checked camera permits sampled silhouettes. Confirm that image, keypoints and contours share the original oriented pixels and calibrated lens.",
     )
 }
 
@@ -351,7 +351,7 @@ pub(super) fn prepare_capture(
          or use the corrected capture input to recheck original source files in a new native review. \
          No points or partitions were inferred. Pixels retain their stored orientation and lens distortion.</p>\
          <p>This does not establish anatomical correspondence, observability, physical accuracy, READY measurements or garment fit. \
-         Sampled silhouettes are caller-reviewed constraints. Inline samples can be authored on checked rectified frames; imported masks remain read-only.</p>\
+         Sampled silhouettes are caller-reviewed constraints. Inline samples can be authored on checked calibrated frames; imported masks remain read-only.</p>\
          <p><a href=\"capture.json\">Original input for fit-body (requires original source files)</a> · \
          <a href=\"prepared-input.json\">Original calibrated observation snapshot for local browser fitting</a> · \
          <a href=\"original-input.json\">Original input bytes</a> · <a href=\"review.json\">Complete preparation evidence</a></p>",
@@ -389,7 +389,7 @@ pub(super) fn prepare_capture(
         Missing FIT/CHECK evidence can make the native fitter refuse. Do not remove CHECKs to tune a fit result. \
         Reset restores the original complete point lists.</p>\
         <fieldset id=\"silhouetteFields\" disabled><legend>Author sampled body silhouettes</legend>\
-        <p>Use already rectified images and cameras. Declare FIT/CHECK slices before fitting and describe clothing and occluders. \
+        <p>Use the original oriented image pixels and their calibrated camera. Declare FIT/CHECK slices before fitting and describe clothing and occluders. \
         These are manually observed foreground intervals, not automatic segmentation or evidence of real-body accuracy. \
         Existing slice locations, roles and sigmas stay fixed while correcting endpoints.</p>\
         <label>Frame <select id=\"silhouetteFrame\"><option value=\"\">Choose frame</option></select></label>\
@@ -625,7 +625,7 @@ fn contours(mesh: &SurfaceMesh, frame: &FitFrame) -> Result<(String, Value), Ref
     Ok((
         svg,
         json!({"evidence":silhouette.evidence,"lines":lines,
-        "no_claim":"Agreement on supplied scanlines only, not full-mask, occlusion, segmentation or real-wearer validation. Original oriented rectified coordinates; no resampling."}),
+        "no_claim":"Agreement on supplied scanlines only, not full-mask, occlusion, segmentation or real-wearer validation. Original oriented coordinates and calibrated lens; no resampling."}),
     ))
 }
 
@@ -960,11 +960,19 @@ mod tests {
         assert!(text.contains("sigma 2 px"));
         assert!(!text.contains("<source>"));
         frame.camera.intrinsics.distortion.radial[0] = 0.01;
+        assert!(silhouette_editability(&frame, &json!({})).0);
+        assert_eq!(
+            observed_silhouette(&frame).unwrap(),
+            (observed.clone(), text.clone())
+        );
+        frame.camera.intrinsics.distortion.radial[0] = 0.;
+        frame.camera.intrinsics.distortion.tangential[0] = 0.001;
+        assert!(silhouette_editability(&frame, &json!({})).0);
+        assert_eq!(observed_silhouette(&frame).unwrap(), (observed, text));
+        frame.camera.intrinsics.distortion.radial[0] = -1.;
         assert!(!silhouette_editability(&frame, &json!({})).0);
         assert!(observed_silhouette(&frame).is_err());
         frame.camera.intrinsics.distortion.radial[0] = 0.;
-        frame.camera.intrinsics.distortion.tangential[0] = 0.001;
-        assert!(!silhouette_editability(&frame, &json!({})).0);
         frame.camera.intrinsics.distortion.tangential[0] = 0.;
         let (svg, data) = contours(&mesh, &frame).unwrap();
         assert!(svg.contains("x1=\"10\" y1=\"40\" x2=\"30\" y2=\"40\""));

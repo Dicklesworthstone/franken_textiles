@@ -5931,6 +5931,12 @@ the zero-distortion comparison retains its existing calculation. This extends th
 and fitting path through `ftx-bc1.brown`. It does not infer segmentation, clothing or anatomical
 correspondence, propagate lens uncertainty into a body fit, or establish physical wearer accuracy.
 
+Native binary-mask import and portable/manual contour authoring use the same calibrated-domain
+admission. They retain exact source images and cameras, fractional original endpoints, full-width
+frame identities, imported-mask receipts and existing FIT/CHECK roles. Complete native and portable
+reports, full-mesh contour reviews and browser fitting share this calculation. Fresh captures may
+also explicitly choose the corrected-image workflow below before observations are authored.
+
 ### 25.209 Fit silhouettes from corrected fresh Brown-camera photographs
 
 Fresh still-photo capture can now derive actual pinhole PNGs before anatomical targets, image

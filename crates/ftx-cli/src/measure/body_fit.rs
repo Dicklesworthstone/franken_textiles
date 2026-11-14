@@ -12,7 +12,7 @@ use ftx_measure::body_fit::{
     validate_capture_images,
 };
 use ftx_measure::{
-    silhouette::{MaskSample, SurfaceMesh, require_rectified, sample_mask},
+    silhouette::{MaskSample, SurfaceMesh, sample_mask, validate_observation},
     triangulate::FrameId,
 };
 use serde::Deserialize;
@@ -117,7 +117,7 @@ fn import_masks(path: &str, fit: &mut BodyFitInput) -> Result<Value, Refusal> {
                 "cannot replace inline silhouette evidence with a mask",
             ));
         }
-        require_rectified(&frame.camera)?;
+        frame.camera.validate()?;
         let mask = super::video::load(base, &entry.mask, true)?;
         if [mask.w, mask.h] != frame.image_size_px.map(|v| v as usize) {
             return Err(bad_input(
@@ -125,12 +125,14 @@ fn import_masks(path: &str, fit: &mut BodyFitInput) -> Result<Value, Refusal> {
             ));
         }
         let hash = sha256_hex(&mask.data);
-        frame.silhouette = Some(sample_mask(
+        let silhouette = sample_mask(
             frame.image_size_px,
             &mask.data,
             &entry.samples,
             &format!("{}; decoded_mask_sha256:{hash}", manifest.evidence),
-        )?);
+        )?;
+        validate_observation(&frame.camera, frame.image_size_px, &silhouette)?;
+        frame.silhouette = Some(silhouette);
         receipts.push(json!({"frame":entry.frame,"mask":entry.mask,
             "image_size_px":frame.image_size_px,"decoded_mask_sha256":hash}));
     }

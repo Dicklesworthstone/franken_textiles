@@ -1511,10 +1511,10 @@ test('body-silhouette authoring rejects missing evidence, duplicate slices, unsa
   p.e.bodyPointsCancel.onclick();assert.equal(p.e.bodySilhouetteLine.children.length,2);
 });
 
-test('body-silhouette imported masks and distorted cameras remain read-only while keypoint-only edits preserve them',async()=>{
+test('body-silhouette imported masks and invalid cameras remain read-only while keypoint-only edits preserve them',async()=>{
   for(const masked of [false,true]) {
     const p=await photoPage();selectBodyFit(p);const initial=bodyPointsReport();
-    Object.assign(initial.frames[0],{silhouette_editable:false,silhouette_reason:masked?'Imported source mask remains read-only.':'Rectify the camera and all observations together.'});
+    Object.assign(initial.frames[0],{silhouette_editable:false,silhouette_reason:masked?'Imported source mask remains read-only.':'The camera has no certified lens domain.'});
     if(masked)initial.frames[0].silhouette={evidence:'decoded_mask_sha256: '+'f'.repeat(64),
       lines:[{axis:'vertical',at_px:40,intervals_px:[[20,150]],sigma_px:2,partition:'fit'}]};
     const view=await loadBodyPoints(p,{frames:initial.frames});assert.equal(p.e.bodyPointsError.textContent,'');
@@ -1525,6 +1525,25 @@ test('body-silhouette imported masks and distorted cameras remain read-only whil
     assert.equal(Object.hasOwn(applied.edits.frames[0],'silhouette_edit'),false);
     assert.deepEqual(applied.result.frames[0].silhouette,initial.frames[0].silhouette);
   }
+});
+
+test('body-silhouette Brown observations retain original calibrated pixels through editing and fitting',async()=>{
+  const p=await photoPage();
+  const original=' {"timestamp_us":18446744073709551615,"camera":{"distortion":{"radial":[1.2,0.2,0.03],"tangential":[0.004,-0.003],"max_radius":1.5}}}\r\n';
+  selectBodyFit(p,original);
+  const initial=bodyPointsReport();
+  initial.frames[0].silhouette_reason='Manual sampled contours use the original oriented pixels and their calibrated lens.';
+  const view=await loadBodyPoints(p,{frames:initial.frames});
+  assert.equal(p.e.bodySilhouetteAdd.disabled,false);
+  addSilhouette(p,{bodySilhouetteAt:'100.125',bodySilhouetteIntervals:'30.125, 90.875',
+    bodySilhouetteEvidence:'Original Brown-calibrated pixels; synthetic outline, no rectification.'});
+  const native=' {"timestamp_us":18446744073709551615,"checked":"Brown silhouette","radial":[1.2,0.2,0.03]}\r\n';
+  const applied=await applyBodyPoints(p,view,native,'b'.repeat(64));
+  assert.equal(applied.message.input,original);
+  assert.deepEqual(applied.edits.frames[0].silhouette_edit.silhouette.lines,[{
+    axis:'horizontal',at_px:100.125,intervals_px:[[30.125,90.875]],sigma_px:1.5,partition:'held_out'}]);
+  assert.equal(await p.urls.get(p.e.bodyPointsDownloads.children[0].href).text(),native);
+  await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,native);
 });
 
 test('body-silhouette photo picking uses verified stored pixels and explicitly owns canvas clicks',async()=>{

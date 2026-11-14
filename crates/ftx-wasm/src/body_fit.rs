@@ -474,9 +474,9 @@ fn silhouette_edit_refusal(frame: &FitFrame) -> Option<&'static str> {
         Some(
             "Imported mask samples are source-bound and read-only; review the original mask and prepare a new capture snapshot.",
         )
-    } else if silhouette::require_rectified(&frame.camera).is_err() {
+    } else if frame.camera.validate().is_err() {
         Some(
-            "Silhouette authoring requires rectified pixels and zero lens distortion; rectify images, keypoints and calibration together before preparing a new input.",
+            "Silhouette authoring requires a valid calibrated camera. Keep images, keypoints and contours in the original oriented pixel coordinates associated with that lens.",
         )
     } else {
         None
@@ -498,7 +498,7 @@ fn apply_silhouette_edit(frame: &mut FitFrame, edit: SilhouetteEdit) -> Result<b
                 "manual silhouette edits cannot assert an imported mask source receipt",
             ));
         }
-        silhouette.validate(frame.image_size_px)?;
+        silhouette::validate_observation(&frame.camera, frame.image_size_px, silhouette)?;
         if let Some(original) = &frame.silhouette {
             for line in &silhouette.lines {
                 if original.lines.iter().any(|old| {
@@ -519,14 +519,14 @@ fn apply_silhouette_edit(frame: &mut FitFrame, edit: SilhouetteEdit) -> Result<b
 
 /// Open a prepared observation draft or edit reviewed keypoints and manual silhouette samples.
 /// No body is evaluated. Silhouette edits are explicit replacements or removals; omitted edits
-/// preserve the original field. Rectified cameras are required and imported mask samples stay fixed.
+/// preserve the original field. Checked cameras retain their lens and imported mask samples stay fixed.
 /// Original frame ordinals bind edits; all full-width identities and unedited evidence stay native.
 /// Existing points and slices retain their uncertainty and FIT/CHECK roles. New evidence requires
 /// explicit coordinates, uncertainty and partition; absent points or contours are never inferred.
 ///
 /// # Errors
 /// Invalid model/source identity, more than 16 MiB input / 512 MiB model / 256 KiB edits, incomplete
-/// frame edits, unknown/duplicate targets or slices, changed existing roles/sigmas, unrectified or
+/// frame edits, unknown/duplicate targets or slices, changed existing roles/sigmas, unqualified or
 /// source-bound mask edits, or canonical draft refusal.
 pub fn body_fit_observations(
     model_bytes: &[u8],
@@ -638,7 +638,7 @@ pub fn body_fit_observations(
         Ok(json!({"frame_index":frame_index,"label":format!("{} @ {} us",frame.frame.stream,frame.frame.timestamp_us),
             "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,"keypoints":frame.keypoints,
             "silhouette":frame.silhouette,"silhouette_editable":silhouette_refusal.is_none(),
-            "silhouette_reason":silhouette_refusal.unwrap_or("Manual sampled contours may be authored in stored, rectified pixels. Existing slice roles and uncertainties stay fixed; declare clothing and occluders explicitly."),
+            "silhouette_reason":silhouette_refusal.unwrap_or("Manual sampled contours use the original oriented pixels and their calibrated lens. Existing slice roles and uncertainties stay fixed; declare clothing and occluders explicitly."),
             "image_name":source.map(|image| &image.image_name),"image_review":image_review}))
     }).collect::<Result<Vec<_>, Refusal>>()?;
     let targets: Vec<_> = adapter

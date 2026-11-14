@@ -266,7 +266,7 @@
     function silhouetteFrame() {
       const raw = byId("silhouetteFrame").value, i = Number(raw);
       if (!raw || !Number.isInteger(i) || !silhouetteEditable[i]) {
-        throw Error("Choose an editable frame with a checked rectified camera. Imported mask constraints are read-only.");
+        throw Error("Choose an editable frame with a checked calibrated camera. Imported mask constraints are read-only.");
       }
       return i;
     }
@@ -387,7 +387,7 @@
         throw Error("Every original capture frame must remain in its original order.");
       }
       value.fit.frames.forEach((frame, i) => {
-        // Only ordinary annotations vary. Imported masks and unrectified cameras never gain
+        // Only ordinary annotations vary. Imported masks and invalid cameras never gain
         // an inline silhouette through a saved file, even when their DOM controls are changed.
         unchanged(frame, original.fit.frames[i], silhouetteEditable[i] ? ["keypoints", "silhouette"] : ["keypoints"], "Frame " + (i + 1));
         const size = original.fit.frames[i].source.image_size_px, seen = new Set();
@@ -617,7 +617,7 @@
     });
     render(); loadSilhouetteForm(); byId("newPointFields").disabled = false;
     byId("silhouetteFields").disabled = false; savedFile.disabled = false; byId("captureEditor").hidden = false;
-    status.textContent = "Select a point, declare a new observation, or author sampled silhouettes on a checked rectified frame.";
+    status.textContent = "Select a point, declare a new observation, or author sampled silhouettes in the original calibrated image.";
   } catch (error) {
     withdraw();
     document.querySelectorAll(".edit-point").forEach(b => b.disabled = true);

@@ -320,6 +320,54 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
             .unwrap();
         frame["silhouette"] = source["silhouette"].clone();
     }
+    // Brown observations retain their original pixels. The independent mask raster checks
+    // inverse-calibrated pixel centers against the original pinhole triangle interiors.
+    let mut brown = base.clone();
+    for frame in brown["fit"]["frames"].as_array_mut().unwrap() {
+        let mut lens: Intrinsics =
+            serde_json::from_value(frame["camera"]["intrinsics"].clone()).unwrap();
+        lens.distortion = Distortion {
+            radial: [1.2, 0.2, 0.03],
+            tangential: [0.004, -0.003],
+            max_radius: 1.5,
+        };
+        for point in frame["keypoints"].as_array_mut().unwrap() {
+            let pixel = serde_json::from_value(point["pixel_px"].clone()).unwrap();
+            point["pixel_px"] = json!(lens.distort_pixel(pixel).unwrap());
+        }
+        frame["camera"]["intrinsics"] = json!(lens);
+    }
+    let brown_dir = dir.join("brown");
+    std::fs::create_dir(&brown_dir).unwrap();
+    let brown_masks = mask_manifest_for(&brown_dir, &brown);
+    save(&dir, &brown);
+    let sampled_brown = run(&dir, &["--silhouettes", "brown/masks/manifest.json"], 0);
+    assert_eq!(
+        sampled_brown["result"]["silhouette_input"]["masks"][0]["decoded_mask_sha256"],
+        sha256_hex(&brown_masks[0].data)
+    );
+    for frame in brown["fit"]["frames"].as_array_mut().unwrap() {
+        let source = sampled_brown["result"]["input"]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["frame"] == frame["frame"])
+            .unwrap();
+        assert_eq!(source["camera"], frame["camera"]);
+        frame["silhouette"] = source["silhouette"].clone();
+    }
+    let mut brown_held_out = brown.clone();
+    let check = brown_held_out["fit"]["frames"][0]["silhouette"]["lines"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|line| line["partition"] == "held_out")
+        .unwrap();
+    for interval in check["intervals_px"].as_array_mut().unwrap() {
+        for endpoint in interval.as_array_mut().unwrap() {
+            *endpoint = json!(endpoint.as_f64().unwrap() + 10.0);
+        }
+    }
     let capture_pixels = Gray {
         w: 1280,
         h: 960,
@@ -349,6 +397,7 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
     }
     let mut cases = Vec::new();
     let mut accepted: Option<Value> = None;
+    let mut brown_accepted: Option<Value> = None;
     for (name, input, iterations, evaluations, code, status) in [
         ("accepted", base.clone(), "50", "100000", 0, "ACCEPTED"),
         ("held-out", held_out, "50", "100000", 2, "REJECTED"),
@@ -363,6 +412,15 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
         ("budget", base.clone(), "50", "1", 4, "BUDGET_STOP"),
         ("iterations", base.clone(), "1", "100000", 4, "BUDGET_STOP"),
         ("silhouette", silhouette, "50", "100000", 0, "ACCEPTED"),
+        ("brown-silhouette", brown, "50", "100000", 0, "ACCEPTED"),
+        (
+            "brown-held-out",
+            brown_held_out,
+            "50",
+            "100000",
+            2,
+            "REJECTED",
+        ),
         ("capture-image", source_bound, "50", "100000", 0, "ACCEPTED"),
     ] {
         save(&dir, &input);
@@ -386,7 +444,11 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
             let reused =
                 ftx_body::accepted_shape::AcceptedShape::read(&portable, &sha256_hex(&model), &[])
                     .unwrap();
-            let tolerance = if name == "silhouette" { 0.02 } else { 1e-5 };
+            let tolerance = if name.ends_with("silhouette") {
+                0.02
+            } else {
+                1e-5
+            };
             assert!((reused.params.phenotype.height - 0.6).abs() < tolerance);
             assert!((reused.params.phenotype.weight - 0.45).abs() < tolerance);
             let text = serde_json::to_string(&portable).unwrap();
@@ -412,7 +474,10 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
             );
             assert_eq!(review["report_sha256"], sha256_hex(text.as_bytes()));
             assert_eq!(review["export_pose_evaluations"], 1);
-            if name == "silhouette" {
+            if name == "brown-silhouette" {
+                assert_eq!(review["projection_kind"], "distorted_vertices");
+            }
+            if name.ends_with("silhouette") {
                 assert_eq!(
                     review["silhouette"]["lines"].as_array().unwrap().len(),
                     portable["input"]["frames"][0]["silhouette"]["lines"]
@@ -449,6 +514,18 @@ fn prepared_body_fit_replays_native_acceptance_and_failures_in_the_portable_engi
             accepted = Some(native.clone());
         } else if name == "held-out" {
             for (a, b) in accepted.as_ref().unwrap()["attempts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(native["attempts"].as_array().unwrap())
+            {
+                assert_eq!(a["cost_history"], b["cost_history"]);
+            }
+        }
+        if name == "brown-silhouette" {
+            brown_accepted = Some(native.clone());
+        } else if name == "brown-held-out" {
+            for (a, b) in brown_accepted.as_ref().unwrap()["attempts"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2196,11 +2273,21 @@ fn mask_manifest_for(dir: &Path, input: &Value) -> Vec<Gray> {
         .iter()
         .enumerate()
     {
+        let lens: Intrinsics =
+            serde_json::from_value(frame["camera"]["intrinsics"].clone()).unwrap();
+        let distorted = lens.distortion.radial != [0.; 3] || lens.distortion.tangential != [0.; 2];
         let pixels: Vec<Vec2> = frame["keypoints"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|p| serde_json::from_value(p["pixel_px"].clone()).unwrap())
+            .map(|p| {
+                let pixel = serde_json::from_value(p["pixel_px"].clone()).unwrap();
+                if distorted {
+                    lens.undistort_pixel_with_jacobian(pixel).unwrap().0
+                } else {
+                    pixel
+                }
+            })
             .collect();
         let faces = [
             [0, 1, 2],
@@ -2218,13 +2305,26 @@ fn mask_manifest_for(dir: &Path, input: &Value) -> Vec<Gray> {
             [1, 7, 3],
         ];
         let mut mask = Gray::filled(1280, 960, 0);
-        let xmin = pixels.iter().map(|p| p.x.floor() as usize).min().unwrap();
-        let xmax = pixels.iter().map(|p| p.x.ceil() as usize).max().unwrap();
-        let ymin = pixels.iter().map(|p| p.y.floor() as usize).min().unwrap();
-        let ymax = pixels.iter().map(|p| p.y.ceil() as usize).max().unwrap();
+        // A warped edge can leave its endpoint box. Brown masks inspect the whole original
+        // image instead of borrowing the candidate's curved-edge bounds or root solver.
+        let (xmin, xmax, ymin, ymax) = if distorted {
+            (0, mask.w - 1, 0, mask.h - 1)
+        } else {
+            (
+                pixels.iter().map(|p| p.x.floor() as usize).min().unwrap(),
+                pixels.iter().map(|p| p.x.ceil() as usize).max().unwrap(),
+                pixels.iter().map(|p| p.y.floor() as usize).min().unwrap(),
+                pixels.iter().map(|p| p.y.ceil() as usize).max().unwrap(),
+            )
+        };
         for y in ymin..=ymax {
             for x in xmin..=xmax {
-                let p = Vec2::new(x as f64, y as f64);
+                let pixel = Vec2::new(x as f64, y as f64);
+                let p = if distorted {
+                    lens.undistort_pixel_with_jacobian(pixel).unwrap().0
+                } else {
+                    pixel
+                };
                 if faces.iter().any(|t| {
                     let [a, b, c] = t.map(|k| pixels[k]);
                     let area = (b - a).cross(c - a);

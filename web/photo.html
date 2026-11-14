@@ -298,7 +298,8 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <label>Original printed calibration-sheet sidecar
       <input id="bodyCaptureSheet" type="file" accept=".json,application/json"></label>
     <label><input id="bodyCaptureRectify" type="checkbox"> Correct lens distortion for silhouette editing</label>
-    <p><small>This creates corrected PNG copies and crops unsupported edges. Review each corrected
+    <p><small>Silhouette editing also supports original photographs with a checked lens model.
+      This option creates corrected PNG copies and crops unsupported edges. Review each corrected
       photograph before marking the wearer; anything outside the crop is unavailable. Your original
       photographs remain the calibration and sheet-check sources. Download the corrected copies
       with the prepared input to reopen this capture later.</small></p>
@@ -431,7 +432,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
         <tbody id="bodyPointsRows"></tbody></table></div>
       <fieldset><legend>Sampled silhouette in stored pixels</legend>
         <p id="bodySilhouetteAvailability"></p>
-        <p><small>Declare the visible body outline on an independently rectified frame. Record clothing,
+        <p><small>Declare the visible body outline in this frame's stored pixels with its calibrated camera. Record clothing,
           occlusions and sampling evidence. These sparse slices do not imply full-mask agreement.
           Imported mask evidence stays read-only. Existing slice roles and uncertainties stay fixed.</small></p>
         <label>Slice <select id="bodySilhouetteLine" disabled></select></label>

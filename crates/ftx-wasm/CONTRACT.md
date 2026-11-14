@@ -170,7 +170,8 @@ new points require an explicit declared target, pixel, sigma and role. An option
 silhouette field, including absence or null. Replacements supply evidence and the canonical
 1–64 distinct horizontal/vertical slices with at most eight ordered disjoint foreground intervals
 each. Existing slices at the same axis/coordinate retain their sigma and FIT/CHECK partition.
-Zero lens distortion is required. Imported-mask source receipts remain read-only and cannot be
+Checked Brown lenses retain original oriented pixels; every foreground endpoint must lie in the
+certified inverse domain. Imported-mask source receipts remain read-only and cannot be
 asserted through a manual replacement. Every other input field, including starts, cameras, targets
 and source images, remains fixed. Limits are 16 MiB input, 512 MiB
 model and 256 KiB edits. Each frame's opaque `OBSERVATION_REVIEW` image receipt can use the existing
