@@ -652,8 +652,8 @@ comparisons replay those joins through the same material authority before admitt
 objectives; missing or altered branch/source/state receipts withhold the affected thermal
 result while independent manufacturing remains available.
 
-All three versions use the existing uniform dry films. Independent-sheet compression also admits
-a separately qualified convection-only `exterior_exchange` schedule. Each environment must qualify
+All three versions use the existing uniform dry films. Independent-sheet and layered compression also
+admit separately qualified convection-only `exterior_exchange` schedules. Each environment must qualify
 its coefficient, source, estimate consent and surface-temperature domain for the stated geometry,
 motion and compressed state. The outside film must be zero and `outside_c` must equal that interval's
 `air_c`. Current accepted area sets convection; pressure-conditioned transport and retained reference
@@ -662,9 +662,26 @@ rolls back the complete pressure and heat interval. Comparisons reconcile every 
 receipt with the outside heat ledger and require zero radiative exchange before admitting a thermal
 objective.
 
-Compressed coverage retains explicit film or adiabatic choices for exposed cloth. Exterior exchange,
-seam/closure bridges and dissipation heating require compatible pressure qualifications and remain
-refused within that coverage history. Independent-sheet compression still refuses radiation, its
+Layered compression admits independent covered `exterior_exchange` and uncovered
+`exposed_exterior_exchange` schedules, with one entry per authored interval. A null entry keeps that
+interval's film or adiabatic choice. Covered convection requires an explicit matching
+`bare_boundaries` entry even when the selected body region is fully covered; other intervals leave it
+null. Bare films share the covered path's prescribed body temperature and need a positive finite total
+resistance; their outside temperature and film resistances remain independently authored.
+Exposed convection requires the interval's explicit exposed films. Every declared environment
+passes source and domain admission before movement, including future intervals and zero active areas.
+Changing coverage carries the same retained cloth enthalpy between these paths.
+
+Compressed coverage with any active convection retains five signed `outside_energy_paths` in joules:
+`covered_convection_j`, `exposed_convection_j`, `covered_film_j`, `exposed_film_j` and `bare_j`.
+Each trace sample retains their cumulative totals and accepted `outside_power_paths`; the final field
+retains the same powers in watts. The paths reconcile with total outside-boundary exchange, while
+bare-body films and non-convective intervals remain distinct from cloth convection. A later film-only
+interval retains earlier convection energy. Comparisons check these paths, schedules and final fields
+before admitting the ordinary heat objective. No new fields are added to film-only compressed reports.
+
+Radiation, seam/closure bridges and dissipation heating require compatible pressure qualifications and
+remain refused within compressed coverage. Independent-sheet compression still refuses radiation, its
 textile-water and liquid-coupling options, and dissipation heating. A separately requested wet-sheet
 or mechanical history keeps its own domain; compressed coverage still models dry thermal storage
 and supplies no wet/compressed law. Omission preserves the original
@@ -682,9 +699,10 @@ withdraws obsolete active results. Each history reports its own work and heat le
 both does not add their energies together.
 Version `/3` preserves pressure and clearance controls, acquisition text and qualified branch changes
 exactly through single studies, saved named cases and replay downloads. Convection-only environments
-for independent sheets use the existing explicit exterior controls. The result table shows each
+use the existing independent sheet, covered-cloth and exposed-cloth exterior controls. The result table shows each
 declared control beside its solved pressure, actual thickness, clearance residual and signed work;
-acquired branch joins retain their own chronological source table. Editing or replacing a compression
+acquired branch joins retain their own chronological source table. Layered convection results also show
+each outside path's signed energy and final power separately from compression work. Editing or replacing a compression
 source cancels obsolete work and withdraws its results.
 
 ### Qualified irreversible material heating
