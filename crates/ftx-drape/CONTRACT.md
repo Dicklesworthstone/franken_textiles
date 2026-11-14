@@ -870,11 +870,15 @@ independent even for the same original material. A failed pressure or later ther
 back the entire trial, and repeated samples within one interval do not count compression twice.
 Original source receipts, initial/final conditioned models and interval hashes support frozen replay
 and the ordinary motion heat objectives. All versions admit dry films or separately qualified
-convection-only exterior exchange; actual pressure-conditioned transport reaches the same heat solver.
-Exterior source/consent/temperature domains and zero-film/air consistency remain required. Comparison
-admission reconciles complete convection energy and power against outside-boundary heat and refuses
-radiative receipts. Wet, radiation and dissipation-heating combinations still require compatible
-pressure-conditioned laws; no contact-derived pressure, geometry feedback,
+convection and opaque-gray radiation; actual pressure-conditioned transport reaches the same heat solver.
+Radiation requires an explicit face and scalar emissivity observation retained by the pressure
+acquisition, with all optical conditions and pressure-domain qualification intact. Automatic face
+mappings remain refused because scalar conditioning does not preserve them. Every retained column
+is qualified even before exposure; branch changes repeat the same checks. Exterior consent,
+temperature domains and zero-film/air consistency remain required. Comparisons reconcile signed
+convection and radiation energy/power independently with outside-boundary heat. Wet and
+dissipation-heating combinations still require compatible pressure-conditioned laws; no
+contact-derived pressure, geometry feedback,
 work-to-heat conversion or physical compression claim follows. Tests: `study::heat::compression`;
 consumer contract: `docs/material-scenario-studies.md#prescribed-compression-during-moving-sheet-heat`.
 
@@ -907,13 +911,15 @@ once per authored interval and remains separate from heat. A late failure rolls 
 including branch state, projection, thermal state and counters. Final `model` and checkpoint source
 agree; comparisons independently rebuild projection identities and retained material storage.
 This coverage consumer accepts dry film boundaries, explicit adiabatic exposed cloth and separately
-qualified convection-only covered/exposed schedules. Every declared convection source and domain is
-admitted even when its active area is zero; covered convection requires explicit bare-body films.
+qualified convection/radiation covered/exposed schedules. Every declared exterior source and domain
+is admitted even when its active area is zero; covered exchange requires explicit bare-body films.
 Pressure-conditioned thickness enters the same exterior solver after conservative remapping. Optional
 `outside_energy_paths` and `outside_power_paths` distinguish covered/exposed convection, covered/exposed
-films and bare-body films through mixed intervals, without counting normal work as heat. Film-only
-histories retain their original report shape. Radiation, thermal bridges and dissipation heating still
-require compatible pressure qualifications and remain refused within this coverage history.
+films and bare-body films through mixed intervals. Radiation histories additionally retain
+`covered_radiative_j|w` and `exposed_radiative_j|w`, including after a final film interval.
+Normal work remains separate from heat. Film/convection-only histories retain their original report
+shape. Thermal bridges and dissipation heating still require compatible pressure qualifications and
+remain refused within this coverage history.
 Separate wet-sheet or mechanical histories retain their established domains. Tests cover gap changes,
 cover/expose/re-cover transfer, independent film/RC answers, signed exterior paths, rollback and
 native/portable pressure, cycle and clearance replay.

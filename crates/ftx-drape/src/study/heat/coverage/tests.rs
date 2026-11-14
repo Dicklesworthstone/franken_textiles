@@ -800,12 +800,19 @@ fn compression_history() -> (History, Vec<Vec3>) {
 }
 
 fn compression_history_cells(cells: usize) -> (History, Vec<Vec3>) {
-    use ftx_pattern::material_compression::{self, stack};
-    let (mut history, mut cloth) = two_instance_history();
-    let mut preparation: material_compression::Input = serde_json::from_str(include_str!(
+    let preparation = serde_json::from_str(include_str!(
         "../../../../../../tests/fixtures/materials/synthetic-compression.json"
     ))
     .unwrap();
+    compression_history_from(cells, preparation)
+}
+
+fn compression_history_from(
+    cells: usize,
+    mut preparation: ftx_pattern::material_compression::Input,
+) -> (History, Vec<Vec3>) {
+    use ftx_pattern::material_compression::stack;
+    let (mut history, mut cloth) = two_instance_history();
     preparation.pressure_pa = 0.;
     let material = Catalog::builtin()
         .unwrap()
@@ -1094,14 +1101,24 @@ fn compression_coverage_requires_independent_storage_and_dry_qualification() {
 }
 
 fn convection_compression_history(cells: usize) -> (History, Vec<Vec3>) {
-    let (mut history, cloth) = compression_history_cells(cells);
+    exterior_compression_history(cells, false)
+}
+
+fn exterior_compression_history(cells: usize, radiation: bool) -> (History, Vec<Vec3>) {
+    let (mut history, cloth) = if radiation {
+        compression_history_from(cells, compression::tests::optical_acquisition())
+    } else {
+        compression_history_cells(cells)
+    };
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
     ))
     .unwrap();
     let mut exterior: Exterior =
         serde_json::from_value(fixture["exterior_exchange"].clone()).unwrap();
-    exterior.radiation = None;
+    if !radiation {
+        exterior.radiation = None;
+    }
     exterior.convection_w_m2_k = 5.;
     exterior.convection_conditions =
         "Synthetic constant coefficient for explicit covered/exposed arithmetic controls".into();
@@ -1287,6 +1304,219 @@ fn coverage_compression_convection_matches_films_through_partial_exposure_and_re
 }
 
 #[test]
+fn coverage_compression_radiation_matches_independent_two_cell_balance() {
+    let (mut history, cloth) = exterior_compression_history(1, true);
+    history
+        .request
+        .validate_compression_sources(&history.source)
+        .unwrap();
+    history
+        .advance(&cloth, &body(0.), 0.1, 0, 0, None, None, None)
+        .unwrap();
+    // Per square metre, two independently derived backward-Euler cell equations connect the
+    // 500 Pa lining and 250 Pa shell. Only the actual outside shell sees the radiative enclosure.
+    let inside = 1. / (0.25 / 2. + 0.1);
+    let middle = 1. / (0.25 / 2. + 0.05 + 0.0275 / 0.025 + 0.375 / 2.);
+    let outside = 1. / (0.375 / 2.);
+    let capacity_rate = 100. / 0.1;
+    let a = capacity_rate + inside + middle;
+    let d = capacity_rate + outside + middle;
+    let f = capacity_rate * 20. + inside * 35.;
+    let determinant = a * d - middle * middle;
+    let state = |face: f64| {
+        let g = capacity_rate * 20. + outside * face;
+        let temperatures = [
+            (f * d + middle * g) / determinant,
+            (a * g + middle * f) / determinant,
+        ];
+        let convective = 5. * (face - 5.);
+        let radiative = 0.8
+            * 5.670_374_419e-8
+            * ((face + 273.15).powi(4) - (263.15_f64).powi(4));
+        (temperatures, convective, radiative)
+    };
+    let (mut lo, mut hi) = (-80., 80.);
+    for _ in 0..96 {
+        let face = (lo + hi) / 2.;
+        let (temperature, convection, radiation) = state(face);
+        if convection + radiation > outside * (temperature[1] - face) {
+            hi = face;
+        } else {
+            lo = face;
+        }
+    }
+    let (temperature, convection, radiation) = state((lo + hi) / 2.);
+    for (&actual, expected) in history.state.temperature_c()[0].iter().zip(temperature) {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+    assert!((history.stored_j - 50. * (temperature[0] + temperature[1] - 40.)).abs() < 1e-8);
+    assert!((history.covered_convective_j - 0.05 * convection).abs() < 1e-9);
+    assert!((history.covered_radiative_j - 0.05 * radiation).abs() < 1e-9);
+    assert!((history.outside_j - 0.05 * (convection + radiation)).abs() < 1e-9);
+    assert!((history.stored_j - history.net_j).abs() < 1e-8);
+    let report = history.finish("path", "initial", 0.1).unwrap();
+    assert_eq!(report["outside_energy_paths"]["exposed_radiative_j"], 0.);
+    assert_eq!(
+        report["outside_energy_paths"]["covered_radiative_j"],
+        report["exterior_exchange"]["radiative_energy_j"]
+    );
+    assert_eq!(
+        report["prescribed_compression"]["normal_work_to_heat_j"],
+        0.
+    );
+}
+
+#[test]
+fn compression_radiation_keeps_seven_signed_paths_through_exposure_and_final_films() {
+    let (mut history, cloth) = exterior_compression_history(2, true);
+    for schedule in [
+        &mut history.request.exterior_exchange,
+        &mut history.request.exposed_exterior_exchange,
+    ] {
+        let schedule = schedule.as_mut().unwrap();
+        schedule[1]
+            .as_mut()
+            .unwrap()
+            .radiation
+            .as_mut()
+            .unwrap()
+            .ambient_c = 60.;
+        schedule[2] = None;
+    }
+    history.request.bare_boundaries.as_mut().unwrap()[2] = None;
+    history.request.boundaries[2].outside_resistance_m2_k_w = 0.2;
+    history.request.exposed_boundaries[2]
+        .as_mut()
+        .unwrap()
+        .outside_resistance_m2_k_w = 0.2;
+    history.request.validate_compression(3).unwrap();
+    history
+        .request
+        .validate_compression_sources(&history.source)
+        .unwrap();
+    let mut previous = BTreeMap::<String, f64>::new();
+    for (interval, offset) in [0., 2., 0.].into_iter().enumerate() {
+        history
+            .advance(
+                &cloth,
+                &body(offset),
+                (interval + 1) as f64 * 0.1,
+                interval,
+                interval,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let row = history.trace.last().unwrap();
+        for name in [
+            "covered_film",
+            "exposed_film",
+            "bare",
+            "covered_convection",
+            "exposed_convection",
+            "covered_radiative",
+            "exposed_radiative",
+        ] {
+            let energy = row["outside_energy_paths"][format!("{name}_j")]
+                .as_f64()
+                .unwrap();
+            let power = row["outside_power_paths"][format!("{name}_w")]
+                .as_f64()
+                .unwrap();
+            let old = previous.insert(name.into(), energy).unwrap_or(0.);
+            assert!(
+                (energy - old - 0.1 * power).abs() < 1e-9,
+                "{name}, interval {interval}"
+            );
+        }
+        let sum = |paths: &Value| {
+            paths
+                .as_object()
+                .unwrap()
+                .values()
+                .map(|x| x.as_f64().unwrap())
+                .sum::<f64>()
+        };
+        // Exterior equation residuals accumulate separately from reference-mass storage error.
+        assert!((sum(&row["outside_energy_paths"]) - history.outside_j).abs() < 1e-8);
+        assert!(
+            (sum(&row["outside_power_paths"]) - row["outside_heat_w"].as_f64().unwrap()).abs()
+                < 1e-7
+        );
+        assert!((history.stored_j - history.net_j).abs() < 1e-8);
+    }
+    let report = history.finish("path", "initial", 3. * 0.1).unwrap();
+    assert!(
+        report["outside_energy_paths"]["covered_radiative_j"]
+            .as_f64()
+            .unwrap()
+            > 0.
+    );
+    assert!(
+        report["outside_energy_paths"]["exposed_radiative_j"]
+            .as_f64()
+            .unwrap()
+            < 0.
+    );
+    for side in ["covered", "exposed"] {
+        assert_eq!(
+            report["final_field"]["outside_power_paths"][format!("{side}_radiative_w")],
+            0.
+        );
+    }
+    assert_eq!(
+        report["outside_energy_paths"],
+        report["trace"][2]["outside_energy_paths"]
+    );
+}
+
+#[test]
+fn compressed_radiation_qualifies_hidden_sources_and_rolls_back_late_optical_refusal() {
+    let (mut history, cloth) = exterior_compression_history(2, true);
+    let (unqualified, _) = compression_history_cells(2);
+    // The hidden lining lacks pressure-qualified emissivity; the currently outer shell keeps it.
+    let mut hidden = history.source.snapshot();
+    hidden["columns"][0] = unqualified.source.snapshot()["columns"][0].clone();
+    hidden.as_object_mut().unwrap().remove("sha256");
+    hidden["sha256"] = json!(hash(&hidden).unwrap());
+    let hidden = Surface::from_snapshot(&hidden).unwrap();
+    assert!(history.request.validate_compression_sources(&hidden).is_err());
+    history
+        .advance(&cloth, &body(0.), 0.1, 0, 0, None, None, None)
+        .unwrap();
+    let mut control = history.clone();
+    history.request.exposed_exterior_exchange.as_mut().unwrap()[1]
+        .as_mut()
+        .unwrap()
+        .radiation
+        .as_mut()
+        .unwrap()
+        .exposed_face = "unqualified-reverse".into();
+    history.request.validate_compression(3).unwrap();
+    let before = history.clone().finish("path", "initial", 0.1).unwrap();
+    // All cloth remains covered here; zero exposed area cannot hide the invalid declaration.
+    assert!(
+        history
+            .advance(&cloth, &body(0.), 0.2, 1, 1, None, None, None)
+            .is_err()
+    );
+    assert_eq!(
+        history.clone().finish("path", "initial", 0.1).unwrap(),
+        before
+    );
+    history.request = control.request.clone();
+    for run in [&mut history, &mut control] {
+        run.advance(&cloth, &body(2.), 0.2, 1, 1, None, None, None)
+            .unwrap();
+    }
+    assert_eq!(
+        history.finish("path", "initial", 0.2).unwrap(),
+        control.finish("path", "initial", 0.2).unwrap()
+    );
+}
+
+#[test]
 fn coverage_compression_mixed_convection_keeps_signed_path_ledgers_after_last_film_interval() {
     let (mut history, cloth) = convection_compression_history(2);
     history.request.exterior_exchange.as_mut().unwrap()[1] = None;
@@ -1393,7 +1623,7 @@ fn coverage_compression_mixed_convection_keeps_signed_path_ledgers_after_last_fi
 }
 
 #[test]
-fn compression_coverage_admits_complete_convection_sources_and_rejects_radiation_before_exposure() {
+fn compression_coverage_admits_complete_sources_and_refuses_unqualified_face_mapping() {
     let (history, _) = convection_compression_history(2);
     let radiation = serde_json::from_str::<Value>(include_str!(
         "../../../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
@@ -1410,7 +1640,14 @@ fn compression_coverage_admits_complete_convection_sources_and_rejects_radiation
             };
             let exterior = schedules.as_mut().unwrap()[2].as_mut().unwrap();
             match mutation {
-                0 => exterior.radiation = Some(serde_json::from_value(radiation.clone()).unwrap()),
+                0 => {
+                    exterior.radiation = Some(serde_json::from_value(radiation.clone()).unwrap());
+                    exterior
+                        .radiation
+                        .as_mut()
+                        .unwrap()
+                        .automatic_material_face = true;
+                }
                 1 => exterior.convection_source.reference.clear(),
                 2 => exterior.convection_source.note.clear(),
                 3 => exterior.convection_conditions.clear(),

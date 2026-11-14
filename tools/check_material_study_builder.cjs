@@ -3987,7 +3987,7 @@ test('layered compression admits only supported target policies and preserves un
     assert.doesNotThrow(()=>motion({...input,transient_coverage:changed}));
     assert.doesNotThrow(()=>motion({...input,transient_coverage:changed},undefined,original,'transient_coverage'));
     changed[field][0]={...exterior,radiation:{ambient_c:-15,automatic_material_face:true,allow_opaque_gray_approximation:true}};
-    assert.throws(()=>motion({...input,transient_coverage:changed},undefined,original,'transient_coverage'),/without radiation/);
+    assert.throws(()=>motion({...input,transient_coverage:changed},undefined,original,'transient_coverage'),/automatic face selection is unavailable/);
   }
   assert.throws(()=>motion(input,{},original,'transient_coverage'),/liquid|water/i);
   const water=' {"schema":"ftx-textile-surface-water/5","bindings":{"front.R":{"material_sha256":"'+
@@ -4064,7 +4064,7 @@ test('mixed compression controls reject ambiguous schemas fields and unsupported
   assert.doesNotThrow(()=>motion(input,undefined,JSON.stringify(consecutive)),
     'The canonical acquired branch, not browser interpolation, admits or refuses mixed-control physical transitions');
 });
-test('compressed motion composes qualified convection without radiation or inferred weather',async()=>{
+test('compressed motion composes qualified convection and explicit radiation through frozen replay',async()=>{
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
   const source=' \n'+JSON.stringify(motionCompressionInput())+'\n';
   const environment=exteriorPolicy(),input={...motionState(),transient_surface:{
@@ -4075,10 +4075,25 @@ test('compressed motion composes qualified convection without radiation or infer
   const saved=single({...scenarioState(),motion:input,motionCompression:source,maxMotionTrials:1024,maxVertexFrames:32000000});
   const cases=matrix({maxEvaluations:2,cases:[{key:'compressed-air',scenario:saved}]});
   assert.ok(cases.includes(source));assert.ok(cases.includes(saved));
-  for(const radiation of [{ambient_c:-15,emissivity_property:'emissivity',exposed_face:'public',allow_opaque_gray_approximation:true},
-    {ambient_c:-15,automatic_material_face:true,allow_opaque_gray_approximation:true}]) {
+  for(const automatic of [undefined,false]) {
+    const radiation={ambient_c:-15,emissivity_property:'emissivity',exposed_face:'public',allow_opaque_gray_approximation:true,
+      ...(automatic===undefined?{}:{automatic_material_face:automatic})};
     const changed=structuredClone(input);changed.transient_surface.exterior_exchange[0].radiation=radiation;
-    assert.throws(()=>motion(changed,undefined,source),/without radiation/);
+    const before=JSON.stringify(changed),raw=motion(changed,undefined,source);
+    assert.equal(JSON.stringify(changed),before);assert.ok(raw.includes(source));
+    assert.deepEqual(JSON.parse(raw).transient_surface.exterior_exchange[0].radiation,radiation);
+    const scenario=single({...scenarioState(),motion:changed,motionCompression:source,maxMotionTrials:1024,maxVertexFrames:32000000});
+    const cases=matrix({maxEvaluations:2,cases:[{key:'compressed radiation',scenario}]});
+    radiation.ambient_c=99;
+    assert.equal(JSON.parse(cases).cases[0].scenario.motion.transient_surface.exterior_exchange[0].radiation.ambient_c,-15);
+    assert.ok(cases.includes(source));assert.ok(cases.includes(scenario));
+  }
+  for(const radiation of [{ambient_c:-15,automatic_material_face:true,allow_opaque_gray_approximation:true},
+    {ambient_c:-15,emissivity_property:'emissivity',allow_opaque_gray_approximation:true},
+    {ambient_c:-15,exposed_face:'public',allow_opaque_gray_approximation:true},
+    {ambient_c:-15,emissivity_property:'emissivity',exposed_face:'public',allow_opaque_gray_approximation:false}]) {
+    const changed=structuredClone(input);changed.transient_surface.exterior_exchange[0].radiation=radiation;
+    assert.throws(()=>motion(changed,undefined,source),/explicit emissivity property|opaque-gray/);
   }
   for(const mutate of [v=>{v.transient_surface.exterior_exchange[0].convection_source.note='';},
     v=>{v.transient_surface.exterior_exchange[0].allow_estimates=false;},
@@ -4090,11 +4105,13 @@ test('compressed motion composes qualified convection without radiation or infer
   assert.equal(JSON.parse(saved).motion.transient_surface.exterior_exchange[0].convection_w_m2_k,8);
 });
 
-test('layered compression preserves mixed convection and film intervals through exact named replay',async()=>{
+test('layered compression preserves independent radiation convection and film intervals through exact named replay',async()=>{
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix,
     buildWorkbenchStudyBundle:save,parseWorkbenchStudyBundle:load}=await modulePromise;
   const input=cyclicCompressionMotion(),coverage=await guidedMovingCoverageHeat(),film=coverage.boundaries[0];
-  const covered=exteriorPolicy(),exposed=exteriorPolicy({air_c:30,convection_w_m2_k:4});
+  const covered=exteriorPolicy({radiation:{ambient_c:-15,emissivity_property:'outer_emissivity',exposed_face:'public',allow_opaque_gray_approximation:true}}),
+    exposed=exteriorPolicy({air_c:30,convection_w_m2_k:4,radiation:{ambient_c:45,emissivity_property:'reverse_emissivity',
+      exposed_face:'reverse',automatic_material_face:false,allow_opaque_gray_approximation:true}});
   coverage.boundaries=[{...film,outside_c:covered.air_c,outside_resistance_m2_k_w:0},{...film},{...film}];
   coverage.exterior_exchange=[covered,null,null];
   coverage.bare_boundaries=[{...film},null,null];
@@ -4113,8 +4130,11 @@ test('layered compression preserves mixed convection and film intervals through 
   const replay={type:'scenario',pattern:workbenchPattern,studyRequest:workbenchRequest().studyRequest,
     scenarioRequest:cases,measurements:workbenchBody};
   assert.ok(cases.includes(original));assert.equal(load(save(replay,workbenchModel())).request.scenarioRequest,cases);
-  covered.convection_w_m2_k=99;exposed.convection_source.note='later edit';
+  covered.convection_w_m2_k=99;covered.radiation.ambient_c=80;exposed.radiation.emissivity_property='later property';
+  exposed.convection_source.note='later edit';
   assert.equal(JSON.parse(scenario).motion.transient_coverage.exterior_exchange[0].convection_w_m2_k,8);
+  assert.equal(JSON.parse(scenario).motion.transient_coverage.exterior_exchange[0].radiation.ambient_c,-15);
+  assert.equal(cases.includes('later property'),false);
   assert.equal(cases.includes('later edit'),false);
 });
 
@@ -4250,7 +4270,7 @@ test('clearance controls defer solved pressure and physical branch qualification
   assert.throws(()=>motion(cyclicCompressionMotion(),undefined,JSON.stringify(policy)),/active branch direction/);
 });
 
-test('compressed sheet convection remains qualified and independent of film-only coverage targets',async()=>{
+test('compressed sheet radiation remains qualified across pressure control schemas and independent coverage targets',async()=>{
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
   for(const policy of [motionCompressionInput(),motionCompressionCycle(),motionCompressionControls()]) {
     const intervals=policy.bindings['front.R'].pressure_pa?.length||policy.bindings['front.R'].controls.length;
@@ -4258,7 +4278,8 @@ test('compressed sheet convection remains qualified and independent of film-only
     input.keyframes=input.keyframes.slice(0,intervals);
     input.transient_surface.boundaries=input.transient_surface.boundaries.slice(0,intervals);
     input.transient_surface.exterior_exchange=Array.from({length:intervals},(_,i)=>exteriorPolicy({
-      convection_w_m2_k:8+i,radiation:null}));
+      convection_w_m2_k:8+i,radiation:{ambient_c:-5+i,emissivity_property:'emissivity',exposed_face:'public',
+        allow_opaque_gray_approximation:true}}));
     coverage.boundaries=Array.from({length:intervals},()=>({...coverage.boundaries[0]}));
     coverage.exposed_boundaries=Array(intervals).fill(null);input.transient_coverage=coverage;
     const original=' \r\n'+JSON.stringify(policy)+'\r\n',before=JSON.stringify(input);
@@ -4275,7 +4296,7 @@ test('compressed sheet convection remains qualified and independent of film-only
       allow_opaque_gray_approximation:true};
     assert.doesNotThrow(()=>motion(input,undefined,original,'transient_coverage'),'Unselected sheet radiation remains independent');
     for(const target of [undefined,'transient_surface','both']) {
-      assert.throws(()=>motion(input,undefined,original,target),/convection-only/);
+      assert.throws(()=>motion(input,undefined,original,target),/automatic face selection is unavailable/);
     }
   }
 });

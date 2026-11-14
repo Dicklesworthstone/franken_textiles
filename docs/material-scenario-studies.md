@@ -653,14 +653,23 @@ objectives; missing or altered branch/source/state receipts withhold the affecte
 result while independent manufacturing remains available.
 
 All three versions use the existing uniform dry films. Independent-sheet and layered compression also
-admit separately qualified convection-only `exterior_exchange` schedules. Each environment must qualify
-its coefficient, source, estimate consent and surface-temperature domain for the stated geometry,
-motion and compressed state. The outside film must be zero and `outside_c` must equal that interval's
-`air_c`. Current accepted area sets convection; pressure-conditioned transport and retained reference
-mass set the heat response. Explicit zero convection is allowed. Source/domain or late heat failure
-rolls back the complete pressure and heat interval. Comparisons reconcile every convective power/energy
-receipt with the outside heat ledger and require zero radiative exchange before admitting a thermal
-objective.
+admit separately qualified convection and opaque-gray radiation through `exterior_exchange`.
+Each environment must qualify its coefficient, source, estimate consent and surface-temperature domain
+for the stated geometry, motion and compressed state. The outside film must be zero and `outside_c`
+must equal that interval's `air_c`. Current accepted area sets exchange; pressure-conditioned transport
+and retained reference mass set the heat response. Explicit zero convection is allowed.
+
+Radiation uses an explicit `emissivity_property` and `exposed_face`. The original optical observation
+must retain its specimen, conditioning, face, spectral basis and temperature domain through an
+independently qualified pressure-invariant declaration or acquired pressure samples. Merely retaining
+the uncompressed coefficient is insufficient. The same source authority checks every retained column,
+including currently hidden cloth, and repeats qualification after branch changes. Automatic material
+face selection remains refused because scalar pressure conditioning discards orientation mappings.
+The environment still needs explicit opaque-gray enclosure consent; no optical defaults are inferred.
+
+Source/domain or late heat failure rolls back the complete pressure and heat interval. Comparisons
+reconstruct the conditioned optical observations and reconcile separate signed convection/radiation
+power and energy with outside-boundary heat before admitting a thermal objective.
 
 Layered compression admits independent covered `exterior_exchange` and uncovered
 `exposed_exterior_exchange` schedules, with one entry per authored interval. A null entry keeps that
@@ -672,17 +681,19 @@ Exposed convection requires the interval's explicit exposed films. Every declare
 passes source and domain admission before movement, including future intervals and zero active areas.
 Changing coverage carries the same retained cloth enthalpy between these paths.
 
-Compressed coverage with any active convection retains five signed `outside_energy_paths` in joules:
-`covered_convection_j`, `exposed_convection_j`, `covered_film_j`, `exposed_film_j` and `bare_j`.
-Each trace sample retains their cumulative totals and accepted `outside_power_paths`; the final field
-retains the same powers in watts. The paths reconcile with total outside-boundary exchange, while
-bare-body films and non-convective intervals remain distinct from cloth convection. A later film-only
-interval retains earlier convection energy. Comparisons check these paths, schedules and final fields
-before admitting the ordinary heat objective. No new fields are added to film-only compressed reports.
+Compressed coverage with any active exterior exchange retains five signed `outside_energy_paths`
+in joules: `covered_convection_j`, `exposed_convection_j`, `covered_film_j`, `exposed_film_j`
+and `bare_j`. If any interval requests radiation, both `covered_radiative_j` and
+`exposed_radiative_j` are also present. Each trace sample retains cumulative totals and accepted
+`outside_power_paths`; the final field retains corresponding `_w` powers. The paths reconcile with
+total outside-boundary exchange, while bare-body films remain distinct from textile exchange. A later
+film-only interval retains earlier convection and radiation energy. Comparisons check each path,
+schedule and final field before admitting the ordinary heat objective. Existing film/convection-only
+histories retain their original report shape.
 
-Radiation, seam/closure bridges and dissipation heating require compatible pressure qualifications and
-remain refused within compressed coverage. Independent-sheet compression still refuses radiation, its
-textile-water and liquid-coupling options, and dissipation heating. A separately requested wet-sheet
+Seam/closure bridges and dissipation heating require compatible pressure qualifications and
+remain refused within compressed coverage. Independent-sheet compression still refuses its
+textile-water and liquid-coupling options and dissipation heating. A separately requested wet-sheet
 or mechanical history keeps its own domain; compressed coverage still models dry thermal storage
 and supplies no wet/compressed law. Omission preserves the original
 dry history and receipt shape. Numerical conservation and synthetic pressure/RC answers establish

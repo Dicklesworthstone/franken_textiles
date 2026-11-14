@@ -114,11 +114,31 @@ fn clearance_controlled_coverage_convection_replays_native_portable_and_named_ca
     prescribed_compression_workflow(false, true, true, true);
 }
 
+#[test]
+fn compressed_radiation_heat_replays_native_portable_and_named_case_decisions() {
+    compression_exterior_workflow(true, false, true, false, true);
+}
+
+#[test]
+fn compressed_coverage_radiation_replays_native_portable_and_named_case_decisions() {
+    compression_exterior_workflow(false, true, true, true, true);
+}
+
 fn prescribed_compression_workflow(
     cyclic: bool,
     controlled: bool,
     convection: bool,
     coverage: bool,
+) {
+    compression_exterior_workflow(cyclic, controlled, convection, coverage, false);
+}
+
+fn compression_exterior_workflow(
+    cyclic: bool,
+    controlled: bool,
+    convection: bool,
+    coverage: bool,
+    radiation: bool,
 ) {
     let (mut pattern, mut study, mut single) = inputs();
     let consumer = if coverage {
@@ -154,6 +174,24 @@ fn prescribed_compression_workflow(
     ))
     .unwrap();
     preparation["pressure_pa"] = json!(0.0);
+    if radiation {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+        ))
+        .unwrap();
+        let mut optical = fixture["layers"][0]["record"]["properties"]["emissivity"].clone();
+        optical["conditions"]["specimen"] = preparation["specimen"].clone();
+        optical["conditions"]["conditioning"] = preparation["conditioning"].clone();
+        preparation["material"]["properties"]["emissivity"] = optical;
+        let mut invariant = preparation["invariants"]["specific_heat"].clone();
+        invariant["conditions"] =
+            preparation["material"]["properties"]["emissivity"]["conditions"].clone();
+        invariant["conditions"]["loading_branch"] = preparation["loading_branch"].clone();
+        invariant["method"] = json!(
+            "Independent synthetic pressure-invariant total hemispherical emissivity; no measured textile claim"
+        );
+        preparation["invariants"]["emissivity"] = invariant;
+    }
     if cyclic {
         // These synthetic reference observations explicitly apply to both acquired branches.
         // Branch-specific source observations cannot be transferred by renaming the branch.
@@ -240,7 +278,9 @@ fn prescribed_compression_workflow(
         ))
         .unwrap();
         let mut exterior = fixture["exterior_exchange"].clone();
-        exterior.as_object_mut().unwrap().remove("radiation");
+        if !radiation {
+            exterior.as_object_mut().unwrap().remove("radiation");
+        }
         exterior["air_c"] = json!(5.0);
         exterior["convection_conditions"] = json!(
             "Synthetic prescribed coefficient over the entire declared motion and pressure domain; no wind correlation or empirical claim"
@@ -358,7 +398,11 @@ fn prescribed_compression_workflow(
         &pattern,
         &study,
         single,
-        if coverage {
+        if radiation && coverage {
+            "FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY"
+        } else if radiation {
+            "FTX_COMPRESSION_RADIATION_MOTION_REPLAY"
+        } else if coverage {
             if convection && controlled {
                 "FTX_CLEARANCE_CONVECTION_COVERAGE_REPLAY"
             } else if convection {
@@ -466,7 +510,14 @@ fn prescribed_compression_workflow(
                 assert_eq!(updates[2]["instances"]["band"]["thickness_m"], 0.02);
             }
             if convection {
-                assert_eq!(heat["exterior_exchange"]["radiative_energy_j"], 0.0);
+                let radiative = heat["exterior_exchange"]["radiative_energy_j"]
+                    .as_f64()
+                    .unwrap();
+                if radiation {
+                    assert!(radiative > 0.0);
+                } else {
+                    assert_eq!(radiative, 0.0);
+                }
                 let convective = heat["exterior_exchange"]["convective_energy_j"]
                     .as_f64()
                     .unwrap();
@@ -491,7 +542,22 @@ fn prescribed_compression_workflow(
                         heat["outside_energy_paths"]["bare_j"],
                         heat["bare_energy_j"]
                     );
-                    assert_eq!(heat["exposed_exterior_exchange"]["radiative_energy_j"], 0.0);
+                    if radiation {
+                        assert_eq!(paths["covered_radiative_j"], radiative);
+                        assert_eq!(
+                            paths["exposed_radiative_j"],
+                            heat["exposed_exterior_exchange"]["radiative_energy_j"]
+                        );
+                        assert!(paths["exposed_radiative_j"].as_f64().unwrap() > 0.0);
+                        assert_eq!(
+                            heat["final_field"]["outside_power_paths"]["covered_radiative_w"],
+                            0.0
+                        );
+                    } else {
+                        assert_eq!(heat["exposed_exterior_exchange"]["radiative_energy_j"], 0.0);
+                        assert!(!paths.contains_key("covered_radiative_j"));
+                        assert!(!paths.contains_key("exposed_radiative_j"));
+                    }
                     assert!(heat["final_field"]["exterior_exchange"].is_null());
                     assert_eq!(
                         heat["final_field"]["outside_power_paths"]["covered_convection_w"],
@@ -499,17 +565,24 @@ fn prescribed_compression_workflow(
                     );
                 } else {
                     assert!(
-                        (heat["outside_energy_j"].as_f64().unwrap() - convective).abs() < 1e-10
+                        (heat["outside_energy_j"].as_f64().unwrap() - convective - radiative)
+                            .abs()
+                            < 1e-10
                     );
                 }
                 assert!(convective.abs() > 1e-10);
                 for sample in heat["trace"].as_array().unwrap() {
                     let interval = sample["interval_index"].as_u64().unwrap();
-                    if !coverage || interval % 2 == 0 {
-                        assert_eq!(sample["exterior_exchange"]["radiative_heat_w"], 0.0);
+                    let exterior = if !coverage || interval % 2 == 0 {
+                        &sample["exterior_exchange"]
                     } else {
                         assert!(sample["exterior_exchange"].is_null());
-                        assert_eq!(sample["exposed_exterior_exchange"]["radiative_heat_w"], 0.0);
+                        &sample["exposed_exterior_exchange"]
+                    };
+                    if radiation {
+                        assert!(exterior["radiative_heat_w"].as_f64().unwrap() > 0.0);
+                    } else {
+                        assert_eq!(exterior["radiative_heat_w"], 0.0);
                     }
                     assert!(sample["prescribed_compression"].is_object());
                 }
@@ -611,6 +684,12 @@ fn prescribed_compression_workflow(
             if controlled {
                 faults.push("control");
             }
+            if radiation {
+                faults.extend(["radiation-ledger", "radiation-face", "radiation-consent"]);
+                if coverage {
+                    faults.push("missing-radiation-path");
+                }
+            }
             if coverage {
                 faults.extend([
                     "stale-checkpoint-source",
@@ -650,6 +729,19 @@ fn prescribed_compression_workflow(
                                 }
                                 "convection-ledger" => {
                                     heat["exterior_exchange"]["convective_energy_j"] = json!(1000.0);
+                                }
+                                "radiation-ledger" => {
+                                    heat["exterior_exchange"]["radiative_energy_j"] = json!(1000.0);
+                                }
+                                "radiation-face" => {
+                                    heat["request"]["exterior_exchange"][0]["radiation"]["exposed_face"] = json!("unqualified-face");
+                                }
+                                "radiation-consent" => {
+                                    heat["request"]["exterior_exchange"][0]["radiation"]["allow_opaque_gray_approximation"] = json!(false);
+                                }
+                                "missing-radiation-path" => {
+                                    heat["trace"][0]["outside_energy_paths"].as_object_mut().unwrap()
+                                        .remove("covered_radiative_j");
                                 }
                                 "missing-path-ledger" => {
                                     heat["trace"][0].as_object_mut().unwrap().remove("outside_energy_paths");

@@ -343,11 +343,7 @@ impl SurfaceRequest {
         }
         if let Some(compression) = &self.prescribed_compression {
             compression.validate(intervals)?;
-            if self
-                .exterior_exchange
-                .as_ref()
-                .is_some_and(|exteriors| exteriors.iter().any(|e| e.radiation.is_some()))
-                || self.plastic_dissipation_heat.is_some()
+            if self.plastic_dissipation_heat.is_some()
                 || self.relaxation_dissipation_heat.is_some()
                 || self.bending_plastic_dissipation_heat.is_some()
                 || self.surface_water.is_some()
@@ -356,8 +352,11 @@ impl SurfaceRequest {
                 || self.mechanical_coupling.is_some()
             {
                 return Err(invalid(
-                    "prescribed compression requires independent dry films or qualified convection; combined water, dissipation heating and radiation qualifications are not supplied",
+                    "prescribed compression requires independent dry films or qualified exterior exchange; combined water and dissipation heating qualifications are not supplied",
                 ));
+            }
+            for exterior in self.exterior_exchange.iter().flatten() {
+                compression::validate_exterior(exterior)?;
             }
         }
         if let Some(exteriors) = &self.exterior_exchange {
@@ -561,6 +560,11 @@ impl SurfaceHistory {
             return Err(budget(
                 "motion heat initial cells exceed the whole-history budget",
             ));
+        }
+        if request.prescribed_compression.is_some() {
+            for exterior in request.exterior_exchange.iter().flatten() {
+                model.validate_exterior_sources(exterior)?;
+            }
         }
         let (state, initial_condition) = if let Some(profiles) =
             &request.initial_instance_temperature_profiles_c
@@ -910,6 +914,9 @@ impl SurfaceHistory {
                 self.time_s,
             )?
         {
+            for exterior in self.request.exterior_exchange.iter().flatten() {
+                model.validate_exterior_sources(exterior)?;
+            }
             self.model = model;
             self.state = state;
         }

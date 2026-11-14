@@ -21466,11 +21466,13 @@ test('guided prescribed compression retains named cases and rejects unsupported 
   assert.equal(p.current().dead,false);p.emit(scenarioReport());await p.e.scenario.onclick();
   assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
 });
-test('motion results display retained source sampling and separate compression work',async()=>{
+test('motion results display retained source sampling radiation and separate compression work',async()=>{
   const p=await pageModule();await p.load();scenarioInputs(p);
   const report=scenarioReport(),initial=report.simulations.find(row=>row.key==='A').evaluation.result;
   initial.motion=outcome({keyframes:[],samples:[],source_pose_sampling:{max_step_s:0.02,max_segments:16,generated_segments:8,
-    source_times_s:[0.02],authored_interval_indices:[0]},transient_surface:outcome({trace:[{temperature_range_c:[18,20]}],
+    source_times_s:[0.02],authored_interval_indices:[0]},transient_surface:outcome({trace:[{temperature_range_c:[18,20],
+      exterior_exchange:{convective_heat_w:-4,radiative_heat_w:3}}],
+    exterior_exchange:{convective_energy_j:2,radiative_energy_j:-0.8},
     prescribed_compression:{initial_instances:{'<panel>':{pressure_pa:0,thickness_m:0.02}},
       final_instances:{'<panel>':{pressure_pa:500,thickness_m:0.01,reference_mass_kg:0.25,cumulative_normal_work_j:0.75}},
       cumulative_normal_work_j:0.75,normal_work_to_heat_j:0,updates:[{interval_index:0}]}})});
@@ -21478,6 +21480,9 @@ test('motion results display retained source sampling and separate compression w
   assert.match(visibleText(s),/8 intermediate source-pose segments/);
   const table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='A: prescribed pressure and retained thermal mass');
   assert.deepEqual(plain(table.children[2].children.map(n=>n.textContent)),['<panel>','0','500','0.02','0.01','0.25','0.75']);
+  const exterior=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='A: independent-sheet exterior exchange');
+  assert.ok(exterior);assert.deepEqual(plain(exterior.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['Convection','2','-4'],['Radiation','-0.8','3']]);
   assert.match(visibleText(s),/converted to heat: 0 J/);assert.match(visibleText(s),/Pressure is supplied explicitly/);
   assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
 });
@@ -21564,9 +21569,9 @@ function guidedClearanceCompressionSource() {
   return ' \r\n'+JSON.stringify(value).replace('"controls":[{"kind":"gap","gap_m":0.01},{"kind":"pressure","pressure_pa":0},{"kind":"gap","gap_m":0.015}]',
     '"controls":[{"kind":"gap","gap_m":1.000e-2},{"kind":"pressure","pressure_pa":-0.0},{"kind":"gap","gap_m":1.500e-2}]')+'\r\n';
 }
-test('guided controlled compression preserves original gap and pressure sources with qualified convection and cancels obsolete reads',async()=>{
+test('guided controlled compression preserves original gap and pressure sources with explicit radiation and cancels obsolete reads',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p,35,999,0.1,0.2);
-  const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:5,coefficient:7});
+  const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:5,coefficient:7,radiation:'explicit'});
   for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
   const raw=guidedClearanceCompressionSource();guidedCompressionSource(p,raw);
   await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
@@ -21585,9 +21590,9 @@ test('guided controlled compression preserves original gap and pressure sources 
   assert.equal(current.messages.length,before,'A cancelled source read cannot dispatch the replaced declaration');
   p.ready();await p.e.scenario.onclick();assert.ok(p.current().messages.at(-1).scenarioRequest.includes(raw));
 });
-test('guided controlled compression freezes named convection cases and preserves their source joins independently of later drafts',async()=>{
+test('guided controlled compression freezes named radiation cases and preserves their source joins independently of later drafts',async()=>{
   const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
-  const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:12,coefficient:4});
+  const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:12,coefficient:4,radiation:'explicit'});
   for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
   const raw=guidedClearanceCompressionSource();guidedCompressionSource(p,raw);await saveGuidedCase(p,'clearance-cycle');
   assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
@@ -21606,14 +21611,14 @@ test('guided controlled compression freezes named convection cases and preserves
 test('guided controlled compression refuses unsupported heating and malformed controls without dispatch',async()=>{
   for(const policy of ['radiation','water','deformation']) {
     const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
-    authorExterior(p,'guidedMotionHeatExterior',{radiation:policy==='radiation'?'explicit':'none'});
+    authorExterior(p,'guidedMotionHeatExterior',{radiation:policy==='radiation'?'automatic':'none'});
     for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
     guidedCompressionSource(p,guidedClearanceCompressionSource());
     if(policy==='water')guidedLiquidSource(p);
     if(policy==='deformation'){p.e.guidedMotionHeatPlastic.checked=true;p.e.guidedMotionHeatPlastic.handlers.change();}
     const before=p.current().messages.length;await p.e.scenario.onclick();
     assert.equal(p.current().messages.length,before,policy);
-    assert.match(p.e.error.textContent,policy==='radiation'?/without radiation/:/without liquid or deformation-heating/);
+    assert.match(p.e.error.textContent,policy==='radiation'?/automatic face selection is unavailable/:/without liquid or deformation-heating/);
   }
   const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
   for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
@@ -21755,13 +21760,13 @@ test('guided layered compression refuses unqualified heating without losing its 
   assert.deepEqual(motion.transient_coverage.prescribed_compression,JSON.parse(guidedCompressionOriginal));
 });
 
-test('guided layered compression saves independent mixed weather intervals and invalidates changed source files',async()=>{
+test('guided layered compression saves independent radiating and film intervals and invalidates changed source files',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionControls(p);
   guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
   p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();
   guidedCoverageHeatFilm(p,'Exposed',18,9,0.2,0.3);
-  const covered=authorExterior(p,'guidedMotionCoverageExterior',{air:5,coefficient:7});
-  const exposed=authorExterior(p,'guidedMotionExposedExterior',{air:25,coefficient:3});
+  const covered=authorExterior(p,'guidedMotionCoverageExterior',{air:5,coefficient:7,radiation:'explicit'});
+  const exposed=authorExterior(p,'guidedMotionExposedExterior',{air:25,coefficient:3,radiation:'explicit'});
   const bare=authorBareFilms(p,'guidedMotionCoverageBare',[35,2,0.2,0.4]);
   await addGuidedMotion(p,0.002,35);
   for(const prefix of ['guidedMotionCoverageExterior','guidedMotionExposedExterior']) {
@@ -21791,11 +21796,11 @@ test('guided layered compression saves independent mixed weather intervals and i
   await p.e.scenario.onclick();assert.ok(p.current().messages.at(-1).scenarioRequest.includes(changed));
 });
 
-test('guided layered convection cases retain exact compression acquisitions after later weather edits',async()=>{
+test('guided layered radiation cases retain exact compression acquisitions after later weather edits',async()=>{
   const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
   guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
   p.e.guidedMotionExposedMode.value='adiabatic';p.e.guidedMotionExposedMode.handlers.change();
-  const exterior=authorExterior(p,'guidedMotionCoverageExterior',{air:5,coefficient:7});
+  const exterior=authorExterior(p,'guidedMotionCoverageExterior',{air:5,coefficient:7,radiation:'explicit'});
   authorBareFilms(p,'guidedMotionCoverageBare',[35,5,0.2,0.4]);await addGuidedMotion(p,0.002,35);
   guidedCompressionSource(p);p.e.guidedMotionCompressionTarget.value='transient_coverage';
   p.e.guidedMotionCompressionTarget.handlers.change();await saveGuidedCase(p,'cold convection');
@@ -21812,31 +21817,34 @@ test('guided layered convection cases retain exact compression acquisitions afte
   assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
 });
 
-test('guided layered compression refuses radiation on either exterior path before dispatch',async()=>{
-  for(const [domain,radiation] of [['Coverage','automatic'],['Exposed','explicit']]) {
+test('guided layered compression refuses automatic radiation faces on either exterior path before dispatch',async()=>{
+  for(const domain of ['Coverage','Exposed']) {
     const {p}=await guidedScenarioSetup();guidedMotionControls(p);
     guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
     p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();
     guidedCoverageHeatFilm(p,'Exposed');authorBareFilms(p,'guidedMotionCoverageBare');
-    authorExterior(p,'guidedMotion'+domain+'Exterior',{radiation});
+    authorExterior(p,'guidedMotion'+domain+'Exterior',{radiation:'automatic'});
     await addGuidedMotion(p,0.002,35);guidedCompressionSource(p);
     p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
     const before=p.current().messages.length;await p.e.scenario.onclick();
-    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/without radiation/);
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/automatic face selection is unavailable/);
   }
 });
 
-test('compressed coverage results show signed exterior paths separately from normal work',async()=>{
+test('compressed coverage results show signed radiative exterior paths separately from normal work',async()=>{
   const p=await pageModule();await p.load();scenarioInputs(p);
   const report=scenarioReport(),initial=report.simulations.find(row=>row.key==='A').evaluation.result;
   initial.motion=outcome({keyframes:[],samples:[],transient_coverage:outcome({trace:[{temperature_range_c:[18,20]}],
-    outside_energy_paths:{covered_convection_j:2,exposed_convection_j:-0.3,covered_film_j:1.2,exposed_film_j:0.4,bare_j:2.8},
-    final_field:{outside_power_paths:{covered_convection_w:-4,exposed_convection_w:0,covered_film_w:0,exposed_film_w:0,bare_w:5}},
+    outside_energy_paths:{covered_convection_j:2,covered_radiative_j:-0.7,exposed_convection_j:-0.3,exposed_radiative_j:0.6,
+      covered_film_j:1.2,exposed_film_j:0.4,bare_j:2.8},
+    final_field:{outside_power_paths:{covered_convection_w:-4,covered_radiative_w:-2,exposed_convection_w:0,exposed_radiative_w:3,
+      covered_film_w:0,exposed_film_w:0,bare_w:5}},
     prescribed_compression:{initial_instances:{},final_instances:{},cumulative_normal_work_j:0.75,normal_work_to_heat_j:0,updates:[]}})});
   await p.e.scenario.onclick();p.emit(report);const result=section(p,'Fresh drape and heat alternatives');
   const paths=descendants(result).find(n=>n.tag==='table'&&n.children[0].textContent==='A: outside heat paths during compressed motion');
   assert.ok(paths);assert.deepEqual(plain(paths.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
-    ['Covered cloth: convection','2','-4'],['Exposed cloth: convection','-0.3','0'],
+    ['Covered cloth: convection','2','-4'],['Covered cloth: radiation','-0.7','-2'],
+    ['Exposed cloth: convection','-0.3','0'],['Exposed cloth: radiation','0.6','3'],
     ['Covered cloth: films','1.2','0'],['Exposed cloth: films','0.4','0'],['Bare body: films','2.8','5']]);
   assert.match(visibleText(result),/Prescribed normal work: 0.75 J; converted to heat: 0 J/);
   assert.match(visibleText(result),/negative values supply heat/);

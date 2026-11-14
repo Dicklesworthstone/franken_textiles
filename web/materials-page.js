@@ -1289,13 +1289,27 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       detail(parent, `${key}: original compression acquisitions and complete ${controlled ? "control" : "pressure"} history (display only)`, {
         request: h.request?.prescribed_compression, result: compression });
     }
+    if (name === "transient_surface" && h?.exterior_exchange) {
+      const energy = h.exterior_exchange, power = h.trace?.at(-1)?.exterior_exchange;
+      const paths = table(parent, `${key}: independent-sheet exterior exchange`,
+        ["Boundary path", "Signed energy (J)", "Final outward power (W)"]);
+      for (const [label, field] of [["Convection", "convective"], ["Radiation", "radiative"]]) {
+        cells(paths, [label, metric(energy[field + "_energy_j"]), metric(power?.[field + "_heat_w"])]);
+      }
+      const scope = document.createElement("p");
+      scope.textContent = "Positive exterior values carry heat outward; negative values supply heat. " +
+        "Convection and radiation keep their separate signed thermal ledgers; normal compression work is reported separately.";
+      parent.append(scope);
+    }
     if (h?.outside_energy_paths) {
       const energy = h.outside_energy_paths, power = h.final_field?.outside_power_paths;
       const paths = table(parent, `${key}: outside heat paths during compressed motion`,
         ["Boundary path", "Signed energy (J)", "Final outward power (W)"]);
       for (const [label, field] of [["Covered cloth: convection", "covered_convection"],
-        ["Exposed cloth: convection", "exposed_convection"], ["Covered cloth: films", "covered_film"],
+        ["Covered cloth: radiation", "covered_radiative"], ["Exposed cloth: convection", "exposed_convection"],
+        ["Exposed cloth: radiation", "exposed_radiative"], ["Covered cloth: films", "covered_film"],
         ["Exposed cloth: films", "exposed_film"], ["Bare body: films", "bare"]]) {
+        if (field.endsWith("_radiative") && !Object.hasOwn(energy, field + "_j")) continue;
         cells(paths, [label, metric(energy[field + "_j"]), metric(power?.[field + "_w"])]);
       }
       const scope = document.createElement("p");

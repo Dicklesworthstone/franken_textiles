@@ -216,6 +216,9 @@ impl Request {
         } else {
             (run.thermal_surface(self.settings.cells_per_layer)?, None)
         };
+        if compression.is_some() {
+            self.validate_compression_sources(&source)?;
+        }
         let triangles: Vec<_> = self.body_triangle_ids.iter().map(|&i| body.1[i]).collect();
         let projection = projection::Request {
             schema: "ftx-thermal-projection/1".into(),
@@ -331,20 +334,13 @@ impl Request {
     fn validate_compression(&self, intervals: usize) -> Result<(), Refusal> {
         if let Some(compression) = &self.prescribed_compression {
             compression.validate(intervals)?;
-            if self
-                .exterior_exchange
-                .iter()
-                .chain(self.exposed_exterior_exchange.iter())
-                .flatten()
-                .flatten()
-                .any(|exterior| exterior.radiation.is_some())
-                || self.plastic_dissipation_heat.is_some()
+            if self.plastic_dissipation_heat.is_some()
                 || self.relaxation_dissipation_heat.is_some()
                 || self.bending_plastic_dissipation_heat.is_some()
                 || self.thermal_bridges.is_some()
             {
                 return Err(invalid(
-                    "coverage compression requires independent dry films or qualified convection and constant storage; radiation, dissipation and bridge combinations need joint qualification",
+                    "coverage compression requires independent dry films or qualified exterior exchange and constant storage; dissipation and bridge combinations need joint qualification",
                 ));
             }
             for exterior in self
@@ -354,7 +350,7 @@ impl Request {
                 .flatten()
                 .flatten()
             {
-                exterior.validate_convection()?;
+                compression::validate_exterior(exterior)?;
             }
             for (interval, exterior) in self.exterior_exchange.iter().flatten().enumerate() {
                 if exterior.is_some() {
@@ -380,6 +376,30 @@ impl Request {
             }
         }
         Ok(())
+    }
+
+    fn validate_compression_sources(&self, source: &Surface) -> Result<(), Refusal> {
+        for exterior in self
+            .exterior_exchange
+            .iter()
+            .chain(self.exposed_exterior_exchange.iter())
+            .flatten()
+            .flatten()
+        {
+            source.validate_exterior_sources(exterior)?;
+        }
+        Ok(())
+    }
+
+    fn compression_radiation(&self) -> bool {
+        self.prescribed_compression.is_some()
+            && self
+                .exterior_exchange
+                .iter()
+                .chain(self.exposed_exterior_exchange.iter())
+                .flatten()
+                .flatten()
+                .any(|exterior| exterior.radiation.is_some())
     }
 
     fn compression_exterior(&self) -> bool {
@@ -690,6 +710,7 @@ impl History {
                 sample_index,
                 self.time_s,
             )? {
+                self.request.validate_compression_sources(&source)?;
                 self.source = source;
                 true
             } else {
@@ -904,6 +925,13 @@ impl History {
                 "covered_convection_w": covered.map_or(0., |exchange| exchange.convective_heat_w),
                 "exposed_convection_w": exposed.map_or(0., |exchange| exchange.convective_heat_w)
             });
+            if self.request.compression_radiation() {
+                let paths = &mut self.final_field["outside_power_paths"];
+                paths["covered_radiative_w"] =
+                    json!(covered.map_or(0., |exchange| exchange.radiative_heat_w));
+                paths["exposed_radiative_w"] =
+                    json!(exposed.map_or(0., |exchange| exchange.radiative_heat_w));
+            }
             if self.final_field["outside_power_paths"]
                 .as_object()
                 .expect("computed outside paths")
@@ -1066,13 +1094,18 @@ impl History {
     }
 
     fn outside_energy_paths(&self) -> Value {
-        json!({
+        let mut paths = json!({
             "covered_film_j": self.covered_film_j,
             "exposed_film_j": self.exposed_film_j,
             "bare_j": self.bare_j,
             "covered_convection_j": self.covered_convective_j,
             "exposed_convection_j": self.exposed_convective_j
-        })
+        });
+        if self.request.compression_radiation() {
+            paths["covered_radiative_j"] = json!(self.covered_radiative_j);
+            paths["exposed_radiative_j"] = json!(self.exposed_radiative_j);
+        }
+        paths
     }
 
     fn bridge_accounting(&self) -> Result<Value, Refusal> {
@@ -1117,9 +1150,11 @@ impl History {
             );
             if self.request.compression_exterior() {
                 result["outside_energy_paths"] = self.outside_energy_paths();
-                result["scope"] = json!(
+                result["scope"] = json!(if self.request.compression_radiation() {
+                    "Transient dry-film or separately source-qualified convection and explicit-face radiation heat on moving layered body coverage with prescribed compression. Only the actual outer covered textile face exchanges with its environment; exposed source cloth and bare-body films retain independent boundaries. Optical observations must remain qualified at every prescribed pressure; no face mapping survives scalar conditioning. Conditioned thickness changes face gaps and transport while reference mass, specific heat and covered/exposed enthalpy persist. Signed normal work stays separate from heat. No inferred contact pressure, wet law, recovery-time law, work heating, physiological or empirical garment claim."
+                } else {
                     "Transient dry-film or separately source-qualified convection heat on moving layered body coverage with prescribed compression. Only the actual outer covered textile face exchanges with its environment; exposed source cloth and bare-body films retain independent boundaries. Conditioned thickness changes face gaps and transport while reference mass, specific heat and covered/exposed enthalpy persist. Signed normal work stays separate from heat. No inferred contact pressure, radiation, wet law, recovery-time law, work heating, physiological or empirical garment claim."
-                );
+                });
             }
         }
         if let Some(authority) = &self.bridge_authority {

@@ -5866,6 +5866,23 @@ refusal, rollback and native/portable regressions accompany this extension of `f
 `ftx-ms2`. Radiation, wet/compressed laws, contact-derived pressure, recovery time and independently
 measured garment performance remain separate qualification work.
 
+### 25.205 Exchange radiation across pressure-conditioned moving textiles
+
+Acquired pressure, clearance and branch histories now compose with explicitly qualified opaque-gray
+radiation on independent moving sheets and layered body coverage. The scalar emissivity observation
+must survive the canonical pressure conditioner with its complete optical conditions and pressure
+qualification; automatic orientation mappings remain excluded. Every retained source is checked before
+exposure, and branch changes repeat the same admission without changing the mechanical cloth law.
+
+The existing nonlinear exterior solver retains signed convection and radiation separately, with
+covered/exposed radiative paths surviving later film intervals. Reference mass and material-coordinate
+enthalpy remain authoritative, while prescribed normal work stays outside heat. Material/design
+comparison replays conditioned optical sources and all path ledgers; ordinary workbench controls,
+frozen named cases and replay files retain the same declarations. Independent nonlinear RC,
+changing-coverage, refusal, rollback and native/portable regression cases accompany this extension of
+`ftx-cp2`, `ftx-tm5` and `ftx-ms2`. Numerical checks do not establish measured optical/compression
+behavior, wet/compressed response, contact-derived pressure, recovery time or physical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

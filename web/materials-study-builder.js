@@ -727,12 +727,12 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
       const heat = state[consumer];
       if ((consumer === "transient_surface" && liquid !== undefined) ||
           heatingFields.some(field => heat[field] != null)) {
-        throw Error("Prescribed compression requires dry film-boundary heat or qualified convection, without liquid or deformation-heating policies.");
+        throw Error("Prescribed compression requires dry film-boundary heat or qualified exterior exchange, without liquid or deformation-heating policies.");
       }
       const exchanges = consumer === "transient_coverage" ?
         ["exterior_exchange", "exposed_exterior_exchange"] : ["exterior_exchange"];
-      if (exchanges.some(field => heat[field]?.some(exterior => exterior?.radiation != null))) {
-        throw Error("Compressed textile exterior exchange must be convection-only, without radiation.");
+      if (exchanges.some(field => heat[field]?.some(exterior => exterior?.radiation?.automatic_material_face === true))) {
+        throw Error("Compressed textile radiation requires an explicit emissivity property and exposed face qualified for the declared pressure history; automatic face selection is unavailable.");
       }
       if (consumer === "transient_coverage") {
         heat.exterior_exchange?.forEach((exterior, index) => {
@@ -740,7 +740,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
           const bare = heat.bare_boundaries[index];
           const resistance = bare.inside_resistance_m2_k_w + bare.outside_resistance_m2_k_w;
           if (bare.inside_c !== heat.boundaries[index].inside_c || !Number.isFinite(resistance) || resistance <= 0) {
-            throw Error("Compressed covered convection needs bare-body films with the same body temperature and a finite positive total resistance.");
+            throw Error("Compressed covered exterior exchange needs bare-body films with the same body temperature and a finite positive total resistance.");
           }
         });
       }

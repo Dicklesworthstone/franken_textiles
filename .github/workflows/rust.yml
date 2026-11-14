@@ -42,6 +42,10 @@ jobs:
       - name: Check coupled motion and material heating
         if: ${{ !cancelled() }}
         run: |
+          cargo test -p ftx-drape --lib --locked study::heat::compression::tests::
+          cargo test -p ftx-drape --lib --locked study::heat::coverage::tests::
+          cargo test -p ftx-cli --test accepted_body_workflow --locked compressed_radiation_heat_replays_native_portable_and_named_case_decisions
+          cargo test -p ftx-cli --test accepted_body_workflow --locked compressed_coverage_radiation_replays_native_portable_and_named_case_decisions
           cargo test -p ftx-export --lib --locked material_study::comparison::surface_water::tests
           cargo test -p ftx-export --lib --locked material_study::comparison::heating_tests
           cargo test -p ftx-export --test scenario_comparison --locked

@@ -216,6 +216,22 @@ impl Surface {
         &self.patches
     }
 
+    // Pressure-conditioned histories admit every retained source before changing coverage can
+    // expose it. This uses the same optical authority as the actual exterior solve, without
+    // inventing a face mapping or evaluating flux on a currently hidden material.
+    pub(crate) fn validate_exterior_sources(&self, exterior: &Exterior) -> Result<(), Refusal> {
+        for column in &self.columns {
+            for layer in &column.layers {
+                super::steady::exterior::Exchange::on_side(
+                    exterior,
+                    layer,
+                    ftx_pattern::material_optics::Side::Positive,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn requires_enthalpy_inverse(&self) -> bool {
         self.columns
             .iter()

@@ -22,6 +22,7 @@ use crate::{
     thermal::{
         DryThermalModel,
         compression::Control,
+        steady::exterior::Exterior,
         surface::{Patch, Surface, SurfaceState, io::retained_materials},
     },
 };
@@ -231,6 +232,23 @@ fn check_storage(preparation: &material_compression::Input) -> Result<(), Refusa
                 "pressure heat needs independently qualified invariant {key}; sampled storage is unsupported",
             )));
         }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_exterior(exterior: &Exterior) -> Result<(), Refusal> {
+    exterior.validate_convection()?;
+    if let Some(radiation) = &exterior.radiation
+        && (radiation.automatic_material_face
+            || radiation.emissivity_property.trim().is_empty()
+            || radiation.exposed_face.trim().is_empty()
+            || !radiation.allow_opaque_gray_approximation
+            || !radiation.ambient_c.is_finite()
+            || radiation.ambient_c < -273.15)
+    {
+        return Err(invalid(
+            "compressed radiation needs an explicit qualified face and emissivity, physical enclosure temperature and opaque-gray consent; pressure-conditioned face mappings are unavailable",
+        ));
     }
     Ok(())
 }
@@ -663,7 +681,7 @@ fn instance_snapshot(instances: &BTreeMap<String, Instance>) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::study::heat::{SurfaceHistory, SurfaceRequest};
     use ftx_pattern::material_catalog::Selection;
@@ -674,6 +692,28 @@ mod tests {
         ))
         .unwrap();
         input.pressure_pa = 0.;
+        input
+    }
+
+    pub(in crate::study::heat) fn optical_acquisition() -> material_compression::Input {
+        let mut input = acquisition();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+        ))
+        .unwrap();
+        let observed = fixture["layers"][0]["record"]["properties"]["emissivity"].clone();
+        let mut optical: ftx_pattern::materials::Quantity = serde_json::from_value(observed).unwrap();
+        optical.conditions.extend([
+            ("specimen".into(), input.specimen.clone()),
+            ("conditioning".into(), input.conditioning.clone()),
+            ("loading_branch".into(), input.loading_branch.clone()),
+        ]);
+        let mut invariant = input.invariants["specific_heat"].clone();
+        invariant.method =
+            "Synthetic pressure-independent optical coefficient; no measured textile claim".into();
+        invariant.conditions = optical.conditions.clone();
+        input.invariants.insert("emissivity".into(), invariant);
+        input.material.properties.insert("emissivity".into(), optical);
         input
     }
 
@@ -1622,6 +1662,224 @@ mod tests {
         exterior
     }
 
+    fn radiating_fixture(pressures: Vec<f64>) -> SurfaceHistory {
+        let mut policy = fixture(pressures).request.prescribed_compression.unwrap();
+        let binding = policy.bindings.get_mut("sheet").unwrap();
+        binding.preparation = optical_acquisition();
+        binding.material_sha256 = selected(&binding.preparation).sha256().into();
+        history_from(policy)
+    }
+
+    fn radiation(air_c: f64, coefficient: f64, enclosure_c: f64) -> Exterior {
+        let mut exterior = convection(air_c, coefficient);
+        exterior.radiation = Some(crate::thermal::steady::exterior::AmbientRadiation {
+            ambient_c: enclosure_c,
+            emissivity_property: "emissivity".into(),
+            exposed_face: "public".into(),
+            automatic_material_face: false,
+            allow_opaque_gray_approximation: true,
+        });
+        exterior
+    }
+
+    #[test]
+    fn compressed_radiation_matches_independent_nonlinear_rc_balance() {
+        // The exterior solver bounds its original equation using the separate signed fluxes.
+        // Their cancellation must not shrink this oracle's energy comparison below that budget.
+        let answer = |actual: f64, expected: f64| {
+            assert!(
+                (actual - expected).abs() < 1e-8,
+                "{actual} differs from {expected}"
+            );
+        };
+        let mut history = radiating_fixture(vec![250., 500., 500.]);
+        let environments = vec![
+            radiation(0., 4., -10.),
+            radiation(10., 0., 60.),
+            radiation(20., 2., -10.),
+        ];
+        for (film, exterior) in history.request.boundaries.iter_mut().zip(&environments) {
+            film.inside_resistance_m2_k_w = 0.1;
+            film.outside_c = exterior.air_c;
+        }
+        history.request.exterior_exchange = Some(environments.clone());
+        history.request.validate(3).unwrap();
+        let mut temperature = 0.;
+        let (mut inside_energy, mut convective_energy, mut radiative_energy) = (0., 0., 0.);
+        for (interval, (area, resistance)) in [(1., 0.375), (0.5, 0.25), (0.25, 0.25)]
+            .into_iter()
+            .enumerate()
+        {
+            let exterior = &environments[interval];
+            let enclosure = exterior.radiation.as_ref().unwrap().ambient_c;
+            let inside = area / (0.5 * resistance + 0.1);
+            let outside = area / (0.5 * resistance);
+            // Independently eliminate the one reference-mass cell, then solve its exterior
+            // face balance using the unfactored fourth-power law. Capacity is 25 J/K and dt=1 s.
+            let state = |face: f64| {
+                let cell = (25. * temperature + inside * 40. + outside * face)
+                    / (25. + inside + outside);
+                let convection = area * exterior.convection_w_m2_k * (face - exterior.air_c);
+                let radiation = area * 0.8 * 5.670_374_419e-8
+                    * ((face + 273.15).powi(4) - (enclosure + 273.15).powi(4));
+                (cell, convection, radiation)
+            };
+            let (mut lo, mut hi) = (-80., 80.);
+            for _ in 0..96 {
+                let face = (lo + hi) * 0.5;
+                let (cell, convection, radiation) = state(face);
+                if convection + radiation > outside * (cell - face) {
+                    hi = face;
+                } else {
+                    lo = face;
+                }
+            }
+            let (expected, convective, radiative) = state((lo + hi) * 0.5);
+            temperature = expected;
+            inside_energy += inside * (40. - temperature);
+            convective_energy += convective;
+            radiative_energy += radiative;
+            assert_eq!(radiative < 0., interval == 1);
+            history
+                .advance(
+                    &geometry(area),
+                    (interval + 1) as f64,
+                    interval,
+                    interval,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            answer(history.state.temperature_c()[0][0], temperature);
+            answer(history.stored_j, 25. * temperature);
+            answer(history.inside_j, inside_energy);
+            answer(history.convective_j, convective_energy);
+            answer(history.radiative_j, radiative_energy);
+            answer(history.outside_j, convective_energy + radiative_energy);
+            answer(history.balance_error_j(), 0.);
+        }
+        let report = history.finish("path", "initial", 3.).unwrap();
+        assert_eq!(
+            report["prescribed_compression"]["normal_work_to_heat_j"],
+            0.
+        );
+        close(
+            report["prescribed_compression"]["final_instances"]["sheet"]["reference_mass_kg"]
+                .as_f64()
+                .unwrap(),
+            0.025,
+        );
+        answer(
+            report["exterior_exchange"]["radiative_energy_j"]
+                .as_f64()
+                .unwrap(),
+            radiative_energy,
+        );
+    }
+
+    #[test]
+    fn compressed_radiation_requires_retained_optics_and_rolls_back_late_source_failures() {
+        let mut history = radiating_fixture(vec![250., 500.]);
+        history.request.exterior_exchange = Some(vec![radiation(0., 3., -10.); 2]);
+        history.request.validate(2).unwrap();
+        history
+            .advance(&geometry(1.), 1., 0, 0, None, None, None)
+            .unwrap();
+        let before = history.clone().finish("path", "initial", 1.).unwrap();
+        for fault in [
+            "missing",
+            "face",
+            "spectral",
+            "temperature",
+            "invariance",
+            "consent",
+        ] {
+            let mut rejected = history.clone();
+            if fault == "consent" {
+                rejected.request.exterior_exchange.as_mut().unwrap()[1]
+                    .radiation
+                    .as_mut()
+                    .unwrap()
+                    .allow_opaque_gray_approximation = false;
+            } else {
+                let preparation = &mut rejected
+                    .compression
+                    .as_mut()
+                    .unwrap()
+                    .instances
+                    .get_mut("sheet")
+                    .unwrap()
+                    .preparation;
+                match fault {
+                    "missing" => {
+                        preparation.invariants.remove("emissivity");
+                    }
+                    "invariance" => {
+                        preparation
+                            .invariants
+                            .get_mut("emissivity")
+                            .unwrap()
+                            .pressure_range_pa = [0., 250.];
+                    }
+                    _ => {
+                        let (key, value) = match fault {
+                            "face" => ("face", "reverse"),
+                            "spectral" => ("spectral_basis", "visible_only"),
+                            "temperature" => ("temperature_min_c", "0"),
+                            _ => unreachable!(),
+                        };
+                        preparation
+                            .material
+                            .properties
+                            .get_mut("emissivity")
+                            .unwrap()
+                            .conditions
+                            .insert(key.into(), value.into());
+                        preparation
+                            .invariants
+                            .get_mut("emissivity")
+                            .unwrap()
+                            .conditions
+                            .insert(key.into(), value.into());
+                    }
+                }
+            }
+            assert!(
+                rejected
+                    .advance(&geometry(1.), 2., 1, 1, None, None, None)
+                    .is_err(),
+                "{fault}"
+            );
+            // Only the authored fault differs; none of its pressure, state or energy trial commits.
+            rejected.request = history.request.clone();
+            rejected
+                .compression
+                .as_mut()
+                .unwrap()
+                .instances
+                .get_mut("sheet")
+                .unwrap()
+                .preparation = history.compression.as_ref().unwrap().instances["sheet"]
+                .preparation
+                .clone();
+            assert_eq!(
+                rejected.clone().finish("path", "initial", 1.).unwrap(),
+                before,
+                "{fault}"
+            );
+            rejected
+                .advance(&geometry(1.), 2., 1, 1, None, None, None)
+                .unwrap();
+        }
+        let bare = fixture(vec![250., 500.]);
+        assert!(
+            bare.model
+                .validate_exterior_sources(&radiation(0., 3., -10.))
+                .is_err()
+        );
+    }
+
     #[test]
     fn compressed_convection_preserves_reference_storage_and_current_area_exchange() {
         let mut history = fixture(vec![250., 500., 500.]);
@@ -1748,6 +2006,18 @@ mod tests {
         let radiation =
             serde_json::from_value(fixture["exterior_exchange"]["radiation"].clone()).unwrap();
         history.request.exterior_exchange.as_mut().unwrap()[0].radiation = Some(radiation);
+        history.request.validate(2).unwrap();
+        assert!(
+            history
+                .model
+                .validate_exterior_sources(&history.request.exterior_exchange.as_ref().unwrap()[0])
+                .is_err()
+        );
+        history.request.exterior_exchange.as_mut().unwrap()[0]
+            .radiation
+            .as_mut()
+            .unwrap()
+            .automatic_material_face = true;
         assert!(history.request.validate(2).is_err());
         history.request.exterior_exchange.as_mut().unwrap()[0].radiation = None;
         history.request.boundaries[0].outside_resistance_m2_k_w = 0.2;

@@ -110,9 +110,9 @@ fn surface_hash(model: &mut Value) -> Result<(), Refusal> {
     Ok(())
 }
 
-// Compression may change transport, but convection-only exterior exchange is still the entire
+// Compression may change transport, but qualified exterior exchange is still the entire
 // outside boundary. Reconcile that separate receipt with the physical ledger at every sample.
-fn admit_convection(
+fn admit_exterior(
     heat: &Value,
     request: &Value,
     trace: &[Value],
@@ -141,19 +141,26 @@ fn admit_convection(
             .zip(boundaries)
             .any(|(environment, film)| {
                 !environment.is_object()
-                    || !environment["radiation"].is_null()
                     || film["outside_resistance_m2_k_w"] != 0.
                     || film["outside_c"] != environment["air_c"]
             })
     {
         return Err(fail());
     }
+    for (environment, boundary) in environments.iter().zip(boundaries) {
+        exterior_boundary(environment, boundary)?;
+    }
+    let radiative = environments
+        .iter()
+        .any(|environment| !environment["radiation"].is_null());
     for row in trace.iter().chain(std::iter::once(heat)) {
         let exterior = &row["exterior_exchange"];
+        let convection = finite(&exterior["convective_energy_j"]).ok_or_else(fail)?;
+        let radiation = finite(&exterior["radiative_energy_j"]).ok_or_else(fail)?;
         if !heat_near(
-            finite(&exterior["convective_energy_j"]).ok_or_else(fail)?,
+            convection + radiation,
             finite(&row["outside_energy_j"]).ok_or_else(fail)?,
-        ) || finite(&exterior["radiative_energy_j"]) != Some(0.)
+        ) || (!radiative && radiation != 0.)
         {
             return Err(fail());
         }
@@ -161,22 +168,63 @@ fn admit_convection(
     let final_field = &heat["final"];
     for row in trace.iter().chain(std::iter::once(final_field)) {
         let exterior = &row["exterior_exchange"];
+        let convection = finite(&exterior["convective_heat_w"]).ok_or_else(fail)?;
+        let radiation = finite(&exterior["radiative_heat_w"]).ok_or_else(fail)?;
         if !heat_near(
-            finite(&exterior["convective_heat_w"]).ok_or_else(fail)?,
+            convection + radiation,
             finite(&row["outside_heat_w"]).ok_or_else(fail)?,
-        ) || finite(&exterior["radiative_heat_w"]) != Some(0.)
+        ) || (!radiative && radiation != 0.)
             || finite(&exterior["balance_residual_w"]).is_none()
         {
             return Err(fail());
         }
     }
+    let mut previous = [0.; 2];
+    let mut previous_time = 0.;
+    for row in trace {
+        let interval = vapor_index(&row["interval_index"])?;
+        let environment = environments.get(interval).ok_or_else(fail)?;
+        let exterior = &row["exterior_exchange"];
+        let time = finite(&row["time_s"]).ok_or_else(fail)?;
+        let energy = [
+            finite(&exterior["convective_energy_j"]).ok_or_else(fail)?,
+            finite(&exterior["radiative_energy_j"]).ok_or_else(fail)?,
+        ];
+        let power = [
+            finite(&exterior["convective_heat_w"]).ok_or_else(fail)?,
+            finite(&exterior["radiative_heat_w"]).ok_or_else(fail)?,
+        ];
+        if time <= previous_time
+            || (environment["convection_w_m2_k"] == 0.
+                && (power[0] != 0. || energy[0] != previous[0]))
+            || (environment["radiation"].is_null()
+                && (power[1] != 0. || energy[1] != previous[1]))
+        {
+            return Err(fail());
+        }
+        for component in 0..2 {
+            if row["thermal_substeps"] == 1
+                && !heat_near(
+                    energy[component],
+                    previous[component] + (time - previous_time) * power[component],
+                )
+            {
+                return Err(fail());
+            }
+        }
+        previous = energy;
+        previous_time = time;
+    }
     let last = trace.last().ok_or_else(fail)?;
-    if heat["exterior_exchange"]["convective_energy_j"]
-        != last["exterior_exchange"]["convective_energy_j"]
-        || final_field["exterior_exchange"]["convective_heat_w"]
-            != last["exterior_exchange"]["convective_heat_w"]
-    {
-        return Err(fail());
+    for field in ["convective_energy_j", "radiative_energy_j"] {
+        if heat["exterior_exchange"][field] != last["exterior_exchange"][field] {
+            return Err(fail());
+        }
+    }
+    for field in ["convective_heat_w", "radiative_heat_w", "balance_residual_w"] {
+        if final_field["exterior_exchange"][field] != last["exterior_exchange"][field] {
+            return Err(fail());
+        }
     }
     Ok(())
 }
@@ -222,7 +270,67 @@ fn film(value: &Value) -> Result<[f64; 4], Refusal> {
     Ok(values)
 }
 
-fn convection_boundary(environment: &Value, boundary: &Value) -> Result<(), Refusal> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Radiation {
+    ambient_c: f64,
+    #[serde(default)]
+    emissivity_property: String,
+    #[serde(default)]
+    exposed_face: String,
+    #[serde(default)]
+    automatic_material_face: bool,
+    allow_opaque_gray_approximation: bool,
+}
+
+fn explicit_radiation(environment: &Value) -> Result<Option<Radiation>, Refusal> {
+    if environment["radiation"].is_null() {
+        return Ok(None);
+    }
+    let radiation: Radiation =
+        serde_json::from_value(environment["radiation"].clone()).map_err(|_| fail())?;
+    if !radiation.ambient_c.is_finite()
+        || radiation.ambient_c < -273.15
+        || radiation.automatic_material_face
+        || !radiation.allow_opaque_gray_approximation
+        || radiation.emissivity_property.trim().is_empty()
+        || radiation.exposed_face.trim().is_empty()
+    {
+        return Err(fail());
+    }
+    Ok(Some(radiation))
+}
+
+// Pressure conditioning discards orientation mappings. Requalify the explicit scalar observation
+// from each reconstructed pressure state, including branch changes and currently hidden cloth.
+fn qualify_optics(material: &ResolvedMaterial, request: &Value) -> Result<(), Refusal> {
+    for field in ["exterior_exchange", "exposed_exterior_exchange"] {
+        if request[field].is_null() {
+            continue;
+        }
+        for environment in vapor_array(request, field)? {
+            let Some(radiation) = explicit_radiation(environment)? else {
+                continue;
+            };
+            let optical = material.material().thermal_emissivity(
+                &radiation.emissivity_property,
+                &radiation.exposed_face,
+                radiation.ambient_c,
+                material.allows_estimates(),
+            )?;
+            let range = vapor_array(environment, "surface_temperature_range_c")?;
+            if range.len() != 2
+                || finite(&range[0]).ok_or_else(fail)?.max(optical.temperature_range_c[0])
+                    > finite(&range[1]).ok_or_else(fail)?.min(optical.temperature_range_c[1])
+            {
+                return Err(fail());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn exterior_boundary(environment: &Value, boundary: &Value) -> Result<(), Refusal> {
     let source: ftx_pattern::materials::Source =
         serde_json::from_value(environment["convection_source"].clone()).map_err(|_| fail())?;
     let evidence: ftx_pattern::materials::Evidence =
@@ -231,8 +339,8 @@ fn convection_boundary(environment: &Value, boundary: &Value) -> Result<(), Refu
     let air = finite(&environment["air_c"]).ok_or_else(fail)?;
     let h = finite(&environment["convection_w_m2_k"]).ok_or_else(fail)?;
     let boundary = film(boundary)?;
-    if !environment["radiation"].is_null()
-        || air < -273.15
+    explicit_radiation(environment)?;
+    if air < -273.15
         || h < 0.
         || boundary[1] != air
         || boundary[3] != 0.
@@ -255,23 +363,26 @@ fn convection_boundary(environment: &Value, boundary: &Value) -> Result<(), Refu
     Ok(())
 }
 
-const OUTSIDE_PATHS: [&str; 5] = [
+const OUTSIDE_PATHS: [&str; 7] = [
     "covered_film",
     "exposed_film",
     "bare",
     "covered_convection",
     "exposed_convection",
+    "covered_radiative",
+    "exposed_radiative",
 ];
 
-fn outside_paths(value: &Value, unit: &str) -> Result<[f64; 5], Refusal> {
+fn outside_paths(value: &Value, unit: &str, radiative: bool) -> Result<[f64; 7], Refusal> {
+    let count = if radiative { 7 } else { 5 };
     if !value
         .as_object()
-        .is_some_and(|fields| fields.len() == OUTSIDE_PATHS.len())
+        .is_some_and(|fields| fields.len() == count)
     {
         return Err(fail());
     }
-    let mut values = [0.; 5];
-    for (index, field) in OUTSIDE_PATHS.iter().enumerate() {
+    let mut values = [0.; 7];
+    for (index, field) in OUTSIDE_PATHS.iter().take(count).enumerate() {
         values[index] = finite(&value[format!("{field}_{unit}")]).ok_or_else(fail)?;
     }
     if !values.iter().sum::<f64>().is_finite() {
@@ -280,11 +391,11 @@ fn outside_paths(value: &Value, unit: &str) -> Result<[f64; 5], Refusal> {
     Ok(values)
 }
 
-fn convection_power(value: &Value, expected: f64) -> Result<(), Refusal> {
+fn exterior_power(value: &Value, convection: f64, radiation: f64) -> Result<(), Refusal> {
     if !heat_near(
         finite(&value["convective_heat_w"]).ok_or_else(fail)?,
-        expected,
-    ) || finite(&value["radiative_heat_w"]) != Some(0.)
+        convection,
+    ) || !heat_near(finite(&value["radiative_heat_w"]).ok_or_else(fail)?, radiation)
         || finite(&value["balance_residual_w"]).is_none()
     {
         return Err(fail());
@@ -292,21 +403,21 @@ fn convection_power(value: &Value, expected: f64) -> Result<(), Refusal> {
     Ok(())
 }
 
-fn convection_energy(value: &Value, expected: f64) -> Result<(), Refusal> {
+fn exterior_energy(value: &Value, convection: f64, radiation: f64) -> Result<(), Refusal> {
     if !heat_near(
         finite(&value["convective_energy_j"]).ok_or_else(fail)?,
-        expected,
-    ) || finite(&value["radiative_energy_j"]) != Some(0.)
+        convection,
+    ) || !heat_near(finite(&value["radiative_energy_j"]).ok_or_else(fail)?, radiation)
     {
         return Err(fail());
     }
     Ok(())
 }
 
-// A compressed coverage domain can exchange through five distinct outside paths. Bare body
-// and exposed-film heat are not textile convection, and an inactive interval does not erase
+// A compressed coverage domain can exchange through seven distinct outside paths. Bare body
+// and exposed-film heat are not textile exterior exchange, and an inactive interval does not erase
 // earlier exterior energy. Reconcile the complete retained path rather than a final subtotal.
-fn admit_coverage_convection(
+fn admit_coverage_exterior(
     heat: &Value,
     request: &Value,
     trace: &[Value],
@@ -322,6 +433,11 @@ fn admit_coverage_convection(
     }
     let any_covered = covered.iter().any(Option::is_some);
     let any_exposed = exposed.iter().any(Option::is_some);
+    let radiative = covered
+        .iter()
+        .chain(&exposed)
+        .flatten()
+        .any(|environment| !environment["radiation"].is_null());
     if !any_covered && !any_exposed {
         if trace.iter().chain(std::iter::once(heat)).any(|row| {
             !row["outside_energy_paths"].is_null()
@@ -346,7 +462,7 @@ fn admit_coverage_convection(
             return Err(fail());
         }
         if let Some(environment) = covered[i] {
-            convection_boundary(environment, &boundaries[i])?;
+            exterior_boundary(environment, &boundaries[i])?;
             let bare = film(bare[i].ok_or_else(fail)?)?;
             let resistance = bare[2] + bare[3];
             if bare[0] != boundary[0] || !resistance.is_finite() || resistance <= 0. {
@@ -357,18 +473,18 @@ fn admit_coverage_convection(
             film(boundary)?;
         }
         if let Some(environment) = exposed[i] {
-            convection_boundary(environment, exposed_films[i].ok_or_else(fail)?)?;
+            exterior_boundary(environment, exposed_films[i].ok_or_else(fail)?)?;
         }
     }
-    let mut previous = [0.; 5];
+    let mut previous = [0.; 7];
     let mut previous_time = 0.;
     for row in trace {
         let interval = vapor_index(&row["interval_index"])?;
         if interval >= intervals {
             return Err(fail());
         }
-        let energy = outside_paths(&row["outside_energy_paths"], "j")?;
-        let power = outside_paths(&row["outside_power_paths"], "w")?;
+        let energy = outside_paths(&row["outside_energy_paths"], "j", radiative)?;
+        let power = outside_paths(&row["outside_power_paths"], "w", radiative)?;
         let time = finite(&row["time_s"]).ok_or_else(fail)?;
         if time <= previous_time
             || !heat_near(
@@ -389,8 +505,10 @@ fn admit_coverage_convection(
             true,
             covered[interval].is_some(),
             exposed[interval].is_some(),
+            covered[interval].is_some_and(|environment| !environment["radiation"].is_null()),
+            exposed[interval].is_some_and(|environment| !environment["radiation"].is_null()),
         ];
-        for index in 0..5 {
+        for index in 0..7 {
             if (!active[index] && (power[index] != 0. || energy[index] != previous[index]))
                 || (row["thermal_substeps"] == 1
                     && !heat_near(
@@ -401,10 +519,13 @@ fn admit_coverage_convection(
                 return Err(fail());
             }
         }
-        for (field, path) in [("exterior_exchange", 3), ("exposed_exterior_exchange", 4)] {
+        for (field, path, radiation) in [
+            ("exterior_exchange", 3, 5),
+            ("exposed_exterior_exchange", 4, 6),
+        ] {
             if active[path] {
-                convection_energy(&row[field], energy[path])?;
-                convection_power(&row[field], power[path])?;
+                exterior_energy(&row[field], energy[path], energy[radiation])?;
+                exterior_power(&row[field], power[path], power[radiation])?;
             } else if !row[field].is_null() {
                 return Err(fail());
             }
@@ -414,8 +535,8 @@ fn admit_coverage_convection(
     }
     let last = trace.last().ok_or_else(fail)?;
     let final_field = &heat["final_field"];
-    let energy = outside_paths(&heat["outside_energy_paths"], "j")?;
-    let power = outside_paths(&final_field["outside_power_paths"], "w")?;
+    let energy = outside_paths(&heat["outside_energy_paths"], "j", radiative)?;
+    let power = outside_paths(&final_field["outside_power_paths"], "w", radiative)?;
     if heat["outside_energy_paths"] != last["outside_energy_paths"]
         || final_field["outside_power_paths"] != last["outside_power_paths"]
         || !heat_near(
@@ -428,32 +549,33 @@ fn admit_coverage_convection(
             finite(&final_field["bare_heat_w"]).ok_or_else(fail)?,
         )
         || !heat_near(
-            power[0] + power[2] + power[3],
+            power[0] + power[2] + power[3] + power[5],
             finite(&final_field["body_outside_heat_w"]).ok_or_else(fail)?,
         )
         || !heat_near(
-            power[1] + power[4],
+            power[1] + power[4] + power[6],
             finite(&final_field["exposed_outside_heat_w"]).ok_or_else(fail)?,
         )
     {
         return Err(fail());
     }
-    for (field, path, any, current) in [
-        ("exterior_exchange", 3, any_covered, covered[intervals - 1]),
+    for (field, path, radiation, any, current) in [
+        ("exterior_exchange", 3, 5, any_covered, covered[intervals - 1]),
         (
             "exposed_exterior_exchange",
             4,
+            6,
             any_exposed,
             exposed[intervals - 1],
         ),
     ] {
         if any {
-            convection_energy(&heat[field], energy[path])?;
-        } else if !heat[field].is_null() || energy[path] != 0. {
+            exterior_energy(&heat[field], energy[path], energy[radiation])?;
+        } else if !heat[field].is_null() || energy[path] != 0. || energy[radiation] != 0. {
             return Err(fail());
         }
         if current.is_some() {
-            convection_power(&final_field[field], power[path])?;
+            exterior_power(&final_field[field], power[path], power[radiation])?;
             for name in [
                 "convective_heat_w",
                 "radiative_heat_w",
@@ -603,16 +725,6 @@ pub(super) fn admit(
                 "ftx-motion-surface-compression-result/1"
             }
         || receipt["normal_work_to_heat_j"] != 0.
-        || request
-            .get("exterior_exchange")
-            .filter(|value| !value.is_null())
-            .is_some_and(|value| {
-                value.as_array().is_none_or(|environments| {
-                    environments
-                        .iter()
-                        .any(|environment| !environment["radiation"].is_null())
-                })
-            })
         || [
             "thermal_bridges",
             "plastic_dissipation_heat",
@@ -644,9 +756,9 @@ pub(super) fn admit(
     let samples = vapor_array(motion, "samples")?;
     let endpoints = vapor_array(motion, "keyframes")?;
     if coverage {
-        admit_coverage_convection(heat, request, trace, endpoints.len())?;
+        admit_coverage_exterior(heat, request, trace, endpoints.len())?;
     } else {
-        admit_convection(heat, request, trace, endpoints.len())?;
+        admit_exterior(heat, request, trace, endpoints.len())?;
     }
     // A present null field must not silently downgrade a requested branch or boundary policy.
     // Legacy schemas retain their original contracts and reject fields belonging only to /3.
@@ -826,6 +938,7 @@ pub(super) fn admit(
         } else if initial["layers"][0] != *original {
             return Err(fail());
         }
+        qualify_optics(&selected, request)?;
         selections.push(json!(material.frozen_selection()));
         originals.push(material);
         materials.push(selected);
@@ -946,6 +1059,7 @@ pub(super) fn admit(
                 let pressure = compressed.pressure_pa;
                 let layer = &compressed.layers[0];
                 let selected = catalog.resolve(&layer.conditioned.selection)?;
+                qualify_optics(&selected, request)?;
                 let mut area = 0.;
                 for &patch_index in &owned_patches[column] {
                     let patch = &patches[patch_index];
