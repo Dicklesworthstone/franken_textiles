@@ -8,6 +8,18 @@ Stock-width readiness requires a positive nominal width in metres under the sele
 policy; nonpositive authored observations remain inspectable without being admitted for stock.
 Regression: CLI `material_binding_workflow` (both native commands and the portable adapter).
 
+**Fixed material-region selection.** `material_compression::regions` admits convex 3–32-vertex
+polygons in a physical instance's mirrored, simulation-scaled flat millimetres. Its explicit
+`whole_triangle_centroid` rule selects complete retained triangles by exact orientation of their
+mathematical centroids, including boundaries. Canonical rounded coordinates serve only reporting.
+Both windings are accepted;
+crossed, concave, repeated, degenerate or unsupported coordinates refuse. Coordinates are bounded
+to ±1,000,000 mm, with nonzero magnitudes below 1e-100 excluded from exact-predicate arithmetic.
+The shared 16,777,216 candidate-triangle × polygon-edge budget bounds a regional partition.
+Drape construction and export replay use the same selector; callers enforce disjoint ownership
+and complete original-material remainders. No triangle clipping, mesh mutation or pressure law is
+introduced. Tests independently cover boundaries, corner ordering, winding and malformed geometry.
+
 **Bounded origin approximation.** `material_linearization::linearize` transfers exact Wang2011
 origin coefficients into the existing `TabulatedMembrane`, with G12=C33/2, explicit estimate consent,
 operator-authored physical Green-strain bounds and dated rationale. Original observations and

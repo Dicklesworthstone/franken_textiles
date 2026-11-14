@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::material_catalog::{Selection, normalize, property_unit};
 use crate::materials::{CATALOG_SCHEMA, Catalog, Evidence, Form, Material, Quantity, Source};
 
+/// Select fixed whole-triangle material regions in physical instance flat coordinates.
+pub mod regions;
 /// Invert qualified layer thicknesses to a common pressure at a prescribed stack clearance.
 pub mod stack;
 

@@ -180,6 +180,38 @@ pub fn orient2d_determinant(pa: [f64; 2], pb: [f64; 2], pc: [f64; 2]) -> (Sign, 
     (Sign::of_i32(expansion_sign(&det_e)), det_e.iter().sum())
 }
 
+/// Exact orientation of a triangle's mathematical centroid against the directed line `a → b`.
+/// This evaluates three times the determinant using exact coordinate differences and sums,
+/// without rounding the centroid or dividing by three. A centroid on the line stays exactly on it.
+/// The certified arithmetic domain is the same as [`orient2d`].
+///
+/// # Panics
+/// On a non-finite coordinate or when the arithmetic leaves the finite range.
+#[must_use]
+pub fn orient2d_triangle_centroid(a: [f64; 2], b: [f64; 2], triangle: [[f64; 2]; 3]) -> Sign {
+    // A linear half-plane containing every corner also contains its centroid. This exact
+    // shortcut avoids expansion allocation for triangles wholly on one side of the edge.
+    let signs = triangle.map(|point| orient2d(a, b, point));
+    if !signs.contains(&Sign::Negative) {
+        return if signs.contains(&Sign::Positive) {
+            Sign::Positive
+        } else {
+            Sign::Zero
+        };
+    }
+    if !signs.contains(&Sign::Positive) {
+        return Sign::Negative;
+    }
+    let dx = triangle.map(|point| diff_expansion(point[0], a[0]));
+    let dy = triangle.map(|point| diff_expansion(point[1], a[1]));
+    let x = fast_expansion_sum_zeroelim(&fast_expansion_sum_zeroelim(&dx[0], &dx[1]), &dx[2]);
+    let y = fast_expansion_sum_zeroelim(&fast_expansion_sum_zeroelim(&dy[0], &dy[1]), &dy[2]);
+    let abx = diff_expansion(b[0], a[0]);
+    let aby = diff_expansion(b[1], a[1]);
+    let determinant = expansion_diff(&expansion_product(&abx, &y), &expansion_product(&aby, &x));
+    Sign::of_i32(expansion_sign(&determinant))
+}
+
 /// Exact sign and rounded magnitude of `(2 radius)^2 - |b - a|^2` for circle admission.
 /// Subtractions and squares use expansions before cancellation, so a nearly diametric chord
 /// does not lose its small positive center offset or admit a radius below the true half chord.
@@ -386,6 +418,40 @@ fn diff_expansion(a: f64, b: f64) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn triangle_centroid_orientation_keeps_exact_boundary_and_matches_integer_oracle() {
+        let a = [0., 0.];
+        let b = [1., 3.];
+        let triangle = [[0., 0.], [2., 0.], [0., 6.]];
+        assert_ne!(orient2d(a, b, [2. / 3., 2.]), Sign::Zero);
+        assert_eq!(orient2d_triangle_centroid(a, b, triangle), Sign::Zero);
+        assert_eq!(orient2d_triangle_centroid(b, a, triangle), Sign::Zero);
+        let mut right = triangle;
+        right[1][0] = 2_f64.next_up();
+        assert_eq!(orient2d_triangle_centroid(a, b, right), Sign::Negative);
+        let mut left = triangle;
+        left[1][0] = 2_f64.next_down();
+        assert_eq!(orient2d_triangle_centroid(a, b, left), Sign::Positive);
+
+        let mut seed = 0x0012_8C00_0000_0011_u64;
+        for _ in 0..2000 {
+            let mut point = || [lcg(&mut seed), lcg(&mut seed)];
+            let (a, b, triangle) = (point(), point(), [point(), point(), point()]);
+            let exact: i128 = triangle
+                .into_iter()
+                .map(|c| {
+                    i128::from(b[0] - a[0]) * i128::from(c[1] - a[1])
+                        - i128::from(b[1] - a[1]) * i128::from(c[0] - a[0])
+                })
+                .sum();
+            let float = |p: [i64; 2]| [p[0] as f64, p[1] as f64];
+            assert_eq!(
+                orient2d_triangle_centroid(float(a), float(b), triangle.map(float)),
+                Sign::of_i32(exact.signum() as i32)
+            );
+        }
+    }
 
     #[test]
     fn circle_margin_keeps_exact_semicircles_and_resolves_rounded_half_chords() {

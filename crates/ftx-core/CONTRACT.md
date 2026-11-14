@@ -30,6 +30,10 @@ Body and drape geometry: metres, 3D, z up. Nothing here converts between them.
   `(2R)^2 - |b-a|^2` before near-diameter cancellation. Nonzero source inputs outside `[2^-300,2^300]`
   refuse the helper's certified normal-arithmetic domain. Direct integer-numerator, impossible-radius
   and exact-semicircle controls cover the circular-arc import boundary.
+- `exact::orient2d_triangle_centroid` determines which side of a line contains a triangle's
+  mathematical centroid without rounding a divided coordinate. It sums exact corner determinants
+  in the existing normal-arithmetic domain. A shared diagonal boundary, one-ULP perturbations and
+  2,000 independent integer-oracle cases cover regional whole-triangle material selection.
 
 **Determinism class.** Bit-identical across targets. The elementary functions use only correctly rounded
 IEEE operations (lifted from frankensim `fs-math/src/det.rs` at `f58c1acb`, unchanged bodies; trig refuses

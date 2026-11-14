@@ -845,6 +845,7 @@ fn compression_history_from(
                 })
             })
             .collect(),
+        regions: None,
     };
     let (source, compressed) = compression::Compression::from_retained(
         &policy,

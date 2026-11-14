@@ -900,6 +900,21 @@ unattainable gaps and unqualified reversal refuse. Temperature/storage, signed n
 whole-interval rollback retain the preceding contracts; source/pressure fields in versions `/1`
 and `/2` preserve their original serialized form.
 
+Version `/4` replaces whole-instance bindings with named regions, each retaining its physical
+instance, a shared convex `whole_triangle_centroid` selector and the existing `/3` binding.
+Flat coordinates come from the original mirrored/scaled mesh before grain rotation, wrapping or
+welding. The retained-face mapping must agree with the mechanical topology and reference areas.
+Each selected triangle belongs to one fixed region throughout motion; overlapping or empty
+selections refuse. Separate regions on one physical instance own independent conditioned columns
+and acquired histories. Every unselected triangle belongs to that owner's original-material
+remainder, whose own thermal properties must qualify without borrowing a compression acquisition.
+Physical layer/stack identities, reference mass, initial owner temperatures and heat-cell capacities
+remain unchanged. Source `/2` retains flat triangles and column-to-region ownership; result `/4`
+retains region states, selected triangles and remainders. Both heat modes reuse the existing solvers,
+projection and rollback. Current selected area scales normal work; whole-triangle selection is an
+explicit mesh approximation, with no geometric clipping, force-to-pressure inference or empirical
+compression claim. See `docs/material-scenario-studies.md` and `ftx-cp2.regions`.
+
 **Prescribed compression on moving layered coverage** (`study::heat::coverage`). Optional
 `motion.transient_coverage.prescribed_compression` uses the same source-qualified pressure,
 clearance and acquired-branch authority independently of sheet heat. The conditioned source reaches

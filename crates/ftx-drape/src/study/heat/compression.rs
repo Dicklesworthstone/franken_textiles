@@ -7,10 +7,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::{Refusal, Vec3};
+use ftx_core::{Refusal, Vec2, Vec3};
 use ftx_pattern::{
     material_catalog::{ResolvedMaterial, normalize},
-    material_compression::{self, stack},
+    material_compression::{
+        self,
+        regions::{MAX_REGION_EDGE_TESTS, PreparedSelector, Selector, triangle_centroid_mm},
+        stack,
+    },
     materials::{CATALOG_SCHEMA, Catalog},
 };
 use serde::{Deserialize, Serialize};
@@ -39,21 +43,21 @@ pub struct Binding {
     /// Initial monotone acquired branch. Version 2 may explicitly replace it at a qualified join.
     pub direction: stack::Direction,
     /// Versions 1 and 2: one prescribed pressure, Pa, for each mechanical keyframe interval.
-    /// Omit for version 3; even an empty or null legacy schedule is not a second control.
+    /// Omit for versions 3 and 4; even an empty or null legacy schedule is not a second control.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "pressures"
     )]
     pub pressure_pa: Option<Vec<f64>>,
-    /// Version 3 only: one explicit pressure or clearance boundary per keyframe interval.
+    /// Versions 3 and 4: one explicit pressure or clearance boundary per keyframe interval.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "controls"
     )]
     pub controls: Option<Vec<Control>>,
-    /// Versions 2 and 3: exactly one entry per interval; null continues the active branch.
+    /// Versions 2..4: exactly one entry per interval; null continues the active branch.
     /// A present change joins a single-layer unit-area source stack at the CURRENT state before
     /// this interval's pressure is applied. The whole field cannot be null or imply a recovery law.
     #[serde(
@@ -95,37 +99,112 @@ fn branch_changes<'de, D: serde::Deserializer<'de>>(
     Vec::<Option<stack::BranchChange>>::deserialize(deserializer).map(Some)
 }
 
-/// Optional dry pressure/heat closure on exact physical instance IDs; other sheets stay unchanged.
+/// A fixed flat-material region with its own source-qualified prescribed history.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RegionalBinding {
+    /// Physical retained instance; stack-layer and acquired branch identities use this name.
+    pub instance: String,
+    /// Whole-triangle membership in mirrored, simulation-scaled flat millimetres.
+    pub selector: Selector,
+    /// The existing explicit pressure/clearance controls and optional acquired branch joins.
+    pub binding: Binding,
+}
+
+/// Optional dry pressure/heat closure on physical instances or fixed material regions.
+#[derive(Clone, Debug, Serialize)]
 pub struct Request {
     /// `ftx-motion-surface-compression/1` for prescribed pressure on one monotone branch, /2
-    /// for qualified reversals, or /3 for explicit pressure/clearance controls with optional joins.
+    /// for qualified reversals, /3 for explicit controls, or /4 for named flat-material regions.
     pub schema: String,
     /// Explicit application evidence for constant dry thermal coefficients, temperature/time
     /// range, prescribed pressure and films, and omission of normal-work conversion into heat.
     pub thermal_evidence: String,
     /// One to 256 exact retained instance bindings. A shared material may have different pressures
-    /// on different instances. Unretained names and incomplete source matches refuse.
+    /// on different instances. Versions 1..3 only; omitted completely for version 4.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, Binding>,
+    /// Version 4 only: one to 256 named regions. Unselected triangles retain their original material.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regions: Option<BTreeMap<String, RegionalBinding>>,
+}
+
+impl<'de> Deserialize<'de> for Request {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        fn bindings<'de, D: serde::Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Option<BTreeMap<String, Binding>>, D::Error> {
+            BTreeMap::deserialize(deserializer).map(Some)
+        }
+        fn regions<'de, D: serde::Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Option<BTreeMap<String, RegionalBinding>>, D::Error> {
+            BTreeMap::deserialize(deserializer).map(Some)
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            schema: String,
+            thermal_evidence: String,
+            #[serde(default, deserialize_with = "bindings")]
+            bindings: Option<BTreeMap<String, Binding>>,
+            #[serde(default, deserialize_with = "regions")]
+            regions: Option<BTreeMap<String, RegionalBinding>>,
+        }
+        let fields = Fields::deserialize(deserializer)?;
+        let regional = fields.schema == "ftx-motion-surface-compression/4";
+        if (regional && (fields.bindings.is_some() || fields.regions.is_none()))
+            || (!regional && (fields.bindings.is_none() || fields.regions.is_some()))
+        {
+            return Err(serde::de::Error::custom(
+                "compression /4 requires regions without bindings; versions 1..3 require bindings without regions",
+            ));
+        }
+        Ok(Self {
+            schema: fields.schema,
+            thermal_evidence: fields.thermal_evidence,
+            bindings: fields.bindings.unwrap_or_default(),
+            regions: fields.regions,
+        })
+    }
 }
 
 impl Request {
     pub(super) fn validate(&self, intervals: usize) -> Result<(), Refusal> {
         let cyclic = self.schema == "ftx-motion-surface-compression/2";
-        let controlled = self.schema == "ftx-motion-surface-compression/3";
+        let regional = self.schema == "ftx-motion-surface-compression/4";
+        let controlled = regional || self.schema == "ftx-motion-surface-compression/3";
+        let count = if regional {
+            self.regions.as_ref().map_or(0, BTreeMap::len)
+        } else {
+            self.bindings.len()
+        };
         if (!cyclic && !controlled && self.schema != "ftx-motion-surface-compression/1")
             || self.thermal_evidence.trim().is_empty()
             || self.thermal_evidence.len() > 4096
-            || !(1..=256).contains(&self.bindings.len())
+            || !(1..=256).contains(&count)
             || !(1..=16).contains(&intervals)
+            || (regional && !self.bindings.is_empty())
+            || (!regional && self.regions.is_some())
         {
             return Err(invalid(
-                "prescribed compression needs schema /1, /2 or /3, explicit thermal evidence and 1..256 bindings",
+                "prescribed compression needs schema /1..4, explicit thermal evidence and 1..256 schema-qualified bindings or regions",
             ));
         }
+        let mut bindings = Vec::with_capacity(count);
+        if let Some(regions) = &self.regions {
+            for (name, region) in regions {
+                if name.trim().is_empty() || name.len() > 512 {
+                    return Err(invalid("compression region needs a nonempty bounded name"));
+                }
+                PreparedSelector::new(&region.selector)?;
+                bindings.push((&region.instance, &region.binding));
+            }
+        } else {
+            bindings.extend(self.bindings.iter());
+        }
         let mut joined = false;
-        for (id, binding) in &self.bindings {
+        for (id, binding) in bindings {
             let invalid_schedule = if controlled {
                 binding.pressure_pa.is_some()
                     || binding
@@ -267,6 +346,7 @@ struct InstanceState {
 
 #[derive(Clone, Debug)]
 struct Instance {
+    owner: String,
     binding: Binding,
     preparation: material_compression::Input,
     direction: stack::Direction,
@@ -278,10 +358,12 @@ struct Instance {
 pub(super) struct Compression {
     cyclic: bool,
     controlled: bool,
+    regional: bool,
     source_model: Value,
     initial_model: Value,
     initial_instances: Value,
     instances: BTreeMap<String, Instance>,
+    remainders: Value,
     cells_per_layer: usize,
     last_interval: Option<usize>,
     model_sha256: String,
@@ -326,7 +408,7 @@ impl Compression {
             &run.scene.mesh.instances,
             &run.scene.triangle_owner,
         )?;
-        let patches = faces
+        let patches: Vec<_> = faces
             .iter()
             .zip(assignment)
             .map(|(face, column)| Patch {
@@ -335,6 +417,35 @@ impl Compression {
                 column,
             })
             .collect();
+        if request.schema == "ftx-motion-surface-compression/4" {
+            let mut rest_triangles_mm = Vec::with_capacity(faces.len());
+            for face in &run.scene.mesh.faces {
+                let welded = face.map(|vertex| run.scene.weld[vertex]);
+                if welded[0] == welded[1] || welded[1] == welded[2] || welded[0] == welded[2] {
+                    continue;
+                }
+                let index = rest_triangles_mm.len();
+                if faces.get(index).is_none_or(|retained| retained.v != welded)
+                    || run.scene.triangle_owner.get(index) != Some(&run.scene.mesh.owner[face[0]])
+                {
+                    return Err(invalid(
+                        "regional compression flat source differs from retained cloth",
+                    ));
+                }
+                rest_triangles_mm.push(face.map(|vertex| run.scene.mesh.verts2d[vertex]));
+            }
+            return Self::from_regions(
+                request,
+                &records,
+                &run.scene.mesh.instances,
+                &run.scene.triangle_owner,
+                patches,
+                rest_triangles_mm,
+                run.scene.solver.x.len(),
+                cells_per_layer,
+                hash(&run.report["material"])?,
+            );
+        }
         Self::from_retained(
             request,
             &records,
@@ -359,7 +470,8 @@ impl Compression {
         material_report_sha256: String,
     ) -> Result<(Surface, Self), Refusal> {
         let retained = owners.iter().copied().collect::<BTreeSet<_>>();
-        if owners.len() != patches.len()
+        if request.regions.is_some()
+            || owners.len() != patches.len()
             || retained.iter().any(|&owner| owner >= instance_names.len())
             || request
                 .bindings
@@ -424,6 +536,7 @@ impl Compression {
                 instances.insert(
                     id.clone(),
                     Instance {
+                        owner: id.clone(),
                         binding: binding.clone(),
                         preparation: binding.preparation.clone(),
                         direction: binding.direction,
@@ -463,10 +576,11 @@ impl Compression {
             "instances":instance_names,"triangle_instance":owners,
             "column_instances":column_instances,"columns":source_columns,"patches":patches});
         source_model["sha256"] = json!(hash(&source_model)?);
-        let initial_instances = instance_snapshot(&instances);
+        let initial_instances = instance_snapshot(&instances, false);
         let compression = Self {
             cyclic: request.schema == "ftx-motion-surface-compression/2",
             controlled: request.schema == "ftx-motion-surface-compression/3",
+            regional: false,
             source_model,
             model_sha256: initial_model["sha256"]
                 .as_str()
@@ -475,6 +589,257 @@ impl Compression {
             initial_model,
             initial_instances,
             instances,
+            remainders: Value::Null,
+            cells_per_layer,
+            last_interval: None,
+            updates: Vec::new(),
+            cumulative_normal_work_j: 0.,
+        };
+        Ok((model, compression))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_regions(
+        request: &Request,
+        records: &[ResolvedMaterial],
+        instance_names: &[String],
+        owners: &[usize],
+        mut patches: Vec<Patch>,
+        rest_triangles_mm: Vec<[Vec2; 3]>,
+        vertex_count: usize,
+        cells_per_layer: usize,
+        material_report_sha256: String,
+    ) -> Result<(Surface, Self), Refusal> {
+        let regions = request
+            .regions
+            .as_ref()
+            .ok_or_else(|| invalid("regional compression needs named regions"))?;
+        let retained = owners.iter().copied().collect::<BTreeSet<_>>();
+        if request.schema != "ftx-motion-surface-compression/4"
+            || !request.bindings.is_empty()
+            || !(1..=256).contains(&regions.len())
+            || patches.is_empty()
+            || patches.len() > 65_536
+            || owners.len() != patches.len()
+            || rest_triangles_mm.len() != patches.len()
+            || retained.iter().any(|&owner| owner >= instance_names.len())
+            || regions.values().any(|region| {
+                !retained
+                    .iter()
+                    .any(|&owner| instance_names[owner] == region.instance)
+            })
+        {
+            return Err(invalid(
+                "regional compression needs exact retained instances and complete flat source triangles",
+            ));
+        }
+        for (triangle, patch) in rest_triangles_mm.iter().zip(&patches) {
+            triangle_centroid_mm(*triangle)?;
+            let [a, b, c] = *triangle;
+            let flat_area = positive(0.5 * (b - a).cross(c - a).abs() * 1e-6, "flat source area")?;
+            positive(patch.reference_area_m2, "reference source area")?;
+            if (flat_area - patch.reference_area_m2).abs()
+                > 1e-10 * flat_area.max(patch.reference_area_m2)
+            {
+                return Err(invalid(
+                    "regional compression flat area differs from retained reference area",
+                ));
+            }
+        }
+        let mut owned_by_instance: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (index, &owner) in owners.iter().enumerate() {
+            owned_by_instance.entry(owner).or_default().push(index);
+        }
+        let mut edge_tests = 0_usize;
+        let mut prepared = Vec::with_capacity(regions.len());
+        for (name, region) in regions {
+            let selector = PreparedSelector::new(&region.selector)?;
+            let count = owned_by_instance
+                .iter()
+                .find(|(owner, _)| instance_names[**owner] == region.instance)
+                .map_or(0, |(_, owned)| owned.len());
+            edge_tests = edge_tests
+                .checked_add(
+                    count
+                        .checked_mul(region.selector.polygon_mm.len())
+                        .ok_or_else(|| {
+                            invalid("regional compression selector work exceeds its bound")
+                        })?,
+                )
+                .ok_or_else(|| invalid("regional compression selector work exceeds its bound"))?;
+            if edge_tests > MAX_REGION_EDGE_TESTS {
+                return Err(invalid(
+                    "regional compression selector work exceeds its bound",
+                ));
+            }
+            prepared.push((name, region, selector));
+        }
+        let mut assigned = vec![false; patches.len()];
+        let mut source_columns = Vec::new();
+        let mut column_instances = Vec::new();
+        let mut column_regions: Vec<Option<String>> = Vec::new();
+        let mut columns = Vec::new();
+        let mut instances = BTreeMap::new();
+        let mut remainders = BTreeMap::new();
+        for (owner, owned) in owned_by_instance {
+            let id = &instance_names[owner];
+            let source_index = patches[owned[0]].column;
+            let source = records
+                .get(source_index)
+                .ok_or_else(|| invalid("regional compression source material is missing"))?;
+            if owned
+                .iter()
+                .any(|&index| patches[index].column != source_index)
+            {
+                return Err(invalid(
+                    "one regional compression instance has conflicting source materials",
+                ));
+            }
+            for (name, region, selector) in prepared
+                .iter()
+                .filter(|(_, region, _)| region.instance == *id)
+            {
+                let mut selected = Vec::new();
+                for &index in &owned {
+                    if selector.contains_triangle_centroid(rest_triangles_mm[index])? {
+                        if assigned[index] {
+                            return Err(invalid(
+                                "compression regions select the same retained triangle",
+                            ));
+                        }
+                        assigned[index] = true;
+                        selected.push(index);
+                    }
+                }
+                if selected.is_empty() {
+                    return Err(invalid("compression region selects no retained triangle"));
+                }
+                let binding = &region.binding;
+                if binding.material_sha256 != source.sha256()
+                    || hash(&normalize(&binding.preparation.material)?)? != hash(source.material())?
+                {
+                    return Err(invalid(
+                        "regional compression acquisition must match the exact selected material and normalized source record",
+                    ));
+                }
+                let conditioned = material_compression::condition(&binding.preparation)?;
+                let material = empty_catalog().resolve(&conditioned.selection)?;
+                let area = positive(
+                    selected
+                        .iter()
+                        .map(|&index| patches[index].reference_area_m2)
+                        .sum(),
+                    "region reference area",
+                )?;
+                let mass = positive(quantity(&material, "areal_density", "kg/m2")?, "areal mass")?;
+                if mass != quantity(source, "areal_density", "kg/m2")?
+                    || quantity(&material, "specific_heat", "J/(kg*K)")?
+                        != quantity(source, "specific_heat", "J/(kg*K)")?
+                {
+                    return Err(invalid(
+                        "regional compression cannot change selected reference mass or specific heat",
+                    ));
+                }
+                let column = columns.len();
+                let state = InstanceState {
+                    column,
+                    material_sha256: source.sha256().into(),
+                    conditioned_material_sha256: material.sha256().into(),
+                    pressure_pa: binding.preparation.pressure_pa,
+                    thickness_m: positive(quantity(&material, "thickness", "m")?, "thickness")?,
+                    reference_area_m2: area,
+                    reference_mass_kg: positive(area * mass, "reference mass")?,
+                    cumulative_normal_work_j: 0.,
+                };
+                columns.push(DryThermalModel::new(
+                    vec![material],
+                    vec![],
+                    cells_per_layer,
+                )?);
+                source_columns.push(source.clone());
+                column_instances.push(id.clone());
+                column_regions.push(Some((*name).clone()));
+                for &index in &selected {
+                    patches[index].column = column;
+                }
+                instances.insert(
+                    (*name).clone(),
+                    Instance {
+                        owner: id.clone(),
+                        binding: binding.clone(),
+                        preparation: binding.preparation.clone(),
+                        direction: binding.direction,
+                        patches: selected,
+                        state,
+                    },
+                );
+            }
+            let remainder: Vec<_> = owned
+                .into_iter()
+                .filter(|&index| !assigned[index])
+                .collect();
+            if !remainder.is_empty() {
+                let column = columns.len();
+                let area = positive(
+                    remainder
+                        .iter()
+                        .map(|&index| patches[index].reference_area_m2)
+                        .sum(),
+                    "remainder reference area",
+                )?;
+                let mass = positive(
+                    quantity(source, "areal_density", "kg/m2")?,
+                    "remainder areal mass",
+                )?;
+                // The untouched original record must supply its own thermal properties. A region's
+                // acquired law cannot silently qualify transport on the unselected material.
+                columns.push(DryThermalModel::new(
+                    vec![source.clone()],
+                    vec![],
+                    cells_per_layer,
+                )?);
+                source_columns.push(source.clone());
+                column_instances.push(id.clone());
+                column_regions.push(None);
+                for &index in &remainder {
+                    patches[index].column = column;
+                    assigned[index] = true;
+                }
+                remainders.insert(
+                    id.clone(),
+                    json!({"column":column,"source_triangles":remainder,
+                    "material_sha256":source.sha256(),"reference_area_m2":area,
+                    "reference_mass_kg":positive(area * mass, "remainder reference mass")?}),
+                );
+            }
+        }
+        if assigned.iter().any(|selected| !selected) {
+            return Err(invalid(
+                "regional compression did not partition every retained triangle",
+            ));
+        }
+        let model = Surface::new(columns, vertex_count, patches.clone())?;
+        let initial_model = model.snapshot();
+        let mut source_model = json!({"schema":"ftx-motion-compression-source/2",
+            "material_report_sha256":material_report_sha256,
+            "cells_per_layer":cells_per_layer,"vertex_count":vertex_count,
+            "instances":instance_names,"triangle_instance":owners,
+            "column_instances":column_instances,"column_regions":column_regions,
+            "columns":source_columns,"patches":patches,"rest_triangles_mm":rest_triangles_mm});
+        source_model["sha256"] = json!(hash(&source_model)?);
+        let compression = Self {
+            cyclic: false,
+            controlled: true,
+            regional: true,
+            source_model,
+            model_sha256: initial_model["sha256"]
+                .as_str()
+                .expect("surface identity")
+                .into(),
+            initial_model,
+            initial_instances: instance_snapshot(&instances, true),
+            instances,
+            remainders: json!(remainders),
             cells_per_layer,
             last_interval: None,
             updates: Vec::new(),
@@ -558,7 +923,7 @@ impl Compression {
                 reference_area_m2: 1.,
                 direction: instance.direction,
                 layers: vec![stack::Layer {
-                    id: id.clone(),
+                    id: instance.owner.clone(),
                     preparation,
                 }],
                 allow_estimates: instance.preparation.allow_estimates,
@@ -613,8 +978,7 @@ impl Compression {
             instance.state.conditioned_material_sha256 = material.sha256().into();
             instance.state.cumulative_normal_work_j = cumulative;
             self.cumulative_normal_work_j = total;
-            let mut update = serde_json::to_value(&instance.state)
-                .map_err(|error| invalid(error.to_string()))?;
+            let mut update = state_snapshot(instance, self.regional);
             update["previous_pressure_pa"] = json!(previous_pressure);
             update["work_area_m2"] = json!(area);
             update["normal_work_j"] = json!(work);
@@ -637,45 +1001,80 @@ impl Compression {
             .as_str()
             .expect("surface identity")
             .into();
-        self.updates.push(
-            json!({"interval_index":interval,"sample_index":sample_index,
+        let mut update = json!({"interval_index":interval,"sample_index":sample_index,
             "time_s":time_s,"positions_sha256":hash(&positions)?,
-            "model_sha256":self.model_sha256,"instances":updates}),
-        );
+            "model_sha256":self.model_sha256});
+        update[if self.regional {
+            "regions"
+        } else {
+            "instances"
+        }] = json!(updates);
+        self.updates.push(update);
         self.last_interval = Some(interval);
         Ok(Some((next, temperature)))
     }
 
     pub(super) fn summary(&self) -> Value {
-        json!({"model_sha256":self.model_sha256,"instances":instance_snapshot(&self.instances),
-            "cumulative_normal_work_j":self.cumulative_normal_work_j})
+        let mut summary = json!({"model_sha256":self.model_sha256,
+            "cumulative_normal_work_j":self.cumulative_normal_work_j});
+        summary[if self.regional {
+            "regions"
+        } else {
+            "instances"
+        }] = instance_snapshot(&self.instances, self.regional);
+        summary
     }
 
     pub(super) fn finish(&self) -> Value {
-        json!({"schema":if self.controlled { "ftx-motion-surface-compression-result/3" }
+        let mut result = json!({"schema":if self.regional { "ftx-motion-surface-compression-result/4" }
+        else if self.controlled { "ftx-motion-surface-compression-result/3" }
         else if self.cyclic { "ftx-motion-surface-compression-result/2" }
         else { "ftx-motion-surface-compression-result/1" },
         "material_report_sha256":self.source_model["material_report_sha256"],
         "source_model":self.source_model,"initial_model":self.initial_model,
-        "initial_instances":self.initial_instances,"updates":self.updates,
-        "final_instances":instance_snapshot(&self.instances),
+        "updates":self.updates,
         "final_model_sha256":self.model_sha256,
         "cumulative_normal_work_j":self.cumulative_normal_work_j,"normal_work_to_heat_j":0.,
-        "scope":if self.controlled {
+        "scope":if self.regional {
+            "Explicit pressure or rigid-face clearance on fixed whole-triangle material regions selected by convex flat-rest-mm polygons. Region histories follow the same retained cloth triangles; unselected triangles retain independently qualified original material. Every optional acquired reversal preserves actual pressure, thickness, reference mass and temperature cells with zero entry work. Normal work uses current accepted selected-triangle area while thermal storage follows unchanged reference mass. No geometric clipping, pressure inferred from force or contact, geometry feedback, inferred recovery-time or minor-loop law, wet law, work-to-heat conversion or empirical garment claim."
+        } else if self.controlled {
             "Explicit uniform pressure or rigid-face clearance per retained instance on source-qualified dry branches. Clearance uses the shared inverse stack authority; every optional reversal preserves actual pressure, thickness, reference mass and temperature cells with zero entry work. Each instantaneous traverse uses current accepted area held fixed during that traverse; subsequent heat storage follows unchanged reference mass. No contact-derived pressure or gap, geometry feedback, inferred recovery-time or minor-loop law, wet law, work-to-heat conversion or empirical garment claim."
         } else if self.cyclic {
             "Prescribed uniform pressure per retained instance on explicitly joined source-qualified dry branches. Every reversal preserves actual pressure, thickness, reference mass and temperature cells with zero entry work. Each instantaneous traverse uses current accepted area held fixed during that traverse; subsequent heat storage follows unchanged reference mass. No inferred recovery-time or minor-loop law, contact pressure, geometry feedback, wet law, work-to-heat conversion or empirical garment claim."
         } else {
             "Prescribed uniform pressure per retained instance on its qualified monotone dry branch. Each instantaneous traverse uses current accepted area held fixed during that traverse; subsequent heat storage follows unchanged reference mass. No pressure inferred from contact, geometry feedback, branch reversal, wet law, work-to-heat conversion or empirical garment claim."
-        }})
+        }});
+        result[if self.regional {
+            "initial_regions"
+        } else {
+            "initial_instances"
+        }] = self.initial_instances.clone();
+        result[if self.regional {
+            "final_regions"
+        } else {
+            "final_instances"
+        }] = instance_snapshot(&self.instances, self.regional);
+        if self.regional {
+            result["remainders"] = self.remainders.clone();
+        }
+        result
     }
 }
 
-fn instance_snapshot(instances: &BTreeMap<String, Instance>) -> Value {
+fn state_snapshot(instance: &Instance, regional: bool) -> Value {
+    let mut state = json!(instance.state);
+    if regional {
+        state["instance"] = json!(instance.owner);
+        state["source_triangles"] = json!(instance.patches);
+    }
+    state
+}
+
+fn instance_snapshot(instances: &BTreeMap<String, Instance>, regional: bool) -> Value {
     json!(
         instances
             .iter()
-            .map(|(id, instance)| (id, &instance.state))
+            .map(|(id, instance)| (id, state_snapshot(instance, regional)))
             .collect::<BTreeMap<_, _>>()
     )
 }
@@ -746,6 +1145,7 @@ pub(super) mod tests {
                 controls: None,
                 branch_changes: None,
             })]),
+            regions: None,
         };
         history_from(compression)
     }
@@ -927,6 +1327,365 @@ pub(super) mod tests {
         binding.pressure_pa = None;
         binding.controls = Some(controls);
         request
+    }
+
+    fn regional_request() -> Request {
+        let mut request = controlled_request(vec![
+            Control::Pressure { pressure_pa: 250. },
+            Control::Pressure { pressure_pa: 500. },
+        ]);
+        let pressure = request.bindings.remove("sheet").unwrap();
+        let mut clearance = pressure.clone();
+        clearance.controls = Some(vec![
+            Control::Gap { gap_m: 0.018 },
+            Control::Gap { gap_m: 0.015 },
+        ]);
+        let selector = |left: f64| Selector {
+            kind: "whole_triangle_centroid".into(),
+            polygon_mm: [
+                [left - 100., -100.],
+                [left + 1100., -100.],
+                [left + 1100., 600.],
+                [left - 100., 600.],
+            ]
+            .map(Vec2::from)
+            .to_vec(),
+        };
+        request.schema = "ftx-motion-surface-compression/4".into();
+        request.regions = Some(BTreeMap::from([
+            (
+                "pressure-zone".into(),
+                RegionalBinding {
+                    instance: "sheet".into(),
+                    selector: selector(0.),
+                    binding: pressure,
+                },
+            ),
+            (
+                "clearance-zone".into(),
+                RegionalBinding {
+                    instance: "sheet".into(),
+                    selector: selector(2000.),
+                    binding: clearance,
+                },
+            ),
+        ]));
+        request
+    }
+
+    fn regional_source(request: &Request) -> Result<(Surface, Compression), Refusal> {
+        let preparation = &request
+            .regions
+            .as_ref()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .binding
+            .preparation;
+        let triangles = [0., 2000., 4000.].map(|left| {
+            [
+                Vec2::new(left, 0.),
+                Vec2::new(left + 1000., 0.),
+                Vec2::new(left, 500.),
+            ]
+        });
+        Compression::from_regions(
+            request,
+            &[selected(preparation)],
+            &["sheet".into()],
+            &[0, 0, 0],
+            (0..3)
+                .map(|index| Patch {
+                    vertices: [3 * index, 3 * index + 1, 3 * index + 2],
+                    reference_area_m2: 0.25,
+                    column: 0,
+                })
+                .collect(),
+            triangles.to_vec(),
+            9,
+            1,
+            "a".repeat(64),
+        )
+    }
+
+    fn regional_history(request: Request) -> SurfaceHistory {
+        request.validate(2).unwrap();
+        let (model, compression) = regional_source(&request).unwrap();
+        let policy: SurfaceRequest = serde_json::from_value(json!({
+            "schema":"ftx-motion-surface-heat/1","initial_temperature_c":0.,
+            "cells_per_layer":1,"max_step_s":1.,"max_cell_steps":100,
+            "boundaries":vec![json!({"inside_c":40.,"outside_c":0.,
+                "inside_resistance_m2_k_w":0.,"outside_resistance_m2_k_w":0.});2],
+            "prescribed_compression":request,
+        }))
+        .unwrap();
+        policy.validate(2).unwrap();
+        let mut history =
+            SurfaceHistory::with_instances(policy, model, &["sheet".into()], &[0, 0, 0]).unwrap();
+        history.compression = Some(compression);
+        history
+    }
+
+    fn regional_geometry(areas: [f64; 3]) -> Vec<Vec3> {
+        areas
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, area)| {
+                let origin = Vec3::new(10. * index as f64, 0., 0.);
+                [
+                    origin,
+                    origin + Vec3::new(2. * area, 0., 0.),
+                    origin + Vec3::new(0., 1., 0.),
+                ]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn regional_pressure_and_clearance_preserve_remainder_mass_and_independent_heat() {
+        let request = regional_request();
+        let raw = serde_json::to_value(&request).unwrap();
+        assert!(raw.get("bindings").is_none());
+        assert_eq!(
+            serde_json::to_value(serde_json::from_value::<Request>(raw.clone()).unwrap()).unwrap(),
+            raw
+        );
+        let mut history = regional_history(request);
+        let source_hash =
+            history.compression.as_ref().unwrap().source_model["columns"][0]["sha256"].clone();
+        let mut temperatures = [0.; 3];
+        for (interval, (areas, resistances)) in [
+            ([1., 0.5, 0.25], [0.375, 0.45, 0.5]),
+            ([0.5, 1., 0.125], [0.25, 0.375, 0.5]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            history
+                .advance(
+                    &regional_geometry(areas),
+                    (interval + 1) as f64,
+                    interval,
+                    interval,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            for patch in 0..3 {
+                temperatures[patch] =
+                    expected_step(temperatures[patch], areas[patch], resistances[patch], 1.);
+                close(history.state.temperature_c()[patch][0], temperatures[patch]);
+            }
+            close(history.stored_j, 25. * temperatures.iter().sum::<f64>());
+            close(history.balance_error_j(), 0.);
+        }
+        let result = history.finish("regional", "initial", 2.).unwrap();
+        let report = &result["prescribed_compression"];
+        assert_eq!(report["schema"], "ftx-motion-surface-compression-result/4");
+        assert_eq!(
+            report["source_model"]["schema"],
+            "ftx-motion-compression-source/2"
+        );
+        assert_eq!(
+            report["source_model"]["column_instances"],
+            json!(["sheet", "sheet", "sheet"])
+        );
+        assert_eq!(
+            report["source_model"]["column_regions"],
+            json!(["clearance-zone", "pressure-zone", null])
+        );
+        assert_eq!(
+            report["final_regions"]["pressure-zone"]["source_triangles"],
+            json!([0])
+        );
+        assert_eq!(
+            report["final_regions"]["clearance-zone"]["source_triangles"],
+            json!([1])
+        );
+        assert_eq!(
+            report["remainders"]["sheet"]["source_triangles"],
+            json!([2])
+        );
+        for name in ["pressure-zone", "clearance-zone"] {
+            assert_eq!(report["final_regions"][name]["instance"], "sheet");
+            close(
+                report["final_regions"][name]["reference_mass_kg"]
+                    .as_f64()
+                    .unwrap(),
+                0.025,
+            );
+        }
+        assert_eq!(
+            report["remainders"]["sheet"]["material_sha256"],
+            source_hash
+        );
+        close(
+            report["remainders"]["sheet"]["reference_mass_kg"]
+                .as_f64()
+                .unwrap(),
+            0.025,
+        );
+        close(
+            report["final_regions"]["pressure-zone"]["cumulative_normal_work_j"]
+                .as_f64()
+                .unwrap(),
+            1.5625,
+        );
+        close(
+            report["final_regions"]["clearance-zone"]["cumulative_normal_work_j"]
+                .as_f64()
+                .unwrap(),
+            0.575,
+        );
+        assert_eq!(report["normal_work_to_heat_j"], 0.);
+        assert!(report.get("initial_instances").is_none());
+        assert!(report["updates"][0].get("instances").is_none());
+        assert!(
+            result["trace"][0]["prescribed_compression"]
+                .get("regions")
+                .is_some()
+        );
+        Surface::from_snapshot(&result["model"]).unwrap();
+    }
+
+    #[test]
+    fn regional_partition_refuses_overlap_empty_stale_and_implicit_remainder_transport() {
+        let original = regional_request();
+        for case in 0..6 {
+            let mut request = original.clone();
+            let regions = request.regions.as_mut().unwrap();
+            match case {
+                0 => {
+                    regions.get_mut("pressure-zone").unwrap().selector =
+                        regions["clearance-zone"].selector.clone()
+                }
+                1 => {
+                    for point in &mut regions
+                        .get_mut("pressure-zone")
+                        .unwrap()
+                        .selector
+                        .polygon_mm
+                    {
+                        point.x += 20_000.;
+                    }
+                }
+                2 => regions.get_mut("pressure-zone").unwrap().instance = "unknown".into(),
+                3 => {
+                    regions
+                        .get_mut("pressure-zone")
+                        .unwrap()
+                        .binding
+                        .material_sha256 = "0".repeat(64)
+                }
+                4 => {
+                    regions
+                        .get_mut("pressure-zone")
+                        .unwrap()
+                        .binding
+                        .preparation
+                        .material
+                        .name
+                        .push_str(" stale");
+                }
+                _ => {
+                    for region in regions.values_mut() {
+                        region
+                            .binding
+                            .preparation
+                            .material
+                            .properties
+                            .remove("thermal_resistance");
+                        region
+                            .binding
+                            .preparation
+                            .material
+                            .properties
+                            .remove("thermal_conductivity");
+                        region.binding.material_sha256 =
+                            selected(&region.binding.preparation).sha256().into();
+                    }
+                }
+            }
+            assert!(regional_source(&request).is_err(), "case {case}");
+        }
+        let raw = serde_json::to_value(original).unwrap();
+        for value in [Value::Null, json!({})] {
+            let mut mixed = raw.clone();
+            mixed["bindings"] = value;
+            assert!(serde_json::from_value::<Request>(mixed).is_err());
+        }
+        let mut legacy = raw;
+        legacy["schema"] = json!("ftx-motion-surface-compression/3");
+        assert!(serde_json::from_value::<Request>(legacy).is_err());
+    }
+
+    #[test]
+    fn regional_branch_join_keeps_physical_owner_and_fully_selected_material_needs_no_remainder() {
+        let mut request = regional_request();
+        let mut region = request
+            .regions
+            .take()
+            .unwrap()
+            .remove("pressure-zone")
+            .unwrap();
+        for quantity in region.binding.preparation.material.properties.values_mut() {
+            quantity.conditions.remove("loading_branch");
+        }
+        region
+            .binding
+            .preparation
+            .material
+            .properties
+            .remove("thermal_resistance");
+        region
+            .binding
+            .preparation
+            .material
+            .properties
+            .remove("thermal_conductivity");
+        region.binding.material_sha256 = selected(&region.binding.preparation).sha256().into();
+        region.selector.polygon_mm = [[-100., -100.], [6000., -100.], [6000., 600.], [-100., 600.]]
+            .map(Vec2::from)
+            .to_vec();
+        region.binding.controls = Some(vec![
+            Control::Pressure { pressure_pa: 500. },
+            Control::Gap { gap_m: 0.012 },
+        ]);
+        region.binding.branch_changes = Some(vec![
+            None,
+            Some(reversal(&region.binding.preparation, true)),
+        ]);
+        request.regions = Some(BTreeMap::from([("named-zone".into(), region)]));
+        let mut history = regional_history(request);
+        for interval in 0..2 {
+            history
+                .advance(
+                    &regional_geometry([0.25; 3]),
+                    (interval + 1) as f64,
+                    interval,
+                    interval,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+        let result = history.finish("regional-cycle", "initial", 2.).unwrap();
+        let report = &result["prescribed_compression"];
+        assert_eq!(report["remainders"], json!({}));
+        assert_eq!(
+            report["final_regions"]["named-zone"]["source_triangles"],
+            json!([0, 1, 2])
+        );
+        assert_eq!(report["final_regions"]["named-zone"]["pressure_pa"], 250.);
+        assert_eq!(
+            report["updates"][1]["regions"]["named-zone"]["branch_change"]["change"]["entry"]["layers"]
+                [0]["id"],
+            "sheet"
+        );
+        close(report["cumulative_normal_work_j"].as_f64().unwrap(), 1.3125);
     }
 
     #[test]
