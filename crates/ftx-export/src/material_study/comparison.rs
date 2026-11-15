@@ -2168,6 +2168,22 @@ impl Policy {
                     "instances":strain["source"]["instances"],"scope":strain["scope"],
                     "strain_convention":strain["strain_convention"],"unit":strain["unit"]}),
                 ))?;
+                if strain["schema"] == "ftx-material-strain-report/2" {
+                    // A region is authored in flat material coordinates. Mesh identities, counts
+                    // and areas may change across designs; the selected polygon and owner may not.
+                    let regions = strain["source"]["regions"]
+                        .as_object()
+                        .ok_or_else(|| invalid("admitted material-strain regions unavailable"))?
+                        .iter()
+                        .map(|(id, region)| {
+                            (
+                                id,
+                                json!({"instance":region["instance"],"selector":region["selector"]}),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    base = hash(&(base, "ftx-material-strain/2", regions))?;
+                }
             }
         }
         for (consumer, loads) in [

@@ -1285,6 +1285,16 @@ requirements, never an inferred comfort criterion or continuous-time bound. Anal
 deterministic witness and transactional checks accompany actual sewn static/motion replay and
 source/scope/budget refusal tests in `tests/material_scenario/strain.rs`.
 
+Version `/2` selects 1–256 named disjoint regions within retained physical instances using the
+shared exact whole-triangle-centroid selector in mirrored, simulation-scaled flat millimetres.
+Selectors stay fixed through motion; altered designs recompute membership on their actual flat
+mesh, without inferring an anatomical or vertex-following region. Every region must be nonempty;
+exact boundary overlaps refuse. Complete retained flat triangles permit independent partition
+reconstruction. The report adds per-region extrema/witnesses, selected reference areas and source
+triangle IDs; existing metrics cover their union. All selected samples share the ordinary budget,
+and preparation separately bounds polygon-edge work. Version `/1` omits all regional fields and
+preserves its output. Neither spatial scope nor an authored limit supplies new material evidence.
+
 **Named operating cases.** `study::matrix` admits `ftx-drape-scenario-matrix/1` through the existing
 scenario adapters. The common body is selected once; each case owns a fresh ordinary session and
 each material evaluation starts with independent cloth, constitutive and thermal state. Every case

@@ -934,6 +934,14 @@ Unavailable motion strain preserves static strain readings and independent manuf
 Regressions include all twelve inclusive signed constraints, changed-source/partial-history refusal,
 actual portable design selection and native/compiled-WASM selected-body replay.
 
+Regional strain `/2` independently reconstructs complete disjoint selection from the retained
+physical flat triangles and original instance/polygon declarations. Selected reference areas,
+region/instance/global extrema and deterministic witnesses must reconcile. Rehashed but incomplete
+partitions refuse. The comparison protocol includes named selectors and physical owners, while
+actual mesh indices, counts and areas can change across explicitly altered designs. Metrics cover
+the selected union; per-region summaries retain diagnostic detail. Version `/1` keeps its original
+whole-instance admission and output. A missing region never becomes a zero-strain result.
+
 **Material-following vapor studies** (`material_study::vapor`, plan §25.49). Explicit ordered layer
 occurrences resolve the final source-piece/default selections after every atomic material substitution.
 The canonical `material_vapor` evaluator supplies its independent report/refusal and exact standalone

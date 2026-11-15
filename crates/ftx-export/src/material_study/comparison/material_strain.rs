@@ -2,7 +2,8 @@
 //! This is receipt consistency, not a second deformation solve or an imported-report certificate.
 
 use super::*;
-use ftx_pattern::material_calibration;
+use ftx_core::Vec2;
+use ftx_pattern::{material_calibration, material_compression::regions};
 
 type Ranges = [[f64; 2]; 3];
 
@@ -116,6 +117,126 @@ struct Source<'a> {
     vertex_count: usize,
     triangles: BTreeMap<usize, &'a Value>,
     domains: BTreeMap<&'a str, [Option<Ranges>; 2]>,
+    regions: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Region {
+    id: String,
+    instance: String,
+    selector: regions::Selector,
+}
+
+struct RegionalScope {
+    instances: BTreeSet<String>,
+    triangle_regions: BTreeMap<usize, String>,
+    regions: BTreeMap<String, String>,
+    flat_areas_m2: Vec<f64>,
+}
+
+// Reconstruct the fixed source-space union. Hashes alone cannot establish that an omitted or
+// reassigned retained triangle lies outside an authored region. The kinematics remain in drape.
+fn regional_scope(
+    policy: &Value,
+    source: &Value,
+    ownership: &Value,
+    instances: &[Value],
+    owners: &[Value],
+) -> Result<RegionalScope, Refusal> {
+    let requested = array(policy, "regions")?;
+    let flat = array(ownership, "rest_triangles_mm")?;
+    let published = source["regions"].as_object().ok_or_else(fail)?;
+    if !(1..=256).contains(&requested.len())
+        || published.len() != requested.len()
+        || flat.len() != owners.len()
+    {
+        return Err(fail());
+    }
+    let flat = flat
+        .iter()
+        .map(|triangle| <[Vec2; 3]>::deserialize(triangle).map_err(|_| fail()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut flat_areas_m2 = Vec::with_capacity(flat.len());
+    let mut by_instance = BTreeMap::<&str, Vec<usize>>::new();
+    for (i, (triangle, owner)) in flat.iter().zip(owners).enumerate() {
+        regions::triangle_centroid_mm(*triangle)?;
+        let [a, b, c] = *triangle;
+        let area = 0.5 * (b - a).cross(c - a).abs() * 1e-6;
+        if !area.is_finite() || area <= 0. {
+            return Err(fail());
+        }
+        flat_areas_m2.push(area);
+        let instance = instances
+            .get(index(owner)?)
+            .and_then(Value::as_str)
+            .ok_or_else(fail)?;
+        by_instance.entry(instance).or_default().push(i);
+    }
+    let requested = requested
+        .iter()
+        .map(|value| Region::deserialize(value).map_err(|_| fail()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut edge_tests = 0usize;
+    let mut ids = BTreeSet::new();
+    let mut selectors = Vec::with_capacity(requested.len());
+    for region in &requested {
+        if region.id.trim().is_empty()
+            || region.id.len() > 512
+            || !ids.insert(region.id.as_str())
+            || region.instance.trim().is_empty()
+            || region.instance.len() > 4096
+        {
+            return Err(fail());
+        }
+        let owned = by_instance.get(region.instance.as_str()).ok_or_else(fail)?;
+        edge_tests = owned
+            .len()
+            .checked_mul(region.selector.polygon_mm.len())
+            .and_then(|count| edge_tests.checked_add(count))
+            .filter(|&count| count <= regions::MAX_REGION_EDGE_TESTS)
+            .ok_or_else(fail)?;
+        selectors.push((
+            region,
+            regions::PreparedSelector::new(&region.selector)?,
+            owned,
+        ));
+    }
+    let mut result = RegionalScope {
+        instances: BTreeSet::new(),
+        triangle_regions: BTreeMap::new(),
+        regions: BTreeMap::new(),
+        flat_areas_m2,
+    };
+    for (region, selector, owned) in selectors {
+        let mut selected = Vec::new();
+        for &i in owned {
+            if selector.contains_triangle_centroid(flat[i])? {
+                if result
+                    .triangle_regions
+                    .insert(i, region.id.clone())
+                    .is_some()
+                {
+                    return Err(fail());
+                }
+                selected.push(i);
+            }
+        }
+        let published = published.get(&region.id).ok_or_else(fail)?;
+        if selected.is_empty()
+            || published["instance"] != region.instance
+            || published["selector"] != json!(region.selector)
+            || published["source_triangles"] != json!(selected)
+            || !finite(&published["reference_area_m2"]).is_some_and(|area| area > 0.)
+        {
+            return Err(fail());
+        }
+        result.instances.insert(region.instance.clone());
+        result
+            .regions
+            .insert(region.id.clone(), region.instance.clone());
+    }
+    Ok(result)
 }
 
 fn source<'a>(
@@ -165,7 +286,23 @@ fn source<'a>(
             .ok_or_else(fail)?;
         retained.insert(name.to_owned());
     }
-    let selected = if let Some(requested) = policy.get("instances") {
+    let regional = if policy["schema"] == "ftx-material-strain/2" {
+        Some(regional_scope(
+            policy,
+            source,
+            ownership,
+            all_instances,
+            owners,
+        )?)
+    } else {
+        if source.get("regions").is_some() || report.get("regions").is_some() {
+            return Err(fail());
+        }
+        None
+    };
+    let selected = if let Some(regional) = &regional {
+        regional.instances.clone()
+    } else if let Some(requested) = policy.get("instances") {
         let ids = requested.as_array().ok_or_else(fail)?;
         let mut selected = BTreeSet::new();
         for id in ids {
@@ -275,7 +412,13 @@ fn source<'a>(
             let name = all_instances[owner.as_u64().expect("checked owner") as usize]
                 .as_str()
                 .expect("checked name");
-            selected.contains(name).then_some((i, name))
+            regional
+                .as_ref()
+                .map_or_else(
+                    || selected.contains(name),
+                    |scope| scope.triangle_regions.contains_key(&i),
+                )
+                .then_some((i, name))
         })
         .collect::<Vec<_>>();
     let rows = array(source, "triangles")?;
@@ -284,6 +427,7 @@ fn source<'a>(
     }
     let mut triangles = BTreeMap::new();
     let mut area_by_instance = BTreeMap::<&str, f64>::new();
+    let mut area_by_region = BTreeMap::<&str, f64>::new();
     for (row, (i, name)) in rows.iter().zip(expected) {
         let vertices: [usize; 3] =
             Deserialize::deserialize(&row["vertices"]).map_err(|_| fail())?;
@@ -317,11 +461,25 @@ fn source<'a>(
         {
             return Err(fail());
         }
+        if let Some(regional) = &regional {
+            let id = &regional.triangle_regions[&i];
+            let flat_area = regional.flat_areas_m2[i];
+            if row["region"] != *id || (flat_area - area).abs() > 1e-10 * flat_area.max(area) {
+                return Err(fail());
+            }
+            *area_by_region.entry(id).or_default() += area;
+        } else if row.get("region").is_some() {
+            return Err(fail());
+        }
         *area_by_instance.entry(name).or_default() += area;
         triangles.insert(i, row);
     }
     if area_by_instance.values().any(|area| !area.is_finite())
+        || area_by_region.iter().any(|(id, area)| {
+            !area.is_finite() || finite(&source["regions"][*id]["reference_area_m2"]) != Some(*area)
+        })
         || (per_piece
+            && regional.is_none()
             && area_by_instance.iter().any(|(name, area)| {
                 finite(&material_report["instances"][names[name]]["rest_area_m2"]) != Some(*area)
             }))
@@ -332,6 +490,7 @@ fn source<'a>(
         vertex_count,
         triangles,
         domains,
+        regions: regional.map_or_else(BTreeMap::new, |scope| scope.regions),
     })
 }
 
@@ -340,6 +499,7 @@ fn check_summary(
     frames: &[Frame],
     source: &Source<'_>,
     instance: Option<&str>,
+    region: Option<&str>,
 ) -> Result<(), Refusal> {
     for i in 0..3 {
         for (side, witness) in [
@@ -358,6 +518,7 @@ fn check_summary(
                 || witness.value < lo
                 || witness.value > hi
                 || instance.is_some_and(|id| triangle["instance"] != id)
+                || region.is_some_and(|id| triangle["region"] != id)
                 || (witness.value == lo && witness.source_triangle < frame.minimum_triangle[i])
                 || (witness.value == hi && witness.source_triangle < frame.maximum_triangle[i])
             {
@@ -372,7 +533,10 @@ fn check_summary(
             let observed = frame.summary();
             for i in 0..3 {
                 for witness in [&observed.minimum_witness[i], &observed.maximum_witness[i]] {
-                    if source.triangles[&witness.source_triangle]["instance"] != id {
+                    let triangle = source.triangles[&witness.source_triangle];
+                    if triangle["instance"] != id
+                        || region.is_some_and(|id| triangle["region"] != id)
+                    {
                         continue;
                     }
                     if witness.value < summary.green_strain_range[i][0]
@@ -397,6 +561,21 @@ fn check_summary(
             }
         }
     }
+    if let Some(region) = region {
+        let first = source
+            .triangles
+            .iter()
+            .find_map(|(index, triangle)| (triangle["region"] == region).then_some(*index))
+            .ok_or_else(fail)?;
+        for (axis, [lo, hi]) in summary.green_strain_range.iter().enumerate() {
+            if lo == hi
+                && (summary.minimum_witness[axis].order() != (0, first)
+                    || summary.maximum_witness[axis].order() != (0, first))
+            {
+                return Err(fail());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -412,13 +591,24 @@ pub(super) fn admit<'a>(
     let allowance = index(&policy["max_triangle_samples"])?;
     let outcome = &motion.unwrap_or(simulation)["material_strain"];
     let report = &outcome["result"];
-    if policy["schema"] != "ftx-material-strain/1"
+    let regional = policy["schema"] == "ftx-material-strain/2";
+    if (!regional && policy["schema"] != "ftx-material-strain/1")
         || !(1..=64_000_000).contains(&allowance)
-        || request
-            .keys()
-            .any(|key| !["schema", "instances", "max_triangle_samples"].contains(&key.as_str()))
+        || request.keys().any(|key| {
+            ![
+                "schema",
+                if regional { "regions" } else { "instances" },
+                "max_triangle_samples",
+            ]
+            .contains(&key.as_str())
+        })
         || outcome["status"] != "available"
-        || report["schema"] != "ftx-material-strain-report/1"
+        || report["schema"]
+            != if regional {
+                "ftx-material-strain-report/2"
+            } else {
+                "ftx-material-strain-report/1"
+            }
         || report["request"] != *policy
         || report["scope"]
             != if motion.is_some() {
@@ -526,7 +716,7 @@ pub(super) fn admit<'a>(
         return Err(fail());
     }
     let reported = Summary::read(report)?;
-    check_summary(&reported, &frames, &source, None)?;
+    check_summary(&reported, &frames, &source, None, None)?;
     if aggregate.as_ref() != Some(&reported) {
         return Err(fail());
     }
@@ -540,7 +730,7 @@ pub(super) fn admit<'a>(
             return Err(fail());
         }
         let summary = Summary::read(value)?;
-        check_summary(&summary, &frames, &source, Some(id))?;
+        check_summary(&summary, &frames, &source, Some(id), None)?;
         if let Some(initial) = initial {
             let before = Summary::read(&initial["instances"][id])?;
             let mut including_initial = summary.clone();
@@ -555,6 +745,38 @@ pub(super) fn admit<'a>(
     }
     if aggregate.as_ref() != Some(&reported) {
         return Err(fail());
+    }
+    if regional {
+        let regions = report["regions"].as_object().ok_or_else(fail)?;
+        if regions.len() != source.regions.len() {
+            return Err(fail());
+        }
+        let mut by_instance = BTreeMap::<&str, Summary>::new();
+        for (id, value) in regions {
+            let instance = source.regions.get(id).ok_or_else(fail)?;
+            let summary = Summary::read(value)?;
+            check_summary(&summary, &frames, &source, Some(instance), Some(id))?;
+            if let Some(initial) = initial {
+                let before = Summary::read(&initial["regions"][id])?;
+                let mut including_initial = summary.clone();
+                including_initial.include(&before);
+                if including_initial != summary {
+                    return Err(fail());
+                }
+            }
+            by_instance
+                .entry(instance)
+                .or_insert_with(|| summary.clone())
+                .include(&summary);
+        }
+        if by_instance.len() != instances.len()
+            || by_instance.iter().any(|(instance, summary)| {
+                !Summary::read(&report["instances"][*instance])
+                    .is_ok_and(|actual| actual == *summary)
+            })
+        {
+            return Err(fail());
+        }
     }
     Ok(report)
 }
@@ -782,6 +1004,120 @@ mod tests {
         (a, d, s)
     }
 
+    fn regional_case(per_piece: bool, selected: &[usize]) -> (Alternative, Value, Value, Value) {
+        let (a, mut d, mut s, mut m) = case(per_piece, true);
+        let regions: Vec<_> = selected
+            .iter()
+            .map(|&index| {
+                let (id, low, high) = if index == 0 {
+                    ("right", 100., 1100.)
+                } else {
+                    assert_eq!(index, 2);
+                    ("left", -1100., -100.)
+                };
+                json!({"id":id,"instance":"front","selector":{
+                    "kind":"whole_triangle_centroid",
+                    "polygon_mm":[[low,-100.],[high,-100.],[high,1100.],[low,1100.]]}})
+            })
+            .collect();
+        let policy = json!({"schema":"ftx-material-strain/2","regions":regions,
+            "max_triangle_samples":100});
+        d["scenario"]["material_strain"] = policy.clone();
+        s["material_strain_ownership"]["rest_triangles_mm"] = json!([
+            [[0., 0.], [1000., 0.], [0., 1000.]],
+            [[0., 0.], [1000., 0.], [0., 1000.]],
+            [[0., 0.], [0., 1000.], [-1000., 0.]]
+        ]);
+        let mut source = s["material_strain"]["result"]["source"].clone();
+        source["triangles"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|row| selected.contains(&(row["source_triangle"].as_u64().unwrap() as usize)));
+        source["regions"] = json!({});
+        for (region, &index) in regions.iter().zip(selected) {
+            let id = region["id"].as_str().unwrap();
+            source["regions"][id] = json!({"instance":"front","selector":region["selector"],
+                "source_triangles":[index],"reference_area_m2":0.5});
+            for row in source["triangles"].as_array_mut().unwrap() {
+                if row["source_triangle"] == index {
+                    row["region"] = json!(id);
+                }
+            }
+        }
+        let positions = [
+            s["positions_m"].clone(),
+            m["samples"][0]["positions_m"].clone(),
+            m["samples"][1]["positions_m"].clone(),
+        ];
+        let readings = [
+            [[0.2, -0.1, 0.3], [0., 0., 0.], [0.2, 0.1, 0.15]],
+            [[0.3, -0.1, 0.2], [0., 0., 0.], [0.3, 0.2, 0.1]],
+            [[0.2, -0.1, 0.3], [0., 0., 0.], [0.2, 0.1, 0.15]],
+        ];
+        for (moving, container) in [(false, &mut s), (true, &mut m)] {
+            let mut summaries = BTreeMap::<&str, Summary>::new();
+            let mut frames = Vec::new();
+            let mut overall: Option<Summary> = None;
+            for step in 0..if moving { 3 } else { 1 } {
+                let mut frame: Option<Summary> = None;
+                for &index in selected {
+                    let values = readings[step][index];
+                    let witnesses = std::array::from_fn(|axis| Witness {
+                        value: values[axis],
+                        source_triangle: index,
+                        sample_index: step,
+                        time_s: step as f64,
+                    });
+                    let summary = Summary {
+                        green_strain_range: values.map(|value| [value, value]),
+                        minimum_witness: witnesses.clone(),
+                        maximum_witness: witnesses,
+                    };
+                    summaries
+                        .entry(if index == 0 { "right" } else { "left" })
+                        .or_insert_with(|| summary.clone())
+                        .include(&summary);
+                    frame
+                        .get_or_insert_with(|| summary.clone())
+                        .include(&summary);
+                    overall
+                        .get_or_insert_with(|| summary.clone())
+                        .include(&summary);
+                }
+                let frame = frame.unwrap();
+                frames.push(json!({"sample_index":step,"time_s":step as f64,
+                    "positions_sha256":hash(&positions[step]).unwrap(),
+                    "green_strain_range":frame.green_strain_range,
+                    "minimum_triangle":frame.minimum_witness.map(|w|w.source_triangle),
+                    "maximum_triangle":frame.maximum_witness.map(|w|w.source_triangle)}));
+            }
+            let report = &mut container["material_strain"]["result"];
+            let overall = overall.unwrap();
+            report["schema"] = json!("ftx-material-strain-report/2");
+            report["request"] = policy.clone();
+            report["source"] = source.clone();
+            report["source_sha256"] = json!(hash(&source).unwrap());
+            report["regions"] = json!(summaries);
+            report["instances"] = json!({"front":overall});
+            report["green_strain_range"] = json!(overall.green_strain_range);
+            report["minimum_witness"] = json!(overall.minimum_witness);
+            report["maximum_witness"] = json!(overall.maximum_witness);
+            report["triangle_samples"] = json!(selected.len() * frames.len());
+            report["frames"] = json!(frames);
+        }
+        (a, d, s, m)
+    }
+
+    fn regional_comparison_case(selected: &[usize]) -> (Alternative, Value, Value) {
+        let (a, mut d, mut s) = comparison_case(true);
+        let (_, regional_d, regional_s, regional_m) = regional_case(true, selected);
+        d["scenario"]["material_strain"] = regional_d["scenario"]["material_strain"].clone();
+        s["material_strain_ownership"] = regional_s["material_strain_ownership"].clone();
+        s["material_strain"] = regional_s["material_strain"].clone();
+        s["motion"]["result"]["material_strain"] = regional_m["material_strain"].clone();
+        (a, d, s)
+    }
+
     #[test]
     fn comparison_constraints_use_all_twelve_signed_raw_metrics_and_keep_static_refusal_isolation()
     {
@@ -878,6 +1214,218 @@ mod tests {
             front.readings[&Metric::MaxWarpGreenStrain].value
         );
         assert_ne!(all.input_protocol_sha256, front.input_protocol_sha256);
+    }
+
+    #[test]
+    fn regional_strain_admits_partial_panels_and_complete_disjoint_sample_histories() {
+        for per_piece in [false, true] {
+            for selected in [&[2][..], &[0, 2][..]] {
+                let (a, d, s, m) = regional_case(per_piece, selected);
+                let initial = admit(&a, &d, &s, None).unwrap();
+                let moving = admit(&a, &d, &s, Some(&m)).unwrap();
+                assert_eq!(initial["triangle_samples"], json!(selected.len()));
+                assert_eq!(moving["triangle_samples"], json!(3 * selected.len()));
+                assert_eq!(moving["source"]["instances"], json!(["front"]));
+                assert_eq!(
+                    moving["regions"]["left"]["green_strain_range"][2],
+                    json!([0.1, 0.15])
+                );
+                assert_eq!(
+                    moving["regions"]["left"]["maximum_witness"][2]["sample_index"],
+                    0
+                );
+                assert_eq!(
+                    moving["regions"]["left"]["minimum_witness"][2]["sample_index"],
+                    1
+                );
+                assert_eq!(
+                    initial["green_strain_range"][2][1],
+                    if selected.len() == 1 { 0.15 } else { 0.3 }
+                );
+                let mut capped_d = d.clone();
+                let mut capped_s = s.clone();
+                let mut capped_m = m.clone();
+                capped_d["scenario"]["material_strain"]["max_triangle_samples"] =
+                    json!(selected.len());
+                capped_s["material_strain"]["result"]["request"] =
+                    capped_d["scenario"]["material_strain"].clone();
+                capped_m["material_strain"]["result"]["request"] =
+                    capped_d["scenario"]["material_strain"].clone();
+                assert!(admit(&a, &capped_d, &capped_s, None).is_ok());
+                assert!(admit(&a, &capped_d, &capped_s, Some(&capped_m)).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn regional_strain_reconstructs_membership_and_refuses_rehashed_source_tampering() {
+        let (a, d, s, _) = regional_case(true, &[0, 2]);
+        for mutation in 0..12 {
+            let mut changed = s.clone();
+            match mutation {
+                0 => {
+                    changed["material_strain"]["result"]["source"]["triangles"]
+                        .as_array_mut()
+                        .unwrap()
+                        .pop();
+                }
+                1 => {
+                    changed["material_strain"]["result"]["source"]["regions"]["left"]["source_triangles"] =
+                        json!([0])
+                }
+                2 => {
+                    changed["material_strain"]["result"]["source"]["regions"]["left"]["instance"] =
+                        json!("back")
+                }
+                3 => {
+                    changed["material_strain"]["result"]["source"]["regions"]["left"]["selector"]
+                        ["polygon_mm"][0][0] = json!(-1200.)
+                }
+                4 => {
+                    changed["material_strain"]["result"]["source"]["regions"]["left"]["reference_area_m2"] =
+                        json!(1.)
+                }
+                5 => {
+                    changed["material_strain"]["result"]["source"]["triangles"][1]["region"] =
+                        json!("right")
+                }
+                6 => {
+                    changed["material_strain_ownership"]["rest_triangles_mm"][2] =
+                        changed["material_strain_ownership"]["rest_triangles_mm"][0].clone()
+                }
+                7 => {
+                    changed["material_strain_ownership"]["rest_triangles_mm"]
+                        .as_array_mut()
+                        .unwrap()
+                        .pop();
+                }
+                8 => {
+                    changed["material_strain_ownership"]["rest_triangles_mm"][1] =
+                        json!([[0., 0.], [0., 0.], [0., 0.]])
+                }
+                9 => {
+                    changed["material_strain"]["result"]["source"]["triangles"][0]["reference_area_m2"] =
+                        json!(0.25)
+                }
+                10 => {
+                    changed["material_strain"]["result"]["source"]["regions"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("left");
+                }
+                _ => {
+                    changed["material_strain"]["result"]["source"]["regions"]["extra"] =
+                        changed["material_strain"]["result"]["source"]["regions"]["left"].clone()
+                }
+            }
+            let report = &mut changed["material_strain"]["result"];
+            report["source_sha256"] = json!(hash(&report["source"]).unwrap());
+            assert!(
+                admit(&a, &d, &changed, None).is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn regional_strain_rejects_empty_overlap_unknown_and_mixed_schema_requests() {
+        let (a, d, s, _) = regional_case(true, &[0, 2]);
+        for mutation in 0..8 {
+            let mut changed_d = d.clone();
+            let mut changed_s = s.clone();
+            let policy = &mut changed_d["scenario"]["material_strain"];
+            match mutation {
+                0 => policy["instances"] = json!(["front"]),
+                1 => policy["regions"][1]["id"] = policy["regions"][0]["id"].clone(),
+                2 => policy["regions"][1]["selector"] = policy["regions"][0]["selector"].clone(),
+                3 => {
+                    policy["regions"][0]["selector"]["polygon_mm"] =
+                        json!([[5000., 0.], [6000., 0.], [6000., 1000.], [5000., 1000.]])
+                }
+                4 => policy["regions"][0]["instance"] = json!("missing"),
+                5 => policy["regions"][0]["unexpected"] = json!(true),
+                6 => policy["regions"] = json!([]),
+                _ => policy["schema"] = json!("ftx-material-strain/1"),
+            }
+            changed_s["material_strain"]["result"]["request"] = policy.clone();
+            assert!(
+                admit(&a, &changed_d, &changed_s, None).is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn regional_strain_checks_local_witnesses_and_region_to_instance_reductions() {
+        let (a, d, s, m) = regional_case(true, &[0, 2]);
+        for mutation in 0..7 {
+            let mut changed = m.clone();
+            let report = &mut changed["material_strain"]["result"];
+            match mutation {
+                0 => report["regions"]["left"]["maximum_witness"][2]["source_triangle"] = json!(0),
+                1 => report["regions"]["left"]["maximum_witness"][2]["time_s"] = json!(1.),
+                2 => report["regions"]["left"]["green_strain_range"][1][1] = json!(0.3),
+                3 => {
+                    report["regions"].as_object_mut().unwrap().remove("right");
+                }
+                4 => report["regions"]["extra"] = report["regions"]["right"].clone(),
+                5 => {
+                    report["regions"]["right"]["minimum_witness"][1]["sample_index"] = json!(1);
+                    report["regions"]["right"]["minimum_witness"][1]["time_s"] = json!(1.);
+                }
+                _ => {
+                    report["regions"]["left"]["green_strain_range"][2][1] = json!(0.1);
+                    report["regions"]["left"]["maximum_witness"][2] =
+                        report["regions"]["left"]["minimum_witness"][2].clone();
+                }
+            }
+            assert!(
+                admit(&a, &d, &s, Some(&changed)).is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn regional_comparison_guards_use_selected_union_and_preserve_polygon_protocols() {
+        let policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+            "objectives":[{"metric":"max_engineering_shear_green_strain","direction":"minimize"}],
+            "constraints":[{"metric":"max_engineering_shear_green_strain","maximum":0.2}]}))
+        .unwrap();
+        let (a, d, s) = regional_comparison_case(&[0, 2]);
+        let union = policy.candidate(&a, None, &d, &s);
+        assert!(!union.eligible);
+        assert_eq!(
+            union.readings[&Metric::MaxEngineeringShearGreenStrain].value,
+            0.3
+        );
+        let (a, d, s) = regional_comparison_case(&[2]);
+        let selected = policy.candidate(&a, None, &d, &s);
+        assert!(selected.eligible, "{}", json!(selected));
+        assert_eq!(
+            selected.readings[&Metric::MaxEngineeringShearGreenStrain].value,
+            0.15
+        );
+
+        let mut changed_d = d.clone();
+        let mut changed_s = s.clone();
+        changed_d["scenario"]["material_strain"]["regions"][0]["selector"]["polygon_mm"][0][0] =
+            json!(-1200.);
+        let selector = changed_d["scenario"]["material_strain"]["regions"][0]["selector"].clone();
+        let report = &mut changed_s["material_strain"]["result"];
+        report["request"] = changed_d["scenario"]["material_strain"].clone();
+        report["source"]["regions"]["left"]["selector"] = selector;
+        report["source_sha256"] = json!(hash(&report["source"]).unwrap());
+        let different_polygon = policy.candidate(&a, None, &changed_d, &changed_s);
+        assert!(different_polygon.eligible, "{}", json!(different_polygon));
+        assert_eq!(
+            selected.readings[&Metric::MaxEngineeringShearGreenStrain].value,
+            different_polygon.readings[&Metric::MaxEngineeringShearGreenStrain].value
+        );
+        assert_ne!(
+            selected.input_protocol_sha256,
+            different_polygon.input_protocol_sha256
+        );
     }
 
     #[test]

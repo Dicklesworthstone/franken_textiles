@@ -481,6 +481,11 @@ impl<'a, 'body> Session<'a, 'body> {
             result["material_strain_ownership"] = json!({
                 "instances":run.scene.mesh.instances,
                 "triangle_instance":run.scene.triangle_owner});
+            if let Ok(history) = history
+                && let Some(triangles) = history.rest_triangles_mm()
+            {
+                result["material_strain_ownership"]["rest_triangles_mm"] = json!(triangles);
+            }
             result["material_strain"] = outcome(
                 history
                     .as_ref()
