@@ -38,7 +38,8 @@ pub struct Sample {
     pub properties: BTreeMap<String, Quantity>,
 }
 
-/// Explicit source evidence permitting one original scalar observation to survive conditioning.
+/// Explicit source evidence permitting an original scalar observation or optical face assignment
+/// to survive conditioning. The reserved `optical_faces` key qualifies the assignment, not emissivity.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Invariant {
@@ -79,7 +80,9 @@ pub struct Input {
     /// Two to 128 rows in strictly increasing pressure order; loft must be nonincreasing.
     pub samples: Vec<Sample>,
     /// Original scalar keys explicitly retained. Unsampled, undeclared keys are reported as discarded.
-    /// Existing response blocks and model selectors cannot be retained through this scalar operation.
+    /// The reserved `optical_faces` key separately qualifies the original source-side assignment;
+    /// every mapped emissivity must also be sampled or independently retained in unit `1`.
+    /// Other response blocks and model selectors cannot survive this scalar operation.
     #[serde(default)]
     pub invariants: BTreeMap<String, Invariant>,
     /// Allow estimated observations/invariance and interior piecewise-linear interpolation.
@@ -169,6 +172,23 @@ fn scalar_record(material: &Material, properties: BTreeMap<String, Quantity>) ->
     result
 }
 
+// A qualified mapping can name separate front/back observations outside the scalar allowlist.
+// Only its exact original property names are admitted; other unknown scalar keys still refuse.
+fn supported_property(input: &Input, key: &str, q: &Quantity) -> bool {
+    if input.invariants.contains_key("optical_faces")
+        && input.material.optical_faces.as_ref().is_some_and(|faces| {
+            [&faces.positive, &faces.negative]
+                .into_iter()
+                .flatten()
+                .any(|face| face.emissivity_property == key)
+        })
+    {
+        q.unit == "1"
+    } else {
+        property_unit(key).is_some()
+    }
+}
+
 fn positive_property(key: &str, q: &Quantity) -> Result<(), Refusal> {
     if matches!(
         key,
@@ -206,8 +226,8 @@ fn rows(input: &Input) -> Result<Vec<Material>, Refusal> {
         || first.properties.contains_key("areal_density")
         || first
             .properties
-            .keys()
-            .any(|key| property_unit(key).is_none())
+            .iter()
+            .any(|(key, q)| !supported_property(input, key, q))
     {
         return Err(invalid(
             "compression rows require supported scalar properties including thickness, without pressure-dependent areal mass",
@@ -225,6 +245,11 @@ fn rows(input: &Input) -> Result<Vec<Material>, Refusal> {
             ));
         }
         for (key, q) in &sample.properties {
+            if !supported_property(input, key, q) {
+                return Err(invalid(format!(
+                    "{key}: compression rows need supported scalar units or a mapped emissivity in unit 1"
+                )));
+            }
             qualified(input, &q.source, q.evidence, &q.method, &q.conditions)?;
             if pressure_conditions(q, sample.pressure_pa)?
                 != pressure_conditions(&first.properties[key], first.pressure_pa)?
@@ -258,6 +283,87 @@ fn weaker(a: Evidence, b: Evidence) -> Evidence {
     }
 }
 
+fn qualify_invariant(
+    input: &Input,
+    key: &str,
+    declaration: &Invariant,
+    domain: [f64; 2],
+) -> Result<(), Refusal> {
+    let [lo, hi] = declaration.pressure_range_pa;
+    if !lo.is_finite() || !hi.is_finite() || lo < 0.0 || lo > domain[0] || hi < domain[1] {
+        return Err(invalid(format!(
+            "{key}: pressure invariance must cover the entire characterized interval"
+        )));
+    }
+    if declaration.conditions.contains_key("pressure_pa") {
+        return Err(invalid(format!(
+            "{key}: invariance uses pressure_range_pa, not a fixed pressure_pa condition"
+        )));
+    }
+    qualified(
+        input,
+        &declaration.source,
+        declaration.evidence,
+        &declaration.method,
+        &declaration.conditions,
+    )
+}
+
+fn retain_optical_faces(
+    input: &Input,
+    material: &mut Material,
+    domain: [f64; 2],
+    receipt_source: &str,
+) -> Result<(), Refusal> {
+    let Some(declaration) = input.invariants.get("optical_faces") else {
+        return Ok(());
+    };
+    let original = input
+        .material
+        .optical_faces
+        .as_ref()
+        .ok_or_else(|| invalid("optical_faces: no original source-side assignment to retain"))?;
+    qualify_invariant(input, "optical_faces", declaration, domain)?;
+    if original.specimen != input.specimen
+        || original.conditioning != input.conditioning
+        || (original.evidence == Evidence::Estimate && !input.allow_estimates)
+    {
+        return Err(invalid(
+            "optical_faces: pressure qualification must preserve the original specimen, conditioning and admitted assignment evidence",
+        ));
+    }
+    for face in [&original.positive, &original.negative].into_iter().flatten() {
+        let q = material
+            .properties
+            .get(&face.emissivity_property)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "optical_faces: mapped property {} did not survive pressure conditioning",
+                    face.emissivity_property
+                ))
+            })?;
+        if q.unit != "1"
+            || q.conditions.get("face") != Some(&face.face)
+            || q.conditions.get("specimen") != Some(&original.specimen)
+            || q.conditions.get("conditioning") != Some(&original.conditioning)
+        {
+            return Err(invalid(
+                "optical_faces: conditioned emissivity must retain its original face, specimen, conditioning and dimensionless unit",
+            ));
+        }
+    }
+    let mut retained = original.clone();
+    retained.source = receipt_source.into();
+    retained.evidence = weaker(original.evidence, declaration.evidence);
+    retained.method = format!(
+        "Original source-side assignment from {} ({}), pressure-qualified by {} ({}) over {:?} Pa on the {} branch. Exact assignment and qualifications remain in the compression input receipt.",
+        original.source, original.method, declaration.source, declaration.method,
+        declaration.pressure_range_pa, input.loading_branch,
+    );
+    material.optical_faces = Some(retained);
+    Ok(())
+}
+
 fn retained(
     input: &Input,
     domain: [f64; 2],
@@ -266,11 +372,15 @@ fn retained(
     let base = normalize(&input.material)?;
     let mut result = BTreeMap::new();
     for (key, declaration) in &input.invariants {
+        // This declaration is checked against the complete conditioned material separately.
+        if key == "optical_faces" {
+            continue;
+        }
         let q =
             input.material.properties.get(key).ok_or_else(|| {
                 invalid(format!("{key}: no original scalar observation to retain"))
             })?;
-        if property_unit(key).is_none()
+        if !supported_property(input, key, q)
             || input.samples[0].properties.contains_key(key)
             || (key == "bulk_density" && varied_loft)
         {
@@ -278,17 +388,8 @@ fn retained(
                 "{key}: unsupported, multiply specified, or incompatible pressure-invariant property"
             )));
         }
+        qualify_invariant(input, key, declaration, domain)?;
         let [lo, hi] = declaration.pressure_range_pa;
-        if !lo.is_finite() || !hi.is_finite() || lo < 0.0 || lo > domain[0] || hi < domain[1] {
-            return Err(invalid(format!(
-                "{key}: pressure invariance must cover the entire characterized interval"
-            )));
-        }
-        if declaration.conditions.contains_key("pressure_pa") {
-            return Err(invalid(format!(
-                "{key}: invariance uses pressure_range_pa, not a fixed pressure_pa condition"
-            )));
-        }
         if let Some(original) = q.conditions.get("pressure_pa")
             && !original.parse::<f64>().ok().is_some_and(|pressure| {
                 pressure.is_finite() && pressure >= 0.0 && pressure >= lo && pressure <= hi
@@ -298,13 +399,6 @@ fn retained(
                 "{key}: original pressure_pa must be finite, nonnegative and covered by the invariant interval"
             )));
         }
-        qualified(
-            input,
-            &declaration.source,
-            declaration.evidence,
-            &declaration.method,
-            &declaration.conditions,
-        )?;
         if (q.evidence == Evidence::Estimate && !input.allow_estimates)
             || q.conditions
                 .iter()
@@ -491,13 +585,18 @@ pub fn condition(input: &Input) -> Result<Report, Refusal> {
             "thermal_response",
             input.material.thermal_response.is_some(),
         ),
-        ("optical_faces", input.material.optical_faces.is_some()),
+        (
+            "optical_faces",
+            input.material.optical_faces.is_some()
+                && !input.invariants.contains_key("optical_faces"),
+        ),
     ]
     .into_iter()
     .filter(|(_, present)| *present)
     .map(|(key, _)| key.into())
     .collect();
     let mut material = scalar_record(&input.material, properties);
+    retain_optical_faces(input, &mut material, pressure_range_pa, &source_id)?;
     let discarded_structure = input
         .material
         .structure

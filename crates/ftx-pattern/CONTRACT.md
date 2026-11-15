@@ -8,6 +8,15 @@ Stock-width readiness requires a positive nominal width in metres under the sele
 policy; nonpositive authored observations remain inspectable without being admitted for stock.
 Regression: CLI `material_binding_workflow` (both native commands and the portable adapter).
 
+**Pressure-qualified optical assignments.** `material_compression::condition` admits reserved
+`invariants.optical_faces` only for the original source-side map, complete pressure domain and
+matching specimen, conditioning, branch and estimate policy. Every mapped emissivity independently
+survives as a row or invariant with unit `1`; only exact mapped names extend the scalar allowlist.
+The output preserves side labels and weaker evidence, binding the map to the complete compression
+receipt. Omission still removes the map, and ordinary consumers retain spectral/temperature/side
+qualification. Tests: `tests/material_compression.rs` optical retention, replay, mass and refusal
+cases. No pressure-dependent optics or orientation is inferred from compression alone.
+
 **Fixed material-region selection.** `material_compression::regions` admits convex 3–32-vertex
 polygons in a physical instance's mirrored, simulation-scaled flat millimetres. Its explicit
 `whole_triangle_centroid` rule selects complete retained triangles by exact orientation of their

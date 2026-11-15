@@ -340,6 +340,273 @@ fn pressure_preparation_discards_unqualified_optical_faces_and_keeps_the_origina
     assert!(prepared.thermal_resistance().is_ok());
 }
 
+fn optical_fixture() -> Input {
+    let mut input = fixture();
+    for (key, face, value) in [
+        ("emissivity_front", "front", 0.25),
+        ("emissivity_back", "back", 0.8),
+    ] {
+        let mut q = input.material.properties["areal_density"].clone();
+        q.value = value;
+        q.unit = "1".into();
+        q.bounds = None;
+        q.method = "Synthetic pressure-independent total emissivity".into();
+        q.conditions.extend([
+            ("face".into(), face.into()),
+            ("spectral_basis".into(), "total_hemispherical".into()),
+            ("temperature_min_c".into(), "-20".into()),
+            ("temperature_max_c".into(), "80".into()),
+        ]);
+        let mut invariant = input.invariants["specific_heat"].clone();
+        invariant.conditions = q.conditions.clone();
+        input.material.properties.insert(key.into(), q);
+        input.invariants.insert(key.into(), invariant);
+    }
+    input.material.optical_faces = Some(serde_json::from_value(json!({
+        "positive":{"face":"front","emissivity_property":"emissivity_front"},
+        "negative":{"face":"back","emissivity_property":"emissivity_back"},
+        "source":"synthetic","evidence":"estimate","method":"Synthetic original front/back assignment",
+        "specimen":input.specimen,"conditioning":input.conditioning
+    })).unwrap());
+    let mut mapping = input.invariants["specific_heat"].clone();
+    mapping.method =
+        "Synthetic unchanged front/back assignment across the full pressure interval".into();
+    input.invariants.insert("optical_faces".into(), mapping);
+    input
+}
+
+#[test]
+fn qualified_optical_faces_survive_pressure_with_exact_sources_mass_and_frozen_replay() {
+    use ftx_pattern::material_optics::Side;
+    let mut input = optical_fixture();
+    for pressure in [0., 250., 500.] {
+        input.pressure_pa = pressure;
+        let before = serde_json::to_value(&input).unwrap();
+        let report = condition(&input).unwrap();
+        assert!(
+            !report
+                .discarded_responses
+                .iter()
+                .any(|key| key == "optical_faces")
+        );
+        let mapping = report.material.optical_faces.as_ref().unwrap();
+        assert_eq!(
+            mapping.positive,
+            input.material.optical_faces.as_ref().unwrap().positive
+        );
+        assert_eq!(
+            mapping.negative,
+            input.material.optical_faces.as_ref().unwrap().negative
+        );
+        assert_eq!(mapping.source, format!("compression/{}", report.input_sha256));
+        assert_eq!(mapping.evidence, Evidence::Estimate);
+        assert!(
+            mapping
+                .method
+                .contains("Synthetic original front/back assignment")
+        );
+        assert!(report.material.sources.contains_key(&mapping.source));
+        let resolved = catalog().resolve(&report.selection).unwrap();
+        close(
+            resolved
+                .material()
+                .require("areal_density", "kg/m2", true)
+                .unwrap(),
+            0.1,
+        );
+        close(
+            ThermalLaw::from_material(resolved.material(), true)
+                .unwrap()
+                .capacity_at(20.)
+                .unwrap(),
+            100.,
+        );
+        for (side, expected) in [(Side::Positive, 0.25), (Side::Negative, 0.8)] {
+            let face = resolved.material().optical_face(side, true).unwrap();
+            let optical = resolved
+                .material()
+                .thermal_emissivity(&face.emissivity_property, &face.face, 20., true)
+                .unwrap();
+            close(optical.value, expected);
+        }
+        let frozen: Selection = serde_json::from_str(&report.selection_json).unwrap();
+        assert_eq!(
+            catalog().resolve(&frozen).unwrap().sha256(),
+            resolved.sha256()
+        );
+        assert_eq!(serde_json::to_value(&input).unwrap(), before);
+        assert_eq!(serde_json::to_value(&report.input).unwrap(), before);
+        let mut tampered = frozen;
+        let mapping = tampered
+            .record
+            .as_mut()
+            .unwrap()
+            .optical_faces
+            .as_mut()
+            .unwrap();
+        std::mem::swap(&mut mapping.positive, &mut mapping.negative);
+        assert!(catalog().resolve(&tampered).is_err());
+    }
+}
+
+#[test]
+fn qualified_optical_faces_use_sampled_emissivity_without_inventing_unknown_scalar_units() {
+    let mut input = optical_fixture();
+    input.invariants.remove("emissivity_front");
+    for (sample, value) in input.samples.iter_mut().zip([0.1, 0.5]) {
+        let mut q = input.material.properties["emissivity_front"].clone();
+        q.value = value;
+        q.conditions
+            .insert("pressure_pa".into(), sample.pressure_pa.to_string());
+        sample.properties.insert("emissivity_front".into(), q);
+    }
+    for (pressure, expected) in [(0., 0.1), (250., 0.3), (500., 0.5)] {
+        input.pressure_pa = pressure;
+        let report = condition(&input).unwrap();
+        close(
+            report.material.properties["emissivity_front"].value,
+            expected,
+        );
+        assert!(report.material.optical_faces.is_some());
+    }
+    // Every pressure row, not only the first, has to use canonical dimensionless optics.
+    input.samples[1]
+        .properties
+        .get_mut("emissivity_front")
+        .unwrap()
+        .unit = "m".into();
+    assert!(condition(&input).is_err());
+}
+
+#[test]
+fn optical_face_retention_refuses_incomplete_sources_domains_and_changed_assignments() {
+    for fault in 0..12 {
+        let mut input = optical_fixture();
+        match fault {
+            0 => {
+                input
+                    .invariants
+                    .get_mut("optical_faces")
+                    .unwrap()
+                    .pressure_range_pa = [1., 500.]
+            }
+            1 => {
+                input
+                    .invariants
+                    .get_mut("optical_faces")
+                    .unwrap()
+                    .pressure_range_pa = [0., 499.]
+            }
+            2 => input.invariants.get_mut("optical_faces").unwrap().source = "missing".into(),
+            3 => input.invariants.get_mut("optical_faces").unwrap().method.clear(),
+            4 => {
+                input
+                    .invariants
+                    .get_mut("optical_faces")
+                    .unwrap()
+                    .conditions
+                    .insert("conditioning".into(), "different".into());
+            }
+            5 => {
+                input
+                    .invariants
+                    .get_mut("optical_faces")
+                    .unwrap()
+                    .conditions
+                    .insert("loading_branch".into(), "unloading".into());
+            }
+            6 => {
+                input
+                    .invariants
+                    .get_mut("optical_faces")
+                    .unwrap()
+                    .conditions
+                    .insert("pressure_pa".into(), "250".into());
+            }
+            7 => input.material.optical_faces = None,
+            8 => {
+                input.invariants.remove("emissivity_back");
+            }
+            9 => {
+                input
+                    .material
+                    .properties
+                    .get_mut("emissivity_back")
+                    .unwrap()
+                    .unit = "m".into()
+            }
+            10 => {
+                input
+                    .invariants
+                    .insert("unknown".into(), input.invariants["specific_heat"].clone());
+            }
+            _ => {
+                input
+                    .material
+                    .optical_faces
+                    .as_mut()
+                    .unwrap()
+                    .negative
+                    .as_mut()
+                    .unwrap()
+                    .face = "wrong".into();
+            }
+        }
+        let before = serde_json::to_value(&input).unwrap();
+        assert!(condition(&input).is_err(), "fault {fault}");
+        assert_eq!(serde_json::to_value(&input).unwrap(), before, "fault {fault}");
+    }
+    let mut omitted = optical_fixture();
+    for key in ["optical_faces", "emissivity_front", "emissivity_back"] {
+        omitted.invariants.remove(key);
+    }
+    let report = condition(&omitted).unwrap();
+    assert!(report.material.optical_faces.is_none());
+    assert_eq!(report.discarded_responses, ["optical_faces"]);
+}
+
+#[test]
+fn optical_assignment_and_invariance_evidence_are_admitted_independently() {
+    let mut input = optical_fixture();
+    input.pressure_pa = 0.;
+    input.allow_estimates = false;
+    for q in input.material.properties.values_mut() {
+        q.evidence = Evidence::Published;
+    }
+    for sample in &mut input.samples {
+        for q in sample.properties.values_mut() {
+            q.evidence = Evidence::Published;
+        }
+    }
+    for declaration in input.invariants.values_mut() {
+        declaration.evidence = Evidence::Published;
+    }
+    // A published qualifier cannot upgrade an estimated original assignment.
+    assert!(condition(&input).is_err());
+    input.material.optical_faces.as_mut().unwrap().evidence = Evidence::Published;
+    assert_eq!(
+        condition(&input)
+            .unwrap()
+            .material
+            .optical_faces
+            .unwrap()
+            .evidence,
+        Evidence::Published
+    );
+    input.invariants.get_mut("optical_faces").unwrap().evidence = Evidence::Estimate;
+    assert!(condition(&input).is_err());
+    input.allow_estimates = true;
+    assert_eq!(
+        condition(&input)
+            .unwrap()
+            .material
+            .optical_faces
+            .unwrap()
+            .evidence,
+        Evidence::Estimate
+    );
+}
+
 #[test]
 fn domain_sources_conditions_loft_and_dimensions_refuse_without_mutation() {
     for case in 0..19 {

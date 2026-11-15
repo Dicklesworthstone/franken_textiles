@@ -96,9 +96,12 @@ coverage advance refuses an orientation reversal of stored temperatures; use the
 motion remapper to reverse depth order and transfer reference enthalpy. Covered/exposed
 transitions and checkpoint restoration preserve that authority. Valid next-interval
 weather changes preserve old temperatures. Editing a face map, its source or the material
-changes its identity and requires freshly bound geometry/state. Pressure-conditioned
-preparation removes and reports the previous `optical_faces` assignment; any replacement
-needs separate characterization.
+changes its identity and requires freshly bound geometry/state. Pressure conditioning preserves
+the original assignment only with an explicit `invariants.optical_faces` qualification covering
+the complete pressure domain, exact specimen, conditioning and loading branch. Every mapped
+emissivity must separately survive the conditioner. Without this qualification the assignment
+is removed and reported. The conditioned map points to the complete source receipt and never
+improves the original evidence class; see [pressure qualification](pressure-conditioned-materials.md#retain-qualified-optical-faces).
 
 See [layered coverage](thermal-coverage.md#exterior-convection-and-radiation),
 [moving coverage](thermal-motion.md#covered-and-exposed-exterior-exchange), and

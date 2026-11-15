@@ -88,13 +88,15 @@ The fixture is a complete `ftx-material-compression/1` request.
 | `method`, `conditioned_on` | Acquisition/reduction method and receipt date. Document any source-supported conversion to pressure. |
 | `pressure_pa` | Finite nonnegative target within the observed interval. No extrapolation. |
 | `samples` | 2–128 strictly pressure-ordered rows, each with `pressure_pa` and the same supported scalar `properties` keys. Every row requires positive thickness; normalized loft must be nonincreasing as pressure increases. |
-| `invariants` | Map from original scalar property names to independent source-qualified pressure-invariance declarations. Absence does not establish applicability. |
+| `invariants` | Map from original scalar property names to independent source-qualified pressure-invariance declarations. Reserved `optical_faces` qualifies retention of the original side assignment. Absence does not establish applicability. |
 | `allow_estimates` | Explicit permission for estimated observations, estimated invariance and interior interpolation; defaults to false. |
 
 Each row quantity uses the ordinary `Quantity` fields: value, unit, evidence, source, method, conditions
 and optional bounds. Per-property conditions must match across rows apart from an optional
 `pressure_pa`, which must equal that row's pressure. Unknown property keys, incomplete row keysets,
-missing sources and mixed acquisition conditions refuse.
+missing sources and mixed acquisition conditions refuse. With a qualified `optical_faces` declaration,
+exact original mapped emissivity names are also supported, each with dimensionless unit `1` in every
+row or retained observation; unrelated unknown keys still refuse.
 
 An invariant supplies `pressure_range_pa`, `source`, `evidence`, `method` and `conditions`. Its range
 must cover **the entire pressure table**. It must preserve the original property's conditions; if that
@@ -108,6 +110,25 @@ reference areal mass keeps its original value, units and bounds. Otherwise mass 
 it is never reconstructed from bulk density times compressed thickness. A pressure-invariant bulk
 density is also refused when loft varies. The output admits at most one transport authority,
 `thermal_resistance` or `thermal_conductivity`; either may remain missing.
+
+## Retain qualified optical faces
+
+The reserved `invariants.optical_faces` entry uses the same `Invariant` fields as a scalar
+declaration. It qualifies the **original positive/negative side assignment** throughout the entire
+pressure table for this exact specimen, conditioning and loading branch. It does not qualify the
+emissivity values by itself: every mapped observation must independently survive as a pressure row
+or scalar invariant, retaining its own face, specimen, conditioning and dimensionless unit.
+
+The original mapping and the invariance evidence each require estimate consent when applicable.
+A measured declaration cannot promote an estimated original assignment. The output preserves the
+exact side-to-face/property mapping and the weaker evidence class; its source points to the complete
+pressure-conditioning receipt, which retains both original sources and methods. Its frozen selection
+therefore changes if the assignment or either qualification changes.
+
+Omitting this declaration continues to remove and report `optical_faces`. Requesting retention with
+no original map, missing mapped observations, incomplete pressure coverage, mismatched conditions or
+unadmitted evidence refuses the whole preparation. Ordinary optical consumers still check the actual
+side, spectral basis and temperature domain when they use the conditioned selection.
 
 ## Knots, interpolation and omitted capabilities
 
@@ -123,7 +144,8 @@ frozen `selection`, exact `selection_json`, full `pressure_range_pa`, selected `
 
 `discarded_properties` lists original scalar keys neither sampled nor qualified as invariant.
 `discarded_responses` lists removed `membrane_response`, `membrane_relaxation` and `thermal_response`
-blocks. `discarded_structure` lists removed `*_model` selectors, including directional bending and
+blocks, plus `optical_faces` when its independent retention qualification is absent.
+`discarded_structure` lists removed `*_model` selectors, including directional bending and
 plasticity selectors. This scalar operation cannot qualify those response models for a new pressure.
 The normal consumers refuse any resulting missing inputs: a fill may support steady conduction
 while lacking storage measurements or a shell constitutive law.
