@@ -103,6 +103,14 @@ emissivity must separately survive the conditioner. Without this qualification t
 is removed and reported. The conditioned map points to the complete source receipt and never
 improves the original evidence class; see [pressure qualification](pressure-conditioned-materials.md#retain-qualified-optical-faces).
 
+During prescribed compression, independent and exposed moving sheets use the qualified positive
+source face. Covered automatic radiation may use either side, so both mapped observations are
+checked before the motion begins and again after branch changes. The existing source-normal and
+temperature-depth remapping chooses the actual covered side; no face is inferred from a material
+name. Material/design comparisons reconstruct each conditioned source and repeat that admission.
+Reference mass and sensible enthalpy remain separate from the prescribed normal-work ledger, and
+a failed later source or heat step restores the entire trial state.
+
 See [layered coverage](thermal-coverage.md#exterior-convection-and-radiation),
 [moving coverage](thermal-motion.md#covered-and-exposed-exterior-exchange), and
 [exterior qualification](transient-exterior-heat.md#qualify-the-exterior-boundary) for

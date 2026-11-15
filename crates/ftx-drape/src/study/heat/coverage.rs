@@ -388,6 +388,20 @@ impl Request {
         {
             source.validate_exterior_sources(exterior)?;
         }
+        // Covered material can expose either source side as its body-relative orientation changes.
+        // Independent/exposed sheet boundaries retain their declared positive outside face.
+        for exterior in self.exterior_exchange.iter().flatten().flatten() {
+            if exterior
+                .radiation
+                .as_ref()
+                .is_some_and(|radiation| radiation.automatic_material_face)
+            {
+                source.validate_exterior_sources_on_side(
+                    exterior,
+                    ftx_pattern::material_optics::Side::Negative,
+                )?;
+            }
+        }
         Ok(())
     }
 

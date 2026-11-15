@@ -871,10 +871,11 @@ back the entire trial, and repeated samples within one interval do not count com
 Original source receipts, initial/final conditioned models and interval hashes support frozen replay
 and the ordinary motion heat objectives. All versions admit dry films or separately qualified
 convection and opaque-gray radiation; actual pressure-conditioned transport reaches the same heat solver.
-Radiation requires an explicit face and scalar emissivity observation retained by the pressure
-acquisition, with all optical conditions and pressure-domain qualification intact. Automatic face
-mappings remain refused because scalar conditioning does not preserve them. Every retained column
-is qualified even before exposure; branch changes repeat the same checks. Exterior consent,
+Radiation requires retained, pressure-qualified optical observations. Explicit face selection
+remains available; automatic source-side selection additionally requires the original map's complete
+`invariants.optical_faces` qualification. Independent/exposed sheets preflight the positive side,
+while covered automatic exchange preflights both sides before changing geometry can expose them.
+Every retained column is qualified even before exposure; branch changes repeat the same checks. Exterior consent,
 temperature domains and zero-film/air consistency remain required. Comparisons reconcile signed
 convection and radiation energy/power independently with outside-boundary heat. Wet and
 dissipation-heating combinations still require compatible pressure-conditioned laws; no

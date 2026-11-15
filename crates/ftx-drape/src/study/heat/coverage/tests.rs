@@ -809,7 +809,15 @@ fn compression_history_cells(cells: usize) -> (History, Vec<Vec3>) {
 
 fn compression_history_from(
     cells: usize,
+    preparation: ftx_pattern::material_compression::Input,
+) -> (History, Vec<Vec3>) {
+    compression_history_oriented(cells, preparation, false)
+}
+
+fn compression_history_oriented(
+    cells: usize,
     mut preparation: ftx_pattern::material_compression::Input,
+    reverse_shell: bool,
 ) -> (History, Vec<Vec3>) {
     use ftx_pattern::material_compression::stack;
     let (mut history, mut cloth) = two_instance_history();
@@ -859,7 +867,7 @@ fn compression_history_from(
                 column: 0,
             },
             Patch {
-                vertices: [3, 4, 5],
+                vertices: if reverse_shell { [3, 5, 4] } else { [3, 4, 5] },
                 reference_area_m2: 0.5,
                 column: 0,
             },
@@ -1140,6 +1148,129 @@ fn exterior_compression_history(cells: usize, radiation: bool) -> (History, Vec<
     history.request.exposed_exterior_exchange = Some(vec![Some(exterior); 3]);
     history.request.validate_compression(3).unwrap();
     (history, cloth)
+}
+
+fn automatic_compression_history(
+    preparation: ftx_pattern::material_compression::Input,
+    reverse_shell: bool,
+) -> (History, Vec<Vec3>) {
+    let (mut history, cloth) = compression_history_oriented(1, preparation, reverse_shell);
+    let (template, _) = exterior_compression_history(1, true);
+    history.request.boundaries = template.request.boundaries;
+    history.request.exposed_boundaries = template.request.exposed_boundaries;
+    history.request.bare_boundaries = template.request.bare_boundaries;
+    history.request.exterior_exchange = template.request.exterior_exchange;
+    history.request.exposed_exterior_exchange = template.request.exposed_exterior_exchange;
+    for schedule in [
+        &mut history.request.exterior_exchange,
+        &mut history.request.exposed_exterior_exchange,
+    ] {
+        for environment in schedule.iter_mut().flatten().flatten() {
+            let radiation = environment.radiation.as_mut().unwrap();
+            radiation.automatic_material_face = true;
+            radiation.emissivity_property.clear();
+            radiation.exposed_face.clear();
+        }
+    }
+    history.request.validate_compression(3).unwrap();
+    (history, cloth)
+}
+
+#[test]
+fn compressed_automatic_faces_follow_covered_orientation_and_exposed_source_side() {
+    let mut first_radiation = Vec::new();
+    for reverse_shell in [false, true] {
+        let (mut automatic, cloth) = automatic_compression_history(
+            compression::tests::mapped_optical_acquisition(),
+            reverse_shell,
+        );
+        automatic
+            .request
+            .validate_compression_sources(&automatic.source)
+            .unwrap();
+        let mut explicit = automatic.clone();
+        for (covered, schedule) in [
+            (true, &mut explicit.request.exterior_exchange),
+            (false, &mut explicit.request.exposed_exterior_exchange),
+        ] {
+            for environment in schedule.iter_mut().flatten().flatten() {
+                let radiation = environment.radiation.as_mut().unwrap();
+                radiation.automatic_material_face = false;
+                let (face, property) = if covered && reverse_shell {
+                    ("reverse", "emissivity_reverse")
+                } else {
+                    ("public", "emissivity")
+                };
+                radiation.exposed_face = face.into();
+                radiation.emissivity_property = property.into();
+            }
+        }
+        for (interval, offset) in [0., 2., 0.].into_iter().enumerate() {
+            for history in [&mut automatic, &mut explicit] {
+                history
+                    .advance(
+                        &cloth,
+                        &body(offset),
+                        (interval + 1) as f64 * 0.1,
+                        interval,
+                        interval,
+                        None,
+                        None,
+                        None,
+                    )
+                    .unwrap();
+            }
+            assert_eq!(automatic.state.temperature_c(), explicit.state.temperature_c());
+            assert_eq!(automatic.stored_j, explicit.stored_j);
+            assert_eq!(automatic.inside_j, explicit.inside_j);
+            assert_eq!(automatic.outside_j, explicit.outside_j);
+            assert_eq!(automatic.covered_radiative_j, explicit.covered_radiative_j);
+            assert_eq!(automatic.exposed_radiative_j, explicit.exposed_radiative_j);
+            assert!((automatic.stored_j - automatic.net_j).abs() < 1e-8);
+            if interval == 1 {
+                for patch in automatic.final_field["exposed_exterior_exchange"]["patches"]
+                    .as_array()
+                    .unwrap()
+                {
+                    assert_eq!(patch["material_face"]["side"], "positive");
+                    assert_eq!(patch["material_face"]["face"], "public");
+                }
+            } else {
+                let face = &automatic.final_field["exterior_exchange"]["regions"][0]["flux"]
+                    ["material_face"];
+                assert_eq!(face["side"], if reverse_shell { "negative" } else { "positive" });
+                assert_eq!(face["face"], if reverse_shell { "reverse" } else { "public" });
+            }
+            if interval == 0 {
+                first_radiation.push(automatic.covered_radiative_j);
+            }
+        }
+        assert_eq!(
+            automatic.compression.as_ref().unwrap().finish(),
+            explicit.compression.as_ref().unwrap().finish()
+        );
+    }
+    // Same thermal state, pressure, geometry and boundary; only the actual outer-face observation differs.
+    assert!(first_radiation[0] > first_radiation[1]);
+}
+
+#[test]
+fn compressed_coverage_preflights_both_sides_but_exposed_sheets_need_only_positive() {
+    let mut preparation = compression::tests::mapped_optical_acquisition();
+    preparation.material.optical_faces.as_mut().unwrap().negative = None;
+    preparation.invariants.remove("emissivity_reverse");
+    let (mut history, _) = automatic_compression_history(preparation, false);
+    assert!(
+        history
+            .request
+            .validate_compression_sources(&history.source)
+            .is_err()
+    );
+    history.request.exterior_exchange = None;
+    history
+        .request
+        .validate_compression_sources(&history.source)
+        .unwrap();
 }
 
 #[test]

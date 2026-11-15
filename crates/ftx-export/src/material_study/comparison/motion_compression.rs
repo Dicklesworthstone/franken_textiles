@@ -3,6 +3,7 @@
 use super::*;
 use ftx_core::{Vec2, Vec3};
 use ftx_pattern::material_compression::{self, regions, stack};
+use ftx_pattern::material_optics::Side;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -427,51 +428,75 @@ struct Radiation {
     allow_opaque_gray_approximation: bool,
 }
 
-fn explicit_radiation(environment: &Value) -> Result<Option<Radiation>, Refusal> {
+fn qualified_radiation(environment: &Value) -> Result<Option<Radiation>, Refusal> {
     if environment["radiation"].is_null() {
         return Ok(None);
     }
     let radiation: Radiation =
         serde_json::from_value(environment["radiation"].clone()).map_err(|_| fail())?;
+    let ambiguous_face = if radiation.automatic_material_face {
+        !radiation.emissivity_property.is_empty() || !radiation.exposed_face.is_empty()
+    } else {
+        radiation.emissivity_property.trim().is_empty() || radiation.exposed_face.trim().is_empty()
+    };
     if !radiation.ambient_c.is_finite()
         || radiation.ambient_c < -273.15
-        || radiation.automatic_material_face
         || !radiation.allow_opaque_gray_approximation
-        || radiation.emissivity_property.trim().is_empty()
-        || radiation.exposed_face.trim().is_empty()
+        || ambiguous_face
     {
         return Err(fail());
     }
     Ok(Some(radiation))
 }
 
-// Pressure conditioning discards orientation mappings. Requalify the explicit scalar observation
-// from each reconstructed pressure state, including branch changes and currently hidden cloth.
-fn qualify_optics(material: &ResolvedMaterial, request: &Value) -> Result<(), Refusal> {
+// Requalify each reconstructed pressure state, including branch changes and hidden cloth.
+// Covered automatic exchange can expose either source side; independent and exposed sheets use
+// their canonical positive side. Only mappings retained by the pressure conditioner can qualify.
+fn qualify_optics(
+    material: &ResolvedMaterial,
+    request: &Value,
+    coverage: bool,
+) -> Result<(), Refusal> {
     for field in ["exterior_exchange", "exposed_exterior_exchange"] {
         if request[field].is_null() {
             continue;
         }
         for environment in vapor_array(request, field)? {
-            let Some(radiation) = explicit_radiation(environment)? else {
+            let Some(radiation) = qualified_radiation(environment)? else {
                 continue;
             };
-            let optical = material.material().thermal_emissivity(
-                &radiation.emissivity_property,
-                &radiation.exposed_face,
-                radiation.ambient_c,
-                material.allows_estimates(),
-            )?;
-            let range = vapor_array(environment, "surface_temperature_range_c")?;
-            if range.len() != 2
-                || finite(&range[0])
-                    .ok_or_else(fail)?
-                    .max(optical.temperature_range_c[0])
-                    > finite(&range[1])
+            let qualify = |property: &str, face: &str| {
+                let optical = material.material().thermal_emissivity(
+                    property,
+                    face,
+                    radiation.ambient_c,
+                    material.allows_estimates(),
+                )?;
+                let range = vapor_array(environment, "surface_temperature_range_c")?;
+                if range.len() != 2
+                    || finite(&range[0])
                         .ok_or_else(fail)?
-                        .min(optical.temperature_range_c[1])
-            {
-                return Err(fail());
+                        .max(optical.temperature_range_c[0])
+                        > finite(&range[1])
+                            .ok_or_else(fail)?
+                            .min(optical.temperature_range_c[1])
+                {
+                    return Err(fail());
+                }
+                Ok(())
+            };
+            if radiation.automatic_material_face {
+                for side in [Side::Positive, Side::Negative] {
+                    if side == Side::Negative && !(coverage && field == "exterior_exchange") {
+                        continue;
+                    }
+                    let face = material
+                        .material()
+                        .optical_face(side, material.allows_estimates())?;
+                    qualify(&face.emissivity_property, &face.face)?;
+                }
+            } else {
+                qualify(&radiation.emissivity_property, &radiation.exposed_face)?;
             }
         }
     }
@@ -487,7 +512,7 @@ fn exterior_boundary(environment: &Value, boundary: &Value) -> Result<(), Refusa
     let air = finite(&environment["air_c"]).ok_or_else(fail)?;
     let h = finite(&environment["convection_w_m2_k"]).ok_or_else(fail)?;
     let boundary = film(boundary)?;
-    explicit_radiation(environment)?;
+    qualified_radiation(environment)?;
     if air < -273.15
         || h < 0.
         || boundary[1] != air
@@ -1170,7 +1195,7 @@ pub(super) fn admit(
                 );
             }
         }
-        qualify_optics(&selected, request)?;
+        qualify_optics(&selected, request, coverage)?;
         selections.push(json!(material.frozen_selection()));
         originals.push(material);
         materials.push(selected);
@@ -1303,7 +1328,7 @@ pub(super) fn admit(
                 let pressure = compressed.pressure_pa;
                 let layer = &compressed.layers[0];
                 let selected = catalog.resolve(&layer.conditioned.selection)?;
-                qualify_optics(&selected, request)?;
+                qualify_optics(&selected, request, coverage)?;
                 let mut area = 0.;
                 for &patch_index in &owned_patches[column] {
                     let patch = &patches[patch_index];
@@ -1454,6 +1479,169 @@ pub(super) fn admit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn optical_input() -> material_compression::Input {
+        let mut input: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/materials/synthetic-compression.json"
+        ))
+        .unwrap();
+        for (property, face, value) in [
+            ("emissivity", "public", 0.2),
+            ("emissivity_back", "back", 0.8),
+        ] {
+            let mut conditions = input["invariants"]["areal_density"]["conditions"].clone();
+            conditions["face"] = json!(face);
+            conditions["spectral_basis"] = json!("total_hemispherical");
+            conditions["temperature_min_c"] = json!("-80");
+            conditions["temperature_max_c"] = json!("80");
+            input["material"]["properties"][property] = json!({
+                "value":value,"unit":"1","source":"synthetic","evidence":"estimate",
+                "method":"Synthetic asymmetric optical observation; no empirical textile claim",
+                "conditions":conditions});
+            let mut invariant = input["invariants"]["areal_density"].clone();
+            invariant["conditions"] = conditions;
+            invariant["method"] =
+                json!("Synthetic optical scalar invariant over the acquired range");
+            input["invariants"][property] = invariant;
+        }
+        input["material"]["optical_faces"] = json!({
+            "positive":{"face":"public","emissivity_property":"emissivity"},
+            "negative":{"face":"back","emissivity_property":"emissivity_back"},
+            "source":"synthetic","evidence":"estimate",
+            "method":"Synthetic source-normal assignment, not an empirical measurement",
+            "specimen":input["specimen"],"conditioning":input["conditioning"]});
+        let mut invariant = input["invariants"]["areal_density"].clone();
+        invariant["method"] =
+            json!("Synthetic orientation invariant over the acquired pressure range");
+        input["invariants"]["optical_faces"] = invariant;
+        serde_json::from_value(input).unwrap()
+    }
+
+    fn conditioned(input: &material_compression::Input) -> ResolvedMaterial {
+        Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: vec![],
+        }
+        .resolve(&material_compression::condition(input).unwrap().selection)
+        .unwrap()
+    }
+
+    fn optical_request() -> Value {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+        ))
+        .unwrap();
+        let mut environment = fixture["exterior_exchange"].clone();
+        environment["radiation"] = json!({"ambient_c":-10.,"automatic_material_face":true,
+            "allow_opaque_gray_approximation":true});
+        json!({"exterior_exchange":[environment]})
+    }
+
+    #[test]
+    fn automatic_optics_replay_pressure_qualified_faces_at_every_state() {
+        let mut input = optical_input();
+        let request = optical_request();
+        let mut identities = BTreeSet::new();
+        for pressure in [0., 250., 500.] {
+            input.pressure_pa = pressure;
+            let material = conditioned(&input);
+            assert!(identities.insert(material.sha256().to_owned()));
+            qualify_optics(&material, &request, false).unwrap();
+            qualify_optics(&material, &request, true).unwrap();
+            for (side, value) in [(Side::Positive, 0.2), (Side::Negative, 0.8)] {
+                let face = material.material().optical_face(side, true).unwrap();
+                assert_eq!(
+                    material.material().properties[&face.emissivity_property].value,
+                    value
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_orientation_qualification_keeps_explicit_and_omitted_modes() {
+        let mut input = optical_input();
+        input.invariants.remove("optical_faces");
+        input.invariants.remove("emissivity_back");
+        let material = conditioned(&input);
+        assert!(material.material().optical_faces.is_none());
+        let mut request = optical_request();
+        assert!(qualify_optics(&material, &request, false).is_err());
+        assert!(qualify_optics(&material, &request, true).is_err());
+        request["exterior_exchange"][0]["radiation"] = json!({"ambient_c":-10.,
+            "emissivity_property":"emissivity","exposed_face":"public",
+            "allow_opaque_gray_approximation":true});
+        qualify_optics(&material, &request, false).unwrap();
+        qualify_optics(&material, &request, true).unwrap();
+        request["exterior_exchange"][0]["radiation"] = Value::Null;
+        qualify_optics(&material, &request, false).unwrap();
+        qualify_optics(&material, &json!({}), true).unwrap();
+    }
+
+    #[test]
+    fn covered_optics_require_both_sides_but_exposed_sheets_use_positive() {
+        for fault in ["missing", "spectral", "temperature"] {
+            let mut input = optical_input();
+            if fault == "missing" {
+                input.material.optical_faces.as_mut().unwrap().negative = None;
+                input.invariants.remove("emissivity_back");
+            } else {
+                let (key, value) = if fault == "spectral" {
+                    ("spectral_basis", "camera_band_8_12_um")
+                } else {
+                    ("temperature_max_c", "-20")
+                };
+                input
+                    .material
+                    .properties
+                    .get_mut("emissivity_back")
+                    .unwrap()
+                    .conditions
+                    .insert(key.into(), value.into());
+                input
+                    .invariants
+                    .get_mut("emissivity_back")
+                    .unwrap()
+                    .conditions
+                    .insert(key.into(), value.into());
+            }
+            let material = conditioned(&input);
+            let request = optical_request();
+            qualify_optics(&material, &request, false).unwrap();
+            assert!(qualify_optics(&material, &request, true).is_err(), "{fault}");
+            let exposed = json!({"exterior_exchange":[null],
+                "exposed_exterior_exchange":request["exterior_exchange"]});
+            qualify_optics(&material, &exposed, true).unwrap();
+        }
+    }
+
+    #[test]
+    fn automatic_optics_reject_conflicting_modes_and_unqualified_boundaries() {
+        let input = optical_input();
+        let material = conditioned(&input);
+        let request = optical_request();
+        let environment = &request["exterior_exchange"][0];
+        let boundary = json!({"inside_c":35.,"outside_c":environment["air_c"],
+            "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.});
+        exterior_boundary(environment, &boundary).unwrap();
+        for (field, value) in [
+            ("emissivity_property", json!("emissivity")),
+            ("exposed_face", json!("public")),
+            ("allow_opaque_gray_approximation", json!(false)),
+            ("ambient_c", json!(-274.)),
+        ] {
+            let mut changed = request.clone();
+            changed["exterior_exchange"][0]["radiation"][field] = value;
+            assert!(qualify_optics(&material, &changed, true).is_err(), "{field}");
+            assert!(exterior_boundary(&changed["exterior_exchange"][0], &boundary).is_err());
+        }
+        let mut changed = request.clone();
+        changed["exterior_exchange"][0]["surface_temperature_range_c"] = json!([81., 90.]);
+        assert!(qualify_optics(&material, &changed, true).is_err());
+        changed = request;
+        changed["exterior_exchange"][0]["radiation"]["ambient_c"] = json!(81.);
+        assert!(qualify_optics(&material, &changed, true).is_err());
+    }
 
     fn case() -> (BTreeMap<String, RegionalBinding>, Value) {
         let preparation: Value = serde_json::from_str(include_str!(

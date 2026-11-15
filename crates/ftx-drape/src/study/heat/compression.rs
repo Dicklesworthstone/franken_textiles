@@ -317,17 +317,22 @@ fn check_storage(preparation: &material_compression::Input) -> Result<(), Refusa
 
 pub(super) fn validate_exterior(exterior: &Exterior) -> Result<(), Refusal> {
     exterior.validate_convection()?;
-    if let Some(radiation) = &exterior.radiation
-        && (radiation.automatic_material_face
-            || radiation.emissivity_property.trim().is_empty()
-            || radiation.exposed_face.trim().is_empty()
+    if let Some(radiation) = &exterior.radiation {
+        let invalid_selection = if radiation.automatic_material_face {
+            !radiation.emissivity_property.is_empty() || !radiation.exposed_face.is_empty()
+        } else {
+            radiation.emissivity_property.trim().is_empty()
+                || radiation.exposed_face.trim().is_empty()
+        };
+        if invalid_selection
             || !radiation.allow_opaque_gray_approximation
             || !radiation.ambient_c.is_finite()
-            || radiation.ambient_c < -273.15)
-    {
-        return Err(invalid(
-            "compressed radiation needs an explicit qualified face and emissivity, physical enclosure temperature and opaque-gray consent; pressure-conditioned face mappings are unavailable",
-        ));
+            || radiation.ambient_c < -273.15
+        {
+            return Err(invalid(
+                "compressed radiation needs either a qualified source-side mapping or an explicit face and emissivity, physical enclosure temperature and opaque-gray consent",
+            ));
+        }
     }
     Ok(())
 }
@@ -1117,6 +1122,33 @@ pub(super) mod tests {
             .material
             .properties
             .insert("emissivity".into(), optical);
+        input
+    }
+
+    pub(in crate::study::heat) fn mapped_optical_acquisition() -> material_compression::Input {
+        let mut input = optical_acquisition();
+        let mut reverse = input.material.properties["emissivity"].clone();
+        reverse.value = 0.2;
+        reverse.bounds = None;
+        reverse.conditions.insert("face".into(), "reverse".into());
+        let mut invariant = input.invariants["emissivity"].clone();
+        invariant.conditions = reverse.conditions.clone();
+        input.invariants.insert("emissivity_reverse".into(), invariant);
+        input
+            .material
+            .properties
+            .insert("emissivity_reverse".into(), reverse);
+        input.material.optical_faces = Some(serde_json::from_value(json!({
+            "positive":{"face":"public","emissivity_property":"emissivity"},
+            "negative":{"face":"reverse","emissivity_property":"emissivity_reverse"},
+            "source":"synthetic","evidence":"estimate",
+            "method":"Synthetic original orientation; no physical face qualification",
+            "specimen":input.specimen,"conditioning":input.conditioning
+        })).unwrap());
+        input.invariants.insert(
+            "optical_faces".into(),
+            input.invariants["specific_heat"].clone(),
+        );
         input
     }
 
@@ -2443,6 +2475,155 @@ pub(super) mod tests {
             allow_opaque_gray_approximation: true,
         });
         exterior
+    }
+
+
+    fn automatic_radiation() -> Exterior {
+        let mut exterior = radiation(0., 3., -10.);
+        let optical = exterior.radiation.as_mut().unwrap();
+        optical.automatic_material_face = true;
+        optical.emissivity_property.clear();
+        optical.exposed_face.clear();
+        exterior
+    }
+
+    #[test]
+    fn automatic_compressed_radiation_matches_explicit_through_qualified_branch_changes() {
+        let mut policy = cyclic_request();
+        let binding = policy.bindings.get_mut("sheet").unwrap();
+        binding.preparation = mapped_optical_acquisition();
+        for quantity in binding.preparation.material.properties.values_mut() {
+            quantity.conditions.remove("loading_branch");
+        }
+        binding.material_sha256 = selected(&binding.preparation).sha256().into();
+        binding.branch_changes = Some(vec![
+            None,
+            Some(reversal(&binding.preparation, true)),
+            None,
+            Some(reversal(&binding.preparation, false)),
+        ]);
+        let mut automatic = history_from(policy);
+        let mut explicit = automatic.clone();
+        automatic.request.exterior_exchange = Some(vec![automatic_radiation(); 4]);
+        explicit.request.exterior_exchange = Some(vec![radiation(0., 3., -10.); 4]);
+        automatic.request.validate(4).unwrap();
+        explicit.request.validate(4).unwrap();
+        for interval in 0..4 {
+            let area = 1. / (interval + 1) as f64;
+            for history in [&mut automatic, &mut explicit] {
+                history
+                    .advance(
+                        &geometry(area),
+                        (interval + 1) as f64,
+                        interval,
+                        interval,
+                        None,
+                        None,
+                        None,
+                    )
+                    .unwrap();
+            }
+            assert_eq!(automatic.state.temperature_c(), explicit.state.temperature_c());
+            assert_eq!(automatic.stored_j, explicit.stored_j);
+            assert_eq!(automatic.inside_j, explicit.inside_j);
+            assert_eq!(automatic.radiative_j, explicit.radiative_j);
+            assert_eq!(automatic.outside_j, explicit.outside_j);
+            assert_eq!(
+                automatic.compression.as_ref().unwrap().finish(),
+                explicit.compression.as_ref().unwrap().finish()
+            );
+            assert!(automatic.balance_error_j().abs() < 1e-8);
+        }
+        let report = automatic.finish("path", "initial", 4.).unwrap();
+        let face = &report["final"]["exterior_exchange"]["patches"][0]["material_face"];
+        assert_eq!(face["side"], "positive");
+        assert_eq!(face["face"], "public");
+        assert_eq!(face["emissivity_property"], "emissivity");
+        close(
+            report["prescribed_compression"]["final_instances"]["sheet"]["reference_mass_kg"]
+                .as_f64()
+                .unwrap(),
+            0.025,
+        );
+        assert_eq!(report["prescribed_compression"]["normal_work_to_heat_j"], 0.);
+    }
+
+    #[test]
+    fn automatic_compressed_radiation_requires_mapping_and_rolls_back_its_failed_qualification() {
+        let mut policy = fixture(vec![250., 500.])
+            .request
+            .prescribed_compression
+            .unwrap();
+        let binding = policy.bindings.get_mut("sheet").unwrap();
+        binding.preparation = mapped_optical_acquisition();
+        binding.material_sha256 = selected(&binding.preparation).sha256().into();
+        let mut history = history_from(policy);
+        history.request.exterior_exchange = Some(vec![automatic_radiation(); 2]);
+        history.request.validate(2).unwrap();
+        history
+            .advance(&geometry(1.), 1., 0, 0, None, None, None)
+            .unwrap();
+        let before = history.clone().finish("path", "initial", 1.).unwrap();
+        for fault in ["qualifier", "domain", "mapping", "property"] {
+            let mut rejected = history.clone();
+            let preparation = &mut rejected
+                .compression
+                .as_mut()
+                .unwrap()
+                .instances
+                .get_mut("sheet")
+                .unwrap()
+                .preparation;
+            match fault {
+                "qualifier" => {
+                    preparation.invariants.remove("optical_faces");
+                    preparation.invariants.remove("emissivity_reverse");
+                }
+                "domain" => {
+                    preparation
+                        .invariants
+                        .get_mut("optical_faces")
+                        .unwrap()
+                        .pressure_range_pa = [0., 250.];
+                }
+                "mapping" => preparation.material.optical_faces = None,
+                "property" => {
+                    preparation.invariants.remove("emissivity_reverse");
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                rejected
+                    .advance(&geometry(1.), 2., 1, 1, None, None, None)
+                    .is_err(),
+                "{fault}"
+            );
+            rejected
+                .compression
+                .as_mut()
+                .unwrap()
+                .instances
+                .get_mut("sheet")
+                .unwrap()
+                .preparation = history.compression.as_ref().unwrap().instances["sheet"]
+                .preparation
+                .clone();
+            assert_eq!(
+                rejected.clone().finish("path", "initial", 1.).unwrap(),
+                before,
+                "{fault}"
+            );
+            rejected
+                .advance(&geometry(1.), 2., 1, 1, None, None, None)
+                .unwrap();
+        }
+        let unqualified = radiating_fixture(vec![250.]);
+        assert!(
+            unqualified
+                .model
+                .validate_exterior_sources(&automatic_radiation())
+                .is_err()
+        );
     }
 
     #[test]
