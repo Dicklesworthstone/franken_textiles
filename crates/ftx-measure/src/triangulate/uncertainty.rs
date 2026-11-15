@@ -14,6 +14,7 @@ use crate::invalid;
 
 mod lens;
 mod pose;
+mod scale;
 mod sheet;
 pub use lens::{
     LensGroupSensitivity, LensNoiseGroup, LensNoiseInput, LensUncertainTriangulationReport,
@@ -22,6 +23,11 @@ pub use lens::{
 pub use pose::{
     FrameSheetCornerNoise, SheetCornerNoiseInput, SheetFrameSensitivity,
     SheetUncertainTriangulationReport, SheetUncertaintyReport, triangulate_with_sheet_noise,
+};
+pub use scale::{
+    ReferenceScaleNoiseInput, ReferenceScaleUncertainTriangulationReport,
+    ReferenceScaleUncertaintyReport, triangulate_with_reference_scale_noise,
+    validate_reference_scale_sources,
 };
 pub use sheet::FrameSheetPose;
 

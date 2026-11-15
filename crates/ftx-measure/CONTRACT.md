@@ -220,6 +220,17 @@ native/portable replay cover software behavior. Sheet pixels (lens term), intrin
 term), metric reference, capture assumptions and independent empirical accuracy retain their
 separate scope; no total uncertainty, readiness, body measurement or fit claim is introduced.
 
+**Common reference-scale precision.** `triangulate_with_reference_scale_noise` admits one explicit
+positive fractional sigma bound to the exact original stationary-sheet reports for every FIT frame.
+Complete source replay fixes the original sheet zero; the shared Jacobian is the accepted point,
+and covariance is the outer product of sigma times that point. Cross terms remain and added views
+do not average away the common mode. Source-pose lens and sheet-corner requests must use identical
+complete acquisitions. Rejected geometry or nonrepresentable covariance publishes no partial
+precision, while the original geometry remains unchanged. Native/portable/browser consumers expose
+this separate component and retain exact replay inputs. Tests: `sheet_triangulation`,
+`triangulation_workflow` and `check_photo_frontend.cjs`; no total uncertainty, anisotropic print/warp
+model, independent capture qualification, fused evidence or body/garment fit is established.
+
 **Anchored joint bundle refinement (FTX-20).** `bundle::adjust` jointly refines all camera
 extrinsics and free landmark positions against sigma-weighted fit pixel residuals. Fixed
 metric controls define the gauge and absolute scale; intrinsics and lens distortion remain

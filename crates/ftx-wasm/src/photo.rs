@@ -10,7 +10,9 @@ use ftx_measure::photo::{
     intrinsics::{calibrate_document, uncertainty::CalibrationNoise},
     measure_photo,
 };
-use ftx_measure::triangulate::uncertainty::{LensNoiseInput, SheetCornerNoiseInput};
+use ftx_measure::triangulate::uncertainty::{
+    LensNoiseInput, ReferenceScaleNoiseInput, SheetCornerNoiseInput,
+};
 use ftx_trace::raster::image::{Bgr, encode_png_bgr, load_photo_with_limit};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -152,6 +154,63 @@ pub fn triangulate_with_camera_noise(
         ftx_measure::triangulate::uncertainty::triangulate_with_sheet_noise(&input, &sheet)?;
     report["conditional_sheet_uncertainty"] =
         serde_json::to_value(result.conditional_sheet_uncertainty)
+            .map_err(|e| invalid(e.to_string()))?;
+    Ok(report)
+}
+
+/// Calibrated landmark geometry with a separate common reference-scale contribution.
+/// The original sheet origin is fixed; additional views never average down the shared error.
+/// Empty scale evidence preserves the existing four-input wrapper exactly. Combined source-pose
+/// lens, sheet-corner and scale requests must retain the same original sheet acquisitions.
+///
+/// # Errors
+/// Input/click JSON above 256 KiB, each camera/scale source above 16 MiB, or the canonical
+/// source, calibration and geometry guards refuse. Unavailable precision preserves geometry.
+pub fn triangulate_with_reference_scale_noise(
+    input: &str,
+    click_noise: &str,
+    lens_noise: &str,
+    sheet_noise: &str,
+    reference_scale_noise: &str,
+) -> Result<Value, Refusal> {
+    if reference_scale_noise.is_empty() {
+        return triangulate_with_camera_noise(input, click_noise, lens_noise, sheet_noise);
+    }
+    for (name, text) in [
+        ("lens", lens_noise),
+        ("sheet", sheet_noise),
+        ("reference-scale", reference_scale_noise),
+    ] {
+        if text.len() > ftx_measure::photo::acquisition::MAX_CALIBRATION_JSON_BYTES {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                format!("triangulation {name}-noise JSON exceeds 16 MiB"),
+            ));
+        }
+    }
+    let scale: ReferenceScaleNoiseInput =
+        serde_json::from_str(reference_scale_noise).map_err(|e| invalid(e.to_string()))?;
+    let lens: Option<LensNoiseInput> = if lens_noise.is_empty() {
+        None
+    } else {
+        Some(serde_json::from_str(lens_noise).map_err(|e| invalid(e.to_string()))?)
+    };
+    let sheet: Option<SheetCornerNoiseInput> = if sheet_noise.is_empty() {
+        None
+    } else {
+        Some(serde_json::from_str(sheet_noise).map_err(|e| invalid(e.to_string()))?)
+    };
+    ftx_measure::triangulate::uncertainty::validate_reference_scale_sources(
+        &scale,
+        lens.as_ref(),
+        sheet.as_ref(),
+    )?;
+    let mut report = triangulate_with_camera_noise(input, click_noise, lens_noise, sheet_noise)?;
+    let input = parse(input)?;
+    let result =
+        ftx_measure::triangulate::uncertainty::triangulate_with_reference_scale_noise(&input, &scale)?;
+    report["conditional_reference_scale_uncertainty"] =
+        serde_json::to_value(result.conditional_reference_scale_uncertainty)
             .map_err(|e| invalid(e.to_string()))?;
     Ok(report)
 }

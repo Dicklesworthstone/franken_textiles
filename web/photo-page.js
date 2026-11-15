@@ -150,7 +150,7 @@ function controls() {
   $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
   $("geometryStillControls").hidden=!still;
   $("triangulationNoise").disabled=!triangulate; $("triangulationLensNoise").disabled=!triangulate;
-  $("triangulationSheetNoise").disabled=!triangulate; $("bundleIterations").disabled=!bundle;
+  $("triangulationSheetNoise").disabled=!triangulate; $("triangulationReferenceScaleNoise").disabled=!triangulate; $("bundleIterations").disabled=!bundle;
   $("geometryInputKind").textContent=still?"ftx-still-window-input/1":bundle?"ftx-bundle-input/1":"ftx-triangulation-input/1";
   $("triangulationRun").textContent=still?"Assess still-window candidate":bundle?"Refine cameras and landmarks":"Triangulate landmark";
   $("triangulationRun").disabled=triangulationBusy || !$("triangulationInput").files.length;
@@ -158,6 +158,7 @@ function controls() {
   $("triangulationClearNoise").disabled=!triangulate || !$("triangulationNoise").files.length;
   $("triangulationClearLensNoise").disabled=!triangulate || !$("triangulationLensNoise").files.length;
   $("triangulationClearSheetNoise").disabled=!triangulate || !$("triangulationSheetNoise").files.length;
+  $("triangulationClearReferenceScaleNoise").disabled=!triangulate || !$("triangulationReferenceScaleNoise").files.length;
   const charuco=$("referenceMode").value==="charuco", calibrated=charuco && ($("calibration").files.length>0 || generatedCalibration!==null);
   $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
   $("paper").disabled=charuco; $("sheet").disabled=!charuco; $("calibration").disabled=!charuco;
@@ -1563,21 +1564,24 @@ function withdrawTriangulation() {
   $("triangulationDownloads").replaceChildren(); $("triangulationResult").hidden=true;
   for(const id of ["triangulationReport","triangulationSummary","triangulationPoint","triangulationPrecision","triangulationFlags","triangulationError"]) $(id).textContent="";
 }
-function publishTriangulation(text, input, noise, operation, iterations, lensNoise, sheetNoise) {
+function publishTriangulation(text, input, noise, operation, iterations, lensNoise, sheetNoise, referenceScaleNoise) {
   // Parsed values are display-only. Original input and complete native report text are downloaded
   // unchanged, so full-width frame timestamps never pass through JavaScript serialization.
   const report=JSON.parse(text), bundle=operation==="bundle-adjust", still=operation==="still-window",
-    uncertainty=report.conditional_click_uncertainty, lens=report.conditional_lens_uncertainty, sheet=report.conditional_sheet_uncertainty;
+    uncertainty=report.conditional_click_uncertainty, lens=report.conditional_lens_uncertainty, sheet=report.conditional_sheet_uncertainty,
+    referenceScale=report.conditional_reference_scale_uncertainty;
   if(report.schema!==(still?"ftx-still-window/1":bundle?"ftx-bundle/1":"ftx-triangulation/1") || !Array.isArray(report.flags) ||
     !Array.isArray(bundle || still?report.checks:report.reprojection)) {
     throw Error("The engine did not return the requested geometry report.");
   }
   if(lensNoise && !lens) throw Error("The engine did not return the requested shared-lens uncertainty.");
   if(sheetNoise && !sheet) throw Error("The engine did not return the requested sheet-corner uncertainty.");
+  if(referenceScaleNoise && !referenceScale) throw Error("The engine did not return the requested reference-scale uncertainty.");
   const unavailable=[];
   if(uncertainty && uncertainty.status!=="AVAILABLE") unavailable.push("click");
   if(lens && lens.status!=="AVAILABLE") unavailable.push("lens");
   if(sheet && sheet.status!=="AVAILABLE") unavailable.push("sheet-corner");
+  if(referenceScale && referenceScale.status!=="AVAILABLE") unavailable.push("reference-scale");
   $("triangulationReport").textContent=text;
   if(still) {
     $("triangulationSummary").textContent=`${report.status}: ${report.input.frames.length} frames, ${report.fit_landmarks} FIT landmarks, ${report.held_out_landmarks} held-out landmarks; supplied motion limit ${report.input.max_motion_mm} mm.`;
@@ -1608,16 +1612,24 @@ function publishTriangulation(text, input, noise, operation, iterations, lensNoi
       (sheet.sigma_m?`Sheet-only one-sigma x, y, z [m]: ${sheet.sigma_m.join(", ")}. `:"No covariance estimate is available. ")+
       (sheet.covariance_m2?`Sheet-only covariance [m²], rows x, y, z: ${sheet.covariance_m2.rows.map(row=>`[${row.join(", ")}]`).join("; ")}. `:"")+
       "Sheet-corner noise changes each camera pose at fixed lens parameters; measurement clicks are excluded from this component.";
-    if(lens || sheet) $("triangulationPrecision").textContent+=
+    if(referenceScale) $("triangulationPrecision").textContent+=
+      `\nConditional reference-scale uncertainty: ${referenceScale.status}. `+
+      (referenceScale.sigma_m?`Scale-only one-sigma x, y, z [m]: ${referenceScale.sigma_m.join(", ")}. `:"No covariance estimate is available. ")+
+      (referenceScale.covariance_m2?`Scale-only covariance [m²], rows x, y, z: ${referenceScale.covariance_m2.rows.map(row=>`[${row.join(", ")}]`).join("; ")}. `:"")+
+      "One uniform reference-scale error is shared by all views about the stationary sheet origin; adding views does not average it away.";
+    if(referenceScale) $("triangulationPrecision").textContent+=
+      "\nClick, shared-lens, sheet-corner and reference-scale components are reported separately; no total measurement uncertainty is inferred.";
+    else if(lens || sheet) $("triangulationPrecision").textContent+=
       "\nClick, shared-lens and sheet-corner components are reported separately; no total measurement uncertainty is inferred.";
   }
-  $("triangulationFlags").textContent=[...report.flags,...(report.advisories || []),...(uncertainty?.flags || []),...(lens?.flags || []),...(sheet?.flags || []),report.no_claim,uncertainty?.no_claim,lens?.no_claim,sheet?.no_claim].filter(Boolean).join(" ");
+  $("triangulationFlags").textContent=[...report.flags,...(report.advisories || []),...(uncertainty?.flags || []),...(lens?.flags || []),...(sheet?.flags || []),...(referenceScale?.flags || []),report.no_claim,uncertainty?.no_claim,lens?.no_claim,sheet?.no_claim,referenceScale?.no_claim].filter(Boolean).join(" ");
   const name=still?"still-window":bundle?"bundle":"triangulation";
   link($("triangulationDownloads"),text,name+".json","application/json",triangulationUrls);
   link($("triangulationDownloads"),input,name+"-input.json","application/json",triangulationUrls);
   if(noise) link($("triangulationDownloads"),noise,"triangulation-click-noise.json","application/json",triangulationUrls);
   if(lensNoise) link($("triangulationDownloads"),lensNoise,"triangulation-lens-noise.json","application/json",triangulationUrls);
   if(sheetNoise) link($("triangulationDownloads"),sheetNoise,"triangulation-sheet-noise.json","application/json",triangulationUrls);
+  if(referenceScaleNoise) link($("triangulationDownloads"),referenceScaleNoise,"triangulation-reference-scale-noise.json","application/json",triangulationUrls);
   if(bundle) link($("triangulationDownloads"),iterations,"bundle-iterations.txt","text/plain",triangulationUrls);
   $("triangulationResult").hidden=false;
   $("triangulationStatus").textContent=still?
@@ -1634,7 +1646,8 @@ async function runTriangulation() {
   const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", iterations=bundle?$("bundleIterations").value:"";
   const inputFile=$("triangulationInput").files[0], noiseFile=operation==="triangulate"?$("triangulationNoise").files[0]:null,
     lensFile=operation==="triangulate"?$("triangulationLensNoise").files[0]:null,
-    sheetFile=operation==="triangulate"?$("triangulationSheetNoise").files[0]:null;
+    sheetFile=operation==="triangulate"?$("triangulationSheetNoise").files[0]:null,
+    referenceScaleFile=operation==="triangulate"?$("triangulationReferenceScaleNoise").files[0]:null;
   withdrawTriangulation(); const id=triangulationTicket;
   try {
     if(operation!=="triangulate" && !bundle && !still) throw Error("Choose a supported geometry operation.");
@@ -1642,19 +1655,21 @@ async function runTriangulation() {
     if(inputFile.size>256*1024 || noiseFile?.size>256*1024) throw Error("Each geometry file must be at most 256 KiB; no source was read.");
     if(lensFile?.size>16*1024*1024) throw Error("Shared-lens evidence must be at most 16 MiB; no source was read.");
     if(sheetFile?.size>16*1024*1024) throw Error("Sheet-corner evidence must be at most 16 MiB; no source was read.");
+    if(referenceScaleFile?.size>16*1024*1024) throw Error("Reference-size evidence must be at most 16 MiB; no source was read.");
     triangulationBusy=true; controls(); $("triangulationStatus").textContent="Reading the local calibrated observations…";
-    const [input,noise,lensNoise,sheetNoise]=await Promise.all([readJsonFile(inputFile),readJsonFile(noiseFile),readJsonFile(lensFile),readJsonFile(sheetFile)]);
+    const [input,noise,lensNoise,sheetNoise,referenceScaleNoise]=await Promise.all([readJsonFile(inputFile),readJsonFile(noiseFile),readJsonFile(lensFile),readJsonFile(sheetFile),readJsonFile(referenceScaleFile)]);
     if(id!==triangulationTicket) return;
     if(noiseFile && noise.length===0) throw Error("The selected click-noise file is empty; supply evidence or remove the file explicitly.");
     if(lensFile && lensNoise.length===0) throw Error("The selected lens-noise file is empty; supply evidence or remove the file explicitly.");
     if(sheetFile && sheetNoise.length===0) throw Error("The selected sheet-noise file is empty; supply evidence or remove the file explicitly.");
+    if(referenceScaleFile && referenceScaleNoise.length===0) throw Error("The selected reference-scale file is empty; supply evidence or remove the file explicitly.");
     const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); triangulationWorker=current;
     current.onmessage=({data:m})=>{
       if(current!==triangulationWorker || m.request!==triangulationTicket) return;
       if(m.type==="progress") {$("triangulationStatus").textContent=m.text; return;}
       stopTriangulation();
       if(m.type==="error") {$("triangulationError").textContent=m.message; $("triangulationStatus").textContent="Geometry calculation failed; no result published."; return;}
-      try {publishTriangulation(m.report,input,noise,operation,iterations,lensNoise,sheetNoise);} catch(error) {
+      try {publishTriangulation(m.report,input,noise,operation,iterations,lensNoise,sheetNoise,referenceScaleNoise);} catch(error) {
         withdrawTriangulation(); $("triangulationError").textContent=String(error.message || error);
         $("triangulationStatus").textContent="No geometry report published.";
       }
@@ -1664,7 +1679,7 @@ async function runTriangulation() {
       withdrawTriangulation(); $("triangulationError").textContent=error.message;
       $("triangulationStatus").textContent="Geometry worker stopped; run the current observations again.";
     };
-    current.postMessage({request:id,op:operation,input,noise,lensNoise,sheetNoise,iterations,source:inputFile.name});
+    current.postMessage({request:id,op:operation,input,noise,lensNoise,sheetNoise,referenceScaleNoise,iterations,source:inputFile.name});
   } catch(error) {
     if(id!==triangulationTicket) return;
     stopTriangulation(); $("triangulationError").textContent=String(error.message || error);
@@ -2242,7 +2257,7 @@ for(const id of ["bodyFitIterations","bodyFitEvaluations"]) $(id).addEventListen
 $("triangulationRun").onclick=runTriangulation;
 $("geometryOperation").addEventListener("change",()=>{
   if($("geometryOperation").value!=="triangulate") {
-    $("triangulationNoise").value=""; $("triangulationLensNoise").value=""; $("triangulationSheetNoise").value="";
+    $("triangulationNoise").value=""; $("triangulationLensNoise").value=""; $("triangulationSheetNoise").value=""; $("triangulationReferenceScaleNoise").value="";
   }
   withdrawTriangulation(); $("triangulationStatus").textContent="Geometry operation changed; select the matching input and run again.";
 });
@@ -2262,7 +2277,11 @@ $("triangulationClearSheetNoise").onclick=()=>{
   $("triangulationSheetNoise").value=""; withdrawTriangulation();
   $("triangulationStatus").textContent="Sheet-corner evidence removed; run the current observations again.";
 };
-for(const id of ["triangulationInput","triangulationNoise","triangulationLensNoise","triangulationSheetNoise"]) $(id).addEventListener("change",()=>{
+$("triangulationClearReferenceScaleNoise").onclick=()=>{
+  $("triangulationReferenceScaleNoise").value=""; withdrawTriangulation();
+  $("triangulationStatus").textContent="Reference-size evidence removed; run the current observations again.";
+};
+for(const id of ["triangulationInput","triangulationNoise","triangulationLensNoise","triangulationSheetNoise","triangulationReferenceScaleNoise"]) $(id).addEventListener("change",()=>{
   withdrawTriangulation(); $("triangulationStatus").textContent="Triangulation source changed; run the current observations again.";
 });
 $("cameraCancel").onclick=()=>{withdrawCamera(); $("cameraStatus").textContent="Calibration cancelled; no result published.";};

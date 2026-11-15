@@ -26,7 +26,7 @@ jobs:
       - name: Check shared-lens triangulation through native and portable consumers
         if: ${{ !cancelled() }}
         run: |
-          cargo test -p ftx-measure --lib --test camera_brown --locked
+          cargo test -p ftx-measure --lib --test camera_brown --test sheet_triangulation --locked
           cargo test -p ftx-cli --test triangulation_workflow --locked
       - name: Check all 9 pure-Node VM frontend and worker suites
         if: ${{ !cancelled() }}

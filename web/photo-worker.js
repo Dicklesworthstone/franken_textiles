@@ -159,13 +159,18 @@ self.onmessage = async ({data: m}) => {
     if(m.op==="triangulate") {
       if(m.lensNoise!==undefined && typeof m.lensNoise!=="string") throw Error("Shared-lens evidence must be original JSON text.");
       if(m.sheetNoise!==undefined && typeof m.sheetNoise!=="string") throw Error("Sheet-corner evidence must be original JSON text.");
-      if(m.sheetNoise && typeof ftx.triangulate_with_camera_noise!=="function") throw Error("Rebuild web/pkg: missing sheet-corner triangulation uncertainty.");
-      if(!m.sheetNoise && m.lensNoise && typeof ftx.triangulate_with_lens_noise!=="function") throw Error("Rebuild web/pkg: missing shared-lens triangulation uncertainty.");
-      self.postMessage({type:"progress",request:m.request,text:m.sheetNoise?
+      if(m.referenceScaleNoise!==undefined && typeof m.referenceScaleNoise!=="string") throw Error("Reference-size evidence must be original JSON text.");
+      if(m.referenceScaleNoise && typeof ftx.triangulate_with_reference_scale_noise!=="function") throw Error("Rebuild web/pkg: missing shared reference-scale triangulation uncertainty.");
+      if(!m.referenceScaleNoise && m.sheetNoise && typeof ftx.triangulate_with_camera_noise!=="function") throw Error("Rebuild web/pkg: missing sheet-corner triangulation uncertainty.");
+      if(!m.referenceScaleNoise && !m.sheetNoise && m.lensNoise && typeof ftx.triangulate_with_lens_noise!=="function") throw Error("Rebuild web/pkg: missing shared-lens triangulation uncertainty.");
+      self.postMessage({type:"progress",request:m.request,text:m.referenceScaleNoise?
+        "Rechecking the original sheet cameras and propagating their shared reference-scale uncertainty…":m.sheetNoise?
         "Rechecking saved sheet poses and propagating independent corner noise through the calibrated cameras…":m.lensNoise?
         "Rechecking saved calibrations and propagating shared-lens uncertainty through the calibrated rays…":
         "Checking calibrated rays, held-out views and declared click uncertainty…"});
-      const report=m.sheetNoise?ftx.triangulate_with_camera_noise(m.input,m.noise,m.lensNoise || "",m.sheetNoise):
+      const report=m.referenceScaleNoise?
+        ftx.triangulate_with_reference_scale_noise(m.input,m.noise,m.lensNoise || "",m.sheetNoise || "",m.referenceScaleNoise):
+        m.sheetNoise?ftx.triangulate_with_camera_noise(m.input,m.noise,m.lensNoise || "",m.sheetNoise):
         m.lensNoise?ftx.triangulate_with_lens_noise(m.input,m.noise,m.lensNoise):ftx.triangulate(m.input,m.noise);
       self.postMessage({type:"result",request:m.request,report});
       return;

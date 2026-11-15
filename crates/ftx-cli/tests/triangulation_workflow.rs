@@ -1110,3 +1110,202 @@ fn requested_sheet_uncertainty_preserves_geometry_when_precision_is_unavailable(
         RefusalCode::BudgetExceeded
     );
 }
+
+fn reference_scale_case(dir: &Path) -> (Value, Value, Value, Value, Value) {
+    let (input, click, lens, sheet) = sheet_camera_case(dir);
+    let scale = json!({
+        "schema":"ftx-triangulation-reference-scale-noise/1",
+        "reference_id":"synthetic-stationary-camera-noise-sheet",
+        "sigma_fraction":0.002,
+        "evidence":"Synthetic 0.2-percent common dimensional error about the fixed source sheet origin",
+        "sheet_poses":lens["sheet_poses"],
+    });
+    save(&dir.join("reference-scale.json"), &scale);
+    (input, click, lens, sheet, scale)
+}
+
+#[test]
+fn reference_scale_replays_native_and_portable_without_changing_other_components() {
+    let dir = Scratch::new();
+    let (input, click, lens, sheet, scale) = reference_scale_case(&dir.0);
+    let plain = run(&dir.0, &[], 0)["result"].clone();
+    let scale_only = run(
+        &dir.0,
+        &["--reference-scale-noise", "reference-scale.json"],
+        0,
+    )["result"]
+        .clone();
+    let previous = ftx_wasm::photo::triangulate_with_camera_noise(
+        &input.to_string(),
+        &click.to_string(),
+        &lens.to_string(),
+        &sheet.to_string(),
+    )
+    .unwrap();
+    let all = run(
+        &dir.0,
+        &[
+            "--click-noise", "click.json",
+            "--lens-noise", "lens.json",
+            "--sheet-noise", "sheet.json",
+            "--reference-scale-noise", "reference-scale.json",
+            "--out", "scale-result.json",
+        ],
+        0,
+    )["result"]
+        .clone();
+    assert_eq!(read(&dir.0.join("scale-result.json")), all);
+    assert_eq!(
+        all,
+        ftx_wasm::photo::triangulate_with_reference_scale_noise(
+            &input.to_string(),
+            &click.to_string(),
+            &lens.to_string(),
+            &sheet.to_string(),
+            &scale.to_string(),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        scale_only,
+        ftx_wasm::photo::triangulate_with_reference_scale_noise(
+            &input.to_string(), "", "", "", &scale.to_string(),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        previous,
+        ftx_wasm::photo::triangulate_with_reference_scale_noise(
+            &input.to_string(),
+            &click.to_string(),
+            &lens.to_string(),
+            &sheet.to_string(),
+            "",
+        )
+        .unwrap()
+    );
+    for (mut augmented, original) in [(scale_only.clone(), plain), (all.clone(), previous)] {
+        augmented.as_object_mut().unwrap().remove("conditional_reference_scale_uncertainty");
+        assert_eq!(augmented, original);
+    }
+    let component = &all["conditional_reference_scale_uncertainty"];
+    assert_eq!(component, &scale_only["conditional_reference_scale_uncertainty"]);
+    assert_eq!(component["status"], "AVAILABLE");
+    assert_eq!(component["input"], scale);
+    assert_eq!(component["reference_origin_m"], json!([0.,0.,0.]));
+    for (actual, expected) in component["sigma_m"].as_array().unwrap().iter().zip([0.0001, 0.0008, 0.0025]) {
+        assert!((actual.as_f64().unwrap() - expected).abs() < 1e-10);
+    }
+    assert!(all.get("total_uncertainty").is_none());
+    assert!(all.get("records").is_none());
+    let human = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir.0)
+        .args(["measure", "triangulate", "input.json", "--reference-scale-noise", "reference-scale.json"])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    assert!(String::from_utf8(human.stdout).unwrap().contains(
+        "CONDITIONAL REFERENCE-SCALE UNCERTAINTY: AVAILABLE"
+    ));
+    if let Ok(directory) = std::env::var("FTX_TRIANGULATION_CAMERA_FIXTURES") {
+        use std::io::Write;
+        let directory = Path::new(&directory);
+        std::fs::create_dir_all(directory).unwrap();
+        for (name, value) in [
+            ("reference-scale-noise.json", &scale),
+            ("reference-scale-result.json", &scale_only),
+            ("reference-scale-all-result.json", &all),
+        ] {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(directory.join(name))
+                .unwrap()
+                .write_all(&serde_json::to_vec_pretty(value).unwrap())
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn reference_scale_refuses_different_original_acquisitions_in_combined_requests() {
+    let dir = Scratch::new();
+    let (input, _, lens, sheet, mut scale) = reference_scale_case(&dir.0);
+    let original = scale["sheet_poses"][0]["report"].clone();
+    let mut source = original["input"].clone();
+    let check = source["points"].as_array_mut().unwrap().iter_mut()
+        .find(|point| point["held_out"] == true).unwrap();
+    check["pixel_px"][0] = json!(check["pixel_px"][0].as_f64().unwrap() + 0.1);
+    let different = Camera::sheet_pose_report(&source).unwrap();
+    assert_eq!(different["ok"], true);
+    assert_eq!(different["camera"], original["camera"]);
+    scale["sheet_poses"][0]["report"] = different;
+    save(&dir.0.join("reference-scale.json"), &scale);
+    run(&dir.0, &["--reference-scale-noise", "reference-scale.json"], 0);
+    for (flag, name, lenses, sheets) in [
+        ("--lens-noise", "lens.json", lens.to_string(), String::new()),
+        ("--sheet-noise", "sheet.json", String::new(), sheet.to_string()),
+    ] {
+        run(
+            &dir.0,
+            &["--reference-scale-noise", "reference-scale.json", flag, name, "--out", "new/result.json"],
+            3,
+        );
+        assert!(!dir.0.join("new").exists());
+        assert!(ftx_wasm::photo::triangulate_with_reference_scale_noise(
+            &input.to_string(), "", &lenses, &sheets, &scale.to_string(),
+        ).is_err());
+    }
+}
+
+#[test]
+fn reference_scale_preserves_unavailable_precision_bounds_and_no_clobber() {
+    let dir = Scratch::new();
+    let (input, _, _, _, mut scale) = reference_scale_case(&dir.0);
+    let original = std::fs::read(dir.0.join("reference-scale.json")).unwrap();
+    run(
+        &dir.0,
+        &["--reference-scale-noise", "reference-scale.json", "--out", "reference-scale.json"],
+        3,
+    );
+    assert_eq!(std::fs::read(dir.0.join("reference-scale.json")).unwrap(), original);
+    scale["sigma_fraction"] = json!(1e-200);
+    save(&dir.0.join("reference-scale.json"), &scale);
+    let unavailable = run(
+        &dir.0,
+        &["--reference-scale-noise", "reference-scale.json"],
+        2,
+    )["result"].clone();
+    assert_eq!(unavailable["status"], "ACCEPTED");
+    assert!(unavailable["point_m"].is_array());
+    let component = &unavailable["conditional_reference_scale_uncertainty"];
+    assert_eq!(component["status"], "UNAVAILABLE");
+    for field in ["covariance_m2", "sigma_m", "jacobian_m_per_fraction"] {
+        assert!(component[field].is_null());
+    }
+    assert_eq!(
+        unavailable,
+        ftx_wasm::photo::triangulate_with_reference_scale_noise(
+            &input.to_string(), "", "", "", &scale.to_string(),
+        ).unwrap()
+    );
+    for bad in [" ", "{}"] {
+        assert!(ftx_wasm::photo::triangulate_with_reference_scale_noise(
+            &input.to_string(), "", "", "", bad,
+        ).is_err());
+    }
+    let oversized = " ".repeat(16 * 1024 * 1024 + 1);
+    assert_eq!(
+        ftx_wasm::photo::triangulate_with_reference_scale_noise(
+            &input.to_string(), "", "", "", &oversized,
+        ).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    std::fs::write(dir.0.join("oversized.json"), oversized).unwrap();
+    run(
+        &dir.0,
+        &["--reference-scale-noise", "oversized.json", "--out", "new/result.json"],
+        4,
+    );
+    assert!(!dir.0.join("new").exists());
+}

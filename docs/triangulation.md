@@ -29,7 +29,9 @@ optionally, an `ftx-click-noise/1` document declaring an independent positive pi
 frame. Input and click-noise files are limited to 256 KiB each. The separate shared-lens evidence
 control accepts `ftx-triangulation-lens-noise/1` or `/2` up to 16 MiB, retaining complete calibration
 reports and the exact assignment of FIT frames to shared lenses. The separate sheet-corner control
-accepts `ftx-triangulation-sheet-noise/1` up to 16 MiB, retaining the original sheet-pose reports. The existing Rust engines run in a
+accepts `ftx-triangulation-sheet-noise/1` up to 16 MiB, retaining the original sheet-pose reports.
+The common reference-size control accepts `ftx-triangulation-reference-scale-noise/1` up to 16 MiB,
+with explicit dimensional evidence and the same original sheet reports. The existing Rust engines run in a
 disposable local worker; no source is uploaded. Download the complete report and exact original
 input/noise files for native replay:
 
@@ -38,7 +40,8 @@ ftx measure triangulate triangulation-input.json --click-noise triangulation-cli
 ```
 
 Omit `--click-noise` when none was selected; add `--lens-noise triangulation-lens-noise.json` and
-`--sheet-noise triangulation-sheet-noise.json` for the corresponding selected evidence. The page
+`--sheet-noise triangulation-sheet-noise.json`, or
+`--reference-scale-noise triangulation-reference-scale-noise.json` for the corresponding selected evidence. The page
 displays each requested component separately and preserves valid geometry when any requested
 covariance is unavailable. An older bundle cannot silently ignore selected camera evidence:
 rebuild it with `tools/build_web.sh` when the engine reports a missing entry point.
@@ -55,7 +58,9 @@ compares both lens-only and click-plus-lens reports with the actual compiled WAS
 `FTX_TRIANGULATION_LENS_FIXTURES` capture is separate from other photo fixtures. The corresponding
 `FTX_TRIANGULATION_CAMERA_FIXTURES` capture exercises sheet-only, sheet-plus-click, sheet-plus-lens
 and all-three requests through the four-input export; `tools/check_photo_web.cjs --camera-noise DIR`
-replays those native fixtures in Chromium, including exact source downloads. DOM/worker regressions
+replays those native fixtures in Chromium, including exact source downloads. The same capture also
+supplies scale-only and all-four-component reports for the five-input export and actual worker replay.
+DOM/worker regressions
 also exercise original-byte replay, unavailable covariance, source-size limits, cancellation during
 file reads, source removal, operation changes and stale bundles. These are numerical and workflow
 checks, not physical camera qualification.
@@ -188,6 +193,60 @@ exactly for every FIT frame. Two different acquisitions that happen to fit the s
 interchangeable. Click, lens and sheet components remain separate; no total covariance, fused body
 record or physical accuracy claim is inferred. Correlated detector errors, reference manufacturing
 error and real capture motion require further evidence.
+
+## Shared reference-scale precision
+
+The optional `--reference-scale-noise` input describes **one uniform dimensional error shared by
+the stationary reference and every FIT camera derived from it**. It uses these fields:
+
+| Field | Required content |
+|---|---|
+| `schema` | `ftx-triangulation-reference-scale-noise/1` |
+| `reference_id` | Exact stationary reference identity in every original sheet-pose report |
+| `sigma_fraction` | Positive finite one-sigma relative scale error; `0.005` means 0.5 percent |
+| `evidence` | Source and method supporting uniform dimensional uncertainty about the sheet's fixed coordinate origin |
+| `sheet_poses` | Exactly one original accepted source report for every FIT frame |
+| `sheet_poses[].frame` | Exact `(stream, timestamp_us)` identity |
+| `sheet_poses[].report` | Complete original `ftx-sheet-pose/1` report, including FIT/CHECK observations and their acquisition |
+
+The ordinary sheet estimator replays every original report and checks exact camera identity and
+one common reference. Moving a camera without its source, omitting or duplicating a FIT frame,
+changing the reference identity, or substituting another acquisition refuses. Combined requests
+with source-pose lens `/2` or sheet-corner noise must retain identical complete reports, including
+CHECK observations. The original point, residuals and acceptance gates remain unchanged.
+
+The error model scales each source coordinate about the **original sheet chart's zero**, not about
+a camera or the reconstructed landmark. Rotations and pixel observations stay fixed. If the
+reconstructed point is `p` metres and the common relative sigma is `s`, the scale sensitivity is
+`J = p` and its full covariance is `C = (s p)(s p)ᵀ`. This retains cross terms and does not divide by
+the number of views. For example, a synthetic point `[1, -0.5, 2]` m with `s = 0.005` has
+scale-only marginal sigma `[0.005, 0.0025, 0.01]` m even when more identical-quality views are added.
+
+`conditional_reference_scale_uncertainty` retains the canonical source input/hash, fixed
+`reference_origin_m: [0,0,0]`, `jacobian_m_per_fraction`, full `covariance_m2`, marginal
+`sigma_m`, flags and assumptions. Rejected geometry or nonrepresentable nonzero covariance yields
+UNAVAILABLE with null sensitivity/covariance/sigma; genuine zero coordinates of this one mode
+remain zero. The native command returns exit 2 for requested unavailable precision. Invalid source
+evidence still refuses before creating output. The portable/WASM
+`triangulate_with_reference_scale_noise(input, click_noise, lens_noise, sheet_noise, reference_scale_noise)`
+takes exact source JSON strings; an empty final string preserves the existing four-input route.
+
+All four components may be requested together:
+
+```sh
+ftx measure triangulate triangulation-input.json \
+  --click-noise triangulation-click-noise.json \
+  --lens-noise triangulation-lens-noise.json \
+  --sheet-noise triangulation-sheet-noise.json \
+  --reference-scale-noise triangulation-reference-scale-noise.json \
+  --out triangulation-result.json
+```
+
+The four covariances remain separate conditional contributions. No total covariance or independent
+measurement record is inferred. This uniform mode does not model anisotropic print stretch, sheet
+warp, an uncertain coordinate origin, camera drift, synchronization, wearer motion or other
+systematic errors. Its sigma and physical applicability require independent source evidence;
+numerical checks do not establish capture accuracy or garment fit.
 
 ## Input contract
 

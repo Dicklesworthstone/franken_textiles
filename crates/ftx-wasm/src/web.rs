@@ -113,6 +113,30 @@ pub fn triangulate_with_camera_noise(
         .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Triangulate with a separately source-bound common metric-reference scale contribution.
+/// Empty scale evidence preserves the existing camera-noise route; no total covariance is inferred.
+///
+/// # Errors
+/// The shared source budgets, exact sheet replay and geometry guards refuse.
+#[wasm_bindgen]
+pub fn triangulate_with_reference_scale_noise(
+    input: &str,
+    click_noise: &str,
+    lens_noise: &str,
+    sheet_noise: &str,
+    reference_scale_noise: &str,
+) -> Result<String, JsError> {
+    crate::photo::triangulate_with_reference_scale_noise(
+        input,
+        click_noise,
+        lens_noise,
+        sheet_noise,
+        reference_scale_noise,
+    )
+    .map(|value| value.to_string())
+    .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Refine anchored camera/landmark geometry with a text-parsed native iteration limit.
 ///
 /// # Errors

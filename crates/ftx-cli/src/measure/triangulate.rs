@@ -2,8 +2,9 @@
 
 use ftx_core::Refusal;
 use ftx_measure::triangulate::uncertainty::{
-    ClickNoiseInput, LensNoiseInput, SheetCornerNoiseInput, triangulate_with_click_noise,
-    triangulate_with_lens_noise, triangulate_with_sheet_noise, validate_camera_noise_sources,
+    ClickNoiseInput, LensNoiseInput, ReferenceScaleNoiseInput, SheetCornerNoiseInput,
+    triangulate_with_click_noise, triangulate_with_lens_noise, triangulate_with_reference_scale_noise,
+    triangulate_with_sheet_noise, validate_camera_noise_sources, validate_reference_scale_sources,
 };
 use ftx_measure::triangulate::{TriangulationInput, triangulate};
 use serde_json::Value;
@@ -15,7 +16,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "measure triangulate",
-        &["out", "click-noise", "lens-noise", "sheet-noise"],
+        &[
+            "out",
+            "click-noise",
+            "lens-noise",
+            "sheet-noise",
+            "reference-scale-noise",
+        ],
     )?;
     let path = single(args, "triangulate")?;
     // Bound retained calibration/pose sources before parsing or performing any solves.
@@ -33,8 +40,20 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 .map_err(|e| bad_input(format!("invalid triangulation sheet-noise input: {e}")))
         })
         .transpose()?;
+    let reference_scale_noise: Option<ReferenceScaleNoiseInput> =
+        option(args, "reference-scale-noise")
+            .map(|path| {
+                let (value, _) = super::intrinsics::read_document(path)?;
+                serde_json::from_value(value).map_err(|e| {
+                    bad_input(format!("invalid triangulation reference-scale input: {e}"))
+                })
+            })
+            .transpose()?;
     if let (Some(lens), Some(sheet)) = (&lens_noise, &sheet_noise) {
         validate_camera_noise_sources(lens, sheet)?;
+    }
+    if let Some(scale) = &reference_scale_noise {
+        validate_reference_scale_sources(scale, lens_noise.as_ref(), sheet_noise.as_ref())?;
     }
     let input: TriangulationInput = serde_json::from_value(read_json(path)?.0)
         .map_err(|e| bad_input(format!("invalid triangulation input: {e}")))?;
@@ -61,12 +80,22 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             triangulate_with_sheet_noise(&input, noise).map(|r| r.conditional_sheet_uncertainty)
         })
         .transpose()?;
+    let reference_scale_uncertainty = reference_scale_noise
+        .as_ref()
+        .map(|noise| {
+            triangulate_with_reference_scale_noise(&input, noise)
+                .map(|r| r.conditional_reference_scale_uncertainty)
+        })
+        .transpose()?;
     let code = if report.point_m.is_some()
         && uncertainty.as_ref().is_none_or(|u| u.status == "AVAILABLE")
         && lens_uncertainty
             .as_ref()
             .is_none_or(|u| u.status == "AVAILABLE")
         && sheet_uncertainty
+            .as_ref()
+            .is_none_or(|u| u.status == "AVAILABLE")
+        && reference_scale_uncertainty
             .as_ref()
             .is_none_or(|u| u.status == "AVAILABLE")
     {
@@ -148,6 +177,24 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         text.push_str(&format!("\n{}", uncertainty.no_claim));
         value["conditional_sheet_uncertainty"] =
+            serde_json::to_value(uncertainty).map_err(|e| bad_input(e.to_string()))?;
+    }
+    if let Some(uncertainty) = reference_scale_uncertainty {
+        text.push_str(&format!(
+            "\nCONDITIONAL REFERENCE-SCALE UNCERTAINTY: {}",
+            uncertainty.status
+        ));
+        if let Some(sigma) = uncertainty.sigma_m {
+            text.push_str(&format!(
+                "\nShared reference-scale one-sigma about the sheet origin [m]: [{:.9}, {:.9}, {:.9}]",
+                sigma.x, sigma.y, sigma.z
+            ));
+        }
+        for flag in &uncertainty.flags {
+            text.push_str(&format!("\n  {flag}"));
+        }
+        text.push_str(&format!("\n{}", uncertainty.no_claim));
+        value["conditional_reference_scale_uncertainty"] =
             serde_json::to_value(uncertainty).map_err(|e| bad_input(e.to_string()))?;
     }
     if let Some(path) = option(args, "out") {

@@ -381,8 +381,12 @@ independence basis. The actual pixel-refined estimator supplies the derivatives,
 ordinary geometry and held-out gates. Click and lens precision remain separate conditional
 components. The original lens mode holds poses fixed; the source-pose mode jointly refits the
 original sheet cameras for every correlated lens perturbation. Independently declared sheet-corner
-noise supplies a separate camera component. Metric scale remains fixed, and none of these components
-accounts for motion, systematic error or empirical capture accuracy. See `docs/triangulation.md`.
+noise supplies a separate camera component. These components hold metric scale fixed. An independently
+requested uniform reference-scale mode retains the same original sheet sources and their fixed origin;
+its common rank-one covariance does not average down across views. Original geometry stays unchanged,
+and the scale component remains separate from click, lens and sheet-corner precision. Nonuniform
+print distortion, sheet warp, uncertain origin, motion, other systematic errors and empirical capture
+accuracy remain outside these models. See `docs/triangulation.md`.
 
 Order of the port (research file 08): conventions and receipts → camera core (distortion, projection, plane
 homography, similarity fits, gated triangulation, RANSAC plane, homography scale and focal search) → frame
@@ -5873,8 +5877,12 @@ measured garment performance remain separate qualification work.
 Acquired pressure, clearance and branch histories now compose with explicitly qualified opaque-gray
 radiation on independent moving sheets and layered body coverage. The scalar emissivity observation
 must survive the canonical pressure conditioner with its complete optical conditions and pressure
-qualification; automatic orientation mappings remain excluded. Every retained source is checked before
-exposure, and branch changes repeat the same admission without changing the mechanical cloth law.
+qualification. Automatic orientation uses the original source-side mapping only when a separate
+`invariants.optical_faces` declaration qualifies its full pressure domain, specimen, conditioning
+and branch. Mapped front/back emissivities remain independently qualified. Independent and exposed
+sheets require the positive source side; covered exchange preflights both sides before motion can
+expose either. Every retained source is checked before exposure, and branch changes repeat the same
+admission without changing the mechanical cloth law.
 
 The existing nonlinear exterior solver retains signed convection and radiation separately, with
 covered/exposed radiative paths surviving later film intervals. Reference mass and material-coordinate

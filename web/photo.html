@@ -243,15 +243,21 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <button id="triangulationClearSheetNoise" disabled>Remove sheet-corner evidence</button>
     <p><small>Supply the original sheet-pose report and independent corner pixel sigma for every FIT view.
       The engine rechecks each camera and propagates sheet-corner noise through its pose at fixed lens parameters.</small></p>
-    <p><small>Click, shared-lens and sheet-corner uncertainty are separate conditional components; they are not added into
-      a total accuracy estimate. Metric scale, print error, motion and systematic error remain excluded.
+    <label>Optional common reference-size evidence (<code>ftx-triangulation-reference-scale-noise/1</code>, up to 16 MiB)
+      <input id="triangulationReferenceScaleNoise" type="file" accept=".json,application/json"></label>
+    <button id="triangulationClearReferenceScaleNoise" disabled>Remove reference-size evidence</button>
+    <p><small>Supply the same original sheet-pose reports and a sourced fractional sigma for the stationary reference.
+      This is one uniform scale error shared by every view, measured about the sheet's fixed coordinate origin;
+      adding views does not average it away. Nonuniform print distortion and sheet bending are not included.</small></p>
+    <p><small>Click, shared-lens, sheet-corner and reference-scale uncertainty are separate conditional components;
+      they are not added into a total accuracy estimate. Motion and other systematic errors remain excluded.
       Missing uncertainty remains unavailable.</small></p>
   </div>
   <div id="geometryBundleControls" hidden>
     <label>Maximum accepted refinement steps <input id="bundleIterations" type="number" min="1" max="100" step="1" value="50"></label>
     <p>Joint refinement requires at least four well-spread fixed metric controls in every camera.
       Use the same stationary reference and world frame throughout. Initial camera and landmark guesses are not observations.</p>
-    <p><small>Each observation supplies its own pixel sigma. Switching to joint refinement clears the separate click, lens and sheet evidence selections.
+    <p><small>Each observation supplies its own pixel sigma. Switching to joint refinement clears the separate click, lens, sheet and reference-size evidence selections.
       Intrinsics stay fixed; no camera covariance or global optimum is established. Failed or budget-stopped solves publish no optimized geometry.</small></p>
   </div>
   <div id="geometryStillControls" hidden>
@@ -261,7 +267,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       reprojection checks can reject motion or weak geometry. A passing candidate still requires human review:
       it does not create reviewed capture evidence, verify untracked anatomy or establish measurement accuracy.</small></p>
   </div>
-  <p><small>Geometry and click-noise files are each limited to 256 KiB; lens and sheet evidence files are each limited to 16 MiB.
+  <p><small>Geometry and click-noise files are each limited to 256 KiB; lens, sheet and reference-size evidence files are each limited to 16 MiB.
     Review the complete native report before using any geometry.</small></p>
   <p><button id="triangulationRun" disabled>Triangulate landmark</button>
     <button id="triangulationCancel" disabled>Cancel geometry calculation</button></p>

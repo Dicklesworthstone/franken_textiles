@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,bodyObservations=null,bodyTargets=null,bodyCaptureCatalogue=undefined,bodyCaptureClass=undefined,lensTriangulation=undefined,cameraTriangulation=undefined,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,bodyObservations=null,bodyTargets=null,bodyCaptureCatalogue=undefined,bodyCaptureClass=undefined,lensTriangulation=undefined,cameraTriangulation=undefined,referenceScaleTriangulation=undefined,calibrationReport=cameraReport()}={}) {
   const sent=[],transfers=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -50,6 +50,7 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function triangulate(input,noise){calls.push({kind:'triangulate',input,noise});if(failTriangulation)throw Error('capture evidence refused');return JSON.stringify(triangulationReport());}
   function triangulate_with_lens_noise(input,noise,lensNoise){calls.push({kind:'triangulate-lens',input,noise,lensNoise});if(failTriangulation)throw Error('retained lens calibration refused');return JSON.stringify(triangulationReport());}
   function triangulate_with_camera_noise(input,noise,lensNoise,sheetNoise){calls.push({kind:'triangulate-camera',input,noise,lensNoise,sheetNoise});if(failTriangulation)throw Error('retained sheet pose refused');return JSON.stringify(triangulationReport());}
+  function triangulate_with_reference_scale_noise(input,noise,lensNoise,sheetNoise,referenceScaleNoise){calls.push({kind:'triangulate-reference-scale',input,noise,lensNoise,sheetNoise,referenceScaleNoise});if(failTriangulation)throw Error('retained reference scale refused');return JSON.stringify(triangulationReport());}
   function bundle_adjust(input,iterations){calls.push({kind:'bundle-adjust',input,iterations});if(failBundle)throw Error('metric controls refused');return JSON.stringify(bundleReport());}
   function still_window(input,source){calls.push({kind:'still-window',input,source});if(failStill)throw Error('track evidence refused');return JSON.stringify(stillReport());}
   function fit_body(model,input,iterations,maxEvaluations){calls.push({kind:'fit-body',model:[...model],input,iterations,maxEvaluations});if(failBodyFit)throw Error('model SHA-256 mismatch');return JSON.stringify(bodyFitReport());}
@@ -59,7 +60,7 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function review_body_fit_start(model,input,startIndex,frameIndex){calls.push({kind:'body-start-review',model:[...model],input,startIndex,frameIndex});if(failBodyStart)throw Error('no declared initialization at that index');return JSON.stringify(bodyStartFrameReport({start_index:Number(startIndex),frame_index:Number(frameIndex),start_count:4,frame_count:8}));}
   function review_body_fit_frame(model,report,frameIndex){calls.push({kind:'body-frame-review',model:[...model],report,frameIndex});if(failBodyReview)throw Error('full mesh keypoint disagrees with the accepted 3-pixel fit gate');return JSON.stringify(bodyFrameReport());}
   const context=vm.createContext({Uint8Array,ArrayBuffer,TextEncoder,JSON,Error,URL,self:{postMessage:(m,transfer)=>{sent.push(m);transfers.push(transfer || []);}}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','triangulate_with_lens_noise','triangulate_with_camera_noise','bundle_adjust','still_window','fit_body','body_fit_starts','body_fit_observations','body_fit_targets','review_body_fit_start','review_body_fit_frame','body_capture_catalogue','WebBodyCapture'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','triangulate_with_lens_noise','triangulate_with_camera_noise','triangulate_with_reference_scale_noise','bundle_adjust','still_window','fit_body','body_fit_starts','body_fit_observations','body_fit_targets','review_body_fit_start','review_body_fit_frame','body_capture_catalogue','WebBodyCapture'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('WebBodyFitImage',bodyImageClass ?? WebBodyFitImage);
@@ -67,6 +68,7 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
     this.setExport('triangulate',triangulate);
     this.setExport('triangulate_with_lens_noise',lensTriangulation===undefined?triangulate_with_lens_noise:lensTriangulation);
     this.setExport('triangulate_with_camera_noise',cameraTriangulation===undefined?triangulate_with_camera_noise:cameraTriangulation);
+    this.setExport('triangulate_with_reference_scale_noise',referenceScaleTriangulation===undefined?triangulate_with_reference_scale_noise:referenceScaleTriangulation);
     this.setExport('bundle_adjust',bundle_adjust);
     this.setExport('still_window',still_window);
     this.setExport('fit_body',fit_body);
@@ -123,7 +125,7 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','triangulationLensNoise','triangulationSheetNoise','bodyFitModel','bodyFitInput','bodyFitSaved','bodyFitReviewImage','bodyPointsImage','bodyCaptureImages','bodyCaptureCalibration','bodyCaptureSheet'])if(e[id])e[id].type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','triangulationLensNoise','triangulationSheetNoise','triangulationReferenceScaleNoise','bodyFitModel','bodyFitInput','bodyFitSaved','bodyFitReviewImage','bodyPointsImage','bodyCaptureImages','bodyCaptureCalibration','bodyCaptureSheet'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images',geometryOperation:'triangulate',bundleIterations:'50'}))e[id].value=value;
   for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
   e.bodyFitIterations.value='50';e.bodyFitEvaluations.value='100000';
@@ -942,6 +944,110 @@ test('sheet-corner removal, operation changes and page exit cancel pending work 
   p.e.geometryOperation.value='triangulate';p.e.geometryOperation.handlers.change();
   p.e.triangulationSheetNoise.files=[file('{}')];await p.e.triangulationRun.onclick();const old=p.current();p.windowEvents.pagehide();
   assert.equal(old.dead,true);await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify(triangulationReport())});
+  assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
+});
+
+test('reference-scale worker preserves shared source bytes and refuses a missing or rejected engine',async()=>{
+  const source={request:19,op:'triangulate',input:' {"timestamp_us":18446744073709551615}\r\n',
+    noise:' {"click":"λ"}\n',lensNoise:' {"lens":"original"}\r\n',sheetNoise:' {"corners":"original"}\r\n',
+    referenceScaleNoise:' {"scale":"original λ"}\r\n'};
+  const w=await photoWorker();assert.equal((await w.send(source)).type,'result');
+  assert.deepEqual(w.calls,[{kind:'triangulate-reference-scale',input:source.input,noise:source.noise,
+    lensNoise:source.lensNoise,sheetNoise:source.sheetNoise,referenceScaleNoise:source.referenceScaleNoise}]);
+  const scaleOnly=await photoWorker({lensTriangulation:null,cameraTriangulation:null});
+  assert.equal((await scaleOnly.send({...source,lensNoise:undefined,sheetNoise:undefined})).type,'result');
+  assert.equal(scaleOnly.calls[0].lensNoise,'');assert.equal(scaleOnly.calls[0].sheetNoise,'');
+  const failed=await photoWorker({failTriangulation:true});const refusal=await failed.send(source);
+  assert.equal(refusal.type,'error');assert.match(refusal.message,/retained reference scale refused/);
+  assert.deepEqual(failed.calls.map(c=>c.kind),['triangulate-reference-scale']);
+  const stale=await photoWorker({referenceScaleTriangulation:null});
+  assert.match((await stale.send(source)).message,/Rebuild web\/pkg/);assert.equal(stale.calls.length,0);
+  for(const changed of [{referenceScaleNoise:{}},{sheetNoise:[]},{lensNoise:[]}])
+    assert.equal((await w.send({...source,...changed})).type,'error');
+  assert.equal(w.calls.length,1);
+});
+
+test('reference-scale page retains five-source replay and displays the common covariance separately',async()=>{
+  const p=await photoPage(),input=' {"timestamp_us":18446744073709551615}\r\n',noise=' {"click":"original"}\n',
+    lens=' {"schema":"ftx-triangulation-lens-noise/2","source":"λ"}\r\n',sheet=' {"sheet":"original"}\r\n',
+    scale=' {"sigma_fraction":0.005,"evidence":"original λ"}\r\n';
+  for(const [id,text] of [['triangulationInput',input],['triangulationNoise',noise],['triangulationLensNoise',lens],
+    ['triangulationSheetNoise',sheet],['triangulationReferenceScaleNoise',scale]])p.e[id].files=[file(text)];
+  p.e.triangulationReferenceScaleNoise.handlers.change();assert.equal(p.e.triangulationClearReferenceScaleNoise.disabled,false);
+  await p.e.triangulationRun.onclick();const w=p.current(),m=w.messages[0];assert.equal(m.referenceScaleNoise,scale);
+  const raw=JSON.stringify(triangulationReport({
+    conditional_click_uncertainty:{status:'AVAILABLE',sigma_m:[0.001,0.002,0.001],flags:[],no_claim:'click only'},
+    conditional_lens_uncertainty:{status:'AVAILABLE',input:{schema:'ftx-triangulation-lens-noise/2'},sigma_m:[0.003,0.004,0.003],flags:[],no_claim:'lens only'},
+    conditional_sheet_uncertainty:{status:'AVAILABLE',sigma_m:[0.005,0.006,0.005],flags:[],no_claim:'corners only'},
+    conditional_reference_scale_uncertainty:{status:'AVAILABLE',sigma_m:[0.001,0.002,0.003],
+      covariance_m2:{rows:[[0.000001,-0.000002,0.000003],[-0.000002,0.000004,-0.000006],[0.000003,-0.000006,0.000009]]},
+      reference_origin_m:[0,0,0],flags:[],no_claim:'uniform scale only; excludes sheet flatness'}}))
+    .replace('"reprojection":[]','"reprojection":[{"frame":{"timestamp_us":18446744073709551615}}]');
+  await w.emit({type:'result',request:m.request,report:raw});
+  assert.equal(p.e.triangulationReport.textContent,raw);
+  assert.deepEqual(await Promise.all(p.e.triangulationDownloads.children.map(a=>p.urls.get(a.href).text())),[raw,input,noise,lens,sheet,scale]);
+  assert.equal(p.e.triangulationDownloads.children.at(-1).download,'triangulation-reference-scale-noise.json');
+  assert.match(p.e.triangulationPrecision.textContent,/Conditional reference-scale uncertainty: AVAILABLE/);
+  assert.match(p.e.triangulationPrecision.textContent,/Scale-only covariance \[m²\].*0.000001, -0.000002, 0.000003/);
+  assert.match(p.e.triangulationPrecision.textContent,/shared by all views.*adding views does not average it away/);
+  assert.match(p.e.triangulationPrecision.textContent,/no total measurement uncertainty/);
+  assert.match(p.e.triangulationFlags.textContent,/excludes sheet flatness/);
+  assert.equal(p.e.openWorkbench.disabled,true);assert.equal(p.e.report.textContent,'');
+  p.e.triangulationReferenceScaleNoise.handlers.change();assert.equal(p.urls.size,0);assert.equal(p.e.triangulationResult.hidden,true);
+  await w.emit({type:'result',request:m.request,report:raw});assert.equal(p.e.triangulationResult.hidden,true);
+});
+
+test('reference-scale unavailable precision stays separate from accepted geometry and cannot silently disappear',async()=>{
+  const p=await photoPage();p.e.triangulationInput.files=[file('{}')];p.e.triangulationReferenceScaleNoise.files=[file('{}')];
+  await p.e.triangulationRun.onclick();let w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(triangulationReport({
+    conditional_reference_scale_uncertainty:{status:'UNAVAILABLE',sigma_m:null,covariance_m2:null,
+      flags:['scale covariance not representable'],no_claim:'uniform scale only'}}))});
+  assert.equal(p.e.triangulationResult.hidden,false);assert.match(p.e.triangulationPoint.textContent,/World point/);
+  assert.match(p.e.triangulationStatus.textContent,/requested reference-scale uncertainty is unavailable/);
+  assert.doesNotMatch(p.e.triangulationPrecision.textContent,/Scale-only covariance/);
+  assert.match(p.e.triangulationFlags.textContent,/not representable/);assert.equal(p.e.triangulationDownloads.children.length,3);
+  await p.e.triangulationRun.onclick();w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(triangulationReport())});
+  assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
+  assert.match(p.e.triangulationError.textContent,/did not return the requested reference-scale/);
+});
+
+test('reference-scale sources preflight the byte limit and reject empty and invalid UTF-8 before starting a worker',async()=>{
+  const p=await photoPage();let reads=0;
+  p.e.triangulationInput.files=[{size:2,arrayBuffer:async()=>{reads++;return new TextEncoder().encode('{}').buffer;}}];
+  p.e.triangulationReferenceScaleNoise.files=[{size:16*1024*1024+1,arrayBuffer:async()=>{reads++;throw Error('must not read');}}];
+  await p.e.triangulationRun.onclick();assert.equal(reads,0);assert.equal(p.workers.length,0);
+  assert.match(p.e.triangulationError.textContent,/Reference-size.*16 MiB/);
+  p.e.triangulationReferenceScaleNoise.files=[file('')];await p.e.triangulationRun.onclick();
+  assert.match(p.e.triangulationError.textContent,/reference-scale file is empty/);
+  p.e.triangulationReferenceScaleNoise.files=[{size:1,arrayBuffer:async()=>new Uint8Array([255]).buffer}];
+  await p.e.triangulationRun.onclick();assert.equal(p.workers.length,0);
+  p.e.triangulationClearReferenceScaleNoise.onclick();assert.equal(p.e.triangulationReferenceScaleNoise.files.length,0);
+  await p.e.triangulationRun.onclick();assert.equal(p.current().messages[0].referenceScaleNoise,'');
+});
+
+test('reference-scale edits, removal, operation changes and page exit cancel stale work without changing photo evidence',async()=>{
+  const p=await photoPage();p.select();await p.analyze();await p.measure();
+  const photo=p.e.report.textContent,photoUrls=[...p.urls.keys()],before=p.workers.length;
+  p.e.triangulationInput.files=[file('{}')];let finish;
+  p.e.triangulationReferenceScaleNoise.files=[{size:2,arrayBuffer:()=>new Promise(resolve=>{finish=resolve;})}];
+  const pending=p.e.triangulationRun.onclick();p.e.triangulationClearReferenceScaleNoise.onclick();
+  finish(new TextEncoder().encode('{}').buffer);await pending;assert.equal(p.workers.length,before);
+  for(const operation of ['bundle-adjust','still-window']) {
+    p.e.geometryOperation.value='triangulate';p.e.geometryOperation.handlers.change();
+    p.e.triangulationReferenceScaleNoise.files=[file('{}')];await p.e.triangulationRun.onclick();const old=p.current();
+    p.e.geometryOperation.value=operation;p.e.geometryOperation.handlers.change();assert.equal(old.dead,true);
+    assert.equal(p.e.triangulationReferenceScaleNoise.files.length,0);assert.equal(p.e.triangulationReferenceScaleNoise.disabled,true);
+    assert.equal(p.e.triangulationClearReferenceScaleNoise.disabled,true);
+    await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify(triangulationReport())});
+    assert.equal(p.e.triangulationResult.hidden,true);assert.deepEqual([...p.urls.keys()],photoUrls);
+    assert.equal(p.e.report.textContent,photo);assert.equal(p.e.openWorkbench.disabled,false);
+  }
+  p.e.geometryOperation.value='triangulate';p.e.geometryOperation.handlers.change();
+  p.e.triangulationReferenceScaleNoise.files=[file('{}')];await p.e.triangulationRun.onclick();const old=p.current();
+  p.windowEvents.pagehide();assert.equal(old.dead,true);
+  await old.emit({type:'result',request:old.messages[0].request,report:JSON.stringify(triangulationReport())});
   assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
 });
 
@@ -2716,6 +2822,28 @@ test('compiled sheet-corner and shared-lens pose propagation reproduce complete 
     assert.throws(()=>ftx.triangulate_with_camera_noise(input,'','','{}'));
     assert.throws(()=>ftx.triangulate_with_camera_noise(input,'','',' '.repeat(16*1024*1024+1)),/16 MiB/);
     assert.throws(()=>ftx.triangulate_with_camera_noise(input,'','','\ufeff'+sheet));
+  });
+
+test('compiled shared reference scale reproduces native separate components through the actual worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_TRIANGULATION_CAMERA_FIXTURES},async()=>{
+    const ftx=await compiledPhotoBindings(),dir=process.env.FTX_TRIANGULATION_CAMERA_FIXTURES;
+    const read=name=>fs.readFileSync(path.join(dir,name),'utf8');
+    const input=read('camera-input.json'),click=read('click-noise.json'),lens=read('lens-noise.json'),
+      sheet=read('sheet-noise.json'),scale=read('reference-scale-noise.json');
+    const parse=text=>JSON.parse(text,(key,value,meta)=>key==='timestamp_us'?meta.source:value);
+    for(const [noise,lensNoise,sheetNoise,name] of [
+      ['','','','reference-scale-result.json'],[click,lens,sheet,'reference-scale-all-result.json']]) {
+      const expected=read(name),actual=ftx.triangulate_with_reference_scale_noise(input,noise,lensNoise,sheetNoise,scale);
+      assert.deepEqual(parse(actual),parse(expected),name+' complete original native report');
+      const worker=await photoWorker({referenceScaleTriangulation:ftx.triangulate_with_reference_scale_noise});
+      const result=await worker.send({request:31,op:'triangulate',input,noise,lensNoise,sheetNoise,referenceScaleNoise:scale});
+      assert.equal(result.type,'result');assert.deepEqual(parse(result.report),parse(expected));
+    }
+    assert.deepEqual(parse(ftx.triangulate_with_reference_scale_noise(input,click,lens,sheet,'')),
+      parse(ftx.triangulate_with_camera_noise(input,click,lens,sheet)));
+    assert.throws(()=>ftx.triangulate_with_reference_scale_noise(input,'','','','{}'));
+    assert.throws(()=>ftx.triangulate_with_reference_scale_noise(input,'','','',' '.repeat(16*1024*1024+1)),/16 MiB/);
+    assert.throws(()=>ftx.triangulate_with_reference_scale_noise(input,'','','','\ufeff'+scale));
   });
 
 test('compiled fresh Brown capture streams the exact native rectified PNGs and enables ordinary silhouette authoring',
