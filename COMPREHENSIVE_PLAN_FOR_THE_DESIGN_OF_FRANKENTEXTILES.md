@@ -5985,6 +5985,23 @@ area/work, heat/storage, refusal and native/portable replay checks cover the imp
 Measured contact-pressure inference, exact subtriangle footprints, wet/compressed coupling,
 geometric squeeze feedback, recovery-time laws and empirical garment qualification remain separate.
 
+### 25.211 Constrain material strain within intact pattern panels
+
+Named convex polygons in physical flat-material millimetres scope material-direction strain without
+splitting a pattern piece or changing its mechanical topology. Exact whole-triangle-centroid selection
+shares the regional-compression geometry authority. Each declared zone must be nonempty and disjoint;
+the unselected remainder does not influence the selected union's strain extrema.
+
+Initial and complete sampled-motion reports retain each region's signed extrema, earliest source
+witnesses, selected reference area and material identity. Comparison reconstructs the partition from
+the complete retained flat mesh. A design alteration recomputes membership against the same authored
+polygon on its actual new geometry; no anatomical tracking is inferred. Native, portable and guided
+browser studies retain identical selectors, named-case snapshots and independent consumer refusals.
+
+This advances the local-strain requirements in `ftx-ds2` and `ftx-ms2`. Existing whole-instance requests
+stay compatible. Limits remain explicit design requirements, with no inferred rupture, comfort,
+continuous-time strain bound, physical material qualification or empirical garment-fit claim.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

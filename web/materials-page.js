@@ -1,5 +1,6 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
+  buildMaterialStrainRequest,
   buildGuidedDesignAfterOperations, buildGuidedDesignRestartPoints, buildGuidedFitSpec, GUIDED_FIT_BODY_MEASUREMENTS,
   hasTextileWaterPolicy, hasTextileWaterMechanicsPolicy, buildMaterialSurfaceConditions,
   buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
@@ -62,6 +63,7 @@ const guidedDesignNominations = new Map();
 let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
 let guidedDesignCaseNomination = null;
 const guidedScenarioDrafts = [], guidedScenarioButtons = [];
+const guidedMaterialStrainRegions = new Map(), guidedMaterialStrainRegionButtons = [];
 const guidedMotionKeyframes = [], guidedMotionButtons = [];
 const guidedMotionHeatInitials = new Map(), guidedMotionHeatInitialButtons = [];
 const guidedMotionHeatProfiles = new Map(), guidedMotionHeatProfileButtons = [];
@@ -334,6 +336,12 @@ function controls() {
   $("guidedScenarioGoals").hidden = !guided;
   $("guidedMaterialStrainControls").hidden = !$("guidedMaterialStrain").checked;
   $("guidedMaterialStrainInstances").disabled = !$("guidedMaterialStrain").checked || $("guidedMaterialStrainScope").value !== "instances";
+  const strainRegions = $("guidedMaterialStrain").checked && $("guidedMaterialStrainScope").value === "regions";
+  $("guidedMaterialStrainRegionControls").hidden = !strainRegions;
+  for (const id of ["guidedMaterialStrainRegionName", "guidedMaterialStrainRegionInstance", "guidedMaterialStrainRegionPolygon",
+    "saveMaterialStrainRegion"]) $(id).disabled = !source || !guidedScenarioMode() || !strainRegions;
+  $("clearMaterialStrainRegions").disabled = !source || !guidedScenarioMode() || !strainRegions || !guidedMaterialStrainRegions.size;
+  for (const button of guidedMaterialStrainRegionButtons) button.disabled = !source || !guidedScenarioMode() || !strainRegions;
   const contactLoads = $("guidedContactLoads").checked;
   $("guidedContactLoadsControls").hidden = !contactLoads;
   for (const id of ["guidedContactLoadsScope", "guidedContactVertexBudget", "guidedContactPairBudget"]) $(id).disabled = !contactLoads;
@@ -1152,11 +1160,26 @@ function materialStrainComparison(parent, key, output, dependency, requested, mo
     const t = table(parent, `${key}: ${label} material-direction strain`,
       ["Scope", "Direction", "Minimum (1)", "Minimum location", "Maximum (1)", "Maximum location"]);
     const witness = w => w ? `Triangle ${metric(w.source_triangle)}, sample ${metric(w.sample_index)} at ${metric(w.time_s)} s` : "Unknown";
-    for (const [scope, values] of [["Selected scope", result], ...Object.entries(result.instances || {})]) {
+    const regions = Object.entries(result.regions || {}).map(([id, values]) =>
+      [`Region ${id} (${result.source?.regions?.[id]?.instance ?? "unknown instance"})`, values]);
+    for (const [scope, values] of [["Selected scope", result], ...Object.entries(result.instances || {}), ...regions]) {
       ["Warp E11", "Weft E22", "Engineering shear 2E12"].forEach((axis, i) => {
         cells(t, [scope, axis, metric(values.green_strain_range?.[i]?.[0]), witness(values.minimum_witness?.[i]),
           metric(values.green_strain_range?.[i]?.[1]), witness(values.maximum_witness?.[i])]);
       });
+    }
+    if (regions.length) {
+      const scope = table(parent, `${key}: ${label} selected material regions`,
+        ["Region", "Physical instance", "Selected source triangles", "Reference area (m²)", "Flat polygon (mm)"]);
+      for (const [id, region] of Object.entries(result.source?.regions || {})) {
+        cells(scope, [id, region.instance, (region.source_triangles || []).join(", "), metric(region.reference_area_m2),
+          (region.selector?.polygon_mm || []).map(point => point.join(", ")).join("; ")]);
+      }
+      const selection = document.createElement("p");
+      selection.textContent = "Each region selects whole production triangles whose centroids lie in its flat-material polygon, including its boundary. " +
+        "The same source triangles are followed through motion. Boundaries are not cut into triangles; unselected cloth is outside these strain summaries. " +
+        "Selected scope and comparison objectives use the disjoint union of these regions; the named rows show each region separately.";
+      parent.append(selection);
     }
     const note = document.createElement("p");
     note.textContent = "Raw material Green strain [E11, E22, 2E12] is dimensionless and retains its sign; it is not engineering extension percent. " +
@@ -5410,6 +5433,60 @@ function changedGuidedScenarioDraft() {
   if (guidedScenarioMode()) invalidate([guidedMatrixMode() ? "scenarioDraft" : "scenario"], true);
   else controls();
 }
+function guidedMaterialStrainInput(regions = [...guidedMaterialStrainRegions.values()]) {
+  const scope = $("guidedMaterialStrainScope").value || "all", raw = $("guidedMaterialStrainBudget").value.trim();
+  if (!["all", "instances", "regions"].includes(scope)) throw Error("Choose all retained cloth, exact instances or named polygon regions for material strain.");
+  if (!raw) throw Error("Supply the directional strain triangle-sample allowance.");
+  return buildMaterialStrainRequest({ schema: scope === "regions" ? "ftx-material-strain/2" : "ftx-material-strain/1",
+    ...(scope === "regions" ? { regions } : scope === "instances" ?
+      { instances: $("guidedMaterialStrainInstances").value.split(/\r?\n/).filter(line => line.length) } : {}),
+    max_triangle_samples: Number(raw) });
+}
+function showGuidedMaterialStrainRegions() {
+  const parent = $("guidedMaterialStrainRegions"); parent.replaceChildren(); guidedMaterialStrainRegionButtons.length = 0;
+  for (const [id, region] of guidedMaterialStrainRegions) {
+    const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
+    label.textContent = `${id} on ${region.instance}: ${region.selector.polygon_mm.map(point => point.join(", ")).join("; ")} mm`;
+    const current = () => source && guidedScenarioMode() && $("guidedMaterialStrain").checked &&
+      $("guidedMaterialStrainScope").value === "regions" && guidedMaterialStrainRegions.get(id) === region;
+    const edit = document.createElement("button"); edit.type = "button"; edit.textContent = `Edit strain region ${id}`;
+    edit.onclick = () => {
+      if (!current()) return;
+      $("guidedMaterialStrainRegionName").value = id; $("guidedMaterialStrainRegionInstance").value = region.instance;
+      $("guidedMaterialStrainRegionPolygon").value = region.selector.polygon_mm.map(point => point.join(", ")).join("\n");
+      changedGuidedScenarioDraft();
+    };
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = `Remove strain region ${id}`;
+    remove.onclick = () => {
+      if (!current()) return;
+      guidedMaterialStrainRegions.delete(id); showGuidedMaterialStrainRegions(); changedGuidedScenarioDraft();
+    };
+    row.append(label, edit, remove); parent.append(row); guidedMaterialStrainRegionButtons.push(edit, remove);
+  }
+  $("guidedMaterialStrainRegionsSummary").textContent = guidedMaterialStrainRegions.size ?
+    `${guidedMaterialStrainRegions.size} of 256 named regions saved. Only saved regions run; each must select at least one retained triangle, with no shared triangles.` :
+    "No regions saved. Name a region, enter its physical instance and polygon, then save it before running this scope.";
+}
+function saveGuidedMaterialStrainRegion() {
+  if (!source || !guidedScenarioMode() || !$("guidedMaterialStrain").checked || $("guidedMaterialStrainScope").value !== "regions") return;
+  try {
+    const raw = $("guidedMaterialStrainRegionPolygon").value;
+    if (raw.length > 8192) throw Error("The region polygon must fit within 8192 characters.");
+    const polygon = raw.split(/\r?\n/).filter(line => line.trim()).map(line => {
+      const point = line.split(",").map(coordinate => coordinate.trim());
+      if (point.length !== 2 || point.some(coordinate => !coordinate || !Number.isFinite(Number(coordinate)))) {
+        throw Error("Enter one finite x, y pair per line for the flat-material polygon in millimetres.");
+      }
+      return point.map(Number);
+    });
+    const region = { id: $("guidedMaterialStrainRegionName").value, instance: $("guidedMaterialStrainRegionInstance").value,
+      selector: { kind: "whole_triangle_centroid", polygon_mm: polygon } };
+    const next = new Map(guidedMaterialStrainRegions); next.set(region.id, region);
+    guidedMaterialStrainInput([...next.values()]);
+    guidedMaterialStrainRegions.set(region.id, region);
+    showGuidedMaterialStrainRegions(); changedGuidedScenarioDraft();
+  } catch (e) { error(String(e.message || e)); }
+}
 function showGuidedCoverageTopology() {
   guidedCoverageButtons.length = 0;
   for (const [entries, id, describe, removeLabel] of [
@@ -5815,11 +5892,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   if (compression) input.motionCompressionTarget = $("guidedMotionCompressionTarget").value || "transient_surface";
   if (motionMode === "file") input.maxMotionTrials = number("guidedScenarioMotionTrials", "case motion-attempt allowance");
   if (materialStrain) {
-    const scope = $("guidedMaterialStrainScope").value || "all";
-    if (!["all", "instances"].includes(scope)) throw Error("Choose all retained cloth or exact instance names for material strain.");
-    input.materialStrain = JSON.stringify({ schema: "ftx-material-strain/1",
-      ...(scope === "instances" ? { instances: $("guidedMaterialStrainInstances").value.split(/\r?\n/).filter(line => line.length) } : {}),
-      max_triangle_samples: number("guidedMaterialStrainBudget", "directional strain triangle-sample allowance") });
+    input.materialStrain = guidedMaterialStrainInput();
   }
   if (contactLoads) {
     const scope = $("guidedContactLoadsScope").value || "all";
@@ -5896,7 +5969,9 @@ function showGuidedScenarioDrafts() {
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
       (value.motion?.source_pose_sampling ? `source body poses at most ${value.motion.source_pose_sampling.max_step_s} s apart, ` +
         `${value.motion.source_pose_sampling.max_segments} source segments allowed; ` : "") +
-      `${value.material_strain ? `directional strain on ${value.material_strain.instances?.join(", ") || "all retained instances"}, ${value.material_strain.max_triangle_samples} triangle-samples` : "no directional strain request"}; ` +
+      `${value.material_strain ? `directional strain on ${value.material_strain.regions ?
+        `${value.material_strain.regions.length} named regions (${value.material_strain.regions.map(region => `${region.id} on ${region.instance}`).join(", ")})` :
+        value.material_strain.instances?.join(", ") || "all retained instances"}, ${value.material_strain.max_triangle_samples} triangle-samples` : "no directional strain request"}; ` +
       `${value.contact_loads ? `body contact loads on ${value.contact_loads.instances?.join(", ") || "all retained instances"}, ${value.contact_loads.max_vertex_samples} vertex-samples and ${value.contact_loads.max_pair_evaluations} pair evaluations` : "no body contact-load request"}; ` +
       `${value.coverage ? "retained steady body/layer heat" : "no steady body/layer heat"}; ` +
       `${value.vapor_surface ? "retained independent-sheet vapor" : "no sheet vapor"}; ` +
@@ -6380,6 +6455,14 @@ for (const id of ["guidedMaterialStrain", "guidedMaterialStrainScope", "guidedMa
   $(id).addEventListener("change", changedGuidedScenarioDraft);
   if (!["guidedMaterialStrain", "guidedMaterialStrainScope"].includes(id)) $(id).addEventListener("input", changedGuidedScenarioDraft);
 }
+for (const id of ["guidedMaterialStrainRegionName", "guidedMaterialStrainRegionInstance", "guidedMaterialStrainRegionPolygon"]) {
+  $(id).addEventListener("change", changedGuidedScenarioDraft);
+  $(id).addEventListener("input", changedGuidedScenarioDraft);
+}
+$("saveMaterialStrainRegion").onclick = saveGuidedMaterialStrainRegion;
+$("clearMaterialStrainRegions").onclick = () => {
+  guidedMaterialStrainRegions.clear(); showGuidedMaterialStrainRegions(); changedGuidedScenarioDraft();
+};
 for (const id of ["guidedContactLoads", "guidedContactLoadsScope", "guidedContactLoadsInstances", "guidedContactVertexBudget", "guidedContactPairBudget"]) {
   const changed = () => {
     if (id === "guidedContactLoads" || $("guidedContactLoads").checked) changedGuidedScenarioDraft();
@@ -7038,6 +7121,8 @@ function resetGuidedScenarios() {
   $("guidedMotionLegs").value = "standing"; $("guidedMotionLegFraction").value = "1"; showGuidedMotionKeyframes();
   $("guidedMaterialStrain").checked = false; $("guidedMaterialStrainScope").value = "all";
   $("guidedMaterialStrainInstances").value = "";
+  guidedMaterialStrainRegions.clear(); showGuidedMaterialStrainRegions();
+  for (const id of ["guidedMaterialStrainRegionName", "guidedMaterialStrainRegionInstance", "guidedMaterialStrainRegionPolygon"]) $(id).value = "";
   $("guidedContactLoads").checked = false; $("guidedContactLoadsScope").value = "all";
   $("guidedContactLoadsInstances").value = "";
   guidedCoverageLayers.clear(); guidedCoverageInterfaces.clear(); showGuidedCoverageTopology();

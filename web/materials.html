@@ -1280,11 +1280,29 @@ when the policy is absent. Use the finite-water goals below to compare the compl
 <label><input id="guidedMaterialStrain" type="checkbox"> Track warp, weft and shear on the actual cloth triangles</label>
 <div id="guidedMaterialStrainControls" hidden>
 <label>Cloth region <select id="guidedMaterialStrainScope"><option value="all">All retained physical instances</option>
-<option value="instances">Only the exact physical instance names below</option></select></label>
+<option value="instances">Only the exact physical instance names below</option>
+<option value="regions">Named polygon regions within physical instances</option></select></label>
 <label>Physical instance names, one per line <textarea id="guidedMaterialStrainInstances" rows="3" disabled
 placeholder="For example: front.R&#10;front.L"></textarea></label>
 <small>Use names from the drape report. A source piece can expand into several physical instances.
 Blank lines are ignored; other spaces remain part of each name. Missing or unretained names refuse this consumer.</small>
+<div id="guidedMaterialStrainRegionControls" hidden>
+<label>Region name <input id="guidedMaterialStrainRegionName" type="text" placeholder="For example: right elbow" disabled></label>
+<label>Exact physical instance <input id="guidedMaterialStrainRegionInstance" type="text" placeholder="For example: sleeve.R" disabled></label>
+<label>Polygon in flat-material millimetres, one x, y pair per line
+<textarea id="guidedMaterialStrainRegionPolygon" rows="5" maxlength="8192" disabled
+placeholder="Enter your polygon coordinates from the flat physical piece"></textarea></label>
+<p class="note">Enter 3–32 corners of a convex polygon in either winding, without repeating the first corner.
+Use the physical piece's flat coordinates after mirroring and simulation scaling, before grain rotation and wrapping.
+A region selects whole triangles whose centres lie inside or on the polygon; boundaries do not cut triangles.
+Each region must select at least one triangle, and two regions cannot select the same triangle.
+The same selection follows the cloth through motion. Comparison goals and limits apply to the union of saved regions;
+the results also show each region separately. Unselected cloth is outside this strain scope.</p>
+<div class="buttons"><button id="saveMaterialStrainRegion" type="button" disabled>Save or replace region</button>
+<button id="clearMaterialStrainRegions" type="button" disabled>Clear strain regions</button></div>
+<p id="guidedMaterialStrainRegionsSummary">No regions saved. Save each region before running this scope.</p>
+<div id="guidedMaterialStrainRegions"></div>
+</div>
 <label>Triangle-sample allowance per alternative <input id="guidedMaterialStrainBudget" type="number"
 min="1" max="64000000" step="1" value="1000000"></label>
 <p class="note">The allowance covers selected production triangles in the initial state and every accepted motion sample.

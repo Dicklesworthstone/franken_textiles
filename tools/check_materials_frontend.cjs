@@ -6819,6 +6819,13 @@ function guidedStrainControls(p, instances = null) {
   p.e.guidedMaterialStrainBudget.value='100000';
   p.e.guidedMaterialStrain.handlers.change();
 }
+function guidedStrainRegionControls(p) {
+  guidedStrainControls(p);p.e.guidedMaterialStrainScope.value='regions';p.e.guidedMaterialStrainScope.handlers.change();
+}
+function saveGuidedStrainRegion(p,id='right elbow',instance='sleeve.R',polygon='20, 100\n60, 100\n60, 240\n20, 240') {
+  p.e.guidedMaterialStrainRegionName.value=id;p.e.guidedMaterialStrainRegionInstance.value=instance;
+  p.e.guidedMaterialStrainRegionPolygon.value=polygon;p.e.saveMaterialStrainRegion.onclick();
+}
 function guidedContactControls(p, instances = null) {
   p.e.guidedContactLoads.checked=true;
   p.e.guidedContactLoadsScope.value=instances===null?'all':'instances';
@@ -9050,6 +9057,93 @@ test('guided directional consumers refuse absent scope, missing motion and unsup
     const before=p.current().messages.length;await p.e.scenario.onclick();
     assert.equal(p.current().messages.length,before,invalid);assert.equal(p.e.error.hidden,false,invalid);
     assert.ok(p.e.error.textContent,invalid);assert.equal(p.live.size,0,invalid);
+  }
+});
+
+test('guided regional strain authors exact physical polygons and keeps legacy scopes independent',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);
+  assert.equal(p.e.guidedMaterialStrainRegionControls.hidden,false);assert.equal(p.e.guidedMaterialStrainInstances.disabled,true);
+  assert.equal(p.e.saveMaterialStrainRegion.disabled,false);
+  saveGuidedStrainRegion(p);saveGuidedStrainRegion(p,'left area','sleeve.R','80, 240\n120, 240\n120, 100\n80, 100');
+  assert.equal(p.e.guidedMaterialStrainRegions.children.length,2);assert.match(p.e.guidedMaterialStrainRegionsSummary.textContent,/2 of 256/);
+  p.e.guidedWarpMaxGoal.checked=true;p.e.guidedWarpMinLimit.value='-0.1';await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const policy=JSON.parse(sent.scenarioRequest).material_strain;
+  assert.deepEqual(policy,{schema:'ftx-material-strain/2',max_triangle_samples:100000,regions:[
+    {id:'right elbow',instance:'sleeve.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[20,100],[60,100],[60,240],[20,240]]}},
+    {id:'left area',instance:'sleeve.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[80,240],[120,240],[120,100],[80,100]]}}]});
+  assert.equal(JSON.parse(sent.studyRequest).comparison.constraints[0].metric,'min_warp_green_strain');
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const oldRemove=descendants(p.e.guidedMaterialStrainRegions).find(node=>node.textContent==='Remove strain region right elbow');
+  descendants(p.e.guidedMaterialStrainRegions).find(node=>node.textContent==='Edit strain region right elbow').onclick();
+  assert.equal(p.e.guidedMaterialStrainRegionPolygon.value,'20, 100\n60, 100\n60, 240\n20, 240');
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+  saveGuidedStrainRegion(p,'right elbow','sleeve.R','21, 100\n60, 100\n60, 240\n21, 240');oldRemove.onclick();
+  assert.equal(p.e.guidedMaterialStrainRegions.children.length,2,'An obsolete row cannot remove a replaced region');
+  await p.e.scenario.onclick();assert.equal(JSON.parse(p.current().messages.at(-1).scenarioRequest).material_strain.regions[0].selector.polygon_mm[0][0],21);
+  p.emit(scenarioReport());guidedStrainControls(p,['front.R']);await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).material_strain,
+    {schema:'ftx-material-strain/1',instances:['front.R'],max_triangle_samples:100000});
+  p.emit(scenarioReport());guidedStrainControls(p);await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).material_strain,
+    {schema:'ftx-material-strain/1',max_triangle_samples:100000});
+});
+
+test('guided regional strain refuses empty scopes and malformed drafts without replacing saved geometry',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);
+  let before=p.current().messages.length;await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+  assert.match(p.e.error.textContent,/1–256 named regions/);
+  saveGuidedStrainRegion(p);const original=visibleText(p.e.guidedMaterialStrainRegions);
+  for(const [id,instance,polygon] of [['','sleeve.R','0,0\n1,0\n0,1'],['right elbow','','0,0\n1,0\n0,1'],
+    ['right elbow','sleeve.R','0,0\n1,0'],['right elbow','sleeve.R','0,0\n1,0\n,1'],
+    ['right elbow','sleeve.R','0,0\n1,0\n0,Infinity'],['right elbow','sleeve.R','0,0\n1,0\n0,1000001'],
+    ['right elbow','sleeve.R','0,0\n1,0\n0,1,2']]) {
+    saveGuidedStrainRegion(p,id,instance,polygon);assert.equal(visibleText(p.e.guidedMaterialStrainRegions),original);
+    assert.equal(p.e.error.hidden,false);assert.equal(p.current().messages.length,before);
+  }
+  descendants(p.e.guidedMaterialStrainRegions).find(node=>node.textContent==='Remove strain region right elbow').onclick();
+  assert.equal(p.e.guidedMaterialStrainRegions.children.length,0);await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/1–256 named regions/);
+  assert.equal(p.e.clearMaterialStrainRegions.disabled,true);
+});
+
+test('guided regional strain freezes named scopes and cancels pending source reads on region edits',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);saveGuidedStrainRegion(p);guidedNamedCases(p);
+  await saveGuidedCase(p,'original elbow');saveGuidedStrainRegion(p,'right elbow','sleeve.R','30,100\n60,100\n60,240\n30,240');
+  await saveGuidedCase(p,'narrow elbow');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1),cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.scenario.material_strain.regions[0].selector.polygon_mm[0]),[[20,100],[30,100]]);
+  assert.match(visibleText(p.e.guidedScenarioCases),/1 named regions \(right elbow on sleeve.R\)/);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);const live=new Set(p.live);
+  p.e.clearMaterialStrainRegions.onclick();assert.deepEqual(p.live,live,'A saved case retains its exact regional scope');
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+  for(const mode of ['single','draft'])for(const field of ['Name','Instance','Polygon']) {
+    const {p,sources}=await guidedScenarioSetup();guidedStrainRegionControls(p);saveGuidedStrainRegion(p);
+    if(mode==='draft')guidedNamedCases(p);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=mode==='draft'?saveGuidedCase(p,'pending'):p.e.scenario.onclick();
+    p.e['guidedMaterialStrainRegion'+field].handlers.input();assert.equal(old.dead,true,mode+':'+field);p.ready();
+    delay.resolve(sources.fit);await running;assert.equal(old.messages.length,before);
+    assert.equal(p.current().messages.length,0);assert.equal(p.live.size,0);assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+});
+
+test('guided regional strain clears garment-specific polygons after source replacement',async()=>{
+  for(const replacement of ['removed','file','malformed','candidate']) {
+    const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);saveGuidedStrainRegion(p);
+    const stale=descendants(p.e.guidedMaterialStrainRegions).find(node=>node.textContent==='Edit strain region right elbow');
+    if(replacement==='candidate') {
+      await p.e.scenario.onclick();p.emit(scenarioReport());
+      descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.tag==='button'&&node.textContent==='Use A pattern').onclick();
+    } else {
+      if(replacement==='removed')p.e.patternFile.files=[];
+      else p.select('patternFile',replacement==='malformed'?'{':'{"pieces":[{"id":"replacement"}]}');
+      await p.e.patternFile.onchange();
+    }
+    assert.equal(p.e.guidedMaterialStrainRegions.children.length,0,replacement);
+    assert.deepEqual(['Name','Instance','Polygon'].map(suffix=>p.e['guidedMaterialStrainRegion'+suffix].value),['','',''],replacement);
+    assert.equal(p.e.guidedMaterialStrain.checked,false);assert.equal(p.e.guidedMaterialStrainScope.value,'all');
+    stale.onclick();assert.equal(p.e.guidedMaterialStrainRegionName.value,'');
   }
 });
 
@@ -13989,6 +14083,36 @@ test('material-direction strain preserves signed axes, regional witnesses and in
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('regional material strain displays independent named extrema and the retained flat selection',async()=>{
+  const p=await pageModule();await p.load();scenarioInputs(p);const report=scenarioReport();
+  report.scenario.scenario={material_strain:{schema:'ftx-material-strain/2',regions:[{id:'<elbow>',instance:'sleeve.R',
+    selector:{kind:'whole_triangle_centroid',polygon_mm:[[20,100],[60,100],[60,240],[20,240]]}}],max_triangle_samples:100},motion:{}};
+  const extrema=(maximum,triangle)=>({green_strain_range:[[-0.02,maximum],[-0.03,0.02],[-0.04,0.06]],
+    minimum_witness:[0,1,2].map(i=>({source_triangle:i,sample_index:0,time_s:0})),
+    maximum_witness:[0,1,2].map(i=>({source_triangle:triangle+i,sample_index:2,time_s:0.5}))});
+  const strain={schema:'ftx-material-strain-report/2',...extrema(0.08,8),triangle_samples:18,duration_s:0.5,
+    instances:{'sleeve.R':extrema(0.08,8)},regions:{'<elbow>':extrema(0.05,3),'cuff':extrema(0.08,8)},
+    source:{regions:{'<elbow>':{instance:'sleeve.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[20,100],[60,100],[60,240],[20,240]]},
+      source_triangles:[3,4,5],reference_area_m2:0.002},cuff:{instance:'sleeve.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[20,0],[60,0],[60,30],[20,30]]},
+      source_triangles:[8,9,10],reference_area_m2:0.001}}}};
+  const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.material_strain=outcome({...strain,duration_s:0});
+  initial.motion=outcome({samples:[{}],keyframes:[],material_strain:outcome(strain)});
+  await p.e.scenario.onclick();p.emit(report);const s=section(p,'Fresh drape and heat alternatives');
+  const table=name=>descendants(s).find(node=>node.tag==='table'&&node.children[0].textContent===name);
+  const moving=table('A: accepted-motion material-direction strain');
+  const elbow=moving.children.find(row=>row.children[0]?.textContent==='Region <elbow> (sleeve.R)'&&row.children[1]?.textContent==='Warp E11');
+  assert.deepEqual(plain(elbow.children.map(cell=>cell.textContent)),['Region <elbow> (sleeve.R)','Warp E11','-0.02','Triangle 0, sample 0 at 0 s','0.05','Triangle 3, sample 2 at 0.5 s']);
+  const scope=table('A: accepted-motion selected material regions');
+  assert.deepEqual(plain(scope.children[2].children.map(cell=>cell.textContent)),['<elbow>','sleeve.R','3, 4, 5','0.002','20, 100; 60, 100; 60, 240; 20, 240']);
+  assert.match(visibleText(s),/disjoint union of these regions/);assert.match(visibleText(s),/unselected cloth is outside/);
+  assert.equal(descendants(s).some(node=>'innerHTML' in node),false);
+  initial.motion.result.material_strain=refused('declared strain region selects no retained triangles');
+  await p.e.scenario.onclick();p.emit(report);
+  assert.equal(table('A: accepted-motion selected material regions'),undefined);
+  assert.ok(table('A: initial selected material regions'));assert.match(visibleText(s),/selects no retained triangles/);
+});
+
 test('body-contact loads retain signed vectors, force witnesses and independent motion refusal', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const report=scenarioReport();
@@ -16953,6 +17077,70 @@ test('compiled WASM textile-water objectives, moving mass, scheduled phase momen
         assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
         assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
         }
+      }
+    } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM regional material strain replays native single and named-case comparisons',
+  {skip:!process.env.FTX_REGIONAL_STRAIN_REPLAY},async()=>{
+    const dir=process.env.FTX_REGIONAL_STRAIN_REPLAY;
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const worker=await workerModule({bindings:ftx}),previousProgress=globalThis.ftxProgress;
+    const input=name=>fs.readFileSync(path.join(dir,name),'utf8'),bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
+    const pattern=input('pattern.json'),studyRequest=input('study.json'),measurements=input('body-input.json');
+    globalThis.ftxProgress=()=>{};
+    try {
+      for(const name of ['single','matrix']) {
+        const scenarioRequest=input(`${name}-scenario.json`),source=JSON.parse(scenarioRequest);
+        const scenarios=name==='single'?[source]:source.cases.map(item=>item.scenario);
+        const output=await worker.send({type:'scenario',request:187,pattern,studyRequest,scenarioRequest,measurements,
+          bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(output.type,'result',output.message);
+        assert.deepEqual(output.result,JSON.parse(input(`${name}-report.json`)));
+        assert.deepEqual(output.result.comparison.frontier,['qualified']);
+        const reports=name==='single'?[output.result]:output.result.cases;
+        assert.equal(reports.length,scenarios.length);
+        for(const [index,report] of reports.entries()) {
+          assert.deepEqual(report.comparison.frontier,['qualified']);
+          const authored=scenarios[index].material_strain;
+          assert.equal(authored.schema,'ftx-material-strain/2');assert.ok(authored.regions.length>=2);
+          const ids=authored.regions.map(region=>region.id).sort();
+          for(const alternative of ['qualified','heavier']) {
+            const simulation=report.simulations.find(row=>row.key===alternative).evaluation;
+            assert.equal(simulation.status,'available');const result=simulation.result;
+            assert.equal(result.material_strain.status,'available');assert.equal(result.motion.status,'available');
+            assert.equal(result.motion.result.material_strain.status,'available');
+            const initial=result.material_strain.result,moving=result.motion.result.material_strain.result;
+            assert.ok(moving.frames.length>1&&moving.duration_s>0);
+            assert.equal(moving.triangle_samples,initial.triangle_samples*moving.frames.length);
+            assert.deepEqual(moving.source.regions,initial.source.regions);
+            for(const strain of [initial,moving]) {
+              assert.equal(strain.schema,'ftx-material-strain-report/2');
+              assert.equal(strain.strain_convention,'material_green_E11_E22_2E12');
+              for(const claim of ['physical_validation_claim','fit_claim','safe_strain_claim','continuous_time_bound'])assert.equal(strain[claim],false);
+              assert.deepEqual(Object.keys(strain.regions),ids);assert.deepEqual(Object.keys(strain.source.regions),ids);
+              const selected=[];
+              for(const region of authored.regions) {
+                const retained=strain.source.regions[region.id],summary=strain.regions[region.id];
+                assert.equal(retained.instance,region.instance);assert.deepEqual(retained.selector,region.selector);
+                assert.ok(retained.source_triangles.length>0&&retained.reference_area_m2>0);
+                selected.push(...retained.source_triangles);
+                assert.ok(summary.green_strain_range.flat().every(Number.isFinite));
+                for(const witness of [...summary.minimum_witness,...summary.maximum_witness]) {
+                  assert.ok(retained.source_triangles.includes(witness.source_triangle));
+                  assert.ok(witness.sample_index<strain.frames.length);
+                }
+              }
+              assert.equal(new Set(selected).size,selected.length);
+              assert.deepEqual(selected.sort((a,b)=>a-b),strain.source.triangles.map(triangle=>triangle.source_triangle).sort((a,b)=>a-b));
+              assert.ok(strain.green_strain_range.flat().some(value=>value!==0));
+            }
+          }
+        }
+        assert.equal(output.files.find(file=>file.name==='study-request.json').text,studyRequest);
+        assert.equal(output.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
       }
     } finally {globalThis.ftxProgress=previousProgress;}
   });

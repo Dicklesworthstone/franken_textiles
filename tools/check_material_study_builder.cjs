@@ -1185,6 +1185,41 @@ test('guided material strain validates exact distinct instance scope and explici
   }
 });
 
+test('regional material strain retains original polygons and freezes the exact scope in named cases', async () => {
+  const {buildMaterialScenarioRequest:build,buildMaterialStrainRequest:author,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const region={id:'elbow <right>',instance:'sleeve.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[20,100],[60,100],[60,240],[20,240]]}};
+  const policy={schema:'ftx-material-strain/2',regions:[region,{...region,id:'second',selector:{...region.selector,polygon_mm:[[80,240],[120,240],[120,100],[80,100]]}}],max_triangle_samples:10000};
+  const before=JSON.stringify(policy),raw=' \r\n'+before.replace('[20,100]','[20.0,100.0]')+'\r\n';
+  const scenario=build({...scenarioState(),materialStrain:raw});
+  assert.ok(scenario.includes(raw));assert.deepEqual(JSON.parse(scenario).material_strain,policy);
+  assert.equal(author(policy),before);assert.equal(JSON.stringify(policy),before);
+  const combined=matrix({maxEvaluations:2,cases:[{key:'regional',scenario}]});
+  assert.ok(combined.includes(raw));assert.deepEqual(JSON.parse(combined).cases[0].scenario.material_strain,policy);
+  assert.equal(Object.hasOwn(JSON.parse(scenario).material_strain,'instances'),false);
+});
+
+test('regional material strain rejects ambiguous versions duplicate names and malformed polygon declarations', async () => {
+  const {buildMaterialStrainRequest:build}=await modulePromise;
+  const region={id:'__proto__',instance:' sleeve.R ',selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[1,0],[0,1]]}};
+  const policy={schema:'ftx-material-strain/2',regions:[region],max_triangle_samples:1};
+  assert.deepEqual(JSON.parse(build(policy)),policy);
+  for(const regions of [undefined,null,[],{},Array(257).fill(region),[region,region],
+    [{...region,id:' '}],[{...region,id:'é'.repeat(257)}],[{...region,instance:''}],
+    [{...region,instance:'é'.repeat(2049)}],[{...region,extra:true}]])assert.throws(()=>build({...policy,regions}));
+  for(const instances of [null,[],['sleeve.R']])assert.throws(()=>build({...policy,instances}),/unsupported/);
+  for(const regions of [null,[],[region]])assert.throws(()=>build({...strainPolicy(),regions}),/unsupported/);
+  for(const selector of [null,{}, {...region.selector,kind:'intersecting_triangle'}, {...region.selector,extra:true},
+    ...[[],[[0,0],[1,0]],Array(33).fill([0,0]),[[0,0],[1,0],[0,'1']],[[0,0],[1,0],[0,Infinity]],
+      [[0,0],[1,0],[0,1000001]],[[0,0],[1,0],[0,1,2]]].map(polygon_mm=>({...region.selector,polygon_mm}))]) {
+    assert.throws(()=>build({...policy,regions:[{...region,selector}]}));
+  }
+  const long={...region,id:'é'.repeat(256),instance:'é'.repeat(2048)};
+  assert.equal(JSON.parse(build({...policy,regions:[long]})).regions[0].id,long.id);
+  // Structural validation does not guess which production triangles exist or overlap.
+  const samePolygon={...region,id:'independently named'};
+  assert.deepEqual(JSON.parse(build({...policy,regions:[region,samePolygon]})).regions,[region,samePolygon]);
+});
+
 test('guided contact loads retain original scope and budget text alongside motion, strain and fit sources', async () => {
   const {buildMaterialScenarioRequest:build}=await modulePromise;
   const contactLoads=' {\r\n"max_pair_evaluations":1000000,"schema":"ftx-contact-loads/1",'+

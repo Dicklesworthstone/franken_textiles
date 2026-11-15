@@ -833,15 +833,46 @@ function motionPolicy(value) {
 }
 
 function materialStrainPolicy(value) {
-  object(value, ["schema", "instances", "max_triangle_samples"], ["schema", "max_triangle_samples"], "Material strain");
-  if (value.schema !== "ftx-material-strain/1" || !Number.isSafeInteger(value.max_triangle_samples) ||
+  const regional = value?.schema === "ftx-material-strain/2";
+  object(value, ["schema", regional ? "regions" : "instances", "max_triangle_samples"],
+    ["schema", "max_triangle_samples", ...(regional ? ["regions"] : [])], "Material strain");
+  if (!["ftx-material-strain/1", "ftx-material-strain/2"].includes(value.schema) || !Number.isSafeInteger(value.max_triangle_samples) ||
     value.max_triangle_samples < 1 || value.max_triangle_samples > 64000000) {
-    throw Error("Material strain needs ftx-material-strain/1 and an explicit integer triangle-sample budget from 1 to 64000000.");
+    throw Error("Material strain needs ftx-material-strain/1 or /2 and an explicit integer triangle-sample budget from 1 to 64000000.");
+  }
+  if (regional) {
+    if (!Array.isArray(value.regions) || !value.regions.length || value.regions.length > 256) {
+      throw Error("Material strain needs 1–256 named regions.");
+    }
+    const names = new Set();
+    for (const region of value.regions) {
+      object(region, ["id", "instance", "selector"], ["id", "instance", "selector"], "Material strain region");
+      name(region.id, "Material strain region name"); name(region.instance, "Material strain physical instance");
+      bytes(region.id, 512, "Material strain region names must fit within 512 UTF-8 bytes.");
+      bytes(region.instance, 4096, "Material strain instance IDs must not exceed 4096 UTF-8 bytes.");
+      if (names.has(region.id)) throw Error("Material strain region names must be unique.");
+      names.add(region.id);
+      const selector = object(region.selector, ["kind", "polygon_mm"], ["kind", "polygon_mm"], "Material strain region selector");
+      if (selector.kind !== "whole_triangle_centroid" || !Array.isArray(selector.polygon_mm) ||
+          selector.polygon_mm.length < 3 || selector.polygon_mm.length > 32 ||
+          selector.polygon_mm.some(point => !Array.isArray(point) || point.length !== 2 ||
+            point.some(coordinate => typeof coordinate !== "number" || !Number.isFinite(coordinate) || Math.abs(coordinate) > 1000000))) {
+        throw Error("Material strain regions need whole_triangle_centroid selection and 3–32 finite flat-coordinate vertices within ±1000000 mm.");
+      }
+      // Rust admits convexity, nonempty retained triangles and disjoint ownership on the actual
+      // production mesh. The browser preserves every authored coordinate, winding and region ID.
+    }
   }
   if (value.instances != null) {
     uniqueNames(value.instances, "Material strain instance IDs", 4096);
     for (const id of value.instances) bytes(id, 4096, "Material strain instance IDs must not exceed 4096 UTF-8 bytes.");
   }
+}
+
+/** Serialize an authored strain scope; production-mesh selection remains the native consumer's decision. */
+export function buildMaterialStrainRequest(value) {
+  materialStrainPolicy(value);
+  return JSON.stringify(value);
 }
 
 function contactLoadsPolicy(value) {

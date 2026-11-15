@@ -44,14 +44,64 @@ transport consumer leave independent numerical and manufacturing results inspect
 [the guided workflow](browser-material-workbench.md#compare-layered-heat-and-potential-vapor-transfer)
 for source selection, units, work allowances and case snapshots.
 
-Enable material-direction strain to inspect all retained physical instances or exact named
-instances from a drape report. Six initial and six complete-motion extrema expose warp E11,
+Enable material-direction strain to inspect all retained physical instances, exact named
+instances from a drape report, or named regions within a continuous panel. Six initial and
+six complete-motion extrema expose warp E11,
 weft E22 and engineering shear 2E12. These are signed dimensionless Green strains; the guided
 controls never turn them into percent elongation or invent acceptable fabric limits. Raising a
 minimum and lowering a maximum are separate explicit objectives. Minimum-strain constraints
 apply lower bounds, and maximum-strain constraints apply upper bounds. All strain decisions use
 the nominal basis and can accompany reported-bound heat or mass objectives through explicit
 nominal limits.
+
+For a local zone, select **Named polygon regions within physical instances** and save a region name, its exact physical
+instance ID and a convex polygon in flat millimetres. Each line in the polygon field is an
+`x, y` pair; either winding is accepted, without repeating the closing point. The coordinates
+belong to the physical instance after mirroring and simulation scale, before grain rotation.
+They are not body coordinates or a region that automatically follows an anatomical landmark.
+An altered design recomputes membership on its new flat mesh against the same authored polygon.
+Changing or adopting a garment clears the previous region definitions in the workbench.
+
+Regions select **whole retained triangles by their exact mathematical centroid**; boundary
+centroids count as inside. No triangle is clipped or subdivided, and the cloth topology is
+unchanged. Every named region must select at least one triangle, and a retained triangle may
+belong to at most one region. A shared polygon boundary can therefore refuse when a triangle
+centroid lies exactly on it. Leave the unselected fabric outside the scope or adjust the polygons
+explicitly; the engine never silently drops a conflicting triangle.
+
+The native scenario form is:
+
+```json
+"material_strain": {
+  "schema": "ftx-material-strain/2",
+  "max_triangle_samples": 100000,
+  "regions": [{
+    "id": "shoulder-zone",
+    "instance": "front.R",
+    "selector": {
+      "kind": "whole_triangle_centroid",
+      "polygon_mm": [[0, 0], [80, 0], [80, 60], [0, 60]]
+    }
+  }]
+}
+```
+
+Use 1–256 unique region names and 3–32 distinct vertices per convex polygon. Version `/2`
+requires `regions` and excludes `instances`; the existing `/1` request retains its whole-instance
+behavior. The triangle-sample allowance counts selected triangles across the initial state and
+every accepted motion sample. A separate bounded selector workload prevents a large collection
+of polygons from causing unbounded preparation.
+
+Existing comparison metrics apply to the **union of all selected regions**. Named regional
+summaries expose each zone's signed extrema and the source triangle, time and sample responsible.
+They also report the selected reference area and exact triangle IDs; neither the polygon's area
+nor unselected fabric substitutes for that selected area. If different zones need independent
+limits, use explicit named cases with their own regional policies and comparison constraints.
+Static and motion reports bind the original selectors, full retained flat mesh and material
+sources. Comparison reconstructs the complete partition before admitting a result, and rejects
+empty, overlapping, stale or inconsistent regional receipts. Independent manufacturing, drape
+and heat results remain available when regional inspection refuses. These numerical requirements
+do not establish a material failure threshold, physiological comfort or empirical garment fit.
 
 Enable motion and choose either 1–16 authored absolute pose endpoints or an original
 `ftx-drape-motion/1` JSON request. Original files preserve complete transient heat/water inputs
