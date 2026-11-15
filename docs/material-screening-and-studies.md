@@ -262,6 +262,20 @@ An unproved complete incumbent can be compared, while recipe optimality requires
 inner allocations to be proved. Missing cell qualification withholds the sewing result and its
 objective without erasing independent mass or cutting. Reported-bound makespan is unsupported.
 
+The nominal `sewing_scheduled_feed_milliseconds` metric compares the selected complete
+parallel or specialist-route batch's actual scheduled feed work. It can be minimized or used
+as an inclusive maximum, including in adaptive garment studies. The guided workbench exposes
+**Scheduled sewing feed work (ms / batch)** beside elapsed makespan. Each operation or cell
+keeps the selected scheduler's declared ceiling convention: summing raw feed seconds and then
+rounding once can give a different answer. Setup, handling, transfers and idle time remain outside
+this feed-work metric. Complete bounded-search incumbents remain usable without an optimality claim.
+
+The reading is bound to the selected plan, material/pattern identity, effective production quantity
+and qualified route or cell policy. Serial-only plans supply no scheduled-millisecond value;
+missing qualification, inconsistent receipts and reported-bound requests do not invent one.
+The report retains an exact integer; scalar comparisons admit it only in the exact integer
+range shared with browser numbers.
+
 Parallel plans leave the old serial setup/handling/time metrics unavailable, and serial timed
 recipe objectives refuse a parallel request. Generated feed, stitch counts and thread orders retain
 their complete-batch meanings. Recipe/material work reservations include the entire parallel cap

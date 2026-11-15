@@ -308,6 +308,10 @@ pub struct Metrics {
     pub stitch_intervals: Option<usize>,
     /// Declared stitch-rate feed time; excludes handling, robot movement and machine setup.
     pub feed_seconds: Option<f64>,
+    /// Complete selected parallel/routed feed work under its explicit millisecond ceiling rule.
+    /// Distinct from raw feed and elapsed makespan; serial-only plans leave this unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sewing_scheduled_feed_milliseconds: Option<u64>,
     /// Selected production schedule's source-qualified setup time in seconds. Unknown without
     /// admitted directed timing evidence; setup-change counts never supply a time estimate.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1484,6 +1488,7 @@ impl Request {
         if let Some(plan) = row.sewing.value() {
             row.metrics.stitch_intervals = Some(plan.total_stitch_intervals());
             row.metrics.feed_seconds = Some(plan.total_feed_seconds());
+            row.metrics.sewing_scheduled_feed_milliseconds = plan.scheduled_feed_milliseconds();
             row.metrics.sewing_parallel_makespan_seconds = plan.parallel_makespan_seconds();
             if let Some(consumables) = plan
                 .consumables

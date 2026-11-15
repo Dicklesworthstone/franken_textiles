@@ -275,10 +275,28 @@ test('routed feed selection preserves exact recipe and route objective sources i
   }
 });
 
+test('scheduled sewing feed is an independent nominal batch objective and inclusive guard', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const metric='sewing_scheduled_feed_milliseconds';
+  const input={...state(),sewing:processSources().sewing,
+    objectives:[{metric,direction:'minimize'}],constraints:[{metric,maximum:1234,basis:'nominal'}],requiredConsumers:['sewing']};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);assert.ok(raw.includes(input.sewing));
+  assert.deepEqual(result.comparison.objectives,input.objectives);
+  assert.deepEqual(result.comparison.constraints,input.constraints);
+  const selection={...input,sewingSelection:' {"schema":"ftx-sewing-selection/8","options":{}}\r\n'};
+  delete selection.sewing;
+  assert.ok(build(selection).includes(selection.sewingSelection));
+  const without={...input};delete without.sewing;
+  assert.throws(()=>build(without),/requires requested sewing/);
+  assert.throws(()=>build({...input,basis:'reported_bounds'}),/reported.bound/);
+  assert.throws(()=>build({...input,constraints:[{metric,maximum:1234,basis:'reported_bounds'}]}),/reported.bound/);
+});
+
 test('manufacturing objectives and required consumers cannot omit their source inputs', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const goal=metric=>[{metric,direction:'minimize'}];
-  for(const metric of ['cutting_modeled_path_seconds','sewing_modeled_production_seconds','sewing_parallel_makespan_seconds',
+  for(const metric of ['cutting_modeled_path_seconds','sewing_modeled_production_seconds','sewing_parallel_makespan_seconds','sewing_scheduled_feed_milliseconds',
     'selected_observed_order_cost','thread_required_length_m','thread_observed_order_cost','cut_and_sew_selected_order_cost']) {
     assert.throws(()=>build({...state(),objectives:goal(metric)}),/requires requested/);
   }

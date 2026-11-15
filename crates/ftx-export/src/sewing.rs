@@ -491,6 +491,23 @@ impl SewPlan {
             .map_or(self.feed_seconds, |production| production.feed_seconds)
     }
 
+    /// Summed feed work of the complete selected multi-cell schedule, in exact milliseconds.
+    /// Routing ceilings each operation; parallel allocation retains its qualified cell/operation
+    /// convention. Serial raw feed has no implicit millisecond scheduling convention.
+    #[must_use]
+    pub fn scheduled_feed_milliseconds(&self) -> Option<u64> {
+        let production = self.production.as_ref()?;
+        production.routing.as_ref().map_or_else(
+            || {
+                production
+                    .parallel
+                    .as_ref()
+                    .map(|parallel| parallel.selected.scheduled_feed_milliseconds)
+            },
+            |routing| Some(routing.selected.scheduled_feed_milliseconds),
+        )
+    }
+
     /// Complete serial feed/setup/handling model, available only with admitted handling evidence.
     /// This is conditional modeled time, not an elapsed factory throughput or hardware claim.
     #[must_use]

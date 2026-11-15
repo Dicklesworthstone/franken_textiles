@@ -1951,6 +1951,75 @@ fn configured_cell_stitch_bound_uses_its_actual_recipe_before_count_search() {
 }
 
 #[test]
+fn material_studies_preserve_parallel_feed_ceilings_and_leave_serial_milliseconds_unavailable() {
+    use ftx_export::material_study::Request;
+
+    let (pattern, mut options) = fixture(3);
+    for pass in options["passes"].as_array_mut().unwrap() {
+        pass["stitches_per_minute"] = json!(613.0);
+    }
+    let expected = build(&pattern, options.clone()).unwrap();
+    let schedule = &expected
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap()
+        .selected;
+    let milliseconds = schedule.scheduled_feed_milliseconds;
+    assert_eq!(expected.scheduled_feed_milliseconds(), Some(milliseconds));
+    assert_eq!(
+        milliseconds,
+        schedule
+            .cells
+            .iter()
+            .map(|cell| cell.scheduled_feed_milliseconds)
+            .sum::<u64>()
+    );
+    let study = |options: Value| {
+        let request: Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1","sewing":options,
+            "variants":[{"key":"cells","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}],
+            "comparison":{"basis":"nominal","objectives":[{
+                "metric":"sewing_scheduled_feed_milliseconds","direction":"minimize"}]}
+        })).unwrap();
+        serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap()
+    };
+    let report = study(options.clone());
+    assert_eq!(report["comparison"]["frontier"], json!(["cells"]));
+    assert_eq!(
+        report["alternatives"][0]["metrics"]["sewing_scheduled_feed_milliseconds"],
+        milliseconds
+    );
+    assert_eq!(
+        report["comparison"]["alternatives"][0]["readings"]
+            ["sewing_scheduled_feed_milliseconds"]["value"],
+        milliseconds as f64
+    );
+    options["production"]
+        .as_object_mut()
+        .unwrap()
+        .remove("parallel");
+    let serial = build(&pattern, options.clone()).unwrap();
+    assert!(serial.scheduled_feed_milliseconds().is_none());
+    let report = study(options);
+    assert_eq!(report["alternatives"][0]["sewing"]["status"], "available");
+    assert!(
+        report["alternatives"][0]["metrics"]["feed_seconds"]
+            .as_f64()
+            .is_some()
+    );
+    assert!(
+        report["alternatives"][0]["metrics"]
+            .get("sewing_scheduled_feed_milliseconds")
+            .is_none()
+    );
+    assert_eq!(report["comparison"]["frontier"], json!([]));
+}
+
+#[test]
 fn explicit_millisecond_feed_ceiling_is_once_per_used_cell_and_retains_raw_feed() {
     let (pattern, mut options) = fixture(3);
     for pass in options["passes"].as_array_mut().unwrap() {

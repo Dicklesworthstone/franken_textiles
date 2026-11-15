@@ -7777,6 +7777,31 @@ test('guided manufacturing transports original policies with bounded mass, nomin
   }
 });
 
+test('scheduled sewing feed reaches guided comparisons and preserves its guard when sewing is disabled', async () => {
+  for(const optimize of [false,true]) {
+    const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
+    const sources=guidedManufacturingSources(p,optimize);
+    p.e.guidedAreaGoal.checked=false;p.e.guidedScheduledFeedGoal.checked=true;p.e.guidedScheduledFeedLimit.value='1234';
+    p.e.guidedRequireSewing.checked=true;p.e.guidedLimitBasis.value='nominal';
+    await p.e.study.onclick();const sent=p.current().messages.at(-1);
+    assert.equal(sent.type,'study',p.e.error.textContent);assert.ok(sent.studyRequest.includes(sources.sewOptions));
+    const comparison=JSON.parse(sent.studyRequest).comparison,metric='sewing_scheduled_feed_milliseconds';
+    assert.deepEqual(comparison.objectives,[{metric,direction:'minimize'}]);
+    assert.deepEqual(comparison.constraints,[{metric,maximum:1234,basis:'nominal'}]);
+    assert.deepEqual(comparison.required_consumers,['sewing']);
+    const report=studyReport();report.alternatives[0].metrics.sewing_scheduled_feed_milliseconds=1234;
+    p.emit(report);const text=descendants(section(p,'Fixed-pattern manufacturing alternatives')).map(node=>node.textContent).join('\n');
+    assert.match(text,/Scheduled sewing feed work/);assert.match(text,/1234/);
+    assert.match(text,/excludes setup, handling, transfers and idle time/);
+    p.e.guidedSewing.checked=false;p.e.guidedSewing.handlers.change();
+    assert.equal(p.e.guidedScheduledFeedGoal.checked,false);assert.equal(p.e.guidedScheduledFeedGoal.disabled,true);
+    assert.equal(p.e.guidedScheduledFeedLimit.value,'1234');
+    p.e.guidedAreaGoal.checked=true;
+    const count=p.current().messages.length;await p.e.study.onclick();
+    assert.equal(p.current().messages.length,count);assert.match(p.e.error.textContent,/sewing/);
+  }
+});
+
 test('guided manufacturing cannot silently discard limits or required results when a consumer is disabled', async () => {
   const p=await pageModule();await p.load();guidedControls(p);await addGuidedSelection(p);
   guidedManufacturingSources(p);p.e.guidedSewTimeGoal.checked=true;

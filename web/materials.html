@@ -904,9 +904,13 @@ A missing required value excludes an alternative; it is never treated as zero.</
 <label><input id="guidedMassGoal" type="checkbox"> Complete garment mass (kg / garment)</label><input id="guidedMassLimit" type="number" min="0" step="any" aria-label="Maximum complete garment mass in kilograms" placeholder="No limit">
 <label><input id="guidedSewTimeGoal" type="checkbox"> Modeled serial sewing production (s)</label><input id="guidedSewTimeLimit" type="number" min="0" step="any" aria-label="Maximum modeled serial sewing production seconds" placeholder="No limit">
 <label><input id="guidedMakespanGoal" type="checkbox"> Modeled multi-cell sewing makespan (s)</label><input id="guidedMakespanLimit" type="number" min="0" step="any" aria-label="Maximum modeled sewing makespan in seconds" placeholder="No limit">
+<label><input id="guidedScheduledFeedGoal" type="checkbox"> Scheduled sewing feed work (ms / batch)</label><input id="guidedScheduledFeedLimit" type="number" min="0" step="1" aria-label="Maximum scheduled sewing feed work in milliseconds per batch" placeholder="No limit">
 <label><input id="guidedThreadLengthGoal" type="checkbox"> Required sewing thread (m / batch)</label><input id="guidedThreadLengthLimit" type="number" min="0" step="any" aria-label="Maximum required sewing thread in metres" placeholder="No limit">
 <label><input id="guidedThreadCostGoal" type="checkbox"> Complete thread order cost</label><input id="guidedThreadCostLimit" type="number" min="0" step="any" aria-label="Maximum thread order cost in its declared currency" placeholder="No limit">
 </div>
+<p class="note">Scheduled feed adds the separately rounded feed milliseconds of every operation in the selected multi-cell
+or specialist-route batch. It excludes setup, handling, transfers and idle time; makespan measures elapsed completion.
+This goal requires an available qualified multi-cell schedule and uses nominal values. A serial plan supplies no scheduled-feed value.</p>
 <div id="guidedCombinedGoals"><div class="study-goals">
 <label><input id="guidedCombinedCostGoal" type="checkbox"> Selected complete fabric + thread cost</label><input id="guidedCombinedCostLimit" type="number" min="0" step="any" aria-label="Maximum selected fabric and thread order cost in its declared currency" placeholder="No limit">
 </div></div>

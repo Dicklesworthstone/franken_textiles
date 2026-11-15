@@ -93,7 +93,8 @@ const guidedDesignFields = { key: "guidedDesignKey", kind: "guidedDesignKind", a
 const guidedMetrics = [
   ["guidedArea", "stock_area_m2", "roll"], ["guidedStockMass", "stock_mass_kg", "roll"], ["guidedMass", "assembly_mass_kg"],
   ["guidedCutTime", "cutting_modeled_path_seconds", "roll"], ["guidedSewTime", "sewing_modeled_production_seconds"],
-  ["guidedMakespan", "sewing_parallel_makespan_seconds"], ["guidedOrderCost", "selected_observed_order_cost", "roll"],
+  ["guidedMakespan", "sewing_parallel_makespan_seconds"], ["guidedScheduledFeed", "sewing_scheduled_feed_milliseconds"],
+  ["guidedOrderCost", "selected_observed_order_cost", "roll"],
   ["guidedThreadLength", "thread_required_length_m"], ["guidedThreadCost", "thread_observed_order_cost"],
   ["guidedCombinedCost", "cut_and_sew_selected_order_cost", "priced"],
   ["guidedFiniteCount", "used_stock_count", "finite"], ["guidedFiniteArea", "used_stock_gross_area_m2", "finite"],
@@ -495,7 +496,7 @@ function controls() {
   $("guidedRollForm").hidden = rollFile;
   for (const id of ["guidedCopies", "guidedGap", "guidedEdge", "guidedEnd"]) $(id).disabled = !cutting || stockMode !== "roll" || rollFile;
   $("guidedCutTimeGoal").disabled ||= !rollFile;
-  for (const id of ["guidedSewTimeGoal", "guidedMakespanGoal", "guidedThreadLengthGoal", "guidedThreadCostGoal"]) $(id).disabled = !$("guidedSewing").checked;
+  for (const id of ["guidedSewTimeGoal", "guidedMakespanGoal", "guidedScheduledFeedGoal", "guidedThreadLengthGoal", "guidedThreadCostGoal"]) $(id).disabled = !$("guidedSewing").checked;
   $("guidedOrderCostGoal").disabled ||= !$("guidedPurchasing").checked;
   $("guidedCombinedCostGoal").disabled ||= !$("guidedCombinedCost").checked;
   $("guidedInventory").disabled = !$("guidedMass").checked;
@@ -2546,6 +2547,19 @@ function sewingSelection(parent, alternatives) {
   }
 }
 function manufacturingSewingMetrics(op, parent, study, computed) {
+  if (study.alternatives.some(row => row.metrics?.sewing_scheduled_feed_milliseconds != null) ||
+      [...(computed?.policy?.objectives || []), ...(computed?.policy?.constraints || [])]
+        .some(item => item.metric === "sewing_scheduled_feed_milliseconds")) {
+    const feed = table(parent, "Scheduled sewing feed work", ["Alternative", "Sewing", "Feed work (ms / batch)"]);
+    for (const row of study.alternatives) {
+      cells(feed, [row.key, state(row.sewing), metric(row.metrics?.sewing_scheduled_feed_milliseconds)]);
+    }
+    const note = document.createElement("p");
+    note.textContent = "The selected qualified multi-cell schedule supplies each operation's separately rounded feed milliseconds. " +
+      "Their complete batch sum excludes setup, handling, transfers and idle time. It is distinct from elapsed makespan and raw feed seconds. " +
+      "Serial-only or unavailable schedules remain unknown; feasible search results do not prove minimum feed work.";
+    parent.append(note);
+  }
   if (study.alternatives.some(row => row.metrics?.sewing_setup_seconds != null ||
       row.metrics?.sewing_feed_and_setup_seconds != null) ||
       [...(computed?.policy?.objectives || []), ...(computed?.policy?.constraints || [])]
@@ -6690,7 +6704,7 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
     if (id === "guidedCuttingSource" && $(id).value !== "file") $("guidedCutTimeGoal").checked = false;
     if (id === "guidedMass" && !$(id).checked) $("guidedMassGoal").checked = false;
     if (id === "guidedSewing" && !$(id).checked) {
-      for (const goal of ["guidedSewTimeGoal", "guidedMakespanGoal", "guidedThreadLengthGoal", "guidedThreadCostGoal"]) $(goal).checked = false;
+      for (const goal of ["guidedSewTimeGoal", "guidedMakespanGoal", "guidedScheduledFeedGoal", "guidedThreadLengthGoal", "guidedThreadCostGoal"]) $(goal).checked = false;
     }
     if (id === "guidedPurchasing" && !$(id).checked) $("guidedOrderCostGoal").checked = false;
     if (id === "guidedCombinedCost" && !$(id).checked) $("guidedCombinedCostGoal").checked = false;

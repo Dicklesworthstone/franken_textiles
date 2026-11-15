@@ -4095,6 +4095,149 @@ fn feed_selection(options: &Value) -> Value {
 }
 
 #[test]
+fn material_studies_use_selected_routed_feed_milliseconds_without_rounding_raw_seconds() {
+    use ftx_export::material_study::Request;
+
+    let (pattern, mut options) = feed_fixture();
+    for (cell, operation) in [(1, "reinforce"), (2, "join")] {
+        options["production"]["routing"]["cells"][cell]["configuration"]["recipes"][operation]
+            ["stitches_per_minute"] = json!(603.0);
+    }
+    refresh_locks(&mut options);
+    let evaluate = |input: Value| {
+        let request: Request = serde_json::from_value(input).unwrap();
+        serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap()
+    };
+    for selected in [false, true] {
+        let mut input = json!({"schema":"ftx-material-study/1",
+            "variants":[{"key":"scheduled","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}],
+            "comparison":{"basis":"nominal","objectives":[{
+                "metric":"sewing_scheduled_feed_milliseconds","direction":"minimize"}]}});
+        if selected {
+            input["sewing_selection"] = feed_selection(&options);
+        } else {
+            input["sewing"] = options.clone();
+        }
+        let report = evaluate(input.clone());
+        assert_eq!(report["comparison"]["frontier"], json!(["scheduled"]));
+        let row = &report["alternatives"][0];
+        let plan = &row["sewing"]["result"];
+        let actual = plan["production"]["routing"]["selected"]["scheduled_feed_milliseconds"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(actual, 3982);
+        assert_eq!(row["metrics"]["sewing_scheduled_feed_milliseconds"], actual);
+        let reading = &report["comparison"]["alternatives"][0]["readings"]
+            ["sewing_scheduled_feed_milliseconds"];
+        assert_eq!(reading["value"], 3982.0);
+        assert_eq!(reading["unit"], "ms");
+        assert_eq!(reading["consumer"], "sewing");
+        assert!(reading.get("reported_bounds").is_none());
+        assert_eq!(
+            (row["metrics"]["feed_seconds"].as_f64().unwrap() * 1000.0).ceil() as u64,
+            3981
+        );
+        if selected {
+            assert_eq!(
+                row["sewing_selection"]["result"]["selected_scheduled_feed_milliseconds"],
+                actual
+            );
+        }
+        let mut inherited = input.clone();
+        let production = if selected {
+            &mut inherited["sewing_selection"]["options"]["production"]
+        } else {
+            &mut inherited["sewing"]["production"]
+        };
+        production.as_object_mut().unwrap().remove("production_copies");
+        let inherited = evaluate(inherited);
+        assert_eq!(
+            inherited["alternatives"][0]["metrics"]["sewing_scheduled_feed_milliseconds"],
+            actual
+        );
+        assert_eq!(
+            inherited["alternatives"][0]["sewing"]["result"]["options"]["production"]
+                ["production_copies"],
+            1
+        );
+        assert_eq!(inherited["comparison"]["frontier"], json!(["scheduled"]));
+        for (maximum, eligible) in [(3981, false), (3982, true)] {
+            let mut limited = input.clone();
+            limited["comparison"]["constraints"] = json!([{
+                "metric":"sewing_scheduled_feed_milliseconds","maximum":maximum}]);
+            let limited = evaluate(limited);
+            assert_eq!(
+                limited["comparison"]["alternatives"][0]["eligible"],
+                eligible
+            );
+            assert_eq!(limited["alternatives"], report["alternatives"]);
+        }
+        let mut bounded = input;
+        bounded["comparison"]["basis"] = json!("reported_bounds");
+        assert!(
+            serde_json::from_value::<Request>(bounded)
+                .unwrap()
+                .evaluate(&pattern)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn scheduled_feed_comparison_retains_bounded_incumbents_and_route_qualification() {
+    use ftx_export::material_study::Request;
+
+    let (pattern, mut options) = feed_fixture();
+    options["production"]["routing"]["max_search_nodes"] = json!(2);
+    let study = |options: Value| {
+        let request: Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1","sewing":options,
+            "variants":[{"key":"bounded","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}],
+            "comparison":{"basis":"nominal","objectives":[{
+                "metric":"sewing_scheduled_feed_milliseconds","direction":"minimize"}]}
+        })).unwrap();
+        serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap()
+    };
+    let original = study(options.clone());
+    assert_eq!(original["comparison"]["frontier"], json!(["bounded"]));
+    assert_eq!(
+        original["comparison"]["alternatives"][0]["readings"]
+            ["sewing_scheduled_feed_milliseconds"]["value"],
+        6000.0
+    );
+    assert_eq!(
+        original["alternatives"][0]["sewing"]["result"]["production"]["routing"]
+            ["feed_time_search"]["optimality_proven"],
+        false
+    );
+    // Equal selected feed cannot erase a changed source-qualified route protocol.
+    let mut changed = options.clone();
+    changed["production"]["routing"]["method"] =
+        json!("A separately qualified synthetic route and staging protocol");
+    let changed = study(changed);
+    assert_eq!(
+        original["comparison"]["alternatives"][0]["readings"],
+        changed["comparison"]["alternatives"][0]["readings"]
+    );
+    assert_ne!(
+        original["comparison"]["alternatives"][0]["input_protocol_sha256"],
+        changed["comparison"]["alternatives"][0]["input_protocol_sha256"]
+    );
+    options["production"]["routing"]["cells"][2]["configuration"]["recipes"]["join"]
+        ["stitches_per_minute"] = json!(500.0);
+    let stale = study(options);
+    assert_eq!(stale["alternatives"][0]["sewing"]["status"], "refused");
+    assert_eq!(stale["comparison"]["frontier"], json!([]));
+    assert!(
+        stale["alternatives"][0]["metrics"]
+            .get("sewing_scheduled_feed_milliseconds")
+            .is_none()
+    );
+}
+
+#[test]
 fn routed_feed_minimizes_actual_occupied_work_separately_from_completion() {
     let (pattern, options) = feed_fixture();
     let plan = build(&pattern, options.clone()).unwrap();

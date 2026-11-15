@@ -26,6 +26,7 @@ const METRIC_CONSUMERS = {
   cutting_job_stock_area_m2: "cutting_job", cutting_job_stock_mass_kg: "cutting_job",
   cutting_job_modeled_path_seconds: "cutting_job_program", cutting_job_selected_order_cost: "cutting_job_purchasing",
   sewing_modeled_production_seconds: "sewing", sewing_parallel_makespan_seconds: "sewing",
+  sewing_scheduled_feed_milliseconds: "sewing",
   selected_observed_order_cost: "purchasing", thread_observed_order_cost: "sewing_purchasing",
   cut_and_sew_selected_order_cost: "cut_and_sew_purchasing", thread_required_length_m: "sewing_consumables",
   simulated_cloth_mass_kg: "drape", max_absolute_edge_strain_pct: "drape",

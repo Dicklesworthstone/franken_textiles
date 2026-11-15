@@ -152,6 +152,9 @@ pub enum Metric {
     StitchIntervals,
     /// Feed-only time in seconds; not a robot cycle-time estimate.
     FeedSeconds,
+    /// Complete selected parallel/routed feed work, under its explicit ceiling rule, in exact ms.
+    /// This is neither continuous raw feed nor elapsed completion; serial-only plans have no value.
+    SewingScheduledFeedMilliseconds,
     /// Source-qualified directed setup time of the selected complete sewing schedule, in seconds.
     SewingSetupSeconds,
     /// Generated feed plus source-qualified setup time, excluding undeclared handling, in seconds.
@@ -326,6 +329,7 @@ impl Metric {
             Self::ObservedOrderCost | Self::SelectedObservedOrderCost => Consumer::Purchasing,
             Self::StitchIntervals
             | Self::FeedSeconds
+            | Self::SewingScheduledFeedMilliseconds
             | Self::SewingSetupSeconds
             | Self::SewingFeedAndSetupSeconds
             | Self::SewingHandlingSeconds
@@ -441,6 +445,7 @@ impl Metric {
             | Self::CuttingJobCutLengthM
             | Self::CuttingJobRaisedTravelLengthM => "m",
             Self::StitchIntervals | Self::UsedStockCount => "count",
+            Self::SewingScheduledFeedMilliseconds => "ms",
             Self::FeedSeconds
             | Self::CuttingModeledPathSeconds
             | Self::FiniteStockModeledPathSeconds
@@ -533,6 +538,7 @@ impl Metric {
             Self::SelectedObservedOrderCost => row.metrics.selected_observed_order_total,
             Self::StitchIntervals => row.metrics.stitch_intervals.map(|n| n as f64),
             Self::FeedSeconds => row.metrics.feed_seconds,
+            Self::SewingScheduledFeedMilliseconds => scheduled_sewing_feed(row),
             Self::SewingSetupSeconds => row.metrics.sewing_setup_seconds,
             Self::SewingFeedAndSetupSeconds => row.metrics.sewing_feed_and_setup_seconds,
             Self::SewingHandlingSeconds => row.metrics.sewing_handling_seconds,
@@ -1384,6 +1390,12 @@ impl Policy {
             .contains(&Metric::SewingParallelMakespanSeconds)
         {
             report.notes.push("Parallel sewing makespan is the completion time of the selected whole-garment allocation or fixed specialist-cell route from the declared common origin. The chosen model retains its qualified cell availability, setup, handling, resource independence and conservative feed rounding. A routed model additionally requires its exact transfer-resource and staging policy. This is distinct from summed machine work. A complete incumbent remains comparable without an optimality proof; a fixed-route dispatch proof is conditional on that search scope. No unqualified resource independence, inter-cell transfer, measured throughput or hardware execution is inferred.");
+        }
+        if self
+            .metrics()
+            .contains(&Metric::SewingScheduledFeedMilliseconds)
+        {
+            report.notes.push("Scheduled sewing feed is the exact sum of feed milliseconds in the complete selected multi-cell schedule, excluding setup, handling, transfer and waiting. Routed cells ceiling each operation separately; parallel cells retain their explicitly qualified cell or operation ceiling rule. Raw feed seconds and elapsed makespan remain independent quantities. The retained source-bound schedule and whole routing/allocation protocol qualify this nominal reading; serial-only feed has no inferred millisecond value. A complete incumbent need not prove minimum feed, measured throughput or physical sewing quality.");
         }
         if self.consumers().contains(&Consumer::CuttingJob)
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
@@ -2502,6 +2514,9 @@ impl Policy {
         if self
             .metrics()
             .contains(&Metric::SewingParallelMakespanSeconds)
+            || self
+                .metrics()
+                .contains(&Metric::SewingScheduledFeedMilliseconds)
             || ((consumers.contains(&Consumer::Sewing) || thread)
                 && row.sewing.value().is_some_and(|plan| {
                     parallel_calendars(&plan.options)
@@ -2738,6 +2753,51 @@ struct Heat<'a> {
     final_range_c: [f64; 2],
     vapor_pressure_range_pa: Option<[f64; 2]>,
     wet_inertial_mass: Option<surface_water::InertialMass>,
+}
+
+fn scheduled_sewing_feed(row: &Alternative) -> Option<f64> {
+    let plan = row.sewing.value()?;
+    let milliseconds = plan.scheduled_feed_milliseconds()?;
+    if milliseconds > 9_007_199_254_740_991
+        || row.metrics.sewing_scheduled_feed_milliseconds != Some(milliseconds)
+        || row.binding.value()?["pattern_sha256"].as_str() != Some(plan.pattern_sha256.as_str())
+        || row.sewing_selection.value().is_some_and(|selection| {
+            selection.pattern_sha256 != plan.pattern_sha256
+                || selection
+                    .selected_scheduled_feed_milliseconds
+                    .is_some_and(|selected| selected != milliseconds)
+        })
+    {
+        return None;
+    }
+    let production = plan.production.as_ref()?;
+    let policy = plan.options.production.as_ref()?;
+    if policy.production_copies != Some(production.production_copies) {
+        return None;
+    }
+    // Consume the producer's selected schedule and retained rounding convention. Never round
+    // raw feed a second time, sum a reference plan, or relabel serial work as scheduled feed.
+    let qualified = match (&production.routing, &production.parallel) {
+        (Some(route), None) => {
+            policy.parallel.is_none()
+                && policy.routing.as_ref().is_some_and(|request| {
+                    request.time_basis == "ceil_operation_feed_milliseconds/1"
+                })
+                && route
+                    .feed_time_search
+                    .as_ref()
+                    .is_none_or(|search| search.selected_feed_milliseconds == milliseconds)
+        }
+        (None, Some(parallel)) => {
+            policy.routing.is_none()
+                && policy
+                    .parallel
+                    .as_ref()
+                    .is_some_and(|request| request.time_basis == parallel.time_basis)
+        }
+        _ => false,
+    };
+    qualified.then_some(milliseconds as f64)
 }
 
 fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerical<'_>) -> bool {
@@ -5449,4 +5509,74 @@ fn admit_dissipation_heat(
     check(heat, dissipated, supplied)?;
     supplied_history.push(supplied);
     Ok(supplied_history)
+}
+
+#[cfg(test)]
+mod sewing_feed_tests {
+    use super::*;
+    use crate::material_study::Outcome;
+
+    #[test]
+    fn scheduled_feed_requires_matching_source_summary_quantity_and_rounding() {
+        let pattern = ftx_pattern::Pattern::from_json(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+        ))
+        .unwrap();
+        let options: Value = serde_json::from_str(include_str!(
+            "../../../../examples/sewing-parallel-options.json"
+        ))
+        .unwrap();
+        let request: Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1","sewing":options,
+            "variants":[{"key":"scheduled","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}]
+        }))
+        .unwrap();
+        let original = request.evaluate(&pattern).unwrap().alternatives.remove(0);
+        let expected = original
+            .sewing
+            .value()
+            .unwrap()
+            .scheduled_feed_milliseconds()
+            .unwrap();
+        assert_eq!(scheduled_sewing_feed(&original), Some(expected as f64));
+        for change in 0..5 {
+            let mut row = original.clone();
+            let Outcome::Available { result: plan } = &mut row.sewing else {
+                unreachable!()
+            };
+            match change {
+                0 => row.metrics.sewing_scheduled_feed_milliseconds = Some(expected + 1),
+                1 => plan.pattern_sha256 = "0".repeat(64),
+                2 => plan.production.as_mut().unwrap().production_copies += 1,
+                3 => {
+                    let milliseconds = 9_007_199_254_740_992;
+                    row.metrics.sewing_scheduled_feed_milliseconds = Some(milliseconds);
+                    plan.production
+                        .as_mut()
+                        .unwrap()
+                        .parallel
+                        .as_mut()
+                        .unwrap()
+                        .selected
+                        .scheduled_feed_milliseconds = milliseconds;
+                }
+                4 => {
+                    plan.options
+                        .production
+                        .as_mut()
+                        .unwrap()
+                        .parallel
+                        .as_mut()
+                        .unwrap()
+                        .time_basis = "unqualified_rounding".into();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                scheduled_sewing_feed(&row).is_none(),
+                "changed scheduled feed case {change} admitted"
+            );
+        }
+    }
 }
