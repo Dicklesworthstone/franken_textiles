@@ -1318,11 +1318,29 @@ Enter independently justified limits below; no material failure or comfort thres
 <label><input id="guidedContactLoads" type="checkbox"> Track normal body forces on retained cloth</label>
 <div id="guidedContactLoadsControls" hidden>
 <label>Cloth region <select id="guidedContactLoadsScope"><option value="all">All retained physical instances</option>
-<option value="instances">Only the exact physical instance names below</option></select></label>
+<option value="instances">Only the exact physical instance names below</option>
+<option value="regions">Named regions inside intact panels</option></select></label>
 <label>Physical instance names, one per line <textarea id="guidedContactLoadsInstances" rows="3" disabled
 placeholder="For example: front.R&#10;front.L"></textarea></label>
 <small>Use names from the drape report. Blank lines are ignored; other spaces remain part of each name.
-Selected pieces contribute their union of welded vertices; shared vertices keep their complete body force.</small>
+<span>Selected pieces contribute their union of welded vertices; shared vertices keep their complete body force.</span></small>
+<div id="guidedContactRegionControls" hidden>
+<div class="study-fields">
+<label>Region name <input id="guidedContactRegionName" placeholder="waistband" maxlength="512"></label>
+<label>Exact physical instance <input id="guidedContactRegionInstance" placeholder="front.R" maxlength="4096"></label>
+</div>
+<label>Flat panel polygon in millimetres: one x, y pair per line
+<textarea id="guidedContactRegionPolygon" rows="5" maxlength="8192" placeholder="0, 0&#10;100, 0&#10;100, 20&#10;0, 20"></textarea></label>
+<p class="note">Use the physical instance's mirrored and scaled flat coordinates. Save 3–32 corners of a convex polygon
+without repeating the first corner. The polygon selects whole triangles whose centroids lie inside it or on its boundary;
+it does not cut the mesh. Every region must select retained triangles, and regions cannot share triangles.
+Shared welded vertices retain their full assembled body force in each region; the combined scope counts them once.
+Goals and limits apply to that combined scope. Named result rows show regional loads separately.</p>
+<div class="buttons"><button id="saveContactRegion" type="button" disabled>Save or replace contact region</button>
+<button id="clearContactRegions" type="button" disabled>Clear contact regions</button></div>
+<p id="guidedContactRegionsSummary">No regions saved. Save each region before running this scope.</p>
+<div id="guidedContactRegions"></div>
+</div>
 <div class="study-fields">
 <label>Vertex-sample allowance per alternative <input id="guidedContactVertexBudget" type="number"
 min="1" max="64000000" step="1" value="1000000"></label>

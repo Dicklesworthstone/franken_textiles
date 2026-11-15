@@ -1387,7 +1387,7 @@ whole-wearer accuracy, global optimum or hardware execution authorization is cla
 ## Body contact loads in material studies
 
 Optional `scenario.contact_loads` summarizes body barrier forces from the production
-contact model for the whole retained garment or selected physical instances:
+contact model for the whole retained garment, selected physical instances, or named regions within intact panels:
 
 ```json
 {
@@ -1404,6 +1404,49 @@ Use exact instance IDs from the sewn garment, or omit `instances` to select all 
 instances. An explicit list must be nonempty and unique. Unknown, omitted or collapsed
 instances refuse the optional consumer. Both work allowances are required positive integers
 at most 64000000 and cover the initial state and all accepted motion samples together.
+
+### Regions within intact garment panels
+
+Use `ftx-contact-loads/2` to measure named areas without introducing artificial seams:
+
+```json
+{
+  "contact_loads": {
+    "schema": "ftx-contact-loads/2",
+    "regions": [
+      {
+        "id": "waist",
+        "instance": "front",
+        "selector": {
+          "kind": "whole_triangle_centroid",
+          "polygon_mm": [[0, 0], [100, 0], [100, 20], [0, 20]]
+        }
+      }
+    ],
+    "max_vertex_samples": 100000,
+    "max_pair_evaluations": 1000000
+  }
+}
+```
+
+Declare 1–256 uniquely named regions. Every region names one exact physical instance and
+a convex polygon of 3–32 vertices in its original mirrored and scaled flat coordinates,
+in millimetres. A retained triangle belongs to the region when its exact centroid lies
+inside or on the polygon boundary. Entire triangles participate; polygon edges do not
+clip triangles or create partial contact areas. A new design or remesh resolves the
+same polygon against its own retained triangles.
+
+Each region must select at least one retained triangle. Regions cannot share triangles;
+unknown instances, malformed polygons, empty selections and excessive selection work
+refuse the optional consumer. The native selector allows at most 16777216 polygon-edge
+tests. The /2 request requires `regions` and forbids `instances`, including null;
+the /1 request keeps its existing behavior and rejects `regions`.
+
+Regions may share welded vertices. Each region retains the complete assembled body
+force at those vertices, so **regional totals are not additive**. The existing six
+comparison metrics apply to the union of selected vertices, counted once. Per-region
+peaks and their witnesses remain available for inspection; they are not separate
+region-specific comparison objectives.
 
 ### Force scope and material propagation
 
@@ -1430,7 +1473,7 @@ requirements, without an inferred comfort, safe-fit or garment-tightness thresho
 Within each available simulation's result, `contact_loads` is the initial outcome and
 `motion.result.contact_loads` is the accepted-motion outcome. Each uses the ordinary
 `status: "available"` plus `result`, or `status: "refused"` plus refusal envelope.
-An available report has schema `ftx-contact-loads-report/1` and unit `N`.
+An available report has schema `ftx-contact-loads-report/1`, or `/2` for named regions, and unit `N`.
 The initial scope `initial_state` means the completed drape state used to start motion.
 The motion scope `accepted_motion_samples` contains that state followed by every accepted
 sample, excluding rejected solver trials and unsampled intermediate states.
@@ -1468,7 +1511,18 @@ witnesses and work totals. An independent initial collision-body identity in the
 prevents a receipt from another body from becoming eligible. Retained vectors support arithmetic
 reconciliation without an additional solve; that is consistency checking, not physical validation.
 Scope and mesh topology participate in comparison protocols, with incompatible protocols refused
-unless the caller explicitly permits mixed protocols. Only nominal readings are supported.
+unless the caller explicitly permits mixed protocols. Region names, physical instances and exact
+polygons also participate: different polygons do not silently become the same protocol merely
+because they currently select the same triangles. Only nominal readings are supported.
+
+Regional reports retain `source.regions` with each region's original selector, source-triangle
+indices, sorted welded vertices and reference area, plus the complete retained flat-triangle
+digest. The simulation ownership descriptor retains those flat triangles. Admission reconstructs
+the selection from this domain and checks the mesh, material and ownership binding rather than
+trusting caller-supplied memberships. The `regions` summary includes resultant, summed-nodal and
+maximum-nodal force peaks, each with its sample witness, and the maximum's welded vertex witness.
+The /2 union summary also includes `max_force_vertex`. Admission recomputes every regional summary
+from the retained union force vectors and rejects inconsistent peaks or incomplete motion.
 
 ### Work limits and optional failure
 
@@ -1490,7 +1544,7 @@ components, maxima, sample/time/vertex witnesses, selected instances and raw rec
 the Rust comparison result without deriving a pressure or reranking the alternatives in JavaScript.
 
 In guided scenarios, enable **Track normal body forces on retained cloth**, choose all retained
-instances or exact physical instance names, and declare both work allowances. The six force
+instances, exact physical instance names or **Named regions inside intact panels**, and declare both work allowances. Save each named region with its exact instance and one x, y polygon vertex per line. The six force
 criteria above can be minimized or given inclusive maximums independently of their goal checkboxes.
 Required initial or complete-motion loads can also be declared without a force objective. These
 criteria use nominal values; source-reported heat or mass objectives can retain explicit nominal

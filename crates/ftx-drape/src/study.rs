@@ -127,6 +127,51 @@ fn hash<T: Serialize>(value: &T) -> Result<String, Refusal> {
         &serde_json::to_vec(value).map_err(|e| invalid(e.to_string()))?,
     ))
 }
+
+// Flat coordinates precede grain rotation, wrapping and welding. Retain every surviving source
+// face so regional consumers and comparison can reconstruct membership without changing topology.
+fn retained_flat_triangles(run: &crate::run::DrapeRun) -> Result<Vec<[Vec2; 3]>, Refusal> {
+    let scene = &run.scene;
+    let elements = &scene.solver.model.membranes;
+    let mut triangles = Vec::with_capacity(elements.len());
+    for face in &scene.mesh.faces {
+        let welded = face.map(|vertex| scene.weld[vertex]);
+        if welded[0] == welded[1] || welded[1] == welded[2] || welded[0] == welded[2] {
+            continue;
+        }
+        let index = triangles.len();
+        let element = elements
+            .get(index)
+            .ok_or_else(|| invalid("regional flat source exceeds retained cloth topology"))?;
+        if element.v != welded
+            || scene.triangle_owner.get(index) != Some(&scene.mesh.owner[face[0]])
+        {
+            return Err(invalid(
+                "regional flat source differs from retained cloth ownership",
+            ));
+        }
+        let triangle = face.map(|vertex| scene.mesh.verts2d[vertex]);
+        ftx_pattern::material_compression::regions::triangle_centroid_mm(triangle)?;
+        let [a, b, c] = triangle;
+        let area = 0.5 * (b - a).cross(c - a).abs() * 1e-6;
+        if !area.is_finite()
+            || area <= 0.
+            || !element.area.is_finite()
+            || element.area <= 0.
+            || (area - element.area).abs() > 1e-10 * area.max(element.area)
+        {
+            return Err(invalid(
+                "regional flat area differs from retained material reference area",
+            ));
+        }
+        triangles.push(triangle);
+    }
+    if triangles.len() != elements.len() {
+        return Err(invalid("regional scope needs every retained flat triangle"));
+    }
+    Ok(triangles)
+}
+
 fn outcome(result: Result<Value, Refusal>) -> Value {
     match result {
         Ok(result) => json!({"status":"available","result":result}),
@@ -496,6 +541,11 @@ impl<'a, 'body> Session<'a, 'body> {
         if let Some(history) = &contact_loads {
             result["contact_load_ownership"] = json!({"instances":run.scene.mesh.instances,
                 "triangle_instance":run.scene.triangle_owner});
+            if let Ok(history) = history
+                && let Some(triangles) = history.rest_triangles_mm()
+            {
+                result["contact_load_ownership"]["rest_triangles_mm"] = json!(triangles);
+            }
             result["contact_loads"] = outcome(
                 history
                     .as_ref()

@@ -6,14 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use ftx_core::{Refusal, Vec2, Vec3};
 use ftx_pattern::{
     material_catalog::Selection,
-    material_compression::regions::{
-        MAX_REGION_EDGE_TESTS, PreparedSelector, Selector, triangle_centroid_mm,
-    },
+    material_compression::regions::{MAX_REGION_EDGE_TESTS, PreparedSelector, Selector},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{budget, hash, invalid};
+use super::{budget, hash, invalid, retained_flat_triangles};
 use crate::{elements::MembraneElement, run::DrapeRun, thermal::surface::io::retained_materials};
 
 const MAX_TRIANGLE_SAMPLES: usize = 64_000_000;
@@ -190,52 +188,6 @@ struct Partition {
     regions: BTreeMap<String, RegionSource>,
 }
 
-// Retain the complete original material domain, including unselected triangles, so downstream
-// comparison can independently reconstruct the selection instead of trusting a shortened receipt.
-fn rest_triangles(run: &DrapeRun) -> Result<Vec<[Vec2; 3]>, Refusal> {
-    let scene = &run.scene;
-    let elements = &scene.solver.model.membranes;
-    let mut triangles = Vec::with_capacity(elements.len());
-    for face in &scene.mesh.faces {
-        let welded = face.map(|vertex| scene.weld[vertex]);
-        if welded[0] == welded[1] || welded[1] == welded[2] || welded[0] == welded[2] {
-            continue;
-        }
-        let index = triangles.len();
-        let element = elements.get(index).ok_or_else(|| {
-            invalid("regional strain flat source exceeds retained cloth topology")
-        })?;
-        if element.v != welded
-            || scene.triangle_owner.get(index) != Some(&scene.mesh.owner[face[0]])
-        {
-            return Err(invalid(
-                "regional strain flat source differs from retained cloth ownership",
-            ));
-        }
-        let triangle = face.map(|vertex| scene.mesh.verts2d[vertex]);
-        triangle_centroid_mm(triangle)?;
-        let [a, b, c] = triangle;
-        let area = 0.5 * (b - a).cross(c - a).abs() * 1e-6;
-        if !area.is_finite()
-            || area <= 0.
-            || !element.area.is_finite()
-            || element.area <= 0.
-            || (area - element.area).abs() > 1e-10 * area.max(element.area)
-        {
-            return Err(invalid(
-                "regional strain flat area differs from retained material reference area",
-            ));
-        }
-        triangles.push(triangle);
-    }
-    if triangles.len() != elements.len() {
-        return Err(invalid(
-            "regional strain needs every retained flat triangle",
-        ));
-    }
-    Ok(triangles)
-}
-
 fn partition(
     regions: &[Region],
     instances: &[String],
@@ -405,7 +357,7 @@ impl History {
         let rest_triangles_mm = request
             .regions
             .as_ref()
-            .map(|_| rest_triangles(run))
+            .map(|_| retained_flat_triangles(run))
             .transpose()?;
         let partition = request
             .regions

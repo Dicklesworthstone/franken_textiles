@@ -1,6 +1,6 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialScenarioRequest, buildMaterialScenarioMatrixRequest,
-  buildMaterialStrainRequest,
+  buildMaterialStrainRequest, buildContactLoadsRequest,
   buildGuidedDesignAfterOperations, buildGuidedDesignRestartPoints, buildGuidedFitSpec, GUIDED_FIT_BODY_MEASUREMENTS,
   hasTextileWaterPolicy, hasTextileWaterMechanicsPolicy, buildMaterialSurfaceConditions,
   buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
@@ -64,6 +64,7 @@ let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
 let guidedDesignCaseNomination = null;
 const guidedScenarioDrafts = [], guidedScenarioButtons = [];
 const guidedMaterialStrainRegions = new Map(), guidedMaterialStrainRegionButtons = [];
+const guidedContactRegions = new Map(), guidedContactRegionButtons = [];
 const guidedMotionKeyframes = [], guidedMotionButtons = [];
 const guidedMotionHeatInitials = new Map(), guidedMotionHeatInitialButtons = [];
 const guidedMotionHeatProfiles = new Map(), guidedMotionHeatProfileButtons = [];
@@ -347,6 +348,12 @@ function controls() {
   $("guidedContactLoadsControls").hidden = !contactLoads;
   for (const id of ["guidedContactLoadsScope", "guidedContactVertexBudget", "guidedContactPairBudget"]) $(id).disabled = !contactLoads;
   $("guidedContactLoadsInstances").disabled = !contactLoads || $("guidedContactLoadsScope").value !== "instances";
+  const contactRegions = contactLoads && $("guidedContactLoadsScope").value === "regions";
+  $("guidedContactRegionControls").hidden = !contactRegions;
+  for (const id of ["guidedContactRegionName", "guidedContactRegionInstance", "guidedContactRegionPolygon",
+    "saveContactRegion"]) $(id).disabled = !source || !guidedScenarioMode() || !contactRegions;
+  $("clearContactRegions").disabled = !source || !guidedScenarioMode() || !contactRegions || !guidedContactRegions.size;
+  for (const button of guidedContactRegionButtons) button.disabled = !source || !guidedScenarioMode() || !contactRegions;
   for (const [, id, file] of guidedTransportSources) $(file).disabled = !$(id).checked;
   const coverageForm = guidedCoverageMode() === "form", steadyCoverageForm = $("guidedCoverage").checked && coverageForm;
   const editCoverage = !!source && guidedScenarioMode() && guidedCoverageTopologyActive();
@@ -1216,6 +1223,25 @@ function contactLoadsComparison(parent, key, output, dependency, requested, movi
         ...[0, 1, 2].map(i => metric(body?.resultant_n?.[i])), metric(body?.resultant_magnitude_n),
         metric(body?.sum_vertex_force_n),
         metric(body?.max_vertex_force_n), metric(body?.max_force_vertex)]);
+    }
+    if (Object.keys(result.source?.regions || {}).length) {
+      const regions = table(parent, key + ": " + label + " contact regions",
+        ["Region", "Physical instance", "Source triangles", "Welded vertices", "Reference area (m²)", "Flat polygon (mm)",
+          "Peak resultant (N)", "Resultant witness", "Peak nodal sum (N)", "Summed-force witness",
+          "Maximum nodal force (N)", "Nodal-force witness", "Source vertex"]);
+      for (const [id, region] of Object.entries(result.source.regions)) {
+        const values = result.regions?.[id];
+        cells(regions, [id, region.instance, (region.source_triangles || []).join(", "), (region.selected_vertices || []).join(", "),
+          metric(region.reference_area_m2), (region.selector?.polygon_mm || []).map(point => point.join(", ")).join("; "),
+          metric(values?.peak_body_resultant_n), witness(values?.peak_body_resultant_sample),
+          metric(values?.peak_body_sum_vertex_force_n), witness(values?.peak_body_sum_vertex_force_sample),
+          metric(values?.max_body_vertex_force_n), witness(values?.max_body_vertex_force_sample), metric(values?.max_force_vertex)]);
+      }
+      const selection = document.createElement("p");
+      selection.textContent = "Regional loads follow the welded vertices of whole triangles selected in the original flat panel. " +
+        "Shared vertices retain their full assembled body force in each region; regional rows are not additive. " +
+        "The combined comparison scope counts each selected vertex once. Polygon boundaries do not cut triangles.";
+      parent.append(selection);
     }
     const scope = document.createElement("p");
     scope.textContent = `Selected garment instances: ${Object.keys(result.source?.instances || {}).join(", ") || "Unknown"}. ` +
@@ -5501,6 +5527,61 @@ function saveGuidedMaterialStrainRegion() {
     showGuidedMaterialStrainRegions(); changedGuidedScenarioDraft();
   } catch (e) { error(String(e.message || e)); }
 }
+function guidedContactLoadsInput(regions = [...guidedContactRegions.values()]) {
+  const scope = $("guidedContactLoadsScope").value || "all";
+  if (!["all", "instances", "regions"].includes(scope)) throw Error("Choose all retained cloth, exact instances or named polygon regions for body contact loads.");
+  const vertexBudget = $("guidedContactVertexBudget").value.trim(), pairBudget = $("guidedContactPairBudget").value.trim();
+  if (!vertexBudget || !pairBudget) throw Error("Supply both body contact vertex-sample and candidate-pair allowances.");
+  return buildContactLoadsRequest({ schema: scope === "regions" ? "ftx-contact-loads/2" : "ftx-contact-loads/1",
+    ...(scope === "regions" ? { regions } : scope === "instances" ?
+      { instances: $("guidedContactLoadsInstances").value.split(/\r?\n/).filter(line => line.length) } : {}),
+    max_vertex_samples: Number(vertexBudget), max_pair_evaluations: Number(pairBudget) });
+}
+function showGuidedContactRegions() {
+  const parent = $("guidedContactRegions"); parent.replaceChildren(); guidedContactRegionButtons.length = 0;
+  for (const [id, region] of guidedContactRegions) {
+    const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
+    label.textContent = id + " on " + region.instance + ": " + region.selector.polygon_mm.map(point => point.join(", ")).join("; ") + " mm";
+    const current = () => source && guidedScenarioMode() && $("guidedContactLoads").checked &&
+      $("guidedContactLoadsScope").value === "regions" && guidedContactRegions.get(id) === region;
+    const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit contact region " + id;
+    edit.onclick = () => {
+      if (!current()) return;
+      $("guidedContactRegionName").value = id; $("guidedContactRegionInstance").value = region.instance;
+      $("guidedContactRegionPolygon").value = region.selector.polygon_mm.map(point => point.join(", ")).join("\n");
+      changedGuidedScenarioDraft();
+    };
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove contact region " + id;
+    remove.onclick = () => {
+      if (!current()) return;
+      guidedContactRegions.delete(id); showGuidedContactRegions(); changedGuidedScenarioDraft();
+    };
+    row.append(label, edit, remove); parent.append(row); guidedContactRegionButtons.push(edit, remove);
+  }
+  $("guidedContactRegionsSummary").textContent = guidedContactRegions.size ?
+    guidedContactRegions.size + " of 256 named regions saved. Only saved regions run; each needs retained triangles, with no shared triangles." :
+    "No regions saved. Name a region, enter its physical instance and polygon, then save it before running this scope.";
+}
+function saveGuidedContactRegion() {
+  if (!source || !guidedScenarioMode() || !$("guidedContactLoads").checked || $("guidedContactLoadsScope").value !== "regions") return;
+  try {
+    const raw = $("guidedContactRegionPolygon").value;
+    if (raw.length > 8192) throw Error("The region polygon must fit within 8192 characters.");
+    const polygon = raw.split(/\r?\n/).filter(line => line.trim()).map(line => {
+      const point = line.split(",").map(coordinate => coordinate.trim());
+      if (point.length !== 2 || point.some(coordinate => !coordinate || !Number.isFinite(Number(coordinate)))) {
+        throw Error("Enter one finite x, y pair per line for the flat-material polygon in millimetres.");
+      }
+      return point.map(Number);
+    });
+    const region = { id: $("guidedContactRegionName").value, instance: $("guidedContactRegionInstance").value,
+      selector: { kind: "whole_triangle_centroid", polygon_mm: polygon } };
+    const next = new Map(guidedContactRegions); next.set(region.id, region);
+    guidedContactLoadsInput([...next.values()]);
+    guidedContactRegions.set(region.id, region);
+    showGuidedContactRegions(); changedGuidedScenarioDraft();
+  } catch (e) { error(String(e.message || e)); }
+}
 function showGuidedCoverageTopology() {
   guidedCoverageButtons.length = 0;
   for (const [entries, id, describe, removeLabel] of [
@@ -5908,14 +5989,7 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   if (materialStrain) {
     input.materialStrain = guidedMaterialStrainInput();
   }
-  if (contactLoads) {
-    const scope = $("guidedContactLoadsScope").value || "all";
-    if (!["all", "instances"].includes(scope)) throw Error("Choose all retained cloth or exact instance names for body contact loads.");
-    input.contactLoads = JSON.stringify({ schema: "ftx-contact-loads/1",
-      ...(scope === "instances" ? { instances: $("guidedContactLoadsInstances").value.split(/\r?\n/).filter(line => line.length) } : {}),
-      max_vertex_samples: number("guidedContactVertexBudget", "body contact vertex-sample allowance"),
-      max_pair_evaluations: number("guidedContactPairBudget", "body contact candidate-pair allowance") });
-  }
+  if (contactLoads) input.contactLoads = guidedContactLoadsInput();
   if (transport.coverage && coverageSource === "form") input.coverage = guidedCoverageInput(number);
   // Both original files and every control are captured before starting a read.
   const policy = $("guidedScenarioPolicySource").value;
@@ -5986,7 +6060,7 @@ function showGuidedScenarioDrafts() {
       `${value.material_strain ? `directional strain on ${value.material_strain.regions ?
         `${value.material_strain.regions.length} named regions (${value.material_strain.regions.map(region => `${region.id} on ${region.instance}`).join(", ")})` :
         value.material_strain.instances?.join(", ") || "all retained instances"}, ${value.material_strain.max_triangle_samples} triangle-samples` : "no directional strain request"}; ` +
-      `${value.contact_loads ? `body contact loads on ${value.contact_loads.instances?.join(", ") || "all retained instances"}, ${value.contact_loads.max_vertex_samples} vertex-samples and ${value.contact_loads.max_pair_evaluations} pair evaluations` : "no body contact-load request"}; ` +
+      `${value.contact_loads ? `body contact loads on ${value.contact_loads.regions?.map(region => `${region.id} on ${region.instance}`).join(", ") || value.contact_loads.instances?.join(", ") || "all retained instances"}, ${value.contact_loads.max_vertex_samples} vertex-samples and ${value.contact_loads.max_pair_evaluations} pair evaluations` : "no body contact-load request"}; ` +
       `${value.coverage ? "retained steady body/layer heat" : "no steady body/layer heat"}; ` +
       `${value.vapor_surface ? "retained independent-sheet vapor" : "no sheet vapor"}; ` +
       `${value.vapor_coverage ? "retained covered-body vapor" : "no covered-body vapor"}; ` +
@@ -6476,6 +6550,18 @@ for (const id of ["guidedMaterialStrainRegionName", "guidedMaterialStrainRegionI
 $("saveMaterialStrainRegion").onclick = saveGuidedMaterialStrainRegion;
 $("clearMaterialStrainRegions").onclick = () => {
   guidedMaterialStrainRegions.clear(); showGuidedMaterialStrainRegions(); changedGuidedScenarioDraft();
+};
+for (const id of ["guidedContactRegionName", "guidedContactRegionInstance", "guidedContactRegionPolygon"]) {
+  const changed = () => {
+    if ($("guidedContactLoads").checked && $("guidedContactLoadsScope").value === "regions") changedGuidedScenarioDraft();
+    else controls();
+  };
+  $(id).addEventListener("change", changed); $(id).addEventListener("input", changed);
+}
+$("saveContactRegion").onclick = saveGuidedContactRegion;
+$("clearContactRegions").onclick = () => {
+  if (!$("guidedContactLoads").checked || $("guidedContactLoadsScope").value !== "regions") return;
+  guidedContactRegions.clear(); showGuidedContactRegions(); changedGuidedScenarioDraft();
 };
 for (const id of ["guidedContactLoads", "guidedContactLoadsScope", "guidedContactLoadsInstances", "guidedContactVertexBudget", "guidedContactPairBudget"]) {
   const changed = () => {
@@ -7139,6 +7225,8 @@ function resetGuidedScenarios() {
   for (const id of ["guidedMaterialStrainRegionName", "guidedMaterialStrainRegionInstance", "guidedMaterialStrainRegionPolygon"]) $(id).value = "";
   $("guidedContactLoads").checked = false; $("guidedContactLoadsScope").value = "all";
   $("guidedContactLoadsInstances").value = "";
+  guidedContactRegions.clear(); showGuidedContactRegions();
+  for (const id of ["guidedContactRegionName", "guidedContactRegionInstance", "guidedContactRegionPolygon"]) $(id).value = "";
   guidedCoverageLayers.clear(); guidedCoverageInterfaces.clear(); showGuidedCoverageTopology();
   for (const id of [...guidedCoverageFields, ...guidedCoverageDraftFields]) $(id).value = "";
   for (const prefix of ["heatExterior", "guidedCoverageExterior", ...motionExteriorPrefixes]) for (const suffix of exteriorSuffixes) {

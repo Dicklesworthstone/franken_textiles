@@ -2212,6 +2212,20 @@ impl Policy {
                     "selected_vertices":loads["source"]["selected_vertices"],
                     "triangles":admitted.drape["triangles"],"unit":"N"}),
                 ))?;
+                if loads["schema"] == "ftx-contact-loads-report/2" {
+                    let regions = loads["source"]["regions"]
+                        .as_object()
+                        .ok_or_else(|| invalid("admitted contact-load regions unavailable"))?
+                        .iter()
+                        .map(|(id, region)| {
+                            (
+                                id,
+                                json!({"instance":region["instance"],"selector":region["selector"]}),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    base = hash(&(base, "ftx-contact-loads/2", regions))?;
+                }
             }
         }
         if textile_water {

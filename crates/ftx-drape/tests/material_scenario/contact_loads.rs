@@ -135,6 +135,15 @@ fn contact_load_refusals_leave_mechanics_heat_and_complete_motion_unchanged() {
         json!({"schema":"ftx-contact-loads/1","instances":["absent"],"max_vertex_samples":100000,"max_pair_evaluations":1000000}),
         json!({"schema":"ftx-contact-loads/1","max_vertex_samples":1,"max_pair_evaluations":1000000}),
         json!({"schema":"ftx-contact-loads/1","max_vertex_samples":count,"max_pair_evaluations":1000000}),
+        json!({"schema":"ftx-contact-loads/2","regions":[{"id":"absent","instance":"absent",
+            "selector":{"kind":"whole_triangle_centroid","polygon_mm":[[0.,0.],[300.,0.],[300.,30.],[0.,30.]]}}],
+            "max_vertex_samples":100000,"max_pair_evaluations":1000000}),
+        json!({"schema":"ftx-contact-loads/2","regions":[
+            {"id":"first","instance":"band","selector":{"kind":"whole_triangle_centroid",
+                "polygon_mm":[[0.,0.],[300.,0.],[300.,30.],[0.,30.]]}},
+            {"id":"second","instance":"band","selector":{"kind":"whole_triangle_centroid",
+                "polygon_mm":[[0.,0.],[300.,0.],[300.,30.],[0.,30.]]}}],
+            "max_vertex_samples":100000,"max_pair_evaluations":1000000}),
     ] {
         s.contact_loads = Some(serde_json::from_value(policy).unwrap());
         let mut session = Session::new(&s, &body).unwrap();
@@ -159,5 +168,133 @@ fn contact_load_refusals_leave_mechanics_heat_and_complete_motion_unchanged() {
                 "refused"
             }
         );
+    }
+}
+
+fn regional_request() -> ftx_drape::study::contact_loads::Request {
+    let split = 40. * std::f64::consts::TAU * 0.413;
+    serde_json::from_value(json!({"schema":"ftx-contact-loads/2",
+        "regions":[
+            {"id":"left","instance":"band","selector":{"kind":"whole_triangle_centroid",
+                "polygon_mm":[[-1.,-1.],[split,-1.],[split,21.],[-1.,21.]]}},
+            {"id":"right","instance":"band","selector":{"kind":"whole_triangle_centroid",
+                "polygon_mm":[[split,-1.],[300.,-1.],[300.,21.],[split,21.]]}}
+        ],"max_vertex_samples":100_000,"max_pair_evaluations":1_000_000}))
+    .unwrap()
+}
+
+#[test]
+fn regional_contact_loads_select_intact_flat_panels_and_replay_the_same_sewn_motion() {
+    let form = form();
+    let body = body(&form);
+    let p = pattern();
+    let mut s = motion_scenario();
+    s.options.contact.dhat = 0.02;
+    s.contact_loads = Some(request());
+    let mut whole = Session::new(&s, &body).unwrap();
+    whole.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let whole = whole.evaluate(&p, |_| {}).unwrap();
+
+    s.contact_loads = Some(regional_request());
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let result = session.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(result["contact_loads"]["status"], "available", "{result}");
+    assert_eq!(
+        result["motion"]["result"]["contact_loads"]["status"],
+        "available",
+        "{}",
+        result["motion"]
+    );
+    assert_eq!(result["drape"], whole["drape"]);
+    assert_eq!(result["positions_m"], whole["positions_m"]);
+    assert_eq!(
+        result["motion"]["result"]["samples"],
+        whole["motion"]["result"]["samples"]
+    );
+    let source = &result["contact_loads"]["result"]["source"];
+    let original = &whole["contact_loads"]["result"];
+    assert_eq!(source["selected_vertices"], original["source"]["selected_vertices"]);
+    let flat: Vec<[ftx_core::Vec2; 3]> =
+        serde_json::from_value(result["contact_load_ownership"]["rest_triangles_mm"].clone())
+            .unwrap();
+    let faces: Vec<[usize; 3]> = serde_json::from_value(result["triangles"].clone()).unwrap();
+    let split = 40. * std::f64::consts::TAU * 0.413;
+    for (name, left) in [("left", true), ("right", false)] {
+        let selected: Vec<usize> = flat
+            .iter()
+            .enumerate()
+            .filter_map(|(i, triangle)| {
+                let x = triangle.iter().map(|p| p.x).sum::<f64>() / 3.;
+                assert_ne!(x, split);
+                ((x < split) == left).then_some(i)
+            })
+            .collect();
+        let vertices: std::collections::BTreeSet<_> =
+            selected.iter().flat_map(|&i| faces[i]).collect();
+        assert!(!selected.is_empty() && selected.len() < flat.len());
+        assert_eq!(source["regions"][name]["source_triangles"], json!(selected));
+        assert_eq!(
+            source["regions"][name]["selected_vertices"],
+            json!(vertices.into_iter().collect::<Vec<_>>())
+        );
+    }
+    let report = &result["motion"]["result"]["contact_loads"]["result"];
+    let baseline = &whole["motion"]["result"]["contact_loads"]["result"];
+    assert_eq!(report["frames"], baseline["frames"]);
+    for key in [
+        "peak_body_resultant_n",
+        "peak_body_resultant_sample",
+        "peak_body_sum_vertex_force_n",
+        "peak_body_sum_vertex_force_sample",
+        "max_body_vertex_force_n",
+        "max_body_vertex_force_sample",
+        "vertex_samples",
+        "pair_evaluations",
+    ] {
+        assert_eq!(report[key], baseline[key], "{key}");
+    }
+    assert_eq!(report["schema"], "ftx-contact-loads-report/2");
+    assert_eq!(report["source"], *source);
+    assert_eq!(report["pressure_claim"], false);
+
+    // Keeping only one region changes the observed scope, never the garment topology or forces.
+    s.contact_loads.as_mut().unwrap().regions.as_mut().unwrap().pop();
+    let mut partial = Session::new(&s, &body).unwrap();
+    partial.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let partial = partial.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(partial["drape"], whole["drape"]);
+    assert_eq!(partial["triangles"], whole["triangles"]);
+    let partial = &partial["motion"]["result"]["contact_loads"]["result"];
+    let selected: Vec<usize> =
+        serde_json::from_value(partial["source"]["selected_vertices"].clone()).unwrap();
+    let all_selected: Vec<usize> =
+        serde_json::from_value(source["selected_vertices"].clone()).unwrap();
+    assert!(selected.len() < all_selected.len());
+    for (frame, all) in partial["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(baseline["frames"].as_array().unwrap())
+    {
+        let expected: Vec<_> = selected
+            .iter()
+            .map(|v| {
+                all["body_force_on_selected_vertices_n"][all_selected.binary_search(v).unwrap()]
+                    .clone()
+            })
+            .collect();
+        assert_eq!(frame["body_force_on_selected_vertices_n"], json!(expected));
+    }
+    for key in [
+        "peak_body_resultant_n",
+        "peak_body_resultant_sample",
+        "peak_body_sum_vertex_force_n",
+        "peak_body_sum_vertex_force_sample",
+        "max_body_vertex_force_n",
+        "max_body_vertex_force_sample",
+        "max_force_vertex",
+    ] {
+        assert_eq!(partial[key], partial["regions"]["left"][key], "{key}");
     }
 }

@@ -2,7 +2,8 @@
 //! Arithmetic replay checks forces and extrema; it is not an independent contact solve.
 
 use super::*;
-use ftx_core::Vec3;
+use ftx_core::{Vec2, Vec3};
+use ftx_pattern::material_compression::regions;
 
 fn fail() -> Refusal {
     invalid(
@@ -21,12 +22,137 @@ fn digest(value: &Value) -> bool {
         .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+struct Scope {
+    vertices: usize,
+    body_vertices: usize,
+    selected: Vec<usize>,
+    regions: BTreeMap<String, Vec<usize>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Region {
+    id: String,
+    instance: String,
+    selector: regions::Selector,
+}
+
+struct RegionalScope {
+    selected_triangles: BTreeSet<usize>,
+    vertices: BTreeMap<String, Vec<usize>>,
+}
+
+// Reconstruct every selector on the complete retained flat domain. This checks partition
+// consistency independently of the producer's chosen faces; the force solve remains in drape.
+fn regional_scope(
+    policy: &Value,
+    source: &Value,
+    ownership: &Value,
+    instances: &[Value],
+    owners: &[Value],
+    faces: &[Value],
+) -> Result<RegionalScope, Refusal> {
+    let requested = array(policy, "regions")?;
+    let flat = array(ownership, "rest_triangles_mm")?;
+    let published = source["regions"].as_object().ok_or_else(fail)?;
+    if !(1..=256).contains(&requested.len())
+        || published.len() != requested.len()
+        || flat.len() != owners.len()
+        || source["rest_triangles_sha256"] != hash(&ownership["rest_triangles_mm"])?
+    {
+        return Err(fail());
+    }
+    let flat = flat
+        .iter()
+        .map(|triangle| <[Vec2; 3]>::deserialize(triangle).map_err(|_| fail()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut areas = Vec::with_capacity(flat.len());
+    let mut by_instance = BTreeMap::<&str, Vec<usize>>::new();
+    for (i, (triangle, owner)) in flat.iter().zip(owners).enumerate() {
+        regions::triangle_centroid_mm(*triangle)?;
+        let [a, b, c] = *triangle;
+        let area = 0.5 * (b - a).cross(c - a).abs() * 1e-6;
+        if !area.is_finite() || area <= 0. {
+            return Err(fail());
+        }
+        areas.push(area);
+        let instance = instances
+            .get(index(owner)?)
+            .and_then(Value::as_str)
+            .ok_or_else(fail)?;
+        by_instance.entry(instance).or_default().push(i);
+    }
+    let requested = requested
+        .iter()
+        .map(|value| Region::deserialize(value).map_err(|_| fail()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut ids = BTreeSet::new();
+    let mut edge_tests = 0usize;
+    let mut selectors = Vec::with_capacity(requested.len());
+    for region in &requested {
+        if region.id.trim().is_empty()
+            || region.id.len() > 512
+            || !ids.insert(region.id.as_str())
+            || region.instance.trim().is_empty()
+            || region.instance.len() > 4096
+        {
+            return Err(fail());
+        }
+        let owned = by_instance.get(region.instance.as_str()).ok_or_else(fail)?;
+        edge_tests = owned
+            .len()
+            .checked_mul(region.selector.polygon_mm.len())
+            .and_then(|count| edge_tests.checked_add(count))
+            .filter(|&count| count <= regions::MAX_REGION_EDGE_TESTS)
+            .ok_or_else(fail)?;
+        selectors.push((
+            region,
+            regions::PreparedSelector::new(&region.selector)?,
+            owned,
+        ));
+    }
+    let mut result = RegionalScope {
+        selected_triangles: BTreeSet::new(),
+        vertices: BTreeMap::new(),
+    };
+    for (region, selector, owned) in selectors {
+        let mut triangles = Vec::new();
+        let mut vertices = BTreeSet::new();
+        let mut area = 0.;
+        for &i in owned {
+            if selector.contains_triangle_centroid(flat[i])? {
+                if !result.selected_triangles.insert(i) {
+                    return Err(fail());
+                }
+                triangles.push(i);
+                let face: [usize; 3] =
+                    serde_json::from_value(faces[i].clone()).map_err(|_| fail())?;
+                vertices.extend(face);
+                area += areas[i];
+            }
+        }
+        let vertices: Vec<_> = vertices.into_iter().collect();
+        if triangles.is_empty()
+            || !area.is_finite()
+            || area <= 0.
+            || published.get(&region.id)
+                != Some(&json!({"instance":region.instance,"selector":region.selector,
+                    "source_triangles":triangles,"selected_vertices":vertices,
+                    "reference_area_m2":area}))
+        {
+            return Err(fail());
+        }
+        result.vertices.insert(region.id.clone(), vertices);
+    }
+    Ok(result)
+}
+
 fn source(
     alternative: &Alternative,
     policy: &Value,
     simulation: &Value,
     report: &Value,
-) -> Result<(usize, usize, Vec<usize>), Refusal> {
+) -> Result<Scope, Refusal> {
     let source = &report["source"];
     let ownership = &simulation["contact_load_ownership"];
     let material = &simulation["drape"]["material"];
@@ -79,7 +205,24 @@ fn source(
                 .ok_or_else(fail)?,
         );
     }
-    let selected = if let Some(ids) = policy.get("instances") {
+    let regional = if policy["schema"] == "ftx-contact-loads/2" {
+        Some(regional_scope(policy, source, ownership, names, owners, faces)?)
+    } else {
+        if source.get("regions").is_some()
+            || source.get("rest_triangles_sha256").is_some()
+            || ownership.get("rest_triangles_mm").is_some()
+        {
+            return Err(fail());
+        }
+        None
+    };
+    let selected = if let Some(regional) = &regional {
+        regional
+            .selected_triangles
+            .iter()
+            .map(|&i| names[index(&owners[i])?].as_str().ok_or_else(fail))
+            .collect::<Result<BTreeSet<_>, _>>()?
+    } else if let Some(ids) = policy.get("instances") {
         let mut selected = BTreeSet::new();
         for name in ids.as_array().ok_or_else(fail)? {
             let name = name.as_str().ok_or_else(fail)?;
@@ -134,13 +277,16 @@ fn source(
         }
     }
     let mut selected_vertices = BTreeSet::new();
-    for (face, owner) in faces.iter().zip(owners) {
+    for (i, (face, owner)) in faces.iter().zip(owners).enumerate() {
         let name = names[index(owner)?].as_str().ok_or_else(fail)?;
         let face: [usize; 3] = serde_json::from_value(face.clone()).map_err(|_| fail())?;
         if face.iter().any(|&v| v >= vertices) {
             return Err(fail());
         }
-        if selected.contains(name) {
+        if regional
+            .as_ref()
+            .map_or_else(|| selected.contains(name), |scope| scope.selected_triangles.contains(&i))
+        {
             selected_vertices.extend(face);
         }
     }
@@ -148,7 +294,78 @@ fn source(
     if selected_vertices.is_empty() || source["selected_vertices"] != json!(selected_vertices) {
         return Err(fail());
     }
-    Ok((vertices, body_vertices, selected_vertices))
+    Ok(Scope {
+        vertices,
+        body_vertices,
+        selected: selected_vertices,
+        regions: regional.map_or_else(BTreeMap::new, |scope| scope.vertices),
+    })
+}
+
+#[derive(Serialize)]
+struct RegionSummary {
+    peak_body_resultant_n: f64,
+    peak_body_resultant_sample: usize,
+    peak_body_sum_vertex_force_n: f64,
+    peak_body_sum_vertex_force_sample: usize,
+    max_body_vertex_force_n: f64,
+    max_body_vertex_force_sample: usize,
+    max_force_vertex: usize,
+}
+
+impl RegionSummary {
+    fn initial(first_vertex: usize) -> Self {
+        Self {
+            peak_body_resultant_n: 0.,
+            peak_body_resultant_sample: 0,
+            peak_body_sum_vertex_force_n: 0.,
+            peak_body_sum_vertex_force_sample: 0,
+            max_body_vertex_force_n: 0.,
+            max_body_vertex_force_sample: 0,
+            max_force_vertex: first_vertex,
+        }
+    }
+
+    fn observe(
+        &mut self,
+        vertices: &[usize],
+        indices: &[usize],
+        forces: &[Vec3],
+        sample: usize,
+    ) -> Result<(), Refusal> {
+        let mut resultant = Vec3::ZERO;
+        let mut sum = 0.;
+        let mut maximum = 0.;
+        let mut witness = vertices[0];
+        for (&vertex, &index) in vertices.iter().zip(indices) {
+            let force = forces[index];
+            let magnitude = force.norm();
+            resultant += force;
+            sum += magnitude;
+            if magnitude > maximum {
+                maximum = magnitude;
+                witness = vertex;
+            }
+        }
+        let norm = resultant.norm();
+        if !norm.is_finite() || !sum.is_finite() {
+            return Err(fail());
+        }
+        if norm > self.peak_body_resultant_n {
+            self.peak_body_resultant_n = norm;
+            self.peak_body_resultant_sample = sample;
+        }
+        if sum > self.peak_body_sum_vertex_force_n {
+            self.peak_body_sum_vertex_force_n = sum;
+            self.peak_body_sum_vertex_force_sample = sample;
+        }
+        if maximum > self.max_body_vertex_force_n {
+            self.max_body_vertex_force_n = maximum;
+            self.max_body_vertex_force_sample = sample;
+            self.max_force_vertex = witness;
+        }
+        Ok(())
+    }
 }
 
 /// Drape and complete motion are admitted by the caller before this optional force consumer.
@@ -164,20 +381,31 @@ pub(super) fn admit<'a>(
     let max_pairs = index(&policy["max_pair_evaluations"])?;
     let outcome = &motion.unwrap_or(simulation)["contact_loads"];
     let report = &outcome["result"];
-    if policy["schema"] != "ftx-contact-loads/1"
+    let regional = policy["schema"] == "ftx-contact-loads/2";
+    if (!regional && policy["schema"] != "ftx-contact-loads/1")
+        || (regional && (object.contains_key("instances") || !object.contains_key("regions")))
+        || (!regional && object.contains_key("regions"))
         || !(1..=64_000_000).contains(&max_vertices)
         || !(1..=64_000_000).contains(&max_pairs)
         || object.keys().any(|k| {
             ![
                 "schema",
                 "instances",
+                "regions",
                 "max_vertex_samples",
                 "max_pair_evaluations",
             ]
             .contains(&k.as_str())
         })
         || outcome["status"] != "available"
-        || report["schema"] != "ftx-contact-loads-report/1"
+        || report["schema"]
+            != if regional {
+                "ftx-contact-loads-report/2"
+            } else {
+                "ftx-contact-loads-report/1"
+            }
+        || (!regional
+            && (report.get("regions").is_some() || report.get("max_force_vertex").is_some()))
         || report["request"] != *policy
         || report["unit"] != "N"
         || report["scope"]
@@ -200,7 +428,22 @@ pub(super) fn admit<'a>(
     let initial = motion
         .map(|_| admit(alternative, descriptor, simulation, None))
         .transpose()?;
-    let (vertices, body_vertices, selected) = source(alternative, policy, simulation, report)?;
+    let Scope {
+        vertices,
+        body_vertices,
+        selected,
+        regions,
+    } = source(alternative, policy, simulation, report)?;
+    let mut region_summaries = BTreeMap::new();
+    let mut region_indices = BTreeMap::new();
+    for (name, vertices) in &regions {
+        let indices = vertices
+            .iter()
+            .map(|vertex| selected.binary_search(vertex).map_err(|_| fail()))
+            .collect::<Result<Vec<_>, _>>()?;
+        region_summaries.insert(name.clone(), RegionSummary::initial(vertices[0]));
+        region_indices.insert(name.clone(), indices);
+    }
     let frames = array(report, "frames")?;
     let samples = motion.map_or(Ok(&[][..]), |m| array(m, "samples"))?;
     let map_outcome = &simulation["drape"]["contact_diagnostics"]["final_reactions"];
@@ -245,6 +488,9 @@ pub(super) fn admit<'a>(
         || frames
             .iter()
             .any(|frame| frame["body"].get("sum_vertex_force_n").is_some());
+    if regional && !has_sum {
+        return Err(fail());
+    }
     let mut peak_sum = 0.;
     let mut peak_vertex = 0.;
     let mut resultant_sample = 0;
@@ -326,6 +572,12 @@ pub(super) fn admit<'a>(
         if !norm.is_finite() || frame["body"] != expected {
             return Err(fail());
         }
+        for (name, vertices) in &regions {
+            region_summaries
+                .get_mut(name)
+                .expect("admitted region")
+                .observe(vertices, &region_indices[name], &forces, i)?;
+        }
         if norm > peak_resultant {
             peak_resultant = norm;
             resultant_sample = i;
@@ -353,6 +605,9 @@ pub(super) fn admit<'a>(
         || report["max_body_vertex_force_n"].as_f64() != Some(peak_vertex)
         || report["peak_body_resultant_sample"] != resultant_sample
         || report["max_body_vertex_force_sample"] != vertex_sample
+        || (regional
+            && (report["regions"] != json!(region_summaries)
+                || report["max_force_vertex"] != frames[vertex_sample]["body"]["max_force_vertex"]))
         || report["pair_evaluations"] != pairs
         || report["duration_s"].as_f64() != Some(previous)
         || report["initial_positions_sha256"] != frames[0]["positions_sha256"]
@@ -591,5 +846,158 @@ mod tests {
                 "{pointer}"
             );
         }
+    }
+
+    fn regional_case() -> (Alternative, Value, Value, Value) {
+        let (alternative, mut descriptor, mut simulation, mut motion) = summed_case();
+        let left = json!({"kind":"whole_triangle_centroid",
+            "polygon_mm":[[-1.,-1.],[2.,-1.],[2.,4.],[-1.,4.]]});
+        let right = json!({"kind":"whole_triangle_centroid",
+            "polygon_mm":[[3.,-1.],[7.,-1.],[7.,4.],[3.,4.]]});
+        let policy = json!({"schema":"ftx-contact-loads/2",
+            "regions":[{"id":"left","instance":"front","selector":left},
+                {"id":"right","instance":"front","selector":right}],
+            "max_vertex_samples":100,"max_pair_evaluations":100});
+        let flat = json!([[[0.,0.],[3.,0.],[0.,3.]],[[3.,0.],[6.,0.],[3.,3.]]]);
+        descriptor["scenario"]["contact_loads"] = policy.clone();
+        simulation["contact_load_ownership"]["triangle_instance"] = json!([0, 0]);
+        simulation["contact_load_ownership"]["rest_triangles_mm"] = flat.clone();
+        simulation["drape"]["contact_diagnostics"]["final_reactions"]["result"]
+            ["body_force_on_cloth_n"][3] = json!([0., 0., 0.]);
+        for (moving, report) in [
+            (false, &mut simulation["contact_loads"]["result"]),
+            (true, &mut motion["contact_loads"]["result"]),
+        ] {
+            report["schema"] = json!("ftx-contact-loads-report/2");
+            report["request"] = policy.clone();
+            report["source"]["triangle_instance"] = json!([0, 0]);
+            report["source"]["selected_vertices"] = json!([0, 1, 2, 3]);
+            report["source"]["rest_triangles_sha256"] = json!(hash(&flat).unwrap());
+            report["source"]["regions"] = json!({
+                "left":{"instance":"front","selector":left,"source_triangles":[0],
+                    "selected_vertices":[0,1,2],"reference_area_m2":4.5e-6},
+                "right":{"instance":"front","selector":right,"source_triangles":[1],
+                    "selected_vertices":[0,2,3],"reference_area_m2":4.5e-6}});
+            report["source_sha256"] = json!(hash(&report["source"]).unwrap());
+            for frame in report["frames"].as_array_mut().unwrap() {
+                frame["body_force_on_selected_vertices_n"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!([0., 0., 0.]));
+            }
+            report["max_force_vertex"] = json!(0);
+            report["regions"] = json!({
+                "left":{"peak_body_resultant_n":if moving{6.}else{2.},
+                    "peak_body_resultant_sample":usize::from(moving),
+                    "peak_body_sum_vertex_force_n":12.,"peak_body_sum_vertex_force_sample":0,
+                    "max_body_vertex_force_n":if moving{6.}else{5.},
+                    "max_body_vertex_force_sample":usize::from(moving),"max_force_vertex":0},
+                "right":{"peak_body_resultant_n":if moving{6.}else{Vec3::new(3.,4.,2.).norm()},
+                    "peak_body_resultant_sample":usize::from(moving),
+                    "peak_body_sum_vertex_force_n":7.,"peak_body_sum_vertex_force_sample":0,
+                    "max_body_vertex_force_n":if moving{6.}else{5.},
+                    "max_body_vertex_force_sample":usize::from(moving),"max_force_vertex":0}});
+        }
+        (alternative, descriptor, simulation, motion)
+    }
+
+    #[test]
+    fn regional_loads_admit_intact_panel_regions_and_nonadditive_welded_force_summaries() {
+        let (alternative, descriptor, simulation, motion) = regional_case();
+        let initial = admit(&alternative, &descriptor, &simulation, None).unwrap();
+        assert_eq!(initial["peak_body_sum_vertex_force_n"], 12.);
+        assert_eq!(initial["regions"]["left"]["peak_body_sum_vertex_force_n"], 12.);
+        assert_eq!(initial["regions"]["right"]["peak_body_sum_vertex_force_n"], 7.);
+        let history = admit(&alternative, &descriptor, &simulation, Some(&motion)).unwrap();
+        assert_eq!(history["regions"]["right"]["peak_body_resultant_n"], 6.);
+        assert_eq!(history["regions"]["right"]["peak_body_resultant_sample"], 1);
+        assert_eq!(history["regions"]["right"]["peak_body_sum_vertex_force_sample"], 0);
+        assert_eq!(history["regions"]["right"]["max_force_vertex"], 0);
+
+        let mut partial_descriptor = descriptor;
+        partial_descriptor["scenario"]["contact_loads"]["regions"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        let mut partial = simulation;
+        let report = &mut partial["contact_loads"]["result"];
+        report["request"] = partial_descriptor["scenario"]["contact_loads"].clone();
+        report["source"]["regions"].as_object_mut().unwrap().remove("right");
+        report["source"]["selected_vertices"] = json!([0, 1, 2]);
+        report["source_sha256"] = json!(hash(&report["source"]).unwrap());
+        report["regions"].as_object_mut().unwrap().remove("right");
+        report["frames"][0]["body_force_on_selected_vertices_n"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        assert!(admit(&alternative, &partial_descriptor, &partial, None).is_ok());
+    }
+
+    #[test]
+    fn regional_loads_reconstruct_membership_even_after_source_receipts_are_rehashed() {
+        let (alternative, descriptor, simulation, _) = regional_case();
+        for (pointer, value) in [
+            ("/contact_loads/result/source/regions/left/source_triangles", json!([1])),
+            ("/contact_loads/result/source/regions/left/selected_vertices", json!([0, 2, 3])),
+            ("/contact_loads/result/source/regions/left/reference_area_m2", json!(1.)),
+            ("/contact_loads/result/source/regions/left/instance", json!("back")),
+            ("/contact_loads/result/source/selected_vertices", json!([0, 1, 2])),
+            ("/contact_load_ownership/rest_triangles_mm/0", json!([[30.,0.],[33.,0.],[30.,3.]])),
+            ("/contact_load_ownership/rest_triangles_mm/1", json!([[0.,0.],[1.,0.],[2.,0.]])),
+            ("/contact_load_ownership/triangle_instance/1", json!(1)),
+        ] {
+            let mut changed = simulation.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            changed["contact_loads"]["result"]["source"]["rest_triangles_sha256"] =
+                json!(hash(&changed["contact_load_ownership"]["rest_triangles_mm"]).unwrap());
+            changed["contact_loads"]["result"]["source_sha256"] =
+                json!(hash(&changed["contact_loads"]["result"]["source"]).unwrap());
+            assert!(admit(&alternative, &descriptor, &changed, None).is_err(), "{pointer}");
+        }
+    }
+
+    #[test]
+    fn regional_loads_refuse_inconsistent_extrema_witnesses_and_cross_schema_scopes() {
+        let (alternative, descriptor, simulation, motion) = regional_case();
+        for (pointer, value) in [
+            ("/contact_loads/result/regions/right/peak_body_sum_vertex_force_n", json!(12.)),
+            ("/contact_loads/result/regions/right/peak_body_sum_vertex_force_sample", json!(1)),
+            ("/contact_loads/result/regions/right/peak_body_resultant_sample", json!(0)),
+            ("/contact_loads/result/regions/right/max_force_vertex", json!(3)),
+            ("/contact_loads/result/max_force_vertex", json!(3)),
+            ("/contact_loads/result/regions/left", Value::Null),
+        ] {
+            let mut changed = motion.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                admit(&alternative, &descriptor, &simulation, Some(&changed)).is_err(),
+                "{pointer}"
+            );
+        }
+        for (key, value) in [
+            ("instances", Value::Null),
+            ("instances", json!(["front"])),
+            ("regions", json!([])),
+            ("regions", Value::Null),
+            ("schema", json!("ftx-contact-loads/1")),
+        ] {
+            let mut changed_descriptor = descriptor.clone();
+            changed_descriptor["scenario"]["contact_loads"][key] = value;
+            let mut changed = simulation.clone();
+            changed["contact_loads"]["result"]["request"] =
+                changed_descriptor["scenario"]["contact_loads"].clone();
+            assert!(
+                admit(&alternative, &changed_descriptor, &changed, None).is_err(),
+                "{key}"
+            );
+        }
+        let mut overlap_descriptor = descriptor;
+        let selector =
+            overlap_descriptor["scenario"]["contact_loads"]["regions"][0]["selector"].clone();
+        overlap_descriptor["scenario"]["contact_loads"]["regions"][1]["selector"] = selector;
+        let mut overlap = simulation;
+        overlap["contact_loads"]["result"]["request"] =
+            overlap_descriptor["scenario"]["contact_loads"].clone();
+        assert!(admit(&alternative, &overlap_descriptor, &overlap, None).is_err());
     }
 }

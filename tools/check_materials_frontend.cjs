@@ -22302,3 +22302,111 @@ test('compressed coverage results show signed radiative exterior paths separatel
   assert.match(visibleText(result),/Prescribed normal work: 0.75 J; converted to heat: 0 J/);
   assert.match(visibleText(result),/negative values supply heat/);
 });
+
+
+function guidedContactRegionControls(p) {
+  guidedContactControls(p);p.e.guidedContactLoadsScope.value='regions';p.e.guidedContactLoadsScope.handlers.change();
+}
+function saveGuidedContactRegion(p,id='waist <β>',instance='front.R',polygon='0,0\n100,0\n100,20\n0,20') {
+  p.e.guidedContactRegionName.value=id;p.e.guidedContactRegionInstance.value=instance;
+  p.e.guidedContactRegionPolygon.value=polygon;p.e.saveContactRegion.onclick();
+}
+test('guided regional contact loads author physical polygons and preserve legacy whole-instance scope',async()=>{
+  const {p}=await guidedScenarioSetup();guidedContactRegionControls(p);
+  assert.equal(p.e.guidedContactRegionControls.hidden,false);assert.equal(p.e.guidedContactLoadsInstances.disabled,true);
+  saveGuidedContactRegion(p);saveGuidedContactRegion(p,'upper','front.R','0,30\n100,30\n100,50\n0,50');
+  assert.equal(p.e.guidedContactRegions.children.length,2);assert.match(p.e.guidedContactRegionsSummary.textContent,/2 of 256/);
+  await p.e.scenario.onclick();let sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).contact_loads,{schema:'ftx-contact-loads/2',regions:[
+    {id:'waist <β>',instance:'front.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[100,0],[100,20],[0,20]]}},
+    {id:'upper',instance:'front.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,30],[100,30],[100,50],[0,50]]}}],
+    max_vertex_samples:100000,max_pair_evaluations:1000000});
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const stale=descendants(p.e.guidedContactRegions).find(node=>node.textContent==='Remove contact region waist <β>');
+  descendants(p.e.guidedContactRegions).find(node=>node.textContent==='Edit contact region waist <β>').onclick();
+  assert.equal(p.e.guidedContactRegionPolygon.value,'0, 0\n100, 0\n100, 20\n0, 20');
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+  saveGuidedContactRegion(p,'waist <β>','front.R','0,0\n100,0\n100,25\n0,25');stale.onclick();
+  assert.equal(p.e.guidedContactRegions.children.length,2,'A stale row cannot remove a replacement');
+  await p.e.scenario.onclick();sent=p.current().messages.at(-1);
+  assert.equal(JSON.parse(sent.scenarioRequest).contact_loads.regions[0].selector.polygon_mm[2][1],25);
+  p.emit(scenarioReport());guidedContactControls(p,['front.R']);await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).contact_loads,contactPolicyForPage(['front.R']));
+  p.emit(scenarioReport());guidedContactControls(p);await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).contact_loads,contactPolicyForPage());
+});
+function contactPolicyForPage(instances) {
+  return {schema:'ftx-contact-loads/1',...(instances?{instances}:{}),max_vertex_samples:100000,max_pair_evaluations:1000000};
+}
+test('guided regional contact loads refuse invalid drafts without replacing saved geometry',async()=>{
+  const {p}=await guidedScenarioSetup();guidedContactRegionControls(p);
+  const before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/1–256 named regions/);
+  saveGuidedContactRegion(p);const original=visibleText(p.e.guidedContactRegions);
+  for(const [id,instance,polygon] of [['','front.R','0,0\n1,0\n0,1'],['waist <β>','','0,0\n1,0\n0,1'],
+    ['waist <β>','front.R','0,0\n1,0'],['waist <β>','front.R','0,0\n1,0\n,1'],
+    ['waist <β>','front.R','0,0\n1,0\n0,Infinity'],['waist <β>','front.R','0,0\n1,0\n0,1000001'],
+    ['waist <β>','front.R','0,0\n1,0\n0,1,2']]) {
+    saveGuidedContactRegion(p,id,instance,polygon);assert.equal(visibleText(p.e.guidedContactRegions),original);
+    assert.equal(p.e.error.hidden,false);assert.equal(p.current().messages.length,before);
+  }
+  descendants(p.e.guidedContactRegions).find(node=>node.textContent==='Remove contact region waist <β>').onclick();
+  assert.equal(p.e.guidedContactRegions.children.length,0);assert.equal(p.e.clearContactRegions.disabled,true);
+  await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);
+});
+test('guided regional contact loads freeze named cases and cancel obsolete pending source reads',async()=>{
+  const {p}=await guidedScenarioSetup();guidedContactRegionControls(p);saveGuidedContactRegion(p);guidedNamedCases(p);
+  await saveGuidedCase(p,'original waist');saveGuidedContactRegion(p,'waist <β>','front.R','0,0\n100,0\n100,25\n0,25');
+  await saveGuidedCase(p,'taller waist');await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1),cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.scenario.contact_loads.regions[0].selector.polygon_mm[2][1]),[20,25]);
+  assert.match(visibleText(p.e.guidedScenarioCases),/waist <β> on front.R/);
+  p.emit(scenarioReport(),[{name:'scenario-request.json',text:sent.scenarioRequest}]);const live=new Set(p.live);
+  p.e.clearContactRegions.onclick();assert.deepEqual(p.live,live);
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+  for(const mode of ['single','draft'])for(const field of ['Name','Instance','Polygon']) {
+    const {p,sources}=await guidedScenarioSetup();guidedContactRegionControls(p);saveGuidedContactRegion(p);
+    if(mode==='draft')guidedNamedCases(p);
+    const delay=deferred();p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+    const old=p.current(),before=old.messages.length,running=mode==='draft'?saveGuidedCase(p,'pending'):p.e.scenario.onclick();
+    p.e['guidedContactRegion'+field].handlers.input();assert.equal(old.dead,true,mode+':'+field);p.ready();
+    delay.resolve(sources.fit);await running;assert.equal(old.messages.length,before);
+    assert.equal(p.current().messages.length,0);assert.equal(p.live.size,0);assert.equal(p.e.guidedScenarioCases.children.length,0);
+  }
+});
+test('guided regional contact loads clear garment scopes and stale controls after pattern replacement',async()=>{
+  for(const replacement of ['removed','file','malformed','candidate']) {
+    const {p}=await guidedScenarioSetup();guidedContactRegionControls(p);saveGuidedContactRegion(p);
+    const stale=descendants(p.e.guidedContactRegions).find(node=>node.textContent==='Edit contact region waist <β>');
+    if(replacement==='candidate') {
+      await p.e.scenario.onclick();p.emit(scenarioReport());
+      descendants(section(p,'Fresh drape and heat alternatives')).find(node=>node.tag==='button'&&node.textContent==='Use A pattern').onclick();
+    } else {
+      if(replacement==='removed')p.e.patternFile.files=[];
+      else p.select('patternFile',replacement==='malformed'?'{':'{"pieces":[{"id":"replacement"}]}');
+      await p.e.patternFile.onchange();
+    }
+    assert.equal(p.e.guidedContactRegions.children.length,0,replacement);
+    assert.deepEqual(['Name','Instance','Polygon'].map(suffix=>p.e['guidedContactRegion'+suffix].value),['','',''],replacement);
+    assert.equal(p.e.guidedContactLoads.checked,false);assert.equal(p.e.guidedContactLoadsScope.value,'all');
+    stale.onclick();assert.equal(p.e.guidedContactRegionName.value,'');
+  }
+});
+test('regional contact reports show independent peak witnesses and nonadditive welded force scope',async()=>{
+  const {p}=await guidedScenarioSetup();guidedContactRegionControls(p);saveGuidedContactRegion(p);await p.e.scenario.onclick();
+  const scenario=JSON.parse(p.current().messages.at(-1).scenarioRequest),report=scenarioReport();
+  report.scenario.scenario=scenario;
+  const frame={sample_index:0,time_s:0,body:{resultant_n:[1,0,0],resultant_magnitude_n:1,sum_vertex_force_n:3,max_vertex_force_n:2,max_force_vertex:2}};
+  const loads={schema:'ftx-contact-loads-report/2',unit:'N',vertex_samples:12,pair_evaluations:8,
+    source:{instances:{'front.R':{}},regions:{'waist <β>':{instance:'front.R',selector:scenario.contact_loads.regions[0].selector,
+      source_triangles:[0,2],selected_vertices:[0,1,2,3],reference_area_m2:0.002}}},
+    peak_body_resultant_n:1,peak_body_resultant_sample:0,peak_body_sum_vertex_force_n:3,peak_body_sum_vertex_force_sample:0,
+    max_body_vertex_force_n:2,max_body_vertex_force_sample:0,max_force_vertex:2,frames:[frame],
+    regions:{'waist <β>':{peak_body_resultant_n:1,peak_body_resultant_sample:0,peak_body_sum_vertex_force_n:3,
+      peak_body_sum_vertex_force_sample:0,max_body_vertex_force_n:2,max_body_vertex_force_sample:0,max_force_vertex:2}}};
+  report.simulations.find(row=>row.key==='A').evaluation.result.contact_loads=outcome(loads);
+  p.emit(report);const output=section(p,'Fresh drape and heat alternatives'),visible=visibleText(output);
+  for(const expected of [/A: initial contact regions/,/waist <β>/,/front.R/,/0, 2/,/0.002/,/Sample 0 at 0 s/,
+    /regional rows are not additive/,/counts each selected vertex once/,/Polygon boundaries do not cut triangles/])assert.match(visible,expected);
+  assert.equal(descendants(output).some(node=>node.tag==='script'),false);
+});

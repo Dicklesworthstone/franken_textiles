@@ -4433,3 +4433,43 @@ test('compressed sheet radiation remains qualified across pressure control schem
     }
   }
 });
+
+
+test('regional contact loads preserve exact polygons and freeze independent named scopes',async()=>{
+  const {buildContactLoadsRequest:build,buildMaterialScenarioRequest:scenario,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const first={id:'waist <β>',instance:'front.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[100,0],[100,20],[0,20]]}};
+  const policy={schema:'ftx-contact-loads/2',regions:[first],max_vertex_samples:100000,max_pair_evaluations:1000000};
+  assert.deepEqual(JSON.parse(build(policy)),policy);
+  const original=' \r\n'+JSON.stringify(policy).replace('[0,0]','[-0.0,0.0]').replace('[100,0]','[100.0,0]')+'\r\n';
+  const request=scenario({...scenarioState(),maxVertexFrames:25000,contactLoads:original});
+  assert.ok(request.includes(original));assert.deepEqual(JSON.parse(request).contact_loads,JSON.parse(original));
+  const second=JSON.parse(original);second.regions[0].selector.polygon_mm[2][1]=25;
+  const other=scenario({...scenarioState(),maxVertexFrames:25000,contactLoads:build(second)});
+  const frozen=matrix({cases:[{key:'waist',scenario:request},{key:'taller',scenario:other}],maxEvaluations:16});
+  const cases=JSON.parse(frozen).cases;
+  assert.equal(cases[0].scenario.contact_loads.regions[0].selector.polygon_mm[2][1],20);
+  assert.equal(cases[1].scenario.contact_loads.regions[0].selector.polygon_mm[2][1],25);
+  assert.ok(frozen.includes(original));
+});
+
+test('regional contact loads reject ambiguous schemas and malformed declarations before dispatch',async()=>{
+  const {buildContactLoadsRequest:build}=await modulePromise;
+  const region={id:'waist',instance:'front.R',selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[100,0],[0,20]]}};
+  const policy={schema:'ftx-contact-loads/2',regions:[region],max_vertex_samples:1,max_pair_evaluations:64000000};
+  for(const changed of [{...policy,instances:null},{...policy,instances:[]},{...policy,schema:'ftx-contact-loads/1'},
+    {...policy,regions:[]},{...policy,regions:null},{...policy,regions:[region,region]},
+    {...policy,regions:Array.from({length:257},(_,i)=>({...region,id:String(i)}))}])assert.throws(()=>build(changed));
+  const missing={...policy};delete missing.regions;assert.throws(()=>build(missing));
+  for(const changes of [{id:''},{id:'é'.repeat(257)},{instance:''},{instance:'é'.repeat(2049)},{unknown:true},
+    {selector:{kind:'clip',polygon_mm:region.selector.polygon_mm}},
+    {selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[1,1]]}},
+    {selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[1,0],[0,1000001]]}},
+    {selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[1,0],[0,NaN]]}},
+    {selector:{kind:'whole_triangle_centroid',polygon_mm:[[0,0],[1,0],[0,'1']]}}]) {
+    assert.throws(()=>build({...policy,regions:[{...region,...changes}]}));
+  }
+  const distinct={...region,id:'other'};
+  assert.deepEqual(JSON.parse(build({...policy,regions:[region,distinct]})).regions,[region,distinct],
+    'Only the native retained mesh can decide whether individually valid polygons select overlapping triangles');
+  assert.deepEqual(JSON.parse(build(contactPolicy({instances:['front.R']}))),contactPolicy({instances:['front.R']}));
+});
