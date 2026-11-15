@@ -76,6 +76,35 @@ pub fn load_capture_image_with_limit(bytes: &[u8], max_pixels: usize) -> Result<
         .map_err(|message| Refusal::new(RefusalCode::InvalidDocument, message))
 }
 
+/// Decode an explicit binary evidence mask in its already-oriented pixel coordinates.
+/// No thresholding, alpha compositing, rotation or resizing may create foreground evidence.
+///
+/// # Errors
+/// Anything other than an opaque 8-bit grayscale PNG containing only 0 and 255, or the
+/// ordinary capture decoder's metadata, encoded-size, decoded-size and malformed-pixel refusals.
+pub fn load_binary_mask_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Gray, Refusal> {
+    if bytes.len() < 33
+        || &bytes[..8] != b"\x89PNG\r\n\x1a\n"
+        || &bytes[8..16] != b"\0\0\0\rIHDR"
+        || bytes[24] != 8
+        || bytes[25] != 0
+    {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "masks need an opaque 8-bit grayscale PNG with orientation already applied",
+        ));
+    }
+    let image = load_capture_image_with_limit(bytes, max_pixels)?;
+    let gray = super::color::bgr_to_gray(&image);
+    if gray.data.iter().any(|&value| value != 0 && value != 255) {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "masks must contain only 0 (outside) and 255 (inside)",
+        ));
+    }
+    Ok(gray)
+}
+
 /// Decode measurement evidence without changing brightness or estimating missing pixels.
 /// JPEG orientation is applied once; PNG must already be oriented, opaque 8-bit gray/RGB.
 /// The receipt has no filesystem path; callers may add their explicit source label.

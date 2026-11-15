@@ -183,6 +183,27 @@ each application binds the current snapshot hash. Pending changes withdraw stale
 handoffs, while cancellation restores the last applied values and reset restores the uploaded source.
 This authoring path performs no model evaluation, fitting, anatomy inference or readiness promotion.
 
+**Binary silhouette masks in prepared frames.** `body_fit::body_fit_mask(model_bytes, input, mask_bytes, selection)`
+and its wasm32 export import one explicitly selected frame from an opaque 8-bit grayscale PNG.
+The native video/mask reader and portable importer share `load_binary_mask_with_limit`:
+only 0/255 pixels are admitted, with the original dimensions and orientation. Transparency,
+animation, EXIF metadata, soft pixels and RGB/palette/depth conversions refuse. The existing
+`sample_mask` and calibrated silhouette validator enforce uncropped foreground, 1–64 distinct
+integer row/column samples, explicit sigma and FIT/CHECK roles, at most eight components per
+slice and the original lens domain. The mask is released before loading the model.
+
+The selection binds exact input/model hashes and an original frame ordinal. Existing silhouettes
+cannot be replaced. Only that frame's silhouette is added; every other source, observation and
+initialization stays unchanged, including full-width frame identities. The evidence retains both
+encoded and decoded mask hashes; the ordinary observation review additionally returns a source
+receipt with the filename, frame and original slice declarations. Manual observation edits cannot
+modify imported samples. Limits are 16 MiB input, 512 MiB model, 128 MiB mask, 40 million pixels
+and 64 KiB declarations. The Photo Workbench supplies local file and FIT/CHECK row/column controls,
+requires pending edits to be resolved, and downloads the exact prepared input and complete import
+receipt. Input changes and cancellation discard late reads and worker replies. Segmentation,
+anatomical visibility and the mask's relationship to its selected photograph remain declared
+evidence; no contour is inferred and no physical-accuracy or full-mask claim follows.
+
 **Original capture image inspection.** An accepted frame review retains `source_image` when its
 report has complete `capture_images` or an older native `capture_input` receipt. Both must agree
 when present. `body_fit::BodyFitImage` and wasm32 `WebBodyFitImage` accept only explicitly supplied

@@ -258,6 +258,22 @@ pub fn body_fit_observations(
         .map_err(|error| JsError::new(&error.to_string()))
 }
 
+/// Import source-bound binary PNG silhouette samples without changing camera or pixel geometry.
+///
+/// # Errors
+/// Stale sources, invalid mask pixels, existing silhouettes, invalid slices or lens-domain refusal.
+#[wasm_bindgen]
+pub fn body_fit_mask(
+    model_bytes: &[u8],
+    input: &str,
+    mask_bytes: &[u8],
+    selection: &str,
+) -> Result<String, JsError> {
+    crate::body_fit::body_fit_mask(model_bytes, input, mask_bytes, selection)
+        .map(|value| value.to_string())
+        .map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Fit prepared multi-frame observations and local model bytes with native acceptance gates.
 /// Work limits are strings so the boundary cannot truncate a JavaScript number into a valid limit.
 ///

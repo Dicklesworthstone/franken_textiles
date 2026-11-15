@@ -18,7 +18,7 @@ use ftx_measure::{
         self, BodyFitInput, BodyModel, CaptureImage, FitFrame, FitOptions, FitStart, FramePose,
         Keypoint, ModelLayout, Parameter,
     },
-    silhouette::{self, Silhouette, SurfaceMesh},
+    silhouette::{self, MaskSample, Silhouette, SurfaceMesh},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -654,6 +654,119 @@ pub fn body_fit_observations(
         "input":input,"frames":frames,"targets":targets,"start_count":request.fit.starts.len(),
         "no_claim":"Manually observed keypoints and explicitly sampled contours only, not inferred anatomy or full-mask agreement. Cameras, model targets, starts, imported mask samples and source identities stay fixed. Keep predeclared CHECK evidence independent; do not tune observations to fit residuals. No fitted body, measurement readiness or physical accuracy is established."}),
     )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaskImport {
+    input_sha256: String,
+    model_sha256: String,
+    frame_index: usize,
+    mask_name: String,
+    evidence: String,
+    samples: Vec<MaskSample>,
+}
+
+/// Import one explicitly sampled binary mask into a prepared frame's original pixel space.
+/// The shared native decoder and sampler retain the exact foreground, source hashes, slice
+/// uncertainties and FIT/CHECK roles. Existing silhouettes cannot be replaced. The ordinary
+/// observation editor is returned, with imported samples locked against manual edits.
+///
+/// # Errors
+/// Stale input/model bindings; invalid model, frame, evidence or samples; an existing silhouette;
+/// nonbinary, transparent, rotated, oversized or differently sized mask pixels; or a contour
+/// outside its calibrated lens domain. No thresholding, resizing or fitting occurs.
+pub fn body_fit_mask(
+    model_bytes: &[u8],
+    input_text: &str,
+    mask_bytes: &[u8],
+    selection_text: &str,
+) -> Result<Value, Refusal> {
+    if input_text.len() > 16 * 1024 * 1024
+        || model_bytes.len() > 512 * 1024 * 1024
+        || mask_bytes.len() > 128 * 1024 * 1024
+        || selection_text.len() > 64 * 1024
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "mask import permits 16 MiB input, 512 MiB model, 128 MiB mask and 64 KiB declarations",
+        ));
+    }
+    let selection: MaskImport = serde_json::from_str(selection_text)
+        .map_err(|e| invalid(format!("invalid mask import declarations: {e}")))?;
+    let source_hash = sha256_hex(input_text.as_bytes());
+    let model_hash = sha256_hex(model_bytes);
+    if selection.input_sha256 != source_hash || selection.model_sha256 != model_hash {
+        return Err(invalid(
+            "mask import belongs to different input or model bytes",
+        ));
+    }
+    if selection.mask_name.trim().is_empty()
+        || selection.mask_name.len() > 256
+        || selection.mask_name.contains(['\0', '/', '\\'])
+        || selection.evidence.trim().is_empty()
+        || selection.evidence.len() > 3000
+        || selection.evidence.contains("decoded_mask_sha256:")
+        || selection.evidence.contains("encoded_mask_sha256:")
+    {
+        return Err(invalid(
+            "declare a local mask filename and 1..3000 bytes of segmentation, clothing and occlusion evidence without source-hash markers",
+        ));
+    }
+    let request: Request = serde_json::from_str(input_text)
+        .map_err(|e| invalid(format!("invalid prepared mask input: {e}")))?;
+    if request.schema != "ftx-anny-body-fit-input/1" || request.model.model_sha256 != model_hash {
+        return Err(invalid(
+            "mask import needs a prepared input for this exact model",
+        ));
+    }
+    let frame = request
+        .fit
+        .frames
+        .get(selection.frame_index)
+        .ok_or_else(|| invalid("mask frame_index is out of range"))?;
+    if frame.silhouette.is_some() {
+        return Err(invalid(
+            "cannot replace existing silhouette evidence with a mask",
+        ));
+    }
+    frame.camera.validate()?;
+    let mask = ftx_trace::raster::image::load_binary_mask_with_limit(mask_bytes, 40_000_000)?;
+    if [mask.w, mask.h] != frame.image_size_px.map(|size| size as usize) {
+        return Err(invalid(
+            "mask dimensions differ from the oriented fit image; no resampling is performed",
+        ));
+    }
+    let encoded_hash = sha256_hex(mask_bytes);
+    let decoded_hash = sha256_hex(&mask.data);
+    let silhouette = silhouette::sample_mask(
+        frame.image_size_px,
+        &mask.data,
+        &selection.samples,
+        &format!(
+            "{}; encoded_mask_sha256:{encoded_hash}; decoded_mask_sha256:{decoded_hash}",
+            selection.evidence
+        ),
+    )?;
+    silhouette::validate_observation(&frame.camera, frame.image_size_px, &silhouette)?;
+    drop(mask);
+    // Edit the original JSON value, preserving all native-width identities and every other
+    // field. The ordinary authoring boundary rechecks the model, cameras and source bindings.
+    let mut value: Value = serde_json::from_str(input_text).map_err(|e| invalid(e.to_string()))?;
+    value["fit"]["frames"][selection.frame_index]["silhouette"] = json!(silhouette);
+    let input = serde_json::to_string_pretty(&value).map_err(|e| invalid(e.to_string()))?;
+    let mut review = body_fit_observations(model_bytes, &input, "")?;
+    review["original_input_sha256"] = json!(source_hash);
+    review["mask_import"] = json!({
+        "schema":"ftx-body-mask-import/1","frame_index":selection.frame_index,
+        "frame":frame.frame,"image_size_px":frame.image_size_px,
+        "rotation_cw_deg":frame.rotation_cw_deg,"mask_name":selection.mask_name,
+        "encoded_mask_sha256":encoded_hash,"decoded_mask_sha256":decoded_hash,
+        "source_input_sha256":source_hash,"input_sha256":review["input_sha256"],
+        "model_sha256":model_hash,"evidence":selection.evidence,"samples":selection.samples,
+        "no_claim":"Explicit binary mask samples in the selected frame's stored oriented pixels. Source identity and numerical admission do not establish segmentation accuracy, anatomical visibility, full-mask agreement or body/garment fit."
+    });
+    Ok(review)
 }
 
 /// Fit one shared shape and independent frame poses from original prepared JSON and model bytes.

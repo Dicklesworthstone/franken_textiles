@@ -9,7 +9,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::video::{FrameMetadata, SelectionOptions, score_frame, select_frames};
 use ftx_trace::raster::{
     color::bgr_to_gray,
-    image::{Gray, load_capture_image_with_limit, load_png_with_limit},
+    image::{Gray, load_binary_mask_with_limit, load_capture_image_with_limit},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -96,68 +96,8 @@ pub(super) fn load_pixels(base: &Path, name: &str, mask: bool) -> Result<(Gray, 
         let image = load_capture_image_with_limit(&bytes, 40_000_000)?;
         return Ok((bgr_to_gray(&image), bytes));
     }
-    // Restrict the evidence boundary to explicit 8-bit pixels. In particular, alpha compositing
-    // on white would silently turn transparent mask backgrounds into foreground evidence.
-    if bytes.len() < 33
-        || &bytes[..8] != b"\x89PNG\r\n\x1a\n"
-        || &bytes[8..16] != b"\0\0\0\rIHDR"
-        || bytes[24] != 8
-        || if mask {
-            bytes[25] != 0
-        } else {
-            !matches!(bytes[25], 0 | 2)
-        }
-    {
-        return Err(bad_input(format!(
-            "{}: use an opaque 8-bit {} PNG with orientation already applied",
-            path.display(),
-            if mask {
-                "grayscale mask"
-            } else {
-                "grayscale or RGB frame"
-            }
-        )));
-    }
-    let mut pos = 8usize;
-    let mut ended = false;
-    while pos + 12 <= bytes.len() {
-        let len = u32::from_be_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
-        let end = pos
-            .checked_add(12)
-            .and_then(|p| p.checked_add(len))
-            .filter(|&p| p <= bytes.len())
-            .ok_or_else(|| bad_input("truncated PNG chunk"))?;
-        if matches!(
-            &bytes[pos + 4..pos + 8],
-            b"tRNS" | b"eXIf" | b"acTL" | b"fcTL" | b"fdAT"
-        ) {
-            return Err(bad_input(format!(
-                "{}: remove transparency, animation and EXIF metadata after decoding and orienting the pixels",
-                path.display()
-            )));
-        }
-        if &bytes[pos + 4..pos + 8] == b"IEND" {
-            if len != 0 || end != bytes.len() {
-                return Err(bad_input(
-                    "PNG must end with an empty IEND and no trailing data",
-                ));
-            }
-            ended = true;
-        }
-        pos = end;
-    }
-    if !ended {
-        return Err(bad_input("PNG has no complete IEND"));
-    }
-    let image = load_png_with_limit(&bytes, 40_000_000)
+    let gray = load_binary_mask_with_limit(&bytes, 40_000_000)
         .map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
-    let gray = bgr_to_gray(&image);
-    if mask && gray.data.iter().any(|&v| v != 0 && v != 255) {
-        return Err(bad_input(format!(
-            "{}: masks must contain only 0 (outside) and 255 (inside)",
-            path.display()
-        )));
-    }
     Ok((gray, bytes))
 }
 

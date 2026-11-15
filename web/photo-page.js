@@ -33,6 +33,7 @@ const bodyStartsUrls = [];
 let bodyStartsInputs = [];
 let bodyPointsWorker = null, bodyPointsTicket = 0, bodyPointsBusy = false, bodyPointsPending = false;
 let bodyPointsSource = null, bodyPointsView = null, bodyPointsDraft = [], bodyPointsSelected = 0;
+let bodyPointsReviewText = null;
 let bodyPointsImageWorker = null, bodyPointsImageTicket = 0, bodyPointsImageBusy = false, bodyPointsBitmap = null;
 let bodySilhouetteDrawing = null;
 const bodyPointsUrls = [];
@@ -146,6 +147,9 @@ function controls() {
   $("bodySilhouetteEvidence").disabled=silhouetteLocked || !silhouette;
   $("bodySilhouettePick").disabled=silhouetteLocked || !slice || slice.background || !bodyPointsBitmap;
   $("bodySilhouettePickCancel").disabled=!bodySilhouetteDrawing;
+  const maskLocked=pointsLocked || bodyPointsPending || !pointFrame || !!pointFrame.silhouette;
+  for(const id of ["bodyMaskFile","bodyMaskFitRows","bodyMaskCheckRows","bodyMaskFitColumns","bodyMaskCheckColumns","bodyMaskSigma","bodyMaskEvidence"]) $(id).disabled=maskLocked;
+  $("bodyMaskImport").disabled=maskLocked || !$("bodyMaskFile").files.length;
   const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate";
   $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
   $("geometryStillControls").hidden=!still;
@@ -896,6 +900,7 @@ function withdrawBodyPointsImage(clearFile=true) {
 function withdrawBodyPoints() {
   stopBodyPoints(); withdrawBodyPointsImage(); revoke(bodyPointsUrls); $("bodyPointsDownloads").replaceChildren();
   bodyPointsSource=null; bodyPointsView=null; bodyPointsDraft=[]; bodyPointsPending=false; bodyPointsSelected=0;
+  bodyPointsReviewText=null; clearBodyMask();
   for(const id of ["bodyPointsFrame","bodyPointsTarget","bodyPointsRows"]) $(id).replaceChildren();
   $("bodyPointsError").textContent=""; $("bodyPointsStatus").textContent="Open the current prepared input to observe its declared targets.";
   controls();
@@ -904,6 +909,7 @@ function bodyPointsDownload() {
   revoke(bodyPointsUrls); $("bodyPointsDownloads").replaceChildren();
   if(bodyPointsView && !bodyPointsPending && !bodyPointsBusy) {
     link($("bodyPointsDownloads"),bodyPointsView.input,"body-fit-input-observations.json","application/json",bodyPointsUrls);
+    if(bodyPointsView.mask_import && bodyPointsReviewText) link($("bodyPointsDownloads"),bodyPointsReviewText,"body-mask-import.json","application/json",bodyPointsUrls);
   }
 }
 function pendingBodyPoints() {
@@ -1124,7 +1130,7 @@ function bodyPointsEdits() {
   });
   return '{"input_sha256":'+JSON.stringify(bodyPointsView.input_sha256)+',"model_sha256":'+JSON.stringify(bodyPointsView.model_sha256)+',"frames":['+frames.join(",")+']}';
 }
-function checkedBodyPointsView(text,input,apply) {
+function checkedBodyPointsView(text,input,apply,mask=null) {
   const v=JSON.parse(text), hash=value=>typeof value==="string" && /^[0-9a-f]{64}$/.test(value);
   if(v.schema!=="ftx-body-observations-review/1" || v.status!=="OBSERVATION_REVIEW" || v.body_fitted!==false ||
       typeof v.input!=="string" || new Blob([v.input]).size>16*1024*1024 || !hash(v.input_sha256) || !hash(v.original_input_sha256) || !hash(v.model_sha256) ||
@@ -1148,11 +1154,34 @@ function checkedBodyPointsView(text,input,apply) {
     }
     bodySilhouetteValue(copyBodyPoints([frame])[0].silhouette,frame,false);
     if(apply) {
-      const draft=bodyPointsDraft[i],expected=draft.silhouette_changed?bodySilhouetteValue(draft.silhouette,bodyPointsView.frames[i]):bodyPointsView.frames[i].silhouette;
-      if(bodySilhouetteIdentity(frame.silhouette)!==bodySilhouetteIdentity(expected)) throw Error("The engine did not retain the requested silhouette observations.");
+      if(mask && i===mask.frame_index) {
+        const receipt=v.mask_import, source=bodyPointsView.frames[i];
+        if(!receipt || receipt.schema!=="ftx-body-mask-import/1" || receipt.frame_index!==i ||
+            receipt.source_input_sha256!==bodyPointsView.input_sha256 || receipt.input_sha256!==v.input_sha256 ||
+            receipt.model_sha256!==v.model_sha256 || receipt.mask_name!==mask.mask_name || receipt.evidence!==mask.evidence ||
+            !Array.isArray(receipt.samples) || JSON.stringify(receipt.samples.map(s=>[s.axis,s.index,s.sigma_px,s.partition]))!==JSON.stringify(mask.samples.map(s=>[s.axis,s.index,s.sigma_px,s.partition])) ||
+            JSON.stringify(receipt.image_size_px)!==JSON.stringify(source.image_size_px) || receipt.rotation_cw_deg!==source.rotation_cw_deg ||
+            !hash(receipt.encoded_mask_sha256) || !hash(receipt.decoded_mask_sha256) || source.silhouette ||
+            !frame.silhouette || frame.silhouette_editable!==false ||
+            frame.silhouette.evidence!==mask.evidence+"; encoded_mask_sha256:"+receipt.encoded_mask_sha256+"; decoded_mask_sha256:"+receipt.decoded_mask_sha256) {
+          throw Error("The engine did not retain the selected mask, source bindings and sampling evidence.");
+        }
+        const requested=mask.samples.map(s=>JSON.stringify([s.axis,s.index,s.sigma_px,s.partition])).sort();
+        const sampled=frame.silhouette.lines.map(s=>JSON.stringify([s.axis,s.at_px,s.sigma_px,s.partition])).sort();
+        if(JSON.stringify(requested)!==JSON.stringify(sampled)) throw Error("Mask import changed the declared slice positions, uncertainty or FIT/CHECK roles.");
+      } else {
+        const draft=bodyPointsDraft[i],expected=draft.silhouette_changed?bodySilhouetteValue(draft.silhouette,bodyPointsView.frames[i]):bodyPointsView.frames[i].silhouette;
+        if(bodySilhouetteIdentity(frame.silhouette)!==bodySilhouetteIdentity(expected)) throw Error("The engine did not retain the requested silhouette observations.");
+      }
+      if(mask && JSON.stringify(frame.keypoints)!==JSON.stringify(bodyPointsView.frames[i].keypoints)) throw Error("Mask import changed existing landmark observations.");
     }
   }
-  const evidence=view=>JSON.stringify([view.targets,view.start_count,view.frames.map(({keypoints,silhouette,...frame})=>frame)]);
+  const evidence=view=>JSON.stringify([view.targets,view.start_count,view.frames.map(({keypoints,silhouette,...frame})=>{
+    if(mask && frame.frame_index===mask.frame_index) {
+      const {silhouette_editable,silhouette_reason,...source}=frame;return source;
+    }
+    return frame;
+  })]);
   if(apply && evidence(v)!==evidence(bodyPointsView)) throw Error("Observation editing changed the original targets, starts or image bindings.");
   return v;
 }
@@ -1182,6 +1211,7 @@ async function runBodyPoints(apply=false) {
         if(apply) withdrawBodyFit();
         withdrawBodyTargets(); withdrawBodyStarts(); keepBodyInput(view,input,inputFile,modelFile); stopBodyPoints();
         bodyPointsSource ??= {inputFile,modelFile}; bodyPointsView=view; bodyPointsDraft=copyBodyPoints(view.frames); bodyPointsPending=false;
+        bodyPointsReviewText=m.report;
         renderBodyPoints(); bodyPointsDownload();
         $("bodyPointsStatus").textContent=(apply?"Applied ":"Loaded ")+view.frames.reduce((n,f)=>n+f.keypoints.length,0)+" landmarks and "+
           view.frames.reduce((n,f)=>n+(f.silhouette?.lines.length ?? 0),0)+" silhouette slices. Continue with starting values, or preview and fit the current input.";
@@ -1189,6 +1219,79 @@ async function runBodyPoints(apply=false) {
     };
     current.onerror=error=>{if(current===bodyPointsWorker)fail(error);};
     current.postMessage({request:id,op:"body-fit-observations",model,input,edits},[model]);
+  } catch(error) {fail(error);}
+}
+function clearBodyMask() {
+  for(const id of ["bodyMaskFile","bodyMaskFitRows","bodyMaskCheckRows","bodyMaskFitColumns","bodyMaskCheckColumns","bodyMaskSigma","bodyMaskEvidence"]) $(id).value="";
+}
+function changeBodyMask() {
+  if(bodyPointsBusy) {
+    stopBodyPoints();bodyPointsDownload();
+    $("bodyPointsStatus").textContent="Mask import cancelled after its source or declarations changed; the last applied input is unchanged.";
+  }
+  controls();
+}
+function bodyMaskSelection(name) {
+  const frame=bodyPointsView.frames[bodyPointsSelected], samples=[];
+  const sigma=bodySilhouetteNumber($("bodyMaskSigma").value,1e-6,1e6,"mask contour sigma");
+  const evidence=$("bodyMaskEvidence").value;
+  if(!evidence.trim() || new Blob([evidence]).size>3000 ||
+      evidence.includes("decoded_mask_sha256:") || evidence.includes("encoded_mask_sha256:")) {
+    throw Error("Declare segmentation, clothing and occlusion evidence (1..3000 bytes), without source-hash markers.");
+  }
+  for(const [id,axis,partition] of [["bodyMaskFitRows","horizontal","fit"],["bodyMaskCheckRows","horizontal","held_out"],
+      ["bodyMaskFitColumns","vertical","fit"],["bodyMaskCheckColumns","vertical","held_out"]]) {
+    const text=$(id).value.trim();if(!text)continue;
+    for(const token of text.split(",")) {
+      if(!/^(0|[1-9]\d*)$/.test(token.trim())) throw Error("Mask slice positions must be zero-based integers separated by commas.");
+      const index=Number(token.trim()), limit=frame.image_size_px[axis==="horizontal"?1:0];
+      if(!Number.isSafeInteger(index) || index>=limit) throw Error("A declared mask slice lies outside this frame.");
+      samples.push({axis,index,sigma_px:sigma,partition});
+    }
+  }
+  if(samples.length<1 || samples.length>64 || new Set(samples.map(s=>s.axis+":"+s.index)).size!==samples.length) {
+    throw Error("Declare 1–64 distinct mask slices; a row or column cannot be both FIT and CHECK.");
+  }
+  return {input_sha256:bodyPointsView.input_sha256,model_sha256:bodyPointsView.model_sha256,
+    frame_index:bodyPointsSelected,mask_name:name,evidence,samples};
+}
+async function runBodyMask() {
+  if(bodyCaptureBusy || bodyTargetsBusy || bodyTargetsView || bodyPointsBusy || bodyPointsPending || bodyFitBusy ||
+      bodyStartsBusy || bodyStartsPending || !bodyPointsView || bodyPointsView.frames[bodyPointsSelected].silhouette) return;
+  const inputFile=bodyInputFile(),modelFile=$("bodyFitModel").files[0],maskFile=$("bodyMaskFile").files[0];
+  stopBodyPoints();const id=bodyPointsTicket;$("bodyPointsError").textContent="";
+  const fail=error=>{
+    if(id!==bodyPointsTicket)return;
+    stopBodyPoints();bodyPointsDownload();$("bodyPointsError").textContent=String(error.message || error);
+    $("bodyPointsStatus").textContent="Mask not imported. The last applied input is unchanged; correct the mask or declarations and retry.";controls();
+  };
+  try {
+    if(!inputFile || inputFile!==bodyPointsSource?.inputFile || !modelFile || modelFile!==bodyPointsSource?.modelFile ||
+        !modelFile.size || modelFile.size>512*1024*1024 || !maskFile || !maskFile.size || maskFile.size>128*1024*1024) {
+      throw Error("Use the opened input and exact model, and choose a binary PNG mask up to 128 MiB.");
+    }
+    const selection=bodyMaskSelection(maskFile.name),input=bodyPointsView.input;
+    bodyPointsBusy=true;bodyPointsDownload();withdrawBodyFit();stopBodySilhouetteDrawing();controls();
+    $("bodyPointsStatus").textContent="Reading the local mask and checking its exact source bindings…";
+    const model=await modelFile.arrayBuffer();if(id!==bodyPointsTicket)return;
+    const mask=await maskFile.arrayBuffer();if(id!==bodyPointsTicket)return;
+    if(model.byteLength!==modelFile.size || mask.byteLength!==maskFile.size) throw Error("A selected source changed while it was being read.");
+    const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"});bodyPointsWorker=current;
+    current.onmessage=({data:m})=>{
+      if(current!==bodyPointsWorker || m.request!==bodyPointsTicket)return;
+      if(m.type==="progress") {$("bodyPointsStatus").textContent=m.text;return;}
+      if(m.type==="error") {fail(m.message);return;}
+      try {
+        const view=checkedBodyPointsView(m.report,input,true,selection);
+        withdrawBodyTargets();withdrawBodyStarts();keepBodyInput(view,input,inputFile,modelFile);stopBodyPoints();
+        bodyPointsView=view;bodyPointsReviewText=m.report;bodyPointsDraft=copyBodyPoints(view.frames);bodyPointsPending=false;
+        clearBodyMask();renderBodyPoints();bodyPointsDownload();
+        $("bodyPointsStatus").textContent="Imported "+selection.samples.length+" source-bound silhouette slices into "+view.frames[selection.frame_index].label+
+          ". Review the read-only samples over the photograph, then continue with starting values or fitting.";
+      } catch(error) {fail(error);}
+    };
+    current.onerror=error=>{if(current===bodyPointsWorker)fail(error);};
+    current.postMessage({request:id,op:"body-fit-mask",model,input,mask,selection:JSON.stringify(selection)},[model,mask]);
   } catch(error) {fail(error);}
 }
 async function runBodyPointsImage() {
@@ -2081,11 +2184,14 @@ $("bodyFitReviewRun").onclick=runBodyReview;
 $("bodyFitStartRun").onclick=runBodyStartReview;
 $("bodyPointsLoad").onclick=()=>runBodyPoints();
 $("bodyPointsApply").onclick=()=>runBodyPoints(true);
+$("bodyMaskImport").onclick=runBodyMask;
+for(const event of ["change","click","cancel"]) $("bodyMaskFile").addEventListener(event,changeBodyMask);
+for(const id of ["bodyMaskFitRows","bodyMaskCheckRows","bodyMaskFitColumns","bodyMaskCheckColumns","bodyMaskSigma","bodyMaskEvidence"]) $(id).addEventListener("input",changeBodyMask);
 $("bodyPointsFrame").addEventListener("change",()=>{
   if(bodyPointsBusy || bodyFitBusy || bodyStartsBusy || bodyStartsPending) return;
   const index=Number($("bodyPointsFrame").value);
   if(!Number.isSafeInteger(index) || !bodyPointsView?.frames[index]) return;
-  withdrawBodyPointsImage(); bodyPointsSelected=index; renderBodyPoints();
+  withdrawBodyPointsImage(); clearBodyMask(); bodyPointsSelected=index; renderBodyPoints();
 });
 $("bodyPointsTarget").addEventListener("change",renderBodyPointForm);
 for(const id of ["bodyPointsX","bodyPointsY","bodyPointsSigma","bodyPointsPartition"]) $(id).addEventListener(id==="bodyPointsPartition"?"change":"input",editBodyPoint);

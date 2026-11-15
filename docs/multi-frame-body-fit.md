@@ -91,6 +91,30 @@ Fail-closed operator boundaries enforced by this route (covered end-to-end in
 - Accepted body predictions carry `MODEL_FIT` provenance and never promote `round` readiness to
   `READY` (`MEASUREMENTS_NOT_READY` until required `MEASURED_TAPE` records are supplied).
 
+## Import local segmentation masks in the browser
+
+After opening the prepared observations, select a frame and expand **Import a segmented
+silhouette mask for this frame**. Choose its opaque 8-bit grayscale PNG: background must be
+exactly 0 and foreground exactly 255. The mask must already use the selected photograph's
+oriented dimensions and calibrated lens coordinates. When using corrected captures, segment
+the downloaded corrected PNG.
+
+Enter the zero-based horizontal rows and vertical columns to sample, with separate FIT and
+CHECK lists, an explicit contour sigma and the segmentation/clothing/occlusion evidence.
+Unused lists may remain blank. At most 64 distinct slices are admitted, and at least one must
+contain foreground. Border foreground, soft pixels, transparency, metadata-driven orientation,
+resizing and out-of-domain contours refuse. FIT/CHECK roles are declared before fitting.
+
+Import adds only the selected frame's source-bound silhouette. Apply or cancel other pending
+observations first; a frame with an existing silhouette cannot be overwritten. Imported samples
+stay read-only and can be reviewed over the verified original photograph. Download the prepared
+input and import receipt, then continue through the ordinary starting-value and fitting controls.
+The receipt retains both encoded-PNG and decoded-pixel hashes, original frame identity and slice
+declarations. To correct an imported mask, restore the original input or reopen a saved draft
+from before the import. Changing sources or cancelling prevents late worker results from being
+applied. All processing is local; this operation establishes numerical/source consistency, not
+segmentation accuracy, anatomical visibility or real-person fit.
+
 ## Prepare a body-fit draft from local still photographs
 
 In **Fit one body shape across changing poses**, select the converted model and expand

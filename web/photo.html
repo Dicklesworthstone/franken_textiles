@@ -389,7 +389,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
   <label>Or load existing prepared observations <input id="bodyFitInput" type="file" accept=".json,application/json"></label>
   <p><small>The request declares the exact model hash, calibrated cameras, anatomical correspondences,
     FIT/CHECK roles, parameter bounds and every initialization. Reviewed inline silhouette slices are
-    supported. A path-based capture input or mask manifest must first be prepared with the native tools;
+    supported, and binary silhouette PNGs can be imported below. A path-based capture input must first be prepared with the native tools;
     this page does not read local paths or infer landmarks from a video. Input limit: 16 MiB; model limit: 512 MiB.</small></p>
   <details>
     <summary>Declare or correct anatomical model targets</summary>
@@ -462,6 +462,28 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
         <p><small>At most 64 distinct slices and eight ordered, disjoint foreground intervals per slice.
           Include foreground on at least one slice. Pending silhouette and landmark edits are applied together below.</small></p>
       </fieldset>
+      <details><summary>Import a segmented silhouette mask for this frame</summary>
+        <p>Choose an opaque 8-bit grayscale PNG with 0 for background and 255 for foreground.
+          It must match this frame's stored orientation, dimensions and lens coordinates exactly.
+          For a corrected capture, segment its corrected PNG. Pixels are never resized or thresholded.</p>
+        <p><small>Declare slices before fitting. Row and column numbers are zero-based integers,
+          separated by commas. Leave unused lists blank. FIT slices constrain the shape; CHECK slices
+          independently test it. At most 64 distinct slices are allowed. Import requires this frame
+          to have no existing silhouette and all pending edits to be applied or cancelled.</small></p>
+        <label>Binary mask PNG <input id="bodyMaskFile" type="file" accept="image/png,.png" disabled></label>
+        <label>Horizontal FIT rows <input id="bodyMaskFitRows" type="text" placeholder="420, 540" disabled></label>
+        <label>Horizontal CHECK rows <input id="bodyMaskCheckRows" type="text" placeholder="100, 480" disabled></label>
+        <label>Vertical FIT columns <input id="bodyMaskFitColumns" type="text" disabled></label>
+        <label>Vertical CHECK columns <input id="bodyMaskCheckColumns" type="text" disabled></label>
+        <label>Contour sigma for these slices (px)
+          <input id="bodyMaskSigma" type="number" min="0.000001" max="1000000" step="any" disabled></label>
+        <label>Segmentation source, clothing and occlusion evidence
+          <textarea id="bodyMaskEvidence" rows="3" maxlength="3000" disabled></textarea></label>
+        <p><button id="bodyMaskImport" disabled>Import mask into this frame</button></p>
+        <p><small>Imported slices retain exact mask hashes and stay read-only. Review them over the
+          verified photograph and download the prepared input before continuing to starting values.
+          To replace imported evidence, restore the original input or open the saved pre-import draft.</small></p>
+      </details>
       <p><button id="bodyPointsApply" disabled>Check and apply all observations</button>
         <button id="bodyPointsReset">Restore original input</button></p>
     </div>

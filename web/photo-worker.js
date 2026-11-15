@@ -81,6 +81,19 @@ self.onmessage = async ({data: m}) => {
       self.postMessage({type:"result",request:m.request,report});
       return;
     }
+    if(m.op==="body-fit-mask") {
+      if(typeof m.input!=="string" || new TextEncoder().encode(m.input).length>16*1024*1024 ||
+          typeof m.selection!=="string" || new TextEncoder().encode(m.selection).length>64*1024 ||
+          !(m.model instanceof ArrayBuffer) || m.model.byteLength===0 || m.model.byteLength>512*1024*1024 ||
+          !(m.mask instanceof ArrayBuffer) || m.mask.byteLength===0 || m.mask.byteLength>128*1024*1024) {
+        throw Error("Mask import needs prepared input up to 16 MiB, model up to 512 MiB, a binary PNG up to 128 MiB and declarations up to 64 KiB.");
+      }
+      if(typeof ftx.body_fit_mask!=="function") throw Error("Rebuild web/pkg: missing binary body-mask import.");
+      self.postMessage({type:"progress",request:m.request,text:"Checking exact source bindings and binary mask pixels; sampling the declared FIT and CHECK slices…"});
+      const report=ftx.body_fit_mask(new Uint8Array(m.model),m.input,new Uint8Array(m.mask),m.selection);
+      self.postMessage({type:"result",request:m.request,report});
+      return;
+    }
     if(m.op==="body-fit-starts" || m.op==="body-fit-observations" || m.op==="body-fit-targets") {
       const observations=m.op==="body-fit-observations", targets=m.op==="body-fit-targets", editLimit=observations || targets?256:64;
       if(typeof m.input!=="string" || new TextEncoder().encode(m.input).length>16*1024*1024 ||

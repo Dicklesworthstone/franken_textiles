@@ -423,6 +423,179 @@ fn portable_silhouette_authoring_reaches_actual_native_and_portable_fit() {
 }
 
 #[test]
+fn portable_binary_masks_preserve_sources_and_replay_native_sampling_and_fitting() {
+    use ftx_wasm::body_fit::{body_fit_mask, body_fit_observations, fit_body};
+
+    let dir = setup();
+    let (model, mut original) = fixture();
+    long_frame_ids(&mut original, u64::MAX - 200_000);
+    original["model"]["root_rotation_rad"] = json!([-0.0, 0.0, 0.0]);
+    original["fit"]["frames"].as_array_mut().unwrap().reverse();
+    let masks = mask_manifest_for(&dir, &original);
+    let manifest = read(&dir, "masks/manifest.json");
+    write(&dir, "input.json", &original);
+    let native_masks = run(&dir, &["--silhouettes", "masks/manifest.json"], 0);
+    let mut source = format!(" \n{original}\n");
+    for (index, mask) in masks.iter().enumerate() {
+        let png = encode_png_gray(mask);
+        let selection = json!({
+            "input_sha256":sha256_hex(source.as_bytes()),"model_sha256":sha256_hex(&model),
+            "frame_index":index,"mask_name":format!("mask-{index}.png"),
+            "evidence":manifest["evidence"],"samples":manifest["frames"][index]["samples"]
+        });
+        let before: Value = serde_json::from_str(&source).unwrap();
+        let imported = body_fit_mask(&model, &source, &png, &selection.to_string()).unwrap();
+        assert_eq!(
+            imported["original_input_sha256"],
+            sha256_hex(source.as_bytes())
+        );
+        assert_eq!(
+            imported["mask_import"]["encoded_mask_sha256"],
+            sha256_hex(&png)
+        );
+        assert_eq!(
+            imported["mask_import"]["decoded_mask_sha256"],
+            sha256_hex(&mask.data)
+        );
+        assert_eq!(
+            imported["mask_import"]["frame"],
+            before["fit"]["frames"][index]["frame"]
+        );
+        assert_eq!(imported["mask_import"]["samples"], selection["samples"]);
+        assert_eq!(imported["frames"][index]["silhouette_editable"], false);
+        source = imported["input"].as_str().unwrap().to_owned();
+        let mut without_import: Value = serde_json::from_str(&source).unwrap();
+        without_import["fit"]["frames"][index]
+            .as_object_mut()
+            .unwrap()
+            .remove("silhouette");
+        assert_eq!(
+            without_import, before,
+            "only the selected silhouette may change"
+        );
+        let opened = body_fit_observations(&model, &source, "").unwrap();
+        let mut edits = observation_edits(&opened);
+        edits["frames"][index]["silhouette_edit"] = json!({"action":"remove"});
+        assert!(body_fit_observations(&model, &source, &edits.to_string()).is_err());
+        let mut repeat = selection.clone();
+        repeat["input_sha256"] = json!(sha256_hex(source.as_bytes()));
+        assert!(body_fit_mask(&model, &source, &png, &repeat.to_string()).is_err());
+    }
+    let portable = fit_body(&model, &source, "50", "100000").unwrap();
+    assert_eq!(portable["status"], "ACCEPTED");
+    assert_eq!(
+        portable["input"]["frames"][1]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
+    for (frame, native) in portable["input"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(native_masks["result"]["input"]["frames"].as_array().unwrap())
+    {
+        assert_eq!(frame["silhouette"]["lines"], native["silhouette"]["lines"]);
+    }
+    for (attempt, native) in portable["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(native_masks["result"]["attempts"].as_array().unwrap())
+    {
+        assert_eq!(attempt["cost_history"], native["cost_history"]);
+    }
+    std::fs::write(dir.join("input.json"), &source).unwrap();
+    assert_eq!(portable, run(&dir, &[], 0)["result"]);
+}
+
+#[test]
+fn portable_binary_masks_refuse_stale_or_transformed_sources_and_invalid_slices() {
+    use ftx_wasm::body_fit::body_fit_mask;
+
+    let (model, original) = fixture();
+    let source = original.to_string();
+    let mut mask = Gray::filled(1280, 960, 0);
+    mask.data[500 * 1280 + 100..500 * 1280 + 201].fill(255);
+    let png = encode_png_gray(&mask);
+    let selection = json!({
+        "input_sha256":sha256_hex(source.as_bytes()),"model_sha256":sha256_hex(&model),
+        "frame_index":0,"mask_name":"synthetic.png","evidence":"Synthetic binary contour; no wearer data",
+        "samples":[{"axis":"horizontal","index":500,"sigma_px":1.0,"partition":"held_out"}]
+    });
+    let imported = body_fit_mask(&model, &source, &png, &selection.to_string()).unwrap();
+    assert_eq!(
+        imported["frames"][0]["silhouette"]["lines"][0]["intervals_px"],
+        json!([[99.5, 200.5]])
+    );
+    assert_eq!(
+        imported["frames"][0]["silhouette"]["lines"][0]["partition"],
+        "held_out"
+    );
+
+    for (field, value) in [
+        ("input_sha256", json!("0".repeat(64))),
+        ("model_sha256", json!("0".repeat(64))),
+        ("frame_index", json!(8)),
+        ("mask_name", json!("../mask.png")),
+        ("evidence", json!("")),
+        ("evidence", json!("decoded_mask_sha256:invented")),
+    ] {
+        let mut changed = selection.clone();
+        changed[field] = value;
+        assert!(
+            body_fit_mask(&model, &source, &png, &changed.to_string()).is_err(),
+            "{field}"
+        );
+    }
+    for (field, value) in [
+        ("index", json!(960)),
+        ("index", json!(500.5)),
+        ("sigma_px", json!(0)),
+        ("partition", json!("inferred")),
+    ] {
+        let mut changed = selection.clone();
+        changed["samples"][0][field] = value;
+        assert!(
+            body_fit_mask(&model, &source, &png, &changed.to_string()).is_err(),
+            "{field}"
+        );
+    }
+    let mut duplicate = selection.clone();
+    duplicate["samples"]
+        .as_array_mut()
+        .unwrap()
+        .push(selection["samples"][0].clone());
+    assert!(body_fit_mask(&model, &source, &png, &duplicate.to_string()).is_err());
+    assert!(body_fit_mask(&model, &(source.clone() + "\n"), &png, &selection.to_string()).is_err());
+    assert!(body_fit_mask(&model, &source, &png, &" ".repeat(64 * 1024 + 1)).is_err());
+
+    let mut soft = mask.clone();
+    soft.data[500 * 1280 + 100] = 128;
+    let mut cropped = mask.clone();
+    cropped.data[0] = 255;
+    let mut rgb_header = png.clone();
+    rgb_header[25] = 2;
+    let mut depth_header = png.clone();
+    depth_header[24] = 16;
+    for invalid in [
+        encode_png_gray(&soft),
+        encode_png_gray(&cropped),
+        encode_png_gray(&Gray::filled(1280, 960, 0)),
+        encode_png_gray(&Gray::filled(16, 16, 0)),
+        rgb_header,
+        depth_header,
+        vec![0xff, 0xd8, 0xff, 0xd9],
+    ] {
+        assert!(body_fit_mask(&model, &source, &invalid, &selection.to_string()).is_err());
+    }
+    let mut occupied = original.clone();
+    occupied["fit"]["frames"][0]["silhouette"] = manual_contour();
+    let occupied = occupied.to_string();
+    let mut rebound = selection.clone();
+    rebound["input_sha256"] = json!(sha256_hex(occupied.as_bytes()));
+    assert!(body_fit_mask(&model, &occupied, &png, &rebound.to_string()).is_err());
+}
+
+#[test]
 fn portable_silhouette_edits_preserve_existing_roles_and_allow_explicit_removal() {
     use ftx_wasm::body_fit::body_fit_observations;
     let (model, mut source) = fixture();

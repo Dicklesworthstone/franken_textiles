@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,bodyObservations=null,bodyTargets=null,bodyCaptureCatalogue=undefined,bodyCaptureClass=undefined,lensTriangulation=undefined,cameraTriangulation=undefined,referenceScaleTriangulation=undefined,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,bodyObservations=null,bodyMask=undefined,bodyTargets=null,bodyCaptureCatalogue=undefined,bodyCaptureClass=undefined,lensTriangulation=undefined,cameraTriangulation=undefined,referenceScaleTriangulation=undefined,calibrationReport=cameraReport()}={}) {
   const sent=[],transfers=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -56,11 +56,12 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function fit_body(model,input,iterations,maxEvaluations){calls.push({kind:'fit-body',model:[...model],input,iterations,maxEvaluations});if(failBodyFit)throw Error('model SHA-256 mismatch');return JSON.stringify(bodyFitReport());}
   function body_fit_starts(model,input,edits){calls.push({kind:'body-starts',model:[...model],input,edits});return JSON.stringify(bodyStartsReport({input}));}
   function body_fit_observations(model,input,edits){calls.push({kind:'body-observations',model:[...model],input,edits});return JSON.stringify(bodyPointsReport({input}));}
+  function body_fit_mask(model,input,mask,selection){calls.push({kind:'body-mask',model:[...model],input,mask:[...mask],selection});return ' {"imported":"native mask result"}\r\n';}
   function body_fit_targets(model,input,edits){calls.push({kind:'body-targets',model:[...model],input,edits});return JSON.stringify(bodyTargetsReport({input}));}
   function review_body_fit_start(model,input,startIndex,frameIndex){calls.push({kind:'body-start-review',model:[...model],input,startIndex,frameIndex});if(failBodyStart)throw Error('no declared initialization at that index');return JSON.stringify(bodyStartFrameReport({start_index:Number(startIndex),frame_index:Number(frameIndex),start_count:4,frame_count:8}));}
   function review_body_fit_frame(model,report,frameIndex){calls.push({kind:'body-frame-review',model:[...model],report,frameIndex});if(failBodyReview)throw Error('full mesh keypoint disagrees with the accepted 3-pixel fit gate');return JSON.stringify(bodyFrameReport());}
   const context=vm.createContext({Uint8Array,ArrayBuffer,TextEncoder,JSON,Error,URL,self:{postMessage:(m,transfer)=>{sent.push(m);transfers.push(transfer || []);}}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','triangulate_with_lens_noise','triangulate_with_camera_noise','triangulate_with_reference_scale_noise','bundle_adjust','still_window','fit_body','body_fit_starts','body_fit_observations','body_fit_targets','review_body_fit_start','review_body_fit_frame','body_capture_catalogue','WebBodyCapture'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','triangulate_with_lens_noise','triangulate_with_camera_noise','triangulate_with_reference_scale_noise','bundle_adjust','still_window','fit_body','body_fit_starts','body_fit_observations','body_fit_mask','body_fit_targets','review_body_fit_start','review_body_fit_frame','body_capture_catalogue','WebBodyCapture'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('WebBodyFitImage',bodyImageClass ?? WebBodyFitImage);
@@ -74,6 +75,7 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
     this.setExport('fit_body',fit_body);
     this.setExport('body_fit_starts',bodyStarts ?? body_fit_starts);
     this.setExport('body_fit_observations',bodyObservations ?? body_fit_observations);
+    this.setExport('body_fit_mask',bodyMask===undefined?body_fit_mask:bodyMask);
     this.setExport('body_fit_targets',bodyTargets ?? body_fit_targets);
     this.setExport('body_capture_catalogue',bodyCaptureCatalogue===undefined?body_capture_catalogue:bodyCaptureCatalogue);
     this.setExport('WebBodyCapture',bodyCaptureClass===undefined?WebBodyCapture:bodyCaptureClass);
@@ -125,7 +127,7 @@ const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text
 async function photoPage({decode,materialsToken=null}={}) {
   const e=Object.fromEntries([...read('photo.html').matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   for(const id of ['photo','sheet','calibration','cameraInput','cameraSheet','cameraImages','cameraDirectory','cameraNoise'])e[id].type='file';
-  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','triangulationLensNoise','triangulationSheetNoise','triangulationReferenceScaleNoise','bodyFitModel','bodyFitInput','bodyFitSaved','bodyFitReviewImage','bodyPointsImage','bodyCaptureImages','bodyCaptureCalibration','bodyCaptureSheet'])if(e[id])e[id].type='file';e.points.type='textarea';
+  for(const id of ['pointFile','optionsFile','draftFile','sectionWidthFile','sectionDepthFile','triangulationInput','triangulationNoise','triangulationLensNoise','triangulationSheetNoise','triangulationReferenceScaleNoise','bodyFitModel','bodyFitInput','bodyFitSaved','bodyFitReviewImage','bodyPointsImage','bodyMaskFile','bodyCaptureImages','bodyCaptureCalibration','bodyCaptureSheet'])if(e[id])e[id].type='file';e.points.type='textarea';
   for(const [id,value] of Object.entries({referenceMode:'plain',paper:'auto',points:'{}',distance:'2500',depth:'0',click:'3',level:'1.5',bootstrap:'200',name:'across_back',cameraMode:'images',geometryOperation:'triangulate',bundleIterations:'50'}))e[id].value=value;
   for(const [id,value] of Object.entries({sectionLevel:'waist',sectionMode:'girth',sectionClothing:'0',sectionRatio:'1',sectionRatioSigma:'0',sectionTapeSigma:'10'}))e[id].value=value;
   e.bodyFitIterations.value='50';e.bodyFitEvaluations.value='100000';
@@ -1567,6 +1569,111 @@ function addSilhouette(p,overrides={}) {
   for(const [id,value] of Object.entries({bodySilhouetteAxis:'horizontal',bodySilhouetteAt:'100.25',bodySilhouetteSigma:'1.5',
     bodySilhouettePartition:'held_out',bodySilhouetteIntervals:'30.5, 90.75\n120, 200',bodySilhouetteEvidence:'Synthetic rectified outline; no clothing or occlusion.',...overrides})) silhouetteField(p,id,value);
 }
+
+function selectBodyMask(p,overrides={}) {
+  p.e.bodyMaskFile.files=[file('binary PNG bytes','body-mask.png')];p.e.bodyMaskFile.handlers.change();
+  for(const [id,value] of Object.entries({bodyMaskFitRows:'200',bodyMaskCheckRows:'100',bodyMaskFitColumns:'',
+    bodyMaskCheckColumns:'300',bodyMaskSigma:'1.5',bodyMaskEvidence:'Reviewed synthetic segmentation; no clothing or occlusion.',...overrides})) {
+    p.e[id].value=value;p.e[id].handlers.input();
+  }
+}
+function maskImportResult(view,message) {
+  const request=JSON.parse(message.selection),encoded='d'.repeat(64),decoded='e'.repeat(64),frame=view.frames[request.frame_index];
+  const result={...view,input:' {"native":"sampled mask","timestamp_us":18446744073709551615}\r\n',
+    input_sha256:'b'.repeat(64),original_input_sha256:request.input_sha256,
+    frames:view.frames.map((frame,index)=>index!==request.frame_index?frame:{...frame,silhouette_editable:false,silhouette_reason:'Imported mask samples are source-bound and read-only.',
+      silhouette:{evidence:request.evidence+'; encoded_mask_sha256:'+encoded+'; decoded_mask_sha256:'+decoded,
+        lines:request.samples.map(s=>({axis:s.axis,at_px:s.index,sigma_px:s.sigma_px,partition:s.partition,intervals_px:[[20.5,90.5]]}))}}),
+    mask_import:{schema:'ftx-body-mask-import/1',frame_index:request.frame_index,source_input_sha256:request.input_sha256,
+      input_sha256:'b'.repeat(64),model_sha256:request.model_sha256,mask_name:request.mask_name,evidence:request.evidence,
+      samples:request.samples.map(s=>({axis:s.axis,index:s.index,partition:s.partition,sigma_px:s.sigma_px})),
+      image_size_px:frame.image_size_px,rotation_cw_deg:frame.rotation_cw_deg,encoded_mask_sha256:encoded,decoded_mask_sha256:decoded}};
+  return result;
+}
+
+test('body-mask worker forwards exact mask bytes and refuses missing engines and transport limits',async()=>{
+  const request={request:68,op:'body-fit-mask',model:new Uint8Array([1,5]).buffer,mask:new Uint8Array([8,4,2]).buffer,
+    input:' {"timestamp_us":18446744073709551615}\r\n',selection:' {"samples":[]}\n'};
+  const w=await photoWorker(),result=await w.send(request);
+  assert.equal(result.type,'result');assert.equal(result.report,' {"imported":"native mask result"}\r\n');
+  assert.deepEqual(w.calls,[{kind:'body-mask',model:[1,5],input:request.input,mask:[8,4,2],selection:request.selection}]);
+  const missing=await photoWorker({bodyMask:null});
+  assert.match((await missing.send(request)).message,/missing binary body-mask import/);
+  const refused=await photoWorker({bodyMask:()=>{throw Error('mask pixels are not binary');}});
+  assert.match((await refused.send(request)).message,/not binary/);
+  for(const bad of [{selection:null},{selection:' '.repeat(64*1024+1)},{input:null},{model:new ArrayBuffer(0)},{mask:new ArrayBuffer(0)}]) {
+    const current=await photoWorker();assert.equal((await current.send({...request,...bad})).type,'error');assert.equal(current.calls.length,0);
+  }
+});
+
+test('body-mask controls preserve declared samples and hand source-bound read-only observations to fitting',async()=>{
+  const p=await photoPage(),source=selectBodyFit(p),view=await loadBodyPoints(p);selectBodyMask(p);
+  await p.e.bodyMaskImport.onclick();const w=p.current(),message=w.messages[0],request=JSON.parse(message.selection);
+  assert.equal(message.op,'body-fit-mask');assert.equal(message.input,source);
+  assert.equal(request.input_sha256,view.input_sha256);assert.equal(request.model_sha256,view.model_sha256);
+  assert.equal(request.mask_name,'body-mask.png');assert.equal(request.frame_index,0);
+  assert.deepEqual(request.samples,[{axis:'horizontal',index:200,sigma_px:1.5,partition:'fit'},
+    {axis:'horizontal',index:100,sigma_px:1.5,partition:'held_out'},{axis:'vertical',index:300,sigma_px:1.5,partition:'held_out'}]);
+  assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.e.bodyPointsDownloads.children.length,0);
+  const result=maskImportResult(view,message),text=JSON.stringify(result);
+  await w.emit({type:'result',request:message.request,report:text});
+  assert.equal(p.e.bodyPointsError.textContent,'');assert.match(p.e.bodyPointsStatus.textContent,/Imported 3/);
+  assert.equal(p.e.bodySilhouetteAdd.disabled,true);assert.equal(p.e.bodySilhouetteClear.disabled,true);
+  assert.equal(p.e.bodyMaskImport.disabled,true);assert.equal(p.e.bodyMaskFile.disabled,true);
+  assert.equal(await p.urls.get(p.e.bodyPointsDownloads.children[0].href).text(),result.input);
+  assert.equal(await p.urls.get(p.e.bodyPointsDownloads.children[1].href).text(),text);
+  await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,result.input);p.e.bodyFitCancel.onclick();
+  chooseBodyPoint(p,'p1',1);
+  assert.equal(p.e.bodyMaskFile.disabled,false);assert.equal(p.e.bodyMaskFile.files.length,0);assert.equal(p.e.bodyMaskFitRows.value,'');
+});
+
+test('body-mask controls refuse ambiguous slices and cannot overwrite pending or existing silhouettes',async()=>{
+  for(const [id,value,pattern] of [
+    ['bodyMaskFitRows','200, 200',/distinct/],['bodyMaskFitRows','100',/both FIT and CHECK/],
+    ['bodyMaskFitRows','200.5',/integers/],['bodyMaskFitRows','480',/outside/],
+    ['bodyMaskSigma','',/sigma/],['bodyMaskSigma','0',/sigma/],
+    ['bodyMaskEvidence','',/evidence/],['bodyMaskEvidence','encoded_mask_sha256:invented',/source-hash/]]) {
+    const p=await photoPage();selectBodyFit(p);await loadBodyPoints(p);selectBodyMask(p,{[id]:value});
+    const count=p.workers.length;await p.e.bodyMaskImport.onclick();assert.equal(p.workers.length,count);
+    assert.match(p.e.bodyPointsError.textContent,pattern);
+  }
+  const p=await photoPage();selectBodyFit(p);await loadBodyPoints(p);selectBodyMask(p);addSilhouette(p);
+  const count=p.workers.length;assert.equal(p.e.bodyMaskImport.disabled,true);await p.e.bodyMaskImport.onclick();assert.equal(p.workers.length,count);
+  p.e.bodyPointsCancel.onclick();assert.equal(p.e.bodyMaskImport.disabled,false);
+});
+
+test('body-mask source changes and cancellation cannot publish stale imports',async()=>{
+  for(const change of ['edit','cancel','source']) {
+    const p=await photoPage();selectBodyFit(p);const view=await loadBodyPoints(p);selectBodyMask(p);
+    await p.e.bodyMaskImport.onclick();const w=p.current(),message=w.messages[0],result=maskImportResult(view,message);
+    if(change==='edit') {p.e.bodyMaskSigma.value='2';p.e.bodyMaskSigma.handlers.input();}
+    else if(change==='cancel')p.e.bodyPointsCancel.onclick();
+    else p.e.bodyFitModel.handlers.change();
+    assert.equal(w.dead,true);
+    await w.emit({type:'result',request:message.request,report:JSON.stringify(result)});
+    assert.doesNotMatch(p.e.bodyPointsStatus.textContent,/Imported 3/);
+    if(change==='source')assert.equal(p.e.bodyPointsEditor.hidden,true);
+    else {
+      assert.equal(p.e.bodySilhouetteLine.children.length,0);
+      assert.equal(await p.urls.get(p.e.bodyPointsDownloads.children[0].href).text(),view.input);
+    }
+  }
+});
+
+test('body-mask replies cannot change roles, other frames or image bindings',async()=>{
+  for(const mutate of [
+    result=>{result.frames[0].silhouette.lines[0].partition='held_out';},
+    result=>{result.mask_import.encoded_mask_sha256='invalid';},
+    result=>{result.frames[1].keypoints=[{name:'p1',pixel_px:[20,30],sigma_px:1,partition:'fit'}];},
+    result=>{result.frames[0].image_review='different image';},
+  ]) {
+    const p=await photoPage();selectBodyFit(p);const view=await loadBodyPoints(p);selectBodyMask(p);
+    await p.e.bodyMaskImport.onclick();const w=p.current(),message=w.messages[0],result=maskImportResult(view,message);mutate(result);
+    await w.emit({type:'result',request:message.request,report:JSON.stringify(result)});
+    assert.notEqual(p.e.bodyPointsError.textContent,'');assert.equal(p.e.bodySilhouetteLine.children.length,0);
+    assert.equal(await p.urls.get(p.e.bodyPointsDownloads.children[0].href).text(),view.input);
+  }
+});
 
 test('body-silhouette authoring composes source-bound frame drafts with landmarks and hands the exact native input to fitting',async()=>{
   const p=await photoPage(),original=selectBodyFit(p),view=await loadBodyPoints(p);addSilhouette(p);
