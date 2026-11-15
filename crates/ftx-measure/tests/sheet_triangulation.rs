@@ -155,7 +155,11 @@ fn shared_reference_scale_matches_analytic_stereo_cross_covariance() {
     assert_eq!(report.reference_origin_m, Vec3::ZERO);
     assert!((report.jacobian_m_per_fraction.unwrap() - point).norm() < 1e-10);
     // An independent 1-percent common scale mode: [0.0008, -0.002, 0.0015] metres.
-    let expected = [[6.4e-7, -1.6e-6, 1.2e-6], [-1.6e-6, 4e-6, -3e-6], [1.2e-6, -3e-6, 2.25e-6]];
+    let expected = [
+        [6.4e-7, -1.6e-6, 1.2e-6],
+        [-1.6e-6, 4e-6, -3e-6],
+        [1.2e-6, -3e-6, 2.25e-6],
+    ];
     for (actual, expected) in report
         .covariance_m2
         .unwrap()
@@ -301,6 +305,14 @@ fn unavailable_reference_scale_preserves_geometry_without_partial_precision() {
     rejected.observations[2].pixel_px.x += 50.;
     let result = triangulate_with_reference_scale_noise(&rejected, &noise).unwrap();
     assert!(result.triangulation.point_m.is_none());
-    assert_eq!(result.conditional_reference_scale_uncertainty.status, "UNAVAILABLE");
-    assert!(result.conditional_reference_scale_uncertainty.covariance_m2.is_none());
+    assert_eq!(
+        result.conditional_reference_scale_uncertainty.status,
+        "UNAVAILABLE"
+    );
+    assert!(
+        result
+            .conditional_reference_scale_uncertainty
+            .covariance_m2
+            .is_none()
+    );
 }

@@ -1314,6 +1314,12 @@ retained drape receipt. In the existing heat-condition JSON, set
 `radiation.automatic_material_face: true` and omit explicit face/property strings. Independent
 sheets use their canonical positive outside face; layered coverage selects the actual outer side
 from cloth/body normals. The result retains the chosen observation and material identity.
+For prescribed compression, the same automatic controls remain available. Retain an original
+`invariants.optical_faces` qualification in every acquired pressure/branch source, and independently
+qualify each mapped emissivity. Covered radiation requires both source sides; independent and
+exposed sheets require the positive side. Native admission checks the complete source and pressure
+domain before motion and after each branch change. Named cases and saved replay retain the
+original qualification bytes.
 No face editor or missing optical data is supplied by the page. See
 [material optical faces](material-optical-faces.md) for the source, specimen, spectral and
 temperature qualifications and a runnable synthetic stack. The same stack request is available

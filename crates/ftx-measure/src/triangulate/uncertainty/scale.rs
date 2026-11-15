@@ -128,9 +128,7 @@ fn covariance(point: Vec3, sigma_fraction: f64) -> Result<(Mat3, Vec3), Refusal>
         std::array::from_fn(|i| std::array::from_fn(|j| weighted[i] * weighted[j]));
     for (i, row) in rows.iter().enumerate() {
         for (j, value) in row.iter().enumerate() {
-            if !value.is_finite()
-                || (weighted[i] != 0. && weighted[j] != 0. && *value == 0.)
-            {
+            if !value.is_finite() || (weighted[i] != 0. && weighted[j] != 0. && *value == 0.) {
                 return Err(super::unavailable(
                     "reference-scale covariance overflowed or underflowed",
                 ));

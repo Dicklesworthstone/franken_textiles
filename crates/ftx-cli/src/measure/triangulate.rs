@@ -3,8 +3,9 @@
 use ftx_core::Refusal;
 use ftx_measure::triangulate::uncertainty::{
     ClickNoiseInput, LensNoiseInput, ReferenceScaleNoiseInput, SheetCornerNoiseInput,
-    triangulate_with_click_noise, triangulate_with_lens_noise, triangulate_with_reference_scale_noise,
-    triangulate_with_sheet_noise, validate_camera_noise_sources, validate_reference_scale_sources,
+    triangulate_with_click_noise, triangulate_with_lens_noise,
+    triangulate_with_reference_scale_noise, triangulate_with_sheet_noise,
+    validate_camera_noise_sources, validate_reference_scale_sources,
 };
 use ftx_measure::triangulate::{TriangulationInput, triangulate};
 use serde_json::Value;

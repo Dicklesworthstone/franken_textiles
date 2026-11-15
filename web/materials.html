@@ -1366,8 +1366,11 @@ Neither control infers pressure from body contact; normal compression work is re
 For body/layer heat, current conditioned thickness changes the covered layers and gaps while covered and exposed cloth retain one thermal state.
 Select each heat history explicitly. Both modes admit dry textiles with prescribed films or separately
 qualified convection and radiation. With compression, choose an exact emissivity property and exposed
-material face; the source must qualify that property across the prescribed pressure history. Automatic
-optical-face selection is unavailable for compressed textiles. Body/layer heat keeps covered-cloth and
+material face, or automatic selection from a qualified material face mapping. The pressure acquisition must
+qualify each emissivity across the prescribed history; automatic selection also requires an explicit
+<code>invariants.optical_faces</code> declaration for the original side assignment. Covered radiation requires
+both physical sides to remain qualified as the cloth moves; independent and exposed sheets use the positive
+source side. Each acquired branch carries its own qualification. Body/layer heat keeps covered-cloth and
 exposed-cloth conditions independent; each interval can use exterior exchange, films or explicitly
 adiabatic exposed cloth. Covered exterior exchange requires separate bare-body films. The retained
 energy history separates convection, radiation, films and normal compression work. Wet laws and

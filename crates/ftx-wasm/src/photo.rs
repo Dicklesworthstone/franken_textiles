@@ -207,8 +207,9 @@ pub fn triangulate_with_reference_scale_noise(
     )?;
     let mut report = triangulate_with_camera_noise(input, click_noise, lens_noise, sheet_noise)?;
     let input = parse(input)?;
-    let result =
-        ftx_measure::triangulate::uncertainty::triangulate_with_reference_scale_noise(&input, &scale)?;
+    let result = ftx_measure::triangulate::uncertainty::triangulate_with_reference_scale_noise(
+        &input, &scale,
+    )?;
     report["conditional_reference_scale_uncertainty"] =
         serde_json::to_value(result.conditional_reference_scale_uncertainty)
             .map_err(|e| invalid(e.to_string()))?;

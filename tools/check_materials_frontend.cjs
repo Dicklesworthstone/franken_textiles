@@ -22001,9 +22001,9 @@ test('guided controlled compression preserves original gap and pressure sources 
   assert.equal(current.messages.length,before,'A cancelled source read cannot dispatch the replaced declaration');
   p.ready();await p.e.scenario.onclick();assert.ok(p.current().messages.at(-1).scenarioRequest.includes(raw));
 });
-test('guided controlled compression freezes named radiation cases and preserves their source joins independently of later drafts',async()=>{
+test('guided controlled compression freezes named automatic radiation cases and preserves their source joins independently of later drafts',async()=>{
   const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
-  const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:12,coefficient:4,radiation:'explicit'});
+  const exterior=authorExterior(p,'guidedMotionHeatExterior',{air:12,coefficient:4,radiation:'automatic'});
   for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
   const raw=guidedClearanceCompressionSource();guidedCompressionSource(p,raw);await saveGuidedCase(p,'clearance-cycle');
   assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
@@ -22020,16 +22020,16 @@ test('guided controlled compression freezes named radiation cases and preserves 
   assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
 });
 test('guided controlled compression refuses unsupported heating and malformed controls without dispatch',async()=>{
-  for(const policy of ['radiation','water','deformation']) {
+  for(const policy of ['water','deformation']) {
     const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
-    authorExterior(p,'guidedMotionHeatExterior',{radiation:policy==='radiation'?'automatic':'none'});
+    authorExterior(p,'guidedMotionHeatExterior',{radiation:'none'});
     for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
     guidedCompressionSource(p,guidedClearanceCompressionSource());
     if(policy==='water')guidedLiquidSource(p);
     if(policy==='deformation'){p.e.guidedMotionHeatPlastic.checked=true;p.e.guidedMotionHeatPlastic.handlers.change();}
     const before=p.current().messages.length;await p.e.scenario.onclick();
     assert.equal(p.current().messages.length,before,policy);
-    assert.match(p.e.error.textContent,policy==='radiation'?/automatic face selection is unavailable/:/without liquid or deformation-heating/);
+    assert.match(p.e.error.textContent,/without liquid or deformation-heating/);
   }
   const {p}=await guidedScenarioSetup();guidedMotionControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);
   for(const time of [0.002,0.004,0.006])await addGuidedMotion(p,time,35);
@@ -22228,17 +22228,34 @@ test('guided layered radiation cases retain exact compression acquisitions after
   assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
 });
 
-test('guided layered compression refuses automatic radiation faces on either exterior path before dispatch',async()=>{
-  for(const domain of ['Coverage','Exposed']) {
-    const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+test('guided layered compression freezes automatic radiation on covered and exposed paths',async()=>{
+  for(const domain of ['Coverage','Exposed','Both']) {
+    const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
     guidedCoverageHeatControls(p);guidedMovingTopology(p);guidedCoverageHeatFilm(p);
     p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();
-    guidedCoverageHeatFilm(p,'Exposed');authorBareFilms(p,'guidedMotionCoverageBare');
-    authorExterior(p,'guidedMotion'+domain+'Exterior',{radiation:'automatic'});
+    guidedCoverageHeatFilm(p,'Exposed');authorBareFilms(p,'guidedMotionCoverageBare',[35,5,0.2,0.4]);
+    const covered=domain!=='Exposed'?authorExterior(p,'guidedMotionCoverageExterior',{radiation:'automatic'}):null;
+    const exposed=domain!=='Coverage'?authorExterior(p,'guidedMotionExposedExterior',{air:25,radiation:'automatic'}):null;
     await addGuidedMotion(p,0.002,35);guidedCompressionSource(p);
     p.e.guidedMotionCompressionTarget.value='transient_coverage';p.e.guidedMotionCompressionTarget.handlers.change();
-    const before=p.current().messages.length;await p.e.scenario.onclick();
-    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/automatic face selection is unavailable/);
+    await saveGuidedCase(p,'automatic '+domain);
+    assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
+    for(const path of domain==='Both'?['Coverage','Exposed']:[domain]) {
+      authorExterior(p,'guidedMotion'+path+'Exterior',{air:60,radiation:'explicit',property:'later_emissivity',face:'later face'});
+    }
+    await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+    await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
+    assert.equal(sent.type,'scenario',p.e.error.textContent);assert.ok(sent.scenarioRequest.includes(guidedCompressionOriginal));
+    const cases=JSON.parse(sent.scenarioRequest).cases;
+    assert.equal(cases.length,1);const heat=cases[0].scenario.motion.transient_coverage;
+    assert.deepEqual(heat.prescribed_compression,JSON.parse(guidedCompressionOriginal));
+    for(const [field,exterior] of [['exterior_exchange',covered],['exposed_exterior_exchange',exposed]]) {
+      if(exterior)assert.deepEqual(heat[field],[exterior]);
+      else assert.equal(Object.hasOwn(heat,field),false);
+    }
+    p.select('guidedMotionCompressionFile','{obsolete later source');p.e.guidedMotionCompressionFile.handlers.change();
+    assert.equal(worker.dead,false);p.emit(scenarioReport());await p.e.scenario.onclick();
+    assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
   }
 });
 

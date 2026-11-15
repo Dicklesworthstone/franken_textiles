@@ -2477,7 +2477,6 @@ pub(super) mod tests {
         exterior
     }
 
-
     fn automatic_radiation() -> Exterior {
         let mut exterior = radiation(0., 3., -10.);
         let optical = exterior.radiation.as_mut().unwrap();

@@ -748,11 +748,9 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
           heatingFields.some(field => heat[field] != null)) {
         throw Error("Prescribed compression requires dry film-boundary heat or qualified exterior exchange, without liquid or deformation-heating policies.");
       }
-      const exchanges = consumer === "transient_coverage" ?
-        ["exterior_exchange", "exposed_exterior_exchange"] : ["exterior_exchange"];
-      if (exchanges.some(field => heat[field]?.some(exterior => exterior?.radiation?.automatic_material_face === true))) {
-        throw Error("Compressed textile radiation requires an explicit emissivity property and exposed face qualified for the declared pressure history; automatic face selection is unavailable.");
-      }
+      // The canonical pressure conditioner qualifies the original optical-face assignment and
+      // every selected emissivity across the acquired pressure/branch history. Preserve the
+      // requested automatic mode and complete source bytes for that admission.
       if (consumer === "transient_coverage") {
         heat.exterior_exchange?.forEach((exterior, index) => {
           if (exterior == null) return;
