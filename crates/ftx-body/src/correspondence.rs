@@ -97,7 +97,8 @@ pub struct Configuration {
     /// Independently fitted controls in each frame, in vector order. Empty retains the same
     /// explicitly fixed root and joint values in every frame; their correctness is not inferred.
     pub pose_parameters: Vec<Parameter>,
-    /// Named model locations in canonical key order.
+    /// Named model locations in canonical key order. May be empty for surface-only evaluation;
+    /// fitting callers must then require actual silhouette evidence.
     pub keypoints: BTreeMap<String, Target>,
     /// Requested independent rest-body tape functionals, in vector order.
     pub measurements: Vec<String>,
@@ -214,32 +215,28 @@ fn surface_identity(indices: [usize; 3], weights: [f64; 3]) -> Vec<(usize, u64)>
 
 impl CorrespondenceModel {
     /// Check the exact model/configuration and resolve authored controls and correspondences.
+    /// Empty targets support surface-only evaluation; observation admission belongs to the fitter.
     ///
     /// # Errors
     /// Model mismatch, unsupported or duplicate controls, invalid bounds/axes/targets or budgets.
     pub fn new(model: AnnyModel, config: Configuration, hash: &str) -> Result<Self, Refusal> {
-        Self::checked(model, config, hash, false)
+        Self::checked(model, config, hash)
     }
 
     /// Prepare target authoring with an initially empty map, without inventing correspondences.
-    /// Ordinary fitting still uses [`Self::new`] and requires an authored target.
+    /// This uses the same model-evaluation checks as [`Self::new`], without fitting observations.
     ///
     /// # Errors
-    /// The same configuration refusals as [`Self::new`], except an empty target map is allowed.
+    /// The same configuration refusals as [`Self::new`].
     pub fn for_target_review(
         model: AnnyModel,
         config: Configuration,
         hash: &str,
     ) -> Result<Self, Refusal> {
-        Self::checked(model, config, hash, true)
+        Self::checked(model, config, hash)
     }
 
-    fn checked(
-        model: AnnyModel,
-        config: Configuration,
-        hash: &str,
-        allow_empty_targets: bool,
-    ) -> Result<Self, Refusal> {
+    fn checked(model: AnnyModel, config: Configuration, hash: &str) -> Result<Self, Refusal> {
         if hash != config.model_sha256
             || hash.len() != 64
             || model.data().header.anny_version != "0.6.1"
@@ -256,7 +253,6 @@ impl CorrespondenceModel {
             || !config.root_translation_m.is_finite()
             || !config.root_rotation_rad.is_finite()
             || config.root_rotation_rad.norm() > std::f64::consts::PI
-            || (!allow_empty_targets && config.keypoints.is_empty())
             || config.keypoints.len() > 128
             || config.measurements.len() > 32
             || config.joints.len() > 32

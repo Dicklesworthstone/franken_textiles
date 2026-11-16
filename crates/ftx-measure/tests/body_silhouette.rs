@@ -18,7 +18,11 @@ impl BodyModel for Panel {
         Ok(vec![])
     }
     fn points(&self, _: &[f64], p: &[f64]) -> Result<Vec<Vec3>, Refusal> {
-        Ok(vec![Vec3::new(p[0], 0., 1.)])
+        if self.layout.keypoints.is_empty() {
+            Ok(vec![])
+        } else {
+            Ok(vec![Vec3::new(p[0], 0., 1.)])
+        }
     }
     fn surface(&self, s: &[f64], p: &[f64]) -> Result<SurfaceMesh, Refusal> {
         Ok(SurfaceMesh {
@@ -152,6 +156,130 @@ fn brown_scene() -> (Panel, BodyFitInput) {
         }
     }
     (model, input)
+}
+
+#[test]
+fn silhouette_only_views_recover_shape_and_lateral_pose_without_dummy_targets() {
+    for (mut model, mut input) in [scene(), brown_scene()] {
+        model.layout.keypoints.clear();
+        for frame in &mut input.frames {
+            frame.keypoints.clear();
+        }
+        let original = serde_json::to_value(&input).unwrap();
+        let prepared = prepare_start_authoring(&input, &model.layout).unwrap();
+        assert_eq!(serde_json::to_value(prepared).unwrap(), original);
+        let baseline = fit_body(&input, &model, &FitOptions::default()).unwrap();
+        assert_eq!(baseline.status, "ACCEPTED", "{baseline:#?}");
+        assert!(baseline.model.keypoints.is_empty());
+        assert!(baseline.input.measurements.is_empty());
+        assert_eq!(serde_json::to_value(&input).unwrap(), original);
+        let solution = baseline.solution.as_ref().unwrap();
+        assert!((solution.shape[0] - 0.6).abs() < 1e-7);
+        for (pose, truth) in solution.poses.iter().zip([-0.1, 0.1]) {
+            assert!((pose.values[0] - truth).abs() < 1e-7);
+        }
+        assert!(
+            baseline
+                .attempts
+                .iter()
+                .flat_map(|attempt| &attempt.checks)
+                .all(|check| check.name.starts_with("silhouette:") && check.passed)
+        );
+        let mut bad_check = input.clone();
+        bad_check.frames[0].silhouette.as_mut().unwrap().lines[1].intervals_px[0][1] += 5.;
+        let rejected = fit_body(&bad_check, &model, &FitOptions::default()).unwrap();
+        assert_eq!(rejected.status, "REJECTED", "{rejected:#?}");
+        assert!(rejected.solution.is_none());
+        for (changed, accepted) in rejected.attempts.iter().zip(&baseline.attempts) {
+            assert_eq!(changed.cost_history, accepted.cost_history);
+        }
+
+        // A CHECK-only view cannot identify its free lateral pose, even though the other
+        // frame still supplies FIT silhouettes. Held-out evidence never repairs deficient rank.
+        let mut unobserved_pose = input.clone();
+        for line in &mut unobserved_pose.frames[0].silhouette.as_mut().unwrap().lines {
+            line.partition = Partition::HeldOut;
+        }
+        let report = fit_body(&unobserved_pose, &model, &FitOptions::default()).unwrap();
+        assert_eq!(report.status, "UNOBSERVABLE");
+        assert!(report.solution.is_none());
+
+        let report = fit_body(
+            &input,
+            &model,
+            &FitOptions {
+                max_model_evaluations: 1,
+                ..FitOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(report.status, "BUDGET_STOP");
+        assert!(report.solution.is_none());
+        input.frames.reverse();
+        for frame in &mut input.frames {
+            frame.silhouette.as_mut().unwrap().lines.reverse();
+        }
+        assert_eq!(
+            serde_json::to_value(&baseline).unwrap(),
+            serde_json::to_value(fit_body(&input, &model, &FitOptions::default()).unwrap())
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn silhouette_only_admission_requires_real_contours_and_preserves_draft_and_start_rules() {
+    let (mut model, mut input) = scene();
+    let unknown = input.frames[0].keypoints[0].clone();
+    model.layout.keypoints.clear();
+    for frame in &mut input.frames {
+        frame.keypoints.clear();
+    }
+    let mut draft = input.clone();
+    draft.starts.clear();
+    assert!(prepare_start_authoring(&draft, &model.layout).is_ok());
+    assert!(prepare_input(&draft, &model.layout).is_err());
+    for frame in &mut draft.frames {
+        frame.silhouette = None;
+    }
+    assert!(prepare_capture_authoring(&draft, &model.layout).is_ok());
+    assert!(prepare_start_authoring(&draft, &model.layout).is_err());
+    draft.starts = input.starts.clone();
+    assert!(fit_body(&draft, &model, &FitOptions::default()).is_err());
+
+    // Tape-only fitting is a different boundary; an empty target map cannot make this
+    // calibrated-image workflow silently accept frames with no image evidence at all.
+    model.layout.measurements.push("width".into());
+    draft.measurements.push(MetricObservation {
+        name: "width".into(),
+        value_m: 0.6,
+        sigma_m: 0.001,
+        evidence: "synthetic independent tape".into(),
+        partition: Partition::Fit,
+    });
+    assert!(prepare_start_authoring(&draft, &model.layout).is_err());
+    assert!(prepare_input(&draft, &model.layout).is_err());
+    model.layout.measurements.clear();
+
+    let mut invalid = input.clone();
+    invalid.frames[0].silhouette.as_mut().unwrap().lines.clear();
+    assert!(prepare_start_authoring(&invalid, &model.layout).is_err());
+    invalid = input.clone();
+    invalid.frames[0].keypoints.push(unknown);
+    assert!(prepare_input(&invalid, &model.layout).is_err());
+    invalid = input.clone();
+    invalid.starts[1] = invalid.starts[0].clone();
+    assert!(prepare_input(&invalid, &model.layout).is_err());
+
+    for frame in &mut input.frames {
+        for line in &mut frame.silhouette.as_mut().unwrap().lines {
+            line.partition = Partition::HeldOut;
+        }
+    }
+    assert!(prepare_start_authoring(&input, &model.layout).is_ok());
+    let report = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(report.status, "UNOBSERVABLE");
+    assert!(report.solution.is_none());
 }
 
 #[test]

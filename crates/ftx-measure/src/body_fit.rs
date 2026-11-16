@@ -39,6 +39,7 @@ pub struct ModelLayout {
     /// Empty means the model's fixed pose and placement are used in every view.
     pub pose: Vec<Parameter>,
     /// Correspondence labels in the exact order returned by `points`.
+    /// Empty layouts require actual silhouette evidence for initialization authoring and fitting.
     pub keypoints: Vec<String>,
     /// Metric scalar labels in the exact order returned by `measurements`.
     pub measurements: Vec<String>,
@@ -595,7 +596,7 @@ fn unique<'a>(names: impl Iterator<Item = &'a str>) -> bool {
 /// This performs the same identity, parameter-bound and distinct-start checks as [`fit_body`].
 /// It evaluates no body model and establishes neither observability nor acceptance.
 pub fn prepare_input(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyFitInput, Refusal> {
-    canonical(input, layout, 2, 1)
+    canonical(input, layout, 2, false)
 }
 
 /// Prepare an initialization editor, allowing zero or one declared start while it is incomplete.
@@ -605,7 +606,7 @@ pub fn prepare_start_authoring(
     input: &BodyFitInput,
     layout: &ModelLayout,
 ) -> Result<BodyFitInput, Refusal> {
-    canonical(input, layout, 0, 1)
+    canonical(input, layout, 0, false)
 }
 
 /// Validate a first capture draft before model targets and initializations have been authored.
@@ -615,14 +616,14 @@ pub fn prepare_capture_authoring(
     input: &BodyFitInput,
     layout: &ModelLayout,
 ) -> Result<BodyFitInput, Refusal> {
-    canonical(input, layout, 0, 0)
+    canonical(input, layout, 0, true)
 }
 
 fn canonical(
     input: &BodyFitInput,
     layout: &ModelLayout,
     minimum_starts: usize,
-    minimum_keypoints: usize,
+    allow_incomplete_evidence: bool,
 ) -> Result<BodyFitInput, Refusal> {
     let ns = layout.shape.len();
     let np = layout.pose.len();
@@ -635,7 +636,7 @@ fn canonical(
         || np > 18
         || ns + np * input.frames.len() > 128
         || input.measurements.len() > 32
-        || !(minimum_keypoints..=128).contains(&layout.keypoints.len())
+        || layout.keypoints.len() > 128
         || layout.measurements.len() > 32
     {
         return Err(invalid(
@@ -705,6 +706,14 @@ fn canonical(
             }
             frame.camera.ray(point.pixel_px)?;
         }
+    }
+    if layout.keypoints.is_empty()
+        && !allow_incomplete_evidence
+        && input.frames.iter().all(|frame| frame.silhouette.is_none())
+    {
+        return Err(invalid(
+            "body fitting without anatomical targets requires actual silhouette evidence",
+        ));
     }
     if !unique(input.measurements.iter().map(|p| p.name.as_str())) {
         return Err(invalid(

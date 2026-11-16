@@ -27,6 +27,222 @@ fn review(dir: &Path, output: &str, extra: &[&str], code: i32) -> Value {
 }
 
 #[test]
+fn silhouette_only_masks_replay_native_portable_starts_and_held_out_checks() {
+    for brown in [false, true] {
+        let dir = setup();
+        let (bytes, mut input) = fixture();
+        let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true).unwrap()).unwrap();
+        let rest = model
+            .rest(&model.params(Phenotype {
+                height: 0.6,
+                weight: 0.45,
+                ..Phenotype::default()
+            }))
+            .unwrap();
+        let posed = model
+            .pose(
+                &rest,
+                &[
+                    Affine {
+                        m: Mat3::IDENTITY,
+                        t: Vec3::ZERO,
+                    },
+                    Affine {
+                        m: Mat3::IDENTITY,
+                        t: Vec3::ZERO,
+                    },
+                ],
+            )
+            .unwrap();
+        input["model"]["pose_parameters"] = json!([]);
+        input["model"]["keypoints"] = json!({});
+        input["model"]["measurements"] = json!([]);
+        input["fit"]["measurements"] = json!([]);
+        for (i, frame) in input["fit"]["frames"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            let mut camera: Camera = serde_json::from_value(frame["camera"].clone()).unwrap();
+            camera.center_m.x = if i == 0 { -0.1 } else { 0.1 };
+            if brown {
+                camera.intrinsics.distortion.radial[0] = 0.3;
+                camera.intrinsics.distortion.tangential = [0.002, -0.003];
+            }
+            frame["camera"] = json!(camera);
+            for (point, vertex) in frame["keypoints"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .zip(&posed.vertices)
+            {
+                point["pixel_px"] = json!(camera.project(*vertex).unwrap());
+            }
+        }
+        for start in input["fit"]["starts"].as_array_mut().unwrap() {
+            for pose in start["poses"].as_array_mut().unwrap() {
+                pose["values"] = json!([]);
+            }
+        }
+        // The independent raster uses projected synthetic vertices only to construct source
+        // masks. Those coordinates are discarded before any authoring, preview or fit call.
+        let masks = mask_manifest_for(&dir, &input);
+        let manifest_path = dir.join("masks/manifest.json");
+        let mut manifest: Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        for frame in manifest["frames"].as_array_mut().unwrap() {
+            // Horizontal edges identify width; vertical edges identify height. Fixed depth
+            // and fixed pose avoid the shape/root-distance gauge of a free camera-facing body.
+            frame["samples"].as_array_mut().unwrap().extend([
+                json!({"axis":"vertical","index":640,"sigma_px":1.0,"partition":"fit"}),
+                json!({"axis":"vertical","index":620,"sigma_px":1.0,"partition":"held_out"}),
+            ]);
+        }
+        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        for frame in input["fit"]["frames"].as_array_mut().unwrap() {
+            frame["keypoints"] = json!([]);
+        }
+        save(&dir, &input);
+        let source = std::fs::read_to_string(dir.join("input.json")).unwrap();
+        let observations =
+            ftx_wasm::body_fit::body_fit_observations(&bytes, &source, "").unwrap();
+        assert_eq!(observations["targets"], json!([]));
+        assert_eq!(observations["input"], source);
+        assert!(ftx_wasm::body_fit::body_fit_starts(&bytes, &source, "").is_err());
+        assert!(ftx_wasm::body_fit::fit_body(&bytes, &source, "50", "100000").is_err());
+        review(&dir, "missing-silhouettes", &[], 3);
+        assert!(!dir.join("missing-silhouettes").exists());
+        run(&dir, &["--out", "missing-silhouettes.json"], 3);
+        assert!(!dir.join("missing-silhouettes.json").exists());
+
+        let preview = review(
+            &dir,
+            "silhouette-starts",
+            &["--silhouettes", "masks/manifest.json"],
+            0,
+        )["result"]
+            .clone();
+        assert_eq!(preview["model"]["keypoints"], json!([]));
+        assert_eq!(preview["model"]["pose"], json!([]));
+        for start in preview["starts"].as_array().unwrap() {
+            for frame in start["frames"].as_array().unwrap() {
+                assert_eq!(frame["keypoints"], json!([]));
+                assert_eq!(frame["silhouette_comparisons"].as_array().unwrap().len(), 5);
+            }
+        }
+        let imported = run(&dir, &["--silhouettes", "masks/manifest.json"], 0)["result"].clone();
+        assert_eq!(imported["status"], "ACCEPTED");
+        assert_eq!(
+            imported["silhouette_input"]["masks"][0]["decoded_mask_sha256"],
+            sha256_hex(&masks[0].data)
+        );
+
+        let mut prepared = source;
+        for (i, mask) in masks.iter().enumerate() {
+            let selection = json!({
+                "input_sha256":sha256_hex(prepared.as_bytes()),
+                "model_sha256":sha256_hex(&bytes),"frame_index":i,
+                "mask_name":format!("mask-{i}.png"),"evidence":manifest["evidence"],
+                "samples":manifest["frames"][i]["samples"]
+            });
+            let encoded = encode_png_gray(mask);
+            let attached = ftx_wasm::body_fit::body_fit_mask(
+                &bytes,
+                &prepared,
+                &encoded,
+                &selection.to_string(),
+            )
+            .unwrap();
+            assert_eq!(attached["targets"], json!([]));
+            assert_eq!(attached["mask_import"]["decoded_mask_sha256"], sha256_hex(&mask.data));
+            prepared = attached["input"].as_str().unwrap().to_owned();
+        }
+        let starts: Vec<_> = input["fit"]["starts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|start| {
+                json!({"shape":start["shape"],"poses":[
+                    {"frame_index":0,"values":[]},{"frame_index":1,"values":[]}
+                ]})
+            })
+            .collect();
+        let edits = json!({"input_sha256":sha256_hex(prepared.as_bytes()),
+            "model_sha256":sha256_hex(&bytes),"starts":starts});
+        let authored =
+            ftx_wasm::body_fit::body_fit_starts(&bytes, &prepared, &edits.to_string()).unwrap();
+        assert_eq!(authored["pose"], json!([]));
+        prepared = authored["input"].as_str().unwrap().to_owned();
+        let prepared_value: Value = serde_json::from_str(&prepared).unwrap();
+        assert_eq!(prepared_value["model"]["keypoints"], json!({}));
+        for frame in prepared_value["fit"]["frames"].as_array().unwrap() {
+            assert_eq!(frame["keypoints"], json!([]));
+        }
+        let portable_preview =
+            ftx_wasm::body_fit::review_body_fit_start(&bytes, &prepared, "0", "0").unwrap();
+        assert_eq!(portable_preview["keypoints"], json!([]));
+        assert_eq!(portable_preview["pose_values"], json!([]));
+        assert_eq!(portable_preview["silhouette"]["lines"].as_array().unwrap().len(), 5);
+        assert_eq!(portable_preview["camera"], input["fit"]["frames"][0]["camera"]);
+
+        std::fs::write(dir.join("input.json"), &prepared).unwrap();
+        let native = run(&dir, &["--out", "silhouette-only.json"], 0)["result"].clone();
+        let portable = ftx_wasm::body_fit::fit_body(&bytes, &prepared, "50", "100000").unwrap();
+        assert_eq!(native, portable);
+        assert_eq!(native["status"], "ACCEPTED");
+        assert_eq!(native["model"]["keypoints"], json!([]));
+        assert_eq!(native["input"]["measurements"], json!([]));
+        assert!((native["solution"]["shape"][0].as_f64().unwrap() - 0.6).abs() < 0.02);
+        assert!((native["solution"]["shape"][1].as_f64().unwrap() - 0.45).abs() < 0.02);
+        for i in 0..2 {
+            assert_eq!(
+                native["attempts"][i]["cost_history"],
+                imported["attempts"][i]["cost_history"]
+            );
+            let inspected = ftx_wasm::body_fit::review_body_fit_frame(
+                &bytes,
+                &native.to_string(),
+                &i.to_string(),
+            )
+            .unwrap();
+            assert_eq!(inspected["keypoints"], json!([]));
+            assert_eq!(inspected["camera"], input["fit"]["frames"][i]["camera"]);
+            assert!(inspected["mesh_obj"].as_str().unwrap().contains("\nv "));
+        }
+        let reused =
+            ftx_body::accepted_shape::AcceptedShape::read(&native, &sha256_hex(&bytes), &[])
+                .unwrap();
+        assert!((reused.params.phenotype.height - 0.6).abs() < 0.02);
+        assert!((reused.params.phenotype.weight - 0.45).abs() < 0.02);
+
+        let mut rejected = prepared_value;
+        let line = rejected["fit"]["frames"][0]["silhouette"]["lines"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|line| line["axis"] == "horizontal" && line["partition"] == "held_out")
+            .unwrap();
+        let right = &mut line["intervals_px"][0][1];
+        *right = json!(right.as_f64().unwrap() + 10.0);
+        save(&dir, &rejected);
+        let source = std::fs::read_to_string(dir.join("input.json")).unwrap();
+        let native_bad = run(&dir, &["--mesh-out", "rejected-mesh"], 2)["result"].clone();
+        let portable_bad = ftx_wasm::body_fit::fit_body(&bytes, &source, "50", "100000").unwrap();
+        assert_eq!(native_bad, portable_bad);
+        assert_eq!(native_bad["status"], "REJECTED");
+        assert!(native_bad["solution"].is_null());
+        assert!(!dir.join("rejected-mesh").exists());
+        for i in 0..2 {
+            assert_eq!(
+                native_bad["attempts"][i]["cost_history"],
+                native["attempts"][i]["cost_history"]
+            );
+        }
+    }
+}
+
+#[test]
 fn start_review_projects_actual_declared_model_and_keeps_frame_identity() {
     let dir = setup();
     let (bytes, mut input) = fixture();

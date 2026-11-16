@@ -283,6 +283,11 @@ that fixed pose and placement are caller assumptions, not recovered values.
 begin with an empty or one-start draft. The four-start cap, validation of every supplied start,
 identity association, bounds and distinctness remain unchanged. It supplies no initialization
 values and cannot make a draft admissible to `fit_body`.
+Both preparation paths permit an empty anatomical-target layout only when at least one frame
+contains a validated silhouette with foreground. No unused target or landmark observation is
+synthesized. CHECK-only silhouettes remain independent checks; FIT evidence must still identify
+every free parameter through the undamped rank gate. A first capture draft may lack both targets
+and contours, but starts and fitting refuse that state even if it contains FIT tape measurements.
 `preview_keypoints` retains each original observation, FIT/CHECK role and sigma alongside the
 declared model point, projected pixel and raw residual when available. Model and camera refusals
 remain per-observation diagnostics; a large initialization residual is not an acceptance refusal.

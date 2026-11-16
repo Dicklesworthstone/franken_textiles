@@ -3250,7 +3250,10 @@ fn parallel_feed_shared_operator_replays_deadlines_recipe_selection_and_material
     assert_eq!(plan["production"]["schema"], "ftx-sewing-production/24");
     assert_eq!(parallel["schema"], "ftx-sewing-parallel/9");
     assert_eq!(parallel["selected"]["makespan_milliseconds"], 31104);
-    assert_eq!(parallel["feed_time_search"]["selected_feed_milliseconds"], 8004);
+    assert_eq!(
+        parallel["feed_time_search"]["selected_feed_milliseconds"],
+        8004
+    );
     assert_eq!(parallel["feed_time_search"]["optimality_proven"], true);
     assert_eq!(
         parallel["feed_time_search"]["search_scope"],
@@ -3270,7 +3273,10 @@ fn parallel_feed_shared_operator_replays_deadlines_recipe_selection_and_material
             "stitches_per_minute":pass["stitches_per_minute"]}]}]});
     let selected = portable(ftx_wasm::sew_select(PATTERN, &selection.to_string()).unwrap());
     // The inclusive deadline admits one garment on A and two on B: 8000 + 4*1334.
-    assert_eq!(selected["report"]["selected_scheduled_feed_milliseconds"], 13336);
+    assert_eq!(
+        selected["report"]["selected_scheduled_feed_milliseconds"],
+        13336
+    );
     assert_eq!(selected["report"]["optimality_proven"], true);
     let selected_options = selected["selected_options_json"].as_str().unwrap();
     let replay =
@@ -3278,7 +3284,10 @@ fn parallel_feed_shared_operator_replays_deadlines_recipe_selection_and_material
     assert_eq!(replay["plan"], selected["report"]["selected_plan"]);
     let chosen = &replay["plan"]["production"]["parallel"];
     assert_eq!(chosen["selected"]["makespan_milliseconds"], 27336);
-    assert_eq!(chosen["feed_time_search"]["completion_deadline_milliseconds"], 27336);
+    assert_eq!(
+        chosen["feed_time_search"]["completion_deadline_milliseconds"],
+        27336
+    );
     let mut release = 0;
     for phase in chosen["shared_operator"]["selected"]["steps"]
         .as_array()
@@ -3298,8 +3307,8 @@ fn parallel_feed_shared_operator_replays_deadlines_recipe_selection_and_material
     let studied = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
     assert_eq!(studied["comparison"]["frontier"], json!(["shared-feed"]));
     assert_eq!(
-        studied["comparison"]["alternatives"][0]["readings"]
-            ["sewing_scheduled_feed_milliseconds"]["value"],
+        studied["comparison"]["alternatives"][0]["readings"]["sewing_scheduled_feed_milliseconds"]
+            ["value"],
         13336.0
     );
     for (name, value) in [
@@ -3317,11 +3326,23 @@ fn parallel_feed_shared_operator_replays_deadlines_recipe_selection_and_material
             *plan
         );
         assert_eq!(
-            run(main, &directory, "sew-stitches", "pattern.json", "options.json"),
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "options.json"
+            ),
             program
         );
         assert_eq!(
-            run(main, &directory, "sew-select", "pattern.json", "selection.json"),
+            run(
+                main,
+                &directory,
+                "sew-select",
+                "pattern.json",
+                "selection.json"
+            ),
             selected
         );
         assert_eq!(
@@ -3329,11 +3350,20 @@ fn parallel_feed_shared_operator_replays_deadlines_recipe_selection_and_material
             studied
         );
         assert_eq!(
-            run(main, &directory, "sew-stitches", "pattern.json", "selected.json"),
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "selected.json"
+            ),
             replay
         );
     }
-    assert_eq!(fs::read_to_string(directory.join("options.json")).unwrap(), text);
+    assert_eq!(
+        fs::read_to_string(directory.join("options.json")).unwrap(),
+        text
+    );
     options["production"]["parallel"]["cells"][1]["available_at_milliseconds"] = json!(20001);
     assert!(ftx_wasm::manufacturing::sew_plan(PATTERN, &options.to_string()).is_err());
 }
@@ -3349,7 +3379,10 @@ fn parallel_feed_replays_exact_work_and_deadline_choices_through_both_clis_and_p
         portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap());
     let parallel = &program["plan"]["production"]["parallel"];
     assert_eq!(parallel["selected"]["makespan_milliseconds"], 31100);
-    assert_eq!(parallel["feed_time_search"]["selected_feed_milliseconds"], 8000);
+    assert_eq!(
+        parallel["feed_time_search"]["selected_feed_milliseconds"],
+        8000
+    );
     assert_eq!(parallel["feed_time_search"]["optimality_proven"], true);
     assert_eq!(parallel["optimality_proven"], false);
 
@@ -3361,7 +3394,10 @@ fn parallel_feed_replays_exact_work_and_deadline_choices_through_both_clis_and_p
             "needle":pass["needle"],"thread":pass["thread"],"max_stitch_mm":pass["max_stitch_mm"],
             "stitches_per_minute":pass["stitches_per_minute"]}]}]});
     let selected = portable(ftx_wasm::sew_select(PATTERN, &selection.to_string()).unwrap());
-    assert_eq!(selected["report"]["selected_scheduled_feed_milliseconds"], 13334);
+    assert_eq!(
+        selected["report"]["selected_scheduled_feed_milliseconds"],
+        13334
+    );
     assert_eq!(selected["report"]["optimality_proven"], true);
     let selected_options = selected["selected_options_json"].as_str().unwrap();
     let replay =
@@ -3381,8 +3417,8 @@ fn parallel_feed_replays_exact_work_and_deadline_choices_through_both_clis_and_p
     let studied = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
     assert_eq!(studied["comparison"]["frontier"], json!(["feed"]));
     assert_eq!(
-        studied["comparison"]["alternatives"][0]["readings"]
-            ["sewing_scheduled_feed_milliseconds"]["value"],
+        studied["comparison"]["alternatives"][0]["readings"]["sewing_scheduled_feed_milliseconds"]
+            ["value"],
         13334.0
     );
     for (name, text) in [
@@ -3399,11 +3435,23 @@ fn parallel_feed_replays_exact_work_and_deadline_choices_through_both_clis_and_p
             program["plan"]
         );
         assert_eq!(
-            run(main, &directory, "sew-stitches", "pattern.json", "options.json"),
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "options.json"
+            ),
             program
         );
         assert_eq!(
-            run(main, &directory, "sew-select", "pattern.json", "selection.json"),
+            run(
+                main,
+                &directory,
+                "sew-select",
+                "pattern.json",
+                "selection.json"
+            ),
             selected
         );
         assert_eq!(

@@ -6,6 +6,14 @@ parameter bounds and model identity; ftx-measure does not depend on ftx-body or 
 Optional `FitFrame::silhouette` supplies fixed horizontal/vertical contour scanlines. This is
 sampled keypoint/tape/silhouette fitting, not full-mask or real-photo qualification.
 
+A silhouette-only request may declare an empty keypoint layout and empty frame keypoint lists.
+At least one validated silhouette with foreground must then be attached before initialization
+authoring or fitting. The adapter returns an empty point vector and evaluates its ordinary surface;
+no unused anatomical target is required. First capture drafts can still lack all image evidence,
+but tape-only or blank-image requests cannot pass this fitting boundary. CHECK contours remain
+independent checks and never identify free parameters; FIT contours or independent FIT tapes must
+supply full local rank. Frames without FIT image evidence cannot identify a free per-frame pose.
+
 The input is `ftx-body-fit-input/1`: 2–8 fixed metric cameras with oriented image metadata,
 explicit named pixel correspondences and uncertainties, optional independent tape targets in
 metres, and 2–4 distinct starts with frame-identified pose vectors. Selected pose controls vary
@@ -113,7 +121,9 @@ metric-reference uncertainty, full-mask fitting, external inference and real-pho
 remain outside the numerical core implemented here. `tests/body_silhouette.rs` shows a shape
 variable that is unobservable from keypoints alone and recovered from silhouettes, with
 held-out independence and rejection, including independent radial-camera panel recovery without
-changing its original observations. `tests/silhouette.rs` checks analytic straight and curved
+changing its original observations. Target-free tests recover shared width and lateral translation
+from pinhole and independent Brown contours alone, retain CHECK-only rank refusal, and require
+actual contours before start/solve admission. `tests/silhouette.rs` checks analytic straight and curved
 triangle projection, double crossings, tangencies, coverage gaps/overlaps, mask boundaries and
 invalid inputs. Numerical kernel tests retain high-degree roots, bounded work and explicit
 refusal of unresolved thin-component topology.

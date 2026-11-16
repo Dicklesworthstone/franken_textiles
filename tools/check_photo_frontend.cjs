@@ -1724,6 +1724,64 @@ test('body-mask controls preserve declared samples and hand source-bound read-on
   assert.equal(p.e.bodyMaskFile.disabled,false);assert.equal(p.e.bodyMaskFile.files.length,0);assert.equal(p.e.bodyMaskFitRows.value,'');
 });
 
+test('silhouette-only mask authoring reaches fitting without anatomical targets',async()=>{
+  const p=await photoPage(),draft=bodyPointsReport({targets:[],start_count:0});
+  draft.frames=draft.frames.map(frame=>({...frame,keypoints:[]}));
+  const identities=bodyStartsReport().frames.map(frame=>frame.identity);
+  const snapshot=(frames,starts=[])=>' \r\n'+JSON.stringify({
+    schema:'ftx-anny-body-fit-input/1',model:{model_sha256:draft.model_sha256,keypoints:{}},
+    fit:{frames:frames.map((frame,index)=>({frame:identities[index],image_size_px:frame.image_size_px,
+      rotation_cw_deg:frame.rotation_cw_deg,keypoints:[],silhouette:frame.silhouette})),
+      starts:starts.map(start=>({shape:start.shape,poses:start.poses.map(pose=>({
+        frame:identities[pose.frame_index],values:pose.values}))}))},
+  }).replace(/"timestamp_us":"(\d+)"/g,'"timestamp_us":$1')+'\r\n';
+  const original=selectBodyFit(p,snapshot(draft.frames)),snapshots=[original];
+  let view=await loadBodyPoints(p,{...draft,input:original});
+  assert.equal(p.e.bodyPointsError.textContent,'');assert.equal(p.e.bodyPointsEditor.hidden,false);
+  assert.equal(p.e.bodyPointsTarget.children.length,1);assert.equal(p.e.bodyPointsX.disabled,true);
+  assert.equal(p.e.bodyFitRun.disabled,true);
+  for(const index of [0,1]) {
+    chooseBodyPoint(p,'',index);selectBodyMask(p);assert.equal(p.e.bodyMaskImport.disabled,false);
+    await p.e.bodyMaskImport.onclick();const worker=p.current(),message=worker.messages[0];
+    assert.equal(message.op,'body-fit-mask');assert.equal(message.input,snapshots.at(-1));
+    const selection=JSON.parse(message.selection);
+    assert.equal(selection.frame_index,index);assert.equal(selection.input_sha256,view.input_sha256);
+    const imported=maskImportResult(view,message),digest=(index===0?'b':'d').repeat(64);
+    imported.input=snapshot(imported.frames);imported.input_sha256=digest;imported.mask_import.input_sha256=digest;
+    await worker.emit({type:'result',request:message.request,report:JSON.stringify(imported)});
+    assert.equal(p.e.bodyPointsError.textContent,'');assert.equal(p.e.bodyFitRun.disabled,true);
+    assert.equal(p.e.bodySilhouetteAdd.disabled,true);
+    assert.equal(await p.urls.get(p.e.bodyPointsDownloads.children[0].href).text(),imported.input);
+    snapshots.push(imported.input);view=imported;
+  }
+  assert.ok(view.frames.every(frame=>frame.silhouette.lines.some(line=>line.partition==='fit')));
+  const starts=await loadBodyStarts(p,{pose:[],starts:[],
+    input_sha256:view.input_sha256,original_input_sha256:view.input_sha256});
+  assert.equal(p.current().messages[0].input,view.input);assert.equal(p.e.bodyStartsError.textContent,'');
+  p.e.bodyStartsAdd.onclick();p.e.bodyStartsMidpoint.onclick();
+  p.e.bodyStartsCopy.onclick();editBodyStart(p,'bodyStart-shape-0','0.7');
+  await p.e.bodyStartsApply.onclick();const applied=p.current(),message=applied.messages[0],edits=JSON.parse(message.edits);
+  assert.equal(message.input,view.input);assert.equal(edits.input_sha256,view.input_sha256);
+  assert.deepEqual(edits.starts.map(start=>start.shape),[[0.5],[0.7]]);
+  for(const start of edits.starts)assert.deepEqual(start.poses,[{frame_index:0,values:[]},{frame_index:1,values:[]}]);
+  const input=snapshot(view.frames,edits.starts);snapshots.push(input);
+  await applied.emit({type:'result',request:message.request,report:JSON.stringify({...starts,input,
+    input_sha256:'f'.repeat(64),original_input_sha256:view.input_sha256,starts:edits.starts})});
+  assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.e.bodyFitRun.disabled,false);
+  assert.equal(await p.urls.get(p.e.bodyStartsDownloads.children[0].href).text(),input);
+  await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,input);
+  assert.deepEqual(p.workers.flatMap(worker=>worker.messages.map(message=>message.op)),
+    ['body-fit-observations','body-fit-mask','body-fit-mask','body-fit-starts','body-fit-starts','fit-body']);
+  for(const source of snapshots) {
+    const prepared=JSON.parse(source);
+    assert.deepEqual(prepared.model.keypoints,{});
+    assert.ok(prepared.fit.frames.every(frame=>frame.keypoints.length===0));
+    for(const identity of identities)assert.ok(source.includes('"timestamp_us":'+identity.timestamp_us));
+  }
+  assert.equal(await new Blob([await p.e.bodyFitInput.files[0].arrayBuffer()]).text(),original);
+  p.e.bodyFitCancel.onclick();
+});
+
 test('body-mask controls refuse ambiguous slices and cannot overwrite pending or existing silhouettes',async()=>{
   for(const [id,value,pattern] of [
     ['bodyMaskFitRows','200, 200',/distinct/],['bodyMaskFitRows','100',/both FIT and CHECK/],

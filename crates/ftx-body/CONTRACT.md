@@ -244,6 +244,9 @@ remains unavailable. Report consistency is not authenticity or real-person fit.
 Anny evaluator behind native and portable multi-frame fitting. It checks the existing authored
 configuration against the exact array-verified model, resolves explicit vertex/surface/bone targets,
 and evaluates shared shape, independent root/joint poses and requested rest-body tape functionals.
+An empty target map returns no synthetic points and retains ordinary surface evaluation. The
+measurement boundary requires actual validated silhouette evidence before start authoring or
+fitting without targets; this evaluator does not infer image evidence or admit tape-only fitting.
 An empty `pose_parameters` array retains exactly the declared fixed root transform and joint angles
 in every frame. It adds no free nuisance control or inferred pose; fixed placement must be justified
 by the caller. Shape-only fitting uses the same model evaluation and source identity as articulated

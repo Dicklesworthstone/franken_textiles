@@ -426,6 +426,9 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <p>Add or correct 2D observations for the model targets already declared in this input. Verify an
       input-bound photograph before clicking, or enter independently reviewed stored-pixel coordinates.
       New points need an explicit uncertainty and FIT/CHECK role; existing roles and uncertainties stay fixed.</p>
+    <p>For silhouette-only fitting, skip the model target picker and open observations directly. Import
+      reviewed masks or author silhouette slices, then declare at least two distinct starts. The same
+      observability and held-out checks apply.</p>
     <p><button id="bodyPointsLoad" disabled>Open observations</button></p>
     <div id="bodyPointsEditor" hidden>
       <label>Frame <select id="bodyPointsFrame"></select></label>

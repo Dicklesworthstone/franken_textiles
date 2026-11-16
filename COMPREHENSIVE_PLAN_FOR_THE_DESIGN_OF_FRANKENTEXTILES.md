@@ -6077,6 +6077,25 @@ retain the same source policies, integer scores, selected stitches and separate 
 advances `ftx-pb2.2`; independent synthetic enumeration and replay do not establish physical
 factory timing, energy consumption, seam quality or authorization to execute machinery.
 
+### 25.217 Fit calibrated body silhouettes without dummy anatomical targets
+
+An empty anatomical target map can reach the existing surface-contour fitting authority directly.
+Capture and observation drafts permit incomplete evidence so original binary masks can be attached;
+start authoring and fitting then require at least one validated silhouette. No unused vertex target
+or synthetic landmark observation is invented. Native and portable mask import, independent starts,
+frame review, accepted-shape reuse and the Photo Workbench retain the same source identities.
+
+The existing rank test decides whether FIT evidence identifies every free variable. CHECK contours
+remain excluded from optimization and can reject the final body. Fixed depth or explicitly fixed
+pose makes the positive synthetic cases identifiable; a free pose in a CHECK-only frame remains
+unobservable. Blank/tape-only evidence, malformed masks, unknown observations, duplicate starts and
+budget exhaustion retain their ordinary refusals. Pinhole and original calibrated Brown cameras
+share the same admission path without relaxing projection, tolerance or surface checks.
+
+This advances `ftx-onn` through `ftx-onn.silhouette-only`. Source-level review and the actual browser
+authoring lifecycle are separate from pending native/compiled-WASM execution. Silhouette samples
+do not establish whole-mask agreement, clothing removal, anatomical accuracy or physical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

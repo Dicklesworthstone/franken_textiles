@@ -147,7 +147,7 @@ pub fn load_binary_mask_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Gr
     }
     let image = decode_png_with_limit(bytes, max_pixels, true).map_err(|message| bad(&message))?;
     let mut data = Vec::with_capacity(image.w * image.h);
-    for pixel in image.data.chunks_exact(3) {
+    for pixel in image.data.as_chunks::<3>().0 {
         // Never use luminance conversion: a near-black colored pixel can round to gray zero.
         match pixel {
             [0, 0, 0] => data.push(0),

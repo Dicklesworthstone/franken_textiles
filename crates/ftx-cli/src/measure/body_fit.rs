@@ -160,7 +160,7 @@ impl Adapter {
     }
 
     // Target authoring must bootstrap an empty map without inventing a model correspondence.
-    // Ordinary fitting and materialization still require at least one authored target.
+    // Fitting admits empty targets only when the measurement boundary validates silhouettes.
     fn for_target_review(
         model: AnnyModel,
         config: Configuration,

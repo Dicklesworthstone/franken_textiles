@@ -3,8 +3,11 @@
 `ftx measure fit-body` fits one Anny shape to named 2D correspondences across independently
 posed images, optionally constrained by independent tape measurements. Unlike triangulation
 or a stationary bundle, it does not assume the body stayed still between decoded frames.
-Optional sampled silhouettes constrain surface shape in addition to keypoints and tape.
-This is not full-mask fitting or FTX-21's real-photo acceptance gate.
+Sampled silhouettes can constrain surface shape alongside keypoints and tape, or supply the
+only image observations. For silhouette-only fitting, keep `model.keypoints` empty and each
+frame's `keypoints` list empty; no unused anatomical target is needed. Attach actual contour
+evidence before authoring starts or fitting. This is not full-mask fitting or FTX-21's real-photo
+acceptance gate.
 
 ```sh
 ftx measure fit-body observations.json --model /path/to/anny-0.6.1-default.ftxbody \
@@ -431,11 +434,12 @@ acquisition and native draft validation before publishing a new private director
 its preparation. Original choices and setup remain available in the output. Source paths still
 refer to the original local files, so this is not a portable capture archive.
 
-The new input intentionally has empty anatomical targets, photo observations and starts. Define
-targets with `body-target-review`/`body-targets`, review and annotate the resulting capture with
-`capture-review`, then author starts with `fit-start-review`/`fit-starts`. Only ordinary `fit-body`
-can evaluate observability, convergence, ambiguity and held-out acceptance. A constructed draft
-does not qualify physical print scale, anatomy, a fitted body or READY measurements.
+The new input intentionally has empty anatomical targets, photo observations and starts. For
+landmarks, define targets with `body-target-review`/`body-targets` and annotate them in
+`capture-review`. For silhouette-only fitting, keep the target map empty and attach explicitly
+sampled contours or a binary-mask manifest. Then author starts with `fit-start-review`/`fit-starts`.
+Only ordinary `fit-body` can evaluate observability, convergence, ambiguity and held-out acceptance.
+A constructed draft does not qualify physical print scale, anatomy, a fitted body or READY measurements.
 
 ## Review capture observations
 
@@ -618,8 +622,8 @@ promotion. The ordinary wearer confirmation still applies when reusing any later
 
 ## Author and inspect starting poses before fitting
 
-Once the photo observations and targets are reviewed, inspect every declared initialization in
-the calibrated image frame:
+Once the photo observations and any anatomical targets are reviewed, inspect every declared
+initialization in the calibrated image frame:
 
 ```sh
 ftx measure fit-start-review capture-review-002/capture.json --model /path/to/anny.ftxbody \
@@ -689,9 +693,14 @@ it and generate a fresh native review.
 ### Observe keypoints and contours, then continue directly to fitting in the local photo page
 
 Select the exact converted model and a prepared input in `web/photo.html`, then choose **Open
-observations**. The input may have empty observations and no starts, but its calibrated cameras
-and model targets must already be declared. The editor lists those target names and definitions
-for each original frame; it does not infer anatomy or add model targets.
+observations**. The input may have empty observations, no anatomical targets and no starts;
+its calibrated cameras must already be declared. Add explicit silhouette slices or import binary
+masks to fit without landmarks. Anatomical targets are required only for named keypoint observations;
+the editor lists those authored names and definitions without inferring anatomy or adding targets.
+Initialization authoring and fitting require actual attached silhouettes when the target map is
+empty. Independent FIT evidence must identify the selected shape and pose controls; silhouettes
+do not resolve an otherwise unconstrained shape/depth gauge. A known fixed pose can be declared
+with no free pose controls, while every start still identifies every original frame.
 
 For a frame with retained `capture_images`, select its original encoded photograph and choose
 **Verify and show photograph**. The native decoder checks its hash, exact frame identity,
