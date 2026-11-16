@@ -506,8 +506,10 @@ Configured output uses plan `/17`, production `/5`, parallel `/2`, consumables `
 Complete frozen replay preserves each source plan, the selected allocation and its combined order.
 The existing makespan objective remains the default allocation authority: actual feed, inventory and
 cost are conditional outputs of that assignment. Heterogeneous recipe searches must match that
-objective unless they explicitly request the complete thread-order allocation below. A time-selected
-allocation does not establish a separate feed or purchasing minimum.
+objective unless they explicitly request the complete thread-order or scheduled-feed allocations
+below. A time-selected
+allocation does not establish a separate feed or purchasing minimum. The scheduled-feed objective
+below supplies a separate additive allocation authority when machine feed work is the requirement.
 
 The same eight-cell, 256-expanded-operation and aggregate 200000 scheduling-work bounds apply.
 The retained outer and all configured cell source plans additionally share a 250000-station bound.
@@ -588,6 +590,83 @@ Actual stitches, complete thread inventory, manufacturing/design/scenario studie
 browser views consume the same retained allocation. Feed-only and thread-only comparisons retain
 the complete allocation policy and purchasing inputs, including unused cells and original outer
 selection domains. Omitting the new policy preserves the existing schemas and allocation behavior.
+
+### Minimize scheduled feed work across configured cells
+
+Configured independent cells can minimize total scheduled feed work while retaining complete
+garments and the existing exact source qualification. Keep the qualified version-2 policy,
+machines, recipes, setup, handling and availability declarations, and set:
+
+```json
+{
+  "objective": "minimize_feed_milliseconds",
+  "feed_time_search": {
+    "completion_deadline_milliseconds": 27334
+  }
+}
+```
+
+The deadline is optional: `"feed_time_search": {}` searches without an additional finish limit.
+An explicit limit is inclusive, measured from the common job origin and at most
+`9007199254740991` milliseconds. It includes availability, setup, handling, actual feed and final
+unloading. It does not merely cap the feed sum. Each cell's separately qualified finish window
+also remains in force.
+
+This objective requires `independent_whole_garment_cells/2` with independently qualified machines,
+fixtures and handling labor. Shared operators, shared fixture pools, thread-order search and a
+different time convention refuse. Every supplied configuration is still admitted even if left idle.
+Omitting the objective and its policy preserves the existing makespan path and schema.
+
+The score is the sum of the existing `ceil_cell_feed_milliseconds/1` clocks: round the complete
+actual feed of each used cell upward once, then add those integers. Idle cells contribute zero.
+Do not round the whole allocation's raw seconds once, or substitute the specialist route's
+per-operation ceiling. Exact addition is bounded by the existing integer clock domain.
+
+Two complete count-allocation dynamic programs reuse the original cell/count schedules. One
+admits only retained schedules that actually finish within all limits and selects the least feed.
+The other uses valid finish lower bounds to relax feasibility while keeping the same exact feed
+costs. Both are reserved within the original aggregate scheduling budget, alongside the retained
+makespan programs and schedule replays. Equal feed scores retain the first deterministic allocation.
+
+Plan `/35`, production `/23` and parallel `/8` retain the chosen physical cell schedules plus
+`parallel.feed_time_search`. Its `selected_feed_milliseconds`,
+`lower_bound_feed_milliseconds`, `lower_bound_attained` and `optimality_proven` describe the
+feed objective. `parallel.optimality_proven` still describes makespan. The report also retains
+the effective deadline, unresolved cell/count timing and any replacement of an infeasible
+first-cell baseline.
+
+A complete feasible feed incumbent remains usable when an inner serial search stops early.
+Matching the independently relaxed feed bound proves the feed minimum, even when an unrelated
+timing search remains unfinished. A potentially feasible cheaper count prevents that proof.
+If no retained allocation meets a deadline, the planner distinguishes unresolved timing from
+a valid lower bound that proves infeasibility; it never publishes an incomplete garment.
+Final source-schedule replay must reproduce both the chosen counts and exact feed score.
+
+For a synthetic illustration, give cell B in `examples/sewing-heterogeneous-options.json`
+an availability of 20000 ms while retaining its existing three-garment source inputs:
+
+| Objective | Copies on A / B | Complete job (ms) | Scheduled feed work (ms) |
+|---|---:|---:|---:|
+| Existing minimum makespan | 2 / 1 | 25500 | 18667 |
+| Minimum feed, no extra deadline | 0 / 3 | 31100 | 8000 |
+| Minimum feed, deadline 27334 ms | 1 / 2 | 27334 | 13334 |
+
+These are conditional software arithmetic examples. A later finish can reduce feed work; neither
+quantity establishes measured labor capacity, energy use, seam quality or factory throughput.
+
+Recipe selection accepts `ftx-sewing-selection/9` with
+`"objective": "minimize_parallel_feed_milliseconds"` and the same inner feed policy. An outer
+`completion_deadline_milliseconds` tightens the inner deadline before search. Selection report
+`/9` retains exact selected and per-trial scheduled milliseconds and separate feed proof.
+Material/design comparisons bind the complete allocation policy, original recipe domain and all
+cell sources, including unused ones, even for raw feed or thread metrics. Scheduled-feed readings
+also verify matching report versions, clocks, deadline and proof consistency.
+
+Native commands, portable bindings and the materials workbench consume this same allocation.
+The workbench shows integer feed, its independent lower bound and proof separately from elapsed
+completion and any deadline. Focused regressions independently enumerate feasible counts, check
+rounding and bounded proof, and replay full plans, stitches, recipes and study outcomes through
+the existing native and portable interfaces. No machine execution is authorized.
 
 ## Finite cell availability windows
 

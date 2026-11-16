@@ -30,11 +30,16 @@ pub mod shared_workholding;
 pub struct Policy {
     /// `independent_whole_garment_cells/1` or `/2`; no garment transfers are represented.
     pub model: String,
-    /// `minimize_makespan`, or `minimize_thread_observed_order_cost` for configured independent cells.
+    /// `minimize_makespan`, `minimize_feed_milliseconds`, or
+    /// `minimize_thread_observed_order_cost` for configured independent cells.
     pub objective: String,
     /// Optional complete-order allocation search, with separately bounded scheduling and purchasing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_order_search: Option<ThreadOrderSearch>,
+    /// Exact summed cell-feed objective with an optional inclusive job completion limit.
+    /// Exclusive with thread-order search; independent configured cells retain their own clocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed_time_search: Option<FeedTimeSearch>,
     /// `ceil_cell_feed_milliseconds/1`, or `ceil_operation_feed_milliseconds/1` with shared labor.
     pub time_basis: String,
     /// `independent_machines_fixtures_and_handling_labor/1`, or the separately qualified
@@ -84,6 +89,38 @@ pub struct ThreadOrderSearch {
     /// Inclusive job-origin finish limit, including every used cell's final unloading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_deadline_milliseconds: Option<u64>,
+}
+
+/// Minimize the sum of the existing independently ceiled complete cell-feed clocks.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeedTimeSearch {
+    /// Inclusive job-origin finish limit, including every used cell's final unloading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
+}
+
+/// Exact feed-work allocation and its proof, separate from elapsed completion optimality.
+#[derive(Clone, Debug, Serialize)]
+pub struct FeedTimeReport {
+    /// All complete independent cell/count allocations under the qualified cell timing convention.
+    pub search_scope: &'static str,
+    /// Inclusive supplied limit, possibly tightened by outer recipe selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_deadline_milliseconds: Option<u64>,
+    /// Sum of the separately ceiled feed clocks for every selected positive cell count.
+    pub selected_feed_milliseconds: u64,
+    /// Minimum feed sum when each cell/count's valid completion lower bound supplies feasibility.
+    /// An unfinished serial search may admit cheaper counts here than its retained incumbent does.
+    pub lower_bound_feed_milliseconds: u64,
+    /// The complete incumbent reaches that independently relaxed bound.
+    pub lower_bound_attained: bool,
+    /// Exact feed proof for this independent allocation model, never a makespan proof.
+    pub optimality_proven: bool,
+    /// Retained serial orders miss a cell window/deadline although their lower bounds still fit.
+    pub unresolved_cell_counts: usize,
+    /// The ordinary all-copies-on-first-cell baseline violated a window or the explicit deadline.
+    pub baseline_replaced: bool,
 }
 
 /// Complete thread-order optimization, separate from the selected allocation's makespan proof.
@@ -330,7 +367,8 @@ pub struct AvailabilityReport {
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
     /// `/1` shared geometry; `/2` configured sources; `/3` windows; `/4` shared labor; `/5` shared pools;
-    /// `/6` operator calendars; `/7` configured-cell thread-order allocation.
+    /// `/6` operator calendars; `/7` configured-cell thread-order allocation;
+    /// `/8` configured-cell exact feed allocation.
     pub schema: &'static str,
     /// Same explicit time convention as the qualified input.
     pub time_basis: &'static str,
@@ -359,6 +397,9 @@ pub struct Report {
     /// Complete selected-order search, whose cost proof does not replace the makespan proof below.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_order_search: Option<ThreadOrderReport>,
+    /// Exact selected feed objective and its independently relaxed allocation proof.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_time_search: Option<FeedTimeReport>,
     /// Allocation optimum over the valid lower bounds of every cell/count serial subproblem.
     pub lower_bound_makespan_milliseconds: u64,
     /// Actual nested examinations, including reconstruction, plus both allocation DP transitions.
@@ -390,6 +431,21 @@ impl Policy {
         self.objective == "minimize_thread_observed_order_cost"
     }
 
+    pub(crate) fn feed_directed(&self) -> bool {
+        self.objective == "minimize_feed_milliseconds"
+    }
+
+    fn completion_deadline(&self) -> Option<u64> {
+        self.thread_order_search
+            .as_ref()
+            .and_then(|search| search.completion_deadline_milliseconds)
+            .or_else(|| {
+                self.feed_time_search
+                    .as_ref()
+                    .and_then(|search| search.completion_deadline_milliseconds)
+            })
+    }
+
     fn budget(&self, copies: usize, serial_nodes: usize) -> Result<Budget, Refusal> {
         if !(1..=MAX_CELLS).contains(&self.cells.len())
             || !(1..=ordering::MAX_PRODUCTION_PASSES).contains(&copies)
@@ -399,11 +455,13 @@ impl Policy {
                 "parallel production supports 1..8 cells, 1..256 copies and at most 200000 total scheduling work units",
             ));
         }
-        // Two count DPs; shared labor also needs a complete attended-work lower-bound DP.
+        // Two makespan DPs; feed selection adds two additive DPs over the same complete count
+        // domain. Shared labor instead adds its existing attended-work lower-bound DP.
         let allocation = self.cells.len()
             * (copies + 1)
             * (copies + 2)
-            * if self.shared_operator.is_some() { 3 } else { 2 }
+            * (2 + usize::from(self.shared_operator.is_some())
+                + 2 * usize::from(self.feed_time_search.is_some()))
             / 2;
         let operator_work = self
             .shared_operator
@@ -427,6 +485,15 @@ impl Policy {
         }) {
             return Err(budget(
                 "parallel thread-order search needs 1..200000 reserved count-prefix nodes, 1..64 complete prices and an exact millisecond deadline",
+            ));
+        }
+        if self.feed_time_search.as_ref().is_some_and(|search| {
+            search
+                .completion_deadline_milliseconds
+                .is_some_and(|end| end > MAX_EXACT_MILLISECONDS)
+        }) {
+            return Err(budget(
+                "parallel feed search requires an exactly representable millisecond deadline",
             ));
         }
         let trials = self.cells.len() * copies;
@@ -475,11 +542,19 @@ impl Policy {
         let shared_operator = self.shared_operator.is_some();
         if (!configured && self.model != "independent_whole_garment_cells/1")
             || self.shared_workholding.is_some() && !shared_operator
-            || !(self.objective == "minimize_makespan" && self.thread_order_search.is_none()
+            || !(self.objective == "minimize_makespan"
+                && self.thread_order_search.is_none()
+                && self.feed_time_search.is_none()
                 || self.cost_directed()
                     && configured
                     && !shared_operator
-                    && self.thread_order_search.is_some())
+                    && self.thread_order_search.is_some()
+                    && self.feed_time_search.is_none()
+                || self.feed_directed()
+                    && configured
+                    && !shared_operator
+                    && self.feed_time_search.is_some()
+                    && self.thread_order_search.is_none())
             || self.time_basis
                 != if shared_operator {
                     "ceil_operation_feed_milliseconds/1"
@@ -754,6 +829,7 @@ fn allocate(
     cells: &[&Cell],
     copies: usize,
     lower: bool,
+    feed: Option<&FeedTimeSearch>,
 ) -> (Option<(u64, Vec<usize>)>, usize) {
     let mut costs = vec![u64::MAX; copies + 1];
     costs[0] = 0;
@@ -775,14 +851,31 @@ fn allocate(
                     row[count - 1].finish
                 };
                 if count > 0
-                    && cells[cell]
+                    && (cells[cell]
                         .available_until_milliseconds
                         .is_some_and(|end| finish > end)
+                        || feed
+                            .and_then(|search| search.completion_deadline_milliseconds)
+                            .is_some_and(|end| finish > end))
                 {
                     continue;
                 }
-                let candidate = costs[total - count].max(finish);
-                if candidate < next[total] {
+                let candidate = if feed.is_some() {
+                    // Feed is fixed by this exact cell/count recipe, independent of serial order.
+                    // Only temporal feasibility is relaxed when computing the lower bound.
+                    costs[total - count]
+                        .checked_add(if count == 0 {
+                            0
+                        } else {
+                            row[count - 1].feed_milliseconds
+                        })
+                        .filter(|&value| value <= MAX_EXACT_MILLISECONDS)
+                } else {
+                    Some(costs[total - count].max(finish))
+                };
+                if let Some(candidate) = candidate
+                    && candidate < next[total]
+                {
                     next[total] = candidate;
                     parents[cell][total] = count;
                 }
@@ -800,6 +893,26 @@ fn allocate(
         total -= allocation[cell];
     }
     (Some((costs[copies], allocation)), work)
+}
+
+fn unresolved_cell_counts(
+    cells: &[&Cell],
+    trials: &[Vec<Trial>],
+    deadline: Option<u64>,
+) -> usize {
+    cells
+        .iter()
+        .zip(trials)
+        .map(|(cell, row)| {
+            let limit = cell
+                .available_until_milliseconds
+                .unwrap_or(MAX_EXACT_MILLISECONDS)
+                .min(deadline.unwrap_or(MAX_EXACT_MILLISECONDS));
+            row.iter()
+                .filter(|trial| trial.finish > limit && trial.lower <= limit)
+                .count()
+        })
+        .sum()
 }
 
 struct CostSearch<'a> {
@@ -972,23 +1085,8 @@ fn cheapest_assignment(
         .market
         .currency
         .clone();
-    let unresolved_cell_counts = cells
-        .iter()
-        .zip(trials)
-        .map(|(cell, row)| {
-            let limit = cell
-                .available_until_milliseconds
-                .unwrap_or(MAX_EXACT_MILLISECONDS)
-                .min(
-                    policy
-                        .completion_deadline_milliseconds
-                        .unwrap_or(MAX_EXACT_MILLISECONDS),
-                );
-            row.iter()
-                .filter(|trial| trial.finish > limit && trial.lower <= limit)
-                .count()
-        })
-        .sum();
+    let unresolved_cell_counts =
+        unresolved_cell_counts(cells, trials, policy.completion_deadline_milliseconds);
     let copies = seed.1.iter().sum();
     let mut search = CostSearch {
         plan,
@@ -1211,8 +1309,8 @@ pub(super) fn evaluate(
         }
         trials.push(row);
     }
-    let (incumbent, incumbent_work) = allocate(&trials, &cells, copies, false);
-    let (bound, bound_work) = allocate(&trials, &cells, copies, true);
+    let (incumbent, incumbent_work) = allocate(&trials, &cells, copies, false, None);
+    let (bound, bound_work) = allocate(&trials, &cells, copies, true, None);
     search_nodes += incumbent_work + bound_work;
     let Some((mut cost, mut counts)) = incumbent else {
         return Err(if bound.is_some() {
@@ -1272,20 +1370,72 @@ pub(super) fn evaluate(
     } else {
         None
     };
+    let mut feed_work = 0;
+    let mut feed_time_search = if let Some(search) = &policy.feed_time_search {
+        if search
+            .completion_deadline_milliseconds
+            .is_some_and(|end| cost > end)
+        {
+            return Err(if search
+                .completion_deadline_milliseconds
+                .is_some_and(|end| lower_bound_makespan_milliseconds > end)
+            {
+                bad("parallel completion lower bound exceeds the feed search deadline")
+            } else {
+                Refusal::new(
+                    RefusalCode::NotConverged,
+                    "no retained complete cell allocation meets the feed search deadline; unfinished serial orders remain unresolved",
+                )
+                .repair("increase the bounded serial/parallel schedule allowance or supply a longer completion deadline")
+            });
+        }
+        let (selected, selected_work) = allocate(&trials, &cells, copies, false, Some(search));
+        let (lower, lower_work) = allocate(&trials, &cells, copies, true, Some(search));
+        feed_work = selected_work + lower_work;
+        search_nodes += feed_work;
+        let (feed, selected_counts) = selected.ok_or_else(|| {
+            budget("complete parallel feed sums exceed the exact native/browser millisecond clock")
+        })?;
+        let (lower_feed, _) = lower.expect("a feasible feed allocation has a valid relaxed bound");
+        counts = selected_counts;
+        cost = counts
+            .iter()
+            .zip(&trials)
+            .filter_map(|(&count, row)| count.checked_sub(1).map(|index| row[index].finish))
+            .max()
+            .expect("positive complete garment quantity");
+        Some(FeedTimeReport {
+            search_scope: "complete_cell_count_assignments/1",
+            completion_deadline_milliseconds: search.completion_deadline_milliseconds,
+            selected_feed_milliseconds: feed,
+            lower_bound_feed_milliseconds: lower_feed,
+            lower_bound_attained: feed == lower_feed,
+            optimality_proven: feed == lower_feed,
+            unresolved_cell_counts: unresolved_cell_counts(
+                &cells,
+                &trials,
+                search.completion_deadline_milliseconds,
+            ),
+            baseline_replaced: false,
+        })
+    } else {
+        None
+    };
     let baseline_replaced = operator.as_ref().map_or_else(
         || {
             cells[0]
                 .available_until_milliseconds
                 .is_some_and(|end| trials[0][copies - 1].finish > end)
                 || policy
-                    .thread_order_search
-                    .as_ref()
-                    .and_then(|search| search.completion_deadline_milliseconds)
+                    .completion_deadline()
                     .is_some_and(|end| trials[0][copies - 1].finish > end)
         },
         |operator| operator.baseline_replaced,
     );
     if let Some(search) = &mut thread_order_search {
+        search.baseline_replaced = baseline_replaced;
+    }
+    if let Some(search) = &mut feed_time_search {
         search.baseline_replaced = baseline_replaced;
     }
     let mut baseline_counts = vec![0; cells.len()];
@@ -1308,6 +1458,7 @@ pub(super) fn evaluate(
     let mut selected = if counts != baseline_counts
         && (operator.is_some()
             || thread_order_search.is_some()
+            || feed_time_search.is_some()
             || cost < baseline.makespan_milliseconds)
     {
         assignment(
@@ -1322,6 +1473,14 @@ pub(super) fn evaluate(
     } else {
         baseline.clone()
     };
+    if feed_time_search
+        .as_ref()
+        .is_some_and(|search| search.selected_feed_milliseconds != selected.scheduled_feed_milliseconds)
+    {
+        return Err(bad(
+            "selected parallel feed changed during exact schedule replay",
+        ));
+    }
     let shared_operator = operator
         .as_ref()
         .map(|result| {
@@ -1377,13 +1536,18 @@ pub(super) fn evaluate(
             baseline_replaced,
         });
     debug_assert_eq!(
-        incumbent_work + bound_work + operator.as_ref().map_or(0, |operator| operator.bound_work),
+        incumbent_work
+            + bound_work
+            + feed_work
+            + operator.as_ref().map_or(0, |operator| operator.bound_work),
         reservation.allocation
     );
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if thread_order_search.is_some() {
+        schema: if feed_time_search.is_some() {
+            "ftx-sewing-parallel/8"
+        } else if thread_order_search.is_some() {
             "ftx-sewing-parallel/7"
         } else if shared_operator
             .as_ref()
@@ -1415,6 +1579,7 @@ pub(super) fn evaluate(
         shared_operator,
         shared_workholding,
         thread_order_search,
+        feed_time_search,
         lower_bound_makespan_milliseconds,
         search_nodes,
         search_complete,

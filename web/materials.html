@@ -457,6 +457,13 @@ or fixed routes, work limits, qualifications and any deadline. Review every tria
 order and whether the listed optimum was proved. Download the exact selected options and their stitch
 paths for replay. If no candidate qualifies, the result retains the diagnostics and produces no stitch
 program. This does not authorize machine execution.</p>
+<p class="note">For independently staffed configured cells, a parallel policy with
+<code>objective: "minimize_feed_milliseconds"</code> and <code>feed_time_search: {}</code> chooses the least total scheduled feed work.
+An optional <code>feed_time_search.completion_deadline_milliseconds</code> limits complete job finishing time.
+The original model rounds feed upward once per used cell; completion, setup and handling remain separate.
+Use <code>ftx-sewing-selection/9</code> with <code>objective: "minimize_parallel_feed_milliseconds"</code>
+to compare qualified recipes using the same allocation objective. The result shows the selected feed, its independent
+lower bound and proof separately from makespan. Shared operators or shared fixture pools require their existing coupled policies.</p>
 <p class="note">To reduce needle and thread changes, add <code>ordering</code> to the recipe with
 <code>objective: "minimize_setup_changes"</code> and an explicit <code>max_search_nodes</code>.
 The bounded planner preserves declared predecessors and every stitch pass. The result shows the

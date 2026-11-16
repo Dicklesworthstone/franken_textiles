@@ -762,15 +762,12 @@ impl Metric {
 
     fn regional_value(self, region: &str, admitted: &Numerical<'_>) -> Option<f64> {
         let (report, schema) = match self.consumer() {
-            Consumer::MaterialStrain => {
-                (admitted.material_strain?, "ftx-material-strain-report/2")
-            }
-            Consumer::MotionMaterialStrain => {
-                (admitted.motion_material_strain?, "ftx-material-strain-report/2")
-            }
-            Consumer::ContactLoads => {
-                (admitted.contact_loads?, "ftx-contact-loads-report/2")
-            }
+            Consumer::MaterialStrain => (admitted.material_strain?, "ftx-material-strain-report/2"),
+            Consumer::MotionMaterialStrain => (
+                admitted.motion_material_strain?,
+                "ftx-material-strain-report/2",
+            ),
+            Consumer::ContactLoads => (admitted.contact_loads?, "ftx-contact-loads-report/2"),
             Consumer::MotionContactLoads => {
                 (admitted.motion_contact_loads?, "ftx-contact-loads-report/2")
             }
@@ -1401,7 +1398,11 @@ impl Policy {
         {
             report.notes.push("Material-strain objectives use signed, dimensionless raw material-frame Green strains [E11, E22, 2E12] before numerical gather/compression softening, on the explicitly selected retained instances. Motion extrema include the initial state and every accepted mechanical sample; no continuous-time bound is claimed. Canonical source domains describe constitutive characterization support. Authored comparison constraints are design requirements, never measured failure, rupture, comfort or safe-fit limits. Static and motion strain consumers remain independent of thermal qualification; a refused motion history cannot substitute its static result.");
         }
-        if self.constraints.iter().any(|constraint| constraint.region.is_some()) {
+        if self
+            .constraints
+            .iter()
+            .any(|constraint| constraint.region.is_some())
+        {
             report.notes.push("Named regional constraints use only the exact region of their admitted strain or body-contact consumer. The selected union remains the objective scope, and regional readings stay separate. Regional contact loads at shared welded vertices are not additive. A missing region or incomplete motion excludes the candidate without a union or zero fallback. Bounds are authored nominal design requirements, not measured failure, pressure, comfort or empirical fit limits.");
         }
         if self.metrics().iter().any(|metric| {
@@ -1810,24 +1811,29 @@ impl Policy {
                     }
                     for c in self.constraints.iter().filter(|c| c.metric == metric) {
                         let constraint_value = if let Some(region) = &c.region {
-                            let Some(value) = metric
-                                .regional_value(region, &admitted)
-                                .filter(|value| value.is_finite() && (metric.signed() || *value >= 0.))
+                            let Some(value) =
+                                metric.regional_value(region, &admitted).filter(|value| {
+                                    value.is_finite() && (metric.signed() || *value >= 0.)
+                                })
                             else {
                                 result.exclusions.push(invalid(format!(
                                     "{metric:?} for region {region:?} is unavailable; no union, zero or partial value substituted"
                                 )));
                                 continue;
                             };
-                            result.regional_readings.entry(region.clone()).or_default().insert(
-                                metric,
-                                Reading {
-                                    value,
-                                    reported_bounds: None,
-                                    unit: metric.unit(currency).into(),
-                                    consumer: metric.consumer(),
-                                },
-                            );
+                            result
+                                .regional_readings
+                                .entry(region.clone())
+                                .or_default()
+                                .insert(
+                                    metric,
+                                    Reading {
+                                        value,
+                                        reported_bounds: None,
+                                        unit: metric.unit(currency).into(),
+                                        consumer: metric.consumer(),
+                                    },
+                                );
                             value
                         } else {
                             value
@@ -1864,7 +1870,9 @@ impl Policy {
                                 Basis::Nominal => constraint_value.to_string(),
                                 Basis::ReportedBounds => format!("reported range [{lo}, {hi}]"),
                             };
-                            let scope = c.region.as_ref().map_or_else(String::new, |region| format!(" for region {region:?}"));
+                            let scope = c.region.as_ref().map_or_else(String::new, |region| {
+                                format!(" for region {region:?}")
+                            });
                             result.exclusions.push(invalid(format!("{metric:?}{scope} = {observed} {} violates the inclusive comparison constraint", metric.unit(currency))));
                         }
                     }
@@ -2085,12 +2093,12 @@ impl Policy {
                 .and_then(|parallel| parallel.shared_operator.as_ref())
                 .is_some_and(|operator| operator.availability_calendars.is_some())
         };
-        let parallel_order_search = |options: &crate::sewing::SewOptions| {
+        let parallel_allocation_search = |options: &crate::sewing::SewOptions| {
             options
                 .production
                 .as_ref()
                 .and_then(|production| production.parallel.as_ref())
-                .is_some_and(crate::sewing::production::parallel::Policy::cost_directed)
+                .is_some_and(|policy| policy.cost_directed() || policy.feed_directed())
         };
         if consumers.contains(&Consumer::Sewing) || thread {
             keys.insert("thickness");
@@ -2581,7 +2589,7 @@ impl Policy {
             && let Some(selection) = row.sewing_selection.value()
             && (selection.request.completion_deadline_milliseconds.is_some()
                 || parallel_calendars(&selection.request.options)
-                || parallel_order_search(&selection.request.options)
+                || parallel_allocation_search(&selection.request.options)
                 || selection
                     .request
                     .options
@@ -2596,8 +2604,8 @@ impl Policy {
                                 .is_some_and(|staging| staging.cell_capacities.is_some())
                     }))
         {
-            // Arrival/deadline/calendar and explicit cell-buffer constraints qualify the complete
-            // candidate domain, including decisions that request only fixed feed/yarn objectives.
+            // Availability, cell buffers and allocation objectives qualify the complete candidate
+            // domain, including decisions that request only raw feed or thread quantities.
             base = hash(&(
                 base,
                 ("deadline_constrained_sewing_selection", &selection.request),
@@ -2656,7 +2664,7 @@ impl Policy {
             || ((consumers.contains(&Consumer::Sewing) || thread)
                 && row.sewing.value().is_some_and(|plan| {
                     parallel_calendars(&plan.options)
-                        || parallel_order_search(&plan.options)
+                        || parallel_allocation_search(&plan.options)
                         || plan
                             .options
                             .production
@@ -2929,7 +2937,39 @@ fn scheduled_sewing_feed(row: &Alternative) -> Option<f64> {
                 && policy
                     .parallel
                     .as_ref()
-                    .is_some_and(|request| request.time_basis == parallel.time_basis)
+                    .is_some_and(|request| {
+                        if request.time_basis != parallel.time_basis {
+                            return false;
+                        }
+                        match (&request.feed_time_search, &parallel.feed_time_search) {
+                            (None, None) => !request.feed_directed(),
+                            (Some(policy), Some(search)) => {
+                                request.feed_directed()
+                                    && request.model == "independent_whole_garment_cells/2"
+                                    && request.time_basis == "ceil_cell_feed_milliseconds/1"
+                                    && request.shared_operator.is_none()
+                                    && request.shared_workholding.is_none()
+                                    && parallel.shared_operator.is_none()
+                                    && parallel.shared_workholding.is_none()
+                                    && request.thread_order_search.is_none()
+                                    && parallel.schema == "ftx-sewing-parallel/8"
+                                    && production.schema == "ftx-sewing-production/23"
+                                    && plan.schema == "ftx-sewing-plan/35"
+                                    && search.search_scope == "complete_cell_count_assignments/1"
+                                    && search.completion_deadline_milliseconds
+                                        == policy.completion_deadline_milliseconds
+                                    && search.selected_feed_milliseconds == milliseconds
+                                    && search.lower_bound_feed_milliseconds <= milliseconds
+                                    && search.lower_bound_attained
+                                        == (search.lower_bound_feed_milliseconds == milliseconds)
+                                    && search.optimality_proven == search.lower_bound_attained
+                                    && policy.completion_deadline_milliseconds.is_none_or(|end| {
+                                        parallel.selected.makespan_milliseconds <= end
+                                    })
+                            }
+                            _ => false,
+                        }
+                    })
         }
         _ => false,
     };
@@ -5651,6 +5691,114 @@ fn admit_dissipation_heat(
 mod sewing_feed_tests {
     use super::*;
     use crate::material_study::Outcome;
+
+    #[test]
+    fn parallel_feed_score_requires_matching_policy_proof_deadline_and_schedule() {
+        use crate::sewing::production::parallel::shared_workholding;
+        let pattern = ftx_pattern::Pattern::from_json(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+        ))
+        .unwrap();
+        let mut options: Value = serde_json::from_str(include_str!(
+            "../../../../examples/sewing-heterogeneous-options.json"
+        ))
+        .unwrap();
+        options["production"]["parallel"]["objective"] = json!("minimize_feed_milliseconds");
+        options["production"]["parallel"]["feed_time_search"] = json!({});
+        let request: Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1","sewing":options,
+            "variants":[{"key":"scheduled","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}]
+        }))
+        .unwrap();
+        let original = request.evaluate(&pattern).unwrap().alternatives.remove(0);
+        let expected = original
+            .sewing
+            .value()
+            .unwrap()
+            .scheduled_feed_milliseconds()
+            .unwrap();
+        assert_eq!(scheduled_sewing_feed(&original), Some(expected as f64));
+        for change in 0..13 {
+            let mut row = original.clone();
+            let Outcome::Available { result: plan } = &mut row.sewing else {
+                unreachable!()
+            };
+            let request = plan
+                .options
+                .production
+                .as_mut()
+                .unwrap()
+                .parallel
+                .as_mut()
+                .unwrap();
+            let report = plan.production.as_mut().unwrap().parallel.as_mut().unwrap();
+            match change {
+                0 => {
+                    report
+                        .feed_time_search
+                        .as_mut()
+                        .unwrap()
+                        .selected_feed_milliseconds += 1;
+                }
+                1 => report.feed_time_search = None,
+                2 => request.feed_time_search = None,
+                3 => report.feed_time_search.as_mut().unwrap().search_scope = "unqualified_scope",
+                4 => {
+                    request
+                        .feed_time_search
+                        .as_mut()
+                        .unwrap()
+                        .completion_deadline_milliseconds = Some(0);
+                }
+                5 => {
+                    report
+                        .feed_time_search
+                        .as_mut()
+                        .unwrap()
+                        .lower_bound_feed_milliseconds = expected + 1;
+                }
+                6 => {
+                    let search = report.feed_time_search.as_mut().unwrap();
+                    search.lower_bound_attained = !search.lower_bound_attained;
+                }
+                7 => {
+                    let search = report.feed_time_search.as_mut().unwrap();
+                    search.optimality_proven = !search.optimality_proven;
+                }
+                8 => report.schema = "ftx-sewing-parallel/2",
+                9 => request.objective = "minimize_makespan".into(),
+                10 => request.model = "independent_whole_garment_cells/1".into(),
+                11 => {
+                    request.time_basis = "unqualified_rounding".into();
+                    report.time_basis = "unqualified_rounding";
+                }
+                12 => {
+                    let timeline = shared_workholding::Timeline {
+                        holds: vec![],
+                        peak_occupancy: BTreeMap::new(),
+                        final_occupancy: BTreeMap::new(),
+                    };
+                    report.shared_workholding = Some(shared_workholding::Report {
+                        schema: "ftx-sewing-shared-workholding/1",
+                        release_protocol:
+                            "available_at_feed_completion_with_access_in_cell_handling/1",
+                        cells: BTreeMap::new(),
+                        resources: vec![],
+                        bindings: vec![],
+                        baseline: timeline.clone(),
+                        selected: timeline,
+                        physical_pool_access_validated: false,
+                    });
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                scheduled_sewing_feed(&row).is_none(),
+                "changed parallel feed case {change} admitted"
+            );
+        }
+    }
 
     #[test]
     fn scheduled_feed_requires_matching_source_summary_quantity_and_rounding() {

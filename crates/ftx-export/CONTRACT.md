@@ -1,5 +1,16 @@
 # ftx-export
 
+**Parallel scheduled feed.** Configured independent whole-garment cells can explicitly minimize
+the additive `ceil_cell_feed_milliseconds/1` work under an optional inclusive complete-job deadline.
+Retained count schedules supply feasible assignments; valid finish lower bounds supply a separate
+relaxed feed bound. Equality proves feed optimality independently of makespan or unfinished
+irrelevant serial orders. Shared labor/pools, conflicting objectives and unqualified sources refuse.
+Plan `/35`, production `/23` and parallel `/8` retain exact scores, proof, deadline and unresolved
+counts; selection `/9` reuses them across recipes and tightens inherited deadlines. Comparisons bind
+all allocation and recipe inputs and verify the report protocol. Native and portable replay preserve
+the actual selected stitches. Original omitted-policy paths remain unchanged; no factory throughput,
+energy, physical seam-quality or execution claim follows from this numerical minimum.
+
 **Regional comparison limits.** Optional `Constraint.region` scopes only the twelve material-strain
 or six body-contact metrics to an exact name in the admitted version-2 consumer partition. Each
 metric/region pair is unique; the selected union remains the objective and legacy reading scope.

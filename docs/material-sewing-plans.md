@@ -50,6 +50,12 @@ For several garment copies, [production scheduling](sewing-production.md) expand
 dependencies and shares qualified needle/thread setups across the complete batch. It uses these same
 material and process checks, keeps source geometry once, and emits actual repeated stitch travel.
 
+Configured independent cells can also [minimize scheduled feed work](sewing-production.md#minimize-scheduled-feed-work-across-configured-cells)
+with an optional inclusive completion deadline. This uses each cell's actual qualified recipes
+and separate upward-rounded feed clock. `ftx-sewing-selection/9` exposes the same objective as
+`minimize_parallel_feed_milliseconds` when comparing recipes. The selected feed minimum and
+its lower bound remain distinct from elapsed completion, thread purchasing and their proofs.
+
 ## What follows a material change
 
 Each seam side resolves `piece.fabric` or the inherited global selection through

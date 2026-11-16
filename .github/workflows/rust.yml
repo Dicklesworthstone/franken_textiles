@@ -19,12 +19,18 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Check qualified sewing feed routes
         if: ${{ !cancelled() }}
-        run: cargo test -p ftx-export --test sewing_routing --locked routed_feed_
+        run: |
+          cargo test -p ftx-export --test sewing_routing --locked routed_feed_
+          cargo test -p ftx-export --test sewing_parallel --locked parallel_feed_
+          cargo test -p ftx-export --lib --locked parallel_feed_score_requires_matching_policy_proof_deadline_and_schedule
+          cargo test -p ftx-cli --test sewing_production_workflow --locked parallel_feed_replays_exact_work_and_deadline_choices_through_both_clis_and_portable -- --exact
+          node --experimental-vm-modules --test --test-name-pattern='parallel feed|routed feed recipe' tools/check_materials_frontend.cjs
       - name: Check independent garment region constraints
         if: ${{ !cancelled() }}
         run: |
           cargo test -p ftx-export --lib --locked regional_constraint
           cargo test -p ftx-cli --test accepted_body_workflow --locked surface_water::regional_strain_and_contact_limits_replay_native_portable_and_named_cases -- --exact
+          node --experimental-vm-modules --test --test-name-pattern='guided regional limits|regional comparison|regional limits enforce' tools/check_materials_frontend.cjs tools/check_material_study_builder.cjs
       - name: Check body fitting and local shape priors
         if: ${{ !cancelled() }}
         run: cargo test -p ftx-body --lib --test fit_tape --locked

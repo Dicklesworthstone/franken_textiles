@@ -6016,6 +6016,25 @@ and portable studies share the same admission and results. This advances `ftx-ds
 regional contact totals remain nonadditive at shared welded vertices, and authored limits do not
 establish measured rupture, physiological comfort, contact pressure or physical garment fit.
 
+### 25.213 Minimize actual scheduled feed across configured sewing cells
+
+Independent whole-garment cells can optimize the sum of their exact scheduled feed clocks, while
+an optional inclusive deadline bounds complete finishing time. Each cell retains its own admitted
+machine configuration, recipes, setup, handling, finite fixtures and availability. The objective
+reuses the original per-cell ceiling and charges both new count-allocation programs inside the
+existing scheduling-work bound. Shared operators and pools keep their separate coupled authority.
+
+Complete feasible cell/count schedules provide the selected allocation; valid finish lower bounds
+provide an independent relaxed feed lower bound. Matching that bound proves the feed minimum without
+mislabeling it as a makespan minimum. Unresolved cheaper counts withhold proof, and missing feasible
+schedules never become partial garments. Exact source replay reproduces the selected count and feed.
+
+Recipe selection, material/design comparisons, native/portable programs and workbench results retain
+the same chosen allocation, integer score, deadline and separate proof. This advances `ftx-pb2`
+through software child `ftx-pb2.parallel-feed`. It adds a declared manufacturing objective without
+inferring labor capacity, electricity consumption, measured throughput, seam quality or hardware
+authorization from synthetic timing arithmetic.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

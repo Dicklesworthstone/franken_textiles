@@ -311,6 +311,11 @@ pub(super) fn evaluate(
     Ok(Report {
         schema: if parallel
             .as_ref()
+            .is_some_and(|parallel| parallel.feed_time_search.is_some())
+        {
+            "ftx-sewing-production/23"
+        } else if parallel
+            .as_ref()
             .is_some_and(|parallel| parallel.thread_order_search.is_some())
         {
             "ftx-sewing-production/20"

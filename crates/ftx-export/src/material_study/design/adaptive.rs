@@ -2254,7 +2254,6 @@ mod worst_case_range_tests {
     }
 }
 
-
 #[cfg(test)]
 mod regional_restoration_tests {
     use super::*;
@@ -2285,32 +2284,41 @@ mod regional_restoration_tests {
             raw_fit: Outcome::NotRequested,
             max_fit_band_violation_mm: None,
             total_fit_band_violation_mm: None,
-            constraint_violations: Some([("left", 2.), ("right", 3.)].into_iter().map(|(region, excess)| {
-                ConstraintViolation {
-                    material_key: "material".into(),
-                    case_key: Some("moving".into()),
-                    violation: comparison::ConstraintViolation {
-                        metric: comparison::Metric::MotionMaxWarpGreenStrain,
-                        region: Some(region.into()),
-                        basis: comparison::Basis::Nominal,
-                        unit: "1".into(),
-                        minimum_shortfall: None,
-                        maximum_excess: Some(excess),
-                    },
-                }
-            }).collect()),
+            constraint_violations: Some(
+                [("left", 2.), ("right", 3.)]
+                    .into_iter()
+                    .map(|(region, excess)| ConstraintViolation {
+                        material_key: "material".into(),
+                        case_key: Some("moving".into()),
+                        violation: comparison::ConstraintViolation {
+                            metric: comparison::Metric::MotionMaxWarpGreenStrain,
+                            region: Some(region.into()),
+                            basis: comparison::Basis::Nominal,
+                            unit: "1".into(),
+                            minimum_shortfall: None,
+                            maximum_excess: Some(excess),
+                        },
+                    })
+                    .collect(),
+            ),
             refusal: None,
         };
         let mut improved = current.clone();
-        improved.constraint_violations.as_mut().unwrap()[0].violation.maximum_excess = Some(1.);
+        improved.constraint_violations.as_mut().unwrap()[0]
+            .violation
+            .maximum_excess = Some(1.);
         assert!(constraint_progress(&improved, &current));
         assert!(!constraint_progress(&current, &improved));
         for region in [None, Some("right".into()), Some("missing".into())] {
             let mut different = improved.clone();
-            different.constraint_violations.as_mut().unwrap()[0].violation.region = region;
+            different.constraint_violations.as_mut().unwrap()[0]
+                .violation
+                .region = region;
             assert!(!constraint_progress(&different, &current));
         }
-        improved.constraint_violations.as_mut().unwrap()[1].violation.maximum_excess = Some(4.);
+        improved.constraint_violations.as_mut().unwrap()[1]
+            .violation
+            .maximum_excess = Some(4.);
         assert!(!constraint_progress(&improved, &current));
         improved.constraint_violations = None;
         assert!(!constraint_progress(&improved, &current));

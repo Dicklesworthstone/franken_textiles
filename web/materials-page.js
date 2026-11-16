@@ -2504,13 +2504,15 @@ function sewingSelection(parent, alternatives) {
         "Cutting costs, setup time and undeclared supplier bundles are outside this objective.";
       parent.append(scope);
     }
-    const feedSearches = alternatives.filter(row =>
-      available(row.sewing_selection)?.request?.objective === "minimize_routed_feed_milliseconds");
+    const feedSearches = alternatives.filter(row => ["minimize_routed_feed_milliseconds", "minimize_parallel_feed_milliseconds"]
+      .includes(available(row.sewing_selection)?.request?.objective));
     if (feedSearches.length) {
+      const parallelFeed = feedSearches.some(row =>
+        available(row.sewing_selection)?.request?.objective === "minimize_parallel_feed_milliseconds");
       const milliseconds = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : "Unknown";
-      const selected = table(parent, "Routed feed-work recipe search",
+      const selected = table(parent, parallelFeed ? "Scheduled feed-work recipe search" : "Routed feed-work recipe search",
         ["Alternative", "Selected scheduled feed work (ms)", "Listed feed minimum proved", "Unresolved trials"]);
-      const trials = table(parent, "Scheduled feed work by recipe and route",
+      const trials = table(parent, parallelFeed ? "Scheduled feed work by recipe and allocation" : "Scheduled feed work by recipe and route",
         ["Alternative", "Route and recipes", "Scheduled feed work (ms)", "Raw feed work (s)",
           "Feed minimum proved", "Availability", "Reason"]);
       for (const row of feedSearches) {
@@ -2527,13 +2529,16 @@ function sewingSelection(parent, alternatives) {
               "Unresolved" : trial.completion_deadline?.status === "excluded" ? "Misses deadline (proved)" :
               trial.completion_deadline?.status === "unresolved" ? "Deadline unresolved" : "Complete candidate",
             trial.refusal?.message || trial.objective_unavailable?.message ||
-              trial.completion_deadline?.reason || "Inspect retained route timing"]);
+              trial.completion_deadline?.reason || (result.request?.objective === "minimize_parallel_feed_milliseconds" ?
+                "Inspect retained cell allocation timing" : "Inspect retained route timing")]);
         }
       }
       const scope = document.createElement("p");
-      scope.textContent = "This objective minimizes the summed integer millisecond feed durations of actual assigned operations. " +
+      scope.textContent = (parallelFeed ?
+        "Parallel allocations minimize feed rounded upward once per used cell; routed allocations sum separately rounded operation feeds. " :
+        "This objective minimizes the summed integer millisecond feed durations of actual assigned operations. ") +
         "Raw feed seconds and elapsed completion are separate quantities. A retained candidate can be usable before its feed minimum " +
-        "is proved; unresolved trials prevent proof across all declared recipes and routes.";
+        "is proved; unresolved trials prevent proof across all declared recipes and allocations.";
       parent.append(scope);
     }
     const deadlineSearches = alternatives.filter(row => {
@@ -3668,17 +3673,35 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const windowed = Boolean(report.availability);
   const operator = report.shared_operator;
   const orderSearch = report.thread_order_search;
+  const feedSearch = report.feed_time_search;
   const calendars = operator?.availability_calendars;
   const pools = report.shared_workholding;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
     ["Allocation", "Completion (s)", "Total feed work (s)", "Scheduled feed work (s)", "Total setup work (s)", "Total handling work (s)"]);
-  const baselineLabel = report.availability?.baseline_replaced || operator?.baseline_replaced || orderSearch?.baseline_replaced ?
+  const baselineLabel = report.availability?.baseline_replaced || operator?.baseline_replaced || orderSearch?.baseline_replaced || feedSearch?.baseline_replaced ?
     "Feasible replacement baseline" : "Single-cell baseline";
   for (const [name, allocation] of [[baselineLabel, report.baseline], ["Selected cells", report.selected]]) {
     cells(totals, [name, metric(seconds(allocation?.makespan_milliseconds)), metric(allocation?.feed_seconds),
       metric(seconds(allocation?.scheduled_feed_milliseconds)), metric(seconds(allocation?.setup_milliseconds)),
       metric(seconds(allocation?.handling_milliseconds))]);
+  }
+  if (feedSearch) {
+    const milliseconds = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : "Unavailable";
+    const proof = value => typeof value === "boolean" ? String(value) : "Unknown";
+    const feed = table(parent, `${label}: parallel feed-work objective and proof`,
+      ["Selected scheduled feed work (ms)", "Independent feed lower bound (ms)", "Lower bound attained",
+        "Feed minimum proved", "Inclusive completion deadline (ms)", "Unresolved cell counts"]);
+    cells(feed, [milliseconds(feedSearch.selected_feed_milliseconds), milliseconds(feedSearch.lower_bound_feed_milliseconds),
+      proof(feedSearch.lower_bound_attained), proof(feedSearch.optimality_proven),
+      feedSearch.completion_deadline_milliseconds == null ? "None declared" : milliseconds(feedSearch.completion_deadline_milliseconds),
+      metric(feedSearch.unresolved_cell_counts)]);
+    const scope = document.createElement("p");
+    scope.textContent = "Feed work is rounded upward once per used cell under the declared whole-garment allocation model. " +
+      "The feed minimum is separate from the minimum completion time: a selected allocation can finish later while using less feed work. " +
+      "Any declared deadline includes complete cell setup, handling, feed and final unloading. Unresolved inner schedules cannot " +
+      "supply an unverified feasible allocation; the independent lower bound determines whether the feed minimum is proved.";
+    parent.append(scope);
   }
   if (orderSearch) {
     const orders = table(parent, `${label}: complete thread-order allocation`,
@@ -3773,7 +3796,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       "A lower bound that still fits leaves an over-limit incumbent unresolved. " : "") +
     (report.availability?.baseline_replaced || operator?.baseline_replaced ?
       `The first-cell baseline failed a qualified cell or operator window${pools ? " or shared fixture constraint" : ""}; the displayed replacement is the complete selected feasible assignment. ` : "") +
-    (orderSearch?.baseline_replaced && !report.availability?.baseline_replaced ?
+    ((orderSearch?.baseline_replaced || feedSearch?.baseline_replaced) && !report.availability?.baseline_replaced ?
       "The first-cell baseline missed the inclusive completion deadline; the displayed replacement is the complete selected feasible assignment. " : "") +
     "Every garment stays in one physical cell. " +
     (operator ? "One qualified operator performs exclusive travel, handling, setup and final unloading while explicitly qualified autonomous machine feed may overlap. " +
@@ -3790,6 +3813,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     (heterogeneous ? "Stitch pitch, feed, qualifications and thread consumption come from each selected cell's own admitted plan. " +
       (orderSearch ? "Complete source-qualified thread orders select the allocation within the explicit deadline. Cost proof is separate from makespan proof; missing orders and unresolved cell/count timing withhold a cost minimum. " +
         "Every supplier minimum, increment and tier applies to the combined order. " :
+        feedSearch ? "The allocation minimizes total scheduled feed work within any declared completion deadline. Thread purchasing cost is a reported consequence, and feed and makespan proofs remain separate. " :
         "The allocation minimizes elapsed completion; its thread purchasing cost and total feed are reported consequences, not separately optimized quantities. ") : "") +
     (operator ? "This calculation does not qualify garment transfers, unmodeled shared resources or hardware execution." :
       "This calculation does not qualify garment transfers, shared operators or hardware execution.");
@@ -3976,6 +4000,9 @@ function sewingResult(parent, r) {
     parallel_lower_bound_seconds: parallel ? parallel.lower_bound_makespan_milliseconds / 1000 : undefined,
     parallel_optimality_proven: parallel?.optimality_proven,
     parallel_search_work: parallel?.search_nodes,
+    parallel_scheduled_feed_milliseconds: parallel?.feed_time_search?.selected_feed_milliseconds,
+    parallel_feed_lower_bound_milliseconds: parallel?.feed_time_search?.lower_bound_feed_milliseconds,
+    parallel_feed_optimality_proven: parallel?.feed_time_search?.optimality_proven,
     routed_makespan_seconds: routing ? routing.selected.makespan_milliseconds / 1000 : undefined,
     routed_lower_bound_seconds: routing ? routing.lower_bound_makespan_milliseconds / 1000 : undefined,
     routed_optimality_proven: routing?.optimality_proven,

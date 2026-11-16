@@ -901,7 +901,6 @@ mod tests {
         (alternative, descriptor, simulation, motion)
     }
 
-
     #[test]
     fn regional_constraints_use_all_six_contact_metrics_without_adding_shared_forces() {
         let (alternative, mut descriptor, mut simulation, mut motion) = regional_case();
@@ -911,7 +910,8 @@ mod tests {
         descriptor["scenario"]["motion"] = json!({"schema":"ftx-drape-motion/1","max_trials":1,
             "keyframes":[{"time_s":1.,"arm_abduction_deg":0.}]});
         simulation["schema"] = json!("ftx-drape-scenario-result/1");
-        simulation["pattern_sha256"] = alternative.binding.value().unwrap()["pattern_sha256"].clone();
+        simulation["pattern_sha256"] =
+            alternative.binding.value().unwrap()["pattern_sha256"].clone();
         simulation["scenario_sha256"] = descriptor["scenario_sha256"].clone();
         simulation["body_geometry_sha256"] = descriptor["body_geometry_sha256"].clone();
         simulation["positions_sha256"] = json!(hash(&simulation["positions_m"]).unwrap());
@@ -933,7 +933,10 @@ mod tests {
                 &motion["body_triangles"])).unwrap()}]);
         simulation["motion"] = json!({"status":"available","result":motion});
         let values = [
-            (Metric::BodyContactResultantN, [2., Vec3::new(3., 4., 2.).norm()]),
+            (
+                Metric::BodyContactResultantN,
+                [2., Vec3::new(3., 4., 2.).norm()],
+            ),
             (Metric::BodyContactSumVertexForceN, [12., 7.]),
             (Metric::MaxBodyContactVertexForceN, [5., 5.]),
             (Metric::MotionPeakBodyContactResultantN, [6., 6.]),
@@ -945,12 +948,17 @@ mod tests {
             "constraints":values.iter().flat_map(|&(metric, values)| {
                 ["left", "right"].into_iter().zip(values).map(move |(region, value)|
                     json!({"metric":metric,"region":region,"minimum":value,"maximum":value}))
-            }).collect::<Vec<_>>()})).unwrap();
-        let request: Request = serde_json::from_value(json!({"schema":"ftx-material-study/1"})).unwrap();
+            }).collect::<Vec<_>>()}))
+        .unwrap();
+        let request: Request =
+            serde_json::from_value(json!({"schema":"ftx-material-study/1"})).unwrap();
         policy.validate(&request, true).unwrap();
         let admitted = policy.candidate(&alternative, None, &descriptor, &simulation);
         assert!(admitted.eligible, "{}", json!(admitted));
-        assert_eq!(admitted.readings[&Metric::BodyContactSumVertexForceN].value, 12.);
+        assert_eq!(
+            admitted.readings[&Metric::BodyContactSumVertexForceN].value,
+            12.
+        );
         for (metric, expected) in values {
             for (region, value) in ["left", "right"].into_iter().zip(expected) {
                 let reading = &admitted.regional_readings[region][&metric];
@@ -965,7 +973,10 @@ mod tests {
         let refused = policy.candidate(&alternative, None, &descriptor, &simulation);
         assert!(!refused.eligible);
         let violations = refused.constraint_violations.as_ref().unwrap();
-        let violation = violations.iter().find(|v| v.maximum_excess == Some(1.)).unwrap();
+        let violation = violations
+            .iter()
+            .find(|v| v.maximum_excess == Some(1.))
+            .unwrap();
         assert_eq!(violation.metric, Metric::BodyContactSumVertexForceN);
         assert_eq!(violation.region.as_deref(), Some("right"));
 
@@ -979,8 +990,14 @@ mod tests {
         simulation["motion"]["result"]["contact_loads"]["status"] = json!("refused");
         let partial = policy.candidate(&alternative, None, &descriptor, &simulation);
         assert!(!partial.eligible);
-        assert_eq!(partial.regional_readings["right"][&Metric::BodyContactSumVertexForceN].value, 7.);
-        assert!(!partial.regional_readings["right"].contains_key(&Metric::MotionPeakBodyContactSumVertexForceN));
+        assert_eq!(
+            partial.regional_readings["right"][&Metric::BodyContactSumVertexForceN].value,
+            7.
+        );
+        assert!(
+            !partial.regional_readings["right"]
+                .contains_key(&Metric::MotionPeakBodyContactSumVertexForceN)
+        );
         assert!(partial.constraint_violations.is_none());
     }
 

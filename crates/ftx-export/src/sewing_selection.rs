@@ -77,6 +77,9 @@ pub enum Objective {
     /// Minimize the exact sum of separately ceiled routed operation-feed milliseconds. Requires
     /// matching feed-directed routes; raw feed seconds and elapsed completion remain separate.
     MinimizeRoutedFeedMilliseconds,
+    /// Minimize the exact sum of independently ceiled configured cell-feed milliseconds. Requires
+    /// matching feed-directed whole-garment allocation; elapsed completion remains separate.
+    MinimizeParallelFeedMilliseconds,
     /// Minimize generated feed plus source-qualified setup seconds, including initial setup.
     /// Requires the timed ordering objective; neither term includes handling or final reset.
     MinimizeFeedAndSetupSeconds,
@@ -96,7 +99,8 @@ pub enum Objective {
 pub struct Request {
     /// `/1` feed; `/2` feed plus setup; `/3` thread cost; `/4` serial time; `/5` parallel makespan;
     /// `/6` makespan, exact routed feed or complete thread cost across authored specialist routes;
-    /// `/8` exact routed feed across recipe alternatives on one route.
+    /// `/8` exact routed feed across recipe alternatives on one route;
+    /// `/9` exact configured-cell parallel feed across recipe alternatives.
     pub schema: String,
     /// Complete template job. `require_qualification` must be true; it is never silently enabled.
     pub options: SewOptions,
@@ -126,7 +130,7 @@ pub struct Trial {
     pub route_choice: Option<String>,
     /// Actual generated feed time when the entire job was admitted.
     pub feed_seconds: Option<f64>,
-    /// Exact complete selected-route feed score; absent for existing raw-seconds/time/cost modes.
+    /// Exact complete selected routed/parallel feed score; absent for raw-seconds/time/cost modes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduled_feed_milliseconds: Option<u64>,
     /// Inner feed-work proof in its declared dispatch scope, separate from makespan optimality.
@@ -164,7 +168,8 @@ pub struct Trial {
 pub struct Report {
     /// `/1` feed; `/2` feed/setup time; `/3` thread cost; `/4` serial time; `/5` parallel time;
     /// `/6` complete authored route and recipe selection; `/7` a completion-constrained search;
-    /// `/8` exact routed-feed selection, with or without an authored completion limit.
+    /// `/8` exact routed-feed selection; `/9` exact configured-cell parallel-feed selection,
+    /// with or without an authored completion limit.
     pub schema: &'static str,
     /// Original request, including all candidate settings and independent qualification evidence.
     pub request: Request,
@@ -408,6 +413,7 @@ impl Request {
             Objective::MinimizeFeedSeconds => "ftx-sewing-selection/1",
             Objective::MinimizeRoutedFeedMilliseconds if route_search => "ftx-sewing-selection/6",
             Objective::MinimizeRoutedFeedMilliseconds => "ftx-sewing-selection/8",
+            Objective::MinimizeParallelFeedMilliseconds => "ftx-sewing-selection/9",
             Objective::MinimizeFeedAndSetupSeconds => "ftx-sewing-selection/2",
             Objective::MinimizeModeledProductionSeconds => "ftx-sewing-selection/4",
             Objective::MinimizeParallelMakespan if route_search => "ftx-sewing-selection/6",
@@ -417,7 +423,7 @@ impl Request {
         };
         if self.schema != schema || !self.options.require_qualification {
             return Err(invalid(
-                "sewing selection needs schema /1 for raw feed, /2 for feed plus setup, /3 for thread cost, /4 for serial production time, /5 for parallel makespan, /6 for authored-route makespan/feed/cost or /8 for exact routed feed, and explicit require_qualification=true",
+                "sewing selection needs schema /1 for raw feed, /2 for feed plus setup, /3 for thread cost, /4 for serial production time, /5 for parallel makespan, /6 for authored-route makespan/feed/cost, /8 for exact routed feed or /9 for exact parallel feed, and explicit require_qualification=true",
             ));
         }
         if route_search == self.route_candidates.is_empty() {
@@ -449,6 +455,7 @@ impl Request {
             .collect();
         let cost = self.objective == Objective::MinimizeThreadObservedOrderCost;
         let routed_feed = self.objective == Objective::MinimizeRoutedFeedMilliseconds;
+        let parallel_feed = self.objective == Objective::MinimizeParallelFeedMilliseconds;
         if routes.iter().any(|route| {
             route.cost_directed() && !cost
                 || route.feed_directed() != routed_feed
@@ -543,14 +550,20 @@ impl Request {
                 "exact routed feed selection requires a qualified feed-directed production.routing policy",
             ));
         }
+        if parallel_feed && parallel.is_none() {
+            return Err(invalid(
+                "exact parallel feed selection requires a qualified feed-directed production.parallel policy",
+            ));
+        }
         if parallel.is_some_and(|policy| {
             policy.cost_directed() && !cost
+                || policy.feed_directed() != parallel_feed
                 || policy.model == "independent_whole_garment_cells/2"
                     && (self.objective == Objective::MinimizeFeedSeconds
                         || cost && !policy.cost_directed())
         }) {
             return Err(invalid(
-                "heterogeneous feed and thread costs depend on that allocation; match recipe selection with explicit bounded thread-order search for cost or makespan search for time; feed-only selection cannot claim its own allocation minimum",
+                "heterogeneous feed and thread costs depend on that allocation; match recipe selection with explicit thread-order search for cost, feed_time_search for exact parallel milliseconds, or makespan search for time; raw-seconds feed selection cannot claim its own allocation minimum",
             ));
         }
         if (timed || handled) && (parallel.is_some() || routing.is_some()) {
@@ -654,6 +667,7 @@ impl Request {
         let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds || handled || parallel;
         let cost = self.objective == Objective::MinimizeThreadObservedOrderCost;
         let routed_feed = self.objective == Objective::MinimizeRoutedFeedMilliseconds;
+        let parallel_feed = self.objective == Objective::MinimizeParallelFeedMilliseconds;
         let objective_currency = if cost {
             Some(
                 thread_cost::purchasing(&self.options)?
@@ -679,6 +693,19 @@ impl Request {
                 .as_mut()
                 .and_then(|production| production.routing.as_mut())
                 .and_then(|route| route.thread_order_search.as_mut())
+                && let Some(deadline) = self.completion_deadline_milliseconds
+            {
+                search.completion_deadline_milliseconds = Some(
+                    search
+                        .completion_deadline_milliseconds
+                        .map_or(deadline, |inner| inner.min(deadline)),
+                );
+            }
+            if let Some(search) = options
+                .production
+                .as_mut()
+                .and_then(|production| production.parallel.as_mut())
+                .and_then(|parallel| parallel.feed_time_search.as_mut())
                 && let Some(deadline) = self.completion_deadline_milliseconds
             {
                 search.completion_deadline_milliseconds = Some(
@@ -760,22 +787,33 @@ impl Request {
                 Ok(plan) => {
                     trial.feed_seconds = Some(plan.total_feed_seconds());
                     trial.stitch_intervals = Some(plan.total_stitch_intervals());
-                    let score = if routed_feed {
-                        let route = plan
-                            .production
-                            .as_ref()
-                            .and_then(|production| production.routing.as_ref())
-                            .ok_or_else(|| {
-                                invalid("admitted routed feed recipe lost its schedule")
-                            })?;
-                        let feed = route.feed_time_search.as_ref().ok_or_else(|| {
-                            invalid("admitted routed feed recipe lost its objective proof")
-                        })?;
-                        trial.scheduled_feed_milliseconds = Some(feed.selected_feed_milliseconds);
-                        trial.feed_optimality_proven = Some(feed.optimality_proven);
+                    let score = if routed_feed || parallel_feed {
+                        let (milliseconds, proved) = if routed_feed {
+                            let feed = plan
+                                .production
+                                .as_ref()
+                                .and_then(|production| production.routing.as_ref())
+                                .and_then(|route| route.feed_time_search.as_ref())
+                                .ok_or_else(|| {
+                                    invalid("admitted routed feed recipe lost its objective proof")
+                                })?;
+                            (feed.selected_feed_milliseconds, feed.optimality_proven)
+                        } else {
+                            let feed = plan
+                                .production
+                                .as_ref()
+                                .and_then(|production| production.parallel.as_ref())
+                                .and_then(|parallel| parallel.feed_time_search.as_ref())
+                                .ok_or_else(|| {
+                                    invalid("admitted parallel feed recipe lost its objective proof")
+                                })?;
+                            (feed.selected_feed_milliseconds, feed.optimality_proven)
+                        };
+                        trial.scheduled_feed_milliseconds = Some(milliseconds);
+                        trial.feed_optimality_proven = Some(proved);
                         // Every admitted integer is <= 2^53 - 1, so conversion preserves every
                         // millisecond exactly. No division or raw-feed rounding supplies this score.
-                        Some(feed.selected_feed_milliseconds as f64)
+                        Some(milliseconds as f64)
                     } else if let Some(currency) = objective_currency.as_deref() {
                         match thread_cost::score(&plan, currency) {
                             Ok((score, proved)) => {
@@ -884,7 +922,9 @@ impl Request {
             })
             .count();
         Ok(Report {
-            schema: if routed_feed {
+            schema: if parallel_feed {
+                "ftx-sewing-selection-report/9"
+            } else if routed_feed {
                 "ftx-sewing-selection-report/8"
             } else if self.completion_deadline_milliseconds.is_some() {
                 "ftx-sewing-selection-report/7"
@@ -921,6 +961,8 @@ impl Request {
                 "template route first, then route ID, operation ID and recipe ID lexicographic; retain first equal exact summed routed feed milliseconds"
             } else if routed_feed {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal exact summed routed feed milliseconds"
+            } else if parallel_feed {
+                "template first, then operation ID / recipe ID lexicographic; retain first equal exact summed parallel-cell feed milliseconds"
             } else if route_search && cost {
                 "template route first, then route ID, operation ID and recipe ID lexicographic; retain first equal complete thread order cost"
             } else if route_search {

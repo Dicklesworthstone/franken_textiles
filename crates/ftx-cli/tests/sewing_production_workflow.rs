@@ -3229,3 +3229,78 @@ fn complete_batch_timing_changes_recipe_choice_and_both_commands_replay_the_sele
         text
     );
 }
+
+#[test]
+fn parallel_feed_replays_exact_work_and_deadline_choices_through_both_clis_and_portable() {
+    let directory = workspace();
+    let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
+    options["production"]["parallel"]["objective"] = json!("minimize_feed_milliseconds");
+    options["production"]["parallel"]["feed_time_search"] = json!({});
+    options["production"]["parallel"]["cells"][1]["available_at_milliseconds"] = json!(20000);
+    let program =
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap());
+    let parallel = &program["plan"]["production"]["parallel"];
+    assert_eq!(parallel["selected"]["makespan_milliseconds"], 31100);
+    assert_eq!(parallel["feed_time_search"]["selected_feed_milliseconds"], 8000);
+    assert_eq!(parallel["feed_time_search"]["optimality_proven"], true);
+    assert_eq!(parallel["optimality_proven"], false);
+
+    let pass = &options["passes"][0];
+    let selection = json!({"schema":"ftx-sewing-selection/9","options":options,
+        "objective":"minimize_parallel_feed_milliseconds","max_plan_evaluations":2,
+        "completion_deadline_milliseconds":27334,
+        "alternatives":[{"operation":"join","recipes":[{"id":"same-qualified-recipe",
+            "needle":pass["needle"],"thread":pass["thread"],"max_stitch_mm":pass["max_stitch_mm"],
+            "stitches_per_minute":pass["stitches_per_minute"]}]}]});
+    let selected = portable(ftx_wasm::sew_select(PATTERN, &selection.to_string()).unwrap());
+    assert_eq!(selected["report"]["selected_scheduled_feed_milliseconds"], 13334);
+    assert_eq!(selected["report"]["optimality_proven"], true);
+    let selected_options = selected["selected_options_json"].as_str().unwrap();
+    let replay =
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, selected_options).unwrap());
+    assert_eq!(replay["plan"], selected["report"]["selected_plan"]);
+    assert_eq!(
+        replay["plan"]["production"]["parallel"]["selected"]["makespan_milliseconds"],
+        27334
+    );
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"feed","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],"sewing_selection":selection,
+        "comparison":{"basis":"nominal","required_consumers":["sewing"],
+            "objectives":[{"metric":"sewing_scheduled_feed_milliseconds","direction":"minimize"},
+                {"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+    let studied = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    assert_eq!(studied["comparison"]["frontier"], json!(["feed"]));
+    assert_eq!(
+        studied["comparison"]["alternatives"][0]["readings"]
+            ["sewing_scheduled_feed_milliseconds"]["value"],
+        13334.0
+    );
+    for (name, text) in [
+        ("pattern.json", PATTERN.to_owned()),
+        ("options.json", options.to_string()),
+        ("selection.json", selection.to_string()),
+        ("study.json", study.to_string()),
+    ] {
+        fs::write(directory.join(name), text).unwrap();
+    }
+    for main in [false, true] {
+        assert_eq!(
+            run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+            program["plan"]
+        );
+        assert_eq!(
+            run(main, &directory, "sew-stitches", "pattern.json", "options.json"),
+            program
+        );
+        assert_eq!(
+            run(main, &directory, "sew-select", "pattern.json", "selection.json"),
+            selected
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            studied
+        );
+    }
+}

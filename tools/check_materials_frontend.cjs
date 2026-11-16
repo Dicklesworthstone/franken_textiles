@@ -683,14 +683,15 @@ test('direct sewing selection retains exact requests and selected options and ne
   }
 });
 
-test('direct routed feed selection preserves version eight requests and integer objective receipts', async () => {
+test('direct routed and parallel feed selection preserve exact requests and integer objective receipts', async () => {
   const pattern=' {"original":-0.0}\n';
-  const request=' {"schema":"ftx-sewing-selection/8","objective":"minimize_routed_feed_milliseconds",'+
-    '"options":{"production":{"routing":{"objective":"minimize_feed_milliseconds",'+
-    '"feed_time_search":{"completion_deadline_milliseconds":18446744073709551615}}}},"max_plan_evaluations":1.0}\r\n';
   const options=' {"chosen":1.0,"seed":18446744073709551615}\n';
-  for(const selected of [true,false]) {
-    const selection={report:{schema:'ftx-sewing-selection-report/8',
+  for(const [version,mode,objective] of [[8,'routing','minimize_routed_feed_milliseconds'],
+    [9,'parallel','minimize_parallel_feed_milliseconds']]) for(const selected of [true,false]) {
+    const request=' {"schema":"ftx-sewing-selection/'+version+'","objective":"'+objective+'",'+
+      '"options":{"production":{"'+mode+'":{"objective":"minimize_feed_milliseconds",'+
+      '"feed_time_search":{"completion_deadline_milliseconds":18446744073709551615}}}},"max_plan_evaluations":1.0}\r\n';
+    const selection={report:{schema:'ftx-sewing-selection-report/'+version,
       selected_scheduled_feed_milliseconds:selected?9007199254740991:null,
       trials:[{scheduled_feed_milliseconds:9007199254740991,feed_optimality_proven:false}]},
       selected_options_json:selected?options:null};
@@ -3173,6 +3174,57 @@ test('qualified handling displays joint timing, physical copies and source evide
   }
   p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
   assert.equal(section(p,'sew').hidden,true); assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
+test('parallel feed objectives display exact work, deadlines and proof separately from completion', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('sewOptions');
+  // Display double only: the native tests independently enumerate feasible cell counts.
+  const selected={makespan_milliseconds:31100,feed_seconds:8,scheduled_feed_milliseconds:8000,
+    setup_milliseconds:1500,handling_milliseconds:1600,cells:[]};
+  const feed={selected_feed_milliseconds:8000,lower_bound_feed_milliseconds:8000,
+    lower_bound_attained:true,optimality_proven:true,completion_deadline_milliseconds:31100,
+    unresolved_cell_counts:2,baseline_replaced:true};
+  const parallel={schema:'ftx-sewing-parallel/8',time_basis:'ceil_cell_feed_milliseconds/1',
+    baseline:selected,selected,lower_bound_makespan_milliseconds:25500,search_nodes:84,
+    optimality_proven:false,budget_exhausted:true,feed_time_search:feed,
+    cell_plans:[{cell:'cell-b',plan:{options:{machine:{id:'qualified cell'}}}}]};
+  const plan={schema:'ftx-sewing-plan/35',hardware_execution_authorized:false,seams:[],
+    options:{production:{parallel:{objective:'minimize_feed_milliseconds',feed_time_search:{
+      completion_deadline_milliseconds:31100},source:{note:'<independent cells>'}}}},
+    production:{schema:'ftx-sewing-production/23',production_copies:3,feed_seconds:8,parallel}};
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('less feed');row.sewing=outcome(plan);
+    const study=studyReport([row]);
+    const report=op==='sew'?{schema:'ftx-sewing-program/5',stitches:[],plan}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    await p.e[op].onclick();p.emit(report);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith('parallel feed-work objective and proof'));
+    assert.deepEqual(plain(table.children[2].children.map(n=>n.textContent)),
+      ['8000','8000','true','true','31100','2']);
+    assert.match(visibleText(s),/minimum parallel completion time is not proved/);
+    assert.match(visibleText(s),/Feasible replacement baseline/);
+    assert.match(visibleText(s),/finish later while using less feed work/);
+    assert.match(visibleText(s),/minimizes total scheduled feed work/);
+    assert.doesNotMatch(visibleText(s),/allocation minimizes elapsed completion/);
+    if(op==='sew') {
+      const summary=JSON.parse(s.children[1].textContent);
+      assert.equal(summary.parallel_feed_optimality_proven,true);
+      assert.equal(summary.parallel_optimality_proven,false);
+      assert.equal(summary.parallel_scheduled_feed_milliseconds,8000);
+      assert.equal(summary.parallel_feed_lower_bound_milliseconds,8000);
+    }
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  delete feed.completion_deadline_milliseconds;delete feed.lower_bound_feed_milliseconds;
+  delete feed.lower_bound_attained;delete feed.optimality_proven;
+  feed.selected_feed_milliseconds=9007199254740991;
+  await p.e.sew.onclick();p.emit({stitches:[],plan});
+  const s=section(p,'sew');
+  const table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith('parallel feed-work objective and proof'));
+  assert.deepEqual(plain(table.children[2].children.map(n=>n.textContent)),
+    ['9007199254740991','Unavailable','Unknown','Unknown','None declared','2']);
+  p.e.sewOptions.handlers.change();assert.equal(section(p,'sew').hidden,true);
 });
 
 test('parallel cells display elapsed completion, local-to-global copies and exact sources without serial proof leakage', async () => {
@@ -11593,6 +11645,39 @@ test('authored sewing routes remain visible with their bounded search and refuse
   assert.match(visibleText(evidence),/Changed cell source lock/);
   assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('parallel feed recipe searches retain separate allocation proof and unavailable readings in study views', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const exact=studyRow('independent cells'),missing=studyRow('unresolved cells');
+  exact.sewing_selection=outcome({schema:'ftx-sewing-selection-report/9',
+    request:{schema:'ftx-sewing-selection/9',objective:'minimize_parallel_feed_milliseconds'},
+    selected_choices:{hem:'qualified'},selected_scheduled_feed_milliseconds:13334,
+    search_complete:true,budget_exhausted:false,optimality_proven:true,unresolved_trials:0,
+    trials:[{choices:{hem:'qualified'},feed_seconds:13.333333333333334,
+      scheduled_feed_milliseconds:13334,feed_optimality_proven:true}]});
+  missing.sewing_selection=outcome({schema:'ftx-sewing-selection-report/9',
+    request:{schema:'ftx-sewing-selection/9',objective:'minimize_parallel_feed_milliseconds'},
+    selected_choices:null,selected_scheduled_feed_milliseconds:null,
+    search_complete:false,budget_exhausted:true,optimality_proven:false,unresolved_trials:1,
+    trials:[{choices:{},objective_unavailable:{message:'No retained allocation inside <deadline>'}}]});
+  for(const op of ['study','scenario']) {
+    await p.e[op].onclick();const report=studyReport([exact,missing]);
+    p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+    assert.deepEqual(plain(table('Scheduled feed-work recipe search').children.slice(2).map(row=>row.children.map(n=>n.textContent))),
+      [['independent cells','13334','true','0'],['unresolved cells','Unknown','false','1']]);
+    const trials=table('Scheduled feed work by recipe and allocation').children.slice(2);
+    assert.equal(trials[0].children[2].textContent,'13334');
+    assert.equal(trials[0].children[4].textContent,'true');
+    assert.equal(trials[0].children[6].textContent,'Inspect retained cell allocation timing');
+    assert.deepEqual(plain(trials[1].children.map(n=>n.textContent)),
+      ['unresolved cells','Original recipes','Unknown','Unknown','Unknown','Unresolved','No retained allocation inside <deadline>']);
+    assert.match(visibleText(s),/rounded upward once per used cell/);
+    assert.match(visibleText(s),/Raw feed seconds and elapsed completion are separate quantities/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
 });
 
 test('routed feed recipe searches display exact scheduled work and separate bounded proof in study views', async () => {
