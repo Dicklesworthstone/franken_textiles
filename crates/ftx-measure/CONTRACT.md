@@ -274,6 +274,11 @@ corresponding poses together, checks observations and parameter bounds, and requ
 2–4 distinct strictly interior starts. The ordinary fitter uses this same function. Native
 pre-fit visualization can therefore inspect exact declared starts without duplicating validation
 or claiming observability, convergence or acceptance.
+One to twelve shared shape controls can be fitted with zero to eighteen per-frame pose controls.
+With zero pose controls, each start still binds one empty pose vector to every original frame;
+starts must differ in shared shape. The same undamped rank, strict-bound, held-out, multistart and
+global work-budget checks apply. Reports retain empty pose/spread vectors and explicitly disclose
+that fixed pose and placement are caller assumptions, not recovered values.
 `prepare_start_authoring` uses that same admission with a zero-start minimum so an operator can
 begin with an empty or one-start draft. The four-start cap, validation of every supplied start,
 identity association, bounds and distinctness remain unchanged. It supplies no initialization

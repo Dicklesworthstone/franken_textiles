@@ -177,6 +177,13 @@ async function saveDownload(page, name) {
     assert.deepEqual(fixed.shapes[0].choice, {mode: 'fixed', value: 0.6});
     assert.deepEqual(fixed.roots[0].choice, {mode: 'fixed', value: 0.125});
     assert.deepEqual(fixed.joints[0].choice, {mode: 'fixed', value: -0.2});
+    for (const item of expected.roots) {
+      await choice(row(page, 'root', item.name), {mode: 'fixed', value: item.name === expected.roots[0].name ? 0.125 : 0});
+    }
+    await page.locator('#applySetup').click(); await visible(page);
+    const fixedPose = await saveDownload(page, 'fixed-pose-choices.json');
+    assert(fixedPose.roots.every(item => item.choice.mode === 'fixed'));
+    assert(fixedPose.joints.every(item => item.choice.mode === 'fixed'));
     url = await page.locator('#setupDownload').getAttribute('href');
     await page.locator('#resetSetup').click(); await hidden(page); await revoked(page, url);
     assert.equal(await page.locator('#setupFrames input:checked').count(), 0);
@@ -320,6 +327,11 @@ async function saveDownload(page, name) {
 
     // Only setup was authored in the browser. The following is the existing native pipeline,
     // with independent synthetic truth supplied explicitly for targets, observations and starts.
+    command(['capture-init', 'fixed-pose-choices.json', '--model', model, '--out', 'fixed-pose-constructed']);
+    const fixedInput = read(path.join(out, 'fixed-pose-constructed/input.json'));
+    assert.deepEqual(fixedInput.model.pose_parameters, []);
+    assert.deepEqual(fixedInput.model.root_translation_m, [0.125, 0, 0]);
+    assert.equal(fixedInput.model.joints[expected.joints[0].bone].angle_rad, -0.2);
     command(['capture-init', 'capture-choices.json', '--model', model, '--out', 'constructed']);
     assert.deepEqual(fs.readFileSync(path.join(out, 'constructed/input.json')), fs.readFileSync(path.join(root, 'constructed/input.json')));
     command(['capture-init', 'revised-choices.json', '--model', model, '--out', 'revised-constructed']);

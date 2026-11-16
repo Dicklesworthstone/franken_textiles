@@ -469,6 +469,22 @@ fn capture_setup_refuses_invalid_choices_stale_sources_and_missing_check_corners
         model["pose_parameters"],
         json!(truth["model"]["pose_parameters"].as_array().unwrap()[1..6])
     );
+    let mut all_fixed = good.clone();
+    for (index, root) in all_fixed["roots"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        root["choice"] = json!({"mode":"fixed","value":if index == 0 { 0.125 } else { 0.0 }});
+    }
+    all_fixed["joints"][0]["choice"] = json!({"mode":"fixed","value":-0.2});
+    write(&dir, "choices.json", &all_fixed);
+    construct(&dir, "fixed-pose", 0);
+    let fixed_model = read(&dir, "fixed-pose/input.json")["model"].clone();
+    assert_eq!(fixed_model["pose_parameters"], json!([]));
+    assert_eq!(fixed_model["root_translation_m"], json!([0.125, 0.0, 0.0]));
+    assert_eq!(fixed_model["joints"]["arm"]["angle_rad"], -0.2);
     write(&dir, "choices.json", &good);
     for (index, file) in [
         "setup-review/setup.json",

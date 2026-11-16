@@ -6049,6 +6049,19 @@ capture and downstream results. The same bounded sequential image path applies t
 This extends `ftx-bc1`; it does not infer temporal synchrony, anatomical correspondences, calibrated
 uncertainty propagation or empirical body/garment accuracy.
 
+### 25.215 Fit shared body shape with explicitly fixed frame poses
+
+Calibrated multi-view body fitting can retain the authored root placement, orientation and joint
+configuration while estimating only shared shape. An empty pose-control catalogue is an explicit
+fixed-pose request; every frame still carries its own identity and empty parameter vector.
+Native model preparation, capture/setup controls, independent starts, portable fitting and accepted
+body handoff preserve the same choice without inventing a free root or joint.
+
+Shape observability, held-out residuals, independent starts and evaluation budgets remain enforced.
+A fixed pose is a supplied assumption, not a pose measurement or an inferred stationary wearer.
+Analytical rank/holdout controls and native/portable regressions accompany this extension of
+§§9.4/10.2; physical camera/body accuracy and garment fit remain separate acceptance gates.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

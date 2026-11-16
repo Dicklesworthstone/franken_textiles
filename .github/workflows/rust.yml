@@ -22,8 +22,8 @@ jobs:
         run: |
           cargo test -p ftx-export --test sewing_routing --locked routed_feed_
           cargo test -p ftx-export --test sewing_parallel --locked parallel_feed_
-          cargo test -p ftx-export --lib --locked parallel_feed_score_requires_matching_policy_proof_deadline_and_schedule
-          cargo test -p ftx-cli --test sewing_production_workflow --locked parallel_feed_replays_exact_work_and_deadline_choices_through_both_clis_and_portable -- --exact
+          cargo test -p ftx-export --lib --locked parallel_feed_score_
+          cargo test -p ftx-cli --test sewing_production_workflow --locked parallel_feed_
           node --experimental-vm-modules --test --test-name-pattern='parallel feed|routed feed recipe' tools/check_materials_frontend.cjs
       - name: Check independent garment region constraints
         if: ${{ !cancelled() }}
@@ -34,7 +34,11 @@ jobs:
           node --experimental-vm-modules --test --test-name-pattern='guided regional limits|regional comparison|regional limits enforce|regional guards' tools/check_materials_frontend.cjs tools/check_material_study_builder.cjs
       - name: Check body fitting and local shape priors
         if: ${{ !cancelled() }}
-        run: cargo test -p ftx-body --lib --test fit_tape --locked
+        run: |
+          cargo test -p ftx-body --lib --test fit_tape --locked
+          cargo test -p ftx-measure --test body_fit --locked fixed_pose
+          cargo test -p ftx-cli --test body_fit_workflow --locked fixed_pose
+          node --experimental-vm-modules --test --test-name-pattern='fixed pose' tools/check_photo_frontend.cjs
       - name: Check shared-lens triangulation through native and portable consumers
         if: ${{ !cancelled() }}
         run: |

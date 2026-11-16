@@ -94,7 +94,8 @@ pub struct Configuration {
     /// Selected articulated joints; all other joints remain at rest.
     #[serde(default)]
     pub joints: BTreeMap<String, Joint>,
-    /// Independently fitted controls in each frame, in vector order.
+    /// Independently fitted controls in each frame, in vector order. Empty retains the same
+    /// explicitly fixed root and joint values in every frame; their correctness is not inferred.
     pub pose_parameters: Vec<Parameter>,
     /// Named model locations in canonical key order.
     pub keypoints: BTreeMap<String, Target>,
@@ -260,7 +261,7 @@ impl CorrespondenceModel {
             || config.measurements.len() > 32
             || config.joints.len() > 32
             || !(1..=12).contains(&config.shape_parameters.len())
-            || !(1..=18).contains(&config.pose_parameters.len())
+            || config.pose_parameters.len() > 18
         {
             return Err(invalid("invalid Anny fit configuration or size budget"));
         }

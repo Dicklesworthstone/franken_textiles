@@ -356,8 +356,10 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       <fieldset><legend>Root placement and articulated motion</legend>
         <p>All six root components begin explicitly fixed at zero. Choose the components to fit and
           enter bounds in metres or radians. Root rotations are rotation-vector components, with a
-          combined fixed rotation length of at most π. Fit at least one and at most eighteen root or
-          joint controls; each photograph receives its own pose values in the starting-value editor.</p>
+          combined fixed rotation length of at most π. Fit at most eighteen root or joint controls;
+          each photograph receives its own fitted values in the starting-value editor. To fit only
+          shared shape, keep every root and joint fixed and explicitly verify that the same declared
+          pose and placement apply to every photograph.</p>
         <div id="bodyCaptureRoots"></div>
         <label>Articulated bone <select id="bodyCaptureJointName"></select></label>
         <button id="bodyCaptureJointAdd" disabled>Add joint control</button>

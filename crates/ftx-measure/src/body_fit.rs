@@ -36,6 +36,7 @@ pub struct ModelLayout {
     /// Shared shape parameters.
     pub shape: Vec<Parameter>,
     /// Independent parameters in each frame (root placement and selected joint angles).
+    /// Empty means the model's fixed pose and placement are used in every view.
     pub pose: Vec<Parameter>,
     /// Correspondence labels in the exact order returned by `points`.
     pub keypoints: Vec<String>,
@@ -631,7 +632,7 @@ fn canonical(
         || !text(&layout.model_id)
         || !(2..=8).contains(&input.frames.len())
         || !(1..=12).contains(&ns)
-        || !(1..=18).contains(&np)
+        || np > 18
         || ns + np * input.frames.len() > 128
         || input.measurements.len() > 32
         || !(minimum_keypoints..=128).contains(&layout.keypoints.len())
@@ -1164,6 +1165,9 @@ pub fn fit_body(
             .push("No held-out image observations were supplied.".into());
     }
     report.advisories.push("Cameras, lens parameters and tape definitions are fixed; their systematic uncertainty is not estimated.".into());
+    if model.layout().pose.is_empty() {
+        report.advisories.push("No pose parameters were fitted. Every view uses the same explicitly fixed model pose and placement; their accuracy remains a caller assumption.".into());
+    }
     if input.frames.iter().any(|f| f.silhouette.is_some()) {
         let coordinates = if input.frames.iter().any(|frame| {
             frame.silhouette.is_some()

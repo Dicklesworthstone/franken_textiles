@@ -237,6 +237,124 @@ fn first_capture_drafts_retain_validation_without_becoming_fittable() {
 }
 
 #[test]
+fn fixed_pose_views_recover_only_shape_and_retain_every_evidence_gate() {
+    struct FixedPoseBody {
+        body: HingedBody,
+        pose: [f64; 4],
+    }
+    impl BodyModel for FixedPoseBody {
+        fn layout(&self) -> &ModelLayout {
+            &self.body.layout
+        }
+        fn measurements(&self, shape: &[f64]) -> Result<Vec<f64>, Refusal> {
+            self.body.measurements(shape)
+        }
+        fn points(&self, shape: &[f64], pose: &[f64]) -> Result<Vec<Vec3>, Refusal> {
+            assert!(pose.is_empty(), "no synthetic free pose control");
+            self.body.points(shape, &self.pose)
+        }
+    }
+
+    let (mut body, mut input, _) = scene();
+    body.layout.pose.clear();
+    let mut model = FixedPoseBody {
+        body,
+        pose: [-0.2, 0.1, 0.1, -0.4],
+    };
+    let truth = [0.48, 1.25];
+    let points = model.points(&truth, &[]).unwrap();
+    for frame in &mut input.frames {
+        for (observation, point) in frame.keypoints.iter_mut().zip(&points) {
+            observation.pixel_px = frame.camera.project(*point).unwrap();
+        }
+    }
+    for start in &mut input.starts {
+        for pose in &mut start.poses {
+            pose.values.clear();
+        }
+    }
+    // Calibrated views of a fixed metric pose constrain these two dimensions without a tape prior.
+    input.measurements.clear();
+    let report = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(report.status, "ACCEPTED", "{report:#?}");
+    let solution = report.solution.as_ref().unwrap();
+    for (actual, expected) in solution.shape.iter().zip(truth) {
+        assert!((actual - expected).abs() < 1e-7, "{solution:?}");
+    }
+    assert!(report.model.pose.is_empty());
+    for (pose, frame) in solution.poses.iter().zip(&input.frames) {
+        assert_eq!(pose.frame, frame.frame);
+        assert!(pose.values.is_empty());
+    }
+    assert!(
+        report
+            .pose_spread_fraction
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|pose| pose.fractions.is_empty())
+    );
+    assert!(
+        report
+            .advisories
+            .iter()
+            .any(|message| message.contains("No pose parameters were fitted"))
+    );
+    assert!(report.attempts.iter().all(|attempt| {
+        attempt.status == "CONVERGED"
+            && attempt.checks.iter().all(|check| check.passed)
+            && attempt.cost_history.windows(2).all(|pair| pair[1] < pair[0])
+    }));
+
+    let mut invalid = input.clone();
+    invalid.starts[1] = invalid.starts[0].clone();
+    assert!(prepare_input(&invalid, model.layout()).is_err());
+    invalid = input.clone();
+    invalid.starts[0].poses.pop();
+    assert!(prepare_input(&invalid, model.layout()).is_err());
+    invalid = input.clone();
+    invalid.starts[0].poses[0].values.push(0.0);
+    assert!(prepare_input(&invalid, model.layout()).is_err());
+
+    let mut held_out = input.clone();
+    held_out.frames[0].keypoints[3].pixel_px.x += 4.0;
+    let rejected = fit_body(&held_out, &model, &FitOptions::default()).unwrap();
+    assert_eq!(rejected.status, "REJECTED");
+    assert!(rejected.solution.is_none());
+    for (base, changed) in report.attempts.iter().zip(&rejected.attempts) {
+        assert_eq!(base.cost_history, changed.cost_history);
+    }
+
+    let mut unobserved = input.clone();
+    for frame in &mut unobserved.frames {
+        for point in &mut frame.keypoints {
+            point.partition = Partition::HeldOut;
+        }
+    }
+    let unobservable = fit_body(&unobserved, &model, &FitOptions::default()).unwrap();
+    assert_eq!(unobservable.status, "UNOBSERVABLE");
+    assert!(unobservable.solution.is_none());
+
+    let stopped = fit_body(
+        &input,
+        &model,
+        &FitOptions {
+            max_model_evaluations: 1,
+            ..FitOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(stopped.status, "BUDGET_STOP");
+    assert!(stopped.solution.is_none());
+
+    // Fixed does not mean known-correct: incompatible articulated placement must still fail.
+    model.pose[3] = 0.65;
+    let wrong_pose = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_ne!(wrong_pose.status, "ACCEPTED");
+    assert!(wrong_pose.solution.is_none());
+}
+
+#[test]
 fn shared_shape_and_distinct_articulated_poses_are_recovered() {
     let (model, input, poses) = scene();
     let r = fit_body(&input, &model, &FitOptions::default()).unwrap();

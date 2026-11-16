@@ -542,8 +542,8 @@ function captureDeclarations(images,calibratedOverrides=false) {
       captureNumber(row.axisZ.value,row.name+" local axis z")],choice:captureChoice(row)}));
   const shapeCount=shapes.filter(item=>item.choice.mode==="fit").length;
   const poseCount=[...roots,...joints].filter(item=>item.choice.mode==="fit").length;
-  if(shapeCount<1 || shapeCount>12 || poseCount<1 || poseCount>18 || shapeCount+poseCount*images.length>128) {
-    throw Error("Choose 1–12 fitted shape controls and 1–18 fitted root/joint controls, with at most 128 values across all photographs.");
+  if(shapeCount<1 || shapeCount>12 || poseCount>18 || shapeCount+poseCount*images.length>128) {
+    throw Error("Choose 1–12 fitted shape controls and at most 18 fitted root/joint controls, with at most 128 values across all photographs. All roots and joints may instead stay explicitly fixed.");
   }
   const choices={schema:"ftx-body-photo-choices/1",model_sha256:bodyCaptureCatalogue.model_sha256,
     model:{age_years:captureNumber($("bodyCaptureAge").value,"age in years",0,110),

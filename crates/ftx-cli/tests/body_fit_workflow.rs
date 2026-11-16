@@ -658,6 +658,112 @@ fn actual_forward_model_adapter_recovers_shape_root_and_joint_motion() {
 }
 
 #[test]
+fn fixed_pose_shape_fit_replays_native_portable_and_accepted_body_workflows() {
+    let dir = setup();
+    let (bytes, mut input) = fixture();
+    let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true).unwrap()).unwrap();
+    let rest = model
+        .rest(&model.params(Phenotype {
+            height: 0.6,
+            weight: 0.45,
+            ..Phenotype::default()
+        }))
+        .unwrap();
+    let translation = Vec3::new(0.15, 0.1, 0.05);
+    let rotation = Vec3::new(0.0, 0.0, 0.2);
+    let angle = -0.4;
+    let posed = model
+        .pose(
+            &rest,
+            &[
+                Affine {
+                    m: Mat3::rotation(rotation.normalized(), rotation.norm()),
+                    t: translation,
+                },
+                Affine {
+                    m: Mat3::rotation(Vec3::new(1.0, 0.0, 0.0), angle),
+                    t: Vec3::ZERO,
+                },
+            ],
+        )
+        .unwrap();
+    input["model"]["pose_parameters"] = json!([]);
+    input["model"]["root_translation_m"] = json!(translation);
+    input["model"]["root_rotation_rad"] = json!(rotation);
+    input["model"]["joints"]["arm"]["angle_rad"] = json!(angle);
+    input["fit"]["measurements"] = json!([]);
+    for (i, frame) in input["fit"]["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        let mut camera: Camera = serde_json::from_value(frame["camera"].clone()).unwrap();
+        camera.center_m.x = if i == 0 { -0.25 } else { 0.25 };
+        frame["camera"] = json!(camera);
+        for (point, vertex) in frame["keypoints"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .zip(&posed.vertices)
+        {
+            point["pixel_px"] = json!(camera.project(*vertex).unwrap());
+        }
+    }
+    for start in input["fit"]["starts"].as_array_mut().unwrap() {
+        for pose in start["poses"].as_array_mut().unwrap() {
+            pose["values"] = json!([]);
+        }
+    }
+    save(&dir, &input);
+    let source = std::fs::read_to_string(dir.join("input.json")).unwrap();
+    let native = run(&dir, &["--out", "fixed-pose.json"], 0)["result"].clone();
+    let portable = ftx_wasm::body_fit::fit_body(&bytes, &source, "50", "100000").unwrap();
+    assert_eq!(native, portable);
+    assert_eq!(native["status"], "ACCEPTED");
+    assert_eq!(native["model"]["pose"], json!([]));
+    assert_eq!(native["anny_configuration"]["root_translation_m"], json!(translation));
+    assert_eq!(native["anny_configuration"]["root_rotation_rad"], json!(rotation));
+    assert_eq!(native["anny_configuration"]["joints"]["arm"]["angle_rad"], angle);
+    let reused =
+        ftx_body::accepted_shape::AcceptedShape::read(&native, &sha256_hex(&bytes), &[]).unwrap();
+    assert!((reused.params.phenotype.height - 0.6).abs() < 1e-6);
+    assert!((reused.params.phenotype.weight - 0.45).abs() < 1e-6);
+    let mut meshes = Vec::new();
+    for i in 0..2 {
+        assert_eq!(native["solution"]["poses"][i]["values"], json!([]));
+        assert_eq!(native["pose_spread_fraction"][i]["fractions"], json!([]));
+        assert_eq!(
+            native["solution"]["poses"][i]["frame"],
+            input["fit"]["frames"][i]["frame"]
+        );
+        let review =
+            ftx_wasm::body_fit::review_body_fit_frame(&bytes, &native.to_string(), &i.to_string())
+                .unwrap();
+        assert_eq!(review["camera"], input["fit"]["frames"][i]["camera"]);
+        meshes.push(review["mesh_obj"].clone());
+    }
+    assert_eq!(meshes[0], meshes[1], "a fixed pose retains one world-space body");
+
+    let mut rejected = input.clone();
+    let point = &mut rejected["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0];
+    *point = json!(point.as_f64().unwrap() + 10.0);
+    save(&dir, &rejected);
+    let source = std::fs::read_to_string(dir.join("input.json")).unwrap();
+    let native_bad = run(&dir, &[], 2)["result"].clone();
+    let portable_bad = ftx_wasm::body_fit::fit_body(&bytes, &source, "50", "100000").unwrap();
+    assert_eq!(native_bad, portable_bad);
+    assert_eq!(native_bad["status"], "REJECTED");
+    assert!(native_bad["solution"].is_null());
+    for i in 0..2 {
+        assert_eq!(
+            native_bad["attempts"][i]["cost_history"],
+            native["attempts"][i]["cost_history"]
+        );
+    }
+}
+
+#[test]
 fn reviewed_capture_joins_actual_selection_cameras_and_articulated_fit() {
     let dir = setup();
     let original: Value =

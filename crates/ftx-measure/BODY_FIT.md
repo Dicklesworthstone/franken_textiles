@@ -8,8 +8,12 @@ sampled keypoint/tape/silhouette fitting, not full-mask or real-photo qualificat
 
 The input is `ftx-body-fit-input/1`: 2–8 fixed metric cameras with oriented image metadata,
 explicit named pixel correspondences and uncertainties, optional independent tape targets in
-metres, and 2–4 distinct starts with frame-identified pose vectors. Every pose is independently
-variable; the subject need not be stationary between frames. A frozen image must still be a
+metres, and 2–4 distinct starts with frame-identified pose vectors. Selected pose controls vary
+independently, so the subject need not be stationary between frames. An explicitly empty pose
+layout instead fits only shared shape, retaining the same fixed model pose and world placement
+in every view. Each start still supplies an identified empty pose vector for every frame and
+must differ in shared shape. Fixed values are caller assumptions, not recovered evidence;
+incorrect placement still faces the ordinary image and tape gates. A frozen image must be a
 valid exposure of the stated pose: rolling shutter and motion blur are not modeled.
 
 One vector of shape parameters is shared by all frames. Shape and per-frame root distance can

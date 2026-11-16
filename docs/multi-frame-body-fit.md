@@ -135,7 +135,8 @@ In **Fit one body shape across changing poses**, select the converted model and 
 2. Choose **Load available model controls**. Enter age and the Anny gender coefficient, select
    shared shape controls, and choose fixed values or explicit fitting bounds. All six roots
    begin fixed at zero; choose the roots or declared local-axis joints to fit in each frame.
-   At least one shared shape and one pose control must be fitted. Optionally add independent tape
+   At least one shared shape control must be fitted. Pose controls may all stay fixed when the
+   same declared root placement and joint angles apply to every image. Optionally add independent tape
    measurements from the checked model's catalogue: enter measured length and uncertainty in
    millimetres, retain the source/measurement definition, and choose FIT or CHECK explicitly.
    FIT measurements constrain shared shape; CHECK measurements only assess it. A FIT stature can
@@ -216,7 +217,8 @@ Inspect the actual model catalogue, then supply `ftx-body-photo-choices/1`: exac
 age/gender, explicit fixed or bounded fitted shape controls, all six root choices and any
 declared joint axes. Supply metric-scale and observation evidence. Native capture setup and
 this API share the same catalogue and choice-to-model conversion. Ordinary model and capture
-admission still requires a fitted shape control and fitted pose control; bounds and anatomy
+admission requires at least one fitted shape control. Zero fitted pose controls retain the same
+declared fixed root and joints across every view; bounds, stillness and anatomical correctness
 are not inferred from image appearance.
 
 Add each image's original encoded bytes once and finish with the exact model and choices.
@@ -408,8 +410,8 @@ or fits a declared interval, for example the row structures
 `{"name":"height","choice":{"mode":"fixed","value":0.5}}` and
 `{"name":"height","choice":{"mode":"fit","lower":0.1,"upper":0.9}}`.
 These illustrate the format, not recommended body values or bounds. Unselected shape controls
-retain the converted model's defaults. Select at least one fitted shape control and one fitted
-pose control; the ordinary aggregate parameter budget still applies.
+retain the converted model's defaults. Select at least one fitted shape control. Zero to eighteen
+pose controls are supported; the ordinary aggregate parameter budget still applies.
 
 Declare each of the six root components as fixed or fitted. Translations use metres and the
 rotation-vector components use radians. Add an articulated joint only by its exact non-root
@@ -991,7 +993,7 @@ The `model` object specifies:
 | `shape_parameters` | Ordered array of `{name, lower, upper}` for the shared variables |
 | `root_translation_m`, `root_rotation_rad` | Optional fixed root translation and rotation vector, both defaulting to `[0,0,0]`; named free pose parameters override their respective components |
 | `joints` | Optional map from exact bone label to `{axis: [x,y,z], angle_rad: 0}`; axis is a unit vector in that bone's **local rest frame**, not a world axis |
-| `pose_parameters` | Ordered array of `{name, lower, upper}` repeated independently in every frame |
+| `pose_parameters` | Ordered array of `{name, lower, upper}` repeated independently in every frame; `[]` keeps all declared root/joint values fixed across views |
 | `keypoints` | Map from correspondence name to an explicit vertex, triangle-surface or bone target |
 | `measurements` | Ordered array of requested rest-body tape functional names |
 
@@ -1202,6 +1204,15 @@ mask boundaries may be strongly correlated. Segmentation, loose clothing and occ
 produce a self-consistent but wrong body estimate. Those systematic errors are not inferred.
 
 ## Observability, acceptance and output
+
+For shape-only fitting, set `model.pose_parameters` to `[]` and explicitly declare the fixed
+root translation, root rotation and any joint angles. Every view then observes the same posed
+world-space body through its own calibrated camera. Each start still lists every frame, with
+`values: []` for that frame's pose; two to four distinct shared-shape starts remain required.
+A fixed pose is a caller assumption, not a pose recovered from the photographs. Use free pose
+controls for movement between views. The output retains empty per-frame pose and pose-spread
+vectors and states that pose was not fitted. Incorrect fixed placement still faces every original
+pixel, silhouette and tape check, and insufficient shape information still returns `UNOBSERVABLE`.
 
 Known cameras alone do not generally fix body scale when each pose has a free distance to
 its camera. A tape constraint such as stature can resolve that shape/depth ambiguity. The

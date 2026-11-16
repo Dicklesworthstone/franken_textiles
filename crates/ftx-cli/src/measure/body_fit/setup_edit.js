@@ -332,7 +332,7 @@
     const shapeCount = choices.shapes.filter(item => item.choice.mode === 'fit').length;
     const poseCount = [...choices.roots, ...choices.joints].filter(item => item.choice.mode === 'fit').length;
     if (shapeCount < 1 || shapeCount > 12) throw new Error('Declare 1–12 free shape controls.');
-    if (poseCount < 1 || poseCount > 18) throw new Error('Declare 1–18 free root/joint controls.');
+    if (poseCount > 18) throw new Error('Declare at most 18 free root/joint controls, or fix every root and joint explicitly.');
     if (shapeCount + poseCount * indices.length > 128) throw new Error('Shared shape plus independent poses exceed the 128-parameter native budget.');
     const names = new Set(), measurements = choices.measurements === undefined ? [] : choices.measurements;
     for (const item of list(measurements, 32, 'Tape observations')) {

@@ -1395,6 +1395,23 @@ test('body-start editor applies every named pose natively and uses exact edited 
   await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,original);
 });
 
+test('body-start editor keeps fixed pose frame identities while editing distinct shared shapes',async()=>{
+  const p=await photoPage();selectBodyFit(p);
+  const starts=[0.4,0.6].map(value=>({shape:[value],poses:[{frame_index:0,values:[]},{frame_index:1,values:[]}]}));
+  const view=await loadBodyStarts(p,{pose:[],starts});
+  assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.e.bodyStartsEditor.hidden,false);
+  editBodyStart(p,'bodyStart-shape-0','0.45');
+  await p.e.bodyStartsApply.onclick();const worker=p.current(),message=worker.messages[0],edits=JSON.parse(message.edits);
+  assert.deepEqual(edits.starts.map(start=>start.shape),[[0.45],[0.6]]);
+  for(const start of edits.starts)assert.deepEqual(start.poses,[{frame_index:0,values:[]},{frame_index:1,values:[]}]);
+  const input=' {"fixed_pose":true,"timestamp_us":18446744073709551615}\r\n';
+  await worker.emit({type:'result',request:message.request,
+    report:JSON.stringify({...view,input,input_sha256:'b'.repeat(64),starts:edits.starts})});
+  assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.e.bodyFitRun.disabled,false);
+  assert.equal(await p.urls.get(p.e.bodyStartsDownloads.children[0].href).text(),input);
+  await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,input);
+});
+
 test('body-start draft edits withdraw accepted handoffs and invalid applies cannot fit or restore stale output',async()=>{
   const p=await photoPage();selectBodyFit(p);await loadBodyStarts(p);await p.e.bodyFitRun.onclick();let w=p.current();
   await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bodyFitReport())});
@@ -3536,6 +3553,26 @@ test('corrected capture worker refuses a stale export or incomplete derived byte
   result=await w.send(unchecked);assert.match(result.message,/without the requested option/);
 });
 
+test('still-photo capture accepts a fixed pose without inventing a free root or joint',async()=>{
+  const p=await photoPage();await selectBodyCapture(p);
+  const root=bodyCaptureRow(p.e.bodyCaptureRoots.children[0]);
+  root.mode.value='fixed';root.mode.handlers.change();root.field('value').value='0.125';root.field('value').handlers.input();
+  p.e.bodyCaptureJointName.value='synthetic elbow';p.e.bodyCaptureJointName.handlers.change();p.e.bodyCaptureJointAdd.onclick();
+  const joint=bodyCaptureRow(p.e.bodyCaptureJoints.children[0]);joint.mode.value='fixed';joint.mode.handlers.change();
+  for(const [axis,value] of [['axisX','1'],['axisY','0'],['axisZ','0']])joint.field(axis).value=value;
+  joint.field('value').value='-0.2';joint.field('value').handlers.input();
+  const {message}=await completeBodyCapture(p);
+  assert.equal(p.e.bodyCaptureError.textContent,'');
+  const choices=JSON.parse(message.choices);
+  assert.ok(choices.model.roots.every(control=>control.choice.mode==='fixed'));
+  assert.equal(choices.model.roots[0].choice.value,0.125);
+  assert.deepEqual(choices.model.joints,[{bone:'synthetic elbow',axis:[1,0,0],choice:{mode:'fixed',value:-0.2}}]);
+  assert.deepEqual(choices.model.shapes,[{name:'height',choice:{mode:'fit',lower:0.1,upper:0.9}}]);
+  root.field('value').value='0.25';root.field('value').handlers.input();
+  assert.equal(p.e.bodyCaptureDownloads.children.length,0,'Changing fixed placement withdraws the old draft');
+  assert.equal(p.e.bodyTargetsLoad.disabled,true);
+});
+
 test('still-photo capture page hands the exact generated draft to existing editors and never revives an old manual source',async()=>{
   const p=await photoPage();selectBodyFit(p,' old prepared input ');
   await selectBodyCapture(p);
@@ -3644,9 +3681,9 @@ test('still-photo capture page requires explicit bounds and validates budgets be
   const p=await photoPage();await selectBodyCapture(p);
   let reads=0;p.e.bodyCaptureCalibration.files=[{size:2,arrayBuffer:async()=>{reads++;return new TextEncoder().encode('{}').buffer;}}];
   p.e.bodyCaptureAge.value='';await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/age/);
-  p.e.bodyCaptureAge.value='5';bodyCaptureRow(p.e.bodyCaptureRoots.children[0]).mode.value='fixed';
+  p.e.bodyCaptureAge.value='5';const shape=bodyCaptureRow(p.e.bodyCaptureShapes.children[0]);shape.mode.value='fixed';shape.field('value').value='0.5';
   await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/fitted/);
-  fitCaptureRow(p.e.bodyCaptureRoots.children[0],-2,2);
+  fitCaptureRow(p.e.bodyCaptureShapes.children[0],0.1,0.9);
   p.e.bodyCaptureHeldOut.value='0,0';await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/unique/);
   p.e.bodyCaptureHeldOut.value='0,5';await p.e.bodyCaptureRun.onclick();assert.equal(reads,0);assert.match(p.e.bodyCaptureError.textContent,/at least four/);
   p.e.bodyCaptureHeldOut.value='0,5,10,15';p.e.bodyCaptureImages.files[1]={name:'side.png',size:64*1024*1024+1,arrayBuffer:async()=>{reads++;}};
