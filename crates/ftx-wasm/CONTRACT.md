@@ -70,6 +70,20 @@ Source edits/cancellation withdraw all derived files. The user must review crop 
 authoring silhouettes. This does not transform existing annotations, infer contours or propagate
 calibration uncertainty; ordinary silhouette and body-fit acceptance remain unchanged.
 
+**Independent per-photo calibrations.** `BodyCapture::with_calibrations` and the corresponding
+`WebBodyCapture.with_calibrations` accept a strict capture `/2` manifest and an exact
+`ftx-body-photo-calibrations/1` JSON envelope of image-specific calibration-text, lens-ID and rotation
+overrides. Unlisted images retain the declared shared default. Duplicate or unknown image names,
+invalid calibration evidence and mismatched lens/orientation declarations refuse before detection;
+an invalid override never falls back to the default. Each effective calibration is independently
+recomputed through the existing authority, including its own Brown rectifier and pixel dimensions.
+The combined source envelope is bounded before parsing and actual per-image dimensions share the
+existing aggregate pixel budget. Capture result `/3` preserves the exact override JSON and hash,
+parsed evidence and each frame's selected lens binding. The page freezes every selected source
+before asynchronous reads and invalidates dependent work after any override edit. Shared-calibration
+requests retain the existing constructor and output schemas; no anatomical or synchronization claim
+is added by mixing checked cameras.
+
 **Local multi-frame Anny fitting.** `body_fit::fit_body(model_bytes, input, iterations,
 max_evaluations)` and wasm32 `fit_body` accept the original prepared
 `ftx-anny-body-fit-input/1` text and exact converted model bytes. Inputs are bounded to 16 MiB

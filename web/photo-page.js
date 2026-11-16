@@ -22,6 +22,7 @@ let bodyPreparedSource = null;
 let bodyCaptureWorker = null, bodyCaptureTicket = 0, bodyCaptureBusy = false;
 let bodyCaptureCatalogue = null, bodyCaptureModelFile = null, bodyCaptureGenerated = null, bodyCaptureRowId = 0;
 let bodyCaptureRows = {shapes:[],roots:[],joints:[],measurements:[]}, bodyCaptureInputs = [];
+let bodyCaptureLensRows = [];
 const bodyCaptureUrls = [];
 const bodyCapturePendingImages = new Map();
 let bodyTargetsWorker = null, bodyTargetsTicket = 0, bodyTargetsBusy = false;
@@ -78,6 +79,10 @@ function controls() {
   $("bodyCaptureCancel").disabled=!bodyCaptureBusy;
   $("bodyCaptureClear").disabled=bodyCaptureBusy || !bodyCaptureGenerated;
   for(const input of bodyCaptureInputs) input.disabled=captureLocked;
+  for(const row of bodyCaptureLensRows) {
+    row.enabled.disabled=captureLocked;
+    for(const input of [row.calibration,row.lens,row.rotation]) input.disabled=captureLocked || !row.enabled.checked;
+  }
   for(const row of [...bodyCaptureRows.shapes,...bodyCaptureRows.roots,...bodyCaptureRows.joints]) {
     row.value.disabled ||= row.mode.value!=="fixed";
     row.lower.disabled ||= row.mode.value!=="fit"; row.upper.disabled ||= row.mode.value!=="fit";
@@ -317,6 +322,52 @@ function captureText(id,label,maximum=4096) {
 function captureOption(value,label) {
   const option=document.createElement("option"); option.value=value; option.textContent=label; return option;
 }
+function refreshCapturePhotoLenses() {
+  bodyCaptureLensRows=[];$("bodyCapturePhotoLenses").replaceChildren();
+  for(const file of Array.from($("bodyCaptureImages").files).slice(0,8)) {
+    const group=document.createElement("fieldset"),legend=document.createElement("legend");legend.textContent=file.name;
+    const row={file};group.append(legend);
+    for(const [name,type,label] of [["enabled","checkbox","Use a different calibration for this photograph"],
+      ["calibration","file","Checked calibration JSON"],["lens","text","Calibration lens ID"],
+      ["rotation","select","Rotation already applied to stored pixels"]]) {
+      const input=document.createElement(type==="select"?"select":"input"),wrapper=document.createElement("label");
+      input.id=`body-capture-lens-${++bodyCaptureRowId}-${name}`;if(type!=="select")input.type=type;
+      if(type==="file")input.accept=".json,application/json";
+      if(name==="lens")input.maxLength=256;
+      if(name==="rotation") {
+        input.append(captureOption("","Choose recorded rotation"),...[0,90,180,270].map(value=>captureOption(String(value),value+"°")));
+        input.value="";
+      }
+      wrapper.textContent=label+" ";wrapper.append(input);group.append(wrapper);row[name]=input;
+      const current=()=>bodyCaptureLensRows.includes(row);
+      const changed=()=>{if(current())changeBodyCapture();};
+      input.addEventListener("change",changed);
+      if(type==="text")input.addEventListener("input",changed);
+      if(type==="file")for(const event of ["click","cancel"])input.addEventListener(event,()=>{
+        if(!current())return;
+        const pending=bodyCaptureBusy;stopBodyCapture();controls();
+        if(pending)$("bodyCaptureStatus").textContent="Capture acquisition cancelled while choosing a calibration; prepare the current selection again.";
+      });
+    }
+    bodyCaptureLensRows.push(row);$("bodyCapturePhotoLenses").append(group);
+  }
+  controls();
+}
+function captureCalibrationOverrides(images) {
+  return bodyCaptureLensRows.filter(row=>row.enabled.checked).map(row=>{
+    if(!images.includes(row.file))throw Error("The photograph selection changed; choose the images again before assigning lens overrides.");
+    const file=row.calibration.files[0],lens_id=row.lens.value;
+    if(!file || !Number.isSafeInteger(file.size) || file.size<1 || file.size>16*1024*1024) {
+      throw Error("Choose a checked calibration up to 16 MiB for "+row.file.name+".");
+    }
+    if(!lens_id.trim() || lens_id.includes("\0") || new Blob([lens_id]).size>256) {
+      throw Error("Enter the exact calibration lens ID for "+row.file.name+" (up to 256 UTF-8 bytes).");
+    }
+    const rotation_cw_deg=captureNumber(row.rotation.value,"recorded rotation for "+row.file.name);
+    if(![0,90,180,270].includes(rotation_cw_deg))throw Error("Choose a recorded pixel rotation of 0, 90, 180 or 270 degrees for "+row.file.name+".");
+    return {image:row.file.name,lens_id,rotation_cw_deg,file};
+  });
+}
 function refreshCaptureNames() {
   if(!bodyCaptureCatalogue) return;
   for(const [id,kind,names,label] of [
@@ -467,7 +518,7 @@ function captureChoice(row) {
   if(lower>=upper) throw Error("The lower fitting bound must be below the upper bound for "+label+".");
   return {mode,lower,upper};
 }
-function captureDeclarations(images) {
+function captureDeclarations(images,calibratedOverrides=false) {
   if(!bodyCaptureCatalogue || bodyCaptureModelFile!==$("bodyFitModel").files[0]) throw Error("Load the controls for this exact model first.");
   const heldText=captureText("bodyCaptureHeldOut","predeclared held-out corner IDs"), parts=heldText.split(",").map(value=>value.trim());
   if(parts.some(value=>!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) throw Error("Enter held-out corner IDs as comma-separated nonnegative integers.");
@@ -476,7 +527,7 @@ function captureDeclarations(images) {
   if(held_out_corner_ids.length<4) throw Error("Declare at least four held-out corner IDs and leave at least four other corners for fitting.");
   const rotation_cw_deg=captureNumber($("bodyCaptureRotation").value,"recorded rotation");
   if(![0,90,180,270].includes(rotation_cw_deg)) throw Error("Choose a recorded pixel rotation of 0, 90, 180 or 270 degrees.");
-  const manifest={schema:"ftx-body-photo-capture/1",images:images.map(file=>file.name),
+  const manifest={schema:calibratedOverrides?"ftx-body-photo-capture/2":"ftx-body-photo-capture/1",images:images.map(file=>file.name),
     lens_id:captureText("bodyCaptureLens","the calibration lens ID",256),
     rotation_cw_deg,reference_id:captureText("bodyCaptureReference","a stationary reference ID",256),
     held_out_corner_ids,board_bottom_left_xz_m:[
@@ -538,7 +589,11 @@ async function runBodyCapture() {
         new Set(images.map(file=>file.name)).size!==images.length) {
       throw Error("Choose distinct original image filenames, up to 64 MiB per photograph.");
     }
-    const {manifest,choices}=captureDeclarations(images), modelHash=bodyCaptureCatalogue.model_sha256;
+    const overrides=captureCalibrationOverrides(images);
+    if(overrides.length && calibrationFile.size+overrides.reduce((sum,row)=>sum+row.file.size,0)>16*1024*1024) {
+      throw Error("Default and per-photo calibration sources together must fit within 16 MiB.");
+    }
+    const {manifest,choices}=captureDeclarations(images,overrides.length>0), modelHash=bodyCaptureCatalogue.model_sha256;
     clearBodyCapture(); id=bodyCaptureTicket;
     // Beginning a new capture explicitly replaces the selected prepared source. A later cancellation
     // or source edit must not silently expose an older manual input beneath this draft.
@@ -547,6 +602,16 @@ async function runBodyCapture() {
     bodyCaptureBusy=true; controls(); $("bodyCaptureStatus").textContent="Reading the calibration and printed-sheet declaration…";
     const calibration=await readJsonFile(calibrationFile); if(id!==bodyCaptureTicket) return;
     const sheet=await readJsonFile(sheetFile); if(id!==bodyCaptureTicket) return;
+    const overrideSources=[];
+    for(const row of overrides) {
+      const calibration_json=await readJsonFile(row.file);if(id!==bodyCaptureTicket)return;
+      if(new Blob([calibration_json]).size!==row.file.size)throw Error("The calibration for "+row.image+" changed while it was being read.");
+      overrideSources.push({image:row.image,lens_id:row.lens_id,rotation_cw_deg:row.rotation_cw_deg,calibration_json});
+    }
+    const calibrations=overrides.length?JSON.stringify({schema:"ftx-body-photo-calibrations/1",overrides:overrideSources}):null;
+    if(calibrations!==null && new Blob([manifest,calibration,sheet,calibrations]).size>16*1024*1024) {
+      throw Error("Complete default and per-photo capture source documents exceed 16 MiB.");
+    }
     const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); bodyCaptureWorker=current;
     current.onmessage=({data:m})=>{
       if(current!==bodyCaptureWorker || m.request!==bodyCaptureTicket) return;
@@ -572,11 +637,36 @@ async function runBodyCapture() {
       try {
         if(typeof m.report!=="string" || new Blob([m.report]).size>16*1024*1024) throw Error("Capture result exceeds 16 MiB.");
         const view=JSON.parse(m.report);
-        if(view.schema!==(rectify?"ftx-body-photo-capture-result/2":"ftx-body-photo-capture-result/1") || view.status!=="CAPTURE_DRAFT" || view.body_fitted!==false ||
+        if(view.schema!==(calibrations!==null?"ftx-body-photo-capture-result/3":rectify?"ftx-body-photo-capture-result/2":"ftx-body-photo-capture-result/1") || view.status!=="CAPTURE_DRAFT" || view.body_fitted!==false ||
             view.start_count!==0 || view.frame_count!==images.length || typeof view.input!=="string" ||
             new Blob([view.input]).size>16*1024*1024 || !/^[0-9a-f]{64}$/.test(view.input_sha256) ||
             view.model_sha256!==modelHash || !view.acquisition) {
           throw Error("The engine did not return a complete source-bound capture draft.");
+        }
+        if(calibrations!==null) {
+          const retained=view.acquisition.calibration_overrides,declared=JSON.parse(manifest);
+          if(view.acquisition.calibration_overrides_json!==calibrations ||
+              retained?.schema!=="ftx-body-photo-calibrations/1" || !Array.isArray(retained.overrides) ||
+              retained.overrides.length!==overrideSources.length ||
+              !/^[0-9a-f]{64}$/.test(view.acquisition.calibration_overrides_sha256) ||
+              !Array.isArray(view.acquisition.frames) || view.acquisition.frames.length!==images.length ||
+              retained.overrides.some((row,index)=>["image","lens_id","rotation_cw_deg","calibration_json"]
+                .some(key=>row?.[key]!==overrideSources[index][key]))) {
+            throw Error("The capture did not retain the exact per-photo calibration sources.");
+          }
+          for(const [index,frame] of view.acquisition.frames.entries()) {
+            const override=overrideSources.find(row=>row.image===images[index].name),effective=override || declared;
+            const binding=frame.calibration;
+            if(frame.image!==images[index].name || binding?.lens_id!==effective.lens_id ||
+                binding.rotation_cw_deg!==effective.rotation_cw_deg || binding.source!==(override?"image_override":"shared_default") ||
+                !/^[0-9a-f]{64}$/.test(binding.calibration_sha256) ||
+                (!override && binding.calibration_sha256!==view.acquisition.calibration_sha256) ||
+                !Array.isArray(binding.image_size_px) || binding.image_size_px.length!==2 ||
+                binding.image_size_px.some(value=>!Number.isSafeInteger(value) || value<2) ||
+                binding.image_size_px[0]*binding.image_size_px[1]>16000000) {
+              throw Error("A photograph's calibrated lens binding does not match the requested capture.");
+            }
+          }
         }
         const derivedFiles=new Map();
         if(rectify) {
@@ -603,11 +693,17 @@ async function runBodyCapture() {
         link($("bodyCaptureDownloads"),view.input,"body-fit-input-stills.json","application/json",bodyCaptureUrls);
         link($("bodyCaptureDownloads"),m.report,"body-photo-capture.json","application/json",bodyCaptureUrls);
         for(const {file} of derivedFiles.values()) link($("bodyCaptureDownloads"),file,file.name,"image/png",bodyCaptureUrls);
-        if(rectify) {
+        if(rectify || calibrations!==null) {
           link($("bodyCaptureDownloads"),manifest,"body-photo-manifest.json","application/json",bodyCaptureUrls);
           link($("bodyCaptureDownloads"),choices,"body-photo-choices.json","application/json",bodyCaptureUrls);
           link($("bodyCaptureDownloads"),calibration,"body-photo-calibration.json","application/json",bodyCaptureUrls);
           link($("bodyCaptureDownloads"),sheet,"body-photo-sheet.json","application/json",bodyCaptureUrls);
+        }
+        if(calibrations!==null) {
+          link($("bodyCaptureDownloads"),calibrations,"body-photo-calibrations.json","application/json",bodyCaptureUrls);
+          for(const [index,row] of overrideSources.entries()) {
+            link($("bodyCaptureDownloads"),row.calibration_json,`body-photo-calibration-override-${index+1}.json`,"application/json",bodyCaptureUrls);
+          }
         }
         $("bodyCaptureDiagnostics").textContent=m.report;
         $("bodyCaptureStatus").textContent="Prepared "+view.frame_count+" calibrated source-bound frames. "+
@@ -619,7 +715,7 @@ async function runBodyCapture() {
     };
     current.onerror=error=>{if(current===bodyCaptureWorker)fail(error);};
     // File handles cross the worker boundary; each photo is read and decoded only when its turn arrives.
-    current.postMessage({request:id,op:"body-photo-capture",manifest,calibration,sheet,choices,modelFile,
+    current.postMessage({request:id,op:"body-photo-capture",manifest,calibration,...(calibrations!==null?{calibrations}:{}),sheet,choices,modelFile,
       images:images.map(file=>({id:file.name,file}))});
   } catch(error) {fail(error);}
 }
@@ -2166,8 +2262,9 @@ for(const id of ["bodyCaptureLens","bodyCaptureReference","bodyCaptureOriginX","
 }
 $("bodyCaptureRotation").addEventListener("change",changeBodyCapture);
 $("bodyCaptureRectify").addEventListener("change",changeBodyCapture);
+$("bodyCaptureImages").addEventListener("change",()=>{changeBodyCapture();refreshCapturePhotoLenses();});
 for(const id of ["bodyCaptureImages","bodyCaptureCalibration","bodyCaptureSheet"]) {
-  $(id).addEventListener("change",changeBodyCapture);
+  if(id!=="bodyCaptureImages")$(id).addEventListener("change",changeBodyCapture);
   for(const event of ["click","cancel"]) $(id).addEventListener(event,()=>{
     const pending=bodyCaptureBusy; stopBodyCapture(); controls();
     if(pending) $("bodyCaptureStatus").textContent="Capture acquisition cancelled while choosing a source; prepare the current selection again.";

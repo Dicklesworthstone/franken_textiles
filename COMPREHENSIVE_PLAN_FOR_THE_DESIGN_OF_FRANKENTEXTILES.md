@@ -6035,6 +6035,20 @@ through software child `ftx-pb2.parallel-feed`. It adds a declared manufacturing
 inferring labor capacity, electricity consumption, measured throughput, seam quality or hardware
 authorization from synthetic timing arithmetic.
 
+### 25.214 Capture body photos with independently calibrated cameras
+
+The portable still-photo workflow accepts explicit per-image calibration, lens and stored-rotation
+overrides while retaining the shared-calibration default. Every effective camera reuses the native
+checked-calibration and stationary-board FIT/CHECK authorities. Different sensor sizes and Brown
+distortion models remain attached to their own photos through optional rectification and ordinary
+target, observation, start and fitting authoring.
+
+Original calibration text, complete override declarations and selected frame bindings remain
+source-bound. Duplicate/unknown image overrides and invalid sources refuse; edits withdraw stale
+capture and downstream results. The same bounded sequential image path applies to all cameras.
+This extends `ftx-bc1`; it does not infer temporal synchrony, anatomical correspondences, calibrated
+uncertainty propagation or empirical body/garment accuracy.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

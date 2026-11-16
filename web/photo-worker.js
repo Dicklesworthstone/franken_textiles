@@ -29,6 +29,14 @@ self.onmessage = async ({data: m}) => {
         throw Error("Still capture needs 2–8 images, a model up to 512 MiB, calibration up to 16 MiB and declarations up to 256 KiB each.");
       }
       if(typeof ftx.WebBodyCapture!=="function") throw Error("Rebuild web/pkg: missing the still-photo body capture engine.");
+      const calibratedOverrides=Object.hasOwn(m,"calibrations");
+      if(calibratedOverrides && (!bounded(m.calibrations,16*1024*1024) ||
+          [m.manifest,m.calibration,m.sheet,m.calibrations].reduce((sum,text)=>sum+new TextEncoder().encode(text).length,0)>16*1024*1024)) {
+        throw Error("Complete default and per-photo capture source documents exceed 16 MiB.");
+      }
+      if(calibratedOverrides && typeof ftx.WebBodyCapture.with_calibrations!=="function") {
+        throw Error("Rebuild web/pkg: missing independently calibrated capture photographs.");
+      }
       const supplied=new Map();
       for(const image of m.images) {
         if(!image || typeof image.id!=="string" || supplied.has(image.id) || !image.file ||
@@ -38,7 +46,8 @@ self.onmessage = async ({data: m}) => {
         }
         supplied.set(image.id,image.file);
       }
-      bodyCapture=new ftx.WebBodyCapture(m.manifest,m.calibration,m.sheet);
+      bodyCapture=calibratedOverrides?ftx.WebBodyCapture.with_calibrations(m.manifest,m.calibration,m.sheet,m.calibrations):
+        new ftx.WebBodyCapture(m.manifest,m.calibration,m.sheet);
       const rectify=JSON.parse(m.manifest).rectify===true;
       if(rectify && typeof bodyCapture.take_image!=="function") {
         throw Error("Rebuild web/pkg: missing calibrated capture image correction.");

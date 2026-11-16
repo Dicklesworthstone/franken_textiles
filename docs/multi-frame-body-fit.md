@@ -123,6 +123,11 @@ In **Fit one body shape across changing poses**, select the converted model and 
 1. Choose the 2–8 original images, checked camera calibration and original printed sheet sidecar.
    Enter the matching lens/rotation, stationary reference, measured board origin, at least four
    predeclared held-out corner IDs (leaving at least four FIT corners) and placement evidence.
+   The calibration and lens/rotation fields are the shared default. For photographs from a
+   different camera, lens setting, resolution or orientation, expand **Use different calibrated
+   lenses for individual photographs** and enable an override for each affected image. Choose
+   that image's original checked calibration report and enter its exact lens ID and already-applied
+   rotation. A missing or mismatched override refuses acquisition; it never falls back to the default.
    Brown-calibrated photographs support silhouette editing in their original pixels. Optionally
    select **Correct lens distortion for silhouette editing** to derive supported pinhole images.
    Review the corrected crop before authoring; the body regions you intend
@@ -148,6 +153,10 @@ Beginning a valid acquisition replaces the selected prepared input and withdraws
 authoring results, fits and garment handoffs. Changing capture files, model choices or board
 declarations cancels work and invalidates a generated draft. Late reads and workers cannot
 republish it, and clearing or cancelling never falls back to an older prepared-file selection.
+Per-photo calibration edits have the same invalidation behavior. Selecting a replacement image
+list clears its overrides, including when the replacement files have the same names. The original
+default and override calibration texts are frozen before acquisition and remain available with
+the manifest, choices, sheet, prepared input and complete report for exact replay.
 Photographs remain local; the exact image bytes bound to the draft are verified again when displayed
 beneath authored observations or a fitted frame. With lens correction enabled, these are the derived
 PNGs. The page supplies them automatically to the image editor; selecting an original distorted
@@ -157,8 +166,8 @@ The portable `body_capture_catalogue` and incremental `BodyCapture` API can prep
 ordinary `ftx-anny-body-fit-input/1` directly from 2–8 local PNG/JPEG photographs. It uses the
 existing pure-Rust ChArUco detector and calibrated sheet-pose solver. Retain the exact converted
 `.ftxbody` model, original `fabric-calib-sheet/1` sidecar and checked camera-calibration report.
-All photographs must use that lens, image dimensions and declared clockwise rotation, with
-already-oriented stored pixels (EXIF orientation absent or 1).
+Each photograph must match its effective calibration's lens, image dimensions and declared
+clockwise rotation, with already-oriented stored pixels (EXIF orientation absent or 1).
 
 The manifest (`ftx-body-photo-capture/1`) declares the ordered, unique image names, lens and
 reference identities, rotation, stationary upright board's bottom-left world X/Z coordinates,
@@ -166,6 +175,42 @@ evidence for that placement and the corner IDs reserved for independent CHECK be
 The board remains in the world Y=0 plane. Every detected corner is retained; missing CHECK
 corners, fewer than four FIT corners, failed pose checks or a mismatched camera epoch refuse
 that image. Adding a refused image leaves the existing batch unchanged.
+
+For independently calibrated photographs, use manifest `ftx-body-photo-capture/2`, retaining all
+the shared/default fields above, and call
+`BodyCapture::with_calibrations(manifest, default_calibration, sheet, overrides_json)` or the
+browser's `WebBodyCapture.with_calibrations(...)`. The fourth argument is the exact JSON text of
+this envelope:
+
+```json
+{
+  "schema": "ftx-body-photo-calibrations/1",
+  "overrides": [
+    {
+      "image": "side-portrait.png",
+      "lens_id": "portrait-camera",
+      "rotation_cw_deg": 90,
+      "calibration_json": "the complete original checked calibration report text"
+    }
+  ]
+}
+```
+
+There must be 1–8 overrides with unique exact filenames from the manifest. Images without an
+override use the checked default explicitly. Every calibration is recomputed and checked before
+the first photograph is decoded; image dimensions, original pixel rotation and optional
+rectification are then resolved independently for each image. The stationary board, world frame
+and held-out corner declaration remain common to the entire capture. Different lenses do not
+create different body shapes or imply synchronized exposure times.
+
+Both original and corrected multi-lens captures return `ftx-body-photo-capture-result/3`.
+`acquisition.calibration_overrides_json` retains the exact envelope text, with its SHA-256 in
+`calibration_overrides_sha256`; the parsed `calibration_overrides` also retains each original
+calibration text. Each acquisition frame has a `calibration` receipt naming the effective lens,
+rotation, dimensions, exact calibration hash and `shared_default` or `image_override` source.
+The page downloads `body-photo-calibrations.json` and the individual
+`body-photo-calibration-override-N.json` originals alongside the shared capture sources.
+With no overrides, the existing `/1` manifest and three-argument constructor remain unchanged.
 
 Inspect the actual model catalogue, then supply `ftx-body-photo-choices/1`: exact model hash,
 age/gender, explicit fixed or bounded fitted shape controls, all six root choices and any
@@ -196,7 +241,8 @@ original and derived cameras, crop, dimensions, encoded image hash and decoded p
 each PNG under its recorded `image.image_name`. The final opt-in report uses
 `ftx-body-photo-capture-result/2`; its prepared input binds those PNGs while frame identities and
 acquisition evidence still name the originals. Files differing only outside the retained crop do
-not become independent views. Omitting the option retains the original `/1` result and images.
+not become independent views. Omitting the option retains the original `/1` result and images
+for a shared-lens capture; multi-lens captures use `/3` in either mode.
 
 Correction applies only while preparing a fresh draft. Previously authored points, masks, weights
 and starts are not moved to new coordinates. Author new observations on the corrected images, and
@@ -215,6 +261,10 @@ complete result to 16 MiB; model to 512 MiB; each image to 64 MiB encoded and 16
 decoded pixels. Images are decoded and released one at a time, with at most eight frames and
 128 million pixels across the batch. File-backed native captures and clip/window selection
 retain their existing route.
+For multi-lens captures, the complete original default, sheet, manifest and override source
+documents must also fit within 16 MiB. Retaining the exact override text and its parsed source
+receipt can increase the result size; the 16 MiB retained-source/result limits still apply.
+Oversized or refused sources are never dropped to make a partial capture appear complete.
 
 ## Fit prepared observations in the local browser
 

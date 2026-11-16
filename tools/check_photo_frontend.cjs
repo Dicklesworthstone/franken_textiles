@@ -3290,6 +3290,154 @@ async function completeBodyCapture(p,report=bodyCaptureReport()) {
   const raw=typeof report==='string'?report:JSON.stringify(report);
   await worker.emit({type:'result',request:message.request,report:raw});return {worker,message,raw};
 }
+function captureLensFields(p,index=1) {
+  const descend=node=>[node,...node.children.flatMap(descend)],all=descend(p.e.bodyCapturePhotoLenses.children[index]);
+  return Object.fromEntries(['enabled','calibration','lens','rotation'].map(name=>[name,all.find(node=>node.id?.endsWith('-'+name))]));
+}
+function setCaptureLensOverride(p,index=1) {
+  const fields=captureLensFields(p,index),raw=' {\r\n"calibration":"other lens λ","clock":18446744073709551615,"offset":-0.0\r\n}\r\n';
+  fields.enabled.checked=true;fields.enabled.handlers.change();
+  fields.calibration.files=[file(raw,'other-camera.json')];fields.lens.value='other lens <β>';
+  fields.rotation.value='90';fields.rotation.handlers.change();return {...fields,raw};
+}
+function multiLensCaptureReport(message,corrected) {
+  const manifest=JSON.parse(message.manifest),overrides=JSON.parse(message.calibrations);
+  const hash=text=>require('node:crypto').createHash('sha256').update(text).digest('hex');
+  const base=corrected?JSON.parse(JSON.stringify(corrected.report)):bodyCaptureReport();
+  return {...base,schema:'ftx-body-photo-capture-result/3',frame_count:manifest.images.length,
+    acquisition:{...base.acquisition,calibration_sha256:hash(message.calibration),
+      calibration_overrides:overrides,calibration_overrides_json:message.calibrations,
+      calibration_overrides_sha256:hash(message.calibrations),frames:manifest.images.map((image,index)=>{
+        const override=overrides.overrides.find(row=>row.image===image),source=override || manifest;
+        return {...base.acquisition.frames[index],image,calibration:{lens_id:source.lens_id,
+          rotation_cw_deg:source.rotation_cw_deg,image_size_px:corrected?[660,500]:override?[480,640]:[640,480],
+          calibration_sha256:hash(override?override.calibration_json:message.calibration),
+          source:override?'image_override':'shared_default'}};
+      })}};
+}
+
+test('multi-lens capture worker freezes exact calibration sources before sequential images and never falls back on refusal',async()=>{
+  const order=[],raw=' {"source_clock":18446744073709551615,"offset":-0.0,"lens":"λ"}\r\n';
+  const calibrations=' '+JSON.stringify({schema:'ftx-body-photo-calibrations/1',overrides:[
+    {image:'side.png',lens_id:'side lens',rotation_cw_deg:90,calibration_json:raw}]})+'\r\n';
+  let legacy=0,freed=0;
+  class Capture {
+    constructor(){legacy++;throw Error('The shared-lens constructor must not handle overrides');}
+    static with_calibrations(manifest,calibration,sheet,overrides) {
+      order.push('freeze lenses');assert.equal(calibration,raw);assert.equal(sheet,' exact sheet ');assert.equal(overrides,calibrations);
+      assert.equal(JSON.parse(manifest).schema,'ftx-body-photo-capture/2');
+      return {image_ids:()=>JSON.stringify(['front.png','side.png']),
+        add_image:(id,bytes)=>{order.push('decode '+id);assert.ok(bytes.length);return JSON.stringify({image:id});},
+        finish:(model,choices)=>{order.push('finish');assert.equal(new TextDecoder().decode(model),'model');assert.equal(choices,' exact choices ');return '{}';},
+        free:()=>{freed++;}};
+    }
+  }
+  const source=(id,text)=>({id,file:{size:text.length,arrayBuffer:async()=>{order.push('read '+id);return new TextEncoder().encode(text).buffer;}}});
+  const request={request:1,op:'body-photo-capture',manifest:'{"schema":"ftx-body-photo-capture/2","images":["front.png","side.png"]}',
+    calibration:raw,calibrations,sheet:' exact sheet ',choices:' exact choices ',
+    modelFile:{size:5,arrayBuffer:async()=>{order.push('read model');return new TextEncoder().encode('model').buffer;}},
+    images:[source('front.png','front'),source('side.png','side')]};
+  const worker=await photoWorker({bodyCaptureClass:Capture});assert.equal((await worker.send(request)).type,'result');
+  assert.deepEqual(order,['freeze lenses','read front.png','decode front.png','read side.png','decode side.png','read model','finish']);
+  assert.equal(legacy,0);assert.equal(freed,1);
+  class Missing {constructor(){legacy++;}}
+  class Refused extends Missing {static with_calibrations(){throw Error('side.png: calibrated lens mismatch');}}
+  for(const [bodyCaptureClass,overrides,reason] of [[Missing,calibrations,/missing independently calibrated/],
+    [Refused,calibrations,/side.png: calibrated lens mismatch/],[Capture,null,/source documents/]]) {
+    order.length=0;const failed=await photoWorker({bodyCaptureClass});
+    const result=await failed.send({...request,calibrations:overrides});assert.equal(result.type,'error');
+    assert.match(result.message,reason);assert.deepEqual(order,[]);assert.equal(legacy,0);
+  }
+});
+
+test('multi-lens capture page preserves per-photo sources, exact replay downloads and the shared default',async()=>{
+  for(const rectify of [false,true]) {
+    const p=await photoPage();await selectBodyCapture(p);
+    if(!rectify) {
+      p.e.bodyCaptureImages.files=[file('front','__proto__'),file('side','<side & β>.png')];p.e.bodyCaptureImages.handlers.change();
+      assert.equal(p.e.bodyCapturePhotoLenses.children[0].children[0].textContent,'__proto__');
+      assert.equal(p.e.bodyCapturePhotoLenses.children[1].children[0].textContent,'<side & β>.png');
+    }
+    const fields=setCaptureLensOverride(p),calibration=p.e.bodyCaptureCalibration.files[0],read=calibration.arrayBuffer;
+    p.e.bodyCaptureRectify.checked=rectify;p.e.bodyCaptureRectify.handlers.change();
+    let release;calibration.arrayBuffer=()=>new Promise(resolve=>{release=resolve;});
+    const running=p.e.bodyCaptureRun.onclick();
+    fields.lens.value='changed without an input event';fields.rotation.value='180';fields.calibration.files=[file('{}','changed.json')];
+    release(await read());await running;calibration.arrayBuffer=read;
+    const worker=p.current(),message=worker.messages[0],manifest=JSON.parse(message.manifest);
+    assert.equal(manifest.schema,'ftx-body-photo-capture/2');assert.equal(manifest.lens_id,'declared lens');assert.equal(manifest.rotation_cw_deg,0);
+    assert.deepEqual(JSON.parse(message.calibrations),{schema:'ftx-body-photo-calibrations/1',overrides:[
+      {image:p.e.bodyCaptureImages.files[1].name,lens_id:'other lens <β>',rotation_cw_deg:90,calibration_json:fields.raw}]});
+    const corrected=rectify?correctedCaptureFixture():null;
+    if(corrected)for(const output of corrected.outputs)await worker.emit({type:'body-capture-image',request:message.request,...output});
+    const report=multiLensCaptureReport(message,corrected),raw=JSON.stringify(report);
+    await worker.emit({type:'result',request:message.request,report:raw});assert.equal(p.e.bodyCaptureError.textContent,'');
+    assert.equal(p.e.bodyTargetsLoad.disabled,false);assert.equal(p.e.bodyFitRun.disabled,true,'Acquisition never creates fitting starts');
+    const downloads=new Map(p.e.bodyCaptureDownloads.children.map(link=>[link.download,p.urls.get(link.href)]));
+    for(const [name,expected] of [['body-photo-manifest.json',message.manifest],['body-photo-choices.json',message.choices],
+      ['body-photo-calibration.json',message.calibration],['body-photo-calibrations.json',message.calibrations],
+      ['body-photo-calibration-override-1.json',fields.raw],['body-photo-sheet.json',message.sheet],
+      ['body-fit-input-stills.json',report.input],['body-photo-capture.json',raw]]) {
+      assert.equal(await downloads.get(name).text(),expected,name);
+    }
+    if(corrected)for(const output of corrected.outputs)assert.deepEqual(
+      new Uint8Array(await downloads.get(output.image.image_name).arrayBuffer()),new Uint8Array(output.png));
+    const descend=node=>[node,...node.children.flatMap(descend)];
+    assert.equal(descend(p.e.bodyCapturePhotoLenses).some(node=>'innerHTML' in node),false);
+    fields.enabled.checked=false;fields.enabled.handlers.change();assert.equal(p.e.bodyCaptureDownloads.children.length,0);
+    assert.equal(p.urls.size,0);await p.e.bodyCaptureRun.onclick();const shared=p.current().messages[0];
+    assert.equal(JSON.parse(shared.manifest).schema,'ftx-body-photo-capture/1');assert.equal(Object.hasOwn(shared,'calibrations'),false);
+    p.e.bodyCaptureCancel.onclick();
+  }
+});
+
+test('multi-lens capture edits cancel pending source reads and stale workers while image replacement clears overrides',async()=>{
+  for(const stage of ['read','worker'])for(const change of ['lens','calibration','images','cancel']) {
+    const p=await photoPage();await selectBodyCapture(p);const fields=setCaptureLensOverride(p);
+    const previous=p.current();let release,started;
+    const reading=new Promise(resolve=>{started=resolve;});
+    if(stage==='read')fields.calibration.files[0].arrayBuffer=()=>{started();return new Promise(resolve=>{release=resolve;});};
+    const running=p.e.bodyCaptureRun.onclick();if(stage==='read')await reading;else await running;
+    const worker=p.current(),message=stage==='worker'?worker.messages[0]:null;
+    if(change==='lens'){fields.lens.value='replacement';fields.lens.handlers.input();}
+    else if(change==='calibration'){fields.calibration.files=[file('{}')];fields.calibration.handlers.change();}
+    else if(change==='images'){p.e.bodyCaptureImages.files=p.e.bodyCaptureImages.files.map(image=>file('changed',image.name));p.e.bodyCaptureImages.handlers.change();}
+    else p.e.bodyCaptureCancel.onclick();
+    if(stage==='read'){release(new TextEncoder().encode(fields.raw).buffer);await running;assert.equal(p.current(),previous);}
+    else {await worker.emit({type:'result',request:message.request,report:JSON.stringify(multiLensCaptureReport(message))});assert.equal(worker.dead,true);}
+    assert.equal(p.e.bodyCaptureDownloads.children.length,0);assert.equal(p.urls.size,0);assert.equal(p.e.bodyPointsLoad.disabled,true);
+    if(change==='images') {
+      const replacement=captureLensFields(p);assert.equal(Boolean(replacement.enabled.checked),false);assert.equal(replacement.lens.value,'');
+      fields.enabled.checked=true;fields.enabled.handlers.change();assert.equal(Boolean(replacement.enabled.checked),false);
+    }
+  }
+});
+
+test('multi-lens capture refuses incomplete overrides before reads and mismatched returned source bindings',async()=>{
+  for(const invalid of ['calibration','lens','rotation','oversized','aggregate']) {
+    const p=await photoPage();await selectBodyCapture(p);const fields=setCaptureLensOverride(p);let reads=0;
+    p.e.bodyCaptureCalibration.files[0].arrayBuffer=async()=>{reads++;return new ArrayBuffer(0);};
+    if(invalid==='calibration')fields.calibration.files=[];
+    else if(invalid==='lens')fields.lens.value='β'.repeat(129);
+    else if(invalid==='rotation')fields.rotation.value='';
+    else fields.calibration.files=[{size:invalid==='oversized'?16*1024*1024+1:16*1024*1024,arrayBuffer:async()=>{reads++;return new ArrayBuffer(0);}}];
+    await p.e.bodyCaptureRun.onclick();assert.equal(reads,0,invalid);assert.ok(p.e.bodyCaptureError.textContent,invalid);
+    assert.equal(p.e.bodyCaptureDownloads.children.length,0);assert.equal(p.e.bodyTargetsLoad.disabled,true);
+  }
+  for(const invalid of ['original text','source content','lens','rotation','default substitution','legacy result']) {
+    const p=await photoPage();await selectBodyCapture(p);setCaptureLensOverride(p);await p.e.bodyCaptureRun.onclick();
+    const worker=p.current(),message=worker.messages[0],report=multiLensCaptureReport(message);
+    if(invalid==='original text')report.acquisition.calibration_overrides_json+=' ';
+    else if(invalid==='source content')report.acquisition.calibration_overrides.overrides[0].calibration_json+=' ';
+    else if(invalid==='lens')report.acquisition.frames[1].calibration.lens_id='declared lens';
+    else if(invalid==='rotation')report.acquisition.frames[1].calibration.rotation_cw_deg=0;
+    else if(invalid==='default substitution')report.acquisition.frames[1].calibration.source='shared_default';
+    else report.schema='ftx-body-photo-capture-result/1';
+    await worker.emit({type:'result',request:message.request,report:JSON.stringify(report)});
+    assert.ok(p.e.bodyCaptureError.textContent,invalid);assert.equal(p.e.bodyCaptureDownloads.children.length,0,invalid);
+    assert.equal(p.e.bodyTargetsLoad.disabled,true,invalid);assert.equal(worker.dead,true,invalid);
+  }
+});
 
 test('still-photo capture worker acquires source files sequentially, preserves declarations and frees native state',async()=>{
   const order=[],input=' { "original":18446744073709551615 }\r\n';

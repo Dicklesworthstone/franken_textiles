@@ -295,11 +295,11 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <summary>Start a body capture from local still photographs</summary>
     <p>Prepare the calibrated cameras and an empty observation draft, then use the target, observation
       and starting-value editors below. Choose 2–8 distinct photographs of the same wearer with the same
-      stationary upright ChArUco sheet visible. The checked calibration must describe the same lens,
-      oriented image size and recorded rotation. All image decoding and fitting stay in this browser.</p>
+      stationary upright ChArUco sheet visible. Each checked calibration must match its photograph's
+      lens, oriented image size and recorded rotation. All image decoding and fitting stay in this browser.</p>
     <label>Original PNG or JPEG photographs (2–8)
       <input id="bodyCaptureImages" type="file" multiple accept=".png,.jpg,.jpeg,image/png,image/jpeg"></label>
-    <label>Checked camera calibration JSON
+    <label>Default checked camera calibration JSON
       <input id="bodyCaptureCalibration" type="file" accept=".json,application/json"></label>
     <label>Original printed calibration-sheet sidecar
       <input id="bodyCaptureSheet" type="file" accept=".json,application/json"></label>
@@ -310,11 +310,19 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       photographs remain the calibration and sheet-check sources. Download the corrected copies
       with the prepared input to reopen this capture later.</small></p>
     <div class="row">
-      <label>Calibration lens ID <input id="bodyCaptureLens" type="text" maxlength="256"></label>
-      <label>Rotation already applied to stored pixels
+      <label>Default calibration lens ID <input id="bodyCaptureLens" type="text" maxlength="256"></label>
+      <label>Default rotation already applied to stored pixels
         <select id="bodyCaptureRotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
       <label>Stationary reference ID <input id="bodyCaptureReference" type="text" maxlength="256"></label>
     </div>
+    <details>
+      <summary>Use different calibrated lenses for individual photographs</summary>
+      <p>All photographs use the default calibration above unless you enable an override below.
+        For each override, choose the original checked calibration report and explicitly enter its
+        lens ID and the rotation already applied to the stored photograph. The camera checks must
+        pass independently for every image; changing the image selection clears these overrides.</p>
+      <div id="bodyCapturePhotoLenses"></div>
+    </details>
     <div class="row">
       <label>Board outer bottom-left x (m) <input id="bodyCaptureOriginX" type="number" step="any"></label>
       <label>Board outer bottom-left z (m) <input id="bodyCaptureOriginZ" type="number" step="any"></label>
