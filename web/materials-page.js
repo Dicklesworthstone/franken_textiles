@@ -2258,7 +2258,7 @@ function designComparison(op, parent, study, casePolicies = {}) {
           const limits = table(parent, `${design.key ?? "Unknown design"}: comparison-limit violations`,
             ["Material", "Case", "Metric", "Guard basis", "Unit", "Minimum shortfall", "Maximum excess"]);
           for (const item of row.constraint_violations) cells(limits, [item.material_key, item.case_key ?? "Single study",
-            item.metric, basisText(item.basis), item.unit,
+            item.metric + (item.region != null ? ` — region ${item.region}` : ""), basisText(item.basis), item.unit,
             item.minimum_shortfall == null ? "Not declared" : metric(item.minimum_shortfall),
             item.maximum_excess == null ? "Not declared" : metric(item.maximum_excess)]);
         }

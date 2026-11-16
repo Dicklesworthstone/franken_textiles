@@ -8,6 +8,283 @@ mod pareto;
 mod worst_case;
 
 #[test]
+fn regional_guards_share_real_motion_and_preserve_adaptive_cache_and_scope_identity() {
+    use ftx_export::material_study::Request;
+    use ftx_pattern::Pattern;
+    use ftx_wasm::materials::scenario::on_model;
+
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let body = json!({"schema":"ftx-scenario-body/1",
+        "accepted_body_fit":receipt(&digest),"arm_abduction_deg":35.0,
+        "measurements":{"wearer":{"stature_mm":1111.0}}});
+    let mut pattern: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let width = std::f64::consts::TAU * 180.0;
+    pattern["pieces"][0]["vertices"]["b"] = json!([width, 0.0]);
+    pattern["pieces"][0]["vertices"]["c"] = json!([width, 100.0]);
+    pattern["pieces"][0]["vertices"]["d"] = json!([0.0, 100.0]);
+    pattern["pieces"][0]["placement"]["radius_mm"] = json!(180.0);
+    pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    let regions = json!([
+        {"id":"seam-side","instance":"band","selector":{"kind":"whole_triangle_centroid",
+            "polygon_mm":[[-1.,-1.],[width*0.2,-1.],[width*0.2,101.],[-1.,101.]]}},
+        {"id":"panel-center","instance":"band","selector":{"kind":"whole_triangle_centroid",
+            "polygon_mm":[[width*0.3,-1.],[width*0.8,-1.],[width*0.8,101.],[width*0.3,101.]]}}
+    ]);
+    let scenario = json!({"schema":"ftx-drape-scenario/1",
+        "options":{"spacing":100.0,"sew_steps":120,"drape_steps":0,"step":0.001},
+        "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000,
+        "material_strain":{"schema":"ftx-material-strain/2","regions":regions,
+            "max_triangle_samples":100000},
+        "contact_loads":{"schema":"ftx-contact-loads/2","regions":regions,
+            "max_vertex_samples":100000,"max_pair_evaluations":1000000},
+        "motion":{"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.001,"arm_abduction_deg":35.}],
+            "max_step_s":0.0005,"max_trials":8,"max_pairs":100000,"max_sample_vertices":100000}});
+    // These deliberately permissive numerical limits exercise scope routing, not failure strains
+    // or wearer safety. The same metric has two distinct region guards and a union guard.
+    let constraints = json!([
+        {"metric":"max_warp_green_strain","maximum":10.},
+        {"metric":"max_warp_green_strain","region":"seam-side","maximum":11.},
+        {"metric":"max_warp_green_strain","region":"panel-center","maximum":12.},
+        {"metric":"motion_max_warp_green_strain","region":"seam-side","maximum":13.},
+        {"metric":"motion_max_warp_green_strain","region":"panel-center","maximum":14.},
+        {"metric":"max_body_contact_vertex_force_n","region":"seam-side","maximum":1000000.},
+        {"metric":"max_body_contact_vertex_force_n","region":"panel-center","maximum":2000000.},
+        {"metric":"motion_max_body_contact_vertex_force_n","maximum":3000000.},
+        {"metric":"motion_max_body_contact_vertex_force_n","region":"seam-side","maximum":4000000.},
+        {"metric":"motion_max_body_contact_vertex_force_n","region":"panel-center","maximum":5000000.}
+    ]);
+    let study = json!({"schema":"ftx-design-study/1",
+        "design_adaptive":{"objective":"consumer_comparison","material_key":"sheet",
+            "case_key":"moving","constraint_restoration":"componentwise",
+            "variables":[{"key":"length","bounds_mm":[-10.,0.],"initial_mm":0.,
+                "initial_step_mm":10.,"minimum_step_mm":10.,
+                "sites":[{"piece":"band","axis":"y","at_mm":50.,"multiplier":1.}]}],
+            "max_evaluations":2,"max_designs":1},
+        "design_fit":{"fit_spec":{"schema":"fabric-fit/1","points":[{
+            "id":"height-band","kind":"vertical","instance":"band","from":"a","to":"d",
+            "body":"stature","body_scale":0.05,"target_mm":[0.,20.,100.]}]}},
+        "variants":[{"key":"sheet","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],
+        "comparison":{"basis":"nominal",
+            "objectives":[{"metric":"simulated_cloth_mass_kg","direction":"minimize"}],
+            "constraints":constraints}});
+    let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,
+        "cases":[{"key":"moving","scenario":scenario}]});
+    let report: Value = serde_json::from_str(
+        &on_model(
+            &model,
+            &digest,
+            &pattern.to_string(),
+            &study.to_string(),
+            &matrix.to_string(),
+            &body.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let search = &report["manufacturing"]["design_search"];
+    assert_eq!(search["selected_designs"], 1, "{search}");
+    let selected = search["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["selected"] == true)
+        .unwrap();
+    assert_eq!(selected["design"]["variables_mm"]["length"], -10.0);
+    let key = serde_json::to_string(&json!([selected["design"]["key"], "sheet"])).unwrap();
+    let case = &report["cases"][0];
+    assert_eq!(case["key"], "moving");
+    assert_eq!(report["comparison"]["frontier"], json!([key]));
+    let candidate = case["comparison"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == key)
+        .unwrap();
+    let result = &case["simulations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == key)
+        .unwrap()["evaluation"]["result"];
+    assert_eq!(candidate["eligible"], true, "{candidate}");
+    assert_eq!(result["motion"]["status"], "available", "{result}");
+    for field in [
+        "readings",
+        "regional_readings",
+        "eligible",
+        "exclusions",
+        "input_protocol_sha256",
+    ] {
+        assert_eq!(
+            selected["consumer_cases"][0]["comparison"][field],
+            candidate[field]
+        );
+    }
+    for (prefix, source) in [("", result), ("motion_", &result["motion"]["result"])] {
+        assert_eq!(source["material_strain"]["status"], "available");
+        assert_eq!(source["contact_loads"]["status"], "available");
+        for region in ["seam-side", "panel-center"] {
+            for (metric, value, unit) in [
+                (
+                    format!("{prefix}max_warp_green_strain"),
+                    &source["material_strain"]["result"]["regions"][region]["green_strain_range"]
+                        [0][1],
+                    "1",
+                ),
+                (
+                    format!("{prefix}max_body_contact_vertex_force_n"),
+                    &source["contact_loads"]["result"]["regions"][region]["max_body_vertex_force_n"],
+                    "N",
+                ),
+            ] {
+                let reading = &candidate["regional_readings"][region][&metric];
+                assert!(value.is_number(), "{metric}: {source}");
+                assert_eq!(reading["value"], *value);
+                assert_eq!(reading["unit"], unit);
+                assert!(reading.get("reported_bounds").is_none());
+            }
+        }
+    }
+    assert_eq!(
+        candidate["readings"]["max_warp_green_strain"]["value"],
+        result["material_strain"]["result"]["green_strain_range"][0][1]
+    );
+    assert_eq!(
+        candidate["readings"]["motion_max_body_contact_vertex_force_n"]["value"],
+        result["motion"]["result"]["contact_loads"]["result"]["max_body_vertex_force_n"]
+    );
+    assert_eq!(
+        candidate["readings"]["motion_max_warp_green_strain"]["value"],
+        result["motion"]["result"]["material_strain"]["result"]["green_strain_range"][0][1]
+    );
+    for trial in search["rows"].as_array().unwrap() {
+        let guards = trial["constraint_violations"].as_array().unwrap();
+        assert_eq!(guards.len(), constraints.as_array().unwrap().len());
+        for declared in constraints.as_array().unwrap() {
+            let guard = guards
+                .iter()
+                .find(|guard| {
+                    guard["metric"] == declared["metric"]
+                        && guard.get("region") == declared.get("region")
+                })
+                .unwrap();
+            assert_eq!(guard["case_key"], "moving");
+            assert_eq!(guard["metric"], declared["metric"]);
+            assert_eq!(guard.get("region"), declared.get("region"));
+            assert_eq!(guard["maximum_excess"], 0.0);
+        }
+    }
+    let rows = report["manufacturing"]["alternatives"].as_array().unwrap();
+    let probes = search["consumer_guidance"]["evaluations"].as_u64().unwrap() as usize;
+    assert_eq!(
+        report["evaluations"],
+        probes + rows.len() - 1,
+        "all ten local/union guards share each probe; selected production output is reused"
+    );
+
+    // Replay the exact retained production result, changing only decision requirements. A single
+    // failed or absent region must not borrow the passing union or another region's reading.
+    let manufacture = rows.iter().find(|row| row["key"] == key).unwrap();
+    let altered = Pattern::from_json(
+        manufacture["design"]["altered_pattern_json"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    for absent in [false, true] {
+        let mut guards = constraints.clone();
+        if absent {
+            guards[1]["region"] = json!("missing-region");
+        } else {
+            // E11 = (|F_warp|^2 - 1)/2 is never below -0.5, so this is a known rejection.
+            guards[1]["maximum"] = json!(-1.0);
+        }
+        let request: Request = serde_json::from_value(json!({"schema":"ftx-material-study/1",
+            "variants":[{"key":"replay","changes":manufacture["frozen_changes"]}],
+            "comparison":{"basis":"nominal",
+                "objectives":[{"metric":"simulated_cloth_mass_kg","direction":"minimize"}],
+                "constraints":guards}}))
+        .unwrap();
+        let mut calls = 0;
+        let replay = request
+            .evaluate_with(&altered, &case["scenario"], |_, bound| {
+                calls += 1;
+                assert_eq!(bound.raw(), &manufacture["binding"]["result"]["pattern"]);
+                Ok(result.clone())
+            })
+            .unwrap();
+        assert_eq!(calls, 1);
+        let replay = serde_json::to_value(replay).unwrap();
+        let rejected = &replay["comparison"]["alternatives"][0];
+        assert_eq!(rejected["eligible"], false);
+        assert_eq!(
+            rejected["exclusions"].as_array().unwrap().len(),
+            1,
+            "{rejected}"
+        );
+        assert_eq!(
+            rejected["regional_readings"]["panel-center"],
+            candidate["regional_readings"]["panel-center"]
+        );
+        assert_eq!(rejected["readings"], candidate["readings"]);
+        if absent {
+            assert!(
+                rejected["regional_readings"]
+                    .get("missing-region")
+                    .is_none()
+            );
+        }
+    }
+
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    for (name, value) in [
+        ("pattern.json", &pattern),
+        ("study.json", &study),
+        ("scenario.json", &matrix),
+        ("body-input.json", &body),
+    ] {
+        save(&dir.join(name), value);
+    }
+    for (binary, prefix) in [
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            &["--json", "materials", "scenario-study"][..],
+        ),
+        (env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"][..]),
+    ] {
+        let output = Command::new(binary)
+            .current_dir(&dir)
+            .args(prefix)
+            .args([
+                "pattern.json",
+                "study.json",
+                "scenario.json",
+                "body-input.json",
+                "model.ftxbody",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(actual.get("result").unwrap_or(&actual), &report);
+    }
+}
+
+#[test]
 fn consumer_adaptive_uses_real_scenario_mass_and_preserves_cached_incumbent_on_budget_refusal() {
     use ftx_wasm::materials::scenario::on_model;
 

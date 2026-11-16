@@ -10257,6 +10257,44 @@ test('constraint restoration results keep native guard units and exclusions with
   p.e.studyRequest.handlers.change();assert.equal(s.hidden,true);
 });
 
+test('regional guards preserve exact restoration identities and leave missing scoped readings unknown',async()=>{
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const metric='max_warp_green_strain',regions=['__proto__','<cuff & sleeve>'];
+  const candidate={key:'A',eligible:false,dominated_by:[],exclusions:[{message:'Exact cuff reading is unavailable'}],
+    readings:{[metric]:{value:0.8,unit:'1'}},
+    regional_readings:Object.fromEntries([[regions[0],{[metric]:{value:0.07,unit:'1'}}]])};
+  const scenario=scenarioReport();scenario.comparison={policy:{basis:'nominal',allow_mixed_protocols:false,
+    objectives:[{metric,direction:'minimize'}],constraints:regions.map((region,i)=>({metric,region,basis:'nominal',maximum:(i+1)/10}))},
+    frontier:[],incomparable:[],alternatives:[candidate]};
+  await p.e.scenario.onclick();p.emit(scenario);
+  const output=section(p,'Fresh drape and heat alternatives');
+  const readings=descendants(output).find(n=>n.tag==='table'&&n.children[0].textContent==='Declared computed objectives — authoritative Rust comparison');
+  assert.deepEqual(plain(readings.children[2].children.map(n=>n.textContent)),
+    ['A','Excluded: Exact cuff reading is unavailable','None reported','0.8 1','0.07 1','Unknown']);
+  for(const region of regions)assert.ok(visibleText(readings).includes('region '+region));
+  assert.equal(descendants(output).some(n=>'innerHTML' in n),false);
+
+  // Display earlier complete restoration decisions without re-scoring the unavailable final row.
+  const report=designReport(),trial={selected:false,max_fit_band_violation_mm:0,total_fit_band_violation_mm:0,
+    design:{key:'approach',variables_mm:{length:20},validation:{passed:true},fit:outcome({passed:true})},
+    consumer_comparison:{...candidate,key:'approach',exclusions:[{message:'Independent regional strain limits exceeded'}],
+      regional_readings:Object.fromEntries(regions.map((region,i)=>[region,{[metric]:{value:(i+1)/5,unit:'1'}}]))},
+    constraint_violations:regions.map((region,i)=>({material_key:'<linen>',case_key:'<moving>',metric,region,
+      basis:'nominal',unit:'1',maximum_excess:(i+1)/10}))};
+  report.design_search={schema:'ftx-design-adaptive-search/1',request:{constraint_restoration:'componentwise'},
+    evaluations:1,qualified_designs:1,selected_designs:0,stop_reason:'evaluation_budget',
+    consumer_guidance:{material_key:'<linen>',objective:{metric,direction:'minimize'},evaluations:1,reserved_evaluations:2},rows:[trial]};
+  const before=JSON.stringify(report);p.select('studyRequest','{}');await p.e.study.onclick();p.emit(report);
+  assert.equal(JSON.stringify(report),before);
+  const study=section(p,'Fixed-pattern manufacturing alternatives');
+  const violations=descendants(study).find(n=>n.tag==='table'&&n.children[0].textContent==='approach: comparison-limit violations');
+  assert.deepEqual(plain(violations.children.slice(2).map(n=>n.children.map(c=>c.textContent))),[
+    ['<linen>','<moving>',metric+' — region __proto__','Nominal values','1','Not declared','0.1'],
+    ['<linen>','<moving>',metric+' — region <cuff & sleeve>','Nominal values','1','Not declared','0.2']]);
+  assert.equal(descendants(study).some(n=>'innerHTML' in n),false);
+  p.e.studyRequest.handlers.change();assert.equal(study.hidden,true);
+});
+
 test('guided multi-material adaptive discovery freezes explicit choices and refuses changed source nominations',async()=>{
   const {p}=await adaptiveDesignSetup(false);await addGuidedSelection(p,guidedSelection('b'),'alternate');
   guidedDesignField(p,'guidedDesignObjective','consumer_pareto','change');
