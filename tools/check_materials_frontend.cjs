@@ -9085,6 +9085,81 @@ test('guided directional consumers refuse absent scope, missing motion and unsup
   }
 });
 
+function saveRegionalLimit(p,region,metric,maximum,minimum='') {
+  p.e.guidedRegionalName.value=region;p.e.guidedRegionalMetric.value=metric;
+  p.e.guidedRegionalMinimum.value=minimum;p.e.guidedRegionalMaximum.value=maximum;p.e.saveRegionalConstraint.onclick();
+}
+
+test('guided regional limits retain separate same-metric guards alongside union limits and never disappear with region removal',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);saveGuidedStrainRegion(p);
+  saveGuidedStrainRegion(p,'cuff','sleeve.R','20,0\n60,0\n60,30\n20,30');
+  saveRegionalLimit(p,'right elbow','max_warp_green_strain','0.08');saveRegionalLimit(p,'cuff','max_warp_green_strain','0.2');
+  p.e.guidedWarpMaxLimit.value='0.3';await p.e.scenario.onclick();
+  const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.studyRequest).comparison.constraints,[
+    {metric:'max_warp_green_strain',maximum:0.3},
+    {metric:'max_warp_green_strain',region:'right elbow',basis:'nominal',maximum:0.08},
+    {metric:'max_warp_green_strain',region:'cuff',basis:'nominal',maximum:0.2}]);
+  p.emit(scenarioReport());const old=descendants(p.e.guidedRegionalConstraints).find(n=>n.textContent==='Remove limit cuff: max_warp_green_strain');
+  saveRegionalLimit(p,'cuff','max_warp_green_strain','0.15');old.onclick();assert.equal(p.e.guidedRegionalConstraints.children.length,2);
+  descendants(p.e.guidedMaterialStrainRegions).find(n=>n.textContent==='Remove strain region cuff').onclick();
+  await p.e.scenario.onclick();const next=p.current().messages.at(-1);
+  assert.equal(JSON.parse(next.scenarioRequest).material_strain.regions.length,1);
+  assert.equal(JSON.parse(next.studyRequest).comparison.constraints[2].maximum,0.15,'The native engine must refuse a missing region; authoring cannot drop its requirement');
+});
+
+test('guided regional limits reject malformed edits and clear garment-specific guards on source replacement',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);saveGuidedStrainRegion(p);
+  saveRegionalLimit(p,'right elbow','max_warp_green_strain','0.08');const original=visibleText(p.e.guidedRegionalConstraints);
+  for(const [name,metric,maximum,minimum] of [['','max_warp_green_strain','0.1',''],['β'.repeat(257),'max_warp_green_strain','0.1',''],
+    ['right elbow','stock_area_m2','1',''],['right elbow','max_warp_green_strain','Infinity',''],
+    ['right elbow','max_warp_green_strain','0.1','0.2'],['right elbow','max_warp_green_strain','',''],
+    ['right elbow','body_contact_resultant_n','-1','']]) {
+    saveRegionalLimit(p,name,metric,maximum,minimum);assert.equal(visibleText(p.e.guidedRegionalConstraints),original);
+    assert.equal(p.e.error.hidden,false);
+  }
+  const stale=descendants(p.e.guidedRegionalConstraints).find(n=>n.textContent==='Edit limit right elbow: max_warp_green_strain');
+  p.select('patternFile','{"pieces":[{"id":"replacement"}]}');await p.e.patternFile.onchange();
+  assert.equal(p.e.guidedRegionalConstraints.children.length,0);assert.equal(p.e.guidedRegionalName.value,'');
+  stale.onclick();assert.equal(p.e.guidedRegionalName.value,'');
+});
+
+test('guided regional limits freeze case policies and cancel pending requests before changed limits can publish',async()=>{
+  const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);saveGuidedStrainRegion(p);guidedNamedCases(p);
+  p.e.guidedScenarioPolicySource.value='snapshot';p.e.guidedScenarioPolicySource.handlers.change();
+  saveRegionalLimit(p,'right elbow','max_warp_green_strain','0.08');await saveGuidedCase(p,'tight elbow');
+  saveRegionalLimit(p,'right elbow','max_warp_green_strain','0.2');await saveGuidedCase(p,'loose elbow');
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.comparison.constraints[0].maximum),[0.08,0.2]);
+  assert.ok(cases.every(item=>item.comparison.constraints[0].region==='right elbow'));
+  p.emit(scenarioReport());p.e.clearRegionalConstraints.onclick();await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest,'Saved case policies keep their exact original guards');
+  const next=await guidedScenarioSetup();guidedStrainRegionControls(next.p);saveGuidedStrainRegion(next.p);
+  saveRegionalLimit(next.p,'right elbow','max_warp_green_strain','0.08');const delay=deferred();
+  next.p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
+  const old=next.p.current(),before=old.messages.length,running=next.p.e.scenario.onclick();
+  next.p.e.guidedRegionalMaximum.value='0.2';next.p.e.guidedRegionalMaximum.handlers.input();
+  assert.equal(old.dead,true);next.p.ready();delay.resolve(next.sources.fit);await running;
+  assert.equal(old.messages.length,before);assert.equal(next.p.current().messages.length,0);assert.equal(next.p.live.size,0);
+});
+
+test('regional comparison display uses exact regional readings and keeps a missing region unknown',async()=>{
+  const p=await pageModule();await p.load();scenarioInputs(p);const report=scenarioReport();
+  report.comparison={policy:{basis:'nominal',allow_mixed_protocols:false,required_consumers:[],
+    objectives:[{metric:'max_warp_green_strain',direction:'minimize'}],constraints:[
+      {metric:'max_warp_green_strain',region:'neck <β>',basis:'nominal',maximum:0.1},
+      {metric:'max_warp_green_strain',region:'cuff',basis:'nominal',maximum:0.2}]},frontier:[],incomparable:[],
+    alternatives:[{key:'A',eligible:false,dominated_by:[],exclusions:[{message:'cuff is unavailable'}],
+      readings:{max_warp_green_strain:{value:0.8,unit:'1'}},
+      regional_readings:{'neck <β>':{max_warp_green_strain:{value:0.07,unit:'1'}}}}]};
+  await p.e.scenario.onclick();p.emit(report);const s=section(p,'Fresh drape and heat alternatives');
+  const table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Declared computed objectives — authoritative Rust comparison');
+  assert.deepEqual(plain(table.children[2].children.map(n=>n.textContent)),['A','Excluded: cuff is unavailable','None reported','0.8 1','0.07 1','Unknown']);
+  assert.match(visibleText(table),/region neck <β>/);assert.match(visibleText(table),/region cuff/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+});
+
 test('guided regional strain authors exact physical polygons and keeps legacy scopes independent',async()=>{
   const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);
   assert.equal(p.e.guidedMaterialStrainRegionControls.hidden,false);assert.equal(p.e.guidedMaterialStrainInstances.disabled,true);

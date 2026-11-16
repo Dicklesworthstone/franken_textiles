@@ -1,5 +1,14 @@
 # ftx-export
 
+**Regional comparison limits.** Optional `Constraint.region` scopes only the twelve material-strain
+or six body-contact metrics to an exact name in the admitted version-2 consumer partition. Each
+metric/region pair is unique; the selected union remains the objective and legacy reading scope.
+Regional values, violations and adaptive-restoration identities retain their name independently.
+Missing names, null selectors, unsupported metrics or non-nominal bases refuse without a union,
+instance or zero fallback. Static and complete-motion admission stay independent. Shared welded
+vertices make regional contact totals nonadditive. Native/portable and guided named-case paths
+share this authority; authored bounds do not establish failure, pressure, comfort or physical fit.
+
 **Qualified drilling in complete cutting programs** (`cutting::program`, `ftx-tm7`). Optional
 `machine.drilling` selects one explicit `coaxial_cold_through_drill/1` tool with exact diameter,
 maximum thickness and in-place selection times. Each consumed material additionally supplies an

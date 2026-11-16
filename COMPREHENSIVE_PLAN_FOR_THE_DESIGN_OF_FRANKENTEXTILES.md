@@ -6002,6 +6002,20 @@ This advances the local-strain requirements in `ftx-ds2` and `ftx-ms2`. Existing
 stay compatible. Limits remain explicit design requirements, with no inferred rupture, comfort,
 continuous-time strain bound, physical material qualification or empirical garment-fit claim.
 
+### 25.212 Apply distinct design limits to named material regions
+
+Initial and complete-motion strain and body-contact reports now supply individual named-region
+comparison constraints. Each metric and region pair retains its own inclusive nominal bounds,
+admitted reading and constraint-restoration distance. Objectives continue to use the selected
+union, and every region comes from the same reconstructed flat-material partition and original
+source evidence. Unknown regions, unavailable consumers and partial motion refuse independently.
+
+The guided workbench saves separate regional limits, freezes them in named cases and preserves
+them when a region is removed so an unavailable requirement cannot silently disappear. Native
+and portable studies share the same admission and results. This advances `ftx-ds2` and `ftx-ms2`;
+regional contact totals remain nonadditive at shared welded vertices, and authored limits do not
+establish measured rupture, physiological comfort, contact pressure or physical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

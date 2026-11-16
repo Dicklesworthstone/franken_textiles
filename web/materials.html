@@ -1300,8 +1300,9 @@ placeholder="Enter your polygon coordinates from the flat physical piece"></text
 Use the physical piece's flat coordinates after mirroring and simulation scaling, before grain rotation and wrapping.
 A region selects whole triangles whose centres lie inside or on the polygon; boundaries do not cut triangles.
 Each region must select at least one triangle, and two regions cannot select the same triangle.
-The same selection follows the cloth through motion. Comparison goals and limits apply to the union of saved regions;
-the results also show each region separately. Unselected cloth is outside this strain scope.</p>
+The same selection follows the cloth through motion. Comparison goals and limits without a region apply to the union of saved regions;
+use the regional limits editor below for distinct requirements on individual named regions.
+The results also show each region separately. Unselected cloth is outside this strain scope.</p>
 <div class="buttons"><button id="saveMaterialStrainRegion" type="button" disabled>Save or replace region</button>
 <button id="clearMaterialStrainRegions" type="button" disabled>Clear strain regions</button></div>
 <p id="guidedMaterialStrainRegionsSummary">No regions saved. Save each region before running this scope.</p>
@@ -2142,6 +2143,44 @@ Choose nominal objectives, or an explicit nominal limit basis when combining str
 <p class="note">Initial metrics require the directional strain request above. Motion metrics additionally require the complete
 trajectory and include the initial state and every accepted sample. Missing scopes, exhausted work or unavailable consumers
 exclude that decision without erasing independent results. No limit is a measured material failure threshold unless you supply that evidence.</p>
+</details>
+<details><summary>Separate limits for named garment regions</summary>
+<p>Constrain each named strain or contact region independently. For example, give a cuff and neck opening different
+maximum warp strains. Use the exact region name from that metric's scenario scope. A limit remains active if its region
+is later removed; the engine refuses the unavailable requirement until you repair or remove the limit.</p>
+<div class="row">
+<label>Exact region name <input id="guidedRegionalName" type="text" maxlength="512" placeholder="For example: left cuff"></label>
+<label>Regional quantity <select id="guidedRegionalMetric">
+<option value="max_warp_green_strain">Initial maximum warp E11</option>
+<option value="min_warp_green_strain">Initial minimum warp E11</option>
+<option value="max_weft_green_strain">Initial maximum weft E22</option>
+<option value="min_weft_green_strain">Initial minimum weft E22</option>
+<option value="max_engineering_shear_green_strain">Initial maximum shear 2E12</option>
+<option value="min_engineering_shear_green_strain">Initial minimum shear 2E12</option>
+<option value="motion_max_warp_green_strain">Complete-motion maximum warp E11</option>
+<option value="motion_min_warp_green_strain">Complete-motion minimum warp E11</option>
+<option value="motion_max_weft_green_strain">Complete-motion maximum weft E22</option>
+<option value="motion_min_weft_green_strain">Complete-motion minimum weft E22</option>
+<option value="motion_max_engineering_shear_green_strain">Complete-motion maximum shear 2E12</option>
+<option value="motion_min_engineering_shear_green_strain">Complete-motion minimum shear 2E12</option>
+<option value="body_contact_resultant_n">Initial contact resultant (N)</option>
+<option value="body_contact_sum_vertex_force_n">Initial sum of vertex contact forces (N)</option>
+<option value="max_body_contact_vertex_force_n">Initial maximum vertex contact force (N)</option>
+<option value="motion_peak_body_contact_resultant_n">Complete-motion peak contact resultant (N)</option>
+<option value="motion_peak_body_contact_sum_vertex_force_n">Complete-motion peak sum of vertex contact forces (N)</option>
+<option value="motion_max_body_contact_vertex_force_n">Complete-motion maximum vertex contact force (N)</option>
+</select></label>
+<label>Inclusive minimum <input id="guidedRegionalMinimum" type="number" step="any" placeholder="No minimum"></label>
+<label>Inclusive maximum <input id="guidedRegionalMaximum" type="number" step="any" placeholder="No maximum"></label>
+</div>
+<div class="row"><button id="saveRegionalConstraint" type="button" disabled>Save or replace this regional limit</button>
+<button id="clearRegionalConstraints" type="button" disabled>Clear regional limits</button></div>
+<p id="guidedRegionalConstraintsSummary">No regional limits saved. Limits without a region above still apply to the whole selected scope.</p>
+<div id="guidedRegionalConstraints"></div>
+<p class="note">These limits explicitly use nominal values, including alongside reported-range mass or heat objectives.
+Strain is signed, dimensionless Green strain; contact values are discrete forces in newtons. A force limit is not a pressure
+or comfort threshold. Each inheriting named case must provide the requested region and complete motion when required.
+Only saved limits enter the comparison; objectives continue to use the combined selected regions.</p>
 </details>
 <p class="note">Negative power is meaningful; minimizing signed power does not minimize its magnitude. Sheet heat supports nominal
 values or complete source-reported ranges for constant thermal laws. A reported-range limit admits only an entire interval inside

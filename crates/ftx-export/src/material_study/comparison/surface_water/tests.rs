@@ -1832,6 +1832,7 @@ fn wet_inertial_mass_objectives_and_guards_are_nominal_only() {
         policy.basis = Basis::Nominal;
         policy.constraints.push(Constraint {
             metric,
+            region: None,
             basis: Some(Basis::ReportedBounds),
             minimum: None,
             maximum: Some(1.),

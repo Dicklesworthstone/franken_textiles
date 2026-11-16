@@ -1685,6 +1685,46 @@ test('directional strain and motion refuse reported ranges while retaining expli
 const initialContactMetrics=['body_contact_resultant_n','body_contact_sum_vertex_force_n','max_body_contact_vertex_force_n'];
 const movingContactMetrics=['motion_peak_body_contact_resultant_n','motion_peak_body_contact_sum_vertex_force_n','motion_max_body_contact_vertex_force_n'];
 
+test('regional comparison limits retain distinct region identities beside their union and reported-range goals', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:true,motion:true,materialStrain:true,contactLoads:true};
+  const input={...state(),basis:'reported_bounds',objectives:[{metric:'independent_surface_power_w',direction:'minimize'}],
+    constraints:[{metric:'max_warp_green_strain',basis:'nominal',maximum:0.25},
+      {metric:'max_warp_green_strain',region:'neck <β>',basis:'nominal',maximum:0.08},
+      {metric:'max_warp_green_strain',region:'cuff',basis:'nominal',maximum:0.2},
+      {metric:'motion_peak_body_contact_resultant_n',region:'cuff',basis:'nominal',maximum:1.5}]};
+  const before=JSON.stringify(input),result=JSON.parse(build(input,context));
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.comparison.constraints,input.constraints);
+  for(const metric of [...staticStrainMetrics,...motionStrainMetrics,...initialContactMetrics,...movingContactMetrics]) {
+    const guard={metric,region:'__proto__',basis:'nominal',minimum:-0.2,maximum:0.3};
+    assert.deepEqual(JSON.parse(build({...input,constraints:[guard]},context)).comparison.constraints,[guard]);
+  }
+  assert.throws(()=>build({...input,constraints:[input.constraints[1],{...input.constraints[1],maximum:0.09}]},context),/unique within/);
+  for(const region of [null,'','  ',false,0,{},'β'.repeat(257)]) {
+    assert.throws(()=>build({...input,constraints:[{...input.constraints[1],region}]},context),/region name/);
+  }
+  for(const guard of [{metric:'stock_area_m2',region:'cuff',basis:'nominal',maximum:1},
+    {metric:'max_warp_green_strain',region:'cuff',maximum:0.1},
+    {metric:'max_warp_green_strain',region:'cuff',basis:'reported_bounds',maximum:0.1}]) {
+    assert.throws(()=>build({...input,constraints:[guard]},context),/Regional limits support nominal/);
+  }
+  assert.throws(()=>build(input,{...context,motion:false}),/requested motion_contact_loads/);
+  assert.throws(()=>build(input,{...context,materialStrain:false}),/requested material_strain/);
+});
+
+test('regional limits enforce their consumers in every inheriting named case', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),constraints:[{metric:'motion_max_warp_green_strain',region:'neck',maximum:0.1}]};
+  const context={drape:true,surface:false,motion:true,materialStrain:true,matrix:{maxEvaluations:4,
+    cases:[{key:'standing',surface:false,motion:true,materialStrain:true},{key:'seated',surface:false,motion:true,materialStrain:true}]}};
+  assert.deepEqual(JSON.parse(build(input,context)).comparison.constraints,input.constraints);
+  assert.throws(()=>build(input,{...context,matrix:{...context.matrix,cases:[context.matrix.cases[0],
+    {key:'seated',surface:false,motion:true,materialStrain:false}]}}),/Named case seated inherits/);
+  const independent={...context,matrix:{...context.matrix,cases:[context.matrix.cases[0],
+    {key:'seated',surface:false,motion:false,materialStrain:false,comparison:{basis:'nominal',objectives:[{metric:'stock_area_m2',direction:'minimize'}]}}]}};
+  assert.ok(build(input,independent),'A named case with its own policy does not inherit regional limits');
+});
+
 test('body contact objectives and guards require their own initial or complete-motion consumer', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const context={drape:true,surface:false,motion:true,contactLoads:true},input=state();delete input.cutting;

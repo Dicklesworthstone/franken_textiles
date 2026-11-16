@@ -20,6 +20,11 @@ jobs:
       - name: Check qualified sewing feed routes
         if: ${{ !cancelled() }}
         run: cargo test -p ftx-export --test sewing_routing --locked routed_feed_
+      - name: Check independent garment region constraints
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p ftx-export --lib --locked regional_constraint
+          cargo test -p ftx-cli --test accepted_body_workflow --locked surface_water::regional_strain_and_contact_limits_replay_native_portable_and_named_cases -- --exact
       - name: Check body fitting and local shape priors
         if: ${{ !cancelled() }}
         run: cargo test -p ftx-body --lib --test fit_tape --locked

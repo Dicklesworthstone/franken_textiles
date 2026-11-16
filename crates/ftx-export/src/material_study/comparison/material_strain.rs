@@ -1118,6 +1118,150 @@ mod tests {
         (a, d, s)
     }
 
+
+    #[test]
+    fn regional_constraints_keep_distinct_signed_strain_limits_and_union_objectives() {
+        let (a, d, s) = regional_comparison_case(&[0, 2]);
+        let values = [
+            (Metric::MinWarpGreenStrain, [0.2, 0.2]),
+            (Metric::MaxWarpGreenStrain, [0.2, 0.2]),
+            (Metric::MinWeftGreenStrain, [0.1, -0.1]),
+            (Metric::MaxWeftGreenStrain, [0.1, -0.1]),
+            (Metric::MinEngineeringShearGreenStrain, [0.15, 0.3]),
+            (Metric::MaxEngineeringShearGreenStrain, [0.15, 0.3]),
+            (Metric::MotionMinWarpGreenStrain, [0.2, 0.2]),
+            (Metric::MotionMaxWarpGreenStrain, [0.3, 0.3]),
+            (Metric::MotionMinWeftGreenStrain, [0.1, -0.1]),
+            (Metric::MotionMaxWeftGreenStrain, [0.2, -0.1]),
+            (Metric::MotionMinEngineeringShearGreenStrain, [0.1, 0.2]),
+            (Metric::MotionMaxEngineeringShearGreenStrain, [0.15, 0.3]),
+        ];
+        let mut policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+            "objectives":[{"metric":"max_engineering_shear_green_strain","direction":"minimize"}],
+            "constraints":values.iter().flat_map(|&(metric, values)| {
+                ["left", "right"].into_iter().zip(values).map(move |(region, value)|
+                    json!({"metric":metric,"region":region,"minimum":value,"maximum":value}))
+            }).collect::<Vec<_>>()}))
+        .unwrap();
+        let request: Request = serde_json::from_value(json!({"schema":"ftx-material-study/1"})).unwrap();
+        policy.validate(&request, true).unwrap();
+        let admitted = policy.candidate(&a, None, &d, &s);
+        assert!(admitted.eligible, "{}", json!(admitted));
+        assert_eq!(admitted.readings[&Metric::MaxEngineeringShearGreenStrain].value, 0.3);
+        assert_eq!(admitted.regional_readings.len(), 2);
+        for (metric, expected) in values {
+            for (region, value) in ["left", "right"].into_iter().zip(expected) {
+                let reading = &admitted.regional_readings[region][&metric];
+                assert_eq!(reading.value, value);
+                assert_eq!(reading.unit, "1");
+                assert!(reading.reported_bounds.is_none());
+                assert_eq!(reading.consumer, metric.consumer());
+            }
+        }
+        assert!(admitted.constraint_violations.as_ref().unwrap().iter().all(|violation|
+            violation.region.is_some() && violation.minimum_shortfall == Some(0.)
+                && violation.maximum_excess == Some(0.)));
+
+        // Tighten each independent local requirement in turn. Every other region and all
+        // objective values stay unchanged, so union-only guard evaluation cannot pass this check.
+        for i in 0..policy.constraints.len() {
+            let original = policy.constraints[i].clone();
+            policy.constraints[i].minimum = None;
+            policy.constraints[i].maximum = original.maximum.map(|value| value - 0.01);
+            policy.validate(&request, true).unwrap();
+            let refused = policy.candidate(&a, None, &d, &s);
+            assert!(!refused.eligible, "guard {i}");
+            assert_eq!(refused.exclusions.len(), 1);
+            let positive: Vec<_> = refused.constraint_violations.as_ref().unwrap().iter()
+                .filter(|v| v.maximum_excess.is_some_and(|excess| excess > 0.))
+                .collect();
+            assert_eq!(positive.len(), 1);
+            assert_eq!(positive[0].metric, original.metric);
+            assert_eq!(positive[0].region, original.region);
+            policy.constraints[i] = original;
+        }
+    }
+
+    #[test]
+    fn regional_constraints_refuse_unknown_regions_unscoped_reports_and_partial_motion() {
+        let (a, d, mut s) = regional_comparison_case(&[0, 2]);
+        let mut policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+            "objectives":[{"metric":"max_engineering_shear_green_strain","direction":"minimize"}],
+            "constraints":[
+                {"metric":"max_engineering_shear_green_strain","region":"left","maximum":0.2},
+                {"metric":"motion_max_weft_green_strain","region":"left","maximum":0.2}]}))
+        .unwrap();
+        assert!(policy.candidate(&a, None, &d, &s).eligible);
+        policy.constraints[0].region = Some("missing".into());
+        let unknown = policy.candidate(&a, None, &d, &s);
+        assert!(!unknown.eligible);
+        assert!(!unknown.regional_readings.contains_key("missing"));
+        assert_eq!(unknown.readings[&Metric::MaxEngineeringShearGreenStrain].value, 0.3);
+        assert!(unknown.constraint_violations.is_none());
+        policy.constraints[0].region = Some("left".into());
+
+        s["motion"]["result"]["material_strain"]["status"] = json!("refused");
+        let partial = policy.candidate(&a, None, &d, &s);
+        assert!(!partial.eligible);
+        assert_eq!(partial.regional_readings["left"][&Metric::MaxEngineeringShearGreenStrain].value, 0.15);
+        assert!(!partial.regional_readings["left"].contains_key(&Metric::MotionMaxWeftGreenStrain));
+        assert!(partial.constraint_violations.is_none());
+        policy.constraints.pop();
+        assert!(policy.candidate(&a, None, &d, &s).eligible);
+
+        let (a, d, s) = comparison_case(true);
+        let unscoped = policy.candidate(&a, None, &d, &s);
+        assert!(!unscoped.eligible);
+        assert!(unscoped.regional_readings.is_empty());
+        assert!(unscoped.constraint_violations.is_none());
+        policy.constraints[0].region = None;
+        policy.constraints[0].maximum = Some(0.3);
+        let legacy = policy.candidate(&a, None, &d, &s);
+        assert!(legacy.eligible);
+        assert!(json!(legacy).get("regional_readings").is_none());
+        assert!(json!(policy)["constraints"][0].get("region").is_none());
+        assert!(json!(legacy.constraint_violations)[0].get("region").is_none());
+    }
+
+    #[test]
+    fn regional_constraints_validate_exact_scopes_supported_metrics_and_nominal_basis() {
+        let request: Request = serde_json::from_value(json!({"schema":"ftx-material-study/1",
+            "assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,
+                "seam_allowance_mm":0,"extras":[]}})).unwrap();
+        let source = json!({"basis":"reported_bounds",
+            "objectives":[{"metric":"assembly_mass_kg","direction":"minimize"}],
+            "constraints":[
+                {"metric":"max_warp_green_strain","basis":"nominal","maximum":0.5},
+                {"metric":"max_warp_green_strain","region":"left","basis":"nominal","maximum":0.2},
+                {"metric":"max_warp_green_strain","region":"right","basis":"nominal","maximum":0.4}]});
+        let policy: Policy = serde_json::from_value(source.clone()).unwrap();
+        policy.validate(&request, true).unwrap();
+        assert!(serde_json::from_value::<Objective>(json!({"metric":"max_warp_green_strain",
+            "region":"left","direction":"minimize"})).is_err());
+        for (field, value) in [
+            ("region", json!(null)),
+            ("region", json!(42)),
+            ("region", json!("")),
+            ("region", json!(" \n\t")),
+            ("region", json!("é".repeat(257))),
+            ("region", json!("right")),
+            ("metric", json!("assembly_mass_kg")),
+            ("basis", json!("reported_bounds")),
+            ("basis", json!(null)),
+        ] {
+            let mut changed = source.clone();
+            changed["constraints"][1][field] = value;
+            assert!(match serde_json::from_value::<Policy>(changed) {
+                Ok(policy) => policy.validate(&request, true).is_err(),
+                Err(_) => true,
+            }, "field {field}");
+        }
+        let mut duplicate = policy.clone();
+        duplicate.constraints.push(duplicate.constraints[1].clone());
+        assert!(duplicate.validate(&request, true).is_err());
+        assert!(policy.validate(&request, false).is_err());
+    }
+
     #[test]
     fn comparison_constraints_use_all_twelve_signed_raw_metrics_and_keep_static_refusal_isolation()
     {
@@ -1149,6 +1293,7 @@ mod tests {
                 .iter()
                 .map(|&(metric, value)| Constraint {
                     metric,
+                    region: None,
                     basis: None,
                     minimum: Some(value),
                     maximum: Some(value),

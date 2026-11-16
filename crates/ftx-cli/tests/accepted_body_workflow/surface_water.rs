@@ -3113,3 +3113,186 @@ fn supplied_textile_water_replays_in_native_commands_and_portable_scenario_matri
         },
     );
 }
+
+#[test]
+fn regional_strain_and_contact_limits_replay_native_portable_and_named_cases() {
+    use ftx_wasm::materials::scenario::on_model;
+
+    let (pattern, mut study, mut single) = inputs();
+    study["variants"].as_array_mut().unwrap().truncate(1);
+    // This case needs only the actual cloth and contact producers; thermal qualifications
+    // cannot supply or prevent a regional mechanical decision.
+    single.as_object_mut().unwrap().remove("surface");
+    single.as_object_mut().unwrap().remove("coverage");
+    single["motion"]
+        .as_object_mut()
+        .unwrap()
+        .remove("transient_surface");
+    let width = std::f64::consts::TAU * 180.0;
+    let region = |id: &str, left: f64, right: f64| {
+        json!({"id":id,"instance":"band","selector":{
+            "kind":"whole_triangle_centroid",
+            "polygon_mm":[[left,0.0],[right,0.0],[right,20.0],[left,20.0]]}})
+    };
+    let regions = json!([
+        region("short-zone", 0.0, 0.2 * width),
+        region("long-zone", 0.4 * width, 0.9 * width)
+    ]);
+    single["material_strain"] = json!({"schema":"ftx-material-strain/2",
+        "regions":regions,"max_triangle_samples":100000});
+    single["contact_loads"] = json!({"schema":"ftx-contact-loads/2",
+        "regions":regions,"max_vertex_samples":100000,"max_pair_evaluations":1000000});
+    let metrics = [
+        "max_warp_green_strain",
+        "motion_max_warp_green_strain",
+        "body_contact_sum_vertex_force_n",
+        "motion_peak_body_contact_sum_vertex_force_n",
+    ];
+    study["comparison"] = json!({"basis":"nominal","objectives":metrics.map(|metric|
+        json!({"metric":metric,"direction":"minimize"}))});
+
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let body = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":receipt(&digest),
+        "arm_abduction_deg":35.0});
+    let run_portable = |request: &Value, scenario: &Value| -> Value {
+        serde_json::from_str(
+            &on_model(
+                &model,
+                &digest,
+                &pattern,
+                &request.to_string(),
+                &scenario.to_string(),
+                &body.to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let baseline = run_portable(&study, &single);
+    let baseline_decision = keyed(&baseline["comparison"]["alternatives"], "qualified");
+    assert_eq!(baseline_decision["eligible"], true, "{baseline_decision}");
+    assert!(baseline_decision.get("regional_readings").is_none());
+    let simulated = &keyed(&baseline["simulations"], "qualified")["evaluation"]["result"];
+    let source_reports = [
+        &simulated["material_strain"]["result"],
+        &simulated["motion"]["result"]["material_strain"]["result"],
+        &simulated["contact_loads"]["result"],
+        &simulated["motion"]["result"]["contact_loads"]["result"],
+    ];
+    let mut expected = json!({});
+    let mut constraints = Vec::new();
+    for (zone, margin) in [("short-zone", 0.1), ("long-zone", 0.2)] {
+        for (index, (metric, report)) in metrics.iter().zip(source_reports).enumerate() {
+            let value = if index < 2 {
+                report["regions"][zone]["green_strain_range"][0][1]
+                    .as_f64()
+                    .unwrap()
+            } else {
+                report["regions"][zone]["peak_body_sum_vertex_force_n"]
+                    .as_f64()
+                    .unwrap()
+            };
+            expected[zone][metric] = json!(value);
+            constraints.push(json!({"metric":metric,"region":zone,"basis":"nominal",
+                "minimum":value,"maximum":value + margin}));
+        }
+    }
+    study["comparison"]["constraints"] = json!(constraints);
+    let accepted_policy = study["comparison"].clone();
+    let mut too_tight = accepted_policy.clone();
+    too_tight["constraints"][0] = json!({"metric":metrics[0],"region":"short-zone",
+        "basis":"nominal","maximum":expected["short-zone"][metrics[0]].as_f64().unwrap() - 0.01});
+    let mut missing = accepted_policy.clone();
+    missing["constraints"][0]["region"] = json!("absent-zone");
+    let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":3,
+    "cases":[
+        {"key":"accepted-regions","scenario":single},
+        {"key":"tight-region","scenario":single,"comparison":too_tight},
+        {"key":"missing-region","scenario":single,"comparison":missing}
+    ]});
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    std::fs::write(dir.join("pattern.json"), &pattern).unwrap();
+    save(&dir.join("study.json"), &study);
+    save(&dir.join("body-input.json"), &body);
+    for (name, scenario) in [("single", &single), ("matrix", &matrix)] {
+        let report = run_portable(&study, scenario);
+        let cases: Vec<_> = if name == "single" {
+            vec![&report]
+        } else {
+            assert!(
+                report["comparison"]["frontier"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            report["cases"].as_array().unwrap().iter().collect()
+        };
+        for (index, case) in cases.into_iter().enumerate() {
+            let actual = &keyed(&case["simulations"], "qualified")["evaluation"]["result"];
+            assert_eq!(
+                actual, simulated,
+                "constraints must not change production state"
+            );
+            let decision = keyed(&case["comparison"]["alternatives"], "qualified");
+            assert_eq!(decision["eligible"], index == 0, "{decision}");
+            // Union objectives remain available in every case, including a missing region.
+            assert_eq!(decision["readings"], baseline_decision["readings"]);
+            for zone in ["short-zone", "long-zone"] {
+                for metric in metrics {
+                    if index == 2 && zone == "short-zone" && metric == metrics[0] {
+                        continue;
+                    }
+                    assert_eq!(
+                        decision["regional_readings"][zone][metric]["value"],
+                        expected[zone][metric],
+                        "{zone} {metric}: {decision}"
+                    );
+                }
+            }
+            if index == 1 {
+                let exclusions = decision["exclusions"].as_array().unwrap();
+                assert_eq!(exclusions.len(), 1, "{decision}");
+                let reason = exclusions[0]["message"].as_str().unwrap();
+                assert!(reason.contains("short-zone") && reason.contains("violates"));
+                assert!(!reason.contains("long-zone"));
+            }
+            if index == 2 {
+                assert!(decision["regional_readings"]["absent-zone"].is_null());
+                assert!(decision["constraint_violations"].is_null());
+                assert!(!decision["exclusions"].as_array().unwrap().is_empty());
+            }
+        }
+        save(&dir.join("scenario.json"), scenario);
+        for (binary, prefix) in [
+            (
+                env!("CARGO_BIN_EXE_ftx"),
+                &["--json", "materials", "scenario-study"][..],
+            ),
+            (env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"][..]),
+        ] {
+            let output = Command::new(binary)
+                .current_dir(&dir)
+                .args(prefix)
+                .args([
+                    "pattern.json",
+                    "study.json",
+                    "scenario.json",
+                    "body-input.json",
+                    "model.ftxbody",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(native.get("result").unwrap_or(&native), &report);
+        }
+    }
+}

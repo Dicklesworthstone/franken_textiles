@@ -65,6 +65,7 @@ let guidedDesignCaseNomination = null;
 const guidedScenarioDrafts = [], guidedScenarioButtons = [];
 const guidedMaterialStrainRegions = new Map(), guidedMaterialStrainRegionButtons = [];
 const guidedContactRegions = new Map(), guidedContactRegionButtons = [];
+const guidedRegionalConstraints = new Map(), guidedRegionalConstraintButtons = [];
 const guidedMotionKeyframes = [], guidedMotionButtons = [];
 const guidedMotionHeatInitials = new Map(), guidedMotionHeatInitialButtons = [];
 const guidedMotionHeatProfiles = new Map(), guidedMotionHeatProfileButtons = [];
@@ -336,6 +337,11 @@ function controls() {
   for (const button of guidedMotionButtons) button.disabled = !source || !guidedScenarioMode() || motionMode !== "form";
   $("addScenarioCase").disabled ||= motionMode === "form" && !guidedMotionKeyframes.length;
   $("guidedScenarioGoals").hidden = !guided;
+  for (const id of ["guidedRegionalMetric", "guidedRegionalName", "guidedRegionalMinimum", "guidedRegionalMaximum", "saveRegionalConstraint"]) {
+    $(id).disabled = !source || !guided;
+  }
+  $("clearRegionalConstraints").disabled = !source || !guided || !guidedRegionalConstraints.size;
+  for (const button of guidedRegionalConstraintButtons) button.disabled = !source || !guided;
   $("guidedMaterialStrainControls").hidden = !$("guidedMaterialStrain").checked;
   $("guidedMaterialStrainInstances").disabled = !$("guidedMaterialStrain").checked || $("guidedMaterialStrainScope").value !== "instances";
   const strainRegions = $("guidedMaterialStrain").checked && $("guidedMaterialStrainScope").value === "regions";
@@ -965,7 +971,7 @@ function objectiveComparison(parent, r) {
       "Any separately requested motion or transient heat must be inspected in its own result.";
   parent.append(scope);
   const objectives = r.policy.objectives;
-  const constraints = r.policy.constraints.filter(c => !objectives.some(o => o.metric === c.metric));
+  const constraints = r.policy.constraints.filter(c => c.region != null || !objectives.some(o => o.metric === c.metric));
   const metrics = [...objectives, ...constraints];
   const wetFilmLabels = {
     motion_wet_film_evaporated_mass_kg: "Modeled covered evaporation",
@@ -1097,12 +1103,12 @@ function objectiveComparison(parent, r) {
     parent.append(water);
   }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
-    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || strainLabels[o.metric] || contactLabels[o.metric] || threadLabels[o.metric] || cuttingLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
+    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || strainLabels[o.metric] || contactLabels[o.metric] || threadLabels[o.metric] || cuttingLabels[o.metric] || o.metric}${o.region != null ? ` — region ${o.region}` : ""} (${o.direction || "constraint"})`)]);
   for (const row of r.alternatives) {
     cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
       row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
       ...metrics.map(o => {
-        const q = row.readings[o.metric];
+        const q = o.region != null ? row.regional_readings?.[o.region]?.[o.metric] : row.readings[o.metric];
         if (!q) return "Unknown";
         const range = q.reported_bounds ? `; reported range [${q.reported_bounds.map(metric).join(", ")}] ${q.unit}` :
           metricUsesBounds(r.policy, o.metric) ? "; reported range unknown" : "";
@@ -1115,7 +1121,7 @@ function objectiveComparison(parent, r) {
   if (r.policy.constraints.length) {
     const limits = table(parent, "Declared constraints — basis and inclusive limits",
       ["Metric", "Basis", "Minimum", "Maximum"]);
-    for (const c of r.policy.constraints) cells(limits, [c.metric,
+    for (const c of r.policy.constraints) cells(limits, [c.metric + (c.region != null ? ` — region ${c.region}` : ""),
       `${c.basis ?? r.policy.basis}${c.basis ? " (explicit)" : " (inherited)"}`,
       c.minimum == null ? "None" : metric(c.minimum), c.maximum == null ? "None" : metric(c.maximum)]);
   }
@@ -5298,6 +5304,62 @@ async function loadGuidedScenarioCases() {
   }
   refreshGuidedDesignCases(); controls();
 }
+function changedGuidedRegionalConstraints() {
+  if (guidedStudyMode()) invalidate(["study", "scenario",
+    ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true);
+  else controls();
+}
+function showGuidedRegionalConstraints() {
+  const parent = $("guidedRegionalConstraints"); parent.replaceChildren(); guidedRegionalConstraintButtons.length = 0;
+  for (const [key, constraint] of guidedRegionalConstraints) {
+    const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
+    label.textContent = `${constraint.region}: ${constraint.metric}, nominal` +
+      (constraint.minimum == null ? "" : `; minimum ${constraint.minimum}`) +
+      (constraint.maximum == null ? "" : `; maximum ${constraint.maximum}`);
+    const current = () => source && guidedStudyMode() && guidedRegionalConstraints.get(key) === constraint;
+    const edit = document.createElement("button"); edit.type = "button"; edit.textContent = `Edit limit ${constraint.region}: ${constraint.metric}`;
+    edit.onclick = () => {
+      if (!current()) return;
+      $("guidedRegionalName").value = constraint.region; $("guidedRegionalMetric").value = constraint.metric;
+      $("guidedRegionalMinimum").value = constraint.minimum == null ? "" : String(constraint.minimum);
+      $("guidedRegionalMaximum").value = constraint.maximum == null ? "" : String(constraint.maximum);
+      controls();
+    };
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = `Remove limit ${constraint.region}: ${constraint.metric}`;
+    remove.onclick = () => {
+      if (!current()) return;
+      guidedRegionalConstraints.delete(key); showGuidedRegionalConstraints(); changedGuidedRegionalConstraints();
+    };
+    row.append(label, edit, remove); parent.append(row); guidedRegionalConstraintButtons.push(edit, remove);
+  }
+  $("guidedRegionalConstraintsSummary").textContent = guidedRegionalConstraints.size ?
+    `${guidedRegionalConstraints.size} regional limits saved. They count toward the 64 comparison limits and remain active independently of the goal checkboxes.` :
+    "No regional limits saved. Limits without a region above still apply to the whole selected scope.";
+}
+function saveGuidedRegionalConstraint() {
+  if (!source || !guidedStudyMode()) return;
+  try {
+    const region = $("guidedRegionalName").value, metric = $("guidedRegionalMetric").value;
+    if (!region.trim() || new Blob([region]).size > 512) throw Error("Enter the exact saved region name, at most 512 UTF-8 bytes.");
+    const directional = guidedDirectionalMetrics.some(([, name]) => name === metric);
+    const contact = guidedMetrics.some(([id, name]) => id.includes("Contact") && name === metric);
+    if (!directional && !contact) throw Error("Choose a regional material-strain or body-contact metric.");
+    const constraint = { metric, region, basis: "nominal" };
+    for (const [suffix, key] of [["Minimum", "minimum"], ["Maximum", "maximum"]]) {
+      const field = $("guidedRegional" + suffix), raw = field.value.trim();
+      if (field.validity?.badInput || (raw && !Number.isFinite(Number(raw)))) throw Error("Regional limits must be finite numbers.");
+      if (raw) constraint[key] = Number(raw);
+    }
+    if (constraint.minimum == null && constraint.maximum == null) throw Error("Supply at least one inclusive regional limit.");
+    if (constraint.minimum != null && constraint.maximum != null && constraint.minimum > constraint.maximum) {
+      throw Error("The regional minimum must not exceed its maximum.");
+    }
+    if (contact && (constraint.minimum < 0 || constraint.maximum < 0)) throw Error("Body contact force limits must be nonnegative newtons.");
+    const key = JSON.stringify([metric, region]);
+    if (!guidedRegionalConstraints.has(key) && guidedRegionalConstraints.size >= 64) throw Error("Choose at most 64 comparison limits.");
+    guidedRegionalConstraints.set(key, constraint); showGuidedRegionalConstraints(); changedGuidedRegionalConstraints();
+  } catch (e) { error(String(e.message || e)); }
+}
 function guidedComparisonInput(number, stockMode = guidedStockMode()) {
   if (!["roll", "finite", "job"].includes(stockMode)) throw Error("Choose roll, finite stock or a complete cutting job.");
   const metrics = guidedMetrics.filter(([, , scope]) => guidedStockScope(scope, stockMode));
@@ -5345,6 +5407,7 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
       ...($(`${id}MinimumLimit`).value.trim() ? { minimum: number(`${id}MinimumLimit`, `minimum for ${metric}`) } : {}),
       ...($(`${id}Limit`).value.trim() ? { maximum: number(`${id}Limit`, `maximum for ${metric}`) } : {}),
       ...(limitBasis === "inherit" ? {} : { basis: limitBasis }) })));
+  constraints.push(...[...guidedRegionalConstraints.values()].map(constraint => ({ ...constraint })));
   const requiredConsumers = guidedRequired.filter(([id, , scope]) => guidedStockScope(scope, stockMode) && $(id).checked).map(([, consumer]) => consumer);
   return { objectives, constraints, requiredConsumers, basis: $("guidedBasis").value };
 }
@@ -6563,6 +6626,15 @@ $("clearContactRegions").onclick = () => {
   if (!$("guidedContactLoads").checked || $("guidedContactLoadsScope").value !== "regions") return;
   guidedContactRegions.clear(); showGuidedContactRegions(); changedGuidedScenarioDraft();
 };
+$("saveRegionalConstraint").onclick = saveGuidedRegionalConstraint;
+$("clearRegionalConstraints").onclick = () => {
+  if (!source || !guidedStudyMode()) return;
+  guidedRegionalConstraints.clear(); showGuidedRegionalConstraints(); changedGuidedRegionalConstraints();
+};
+for (const id of ["guidedRegionalMetric", "guidedRegionalName", "guidedRegionalMinimum", "guidedRegionalMaximum"]) {
+  $(id).addEventListener("change", changedGuidedRegionalConstraints);
+  if (id !== "guidedRegionalMetric") $(id).addEventListener("input", changedGuidedRegionalConstraints);
+}
 for (const id of ["guidedContactLoads", "guidedContactLoadsScope", "guidedContactLoadsInstances", "guidedContactVertexBudget", "guidedContactPairBudget"]) {
   const changed = () => {
     if (id === "guidedContactLoads" || $("guidedContactLoads").checked) changedGuidedScenarioDraft();
@@ -7227,6 +7299,9 @@ function resetGuidedScenarios() {
   $("guidedContactLoadsInstances").value = "";
   guidedContactRegions.clear(); showGuidedContactRegions();
   for (const id of ["guidedContactRegionName", "guidedContactRegionInstance", "guidedContactRegionPolygon"]) $(id).value = "";
+  guidedRegionalConstraints.clear(); showGuidedRegionalConstraints();
+  for (const id of ["guidedRegionalName", "guidedRegionalMinimum", "guidedRegionalMaximum"]) $(id).value = "";
+  $("guidedRegionalMetric").value = "max_warp_green_strain";
   guidedCoverageLayers.clear(); guidedCoverageInterfaces.clear(); showGuidedCoverageTopology();
   for (const id of [...guidedCoverageFields, ...guidedCoverageDraftFields]) $(id).value = "";
   for (const prefix of ["heatExterior", "guidedCoverageExterior", ...motionExteriorPrefixes]) for (const suffix of exteriorSuffixes) {

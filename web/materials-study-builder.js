@@ -1738,11 +1738,20 @@ export function buildMaterialStudyRequest(state, scenario) {
   if (!Array.isArray(constraints) || constraints.length > 64) throw Error("Choose at most 64 comparison constraints.");
   metrics.clear();
   for (const constraint of constraints) {
-    object(constraint, ["metric", "minimum", "maximum", "basis"], ["metric"], "Comparison constraint");
-    if (metrics.has(constraint.metric)) throw Error("Comparison constraint metrics must be unique.");
-    metrics.add(constraint.metric);
+    object(constraint, ["metric", "minimum", "maximum", "basis", "region"], ["metric"], "Comparison constraint");
+    const regional = own(constraint, "region");
+    if (regional && (typeof constraint.region !== "string" || !constraint.region.trim() || bytes(constraint.region) > 512)) {
+      throw Error("A regional comparison constraint needs an exact nonempty region name of at most 512 UTF-8 bytes.");
+    }
+    const identity = JSON.stringify([constraint.metric, regional ? constraint.region : null]);
+    if (metrics.has(identity)) throw Error("Comparison constraint metrics must be unique within each region or the whole selected scope.");
+    metrics.add(identity);
     const basis = own(constraint, "basis") ? constraint.basis : state.basis;
     if (!["nominal", "reported_bounds"].includes(basis)) throw Error("Choose nominal or reported-bound constraint basis.");
+    if (regional && (basis !== "nominal" || !["material_strain", "motion_material_strain", "contact_loads", "motion_contact_loads"]
+      .includes(METRIC_CONSUMERS[constraint.metric]))) {
+      throw Error("Regional limits support nominal initial or complete-motion material strain and body contact forces only.");
+    }
     const bounds = ["minimum", "maximum"].filter(key => own(constraint, key) && constraint[key] !== null);
     if (!bounds.length || bounds.some(key => typeof constraint[key] !== "number" || !Number.isFinite(constraint[key]))
       || (bounds.length === 2 && constraint.minimum > constraint.maximum)) {

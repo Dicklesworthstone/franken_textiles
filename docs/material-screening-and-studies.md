@@ -1847,6 +1847,36 @@ these witnesses alongside comparison eligibility. `material_strain` or `motion_m
 may also be required independently through `required_consumers`. Sampled compliance does not
 establish continuous-time bounds, rupture limits or physical garment fit.
 
+### Different limits for individual named regions
+
+For a version-2 strain or contact scope, a comparison constraint may name its exact `region`.
+The same metric can have different limits on different regions, alongside an unscoped union limit:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [{"metric": "motion_max_warp_green_strain", "direction": "minimize"}],
+  "constraints": [
+    {"metric": "motion_max_warp_green_strain", "region": "neck", "maximum": 0.08},
+    {"metric": "motion_max_warp_green_strain", "region": "cuff", "maximum": 0.20},
+    {"metric": "motion_peak_body_contact_resultant_n", "region": "cuff", "maximum": 1.5}
+  ]
+}
+```
+
+These illustrative numbers are authored requirements, not measured failure or comfort limits.
+The twelve initial/motion strain metrics and six initial/motion contact metrics support regional
+constraints. Region names bind to the corresponding consumer's reconstructed partition, not to an
+instance or a region in another consumer. Missing regions, whole-instance reports, refused consumers
+and incomplete motion cannot supply a union or zero fallback. Explicit `region: null` refuses.
+Constraints are unique by metric and optional region, with the existing total limit of 64.
+
+Regional guards use nominal values. Set `"basis": "nominal"` on each regional guard when the
+objectives use `reported_bounds`. Objectives and ordinary `readings` retain the selected union;
+`regional_readings[region][metric]` holds each separately admitted guard value. Guard violation
+records retain the region through adaptive constraint restoration and named-case decisions.
+Regional body-force totals can share welded vertices and must not be added together.
+
 ## Compare textile cooling and supplied liquid
 
 Qualified `motion.transient_surface.surface_water` histories can drive the existing nominal
