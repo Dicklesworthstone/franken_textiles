@@ -37,6 +37,15 @@ EXIF orientation. No second rotation is applied. The 128 MiB capture boundary re
 JPEG decoder's 64 MiB ceiling. Capture previews may explicitly reserve up to 40 million pixels
 through `encode_png_bgr_with_limit`; ordinary `encode_png_bgr` retains its 16-million-pixel limit.
 
+`load_binary_mask_with_limit` accepts opaque 8-bit gray/RGB and 1/2/4/8-bit indexed PNGs whose
+actual pixels are exactly black (outside) or white (inside). RGB channels are checked directly;
+luminance rounding, thresholding, alpha compositing and resizing cannot manufacture evidence.
+Indexed masks require a unique complete palette before image data and every referenced index must
+exist. The same orientation, metadata, encoded/pixel budgets, CRC and scanline checks apply. Distinct
+encodings of the same mask produce identical grayscale pixels and decoded-pixel hashes while the
+original encoded source identities remain distinct. Ordinary tracing retains its reference palette
+semantics; neither mask decoding nor source identity establishes segmentation accuracy or body fit.
+
 **Reading documents.** Drafts and patterns are typed `PatternDoc`s parsed from text (vertex order and unknown
 keys such as `trace` survive); `names.json` is an `OValue`, a JSON value whose objects keep their order,
 because renames, splits and the reference's error messages follow it (a `serde_json::Value` sorts keys).

@@ -44,6 +44,15 @@ pub fn load_capture_image_with_limit(bytes: &[u8], max_pixels: usize) -> Result<
             "capture frames need opaque 8-bit grayscale or RGB PNG with orientation already applied",
         ));
     }
+    check_oriented_png_chunks(bytes)?;
+    load_png_with_limit(bytes, max_pixels)
+        .map_err(|message| Refusal::new(RefusalCode::InvalidDocument, message))
+}
+
+// Both photographs and masks describe stored pixels. Metadata must never turn an image into a
+// different orientation, animation frame or alpha-composited set of evidence pixels.
+fn check_oriented_png_chunks(bytes: &[u8]) -> Result<(), Refusal> {
+    let bad = |message: &str| Refusal::new(RefusalCode::InvalidDocument, message);
     let mut pos = 8usize;
     let mut ended = false;
     while pos + 12 <= bytes.len() {
@@ -72,37 +81,89 @@ pub fn load_capture_image_with_limit(bytes: &[u8], max_pixels: usize) -> Result<
     if !ended {
         return Err(bad("PNG has no complete IEND"));
     }
-    load_png_with_limit(bytes, max_pixels)
-        .map_err(|message| Refusal::new(RefusalCode::InvalidDocument, message))
+    Ok(())
 }
 
 /// Decode an explicit binary evidence mask in its already-oriented pixel coordinates.
 /// No thresholding, alpha compositing, rotation or resizing may create foreground evidence.
 ///
 /// # Errors
-/// Anything other than an opaque 8-bit grayscale PNG containing only 0 and 255, or the
+/// Anything other than an opaque 8-bit grayscale/RGB or 1/2/4/8-bit indexed PNG containing
+/// only exact black and white pixels, or the
 /// ordinary capture decoder's metadata, encoded-size, decoded-size and malformed-pixel refusals.
 pub fn load_binary_mask_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Gray, Refusal> {
+    let bad = |message: &str| Refusal::new(RefusalCode::InvalidDocument, message);
+    if bytes.len() > 128 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "mask exceeds 128 MiB encoded input",
+        ));
+    }
     if bytes.len() < 33
         || &bytes[..8] != b"\x89PNG\r\n\x1a\n"
         || &bytes[8..16] != b"\0\0\0\rIHDR"
-        || bytes[24] != 8
-        || bytes[25] != 0
+        || !matches!((bytes[24], bytes[25]), (8, 0 | 2) | (1 | 2 | 4 | 8, 3))
     {
-        return Err(Refusal::new(
-            RefusalCode::InvalidDocument,
-            "masks need an opaque 8-bit grayscale PNG with orientation already applied",
+        return Err(bad(
+            "masks need opaque 8-bit grayscale/RGB or 1/2/4/8-bit indexed PNG with orientation already applied",
         ));
     }
-    let image = load_capture_image_with_limit(bytes, max_pixels)?;
-    let gray = super::color::bgr_to_gray(&image);
-    if gray.data.iter().any(|&value| value != 0 && value != 255) {
-        return Err(Refusal::new(
-            RefusalCode::InvalidDocument,
-            "masks must contain only 0 (outside) and 255 (inside)",
-        ));
+    check_oriented_png_chunks(bytes)?;
+    if bytes[25] == 3 {
+        let mut pos = 8usize;
+        let mut palette_seen = false;
+        let mut image_seen = false;
+        // Chunk bounds and IEND were checked above. Indexed evidence needs a complete, unique
+        // palette before its pixels; the tracing decoder deliberately tolerates more PNG quirks.
+        while pos + 12 <= bytes.len() {
+            let len = be32(&bytes[pos..]) as usize;
+            match &bytes[pos + 4..pos + 8] {
+                b"PLTE" => {
+                    if palette_seen
+                        || image_seen
+                        || len == 0
+                        || !len.is_multiple_of(3)
+                        || len / 3 > (1usize << bytes[24])
+                    {
+                        return Err(bad(
+                            "indexed masks need one complete palette before image data",
+                        ));
+                    }
+                    palette_seen = true;
+                }
+                b"IDAT" => {
+                    if !palette_seen {
+                        return Err(bad("indexed mask has no palette before image data"));
+                    }
+                    image_seen = true;
+                }
+                _ => {}
+            }
+            pos += len + 12;
+        }
+        if !palette_seen {
+            return Err(bad("indexed mask has no palette"));
+        }
     }
-    Ok(gray)
+    let image = decode_png_with_limit(bytes, max_pixels, true).map_err(|message| bad(&message))?;
+    let mut data = Vec::with_capacity(image.w * image.h);
+    for pixel in image.data.chunks_exact(3) {
+        // Never use luminance conversion: a near-black colored pixel can round to gray zero.
+        match pixel {
+            [0, 0, 0] => data.push(0),
+            [255, 255, 255] => data.push(255),
+            _ => {
+                return Err(bad(
+                    "masks must contain only exact black (outside) and white (inside) pixels",
+                ));
+            }
+        }
+    }
+    Ok(Gray {
+        w: image.w,
+        h: image.h,
+        data,
+    })
 }
 
 /// Decode measurement evidence without changing brightness or estimating missing pixels.
@@ -477,6 +538,14 @@ pub fn load_png(bytes: &[u8]) -> Result<Bgr, String> {
 /// The inflated byte count must exactly match the scanlines declared by IHDR (including Adam7).
 /// This preserves [`load_png`]'s colour semantics; it never resizes or truncates an image.
 pub fn load_png_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
+    decode_png_with_limit(bytes, max_pixels, false)
+}
+
+fn decode_png_with_limit(
+    bytes: &[u8],
+    max_pixels: usize,
+    strict_palette: bool,
+) -> Result<Bgr, String> {
     if bytes.starts_with(&[0xff, 0xd8, 0xff])
         || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
     {
@@ -641,6 +710,9 @@ pub fn load_png_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Bgr, Strin
             2 => [to8(s[0]), to8(s[1]), to8(s[2])],
             3 => {
                 let k = usize::from(s[0]);
+                if strict_palette && plte.get(3 * k..3 * k + 3).is_none() {
+                    return Err("indexed mask pixel references a missing palette entry".into());
+                }
                 let rgb = plte
                     .get(3 * k..3 * k + 3)
                     .map_or([0, 0, 0], |p| [p[0], p[1], p[2]]);
@@ -680,6 +752,156 @@ mod decode_budget_tests {
             bytes.extend(crc32(&[kind, data]).to_be_bytes());
         }
         bytes
+    }
+
+    fn mask_png(
+        depth: u8,
+        color: u8,
+        palette: Option<&[u8]>,
+        extra: &[(&[u8; 4], &[u8])],
+        raw: &[u8],
+    ) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut chunk = |kind: &[u8], data: &[u8]| {
+            bytes.extend((data.len() as u32).to_be_bytes());
+            bytes.extend(kind);
+            bytes.extend(data);
+            bytes.extend(crc32(&[kind, data]).to_be_bytes());
+        };
+        chunk(b"IHDR", &[0, 0, 0, 2, 0, 0, 0, 2, depth, color, 0, 0, 0]);
+        if let Some(palette) = palette {
+            chunk(b"PLTE", palette);
+        }
+        for (kind, data) in extra {
+            chunk(*kind, data);
+        }
+        chunk(b"IDAT", &miniz_oxide::deflate::compress_to_vec_zlib(raw, 6));
+        chunk(b"IEND", &[]);
+        bytes
+    }
+
+    #[test]
+    fn binary_masks_preserve_exact_pixels_across_gray_rgb_and_indexed_encodings() {
+        let expected = Gray {
+            w: 2,
+            h: 2,
+            data: vec![0, 255, 255, 0],
+        };
+        let rgb = mask_png(
+            8,
+            2,
+            None,
+            &[],
+            &[0, 0, 0, 0, 255, 255, 255, 0, 255, 255, 255, 0, 0, 0],
+        );
+        let palette = [255, 255, 255, 0, 0, 0];
+        let mut encodings = vec![encode_png_gray(&expected), rgb];
+        for (depth, raw) in [
+            (1, vec![0, 0x80, 0, 0x40]),
+            (2, vec![0, 0x40, 0, 0x10]),
+            (4, vec![0, 0x10, 0, 0x01]),
+            (8, vec![0, 1, 0, 0, 0, 1]),
+        ] {
+            encodings.push(mask_png(depth, 3, Some(&palette), &[], &raw));
+        }
+        for bytes in encodings {
+            let actual = load_binary_mask_with_limit(&bytes, 4).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(sha256_hex(&actual.data), sha256_hex(&expected.data));
+        }
+        // Palette slots that are never referenced cannot supply foreground evidence.
+        let extended = [255, 255, 255, 0, 0, 0, 255, 0, 0];
+        assert_eq!(
+            load_binary_mask_with_limit(
+                &mask_png(8, 3, Some(&extended), &[], &[0, 1, 0, 0, 0, 1]),
+                4
+            )
+            .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn binary_masks_refuse_soft_or_colored_pixels_without_luminance_rounding() {
+        for rgb in [[0, 0, 1], [254, 255, 255], [127, 127, 127], [0, 255, 0]] {
+            let raw = [
+                0, rgb[0], rgb[1], rgb[2], 255, 255, 255, 0, 0, 0, 0, 255, 255, 255,
+            ];
+            assert!(load_binary_mask_with_limit(&mask_png(8, 2, None, &[], &raw), 4).is_err());
+            let palette = [rgb[0], rgb[1], rgb[2], 255, 255, 255];
+            assert!(
+                load_binary_mask_with_limit(
+                    &mask_png(1, 3, Some(&palette), &[], &[0, 0x40, 0, 0x80]),
+                    4
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            load_binary_mask_with_limit(
+                &encode_png_gray(&Gray {
+                    w: 2,
+                    h: 2,
+                    data: vec![0, 127, 255, 0]
+                }),
+                4
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn binary_masks_reject_missing_or_malformed_palette_entries() {
+        let palette = [255, 255, 255, 0, 0, 0];
+        for bytes in [
+            mask_png(2, 3, None, &[], &[0, 0x40, 0, 0x10]),
+            mask_png(2, 3, Some(&[]), &[], &[0, 0, 0, 0]),
+            mask_png(2, 3, Some(&palette[..5]), &[], &[0, 0, 0, 0]),
+            mask_png(1, 3, Some(&[0; 9]), &[], &[0, 0, 0, 0]),
+            mask_png(2, 3, Some(&palette), &[(b"PLTE", &palette)], &[0, 0, 0, 0]),
+            // Index two is absent. Tracing historically substitutes black; evidence must refuse.
+            mask_png(2, 3, Some(&palette), &[], &[0, 0x80, 0, 0]),
+        ] {
+            assert!(load_binary_mask_with_limit(&bytes, 4).is_err());
+        }
+        let missing_index = mask_png(2, 3, Some(&palette), &[], &[0, 0x80, 0, 0]);
+        assert_eq!(
+            load_png_with_limit(&missing_index, 4).unwrap().at(0, 0),
+            [0; 3]
+        );
+    }
+
+    #[test]
+    fn binary_masks_keep_metadata_integrity_and_decoding_budgets_strict() {
+        let palette = [0, 0, 0, 255, 255, 255];
+        for kind in [b"tRNS", b"eXIf", b"acTL", b"fcTL", b"fdAT"] {
+            let bytes = mask_png(
+                1,
+                3,
+                Some(&palette),
+                &[(kind, &[255, 255])],
+                &[0, 0x40, 0, 0x80],
+            );
+            assert!(load_binary_mask_with_limit(&bytes, 4).is_err());
+        }
+        let valid = mask_png(1, 3, Some(&palette), &[], &[0, 0x40, 0, 0x80]);
+        assert!(load_binary_mask_with_limit(&valid, 3).is_err());
+        assert!(
+            load_binary_mask_with_limit(&mask_png(1, 3, Some(&palette), &[], &[0; 4096]), 4)
+                .is_err()
+        );
+        let mut corrupt = valid.clone();
+        corrupt[29] ^= 1;
+        assert!(load_binary_mask_with_limit(&corrupt, 4).is_err());
+        let mut trailing = valid;
+        trailing.push(0);
+        assert!(load_binary_mask_with_limit(&trailing, 4).is_err());
+        for color in [4, 6] {
+            assert!(
+                load_binary_mask_with_limit(&mask_png(8, color, None, &[], &[0; 18]), 4).is_err()
+            );
+        }
+        assert!(load_binary_mask_with_limit(&mask_png(16, 0, None, &[], &[0; 10]), 4).is_err());
     }
 
     #[test]
