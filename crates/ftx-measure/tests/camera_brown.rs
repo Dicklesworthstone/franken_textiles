@@ -464,6 +464,45 @@ fn triangulation_replays_lens_sources_and_refuses_reused_or_unqualified_calibrat
             .is_none()
     );
     assert!((result.triangulation.point_m.unwrap() - point).norm() < 1e-9);
+
+    // The distance consumer must replay this same calibration for both endpoints, retaining
+    // correlated modes instead of summing independently reconstructed positional covariances.
+    let mut other = input.clone();
+    for view in &mut other.observations {
+        view.pixel_px = view.camera.project(point + Vec3::new(0.2, 0., 0.)).unwrap();
+    }
+    let mut distance_input = ftx_measure::triangulate::distance::Input {
+        schema: "ftx-triangulation-distance-input/1".into(),
+        endpoints: [
+            ftx_measure::triangulate::distance::Endpoint {
+                name: "first".into(),
+                input: input.clone(),
+                click_noise: None,
+            },
+            ftx_measure::triangulate::distance::Endpoint {
+                name: "second".into(),
+                input: other,
+                click_noise: None,
+            },
+        ],
+        click_independence_evidence: None,
+        lens_noise: Some(evidence.clone()),
+        sheet_noise: None,
+        reference_scale_noise: None,
+    };
+    let distance = ftx_measure::triangulate::distance::run(&distance_input).unwrap();
+    assert_eq!(distance.status, "ACCEPTED");
+    assert!((distance.distance_m.unwrap() - 0.2).abs() < 1e-9);
+    let precision = distance.conditional_lens_uncertainty.unwrap();
+    assert_eq!(precision.status, "AVAILABLE", "{:?}", precision.flags);
+    assert!(precision.sigma_m.unwrap() > 0.);
+    assert_eq!(
+        json!(distance.endpoints[0].triangulation),
+        json!(result.triangulation),
+    );
+    distance_input.lens_noise.as_mut().unwrap().groups[0].calibration["status"] = json!("REJECTED");
+    assert!(ftx_measure::triangulate::distance::run(&distance_input).is_err());
+
     let mut reversed = evidence.clone();
     reversed.groups[0].frames.reverse();
     assert_eq!(

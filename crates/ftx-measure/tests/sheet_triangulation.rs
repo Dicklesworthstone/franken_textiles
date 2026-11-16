@@ -316,3 +316,205 @@ fn unavailable_reference_scale_preserves_geometry_without_partial_precision() {
             .is_none()
     );
 }
+
+
+use ftx_measure::triangulate::distance::{self, Endpoint, Input as DistanceInput};
+
+fn distance_fixture(fit_views: usize) -> DistanceInput {
+    let (left, scale) = reference_scale_fixture(fit_views, Vec3::new(-0.1, -0.2, 0.15));
+    let (right, other_scale) = reference_scale_fixture(fit_views, Vec3::new(0.1, -0.2, 0.15));
+    assert_eq!(json!(scale), json!(other_scale));
+    DistanceInput {
+        schema: "ftx-triangulation-distance-input/1".into(),
+        endpoints: [
+            Endpoint {
+                name: "left marker".into(),
+                input: left,
+                click_noise: None,
+            },
+            Endpoint {
+                name: "right marker".into(),
+                input: right,
+                click_noise: None,
+            },
+        ],
+        click_independence_evidence: None,
+        lens_noise: None,
+        sheet_noise: None,
+        reference_scale_noise: Some(scale),
+    }
+}
+
+#[test]
+fn straight_distance_preserves_one_shared_scale_instead_of_independent_endpoint_errors() {
+    for fit_views in [2, 3] {
+        let input = distance_fixture(fit_views);
+        let result = distance::run(&input).unwrap();
+        assert_eq!(result.status, "ACCEPTED", "{:?}", result.flags);
+        assert!((result.distance_m.unwrap() - 0.2).abs() < 1e-10);
+        let precision = result.conditional_reference_scale_uncertainty.unwrap();
+        assert_eq!(precision.status, "AVAILABLE", "{:?}", precision.flags);
+        // One common scale error stretches the whole 0.2 m segment: 1% is 0.002 m.
+        // Treating the two opposite endpoint errors as independent would halve this variance.
+        assert!((precision.variance_m2.unwrap() - 4e-6).abs() < 1e-14);
+        assert!((precision.sigma_m.unwrap() - 0.002).abs() < 1e-12);
+        for (endpoint, original) in result.endpoints.iter().zip(&input.endpoints) {
+            assert_eq!(
+                json!(endpoint.triangulation),
+                json!(triangulate(&original.input).unwrap()),
+            );
+        }
+        assert!(result.conditional_click_uncertainty.is_none());
+    }
+}
+
+#[test]
+fn straight_distance_scale_is_invariant_to_a_translated_source_coordinate_origin() {
+    let mut input = distance_fixture(2);
+    let original = distance::run(&input).unwrap();
+    let shift = Vec3::new(3., 0., 2.);
+    for endpoint in &mut input.endpoints {
+        for view in &mut endpoint.input.observations {
+            view.camera.center_m += shift;
+        }
+    }
+    for pose in &mut input.reference_scale_noise.as_mut().unwrap().sheet_poses {
+        let mut source = pose.report["input"].clone();
+        for corner in source["points"].as_array_mut().unwrap() {
+            corner["sheet_xz_m"] = json!([
+                corner["sheet_xz_m"][0].as_f64().unwrap() + shift.x,
+                corner["sheet_xz_m"][1].as_f64().unwrap() + shift.z,
+            ]);
+        }
+        pose.report = Camera::sheet_pose_report(&source).unwrap();
+        assert_eq!(pose.report["ok"], true);
+        let camera: Camera = serde_json::from_value(pose.report["camera"].clone()).unwrap();
+        for endpoint in &mut input.endpoints {
+            endpoint
+                .input
+                .observations
+                .iter_mut()
+                .find(|view| view.frame == pose.frame)
+                .unwrap()
+                .camera = camera;
+        }
+    }
+    let translated = distance::run(&input).unwrap();
+    assert_eq!(translated.status, "ACCEPTED");
+    assert!((translated.distance_m.unwrap() - original.distance_m.unwrap()).abs() < 1e-9);
+    assert!(
+        (translated
+            .conditional_reference_scale_uncertainty
+            .unwrap()
+            .sigma_m
+            .unwrap()
+            - original
+                .conditional_reference_scale_uncertainty
+                .unwrap()
+                .sigma_m
+                .unwrap())
+        .abs()
+            < 1e-11,
+    );
+    assert_ne!(translated.input_sha256, original.input_sha256);
+}
+
+#[test]
+fn distance_replays_complete_scale_sources_and_preserves_unavailable_precision() {
+    let input = distance_fixture(2);
+    for variant in 0..4 {
+        let mut changed = input.clone();
+        let scale = changed.reference_scale_noise.as_mut().unwrap();
+        match variant {
+            0 => scale.reference_id.push_str("-different"),
+            1 => scale.evidence.clear(),
+            2 => {
+                scale.sheet_poses.pop();
+            }
+            _ => scale.sheet_poses[0].report["ok"] = json!(false),
+        }
+        assert!(distance::run(&changed).is_err(), "source variant {variant}");
+    }
+    let mut small = input;
+    small.reference_scale_noise.as_mut().unwrap().sigma_fraction = 1e-200;
+    let report = distance::run(&small).unwrap();
+    assert_eq!(report.status, "ACCEPTED");
+    assert!(report.distance_m.is_some());
+    let precision = report.conditional_reference_scale_uncertainty.unwrap();
+    assert_eq!(precision.status, "UNAVAILABLE");
+    assert!(precision.variance_m2.is_none());
+    assert!(precision.sigma_m.is_none());
+}
+
+#[test]
+fn distance_shared_sheet_precision_matches_joint_source_corner_refits() {
+    use ftx_measure::triangulate::uncertainty::{FrameSheetCornerNoise, SheetCornerNoiseInput};
+    let mut input = distance_fixture(2);
+    let scale = input.reference_scale_noise.take().unwrap();
+    input.sheet_noise = Some(SheetCornerNoiseInput {
+        schema: "ftx-triangulation-sheet-noise/1".into(),
+        independence_evidence:
+            "Synthetic independent sheet corners; shared acquisitions for both endpoints".into(),
+        observations: scale
+            .sheet_poses
+            .iter()
+            .map(|pose| FrameSheetCornerNoise {
+                frame: pose.frame.clone(),
+                report: pose.report.clone(),
+                sigma_px: 0.25,
+            })
+            .collect(),
+    });
+    let report = distance::run(&input).unwrap();
+    let precision = report.conditional_sheet_uncertainty.unwrap();
+    assert_eq!(precision.status, "AVAILABLE", "{:?}", precision.flags);
+
+    // Independently perturb the original camera acquisition, re-solve both full landmarks
+    // with that same camera and difference the resulting scalar length, not endpoint covariance.
+    let mut expected = 0.;
+    for original in &input.sheet_noise.as_ref().unwrap().observations {
+        for (index, corner) in original.report["input"]["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            if corner["held_out"] == true {
+                continue;
+            }
+            for axis in 0..2 {
+                let sample = |step: f64| {
+                    let mut source = original.report["input"].clone();
+                    let pixel = source["points"][index]["pixel_px"][axis]
+                        .as_f64()
+                        .unwrap();
+                    source["points"][index]["pixel_px"][axis] = json!(pixel + step);
+                    let pose = Camera::sheet_pose_report(&source).unwrap();
+                    assert_eq!(pose["ok"], true);
+                    let camera: Camera = serde_json::from_value(pose["camera"].clone()).unwrap();
+                    let points = input.endpoints.each_ref().map(|endpoint| {
+                        let mut changed = endpoint.input.clone();
+                        changed
+                            .observations
+                            .iter_mut()
+                            .find(|view| view.frame == original.frame)
+                            .unwrap()
+                            .camera = camera;
+                        triangulate(&changed).unwrap().point_m.unwrap()
+                    });
+                    (points[1] - points[0]).norm()
+                };
+                let derivative = (sample(0.001) - sample(-0.001)) / 0.002;
+                expected += (derivative * original.sigma_px).powi(2);
+            }
+        }
+    }
+    assert!(expected > 0.);
+    assert!((precision.variance_m2.unwrap() / expected - 1.).abs() < 1e-4);
+
+    let mut mismatched = input;
+    mismatched.reference_scale_noise = Some(scale);
+    mismatched.sheet_noise.as_mut().unwrap().observations[0].report["unbound_annotation"] =
+        json!("different original acquisition");
+    assert!(distance::run(&mismatched).is_err());
+}

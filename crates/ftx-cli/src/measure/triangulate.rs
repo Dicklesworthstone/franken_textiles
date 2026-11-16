@@ -207,6 +207,81 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     Ok((value, code, text))
 }
 
+pub(super) fn run_distance(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(args, "measure triangulate-distance", &["out"])?;
+    let path = single(args, "triangulate-distance")?;
+    let (value, _) = super::intrinsics::read_document(path)?;
+    let input = serde_json::from_value(value)
+        .map_err(|e| bad_input(format!("invalid triangulation distance input: {e}")))?;
+    let report = ftx_measure::triangulate::distance::run(&input)?;
+    let components = [
+        ("CLICK", report.conditional_click_uncertainty.as_ref()),
+        ("LENS", report.conditional_lens_uncertainty.as_ref()),
+        ("SHEET-CORNER", report.conditional_sheet_uncertainty.as_ref()),
+        (
+            "REFERENCE-SCALE",
+            report.conditional_reference_scale_uncertainty.as_ref(),
+        ),
+    ];
+    let code = if report.distance_m.is_some()
+        && components
+            .iter()
+            .all(|(_, component)| component.is_none_or(|u| u.status == "AVAILABLE"))
+    {
+        0
+    } else {
+        2
+    };
+    let mut text = format!("TRIANGULATED DISTANCE: {}", report.status);
+    if let Some(distance) = report.distance_m {
+        text.push_str(&format!("\nStraight distance [m]: {distance:.9}"));
+    } else {
+        text.push_str("\nNo usable distance was published.");
+    }
+    for endpoint in &report.endpoints {
+        text.push_str(&format!(
+            "\nEndpoint {}: {} ({} fit, {} held-out views)",
+            endpoint.name,
+            endpoint.triangulation.status,
+            endpoint.triangulation.fit_views,
+            endpoint.triangulation.held_out_views
+        ));
+        for flag in endpoint
+            .triangulation
+            .flags
+            .iter()
+            .chain(&endpoint.triangulation.advisories)
+        {
+            text.push_str(&format!("\n  {flag}"));
+        }
+    }
+    for (name, component) in components {
+        if let Some(component) = component {
+            text.push_str(&format!(
+                "\nCONDITIONAL {name} UNCERTAINTY: {}",
+                component.status
+            ));
+            if let Some(sigma) = component.sigma_m {
+                text.push_str(&format!("\n{name}-only one-sigma [m]: {sigma:.9}"));
+            }
+            for flag in &component.flags {
+                text.push_str(&format!("\n  {flag}"));
+            }
+            text.push_str(&format!("\n{}", component.no_claim));
+        }
+    }
+    for flag in &report.flags {
+        text.push_str(&format!("\n  {flag}"));
+    }
+    text.push_str(&format!("\n{}", report.no_claim));
+    let value = serde_json::to_value(&report).map_err(|e| bad_input(e.to_string()))?;
+    if let Some(path) = option(args, "out") {
+        photo::save(path, &value)?;
+        eprintln!("wrote {path}");
+    }
+    Ok((value, code, text))
+}
+
 #[cfg(test)]
 mod click_noise_tests {
     use serde_json::{Value, json};

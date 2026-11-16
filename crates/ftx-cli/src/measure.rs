@@ -235,6 +235,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "bundle-adjust" => return bundle::run(args),
         "calib-sheet" => return calibration::run(args),
         "triangulate" => return triangulate::run(args),
+        "triangulate-distance" => return triangulate::run_distance(args),
         "girth-from-section" => section::run(args)?,
         "photo-scale" | "measure-photo" | "sheet-pose" => {
             let (value, status) = photo::run(args, command)?;

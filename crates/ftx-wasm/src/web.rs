@@ -137,6 +137,17 @@ pub fn triangulate_with_reference_scale_noise(
     .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Reconstruct a straight distance with separately retained endpoint and shared-source evidence.
+///
+/// # Errors
+/// The portable source budget, exact camera cohort and conditional precision guards refuse.
+#[wasm_bindgen]
+pub fn triangulate_distance(input: &str) -> Result<String, JsError> {
+    crate::photo::triangulate_distance(input)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Refine anchored camera/landmark geometry with a text-parsed native iteration limit.
 ///
 /// # Errors

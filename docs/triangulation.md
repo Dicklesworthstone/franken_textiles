@@ -248,6 +248,84 @@ warp, an uncertain coordinate origin, camera drift, synchronization, wearer moti
 systematic errors. Its sigma and physical applicability require independent source evidence;
 numerical checks do not establish capture accuracy or garment fit.
 
+## Straight distance between two reconstructed landmarks
+
+`ftx measure triangulate-distance` reconstructs exactly two named endpoints from their original
+observations and reports their positive finite Euclidean separation. Both endpoints use the same
+complete camera cohort, metric-source declaration, capture evidence and FIT/CHECK roles. They may have
+different pixels and endpoint names; reordering observations does not change camera matching.
+
+Run the synthetic 200 mm example:
+
+```sh
+ftx measure triangulate-distance docs/examples/triangulation-distance.json --json
+ftx measure triangulate-distance docs/examples/triangulation-distance.json --out distance-result.json
+```
+
+The complete request uses `ftx-triangulation-distance-input/1`:
+
+| Field | Content |
+|---|---|
+| `endpoints` | Exactly two objects, each with a distinct nonempty `name` and complete `input` of schema `ftx-triangulation-input/1` |
+| `endpoints[].click_noise` | Optional original `ftx-click-noise/1` input; both endpoints must declare one together |
+| `click_independence_evidence` | Required with click models: the explicit basis for treating annotations of the two endpoints as independent |
+| `lens_noise` | Optional single original lens-noise `/1` or `/2` document shared by both endpoints |
+| `sheet_noise` | Optional single original sheet-corner-noise document shared by both endpoints |
+| `reference_scale_noise` | Optional single original uniform reference-scale-noise document shared by both endpoints |
+
+The whole request is limited to **16 MiB**, including its original camera evidence. Every existing
+per-component observation, calibration and differentiation limit still applies, with exactly two
+landmark estimators per component. Camera and capture mismatches refuse before uncertainty solves.
+Complete source-pose lens, sheet-corner and reference-scale evidence must refer to the same original
+acquisitions. A different calibration or CHECK observation that happens to yield the same fitted
+camera is not interchangeable.
+
+The `ftx-triangulation-distance/1` result retains the parsed request, its canonical SHA-256, both
+ordinary endpoint reports, `distance_m` and each requested scalar conditional precision component.
+A failed or unobservable endpoint keeps its diagnostics but publishes no distance. Coincident
+endpoints and unrepresentable separation also publish no usable distance: the length derivative is
+undefined at zero. The endpoint names are operator labels, not inferred anatomical correspondences.
+
+### Shared-source precision
+
+Let the accepted endpoints be `A` and `B`, their separation `L = |B - A|`, and its
+unit direction `u = (B - A) / L`. A shared camera mode contributes
+
+```text
+distance response = dot(u, endpoint_B_response - endpoint_A_response)
+```
+
+The response is differenced **before** squaring. Common translation cancels, and one common fractional
+scale sigma `s` gives `sigma_m = L * s`, independent of the coordinate origin or number of views.
+Adding the two endpoints' positional covariance matrices as though their calibration were independent
+would lose these correlations.
+
+Click precision sums the original per-coordinate estimator sensitivities under the caller's explicit
+cross-endpoint independence declaration. Lens precision pairs the same original correlated calibration
+modes. Sheet precision pairs original FIT corners and their source-camera responses. Each complete
+component returns `AVAILABLE` with `variance_m2` and `sigma_m`, or `UNAVAILABLE` with null values
+and flags. Genuine cancellation may give an available zero contribution; numerical underflow or
+overflow never becomes a zero-uncertainty estimate. Shared reference-scale source admission is retained
+even when an endpoint's positional covariance is unrepresentable: scalar length precision is computed
+from the representable separation and its original uniform scale model.
+
+The four components remain separate. No total sigma, confidence interval, anatomical surface length,
+tape girth, `fabric-measurements/1` record or readiness upgrade is inferred. Physical calibration,
+correct correspondence, motion and systematic error still need independent evidence.
+
+Exit **0** means accepted distance and all requested components available; **2** means rejected
+distance or an unavailable requested component; **3** means invalid evidence/input/output; **4** means
+budget refusal. An unavailable component preserves accepted geometry. Output files use the existing
+exclusive creation rule, including source symlink/hard-link aliases.
+
+The portable API `ftx_wasm::photo::triangulate_distance(input)` and the WASM export
+`triangulate_distance(input)` use the same native engine. Their one argument is the complete original
+JSON text. Direct checks live in `triangulate::distance::tests` and the four
+`triangulated_distance_*` groups in `triangulation_workflow`. They exercise analytic stereo,
+shared-mode cancellation, scale correlation, unchanged endpoint gates, incompatible sources,
+native/portable equality, full-width frame identities and source/output bounds. Test definitions and
+runtime execution evidence remain separate.
+
 ## Input contract
 
 `ftx-triangulation-input/1` describes one landmark with 1–128 observations. At least two

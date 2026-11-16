@@ -216,6 +216,26 @@ pub fn triangulate_with_reference_scale_noise(
     Ok(report)
 }
 
+/// Reconstruct two explicitly named landmarks and their straight distance in one camera cohort.
+/// Shared camera and reference-scale modes remain correlated between endpoints. Requested
+/// conditional precision components stay separate; no tape record or total sigma is inferred.
+///
+/// # Errors
+/// JSON above 16 MiB, incompatible camera/capture sources, invalid endpoint or noise inputs,
+/// or the shared calibration, geometry and numerical budgets refuse.
+pub fn triangulate_distance(input: &str) -> Result<Value, Refusal> {
+    if input.len() > ftx_measure::photo::acquisition::MAX_CALIBRATION_JSON_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "triangulation distance JSON exceeds 16 MiB",
+        ));
+    }
+    let input = serde_json::from_str(input)
+        .map_err(|e| invalid(format!("invalid triangulation distance input: {e}")))?;
+    serde_json::to_value(ftx_measure::triangulate::distance::run(&input)?)
+        .map_err(|e| invalid(e.to_string()))
+}
+
 /// Source-qualified section girth or tape-based coefficient calibration using the shared native
 /// measurement engine. An empty depth source reuses a combined width/depth document.
 ///

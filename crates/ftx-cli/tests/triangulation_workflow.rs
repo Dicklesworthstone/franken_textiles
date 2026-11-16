@@ -1391,3 +1391,228 @@ fn reference_scale_preserves_unavailable_precision_bounds_and_no_clobber() {
     );
     assert!(!dir.0.join("new").exists());
 }
+
+fn distance_case() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../docs/examples/triangulation-distance.json"
+    ))
+    .unwrap()
+}
+
+fn run_distance(dir: &Path, extra: &[&str], expected: i32) -> Value {
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(dir)
+        .args(["measure", "triangulate-distance", "distance.json", "--json"])
+        .args(extra)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(expected),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(envelope["exit"], expected);
+    envelope
+}
+
+#[test]
+fn triangulated_distance_replays_geometry_clicks_and_full_width_sources() {
+    let dir = Scratch::new();
+    let mut input = distance_case();
+    let timestamp = 9_007_199_254_740_993_u64;
+    for endpoint in input["endpoints"].as_array_mut().unwrap() {
+        for view in endpoint["input"]["observations"].as_array_mut().unwrap() {
+            view["frame"]["timestamp_us"] = json!(timestamp);
+        }
+        let observations: Vec<_> = endpoint["input"]["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|view| view["partition"] == "fit")
+            .map(|view| json!({"frame":view["frame"],"sigma_px":1.0}))
+            .collect();
+        endpoint["click_noise"] = json!({
+            "schema":"ftx-click-noise/1",
+            "evidence":"Independent synthetic pixel coordinates",
+            "observations":observations,
+        });
+    }
+    input["click_independence_evidence"] =
+        json!("Synthetic endpoint annotations have independent errors across targets and views");
+    save(&dir.0.join("distance.json"), &input);
+    let result = run_distance(&dir.0, &["--out", "distance-result.json"], 0)["result"].clone();
+    assert_eq!(read(&dir.0.join("distance-result.json")), result);
+    assert_eq!(
+        ftx_wasm::photo::triangulate_distance(&input.to_string()).unwrap(),
+        result
+    );
+    assert_eq!(result["status"], "ACCEPTED");
+    assert!((result["distance_m"].as_f64().unwrap() - 0.2).abs() < 1e-10);
+    assert_eq!(
+        result["conditional_click_uncertainty"]["status"],
+        "AVAILABLE"
+    );
+    assert!(
+        result["conditional_click_uncertainty"]["sigma_m"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert_eq!(
+        result["input"]["endpoints"][0]["input"]["observations"][0]["frame"]["timestamp_us"],
+        json!(timestamp)
+    );
+    for (i, endpoint) in input["endpoints"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(
+            result["endpoints"][i]["triangulation"],
+            ftx_wasm::photo::triangulate(&endpoint["input"].to_string(), "").unwrap()
+        );
+    }
+    assert!(result.get("records").is_none());
+    assert!(result.get("total_uncertainty").is_none());
+    let human = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir.0)
+        .args(["measure", "triangulate-distance", "distance.json"])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let text = String::from_utf8(human.stdout).unwrap();
+    assert!(text.contains("TRIANGULATED DISTANCE: ACCEPTED"));
+    assert!(text.contains("Straight distance [m]: 0.200000000"));
+    assert!(text.contains("CONDITIONAL CLICK UNCERTAINTY: AVAILABLE"));
+    assert!(text.contains("1 held-out"));
+}
+
+#[test]
+fn triangulated_distance_replays_all_shared_camera_sources_and_scale() {
+    let dir = Scratch::new();
+    let (first, click, lens, sheet, scale) = reference_scale_case(&dir.0);
+    let mut second = first.clone();
+    for view in second["observations"].as_array_mut().unwrap() {
+        let camera: Camera = serde_json::from_value(view["camera"].clone()).unwrap();
+        view["pixel_px"] = json!(camera.project(Vec3::new(0.25, 0.4, 1.25)).unwrap());
+    }
+    let input = json!({
+        "schema":"ftx-triangulation-distance-input/1",
+        "endpoints":[
+            {"name":"first","input":first,"click_noise":click},
+            {"name":"second","input":second,"click_noise":click}
+        ],
+        "click_independence_evidence":"Independent synthetic target annotations",
+        "lens_noise":lens,"sheet_noise":sheet,"reference_scale_noise":scale,
+    });
+    save(&dir.0.join("distance.json"), &input);
+    let result = run_distance(&dir.0, &[], 0)["result"].clone();
+    assert_eq!(
+        result,
+        ftx_wasm::photo::triangulate_distance(&input.to_string()).unwrap()
+    );
+    assert!((result["distance_m"].as_f64().unwrap() - 0.2).abs() < 1e-9);
+    for name in ["click", "lens", "sheet", "reference_scale"] {
+        let component = &result[format!("conditional_{name}_uncertainty")];
+        assert_eq!(component["status"], "AVAILABLE", "{component}");
+        assert!(component["sigma_m"].as_f64().unwrap().is_finite());
+    }
+    assert!(
+        (result["conditional_reference_scale_uncertainty"]["sigma_m"]
+            .as_f64()
+            .unwrap()
+            - 0.0004)
+            .abs()
+            < 1e-10
+    );
+    if let Ok(directory) = std::env::var("FTX_TRIANGULATION_CAMERA_FIXTURES") {
+        use std::io::Write;
+        let directory = Path::new(&directory);
+        std::fs::create_dir_all(directory).unwrap();
+        for (name, value) in [
+            ("distance-input.json", &input),
+            ("distance-result.json", &result),
+        ] {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(directory.join(name))
+                .unwrap()
+                .write_all(&serde_json::to_vec_pretty(value).unwrap())
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn triangulated_distance_refusals_keep_geometry_and_evidence_separate() {
+    let dir = Scratch::new();
+    let original = distance_case();
+    let source = dir.0.join("distance.json");
+    let mut rejected = original.clone();
+    rejected["endpoints"][1]["input"]["observations"][2]["pixel_px"][0] = json!(700.);
+    save(&source, &rejected);
+    let result = run_distance(&dir.0, &["--out", "rejected-distance.json"], 2)["result"].clone();
+    assert_eq!(result["status"], "REJECTED");
+    assert!(result["distance_m"].is_null());
+    assert!(result["endpoints"][0]["triangulation"]["point_m"].is_array());
+    assert!(result["endpoints"][1]["triangulation"]["point_m"].is_null());
+    assert_eq!(
+        result,
+        ftx_wasm::photo::triangulate_distance(&rejected.to_string()).unwrap()
+    );
+
+    let mut mismatch = original.clone();
+    mismatch["endpoints"][1]["input"]["metric_scale_source"] = json!("A different world frame");
+    save(&source, &mismatch);
+    run_distance(&dir.0, &["--out", "uncreated/distance.json"], 3);
+    assert!(!dir.0.join("uncreated").exists());
+    assert!(ftx_wasm::photo::triangulate_distance(&mismatch.to_string()).is_err());
+
+    save(&source, &original);
+    let bytes = std::fs::read(&source).unwrap();
+    std::fs::hard_link(&source, dir.0.join("distance-alias.json")).unwrap();
+    for output in ["distance.json", "distance-alias.json"] {
+        run_distance(&dir.0, &["--out", output], 3);
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    }
+    run_distance(&dir.0, &["--click-noise", "input.json"], 3);
+    let oversized = " ".repeat(16 * 1024 * 1024 + 1);
+    assert_eq!(
+        ftx_wasm::photo::triangulate_distance(&oversized)
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+    std::fs::write(&source, oversized).unwrap();
+    run_distance(&dir.0, &["--out", "uncreated/distance.json"], 4);
+    assert!(!dir.0.join("uncreated").exists());
+}
+
+#[test]
+fn triangulated_distance_unavailable_scale_preserves_accepted_length() {
+    let dir = Scratch::new();
+    let (first, _, _, _, mut scale) = reference_scale_case(&dir.0);
+    let mut second = first.clone();
+    for view in second["observations"].as_array_mut().unwrap() {
+        let camera: Camera = serde_json::from_value(view["camera"].clone()).unwrap();
+        view["pixel_px"] = json!(camera.project(Vec3::new(0.25, 0.4, 1.25)).unwrap());
+    }
+    scale["sigma_fraction"] = json!(1e-200);
+    let input = json!({
+        "schema":"ftx-triangulation-distance-input/1",
+        "endpoints":[{"name":"first","input":first},{"name":"second","input":second}],
+        "reference_scale_noise":scale,
+    });
+    save(&dir.0.join("distance.json"), &input);
+    let result = run_distance(&dir.0, &[], 2)["result"].clone();
+    assert_eq!(result["status"], "ACCEPTED");
+    assert!(result["distance_m"].as_f64().unwrap() > 0.0);
+    let component = &result["conditional_reference_scale_uncertainty"];
+    assert_eq!(component["status"], "UNAVAILABLE");
+    assert!(component["sigma_m"].is_null());
+    assert!(component["variance_m2"].is_null());
+    assert_eq!(
+        result,
+        ftx_wasm::photo::triangulate_distance(&input.to_string()).unwrap()
+    );
+}

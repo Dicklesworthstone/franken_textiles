@@ -231,6 +231,21 @@ this separate component and retain exact replay inputs. Tests: `sheet_triangulat
 `triangulation_workflow` and `check_photo_frontend.cjs`; no total uncertainty, anisotropic print/warp
 model, independent capture qualification, fused evidence or body/garment fit is established.
 
+**Source-bound straight distances.** `triangulate::distance::run` consumes exactly two named
+original triangulation inputs in one identical metric, capture, camera and FIT/CHECK cohort.
+It preserves each endpoint's original estimator and gates, publishes a positive finite Euclidean
+distance only when both endpoints pass, and retains complete source input and its canonical hash.
+The 16 MiB complete-request budget and existing per-estimator limits bound retained data and work.
+
+Optional endpoint-click models require an explicit cross-endpoint independence declaration. One
+shared lens, sheet-corner or scale input is replayed against both endpoints; source identities and
+correlated mode responses are paired before reducing the length Jacobian. Shared translations cancel,
+and common fractional scale gives distance times sigma without origin or view-count dependence.
+Unavailable conditional precision remains null beside accepted geometry; genuine zero cancellation
+stays available. Components are separate and never establish total error, anatomical correspondence,
+a surface/tape measurement, fused evidence, readiness or physical fit. Native/portable workflow
+tests and module known answers cover this consumer; see `docs/triangulation.md`.
+
 **Anchored joint bundle refinement (FTX-20).** `bundle::adjust` jointly refines all camera
 extrinsics and free landmark positions against sigma-weighted fit pixel residuals. Fixed
 metric controls define the gauge and absolute scale; intrinsics and lens distortion remain

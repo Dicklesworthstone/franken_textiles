@@ -130,6 +130,7 @@ const USAGE: &str = "usage:
       [--clothing-mm C] [--tape-girth-mm T] [--sigma-tape-mm ST] [--name NAME] [--out FILE] [--json]
   ftx measure triangulate FILE [--click-noise JSON] [--lens-noise JSON] [--sheet-noise JSON]
       [--reference-scale-noise JSON] [--out FILE] [--json]
+  ftx measure triangulate-distance FILE [--out FILE] [--json]
   ftx measure bundle-adjust FILE [--iterations N] [--out FILE] [--json]
   ftx measure fit-body FILE --model PATH [--out REPORT | --mesh-out NEW_DIR]
       [--iterations N] [--max-evaluations N] [--silhouettes MANIFEST] [--json]
