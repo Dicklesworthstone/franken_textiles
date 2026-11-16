@@ -223,11 +223,15 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     Declare a reviewed still window or synchronized capture; unrelated frames of a moving person do not qualify.</p>
   <label>Geometry operation <select id="geometryOperation">
     <option value="triangulate">One landmark with fixed cameras</option>
+    <option value="triangulate-distance">Straight distance between two landmarks</option>
     <option value="bundle-adjust">Refine cameras and landmarks from metric controls</option>
     <option value="still-window">Assess a sparse still-window candidate</option>
   </select></label>
   <label>Calibrated observations (<code id="geometryInputKind">ftx-triangulation-input/1</code>)
     <input id="triangulationInput" type="file" accept=".json,application/json"></label>
+  <p id="geometryDistanceHelp" hidden>Supply both named endpoints from the same calibrated frames in one
+    request, including any click, shared-camera and reference-size evidence (up to 16 MiB).
+    This measures a straight chord. It does not infer a surface tape path, girth or total measurement uncertainty.</p>
   <div id="geometryNoiseControls">
     <label>Optional click-noise evidence (<code>ftx-click-noise/1</code>)
       <input id="triangulationNoise" type="file" accept=".json,application/json"></label>

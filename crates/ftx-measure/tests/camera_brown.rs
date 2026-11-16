@@ -500,6 +500,72 @@ fn triangulation_replays_lens_sources_and_refuses_reused_or_unqualified_calibrat
         json!(distance.endpoints[0].triangulation),
         json!(result.triangulation),
     );
+    // Independently differentiate the complete scalar distance in original physical lens
+    // coordinates, then contract against the full source covariance. This does not reuse
+    // the distance consumer's endpoint-mode reducer or add marginal point covariances.
+    let covariance = calibration
+        .conditional_uncertainty
+        .as_ref()
+        .unwrap()
+        .estimate
+        .as_ref()
+        .unwrap()
+        .covariance();
+    let mut gradient = [0.0; 9];
+    for (parameter, derivative) in gradient.iter_mut().enumerate() {
+        let step = if parameter < 4 { 0.005 } else { 0.00001 };
+        let sample = |delta: f64| {
+            let points = distance_input.endpoints.each_ref().map(|endpoint| {
+                let mut changed = endpoint.input.clone();
+                for view in &mut changed.observations {
+                    let k = &mut view.camera.intrinsics;
+                    match parameter {
+                        0 => k.focal_px.x += delta,
+                        1 => k.focal_px.y += delta,
+                        2 => k.principal_px.x += delta,
+                        3 => k.principal_px.y += delta,
+                        4..=6 => k.distortion.radial[parameter - 4] += delta,
+                        _ => k.distortion.tangential[parameter - 7] += delta,
+                    }
+                }
+                ftx_measure::triangulate::triangulate(&changed)
+                    .unwrap()
+                    .point_m
+                    .unwrap()
+            });
+            (points[1] - points[0]).norm()
+        };
+        *derivative = (sample(step) - sample(-step)) / (2.0 * step);
+    }
+    let expected: f64 = gradient
+        .iter()
+        .enumerate()
+        .map(|(i, left)| {
+            gradient
+                .iter()
+                .enumerate()
+                .map(|(j, right)| left * covariance[i][j] * right)
+                .sum::<f64>()
+        })
+        .sum();
+    assert!(expected.is_finite() && expected > 0.0);
+    assert!(
+        (precision.variance_m2.unwrap() / expected - 1.0).abs() < 1e-3,
+        "joint lens variance: actual {:?}, independently differentiated {expected}",
+        precision.variance_m2,
+    );
+
+    let other = &distance_input.endpoints[1].input;
+    let other_precision = triangulate_with_lens_noise(other, &evidence)
+        .unwrap()
+        .conditional_lens_uncertainty;
+    // The true chord is x-directed. The two marginal x variances retain common camera
+    // motion that cancels from its length, so their independent sum must give another answer.
+    let left_covariance = result.conditional_lens_uncertainty.covariance_m2.unwrap();
+    let right_covariance = other_precision.covariance_m2.unwrap();
+    let incorrectly_independent = left_covariance.rows[0][0] + right_covariance.rows[0][0];
+    assert!((incorrectly_independent - expected).abs() > 0.1 * expected);
+
     distance_input.lens_noise.as_mut().unwrap().groups[0].calibration["status"] = json!("REJECTED");
     assert!(ftx_measure::triangulate::distance::run(&distance_input).is_err());
 

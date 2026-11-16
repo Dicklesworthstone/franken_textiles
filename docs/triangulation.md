@@ -326,6 +326,31 @@ shared-mode cancellation, scale correlation, unchanged endpoint gates, incompati
 native/portable equality, full-width frame identities and source/output bounds. Test definitions and
 runtime execution evidence remain separate.
 
+### Browser distance workflow
+
+In **Reconstruct landmarks from calibrated views**, select **Straight distance between two landmarks**
+and load the complete `ftx-triangulation-distance-input/1` request. Both endpoints and every requested
+precision source belong in this one file, bounded to 16 MiB. The separate single-landmark noise
+controls are hidden and do not affect the distance request.
+
+The local disposable worker calls the same `triangulate_distance` export. Results show the straight
+distance in metres and each requested conditional one-sigma contribution separately. An available
+zero contribution remains visible when shared errors cancel. Accepted geometry with unavailable
+precision retains its diagnostics; rejected endpoint geometry publishes no usable distance.
+Neither result creates measurement records or changes readiness.
+
+Download `triangulation-distance.json` and `triangulation-distance-input.json` for exact replay:
+
+```sh
+ftx measure triangulate-distance triangulation-distance-input.json --json
+```
+
+The downloaded input and report preserve their original bytes, including full-width frame IDs.
+Changing the input or operation, cancellation during reads or computation, and page exit withdraw
+the old result and links. An older WASM bundle without the distance entry point refuses explicitly.
+The existing photo frontend suite covers these paths; numerical propagation remains in the shared
+Rust tests, including a full scalar-distance differentiation against the original lens covariance.
+
 ## Input contract
 
 `ftx-triangulation-input/1` describes one landmark with 1–128 observations. At least two

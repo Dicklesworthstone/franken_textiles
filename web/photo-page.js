@@ -155,13 +155,14 @@ function controls() {
   const maskLocked=pointsLocked || bodyPointsPending || !pointFrame || !!pointFrame.silhouette;
   for(const id of ["bodyMaskFile","bodyMaskFitRows","bodyMaskCheckRows","bodyMaskFitColumns","bodyMaskCheckColumns","bodyMaskSigma","bodyMaskEvidence"]) $(id).disabled=maskLocked;
   $("bodyMaskImport").disabled=maskLocked || !$("bodyMaskFile").files.length;
-  const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate";
+  const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", triangulate=operation==="triangulate", distance=operation==="triangulate-distance";
   $("geometryNoiseControls").hidden=!triangulate; $("geometryBundleControls").hidden=!bundle;
+  $("geometryDistanceHelp").hidden=!distance;
   $("geometryStillControls").hidden=!still;
   $("triangulationNoise").disabled=!triangulate; $("triangulationLensNoise").disabled=!triangulate;
   $("triangulationSheetNoise").disabled=!triangulate; $("triangulationReferenceScaleNoise").disabled=!triangulate; $("bundleIterations").disabled=!bundle;
-  $("geometryInputKind").textContent=still?"ftx-still-window-input/1":bundle?"ftx-bundle-input/1":"ftx-triangulation-input/1";
-  $("triangulationRun").textContent=still?"Assess still-window candidate":bundle?"Refine cameras and landmarks":"Triangulate landmark";
+  $("geometryInputKind").textContent=still?"ftx-still-window-input/1":bundle?"ftx-bundle-input/1":distance?"ftx-triangulation-distance-input/1":"ftx-triangulation-input/1";
+  $("triangulationRun").textContent=still?"Assess still-window candidate":bundle?"Refine cameras and landmarks":distance?"Measure straight distance":"Triangulate landmark";
   $("triangulationRun").disabled=triangulationBusy || !$("triangulationInput").files.length;
   $("triangulationCancel").disabled=!triangulationBusy;
   $("triangulationClearNoise").disabled=!triangulate || !$("triangulationNoise").files.length;
@@ -1766,12 +1767,24 @@ function withdrawTriangulation() {
 function publishTriangulation(text, input, noise, operation, iterations, lensNoise, sheetNoise, referenceScaleNoise) {
   // Parsed values are display-only. Original input and complete native report text are downloaded
   // unchanged, so full-width frame timestamps never pass through JavaScript serialization.
-  const report=JSON.parse(text), bundle=operation==="bundle-adjust", still=operation==="still-window",
+  const report=JSON.parse(text), bundle=operation==="bundle-adjust", still=operation==="still-window", distance=operation==="triangulate-distance",
     uncertainty=report.conditional_click_uncertainty, lens=report.conditional_lens_uncertainty, sheet=report.conditional_sheet_uncertainty,
     referenceScale=report.conditional_reference_scale_uncertainty;
-  if(report.schema!==(still?"ftx-still-window/1":bundle?"ftx-bundle/1":"ftx-triangulation/1") || !Array.isArray(report.flags) ||
-    !Array.isArray(bundle || still?report.checks:report.reprojection)) {
+  if(report.schema!==(still?"ftx-still-window/1":bundle?"ftx-bundle/1":distance?"ftx-triangulation-distance/1":"ftx-triangulation/1") || !Array.isArray(report.flags) ||
+    (distance?(!Array.isArray(report.endpoints) || report.endpoints.length!==2 ||
+      report.endpoints.some(endpoint=>!Array.isArray(endpoint.triangulation?.reprojection))):
+      !Array.isArray(bundle || still?report.checks:report.reprojection))) {
     throw Error("The engine did not return the requested geometry report.");
+  }
+  if(distance) {
+    const requested=JSON.parse(input);
+    for(const [field,component] of [["lens_noise",lens],["sheet_noise",sheet],["reference_scale_noise",referenceScale]]) {
+      if(requested[field] && !component) throw Error("The engine did not return the requested distance precision component: "+field);
+    }
+    if(requested.endpoints?.some(endpoint=>endpoint.click_noise) && !uncertainty)
+      throw Error("The engine did not return the requested distance click precision.");
+    if(report.distance_m!==null && (!Number.isFinite(report.distance_m) || report.distance_m<=0))
+      throw Error("The engine did not return a valid straight distance.");
   }
   if(lensNoise && !lens) throw Error("The engine did not return the requested shared-lens uncertainty.");
   if(sheetNoise && !sheet) throw Error("The engine did not return the requested sheet-corner uncertainty.");
@@ -1795,6 +1808,16 @@ function publishTriangulation(text, input, noise, operation, iterations, lensNoi
       "Refined landmarks [m, z up]: "+report.solution.landmarks.map(point=>`${point.id}: [${point.position_m.join(", ")}]`).join("; "):
       "No optimized geometry was published. Input positions remain initial guesses.";
     $("triangulationPrecision").textContent="Pixel sigmas weight the fit; no camera, metric-scale or landmark covariance is estimated. Intrinsics and metric controls remain fixed.";
+  } else if(distance) {
+    $("triangulationSummary").textContent=`${report.status}: ${report.endpoints[0].name} to ${report.endpoints[1].name}.`;
+    $("triangulationPoint").textContent=report.distance_m!==null?`Straight distance [m]: ${report.distance_m}`:"No usable distance was published.";
+    const precision=[];
+    for(const [label,component] of [["Independent endpoint clicks",uncertainty],["Shared lens",lens],["Shared sheet corners",sheet],["Shared reference scale",referenceScale]]) {
+      if(component) precision.push(`${label}: ${component.status}. `+
+        (component.sigma_m!==null?`Conditional one-sigma [m]: ${component.sigma_m}.`:"No precision estimate is available."));
+    }
+    precision.push("Shared camera and scale effects act on both endpoints together. Components stay separate; no total measurement uncertainty, surface tape length or girth is inferred.");
+    $("triangulationPrecision").textContent=precision.join("\n");
   } else {
     $("triangulationSummary").textContent=`${report.status}: ${report.fit_views} FIT views, ${report.held_out_views} held-out views.`;
     $("triangulationPoint").textContent=report.point_m?`World point [m, z up]: ${report.point_m.join(", ")}`:"No usable point was published.";
@@ -1822,7 +1845,7 @@ function publishTriangulation(text, input, noise, operation, iterations, lensNoi
       "\nClick, shared-lens and sheet-corner components are reported separately; no total measurement uncertainty is inferred.";
   }
   $("triangulationFlags").textContent=[...report.flags,...(report.advisories || []),...(uncertainty?.flags || []),...(lens?.flags || []),...(sheet?.flags || []),...(referenceScale?.flags || []),report.no_claim,uncertainty?.no_claim,lens?.no_claim,sheet?.no_claim,referenceScale?.no_claim].filter(Boolean).join(" ");
-  const name=still?"still-window":bundle?"bundle":"triangulation";
+  const name=still?"still-window":bundle?"bundle":distance?"triangulation-distance":"triangulation";
   link($("triangulationDownloads"),text,name+".json","application/json",triangulationUrls);
   link($("triangulationDownloads"),input,name+"-input.json","application/json",triangulationUrls);
   if(noise) link($("triangulationDownloads"),noise,"triangulation-click-noise.json","application/json",triangulationUrls);
@@ -1835,23 +1858,25 @@ function publishTriangulation(text, input, noise, operation, iterations, lensNoi
     (report.status==="STILL_CANDIDATE"?"Still-window candidate only; human review is required before declaring capture evidence.":"Still-window checks did not pass. Review motion and geometry diagnostics; no stillness assertion was created."):
     bundle?
     (report.solution?"Anchored geometry accepted; review every held-out check and the local-solve assumptions.":"Refinement was not accepted. Diagnostics are available; no optimized geometry was published."):
-    report.point_m?
+    (distance?report.distance_m!==null:report.point_m)?
     (unavailable.length?`Geometry accepted; requested ${unavailable.join(" and ")} uncertainty is unavailable. Review diagnostics.`:
       "Conditional geometry available; review calibration, capture and every held-out check."):
-    "Geometry was not accepted. Diagnostics are available; no usable point was published.";
+    (distance?"Geometry was not accepted. Diagnostics are available; no usable distance was published.":
+      "Geometry was not accepted. Diagnostics are available; no usable point was published.");
 }
 async function runTriangulation() {
   if(triangulationBusy) return;
-  const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", iterations=bundle?$("bundleIterations").value:"";
+  const operation=$("geometryOperation").value, bundle=operation==="bundle-adjust", still=operation==="still-window", distance=operation==="triangulate-distance", iterations=bundle?$("bundleIterations").value:"";
   const inputFile=$("triangulationInput").files[0], noiseFile=operation==="triangulate"?$("triangulationNoise").files[0]:null,
     lensFile=operation==="triangulate"?$("triangulationLensNoise").files[0]:null,
     sheetFile=operation==="triangulate"?$("triangulationSheetNoise").files[0]:null,
     referenceScaleFile=operation==="triangulate"?$("triangulationReferenceScaleNoise").files[0]:null;
   withdrawTriangulation(); const id=triangulationTicket;
   try {
-    if(operation!=="triangulate" && !bundle && !still) throw Error("Choose a supported geometry operation.");
+    if(operation!=="triangulate" && !bundle && !still && !distance) throw Error("Choose a supported geometry operation.");
     if(!inputFile) throw Error("Choose calibrated landmark observations.");
-    if(inputFile.size>256*1024 || noiseFile?.size>256*1024) throw Error("Each geometry file must be at most 256 KiB; no source was read.");
+    if(distance && inputFile.size>16*1024*1024) throw Error("Distance evidence must be at most 16 MiB; no source was read.");
+    if((!distance && inputFile.size>256*1024) || noiseFile?.size>256*1024) throw Error("Each geometry file must be at most 256 KiB; no source was read.");
     if(lensFile?.size>16*1024*1024) throw Error("Shared-lens evidence must be at most 16 MiB; no source was read.");
     if(sheetFile?.size>16*1024*1024) throw Error("Sheet-corner evidence must be at most 16 MiB; no source was read.");
     if(referenceScaleFile?.size>16*1024*1024) throw Error("Reference-size evidence must be at most 16 MiB; no source was read.");

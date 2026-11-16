@@ -1,5 +1,17 @@
 # ftx-wasm
 
+**Source-bound landmark distance.** The Photo Workbench's straight-distance operation forwards one
+original `ftx-triangulation-distance-input/1` string (up to 16 MiB) to the existing
+`photo::triangulate_distance` / wasm32 `triangulate_distance` authority. It ignores the separate
+single-landmark noise controls and requires every embedded requested component in the result.
+Distance and conditional scalar sigmas stay in metres, including available zero shared-mode
+contributions. Unavailable precision does not erase valid geometry. Source edits, cancellation,
+operation changes and page exit terminate obsolete work and revoke report/source downloads.
+Downloaded bytes never pass through display-only JavaScript number parsing. No fused record,
+total uncertainty, anatomical correspondence, surface tape length or readiness claim is created.
+See `docs/triangulation.md`; frontend lifecycle checks and Rust numerical checks remain distinct.
+
+
 **Drafting and flat checks on a selected body.** `page::run_on_selected_body(model,
 model_sha256, request, today, created, optional_report)` and wasm32
 `run_on_selected_body(WebBody, request, today, created, optional_report)` share the

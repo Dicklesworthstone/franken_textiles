@@ -178,6 +178,14 @@ self.onmessage = async ({data: m}) => {
       self.postMessage({type:"result",request:m.request,report});
       return;
     }
+    if(m.op==="triangulate-distance") {
+      if(typeof m.input!=="string") throw Error("Distance evidence must be original JSON text.");
+      if(typeof ftx.triangulate_distance!=="function") throw Error("Rebuild web/pkg: missing calibrated landmark distance.");
+      self.postMessage({type:"progress",request:m.request,text:"Rechecking both landmarks and their shared camera and reference errors…"});
+      const report=ftx.triangulate_distance(m.input);
+      self.postMessage({type:"result",request:m.request,report});
+      return;
+    }
     if(m.op==="triangulate") {
       if(m.lensNoise!==undefined && typeof m.lensNoise!=="string") throw Error("Shared-lens evidence must be original JSON text.");
       if(m.sheetNoise!==undefined && typeof m.sheetNoise!=="string") throw Error("Sheet-corner evidence must be original JSON text.");

@@ -10,7 +10,7 @@ function cameraReport(overrides={}) {
     checks:[{frame:{stream:'capture',timestamp_us:12},partition:'held_out',failure:null,
       corners:[{id:'1',partition:'fit',error_px:0.2},{id:'2',partition:'held_out',error_px:0.4}]}],...overrides};
 }
-async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,bodyObservations=null,bodyMask=undefined,bodyTargets=null,bodyCaptureCatalogue=undefined,bodyCaptureClass=undefined,lensTriangulation=undefined,cameraTriangulation=undefined,referenceScaleTriangulation=undefined,calibrationReport=cameraReport()}={}) {
+async function photoWorker({failConstruction=false,failMeasure=false,failImage=false,failSection=false,failTriangulation=false,failBundle=false,failStill=false,failBodyFit=false,failBodyReview=false,failBodyStart=false,failBodyImage=false,failBodyImagePreview=false,bodyImageClass=null,bodyStartReview=null,bodyStarts=null,bodyObservations=null,bodyMask=undefined,bodyTargets=null,bodyCaptureCatalogue=undefined,bodyCaptureClass=undefined,lensTriangulation=undefined,cameraTriangulation=undefined,referenceScaleTriangulation=undefined,distanceTriangulation=undefined,calibrationReport=cameraReport()}={}) {
   const sent=[],transfers=[],calls=[],instances=[];
   class WebPhoto {
     constructor(bytes,paper) { calls.push({kind:'plain',bytes:[...bytes],paper}); instances.push(this); }
@@ -48,6 +48,7 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function camera_calibration(input,noise){calls.push({kind:'coordinates',input,noise});return JSON.stringify(calibrationReport);}
   function photo_section(width,depth,options){calls.push({kind:'section',width,depth,options});if(failSection)throw Error('section evidence refused');return JSON.stringify(sectionReport());}
   function triangulate(input,noise){calls.push({kind:'triangulate',input,noise});if(failTriangulation)throw Error('capture evidence refused');return JSON.stringify(triangulationReport());}
+  function triangulate_distance(input){calls.push({kind:'triangulate-distance',input});if(failTriangulation)throw Error('distance evidence refused');return JSON.stringify(distanceReport());}
   function triangulate_with_lens_noise(input,noise,lensNoise){calls.push({kind:'triangulate-lens',input,noise,lensNoise});if(failTriangulation)throw Error('retained lens calibration refused');return JSON.stringify(triangulationReport());}
   function triangulate_with_camera_noise(input,noise,lensNoise,sheetNoise){calls.push({kind:'triangulate-camera',input,noise,lensNoise,sheetNoise});if(failTriangulation)throw Error('retained sheet pose refused');return JSON.stringify(triangulationReport());}
   function triangulate_with_reference_scale_noise(input,noise,lensNoise,sheetNoise,referenceScaleNoise){calls.push({kind:'triangulate-reference-scale',input,noise,lensNoise,sheetNoise,referenceScaleNoise});if(failTriangulation)throw Error('retained reference scale refused');return JSON.stringify(triangulationReport());}
@@ -61,12 +62,13 @@ async function photoWorker({failConstruction=false,failMeasure=false,failImage=f
   function review_body_fit_start(model,input,startIndex,frameIndex){calls.push({kind:'body-start-review',model:[...model],input,startIndex,frameIndex});if(failBodyStart)throw Error('no declared initialization at that index');return JSON.stringify(bodyStartFrameReport({start_index:Number(startIndex),frame_index:Number(frameIndex),start_count:4,frame_count:8}));}
   function review_body_fit_frame(model,report,frameIndex){calls.push({kind:'body-frame-review',model:[...model],report,frameIndex});if(failBodyReview)throw Error('full mesh keypoint disagrees with the accepted 3-pixel fit gate');return JSON.stringify(bodyFrameReport());}
   const context=vm.createContext({Uint8Array,ArrayBuffer,TextEncoder,JSON,Error,URL,self:{postMessage:(m,transfer)=>{sent.push(m);transfers.push(transfer || []);}}});
-  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','triangulate_with_lens_noise','triangulate_with_camera_noise','triangulate_with_reference_scale_noise','bundle_adjust','still_window','fit_body','body_fit_starts','body_fit_observations','body_fit_mask','body_fit_targets','review_body_fit_start','review_body_fit_frame','body_capture_catalogue','WebBodyCapture'],function(){
+  const imports=new vm.SyntheticModule(['default','WebPhoto','WebCameraCalibration','WebBodyFitImage','camera_calibration','photo_section','triangulate','triangulate_distance','triangulate_with_lens_noise','triangulate_with_camera_noise','triangulate_with_reference_scale_noise','bundle_adjust','still_window','fit_body','body_fit_starts','body_fit_observations','body_fit_mask','body_fit_targets','review_body_fit_start','review_body_fit_frame','body_capture_catalogue','WebBodyCapture'],function(){
     this.setExport('default',async()=>{}); this.setExport('WebPhoto',WebPhoto);
     this.setExport('WebCameraCalibration',WebCameraCalibration);this.setExport('camera_calibration',camera_calibration);
     this.setExport('WebBodyFitImage',bodyImageClass ?? WebBodyFitImage);
     this.setExport('photo_section',photo_section);
     this.setExport('triangulate',triangulate);
+    this.setExport('triangulate_distance',distanceTriangulation===undefined?triangulate_distance:distanceTriangulation);
     this.setExport('triangulate_with_lens_noise',lensTriangulation===undefined?triangulate_with_lens_noise:lensTriangulation);
     this.setExport('triangulate_with_camera_noise',cameraTriangulation===undefined?triangulate_with_camera_noise:cameraTriangulation);
     this.setExport('triangulate_with_reference_scale_noise',referenceScaleTriangulation===undefined?triangulate_with_reference_scale_noise:referenceScaleTriangulation);
@@ -779,6 +781,84 @@ function triangulationReport(overrides={}) {
   return {schema:'ftx-triangulation/1',status:'ACCEPTED',point_m:[0,0,1.3],fit_views:2,held_out_views:1,
     flags:[],advisories:[],reprojection:[],no_claim:'Synthetic conditional geometry only',...overrides};
 }
+
+function distanceReport(overrides={}) {
+  return {schema:'ftx-triangulation-distance/1',status:'ACCEPTED',distance_m:0.3,
+    input:{schema:'ftx-triangulation-distance-input/1',endpoints:[{name:'lower'},{name:'upper'}]},
+    endpoints:[{name:'lower',triangulation:triangulationReport()},{name:'upper',triangulation:triangulationReport()}],
+    flags:[],no_claim:'Straight chord only; not a surface tape path or total measurement uncertainty.',...overrides};
+}
+
+test('triangulated distance worker retains complete sources and refuses stale or failed engines',async()=>{
+  const source={request:17,op:'triangulate-distance',input:' \r\n{"timestamp_us":18446744073709551615,"source":"λ"}\r\n'};
+  const w=await photoWorker();assert.equal((await w.send(source)).type,'result');
+  assert.deepEqual(w.calls,[{kind:'triangulate-distance',input:source.input}]);
+  const stale=await photoWorker({distanceTriangulation:null});
+  assert.match((await stale.send(source)).message,/missing calibrated landmark distance/);assert.equal(stale.calls.length,0);
+  const refused=await photoWorker({failTriangulation:true});
+  assert.match((await refused.send(source)).message,/distance evidence refused/);
+  assert.deepEqual(refused.calls.map(call=>call.kind),['triangulate-distance']);
+  assert.equal((await w.send({...source,input:{}})).type,'error');assert.equal(w.calls.length,1);
+});
+
+test('triangulated distance page separates precision, preserves zero cancellation and downloads exact source bytes',async()=>{
+  const p=await photoPage();p.e.geometryOperation.value='triangulate-distance';p.e.geometryOperation.handlers.change();
+  assert.equal(p.e.geometryNoiseControls.hidden,true);assert.equal(p.e.geometryDistanceHelp.hidden,false);
+  assert.equal(p.e.geometryInputKind.textContent,'ftx-triangulation-distance-input/1');
+  const input=' \r\n{"schema":"ftx-triangulation-distance-input/1","endpoints":[{"name":"lower","click_noise":{}},{"name":"upper","click_noise":{}}],"lens_noise":{},"reference_scale_noise":{},"timestamp_us":18446744073709551615}\r\n';
+  p.e.triangulationInput.files=[file(input)];await p.e.triangulationRun.onclick();
+  const w=p.current(),message=w.messages[0];assert.equal(message.op,'triangulate-distance');assert.equal(message.input,input);
+  assert.equal(message.noise,'');assert.equal(message.lensNoise,'');
+  const raw=JSON.stringify(distanceReport({
+    conditional_click_uncertainty:{status:'AVAILABLE',sigma_m:0.002,variance_m2:0.000004,flags:[]},
+    conditional_lens_uncertainty:{status:'AVAILABLE',sigma_m:0,variance_m2:0,flags:[]},
+    conditional_reference_scale_uncertainty:{status:'UNAVAILABLE',sigma_m:null,variance_m2:null,flags:['source precision unavailable']}}));
+  await w.emit({type:'result',request:message.request,report:raw});
+  assert.equal(p.e.triangulationResult.hidden,false);assert.match(p.e.triangulationPoint.textContent,/Straight distance \[m\]: 0.3/);
+  assert.match(p.e.triangulationPrecision.textContent,/Shared lens: AVAILABLE. Conditional one-sigma \[m\]: 0\./);
+  assert.match(p.e.triangulationStatus.textContent,/reference-scale uncertainty is unavailable/);
+  assert.match(p.e.triangulationFlags.textContent,/source precision unavailable/);
+  assert.deepEqual(await Promise.all(p.e.triangulationDownloads.children.map(a=>p.urls.get(a.href).text())),[raw,input]);
+  assert.deepEqual(p.e.triangulationDownloads.children.map(a=>a.download),['triangulation-distance.json','triangulation-distance-input.json']);
+  p.e.triangulationInput.handlers.change();assert.equal(p.urls.size,0);assert.equal(p.e.triangulationResult.hidden,true);
+  await w.emit({type:'result',request:message.request,report:raw});assert.equal(p.e.triangulationResult.hidden,true);
+});
+
+test('triangulated distance page enforces source bounds and cancellation during original-byte reads',async()=>{
+  const p=await photoPage();p.e.geometryOperation.value='triangulate-distance';p.e.geometryOperation.handlers.change();
+  let reads=0;
+  p.e.triangulationInput.files=[{size:16*1024*1024+1,arrayBuffer:async()=>{reads++;throw Error('must not read');}}];
+  await p.e.triangulationRun.onclick();assert.equal(reads,0);assert.equal(p.workers.length,0);
+  assert.match(p.e.triangulationError.textContent,/16 MiB/);
+  const large=' '.repeat(256*1024)+'{}';p.e.triangulationInput.files=[file(large)];
+  await p.e.triangulationRun.onclick();assert.equal(p.current().messages[0].input,large);
+  p.e.triangulationCancel.onclick();assert.equal(p.current().dead,true);
+  let finish;
+  p.e.triangulationInput.files=[{size:2,arrayBuffer:()=>new Promise(resolve=>{finish=resolve;})}];
+  const count=p.workers.length,pending=p.e.triangulationRun.onclick();
+  p.e.triangulationCancel.onclick();finish(new TextEncoder().encode('{}').buffer);await pending;
+  assert.equal(p.workers.length,count);assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
+});
+
+test('triangulated distance page rejects missing precision and endpoints and isolates operation changes',async()=>{
+  const p=await photoPage();p.e.geometryOperation.value='triangulate-distance';p.e.geometryOperation.handlers.change();
+  p.e.triangulationInput.files=[file('{"endpoints":[{"click_noise":{}},{"click_noise":{}}]}')];
+  await p.e.triangulationRun.onclick();let w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(distanceReport())});
+  assert.equal(p.e.triangulationResult.hidden,true);assert.match(p.e.triangulationError.textContent,/requested distance click precision/);
+  p.e.triangulationInput.files=[file('{}')];
+  await p.e.triangulationRun.onclick();w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(distanceReport({endpoints:[]}))});
+  assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
+  await p.e.triangulationRun.onclick();w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(distanceReport({distance_m:null,status:'REJECTED',flags:['endpoint rejected']}))});
+  assert.equal(p.e.triangulationResult.hidden,false);assert.match(p.e.triangulationPoint.textContent,/No usable distance/);
+  await p.e.triangulationRun.onclick();w=p.current();
+  p.e.geometryOperation.value='triangulate';p.e.geometryOperation.handlers.change();
+  assert.equal(w.dead,true);assert.equal(p.e.geometryDistanceHelp.hidden,true);assert.equal(p.e.geometryNoiseControls.hidden,false);
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(distanceReport())});
+  assert.equal(p.e.triangulationResult.hidden,true);assert.equal(p.urls.size,0);
+});
 
 test('triangulation worker uses exact source strings and never falls back to photo analysis',async()=>{
   const source={request:17,op:'triangulate',input:' \r\n{"timestamp_us":18446744073709551615}\r\n',noise:' {"noise":"declared λ"}\r\n'};
