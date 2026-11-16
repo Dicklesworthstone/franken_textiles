@@ -1984,7 +1984,8 @@ fn material_studies_preserve_parallel_feed_ceilings_and_leave_serial_millisecond
                 "default":pattern.raw()["fabric"]["material"]}}],
             "comparison":{"basis":"nominal","objectives":[{
                 "metric":"sewing_scheduled_feed_milliseconds","direction":"minimize"}]}
-        })).unwrap();
+        }))
+        .unwrap();
         serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap()
     };
     let report = study(options.clone());
@@ -1994,8 +1995,7 @@ fn material_studies_preserve_parallel_feed_ceilings_and_leave_serial_millisecond
         milliseconds
     );
     assert_eq!(
-        report["comparison"]["alternatives"][0]["readings"]
-            ["sewing_scheduled_feed_milliseconds"]["value"],
+        report["comparison"]["alternatives"][0]["readings"]["sewing_scheduled_feed_milliseconds"]["value"],
         milliseconds as f64
     );
     options["production"]
@@ -3167,6 +3167,58 @@ fn parallel_feed_selection(options: Value) -> Value {
 }
 
 #[test]
+fn parallel_feed_preserves_the_fastest_complete_allocation_when_feed_is_tied() {
+    let (pattern, mut options) = heterogeneous();
+    let mut second = options["production"]["parallel"]["cells"][0].clone();
+    second["id"] = json!("cell-b");
+    options["production"]["parallel"]["cells"][1] = second;
+    let fastest = build(&pattern, options.clone()).unwrap();
+    let fastest = fastest
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert!(fastest.optimality_proven);
+    assert!(
+        fastest
+            .selected
+            .cells
+            .iter()
+            .all(|cell| !cell.copies.is_empty())
+    );
+    assert!(fastest.selected.makespan_milliseconds < fastest.baseline.makespan_milliseconds);
+    for deadline in [None, Some(fastest.selected.makespan_milliseconds)] {
+        let mut request = options.clone();
+        request["production"]["parallel"]["objective"] = json!("minimize_feed_milliseconds");
+        request["production"]["parallel"]["feed_time_search"] = json!({
+            "completion_deadline_milliseconds":deadline
+        });
+        let plan = build(&pattern, request.clone()).unwrap();
+        let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+        assert_eq!(parallel.selected.scheduled_feed_milliseconds, 24000);
+        assert_eq!(
+            serde_json::to_value(&parallel.selected).unwrap(),
+            serde_json::to_value(&fastest.selected).unwrap()
+        );
+        assert!(parallel.optimality_proven);
+        assert!(
+            parallel
+                .feed_time_search
+                .as_ref()
+                .unwrap()
+                .optimality_proven
+        );
+        let replay = build(&pattern, serde_json::to_value(&plan.options).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(plan).unwrap(),
+            serde_json::to_value(replay).unwrap()
+        );
+    }
+}
+
+#[test]
 fn parallel_feed_minimizes_exact_work_under_independently_enumerated_deadlines() {
     // A needs 8000 feed ms per garment and the independently enumerated serial setup/handling.
     // B needs 8000/3 feed ms per garment, starts at 20000, and adds 1100*n - 200 ms.
@@ -3194,15 +3246,14 @@ fn parallel_feed_minimizes_exact_work_under_independently_enumerated_deadlines()
                     20000 + b_feed + 1100 * b as u64 - 200
                 };
                 let finish = serial_cost(a, 2, 5000).max(b_finish);
-                deadline
-                    .is_none_or(|end| finish <= end)
-                    .then_some((a, finish, 8000 * a as u64 + b_feed))
+                deadline.is_none_or(|end| finish <= end).then_some((
+                    a,
+                    finish,
+                    8000 * a as u64 + b_feed,
+                ))
             })
             .collect();
-        let actual = SewProgram::build(
-            &pattern,
-            &serde_json::from_value(options.clone()).unwrap(),
-        );
+        let actual = SewProgram::build(&pattern, &serde_json::from_value(options.clone()).unwrap());
         let Some(&(a, finish, feed)) = expected.iter().min_by_key(|row| row.2) else {
             let refusal = actual.unwrap_err();
             assert!(matches!(
@@ -3225,22 +3276,38 @@ fn parallel_feed_minimizes_exact_work_under_independently_enumerated_deadlines()
         assert_eq!(search.lower_bound_feed_milliseconds, feed);
         assert!(search.lower_bound_attained && search.optimality_proven);
         assert_eq!(search.completion_deadline_milliseconds, deadline);
-        assert_eq!(search.baseline_replaced, deadline.is_some_and(|end| end < 41100));
+        assert_eq!(
+            search.baseline_replaced,
+            deadline.is_some_and(|end| end < 41100)
+        );
         assert!(deadline.is_none_or(|end| parallel.baseline.makespan_milliseconds <= end));
         assert_eq!(program.stitches.len(), 80 * a + 40 * (3 - a));
-        let copies: BTreeSet<_> = program.stitches.iter().map(|step| step.copy.unwrap()).collect();
+        let copies: BTreeSet<_> = program
+            .stitches
+            .iter()
+            .map(|step| step.copy.unwrap())
+            .collect();
         assert_eq!(copies, BTreeSet::from([0, 1, 2]));
         for step in &program.stitches {
-            let assigned = parallel.selected.cells.iter().find(|cell| {
-                cell.cell == *step.cell.as_ref().unwrap()
-            }).unwrap();
+            let assigned = parallel
+                .selected
+                .cells
+                .iter()
+                .find(|cell| cell.cell == *step.cell.as_ref().unwrap())
+                .unwrap();
             assert!(assigned.copies.contains(&step.copy.unwrap()));
             let source = plan.parallel_cell_plan(&assigned.cell).unwrap();
-            assert_eq!(step.a_mm, source.seams[step.operation].stations.a[step.to_station]);
+            assert_eq!(
+                step.a_mm,
+                source.seams[step.operation].stations.a[step.to_station]
+            );
         }
         assert_eq!(parallel.schema, "ftx-sewing-parallel/8");
         assert_eq!(plan.schema, "ftx-sewing-plan/35");
-        assert_eq!(plan.production.as_ref().unwrap().schema, "ftx-sewing-production/23");
+        assert_eq!(
+            plan.production.as_ref().unwrap().schema,
+            "ftx-sewing-production/23"
+        );
         assert_eq!(
             serde_json::to_value(&program).unwrap(),
             serde_json::to_value(SewProgram::build(&pattern, &plan.options).unwrap()).unwrap()
@@ -3250,7 +3317,14 @@ fn parallel_feed_minimizes_exact_work_under_independently_enumerated_deadlines()
             ordinary["production"]["parallel"]["objective"] = json!("minimize_makespan");
             ordinary["production"]["parallel"]["feed_time_search"] = Value::Null;
             let faster = build(&pattern, ordinary).unwrap();
-            let faster = &faster.production.as_ref().unwrap().parallel.as_ref().unwrap().selected;
+            let faster = &faster
+                .production
+                .as_ref()
+                .unwrap()
+                .parallel
+                .as_ref()
+                .unwrap()
+                .selected;
             assert_eq!(faster.makespan_milliseconds, 25500);
             assert!(faster.makespan_milliseconds < finish);
             assert!(faster.scheduled_feed_milliseconds > feed);
@@ -3272,11 +3346,25 @@ fn parallel_feed_preserves_each_cell_ceiling_and_unused_cell_zero_work() {
     options["production"]["parallel"]["objective"] = json!("minimize_feed_milliseconds");
     options["production"]["parallel"]["feed_time_search"] = json!({});
     let consolidated = build(&pattern, options.clone()).unwrap();
-    let parallel = consolidated.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    let parallel = consolidated
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
     // 80 stitches per garment: ceil(2 * 4800000 / 613) = 15661 ms.
     // Splitting the same raw work requires 2 * ceil(4800000 / 613) = 15662 ms.
     assert_eq!(parallel.selected.scheduled_feed_milliseconds, 15661);
-    assert_eq!(parallel.selected.cells.iter().filter(|cell| !cell.copies.is_empty()).count(), 1);
+    assert_eq!(
+        parallel
+            .selected
+            .cells
+            .iter()
+            .filter(|cell| !cell.copies.is_empty())
+            .count(),
+        1
+    );
     for cell in &parallel.selected.cells {
         if cell.copies.is_empty() {
             assert_eq!(cell.scheduled_feed_milliseconds, 0);
@@ -3286,12 +3374,40 @@ fn parallel_feed_preserves_each_cell_ceiling_and_unused_cell_zero_work() {
     options["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
         json!(12000);
     let split = build(&pattern, options).unwrap();
-    let parallel = split.production.as_ref().unwrap().parallel.as_ref().unwrap();
-    assert!(parallel.selected.cells.iter().all(|cell| cell.copies.len() == 1));
+    let parallel = split
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert!(
+        parallel
+            .selected
+            .cells
+            .iter()
+            .all(|cell| cell.copies.len() == 1)
+    );
     assert_eq!(parallel.selected.scheduled_feed_milliseconds, 15662);
-    assert_eq!((parallel.selected.feed_seconds * 1000.0).ceil() as u64, 15661);
-    assert_eq!(parallel.feed_time_search.as_ref().unwrap().selected_feed_milliseconds, 15662);
-    assert!(parallel.feed_time_search.as_ref().unwrap().optimality_proven);
+    assert_eq!(
+        (parallel.selected.feed_seconds * 1000.0).ceil() as u64,
+        15661
+    );
+    assert_eq!(
+        parallel
+            .feed_time_search
+            .as_ref()
+            .unwrap()
+            .selected_feed_milliseconds,
+        15662
+    );
+    assert!(
+        parallel
+            .feed_time_search
+            .as_ref()
+            .unwrap()
+            .optimality_proven
+    );
 }
 
 #[test]
@@ -3309,11 +3425,21 @@ fn parallel_feed_retains_bounded_incumbents_without_proving_unresolved_cheaper_c
             }
         }
     }
-    for recipe in parallel["cells"][1]["configuration"]["recipes"].as_object_mut().unwrap().values_mut() {
+    for recipe in parallel["cells"][1]["configuration"]["recipes"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         recipe["stitches_per_minute"] = json!(275.0);
     }
     let limited = build(&pattern, options.clone()).unwrap();
-    let parallel = limited.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    let parallel = limited
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
     let search = parallel.feed_time_search.as_ref().unwrap();
     assert_eq!(parallel.selected.cells[0].copies.len(), 1);
     assert!(parallel.selected.makespan_milliseconds <= 18500);
@@ -3324,14 +3450,28 @@ fn parallel_feed_retains_bounded_incumbents_without_proving_unresolved_cheaper_c
     assert!(!search.lower_bound_attained && !search.optimality_proven);
     let old_feed = search.selected_feed_milliseconds;
     let mut request = parallel_feed_selection(options.clone());
-    let selection = serde_json::from_value::<ftx_export::sewing_selection::Request>(request.clone())
-        .unwrap().select(&pattern).unwrap();
+    let selection =
+        serde_json::from_value::<ftx_export::sewing_selection::Request>(request.clone())
+            .unwrap()
+            .select(&pattern)
+            .unwrap();
     assert!(selection.selected_plan.is_some() && !selection.optimality_proven);
-    assert!(selection.trials.iter().all(|trial| trial.feed_optimality_proven == Some(false)));
+    assert!(
+        selection
+            .trials
+            .iter()
+            .all(|trial| trial.feed_optimality_proven == Some(false))
+    );
 
     options["production"]["parallel"]["max_search_nodes"] = json!(10000);
     let complete = build(&pattern, options.clone()).unwrap();
-    let parallel = complete.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    let parallel = complete
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
     let search = parallel.feed_time_search.as_ref().unwrap();
     assert_eq!(parallel.selected.cells[0].copies.len(), 2);
     assert_eq!(parallel.selected.makespan_milliseconds, 17800);
@@ -3339,7 +3479,9 @@ fn parallel_feed_retains_bounded_incumbents_without_proving_unresolved_cheaper_c
     assert!(search.lower_bound_attained && search.optimality_proven);
     request["options"] = options;
     let selection = serde_json::from_value::<ftx_export::sewing_selection::Request>(request)
-        .unwrap().select(&pattern).unwrap();
+        .unwrap()
+        .select(&pattern)
+        .unwrap();
     assert!(selection.optimality_proven);
 }
 
@@ -3347,27 +3489,50 @@ fn parallel_feed_retains_bounded_incumbents_without_proving_unresolved_cheaper_c
 fn parallel_feed_refuses_mismatched_sources_models_and_insufficient_work() {
     let (pattern, options) = parallel_feed_fixture();
     for case in [
-        "missing_search", "wrong_objective", "cost_search", "shared_operator",
-        "unconfigured", "stale_source", "wrong_rounding", "estimate_consent",
-        "deadline_overflow", "allocation_budget",
+        "missing_search",
+        "wrong_objective",
+        "cost_search",
+        "shared_operator",
+        "unconfigured",
+        "stale_source",
+        "wrong_rounding",
+        "estimate_consent",
+        "deadline_overflow",
+        "allocation_budget",
     ] {
         let mut invalid = options.clone();
         match case {
             "missing_search" => invalid["production"]["parallel"]["feed_time_search"] = Value::Null,
-            "wrong_objective" => invalid["production"]["parallel"]["objective"] = json!("minimize_makespan"),
-            "cost_search" => invalid["production"]["parallel"]["thread_order_search"] =
-                json!({"max_search_nodes":100,"max_order_evaluations":1}),
+            "wrong_objective" => {
+                invalid["production"]["parallel"]["objective"] = json!("minimize_makespan")
+            }
+            "cost_search" => {
+                invalid["production"]["parallel"]["thread_order_search"] =
+                    json!({"max_search_nodes":100,"max_order_evaluations":1})
+            }
             "shared_operator" => shared_operator(&mut invalid, 40000),
-            "unconfigured" => invalid["production"]["parallel"]["model"] =
-                json!("independent_whole_garment_cells/1"),
-            "stale_source" => invalid["production"]["parallel"]["cells"][0]["configuration"]["qualifications"]
-                [0]["source"]["note"] = json!("Changed unqualified source"),
-            "wrong_rounding" => invalid["production"]["parallel"]["time_basis"] =
-                json!("ceil_operation_feed_milliseconds/1"),
-            "estimate_consent" => invalid["production"]["parallel"]["allow_estimates"] = json!(false),
-            "deadline_overflow" => invalid["production"]["parallel"]["feed_time_search"]
-                ["completion_deadline_milliseconds"] = json!(9007199254740992u64),
-            "allocation_budget" => invalid["production"]["parallel"]["max_search_nodes"] = json!(80),
+            "unconfigured" => {
+                invalid["production"]["parallel"]["model"] =
+                    json!("independent_whole_garment_cells/1")
+            }
+            "stale_source" => {
+                invalid["production"]["parallel"]["cells"][0]["configuration"]["qualifications"]
+                    [0]["source"]["note"] = json!("Changed unqualified source")
+            }
+            "wrong_rounding" => {
+                invalid["production"]["parallel"]["time_basis"] =
+                    json!("ceil_operation_feed_milliseconds/1")
+            }
+            "estimate_consent" => {
+                invalid["production"]["parallel"]["allow_estimates"] = json!(false)
+            }
+            "deadline_overflow" => {
+                invalid["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
+                    json!(9007199254740992u64)
+            }
+            "allocation_budget" => {
+                invalid["production"]["parallel"]["max_search_nodes"] = json!(80)
+            }
             _ => unreachable!(),
         }
         assert!(build(&pattern, invalid).is_err(), "{case}");
@@ -3375,8 +3540,12 @@ fn parallel_feed_refuses_mismatched_sources_models_and_insufficient_work() {
     let mut request = parallel_feed_selection(options);
     request["schema"] = json!("ftx-sewing-selection/5");
     request["objective"] = json!("minimize_parallel_makespan");
-    assert!(serde_json::from_value::<ftx_export::sewing_selection::Request>(request)
-        .unwrap().select(&pattern).is_err());
+    assert!(
+        serde_json::from_value::<ftx_export::sewing_selection::Request>(request)
+            .unwrap()
+            .select(&pattern)
+            .is_err()
+    );
 }
 
 #[test]
@@ -3399,10 +3568,38 @@ fn parallel_feed_recipe_selection_tightens_deadlines_and_replays_the_exact_winne
             && trial.completion_deadline.as_ref().unwrap().status == Status::Feasible
     }));
     let plan = report.selected_plan.unwrap();
-    let retained = plan.options.production.as_ref().unwrap().parallel.as_ref().unwrap();
-    assert_eq!(retained.feed_time_search.as_ref().unwrap().completion_deadline_milliseconds, Some(27334));
-    let original = typed.options.production.as_ref().unwrap().parallel.as_ref().unwrap();
-    assert_eq!(original.feed_time_search.as_ref().unwrap().completion_deadline_milliseconds, Some(41100));
+    let retained = plan
+        .options
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        retained
+            .feed_time_search
+            .as_ref()
+            .unwrap()
+            .completion_deadline_milliseconds,
+        Some(27334)
+    );
+    let original = typed
+        .options
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        original
+            .feed_time_search
+            .as_ref()
+            .unwrap()
+            .completion_deadline_milliseconds,
+        Some(41100)
+    );
     assert_eq!(
         serde_json::to_value(&plan).unwrap(),
         serde_json::to_value(SewPlan::build(&pattern, &plan.options).unwrap()).unwrap()
@@ -3423,32 +3620,61 @@ fn parallel_feed_studies_bind_deadlines_unused_sources_and_the_complete_recipe_d
         } else {
             options.clone()
         };
-        for metric in ["feed_seconds", "thread_required_length_m", "sewing_scheduled_feed_milliseconds"] {
+        for metric in [
+            "feed_seconds",
+            "thread_required_length_m",
+            "sewing_scheduled_feed_milliseconds",
+        ] {
             let study = |input: Value| {
                 let mut request = json!({"schema":"ftx-material-study/1",
                     "variants":[{"key":"feed","changes":{"schema":"ftx-material-bindings/1",
                         "default":pattern.raw()["fabric"]["material"]}}],
                     "comparison":{"basis":"nominal","objectives":[{"metric":metric,"direction":"minimize"}]}});
-                request[if selected { "sewing_selection" } else { "sewing" }] = input;
+                request[if selected {
+                    "sewing_selection"
+                } else {
+                    "sewing"
+                }] = input;
                 let result = serde_json::to_value(
-                    serde_json::from_value::<Request>(request).unwrap().evaluate(&pattern).unwrap(),
-                ).unwrap();
+                    serde_json::from_value::<Request>(request)
+                        .unwrap()
+                        .evaluate(&pattern)
+                        .unwrap(),
+                )
+                .unwrap();
                 assert_eq!(result["comparison"]["frontier"], json!(["feed"]));
-                let parallel = &result["alternatives"][0]["sewing"]["result"]["production"]["parallel"];
+                let parallel =
+                    &result["alternatives"][0]["sewing"]["result"]["production"]["parallel"];
                 assert_eq!(parallel["selected"]["cells"][0]["copies"], json!([]));
-                assert_eq!(parallel["feed_time_search"]["selected_feed_milliseconds"], 8000);
+                assert_eq!(
+                    parallel["feed_time_search"]["selected_feed_milliseconds"],
+                    8000
+                );
                 if metric == "sewing_scheduled_feed_milliseconds" {
-                    assert_eq!(result["comparison"]["alternatives"][0]["readings"][metric]["value"], 8000.0);
+                    assert_eq!(
+                        result["comparison"]["alternatives"][0]["readings"][metric]["value"],
+                        8000.0
+                    );
                 }
                 result
             };
             let original = study(input.clone());
             for field in ["unused_cell", "deadline"] {
                 let mut changed = input.clone();
-                let options = if selected { &mut changed["options"] } else { &mut changed };
+                let options = if selected {
+                    &mut changed["options"]
+                } else {
+                    &mut changed
+                };
                 match field {
-                    "unused_cell" => options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(1),
-                    "deadline" => options["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] = json!(50001),
+                    "unused_cell" => {
+                        options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] =
+                            json!(1)
+                    }
+                    "deadline" => {
+                        options["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
+                            json!(50001)
+                    }
                     _ => unreachable!(),
                 }
                 let changed = study(changed);
@@ -3466,7 +3692,10 @@ fn parallel_feed_studies_bind_deadlines_unused_sources_and_the_complete_recipe_d
                 let mut changed = input.clone();
                 changed["max_plan_evaluations"] = json!(3);
                 let changed = study(changed);
-                assert_eq!(original["alternatives"][0]["sewing"]["result"], changed["alternatives"][0]["sewing"]["result"]);
+                assert_eq!(
+                    original["alternatives"][0]["sewing"]["result"],
+                    changed["alternatives"][0]["sewing"]["result"]
+                );
                 assert_ne!(
                     original["comparison"]["alternatives"][0]["input_protocol_sha256"],
                     changed["comparison"]["alternatives"][0]["input_protocol_sha256"]

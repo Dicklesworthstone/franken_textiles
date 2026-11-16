@@ -895,11 +895,7 @@ fn allocate(
     (Some((costs[copies], allocation)), work)
 }
 
-fn unresolved_cell_counts(
-    cells: &[&Cell],
-    trials: &[Vec<Trial>],
-    deadline: Option<u64>,
-) -> usize {
+fn unresolved_cell_counts(cells: &[&Cell], trials: &[Vec<Trial>], deadline: Option<u64>) -> usize {
     cells
         .iter()
         .zip(trials)
@@ -1376,18 +1372,20 @@ pub(super) fn evaluate(
             .completion_deadline_milliseconds
             .is_some_and(|end| cost > end)
         {
-            return Err(if search
-                .completion_deadline_milliseconds
-                .is_some_and(|end| lower_bound_makespan_milliseconds > end)
-            {
-                bad("parallel completion lower bound exceeds the feed search deadline")
-            } else {
-                Refusal::new(
+            return Err(
+                if search
+                    .completion_deadline_milliseconds
+                    .is_some_and(|end| lower_bound_makespan_milliseconds > end)
+                {
+                    bad("parallel completion lower bound exceeds the feed search deadline")
+                } else {
+                    Refusal::new(
                     RefusalCode::NotConverged,
                     "no retained complete cell allocation meets the feed search deadline; unfinished serial orders remain unresolved",
                 )
                 .repair("increase the bounded serial/parallel schedule allowance or supply a longer completion deadline")
-            });
+                },
+            );
         }
         let (selected, selected_work) = allocate(&trials, &cells, copies, false, Some(search));
         let (lower, lower_work) = allocate(&trials, &cells, copies, true, Some(search));
@@ -1397,13 +1395,29 @@ pub(super) fn evaluate(
             budget("complete parallel feed sums exceed the exact native/browser millisecond clock")
         })?;
         let (lower_feed, _) = lower.expect("a feasible feed allocation has a valid relaxed bound");
-        counts = selected_counts;
-        cost = counts
+        let incumbent_feed = counts
             .iter()
             .zip(&trials)
-            .filter_map(|(&count, row)| count.checked_sub(1).map(|index| row[index].finish))
-            .max()
-            .expect("positive complete garment quantity");
+            .try_fold(0_u64, |sum, (&count, row)| {
+                sum.checked_add(
+                    count
+                        .checked_sub(1)
+                        .map_or(0, |index| row[index].feed_milliseconds),
+                )
+                .filter(|&value| value <= MAX_EXACT_MILLISECONDS)
+            });
+        // The fastest retained complete allocation already satisfies the deadline above.
+        // Preserve it when its exact feed is minimal: a deterministic DP tie must not delay
+        // completion or lose an existing makespan proof without saving any feed work.
+        if incumbent_feed != Some(feed) {
+            counts = selected_counts;
+            cost = counts
+                .iter()
+                .zip(&trials)
+                .filter_map(|(&count, row)| count.checked_sub(1).map(|index| row[index].finish))
+                .max()
+                .expect("positive complete garment quantity");
+        }
         Some(FeedTimeReport {
             search_scope: "complete_cell_count_assignments/1",
             completion_deadline_milliseconds: search.completion_deadline_milliseconds,
@@ -1473,10 +1487,9 @@ pub(super) fn evaluate(
     } else {
         baseline.clone()
     };
-    if feed_time_search
-        .as_ref()
-        .is_some_and(|search| search.selected_feed_milliseconds != selected.scheduled_feed_milliseconds)
-    {
+    if feed_time_search.as_ref().is_some_and(|search| {
+        search.selected_feed_milliseconds != selected.scheduled_feed_milliseconds
+    }) {
         return Err(bad(
             "selected parallel feed changed during exact schedule replay",
         ));
