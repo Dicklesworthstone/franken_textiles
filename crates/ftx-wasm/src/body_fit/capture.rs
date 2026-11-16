@@ -1,7 +1,7 @@
 //! Source-bound still photographs become the ordinary unfinished body-fit input.
 //! Cameras use the native calibrated sheet authority; anatomy and starts remain explicit.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_body::{
     AnnyData, AnnyModel,
@@ -42,6 +42,83 @@ struct Manifest {
     held_out_corner_ids: Vec<usize>,
     board_bottom_left_xz_m: Vec2,
     stationary_upright_evidence: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CalibrationOverrides {
+    schema: String,
+    overrides: Vec<CalibrationOverride>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CalibrationOverride {
+    image: String,
+    lens_id: String,
+    rotation_cw_deg: u16,
+    calibration_json: String,
+}
+
+#[derive(Clone)]
+struct CaptureCalibration {
+    lens_id: String,
+    rotation_cw_deg: u16,
+    calibration_sha256: String,
+    source: &'static str,
+    intrinsics: Intrinsics,
+    image_size_px: [u32; 2],
+    rectification: Option<Rectification>,
+}
+
+impl CaptureCalibration {
+    fn checked(
+        calibration: &Value,
+        calibration_text: &str,
+        lens_id: &str,
+        rotation_cw_deg: u16,
+        rectify: bool,
+        source: &'static str,
+    ) -> Result<Self, Refusal> {
+        if lens_id.trim().is_empty()
+            || lens_id.len() > 256
+            || !matches!(rotation_cw_deg, 0 | 90 | 180 | 270)
+        {
+            return Err(invalid(
+                "capture calibration needs an exact lens ID and already-applied rotation",
+            ));
+        }
+        let checked = checked_calibration(calibration)?;
+        if checked.input.lens_id != lens_id || checked.input.rotation_cw_deg != rotation_cw_deg {
+            return Err(invalid(
+                "capture lens and already-applied rotation must match the checked calibration",
+            ));
+        }
+        let image_size_px = checked.input.image_size_px;
+        if u64::from(image_size_px[0]) * u64::from(image_size_px[1]) > MAX_PHOTO_PIXELS as u64 {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "capture permits 16 million pixels per image and 128 million pixels total",
+            ));
+        }
+        let intrinsics = checked
+            .solution
+            .as_ref()
+            .ok_or_else(|| invalid("checked calibration has no solution"))?
+            .intrinsics;
+        let rectification = rectify
+            .then(|| Rectification::new(intrinsics, image_size_px))
+            .transpose()?;
+        Ok(Self {
+            lens_id: lens_id.into(),
+            rotation_cw_deg,
+            calibration_sha256: sha256_hex(calibration_text.as_bytes()),
+            source,
+            intrinsics,
+            image_size_px,
+            rectification,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -88,7 +165,7 @@ pub fn body_capture_catalogue(model_bytes: &[u8]) -> Result<Value, Refusal> {
     )
 }
 
-/// A frozen batch of two to eight still photos sharing one checked lens and stationary board.
+/// A frozen batch of two to eight still photos with checked lenses and one stationary board.
 /// Successful additions retain source identities and camera diagnostics. Opt-in rectification
 /// retains one derived PNG until it is taken; decoded pixels are released after each addition.
 /// Each still image has its own source stream and zero clock origin; no capture time is inferred.
@@ -96,9 +173,7 @@ pub struct BodyCapture {
     manifest: Manifest,
     board: StationarySheet,
     sheet: Value,
-    intrinsics: Intrinsics,
-    image_size_px: [u32; 2],
-    rectification: Option<Rectification>,
+    calibrations: Vec<CaptureCalibration>,
     pending_image: Option<Vec<u8>>,
     sources: Value,
     frames: Vec<FitFrame>,
@@ -120,6 +195,37 @@ impl BodyCapture {
         calibration_text: &str,
         sheet_text: &str,
     ) -> Result<Self, Refusal> {
+        Self::prepare(manifest_text, calibration_text, sheet_text, None)
+    }
+
+    /// Freeze exact per-image calibration overrides alongside the declared shared default.
+    /// Manifest `/2` and `ftx-body-photo-calibrations/1` explicitly select this path; every
+    /// original ACCEPTED report is checked before any image is decoded. Unlisted images use
+    /// the manifest's default lens. Invalid overrides never fall back to that default.
+    ///
+    /// # Errors
+    /// Unknown/duplicate image names, empty overrides, lens/orientation mismatches, invalid
+    /// original calibrations, unsupported schemas or aggregate source/pixel budgets.
+    pub fn with_calibrations(
+        manifest_text: &str,
+        calibration_text: &str,
+        sheet_text: &str,
+        overrides_text: &str,
+    ) -> Result<Self, Refusal> {
+        Self::prepare(
+            manifest_text,
+            calibration_text,
+            sheet_text,
+            Some(overrides_text),
+        )
+    }
+
+    fn prepare(
+        manifest_text: &str,
+        calibration_text: &str,
+        sheet_text: &str,
+        overrides_text: Option<&str>,
+    ) -> Result<Self, Refusal> {
         if manifest_text.len() > MAX_DECLARATION
             || sheet_text.len() > MAX_DECLARATION
             || calibration_text.len() > MAX_JSON
@@ -129,11 +235,29 @@ impl BodyCapture {
                 "capture manifest and sheet permit 256 KiB each; calibration permits 16 MiB",
             ));
         }
+        if let Some(overrides) = overrides_text
+            && (overrides.len() > MAX_JSON
+                || manifest_text.len()
+                    + calibration_text.len()
+                    + sheet_text.len()
+                    + overrides.len()
+                    > MAX_JSON)
+        {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "combined capture source documents exceed 16 MiB",
+            ));
+        }
         let manifest: Manifest = parse(manifest_text, "body photo capture")?;
         let calibration: Value = parse(calibration_text, "capture calibration")?;
         let sheet: Value = parse(sheet_text, "capture sheet")?;
         let mut names = BTreeSet::new();
-        if manifest.schema != "ftx-body-photo-capture/1"
+        let schema = if overrides_text.is_some() {
+            "ftx-body-photo-capture/2"
+        } else {
+            "ftx-body-photo-capture/1"
+        };
+        if manifest.schema != schema
             || !(2..=8).contains(&manifest.images.len())
             || manifest.images.iter().any(|name| {
                 name.trim().is_empty()
@@ -149,46 +273,78 @@ impl BodyCapture {
             || !matches!(manifest.rotation_cw_deg, 0 | 90 | 180 | 270)
         {
             return Err(invalid(
-                "capture needs schema /1, two to eight unique image basenames, explicit lens/reference IDs and already-applied rotation",
+                "capture needs schema /1 for a shared lens or /2 with explicit calibration overrides, two to eight unique image basenames, explicit lens/reference IDs and already-applied rotation",
             ));
         }
-        let checked = checked_calibration(&calibration)?;
-        if checked.input.lens_id != manifest.lens_id
-            || checked.input.rotation_cw_deg != manifest.rotation_cw_deg
-        {
-            return Err(invalid(
-                "capture lens and already-applied rotation must match the checked calibration",
-            ));
+        let default = CaptureCalibration::checked(
+            &calibration,
+            calibration_text,
+            &manifest.lens_id,
+            manifest.rotation_cw_deg,
+            manifest.rectify,
+            "shared_default",
+        )?;
+        let mut overrides = BTreeMap::new();
+        if let Some(text) = overrides_text {
+            let declared: CalibrationOverrides = parse(text, "capture calibration overrides")?;
+            if declared.schema != "ftx-body-photo-calibrations/1"
+                || declared.overrides.is_empty()
+                || declared.overrides.len() > manifest.images.len()
+            {
+                return Err(invalid(
+                    "capture overrides need schema /1 and one to eight unique declared image bindings",
+                ));
+            }
+            for entry in declared.overrides {
+                if !names.contains(&entry.image) || overrides.contains_key(&entry.image) {
+                    return Err(invalid(
+                        "capture calibration overrides must name each selected image at most once, exactly",
+                    ));
+                }
+                let calibration = parse(&entry.calibration_json, "image calibration")?;
+                let checked = CaptureCalibration::checked(
+                    &calibration,
+                    &entry.calibration_json,
+                    &entry.lens_id,
+                    entry.rotation_cw_deg,
+                    manifest.rectify,
+                    "image_override",
+                )?;
+                overrides.insert(entry.image, checked);
+            }
         }
-        let image_size_px = checked.input.image_size_px;
-        let pixel_count = u64::from(image_size_px[0]) * u64::from(image_size_px[1]);
-        if pixel_count > MAX_PHOTO_PIXELS as u64
-            || pixel_count * manifest.images.len() as u64 > 128_000_000
-        {
+        let calibrations: Vec<_> = manifest
+            .images
+            .iter()
+            .map(|name| overrides.remove(name).unwrap_or_else(|| default.clone()))
+            .collect();
+        let pixel_count: u64 = calibrations
+            .iter()
+            .map(|calibration| {
+                u64::from(calibration.image_size_px[0]) * u64::from(calibration.image_size_px[1])
+            })
+            .sum();
+        if pixel_count > 128_000_000 {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
                 "capture permits 16 million pixels per image and 128 million pixels total",
             ));
         }
-        let intrinsics = checked
-            .solution
-            .as_ref()
-            .ok_or_else(|| invalid("checked calibration has no solution"))?
-            .intrinsics;
-        let rectification = manifest
-            .rectify
-            .then(|| Rectification::new(intrinsics, image_size_px))
-            .transpose()?;
         let board = StationarySheet::new(
             &sheet,
             &manifest.held_out_corner_ids,
             manifest.board_bottom_left_xz_m,
             &manifest.stationary_upright_evidence,
         )?;
-        let sources = json!({"manifest":parse::<Value>(manifest_text,"capture manifest")?,
+        let mut sources = json!({"manifest":parse::<Value>(manifest_text,"capture manifest")?,
             "manifest_sha256":sha256_hex(manifest_text.as_bytes()),
             "calibration":calibration,"calibration_sha256":sha256_hex(calibration_text.as_bytes()),
             "sheet":sheet,"sheet_sha256":sha256_hex(sheet_text.as_bytes())});
+        if let Some(text) = overrides_text {
+            sources["calibration_overrides"] = parse(text, "capture calibration overrides")?;
+            sources["calibration_overrides_json"] = json!(text);
+            sources["calibration_overrides_sha256"] = json!(sha256_hex(text.as_bytes()));
+        }
         if serde_json::to_vec(&sources)
             .map_err(|error| invalid(error.to_string()))?
             .len()
@@ -203,9 +359,7 @@ impl BodyCapture {
             manifest,
             board,
             sheet,
-            intrinsics,
-            image_size_px,
-            rectification,
+            calibrations,
             pending_image: None,
             sources,
             frames: Vec::new(),
@@ -245,8 +399,12 @@ impl BodyCapture {
                 "expected capture image {next}, received {id}; use original manifest order"
             )));
         }
+        let calibration = &self.calibrations[self.frames.len()];
+        let image_size_px = calibration.image_size_px;
+        let rotation_cw_deg = calibration.rotation_cw_deg;
+        let intrinsics = calibration.intrinsics;
         let (image, decoded) = load_photo_with_limit(bytes, MAX_PHOTO_PIXELS)?;
-        if [image.w, image.h] != self.image_size_px.map(|n| n as usize)
+        if [image.w, image.h] != image_size_px.map(|n| n as usize)
             || decoded["exif_orientation"]
                 .as_u64()
                 .is_some_and(|orientation| orientation != 1)
@@ -261,21 +419,16 @@ impl BodyCapture {
                 "duplicate decoded capture image: a renamed or re-encoded photo is not another view",
             ));
         }
-        let detected = detect_charuco(
-            &image.data,
-            image.w,
-            image.h,
-            &self.sheet,
-            Some(self.intrinsics),
-        )?;
+        let detected =
+            detect_charuco(&image.data, image.w, image.h, &self.sheet, Some(intrinsics))?;
         let mut reference = self.board.reference(
             &detected,
             &self.manifest.reference_id,
             id,
             [image.w, image.h],
-            self.manifest.rotation_cw_deg,
+            rotation_cw_deg,
         )?;
-        reference["intrinsics"] = json!(self.intrinsics);
+        reference["intrinsics"] = json!(intrinsics);
         let pose = Camera::sheet_pose_report(&reference)?;
         if pose["ok"] != true || pose["held_out_points"].as_u64().unwrap_or(0) == 0 {
             return Err(invalid(format!(
@@ -294,18 +447,25 @@ impl BodyCapture {
             frame: frame.clone(),
             image_name: id.into(),
             image_sha256: image_sha256.clone(),
-            image_size_px: self.image_size_px,
-            rotation_cw_deg: self.manifest.rotation_cw_deg,
+            image_size_px,
+            rotation_cw_deg,
         };
         let mut receipt = json!({"frame":frame,"image":id,"image_sha256":image_sha256,
             "pixels_bgr_sha256":pixels_sha256,"image_input":decoded,
             "sheet_pose":pose,"detection":detected});
+        if self.manifest.schema == "ftx-body-photo-capture/2" {
+            receipt["calibration"] = json!({
+                "lens_id":calibration.lens_id,"rotation_cw_deg":rotation_cw_deg,
+                "image_size_px":image_size_px,"calibration_sha256":calibration.calibration_sha256,
+                "source":calibration.source,
+            });
+        }
         // Board admission belongs to the original pixels and calibrated lens. Rectification
         // only changes image coordinates; it never refits the accepted metric camera pose.
         let mut camera = original_camera;
         let mut pending_image = None;
         let mut rectified_pixels_sha256 = None;
-        if let Some(rectification) = &self.rectification {
+        if let Some(rectification) = &calibration.rectification {
             let size = rectification.image_size_px();
             let rectified = Bgr {
                 w: size[0] as usize,
@@ -326,7 +486,7 @@ impl BodyCapture {
             receipt["rectification"] = json!({
                 "schema":"ftx-capture-rectification/1",
                 "source_camera":original_camera,
-                "source_image_size_px":self.image_size_px,
+                "source_image_size_px":image_size_px,
                 "crop_origin_px":rectification.crop_origin_px(),
                 "image_size_px":size,
                 "camera":camera,
@@ -343,7 +503,7 @@ impl BodyCapture {
             frame,
             camera,
             image_size_px: source.image_size_px,
-            rotation_cw_deg: self.manifest.rotation_cw_deg,
+            rotation_cw_deg,
             keypoints: Vec::new(),
             silhouette: None,
         });
@@ -436,7 +596,9 @@ impl BodyCapture {
         acquisition["corner_selection"] = json!(
             "all detected corners; every predeclared CHECK required; no pose-dependent trimming"
         );
-        let schema = if self.manifest.rectify {
+        let schema = if self.manifest.schema == "ftx-body-photo-capture/2" {
+            "ftx-body-photo-capture-result/3"
+        } else if self.manifest.rectify {
             "ftx-body-photo-capture-result/2"
         } else {
             "ftx-body-photo-capture-result/1"

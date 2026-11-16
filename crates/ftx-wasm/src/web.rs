@@ -191,6 +191,22 @@ impl WebBodyCapture {
             .map_err(|error| JsError::new(&error.to_string()))
     }
 
+    /// Freeze explicit per-image calibrations for a `/2` capture manifest. Every override
+    /// names an exact declared image and retains its original ACCEPTED calibration JSON.
+    ///
+    /// # Errors
+    /// Invalid/duplicate bindings, mismatched lens or rotation, unqualified calibration or budgets.
+    pub fn with_calibrations(
+        manifest: &str,
+        calibration: &str,
+        sheet: &str,
+        overrides: &str,
+    ) -> Result<Self, JsError> {
+        crate::body_fit::BodyCapture::with_calibrations(manifest, calibration, sheet, overrides)
+            .map(|inner| Self { inner })
+            .map_err(|error| JsError::new(&error.to_string()))
+    }
+
     /// Exact local image labels in the frozen acquisition order.
     #[must_use]
     pub fn image_ids(&self) -> String {

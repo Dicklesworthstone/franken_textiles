@@ -472,6 +472,273 @@ fn portable_photos_refuse_duplicate_pixels_stale_sources_bad_controls_and_missin
     );
 }
 
+#[test]
+fn portable_multilens_photos_keep_each_checked_camera_orientation_and_source_through_rectification()
+{
+    use ftx_measure::photo::intrinsics::{CalibrationInput, calibrate_camera};
+    use ftx_trace::raster::image::{Bgr, encode_png_bgr, load_png};
+
+    let (dir, model, truth) = sources();
+    let default_calibration =
+        std::fs::read_to_string(dir.join("capture-calibration.json")).unwrap();
+    let sheet_text = std::fs::read_to_string(dir.join("capture-board.json")).unwrap();
+    let first_image = std::fs::read(dir.join("capture-frame-0.png")).unwrap();
+    let wrong_second = std::fs::read(dir.join("capture-frame-1.png")).unwrap();
+    let sheet = ftx_trace::calibration_sheet::render(
+        "a4",
+        22.0,
+        16.0,
+        ftx_trace::calibration_sheet::DEFAULT_DICTIONARY,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&sheet_text).unwrap(),
+        sheet.sidecar
+    );
+    // Rotate independent Brown calibration observations and separately rendered source pixels
+    // clockwise, before calibration/capture. The portrait lens has different dimensions, focal
+    // axes and distortion from the shared pinhole camera; no production rectifier creates it.
+    let mut calibration_input = brown_calibration()["input"].clone();
+    calibration_input["lens_id"] = json!("synthetic-brown-portrait");
+    calibration_input["rotation_cw_deg"] = json!(90);
+    calibration_input["image_size_px"] = json!([1200, 1600]);
+    for view in calibration_input["views"].as_array_mut().unwrap() {
+        for corner in view["corners"].as_array_mut().unwrap() {
+            let pixel = &corner["pixel_px"];
+            corner["pixel_px"] = json!([1199.0 - pixel[1].as_f64().unwrap(), pixel[0]]);
+        }
+    }
+    let calibration =
+        calibrate_camera(&serde_json::from_value::<CalibrationInput>(calibration_input).unwrap())
+            .unwrap();
+    assert_eq!(calibration.status, "ACCEPTED");
+    let calibration_text = format!(
+        " \n{}\n",
+        serde_json::to_string_pretty(&calibration).unwrap()
+    );
+    let original = load_png(&brown_capture_images(&sheet.sidecar, &sheet.png)[0]).unwrap();
+    let mut portrait = Bgr {
+        w: original.h,
+        h: original.w,
+        data: vec![0; original.data.len()],
+    };
+    for y in 0..original.h {
+        for x in 0..original.w {
+            let from = (y * original.w + x) * 3;
+            let to = (x * portrait.w + original.h - 1 - y) * 3;
+            portrait.data[to..to + 3].copy_from_slice(&original.data[from..from + 3]);
+        }
+    }
+    let second_image = encode_png_bgr(&portrait).unwrap();
+    let overrides = json!({"schema":"ftx-body-photo-calibrations/1","overrides":[{
+        "image":"capture-frame-1.png","lens_id":"synthetic-brown-portrait",
+        "rotation_cw_deg":90,"calibration_json":calibration_text}]});
+    let overrides_text = format!(" \n{overrides}\n");
+    let mut manifest = manifest();
+    manifest["schema"] = json!("ftx-body-photo-capture/2");
+    for rectify in [false, true] {
+        manifest["rectify"] = json!(rectify);
+        let mut capture = BodyCapture::with_calibrations(
+            &manifest.to_string(),
+            &default_calibration,
+            &sheet_text,
+            &overrides_text,
+        )
+        .unwrap();
+        let first = capture
+            .add_image("capture-frame-0.png", &first_image)
+            .unwrap();
+        let first_png = capture.take_image();
+        assert_eq!(first_png.is_empty(), !rectify);
+        assert_eq!(first["calibration"]["source"], "shared_default");
+        assert_eq!(first["calibration"]["lens_id"], "synthetic-pinhole");
+        assert_eq!(
+            first["calibration"]["calibration_sha256"],
+            sha256_hex(default_calibration.as_bytes())
+        );
+        assert!(
+            capture
+                .add_image("capture-frame-1.png", &wrong_second)
+                .is_err()
+        );
+        let second = capture
+            .add_image("capture-frame-1.png", &second_image)
+            .unwrap();
+        let second_png = capture.take_image();
+        assert_eq!(second_png.is_empty(), !rectify);
+        assert_eq!(
+            second["calibration"],
+            json!({"source":"image_override",
+            "lens_id":"synthetic-brown-portrait","rotation_cw_deg":90,
+            "image_size_px":[1200,1600],"calibration_sha256":sha256_hex(calibration_text.as_bytes())})
+        );
+        assert_eq!(
+            second["sheet_pose"]["camera"]["intrinsics"],
+            json!(calibration.solution.as_ref().unwrap().intrinsics)
+        );
+        assert_ne!(
+            first["sheet_pose"]["camera"]["intrinsics"],
+            second["sheet_pose"]["camera"]["intrinsics"]
+        );
+        let prepared = capture
+            .finish(&model, &choices(&truth).to_string())
+            .unwrap();
+        assert_eq!(
+            prepared,
+            capture
+                .finish(&model, &choices(&truth).to_string())
+                .unwrap()
+        );
+        assert_eq!(prepared["schema"], "ftx-body-photo-capture-result/3");
+        assert_eq!(prepared["body_fitted"], false);
+        assert_eq!(prepared["start_count"], 0);
+        assert_eq!(prepared["acquisition"]["calibration_overrides"], overrides);
+        assert_eq!(
+            prepared["acquisition"]["calibration_overrides_json"],
+            overrides_text
+        );
+        assert_eq!(
+            prepared["acquisition"]["calibration_overrides_sha256"],
+            sha256_hex(overrides_text.as_bytes())
+        );
+        assert_eq!(prepared["acquisition"]["frames"], json!([first, second]));
+        let input = input(&prepared);
+        assert_eq!(input["fit"]["frames"][0]["rotation_cw_deg"], 0);
+        assert_eq!(input["fit"]["frames"][1]["rotation_cw_deg"], 90);
+        assert_eq!(input["capture_images"][1]["rotation_cw_deg"], 90);
+        let camera = if rectify {
+            &second["rectification"]["camera"]
+        } else {
+            &second["sheet_pose"]["camera"]
+        };
+        assert_eq!(&input["fit"]["frames"][1]["camera"], camera);
+        if rectify {
+            assert_eq!(
+                input["capture_images"][0]["image_sha256"],
+                sha256_hex(&first_png)
+            );
+            assert_eq!(
+                input["capture_images"][1]["image_sha256"],
+                sha256_hex(&second_png)
+            );
+            assert_eq!(
+                second["rectification"]["source_image_size_px"],
+                json!([1200, 1600])
+            );
+        } else {
+            assert_eq!(
+                input["fit"]["frames"][1]["image_size_px"],
+                json!([1200, 1600])
+            );
+            assert_eq!(
+                input["capture_images"][1]["image_sha256"],
+                sha256_hex(&second_image)
+            );
+        }
+        body_fit_targets(&model, prepared["input"].as_str().unwrap(), "").unwrap();
+    }
+}
+
+#[test]
+fn portable_multilens_sources_refuse_ambiguous_bindings_and_keep_shared_capture_compatible() {
+    let (dir, model, truth) = sources();
+    let calibration = std::fs::read_to_string(dir.join("capture-calibration.json")).unwrap();
+    let sheet = std::fs::read_to_string(dir.join("capture-board.json")).unwrap();
+    let original_manifest = manifest();
+    let mut mixed_manifest = original_manifest.clone();
+    mixed_manifest["schema"] = json!("ftx-body-photo-capture/2");
+    let overrides = json!({"schema":"ftx-body-photo-calibrations/1","overrides":[{
+        "image":"capture-frame-1.png","lens_id":"synthetic-pinhole","rotation_cw_deg":0,
+        "calibration_json":calibration}]});
+    assert!(BodyCapture::new(&mixed_manifest.to_string(), &calibration, &sheet).is_err());
+    assert!(
+        BodyCapture::with_calibrations(
+            &original_manifest.to_string(),
+            &calibration,
+            &sheet,
+            &overrides.to_string()
+        )
+        .is_err()
+    );
+    for field in [
+        "unknown_image",
+        "duplicate_image",
+        "empty",
+        "wrong_schema",
+        "lens",
+        "rotation",
+        "invalid_json",
+        "forged_solution",
+        "unknown_field",
+    ] {
+        let mut bad = overrides.clone();
+        match field {
+            "unknown_image" => bad["overrides"][0]["image"] = json!("CAPTURE-frame-1.png"),
+            "duplicate_image" => {
+                bad["overrides"] = json!([overrides["overrides"][0], overrides["overrides"][0]])
+            }
+            "empty" => bad["overrides"] = json!([]),
+            "wrong_schema" => bad["schema"] = json!("ftx-body-photo-calibrations/2"),
+            "lens" => bad["overrides"][0]["lens_id"] = json!("unrelated-lens"),
+            "rotation" => bad["overrides"][0]["rotation_cw_deg"] = json!(90),
+            "invalid_json" => bad["overrides"][0]["calibration_json"] = json!("{}"),
+            "forged_solution" => {
+                let mut forged: Value = serde_json::from_str(&calibration).unwrap();
+                forged["solution"]["intrinsics"]["focal_px"][0] = json!(1.0);
+                bad["overrides"][0]["calibration_json"] = json!(forged.to_string());
+            }
+            "unknown_field" => bad["overrides"][0]["fallback"] = json!(true),
+            _ => unreachable!(),
+        }
+        assert!(
+            BodyCapture::with_calibrations(
+                &mixed_manifest.to_string(),
+                &calibration,
+                &sheet,
+                &bad.to_string()
+            )
+            .is_err(),
+            "{field}"
+        );
+    }
+    let error = BodyCapture::with_calibrations(
+        &mixed_manifest.to_string(),
+        &calibration,
+        &sheet,
+        &" ".repeat(16 * 1024 * 1024),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(error.code, ftx_core::RefusalCode::BudgetExceeded);
+    let mut shared =
+        BodyCapture::new(&original_manifest.to_string(), &calibration, &sheet).unwrap();
+    let mut explicit = BodyCapture::with_calibrations(
+        &mixed_manifest.to_string(),
+        &calibration,
+        &sheet,
+        &overrides.to_string(),
+    )
+    .unwrap();
+    for image in shared.image_ids() {
+        let bytes = std::fs::read(dir.join(&image)).unwrap();
+        shared.add_image(&image, &bytes).unwrap();
+        explicit.add_image(&image, &bytes).unwrap();
+    }
+    let shared = shared.finish(&model, &choices(&truth).to_string()).unwrap();
+    let explicit = explicit
+        .finish(&model, &choices(&truth).to_string())
+        .unwrap();
+    assert_eq!(shared["schema"], "ftx-body-photo-capture-result/1");
+    assert!(shared["acquisition"].get("calibration_overrides").is_none());
+    assert!(
+        shared["acquisition"]["frames"][0]
+            .get("calibration")
+            .is_none()
+    );
+    assert_eq!(shared["input"], explicit["input"]);
+    assert_eq!(shared["input_sha256"], explicit["input_sha256"]);
+}
+
 fn known_silhouette(points: &[Vec2], at: f64) -> Vec<[f64; 2]> {
     // Direct intersections of the synthetic fixture's authored triangles with one horizontal
     // line. This test does not call the production silhouette projection or coverage merger.
