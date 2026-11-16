@@ -4,12 +4,26 @@
 the additive `ceil_cell_feed_milliseconds/1` work under an optional inclusive complete-job deadline.
 Retained count schedules supply feasible assignments; valid finish lower bounds supply a separate
 relaxed feed bound. Equality proves feed optimality independently of makespan or unfinished
-irrelevant serial orders. Shared labor/pools, conflicting objectives and unqualified sources refuse.
+irrelevant serial orders. Shared labor/pools use their separately qualified coupled mode below;
+conflicting objectives and unqualified sources refuse.
 Plan `/35`, production `/23` and parallel `/8` retain exact scores, proof, deadline and unresolved
 counts; selection `/9` reuses them across recipes and tightens inherited deadlines. Comparisons bind
 all allocation and recipe inputs and verify the report protocol. Native and portable replay preserve
 the actual selected stitches. Original omitted-policy paths remain unchanged; no factory throughput,
 energy, physical seam-quality or execution claim follows from this numerical minimum.
+
+**Shared-operator scheduled feed.** The same objective composes with one qualified operator,
+resource calendars and optional shared fixture pools, retaining `ceil_operation_feed_milliseconds/1`.
+Only the coupled dispatcher supplies feasible complete assignments, including the final-unload
+deadline. Count relaxations use valid finish bounds and exact feed costs while relaxing contention
+only for lower bounds. Lexicographic feed/makespan search stops early only when both bounds are
+attained; feed proof itself requires only equality with its independent bound. Restricted-order
+exhaustion cannot prove unrestricted optimality or infeasibility. A proved feed minimum can coexist
+with an exhausted secondary makespan search. Plan `/36`, production `/24` and parallel `/9`
+retain `shared_operator_retained_serial_incumbents/1`, exact sources, schedules and separate proofs.
+Selection, native/portable stitch replay and material comparison preserve that scope; browser output
+names per-operation rounding. Independent enumeration, pool/calendar/deadline and source mutation
+tests are in `sewing_parallel`, `comparison::sewing_feed_tests` and `sewing_production_workflow`.
 
 **Regional comparison limits.** Optional `Constraint.region` scopes only the twelve material-strain
 or six body-contact metrics to an exact name in the admitted version-2 consumer partition. Each

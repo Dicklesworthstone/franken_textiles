@@ -821,7 +821,16 @@ impl SewPlan {
                 .and_then(|production| production.parallel.as_ref())
                 .is_some_and(production::parallel::Policy::feed_directed)
             {
-                "ftx-sewing-plan/35"
+                if options
+                    .production
+                    .as_ref()
+                    .and_then(|production| production.parallel.as_ref())
+                    .is_some_and(|parallel| parallel.shared_operator.is_some())
+                {
+                    "ftx-sewing-plan/36"
+                } else {
+                    "ftx-sewing-plan/35"
+                }
             } else if options
                 .production
                 .as_ref()

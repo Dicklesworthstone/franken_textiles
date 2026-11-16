@@ -2944,18 +2944,31 @@ fn scheduled_sewing_feed(row: &Alternative) -> Option<f64> {
                         match (&request.feed_time_search, &parallel.feed_time_search) {
                             (None, None) => !request.feed_directed(),
                             (Some(policy), Some(search)) => {
+                                let execution_matches = if request.shared_operator.is_some() {
+                                    request.time_basis == "ceil_operation_feed_milliseconds/1"
+                                        && parallel.shared_operator.is_some()
+                                        && request.shared_workholding.is_some()
+                                            == parallel.shared_workholding.is_some()
+                                        && parallel.schema == "ftx-sewing-parallel/9"
+                                        && production.schema == "ftx-sewing-production/24"
+                                        && plan.schema == "ftx-sewing-plan/36"
+                                        && search.search_scope
+                                            == "shared_operator_retained_serial_incumbents/1"
+                                } else {
+                                    request.time_basis == "ceil_cell_feed_milliseconds/1"
+                                        && request.shared_workholding.is_none()
+                                        && parallel.shared_operator.is_none()
+                                        && parallel.shared_workholding.is_none()
+                                        && parallel.schema == "ftx-sewing-parallel/8"
+                                        && production.schema == "ftx-sewing-production/23"
+                                        && plan.schema == "ftx-sewing-plan/35"
+                                        && search.search_scope
+                                            == "complete_cell_count_assignments/1"
+                                };
                                 request.feed_directed()
                                     && request.model == "independent_whole_garment_cells/2"
-                                    && request.time_basis == "ceil_cell_feed_milliseconds/1"
-                                    && request.shared_operator.is_none()
-                                    && request.shared_workholding.is_none()
-                                    && parallel.shared_operator.is_none()
-                                    && parallel.shared_workholding.is_none()
                                     && request.thread_order_search.is_none()
-                                    && parallel.schema == "ftx-sewing-parallel/8"
-                                    && production.schema == "ftx-sewing-production/23"
-                                    && plan.schema == "ftx-sewing-plan/35"
-                                    && search.search_scope == "complete_cell_count_assignments/1"
+                                    && execution_matches
                                     && search.completion_deadline_milliseconds
                                         == policy.completion_deadline_milliseconds
                                     && search.selected_feed_milliseconds == milliseconds
@@ -5796,6 +5809,111 @@ mod sewing_feed_tests {
             assert!(
                 scheduled_sewing_feed(&row).is_none(),
                 "changed parallel feed case {change} admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_feed_score_shared_operator_requires_complete_coupled_receipts() {
+        use crate::sewing::production::parallel::operator;
+        let pattern = ftx_pattern::Pattern::from_json(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+        ))
+        .unwrap();
+        let mut options: Value = serde_json::from_str(include_str!(
+            "../../../../examples/sewing-heterogeneous-options.json"
+        ))
+        .unwrap();
+        let parallel = &mut options["production"]["parallel"];
+        parallel["objective"] = json!("minimize_feed_milliseconds");
+        parallel["feed_time_search"] = json!({});
+        parallel["time_basis"] = json!("ceil_operation_feed_milliseconds/1");
+        parallel["independence"] = json!("independent_machines_and_fixtures_shared_operator/1");
+        parallel["max_search_nodes"] = json!(60000);
+        parallel["shared_operator"] = json!({
+            "model":"exclusive_setup_handling_autonomous_feed/1","operator":"synthetic-worker",
+            "available_at_milliseconds":0,"available_until_milliseconds":50000,
+            "cells":{},"initial_arrival_milliseconds":{"cell-a":0,"cell-b":0},
+            "transfers":[{"from":"cell-a","to":"cell-b","milliseconds":0},
+                {"from":"cell-b","to":"cell-a","milliseconds":0}],"max_search_nodes":40000,
+            "source":{"reference":"test:shared-feed-admission","accessed_on":"2026-11-15",
+                "note":"Synthetic exclusive worker and unattended feed; no physical qualification"},
+            "method":"Exclusive setup and handling, explicit zero travel and qualified autonomous feed",
+            "evidence":"estimate","allow_estimates":true
+        });
+        let typed: crate::sewing::SewOptions = serde_json::from_value(options.clone()).unwrap();
+        let locks: BTreeMap<_, _> = typed
+            .production
+            .as_ref()
+            .unwrap()
+            .parallel
+            .as_ref()
+            .unwrap()
+            .cells
+            .iter()
+            .map(|cell| (cell.id.clone(), operator::cell_sha256(cell, &typed).unwrap()))
+            .collect();
+        options["production"]["parallel"]["shared_operator"]["cells"] = json!(locks);
+        let request: Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1","sewing":options,
+            "variants":[{"key":"shared","changes":{"schema":"ftx-material-bindings/1",
+                "default":pattern.raw()["fabric"]["material"]}}]
+        }))
+        .unwrap();
+        let original = request.evaluate(&pattern).unwrap().alternatives.remove(0);
+        let expected = original
+            .sewing
+            .value()
+            .unwrap()
+            .scheduled_feed_milliseconds()
+            .unwrap();
+        assert_eq!(scheduled_sewing_feed(&original), Some(expected as f64));
+        for change in 0..10 {
+            let mut row = original.clone();
+            let Outcome::Available { result: plan } = &mut row.sewing else {
+                unreachable!()
+            };
+            let request = plan
+                .options
+                .production
+                .as_mut()
+                .unwrap()
+                .parallel
+                .as_mut()
+                .unwrap();
+            let production = plan.production.as_mut().unwrap();
+            let report = production.parallel.as_mut().unwrap();
+            match change {
+                0 => report.shared_operator = None,
+                1 => request.shared_operator = None,
+                2 => report.schema = "ftx-sewing-parallel/8",
+                3 => production.schema = "ftx-sewing-production/23",
+                4 => plan.schema = "ftx-sewing-plan/35",
+                5 => {
+                    request.time_basis = "ceil_cell_feed_milliseconds/1".into();
+                    report.time_basis = "ceil_cell_feed_milliseconds/1";
+                }
+                6 => {
+                    report.feed_time_search.as_mut().unwrap().search_scope =
+                        "complete_cell_count_assignments/1";
+                }
+                7 => report.selected.scheduled_feed_milliseconds += 1,
+                8 => {
+                    let search = report.feed_time_search.as_mut().unwrap();
+                    search.optimality_proven = !search.optimality_proven;
+                }
+                9 => {
+                    request
+                        .feed_time_search
+                        .as_mut()
+                        .unwrap()
+                        .completion_deadline_milliseconds = Some(0);
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                scheduled_sewing_feed(&row).is_none(),
+                "changed shared feed case {change} admitted"
             );
         }
     }

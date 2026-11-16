@@ -3697,10 +3697,14 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       feedSearch.completion_deadline_milliseconds == null ? "None declared" : milliseconds(feedSearch.completion_deadline_milliseconds),
       metric(feedSearch.unresolved_cell_counts)]);
     const scope = document.createElement("p");
-    scope.textContent = "Feed work is rounded upward once per used cell under the declared whole-garment allocation model. " +
+    scope.textContent = (operator ?
+      "Feed work is rounded upward separately for each positive operation under the qualified shared-operator model. " :
+      "Feed work is rounded upward once per used cell under the declared whole-garment allocation model. ") +
       "The feed minimum is separate from the minimum completion time: a selected allocation can finish later while using less feed work. " +
-      "Any declared deadline includes complete cell setup, handling, feed and final unloading. Unresolved inner schedules cannot " +
-      "supply an unverified feasible allocation; the independent lower bound determines whether the feed minimum is proved.";
+      "Any declared deadline includes complete cell setup, handling, feed and final unloading. " +
+      (operator ? "The selected timeline enforces shared labor, calendars and fixture pools. The feed lower bound relaxes those resources; " +
+        "exhausting the retained-order dispatch search alone cannot prove a global feed minimum. " : "") +
+      "Unresolved inner schedules cannot supply an unverified feasible allocation; attaining the independent lower bound proves the feed minimum.";
     parent.append(scope);
   }
   if (orderSearch) {

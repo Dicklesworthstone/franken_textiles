@@ -409,6 +409,7 @@ struct Dispatch {
 pub(super) struct Candidate {
     pub counts: Vec<usize>,
     pub makespan: u64,
+    feed: u64,
     steps: Vec<Dispatch>,
     finishes: Vec<Option<u64>>,
 }
@@ -422,6 +423,7 @@ pub(super) struct Outcome {
     pub bound_work: usize,
     pub complete: bool,
     pub exhausted: bool,
+    pub feed_time_search: Option<super::FeedTimeReport>,
 }
 
 // A separate complete DP relaxes all operator travel, waiting and autonomous-feed timing. Each
@@ -469,6 +471,8 @@ struct Search<'a> {
     exhausted: bool,
     best: Option<Candidate>,
     lower: u64,
+    feed_lower: Option<u64>,
+    deadline: Option<u64>,
     shared_workholding: Option<&'a shared_workholding::Policy>,
 }
 
@@ -484,9 +488,25 @@ impl Search<'_> {
     }
 
     fn proved(&self) -> bool {
-        self.best
-            .as_ref()
-            .is_some_and(|best| best.makespan == self.lower)
+        // A feed-bound match proves the primary objective but must not stop improvements to
+        // completion at the same feed. Early stopping requires both independently valid bounds.
+        self.best.as_ref().is_some_and(|best| {
+            best.makespan == self.lower && self.feed_lower.is_none_or(|lower| best.feed == lower)
+        })
+    }
+
+    fn feed(&self, counts: &[usize]) -> Option<u64> {
+        counts
+            .iter()
+            .zip(self.trials)
+            .try_fold(0_u64, |sum, (&count, row)| {
+                sum.checked_add(
+                    count
+                        .checked_sub(1)
+                        .map_or(0, |index| row[index].feed_milliseconds),
+                )
+                .filter(|&value| value <= MAX_EXACT_MILLISECONDS)
+            })
     }
 
     fn phase(&self, counts: &[usize], cell: usize, phase: usize) -> &Phase {
@@ -592,6 +612,7 @@ impl Search<'_> {
             || self.cells[cell]
                 .available_until_milliseconds
                 .is_some_and(|end| finish > end)
+            || self.deadline.is_some_and(|end| finish > end)
         {
             return Ok(None);
         }
@@ -676,22 +697,30 @@ impl Search<'_> {
         Ok(Candidate {
             counts: counts.to_vec(),
             makespan,
+            feed: self
+                .feed(counts)
+                .ok_or_else(|| budget("shared-operator feed sum exceeds the exact clock"))?,
             finishes,
             steps: state.steps.clone(),
         })
     }
 
     fn retain(&mut self, candidate: Candidate) {
-        if self
-            .best
-            .as_ref()
-            .is_none_or(|best| candidate.makespan < best.makespan)
-        {
+        if self.best.as_ref().is_none_or(|best| {
+            if self.feed_lower.is_some() {
+                (candidate.feed, candidate.makespan) < (best.feed, best.makespan)
+            } else {
+                candidate.makespan < best.makespan
+            }
+        }) {
             self.best = Some(candidate);
         }
     }
 
     fn seed(&mut self, counts: &[usize]) -> Result<Option<Candidate>, Refusal> {
+        if self.feed(counts).is_none() {
+            return Ok(None);
+        }
         let mut state = self.initial();
         loop {
             let Some(cell) = self.next_cells(&state, counts).first().copied() else {
@@ -744,7 +773,11 @@ impl Search<'_> {
         {
             return Ok(None);
         }
-        Ok(Some(finish.max(operator_end)))
+        let finish = finish.max(operator_end);
+        if self.deadline.is_some_and(|end| finish > end) {
+            return Ok(None);
+        }
+        Ok(Some(finish))
     }
 
     fn interleave(&mut self, state: &mut State, counts: &[usize]) -> Result<(), Refusal> {
@@ -754,11 +787,16 @@ impl Search<'_> {
         let Some(bound) = self.optimistic(state, counts)? else {
             return Ok(());
         };
-        if self
-            .best
-            .as_ref()
-            .is_some_and(|best| bound >= best.makespan)
-        {
+        let Some(feed) = self.feed(counts) else {
+            return Ok(());
+        };
+        if self.best.as_ref().is_some_and(|best| {
+            if self.feed_lower.is_some() {
+                feed > best.feed || feed == best.feed && bound >= best.makespan
+            } else {
+                bound >= best.makespan
+            }
+        }) {
             return Ok(());
         }
         let choices = self.next_cells(state, counts);
@@ -797,6 +835,7 @@ impl Search<'_> {
         counts: &mut [usize],
         cell: usize,
         remaining: usize,
+        partial_feed: u64,
     ) -> Result<(), Refusal> {
         if self.exhausted || self.proved() {
             return Ok(());
@@ -816,21 +855,36 @@ impl Search<'_> {
             if !self.tick() {
                 break;
             }
+            let Some(feed) = partial_feed
+                .checked_add(
+                    count
+                        .checked_sub(1)
+                        .map_or(0, |index| self.trials[cell][index].feed_milliseconds),
+                )
+                .filter(|&value| value <= MAX_EXACT_MILLISECONDS)
+            else {
+                continue;
+            };
+            if self.feed_lower.is_some() && self.best.as_ref().is_some_and(|best| feed > best.feed) {
+                continue;
+            }
             if count > 0 {
                 let trial = &self.trials[cell][count - 1];
                 if self.cells[cell]
                     .available_until_milliseconds
                     .is_some_and(|end| trial.finish > end)
-                    || self
-                        .best
-                        .as_ref()
-                        .is_some_and(|best| trial.finish >= best.makespan)
+                    || self.deadline.is_some_and(|end| trial.finish > end)
+                    || self.feed_lower.is_none()
+                        && self
+                            .best
+                            .as_ref()
+                            .is_some_and(|best| trial.finish >= best.makespan)
                 {
                     continue;
                 }
             }
             counts[cell] = count;
-            self.allocate(counts, cell + 1, remaining - count)?;
+            self.allocate(counts, cell + 1, remaining - count, feed)?;
             if self.exhausted || self.proved() {
                 break;
             }
@@ -860,15 +914,18 @@ impl State {
 }
 
 pub(super) fn evaluate(
-    policy: &Policy,
+    parallel: &super::Policy,
     cells: &[&Cell],
     trials: &[Vec<Trial>],
     copies: usize,
     independent_counts: &[usize],
     independent_lower: u64,
-    shared_workholding: Option<&shared_workholding::Policy>,
 ) -> Result<Outcome, Refusal> {
-    let (attended, bound_work) = attended_bound(cells, trials, copies);
+    let policy = parallel
+        .shared_operator
+        .as_ref()
+        .expect("qualified shared operator");
+    let (attended, mut bound_work) = attended_bound(cells, trials, copies);
     if attended == u64::MAX {
         return Err(bad(
             "qualified cell windows exclude every shared-operator lower-bound allocation",
@@ -894,6 +951,28 @@ pub(super) fn evaluate(
             "qualified shared-operator shift cannot accommodate the required work: a complete allocation over independent cell-finish and attended-work lower bounds exceeds its end",
         ));
     }
+    let deadline = parallel
+        .feed_time_search
+        .as_ref()
+        .and_then(|feed| feed.completion_deadline_milliseconds);
+    if deadline.is_some_and(|end| lower > end) {
+        return Err(bad(
+            "shared-operator completion lower bound exceeds the feed search deadline",
+        ));
+    }
+    let (feed_lower, feed_counts) = if let Some(feed) = &parallel.feed_time_search {
+        // Independent counts supply only a candidate seed and a relaxed global feed bound. The
+        // shared dispatcher must still admit every phase, including calendar/pool waits and unloads.
+        let (candidate, candidate_work) = super::allocate(trials, cells, copies, false, Some(feed));
+        let (bound, lower_work) = super::allocate(trials, cells, copies, true, Some(feed));
+        bound_work += candidate_work + lower_work;
+        let (lower_feed, _) = bound.ok_or_else(|| {
+            budget("shared-operator feed sums exceed the exact native/browser millisecond clock")
+        })?;
+        (Some(lower_feed), candidate.map(|(_, counts)| counts))
+    } else {
+        (None, None)
+    };
     let mut transfers = vec![vec![0; cells.len()]; cells.len()];
     for transfer in &policy.transfers {
         let from = cells
@@ -916,7 +995,9 @@ pub(super) fn evaluate(
         exhausted: false,
         best: None,
         lower,
-        shared_workholding,
+        feed_lower,
+        deadline,
+        shared_workholding: parallel.shared_workholding.as_ref(),
     };
     let mut baseline_counts = vec![0; cells.len()];
     baseline_counts[0] = copies;
@@ -924,15 +1005,39 @@ pub(super) fn evaluate(
     if !search.proved() && independent_counts != baseline_counts {
         search.seed(independent_counts)?;
     }
+    if !search.proved()
+        && let Some(counts) = &feed_counts
+        && counts != &baseline_counts
+        && counts.as_slice() != independent_counts
+    {
+        search.seed(counts)?;
+    }
     if !search.proved() {
-        search.allocate(&mut vec![0; cells.len()], 0, copies)?;
+        search.allocate(&mut vec![0; cells.len()], 0, copies, 0)?;
     }
     let proved = search.proved();
     let selected = search.best.ok_or_else(|| Refusal::new(RefusalCode::NotConverged,
-        "no complete shared-operator assignment was found inside the qualified cell/operator windows; retained serial incumbents do not exclude other feasible operation orders, so infeasibility is not proved")
+        if deadline.is_some() {
+            "no complete shared-operator assignment was found inside the qualified windows and feed search deadline; retained serial incumbents do not exclude other feasible operation orders, so infeasibility is not proved"
+        } else {
+            "no complete shared-operator assignment was found inside the qualified cell/operator windows; retained serial incumbents do not exclude other feasible operation orders, so infeasibility is not proved"
+        })
         .repair("increase the bounded serial and shared-operator search allowances")
         .repair("supply qualified longer availability or a different operator/cell protocol"))?;
     let baseline_replaced = baseline.is_none();
+    let feed_time_search = parallel.feed_time_search.as_ref().map(|feed| {
+        let lower_feed = feed_lower.expect("requested feed bound");
+        super::FeedTimeReport {
+            search_scope: "shared_operator_retained_serial_incumbents/1",
+            completion_deadline_milliseconds: feed.completion_deadline_milliseconds,
+            selected_feed_milliseconds: selected.feed,
+            lower_bound_feed_milliseconds: lower_feed,
+            lower_bound_attained: selected.feed == lower_feed,
+            optimality_proven: selected.feed == lower_feed,
+            unresolved_cell_counts: super::unresolved_cell_counts(cells, trials, deadline),
+            baseline_replaced,
+        }
+    });
     Ok(Outcome {
         baseline: baseline.unwrap_or_else(|| selected.clone()),
         selected,
@@ -942,6 +1047,7 @@ pub(super) fn evaluate(
         bound_work,
         complete: !search.exhausted || proved,
         exhausted: search.exhausted && !proved,
+        feed_time_search,
     })
 }
 
@@ -1090,9 +1196,11 @@ impl Candidate {
                 ));
             }
         }
-        if self.makespan != self.finishes.iter().flatten().copied().max().unwrap_or(0) {
+        if self.makespan != self.finishes.iter().flatten().copied().max().unwrap_or(0)
+            || self.feed != assignment.scheduled_feed_milliseconds
+        {
             return Err(bad(
-                "shared-operator replay changes complete allocation finish",
+                "shared-operator replay changes complete allocation finish or feed",
             ));
         }
         for (cell, finish) in assignment.cells.iter_mut().zip(&self.finishes) {

@@ -31,13 +31,13 @@ pub struct Policy {
     /// `independent_whole_garment_cells/1` or `/2`; no garment transfers are represented.
     pub model: String,
     /// `minimize_makespan`, `minimize_feed_milliseconds`, or
-    /// `minimize_thread_observed_order_cost` for configured independent cells.
+    /// `minimize_thread_observed_order_cost`; cost search requires independent labor.
     pub objective: String,
     /// Optional complete-order allocation search, with separately bounded scheduling and purchasing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_order_search: Option<ThreadOrderSearch>,
-    /// Exact summed cell-feed objective with an optional inclusive job completion limit.
-    /// Exclusive with thread-order search; independent configured cells retain their own clocks.
+    /// Exact summed scheduled-feed objective with an optional inclusive job completion limit.
+    /// Exclusive with thread-order search; shared labor retains its coupled dispatch authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feed_time_search: Option<FeedTimeSearch>,
     /// `ceil_cell_feed_milliseconds/1`, or `ceil_operation_feed_milliseconds/1` with shared labor.
@@ -91,7 +91,8 @@ pub struct ThreadOrderSearch {
     pub completion_deadline_milliseconds: Option<u64>,
 }
 
-/// Minimize the sum of the existing independently ceiled complete cell-feed clocks.
+/// Minimize the sum of the qualified feed clocks: per cell for independent labor, or per operation
+/// under an explicitly qualified shared operator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeedTimeSearch {
@@ -103,19 +104,21 @@ pub struct FeedTimeSearch {
 /// Exact feed-work allocation and its proof, separate from elapsed completion optimality.
 #[derive(Clone, Debug, Serialize)]
 pub struct FeedTimeReport {
-    /// All complete independent cell/count allocations under the qualified cell timing convention.
+    /// Complete independent counts, or shared-operator counts/interleavings of retained serial
+    /// incumbents. The relaxed lower bound also covers other admitted serial operation orders.
     pub search_scope: &'static str,
     /// Inclusive supplied limit, possibly tightened by outer recipe selection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_deadline_milliseconds: Option<u64>,
-    /// Sum of the separately ceiled feed clocks for every selected positive cell count.
+    /// Sum of the qualified feed clocks for every selected positive cell count.
     pub selected_feed_milliseconds: u64,
     /// Minimum feed sum when each cell/count's valid completion lower bound supplies feasibility.
     /// An unfinished serial search may admit cheaper counts here than its retained incumbent does.
     pub lower_bound_feed_milliseconds: u64,
     /// The complete incumbent reaches that independently relaxed bound.
     pub lower_bound_attained: bool,
-    /// Exact feed proof for this independent allocation model, never a makespan proof.
+    /// Exact feed proof from an attained relaxed bound, never a makespan proof or a claim that
+    /// exhausting retained serial orders covers every coupled production schedule.
     pub optimality_proven: bool,
     /// Retained serial orders miss a cell window/deadline although their lower bounds still fit.
     pub unresolved_cell_counts: usize,
@@ -368,7 +371,7 @@ pub struct AvailabilityReport {
 pub struct Report {
     /// `/1` shared geometry; `/2` configured sources; `/3` windows; `/4` shared labor; `/5` shared pools;
     /// `/6` operator calendars; `/7` configured-cell thread-order allocation;
-    /// `/8` configured-cell exact feed allocation.
+    /// `/8` independent configured-cell exact feed allocation; `/9` shared-operator feed allocation.
     pub schema: &'static str,
     /// Same explicit time convention as the qualified input.
     pub time_basis: &'static str,
@@ -552,7 +555,6 @@ impl Policy {
                     && self.feed_time_search.is_none()
                 || self.feed_directed()
                     && configured
-                    && !shared_operator
                     && self.feed_time_search.is_some()
                     && self.thread_order_search.is_none())
             || self.time_basis
@@ -1326,15 +1328,14 @@ pub(super) fn evaluate(
     let operator = policy
         .shared_operator
         .as_ref()
-        .map(|operator| {
+        .map(|_| {
             operator::evaluate(
-                operator,
+                policy,
                 &cells,
                 &trials,
                 copies,
                 &counts,
                 lower_bound_makespan_milliseconds,
-                policy.shared_workholding.as_ref(),
             )
         })
         .transpose()?;
@@ -1367,7 +1368,9 @@ pub(super) fn evaluate(
         None
     };
     let mut feed_work = 0;
-    let mut feed_time_search = if let Some(search) = &policy.feed_time_search {
+    let mut feed_time_search = if let Some(operator) = &operator {
+        operator.feed_time_search.clone()
+    } else if let Some(search) = &policy.feed_time_search {
         if search
             .completion_deadline_milliseconds
             .is_some_and(|end| cost > end)
@@ -1558,7 +1561,9 @@ pub(super) fn evaluate(
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if feed_time_search.is_some() {
+        schema: if feed_time_search.is_some() && shared_operator.is_some() {
+            "ftx-sewing-parallel/9"
+        } else if feed_time_search.is_some() {
             "ftx-sewing-parallel/8"
         } else if thread_order_search.is_some() {
             "ftx-sewing-parallel/7"

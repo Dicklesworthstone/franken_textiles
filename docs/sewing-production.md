@@ -612,10 +612,11 @@ An explicit limit is inclusive, measured from the common job origin and at most
 unloading. It does not merely cap the feed sum. Each cell's separately qualified finish window
 also remains in force.
 
-This objective requires `independent_whole_garment_cells/2` with independently qualified machines,
-fixtures and handling labor. Shared operators, shared fixture pools, thread-order search and a
-different time convention refuse. Every supplied configuration is still admitted even if left idle.
-Omitting the objective and its policy preserves the existing makespan path and schema.
+This objective requires `independent_whole_garment_cells/2` with independently qualified machines
+and explicit labor/fixture policies. Independently staffed cells use the once-per-cell convention
+below; a qualified shared operator uses the coupled per-operation search described after it.
+Thread-order search and mismatched time conventions refuse. Every supplied configuration is still
+admitted even if left idle. Omitting the objective and its policy preserves the existing makespan path and schema.
 
 The score is the sum of the existing `ceil_cell_feed_milliseconds/1` clocks: round the complete
 actual feed of each used cell upward once, then add those integers. Idle cells contribute zero.
@@ -669,6 +670,40 @@ The workbench shows integer feed, its independent lower bound and proof separate
 completion and any deadline. Focused regressions independently enumerate feasible counts, check
 rounding and bounded proof, and replay full plans, stitches, recipes and study outcomes through
 the existing native and portable interfaces. No machine execution is authorized.
+
+### Minimize feed with one operator and shared fixtures
+
+The same feed objective now composes with `production.parallel.shared_operator`, optional
+resource calendars and qualified shared workholding pools. Retain the complete operator protocol,
+cell locks, transfer observations, qualified windows and existing independence declaration. Shared
+labor requires `ceil_operation_feed_milliseconds/1`: every positive operation keeps its own
+upward-rounded feed slot, including after setup, waiting or calendar delay.
+
+The bounded search chooses complete cell/count assignments and interleaves the retained serial
+orders through the existing one-person dispatcher. Actual feasibility includes exclusive operator
+travel, waiting, setup, handling and final unloading; autonomous feed, machine calendars, fixture
+holds and pool capacity remain enforced. The optional feed deadline also includes the last unload.
+For equal total feed, the search prefers earlier completion and retains a complete feasible result
+when its explicit work allowance is exhausted.
+
+A separate count relaxation uses each cell/count's valid completion lower bound and exact
+per-operation feed cost. It deliberately omits shared-resource contention only when computing a
+lower bound; it never supplies a feasible shared schedule. Feed optimality requires the actual
+incumbent to attain that bound. Exhausting the retained-order search alone does not prove a global
+minimum or physical impossibility. A proved feed minimum may still have an unfinished search for
+earlier completion, so feed proof remains independent of makespan proof and the parent budget flag.
+
+Plan `/36`, production `/24` and parallel `/9` retain both coupled timelines and
+`feed_time_search.search_scope: "shared_operator_retained_serial_incumbents/1"`.
+Recipe selection `/9` tightens the same deadline and uses only feed proof for the feed objective.
+Material comparisons verify the shared time convention and complete coupled receipt; browser
+results show per-operation rounding and the distinct proof. Source edits still invalidate cell locks.
+
+For the same synthetic delayed-cell example with one explicitly qualified operator and zero
+travel, all three garments on B consume six 1334 ms feed slots: **8004 ms** of feed and
+**31104 ms** complete finishing time. An inclusive **27336 ms** deadline selects A1/B2,
+using **13336 ms** of feed. These are conditional arithmetic regressions, not measured factory
+throughput, energy, worker capacity or machine authorization.
 
 ## Finite cell availability windows
 

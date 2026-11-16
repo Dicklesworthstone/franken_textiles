@@ -3227,6 +3227,44 @@ test('parallel feed objectives display exact work, deadlines and proof separatel
   p.e.sewOptions.handlers.change();assert.equal(section(p,'sew').hidden,true);
 });
 
+test('parallel feed with shared labor preserves per-operation rounding and relaxed proof scope', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('sewOptions');
+  const selected={makespan_milliseconds:11104,feed_seconds:8,scheduled_feed_milliseconds:8004,
+    setup_milliseconds:1500,handling_milliseconds:1600,cells:[]};
+  const timeline={steps:[],busy_milliseconds:3100,transfer_milliseconds:0,waiting_milliseconds:8004};
+  const parallel={schema:'ftx-sewing-parallel/9',time_basis:'ceil_operation_feed_milliseconds/1',
+    baseline:selected,selected,lower_bound_makespan_milliseconds:11100,search_nodes:84,
+    optimality_proven:false,budget_exhausted:true,feed_time_search:{
+      selected_feed_milliseconds:8004,lower_bound_feed_milliseconds:8000,
+      lower_bound_attained:false,optimality_proven:false,completion_deadline_milliseconds:11104,
+      unresolved_cell_counts:0,baseline_replaced:false,search_scope:'shared_operator_retained_serial_incumbents/1'},
+    shared_operator:{operator:'one worker',baseline:timeline,selected:timeline,
+      serial_order_scope:'retained_serial_incumbents/1',search_complete:true,budget_exhausted:false},
+    cell_plans:[{cell:'cell-b',plan:{options:{machine:{id:'qualified cell'}}}}]};
+  const plan={schema:'ftx-sewing-plan/36',seams:[],
+    options:{production:{parallel:{objective:'minimize_feed_milliseconds',shared_operator:{},
+      feed_time_search:{completion_deadline_milliseconds:11104}}}},
+    production:{schema:'ftx-sewing-production/24',production_copies:3,feed_seconds:8,parallel}};
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('shared feed');row.sewing=outcome(plan);
+    const study=studyReport([row]);
+    const report=op==='sew'?{stitches:[],plan}:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=JSON.stringify(report);
+    await p.e[op].onclick();p.emit(report,[{name:'shared-feed.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith('parallel feed-work objective and proof'));
+    assert.deepEqual(plain(table.children[2].children.map(n=>n.textContent)),
+      ['8004','8000','false','false','11104','0']);
+    assert.match(visibleText(s),/rounded upward separately for each positive operation/);
+    assert.match(visibleText(s),/selected timeline enforces shared labor, calendars and fixture pools/);
+    assert.match(visibleText(s),/dispatch search alone cannot prove a global feed minimum/);
+    assert.doesNotMatch(visibleText(s),/Feed work is rounded upward once per used cell/);
+    const download=descendants(s).find(n=>n.download==='shared-feed.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+  }
+  p.e.sewOptions.handlers.change();assert.equal(section(p,'sew').hidden,true);
+});
+
 test('parallel cells display elapsed completion, local-to-global copies and exact sources without serial proof leakage', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
   const local=copies=>({production_copies:copies,feed_seconds:copies*8,

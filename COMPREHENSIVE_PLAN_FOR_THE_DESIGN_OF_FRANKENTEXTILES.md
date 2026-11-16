@@ -6062,6 +6062,21 @@ A fixed pose is a supplied assumption, not a pose measurement or an inferred sta
 Analytical rank/holdout controls and native/portable regressions accompany this extension of
 §§9.4/10.2; physical camera/body accuracy and garment fit remain separate acceptance gates.
 
+### 25.216 Minimize sewing feed with shared labor and finite fixtures
+
+Configured whole-garment cells can minimize exact scheduled feed under one qualified operator,
+resource calendars and shared fixture pools. Per-operation feed ceilings retain each machine's
+actual source-qualified slots. Complete allocation and dispatch enforce exclusive attended work,
+travel, local/pool occupancy and an optional inclusive final-unloading deadline; equal-feed
+incumbents prefer earlier completion.
+
+A separately relaxed count bound permits a feed proof without confusing it with elapsed-time
+optimality. Finishing the bounded retained-order search alone proves neither unrestricted
+optimality nor infeasibility. Recipe selection, material/design comparisons and the workbench
+retain the same source policies, integer scores, selected stitches and separate proofs. This
+advances `ftx-pb2.2`; independent synthetic enumeration and replay do not establish physical
+factory timing, energy consumption, seam quality or authorization to execute machinery.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
