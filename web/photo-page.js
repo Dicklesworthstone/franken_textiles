@@ -1809,7 +1809,8 @@ function publishTriangulation(text, input, noise, operation, iterations, lensNoi
       "No optimized geometry was published. Input positions remain initial guesses.";
     $("triangulationPrecision").textContent="Pixel sigmas weight the fit; no camera, metric-scale or landmark covariance is estimated. Intrinsics and metric controls remain fixed.";
   } else if(distance) {
-    $("triangulationSummary").textContent=`${report.status}: ${report.endpoints[0].name} to ${report.endpoints[1].name}.`;
+    $("triangulationSummary").textContent=`${report.status}: ${report.endpoints[0].name} to ${report.endpoints[1].name}. `+
+      report.endpoints.map(endpoint=>`${endpoint.name}: ${endpoint.triangulation.fit_views} FIT views, ${endpoint.triangulation.held_out_views} held-out views.`).join(" ");
     $("triangulationPoint").textContent=report.distance_m!==null?`Straight distance [m]: ${report.distance_m}`:"No usable distance was published.";
     const precision=[];
     for(const [label,component] of [["Independent endpoint clicks",uncertainty],["Shared lens",lens],["Shared sheet corners",sheet],["Shared reference scale",referenceScale]]) {
@@ -1844,7 +1845,9 @@ function publishTriangulation(text, input, noise, operation, iterations, lensNoi
     else if(lens || sheet) $("triangulationPrecision").textContent+=
       "\nClick, shared-lens and sheet-corner components are reported separately; no total measurement uncertainty is inferred.";
   }
-  $("triangulationFlags").textContent=[...report.flags,...(report.advisories || []),...(uncertainty?.flags || []),...(lens?.flags || []),...(sheet?.flags || []),...(referenceScale?.flags || []),report.no_claim,uncertainty?.no_claim,lens?.no_claim,sheet?.no_claim,referenceScale?.no_claim].filter(Boolean).join(" ");
+  const endpointFlags=distance?report.endpoints.flatMap(endpoint=>
+    [...(endpoint.triangulation.flags || []),...(endpoint.triangulation.advisories || [])].map(flag=>`${endpoint.name}: ${flag}`)):[];
+  $("triangulationFlags").textContent=[...report.flags,...(report.advisories || []),...endpointFlags,...(uncertainty?.flags || []),...(lens?.flags || []),...(sheet?.flags || []),...(referenceScale?.flags || []),report.no_claim,uncertainty?.no_claim,lens?.no_claim,sheet?.no_claim,referenceScale?.no_claim].filter(Boolean).join(" ");
   const name=still?"still-window":bundle?"bundle":distance?"triangulation-distance":"triangulation";
   link($("triangulationDownloads"),text,name+".json","application/json",triangulationUrls);
   link($("triangulationDownloads"),input,name+"-input.json","application/json",triangulationUrls);

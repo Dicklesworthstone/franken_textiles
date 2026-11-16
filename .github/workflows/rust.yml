@@ -68,10 +68,13 @@ jobs:
           cargo test -p ftx-pattern --test material_compression --locked
           cargo test -p ftx-drape --lib --locked study::heat::compression::tests::
           cargo test -p ftx-drape --lib --locked study::heat::coverage::tests::
+          cargo test -p ftx-drape --lib --locked finite_vapor
           cargo test -p ftx-export --lib --locked material_study::comparison::motion_compression::
           cargo test -p ftx-cli --test accepted_body_workflow --locked compressed_radiation_heat_replays_native_portable_and_named_case_decisions
           cargo test -p ftx-cli --test accepted_body_workflow --locked compressed_coverage_radiation_replays_native_portable_and_named_case_decisions
           cargo test -p ftx-export --lib --locked material_study::comparison::surface_water::tests
+          cargo test -p ftx-cli --test accepted_body_workflow --locked finite_vapor_
+          node --experimental-vm-modules --test --test-name-pattern='finite shared vapor' tools/check_materials_frontend.cjs
           cargo test -p ftx-export --lib --locked material_study::comparison::heating_tests
           cargo test -p ftx-export --test scenario_comparison --locked
           cargo test -p ftx-wasm --test material_scenario --locked relaxation_heating::distinct_material_heat_fractions_share_one_maxwell_law_in_comparison -- --exact

@@ -1141,6 +1141,36 @@ fn finite_fixture(loading: f64, step: f64, capacitance: f64, pressure: f64) -> S
     history
 }
 
+fn ambient_request(conductance: f64, pressure: f64, temperature: f64) -> AmbientExchange {
+    serde_json::from_value(json!({
+        "schema":"ftx-textile-vapor-exchange/1", "model":"linear_pressure_vapor_exchange/1",
+        "conductance_kg_pa_s":conductance,"ambient_vapor_pressure_pa":pressure,
+        "ambient_temperature_c":temperature,"reservoir_pressure_domain_pa":[0.,10000.],
+        "source":{"reference":"test:ambient-vapor-boundary","accessed_on":"2026-11-15",
+            "note":"Synthetic conductance and boundary; not measured airflow or textile data"},
+        "evidence":"estimate","allow_estimates":true,"method":"Artificial linear pressure exchange",
+        "qualification":"Constant ambient boundary, complete pressure domain and effective latent plus cp_liquid enthalpy; no inferred gas law"
+    })).unwrap()
+}
+
+fn ambient_fixture(
+    mut history: SurfaceHistory,
+    conductance: f64,
+    pressure: f64,
+    temperature: f64,
+) -> SurfaceHistory {
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    request.vapor_reservoir.as_mut().unwrap().ambient_exchange =
+        Some(ambient_request(conductance, pressure, temperature));
+    request.validate(1).unwrap();
+    let water = history.water.as_mut().unwrap();
+    water.vapor_reservoir =
+        Some(reservoir::State::new(request.vapor_reservoir.as_ref().unwrap()).unwrap());
+    water.request = request.clone();
+    history.request.surface_water = Some(request);
+    history
+}
+
 fn constant_wet_pressure(history: &mut SurfaceHistory, pressure: f64) {
     let mut request = history.water.as_ref().unwrap().request.clone();
     request.wet_vapor_pressure_pa = vec![[-20., pressure], [80., pressure]];
@@ -1163,11 +1193,15 @@ fn finite_energy_balance(history: &SurfaceHistory) {
     let report = finite_snapshot(history);
     let gas = &report["vapor_reservoir"];
     let energy = |key: &str| gas[key].as_f64().unwrap();
+    let ambient = gas["ambient_exchange"]["net_vapor_enthalpy_received_j"]
+        .as_f64()
+        .unwrap_or(0.);
     near(
         energy("vapor_enthalpy_change_j") + energy("isothermal_heat_removed_j"),
         water.latent_j + water.exported_sensible_j
             - water.condensation_latent_j
-            - water.incoming_vapor_sensible_j.iter().sum::<f64>(),
+            - water.incoming_vapor_sensible_j.iter().sum::<f64>()
+            + ambient,
     );
     near(
         history.stored_j
@@ -1175,11 +1209,165 @@ fn finite_energy_balance(history: &SurfaceHistory) {
             + energy("vapor_enthalpy_change_j")
             + energy("isothermal_heat_removed_j")
             + water.drained_sensible_j.iter().sum::<f64>()
-            - water.supplied_sensible_j.iter().sum::<f64>(),
+            - water.supplied_sensible_j.iter().sum::<f64>()
+            - ambient,
         history.inside_j - history.outside_j,
     );
     assert!(energy("mass_balance_error_kg").abs() < 1e-12);
     assert!(energy("enthalpy_balance_error_j").abs() < 1e-10);
+}
+
+#[test]
+fn finite_vapor_ambient_exchange_matches_independent_pressure_and_enthalpy_equations() {
+    for (initial, ambient, temperature, reference) in [
+        (1000., 3000., 50., 0.),
+        (4000., 500., 10., 0.),
+        (1000., 3000., 10., 100.),
+    ] {
+        let mut history = ambient_fixture(
+            finite_fixture(0., 1., 1e-5, initial),
+            2e-6,
+            ambient,
+            temperature,
+        );
+        for request in [
+            history.request.surface_water.as_mut().unwrap(),
+            &mut history.water.as_mut().unwrap().request,
+        ] {
+            request.enthalpy_reference_c = reference;
+        }
+        constant_wet_pressure(&mut history, 10000.); // Dry textile: no phase transfer.
+        let expected = (1e-5 * initial + 2e-6 * ambient) / (1e-5 + 2e-6);
+        advance(&mut history, 0.5, 1.).unwrap();
+        let result = finite_snapshot(&history);
+        let gas = &result["vapor_reservoir"];
+        let exchange = &gas["ambient_exchange"];
+        let incoming = 2e-6 * (ambient - expected).max(0.);
+        let outgoing = 2e-6 * (expected - ambient).max(0.);
+        near(gas["vapor_pressure_pa"].as_f64().unwrap(), expected);
+        near(exchange["incoming_vapor_mass_kg"].as_f64().unwrap(), incoming);
+        near(exchange["outgoing_vapor_mass_kg"].as_f64().unwrap(), outgoing);
+        near(
+            exchange["incoming_vapor_enthalpy_j"].as_f64().unwrap(),
+            incoming * (10000. + 1000. * (temperature - reference)),
+        );
+        near(
+            exchange["outgoing_vapor_enthalpy_j"].as_f64().unwrap(),
+            outgoing * (10000. + 1000. * (20. - reference)),
+        );
+        near(
+            exchange["reservoir_pressure_time_pa_s"].as_f64().unwrap(),
+            expected,
+        );
+        near(
+            gas["isothermal_heat_removed_j"].as_f64().unwrap(),
+            incoming * 1000. * (temperature - 20.),
+        );
+        assert_eq!(result["evaporated_liquid_kg"], 0.);
+        assert_eq!(result["condensed_liquid_kg"], 0.);
+        near(history.state.temperature_c()[0][0], 20.);
+        finite_energy_balance(&history);
+    }
+
+    // Wet cloth and ambient inflow use ONE endpoint pressure, not a post-step correction.
+    let mut wet = ambient_fixture(finite_fixture(0.1, 1., 1e-5, 1000.), 2e-6, 6000., 50.);
+    constant_wet_pressure(&mut wet, 4000.);
+    let pressure = (1e-5 * 1000. + 5e-6 * 4000. + 2e-6 * 6000.) / (1e-5 + 5e-6 + 2e-6);
+    let evaporated = 5e-6 * (4000. - pressure);
+    let remaining = 0.05 - evaporated;
+    let temperature = 20. - evaporated * 10000. / (100. + remaining * 1000. + 1. / 1.2);
+    advance(&mut wet, 0.5, 1.).unwrap();
+    let result = finite_snapshot(&wet);
+    near(
+        result["vapor_reservoir"]["vapor_pressure_pa"].as_f64().unwrap(),
+        pressure,
+    );
+    near(result["evaporated_liquid_kg"].as_f64().unwrap(), evaporated);
+    near(wet.state.temperature_c()[0][0], temperature);
+    finite_energy_balance(&wet);
+}
+
+#[test]
+fn finite_vapor_zero_ambient_conductance_preserves_the_sealed_solution() {
+    let mut sealed = finite_fixture(0.015, 0.2, 1e-5, 1000.);
+    constant_wet_pressure(&mut sealed, 4000.);
+    let mut closed = ambient_fixture(sealed.clone(), 0., 500., 50.);
+    advance(&mut sealed, 0.5, 1.).unwrap();
+    advance(&mut closed, 0.5, 1.).unwrap();
+    assert_eq!(closed.state.temperature_c(), sealed.state.temperature_c());
+    let mut a = finite_snapshot(&sealed);
+    let mut b = finite_snapshot(&closed);
+    for result in [&mut a, &mut b] {
+        result.as_object_mut().unwrap().remove("request");
+        result.as_object_mut().unwrap().remove("scope");
+        result["vapor_reservoir"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ambient_exchange");
+    }
+    assert_eq!(a, b);
+    finite_energy_balance(&closed);
+}
+
+#[test]
+fn finite_vapor_ambient_exchange_shares_the_analytic_dryout_clock() {
+    let mut history = ambient_fixture(finite_fixture(0.001, 1., 1e-5, 1000.), 2e-6, 0., 20.);
+    constant_wet_pressure(&mut history, 4000.);
+    // Eliminate t from C(p-p0)=M-k_ambient*p*t and M=k_cloth*(pw-p)*t.
+    let b = 1e-5 * (1000. + 4000.) + 0.0005 * (1. + 2e-6 / 5e-6);
+    let c = 1e-5 * 1000. * 4000. + 0.0005 * 4000.;
+    let pressure = (b - (b * b - 4.0_f64 * 1e-5 * c).sqrt()) / (2. * 1e-5);
+    let seconds = 0.0005 / (5e-6 * (4000. - pressure));
+    let plan = history
+        .water
+        .as_ref()
+        .unwrap()
+        .plan(&history.model, &history.state, &geometry(0.5), 0, 1.)
+        .unwrap();
+    near(plan.seconds, seconds);
+    near(plan.evaporated[0], 0.0005);
+    assert_eq!(plan.remaining[0], 0.);
+    advance(&mut history, 0.5, 1.).unwrap();
+    assert_eq!(history.water.as_ref().unwrap().dryout_events, 1);
+    finite_energy_balance(&history);
+}
+
+#[test]
+fn finite_vapor_ambient_sources_domains_and_failed_heat_are_transactional() {
+    let base = ambient_fixture(finite_fixture(0.1, 1., 1e-5, 1000.), 2e-6, 6000., 50.);
+    let original = serde_json::to_value(base.request.surface_water.as_ref().unwrap()).unwrap();
+    for case in 0..8 {
+        let mut invalid = original.clone();
+        let exchange = &mut invalid["vapor_reservoir"]["ambient_exchange"];
+        match case {
+            0 => exchange["source"]["note"] = json!(""),
+            1 => exchange["allow_estimates"] = json!(false),
+            2 => exchange["conductance_kg_pa_s"] = json!(-1.),
+            3 => exchange["ambient_vapor_pressure_pa"] = json!(-1.),
+            4 => exchange["ambient_temperature_c"] = json!(90.),
+            5 => exchange["reservoir_pressure_domain_pa"] = json!([1., 10000.]),
+            6 => exchange["reservoir_pressure_domain_pa"] = json!([0., 9999.]),
+            _ => exchange["model"] = json!("invented_airflow"),
+        }
+        let request: Request = serde_json::from_value(invalid).unwrap();
+        assert!(request.validate(1).is_err(), "ambient refusal {case}");
+    }
+    // The unconstrained independent energy equation cools to about 19.58 C.
+    let mut history = variable_fixture(base, 1, [0.0025; 2], [19.8, 60.]);
+    constant_wet_pressure(&mut history, 4000.);
+    let before = finite_snapshot(&history);
+    assert!(advance(&mut history, 0.5, 1.).is_err());
+    assert_eq!(history.state.temperature_c(), &[vec![20.]]);
+    let mut after = finite_snapshot(&history);
+    assert!(
+        after["vapor_reservoir"]["pressure_trials"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    after["vapor_reservoir"]["pressure_trials"] =
+        before["vapor_reservoir"]["pressure_trials"].clone();
+    assert_eq!(before, after);
 }
 
 #[test]
@@ -1561,6 +1749,23 @@ fn finite_vapor_selects_early_cold_patch_dryout_before_a_later_rewetting_root() 
     near(
         first.evaporated.iter().sum::<f64>() / 5e-6,
         expected_pressure,
+    );
+
+    // External drying changes g(p), but cannot skip the cold patch's first event.
+    // In the same units k_ambient=1, p_ambient=0: p=(11-3p)*.01/(1-p).
+    let mut exchanging = water.clone();
+    exchanging.request.vapor_reservoir.as_mut().unwrap().ambient_exchange =
+        Some(ambient_request(5e-6, 0., 20.));
+    exchanging.request.validate(1).unwrap();
+    let pressure = 1000. * (1.03_f64 - (1.03_f64 * 1.03 - 0.44).sqrt()) / 2.;
+    let seconds = 0.01 / (1. - pressure / 1000.);
+    let first = exchanging.plan(&model, &old, &positions, 0, 10.).unwrap();
+    near(first.seconds, seconds);
+    assert_eq!(first.remaining[1], 0.);
+    assert_eq!(first.condensed, vec![0., 0.]);
+    near(
+        first.evaporated.iter().sum::<f64>() - 5e-6 * pressure * seconds,
+        5e-6 * pressure,
     );
 }
 

@@ -913,6 +913,14 @@ inventory and thermostat ledger. Minimum/maximum pressure include the initial st
 mechanical endpoints, accumulated once during heat admission. Older prescribed-pressure histories
 retain existing readings but cannot substitute ambient pressure or zero for a finite-reservoir
 outcome. These five metrics support nominal objectives and inclusive constraints only.
+Optional ambient vapor exchange participates in the exact consumed policy and independently
+qualifies its conductance, constant conditions, complete pressure domain and estimate consent.
+Admission reconciles cumulative incoming/outgoing mass with conductance times accepted pressure
+integrals, bounds each retained interval by that domain, and closes textile plus ambient mass and
+effective enthalpy against reservoir storage and thermostat heat. Existing net-received reservoir
+fields retain their textile meaning; ambient phase receipts remain separate. Missing, changed or
+balanced-but-unsourced exchange cannot enter a comparison. Direct forgery controls and complete
+native/portable/named-case replay use the existing surface-water test seams.
 No wet-property characterization, propagated thermal/water intervals or continuous-time extrema
 are inferred. Version 1 preserves initial-only ownership. Version 2 independently qualifies incoming
 liquid evidence and integrates each instance's reference-area delivery and incoming sensible enthalpy

@@ -809,15 +809,21 @@ test('triangulated distance page separates precision, preserves zero cancellatio
   p.e.triangulationInput.files=[file(input)];await p.e.triangulationRun.onclick();
   const w=p.current(),message=w.messages[0];assert.equal(message.op,'triangulate-distance');assert.equal(message.input,input);
   assert.equal(message.noise,'');assert.equal(message.lensNoise,'');
-  const raw=JSON.stringify(distanceReport({
+  const report=distanceReport({
     conditional_click_uncertainty:{status:'AVAILABLE',sigma_m:0.002,variance_m2:0.000004,flags:[]},
     conditional_lens_uncertainty:{status:'AVAILABLE',sigma_m:0,variance_m2:0,flags:[]},
-    conditional_reference_scale_uncertainty:{status:'UNAVAILABLE',sigma_m:null,variance_m2:null,flags:['source precision unavailable']}}));
+    conditional_reference_scale_uncertainty:{status:'UNAVAILABLE',sigma_m:null,variance_m2:null,flags:['source precision unavailable']}});
+  report.endpoints[0].triangulation.held_out_views=0;
+  report.endpoints[0].triangulation.advisories=['no_held_out_views','<literal endpoint advisory>'];
+  const raw=JSON.stringify(report);
   await w.emit({type:'result',request:message.request,report:raw});
   assert.equal(p.e.triangulationResult.hidden,false);assert.match(p.e.triangulationPoint.textContent,/Straight distance \[m\]: 0.3/);
   assert.match(p.e.triangulationPrecision.textContent,/Shared lens: AVAILABLE. Conditional one-sigma \[m\]: 0\./);
   assert.match(p.e.triangulationStatus.textContent,/reference-scale uncertainty is unavailable/);
   assert.match(p.e.triangulationFlags.textContent,/source precision unavailable/);
+  assert.match(p.e.triangulationSummary.textContent,/lower: 2 FIT views, 0 held-out views/);
+  assert.match(p.e.triangulationFlags.textContent,/lower: no_held_out_views/);
+  assert.match(p.e.triangulationFlags.textContent,/lower: <literal endpoint advisory>/);
   assert.deepEqual(await Promise.all(p.e.triangulationDownloads.children.map(a=>p.urls.get(a.href).text())),[raw,input]);
   assert.deepEqual(p.e.triangulationDownloads.children.map(a=>a.download),['triangulation-distance.json','triangulation-distance-input.json']);
   p.e.triangulationInput.handlers.change();assert.equal(p.urls.size,0);assert.equal(p.e.triangulationResult.hidden,true);

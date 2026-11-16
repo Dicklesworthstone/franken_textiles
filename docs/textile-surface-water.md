@@ -780,8 +780,9 @@ domain. Supply remains explicit even when all rates are zero; drainage remains i
 qualified and optional. Versions 1–4 retain their prescribed-pressure semantics and reject a reservoir.
 
 At each thermal substep, every pressure trial starts from the same accepted liquid inventory and
-textile temperatures. The solver balances `m_v1 - m_v0 = evaporated - condensed` using actual patch
-transfers at the trial pressure. All patches share the earliest liquid-depletion time for that trial.
+textile temperatures. Without ambient exchange, the solver balances
+`m_v1 - m_v0 = evaporated - condensed` using actual patch transfers at the trial pressure.
+All patches share the earliest liquid-depletion time for that trial.
 Because dryout time itself changes with pressure, an ordered search must find the earliest admissible
 event; ordinary bisection over the entire pressure range could skip it. The accepted plan then enters
 the existing implicit thermal solver once. The bounded solve refuses unresolved events, exhausted
@@ -814,6 +815,76 @@ against net received enthalpy. This explicit thermostat term keeps the combined 
 energy account closed; it is separate from textile boundary heat and bulk mechanical transfer.
 The browser displays both reservoir ledgers. Comparison admission checks the source, inventory,
 pressure, enthalpy, elapsed time and work receipts before admitting any dependent objective.
+
+### Source-qualified ambient vapor exchange
+
+The optional `vapor_reservoir.ambient_exchange` supplies a constant outside vapor boundary. This
+lets a finite textile microclimate exchange moisture with its surroundings while keeping its own
+humidity feedback and inventory. It requires an independent source for the conductance, ambient
+pressure and temperature; neither textile Ret nor a wind speed supplies that qualification.
+Omitting the object preserves the sealed reservoir. A declared zero conductance keeps the same
+physical solution and reports an explicitly closed boundary.
+
+Add this object inside `vapor_reservoir`. Its values are synthetic software examples:
+
+```json
+"ambient_exchange": {
+  "schema": "ftx-textile-vapor-exchange/1",
+  "model": "linear_pressure_vapor_exchange/1",
+  "conductance_kg_pa_s": 0.000000001,
+  "ambient_vapor_pressure_pa": 1200.0,
+  "ambient_temperature_c": 25.0,
+  "reservoir_pressure_domain_pa": [0.0, 10000.0],
+  "source": {
+    "reference": "test:synthetic-ambient-vapor-exchange",
+    "accessed_on": "2026-11-16",
+    "note": "Illustrative independent boundary; no empirical qualification"
+  },
+  "evidence": "estimate",
+  "allow_estimates": true,
+  "method": "Explicit constant ambient conditions and linear vapor mass conductance",
+  "qualification": "Synthetic exchange over the full reservoir pressure domain, using the existing effective vapor enthalpy convention"
+}
+```
+
+Conductance `k` has units kg/(Pa·s) and must be nonnegative. Ambient pressure is nonnegative,
+ambient temperature is above absolute zero, and the qualified reservoir-pressure interval must
+cover the complete reservoir domain. Estimated exchange needs its own `allow_estimates` consent.
+These conditions remain constant across the history; changing ambient schedules and airflow models
+are outside this closure.
+
+At each trial pressure `p`, the ambient transfer is `k * (p_ambient - p) * accepted_seconds`.
+It enters the same implicit pressure and earliest-dryout solve as textile evaporation and
+condensation. Every owner uses the actual accepted duration, including a shortened dryout step;
+discarded probes cannot deliver moisture. The conserved mass equation becomes
+`m_v1 - m_v0 = evaporated - condensed + ambient_incoming - ambient_outgoing`.
+An exhausted solve, unavailable inventory, unsupported domain or later thermal failure rolls back
+the whole affected interval.
+
+Incoming vapor carries `L + cp_liquid * (T_ambient - T_reference)` per kilogram. Outgoing vapor
+carries the reservoir-temperature value. These signed enthalpies enter the same fixed-temperature
+heat balance: `isothermal_heat_removed_j = textile_net_enthalpy + ambient_net_enthalpy - storage_change`.
+Changing the enthalpy reference changes the separate storage/transfer terms without changing the
+physical pressure or thermostat heat.
+
+Each reservoir trace sample and final receipt then contains
+`ambient_exchange` with schema `ftx-textile-vapor-exchange-result/1`:
+
+| Fields | Meaning |
+|---|---|
+| `incoming_vapor_mass_kg`, `outgoing_vapor_mass_kg`, `net_vapor_received_kg` | Cumulative accepted ambient inflow, reservoir outflow and their signed difference |
+| `incoming_vapor_enthalpy_j`, `outgoing_vapor_enthalpy_j`, `net_vapor_enthalpy_received_j` | Corresponding signed effective enthalpies at their separately declared temperatures |
+| `reservoir_pressure_time_pa_s` | Sum of accepted endpoint pressure times accepted duration |
+| `inward_pressure_time_pa_s`, `outward_pressure_time_pa_s` | Accepted positive and negative ambient pressure differences integrated over their actual durations |
+
+The enclosing reservoir's existing `net_vapor_received_kg` and
+`net_vapor_enthalpy_received_j` continue to mean **textile** exchange. Its mass and energy residuals
+include both owners. Comparison admission independently checks the source, conductance-times-pressure
+integrals, every retained interval's pressure-domain bounds, both phase enthalpies and the complete
+conservation balances. Balanced but unsourced extra water is refused. The workbench displays textile
+and ambient exchange separately and retains the original source policy and complete replay report.
+
+### Finite-reservoir comparison metrics
 
 The same admitted finite inventory supports nominal material/design objectives and inclusive
 constraints for final vapor pressure (`textile_water_final_vapor_pressure_pa`), remaining vapor mass

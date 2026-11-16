@@ -14655,6 +14655,56 @@ test('prescribed textile drainage displays separate liquid mass and sensible exp
   p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
 });
 
+test('finite shared vapor displays ambient exchange separately and withdraws refused histories', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const report=scenarioReport(),policy={schema:'ftx-textile-surface-water/5',
+    vapor_reservoir:{schema:'ftx-textile-vapor-reservoir/1',ambient_exchange:{
+      schema:'ftx-textile-vapor-exchange/1',source:{reference:'<qualified ambient renewal source>'}}}};
+  report.scenario.scenario={motion:{transient_surface:{surface_water:policy}}};
+  const water={schema:'ftx-textile-surface-water-result/5',request:policy,
+    initial_liquid_kg:0,supplied_liquid_kg:0.001,condensed_liquid_kg:0.004,
+    evaporated_liquid_kg:0.003,remaining_liquid_kg:0.002,mass_balance_error_kg:0,
+    latent_energy_j:7500,exported_vapor_sensible_energy_j:252,liquid_stored_change_j:168,
+    supplied_liquid_sensible_energy_j:84,condensation_latent_energy_j:10000,
+    incoming_vapor_sensible_energy_j:504,balance_error_j:0,dryout_events:0,
+    vapor_reservoir:{schema:'ftx-textile-vapor-reservoir-result/1',
+      initial_vapor_mass_kg:0.002,remaining_vapor_mass_kg:0.0015,net_vapor_received_kg:-0.001,
+      mass_balance_error_kg:0,initial_vapor_pressure_pa:800,vapor_pressure_pa:600,
+      vapor_enthalpy_change_j:-1313,net_vapor_enthalpy_received_j:-2752,
+      isothermal_heat_removed_j:-76,enthalpy_balance_error_j:0,
+      ambient_exchange:{schema:'ftx-textile-vapor-exchange-result/1',
+        incoming_vapor_mass_kg:0.0006,outgoing_vapor_mass_kg:0.0001,net_vapor_received_kg:0.0005,
+        incoming_vapor_enthalpy_j:1625.6,outgoing_vapor_enthalpy_j:262.6,net_vapor_enthalpy_received_j:1363,
+        reservoir_pressure_time_pa_s:720,inward_pressure_time_pa_s:600,outward_pressure_time_pa_s:100}}};
+  const evaluation=report.simulations.find(row=>row.key==='A').evaluation.result;
+  evaluation.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome({
+    duration_s:1,thermal_steps:4,trace:[{temperature_range_c:[20,21]}],surface_water:water})});
+  const raw=JSON.stringify(report);
+  await p.e.scenario.onclick();p.emit(report,[{name:'ambient-vapor.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+  assert.deepEqual(plain(table('independently qualified ambient vapor exchange').children[2].children.map(n=>n.textContent)),
+    ['0.0006','0.0001','0.0005']);
+  assert.deepEqual(plain(table('ambient vapor enthalpy exchange').children[2].children.map(n=>n.textContent)),
+    ['1625.6','262.6','1363']);
+  assert.equal(table('finite shared vapor inventory and pressure').children[1].children[2].textContent,'Net textile vapor received (kg)');
+  assert.equal(table('finite vapor energy and fixed-temperature heat exchange').children[1].children[1].textContent,'Net textile vapor enthalpy received (J)');
+  assert.match(visibleText(s),/Incoming vapor carries its ambient-temperature enthalpy/);
+  assert.match(visibleText(s),/both enter the fixed-temperature heat balance/);
+  const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===
+    'A: textile liquid source, exact patches and canonical vapor paths (display only)');
+  source.open=true;source.handlers.toggle();assert.match(visibleText(source),/<qualified ambient renewal source>/);
+  const download=descendants(s).find(n=>n.download==='ambient-vapor.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  evaluation.motion=refused('ambient source is outside its independently qualified pressure domain');
+  await p.e.scenario.onclick();p.emit(report);
+  assert.equal(table('independently qualified ambient vapor exchange'),undefined);
+  assert.equal(table('ambient vapor enthalpy exchange'),undefined);
+  assert.match(visibleText(s),/independently qualified pressure domain/);
+  p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+});
+
 test('finite shared vapor displays humidity feedback and fixed-temperature heat with optional drainage', async () => {
   const p=await pageModule();await p.load();scenarioInputs(p);
   const report=scenarioReport();

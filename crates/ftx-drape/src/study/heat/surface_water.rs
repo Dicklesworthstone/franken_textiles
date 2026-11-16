@@ -22,7 +22,7 @@ use crate::{
 mod mechanics;
 mod reservoir;
 
-pub use reservoir::Request as VaporReservoir;
+pub use reservoir::{AmbientExchange, Request as VaporReservoir};
 
 /// Source-locked initial loading on every retained instance, including explicitly dry instances.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -337,6 +337,9 @@ impl Request {
         if let Some(reservoir) = &self.vapor_reservoir {
             reservoir.validate()?;
             self.pressure(reservoir.temperature_c)?;
+            if let Some(exchange) = &reservoir.ambient_exchange {
+                self.pressure(exchange.ambient_temperature_c)?;
+            }
             if self.condensation.as_ref().is_none_or(|condensation| {
                 condensation
                     .vapor_temperature_c
@@ -394,6 +397,9 @@ fn case_inputs(request: &Request) -> Result<Value, Refusal> {
         if let Some(phase) = value.get_mut(key) {
             remove_evidence(phase);
         }
+    }
+    if let Some(exchange) = value.pointer_mut("/vapor_reservoir/ambient_exchange") {
+        remove_evidence(exchange);
     }
     value
         .as_object_mut()
@@ -1454,6 +1460,17 @@ impl Water {
             result["scope"] = json!(
                 "All retained textile patches share one independently qualified finite isothermal vapor inventory. Every pressure trial restarts the same accepted liquid and thermal states, samples old cloth temperatures and uses one common earliest-dryout duration. The implicit endpoint pressure and discrete dryout event are solved together; temporal refinement remains necessary. Actual condensation cannot overdraw the shared available vapor. Accepted liquid, reservoir and original heat states commit together. The declared constant-latent/cp_liquid effective vapor enthalpy is conserved with a separate isothermal heat-removal ledger; no gas heat capacity, fog, sorption, wicking, wet constitutive law or empirical garment response is inferred. Supply and optional drainage retain their independently sourced reference-area and sensible-enthalpy accounts."
             );
+            if self
+                .request
+                .vapor_reservoir
+                .as_ref()
+                .is_some_and(|reservoir| reservoir.ambient_exchange.is_some())
+            {
+                let scope = result["scope"].as_str().expect("finite vapor scope");
+                result["scope"] = json!(format!(
+                    "{scope} A separately qualified constant ambient boundary exchanges vapor through its explicit pressure conductance at that same implicit endpoint and dryout duration. Incoming vapor carries the ambient effective enthalpy; outgoing vapor carries the finite reservoir effective enthalpy. Both signed boundary transfer and fixed-temperature heat removal remain separate from textile latent heat. No airflow, ventilation rate, gas law or ambient coefficient is inferred."
+                ));
+            }
         }
         Ok(result)
     }

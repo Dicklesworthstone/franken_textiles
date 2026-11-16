@@ -1059,6 +1059,17 @@ water source is inferred. The accepted-state probe and compensated sum mechanism
 filewise from FrankenSim commit `d1aea97c310fa4b6767e975af8c126f450e9f71f`, with provenance in the
 module. Existing versions 1–4 keep their arithmetic and prescribed-pressure semantics.
 
+Optional `ambient_exchange` independently qualifies constant ambient pressure/temperature and a
+nonnegative linear mass conductance. The same pressure/dryout solve adds
+`k * (p_ambient - p_trial) * accepted_seconds`; no failed probe changes either inventory. Incoming
+vapor carries ambient-temperature effective enthalpy, outgoing vapor carries reservoir-temperature
+enthalpy, and both enter the signed thermostat ledger. Trace/final receipts keep ambient mass,
+enthalpy and accepted pressure integrals separate from the existing textile exchange fields.
+Omission preserves the sealed model; zero conductance preserves its physical solution. Independent
+pressure/enthalpy equations, event clocks, negative reference-relative enthalpy, source/domain
+refusals and all-owner rollback exercise this boundary. No airflow, varying ambient schedule or
+empirical microclimate qualification is inferred. See `docs/textile-surface-water.md`.
+
 **Source-qualified prescribed drainage** (`study::heat::surface_water`, `ftx-vc2`).
 Version 4 requires separately sourced liquid supply and drainage, and optionally admits the same
 condensation qualification as version 3. Per-instance, per-keyframe drainage demand uses reference

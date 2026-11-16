@@ -119,18 +119,16 @@ fn source(value: &Value) -> Result<(), Refusal> {
 fn alternative_case_inputs(policy: &Value) -> Result<Value, Refusal> {
     let mut value = policy.clone();
     for name in [
-        None,
-        Some("supply"),
-        Some("condensation"),
-        Some("drainage"),
-        Some("vapor_reservoir"),
+        "",
+        "/supply",
+        "/condensation",
+        "/drainage",
+        "/vapor_reservoir",
+        "/vapor_reservoir/ambient_exchange",
     ] {
-        let item = match name {
-            None => &mut value,
-            Some(name) => match value.get_mut(name) {
-                None | Some(Value::Null) => continue,
-                Some(item) => item,
-            },
+        let item = match value.pointer_mut(name) {
+            None | Some(Value::Null) => continue,
+            Some(item) => item,
         };
         source(item)?;
         // These fields are removed from the common-case comparison, so their complete native
@@ -142,11 +140,11 @@ fn alternative_case_inputs(policy: &Value) -> Result<Value, Refusal> {
             || item
                 .get("allow_estimates")
                 .is_some_and(|value| !value.is_boolean())
-            || (name == Some("supply") && item.get("qualification").is_some())
+            || (name == "/supply" && item.get("qualification").is_some())
         {
             return Err(fail());
         }
-        if name != Some("supply")
+        if name != "/supply"
             && !item["qualification"]
                 .as_str()
                 .is_some_and(|text| !text.trim().is_empty() && text.len() <= 4096)
@@ -1042,6 +1040,157 @@ fn accumulated_near(actual: f64, expected: f64, scale: f64, steps: u64) -> bool 
                 * scale.abs().max(actual.abs()).max(expected.abs())
 }
 
+// The retained endpoint-pressure integrals expose the declared linear boundary law without
+// pretending mechanical samples contain every thermal substep. Domains bound each interval's
+// integrals; exact source conductance and phase temperatures determine mass and enthalpy.
+struct AmbientExchange {
+    conductance: f64,
+    pressure: f64,
+    temperature: f64,
+    domain: [f64; 2],
+    incoming_enthalpy: f64,
+    outgoing_enthalpy: f64,
+    previous: [f64; 5],
+    previous_time: f64,
+}
+
+impl AmbientExchange {
+    fn new(
+        request: &Value,
+        domain: [f64; 2],
+        cp: f64,
+        latent: f64,
+        reference: f64,
+        outgoing_enthalpy: f64,
+    ) -> Result<Self, Refusal> {
+        source(request)?;
+        let conductance = nonnegative(request, "conductance_kg_pa_s")?;
+        let pressure = nonnegative(request, "ambient_vapor_pressure_pa")?;
+        let temperature = number(request, "ambient_temperature_c")?;
+        let bounds = array(request, "reservoir_pressure_domain_pa")?;
+        if request["schema"] != "ftx-textile-vapor-exchange/1"
+            || request["model"] != "linear_pressure_vapor_exchange/1"
+            || temperature <= -273.15
+            || bounds.len() != 2
+            || request
+                .get("allow_estimates")
+                .is_some_and(|v| !v.is_boolean())
+            || !request["qualification"]
+                .as_str()
+                .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
+            || request.as_object().ok_or_else(fail)?.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "schema"
+                        | "model"
+                        | "conductance_kg_pa_s"
+                        | "ambient_vapor_pressure_pa"
+                        | "ambient_temperature_c"
+                        | "reservoir_pressure_domain_pa"
+                        | "source"
+                        | "evidence"
+                        | "allow_estimates"
+                        | "method"
+                        | "qualification"
+                )
+            })
+        {
+            return Err(fail());
+        }
+        let lo = finite(&bounds[0]).ok_or_else(fail)?;
+        let hi = finite(&bounds[1]).ok_or_else(fail)?;
+        let incoming_enthalpy = latent + cp * (temperature - reference);
+        if lo < 0.
+            || lo >= hi
+            || lo > domain[0]
+            || hi < domain[1]
+            || !incoming_enthalpy.is_finite()
+        {
+            return Err(fail());
+        }
+        Ok(Self {
+            conductance,
+            pressure,
+            temperature,
+            domain,
+            incoming_enthalpy,
+            outgoing_enthalpy,
+            previous: [0.; 5],
+            previous_time: 0.,
+        })
+    }
+
+    fn admit(&mut self, report: &Value, time: f64, steps: u64) -> Result<[f64; 3], Refusal> {
+        let values = [
+            nonnegative(report, "incoming_vapor_mass_kg")?,
+            nonnegative(report, "outgoing_vapor_mass_kg")?,
+            nonnegative(report, "reservoir_pressure_time_pa_s")?,
+            nonnegative(report, "inward_pressure_time_pa_s")?,
+            nonnegative(report, "outward_pressure_time_pa_s")?,
+        ];
+        let [incoming, outgoing, pressure_time, inward, outward] = values;
+        let dt = time - self.previous_time;
+        let [lo, hi] = self.domain;
+        let integral_limits = [
+            [lo * dt, hi * dt],
+            [
+                (self.pressure - hi).max(0.) * dt,
+                (self.pressure - lo).max(0.) * dt,
+            ],
+            [
+                (lo - self.pressure).max(0.) * dt,
+                (hi - self.pressure).max(0.) * dt,
+            ],
+        ];
+        if report["schema"] != "ftx-textile-vapor-exchange-result/1"
+            || dt < 0.
+            || !dt.is_finite()
+            || values.iter().zip(self.previous).any(|(v, old)| *v < old)
+            || integral_limits.iter().flatten().any(|v| !v.is_finite())
+            || integral_limits.iter().enumerate().any(|(i, &[low, high])| {
+                !inside(
+                    values[i + 2] - self.previous[i + 2],
+                    low,
+                    high,
+                    values[i + 2],
+                    steps,
+                )
+            })
+            || !accumulated_near(incoming, self.conductance * inward, incoming, steps)
+            || !accumulated_near(outgoing, self.conductance * outward, outgoing, steps)
+            || !accumulated_near(
+                inward - outward,
+                self.pressure * time - pressure_time,
+                inward + outward + self.pressure * time + pressure_time,
+                steps,
+            )
+            || !near(
+                number(report, "net_vapor_received_kg")?,
+                incoming - outgoing,
+                incoming + outgoing,
+            )
+        {
+            return Err(fail());
+        }
+        let incoming_j = number(report, "incoming_vapor_enthalpy_j")?;
+        let outgoing_j = number(report, "outgoing_vapor_enthalpy_j")?;
+        let net_j = number(report, "net_vapor_enthalpy_received_j")?;
+        if !near(incoming_j, incoming * self.incoming_enthalpy, incoming_j)
+            || !near(outgoing_j, outgoing * self.outgoing_enthalpy, outgoing_j)
+            || !near(
+                net_j,
+                incoming_j - outgoing_j,
+                incoming_j.abs() + outgoing_j.abs(),
+            )
+        {
+            return Err(fail());
+        }
+        self.previous = values;
+        self.previous_time = time;
+        Ok([incoming, outgoing, net_j])
+    }
+}
+
 // Independent accounting for the shared vapor owner. The pressure/transport root is never
 // solved here: each retained liquid ledger must explain this inventory and its thermostat.
 struct Reservoir {
@@ -1055,6 +1204,7 @@ struct Reservoir {
     previous_steps: u64,
     previous_trials: u64,
     previous_maximum_residual: f64,
+    ambient_exchange: Option<AmbientExchange>,
 }
 
 impl Reservoir {
@@ -1088,6 +1238,7 @@ impl Reservoir {
                         | "initial_vapor_mass_kg"
                         | "temperature_c"
                         | "pressure_domain_pa"
+                        | "ambient_exchange"
                         | "max_iterations"
                         | "mass_tolerance_kg"
                         | "source"
@@ -1119,6 +1270,11 @@ impl Reservoir {
         {
             return Err(fail());
         }
+        let ambient_exchange = request
+            .get("ambient_exchange")
+            .filter(|v| !v.is_null())
+            .map(|v| AmbientExchange::new(v, domain, cp, latent, reference, effective_enthalpy))
+            .transpose()?;
         Ok(Self {
             capacity,
             initial_mass,
@@ -1130,6 +1286,7 @@ impl Reservoir {
             previous_steps: 0,
             previous_trials: 0,
             previous_maximum_residual: 0.,
+            ambient_exchange,
         })
     }
 
@@ -1141,8 +1298,17 @@ impl Reservoir {
         let condensed = nonnegative(water, "condensed_liquid_kg")?;
         let received = number(report, "net_vapor_received_kg")?;
         let residual = number(report, "mass_balance_error_kg")?;
-        let mass_scale = mass + self.initial_mass + evaporated + condensed;
-        let available = self.initial_mass + evaporated;
+        let [ambient_in, ambient_out, ambient_j] = if let Some(exchange) = &mut self.ambient_exchange {
+            exchange.admit(&report["ambient_exchange"], time, steps)?
+        } else {
+            if report.get("ambient_exchange").is_some() {
+                return Err(fail());
+            }
+            [0.; 3]
+        };
+        let ambient_net = ambient_in - ambient_out;
+        let mass_scale = mass + self.initial_mass + evaporated + condensed + ambient_in + ambient_out;
+        let available = self.initial_mass + evaporated + ambient_in;
         let pressure_trials = report["pressure_trials"].as_u64().ok_or_else(fail)?;
         let maximum_residual = nonnegative(report, "maximum_step_mass_residual_kg")?;
         let new_steps = steps.checked_sub(self.previous_steps).ok_or_else(fail)?;
@@ -1152,7 +1318,8 @@ impl Reservoir {
         // Physical old/new stock is at most initial vapor plus all evaporation so far. Trial
         // C*p may differ from that committed stock by the reported maximum root residual.
         // This bounds the maximum without pretending that trace samples expose every probe.
-        let step_mass_scale = 2. * available + evaporated + condensed + maximum_residual;
+        let step_mass_scale =
+            2. * available + evaporated + condensed + ambient_in + ambient_out + maximum_residual;
         if report["schema"] != "ftx-textile-vapor-reservoir-result/1"
             || nonnegative(report, "initial_vapor_mass_kg")? != self.initial_mass
             || !near(
@@ -1165,10 +1332,14 @@ impl Reservoir {
             || pressure > self.domain[1]
             || (mass > 0. && pressure <= 0.)
             || !near(received, evaporated - condensed, mass_scale)
-            || !near(residual, mass - self.initial_mass - received, mass_scale)
+            || !near(
+                residual,
+                mass - self.initial_mass - received - ambient_net,
+                mass_scale,
+            )
             || residual.abs() > self.mass_tolerance.min(4096. * f64::EPSILON * mass_scale)
             || !inside(mass, 0., available, mass_scale, steps)
-            || !inside(condensed, 0., available, mass_scale, steps)
+            || !inside(condensed + ambient_out, 0., available, mass_scale, steps)
             || !accumulated_near(nonnegative(report, "elapsed_seconds")?, time, time, steps)
             || new_trials < new_steps
             || maximum_residual < self.previous_maximum_residual
@@ -1188,7 +1359,7 @@ impl Reservoir {
         let incoming = number(water, "incoming_vapor_sensible_energy_j")?;
         let exchanged_scale = latent + exported.abs() + condensation + incoming.abs();
         let expected_change = self.effective_enthalpy * (mass - self.initial_mass);
-        let balance_scale = change.abs() + removed_j.abs() + received_j.abs();
+        let balance_scale = change.abs() + removed_j.abs() + received_j.abs() + ambient_j.abs();
         if !near(change, expected_change, expected_change)
             || !accumulated_near(
                 received_j,
@@ -1196,8 +1367,12 @@ impl Reservoir {
                 exchanged_scale,
                 steps,
             )
-            || !near(removed_j, received_j - change, balance_scale)
-            || !near(error_j, change + removed_j - received_j, balance_scale)
+            || !near(removed_j, received_j + ambient_j - change, balance_scale)
+            || !near(
+                error_j,
+                change + removed_j - received_j - ambient_j,
+                balance_scale,
+            )
             || error_j.abs() > 1024. * f64::EPSILON * balance_scale
         {
             return Err(fail());
@@ -1355,6 +1530,10 @@ pub(super) fn admit(
             || reservoir
                 .as_ref()
                 .is_some_and(|r| values.iter().any(|&t| t != r.temperature))
+            || reservoir
+                .as_ref()
+                .and_then(|r| r.ambient_exchange.as_ref())
+                .is_some_and(|e| e.temperature < domain[0] || e.temperature > domain[1])
         {
             return Err(fail());
         }

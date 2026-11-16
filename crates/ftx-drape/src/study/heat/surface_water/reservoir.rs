@@ -12,7 +12,7 @@
 //! Every patch and the reservoir use that ONE probe duration. Cloth temperatures remain the
 //! accepted-start samples of the original film scheme; only ambient pressure is implicit.
 
-use super::{Evidence, Plan, Refusal, Source, Water, invalid, positive_sum};
+use super::{Evidence, Plan, Refusal, Source, Water, add_positive, invalid, positive_sum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -32,6 +32,10 @@ pub struct Request {
     pub temperature_c: f64,
     /// Closed source-qualified pressure interval in Pa, including the initial inventory state.
     pub pressure_domain_pa: [f64; 2],
+    /// Optional independently qualified exchange with one constant ambient vapor reservoir.
+    /// Its pressure law participates in the same implicit finite-inventory/dryout solve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ambient_exchange: Option<AmbientExchange>,
     /// Bisection budget in 1..=128, in addition to initial and bracket-endpoint probes.
     pub max_iterations: usize,
     /// Absolute per-step and cumulative water-balance ceiling in kg. Inventory-scaled roundoff
@@ -49,6 +53,88 @@ pub struct Request {
     /// Qualifies well-mixed isothermal storage, the pressure range and the existing constant-
     /// latent/cp_liquid effective vapor enthalpy convention. No fog or gas heat capacity is added.
     pub qualification: String,
+}
+
+/// A source-qualified pressure-driven vapor boundary, not an inferred airflow or gas law.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AmbientExchange {
+    /// Must be `ftx-textile-vapor-exchange/1`.
+    pub schema: String,
+    /// Must be `linear_pressure_vapor_exchange/1`.
+    pub model: String,
+    /// Nonnegative vapor mass conductance in kg/(Pa·s); zero explicitly closes this boundary.
+    pub conductance_kg_pa_s: f64,
+    /// Constant independently prescribed ambient vapor pressure, Pa.
+    pub ambient_vapor_pressure_pa: f64,
+    /// Incoming vapor temperature, °C, under the same constant-latent/cp_liquid convention.
+    /// Outgoing vapor carries the finite reservoir's independently declared temperature.
+    pub ambient_temperature_c: f64,
+    /// Qualified reservoir pressure interval, covering the complete finite reservoir domain.
+    pub reservoir_pressure_domain_pa: [f64; 2],
+    /// Independent source for the conductance and ambient boundary values.
+    pub source: Source,
+    /// Evidence for this exchange closure, independent of storage and textile transport.
+    pub evidence: Evidence,
+    /// Explicit consent for estimated exchange inputs only.
+    #[serde(default)]
+    pub allow_estimates: bool,
+    /// Method defining the constant ambient boundary and pressure-driven mass exchange.
+    pub method: String,
+    /// Qualifies the full pressure domain and incoming/outgoing effective vapor enthalpy.
+    pub qualification: String,
+}
+
+impl AmbientExchange {
+    fn validate(&self, domain: [f64; 2]) -> Result<(), Refusal> {
+        let text = |s: &str| !s.trim().is_empty() && s.len() <= 4096;
+        let [lo, hi] = self.reservoir_pressure_domain_pa;
+        if self.schema != "ftx-textile-vapor-exchange/1"
+            || self.model != "linear_pressure_vapor_exchange/1"
+            || !self.conductance_kg_pa_s.is_finite()
+            || self.conductance_kg_pa_s < 0.
+            || !self.ambient_vapor_pressure_pa.is_finite()
+            || self.ambient_vapor_pressure_pa < 0.
+            || !self.ambient_temperature_c.is_finite()
+            || self.ambient_temperature_c <= -273.15
+            || !lo.is_finite()
+            || !hi.is_finite()
+            || lo < 0.
+            || lo >= hi
+            || lo > domain[0]
+            || hi < domain[1]
+            || !text(&self.source.reference)
+            || !text(&self.source.note)
+            || self.source.accessed_on.len() != 10
+            || !text(&self.method)
+            || !text(&self.qualification)
+            || (self.evidence == Evidence::Estimate && !self.allow_estimates)
+        {
+            return Err(invalid(
+                "ambient vapor exchange needs independent source evidence, a nonnegative conductance, physical constant ambient conditions and qualification over the complete reservoir pressure domain",
+            ));
+        }
+        Ok(())
+    }
+
+    fn increments(&self, pressure: f64, seconds: f64) -> Result<[f64; 5], Refusal> {
+        let difference = self.ambient_vapor_pressure_pa - pressure;
+        let inward = difference.max(0.) * seconds;
+        let outward = (-difference).max(0.) * seconds;
+        let pressure_time = pressure * seconds;
+        let incoming = self.conductance_kg_pa_s * inward;
+        let outgoing = self.conductance_kg_pa_s * outward;
+        let values = [incoming, outgoing, pressure_time, inward, outward];
+        if values.iter().any(|v| !v.is_finite() || *v < 0.)
+            || (pressure > 0. && pressure_time <= 0.)
+            || (difference != 0. && inward == 0. && outward == 0.)
+            || (self.conductance_kg_pa_s > 0.
+                && ((inward > 0. && incoming <= 0.) || (outward > 0. && outgoing <= 0.)))
+        {
+            return Err(invalid("ambient vapor exchange is unrepresentable"));
+        }
+        Ok(values)
+    }
 }
 
 impl Request {
@@ -89,6 +175,9 @@ impl Request {
                 "finite vapor reservoir needs independently admitted source evidence, positive capacitance, actual nonnegative inventory, a supported pressure domain and bounded solve controls",
             ));
         }
+        if let Some(exchange) = &self.ambient_exchange {
+            exchange.validate(self.pressure_domain_pa)?;
+        }
         Ok(())
     }
 }
@@ -114,6 +203,9 @@ pub(super) struct State {
     elapsed_seconds: f64,
     pressure_trials: usize,
     maximum_step_mass_residual_kg: f64,
+    // Actual accepted ambient mass and implicit endpoint-pressure integrals. Every failed
+    // pressure probe is discarded; these counters share the accepted water/heat transaction.
+    ambient_integrals: [f64; 5],
 }
 
 struct Candidate {
@@ -123,6 +215,7 @@ struct Candidate {
     stored_pressure_residual_kg: f64,
     net_rate_kg_s: f64,
     accepted: bool,
+    ambient_integrals: [f64; 5],
 }
 
 #[derive(Clone, Copy)]
@@ -156,7 +249,8 @@ fn exhausted() -> Refusal {
 
 // Increasing ambient pressure reduces every initial-wet depletion rate h_i with exact slope
 // -k_i. Thus t(p)=min(max_dt,M_i/h_i(p)) is nondecreasing, with t' <= t_hi² max(k_i/M_i).
-// Total signed vapor rate g(p) is nonincreasing, including dry supply/drain sharing. Therefore
+// Total signed vapor rate g(p) is nonincreasing, including dry supply/drain sharing and optional
+// ambient conductance k*(p_ambient-p). That boundary adds -k to g' without changing dryout t'. Thus
 // F'=C-g't-gt' is positive when C > max(g_lo,0)*t_hi²*max(k_i/M_i). Constant-duration
 // intervals are also monotone. Search uncertified intervals from the accepted pressure outward;
 // ordinary whole-domain bisection could otherwise skip an early dryout and choose a later root
@@ -247,6 +341,7 @@ impl State {
             elapsed_seconds: 0.,
             pressure_trials: 0,
             maximum_step_mass_residual_kg: 0.,
+            ambient_integrals: [0.; 5],
         })
     }
 
@@ -275,12 +370,20 @@ impl State {
             let plan = plan_at_pressure(pressure)?;
             let evaporated = positive_sum(&plan.evaporated)?;
             let condensed = positive_sum(&plan.condensed)?;
-            let net = water_sum(
+            let textile_net = water_sum(
                 plan.evaporated
                     .iter()
                     .zip(&plan.condensed)
                     .flat_map(|(&e, &c)| [e, -c]),
             );
+            let ambient_integrals = request
+                .ambient_exchange
+                .as_ref()
+                .map(|exchange| exchange.increments(pressure, plan.seconds))
+                .transpose()?
+                .unwrap_or([0.; 5]);
+            let [incoming, outgoing, ..] = ambient_integrals;
+            let net = water_sum([textile_net, incoming, -outgoing]);
             // Preserve a balanced accepted start exactly instead of rounding it through C*p.
             let trial_mass = if pressure.to_bits() == initial_pressure.to_bits() {
                 self.mass_kg
@@ -294,8 +397,9 @@ impl State {
             let mass = water_sum([self.mass_kg, net]);
             let stored_pressure_residual = trial_mass - mass;
             let net_rate = net / plan.seconds;
-            let available = self.mass_kg + evaporated;
-            let scale = self.mass_kg + trial_mass + evaporated + condensed;
+            let available = self.mass_kg + evaporated + incoming;
+            let removed = condensed + outgoing;
+            let scale = self.mass_kg + trial_mass + evaporated + condensed + incoming + outgoing;
             // Drive the scalar closure to arithmetic roundoff. The wider independent report
             // admission ceiling is not a stopping target: a small vapor capacitance amplifies
             // an otherwise admissible absolute mass defect into a visible pressure error.
@@ -308,6 +412,7 @@ impl State {
                 residual,
                 stored_pressure_residual,
                 available,
+                removed,
                 scale,
                 tolerance,
             ]
@@ -333,9 +438,10 @@ impl State {
                 accepted: residual.abs().max(stored_pressure_residual.abs()) <= tolerance
                     && mass >= 0.
                     && (pressure == 0. || mass > 0.)
-                    && condensed <= available
+                    && removed <= available
                     && mass <= available
                     && represented,
+                ambient_integrals,
             })
         };
         let initial = evaluate(initial_pressure)?;
@@ -412,6 +518,10 @@ impl State {
             .pressure_trials
             .checked_add(trials)
             .ok_or_else(|| invalid("finite vapor pressure work overflows"))?;
+        let mut ambient_integrals = self.ambient_integrals;
+        for (total, increment) in ambient_integrals.iter_mut().zip(accepted.ambient_integrals) {
+            add_positive(total, increment)?;
+        }
         Ok((
             accepted.plan,
             Self {
@@ -422,6 +532,7 @@ impl State {
                     .maximum_step_mass_residual_kg
                     .max(accepted.residual_kg.abs())
                     .max(accepted.stored_pressure_residual_kg.abs()),
+                ambient_integrals,
             },
         ))
     }
@@ -436,8 +547,20 @@ impl State {
                 .zip(&water.condensed)
                 .flat_map(|(&e, &c)| [e, -c]),
         );
-        let mass_error = water_sum([self.mass_kg, -request.initial_vapor_mass_kg, -received]);
-        let mass_scale = self.mass_kg + request.initial_vapor_mass_kg + evaporated + condensed;
+        let [ambient_in, ambient_out, pressure_time, inward, outward] = self.ambient_integrals;
+        let ambient_net = water_sum([ambient_in, -ambient_out]);
+        let mass_error = water_sum([
+            self.mass_kg,
+            -request.initial_vapor_mass_kg,
+            -received,
+            -ambient_net,
+        ]);
+        let mass_scale = self.mass_kg
+            + request.initial_vapor_mass_kg
+            + evaporated
+            + condensed
+            + ambient_in
+            + ambient_out;
         let mass_tolerance = request
             .mass_tolerance_kg
             .min(4096. * f64::EPSILON * mass_scale);
@@ -452,13 +575,28 @@ impl State {
             -water.condensation_latent_j,
             -incoming_sensible,
         ]);
+        let ambient_in_j = request.ambient_exchange.as_ref().map_or(0., |exchange| {
+            ambient_in
+                * (water.request.latent_heat_j_kg
+                    + water.request.liquid_specific_heat_j_kg_k
+                        * (exchange.ambient_temperature_c - water.request.enthalpy_reference_c))
+        });
+        let ambient_out_j = ambient_out * effective_enthalpy;
+        let ambient_received_j = water_sum([ambient_in_j, -ambient_out_j]);
         // Positive heat is removed by the explicitly isothermal reservoir's thermostat. This
         // closes the declared effective-enthalpy model; it is not an inferred gas heat capacity.
-        let isothermal_heat_removed = enthalpy_received - enthalpy_change;
-        let enthalpy_error =
-            water_sum([enthalpy_change, isothermal_heat_removed, -enthalpy_received]);
-        let energy_scale =
-            enthalpy_change.abs() + isothermal_heat_removed.abs() + enthalpy_received.abs();
+        let isothermal_heat_removed = enthalpy_received + ambient_received_j - enthalpy_change;
+        let enthalpy_error = water_sum([
+            enthalpy_change,
+            isothermal_heat_removed,
+            -enthalpy_received,
+            -ambient_received_j,
+        ]);
+        let energy_scale = enthalpy_change.abs()
+            + isothermal_heat_removed.abs()
+            + enthalpy_received.abs()
+            + ambient_in_j.abs()
+            + ambient_out_j.abs();
         let pressure = self.mass_kg / request.vapor_capacitance_kg_pa;
         if [
             mass_error,
@@ -469,6 +607,9 @@ impl State {
             enthalpy_received,
             isothermal_heat_removed,
             enthalpy_error,
+            ambient_in_j,
+            ambient_out_j,
+            ambient_received_j,
             energy_scale,
             pressure,
         ]
@@ -484,7 +625,7 @@ impl State {
                 "finite vapor cumulative mass or enthalpy balance failed",
             ));
         }
-        Ok(json!({
+        let mut result = json!({
             "schema":"ftx-textile-vapor-reservoir-result/1",
             "initial_vapor_mass_kg":request.initial_vapor_mass_kg,
             "remaining_vapor_mass_kg":self.mass_kg,
@@ -499,6 +640,21 @@ impl State {
             "elapsed_seconds":self.elapsed_seconds,
             "pressure_trials":self.pressure_trials,
             "maximum_step_mass_residual_kg":self.maximum_step_mass_residual_kg
-        }))
+        });
+        if request.ambient_exchange.is_some() {
+            result["ambient_exchange"] = json!({
+                "schema":"ftx-textile-vapor-exchange-result/1",
+                "incoming_vapor_mass_kg":ambient_in,
+                "outgoing_vapor_mass_kg":ambient_out,
+                "net_vapor_received_kg":ambient_net,
+                "incoming_vapor_enthalpy_j":ambient_in_j,
+                "outgoing_vapor_enthalpy_j":ambient_out_j,
+                "net_vapor_enthalpy_received_j":ambient_received_j,
+                "reservoir_pressure_time_pa_s":pressure_time,
+                "inward_pressure_time_pa_s":inward,
+                "outward_pressure_time_pa_s":outward,
+            });
+        }
+        Ok(result)
     }
 }

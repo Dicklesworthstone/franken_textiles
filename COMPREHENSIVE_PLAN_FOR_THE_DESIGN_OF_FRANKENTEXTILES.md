@@ -6096,6 +6096,21 @@ This advances `ftx-onn` through `ftx-onn.silhouette-only`. Source-level review a
 authoring lifecycle are separate from pending native/compiled-WASM execution. Silhouette samples
 do not establish whole-mask agreement, clothing removal, anatomical accuracy or physical garment fit.
 
+### 25.218 Exchange ambient vapor with a finite textile microclimate
+
+The finite shared vapor inventory can admit an independently qualified, constant ambient boundary.
+Pressure-driven inflow and outflow participate in the same implicit pressure and earliest-dryout
+solve as textile evaporation and condensation. Every accepted transfer uses the same physical
+duration and joins the complete inventory transaction; failed pressure or thermal trials leave
+all owners unchanged.
+
+Incoming and outgoing vapor retain their separately declared temperatures and effective enthalpies.
+The fixed-temperature heat ledger closes storage against textile and ambient exchange, while
+comparison independently checks source qualification, accepted pressure integrals and conservation.
+Native, portable and named-case studies retain the same policy and receipts; the workbench shows
+the two exchange owners separately. This advances `ftx-vc2` without inferring an airflow model,
+changing ambient schedule, absorbed moisture, thermoregulation or empirical garment qualification.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

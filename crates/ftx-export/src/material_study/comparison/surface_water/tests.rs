@@ -2382,6 +2382,140 @@ fn finite_reservoir_case(draining: bool, mechanical: bool) -> (Alternative, Valu
     (a, d, s, m)
 }
 
+fn ambient_reservoir_case() -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = finite_reservoir_case(false, false);
+    let h = &mut m["transient_surface"]["result"];
+    h["request"]["surface_water"]["vapor_reservoir"]["ambient_exchange"] = json!({
+        "schema":"ftx-textile-vapor-exchange/1","model":"linear_pressure_vapor_exchange/1",
+        "conductance_kg_pa_s":1e-11,"ambient_vapor_pressure_pa":4000.,
+        "ambient_temperature_c":60.,"reservoir_pressure_domain_pa":[0.,5000.],
+        "source":{"reference":"test:ambient-exchange-admission","accessed_on":"2026-11-01",
+            "note":"Synthetic conductance and effective incoming enthalpy; no empirical air law"},
+        "evidence":"estimate","allow_estimates":true,"method":"Explicit constant pressure conductance",
+        "qualification":"Artificial conductance over the complete finite reservoir pressure domain"});
+    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+    for path in [
+        "/surface_water/vapor_reservoir",
+        "/trace/0/surface_water/vapor_reservoir",
+    ] {
+        let gas = h.pointer_mut(path).unwrap();
+        let received = gas["net_vapor_received_kg"].as_f64().unwrap();
+        let received_j = gas["net_vapor_enthalpy_received_j"].as_f64().unwrap();
+        let pressure = (1e-6 + received + 1e-11 * 4000.) / (1e-9 + 1e-11);
+        let incoming = 1e-11 * (4000. - pressure);
+        let incoming_j = incoming * (2500000. + 4200. * 60.);
+        let mass = 1e-6 + received + incoming;
+        let change = (2500000. + 4200. * 40.) * (mass - 1e-6);
+        let thermostat = received_j + incoming_j - change;
+        gas["remaining_vapor_mass_kg"] = json!(mass);
+        gas["vapor_pressure_pa"] = json!(mass / 1e-9);
+        gas["mass_balance_error_kg"] = json!(mass - 1e-6 - received - incoming);
+        gas["vapor_enthalpy_change_j"] = json!(change);
+        gas["isothermal_heat_removed_j"] = json!(thermostat);
+        gas["enthalpy_balance_error_j"] =
+            json!(change + thermostat - received_j - incoming_j);
+        gas["ambient_exchange"] = json!({"schema":"ftx-textile-vapor-exchange-result/1",
+            "incoming_vapor_mass_kg":incoming,"outgoing_vapor_mass_kg":0.,
+            "net_vapor_received_kg":incoming,"incoming_vapor_enthalpy_j":incoming_j,
+            "outgoing_vapor_enthalpy_j":0.,"net_vapor_enthalpy_received_j":incoming_j,
+            "reservoir_pressure_time_pa_s":pressure,
+            "inward_pressure_time_pa_s":4000.-pressure,"outward_pressure_time_pa_s":0.});
+    }
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    (a, d, s, m)
+}
+
+#[test]
+fn finite_vapor_ambient_exchange_admission_checks_sources_integrals_and_enthalpy() {
+    let (a, d, s, m) = ambient_reservoir_case();
+    let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+    let thermostat = heat.result["surface_water"]["vapor_reservoir"]["isothermal_heat_removed_j"]
+        .as_f64()
+        .unwrap();
+    let admitted = numerical_heat(&s, &m, heat);
+    assert_eq!(
+        Metric::TextileWaterIsothermalHeatRemovedJ.value(&a, &admitted),
+        Some(thermostat)
+    );
+    for field in [
+        "incoming_vapor_mass_kg",
+        "outgoing_vapor_mass_kg",
+        "net_vapor_received_kg",
+        "incoming_vapor_enthalpy_j",
+        "outgoing_vapor_enthalpy_j",
+        "net_vapor_enthalpy_received_j",
+        "reservoir_pressure_time_pa_s",
+        "inward_pressure_time_pa_s",
+        "outward_pressure_time_pa_s",
+    ] {
+        let (a, d, s, mut m) = ambient_reservoir_case();
+        let h = &mut m["transient_surface"]["result"];
+        for path in [
+            "/surface_water/vapor_reservoir/ambient_exchange",
+            "/trace/0/surface_water/vapor_reservoir/ambient_exchange",
+        ] {
+            let exchange = h.pointer_mut(path).unwrap();
+            exchange[field] = json!(exchange[field].as_f64().unwrap() + 1.);
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "forged ambient exchange field {field}"
+        );
+    }
+    for (field, forged) in [
+        ("conductance_kg_pa_s", json!(2e-11)),
+        ("ambient_vapor_pressure_pa", json!(4100.)),
+        ("ambient_temperature_c", json!(50.)),
+        ("reservoir_pressure_domain_pa", json!([0., 4999.])),
+        ("allow_estimates", json!(false)),
+    ] {
+        let (a, mut d, s, mut m) = ambient_reservoir_case();
+        let h = &mut m["transient_surface"]["result"];
+        h["request"]["surface_water"]["vapor_reservoir"]["ambient_exchange"][field] = forged;
+        h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+        d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "ambient source mismatch {field}"
+        );
+    }
+}
+
+#[test]
+fn finite_vapor_ambient_exchange_refuses_balanced_but_unsourced_mass() {
+    let (a, d, s, mut m) = ambient_reservoir_case();
+    let h = &mut m["transient_surface"]["result"];
+    for path in [
+        "/surface_water/vapor_reservoir",
+        "/trace/0/surface_water/vapor_reservoir",
+    ] {
+        let gas = h.pointer_mut(path).unwrap();
+        // Every storage, mass and enthalpy identity still closes after doubling the alleged
+        // inflow. Only the independently sourced conductance and accepted pressure integral
+        // expose this fabrication.
+        let received = gas["net_vapor_received_kg"].as_f64().unwrap();
+        let received_j = gas["net_vapor_enthalpy_received_j"].as_f64().unwrap();
+        let incoming = 2. * gas["ambient_exchange"]["incoming_vapor_mass_kg"].as_f64().unwrap();
+        let incoming_j = incoming * (2500000. + 4200. * 60.);
+        let mass = 1e-6 + received + incoming;
+        let change = (2500000. + 4200. * 40.) * (mass - 1e-6);
+        let thermostat = received_j + incoming_j - change;
+        gas["remaining_vapor_mass_kg"] = json!(mass);
+        gas["vapor_pressure_pa"] = json!(mass / 1e-9);
+        gas["mass_balance_error_kg"] = json!(mass - 1e-6 - received - incoming);
+        gas["vapor_enthalpy_change_j"] = json!(change);
+        gas["isothermal_heat_removed_j"] = json!(thermostat);
+        gas["enthalpy_balance_error_j"] =
+            json!(change + thermostat - received_j - incoming_j);
+        let exchange = &mut gas["ambient_exchange"];
+        exchange["incoming_vapor_mass_kg"] = json!(incoming);
+        exchange["net_vapor_received_kg"] = json!(incoming);
+        exchange["incoming_vapor_enthalpy_j"] = json!(incoming_j);
+        exchange["net_vapor_enthalpy_received_j"] = json!(incoming_j);
+    }
+    assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err());
+}
+
 #[test]
 fn finite_vapor_inventory_admits_with_optional_drainage_and_existing_mechanical_exchange() {
     for (draining, mechanical) in [(false, false), (false, true), (true, true)] {
