@@ -2934,55 +2934,51 @@ fn scheduled_sewing_feed(row: &Alternative) -> Option<f64> {
         }
         (None, Some(parallel)) => {
             policy.routing.is_none()
-                && policy
-                    .parallel
-                    .as_ref()
-                    .is_some_and(|request| {
-                        if request.time_basis != parallel.time_basis {
-                            return false;
+                && policy.parallel.as_ref().is_some_and(|request| {
+                    if request.time_basis != parallel.time_basis {
+                        return false;
+                    }
+                    match (&request.feed_time_search, &parallel.feed_time_search) {
+                        (None, None) => !request.feed_directed(),
+                        (Some(policy), Some(search)) => {
+                            let execution_matches = if request.shared_operator.is_some() {
+                                request.time_basis == "ceil_operation_feed_milliseconds/1"
+                                    && parallel.shared_operator.is_some()
+                                    && request.shared_workholding.is_some()
+                                        == parallel.shared_workholding.is_some()
+                                    && parallel.schema == "ftx-sewing-parallel/9"
+                                    && production.schema == "ftx-sewing-production/24"
+                                    && plan.schema == "ftx-sewing-plan/36"
+                                    && search.search_scope
+                                        == "shared_operator_retained_serial_incumbents/1"
+                            } else {
+                                request.time_basis == "ceil_cell_feed_milliseconds/1"
+                                    && request.shared_workholding.is_none()
+                                    && parallel.shared_operator.is_none()
+                                    && parallel.shared_workholding.is_none()
+                                    && parallel.schema == "ftx-sewing-parallel/8"
+                                    && production.schema == "ftx-sewing-production/23"
+                                    && plan.schema == "ftx-sewing-plan/35"
+                                    && search.search_scope == "complete_cell_count_assignments/1"
+                            };
+                            request.feed_directed()
+                                && request.model == "independent_whole_garment_cells/2"
+                                && request.thread_order_search.is_none()
+                                && execution_matches
+                                && search.completion_deadline_milliseconds
+                                    == policy.completion_deadline_milliseconds
+                                && search.selected_feed_milliseconds == milliseconds
+                                && search.lower_bound_feed_milliseconds <= milliseconds
+                                && search.lower_bound_attained
+                                    == (search.lower_bound_feed_milliseconds == milliseconds)
+                                && search.optimality_proven == search.lower_bound_attained
+                                && policy.completion_deadline_milliseconds.is_none_or(|end| {
+                                    parallel.selected.makespan_milliseconds <= end
+                                })
                         }
-                        match (&request.feed_time_search, &parallel.feed_time_search) {
-                            (None, None) => !request.feed_directed(),
-                            (Some(policy), Some(search)) => {
-                                let execution_matches = if request.shared_operator.is_some() {
-                                    request.time_basis == "ceil_operation_feed_milliseconds/1"
-                                        && parallel.shared_operator.is_some()
-                                        && request.shared_workholding.is_some()
-                                            == parallel.shared_workholding.is_some()
-                                        && parallel.schema == "ftx-sewing-parallel/9"
-                                        && production.schema == "ftx-sewing-production/24"
-                                        && plan.schema == "ftx-sewing-plan/36"
-                                        && search.search_scope
-                                            == "shared_operator_retained_serial_incumbents/1"
-                                } else {
-                                    request.time_basis == "ceil_cell_feed_milliseconds/1"
-                                        && request.shared_workholding.is_none()
-                                        && parallel.shared_operator.is_none()
-                                        && parallel.shared_workholding.is_none()
-                                        && parallel.schema == "ftx-sewing-parallel/8"
-                                        && production.schema == "ftx-sewing-production/23"
-                                        && plan.schema == "ftx-sewing-plan/35"
-                                        && search.search_scope
-                                            == "complete_cell_count_assignments/1"
-                                };
-                                request.feed_directed()
-                                    && request.model == "independent_whole_garment_cells/2"
-                                    && request.thread_order_search.is_none()
-                                    && execution_matches
-                                    && search.completion_deadline_milliseconds
-                                        == policy.completion_deadline_milliseconds
-                                    && search.selected_feed_milliseconds == milliseconds
-                                    && search.lower_bound_feed_milliseconds <= milliseconds
-                                    && search.lower_bound_attained
-                                        == (search.lower_bound_feed_milliseconds == milliseconds)
-                                    && search.optimality_proven == search.lower_bound_attained
-                                    && policy.completion_deadline_milliseconds.is_none_or(|end| {
-                                        parallel.selected.makespan_milliseconds <= end
-                                    })
-                            }
-                            _ => false,
-                        }
-                    })
+                        _ => false,
+                    }
+                })
         }
         _ => false,
     };
@@ -5794,8 +5790,7 @@ mod sewing_feed_tests {
                     };
                     report.shared_workholding = Some(shared_workholding::Report {
                         schema: "ftx-sewing-shared-workholding/1",
-                        release_protocol:
-                            "available_at_feed_completion_with_access_in_cell_handling/1",
+                        release_protocol: "available_at_feed_completion_with_access_in_cell_handling/1",
                         cells: BTreeMap::new(),
                         resources: vec![],
                         bindings: vec![],
@@ -5851,7 +5846,12 @@ mod sewing_feed_tests {
             .unwrap()
             .cells
             .iter()
-            .map(|cell| (cell.id.clone(), operator::cell_sha256(cell, &typed).unwrap()))
+            .map(|cell| {
+                (
+                    cell.id.clone(),
+                    operator::cell_sha256(cell, &typed).unwrap(),
+                )
+            })
             .collect();
         options["production"]["parallel"]["shared_operator"]["cells"] = json!(locks);
         let request: Request = serde_json::from_value(json!({

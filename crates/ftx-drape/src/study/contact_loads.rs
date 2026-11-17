@@ -4,7 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, Vec2, Vec3};
-use ftx_pattern::material_compression::regions::{MAX_REGION_EDGE_TESTS, PreparedSelector, Selector};
+use ftx_pattern::material_compression::regions::{
+    MAX_REGION_EDGE_TESTS, PreparedSelector, Selector,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -456,8 +458,9 @@ impl History {
                 .map(|(id, region)| (id.clone(), region.selected_vertices.clone()))
                 .collect();
             source["regions"] = json!(partition.regions);
-            source["rest_triangles_sha256"] =
-                json!(hash(rest_triangles_mm.as_ref().expect("regional flat source"))?);
+            source["rest_triangles_sha256"] = json!(hash(
+                rest_triangles_mm.as_ref().expect("regional flat source")
+            )?);
         }
         let mut history = Self {
             request: request.clone(),
@@ -594,7 +597,9 @@ impl History {
         if self.rest_triangles_mm.is_some() {
             report["regions"] = json!(self.region_summaries);
             report["max_force_vertex"] = json!(self.frames[peak_vertex].body.max_force_vertex);
-            report["note"] = json!("Negative gradient of production body barrier energy on the union of vertices of selected flat whole triangles. Regions retain the entire assembled force at shared welded vertices; regional totals are not additive, while the global union counts each vertex once. Region membership stays fixed through motion and is reevaluated on each new pattern mesh. Excludes self-contact and Coulomb tangential forces. Results depend on mesh and barrier policy, cover accepted samples only, and establish no pressure, comfort, safe-fit, continuous-time or physical validation claim.");
+            report["note"] = json!(
+                "Negative gradient of production body barrier energy on the union of vertices of selected flat whole triangles. Regions retain the entire assembled force at shared welded vertices; regional totals are not additive, while the global union counts each vertex once. Region membership stays fixed through motion and is reevaluated on each new pattern mesh. Excludes self-contact and Coulomb tangential forces. Results depend on mesh and barrier policy, cover accepted samples only, and establish no pressure, comfort, safe-fit, continuous-time or physical validation claim."
+            );
         }
         report
     }
@@ -761,19 +766,15 @@ mod tests {
     fn regional_peaks_keep_opposing_loads_and_earliest_sample_then_lowest_vertex_ties() {
         let first = reading(
             &[2, 4, 8],
-            &[Vec3::new(3., 4., 0.), Vec3::new(-3., -4., 0.), Vec3::new(0., 0., 2.)],
+            &[
+                Vec3::new(3., 4., 0.),
+                Vec3::new(-3., -4., 0.),
+                Vec3::new(0., 0., 2.),
+            ],
         )
         .unwrap();
-        let second = reading(
-            &[2, 4, 8],
-            &[Vec3::ZERO, Vec3::ZERO, Vec3::new(0., 0., 6.)],
-        )
-        .unwrap();
-        let third = reading(
-            &[2, 4, 8],
-            &[Vec3::new(0., 0., 6.), Vec3::ZERO, Vec3::ZERO],
-        )
-        .unwrap();
+        let second = reading(&[2, 4, 8], &[Vec3::ZERO, Vec3::ZERO, Vec3::new(0., 0., 6.)]).unwrap();
+        let third = reading(&[2, 4, 8], &[Vec3::new(0., 0., 6.), Vec3::ZERO, Vec3::ZERO]).unwrap();
         let mut summary = RegionSummary::new(&first, 0);
         summary.observe(&second, 1);
         summary.observe(&third, 2);
@@ -811,13 +812,22 @@ mod tests {
         empty.regions = Some(vec![]);
         assert!(empty.validate().is_err());
         let mut duplicate = request.clone();
-        duplicate.regions.as_mut().unwrap().push(region("waist", 3., 7.));
+        duplicate
+            .regions
+            .as_mut()
+            .unwrap()
+            .push(region("waist", 3., 7.));
         assert!(duplicate.validate().is_err());
         let mut legacy = value;
         legacy["schema"] = json!("ftx-contact-loads/1");
         legacy.as_object_mut().unwrap().remove("regions");
         let legacy: Request = serde_json::from_value(legacy).unwrap();
         legacy.validate().unwrap();
-        assert!(serde_json::to_value(legacy).unwrap().get("regions").is_none());
+        assert!(
+            serde_json::to_value(legacy)
+                .unwrap()
+                .get("regions")
+                .is_none()
+        );
     }
 }

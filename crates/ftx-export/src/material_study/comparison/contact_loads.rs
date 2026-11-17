@@ -136,9 +136,11 @@ fn regional_scope(
             || !area.is_finite()
             || area <= 0.
             || published.get(&region.id)
-                != Some(&json!({"instance":region.instance,"selector":region.selector,
+                != Some(
+                    &json!({"instance":region.instance,"selector":region.selector,
                     "source_triangles":triangles,"selected_vertices":vertices,
-                    "reference_area_m2":area}))
+                    "reference_area_m2":area}),
+                )
         {
             return Err(fail());
         }
@@ -206,7 +208,9 @@ fn source(
         );
     }
     let regional = if policy["schema"] == "ftx-contact-loads/2" {
-        Some(regional_scope(policy, source, ownership, names, owners, faces)?)
+        Some(regional_scope(
+            policy, source, ownership, names, owners, faces,
+        )?)
     } else {
         if source.get("regions").is_some()
             || source.get("rest_triangles_sha256").is_some()
@@ -283,10 +287,10 @@ fn source(
         if face.iter().any(|&v| v >= vertices) {
             return Err(fail());
         }
-        if regional
-            .as_ref()
-            .map_or_else(|| selected.contains(name), |scope| scope.selected_triangles.contains(&i))
-        {
+        if regional.as_ref().map_or_else(
+            || selected.contains(name),
+            |scope| scope.selected_triangles.contains(&i),
+        ) {
             selected_vertices.extend(face);
         }
     }
@@ -858,12 +862,15 @@ mod tests {
             "regions":[{"id":"left","instance":"front","selector":left},
                 {"id":"right","instance":"front","selector":right}],
             "max_vertex_samples":100,"max_pair_evaluations":100});
-        let flat = json!([[[0.,0.],[3.,0.],[0.,3.]],[[3.,0.],[6.,0.],[3.,3.]]]);
+        let flat = json!([
+            [[0., 0.], [3., 0.], [0., 3.]],
+            [[3., 0.], [6., 0.], [3., 3.]]
+        ]);
         descriptor["scenario"]["contact_loads"] = policy.clone();
         simulation["contact_load_ownership"]["triangle_instance"] = json!([0, 0]);
         simulation["contact_load_ownership"]["rest_triangles_mm"] = flat.clone();
-        simulation["drape"]["contact_diagnostics"]["final_reactions"]["result"]
-            ["body_force_on_cloth_n"][3] = json!([0., 0., 0.]);
+        simulation["drape"]["contact_diagnostics"]["final_reactions"]["result"]["body_force_on_cloth_n"]
+            [3] = json!([0., 0., 0.]);
         for (moving, report) in [
             (false, &mut simulation["contact_loads"]["result"]),
             (true, &mut motion["contact_loads"]["result"]),
@@ -1006,12 +1013,21 @@ mod tests {
         let (alternative, descriptor, simulation, motion) = regional_case();
         let initial = admit(&alternative, &descriptor, &simulation, None).unwrap();
         assert_eq!(initial["peak_body_sum_vertex_force_n"], 12.);
-        assert_eq!(initial["regions"]["left"]["peak_body_sum_vertex_force_n"], 12.);
-        assert_eq!(initial["regions"]["right"]["peak_body_sum_vertex_force_n"], 7.);
+        assert_eq!(
+            initial["regions"]["left"]["peak_body_sum_vertex_force_n"],
+            12.
+        );
+        assert_eq!(
+            initial["regions"]["right"]["peak_body_sum_vertex_force_n"],
+            7.
+        );
         let history = admit(&alternative, &descriptor, &simulation, Some(&motion)).unwrap();
         assert_eq!(history["regions"]["right"]["peak_body_resultant_n"], 6.);
         assert_eq!(history["regions"]["right"]["peak_body_resultant_sample"], 1);
-        assert_eq!(history["regions"]["right"]["peak_body_sum_vertex_force_sample"], 0);
+        assert_eq!(
+            history["regions"]["right"]["peak_body_sum_vertex_force_sample"],
+            0
+        );
         assert_eq!(history["regions"]["right"]["max_force_vertex"], 0);
 
         let mut partial_descriptor = descriptor;
@@ -1022,7 +1038,10 @@ mod tests {
         let mut partial = simulation;
         let report = &mut partial["contact_loads"]["result"];
         report["request"] = partial_descriptor["scenario"]["contact_loads"].clone();
-        report["source"]["regions"].as_object_mut().unwrap().remove("right");
+        report["source"]["regions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("right");
         report["source"]["selected_vertices"] = json!([0, 1, 2]);
         report["source_sha256"] = json!(hash(&report["source"]).unwrap());
         report["regions"].as_object_mut().unwrap().remove("right");
@@ -1037,13 +1056,34 @@ mod tests {
     fn regional_loads_reconstruct_membership_even_after_source_receipts_are_rehashed() {
         let (alternative, descriptor, simulation, _) = regional_case();
         for (pointer, value) in [
-            ("/contact_loads/result/source/regions/left/source_triangles", json!([1])),
-            ("/contact_loads/result/source/regions/left/selected_vertices", json!([0, 2, 3])),
-            ("/contact_loads/result/source/regions/left/reference_area_m2", json!(1.)),
-            ("/contact_loads/result/source/regions/left/instance", json!("back")),
-            ("/contact_loads/result/source/selected_vertices", json!([0, 1, 2])),
-            ("/contact_load_ownership/rest_triangles_mm/0", json!([[30.,0.],[33.,0.],[30.,3.]])),
-            ("/contact_load_ownership/rest_triangles_mm/1", json!([[0.,0.],[1.,0.],[2.,0.]])),
+            (
+                "/contact_loads/result/source/regions/left/source_triangles",
+                json!([1]),
+            ),
+            (
+                "/contact_loads/result/source/regions/left/selected_vertices",
+                json!([0, 2, 3]),
+            ),
+            (
+                "/contact_loads/result/source/regions/left/reference_area_m2",
+                json!(1.),
+            ),
+            (
+                "/contact_loads/result/source/regions/left/instance",
+                json!("back"),
+            ),
+            (
+                "/contact_loads/result/source/selected_vertices",
+                json!([0, 1, 2]),
+            ),
+            (
+                "/contact_load_ownership/rest_triangles_mm/0",
+                json!([[30., 0.], [33., 0.], [30., 3.]]),
+            ),
+            (
+                "/contact_load_ownership/rest_triangles_mm/1",
+                json!([[0., 0.], [1., 0.], [2., 0.]]),
+            ),
             ("/contact_load_ownership/triangle_instance/1", json!(1)),
         ] {
             let mut changed = simulation.clone();
@@ -1052,7 +1092,10 @@ mod tests {
                 json!(hash(&changed["contact_load_ownership"]["rest_triangles_mm"]).unwrap());
             changed["contact_loads"]["result"]["source_sha256"] =
                 json!(hash(&changed["contact_loads"]["result"]["source"]).unwrap());
-            assert!(admit(&alternative, &descriptor, &changed, None).is_err(), "{pointer}");
+            assert!(
+                admit(&alternative, &descriptor, &changed, None).is_err(),
+                "{pointer}"
+            );
         }
     }
 
@@ -1060,10 +1103,22 @@ mod tests {
     fn regional_loads_refuse_inconsistent_extrema_witnesses_and_cross_schema_scopes() {
         let (alternative, descriptor, simulation, motion) = regional_case();
         for (pointer, value) in [
-            ("/contact_loads/result/regions/right/peak_body_sum_vertex_force_n", json!(12.)),
-            ("/contact_loads/result/regions/right/peak_body_sum_vertex_force_sample", json!(1)),
-            ("/contact_loads/result/regions/right/peak_body_resultant_sample", json!(0)),
-            ("/contact_loads/result/regions/right/max_force_vertex", json!(3)),
+            (
+                "/contact_loads/result/regions/right/peak_body_sum_vertex_force_n",
+                json!(12.),
+            ),
+            (
+                "/contact_loads/result/regions/right/peak_body_sum_vertex_force_sample",
+                json!(1),
+            ),
+            (
+                "/contact_loads/result/regions/right/peak_body_resultant_sample",
+                json!(0),
+            ),
+            (
+                "/contact_loads/result/regions/right/max_force_vertex",
+                json!(3),
+            ),
             ("/contact_loads/result/max_force_vertex", json!(3)),
             ("/contact_loads/result/regions/left", Value::Null),
         ] {

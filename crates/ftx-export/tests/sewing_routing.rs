@@ -4100,8 +4100,8 @@ fn material_studies_use_selected_routed_feed_milliseconds_without_rounding_raw_s
 
     let (pattern, mut options) = feed_fixture();
     for (cell, operation) in [(1, "reinforce"), (2, "join")] {
-        options["production"]["routing"]["cells"][cell]["configuration"]["recipes"][operation]
-            ["stitches_per_minute"] = json!(603.0);
+        options["production"]["routing"]["cells"][cell]["configuration"]["recipes"][operation]["stitches_per_minute"] =
+            json!(603.0);
     }
     refresh_locks(&mut options);
     let evaluate = |input: Value| {
@@ -4128,8 +4128,7 @@ fn material_studies_use_selected_routed_feed_milliseconds_without_rounding_raw_s
             .unwrap();
         assert_eq!(actual, 3982);
         assert_eq!(row["metrics"]["sewing_scheduled_feed_milliseconds"], actual);
-        let reading = &report["comparison"]["alternatives"][0]["readings"]
-            ["sewing_scheduled_feed_milliseconds"];
+        let reading = &report["comparison"]["alternatives"][0]["readings"]["sewing_scheduled_feed_milliseconds"];
         assert_eq!(reading["value"], 3982.0);
         assert_eq!(reading["unit"], "ms");
         assert_eq!(reading["consumer"], "sewing");
@@ -4150,15 +4149,17 @@ fn material_studies_use_selected_routed_feed_milliseconds_without_rounding_raw_s
         } else {
             &mut inherited["sewing"]["production"]
         };
-        production.as_object_mut().unwrap().remove("production_copies");
+        production
+            .as_object_mut()
+            .unwrap()
+            .remove("production_copies");
         let inherited = evaluate(inherited);
         assert_eq!(
             inherited["alternatives"][0]["metrics"]["sewing_scheduled_feed_milliseconds"],
             actual
         );
         assert_eq!(
-            inherited["alternatives"][0]["sewing"]["result"]["options"]["production"]
-                ["production_copies"],
+            inherited["alternatives"][0]["sewing"]["result"]["options"]["production"]["production_copies"],
             1
         );
         assert_eq!(inherited["comparison"]["frontier"], json!(["scheduled"]));
@@ -4197,19 +4198,20 @@ fn scheduled_feed_comparison_retains_bounded_incumbents_and_route_qualification(
                 "default":pattern.raw()["fabric"]["material"]}}],
             "comparison":{"basis":"nominal","objectives":[{
                 "metric":"sewing_scheduled_feed_milliseconds","direction":"minimize"}]}
-        })).unwrap();
+        }))
+        .unwrap();
         serde_json::to_value(request.evaluate(&pattern).unwrap()).unwrap()
     };
     let original = study(options.clone());
     assert_eq!(original["comparison"]["frontier"], json!(["bounded"]));
     assert_eq!(
-        original["comparison"]["alternatives"][0]["readings"]
-            ["sewing_scheduled_feed_milliseconds"]["value"],
+        original["comparison"]["alternatives"][0]["readings"]["sewing_scheduled_feed_milliseconds"]
+            ["value"],
         6000.0
     );
     assert_eq!(
-        original["alternatives"][0]["sewing"]["result"]["production"]["routing"]
-            ["feed_time_search"]["optimality_proven"],
+        original["alternatives"][0]["sewing"]["result"]["production"]["routing"]["feed_time_search"]
+            ["optimality_proven"],
         false
     );
     // Equal selected feed cannot erase a changed source-qualified route protocol.
@@ -4225,8 +4227,8 @@ fn scheduled_feed_comparison_retains_bounded_incumbents_and_route_qualification(
         original["comparison"]["alternatives"][0]["input_protocol_sha256"],
         changed["comparison"]["alternatives"][0]["input_protocol_sha256"]
     );
-    options["production"]["routing"]["cells"][2]["configuration"]["recipes"]["join"]
-        ["stitches_per_minute"] = json!(500.0);
+    options["production"]["routing"]["cells"][2]["configuration"]["recipes"]["join"]["stitches_per_minute"] =
+        json!(500.0);
     let stale = study(options);
     assert_eq!(stale["alternatives"][0]["sewing"]["status"], "refused");
     assert_eq!(stale["comparison"]["frontier"], json!([]));

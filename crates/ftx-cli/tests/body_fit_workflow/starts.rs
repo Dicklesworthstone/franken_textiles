@@ -99,14 +99,17 @@ fn silhouette_only_masks_replay_native_portable_starts_and_held_out_checks() {
                 json!({"axis":"vertical","index":620,"sigma_px":1.0,"partition":"held_out"}),
             ]);
         }
-        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
         for frame in input["fit"]["frames"].as_array_mut().unwrap() {
             frame["keypoints"] = json!([]);
         }
         save(&dir, &input);
         let source = std::fs::read_to_string(dir.join("input.json")).unwrap();
-        let observations =
-            ftx_wasm::body_fit::body_fit_observations(&bytes, &source, "").unwrap();
+        let observations = ftx_wasm::body_fit::body_fit_observations(&bytes, &source, "").unwrap();
         assert_eq!(observations["targets"], json!([]));
         assert_eq!(observations["input"], source);
         assert!(ftx_wasm::body_fit::body_fit_starts(&bytes, &source, "").is_err());
@@ -155,7 +158,10 @@ fn silhouette_only_masks_replay_native_portable_starts_and_held_out_checks() {
             )
             .unwrap();
             assert_eq!(attached["targets"], json!([]));
-            assert_eq!(attached["mask_import"]["decoded_mask_sha256"], sha256_hex(&mask.data));
+            assert_eq!(
+                attached["mask_import"]["decoded_mask_sha256"],
+                sha256_hex(&mask.data)
+            );
             prepared = attached["input"].as_str().unwrap().to_owned();
         }
         let starts: Vec<_> = input["fit"]["starts"]
@@ -183,8 +189,17 @@ fn silhouette_only_masks_replay_native_portable_starts_and_held_out_checks() {
             ftx_wasm::body_fit::review_body_fit_start(&bytes, &prepared, "0", "0").unwrap();
         assert_eq!(portable_preview["keypoints"], json!([]));
         assert_eq!(portable_preview["pose_values"], json!([]));
-        assert_eq!(portable_preview["silhouette"]["lines"].as_array().unwrap().len(), 5);
-        assert_eq!(portable_preview["camera"], input["fit"]["frames"][0]["camera"]);
+        assert_eq!(
+            portable_preview["silhouette"]["lines"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+        assert_eq!(
+            portable_preview["camera"],
+            input["fit"]["frames"][0]["camera"]
+        );
 
         std::fs::write(dir.join("input.json"), &prepared).unwrap();
         let native = run(&dir, &["--out", "silhouette-only.json"], 0)["result"].clone();

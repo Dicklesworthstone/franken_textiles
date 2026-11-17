@@ -1220,7 +1220,10 @@ fn compressed_automatic_faces_follow_covered_orientation_and_exposed_source_side
                     )
                     .unwrap();
             }
-            assert_eq!(automatic.state.temperature_c(), explicit.state.temperature_c());
+            assert_eq!(
+                automatic.state.temperature_c(),
+                explicit.state.temperature_c()
+            );
             assert_eq!(automatic.stored_j, explicit.stored_j);
             assert_eq!(automatic.inside_j, explicit.inside_j);
             assert_eq!(automatic.outside_j, explicit.outside_j);
@@ -1228,18 +1231,28 @@ fn compressed_automatic_faces_follow_covered_orientation_and_exposed_source_side
             assert_eq!(automatic.exposed_radiative_j, explicit.exposed_radiative_j);
             assert!((automatic.stored_j - automatic.net_j).abs() < 1e-8);
             if interval == 1 {
-                for patch in automatic.final_field["exposed_exterior_exchange"]["patches"]
+                let triangles = automatic.final_field["exposed_exterior_exchange"]["triangles"]
                     .as_array()
-                    .unwrap()
-                {
-                    assert_eq!(patch["material_face"]["side"], "positive");
-                    assert_eq!(patch["material_face"]["face"], "public");
+                    .unwrap();
+                assert!(!triangles.is_empty());
+                for triangle in triangles {
+                    assert_eq!(triangle["flux"]["material_face"]["side"], "positive");
+                    assert_eq!(triangle["flux"]["material_face"]["face"], "public");
                 }
             } else {
-                let face = &automatic.final_field["exterior_exchange"]["regions"][0]["flux"]
-                    ["material_face"];
-                assert_eq!(face["side"], if reverse_shell { "negative" } else { "positive" });
-                assert_eq!(face["face"], if reverse_shell { "reverse" } else { "public" });
+                let face = &automatic.final_field["exterior_exchange"]["regions"][0]["flux"]["material_face"];
+                assert_eq!(
+                    face["side"],
+                    if reverse_shell {
+                        "negative"
+                    } else {
+                        "positive"
+                    }
+                );
+                assert_eq!(
+                    face["face"],
+                    if reverse_shell { "reverse" } else { "public" }
+                );
             }
             if interval == 0 {
                 first_radiation.push(automatic.covered_radiative_j);
@@ -1257,7 +1270,12 @@ fn compressed_automatic_faces_follow_covered_orientation_and_exposed_source_side
 #[test]
 fn compressed_coverage_preflights_both_sides_but_exposed_sheets_need_only_positive() {
     let mut preparation = compression::tests::mapped_optical_acquisition();
-    preparation.material.optical_faces.as_mut().unwrap().negative = None;
+    preparation
+        .material
+        .optical_faces
+        .as_mut()
+        .unwrap()
+        .negative = None;
     preparation.invariants.remove("emissivity_reverse");
     let (mut history, _) = automatic_compression_history(preparation, false);
     assert!(
@@ -1462,7 +1480,8 @@ fn coverage_compression_radiation_matches_independent_two_cell_balance() {
             (a * g + middle * f) / determinant,
         ];
         let convective = 5. * (face - 5.);
-        let radiative = 0.8 * 5.670_374_419e-8 * ((face + 273.15).powi(4) - (263.15_f64).powi(4));
+        let radiative =
+            0.8 * 5.670_374_419e-8 * ((face + 273.15).powi(2).powi(2) - 263.15_f64.powi(2).powi(2));
         (temperatures, convective, radiative)
     };
     let (mut lo, mut hi) = (-80., 80.);

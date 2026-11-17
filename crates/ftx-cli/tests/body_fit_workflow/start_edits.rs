@@ -487,12 +487,11 @@ fn portable_binary_masks_preserve_sources_and_replay_native_sampling_and_fitting
         portable["input"]["frames"][1]["frame"]["timestamp_us"].as_u64(),
         Some(u64::MAX)
     );
-    for (frame, native) in portable["input"]["frames"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .zip(native_masks["result"]["input"]["frames"].as_array().unwrap())
-    {
+    for (frame, native) in portable["input"]["frames"].as_array().unwrap().iter().zip(
+        native_masks["result"]["input"]["frames"]
+            .as_array()
+            .unwrap(),
+    ) {
         assert_eq!(frame["silhouette"]["lines"], native["silhouette"]["lines"]);
     }
     for (attempt, native) in portable["attempts"]
@@ -565,7 +564,15 @@ fn portable_binary_masks_refuse_stale_or_transformed_sources_and_invalid_slices(
         .unwrap()
         .push(selection["samples"][0].clone());
     assert!(body_fit_mask(&model, &source, &png, &duplicate.to_string()).is_err());
-    assert!(body_fit_mask(&model, &(source.clone() + "\n"), &png, &selection.to_string()).is_err());
+    assert!(
+        body_fit_mask(
+            &model,
+            &(source.clone() + "\n"),
+            &png,
+            &selection.to_string()
+        )
+        .is_err()
+    );
     assert!(body_fit_mask(&model, &source, &png, &" ".repeat(64 * 1024 + 1)).is_err());
 
     let mut soft = mask.clone();

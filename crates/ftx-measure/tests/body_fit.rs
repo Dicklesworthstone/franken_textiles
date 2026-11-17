@@ -303,7 +303,10 @@ fn fixed_pose_views_recover_only_shape_and_retain_every_evidence_gate() {
     assert!(report.attempts.iter().all(|attempt| {
         attempt.status == "CONVERGED"
             && attempt.checks.iter().all(|check| check.passed)
-            && attempt.cost_history.windows(2).all(|pair| pair[1] < pair[0])
+            && attempt
+                .cost_history
+                .windows(2)
+                .all(|pair| pair[1] < pair[0])
     }));
 
     let mut invalid = input.clone();

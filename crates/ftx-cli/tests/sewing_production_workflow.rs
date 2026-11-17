@@ -3259,10 +3259,7 @@ fn parallel_feed_shared_operator_replays_deadlines_recipe_selection_and_material
         parallel["feed_time_search"]["search_scope"],
         "shared_operator_retained_serial_incumbents/1"
     );
-    assert_eq!(
-        parallel["time_basis"],
-        "ceil_operation_feed_milliseconds/1"
-    );
+    assert_eq!(parallel["time_basis"], "ceil_operation_feed_milliseconds/1");
 
     let pass = &options["passes"][0];
     let selection = json!({"schema":"ftx-sewing-selection/9","options":options,

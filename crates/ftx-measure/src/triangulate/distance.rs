@@ -211,10 +211,7 @@ struct Variance(f64);
 impl Variance {
     fn mode(&mut self, response_m: f64) -> Result<(), Refusal> {
         let square = response_m * response_m;
-        if !response_m.is_finite()
-            || !square.is_finite()
-            || (response_m != 0. && square == 0.)
-        {
+        if !response_m.is_finite() || !square.is_finite() || (response_m != 0. && square == 0.) {
             return Err(numerical(
                 "distance variance contribution overflowed or underflowed",
             ));
@@ -239,10 +236,7 @@ impl Variance {
         }
         let response = products.iter().sum::<f64>();
         let weighted = response * sigma;
-        if !response.is_finite()
-            || !weighted.is_finite()
-            || (response != 0. && weighted == 0.)
-        {
+        if !response.is_finite() || !weighted.is_finite() || (response != 0. && weighted == 0.) {
             return Err(numerical(
                 "projected distance sensitivity overflowed or underflowed",
             ));
@@ -648,7 +642,9 @@ mod tests {
                 json!(super::super::triangulate(&original.input).unwrap()),
             );
             assert_eq!(
-                endpoint.triangulation.input.observations[0].frame.timestamp_us,
+                endpoint.triangulation.input.observations[0]
+                    .frame
+                    .timestamp_us,
                 9_007_199_254_740_993,
             );
         }
@@ -666,7 +662,12 @@ mod tests {
         reversed.endpoints.swap(0, 1);
         for endpoint in &mut reversed.endpoints {
             endpoint.input.observations.reverse();
-            endpoint.click_noise.as_mut().unwrap().observations.reverse();
+            endpoint
+                .click_noise
+                .as_mut()
+                .unwrap()
+                .observations
+                .reverse();
         }
         let reversed = run(&reversed).unwrap();
         assert_eq!(reversed.distance_m, report.distance_m);
@@ -708,9 +709,20 @@ mod tests {
         input.endpoints[1].input = input.endpoints[0].input.clone();
         let report = run(&input).unwrap();
         assert_eq!(report.status, "REJECTED");
-        assert!(report.endpoints.iter().all(|r| r.triangulation.point_m.is_some()));
+        assert!(
+            report
+                .endpoints
+                .iter()
+                .all(|r| r.triangulation.point_m.is_some())
+        );
         assert!(report.distance_m.is_none());
-        assert!(report.conditional_click_uncertainty.unwrap().sigma_m.is_none());
+        assert!(
+            report
+                .conditional_click_uncertainty
+                .unwrap()
+                .sigma_m
+                .is_none()
+        );
     }
 
     #[test]
@@ -759,7 +771,12 @@ mod tests {
         for endpoint in &mut no_noise.endpoints {
             endpoint.click_noise = None;
         }
-        assert!(run(&no_noise).unwrap().conditional_click_uncertainty.is_none());
+        assert!(
+            run(&no_noise)
+                .unwrap()
+                .conditional_click_uncertainty
+                .is_none()
+        );
         let mut unknown = json!(no_noise);
         unknown["total_sigma_m"] = json!(0.);
         assert!(serde_json::from_value::<Input>(unknown).is_err());
@@ -819,7 +836,9 @@ mod tests {
             4e-6,
         );
         let mut changed = mode_report(right);
-        changed.sensitivities[0].calibration_sha256.push_str("-changed");
+        changed.sensitivities[0]
+            .calibration_sha256
+            .push_str("-changed");
         assert!(lens_variance(&mode_report(left), &changed, unit).is_err());
     }
 

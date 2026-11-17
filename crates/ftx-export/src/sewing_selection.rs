@@ -805,7 +805,9 @@ impl Request {
                                 .and_then(|production| production.parallel.as_ref())
                                 .and_then(|parallel| parallel.feed_time_search.as_ref())
                                 .ok_or_else(|| {
-                                    invalid("admitted parallel feed recipe lost its objective proof")
+                                    invalid(
+                                        "admitted parallel feed recipe lost its objective proof",
+                                    )
                                 })?;
                             (feed.selected_feed_milliseconds, feed.optimality_proven)
                         };

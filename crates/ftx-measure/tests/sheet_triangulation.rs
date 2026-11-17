@@ -88,15 +88,21 @@ fn reference_scale_fixture(
             world_to_camera: Mat3::from_rows([[1., 0., 0.], [0., 0., -1.], [0., 1., 0.]]),
             center_m: Vec3::new(x, -2., 0.3),
         };
-        let points: Vec<_> = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5), (0.1, 0.2)]
-            .into_iter()
-            .enumerate()
-            .map(|(index, (x, z))| {
-                json!({"sheet_xz_m":[x,z],
+        let points: Vec<_> = [
+            (-0.5, -0.5),
+            (0.5, -0.5),
+            (0.5, 0.5),
+            (-0.5, 0.5),
+            (0.1, 0.2),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (x, z))| {
+            json!({"sheet_xz_m":[x,z],
                     "pixel_px":known.project(Vec3::new(x,0.,z)).unwrap(),
                     "held_out":index == 4})
-            })
-            .collect();
+        })
+        .collect();
         let source = json!({"schema":"ftx-sheet-pose-input/1","reference_id":"synthetic-scale-square",
             "intrinsics":intrinsics,"image_size_px":[1600,1200],"rotation_applied_degrees":0,
             "points":points});
@@ -317,7 +323,6 @@ fn unavailable_reference_scale_preserves_geometry_without_partial_precision() {
     );
 }
 
-
 use ftx_measure::triangulate::distance::{self, Endpoint, Input as DistanceInput};
 
 fn distance_fixture(fit_views: usize) -> DistanceInput {
@@ -485,9 +490,7 @@ fn distance_shared_sheet_precision_matches_joint_source_corner_refits() {
             for axis in 0..2 {
                 let sample = |step: f64| {
                     let mut source = original.report["input"].clone();
-                    let pixel = source["points"][index]["pixel_px"][axis]
-                        .as_f64()
-                        .unwrap();
+                    let pixel = source["points"][index]["pixel_px"][axis].as_f64().unwrap();
                     source["points"][index]["pixel_px"][axis] = json!(pixel + step);
                     let pose = Camera::sheet_pose_report(&source).unwrap();
                     assert_eq!(pose["ok"], true);

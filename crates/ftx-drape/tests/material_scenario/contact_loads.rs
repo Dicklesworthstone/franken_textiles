@@ -201,8 +201,7 @@ fn regional_contact_loads_select_intact_flat_panels_and_replay_the_same_sewn_mot
     let result = session.evaluate(&p, |_| {}).unwrap();
     assert_eq!(result["contact_loads"]["status"], "available", "{result}");
     assert_eq!(
-        result["motion"]["result"]["contact_loads"]["status"],
-        "available",
+        result["motion"]["result"]["contact_loads"]["status"], "available",
         "{}",
         result["motion"]
     );
@@ -214,7 +213,10 @@ fn regional_contact_loads_select_intact_flat_panels_and_replay_the_same_sewn_mot
     );
     let source = &result["contact_loads"]["result"]["source"];
     let original = &whole["contact_loads"]["result"];
-    assert_eq!(source["selected_vertices"], original["source"]["selected_vertices"]);
+    assert_eq!(
+        source["selected_vertices"],
+        original["source"]["selected_vertices"]
+    );
     let flat: Vec<[ftx_core::Vec2; 3]> =
         serde_json::from_value(result["contact_load_ownership"]["rest_triangles_mm"].clone())
             .unwrap();
@@ -259,7 +261,13 @@ fn regional_contact_loads_select_intact_flat_panels_and_replay_the_same_sewn_mot
     assert_eq!(report["pressure_claim"], false);
 
     // Keeping only one region changes the observed scope, never the garment topology or forces.
-    s.contact_loads.as_mut().unwrap().regions.as_mut().unwrap().pop();
+    s.contact_loads
+        .as_mut()
+        .unwrap()
+        .regions
+        .as_mut()
+        .unwrap()
+        .pop();
     let mut partial = Session::new(&s, &body).unwrap();
     partial.set_motion_path(Ok(path(&s, &body))).unwrap();
     let partial = partial.evaluate(&p, |_| {}).unwrap();

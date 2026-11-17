@@ -1608,7 +1608,10 @@ mod tests {
             let material = conditioned(&input);
             let request = optical_request();
             qualify_optics(&material, &request, false).unwrap();
-            assert!(qualify_optics(&material, &request, true).is_err(), "{fault}");
+            assert!(
+                qualify_optics(&material, &request, true).is_err(),
+                "{fault}"
+            );
             let exposed = json!({"exterior_exchange":[null],
                 "exposed_exterior_exchange":request["exterior_exchange"]});
             qualify_optics(&material, &exposed, true).unwrap();
@@ -1632,7 +1635,10 @@ mod tests {
         ] {
             let mut changed = request.clone();
             changed["exterior_exchange"][0]["radiation"][field] = value;
-            assert!(qualify_optics(&material, &changed, true).is_err(), "{field}");
+            assert!(
+                qualify_optics(&material, &changed, true).is_err(),
+                "{field}"
+            );
             assert!(exterior_boundary(&changed["exterior_exchange"][0], &boundary).is_err());
         }
         let mut changed = request.clone();

@@ -1100,11 +1100,7 @@ impl AmbientExchange {
         let lo = finite(&bounds[0]).ok_or_else(fail)?;
         let hi = finite(&bounds[1]).ok_or_else(fail)?;
         let incoming_enthalpy = latent + cp * (temperature - reference);
-        if lo < 0.
-            || lo >= hi
-            || lo > domain[0]
-            || hi < domain[1]
-            || !incoming_enthalpy.is_finite()
+        if lo < 0. || lo >= hi || lo > domain[0] || hi < domain[1] || !incoming_enthalpy.is_finite()
         {
             return Err(fail());
         }
@@ -1298,16 +1294,18 @@ impl Reservoir {
         let condensed = nonnegative(water, "condensed_liquid_kg")?;
         let received = number(report, "net_vapor_received_kg")?;
         let residual = number(report, "mass_balance_error_kg")?;
-        let [ambient_in, ambient_out, ambient_j] = if let Some(exchange) = &mut self.ambient_exchange {
-            exchange.admit(&report["ambient_exchange"], time, steps)?
-        } else {
-            if report.get("ambient_exchange").is_some() {
-                return Err(fail());
-            }
-            [0.; 3]
-        };
+        let [ambient_in, ambient_out, ambient_j] =
+            if let Some(exchange) = &mut self.ambient_exchange {
+                exchange.admit(&report["ambient_exchange"], time, steps)?
+            } else {
+                if report.get("ambient_exchange").is_some() {
+                    return Err(fail());
+                }
+                [0.; 3]
+            };
         let ambient_net = ambient_in - ambient_out;
-        let mass_scale = mass + self.initial_mass + evaporated + condensed + ambient_in + ambient_out;
+        let mass_scale =
+            mass + self.initial_mass + evaporated + condensed + ambient_in + ambient_out;
         let available = self.initial_mass + evaporated + ambient_in;
         let pressure_trials = report["pressure_trials"].as_u64().ok_or_else(fail)?;
         let maximum_residual = nonnegative(report, "maximum_step_mass_residual_kg")?;

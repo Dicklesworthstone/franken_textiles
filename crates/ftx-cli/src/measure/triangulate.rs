@@ -217,7 +217,10 @@ pub(super) fn run_distance(args: &Args) -> Result<(Value, i32, String), Refusal>
     let components = [
         ("CLICK", report.conditional_click_uncertainty.as_ref()),
         ("LENS", report.conditional_lens_uncertainty.as_ref()),
-        ("SHEET-CORNER", report.conditional_sheet_uncertainty.as_ref()),
+        (
+            "SHEET-CORNER",
+            report.conditional_sheet_uncertainty.as_ref(),
+        ),
         (
             "REFERENCE-SCALE",
             report.conditional_reference_scale_uncertainty.as_ref(),

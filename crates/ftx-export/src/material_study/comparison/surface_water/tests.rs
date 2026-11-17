@@ -2412,8 +2412,7 @@ fn ambient_reservoir_case() -> (Alternative, Value, Value, Value) {
         gas["mass_balance_error_kg"] = json!(mass - 1e-6 - received - incoming);
         gas["vapor_enthalpy_change_j"] = json!(change);
         gas["isothermal_heat_removed_j"] = json!(thermostat);
-        gas["enthalpy_balance_error_j"] =
-            json!(change + thermostat - received_j - incoming_j);
+        gas["enthalpy_balance_error_j"] = json!(change + thermostat - received_j - incoming_j);
         gas["ambient_exchange"] = json!({"schema":"ftx-textile-vapor-exchange-result/1",
             "incoming_vapor_mass_kg":incoming,"outgoing_vapor_mass_kg":0.,
             "net_vapor_received_kg":incoming,"incoming_vapor_enthalpy_j":incoming_j,
@@ -2495,7 +2494,10 @@ fn finite_vapor_ambient_exchange_refuses_balanced_but_unsourced_mass() {
         // expose this fabrication.
         let received = gas["net_vapor_received_kg"].as_f64().unwrap();
         let received_j = gas["net_vapor_enthalpy_received_j"].as_f64().unwrap();
-        let incoming = 2. * gas["ambient_exchange"]["incoming_vapor_mass_kg"].as_f64().unwrap();
+        let incoming = 2.
+            * gas["ambient_exchange"]["incoming_vapor_mass_kg"]
+                .as_f64()
+                .unwrap();
         let incoming_j = incoming * (2500000. + 4200. * 60.);
         let mass = 1e-6 + received + incoming;
         let change = (2500000. + 4200. * 40.) * (mass - 1e-6);
@@ -2505,8 +2507,7 @@ fn finite_vapor_ambient_exchange_refuses_balanced_but_unsourced_mass() {
         gas["mass_balance_error_kg"] = json!(mass - 1e-6 - received - incoming);
         gas["vapor_enthalpy_change_j"] = json!(change);
         gas["isothermal_heat_removed_j"] = json!(thermostat);
-        gas["enthalpy_balance_error_j"] =
-            json!(change + thermostat - received_j - incoming_j);
+        gas["enthalpy_balance_error_j"] = json!(change + thermostat - received_j - incoming_j);
         let exchange = &mut gas["ambient_exchange"];
         exchange["incoming_vapor_mass_kg"] = json!(incoming);
         exchange["net_vapor_received_kg"] = json!(incoming);

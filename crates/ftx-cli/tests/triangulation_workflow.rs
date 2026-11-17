@@ -1280,7 +1280,12 @@ fn reference_scale_refuses_different_original_acquisitions_in_combined_requests(
     );
     for (flag, name, lenses, sheets) in [
         ("--lens-noise", "lens.json", lens.to_string(), String::new()),
-        ("--sheet-noise", "sheet.json", String::new(), sheet.to_string()),
+        (
+            "--sheet-noise",
+            "sheet.json",
+            String::new(),
+            sheet.to_string(),
+        ),
     ] {
         run(
             &dir.0,

@@ -865,7 +865,8 @@ impl Search<'_> {
             else {
                 continue;
             };
-            if self.feed_lower.is_some() && self.best.as_ref().is_some_and(|best| feed > best.feed) {
+            if self.feed_lower.is_some() && self.best.as_ref().is_some_and(|best| feed > best.feed)
+            {
                 continue;
             }
             if count > 0 {

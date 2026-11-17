@@ -6,7 +6,6 @@
 [![Reference](https://img.shields.io/badge/reference-Python%20skill%20%4088e03965-3776ab)](#oracles-and-pins)
 [![Body model](https://img.shields.io/badge/body-Anny%200.6.1%20(newborn%E2%86%92adult)-2ea44f)](#bodies-anny-not-a-dress-form)
 [![Core](https://img.shields.io/badge/core-Rust%20%2F%20Wasm-b7410e)](#architecture)
-[![Budget](https://img.shields.io/badge/source%20budget-exceeded-orange)](#workspace-and-budget)
 [![License](https://img.shields.io/badge/license-MIT%20%2B%20AI%20rider-yellow)](LICENSE)
 
 </div>

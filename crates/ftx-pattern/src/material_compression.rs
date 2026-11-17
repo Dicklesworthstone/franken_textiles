@@ -318,11 +318,10 @@ fn retain_optical_faces(
     let Some(declaration) = input.invariants.get("optical_faces") else {
         return Ok(());
     };
-    let original = input
-        .material
-        .optical_faces
-        .as_ref()
-        .ok_or_else(|| invalid("optical_faces: no original source-side assignment to retain"))?;
+    let original =
+        input.material.optical_faces.as_ref().ok_or_else(|| {
+            invalid("optical_faces: no original source-side assignment to retain")
+        })?;
     qualify_invariant(input, "optical_faces", declaration, domain)?;
     if original.specimen != input.specimen
         || original.conditioning != input.conditioning
@@ -332,7 +331,10 @@ fn retain_optical_faces(
             "optical_faces: pressure qualification must preserve the original specimen, conditioning and admitted assignment evidence",
         ));
     }
-    for face in [&original.positive, &original.negative].into_iter().flatten() {
+    for face in [&original.positive, &original.negative]
+        .into_iter()
+        .flatten()
+    {
         let q = material
             .properties
             .get(&face.emissivity_property)
@@ -357,8 +359,12 @@ fn retain_optical_faces(
     retained.evidence = weaker(original.evidence, declaration.evidence);
     retained.method = format!(
         "Original source-side assignment from {} ({}), pressure-qualified by {} ({}) over {:?} Pa on the {} branch. Exact assignment and qualifications remain in the compression input receipt.",
-        original.source, original.method, declaration.source, declaration.method,
-        declaration.pressure_range_pa, input.loading_branch,
+        original.source,
+        original.method,
+        declaration.source,
+        declaration.method,
+        declaration.pressure_range_pa,
+        input.loading_branch,
     );
     material.optical_faces = Some(retained);
     Ok(())

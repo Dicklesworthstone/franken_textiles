@@ -3813,7 +3813,15 @@ fn feed_operator_oracle(
                 next[cell] += 1;
                 let mut completion = ready;
                 completion[cell] = finish;
-                enumerate(case, phases, next, completion, Some(cell), release, deadline)
+                enumerate(
+                    case,
+                    phases,
+                    next,
+                    completion,
+                    Some(cell),
+                    release,
+                    deadline,
+                )
             })
             .min()
     }
@@ -3916,11 +3924,21 @@ fn parallel_feed_shared_operator_matches_independent_allocation_and_dispatch_enu
                 continue;
             };
             let program = actual.unwrap();
-            let parallel = program.plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+            let parallel = program
+                .plan
+                .production
+                .as_ref()
+                .unwrap()
+                .parallel
+                .as_ref()
+                .unwrap();
             let feed = parallel.feed_time_search.as_ref().unwrap();
             assert_eq!(parallel.schema, "ftx-sewing-parallel/9");
             assert_eq!(parallel.time_basis, "ceil_operation_feed_milliseconds/1");
-            assert_eq!(feed.search_scope, "shared_operator_retained_serial_incumbents/1");
+            assert_eq!(
+                feed.search_scope,
+                "shared_operator_retained_serial_incumbents/1"
+            );
             assert_eq!(
                 (
                     parallel.selected.scheduled_feed_milliseconds,
@@ -3980,7 +3998,13 @@ fn parallel_feed_shared_operator_keeps_faster_equal_feed_allocations_and_separat
     makespan_options["production"]["parallel"]["objective"] = json!("minimize_makespan");
     makespan_options["production"]["parallel"]["feed_time_search"] = Value::Null;
     let fastest = build(&pattern, makespan_options).unwrap();
-    let fastest = fastest.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    let fastest = fastest
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
     for deadline in [None, Some(6400)] {
         options["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
             json!(deadline);
@@ -3992,7 +4016,13 @@ fn parallel_feed_shared_operator_keeps_faster_equal_feed_allocations_and_separat
             serde_json::to_value(&parallel.selected).unwrap(),
             serde_json::to_value(&fastest.selected).unwrap()
         );
-        assert!(parallel.feed_time_search.as_ref().unwrap().optimality_proven);
+        assert!(
+            parallel
+                .feed_time_search
+                .as_ref()
+                .unwrap()
+                .optimality_proven
+        );
         assert!(!parallel.optimality_proven);
         assert!(parallel.shared_operator.as_ref().unwrap().search_complete);
     }
@@ -4015,7 +4045,14 @@ fn parallel_feed_shared_operator_preserves_a_complete_unproved_low_budget_incumb
     refresh_operator_locks(&mut options);
     options["production"]["parallel"]["shared_operator"]["max_search_nodes"] = json!(4);
     let program = SewProgram::build(&pattern, &serde_json::from_value(options).unwrap()).unwrap();
-    let parallel = program.plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    let parallel = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
     let feed = parallel.feed_time_search.as_ref().unwrap();
     assert_eq!(parallel.selected.cells[0].copies, vec![0, 1, 2]);
     assert_eq!(parallel.selected.makespan_milliseconds, 23300);
@@ -4059,8 +4096,20 @@ fn parallel_feed_shared_operator_deadlines_include_calendar_delays_pools_and_fin
             let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
             assert_eq!(parallel.selected.makespan_milliseconds, finish);
             assert_eq!(parallel.selected.scheduled_feed_milliseconds, 8000);
-            assert!(parallel.feed_time_search.as_ref().unwrap().optimality_proven);
-            assert!(parallel.feed_time_search.as_ref().unwrap().baseline_replaced);
+            assert!(
+                parallel
+                    .feed_time_search
+                    .as_ref()
+                    .unwrap()
+                    .optimality_proven
+            );
+            assert!(
+                parallel
+                    .feed_time_search
+                    .as_ref()
+                    .unwrap()
+                    .baseline_replaced
+            );
             let pools = parallel.shared_workholding.as_ref().unwrap();
             assert_eq!(pools.selected.peak_occupancy["common-jigs"], 1);
             assert_eq!(pools.selected.final_occupancy["common-jigs"], 0);

@@ -722,9 +722,18 @@ fn fixed_pose_shape_fit_replays_native_portable_and_accepted_body_workflows() {
     assert_eq!(native, portable);
     assert_eq!(native["status"], "ACCEPTED");
     assert_eq!(native["model"]["pose"], json!([]));
-    assert_eq!(native["anny_configuration"]["root_translation_m"], json!(translation));
-    assert_eq!(native["anny_configuration"]["root_rotation_rad"], json!(rotation));
-    assert_eq!(native["anny_configuration"]["joints"]["arm"]["angle_rad"], angle);
+    assert_eq!(
+        native["anny_configuration"]["root_translation_m"],
+        json!(translation)
+    );
+    assert_eq!(
+        native["anny_configuration"]["root_rotation_rad"],
+        json!(rotation)
+    );
+    assert_eq!(
+        native["anny_configuration"]["joints"]["arm"]["angle_rad"],
+        angle
+    );
     let reused =
         ftx_body::accepted_shape::AcceptedShape::read(&native, &sha256_hex(&bytes), &[]).unwrap();
     assert!((reused.params.phenotype.height - 0.6).abs() < 1e-6);
@@ -743,7 +752,10 @@ fn fixed_pose_shape_fit_replays_native_portable_and_accepted_body_workflows() {
         assert_eq!(review["camera"], input["fit"]["frames"][i]["camera"]);
         meshes.push(review["mesh_obj"].clone());
     }
-    assert_eq!(meshes[0], meshes[1], "a fixed pose retains one world-space body");
+    assert_eq!(
+        meshes[0], meshes[1],
+        "a fixed pose retains one world-space body"
+    );
 
     let mut rejected = input.clone();
     let point = &mut rejected["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0];

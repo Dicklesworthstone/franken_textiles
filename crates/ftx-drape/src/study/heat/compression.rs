@@ -1133,18 +1133,23 @@ pub(super) mod tests {
         reverse.conditions.insert("face".into(), "reverse".into());
         let mut invariant = input.invariants["emissivity"].clone();
         invariant.conditions = reverse.conditions.clone();
-        input.invariants.insert("emissivity_reverse".into(), invariant);
+        input
+            .invariants
+            .insert("emissivity_reverse".into(), invariant);
         input
             .material
             .properties
             .insert("emissivity_reverse".into(), reverse);
-        input.material.optical_faces = Some(serde_json::from_value(json!({
-            "positive":{"face":"public","emissivity_property":"emissivity"},
-            "negative":{"face":"reverse","emissivity_property":"emissivity_reverse"},
-            "source":"synthetic","evidence":"estimate",
-            "method":"Synthetic original orientation; no physical face qualification",
-            "specimen":input.specimen,"conditioning":input.conditioning
-        })).unwrap());
+        input.material.optical_faces = Some(
+            serde_json::from_value(json!({
+                "positive":{"face":"public","emissivity_property":"emissivity"},
+                "negative":{"face":"reverse","emissivity_property":"emissivity_reverse"},
+                "source":"synthetic","evidence":"estimate",
+                "method":"Synthetic original orientation; no physical face qualification",
+                "specimen":input.specimen,"conditioning":input.conditioning
+            }))
+            .unwrap(),
+        );
         input.invariants.insert(
             "optical_faces".into(),
             input.invariants["specific_heat"].clone(),
@@ -2522,7 +2527,10 @@ pub(super) mod tests {
                     )
                     .unwrap();
             }
-            assert_eq!(automatic.state.temperature_c(), explicit.state.temperature_c());
+            assert_eq!(
+                automatic.state.temperature_c(),
+                explicit.state.temperature_c()
+            );
             assert_eq!(automatic.stored_j, explicit.stored_j);
             assert_eq!(automatic.inside_j, explicit.inside_j);
             assert_eq!(automatic.radiative_j, explicit.radiative_j);
@@ -2544,7 +2552,10 @@ pub(super) mod tests {
                 .unwrap(),
             0.025,
         );
-        assert_eq!(report["prescribed_compression"]["normal_work_to_heat_j"], 0.);
+        assert_eq!(
+            report["prescribed_compression"]["normal_work_to_heat_j"],
+            0.
+        );
     }
 
     #[test]

@@ -1245,8 +1245,14 @@ fn finite_vapor_ambient_exchange_matches_independent_pressure_and_enthalpy_equat
         let incoming = 2e-6 * (ambient - expected).max(0.);
         let outgoing = 2e-6 * (expected - ambient).max(0.);
         near(gas["vapor_pressure_pa"].as_f64().unwrap(), expected);
-        near(exchange["incoming_vapor_mass_kg"].as_f64().unwrap(), incoming);
-        near(exchange["outgoing_vapor_mass_kg"].as_f64().unwrap(), outgoing);
+        near(
+            exchange["incoming_vapor_mass_kg"].as_f64().unwrap(),
+            incoming,
+        );
+        near(
+            exchange["outgoing_vapor_mass_kg"].as_f64().unwrap(),
+            outgoing,
+        );
         near(
             exchange["incoming_vapor_enthalpy_j"].as_f64().unwrap(),
             incoming * (10000. + 1000. * (temperature - reference)),
@@ -1279,7 +1285,9 @@ fn finite_vapor_ambient_exchange_matches_independent_pressure_and_enthalpy_equat
     advance(&mut wet, 0.5, 1.).unwrap();
     let result = finite_snapshot(&wet);
     near(
-        result["vapor_reservoir"]["vapor_pressure_pa"].as_f64().unwrap(),
+        result["vapor_reservoir"]["vapor_pressure_pa"]
+            .as_f64()
+            .unwrap(),
         pressure,
     );
     near(result["evaporated_liquid_kg"].as_f64().unwrap(), evaporated);
@@ -1754,8 +1762,12 @@ fn finite_vapor_selects_early_cold_patch_dryout_before_a_later_rewetting_root() 
     // External drying changes g(p), but cannot skip the cold patch's first event.
     // In the same units k_ambient=1, p_ambient=0: p=(11-3p)*.01/(1-p).
     let mut exchanging = water.clone();
-    exchanging.request.vapor_reservoir.as_mut().unwrap().ambient_exchange =
-        Some(ambient_request(5e-6, 0., 20.));
+    exchanging
+        .request
+        .vapor_reservoir
+        .as_mut()
+        .unwrap()
+        .ambient_exchange = Some(ambient_request(5e-6, 0., 20.));
     exchanging.request.validate(1).unwrap();
     let pressure = 1000. * (1.03_f64 - (1.03_f64 * 1.03 - 0.44).sqrt()) / 2.;
     let seconds = 0.01 / (1. - pressure / 1000.);

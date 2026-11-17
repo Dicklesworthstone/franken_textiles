@@ -398,7 +398,10 @@ fn qualified_optical_faces_survive_pressure_with_exact_sources_mass_and_frozen_r
             mapping.negative,
             input.material.optical_faces.as_ref().unwrap().negative
         );
-        assert_eq!(mapping.source, format!("compression/{}", report.input_sha256));
+        assert_eq!(
+            mapping.source,
+            format!("compression/{}", report.input_sha256)
+        );
         assert_eq!(mapping.evidence, Evidence::Estimate);
         assert!(
             mapping
@@ -498,7 +501,12 @@ fn optical_face_retention_refuses_incomplete_sources_domains_and_changed_assignm
                     .pressure_range_pa = [0., 499.]
             }
             2 => input.invariants.get_mut("optical_faces").unwrap().source = "missing".into(),
-            3 => input.invariants.get_mut("optical_faces").unwrap().method.clear(),
+            3 => input
+                .invariants
+                .get_mut("optical_faces")
+                .unwrap()
+                .method
+                .clear(),
             4 => {
                 input
                     .invariants
@@ -554,7 +562,11 @@ fn optical_face_retention_refuses_incomplete_sources_domains_and_changed_assignm
         }
         let before = serde_json::to_value(&input).unwrap();
         assert!(condition(&input).is_err(), "fault {fault}");
-        assert_eq!(serde_json::to_value(&input).unwrap(), before, "fault {fault}");
+        assert_eq!(
+            serde_json::to_value(&input).unwrap(),
+            before,
+            "fault {fault}"
+        );
     }
     let mut omitted = optical_fixture();
     for key in ["optical_faces", "emissivity_front", "emissivity_back"] {
