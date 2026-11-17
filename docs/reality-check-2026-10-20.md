@@ -4104,3 +4104,84 @@ The reporting countermeasure is to retain failed attempts and their original pro
 completion before importing generated modules, and require observed terminal results before claiming
 a suite passed (`RH-2` proof-class promotion, `RH-3` oracle laundering and `RH-9` premature closure
 remain explicitly excluded). No acceptance condition was discarded to create a completion claim.
+
+### 2026-11-17 contact-continuation repair (`ftx-onn`)
+
+The ordinary 92 cm browser bolero now reaches its requested 1.5 mm body offset, settles and has no
+gating flags in the original 12 sewing + 36 gravity steps, with 2 mm self-contact and no extra steps.
+The three input files are byte-identical to the earlier failing browser round, and every body-fit
+prediction and residual is identical. Before this repair the offset stalled at 1.218864857 mm;
+even 64 extra quiet steps did not advance it. The accepted endpoint body gaps remain positive
+(minimum recorded gap 0.098010149 mm). This is numerical workflow evidence, not real-person fit.
+
+`ramp_thickness` previously required a gap above one tenth of the activation band during partial
+increments. A loaded equilibrium can lie below that fixed margin. The existing relative-clearance
+exception covered only the whole final increment, trapping safe partial progress. All eight bounded
+trials now retain more than one tenth of each preceding gap, matching the existing additive CCD
+rule. The 0.25 mm increment cap, exact target, rollback, material/contact laws, Newton acceptance,
+time schedule and final settling/full-offset gates remain unchanged. The spatial query covers the
+relative guard even outside the activation band. The contract documents this changed continuation
+policy; unit expectations intentionally change from absolute-margin refusal to safe partial progress.
+Touching, penetrating, insufficient-final-clearance and no-admissible-increment cases still cannot
+claim completion. A new positive regression failed against the original ramp before the repair.
+
+Rust checks use `8143da5f59d953fa5e2d994f8cbcf10e573b5275` plus scene-only overlay
+`3d33dab3bf0cc241a9a6e9edc01c950c4530176be33b5c40cc3180c7d8418e41` through
+`RCH_REQUIRE_REMOTE=1 rch exec --worker <worker> --base HEAD --clean-overlay --overlay-path
+crates/ftx-drape/src/scene.rs -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx"
+CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0'`. Workers were `vmi1153651`
+and `vmi1152480`; model-backed checks use the same admitted Anny asset recorded above.
+
+| Command / payload | Result |
+|---|---|
+| `cargo fmt --check`; `git diff --check` | PASS, exit 0. |
+| `cargo clippy -j1 --all-targets --locked -- -D warnings` | PASS, exit 0. |
+| `cargo test -j2 -p ftx-drape --lib --locked scene::grain_tests:: -- --nocapture` | PASS, 16 passed, 370 filtered, 0 ignored. Includes all three ramp tests and failed-phase rollback. |
+| `cargo test -j2 --release -p ftx-drape --test kat_contact --test self_contact --test subdivision --locked -- --nocapture` | PASS, 12 passed, 0 ignored. Includes tube ease, cylinder/cone friction thresholds, pinned contact/self-contact digests and physical-state rollback. |
+| `cargo build -j2 --release --target wasm32-unknown-unknown -p ftx-wasm --locked` | PASS, exit 0; matching `wasm-bindgen 0.2.128` packaging completed before browser import. |
+| `cargo test -j2 --release -p ftx-drape --test kat_fitted --locked kat8_armpit_wedge_at_three_sizes -- --include-ignored --exact --nocapture` | FAIL, exit 101. All 80/92/116 cm cases reach the full offset, settle and have no gating flags. The 116 cm `front.L/hem` rises 17.4 mm against the unchanged 15 mm bound. G2 remains open. |
+| Same KAT8 command on baseline with `--no-overlay` | FAIL, exit 101: Newton nonconvergence after 300 iterations, before the three reports could be assessed. This does not establish an unchanged per-hem result. |
+| Two-garment Chromium check using the compiled module | FAIL overall. Bolero passes its full-offset, 48-converged-step, positive-gap and no-gating assertions. Trousers refuse at starting self-contact: triangles 6344 and 6464 intersect. The baseline bundle reproduces the same trousers refusal. |
+| `node /data/tmp/ftx-ramp-browser-check-20261117.cjs /data/tmp/ftx-ramp-relative-pkg.5GqPYl zouave_bolero` | PASS, exit 0 in a fresh Chromium context. One preselected bolero case; all 48 steps converged, full offset, numerical settling, positive endpoint gaps, 21 MODEL_FIT predictions, separate flat verdict and local GET requests only. This is a temporary direct browser check, not a new repository harness. |
+| `ubs --staged` | Exit 0, 1 Rust file, 0 critical, 388 warning occurrences. Review of the changed production function found no introduced finding; full-file heuristics are not a clean audit of all warnings. Cargo phases were not run by UBS. |
+| `br sync --flush-only` | REFUSED, exit 7: exporting the stale database would lose 36 JSONL issues. No force or task closure. |
+
+The fresh passing artifacts are in `/data/tmp/ftx-ramp-chromium-OiSz1Q/zouave_bolero`; the earlier
+paired-run bolero is in `/data/tmp/ftx-ramp-chromium-8Dd7FG/zouave_bolero`. The identical tested module
+was regenerated into ignored `web/pkg`, SHA-256
+`6b33ab7193708dd576c7c20f6990f9091851e94379bbc6211c3c02da4f4aa9cd` for `ftx_wasm_bg.wasm`.
+The package is local build output. No complete current
+workspace test, fitted-garment matrix, native/browser garment equality, performance budget or G5 pass
+is claimed. The stricter tape-fit regression and independent material/muslin gates remain open.
+
+Discarded trials are not final evidence. Exposing three existing Anny fitting controls passed the
+synthetic recovery cases but still missed the strict chart crotch target by 3.841 mm; its combined
+garment trial also exceeded the 80 cm hem bound. All fitter/contract/test changes from that trial
+were removed. Preferring the old absolute margin before a relative fallback still left the default
+browser bolero gated at 1.346453393 mm and was replaced. Full-workspace and drape-library runs on
+discarded prototypes were cancelled (terminal 143), not counted as passes. Remote attempts also
+encountered disk-reservation refusals and an unfinished source owner; no worker configuration or
+foreign state was modified. The first final-browser extraction tried a nonexistent individual
+pattern download; the check was corrected to retain and unpack the actual round ZIP with no overwrite.
+
+Bounded solo real-work/honesty review of this implementation block: one USER item (the ramp repair),
+one ENABLER (its contract) and one PROCESS item (this evidence update). Remote retries and discarded
+experiments were costly; no new product framework, crate, fixture or tracker machinery was introduced.
+Fresh source review and execution are self-verification, with no independent peer or task closure.
+Older session histories were not re-audited here. Inventory disposition:
+
+- **1, 4:** The continuation admission policy and its unit expectations intentionally changed as
+  described above; final physical/numerical gates and the 15 mm hem bound did not. The unchanged
+  KAT8 failure remains visible. This distinction is the `RH-1` countermeasure.
+- **2, 3, 5:** No (checked: staged source has no specialized double, golden edit or case-specific path).
+- **6:** An initial wrong module filter executed zero tests. It was rejected as evidence and corrected;
+  the final named module executes 16. Require nonzero observed counts (`PL-1`).
+- **7, 8:** No (checked: terminal statuses and numerical-versus-fit claim boundaries above).
+- **9, 10:** No (checked: failed trials, incomplete suites and stderr are retained; none promoted to pass).
+- **11, 12:** No (checked: no closures, plan/spec edits, oracle changes or final qualification-bound changes).
+- **13–17:** N/A, solo work; no delegated or independent-review claims.
+- **18:** No (checked: scene, contact, three-size and two-garment denominators were selected before results).
+- **19:** Discarded trials, zero-run filtering and extraction mistakes needed correction and disclosure;
+  bind claims to completed final-source executions (`RH-2`, `PL-1`), retaining failed cells.
+- **20:** The strongest result is the actual Chromium bolero with byte-identical input documents and
+  unchanged body predictions, paired with its previously failing report and direct ramp regressions.

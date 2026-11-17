@@ -1137,39 +1137,35 @@ fn untangle(
 /// How much the cloth offset may grow per step while it is below its target (m).
 pub const THICKNESS_RAMP: f64 = 0.25e-3;
 
-/// Raises the contact offset toward its target by at most [`THICKNESS_RAMP`], unless that would leave a
-/// gap below a tenth of ĝ. A final increment may instead retain a tenth of each current gap, as CCD
-/// does, so the absolute conditioning margin cannot prevent an already-clear target from completing.
+/// Raises the contact offset toward its target by at most [`THICKNESS_RAMP`], retaining more than a
+/// tenth of every current gap, as CCD does. An absolute activation-band margin can exceed a loaded
+/// contact's equilibrium gap and prevent further offset growth even when the target is clear.
 fn ramp_thickness(c: &mut Contact, x: &[Vec3], target: f64) {
     if c.params.thickness < target {
         let old = c.params.thickness;
-        let mut increment = THICKNESS_RAMP.min(target - old);
+        let remaining = target - old;
+        let mut increment = THICKNESS_RAMP.min(remaining);
         // A blocked maximum increment must not trap a safe smaller continuation step.
         for _ in 0..8 {
-            let next = (old + increment).min(target);
+            let next = if increment == remaining {
+                target
+            } else {
+                (old + increment).min(target)
+            };
             if next == old {
                 break;
             }
             c.params.thickness = next;
-            if c.min_gap(x, c.params.dhat)
-                .is_none_or(|g| g > 0.1 * c.params.dhat)
-            {
-                return;
-            }
-            increment *= 0.5;
-        }
-        let remaining = target - old;
-        if remaining <= THICKNESS_RAMP {
-            c.params.thickness = target;
-            // g_new = g_old - remaining, so g_new > g_old/10 iff g_new > remaining/9.
-            // Per-material offsets grow by at most this global increment, so this is conservative
-            // there too. Query beyond the guard even when the activation band is narrower.
-            let guard = remaining / 9.0;
+            // g_new = g_old - delta, so g_new > g_old/10 iff g_new > delta/9.
+            // Per-material offsets grow by at most this global increment. Query beyond the
+            // activation band when necessary so an inactive but unsafe pair cannot be missed.
+            let guard = (next - old) / 9.0;
             if c.min_gap(x, c.params.dhat.max(guard))
                 .is_none_or(|g| g > guard)
             {
                 return;
             }
+            increment *= 0.5;
         }
         c.params.thickness = old;
     }
@@ -1715,7 +1711,7 @@ mod grain_tests {
     }
 
     #[test]
-    fn body_offset_ramp_backtracks_without_dropping_its_safety_margin() {
+    fn body_offset_ramp_backtracks_without_dropping_its_relative_safety_margin() {
         let body = Body::new(
             vec![
                 Vec3::new(-0.01, -0.01, 0.0),
@@ -1743,27 +1739,32 @@ mod grain_tests {
             vec![[0, 1, 2]],
             |a, b| (x[a] - x[b]).norm(),
         );
-        // The 0.25 mm trial leaves only 0.05 mm; half that trial preserves the 0.1 mm guard.
+        let old_gap = contact.min_gap(&x, 1e-3).unwrap();
         ramp_thickness(&mut contact, &x, 1.5e-3);
-        assert!((contact.params.thickness - 6.25e-4).abs() < 1e-15);
-        assert!(contact.min_gap(&x, 1e-3).unwrap() > 1e-4);
-        ramp_thickness(&mut contact, &x, 6.5e-4);
-        assert_eq!(contact.params.thickness, 6.5e-4);
+        assert_eq!(contact.params.thickness, 7.5e-4);
+        assert!(contact.min_gap(&x, 1e-3).unwrap() > 0.1 * old_gap);
+        ramp_thickness(&mut contact, &x, 7.75e-4);
+        assert_eq!(contact.params.thickness, 7.75e-4);
 
-        let close = x.map(|p| Vec3::new(p.x, p.y, 7e-4));
+        let close = x.map(|p| Vec3::new(p.x, p.y, 8.25e-4));
+        let old = contact.params.thickness;
+        let old_gap = contact.min_gap(&close, 1e-3).unwrap();
         ramp_thickness(&mut contact, &close, 1.5e-3);
-        assert_eq!(contact.params.thickness, 6.5e-4);
+        // A full increment intersects the body; backtracking must preserve a positive gap.
+        assert!((contact.params.thickness - (old + THICKNESS_RAMP / 8.)).abs() < 1e-15);
+        assert!(contact.min_gap(&close, 1e-3).unwrap() > 0.1 * old_gap);
     }
 
     #[test]
     fn body_offset_ramp_finishes_only_with_relative_clearance() {
-        for (name, old, target, distance, dhat, finishes) in [
+        for (name, old, target, distance, dhat, expected, finishes) in [
             (
                 "safe final step",
                 1.413734e-3,
                 1.5e-3,
                 1.513872e-3,
                 1e-3,
+                1.5e-3,
                 true,
             ),
             (
@@ -1772,12 +1773,48 @@ mod grain_tests {
                 1.5e-3,
                 1.509e-3,
                 1e-3,
+                1.455e-3,
                 false,
             ),
-            ("touching", 1.41e-3, 1.5e-3, 1.5e-3, 1e-3, false),
-            ("penetrating", 1.41e-3, 1.5e-3, 1.499e-3, 1e-3, false),
+            ("touching", 1.41e-3, 1.5e-3, 1.5e-3, 1e-3, 1.455e-3, false),
+            (
+                "penetrating",
+                1.41e-3,
+                1.5e-3,
+                1.499e-3,
+                1e-3,
+                1.455e-3,
+                false,
+            ),
+            // The unsafe full increment ends outside the activation band, inside the CCD guard.
+            (
+                "narrow activation band",
+                1.41e-3,
+                1.5e-3,
+                1.509e-3,
+                1e-6,
+                1.455e-3,
+                false,
+            ),
+            (
+                "no admissible increment",
+                1.41e-3,
+                1.5e-3,
+                1.410001e-3,
+                1e-3,
+                1.41e-3,
+                false,
+            ),
             // The target is clear and preserves >10% of the old gap, but exceeds the step cap.
-            ("large remaining offset", 5e-4, 1.5e-3, 1.7e-3, 20e-3, false),
+            (
+                "large remaining offset",
+                5e-4,
+                1.5e-3,
+                1.7e-3,
+                20e-3,
+                7.5e-4,
+                false,
+            ),
         ] {
             let body = Body::new(
                 vec![
@@ -1806,16 +1843,65 @@ mod grain_tests {
                 vec![[0, 1, 2]],
                 |a, b| (x[a] - x[b]).norm(),
             );
-            let old_gap = contact.min_gap(&x, dhat).unwrap();
+            let range = dhat.max(target);
+            let old_gap = contact.min_gap(&x, range).unwrap();
             assert!(old_gap > 0.0, "{name}");
             ramp_thickness(&mut contact, &x, target);
-            assert_eq!(
-                contact.params.thickness,
-                if finishes { target } else { old },
+            assert!(
+                (contact.params.thickness - expected).abs() < 1e-15,
                 "{name}"
             );
-            assert!(contact.min_gap(&x, dhat).unwrap() > 0.1 * old_gap, "{name}");
+            assert_eq!(contact.params.thickness == target, finishes, "{name}");
+            assert!(contact.params.thickness - old <= THICKNESS_RAMP, "{name}");
+            assert!(
+                contact.min_gap(&x, range).unwrap() > 0.1 * old_gap,
+                "{name}"
+            );
         }
+    }
+
+    #[test]
+    fn body_offset_ramp_progresses_when_loaded_clearance_is_below_the_band_guard() {
+        let body = Body::new(
+            vec![
+                Vec3::new(-0.01, -0.01, 0.0),
+                Vec3::new(0.02, -0.01, 0.0),
+                Vec3::new(-0.01, 0.02, 0.0),
+            ],
+            vec![[0, 1, 2]],
+            0.01,
+        )
+        .unwrap();
+        let x = [
+            Vec3::new(0.0, 0.0, 1.7e-3),
+            Vec3::new(1e-3, 0.0, 1.7e-3),
+            Vec3::new(0.0, 1e-3, 1.7e-3),
+        ];
+        let mut contact = Contact::new(
+            body,
+            ContactParams {
+                dhat: 20e-3,
+                thickness: 5e-4,
+                kappa: 100.0,
+                mu: 0.4,
+                eps_v: 1e-3,
+            },
+            vec![[0, 1, 2]],
+            |a, b| (x[a] - x[b]).norm(),
+        );
+        let target = 1.5e-3;
+        // Even the starting gap is below dhat / 10. The requested offset is nevertheless clear,
+        // and four bounded increments can reach it while retaining >10% of each preceding gap.
+        for _ in 0..4 {
+            let old = contact.params.thickness;
+            let old_gap = contact.min_gap(&x, contact.params.dhat).unwrap();
+            assert!(old_gap < 0.1 * contact.params.dhat);
+            ramp_thickness(&mut contact, &x, target);
+            assert!(contact.params.thickness > old);
+            assert!(contact.params.thickness - old <= THICKNESS_RAMP);
+            assert!(contact.min_gap(&x, contact.params.dhat).unwrap() > 0.1 * old_gap);
+        }
+        assert_eq!(contact.params.thickness, target);
     }
 
     fn physical_panel(id: &str, part: &str, side: Option<&str>) -> Value {

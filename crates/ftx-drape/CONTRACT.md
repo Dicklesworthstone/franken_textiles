@@ -220,11 +220,12 @@ Native drape reports expose these diagnostics under `numerical`; gravity draping
 three consecutive accepted steps at at most 1 mm/s, otherwise a numerical-settling gating flag propagates
 to CLI, round and browser consumers.
 Body-offset continuation tries up to eight successively smaller increments, bounded by 0.25 mm per
-accepted step and the existing one-tenth barrier-band gap guard. If those trials fail, a final increment
-of at most 0.25 mm may complete the exact requested offset when every body gap retains more than a tenth
-of its pre-increment value, the same relative clearance rule as CCD. This avoids stalling below a target
-that the geometry already clears, without permitting a nonpositive gap. All other continuation trials,
-solver acceptance and full-offset gating remain unchanged. An unfinished requested body offset
+accepted step, using the relative clearance rule previously used only for the final increment.
+Every increment retains more than a tenth of each pre-increment body gap, as CCD does; the query
+covers that guard even beyond the activation band. A fixed band margin can exceed a loaded contact's
+equilibrium gap and prevent further offset growth. Partial safe increments remain available when
+the exact requested offset is not yet clear; they never complete or waive the full-offset gate.
+Solver acceptance still requires convergence and positive gaps. An unfinished requested body offset
 also gates an ordinary quiet run; paired checks retain that failure without duplicating its flag.
 Accepted phase reports retain the achieved offset, separately from the requested contact offset.
 The fixed phase schedule remains unchanged unless `max_settle_steps` explicitly requests up to
