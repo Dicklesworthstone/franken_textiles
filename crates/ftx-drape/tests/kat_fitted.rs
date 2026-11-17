@@ -21,13 +21,9 @@ use ftx_pattern::Pattern;
 use serde_json::Value;
 
 fn drafts() -> Value {
-    serde_json::from_str(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/oracle/pattern/drafts.json"
-        ))
-        .unwrap(),
-    )
+    serde_json::from_str(include_str!(
+        "../../../tests/fixtures/oracle/pattern/drafts.json"
+    ))
     .unwrap()
 }
 
@@ -148,11 +144,33 @@ fn chart_trousers_self_contact_start() {
         ..DrapeOptions::default()
     };
     let run = drape_result_with_targets(&model, case, &options, &targets).unwrap();
-    assert_eq!(run.scene.start_backtracked_from, Some(400));
-    assert_eq!(run.scene.start.relax_iterations, 200);
-    assert_eq!(run.report["relax_iters"], 200);
-    assert_eq!(run.report["start_repair"]["rejected_relax_iters"], 400);
-    assert_eq!(run.report["start_repair"]["accepted_relax_iters"], 200);
+    println!(
+        "trouser start: rejected {:?}, accepted {}, p95 {:?}",
+        run.scene.start_backtracked_from,
+        run.scene.start.relax_iterations,
+        run.scene.start.block_p95
+    );
+    assert_eq!(run.scene.start_backtracked_from, Some(600));
+    assert_eq!(run.scene.start.relax_iterations, 150);
+    assert_eq!(run.report["relax_iters"], 150);
+    assert_eq!(run.report["start_repair"]["rejected_relax_iters"], 600);
+    assert_eq!(run.report["start_repair"]["accepted_relax_iters"], 150);
+    assert_eq!(run.scene.start.block_p95.len(), 1);
+    let plain: Vec<_> = ftx_drape::start::face_edges(&run.scene.mesh.faces)
+        .into_iter()
+        .filter(|&(a, b)| {
+            run.scene.start.gather_weights[a] >= 1.0 && run.scene.start.gather_weights[b] >= 1.0
+        })
+        .collect();
+    let strain: Vec<_> =
+        ftx_drape::start::edge_strain(&run.scene.start.relaxed, &run.scene.mesh.verts2d, &plain)
+            .into_iter()
+            .map(f64::abs)
+            .collect();
+    assert_eq!(
+        run.scene.start.block_p95[0],
+        ftx_core::np::percentile(&strain, 95.0)
+    );
     assert!(run.scene.start.block_p95[0] > ftx_drape::start::RELAX_TARGET_P95);
     run.scene
         .solver

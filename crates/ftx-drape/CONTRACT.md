@@ -528,20 +528,21 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
   cloth edge's ends (or the pierced cloth triangle) 2 mm above the crossed body triangle (or ridge), in
   rounds of up to 50; a piece wholly inside the body is refused.
 - Self-contact start recovery: if the final relaxed start fails cloth self-contact admission, the
-  resolved pipeline replays completed earlier 200-iteration relaxation blocks and selects the latest
-  one that passes the ordinary scene builder and actual contact policy. Rebuilding retains body
+  resolved pipeline first replays earlier complete 200-iteration blocks, retaining existing recoveries.
+  If none passes, it replays intermediate 25-iteration push-out checkpoints and selects the latest
+  one passing the ordinary scene builder and actual contact policy. Rebuilding retains body
   clearance, rest/material domains, welds and source-owned contact; constitutive histories bind only
   after selection. No valid earlier block means the original refusal. Body-only and already-clear
   starts retain their original path. `start_repair` reports rejected/accepted iteration counts, and
-  `initial_strain_pct`, `relax_iters` and the advisory describe the accepted start, even above the reference's
+  `initial_strain_pct`, `relax_iters` and the advisory describe the accepted start, with the actual
+  p95 strain for a partial final block, even above the reference's
   12% strain heuristic. The chart-trouser regression uses production tape uncertainties, runs actual
   2 mm self-contact and retains a 50 mm offset refusal control. This is start admission, not settling,
   independent anatomy, measured fabric or physical-fit qualification.
 - Offset ramp: when an edge of the start passes closer to the body than the cloth offset ξ, contact
-  starts at half the smallest distance and `run_phase` raises ξ by at most 0.25 mm a step while every gap
-  stays above ĝ/10. It backtracks up to eight times; if none succeeds, completing the exact target within
-  that step cap may instead retain more than a tenth of each previous gap. Penetrating or overly large
-  final increments wait for the barrier to move the cloth out.
+  starts at half the smallest distance. `run_phase` tries up to eight increments bounded by 0.25 mm,
+  retaining more than a tenth of each preceding gap, including for partial increments. Unsafe final
+  increments wait for the barrier to move the cloth out; the exact requested offset remains a gate.
 - Elastic casing: a drafted casing (the one-instance `waistband` piece) is simulated at its cut length
   (`sim_scale` 1, gathered: compression at 3 %) and drawn up by two rings of `ElasticSegment`s, along its
   fold (`top`) and along its seam line, each with half of EA = `ELASTIC_EA` (15 N,

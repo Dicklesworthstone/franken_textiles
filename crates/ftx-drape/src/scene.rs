@@ -611,35 +611,62 @@ pub(crate) fn build_scene_resolved(
         };
         match admit(&scene) {
             Err(e) if e.code == RefusalCode::IntersectingStart => {
-                // Only reuse complete earlier blocks. Rebuilding rechecks body clearance, material
-                // domains and source-owned contact before any constitutive history is initialized.
+                // Replay at existing push-out boundaries, preserving the original relaxation path.
+                // Rebuilding rechecks body clearance, material domains and source-owned contact
+                // before any constitutive history is initialized.
                 let original = scene.start.relax_iterations;
                 let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
-                let mut positions = scene.start.presewn.clone();
                 let mut replacement = None;
-                for iterations in
-                    (crate::start::RELAX_ITERS..original).step_by(crate::start::RELAX_ITERS)
-                {
-                    positions = crate::start::relax(
-                        &scene.mesh,
-                        &positions,
-                        &scene.start.groups,
-                        &tree,
-                        crate::start::RELAX_ITERS,
-                        crate::start::RELAX_CLEARANCE,
-                        &scene.start.gather_weights,
-                    );
-                    let mut start = scene.start.clone();
-                    start.relaxed = positions.clone();
-                    start.relax_iterations = iterations;
-                    start
-                        .block_p95
-                        .truncate(iterations / crate::start::RELAX_ITERS);
-                    if let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
-                        && admit(&candidate).is_ok()
-                    {
-                        candidate.start_backtracked_from = Some(original);
-                        replacement = Some(candidate);
+                let plain: Vec<_> = crate::start::face_edges(&scene.mesh.faces)
+                    .into_iter()
+                    .filter(|&(a, b)| {
+                        scene.start.gather_weights[a] >= 1.0 && scene.start.gather_weights[b] >= 1.0
+                    })
+                    .collect();
+                for stride in [
+                    crate::start::RELAX_ITERS,
+                    crate::start::RELAX_PUSH_OUT_ITERS,
+                ] {
+                    let mut positions = scene.start.presewn.clone();
+                    for iterations in (stride..original).step_by(stride) {
+                        positions = crate::start::relax(
+                            &scene.mesh,
+                            &positions,
+                            &scene.start.groups,
+                            &tree,
+                            stride,
+                            crate::start::RELAX_CLEARANCE,
+                            &scene.start.gather_weights,
+                        );
+                        let complete_block = iterations % crate::start::RELAX_ITERS == 0;
+                        if stride == crate::start::RELAX_PUSH_OUT_ITERS && complete_block {
+                            continue; // Bit-identical to an already refused coarse checkpoint.
+                        }
+                        let mut start = scene.start.clone();
+                        start.relaxed = positions.clone();
+                        start.relax_iterations = iterations;
+                        start
+                            .block_p95
+                            .truncate(iterations / crate::start::RELAX_ITERS);
+                        if !complete_block {
+                            let strain: Vec<_> =
+                                crate::start::edge_strain(&positions, &scene.mesh.verts2d, &plain)
+                                    .into_iter()
+                                    .map(f64::abs)
+                                    .collect();
+                            start
+                                .block_p95
+                                .push(ftx_core::np::percentile(&strain, 95.0));
+                        }
+                        if let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
+                            && admit(&candidate).is_ok()
+                        {
+                            candidate.start_backtracked_from = Some(original);
+                            replacement = Some(candidate);
+                        }
+                    }
+                    if replacement.is_some() {
+                        break;
                     }
                 }
                 if let Some(candidate) = replacement {

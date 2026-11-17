@@ -342,16 +342,20 @@ their start position (mass vertex group). The report records `anchor_vertices` =
 
 ---
 
-**Native self-contact start recovery.** The chart-fitted 92 cm trouser case has a clear welded start
-after 200 relaxation iterations, but its left cuff crosses itself by iteration 225; the ordinary
-400-iteration endpoint fails the exact audit (`chart_trousers_self_contact_start`). When self-contact
-is requested and the final start fails its intersection audit, the native pipeline may rebuild earlier
-completed 200-iteration checkpoints. It chooses the latest one passing the unchanged body admission,
+**Native self-contact start recovery.** Lower edge strain does not imply collision-free cloth.
+The current chart-fitted 92 cm trouser case has a clear welded start at 150 relaxation iterations;
+its ordinary 600-iteration endpoint and earlier complete 200-iteration blocks fail admission
+(`chart_trousers_self_contact_start`). When self-contact is requested and the final start fails its
+intersection audit, the native pipeline first rebuilds earlier completed 200-iteration blocks. If none
+passes, it replays the intermediate 25-iteration push-out checkpoints. Splitting at those boundaries
+performs exactly the same projections and push-outs as the original blocks. Within each search it
+chooses the latest checkpoint passing the unchanged body admission,
 material domains and actual cloth-contact audit, including source-specific offsets. No successful
 checkpoint means the original start remains refused. This is a bounded choice of start geometry,
 not a relaxation of collision detection or a new dynamics solver. A recovered start reports the
-original and accepted iteration counts and its actual initial strain; the original reference path
-and already-admissible starts remain unchanged. Numerical settling, full body offset and real-person
+original and accepted iteration counts and its actual initial strain, including any partial final
+block's p95 strain; the original reference path, already-admissible starts and existing complete-block
+recoveries remain unchanged. Numerical settling, full body offset and real-person
 fit remain separate requirements.
 
 ## 5. Dynamics contract (what any solver must provide)

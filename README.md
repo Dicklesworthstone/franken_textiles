@@ -48,7 +48,15 @@ bands, fold-up animation, metrics and flags), `ftx-export` (every deliverable an
 | Does the drape solver exist? | **Yes, and it drapes a drafted garment on a realistic body**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. The garment mesh and start state match the reference (all 42,003 triangles; pre-sew and relaxation to 1e-12 m), and the drafted bolero and trousers sew and drape on an Anny toddler fitted to the wearer's tape (14 and 40 CPU seconds on a laptop with cloth self-contact; pictures below) with no fit flag. In the browser they take about 21 and 60 seconds and come out bit-identical. Compression is as stiff as tension except in gather zones, as in the reference. An elastic casing is simulated as one: on the trousers an elastic of 0.85, 0.95 or 1.0 × the waist grips the toddler (its friction carries the garment) and one of 1.2 × does not, and the report says so. The metrics and flags match the reference's to the bit on recorded drapes, and the fold-up animation plays in a self-contained page. Cloth self-contact holds layers at Blender's 2 mm |
 | Has anything been benchmarked? | **A bounded browser release workload**: 20 retained runs each, after three warmups, on an Apple M5 Ultra give bolero p50/p95 **16.66/17.43 s** and trousers **45.96/46.80 s**, with 2 mm self-contact and every Newton step converged. These are warm fold-click-to-result latencies on a shared desktop, not M4 native timings or a general speed comparison. Inputs, artifact hashes, spread and limits are in the [reality check](docs/reality-check-2026-10-20.md). Other historical timings above remain single observations; the plan's unmeasured numbers remain targets |
 
-**Qualification remains open (2026-11-06).** The garment runs without flags described above are historical
+**Current verification (2026-11-17).** The ordinary 92 cm browser bolero and trousers complete all
+48 default steps with 2 mm self-contact, full 1.5 mm body offset, numerical settling and no gating flags.
+The trousers recover a fully audited start at 150 relaxation iterations when their 600-iteration
+endpoint and earlier complete blocks intersect. Their source pattern and measurement inputs are
+unchanged. This is numerical workflow evidence: the strict chart tape-fit regression and the 116 cm
+bolero's 15 mm hem-rise criterion still fail. Full candidate, physical-fit and performance qualification
+remain open; see the [current reality check](docs/reality-check-2026-10-20.md).
+
+**Historical qualification (2026-11-06).** The garment runs without flags described above are historical
 observations. The original bolero test on nominal fitted bodies now passes under its fixed schedule.
 The 80, 92 and 116 cm cases reach the requested 1.5 mm body offset, settle and have no gating flags. The 80 cm case
 retains its hem-balance advisory. The 92 cm chart trousers now complete the default 12 sewing and
@@ -415,8 +423,8 @@ proven otherwise.
    through `ftx`. *Passed 2026-10-13* (FEATURE_PARITY, CLI / rounds).
 4. **G4 Browser**: the wasm page reaches parity and drapes a small garment. *Historical pass, 2026-10-13*: the page's
    round equals the reference's on its 25 oracle cases, and the bolero and trousers drape in Chromium
-   bit-identical to `ftx drape` (`tools/check_web.cjs`). The current ordinary/paired bolero and trouser
-   comparisons also pass; broader browser qualification remains open in the tracked release work.
+   bit-identical to `ftx drape` (`tools/check_web.cjs`). The ordinary/paired bolero and trouser
+   comparisons passed on the November 6 candidate; broader browser qualification remains open in the tracked release work.
 5. **G5 Gauntlet**: a convergent multi-round parity, physics and surface audit before 1.0.
 
 ---

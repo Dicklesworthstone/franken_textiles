@@ -2,7 +2,8 @@
 
 **Latest comprehensive assessment** is [2026-11-17, source `2c08309e`](#2026-11-17-comprehensive-reality-check).
 The [November 17 implementation follow-through](#2026-11-17-implementation-follow-through) records
-the subsequent repairs, fresh browser results and remaining qualification failures.
+the subsequent repairs, fresh browser results and remaining qualification failures. The later
+[trouser-start repair](#2026-11-17-default-trousers-start-recovery-ftx-onn) restores both default browser garments.
 The [2026-11-11 assessment](#2026-11-11-comprehensive-reality-check) and its subsequent qualification
 describe earlier revisions. Current failures, empirical gaps and tracker limitations are recorded in
 the November 17 assessment.
@@ -4185,3 +4186,90 @@ Older session histories were not re-audited here. Inventory disposition:
   bind claims to completed final-source executions (`RH-2`, `PL-1`), retaining failed cells.
 - **20:** The strongest result is the actual Chromium bolero with byte-identical input documents and
   unchanged body predictions, paired with its previously failing report and direct ramp regressions.
+
+### 2026-11-17 default trousers start recovery (`ftx-onn`)
+
+Both default 92 cm garments now complete their actual Chromium fold with 2 mm self-contact, all
+48 Newton steps converged, numerical settling, full 1.5 mm body offset and no gating flags. The
+trousers' three input documents are byte-identical to the previous failing browser round. The
+bolero's entire numerical report and body predictions are identical to the preceding passing run.
+Artifacts are in `/data/tmp/ftx-ramp-chromium-r4KNLg/{zouave_bolero,zouave_trousers}`.
+
+The existing native trouser-start regression first reproduced the browser refusal: triangles 6344
+and 6464 intersected. Its old 400/200 iteration expectations described an earlier candidate. Current
+source reaches a rejected 600-iteration endpoint; neither earlier complete 200-iteration block is
+admissible. A clear intermediate state existed at 150 iterations but the recovery never tried it.
+
+The pipeline retains its original complete-block recovery first. Only if that fails does it replay
+25-iteration push-out checkpoints and choose the latest fully admitted one. Each selected start must
+pass the actual scene builder, body/material checks and unchanged self-contact audit. No valid
+candidate means refusal. Partial-block strain is recomputed from the accepted state; this case
+reports p95 initial strain 18.8%, not an invented success against the 12% heuristic. The test
+recomputes raw p95 from the accepted positions and retains its 50 mm refusal control.
+The existing start-state conformance test additionally checks coordinate bits after splitting each
+200-iteration block into eight 25-iteration sections, without changing any oracle assertion or fixture.
+
+Minimum sampled body gaps are 0.098010149 mm for the bolero and 0.147718694 mm for the trousers.
+The trousers have positive active self-contact gaps in all 48 samples, minimum 0.088528910 mm.
+The bolero has no active self-contact pairs in these samples, so no self-gap measurement is claimed.
+These are numerical observations on public chart inputs, not measured material behavior or wearer fit.
+
+Remote commands use `RCH_REQUIRE_REMOTE=1 rch exec --worker <worker> --base HEAD --clean-overlay`
+with explicit overlays for `crates/ftx-drape/src/{scene,start}.rs`,
+`crates/ftx-drape/tests/kat_fitted.rs` and `crates/ftx-conformance/tests/start_state.rs`, then
+`-- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx"
+CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0'` and the payload below.
+Baseline is `da3069bad416c6685071c4f312696a7f427fd81f`. Runtime checks use overlay
+`a9079aaaa2fc35944c5d12fa835b8db02af41b9ef93a8c606d2587e7e7416455`;
+the final fixture-embedding-only test edit uses
+`5347b1db4d72f16594c219ed2eaa7d9be584843b55fcca0f1cbc50063af5b80b`.
+
+| Command / payload | Result |
+|---|---|
+| `cargo fmt --check`; `git diff --check` | PASS, exit 0. |
+| `cargo clippy -j1 --all-targets --locked -- -D warnings` | PASS on `hz4`, exit 0, including the final embedded-fixture test. |
+| `cargo test -j1 -p ftx-conformance --test start_state --locked -- --nocapture` | PASS on `hz4`: 1 test covering both recorded garments and the new bit-replay assertions, 0 ignored. Overlay `6d13d67e03434a053e39548862a0182ddc655252d58bcef51122a6d2cb09ac81`, before the coarse-first policy refinement; the tested `start.rs` and conformance test are unchanged afterward. |
+| `cargo build -j2 --release --target wasm32-unknown-unknown -p ftx-wasm --locked` | PASS on `hz4`, exit 0. Matching wasm-bindgen packaging completed before import. |
+| `node /data/tmp/ftx-ramp-browser-check-20261117.cjs /data/tmp/ftx-start-repair-pkg.tLRhnO` | PASS, exit 0: both preselected garments, retained round/viewer/report outputs, 21 MODEL_FIT predictions, separate flat verdicts and local GET requests only. |
+| `cargo build -j2 --release -p ftx-drape --test kat_fitted --locked` | PASS on `vmi1153651`, exit 0, final test source. Remote binary SHA-256 `a3339ea6f870e315b8aa3a341f3b41a6296413bf981d6039b31f4e927b075d05`; retrieved binary matches. |
+| `FTX_ANNY_MODEL=/home/ubuntu/.cache/franken_textiles/anny-0.6.1-default.ftxbody /data/tmp/ftx-start-native-test.6CkNsm/kat_fitted chart_trousers_self_contact_start --include-ignored --exact --nocapture --test-threads 1` | PASS locally, exit 0: 1 passed, 0 ignored, 5 filtered. The same remotely compiled binary executes the 600→150 recovery, six actual steps, exact partial-block p95, post-step self-contact audit and 50 mm refusal control. |
+| `ubs --staged` | Exit 0: 4 Rust files, 0 critical, 685 full-file warning occurrences. Changed production code reviewed with no introduced finding identified; this is not an audit of every heuristic warning. UBS did not execute Cargo phases. |
+
+Ignored `web/pkg` now contains the tested module, SHA-256
+`6739d564a6569f53ba3f6794c3e28824ee1447d7929daeb3c216df86121b2367` for `ftx_wasm_bg.wasm`.
+README distinguishes this fresh workflow evidence from historical native/browser equality. The
+strict tape-fit regression, 116 cm hem-rise failure, full workspace/G2/G5 qualification and empirical
+fit/performance gates remain open. No complete current native/browser garment equality is claimed.
+
+Verification overhead was substantial. Generic remote test invocations were refused before execution
+by disk reservations; several retries also encountered monitor or slot admission failures. No worker
+configuration, protected disk floor or foreign data was changed. The native test was built remotely
+as a selected Cargo build target. Its existing pinned draft fixture is now embedded with `include_str!`
+so execution does not depend on the managed runner's retired temporary source directory. The managed
+test-job attempt was also refused by its disk reservation; the hash-verified compiled binary was
+therefore run locally with one test thread. Compilation remained remote. A preliminary
+fine-only trial completed six real steps but failed the obsolete iteration expectations; it is not
+counted as a passed test. The final policy additionally preserves existing complete-block recoveries.
+An ad hoc gap analysis initially required active cloth pairs on every garment; that unsupported
+assumption was corrected to retain zero active pairs as unavailable gap observations, not a positive
+contact measurement. `br sync --flush-only` refused to lose 36 newer JSONL issues; no task was closed.
+
+Solo real-work review: USER is the restored default trouser flow and accurate README; ENABLER is
+the direct regression/reference coverage and matching contract/spec; PROCESS is this bounded evidence
+update. A two-minute review can show the retained local fold viewers. Omitting this report would not
+change product behavior; it records acceptance and remaining failures. The enablers exercised the
+actual engine. The older fit/empirical work remains open because this block targeted the reproducible
+start blocker. No swarm or closure splitting occurred. Verdict: useful product delivered, with costly
+verification overhead; no new process system was built.
+
+Honesty inventory disposition, this solo block: **1,4** iteration metadata and the native recovery
+policy changed explicitly; collision, convergence, offset and hem limits did not. Exact replay and
+the retained impossible-offset case guard against `RH-1`. **2,3,5** No (checked: staged code and unchanged
+oracle files; no double, regenerated golden or garment-ID branch). **6–10** No (checked: nonzero executed
+test/case counts, terminal statuses, retained failed trials/stderr and numerical-versus-fit boundaries).
+**11,12** No (checked: no task closure or weakened final qualification requirement). **13–17** N/A,
+no agents or independent-verifier claim. **18** No (checked: test targets and the two browser garments
+were selected before results). **19** Remote retries, obsolete metadata and the active-pair assumption
+needed correction/disclosure; source-bound counts and explicit unavailable observations are the
+`PL-1`/`RH-2` countermeasures. **20** Strongest evidence is the same-input Chromium trouser changing
+from refusal to a complete converged fold. This is fresh self-verification, not independent review.

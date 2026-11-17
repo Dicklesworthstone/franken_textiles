@@ -24,6 +24,8 @@ pub const RELAX_CLEARANCE: f64 = 0.0048;
 pub const PRESEW_ITERS: usize = 400;
 /// Relaxation block length.
 pub const RELAX_ITERS: usize = 200;
+/// Push-out period within a relaxation block, also a boundary for exact start-state replay.
+pub const RELAX_PUSH_OUT_ITERS: usize = 25;
 /// Stop relaxing when the p95 of |strain| over plain edges is at most this.
 pub const RELAX_TARGET_P95: f64 = 0.12;
 /// Cap on the total relaxation iterations.
@@ -361,7 +363,7 @@ pub fn relax(
                 q[v] = m;
             }
         }
-        if it % 25 == 24 || it + 1 == iters {
+        if it % RELAX_PUSH_OUT_ITERS == RELAX_PUSH_OUT_ITERS - 1 || it + 1 == iters {
             body.push_out(&mut q, clearance);
         }
     }

@@ -16,8 +16,8 @@ use ftx_core::np::percentile;
 use ftx_core::{Vec2, Vec3};
 use ftx_drape::distance::point_triangle_closest;
 use ftx_drape::start::{
-    PRESEW_CLEARANCE, PRESEW_ITERS, RELAX_CLEARANCE, RELAX_ITERS, edge_strain, face_edges,
-    gather_weights, presew, relax, sewing_groups,
+    PRESEW_CLEARANCE, PRESEW_ITERS, RELAX_CLEARANCE, RELAX_ITERS, RELAX_PUSH_OUT_ITERS,
+    edge_strain, face_edges, gather_weights, presew, relax, sewing_groups,
 };
 use ftx_drape::{NearestTree, PartFrame, WrapPlacement, build_garment, start_state, wrap_points};
 use ftx_pattern::Pattern;
@@ -158,7 +158,26 @@ fn start_states_match_the_reference() {
         let relax_blocks = |mut q: Vec<Vec3>, n: usize| -> (Vec<Vec3>, Vec<f64>) {
             let mut blocks = Vec::new();
             for _ in 0..n {
+                let mut replay = q.clone();
                 q = relax(&mesh, &q, &groups, &form, RELAX_ITERS, RELAX_CLEARANCE, &gw);
+                for _ in 0..RELAX_ITERS / RELAX_PUSH_OUT_ITERS {
+                    replay = relax(
+                        &mesh,
+                        &replay,
+                        &groups,
+                        &form,
+                        RELAX_PUSH_OUT_ITERS,
+                        RELAX_CLEARANCE,
+                        &gw,
+                    );
+                }
+                for (a, b) in q.iter().zip(&replay) {
+                    assert_eq!(
+                        [a.x.to_bits(), a.y.to_bits(), a.z.to_bits()],
+                        [b.x.to_bits(), b.y.to_bits(), b.z.to_bits()],
+                        "{id}: push-out checkpoint replay"
+                    );
+                }
                 let s: Vec<f64> = edge_strain(&q, &mesh.verts2d, &plain)
                     .into_iter()
                     .map(f64::abs)
