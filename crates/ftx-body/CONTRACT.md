@@ -95,6 +95,10 @@ proportions or local lengths are needed to reach the requested stature; the stan
 `fit_stature` retains its strict one-parameter range refusal. Requested measurements are never
 clipped, and unreachable targets retain their residuals. Independent analytic length and bounded
 least-squares controls cover these numerical behaviors without claiming anatomical accuracy.
+When LM stalls, an already evaluated finite-difference probe may resume the solve only if it
+reduces the complete weighted measurement-plus-prior objective by the existing relative gain
+threshold. This handles a zero central derivative at a shape kink without changing priors, bounds,
+target uncertainties or ordinary LM steps; ties use fixed parameter and positive/negative order.
 Previously recorded G1b results (`tests/fit_tape.rs`, before the bounded-step correction):
 all 21 measurements drawn from the model itself (1.5, 2.5,
 4 and 30 years, local changes up to ±0.3) are recovered within 1.5 mm (the gate asks 3 mm girths, 2 mm

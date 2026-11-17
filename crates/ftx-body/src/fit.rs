@@ -1195,6 +1195,8 @@ fn optimize_tape(
         // Jacobian of the measurement rows by central differences (each reading is continuous in the
         // parameters, kinked where a landmark's extreme vertex changes)
         let mut jac = vec![[0.0; N_FREE]; rows.len()];
+        let mut probe = None;
+        let mut probe_cost = c;
         for j in 0..N_FREE {
             let (mut up, mut dn) = (th, th);
             up[j] += FD_STEP;
@@ -1203,6 +1205,19 @@ fn optimize_tape(
             // A probe missing a requested section falls back to a one-sided difference. Optional
             // diagnostics never invalidate a probe; both failing leaves this column at zero.
             let (ru, rd) = (read(&up)?, read(&dn)?);
+            // The central derivative can vanish at an authored shape split even when either
+            // side lowers the full objective. Retain the best already-evaluated feasible probe
+            // in fixed parameter/positive/negative order; do not change the ordinary LM step.
+            for (candidate, reading) in [(&up, &ru), (&dn, &rd)] {
+                if admitted(reading) {
+                    let residuals = resid(candidate, reading);
+                    let candidate_cost = cost(&residuals);
+                    if candidate_cost < probe_cost {
+                        probe_cost = candidate_cost;
+                        probe = Some((*candidate, *reading, residuals));
+                    }
+                }
+            }
             let (hi, lo, xh, xl) = match (admitted(&ru).then_some(ru), admitted(&rd).then_some(rd))
             {
                 (Some(ru), Some(rd)) => (ru, rd, up[j], dn[j]),
@@ -1258,6 +1273,13 @@ fn optimize_tape(
             lambda *= 4.0;
         }
         if !improved {
+            if let Some((candidate, reading, residuals)) = probe
+                && c - probe_cost > REL_GAIN_STOP * c
+            {
+                (th, readings, r, c) = (candidate, reading, residuals, probe_cost);
+                lambda = 1e-3;
+                continue;
+            }
             break;
         }
     }
@@ -1802,6 +1824,49 @@ mod tests {
         assert_eq!(precise_waist.free, repeat.free);
         assert_eq!(precise_waist.readings, repeat.readings);
         assert_eq!(precise_waist.iterations, repeat.iterations);
+    }
+
+    #[test]
+    fn tape_optimizer_leaves_a_stationary_central_difference_at_a_shape_kink() {
+        let wearer = Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 920.0,
+            weight_kg: None,
+        };
+        let rows = tape_rows(
+            &wearer,
+            &[TapeTarget {
+                name: "waist".into(),
+                value_mm: 540.0,
+                sigma_mm: None,
+            }],
+        )
+        .unwrap();
+        // Anny splits each authored control into positive and negative shapes at zero.
+        // A tape can grow on both sides, so a zero central derivative need not be a minimum.
+        // The identical two sides tie: fixed probe order must select the positive solution.
+        for direction in [1.0, -1.0] {
+            let target = if direction > 0.0 { 540.0 } else { 460.0 };
+            let mut rows = rows.clone();
+            rows[1].target = target;
+            let fit = optimize_tape(&rows, 0.5, PRIOR_SIGMA_LOCAL, |th| {
+                let mut readings = [None; N_TAPE + 1];
+                readings[0] = Some(wearer.stature_mm);
+                readings[2] = Some(500.0 + direction * 100.0 * th[N_PHENOTYPE].abs());
+                Ok(readings)
+            })
+            .unwrap();
+            let exact =
+                100.0 * 40.0 / (10_000.0 + FIT_SIGMA_GIRTH_MM.powi(2) / PRIOR_SIGMA_LOCAL.powi(2));
+            assert!(
+                (fit.free[N_PHENOTYPE] - exact).abs() < 1e-6,
+                "target {target}: {} versus {exact}",
+                fit.free[N_PHENOTYPE]
+            );
+            assert!((fit.readings[2].unwrap() - target).abs() < 3.0);
+            assert!(fit.free.iter().all(|value| value.is_finite()));
+        }
     }
 
     #[test]

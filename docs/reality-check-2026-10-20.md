@@ -4273,3 +4273,80 @@ were selected before results). **19** Remote retries, obsolete metadata and the 
 needed correction/disclosure; source-bound counts and explicit unavailable observations are the
 `PL-1`/`RH-2` countermeasures. **20** Strongest evidence is the same-input Chromium trouser changing
 from refusal to a complete converged fold. This is fresh self-verification, not independent review.
+
+### 2026-11-17 tape-fit shape-kink recovery (ftx-w3s.1)
+
+The tape optimizer could stop at an improving shape kink: a central derivative can cancel even
+when both one-sided changes reduce the objective. A new closed-form control exercises the production
+optimizer with `500 ± 100 |q|` mm readings and targets 540/460 mm. Before the repair it retained
+`q = 0`, missing by 40 mm; afterward both cases reach the original regularized optimum
+`q = 0.39708265802269044` within `1e-6`, with less than 3 mm tape error. This is numerical solver
+evidence, not a captured Anny wearer or anatomical qualification.
+
+The 22-line runtime change retains the best feasible reading already evaluated for finite
+differences. Only when LM stalls can that probe resume fitting, and only when the complete
+measurement-plus-prior cost clears the existing relative gain threshold. Probe order breaks ties
+deterministically. Parameter bounds, priors, uncertainty floors, measurement definitions, iteration
+cap and all existing assertions remain unchanged. The strict chart case still fails unchanged:
+crotch height `376.55631354144435` versus `372.5` mm. The 116 cm hem-rise failure above was not rerun
+or closed. No real-fit or new performance claim follows.
+
+Verification used base `02705694c7925d2c9e0e9584672dce987a3382b2`; the final source overlay fingerprint
+is `772db6167c3d1446238151fafe98efcc2a85cf1c49e6dca3f96126caf1e0e171` (Clippy, wasm and attempted
+workspace tests). Native test executables predate one test-only line wrap; runtime code is unchanged.
+All compilation used
+`RCH_REQUIRE_REMOTE=1 rch exec --worker WORKER --base HEAD --clean-overlay --overlay-path crates/ftx-body/src/fit.rs -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0'`, followed by:
+
+- `cargo build -j2 --release -p ftx-body --tests --locked` on `hz4`: PASS. Retrieved native test
+  executables were SHA-256 matched to their remote originals, then executed locally without Cargo.
+  `/data/tmp/ftx-tape-green.01DoOn/body_unit --test-threads 2`: **56/56 PASS**. A fresh separate run of
+  `fit::tests::tape_optimizer_leaves_a_stationary_central_difference_at_a_shape_kink --exact --nocapture`
+  passed; the test-only original executable in `/data/tmp/ftx-tape-red.T7RSls/` fails that same test.
+- With `FTX_ANNY_MODEL=/home/ubuntu/.cache/franken_textiles/anny-0.6.1-default.ftxbody`, execute
+  `/data/tmp/ftx-tape-green.01DoOn/fit_tape --include-ignored --nocapture --test-threads 1`:
+  **6 PASS, 1 FAIL** (chart). All four model-derived synthetic bodies meet the unchanged G1b limits.
+  `/data/tmp/ftx-tape-green.01DoOn/independent_tape --include-ignored --test-threads 1`: **7/7 PASS**.
+- `cargo clippy -j2 --all-targets --locked -- -D warnings` on `vmi1153651`: PASS.
+- `cargo build -j2 --release --target wasm32-unknown-unknown -p ftx-wasm --locked` on `hz4`: PASS.
+- `cargo test -j2 --locked` on `vmi1152480`: **INCOMPLETE**, exit 137 / `RCH-E330`; RCH stopped
+  compilation after allocated output grew beyond its 32 GiB reservation. No workspace test result is claimed. An earlier baseline
+  chart `cargo test` on `vmi1153651` was refused at disk admission; the successfully built native
+  executables above supplied the actual baseline and candidate results. No limits or caches were altered.
+
+`cargo fmt --check` and `git diff --check`: PASS. `ubs --staged --format=json`: exit 0, zero critical,
+370 warnings over the full Rust file. Changed-line findings were checked separately: test assertions,
+known two-row/array indices, two-row cloning, positive constant divisors and the pre-existing bounded
+probe indices. No suppression was added; this is not a claim that every old warning was audited.
+
+`node /data/tmp/ftx-ramp-browser-check-20261117.cjs /data/tmp/ftx-tape-pkg.X4R7tX`: **both actual Chromium
+default garments PASS**, 48 converged steps each, numerical settling, 1.5 mm body offset, gating `[]`,
+local GET only. Reports in `/data/tmp/ftx-ramp-chromium-c99ASm/` have body and numerical objects identical
+to the preceding passing `r4KNLg` reports. The tested bundle is installed in ignored `web/pkg`;
+wasm SHA-256 `0329ed97ee61ab9b5682d8cd70cea95e7b230cee60d7a8b7a01c85e5e616f1e6`.
+The previous bundle is retained in `/data/tmp/ftx-tape-previous-pkg.S4dDBr/pkg`.
+
+Bounded worksheet, this block: this evidence append is PROCESS, consumed by the operator's requested
+reality check; it gates only truthful reporting of this repair, prevents conflating the reproduced kink
+with the still-failing chart, and retires from current-status use when superseded. The integrity-control
+exception is unnecessary because those four creation answers apply. Fitting remains the ready product
+priority; a larger report or another process artifact would not justify its cost. Real-work inventory:
+one USER repair with direct tests and contract notes, no separate ENABLER/PROCESS work item or closure.
+The two-minute demo is the original-versus-repaired exact-answer test. Omitting this append would change
+no runtime capability; it would remove the disclosed failed checks. Tests exercised the actual optimizer
+and model/browser consumers. The oldest open item is `ftx-onn` (release/gauntlet); this repair supports
+its body-fitting path without declaring it complete. No swarm, speculative infrastructure, plan-only
+commit or follow-up closure split occurred. Verdict: product work with bounded evidence overhead.
+
+Honesty inventory, solo current block: **1** No (checked: staged test diff is additive). **2** The analytic
+reading function is an independent exact-answer control of the production optimizer, not live anatomy;
+real-model and browser results are separate. **3–5** No (checked: unchanged oracles, limits, objective,
+CI and input-independent runtime branch). **6–10** No (checked: nonzero executed case counts, terminal
+statuses, retained stderr, explicit chart failure and incomplete workspace test; no benchmark claim).
+**11,12** No (checked: no item closure or rewritten acceptance criteria). **13–17** N/A: solo, no peer
+or independent-verifier claim. **18** No (checked: both signs, all seven model tests and both garments
+were selected before results). **19** The chart remains unfixed and required full testing was stopped;
+both are disclosed here, with original assertions retained against `RH-1` and explicit incomplete checks
+against `PL-1`. **20** Strongest evidence is the re-executable red/green production-optimizer control
+against its closed-form optimum. Fresh self-review/re-execution was performed; no independent review
+or new audit of older sessions is claimed. Beads import remains broken; flush refuses to lose 36 newer
+JSONL issues. No forced sync, manual tracker edit or closure was attempted.
