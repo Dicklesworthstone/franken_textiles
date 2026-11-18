@@ -1143,6 +1143,46 @@ fn partial_tape_targets_reach_native_portable_and_study_workflows() {
     );
     assert!(dir.join("partial-body/body.obj").is_file());
     assert_eq!(read(&dir.join("partial-body/body.json")), *body);
+    let saved = ["body.obj", "body.json"].map(|name| {
+        (
+            name,
+            std::fs::read(dir.join("partial-body").join(name)).unwrap(),
+        )
+    });
+    let refused = invoke(
+        &dir,
+        &[
+            "body",
+            "--measurements",
+            "m.json",
+            "--model",
+            "partial.ftxbody",
+            "--pose",
+            "rest",
+            "--out",
+            "partial-body",
+        ],
+        3,
+    );
+    let refused: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("body output already exists")
+    );
+    for (name, bytes) in saved {
+        let path = dir.join("partial-body").join(name);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
     for name in &unavailable {
         assert!(body["readings_mm"].get(name).is_none());
         assert!(

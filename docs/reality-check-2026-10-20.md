@@ -4350,3 +4350,92 @@ against `PL-1`. **20** Strongest evidence is the re-executable red/green product
 against its closed-form optimum. Fresh self-review/re-execution was performed; no independent review
 or new audit of older sessions is claimed. Beads import remains broken; flush refuses to lose 36 newer
 JSONL issues. No forced sync, manual tracker edit or closure was attempted.
+
+### 2026-11-17 private, non-overwriting tape-body exports (ftx-onn)
+
+Ordinary `ftx body --measurements` reused directories and truncated `body.obj`/`body.json` with
+`fs::write`. It now shares the existing fresh-directory reservation with draping and the private
+create-only file writer with accepted-shape exports. Existing files, directories and symlinks refuse
+before model loading; files created during publication cannot be overwritten either. New body files
+use mode 0600 on Unix. Fitting, body geometry, JSON fields and source hashing are unchanged.
+
+The existing positive synthetic-prism workflow now checks successful ordinary body publication,
+private permissions and byte-preserving rejection of a repeat. A new unit control checks a directory,
+an input-file alias, a directory symlink and a dangling symlink before model loading. The original
+body implementation fails that control (exit 101: it proceeds to the missing model instead of
+refusing the old destination). Existing assertions and oracle fixtures were retained.
+
+All builds used RCH, base `8d0765a0a1eb8c4f7a8715164f7cf4026ba1141d`. Candidate-check prefix:
+`RCH_REQUIRE_REMOTE=1 rch exec --worker WORKER --base HEAD --clean-overlay --overlay-path crates/ftx-cli/src/main.rs --overlay-path crates/ftx-cli/tests/accepted_body_workflow.rs -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0'`.
+Final source overlay: `b8b54f06b9d558cf09cfd07d5e25b176bfc43fe6fc934887c937c9c72d6096ae`.
+
+- `cargo test -j2 -p ftx-cli --bin ftx --locked`, `vmi1152480`: **54/54 PASS**, none ignored.
+- `cargo test -j2 -p ftx-cli --test accepted_body_workflow --locked partial_tape_targets_reach_native_portable_and_study_workflows -- --exact --nocapture`, same worker:
+  **1 PASS**, 79 filtered. Real CLI, model evaluation and filesystem; no process or solver double.
+- `cargo clippy -j1 --all-targets --locked -- -D warnings`, `vmi1153651`: PASS on final source.
+- `cargo build -j2 --release --target wasm32-unknown-unknown -p ftx-wasm --locked`, `vmi1152480`:
+  PASS. No wasm dependency changed. This and the release CLI build predate a test-only local-variable
+  cleanup; final native tests and Clippy include it.
+- `cargo fmt --check`; `git diff --check`: PASS.
+- `ubs --staged --format=json`: exit 1, seven pre-existing critical command-executable findings.
+  Each test helper selects Cargo's compiled binary constants, including the local closure's callers;
+  all seven were checked as false positives. The changed writer's names are fixed body filenames.
+  Full-file warnings are not a clean audit; no suppression was added.
+- Full workspace `cargo test -j2 --locked` with additional `CARGO_PROFILE_TEST_DEBUG=0` and
+  `CARGO_PROFILE_DEV_DEBUG=0`, `vmi1152480`: **INCOMPLETE, observed failure** in
+  `consumer_adaptive::regional_guards_share_real_motion_and_preserve_adaptive_cache_and_scope_identity`.
+  The body, CLI and materials unit suites passed (56, 54 and 14 tests respectively), as did the
+  modified partial-tape workflow. Other long-running integration cases were still executing when
+  the already-failed run was stopped with `rch jobs cancel` (wrapper exit 143). The buffered panic
+  trace was not obtained; this is not a completed workspace test result. No assertions or test
+  selections were changed. The regional test starts in the unchanged portable scenario path,
+  independently of the body-file publisher, but its failure on the original revision is unconfirmed.
+- Original-revision isolation used `--base 8d0765a0a1eb8c4f7a8715164f7cf4026ba1141d
+  --clean-overlay --no-overlay`, the same two debug-symbol environment settings and
+  `cargo test -j2 -p ftx-cli --test accepted_body_workflow --locked
+  consumer_adaptive::regional_guards_share_real_motion_and_preserve_adaptive_cache_and_scope_identity
+  -- --exact --nocapture`. `vmi1153651` refused disk admission (exit 120); `vmi1152480` returned 1
+  before execution (`execution_started=false`, wrapper `rchw-f532a98e-c2f2-41b9-85b9-297fd082442b`).
+  Neither ran the baseline test. The regional failure remains open; no baseline pass or failure is claimed.
+- The earlier release-suite attempt was cancelled during compilation (wrapper exit 143). The focused
+  release integration-test invocation was refused at RCH disk admission (exit 120); its targeted
+  `cargo build -j2 --release -p ftx-cli --test accepted_body_workflow --locked` succeeded.
+  Neither event is a passing test result.
+
+The retrieved release CLI also passed a direct full-model export and repeat check using the public
+92 cm chart source from `/data/tmp/ftx-ramp-chromium-c99ASm/zouave_bolero/measurements.json` and the
+pinned local Anny asset. Outputs are in `/data/tmp/ftx-body-preservation.EmDC4T/body/`: both files are
+0600; a second identical `ftx body` command exits 3 with `invalid_document`. Before/after SHA-256
+matches for both body files and the original source prove preservation, not anatomical accuracy.
+Two manual-check wrappers were blocked by DCG; the successful check used direct literal CLI
+arguments without output redirection. No guard override was requested or used.
+
+The 116 cm nominal bolero remains a failed G2 cell: current wasm reproduces `front.L/hem` +17.4 mm
+under the unchanged 48-step schedule, with full offset, convergence, settling and no gating flags.
+Canonical triangles match the oracle (their raw order differs). The quantized viewer shows most
+rise during the first sewing step. That observation does not identify a solver defect; no physics,
+metric, prior or 15 mm criterion was changed. Report/viewer: `/data/tmp/ftx-hem-116-baseline-q64zHo/`.
+
+Bounded worksheets, this block: one USER data-loss/privacy repair with direct tests, not a separate
+process work item. Demo: export a body, retry, inspect identical bytes and private permissions.
+This append changes no runtime capability; its consumer is the operator's requested reality check,
+its gate is truthful reporting of this repair, its observed defect is mistaking a reproduced hem
+failure or a build for qualification, and it retires from current-status use when superseded.
+The integrity exception is unnecessary. Tests exercised the real consumers; no speculative enabler,
+swarm, plan-only commit or closure split occurred. The oldest open `ftx-onn` still needs physical
+evidence and broader qualification. Verification was costly: normal focused tests should have run
+before release code generation for this I/O repair. No new process system was built.
+
+Honesty inventory: **1–3** No (checked: additive assertions, existing synthetic model, actual CLI and
+unchanged oracles). **4** Output admission was factored and applied to the tape path; the old drape
+policy is unchanged, and original-versus-repaired negative plus successful-export controls check it.
+**5–10** No (checked: input-independent runtime, nonzero executed counts, observed terminal statuses,
+retained stderr, explicit failed/cancelled/blocked checks, no fit or speed claim). **11,12** No
+(checked: no closure or loosened acceptance criterion; contract describes corrected publication).
+**13–17** N/A: solo, no independent verifier or delegated work. **18** No (checked: declared destination
+cases and model/workflow selection precede their results). **19** Hem remains unfixed; release-codegen
+overhead and blocked wrappers are disclosed. Existing assertions and full-result distinctions guard
+against `RH-1`/`PL-1`; scoped ordinary-profile checks are the correction to the avoidable build cost.
+**20** Strongest evidence is actual successful Anny publication followed by refused, byte-preserving
+retry. Fresh self-review is not independent verification. Beads import/flush remains blocked by the
+existing invalid ID/stale database conflict; no forced export, tracker edit or task closure occurred.

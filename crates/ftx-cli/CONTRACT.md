@@ -336,7 +336,10 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   Accepted coefficients remain partial materials when bending/contact or other properties are absent.
   Exact frozen selections feed ordinary material binding. See `docs/clamped-strip-calibration.md`.
 - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
-  the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
+  reserves a fresh output directory before model loading or fitting; existing directories, files and
+  symlinks refuse without changing previous evidence. `body.obj` and `body.json` use the existing
+  private create-only writer (mode 0600 on Unix), also refusing a file created during publication.
+  Writes the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
   `pose_geometry` reporting rest-vs-posed skin and `clothing_collider` volume change, LBS volume-loss
   advisories and exact self-intersection audits, the phenotype and every local change in use). Exit 0; an unknown pose is refused. Both reports carry

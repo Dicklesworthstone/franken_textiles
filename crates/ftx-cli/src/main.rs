@@ -463,7 +463,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 .repair("--pose drape, rest, arms-up, seated or squat"));
         }
     };
-    make_dir(&out)?;
+    reserve_output(&out, "body")?;
     let model = load_model(args)?;
     let (w, fit) = fitted_body(&model, &meas)?;
     let occupancy = ftx_body::nappy_occupancy(&model, &fit.params, &meas)?;
@@ -504,8 +504,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ),
     );
     let write = |name: &str, bytes: &[u8]| -> Result<(), Refusal> {
-        std::fs::write(out.join(name), bytes)
-            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{name}: {e}")))
+        workspace::write_new(&out.join(name), bytes)
     };
     write(
         "body.obj",
@@ -868,10 +867,14 @@ fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
 /// Claim a fresh destination before fitting/solving. A failed retry must not leave a previous
 /// successful run at the path the caller will inspect for its new result.
 fn reserve_drape_output(out: &std::path::Path) -> Result<(), Refusal> {
+    reserve_output(out, "drape")
+}
+
+fn reserve_output(out: &std::path::Path, command: &str) -> Result<(), Refusal> {
     match std::fs::symlink_metadata(out) {
         Ok(_) => {
             return Err(bad_input(format!(
-                "{}: drape output already exists; use a new directory for every run",
+                "{}: {command} output already exists; use a new directory for every run",
                 out.display()
             ))
             .repair("choose a fresh --out path; completed and failed runs are never reused"));
@@ -1372,6 +1375,54 @@ mod tests {
         assert!(refusal.message.contains("unplaced"));
         assert!(refusal.message.contains("attachment"));
         assert!(!out.exists());
+    }
+
+    #[test]
+    fn tape_body_refuses_existing_outputs_before_loading_the_model() {
+        let dir = drape_scratch();
+        let out = dir.join("body");
+        std::fs::create_dir(&out).unwrap();
+        let previous = br#"{"schema":"ftx-body/1","previous_run":true}"#;
+        std::fs::write(out.join("body.json"), previous).unwrap();
+        let source = dir.join("measurements.json");
+        std::fs::write(&source, b"{}").unwrap();
+        let mut args = parse(&[
+            "body".into(),
+            "--measurements".into(),
+            source.to_string_lossy().into_owned(),
+            "--out".into(),
+            out.to_string_lossy().into_owned(),
+            "--model".into(),
+            dir.join("absent.ftxbody").to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let destinations = vec![out.clone(), source.clone()];
+        #[cfg(unix)]
+        let destinations = {
+            use std::os::unix::fs::symlink;
+            let mut destinations = destinations;
+            let alias = dir.join("alias");
+            symlink(&out, &alias).unwrap();
+            destinations.push(alias);
+            let dangling = dir.join("dangling");
+            symlink("no-such-target", &dangling).unwrap();
+            destinations.push(dangling);
+            destinations
+        };
+        for destination in destinations {
+            args.options
+                .insert("out".into(), destination.to_string_lossy().into_owned());
+            let error = cmd_body(&args).unwrap_err();
+            assert_eq!(error.code, RefusalCode::InvalidDocument, "{error}");
+            assert!(
+                error.message.contains("body output already exists"),
+                "{error}"
+            );
+            assert_eq!(std::fs::read(out.join("body.json")).unwrap(), previous);
+            assert_eq!(std::fs::read(&source).unwrap(), b"{}");
+            assert_eq!(std::fs::read_dir(&out).unwrap().count(), 1);
+        }
+        assert!(!dir.join("no-such-target").exists());
     }
 
     #[test]
