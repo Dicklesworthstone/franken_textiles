@@ -16,7 +16,7 @@ See `docs/reuse-body-fit.md` for commands, the trouser rise basis and source lim
 
 **Later flat checks.** `ftx validate` and `ftx round` explicitly select a model body
 with `--model PATH` and/or `--body-fit REPORT`. They reuse the shared drafting body's
-reference A-pose dimensions and landmarks, including separately supplied hand/foot
+reference measurement pose for dimensions and landmarks, including separately supplied hand/foot
 passage evidence when the fit contract requires it. A pattern carrying `meta.draft_body`
 requires an explicit body selection on later checks; it cannot silently revert to
 analytic measurements. Historical drafting identity stays intact, while the current

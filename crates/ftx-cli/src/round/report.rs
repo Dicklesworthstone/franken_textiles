@@ -111,13 +111,14 @@ fn validation_body(out: &mut String, body: &Value) {
         return;
     }
     out.push_str("<h3>Body used for flat validation — MODEL_FIT</h3>\
-        <p>Finished dimensions and ease were checked against this selected body's reference A-pose. \
+        <p>Finished dimensions and ease were checked in the selected body's source measurement pose. \
         Original measurement evidence and readiness remain separate. These model predictions do not \
         establish physical garment fit.</p>");
     let _ = write!(
         out,
-        "<p>Shape source: {}. Model SHA-256: <code>{}</code>.</p>",
+        "<p>Shape source: {}. Measurement pose: {}. Model SHA-256: <code>{}</code>.</p>",
         cell(&body["identity"]["reference"]["shape_source"]["kind"]),
+        cell(&body["identity"]["reference"]["measurement_pose"]),
         cell(&body["identity"]["reference"]["model_sha256"])
     );
     let mut rows = body["body_fit"]["residuals"]

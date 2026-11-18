@@ -117,6 +117,8 @@ pub struct Pose {
 impl Pose {
     /// The drape's default arm abduction (spec 02 `A_POSE_DEG`).
     pub const A_POSE_DEG: f64 = 35.0;
+    /// Report identity for the straight-arm reference pose used to fit tape measurements.
+    pub const TAPE_FIT_POSE_NAME: &'static str = "standard_straight_arm_drape_35_degrees";
     /// Arms up for ride-up checks.
     pub const ARMS_UP_DEG: f64 = 150.0;
 

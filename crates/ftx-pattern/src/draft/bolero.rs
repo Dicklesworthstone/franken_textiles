@@ -18,6 +18,8 @@ use super::form::{Meas, landmarks};
 use super::geos;
 use crate::Pattern;
 
+const CHEST_BELOW_UNDERARM_MM: f64 = 12.0;
+
 /// The bolero's style defaults (`BOLERO_DEFAULTS`).
 #[must_use]
 pub fn defaults() -> Value {
@@ -214,6 +216,30 @@ pub(super) fn on_body(
     build(body, merge_style(&defaults(), style)?)
 }
 
+/// Finished chest with the two fronts edge to edge, at the flat contract's measurement level.
+fn chest_width(back: &PieceBuilder, front: &PieceBuilder, y: f64) -> Result<f64, Refusal> {
+    let pattern = two_piece(back, front);
+    let mut total = 0.0;
+    for id in ["front.R", "front.L", "back"] {
+        let instance = pattern
+            .instance(id)
+            .ok_or_else(|| bad(format!("missing {id}")))?;
+        let outline = instance
+            .outline(ftx_core::curve::MEASURE_DENSE)
+            .map_err(|e| bad(e.to_string()))?;
+        let width = horizontal_width(&outline, y);
+        if !width.is_finite() || width <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::NoRoot,
+                format!("bolero chest section misses {id} at {y:.2} mm"),
+            )
+            .repair("check the chest landmark, armhole drop and hem height"));
+        }
+        total += width;
+    }
+    Ok(total)
+}
+
 fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Refusal> {
     let (chest, nb, sl) = (
         m.get("chest")?,
@@ -221,8 +247,9 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
         m.get("shoulder_length")?,
     );
     let bnw = m.get("back_neck_to_waist")?;
-    let q = (chest + sf(&s, "chest_ease")?) / 4.0;
-    let x = Fixed {
+    let chest_ease = sf(&s, "chest_ease")?;
+    let q = (chest + chest_ease) / 4.0;
+    let mut x = Fixed {
         nb,
         sl,
         wb: q + 5.0,
@@ -256,7 +283,22 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
         k_neck = bisect(|k| Ok(neckline(k, scoop)? - neck_target), 0.6, 2.2)?;
         scoop = bisect(|sc| Ok(across_back(k_neck, sc)? - ab_target), 0.05, 1.2)?;
     }
-    let (b, f) = bodice(&s, &x, k_neck, scoop)?;
+    let (b, mut f) = bodice(&s, &x, k_neck, scoop)?;
+    if !m.is_analytic_form() {
+        let y = x.y_ua - CHEST_BELOW_UNDERARM_MM;
+        let target = chest + chest_ease;
+        // Preserve the solved across-back and the cutaway. Each front carries half the change.
+        x.wf += (target - chest_width(&b, &f, y)?) / 2.0;
+        (_, f) = bodice(&s, &x, k_neck, scoop)?;
+        let error = chest_width(&b, &f, y)? - target;
+        if error.abs() > 0.05 {
+            return Err(Refusal::new(
+                RefusalCode::NotConverged,
+                format!("finished bolero chest misses the requested ease by {error:+.2} mm"),
+            )
+            .repair("check the front cutaway and the chest measurement level"));
+        }
+    }
     let bsl = sl + sf(&s, "back_shoulder_ease")?;
     let mut meta = Map::new();
     meta.insert(
@@ -394,7 +436,7 @@ fn finish(
                    {"seam": "underarm_R", "end": "end"}, {"seam": "underarm_L", "end": "start"}],
         "points": [
             {"id": "chest", "kind": "girth", "instances": ["front.R", "front.L", "back"], "landmark": "chest",
-             "dy": -(drop + 12.0), "body": "chest", "target_mm": [70, 100, 130],
+             "dy": -(drop + CHEST_BELOW_UNDERARM_MM), "body": "chest", "target_mm": [70, 100, 130],
              "label": "Chest ease (fronts edge to edge)"},
             {"id": "across_back", "kind": "girth", "instances": ["back"], "landmark": "across_back",
              "body": "across_back", "target_mm": [10, 25, 45], "label": "Across-back ease"},

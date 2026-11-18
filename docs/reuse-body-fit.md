@@ -91,11 +91,18 @@ Omitting both model flags retains the original analytic drafting path.
 
 The programs retain their existing construction and style controls. Dimensions,
 landmarks, local section radii and placement origins come from the selected model's
-canonical 35-degree A-pose. Image-frame poses and the later drape arm-angle control
+measurement pose. Tape fitting uses 35-degree arm abduction with straight elbows.
+Accepted image fits use their original 35-degree A-pose. Image-frame poses and the later drape arm-angle control
 do not change that drafting frame. Missing required model anatomy refuses instead
 of borrowing a size-chart dimension. The trouser `body_rise` is the model's vertical
 waist-to-crotch distance; it includes no inferred seated allowance. The program's
 authored `rise_ease` remains separate, and the recorded basis makes this explicit.
+The fitted trouser draft walks the front and back crotch edges to the selected
+body's crotch length plus the authored ease. It can solve beyond the analytic
+form's usual back-extension interval. An unbracketed target reports the attempted lengths.
+The fitted bolero accounts for the open front and cutaway at the finished chest line.
+It divides the required width change between the two fronts, keeping the across-back
+dimension and matching the sleeve to the resulting armhole.
 
 A bolero also needs a separately supplied `hand_pass`; trousers need `foot_pass`.
 The body model does not infer these passage measurements. Automatically filled

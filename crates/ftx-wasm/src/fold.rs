@@ -74,7 +74,7 @@ fn body_report(wearer: &Wearer, fit: &TapeFit, measurements: &Value) -> Value {
     json!({"model":"anny 0.6.1", "provenance":"MODEL_FIT",
         "age_years":wearer.years,"gender":wearer.gender,"mass_kg":fit.mass_kg,
         "tape_evaluation":{"status":if unavailable.is_empty() { "AVAILABLE" } else { "PARTIAL" },
-            "pose":"a_pose_35","provenance":"MODEL_FIT","unavailable_fields":unavailable},
+            "pose":Pose::TAPE_FIT_POSE_NAME,"provenance":"MODEL_FIT","unavailable_fields":unavailable},
         "readings_mm":readings,"fit":{"iterations":fit.iterations,"tape":tape,
             "weight_kg":fit.mass_comparison(wearer, measurements)},
         "no_claim":"Predicted body dimensions are MODEL_FIT. Supplied targets may include priors; residuals do not establish measurement readiness or physical fit."})

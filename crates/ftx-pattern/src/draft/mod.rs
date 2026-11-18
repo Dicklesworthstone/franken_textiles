@@ -19,6 +19,11 @@ pub const PROGRAMS: [&str; 3] = ["zouave_bolero", "zouave_trousers", "fez"];
 /// Values, frame origins and landmark heights are millimetres. A body source must refuse
 /// unavailable geometry; programs do not substitute analytic sections or other measurements.
 pub trait DraftBody {
+    /// Whether dimensions come from the analytic reference form, with its original drafting rules.
+    fn is_analytic_form(&self) -> bool {
+        false
+    }
+
     /// A named dimension in millimetres.
     ///
     /// # Errors
@@ -63,6 +68,10 @@ fn positive(value: f64, what: &str) -> Result<f64, Refusal> {
 }
 
 impl DraftBody for CheckedBody<'_> {
+    fn is_analytic_form(&self) -> bool {
+        self.0.is_analytic_form()
+    }
+
     fn get(&self, name: &str) -> Result<f64, Refusal> {
         positive(self.0.get(name)?, &format!("drafting dimension '{name}'"))
     }
@@ -260,6 +269,39 @@ mod tests {
     }
 
     #[test]
+    fn fitted_bolero_allows_for_the_cutaway_at_the_finished_chest() {
+        let mut body = selected();
+        body.values.insert("chest", 507.4);
+        body.values.insert("back_neck_to_waist", 238.4);
+        body.landmarks.insert("torso/chest", 611.832);
+        let style = json!({"soutache":false,"front_cutaway":75.0});
+        let finished_ease = |style: &Value| {
+            let (doc, fit) = draft_on_body("zouave_bolero", &body, Some(style)).unwrap();
+            let chest = &fit["points"][0];
+            let y = body.landmarks["torso/chest"] - body.landmarks["torso/waist"]
+                + chest["dy"].as_f64().unwrap();
+            let pattern = crate::Pattern::new(doc);
+            let total: f64 = chest["instances"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| {
+                    let panel = pattern.instance(id.as_str().unwrap()).unwrap();
+                    ftx_core::polyline::horizontal_width(
+                        &panel.outline(ftx_core::curve::MEASURE_DENSE).unwrap(),
+                        y,
+                    )
+                })
+                .sum();
+            total - body.values["chest"]
+        };
+        assert!((finished_ease(&style) - 100.0).abs() < 0.05);
+        let mut tight = style;
+        tight["chest_ease"] = json!(10.0);
+        assert!((finished_ease(&tight) - 10.0).abs() < 0.05);
+    }
+
+    #[test]
     fn selected_body_controls_cuff_height_leg_axis_and_wrap_radius() {
         let body = selected();
         let (pattern, _) = draft_on_body("zouave_trousers", &body, None).unwrap();
@@ -277,6 +319,44 @@ mod tests {
             pattern["meta"]["solved"]["leg_to_cuff_top_mm"],
             json!(375.0)
         );
+    }
+
+    #[test]
+    fn fitted_trousers_walk_the_requested_crotch_even_outside_the_reference_bracket() {
+        let mut body = selected();
+        body.values.insert("hip", 569.855);
+        body.values.insert("body_rise", 132.845);
+        body.landmarks.insert("torso/hip", 456.935);
+        for (body_length, longer) in [(403.490, true), (304.0, false)] {
+            body.values.insert("total_crotch_length", body_length);
+            let (raw, _) = draft_on_body("zouave_trousers", &body, None).unwrap();
+            let ext = raw["meta"]["solved"]["back_crotch_ext_mm"]
+                .as_f64()
+                .unwrap();
+            if longer {
+                assert!(ext > 0.20 * body.values["hip"]);
+            } else {
+                assert!(ext > 0.0 && ext < 0.04 * body.values["hip"]);
+            }
+            let pattern = crate::Pattern::new(raw);
+            let front = pattern.instance("tr_front.R").unwrap();
+            let back = pattern.instance("tr_back.R").unwrap();
+            let walked = front.edge_length("cf").unwrap()
+                + front.edge_length("crotch").unwrap()
+                + back.edge_length("cb").unwrap()
+                + back.edge_length("crotch").unwrap();
+            assert!((walked - (body_length + 30.0)).abs() <= 0.01, "{walked}");
+            for edge in ["inseam", "outseam"] {
+                assert!(
+                    (front.edge_length(edge).unwrap() - back.edge_length(edge).unwrap()).abs()
+                        < 0.05
+                );
+            }
+        }
+        body.values.insert("total_crotch_length", 200.0);
+        let error = draft_on_body("zouave_trousers", &body, None).unwrap_err();
+        assert_eq!(error.code, RefusalCode::NoRoot);
+        assert!(error.message.contains("230.00") && !error.repairs.is_empty());
     }
 
     #[test]

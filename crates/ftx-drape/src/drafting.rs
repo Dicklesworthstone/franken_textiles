@@ -176,7 +176,7 @@ impl PreparedPatternBody {
         json!({"schema":"ftx-body-draft/1", "provenance":"MODEL_FIT",
             "identity":self.identity(), "model_readings_mm":values, "body_fit":self.report,
             "body_rise_basis":"Reference-pose vertical waist-to-crotch distance; no inferred seated allowance. The program's authored rise_ease remains separate.",
-            "no_claim":"Body dimensions and landmarks are model predictions in the selected shape's reference A-pose. Passage values retain their supplied evidence. Flat validation does not redraft existing patterns. Model predictions do not change measurements or readiness, supply uncertainty, or establish physical garment fit."})
+            "no_claim":"Body dimensions and landmarks are model predictions in the source measurement pose. Passage values retain their supplied evidence. Flat validation does not redraft existing patterns. Model predictions do not change measurements or readiness, supply uncertainty, or establish physical garment fit."})
     }
 }
 

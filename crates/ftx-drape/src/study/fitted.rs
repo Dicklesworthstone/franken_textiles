@@ -183,6 +183,7 @@ pub struct FittedBody {
     arm_deg: f64,
     // Motion begins at this exact selected pose, including legs; public report edits cannot alter it.
     initial_pose: Pose,
+    measurement_pose: Pose,
     params: BodyParams,
     // This geometric proxy never replaces the source shape or inherits edits to the public report.
     nappy_occupancy: Option<NappyOccupancy>,
@@ -194,7 +195,7 @@ pub struct FittedBody {
     pub report: Value,
 }
 
-/// Flat-pattern measurement authority from one selected model shape in its reference A-pose.
+/// Flat-pattern measurement authority from one selected model shape in its source measurement pose.
 /// Values are model predictions in millimetres, not acquired wearer measurements. Missing tape
 /// sections stay unavailable; no dress-form formula or supplied tape replaces the selected shape.
 pub struct FlatFitBody {
@@ -308,11 +309,12 @@ impl FittedBody {
         request: &BodyRequest,
     ) -> Result<Self, Refusal> {
         request.validate()?;
-        let (params, mut report) = if let Some(accepted) = &request.accepted_body_fit {
-            accepted_shape(model, model_sha256, accepted, &request.measurements)?
-        } else {
-            tape_shape(model, &request.measurements)?
-        };
+        let (params, mut report, measurement_pose) =
+            if let Some(accepted) = &request.accepted_body_fit {
+                accepted_shape(model, model_sha256, accepted, &request.measurements)?
+            } else {
+                tape_shape(model, &request.measurements)?
+            };
         let occupancy = ftx_body::nappy_occupancy(model, &params, &request.measurements)?;
         let occupied_params = occupancy
             .as_ref()
@@ -348,7 +350,7 @@ impl FittedBody {
         report["body_provenance"] = json!("MODEL_FIT");
         report["body_contact_proxy"] = collision.contact_proxy_basis_with_rest(&rest_collision);
         report["physical_validation_claim"] = json!(false);
-        let flat_source = json!({"shape_source":report["shape_source"],
+        let flat_source = json!({"shape_source":report["shape_source"],"measurement_pose":report["measurement_pose"],
             "input_measurements_sha256":report["measurements_sha256"]});
         Ok(Self {
             frames,
@@ -356,6 +358,7 @@ impl FittedBody {
             display,
             arm_deg: request.arm_abduction_deg,
             initial_pose: pose,
+            measurement_pose,
             params,
             nappy_occupancy: occupancy,
             model_sha256: model_sha256.into(),
@@ -364,7 +367,7 @@ impl FittedBody {
         })
     }
 
-    /// Lazily measure this unchanged selected shape in the standard A-pose at 35 degrees.
+    /// Lazily measure this unchanged shape in the same pose used for its source tape readings.
     /// The ordinary scenario pose and any image-frame poses do not change flat-fit targets.
     /// Stature remains available from model anthropometry. Each valid tape reading survives
     /// unrelated missing sections; unavailable anatomy never receives an inferred replacement.
@@ -388,7 +391,10 @@ impl FittedBody {
         if !stature_mm.is_finite() || stature_mm <= 0.0 {
             return Err(invalid("flat-fit model stature is unavailable"));
         }
-        let posed = model.pose(&rest, &pose_deltas(model, &rest, &Pose::a_pose(35.0), 1.0)?)?;
+        let posed = model.pose(
+            &rest,
+            &pose_deltas(model, &rest, &self.measurement_pose, 1.0)?,
+        )?;
         let frames = BodyFrames::new(model, &posed)?;
         let faces: Vec<_> = model
             .data()
@@ -412,7 +418,7 @@ impl FittedBody {
             "shape_sha256":hash(&(model_sha256, parameters(&self.params)))?,
             "shape_source":self.flat_source["shape_source"],
             "input_measurements_sha256":self.flat_source["input_measurements_sha256"],
-            "measurement_pose":"a_pose_35",
+            "measurement_pose":self.flat_source["measurement_pose"],
             "measurement_geometry_sha256":hash(&(&posed.vertices, &faces))?,
             "measurement_values_sha256":hash(&values)?,
             "available_measurements":values.keys().collect::<Vec<_>>(),
@@ -637,7 +643,10 @@ fn root_rotation_between(from: Option<[f64; 3]>, to: Option<[f64; 3]>, fraction:
 }
 
 // Shape estimation always uses the existing reference pose, independent of the requested pose.
-fn tape_shape(model: &AnnyModel, measurements: &Value) -> Result<(BodyParams, Value), Refusal> {
+fn tape_shape(
+    model: &AnnyModel,
+    measurements: &Value,
+) -> Result<(BodyParams, Value, Pose), Refusal> {
     if !measurements["wearer"]["age_months"].is_number() {
         return Err(invalid("scenario body fitting requires wearer.age_months"));
     }
@@ -660,14 +669,14 @@ fn tape_shape(model: &AnnyModel, measurements: &Value) -> Result<(BodyParams, Va
         .filter_map(|(name, value)| value.map(|value| (name.to_string(), json!(value))))
         .collect();
     let unavailable = fit.unavailable_fields();
-    let report = json!({"measurement_pose":"standard_straight_arm_drape_35_degrees",
+    let report = json!({"measurement_pose":Pose::TAPE_FIT_POSE_NAME,
             "shape_source":{"kind":"tape_fit","refitted":true},"fit_iterations":fit.iterations,
             "body_mass_kg":fit.mass_kg,"residuals":residuals,"body_provenance":"MODEL_FIT",
             "readings_mm":readings,"tape_evaluation":{
                 "status":if unavailable.is_empty() { "AVAILABLE" } else { "PARTIAL" },
-                "pose":"a_pose_35","provenance":"MODEL_FIT","unavailable_fields":unavailable},
+                "pose":Pose::TAPE_FIT_POSE_NAME,"provenance":"MODEL_FIT","unavailable_fields":unavailable},
             "physical_validation_claim":false});
-    Ok((fit.params, report))
+    Ok((fit.params, report, pose))
 }
 
 fn accepted_shape(
@@ -675,7 +684,7 @@ fn accepted_shape(
     model_sha256: &str,
     accepted: &Value,
     measurements: &Value,
-) -> Result<(BodyParams, Value), Refusal> {
+) -> Result<(BodyParams, Value, Pose), Refusal> {
     if model.data().header.model != "anny" || model.data().header.anny_version != "0.6.1" {
         return Err(invalid(
             "accepted scenario shapes require the pinned Anny 0.6.1 model",
@@ -714,8 +723,9 @@ fn accepted_shape(
     }
     // Match the existing accepted-body adapter's measurement pose, not its image poses or the
     // requested visualization angle. Missing sections are unavailable residuals, never zeros.
+    let pose = Pose::a_pose(Pose::A_POSE_DEG);
     let readings: Result<_, Refusal> = (|| {
-        let posed = model.pose(&rest, &pose_deltas(model, &rest, &Pose::a_pose(35.0), 1.0)?)?;
+        let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
         let frames = BodyFrames::new(model, &posed)?;
         let faces: Vec<_> = model
             .data()
@@ -759,7 +769,7 @@ fn accepted_shape(
                 .collect::<Vec<_>>()}),
             Err(e) => json!({"status":"refused","refusal":e}),
         }, "no_claim":"Accepted shape reused without refitting; receipt consistency is not authenticity or physical fit. MODEL_FIT predictions are not new measurements."});
-    Ok((shape.params, report))
+    Ok((shape.params, report, pose))
 }
 
 #[cfg(test)]

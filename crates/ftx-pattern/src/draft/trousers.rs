@@ -58,6 +58,51 @@ pub(super) fn on_body(
     build(body, merge_style(&defaults(), style)?)
 }
 
+/// Walk stored, rounded edges. The model's vertical rise and surface crotch length are
+/// independent readings, so the analytic form's back-extension bracket can be too narrow.
+fn fitted_back_extension(
+    walk: impl Fn(f64) -> Result<f64, Refusal>,
+    target: f64,
+    mut lo: f64,
+    mut hi: f64,
+) -> Result<f64, Refusal> {
+    const WALK_TOL_MM: f64 = 0.01;
+    Refusal::finite("crotch path target", target)?;
+    let residual = |ext| Refusal::finite("walked crotch residual", walk(ext)? - target);
+    if residual(hi)? < 0.0 {
+        lo = hi;
+        // The back curve alone spans ext horizontally. The whole path is a sufficient upper bound.
+        hi = target;
+    } else if residual(lo)? > 0.0 {
+        hi = lo;
+        lo = 0.0;
+    }
+    let lower = residual(lo)?;
+    let upper = residual(hi)?;
+    if lower.abs() <= WALK_TOL_MM {
+        return Ok(lo);
+    }
+    if upper.abs() <= WALK_TOL_MM {
+        return Ok(hi);
+    }
+    if lower.signum() == upper.signum() {
+        return Err(Refusal::new(RefusalCode::NoRoot, format!(
+            "crotch target {target:.2} mm is not bracketed: extensions {lo:.2} and {hi:.2} mm walk {:.2} and {:.2} mm",
+            target + lower, target + upper
+        )).repair("check the selected body's crotch length and rise, or revise the authored rise or crotch ease"));
+    }
+    let extension = bisect(residual, lo, hi)?;
+    let error = residual(extension)?;
+    if error.abs() > WALK_TOL_MM {
+        return Err(Refusal::new(
+            RefusalCode::NotConverged,
+            format!("stored crotch seam misses the {target:.2} mm target by {error:+.3} mm"),
+        )
+        .repair("review the crotch and rise dimensions and ease"));
+    }
+    Ok(extension)
+}
+
 #[allow(clippy::too_many_lines)]
 fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Refusal> {
     let nappy = crate::doc::truthy(&s["nappy"]);
@@ -183,11 +228,12 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
             + edge_len(&pat, "tr_front.R", "cf")?
             + (edge_len(&pat, "tr_back.R", "cb")? + edge_len(&pat, "tr_back.R", "crotch")?))
     };
-    let ext_b = bisect(
-        |e| Ok(crotch_total(e)? - target_crotch),
-        0.04 * seat,
-        0.20 * seat,
-    )?;
+    let (lo, hi) = (0.04 * seat, 0.20 * seat);
+    let ext_b = if m.is_analytic_form() {
+        bisect(|e| Ok(crotch_total(e)? - target_crotch), lo, hi)?
+    } else {
+        fitted_back_extension(crotch_total, target_crotch, lo, hi)?
+    };
     // true the legs: equal inseams and outseams (the front is the reference); damped 2x2 Newton
     let fpat = one(vec![fp.clone()]);
     let (f_in, f_out) = (

@@ -398,7 +398,7 @@ fn body_json(w: &Wearer, fit: &TapeFit, measurements: &Value) -> serde_json::Map
     m.insert(
         "tape_evaluation".into(),
         json!({"status":if unavailable.is_empty() { "AVAILABLE" } else { "PARTIAL" },
-            "pose":"a_pose_35","provenance":"MODEL_FIT","unavailable_fields":unavailable}),
+            "pose":Pose::TAPE_FIT_POSE_NAME,"provenance":"MODEL_FIT","unavailable_fields":unavailable}),
     );
     m.insert("mass_kg".into(), json!(kg(fit.mass_kg)));
     m.insert(
@@ -714,7 +714,7 @@ fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mut text = format_table(&rep);
     if let Some(selected) = body {
         result["validation_body"] = selected.body.evidence();
-        text.push_str("\nFlat body: MODEL_FIT in the reference A-pose; original measurement evidence is unchanged.");
+        text.push_str("\nFlat checks use MODEL_FIT dimensions in the source measurement pose.");
     }
     Ok((result, rep.exit_code(), text))
 }

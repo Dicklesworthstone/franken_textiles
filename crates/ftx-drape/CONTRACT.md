@@ -3,8 +3,9 @@
 **Drafting and flat checks on a selected body (plan §8).**
 `drafting::PreparedPatternBody` resolves an optional intact accepted report through
 the existing `FittedBody` authority, or fits the supplied tape evidence when the
-report is absent. It owns one canonical 35-degree `FlatFitBody` for initial drafts
-and later validation. `draft_on_selected_model` supplies it to all three programs;
+report is absent. Initial drafts and later validation use one `FlatFitBody` in the
+source measurement pose. Tape fits straighten the elbows at 35 degrees. Accepted
+reports keep their 35-degree A-pose. `draft_on_selected_model` supplies it to all three programs;
 the accepted-only `draft_on_model` wrapper remains available. Dimensions,
 landmarks, section radii and placement frames use that same selected shape. Missing
 required anatomy refuses; separate explicit hand/foot passage evidence supplies only

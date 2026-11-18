@@ -1157,6 +1157,13 @@ Tested invariants: wrap preserves arc length along the outline within 1 %; `roll
 
 ### C.0 Common machinery
 
+An explicit model-derived draft and its flat check evaluate the selected shape in its source
+measurement pose. Tape fits straighten the elbows at 35 degrees of arm abduction. Accepted
+image fits keep the ordinary 35-degree A-pose used by their tape comparison. Reposing a synthetic
+92 cm tape fit with bent elbows changed its wrist section from 105.1 mm to 174.6 mm. The source
+pose supplies the dimensions, landmark heights and placement frames together, independent of
+the pose selected for the later simulation.
+
 - Each program is `program(meas, style = null) → (pattern, fit_spec)`. Registry `PROGRAMS`: `zouave_bolero`,
   `zouave_trousers`, `fez`.
 - Style merge: defaults overridden by the style object; any unknown key raises `unknown style key(s) [<sorted
@@ -1230,6 +1237,13 @@ Style defaults (`BOLERO_DEFAULTS`):
 | soutache_width | 3.0 | flat braid width |
 | sleeve_band | 35.0 | braid band above the sleeve hem |
 | motif | 0.035 | trefoil radius / chest girth (0 = no motifs; back pair is 1.2×) |
+
+For a fitted-body bolero, check the finished width of both open fronts and unfolded back
+12 mm below the underarm. A 92 cm fitted draft with 100 mm nominal chest ease delivered
+only 65.4 mm there. Share the difference from the authored circumference equally between
+the two fronts and remeasure the stored outlines before solving the sleeve. This applies
+across the size range and to deliberately tight styles. The flat validator independently
+checks its usual band. Preserve the solved back, the front gap and the cutaway.
 
 Derived quantities (L = landmarks):
 - `q = (chest + chest_ease)/4`; back width `wb = q + 5`; front width `wf = q − 5`.
@@ -1410,6 +1424,13 @@ Solves:
 - `target_crotch = total_crotch_length + crotch_ease + (20 if nappy)`. `ext_b = bisect(front(crotch + cf) +
   back(cb + crotch) − target_crotch, 0.04·seat, 0.20·seat)` (instance `.R` edge lengths; back built with hem_dy =
   hem_dx = 0).
+- For an explicitly selected fitted body, the reference interval is the initial search interval.
+  A saved 92 cm model-derived draft requested 433.5 mm and stopped at 403.0 mm when its back
+  extension reached 20% of seat circumference. If the walked target is longer, extend the
+  upper search bound to the target path length: the back crotch curve alone spans the extension
+  horizontally. If shorter, search down to zero extension. Require a bracket and re-walk the
+  stored seam to within 0.01 mm (vertices are stored to 0.001 mm). An unbracketed target refuses.
+  The analytic measurement-document port retains the reference interval and endpoint behavior.
 - Leg truing, front is the reference: `f_in`, `f_out` = front inseam and outseam lengths. Residual(v) = (back inseam −
   f_in, back outseam − f_out) for back(ext_b, v.dy, v.dx). Damped Newton from v = (0, 0), at most 25 iterations: stop
   when max|r| < 0.05 mm; Jacobian by forward differences with step 0.5 mm in each component; step = least-squares

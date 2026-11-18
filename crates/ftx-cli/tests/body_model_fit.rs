@@ -135,6 +135,24 @@ fn unmeasured_readings_come_back_as_model_fit() {
             .contains("records must be a list")
     );
     let check = ftx_wasm::fold::inspect_body(&model, &hash, saved_text, None).unwrap();
+    let drafting =
+        ftx_drape::drafting::PreparedPatternBody::prepare(&model, &hash, &data, None, &[])
+            .unwrap()
+            .evidence();
+    assert_eq!(
+        drafting["identity"]["reference"]["measurement_pose"],
+        Pose::TAPE_FIT_POSE_NAME
+    );
+    assert_eq!(
+        check["body"]["tape_evaluation"]["pose"],
+        Pose::TAPE_FIT_POSE_NAME
+    );
+    for name in ftx_body::TAPE_FIELDS {
+        assert_eq!(
+            drafting["model_readings_mm"][name], check["body"]["readings_mm"][name],
+            "draft and tape fit disagree on {name}"
+        );
+    }
     let supplement = &check["model_fit_measurements"];
     assert_eq!(supplement["source_measurements_sha256"], sha256_hex(saved));
     assert_eq!(supplement["model_sha256"], hash);

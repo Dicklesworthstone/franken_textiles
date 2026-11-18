@@ -38,6 +38,10 @@ impl Meas<'_> {
 }
 
 impl super::DraftBody for Meas<'_> {
+    fn is_analytic_form(&self) -> bool {
+        true
+    }
+
     fn get(&self, name: &str) -> Result<f64, Refusal> {
         Meas::get(self, name)
     }

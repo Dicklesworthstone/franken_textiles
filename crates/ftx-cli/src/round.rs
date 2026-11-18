@@ -505,7 +505,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         if let Some(source) = &selected.source {
             write_new(&rd.join("body_fit.json"), source)?;
         }
-        notes.push("flat validation uses MODEL_FIT dimensions and landmarks in the reference A-pose; original measurement evidence and readiness are unchanged".into());
+        notes.push("flat validation uses MODEL_FIT dimensions and landmarks in the source measurement pose".into());
     }
     let val = serde_json::to_value(&validation).map_err(|e| bad_input(e.to_string()))?;
     write_json(&rd.join("validation.json"), &val)?;
