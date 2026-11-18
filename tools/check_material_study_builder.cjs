@@ -29,6 +29,8 @@ test('guided choices retain the unchanged baseline, exact frozen bytes and indep
   assert.deepEqual(result.cutting,input.cutting);
   assert.equal(Object.hasOwn(result,'assembly_mass'),false);
   assert.deepEqual(result.comparison,{basis:'nominal',objectives:input.objectives,constraints:[],required_consumers:[],allow_mixed_protocols:false});
+  assert.equal(JSON.parse(build({...input,allowMixedProtocols:true})).comparison.allow_mixed_protocols,true);
+  assert.throws(()=>build({...input,allowMixedProtocols:'false'}),/consent/);
 });
 
 test('piece targets preserve exact source IDs and every inserted source snapshot', async () => {

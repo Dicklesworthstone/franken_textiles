@@ -36,7 +36,7 @@ fn regional_guards_share_real_motion_and_preserve_adaptive_cache_and_scope_ident
             "polygon_mm":[[width*0.3,-1.],[width*0.8,-1.],[width*0.8,101.],[width*0.3,101.]]}}
     ]);
     let scenario = json!({"schema":"ftx-drape-scenario/1",
-        "options":{"spacing":100.0,"sew_steps":120,"drape_steps":0,"step":0.001},
+        "options":{"spacing":100.0,"sew_steps":180,"drape_steps":0,"step":0.001},
         "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000,
         "material_strain":{"schema":"ftx-material-strain/2","regions":regions,
             "max_triangle_samples":100000},
@@ -59,7 +59,7 @@ fn regional_guards_share_real_motion_and_preserve_adaptive_cache_and_scope_ident
         {"metric":"motion_max_body_contact_vertex_force_n","region":"seam-side","maximum":4000000.},
         {"metric":"motion_max_body_contact_vertex_force_n","region":"panel-center","maximum":5000000.}
     ]);
-    let study = json!({"schema":"ftx-design-study/1",
+    let mut study = json!({"schema":"ftx-design-study/1",
         "design_adaptive":{"objective":"consumer_comparison","material_key":"sheet",
             "case_key":"moving","constraint_restoration":"componentwise",
             "variables":[{"key":"length","bounds_mm":[-10.,0.],"initial_mm":0.,
@@ -76,19 +76,41 @@ fn regional_guards_share_real_motion_and_preserve_adaptive_cache_and_scope_ident
             "constraints":constraints}});
     let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,
         "cases":[{"key":"moving","scenario":scenario}]});
-    let report: Value = serde_json::from_str(
-        &on_model(
-            &model,
-            &digest,
-            &pattern.to_string(),
-            &study.to_string(),
-            &matrix.to_string(),
-            &body.to_string(),
-            |_| {},
+    let evaluate = |study: &Value| -> Value {
+        serde_json::from_str(
+            &on_model(
+                &model,
+                &digest,
+                &pattern.to_string(),
+                &study.to_string(),
+                &matrix.to_string(),
+                &body.to_string(),
+                |_| {},
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
-    .unwrap();
+        .unwrap()
+    };
+    // The shortened band settles on a different welded mesh. Its nodal loads are
+    // individually admissible, but comparing them across those meshes needs consent.
+    let strict = evaluate(&study);
+    let trials = strict["manufacturing"]["design_search"]["rows"]
+        .as_array()
+        .unwrap();
+    let short = trials
+        .iter()
+        .find(|row| row["design"]["variables_mm"]["length"] == -10.0)
+        .unwrap();
+    assert_eq!(short["consumer_cases"][0]["comparison"]["eligible"], true);
+    assert_eq!(short["selected"], false);
+    assert!(
+        short["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("source protocols differ")
+    );
+    study["comparison"]["allow_mixed_protocols"] = json!(true);
+    let report = evaluate(&study);
     let search = &report["manufacturing"]["design_search"];
     assert_eq!(search["selected_designs"], 1, "{search}");
     let selected = search["rows"]

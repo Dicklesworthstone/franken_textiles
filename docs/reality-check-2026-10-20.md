@@ -4439,3 +4439,31 @@ against `RH-1`/`PL-1`; scoped ordinary-profile checks are the correction to the 
 **20** Strongest evidence is actual successful Anny publication followed by refused, byte-preserving
 retry. Fresh self-review is not independent verification. Beads import/flush remains blocked by the
 existing invalid ID/stale database conflict; no forced export, tracker edit or task closure occurred.
+
+### 2026-11-18 regional garment comparison and accepted-body reuse
+
+The regional test failure above is resolved. At 120 sewing steps the synthetic shortened band
+still drifted (7% of vertices above 0.1 mm/frame). At 180 steps it passed the geometric admission
+check, but its welded mesh differed from the incumbent's. Comparing nodal loads across those meshes
+requires explicit mixed-protocol consent. Guided studies can now set that policy through the
+workbench, and each named case can freeze its own setting. Strict comparison remains the default.
+The integration test exercises both choices, all ten regional/union guards, cached evaluations,
+and both native CLI entry points. With consent the study selects the 10 mm shortening in three
+evaluations. These synthetic results establish software behavior.
+
+An independent replay exposed a body importer defect: a JavaScript JSON round trip of an accepted
+receipt changed `1.0` to `1`, causing a refusal before the simulation. The shared importer now
+compares shape coefficients and bounds by exact numeric value. Its regression includes integer
+bounds and local changes and refuses a phenotype changed by one representable float.
+
+Verified on base `d987d374` with these changes: `cargo fmt --check`,
+`cargo clippy -j2 --all-targets --locked -- -D warnings`, `cargo test -j2 --offline --locked
+-p ftx-body --lib` (57 passed), the exact regional integration test (1 passed), and
+`cargo build -j2 --release --target wasm32-unknown-unknown -p ftx-wasm --locked`. The installed
+release bundle reproduced the original shape, mass, residuals and both garment-position digests
+after a JavaScript save, and refused a one-ULP discrepancy. Strict and opted-in searches on the
+resaved body selected 0 and −10 mm respectively. The Node VM material frontend and study-builder
+suites passed 768 tests with zero failures. The changed UI checks also passed on the final source.
+The staged UBS scan was partial (JS timeout). Its three Rust critical findings are existing tests
+that invoke Cargo's fixed executable paths. No scan suppression, oracle change, threshold change,
+tracker closure, or independent verification. Beads still refuses to flush its stale database.

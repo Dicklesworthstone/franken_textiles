@@ -1183,8 +1183,11 @@ because its probes and alternatives would exhaust those optional per-case reserv
 
 These are discrete normal body forces. Opposing forces can cancel in the resultant, shared welded
 vertices keep their complete force, and summed magnitudes retain opposing loads at different vertices.
-Both sums and nodal maxima depend on the mesh and contact policy. No
-contact area, pressure, tangential friction, physiological comfort or safe-fit threshold is inferred.
+Both sums and nodal maxima depend on the mesh and contact policy. A design alteration can change
+the welded mesh. To rank those alternatives together, check **Allow comparisons across different
+source protocols** under the comparison settings. This also permits differences in other source
+protocols for that policy. Saving a named case with the current goals captures the checkbox setting.
+No contact area, pressure, tangential friction, physiological comfort or safe-fit threshold is inferred.
 
 #### Continue the same sewn garment through movement
 

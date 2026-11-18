@@ -1596,7 +1596,7 @@ export function buildMaterialStudyRequest(state, scenario) {
     }
   }
   object(state, ["candidates", "target", "pieceIds", "seamIds", "cutting", "finiteStock", "cuttingJob", "assemblyMass", "objectives", "basis",
-    "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers", "design"],
+    "sewing", "sewingSelection", "purchasing", "cutAndSewPurchasing", "constraints", "requiredConsumers", "allowMixedProtocols", "design"],
     ["candidates", "pieceIds", "objectives", "basis"], "Guided study");
   const pieces = uniqueNames(state.pieceIds, "Pattern source pieces", 4096);
   if (!Array.isArray(state.candidates) || !state.candidates.length || state.candidates.length > MAX_GUIDED_STUDY_CANDIDATES) {
@@ -1612,6 +1612,10 @@ export function buildMaterialStudyRequest(state, scenario) {
     if ([...selected].some(id => !pieces.has(id))) throw Error("Material target names a missing source piece.");
   } else if (target && (target.scope !== "default" || own(target, "ids"))) throw Error("Choose a default or explicit piece target.");
   if (!["nominal", "reported_bounds"].includes(state.basis)) throw Error("Choose nominal or reported-bound comparison.");
+  const allowMixedProtocols = own(state, "allowMixedProtocols") ? state.allowMixedProtocols : false;
+  if (typeof allowMixedProtocols !== "boolean") {
+    throw Error("Mixed-protocol consent must be a boolean.");
+  }
   const design = own(state, "design") ? linkedDesign(state.design, pieces, state.candidates,
     { basis: state.basis, objectives: state.objectives, constraints: state.constraints }, matrix, state.seamIds) : null;
   if (matrix) {
@@ -1836,7 +1840,7 @@ export function buildMaterialStudyRequest(state, scenario) {
   if (own(state, "cutAndSewPurchasing")) append(`,"cut_and_sew_purchasing":${combinedPurchasing}`);
   if (massJson !== null) { append(',"assembly_mass":'); append(massJson); }
   append(`,"comparison":${JSON.stringify({ basis: state.basis, objectives: state.objectives,
-    constraints, required_consumers: required, allow_mixed_protocols: false })}}`);
+    constraints, required_consumers: required, allow_mixed_protocols: allowMixedProtocols })}}`);
   return parts.join("");
 }
 

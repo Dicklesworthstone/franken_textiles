@@ -9218,10 +9218,13 @@ test('guided regional limits freeze case policies and cancel pending requests be
   const {p}=await guidedScenarioSetup();guidedStrainRegionControls(p);saveGuidedStrainRegion(p);guidedNamedCases(p);
   p.e.guidedScenarioPolicySource.value='snapshot';p.e.guidedScenarioPolicySource.handlers.change();
   saveRegionalLimit(p,'right elbow','max_warp_green_strain','0.08');await saveGuidedCase(p,'tight elbow');
+  p.e.guidedStudyMixed.checked=true;p.e.guidedStudyMixed.handlers.change();
   saveRegionalLimit(p,'right elbow','max_warp_green_strain','0.2');await saveGuidedCase(p,'loose elbow');
   await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
   const cases=JSON.parse(sent.scenarioRequest).cases;
   assert.deepEqual(cases.map(item=>item.comparison.constraints[0].maximum),[0.08,0.2]);
+  assert.equal(JSON.parse(sent.studyRequest).comparison.allow_mixed_protocols,true);
+  assert.deepEqual(cases.map(item=>item.comparison.allow_mixed_protocols),[false,true]);
   assert.ok(cases.every(item=>item.comparison.constraints[0].region==='right elbow'));
   p.emit(scenarioReport());p.e.clearRegionalConstraints.onclick();await p.e.scenario.onclick();
   assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest,'Saved case policies keep their exact original guards');

@@ -5452,7 +5452,8 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
       ...(limitBasis === "inherit" ? {} : { basis: limitBasis }) })));
   constraints.push(...[...guidedRegionalConstraints.values()].map(constraint => ({ ...constraint })));
   const requiredConsumers = guidedRequired.filter(([id, , scope]) => guidedStockScope(scope, stockMode) && $(id).checked).map(([, consumer]) => consumer);
-  return { objectives, constraints, requiredConsumers, basis: $("guidedBasis").value };
+  return { objectives, constraints, requiredConsumers, basis: $("guidedBasis").value,
+    allowMixedProtocols: $("guidedStudyMixed").checked };
 }
 async function guidedStudyInput(scenarioRead) {
   if (!source) throw Error("Load the original pattern first.");
@@ -6103,8 +6104,8 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   let authoredComparison;
   if (includeCasePolicy && policy === "snapshot") {
     if (!guidedStudyMode()) throw Error("Select guided material comparisons before saving their current goals as a case policy.");
-    const { requiredConsumers, ...comparison } = guidedComparisonInput(number);
-    authoredComparison = JSON.stringify({ ...comparison, required_consumers: requiredConsumers, allow_mixed_protocols: false });
+    const { requiredConsumers, allowMixedProtocols, ...comparison } = guidedComparisonInput(number);
+    authoredComparison = JSON.stringify({ ...comparison, required_consumers: requiredConsumers, allow_mixed_protocols: allowMixedProtocols });
   }
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
     ...(surface ? [["surface", "heatConditions", "the selected section-3 sheet heat conditions"]] : []),
@@ -6867,7 +6868,7 @@ $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
   "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
   "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations", "guidedDesignDomainRestarts",
-  "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
+  "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedStudyMixed", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
   ...[...guidedMetrics, ...guidedDirectionalMetrics].flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Limit`]),
   ...guidedTransportMetrics.flatMap(([prefix]) => [`${prefix}Goal`, `${prefix}Direction`, `${prefix}MinimumLimit`, `${prefix}Limit`]),
