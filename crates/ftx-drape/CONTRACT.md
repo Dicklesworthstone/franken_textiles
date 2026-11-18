@@ -554,14 +554,17 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
   channel (a ring on the fold alone left the seam line near its cut length, 639 of 704 mm on the 92 cm
   trousers). The report's `elastic` field gives the relaxed and worn length (the mean of the rings, and each
   ring), stretch, tension (the rings' sum), grip `2πμT` (KAT 4's law), the garment's weight and `holds`
-  (grip ≥ weight); an elastic that does not hold is an advisory flag. KAT 7 (`tests/kat_elastic.rs`) drapes
-  the 92 cm trousers (1.08 N) on the tape-fitted toddler with the elastic at 0.85, 0.95, 1.0 and 1.2 × the
-  530 mm waist, at μ 0.3 and 0.5: it ends 22.9 %, 12.9 % and 9.1 % stretched with a grip of 6.7, 3.8 and
-  2.7 N at μ 0.3 (11.1, 6.4 and 4.6 N at 0.5) and the waistband 12–15 mm below where it was drafted; at 1.2
+  (grip ≥ weight); an elastic that does not hold is an advisory flag. A historical KAT 7 run
+  (`tests/kat_elastic.rs`) draped the 92 cm trousers (1.08 N) on the tape-fitted toddler with the elastic
+  at 0.85, 0.95, 1.0 and 1.2 × the 530 mm waist, at μ 0.3 and 0.5. It ended 22.9 %, 12.9 % and
+  9.1 % stretched with a grip of 6.7, 3.8 and 2.7 N at μ 0.3 (11.1, 6.4 and 4.6 N at 0.5)
+  and the waistband 12–15 mm below where it was drafted; at 1.2
   it grips 0.13 N (0.21 N; flagged) and the waistband rests 14 mm down on the hips and crotch, within a
   millimetre of the snug 1.0 elastic (the test allows 1 mm: there the hips, not the grip, stop it). Without
   the elastic the waistband sits 6.5 mm down: a casing gathered from its cut length hangs lower than one cut
-  to the finished size.
+  to the finished size. With three sewing friction refreshes, the chart trousers pass every grip,
+  slip and height check. The loosest waistband sits 0.5 mm above the preceding rung at μ 0.3
+  and 1.0 mm above it at μ 0.5, exactly the allowed difference.
 - `run_phase` runs implicit steps under a gravity (the reference's sew then drape).
 The drape body (`ftx_body::trimmed_skin`) leaves out the hands and feet; with Anny's bent elbows a
 straight sleeve crossed the forearm, so the drape pose straightens the arms (`Pose::drape`). The drafted
@@ -576,11 +579,11 @@ and deferring the factorization's panel updates (→ 45–50 s); assembly now fi
 place (bit-identical, no triplet sort). With compression at the reference's stiffness (above) the whole
 bolero drape takes about 70 s and the trousers about 7.5 minutes; on the body fitted to 15 tape
 measurements (ftx-body), 50 s and 5.4 minutes; without the friction lag round while sewing
-(`DrapeOptions::lag_rounds` = [0, 1], the default) 29 s and 2.4 minutes: the bolero 312 Newton
+(`DrapeOptions::lag_rounds` = [0, 1], the former default) 29 s and 2.4 minutes: the bolero 312 Newton
 iterations instead of 448, the trousers 318 instead of 680, the same verdicts (no flag, settled),
 readings within a few millimetres (bands within 3.7 mm, hem rise within 6 mm, hem balance −2.2 → 6.0 mm,
-seam strain p90 within 1 %) — the run-to-run spread the reference itself shows. Contacts made during a
-sewing step get friction from the next step on. On the body fitted to 21 measurements (neck, head,
+seam strain p90 within 1 %) — the run-to-run spread the reference itself shows. With that setting,
+contacts made during a sewing step get friction from the next step on. On the body fitted to 21 measurements (neck, head,
 shoulders, crotch length and outseam added) the verdicts are unchanged (no flag, settled) and the work
 grows: the bolero 374 Newton iterations, the trousers 563 (one sewing step unconverged, the drape
 converged). Newton to 1e-3 m/s with the inexact Newton below (the defaults since 2026-10-13) brings them
@@ -605,6 +608,8 @@ frame (+u along the grain).
   100 iterations a step on a sagging sheet; the blend converges in 1–2) and stiffness → s·Q in compression.
 - Bergou's quadratic bending hinges use weight `3a/(A₀+A₁)²` and a constant PSD Hessian. Each triangle
   contributes its own rest area and endpoint cotangents, including at a weld with unequal cut lengths.
+  Across an eased seam the two cross-edge derivatives use the common length
+  `2(A₀+A₁)/(altitude₀+altitude₁)`. Pure seam-direction stretch of a flat sheet produces zero bending energy.
   Each triangle's area is distributed among its interior hinges.
 - Elastic (`ElasticSegment`): a tension-only spring per segment, `(EA/r)·g(l − r)` with g zero below
   −δ, cubic across [−δ, 0] and `e²/2 + δe/2 + δ²/6` above (δ = `ELASTIC_ONSET` = 0.1 mm): C², no force
@@ -791,14 +796,13 @@ body-conditioning inputs; production fitting retains supplied uncertainty and it
 These synthetic controls establish no measured-body accuracy. The earlier KAT 8 armpit-wedge run
 failed at 80 cm with only 1.413734 mm of the requested 1.5 mm body offset. The final-only continuation
 rule above now completes that target: all 80/92/116 cm cases settle with no gating flags under the
-original schedule. KAT 8 still fails the hem criterion at 116 cm. The left front hem rises
-17.4 mm against the ±15 mm limit. Independent anatomy and empirical garment qualification remain open.
-KAT 10 two starts, the 92 cm bolero sewn in 12 and in 18 steps:
-the same minimum, every hem, clearance and seam strain equal at the report's precision; KAT 9 the whole
-pipeline (tape fit, scene, three sewing and three draping steps at the shipped settings) by one SHA-256,
-identical native debug, release and wasm32-wasip1 (re-pinned when `ftx_core::np::interp` became a fused
-multiply-add, as the reference's numpy computes it: the garment mesh moved to 99.9 % bit-exact). 79 s
-release for the historical KATs 8 and 10 run, before offset completion gated KAT 8.
+original schedule. Three friction refreshes per sewing step and one under gravity give new contacts
+tangential resistance on touchdown. The 116 cm left front hem rise drops from 17.4 to 8.0 mm.
+All three sizes pass the ±15 mm bound. Independent anatomy and empirical garment qualification remain open.
+In KAT 10 the 92 cm bolero sewn in 12 and 18 steps has equal final hem heights, landmark
+clearances and seam strains at the report's precision. Fitted KAT 9 hashes the body parameters
+and final garment positions after three sewing and three gravity steps. The current native release
+result differs from its historical cross-target pin. See `FEATURE_PARITY.md` for the digests.
 
 **Lifted code** (frankensim `93fc9b26`, MIT + rider, provenance headers): `sparse/` (CSR assembly and the
 multifrontal LDLᵀ with AMD and inertia; adds `analyze_with_permutation`; assembly orders triplets by a

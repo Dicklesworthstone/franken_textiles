@@ -145,7 +145,7 @@ pub struct DrapeOptions {
 impl Default for DrapeOptions {
     /// 12 mm mesh, 12 sewing and 36 draping steps of 1/24 s, Newton to 1e-3 m/s, compression as stiff
     /// as tension outside gather zones (the reference's `tension = compression = E_t·L`, spec 04 §5.3),
-    /// friction lagged once a step while draping and not while sewing, a drafted casing's elastic at
+    /// three friction refreshes while sewing and one under gravity, a drafted casing's elastic at
     /// [`crate::scene::ELASTIC_EA`], ĝ 1 mm, the cloth's mid-surface 1.5 mm off the body, μ 0.4.
     fn default() -> Self {
         Self {
@@ -159,7 +159,7 @@ impl Default for DrapeOptions {
             time_subdivision: None,
             tol: 1e-3,
             compression: 1.0,
-            lag_rounds: [0, 1],
+            lag_rounds: [3, 1],
             elastic_ea: crate::scene::ELASTIC_EA,
             contact: ContactParams {
                 dhat: 1e-3,

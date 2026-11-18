@@ -472,13 +472,25 @@ impl Hinge {
             let edge = b - a;
             let arm = opposite - a;
             (
+                edge.norm2(),
                 cot(edge, arm),
                 cot(-edge, opposite - b),
                 0.5 * edge.cross(arm).abs(),
             )
         };
-        let (start0, end0, a0) = geometry(first);
-        let (start1, end1, a1) = geometry(second);
+        let (edge0_sq, mut start0, mut end0, a0) = geometry(first);
+        let (edge1_sq, mut start1, mut end1, a1) = geometry(second);
+        if edge0_sq != edge1_sq {
+            // Each cotangent stencil equals its cut edge length times the cross-edge derivative.
+            // Compare the derivatives at a common length, or a flat, tangentially eased seam bends.
+            // Keeping the authored area gives L = 2(A₀+A₁)/(altitude₀+altitude₁).
+            let (l0, l1) = (edge0_sq.sqrt(), edge1_sq.sqrt());
+            let common = (a0 + a1) / (a0 / l0 + a1 / l1);
+            start0 *= common / l0;
+            end0 *= common / l0;
+            start1 *= common / l1;
+            end1 *= common / l1;
+        }
         let k = [end0 + end1, start0 + start1, -start0 - end0, -start1 - end1];
         (a0 > 0.0 && a1 > 0.0 && k.iter().all(|c| c.is_finite())).then(|| Self {
             v,

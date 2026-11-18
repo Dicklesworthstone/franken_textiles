@@ -436,8 +436,7 @@ fn kat10_two_starts() {
 /// of the 92 cm bolero, the fewest the drape's metrics accept) pinned by the SHA-256 of the fitted
 /// parameters and the last frame's positions. The same digest must come out of native debug, native release
 /// and wasm32-wasip1 (`FTX_ANNY_MODEL` naming the model file inside the WASI sandbox). The solver settings
-/// are the shipped ones, so the inexact Newton's paths are covered: these six steps take 1,569 conjugate-
-/// gradient iterations, 38 factorizations and 86 projected iterations.
+/// are the shipped ones, including friction refresh during sewing and draping.
 #[test]
 #[ignore = "needs the converted Anny model"]
 fn kat9_fitted_pipeline_digest() {

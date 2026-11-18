@@ -147,6 +147,29 @@ fn sliding_patch(mu: f64, fixed_height: bool) -> Solver {
 }
 
 #[test]
+fn first_sewing_contact_resists_tangential_slip() {
+    let travel = |mu| {
+        let mut patch = sliding_patch(mu, false);
+        for p in &mut patch.x {
+            p.z = 0.002; // initially outside the 0.5 mm offset plus the 1 mm barrier
+        }
+        patch.v.fill(Vec3::new(0.1, 0.0, -0.2));
+        patch.friction_rounds = ftx_drape::run::DrapeOptions::default().lag_rounds[0];
+        let x0 = patch.x[0].x;
+        assert!(patch.step(0.01).unwrap().converged);
+        assert!(patch.x.iter().all(|p| p.z > 0.0005 && p.z < 0.0015));
+        patch.x[0].x - x0
+    };
+    let smooth = travel(0.0);
+    assert!((smooth - 0.001).abs() < 1e-8);
+    let rough = travel(0.4);
+    assert!(
+        rough > 0.0 && rough < smooth - 1e-5,
+        "{rough} vs {smooth} m"
+    );
+}
+
+#[test]
 fn moving_surface_transports_cloth_by_friction_not_absolute_world_drag() {
     let mut slippery = sliding_patch(0.0, true);
     let mut grippy = sliding_patch(0.5, true);

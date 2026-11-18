@@ -51,11 +51,25 @@ fn eased_seam_bends_with_each_panels_own_triangle() {
         for (&opposite, area) in hinge.v[2..].iter().zip(hinge.areas) {
             assert_eq!(area, if opposite == 2 { 4. } else { 1. });
         }
-        // Endpoint cotangents are (1/2, 3/2) on the long edge and (1, 1) on the short.
-        for (vertex, coefficient) in hinge.v.into_iter().zip(hinge.k) {
-            assert_eq!(coefficient, [2.5, 1.5, -2., -2.][vertex]);
-        }
         assert_eq!(hinge.weight, 3. / 5.);
+        // The endpoints' cotangents are (1/2, 3/2) and (1, 1), scaled by 5/6 and 5/3.
+        for (vertex, coefficient) in hinge.v.into_iter().zip(hinge.k) {
+            let expected = [35. / 12., 25. / 12., -5. / 3., -10. / 3.][vertex];
+            assert!((coefficient - expected).abs() < 1e-14);
+        }
+        // Both edges meet at length 3 through seam-direction strain only. The altitudes stay
+        // 2 and 1, so the two normal derivatives cancel on the flat sheet.
+        let mut sewn = [
+            Vec3::ZERO,
+            Vec3::new(3., 0., 0.),
+            Vec3::new(0.75, 2., 0.),
+            Vec3::new(1.5, -1., 0.),
+        ];
+        assert!(hinge.energy(&sewn, 1.) < 1e-28);
+        // Fold the lower panel 90° without stretching it further. The squared normal derivative
+        // jump is 2, and the common edge length from the two areas and altitudes is 10/3.
+        sewn[3] = Vec3::new(1.5, 0., 1.);
+        assert!((hinge.energy(&sewn, 1.) - 20. / 3.).abs() < 1e-12);
     }
 }
 
