@@ -78,8 +78,18 @@ pub fn placements(
             .ok_or_else(|| bad(format!("no instance {id}")))?;
         let piece = &pattern.raw()["pieces"][inst.piece_index];
         let pl = &piece["placement"];
-        let num = |key: &str, default: f64| pl.get(key).and_then(Value::as_f64).unwrap_or(default);
-        let (mut x0, mut y0) = (num("x0", 0.0), num("y0", 0.0));
+        let num = |key: &str| {
+            pl.get(key)
+                .or_else(|| key.strip_suffix("_mm").and_then(|alias| pl.get(alias)))
+                .map(|v| {
+                    v.as_f64().ok_or_else(|| {
+                        bad(format!("{id}: placement {key} must be a number"))
+                            .repair(format!("Supply a numeric {key} or omit the field."))
+                    })
+                })
+                .transpose()
+        };
+        let (mut x0, mut y0) = (num("x0")?.unwrap_or(0.0), num("y0")?.unwrap_or(0.0));
         if let Some(sc) = piece.get("sim_scale").filter(|v| truthy(v)) {
             x0 *= sc[0].as_f64().unwrap_or(1.0);
             y0 *= sc[1].as_f64().unwrap_or(1.0);
@@ -104,11 +114,7 @@ pub fn placements(
             .landmark_h(&key, landmark)
             .ok_or_else(|| bad(format!("{id}: no landmark {landmark} on {key}")))?
             - y0;
-        let radius = if let Some(r) = pl
-            .get("radius_mm")
-            .or_else(|| pl.get("radius"))
-            .and_then(Value::as_f64)
-        {
+        let radius = if let Some(r) = num("radius_mm")? {
             r
         } else {
             let (lo, hi) = mesh.inst_range[k];
@@ -116,22 +122,29 @@ pub fn placements(
             let (hmin, hmax) = ys.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), h| {
                 (a.min(h), b.max(h))
             });
-            let clearance = pl
-                .get("clearance_mm")
-                .or_else(|| pl.get("clearance"))
-                .and_then(Value::as_f64)
-                .unwrap_or(25.0);
+            let clearance = num("clearance_mm")?.unwrap_or(25.0);
             linspace(hmin, hmax, 9)
                 .into_iter()
                 .map(|h| frames.section_radius(&key, h))
                 .fold(0.0, f64::max)
                 + clearance
         };
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "{id}: placement wrap radius must be finite and positive (got {radius} mm)"
+                ),
+            )
+            .repair(
+                "Supply a positive radius_mm or choose clearance_mm that gives a positive radius.",
+            ));
+        }
         out.push(WrapPlacement {
             frame,
             h0,
             radius,
-            theta_deg: num("theta_deg", 0.0),
+            theta_deg: num("theta_deg")?.unwrap_or(0.0),
             x0,
             mirrored: inst.mirrored,
             own_side: (physical.is_some() || matches!(inst.side, Side::R | Side::L))
@@ -840,6 +853,18 @@ fn build_scene_inner(
     }
     let places = placements(pattern, &mesh, frames)?;
     let wrapped = wrapped_positions(&mesh, &places);
+    if let Some(v) = wrapped.iter().position(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "{}: placement produces a non-finite wrapped position",
+                mesh.instances[mesh.owner[v]]
+            ),
+        )
+        .repair(
+            "Check the wrap radius, angle, anchor and body frame against the pattern dimensions.",
+        ));
+    }
     let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
     let start = start_override.unwrap_or_else(|| start_state(&mesh, wrapped, &tree));
     // Weld each sewing group into one vertex.

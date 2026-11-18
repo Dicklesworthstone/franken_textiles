@@ -109,20 +109,77 @@ fn gravity_only_drape_counts_the_first_step_when_a_band_slides() {
     )
     .unwrap();
 
-    // Free fall from rest: implicit Euler's six endpoint displacements are 1, 3, 6, 10, 15, 21
-    // times g·dt². Their mean crosses the slide threshold only if the first step is included.
-    let drop_mm = (56. / 6.) * ftx_drape::run::GRAVITY * opts.step.powi(2) * 1000.;
+    // The loose band deforms as it falls. Both a median over corners and a mean over a ring
+    // must lie within the actual vertex travels from the start to the six-frame mean.
+    let first = run.fold.fold + run.fold.zip;
+    let start = &run.fold.frames[first - 1];
+    let gravity = &run.fold.frames[first..];
+    let mut travel = start
+        .iter()
+        .enumerate()
+        .map(|(v, p)| {
+            1000. * gravity.iter().map(|frame| frame[v].z - p.z).sum::<f64>() / gravity.len() as f64
+        })
+        .collect::<Vec<_>>();
+    travel.sort_by(f64::total_cmp);
+    let lo = travel[0] - 0.05;
+    let hi = travel[travel.len() - 1] + 0.05;
+    assert!(
+        hi < -20.,
+        "every vertex should cross the slide threshold: {lo}..{hi}"
+    );
     for measured in [
         &run.report["pieces"]["band"]["corner_drop_median_mm"],
         &run.report["landmarks"]["waist"]["ring_shift_mm"],
     ] {
         let measured = measured.as_f64().unwrap();
         assert!(
-            (measured + drop_mm).abs() < 0.15,
-            "measured {measured} mm, expected -{drop_mm} mm"
+            (lo..=hi).contains(&measured),
+            "measured {measured} mm outside the vertex travel range {lo}..{hi}"
         );
     }
     assert!(run.gating().iter().any(|g| g.contains("band slid")));
+}
+
+#[test]
+fn invalid_wrap_inputs_refuse_before_relaxation_or_stepping() {
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    for (key, value, message) in [
+        ("radius_mm", json!(0), "wrap radius"),
+        ("radius", json!(-1), "wrap radius"),
+        ("radius_mm", json!("40mm"), "radius_mm"),
+        ("clearance", json!(-30), "wrap radius"),
+        ("clearance_mm", Value::Null, "clearance_mm"),
+        ("theta_deg", json!([0]), "theta_deg"),
+        ("x0", json!("0"), "x0"),
+        ("y0", Value::Null, "y0"),
+        ("radius_mm", json!(1e-200), "non-finite wrapped position"),
+    ] {
+        let mut raw = band(json!({})).raw().clone();
+        let placement = &mut raw["pieces"][0]["placement"];
+        placement.as_object_mut().unwrap().remove("radius_mm");
+        placement[key] = value;
+        let refusal = drape(
+            &Pattern::new(raw),
+            &json!({}),
+            &body,
+            &DrapeOptions::default(),
+            |_| panic!("invalid {key} reached stepping"),
+        )
+        .err()
+        .expect("invalid placement");
+        assert!(
+            refusal.message.contains("band") && refusal.message.contains(message),
+            "{refusal}"
+        );
+        assert!(!refusal.repairs.is_empty());
+    }
 }
 
 #[test]

@@ -85,24 +85,19 @@ oracle `metrics()` values and texts remain unchanged. Direct rollback/replay, qu
 `cloth.rs` and `run.rs`. Historical fitted-garment timings/verdicts below are not fresh proof of this
 stricter boundary, nor evidence of physical fit.
 
-Fresh release execution passes all 16 KAT/contact/fitted-body tests with the pinned converted Anny
-model: the original 15 and the added chart-trouser start regression. The earlier offset-qualified run
-(`ftx-onn.9`) failed KAT 8 at 80 cm with only 1.413734 mm
-of its requested 1.5 mm offset. KAT 8 now passes unchanged on the
-pinned model's nominal fitted bodies: the 80/92/116 cm boleros reach 1.5 mm, settle and have no gating
-flags under the default schedule. The 80 cm case retains its hem-balance advisory; its largest hem rise is 13.4 mm, within the
-original 15 mm limit. The final-only continuation rule below fixes the numerical offset stall.
-All three pinned native digests pass unchanged. Fresh Chromium/native ordinary and paired 92 cm
-bolero viewers agree byte for byte on the current source. The chart-trouser viewer also agrees byte
-for byte, including gating/advisory flags and fitted targets/readings at the CLI's report precision.
-The 92 cm chart-body trousers previously refused an intersecting cuff start with 2 mm self-contact.
-The resolved pipeline now selects the latest fully admitted earlier relaxation block (200 rather
-than 400 iterations here), retaining all body/material/self-contact checks. The unchanged production
-CLI inputs complete 12 sewing and 36 draping steps with no gating flags, zero unconverged steps and
-one explicit start-repair advisory; the accepted start's plain-edge p95 strain is 16.2%, not the
-rejected start's 11.8%. A direct production-uncertainty regression covers transient self-contact and
-the still-refused 50 mm offset control. This fixes the startup cell; G2/G4 and independent body/
-empirical garment qualification remain open, with original assertions and intersection audits intact.
+**KAT 8 fails at 116 cm.** With the pinned Anny model and nominal chart targets, the left front
+bolero hem rises 17.4 mm against the 15 mm limit. All three sizes reach the full 1.5 mm offset
+and settle with empty gating lists. The recorded release test and the 116 cm wasm replay establish
+the same failed hem criterion. [Release run](docs/reality-check-2026-10-20.md#2026-11-17-contact-continuation-repair-ftx-onn)
+
+The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
+earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
+digests passed, and Chromium/native ordinary and paired 92 cm bolero viewers agreed byte for
+byte. The chart-trouser viewer also agreed byte for byte, including gating and advisory flags.
+The later 92 cm chart-trouser run with production tape uncertainties and 2 mm self-contact
+recovered at 150 relaxation iterations after the 600-iteration start failed admission. Both
+default 92 cm browser garments completed 12 sewing and 36 draping steps with full body offset
+and empty gating lists. The 50 mm self-contact control still refuses. [Trouser recovery](docs/reality-check-2026-10-20.md#2026-11-17-default-trousers-start-recovery-ftx-onn)
 
 Production admission now refuses intended simulation instances without explicit placement before
 meshing. Deliberate `sim: false` omissions remain supported and are listed with excluded seams in
@@ -120,7 +115,7 @@ evidence that the authored catalog garment is complete or fits a person.
 | Dynamics contract | 04 §5 | partial | implicit Euler on the incremental potential with body contact (IPC barrier on the ξ-offset gap, additive CCD, lagged Coulomb friction, start-intersection audit; `ftx-drape` CONTRACT); welded seams, grain-aligned rest, fabric from the pattern, sew and drape phases (`scene.rs`, `examples/drape_drafted.rs`); compression as stiff as tension with gather zones softening it per element to 3 % (spec 04 §5.3–5.4, `ClothModel::set_compression`); settledness and frames in the metrics; a drafted casing simulated at its cut length and drawn up by a tension-only elastic (two rings, fold and seam line; the reference simulates it at its finished size, `sim_scale`), the report saying whether its friction 2πμT carries the garment; cloth self-contact (`--self-contact-mm`, the skill passes Blender's 2 mm; start creases at sharp seams and gathered bands keep a barrier at half their distance); two-start sensitivity (`--two-start-sew`, `docs/two-start.md`); moving-body contact (`ftx_drape::motion`, `docs/moving-body-contact.md`); on a toddler fitted to 21 tape measurements, with self-contact, the bolero takes 14 CPU-s and the trousers 40 natively, the trousers about 60 s in Chromium (22, 56 and 82 at gate G2, which passed). Not matched: Blender's self-collision response itself (only its distance) |
 | Metrics and flags with the reference's text and gating split | 04 §6 | present | drape/metrics (the reference's `metrics()` on four synthetic sequences over the exact start states of the 92 cm bolero and trousers: settled, slipping with open seams and penetration, stretched rings, trousers with sliding cuffs; 443 numbers bit-exact, all 51 flag texts identical) in `crates/ftx-conformance/tests/metrics.rs`; `sim_report.json` written by `ftx drape` and `ftx round --sim` carries all §6.11 run metadata fields |
 | Qualification bands and tightness gating | 04 §7 | present | Native `ftx qualify` uses the posed collision torso girth at the chest placement landmark. Collider qualification and wearer-target alignment have separate results. The historical `round_workflow` fixture's 540 mm chart target and 520.44 mm posed section illustrate a residual exceeding the 5 mm promotion limit, even when its −20, 0 and +20 mm bands pass. Wearer tightness promotion also checks measured landmark residuals; per-piece assemblies retain their own material identities. `qualify::tests`, the model-backed `round_workflow` and portable fold regressions cover these rules and post-gating viewer consistency (`ftx-onn.27`, `ftx-onn.30`). The earlier target-sized run at `a81654e9` failed its −20 and 0 mm bands. Broader current-candidate qualification remains open under `ftx-onn` |
-| Known-answer tests (plan §11.9) | 04 §8 | partial | KAT 2 (anisotropy, compression law), KAT 3 (Peirce cantilever vs exact elastica), KAT 9 (drape digest equal native/wasm) in `crates/ftx-drape/tests/kat.rs`; KAT 1 (barrier calculus vs AD and differences, unit test), KAT 4 (ring on a cylinder, 2πμT), KAT 5 (ring on a cone, tan α vs μ), KAT 6 (ease sweep), KAT 9 (contact digest equal native/wasm) in `tests/kat_contact.rs`; KAT 7 (elastic ladder on the 92 cm trousers at μ 0.3 and 0.5: 0.85, 0.95 and 1.0 × the waist grip, 1.2 does not and is flagged) in `tests/kat_elastic.rs`; KAT 8 (armpit wedge: bolero at 80/92/116 cm, settled, hems within ±15 mm), KAT 10 (two starts: the same minimum at the report's precision) and KAT 9 (the fitted pipeline's digest equal native debug, release and wasm32-wasip1) in `tests/kat_fitted.rs`. Current release execution passes all 16 tests: the original 15 and `chart_trousers_self_contact_start`, including its excessive-offset refusal control. KAT 8 now passes the full requested offset at all three sizes; its earlier failure remains recorded above. Independent physical qualification remains open. Model-dependent cases need converted Anny data (`--include-ignored`, release, minutes); default debug CI skips them and the release-only contact KATs 4–6 |
+| Known-answer tests (plan §11.9) | 04 §8 | partial | KAT 2 (anisotropy, compression law), KAT 3 (Peirce cantilever vs exact elastica), KAT 9 (native/wasm drape digest) in `crates/ftx-drape/tests/kat.rs`. KAT 1 covers barrier calculus in unit tests. KATs 4–6 and 9 cover cylinder/cone friction, ease and contact digest in `tests/kat_contact.rs`. KAT 7 covers the 92 cm trouser elastic ladder at μ 0.3 and 0.5 in `tests/kat_elastic.rs`. KAT 8 fails the 116 cm hem criterion above. The two-start comparison, fitted pipeline digest and chart-trouser contact-start control are in `tests/kat_fitted.rs`. Model-dependent cases need converted Anny data and `--include-ignored`. KATs 4–6 require release mode. Independent physical qualification remains open. |
 | Output formats (fold.pc2, mesh_map.json, report, viewer data) | 04 §9 | present | `animation.rs`: board layout, fold kinematics (rigid flight with Horn rotations instead of SVD Kabsch, isometric roll-up, §3.6 roll), zip, PC2, mesh map, seam and strain colours, the `fabric-fold-viewer/1` payload and page (`assets/fold_viewer_template.html`; HTML packaging exception `viewer-offline-r160` below), `sim_report.json` (§6.11), and standalone `ftx viewer SIMDIR` (`crates/ftx-cli/tests/sim_points.rs`) |
 
 ## Exports (`ftx-export`, spec 03)

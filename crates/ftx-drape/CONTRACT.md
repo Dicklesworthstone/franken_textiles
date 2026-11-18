@@ -496,7 +496,7 @@ geometric side selection, not anatomical landmark, convergence or physical-fit q
 
 **Scene** (`scene.rs`; plan §11.3–11.4). A pattern meshed, placed with a body's part frames (any
 `PartFrames`; `ftx_body::BodyFrames` reads them off a posed Anny body), started (wrap, pre-sew, relax
-against the drape body), untangled, welded and handed to the solver with contact over the body:
+against the drape body), welded, untangled and handed to the solver with contact over the body:
 
 Explicit `meta.solved.elastic_casings` retain 1–64 independent casing instances, positive relaxed
 lengths in metres and physical `load_instances`. Joint composition namespaces these declarations
@@ -527,6 +527,9 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
 - Untangling: crossings the exact audit still finds after relaxation are removed by moving the crossing
   cloth edge's ends (or the pierced cloth triangle) 2 mm above the crossed body triangle (or ridge), in
   rounds of up to 50; a piece wholly inside the body is refused.
+  The last zip frame, initial strain and girth-line travel use the welded, untangled start.
+  Corner drop and elastic-band travel use the last sewing endpoint, or that same start when
+  gravity acts from the first step. Hem rise uses the original wrapped pattern level.
 - Self-contact start recovery: if the final relaxed start fails cloth self-contact admission, the
   resolved pipeline first replays earlier complete 200-iteration blocks, retaining existing recoveries.
   If none passes, it replays intermediate 25-iteration push-out checkpoints and selects the latest
@@ -787,9 +790,8 @@ body-conditioning inputs; production fitting retains supplied uncertainty and it
 These synthetic controls establish no measured-body accuracy. The earlier KAT 8 armpit-wedge run
 failed at 80 cm with only 1.413734 mm of the requested 1.5 mm body offset. The final-only continuation
 rule above now completes that target: all 80/92/116 cm cases settle with no gating flags under the
-original schedule and assertions. The 80 cm case retains its hem-balance advisory and stays within
-the original ±15 mm hem limit. Independent anatomy and empirical garment qualification remain open;
-this regression repair does not close G2.
+original schedule. KAT 8 still fails the hem criterion at 116 cm. The left front hem rises
+17.4 mm against the ±15 mm limit. Independent anatomy and empirical garment qualification remain open.
 KAT 10 two starts, the 92 cm bolero sewn in 12 and in 18 steps:
 the same minimum, every hem, clearance and seam strain equal at the report's precision; KAT 9 the whole
 pipeline (tape fit, scene, three sewing and three draping steps at the shipped settings) by one SHA-256,

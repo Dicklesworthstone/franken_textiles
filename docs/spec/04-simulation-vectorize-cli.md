@@ -183,6 +183,11 @@ factors (§3.1).
 | `radius_mm` | optional | fixed wrap radius |
 | `inferred` | bool | set by role inference (§3.5) |
 
+Native scene admission applies numeric defaults to absent fields. Numeric fields used in the
+placement must be numbers and the effective wrap radius must be finite and positive. The inferred
+placement spellings `radius` and `clearance` also use millimetres. The `_mm` spelling takes precedence.
+An unrepresentable wrapped position refuses the named instance before pre-sewing.
+
 ### 3.2 Part frames and landmark heights
 
 The body/form spec (§15) defines these frames and heights. They are repeated here because placement depends on them.

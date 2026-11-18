@@ -293,7 +293,7 @@ fn fold_on_source(
         static_equilibrium,
         time_subdivision,
     } = options;
-    let m = |r: ftx_core::Refusal| r.message;
+    let m = |r: ftx_core::Refusal| r.to_string();
     let mut pose = Pose::drape();
     pose.arm_abduction_deg = Some(arm_abduction_deg);
     pose.legs = legs;
