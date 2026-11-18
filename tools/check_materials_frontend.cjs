@@ -6293,6 +6293,19 @@ test('primary workshop cancels delayed measurement reads and accepts only the la
   p.emit({type:'fields',request:fresh.request,program:'zouave_bolero',rows:[]});assert.equal(p.e.tapeRows.innerHTML,'');
 });
 
+test('primary tape entry preserves mass inputs and refuses incomplete or nonpositive values', async () => {
+  const p=draftingPage();p.modes[0].checked=false;p.modes[1].checked=true;
+  p.e.bmi.validity={badInput:true};
+  await p.e.go.handlers.click();assert.equal(p.last('run'),undefined);
+  assert.match(p.e.errorText.textContent,/positive number for BMI/);
+  p.e.bmi.validity.badInput=false;p.e.bmi.value='16';p.e.weightKg.value='0';
+  await p.e.go.handlers.click();assert.equal(p.last('run'),undefined);
+  assert.match(p.e.errorText.textContent,/positive number for weight in kg/);
+  p.e.weightKg.value='13.5';await p.e.go.handlers.click();
+  const body=p.last('run').req.body;
+  assert.equal(body.bmi,16);assert.equal(body.weight_kg,13.5);
+});
+
 test('primary workshop transports original local evidence only with current wearer consent', async () => {
   const p=draftingPage();p.modes[0].checked=false;p.modes[1].checked=true;
   const raw='\n{"schema":"fabric-measurements/1","signed":-0.0}\n',bytes=Buffer.from(raw);

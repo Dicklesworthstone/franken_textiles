@@ -339,8 +339,17 @@ fn fitted_body(model: &AnnyModel, meas: &Value) -> Result<(Wearer, TapeFit), Ref
             .collect::<Vec<_>>()
             .join(", "),
         fit.mass_kg,
-        w.weight_kg
-            .map_or(String::new(), |kg| format!(" (weighs {kg:.2})"))
+        w.weight_kg.map_or_else(String::new, |kg| {
+            let source = if meas["wearer"]["weight_kg"].is_null() {
+                "BMI-derived target"
+            } else {
+                "supplied weight"
+            };
+            format!(
+                " ({source} {kg:.2} kg, residual {:+.3} kg)",
+                fit.mass_kg - kg
+            )
+        })
     );
     Ok((w, fit))
 }
