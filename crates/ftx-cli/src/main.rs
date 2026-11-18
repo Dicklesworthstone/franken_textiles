@@ -113,7 +113,7 @@ const USAGE: &str = "usage:
   ftx materials sew-cell-svg PATTERN.json OPTIONS.json CELL-ID OPERATION-ID NEW.svg [--json]
   ftx measure catalogue [--garment KIND] [--out FILE] [--json]
   ftx measure prior|reference --stature-mm MM [--age-months N] [--sex M|F] [--out FILE] [--json]
-  ftx measure init --label NICKNAME --out FILE [--stature 92cm] [--age-months N] [--taken-on DATE] [--json]
+  ftx measure init --label NICKNAME --out FILE [--stature 92cm] [--age-months N] [--weight-kg KG] [--bmi KG_PER_M2] [--taken-on DATE] [--json]
   ftx measure add FILE --name NAME --value 55cm [--value 55.5cm] [--sigma 1cm] [--provenance SOURCE] [--out FILE] [--json]
   ftx measure validate FILE [--json]
   ftx measure calib-sheet --paper letter|a4 --out DIR [--squares-x N] [--squares-y N] [--square-mm MM] [--marker-mm MM] [--json]
@@ -370,7 +370,10 @@ fn body_json(w: &Wearer, fit: &TapeFit, measurements: &Value) -> serde_json::Map
             "free": named(&mut FREE.iter().zip(fit.free).map(|(n, v)| {
                 ((*n).to_string(), json!((v * 1e4).round() / 1e4))
             })),
-            "weight_kg": w.weight_kg.map(|t| json!({"target_kg": t, "body_kg": kg(fit.mass_kg)})),
+            "weight_kg": fit.mass_comparison(w, measurements).map(|mut row| {
+                row["body_kg"] = json!(kg(fit.mass_kg));
+                row
+            }),
         }),
     );
     m.insert(
@@ -1229,7 +1232,7 @@ mod tests {
             years: 2.5,
             gender: 0.5,
             stature_mm: 920.0,
-            weight_kg: None,
+            weight_kg: Some(10.0001),
         };
         let fit = TapeFit {
             params: ftx_body::BodyParams {
@@ -1237,7 +1240,7 @@ mod tests {
                 local_changes: vec![],
             },
             readings: std::array::from_fn(|i| if i == 16 { None } else { Some(100.0004) }),
-            mass_kg: 10.0,
+            mass_kg: 10.0003,
             residuals: vec![ftx_body::TapeResidual {
                 name: "waist".into(),
                 target_mm: 100.0,
@@ -1248,7 +1251,19 @@ mod tests {
             free: [0.0; FREE.len()],
             iterations: 3,
         };
-        let body = Value::Object(body_json(&wearer, &fit, &json!({})));
+        let body = Value::Object(body_json(
+            &wearer,
+            &fit,
+            &json!({"wearer":{"weight_kg":10.0001,"bmi":16}}),
+        ));
+        let mass = &body["fit"]["weight_kg"];
+        assert_eq!(mass["target_source"], "wearer.weight_kg");
+        assert_eq!(mass["body_kg"], 10.0);
+        assert_eq!(mass["residual_kg"], 10.0003 - 10.0001);
+        assert_eq!(
+            mass["normalized_residual"],
+            (10.0003 - 10.0001) / (10.0001 * 0.01)
+        );
         let row = &body["fit"]["tape"]["waist"];
         assert_eq!(row["body_mm"], 100.0); // Preserve the historical display precision.
         assert_eq!(row["residual_mm"], 100.0004 - 100.0);

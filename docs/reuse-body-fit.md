@@ -40,6 +40,13 @@ and saved round-measurement hashes; changes withdraw its old display and files.
 It neither changes measurement readiness nor establishes physical fit. Use the
 separate fold-up action to obtain cloth results.
 
+In **My tape measurements**, enter a known weight in kg or a BMI in kg/m² to
+constrain the tape-fitted body's mass. The CLI accepts the same inputs with
+`ftx measure init --weight-kg` and `--bmi`. The fitter uses the supplied weight
+first, or converts BMI using the entered or fused stature. The body check shows
+the target and signed mass difference. Garment readiness still uses its required
+tape dimensions.
+
 ```sh
 ftx measure fit-body observations.json --model anny.ftxbody --out accepted-fit.json
 ftx body --body-fit accepted-fit.json --model anny.ftxbody \

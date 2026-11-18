@@ -349,6 +349,10 @@ const LOCAL_LIMIT: f64 = 1.0;
 const WEIGHT_SIGMA_FRACTION: f64 = 0.01;
 /// See [`WEIGHT_SIGMA_FRACTION`].
 const WEIGHT_SIGMA_MIN_KG: f64 = 0.1;
+
+fn mass_fit_scale_kg(target_kg: f64) -> f64 {
+    (WEIGHT_SIGMA_FRACTION * target_kg).max(WEIGHT_SIGMA_MIN_KG)
+}
 /// Prior 1σ of a phenotype parameter about the population middle (0.5) and of a local change about 0:
 /// the scanned shape space explains a body before the authored blend shapes adjust it.
 const PRIOR_SIGMA_PHENOTYPE: f64 = 0.5;
@@ -861,7 +865,7 @@ fn tape_rows(wearer: &Wearer, targets: &[TapeTarget]) -> Result<Vec<TapeRow>, Re
         rows.push(TapeRow {
             field: N_TAPE,
             target: kg,
-            sigma: (WEIGHT_SIGMA_FRACTION * kg).max(WEIGHT_SIGMA_MIN_KG),
+            sigma: mass_fit_scale_kg(kg),
             source_sigma: None,
         });
     }
@@ -887,6 +891,26 @@ pub struct TapeFit {
 }
 
 impl TapeFit {
+    /// Compare the model mass to the target actually used by the solver. BMI-derived targets
+    /// retain their stature basis. The fitting scale is in kg and the signed residual is raw.
+    pub fn mass_comparison(&self, wearer: &Wearer, measurements: &Value) -> Option<Value> {
+        let target = wearer.weight_kg?;
+        let sigma = mass_fit_scale_kg(target);
+        let residual = self.mass_kg - target;
+        let mut row = serde_json::json!({"target_source":"wearer.weight_kg","target_kg":target,
+            "body_kg":self.mass_kg,"residual_kg":residual,"effective_sigma_kg":sigma,
+            "normalized_residual":residual / sigma});
+        let source = &measurements["wearer"];
+        if source["weight_kg"].is_null()
+            && let Some(bmi) = source["bmi"].as_f64()
+        {
+            row["target_source"] = serde_json::json!("wearer.bmi");
+            row["bmi"] = serde_json::json!(bmi);
+            row["stature_mm"] = serde_json::json!(wearer.stature_mm);
+        }
+        Some(row)
+    }
+
     /// Unavailable diagnostics in [`TAPE_FIELDS`] order. None of these were requested fit targets.
     #[must_use]
     pub fn unavailable_fields(&self) -> Vec<&'static str> {

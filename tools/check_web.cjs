@@ -538,6 +538,8 @@ async function standaloneBodyCheck(page, settle, work, nativeDir) {
     await page.fill("#age",String(request.body.age_months));
     await page.selectOption("#sex",request.body.sex||"");
     await page.locator('#tapeRows input[data-name="head"]').waitFor();
+    if(request.body.bmi != null)await page.fill("#bmi",String(request.body.bmi));
+    if(request.body.weight_kg != null)await page.fill("#weightKg",String(request.body.weight_kg));
     for(const el of await page.locator("#tapeRows input").all())await el.fill("");
     for(const [name,value] of Object.entries(request.body.tape))await page.fill(`#tapeRows input[data-name="${name}"]`,String(value));
   }
@@ -580,6 +582,8 @@ async function standaloneBodyCheck(page, settle, work, nativeDir) {
   assert.equal(report.body.model_sha256,modelHash);assert.equal(report.body.provenance,"MODEL_FIT");
   assert.equal(await page.locator("#resGate").innerHTML(),gate);
   assert.equal(await page.locator("#bodyCheckReadings tr").count(),Object.keys(report.body.readings_mm).length+1);
+  if(report.body.fit?.weight_kg?.target_source === "wearer.bmi")
+    assert.match(await page.locator("#bodyCheckSummary").textContent(),/Weight from BMI and stature/);
   const estimatesLink='#bodyCheckFiles a[download="model_fit_measurements.json"]';
   if(report.model_fit_measurements) {
     const supplement=JSON.parse(await download(estimatesLink,"model_fit_measurements.json"));
@@ -590,8 +594,10 @@ async function standaloneBodyCheck(page, settle, work, nativeDir) {
   if(source)assert.ok((await download('#bodyCheckFiles a[download="body_fit.json"]',"body_fit.json")).equals(source));
   await page.evaluate(()=>{window.__holdBodyCheck=true;});await page.click("#bodyCheckGo");
   await page.waitForFunction(()=>!!window.__heldEvidence,null,{timeout:120000});
+  const editField=request.body.bmi != null ? "#bmi" : '#tapeRows input[data-name="head"]';
+  const originalValue=request.body.bmi ?? request.body.tape?.head;
   if(source)await page.setInputFiles("#bodyFitFile",{name:"same-fit-new-source.json",mimeType:"application/json",buffer:source});
-  else await page.fill('#tapeRows input[data-name="head"]',String(request.body.tape.head+1));
+  else await page.fill(editField,String(originalValue+1));
   await page.evaluate(()=>{const h=window.__heldEvidence;delete window.__heldEvidence;
     h.worker.dispatchEvent(new MessageEvent("message",{data:h.data}));});
   assert.equal(await page.locator("#bodyCheckFiles a").count(),0);
@@ -603,7 +609,7 @@ async function standaloneBodyCheck(page, settle, work, nativeDir) {
     await page.check("#bodyFitConsent");assert.match(await settle("#bodyCheckGo",120000),/ACCEPTED|accepted/i);
     assert.equal(await page.locator("#bodyCheckFiles a").count(),0);
   } else {
-    await page.fill('#tapeRows input[data-name="head"]',String(request.body.tape.head));
+    await page.fill(editField,String(originalValue));
     assert.equal(await settle("#go",120000),"");assert.equal(await settle("#bodyCheckGo",120000),"");
     assert.deepEqual(JSON.parse(await download('#bodyCheckFiles a[download="body_check.json"]',"body_check-replayed.json")),report);
   }

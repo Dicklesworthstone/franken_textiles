@@ -10,6 +10,29 @@ use serde_json::{Value, json};
 const TODAY: &str = "2026-10-13";
 const CREATED: &str = "2026-10-13T12:00";
 
+#[test]
+fn optional_mass_constraints_are_wearer_inputs_in_tape_mode() {
+    let mut body = json!({"mode":"tape","stature_cm":92,"age_months":30,"tape":{}});
+    let file = |body: &Value| ftx_wasm::page::body_file(&PyJson::from_value(body), TODAY);
+    let ordinary = file(&body).unwrap();
+    for (key, value) in [("bmi", 16.0), ("weight_kg", 13.5)] {
+        body[key] = json!(value);
+        let result = file(&body).unwrap();
+        assert_eq!(result["wearer"][key], value);
+        assert_eq!(result["records"], ordinary["records"]);
+        assert_eq!(result["fused"], ordinary["fused"]);
+        for bad in [json!(true), json!("13.5"), json!(0), json!(-1)] {
+            body[key] = bad;
+            assert!(file(&body).unwrap_err().contains(key));
+        }
+        body[key] = Value::Null;
+        assert_eq!(file(&body).unwrap(), ordinary);
+    }
+    body["mode"] = json!("chart");
+    body["weight_kg"] = json!(13.5);
+    assert!(file(&body).unwrap()["wearer"].get("weight_kg").is_none());
+}
+
 fn get<'a>(v: &'a PyJson, k: &str) -> &'a PyJson {
     v.get(k).unwrap_or_else(|| panic!("missing {k}"))
 }

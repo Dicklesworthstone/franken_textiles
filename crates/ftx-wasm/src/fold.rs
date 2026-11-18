@@ -48,7 +48,7 @@ fn model_fit_records(fit: &TapeFit, measurements: &Value) -> Vec<Value> {
 }
 
 // Raw fitter outputs, in mm/kg. Supplied targets may be priors; predictions never become evidence.
-fn body_report(wearer: &Wearer, fit: &TapeFit) -> Value {
+fn body_report(wearer: &Wearer, fit: &TapeFit, measurements: &Value) -> Value {
     let tape: Map<String, Value> = fit
         .residuals
         .iter()
@@ -76,8 +76,7 @@ fn body_report(wearer: &Wearer, fit: &TapeFit) -> Value {
         "tape_evaluation":{"status":if unavailable.is_empty() { "AVAILABLE" } else { "PARTIAL" },
             "pose":"a_pose_35","provenance":"MODEL_FIT","unavailable_fields":unavailable},
         "readings_mm":readings,"fit":{"iterations":fit.iterations,"tape":tape,
-            "weight_kg":wearer.weight_kg.map(|target| json!({"target_kg":target,
-                "body_kg":fit.mass_kg,"residual_kg":fit.mass_kg-target}))},
+            "weight_kg":fit.mass_comparison(wearer, measurements)},
         "no_claim":"Predicted body dimensions are MODEL_FIT. Supplied targets may include priors; residuals do not establish measurement readiness or physical fit."})
 }
 
@@ -137,7 +136,7 @@ pub fn inspect_body(
                 "source_measurements_sha256":measurements_sha256,"model_sha256":model_sha256,
                 "records":records});
         }
-        (body_report(&wearer, &fit), fit.params)
+        (body_report(&wearer, &fit, &data), fit.params)
     };
     if let Some(occupied) =
         ftx_body::nappy_occupancy(model, &params, &data).map_err(|e| e.message)?
@@ -383,7 +382,7 @@ fn fold_on_source(
             "body: fitted in {} iterations, {:.2} kg",
             fit.iterations, fit.mass_kg
         ));
-        let mut description = body_report(&wearer, &fit);
+        let mut description = body_report(&wearer, &fit, &data);
         description["model_fit"] = Value::Array(model_fit_records(&fit, &data));
         (fit.params, description)
     };
@@ -552,7 +551,11 @@ mod tests {
             free: std::array::from_fn(|_| 0.0),
             iterations: 7,
         };
-        let got = body_report(&wearer, &fit);
+        let got = body_report(
+            &wearer,
+            &fit,
+            &json!({"wearer":{"weight_kg":wearer.weight_kg}}),
+        );
         assert_eq!(got["provenance"], "MODEL_FIT");
         assert_eq!(got["fit"]["iterations"], 7);
         for r in &fit.residuals {
@@ -606,7 +609,7 @@ mod tests {
                 && !["head", "arm_length", "chest"].contains(&r["name"].as_str().unwrap())
         }));
         wearer.weight_kg = None;
-        assert!(body_report(&wearer, &fit)["fit"]["weight_kg"].is_null());
+        assert!(body_report(&wearer, &fit, &json!({}))["fit"]["weight_kg"].is_null());
     }
 
     #[test]

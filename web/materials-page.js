@@ -713,6 +713,13 @@ function bodyCheckResult(parent, report) {
   }
   if (!imported) {
     const scale = document.createElement("p"); scale.textContent = "Fit scale is the larger of supplied uncertainty and the existing fitting tolerance. Scaled residuals are diagnostics, not confidence intervals."; parent.append(scale);
+    const mass = body.fit?.weight_kg;
+    if (mass) {
+      const weight = table(parent, "Body mass compared with the fitting target",
+        ["Target source", "Target kg", "Model kg", "Model − target kg", "Fit scale kg"]);
+      cells(weight, [mass.target_source === "wearer.bmi" ? "BMI and stature" : "Supplied weight",
+        metric(mass.target_kg), metric(mass.body_kg), signed(mass.residual_kg), metric(mass.effective_sigma_kg)]);
+    }
   }
   if (report.model_fit_measurements?.records.length) {
     const estimates = table(parent, "Body estimates for missing dimensions",

@@ -59,6 +59,39 @@ fn init(path: &str) {
 }
 
 #[test]
+fn init_preserves_optional_mass_inputs_on_the_wearer() {
+    let path = file("mass.json");
+    let result = run(
+        &[
+            "init",
+            "--out",
+            &path,
+            "--label",
+            "synthetic",
+            "--stature",
+            "92cm",
+            "--weight-kg",
+            "13.5",
+            "--bmi",
+            "16",
+        ],
+        0,
+    );
+    let data = &result["result"];
+    assert_eq!(data["wearer"]["weight_kg"], 13.5);
+    assert_eq!(data["wearer"]["bmi"], 16.0);
+    assert_eq!(data["records"].as_array().unwrap().len(), 1);
+    let original = std::fs::read(&path).unwrap();
+    for (flag, bad) in [("--weight-kg", "0"), ("--bmi", "-1"), ("--bmi", "inf")] {
+        run(
+            &["init", "--out", &path, "--label", "synthetic", flag, bad],
+            3,
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+}
+
+#[test]
 fn init_add_repeat_fuse_and_ready_round_trip() {
     let path = file("measurements.json");
     init(&path);
@@ -252,6 +285,70 @@ fn nonpositive_lengths_refuse_add_fusion_and_readiness_without_publishing_eviden
         run(&["add", &invalid, "--name", "head", "--value", "49cm"], 3);
         assert_eq!(std::fs::read(&invalid).unwrap(), original);
     }
+}
+
+#[test]
+fn demo_measurements_cannot_clear_another_wearers_blocking_items() {
+    let demo = file("chart.json");
+    let wearer = file("wearer.json");
+    let empty = file("empty.json");
+    run(
+        &[
+            "reference",
+            "--stature-mm",
+            "920",
+            "--age-months",
+            "30",
+            "--out",
+            &demo,
+        ],
+        0,
+    );
+    init(&wearer);
+    let gate = run(
+        &[
+            "ready",
+            &wearer,
+            "--garment",
+            "bodice",
+            "--as-of",
+            "2026-10-13",
+        ],
+        3,
+    );
+    assert!(
+        gate["result"]["blocking"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("chest"))
+    );
+    for (first, second) in [(&demo, &wearer), (&wearer, &demo)] {
+        for command in ["fuse", "ready"] {
+            let out = file("mixed.json");
+            let mut args = vec![command, first.as_str(), second.as_str(), "--out", &out];
+            if command == "ready" {
+                args.extend(["--garment", "bodice"]);
+            }
+            assert!(
+                run(&args, 3)["refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reference")
+            );
+            assert!(!std::path::Path::new(&out).exists());
+        }
+    }
+    let mut anonymous = json!({"schema":"fabric-measurements/1","wearer":{},"records":[]});
+    std::fs::write(&empty, anonymous.to_string()).unwrap();
+    assert_eq!(
+        run(&["ready", &empty, &demo, "--garment", "bodice"], 0)["result"]["status"],
+        "READY_REFERENCE"
+    );
+    anonymous["records"] = serde_json::from_slice::<Value>(&std::fs::read(&wearer).unwrap())
+        .unwrap()["records"]
+        .clone();
+    std::fs::write(&empty, anonymous.to_string()).unwrap();
+    assert!(run(&["fuse", &empty, &demo], 3)["refusal"].is_object());
 }
 
 #[test]

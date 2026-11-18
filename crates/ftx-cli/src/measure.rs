@@ -145,15 +145,25 @@ fn merged(paths: &[String]) -> Result<Value, Refusal> {
         .ok_or_else(|| bad_input("give at least one measurement FILE"))?;
     let mut base = read_json(first)?.0;
     checked(&base)?;
-    for path in &paths[1..] {
-        let next = read_json(path)?.0;
-        checked(&next)?;
-        if base["wearer"]
+    let empty_wearer = |doc: &Value| {
+        doc["wearer"]
             .as_object()
             .unwrap()
             .values()
             .all(Value::is_null)
-        {
+    };
+    for path in &paths[1..] {
+        let next = read_json(path)?.0;
+        checked(&next)?;
+        let base_reference = base["wearer"]["reference"] == true;
+        if base_reference != (next["wearer"]["reference"] == true) {
+            let other = if base_reference { &next } else { &base };
+            if !empty_wearer(other) || !other["records"].as_array().unwrap().is_empty() {
+                return Err(bad_input("cannot merge reference and non-reference wearer measurements")
+                    .repair("use measurement files for the same wearer, or run the size-chart demo separately"));
+            }
+        }
+        if empty_wearer(&base) {
             base["wearer"] = next["wearer"].clone();
         }
         if base["taken_on"].is_null() {
@@ -276,6 +286,8 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                     "age-months",
                     "sex",
                     "stature",
+                    "weight-kg",
+                    "bmi",
                     "taken-on",
                     "nappies",
                 ],
@@ -288,6 +300,14 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 .transpose()?;
             let mut d = json!({"schema":"fabric-measurements/1","wearer":{"label":label,
                 "age_months":numeric(args,"age-months")?,"stature_mm":h},"taken_on":date(args,"taken-on")?,"records":[],"fused":{}});
+            for (option, field) in [("weight-kg", "weight_kg"), ("bmi", "bmi")] {
+                if let Some(value) = numeric(args, option)? {
+                    if value <= 0.0 {
+                        return Err(bad_input(format!("--{option} must be positive")));
+                    }
+                    d["wearer"][field] = json!(value);
+                }
+            }
             if let Some(sex) = option(args, "sex") {
                 d["wearer"]["sex"] = json!(sex);
             }

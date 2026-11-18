@@ -629,6 +629,18 @@ the native gate returned READY. Direct and mixed-source regressions are in
 
 CLI `ready` exits 0 for READY/READY_REFERENCE and 3 otherwise.
 
+Native body-fit inputs (plan §9.4) are optional in `ftx measure init` (`--weight-kg`,
+`--bmi`) and in browser tape mode (`body.weight_kg`, `body.bmi`). A supplied value
+must be a finite positive number and is saved on the wearer. The fitter uses weight
+in kg when supplied, otherwise BMI in kg/m² times squared stature in metres. These
+inputs add no tape records and have no role in garment measurement readiness.
+
+Native multi-file `fuse` and `ready` refuse to combine a reference wearer with
+non-reference records or wearer metadata. The reference merger inherited the first
+file's wearer and could return `READY_REFERENCE` for a mixture that included a
+real-wearer file with blocking dimensions. A file with no records and only null or
+absent wearer fields can still take the next file's wearer.
+
 Integration (round driver, specified elsewhere, summarized because drafting roles feed it): piece roles select the
 gates. `bodice_front|bodice_back` → `bodice`; `sleeve` → `set_in_sleeve` with `closed_cuff` true; `pant_front|
 pant_back` → `full_trousers_gathered` (if a `cuff` role exists; options `elastic_waist` = a `waistband` role exists,

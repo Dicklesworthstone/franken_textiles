@@ -326,6 +326,16 @@ fn base_body_file(body: &PyJson, today: &str) -> Result<Value, String> {
     }
     let mut wearer =
         json!({"label": "tape measurements (browser)", "age_months": age, "stature_mm": stature});
+    for field in ["weight_kg", "bmi"] {
+        if let Some(raw) = body.get(field).filter(|v| !matches!(v, PyJson::Null)) {
+            let value = raw
+                .to_value()
+                .as_f64()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .ok_or_else(|| format!("{field} must be a finite positive number"))?;
+            wearer[field] = json!(value);
+        }
+    }
     if let Some(s) = &sex {
         wearer["sex"] = json!(s);
     }

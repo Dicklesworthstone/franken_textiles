@@ -117,6 +117,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       </div>
     </div>
     <div id="tapeBox" class="hidden">
+      <div class="row">
+        <label>Weight (kg, optional) <input type="number" id="weightKg" min="0" step="any"></label>
+        <label>BMI (kg/m², if weight is unknown) <input type="number" id="bmi" min="0" step="any"></label>
+      </div>
       <p class="mut">Tape measurements in cm (degrees where marked). <span class="must">●</span> = needed for this
         garment; the rest improve it. Empty boxes fall back to the size chart for this height, shown greyed, and the
         check below says which ones still need measuring.</p>
@@ -440,6 +444,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if ($("age").value) body.age_months = +$("age").value;
       if ($("sex").value) body.sex = $("sex").value;
       if (m === "tape") {
+        for (const [id, field] of [["weightKg", "weight_kg"], ["bmi", "bmi"]]) {
+          const input = $(id);
+          if (input.validity.badInput) throw Error(`Enter a positive number for ${id === "weightKg" ? "weight in kg" : "BMI"}.`);
+          if (input.value !== "") body[field] = input.valueAsNumber;
+        }
         body.nappies = $("nappies").checked && nappyGarment();
         body.tape = {};
         $("tapeRows").querySelectorAll("input").forEach((el) => { if (el.value !== "") body.tape[el.dataset.name] = +el.value; });
@@ -577,7 +586,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         + `</tr>${rows}</table></div>` : "<p>No supplied tape targets.</p>")
       + (imported ? "" : "<p>The fit scale is the larger of supplied uncertainty and the existing tape-fitting tolerance. Missing uncertainty uses that tolerance. Scaled residuals are diagnostics, not confidence intervals.</p>")
       + `<p>Model mass: ${number(body.mass_kg)} kg.</p>`
-      + (weight ? `<p>Supplied weight: ${number(weight.target_kg)} kg; model: ${number(weight.body_kg)} kg; body − target: ${number(weight.residual_kg, true)} kg.</p>` : "")
+      + (weight ? `<p>${weight.target_source === "wearer.bmi" ? "Weight from BMI and stature" : "Supplied weight"}: ${number(weight.target_kg)} kg. Model minus target: ${number(weight.residual_kg, true)} kg.</p>` : "")
       + (occupancy ? `<h3>Nappy geometry proxy (MODEL_FIT)</h3>`
         + `<div class="scroll"><table><tr><th>Target seat over nappy mm</th><th>Bare seat mm</th><th>Occupied seat mm</th><th>Occupied − target mm</th><th>Supplied σ mm</th></tr>`
         + `<tr><td>${number(occupancy.target_mm)}</td><td>${number(occupancy.bare_seat_mm)}</td><td>${number(occupancy.achieved_seat_mm)}</td><td>${number(occupancy.residual_mm, true)}</td><td>${occupancy.sigma_mm == null ? "not supplied" : number(occupancy.sigma_mm)}</td></tr></table></div>`
@@ -994,7 +1003,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     });
   }
   $("clearTraceImport").addEventListener("click",()=>{clearTraceImport();invalidateRound();status("Pattern handoff cleared; choose a pattern.json file.");});
-  for (const id of ["stature", "age", "sex", "nappies", "measFile", "supplementalFiles"]) {
+  for (const id of ["stature", "age", "sex", "weightKg", "bmi", "nappies", "measFile", "supplementalFiles"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateEvidence);
   }
   $("measFile").addEventListener("change",()=>{receivedMaterialMeasurements=null;showMaterialInputs();});

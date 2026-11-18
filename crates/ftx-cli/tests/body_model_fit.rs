@@ -101,7 +101,7 @@ fn unmeasured_readings_come_back_as_model_fit() {
 
     // A flat-only garment's current tape round can expose body diagnostics without any cloth solve.
     let request = json!({"program":"fez","body":{"mode":"tape","stature_cm":92,
-        "age_months":30,"sex":"F","tape":{"head":48}}});
+        "age_months":30,"sex":"F","bmi":16.0,"tape":{"head":48}}});
     let round =
         ftx_wasm::page::run(&request.to_string(), "2026-10-13", "2026-10-13T12:00").unwrap();
     let saved = &round
@@ -185,6 +185,14 @@ fn unmeasured_readings_come_back_as_model_fit() {
     assert_eq!(check["body"]["provenance"], "MODEL_FIT");
     assert_eq!(check["measurements_sha256"], sha256_hex(saved));
     assert_eq!(check["body"]["fit"]["iterations"], fit.iterations);
+    let mass = &check["body"]["fit"]["weight_kg"];
+    let target = 16.0 * 0.92_f64.powi(2);
+    assert_eq!(data["wearer"]["bmi"], 16.0);
+    assert_eq!(mass["target_source"], "wearer.bmi");
+    assert_eq!(mass["target_kg"], target);
+    assert_eq!(mass["stature_mm"], 920.0);
+    assert_eq!(mass["residual_kg"], fit.mass_kg - target);
+    assert_eq!(mass["effective_sigma_kg"], target * 0.01);
     for (name, value) in ftx_body::TAPE_FIELDS.iter().zip(fit.readings) {
         assert_eq!(check["body"]["readings_mm"][name], value.unwrap());
     }
