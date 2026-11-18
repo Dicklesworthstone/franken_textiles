@@ -90,6 +90,11 @@ bolero hem rises 17.4 mm against the 15 mm limit. All three sizes reach the full
 and settle with empty gating lists. The recorded release test and the 116 cm wasm replay establish
 the same failed hem criterion. [Release run](docs/reality-check-2026-10-20.md#2026-11-17-contact-continuation-repair-ftx-onn)
 
+In the 116 cm viewer the left front hem was 87.2 mm high at the admitted start and 104.1 mm
+after the first zero-gravity step. Both the 12- and 18-step sewing schedules finished at
+105.7 mm. Measuring girth-line travel from the admitted start corrects chest travel from
+1.2 to 8.8 mm on this case. All 136 frames retained identical quantized vertex positions.
+
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
 digests passed, and Chromium/native ordinary and paired 92 cm bolero viewers agreed byte for
