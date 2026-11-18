@@ -610,6 +610,8 @@ frame (+u along the grain).
   contributes its own rest area and endpoint cotangents, including at a weld with unequal cut lengths.
   Across an eased seam the two cross-edge derivatives use the common length
   `2(A₀+A₁)/(altitude₀+altitude₁)`. Pure seam-direction stretch of a flat sheet produces zero bending energy.
+  Equal-length welds retain the original rigid map between panel coordinates. The cyclic coverage
+  compression and convection tests exercise the resulting garment positions in a moving thermal study.
   Each triangle's area is distributed among its interior hinges.
 - Elastic (`ElasticSegment`): a tension-only spring per segment, `(EA/r)·g(l − r)` with g zero below
   −δ, cubic across [−δ, 0] and `e²/2 + δe/2 + δ²/6` above (δ = `ELASTIC_ONSET` = 0.1 mm): C², no force

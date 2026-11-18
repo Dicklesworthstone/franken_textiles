@@ -468,18 +468,32 @@ impl Hinge {
         first: [Vec2; 3],
         second: [Vec2; 3],
     ) -> Option<Self> {
+        let [a, b, _] = first;
+        let [c, d, opposite] = second;
+        let (edge0, edge1) = (b - a, d - c);
+        let (edge0_sq, edge1_sq) = (edge0.norm2(), edge1.norm2());
+        // An isometric weld admits the original rigid map into the first chart. Keep its
+        // arithmetic on that domain, including the identity for neighbors in the same chart.
+        let second = if edge0_sq == edge1_sq && (a, b) != (c, d) {
+            let (u, w) = (edge0.normalized(), edge1.normalized());
+            let (cos, sin) = (u.dot(w), w.cross(u));
+            let r = opposite - c;
+            let mapped = a + Vec2::new(cos * r.x - sin * r.y, sin * r.x + cos * r.y);
+            [a, b, mapped]
+        } else {
+            second
+        };
         let geometry = |[a, b, opposite]: [Vec2; 3]| {
             let edge = b - a;
             let arm = opposite - a;
             (
-                edge.norm2(),
                 cot(edge, arm),
                 cot(-edge, opposite - b),
                 0.5 * edge.cross(arm).abs(),
             )
         };
-        let (edge0_sq, mut start0, mut end0, a0) = geometry(first);
-        let (edge1_sq, mut start1, mut end1, a1) = geometry(second);
+        let (mut start0, mut end0, a0) = geometry(first);
+        let (mut start1, mut end1, a1) = geometry(second);
         if edge0_sq != edge1_sq {
             // Each cotangent stencil equals its cut edge length times the cross-edge derivative.
             // Compare the derivatives at a common length, or a flat, tangentially eased seam bends.

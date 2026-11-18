@@ -103,7 +103,7 @@ The default uses three while sewing and one under gravity.
 **The fitted KAT 9 digest fails its pin.** The six-step 92 cm native release test produced
 `ec7277dc9a2a05ccb75ed883568fddd43121d00b5968217ce46ec95593fe356a` before these changes.
 With corrected eased-seam bending and same-step sewing friction it produces
-`f46b57dd674c86f01fe6f155555b0755f7f25f220d2e639614a2272e8d5c4dfb`.
+`aef9c450688c4ff556c1c5ec7a92930173bdf426e377a639b09e15b89a63feba`.
 The pin is `7693994660a8605f5d0081abffde860400c955b109f61d050042d49f1fcac336`.
 
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
