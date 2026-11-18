@@ -95,6 +95,10 @@ after the first zero-gravity step. Both the 12- and 18-step sewing schedules fin
 105.7 mm. Measuring girth-line travel from the admitted start corrects chest travel from
 1.2 to 8.8 mm on this case. All 136 frames retained identical quantized vertex positions.
 
+**The fitted KAT 9 digest also fails its pin.** The six-step 92 cm release test produced
+`ec7277dc9a2a05ccb75ed883568fddd43121d00b5968217ce46ec95593fe356a` on both
+`4b9a7b9b` and the revised drape. It expects `7693994660a8605f5d0081abffde860400c955b109f61d050042d49f1fcac336`.
+
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
 digests passed, and Chromium/native ordinary and paired 92 cm bolero viewers agreed byte for
