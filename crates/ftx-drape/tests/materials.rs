@@ -83,6 +83,49 @@ fn body() -> Body {
 }
 
 #[test]
+fn gravity_only_drape_counts_the_first_step_when_a_band_slides() {
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    let opts = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 0,
+        drape_steps: 6,
+        step: 0.0154,
+        ..DrapeOptions::default()
+    };
+    let fit =
+        json!({"points":[{"id":"waist","kind":"girth","instances":["band"],"landmark":"waist"}]});
+    let run = drape(
+        &band(json!({"material":record(1.)})),
+        &fit,
+        &body,
+        &opts,
+        |_| {},
+    )
+    .unwrap();
+
+    // Free fall from rest: implicit Euler's six endpoint displacements are 1, 3, 6, 10, 15, 21
+    // times g·dt². Their mean crosses the slide threshold only if the first step is included.
+    let drop_mm = (56. / 6.) * ftx_drape::run::GRAVITY * opts.step.powi(2) * 1000.;
+    for measured in [
+        &run.report["pieces"]["band"]["corner_drop_median_mm"],
+        &run.report["landmarks"]["waist"]["ring_shift_mm"],
+    ] {
+        let measured = measured.as_f64().unwrap();
+        assert!(
+            (measured + drop_mm).abs() < 0.15,
+            "measured {measured} mm, expected -{drop_mm} mm"
+        );
+    }
+    assert!(run.gating().iter().any(|g| g.contains("band slid")));
+}
+
+#[test]
 fn ordinary_subdivision_preserves_sewn_frames_and_shares_trials_with_settling() {
     use ftx_drape::stepping::SubdivisionOptions;
     let surface = body();

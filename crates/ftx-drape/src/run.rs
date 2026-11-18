@@ -419,8 +419,8 @@ pub fn drape(
     ));
     let board = board_layout(&scene.mesh);
     let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);
-    frames.extend(zip_frames(&scene.start.wrapped, &scene.start.relaxed));
     let initial_positions = scene.positions();
+    frames.extend(zip_frames(&scene.start.wrapped, &initial_positions));
     let initial_contact = scene
         .solver
         .contact
@@ -494,20 +494,21 @@ pub fn drape(
     let true_body = NearestTree::new(body.collision.0.to_vec(), body.collision.1.to_vec())?;
     let level_y = |inst: &str, landmark: &str| metric_level_y(pattern, body.frames, inst, landmark);
     let seq = &fold.frames[FOLD_FRAMES + ZIP_FRAMES..];
-    let mut report = metrics(
-        &scene.mesh,
-        &MetricsInput {
-            pattern,
-            seq,
-            sew_end: opts.sew_steps.max(1),
-            wrapped: &scene.start.wrapped,
-            body: &true_body,
-            level_y: &level_y,
-            fit_spec,
-            spacing: opts.spacing,
-            arm_deg: body.arm_deg,
-        },
-    );
+    let (sewing_frames, gravity_frames) = seq.split_at(fold.sew);
+    let after_sew = sewing_frames.last().unwrap_or(&initial_positions);
+    let input = MetricsInput {
+        pattern,
+        seq,
+        start: &initial_positions,
+        after_sew,
+        wrapped: &scene.start.wrapped,
+        body: &true_body,
+        level_y: &level_y,
+        fit_spec,
+        spacing: opts.spacing,
+        arm_deg: body.arm_deg,
+    };
+    let mut report = metrics(&scene.mesh, &input);
     let casing_mu: Vec<_> = elastics
         .iter()
         .map(|e| {
@@ -524,8 +525,7 @@ pub fn drape(
         &scene,
         &fabric,
         &executed_options,
-        body.arm_deg,
-        pattern,
+        &input,
         &casing_mu,
     );
     add_numerical_report(
@@ -541,8 +541,8 @@ pub fn drape(
     add_casing_windows(
         &mut report,
         &scene,
-        &fold,
-        &initial_positions,
+        gravity_frames,
+        after_sew,
         &drape,
         &executed_options,
     );
@@ -906,18 +906,11 @@ fn band_window(initial: &[Vec3], frames: &[Vec<Vec3>], vertices: &[usize], step:
 fn add_casing_windows(
     report: &mut Value,
     scene: &Scene,
-    fold: &FoldUp,
+    frames: &[Vec<Vec3>],
     initial: &[Vec3],
     phase: &PhaseReport,
     opts: &DrapeOptions,
 ) {
-    let start = FOLD_FRAMES + ZIP_FRAMES + opts.sew_steps;
-    let initial = if opts.sew_steps == 0 {
-        initial
-    } else {
-        &fold.frames[start - 1]
-    };
-    let frames = &fold.frames[start..];
     let mut windows = Vec::new();
     for group in &scene.elastic_groups {
         // Fold frames use pattern mesh vertices, while elastic edges use welded solver vertices.
@@ -975,8 +968,7 @@ fn add_run_fields(
     scene: &Scene,
     fabric: &Fabric,
     opts: &DrapeOptions,
-    arm_deg: f64,
-    pattern: &Pattern,
+    input: &MetricsInput,
     casing_mu: &[f64],
 ) {
     let mesh = &scene.mesh;
@@ -994,11 +986,11 @@ fn add_run_fields(
         .into_iter()
         .filter(|&(a, b)| w[a] >= 1.0 && w[b] >= 1.0)
         .collect();
-    let init: Vec<f64> = edge_strain(&scene.start.relaxed, &mesh.verts2d, &plain)
+    let init: Vec<f64> = edge_strain(input.start, &mesh.verts2d, &plain)
         .into_iter()
         .map(|e| e.abs() * 100.0)
         .collect();
-    let style = pattern.raw()["style"].as_str().unwrap_or("");
+    let style = input.pattern.raw()["style"].as_str().unwrap_or("");
     let family = |id: &str| id.rsplit_once('_').map_or(id, |(a, _)| a).to_string();
     let mut names: Vec<String> = mesh.seams.iter().map(|s| family(&s.id)).collect();
     names.sort();
@@ -1034,7 +1026,7 @@ fn add_run_fields(
         }),
     );
     o.insert("presew".into(), json!(true));
-    o.insert("arm_deg".into(), json!(arm_deg));
+    o.insert("arm_deg".into(), json!(input.arm_deg));
     o.insert(
         "gather_zone_vertices".into(),
         json!(w.iter().filter(|&&v| v < 1.0).count()),
@@ -1081,7 +1073,7 @@ fn add_run_fields(
     );
     let elastics = &scene.solver.model.elastics;
     let mut casing_reports = Vec::new();
-    let explicit = pattern.raw()["meta"]["solved"]
+    let explicit = input.pattern.raw()["meta"]["solved"]
         .get("elastic_casings")
         .is_some();
     for (group, &mu) in scene.elastic_groups.iter().zip(casing_mu) {

@@ -144,7 +144,8 @@ fn metrics_match_the_reference() {
             &MetricsInput {
                 pattern: &pattern,
                 seq: &seq,
-                sew_end: inp["sew_end"].as_u64().unwrap() as usize,
+                start: &seq[0],
+                after_sew: &seq[inp["sew_end"].as_u64().unwrap() as usize - 1],
                 wrapped: &wrapped,
                 body: &body,
                 level_y: &level_y,

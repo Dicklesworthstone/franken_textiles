@@ -426,6 +426,10 @@ The report records `fabric: {areal_kg_m2, tensile_N_m, bending_Nm}` and `area_m2
 | drape | `--drape-frames` 120 (frames 46…165) | 1 g, switched on at frame `sew_frames + 1` |
 
 - The baked sequence `seq` has `sew + drape` frames: `seq[0]` is the start state and `co_sew = seq[sew_frames − 1]`.
+- The native solver records an endpoint **after** each step. Its start for `initial_strain_pct`,
+  `ring_shift_mm` and the end of the zip animation is the welded garment after crossing repairs,
+  before stepping. Its `co_sew` is the last accepted sewing endpoint, or that start when sewing
+  has zero steps. Final-shape averages still use the baked frames.
 - Time step: one frame per animation frame, subdivided by `quality`. The reference frame rate is Blender's default.
 - **Determinism is required:** identical inputs give bit-identical baked frames. The reference bake equals stepping
   frame by frame, bit for bit.

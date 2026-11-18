@@ -28,8 +28,10 @@ pub struct MetricsInput<'a> {
     pub pattern: &'a Pattern,
     /// The baked frames (sew then drape), metres.
     pub seq: &'a [Vec<Vec3>],
-    /// Frames of the sew phase (`co_sew = seq[sew_end − 1]`).
-    pub sew_end: usize,
+    /// Admitted positions before the first step, metres.
+    pub start: &'a [Vec3],
+    /// Positions at the end of zero-gravity sewing, metres (the start with zero sewing steps).
+    pub after_sew: &'a [Vec3],
     /// The wrapped start (the drafted level in 3D).
     pub wrapped: &'a [Vec3],
     /// The true body.
@@ -86,13 +88,12 @@ fn fraction(flags: impl Iterator<Item = bool>) -> f64 {
 /// The report (`sim_report.json`'s metric fields, flags, gating and tightness gating).
 ///
 /// # Panics
-/// When `seq` has fewer than [`MIN_FRAMES`] frames or fewer than `sew_end` (a caller bug).
+/// When `seq` has fewer than [`MIN_FRAMES`] frames or a position array does not cover the mesh.
 #[must_use]
 #[allow(clippy::too_many_lines)] // one pass, in the reference's order
 pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
     let seq = input.seq;
     let co = frame_mean(&seq[seq.len().saturating_sub(AVG_FRAMES)..]);
-    let co_sew = &seq[input.sew_end - 1];
     let rest2d = &mesh.verts2d;
     let edges = face_edges(&mesh.faces);
     let strain = edge_strain(&co, rest2d, &edges);
@@ -148,7 +149,7 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
         seams.insert(
             s.id.clone(),
             json!({
-                "gap_after_sew_mm": round(gap(co_sew) / MM, 2),
+                "gap_after_sew_mm": round(gap(input.after_sew) / MM, 2),
                 "gap_final_mm": gap_final,
                 "seam_strain_pct": [round(smin * 100.0, 2), round(smax * 100.0, 2)],
                 "seam_strain_p90_pct": round(p90 * 100.0, 2),
@@ -263,7 +264,7 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
             .map(|&v| input.body.signed_distance(co[v]))
             .collect();
         let z_now: Vec<f64> = verts.iter().map(|&v| co[v].z).collect();
-        let z_start: Vec<f64> = verts.iter().map(|&v| seq[0][v].z).collect();
+        let z_start: Vec<f64> = verts.iter().map(|&v| input.start[v].z).collect();
         let mean_pct = round(mean(&st) * 100.0, 2);
         let max_pct = round(
             st.iter().copied().fold(f64::NEG_INFINITY, f64::max) * 100.0,
@@ -325,7 +326,7 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
                 inst.verts
                     .iter()
                     .filter_map(|(vid, _)| mesh.corner.get(&(id.clone(), vid.to_string())))
-                    .map(|&g| (co[g].z - co_sew[g].z) / MM)
+                    .map(|&g| (co[g].z - input.after_sew[g].z) / MM)
                     .collect()
             })
             .unwrap_or_default();
@@ -611,7 +612,8 @@ mod girth_coverage_tests {
             &MetricsInput {
                 pattern,
                 seq: &seq,
-                sew_end: 1,
+                start: &posed,
+                after_sew: &posed,
                 wrapped: &posed,
                 body: &body,
                 level_y: level,
