@@ -212,6 +212,8 @@ pub struct Scene {
     /// Rejected final relaxation count when an earlier self-contact-clear start was selected.
     /// `start.relax_iterations` and `start.block_p95` describe the accepted checkpoint.
     pub start_backtracked_from: Option<usize>,
+    /// Own-side leg start repair, as moved welded vertices and maximum displacement in mm.
+    pub start_leg_separation: Option<(usize, f64)>,
     /// The cloth offset the contact ramps up to (m).
     pub target_thickness: f64,
     /// The solver (positions are the welded vertices).
@@ -583,6 +585,63 @@ pub fn build_scene(
     )
 }
 
+/// Reapply the wrap's own-side placement only where every source of a weld belongs to one leg.
+fn separated_leg_start(
+    scene: &Scene,
+    clearance_m: f64,
+    spacing_m: f64,
+    plain: &[(usize, usize)],
+) -> Option<(StartState, usize, f64)> {
+    let mut owners = vec![[false; 3]; scene.solver.x.len()];
+    let mut legs = [false; 2];
+    for (&owner, &weld) in scene.mesh.owner.iter().zip(&scene.weld) {
+        let place = &scene.placements[owner];
+        let side = if place.own_side {
+            let side = usize::from(place.own_side_left || place.mirrored);
+            legs[side] = true;
+            side
+        } else {
+            2
+        };
+        owners[weld][side] = true;
+    }
+    if legs != [true, true] {
+        return None;
+    }
+    let mut positions = scene.solver.x.clone();
+    let (mut moved, mut max_move) = (0, 0.0_f64);
+    let mut crossed = false;
+    for (p, owner) in positions.iter_mut().zip(owners) {
+        let sign = match owner {
+            [true, false, false] => -1.0,
+            [false, true, false] => 1.0,
+            _ => continue, // Includes the seam joining left to right and attachments to the torso.
+        };
+        let on_side = sign * p.x;
+        crossed |= on_side < 0.0;
+        let delta = clearance_m * 0.5 - on_side;
+        if delta > spacing_m {
+            return None;
+        }
+        if delta > 0.0 {
+            p.x = sign * clearance_m * 0.5;
+            moved += 1;
+            max_move = max_move.max(delta);
+        }
+    }
+    if !crossed {
+        return None;
+    }
+    let mut start = scene.start.clone();
+    start.relaxed = scene.weld.iter().map(|&w| positions[w]).collect();
+    let strain: Vec<_> = crate::start::edge_strain(&start.relaxed, &scene.mesh.verts2d, plain)
+        .into_iter()
+        .map(f64::abs)
+        .collect();
+    *start.block_p95.last_mut()? = ftx_core::np::percentile(&strain, 95.0);
+    Some((start, moved, max_move / MM))
+}
+
 pub(crate) fn build_scene_resolved(
     pattern: &Pattern,
     mesh: GarmentMesh,
@@ -683,6 +742,16 @@ pub(crate) fn build_scene_resolved(
                     }
                 }
                 if let Some(candidate) = replacement {
+                    scene = candidate;
+                } else if let Some((start, moved, max_mm)) = separated_leg_start(
+                    &scene,
+                    params.thickness + params.dhat,
+                    material.options.spacing * MM,
+                    &plain,
+                ) && let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
+                    && admit(&candidate).is_ok()
+                {
+                    candidate.start_leg_separation = Some((moved, max_mm));
                     scene = candidate;
                 }
             }
@@ -1101,6 +1170,7 @@ fn build_scene_inner(
         triangle_owner,
         untangled,
         start_backtracked_from: None,
+        start_leg_separation: None,
         target_thickness: contact.thickness,
         solver,
         elastic_rings,
@@ -1525,6 +1595,7 @@ mod grain_tests {
             triangle_owner: vec![0],
             untangled: vec![],
             start_backtracked_from: None,
+            start_leg_separation: None,
             target_thickness: 0.,
             solver,
             elastic_rings: vec![],

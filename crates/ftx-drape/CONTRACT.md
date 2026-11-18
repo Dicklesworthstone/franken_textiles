@@ -536,13 +536,17 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
   If none passes, it replays intermediate 25-iteration push-out checkpoints and selects the latest
   one passing the ordinary scene builder and actual contact policy. Rebuilding retains body
   clearance, rest/material domains, welds and source-owned contact; constitutive histories bind only
-  after selection. No valid earlier block means the original refusal. Body-only and already-clear
-  starts retain their original path. `start_repair` reports rejected/accepted iteration counts, and
+  after selection. Earlier-block recovery records rejected and accepted iteration counts in
+  `start_repair`, and
   `initial_strain_pct`, `relax_iters` and the advisory describe the accepted start, with the actual
   p95 strain for a partial final block, even above the reference's
   12% strain heuristic. The chart-trouser regression uses production tape uncertainties, runs actual
   2 mm self-contact and retains a 50 mm offset refusal control. This is start admission, not settling,
   independent anatomy, measured fabric or physical-fit qualification.
+- After all relaxation checkpoints fail, a leg crossing the centre plane can recover its own-side
+  placement. Only welds owned exclusively by the same leg move, by at most one mesh spacing.
+  The rebuilt start passes the same body, material and cloth-contact checks. The report records
+  how many welded vertices moved and their maximum displacement in millimetres.
 - Offset ramp: when an edge of the start passes closer to the body than the cloth offset ξ, contact
   starts at half the smallest distance. `run_phase` tries up to eight increments bounded by 0.25 mm,
   retaining more than a tenth of each preceding gap, including for partial increments. Unsafe final

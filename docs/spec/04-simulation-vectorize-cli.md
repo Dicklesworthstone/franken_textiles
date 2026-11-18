@@ -355,13 +355,20 @@ intersection audit, the native pipeline first rebuilds earlier completed 200-ite
 passes, it replays the intermediate 25-iteration push-out checkpoints. Splitting at those boundaries
 performs exactly the same projections and push-outs as the original blocks. Within each search it
 chooses the latest checkpoint passing the unchanged body admission,
-material domains and actual cloth-contact audit, including source-specific offsets. No successful
-checkpoint means the original start remains refused. This is a bounded choice of start geometry,
+material domains and actual cloth-contact audit, including source-specific offsets. This is a bounded choice of start geometry,
 not a relaxation of collision detection or a new dynamics solver. A recovered start reports the
 original and accepted iteration counts and its actual initial strain, including any partial final
 block's p95 strain; the original reference path, already-admissible starts and existing complete-block
 recoveries remain unchanged. Numerical settling, full body offset and real-person
 fit remain separate requirements.
+
+If every checkpoint still crosses, opposite leg panels can have relaxed across the centre plane
+below the crotch. On a 92 cm tape-fitted trouser draft the first crossing lay between the two
+front inseams. As a final starting configuration, restore the wrap's own-side constraint on welded
+vertices owned exclusively by one leg. Leave bilateral and non-leg welds in place. Separate the two
+sides by the requested self-contact thickness plus activation distance. Reject moves larger than
+one mesh spacing. Rebuild and apply the full body, material and self-contact admission, then sew
+and settle normally. Record the moved vertex count and maximum displacement when accepted.
 
 ## 5. Dynamics contract (what any solver must provide)
 

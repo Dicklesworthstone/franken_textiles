@@ -264,6 +264,82 @@ fn production_command(dir: &Path, args: &[&str], expected: i32, receipt: &str) -
 }
 
 #[test]
+#[ignore = "needs the converted Anny model and a full self-contact drape"]
+fn tape_drafted_trousers_sew_after_opposing_leg_placement() {
+    let dir = std::env::temp_dir().join(format!("ftx-fitted-trouser-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let records: Vec<_> = [
+        ("stature", 920, 10),
+        ("head", 480, 5),
+        ("foot_pass", 200, 5),
+    ]
+    .into_iter()
+    .map(|(name, value, sigma)| {
+        json!({"name":name, "value_mm":value, "sigma_mm":sigma,
+            "provenance":"MEASURED_TAPE", "method":"synthetic tape"})
+    })
+    .collect();
+    let measurements = json!({"schema":"fabric-measurements/1",
+        "wearer":{"label":"synthetic", "sex":"F", "age_months":30.0, "stature_mm":920.0, "bmi":16.0},
+        "taken_on":"2026-10-13","records":records,"fused":{}});
+    std::fs::write(
+        dir.join("input.json"),
+        serde_json::to_vec(&measurements).unwrap(),
+    )
+    .unwrap();
+    let model = ftx_body::default_model_path().unwrap();
+    let path = model.to_str().unwrap();
+    production_command(
+        &dir,
+        &[
+            "draft",
+            "zouave_trousers",
+            "--measurements",
+            "input.json",
+            "--model",
+            path,
+            "--out",
+            "draft",
+        ],
+        0,
+        "draft",
+    );
+    let validation: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("draft/validation.json")).unwrap()).unwrap();
+    assert_eq!(validation["status"], "CONVERGED");
+    let result = production_command(
+        &dir,
+        &[
+            "drape",
+            "draft/pattern.json",
+            "--fit",
+            "draft/fit_spec.json",
+            "--measurements",
+            "input.json",
+            "--model",
+            path,
+            "--out",
+            "fold",
+            "--self-contact-mm",
+            "2",
+        ],
+        0,
+        "drape",
+    );
+    assert_eq!(result["result"]["gating"], json!([]));
+    assert_eq!(result["result"]["self_contact"]["audit"], "passed");
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("fold/sim_report.json")).unwrap()).unwrap();
+    assert_eq!(report["numerical"]["gravity_simulated"], true);
+    assert_eq!(report["numerical"]["settled"], true);
+    let repair = &report["start_repair"];
+    assert_eq!(repair["basis"], "opposing_leg_placement");
+    assert!(repair["moved_welded_vertices"].as_u64().unwrap() > 0);
+    let max_mm = repair["maximum_displacement_mm"].as_f64().unwrap();
+    assert!(max_mm > 0.0 && max_mm <= 12.0);
+}
+
+#[test]
 #[ignore = "needs the admitted production Anny model; measurement authority, not empirical fit"]
 fn standalone_body_and_drape_ignore_poisoned_caches_but_retain_source_identity() {
     let model = ftx_body::default_model_path().expect("model path");

@@ -1048,6 +1048,19 @@ fn add_run_fields(
                 "start restored to an earlier self-contact-clear relaxation block"
             ));
     }
+    if let Some((moved, max_mm)) = scene.start_leg_separation {
+        o.insert(
+            "start_repair".into(),
+            json!({"basis":"opposing_leg_placement","moved_welded_vertices":moved,
+                "maximum_displacement_mm":max_mm}),
+        );
+        o.get_mut("flags")
+            .and_then(Value::as_array_mut)
+            .expect("metrics flags exist")
+            .push(json!(
+                "opposing leg panels separated in the starting placement"
+            ));
+    }
     o.insert(
         "frames".into(),
         json!({"sew": opts.sew_steps, "drape": opts.drape_steps}),
