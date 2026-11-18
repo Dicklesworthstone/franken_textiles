@@ -29,7 +29,12 @@ After drafting a round, **Check body against targets** uses the loaded model wit
 running cloth. It works for flat-only garments such as the fez as well as foldable
 patterns. With no accepted report selected it runs the existing tape fitter; with
 an associated report it reuses that exact shape. Review signed target differences
-and all available MODEL_FIT dimensions, then download `body_check.json`. Imported
+and all available MODEL_FIT dimensions, then download `body_check.json`. Both browser
+workbenches also offer `model_fit_measurements.json` for dimensions with no target or
+only a chart target from record fusion. Chart-targeted estimates carry
+`fit_target_provenance: CHART_PRIOR`. Each record carries its population-chart σ or
+the 12 mm catalogue fallback. The file identifies the source model and measurements
+by hash and can be imported as supplemental estimates for the same wearer. Imported
 checks also offer the original report unchanged. The check binds the exact model
 and saved round-measurement hashes; changes withdraw its old display and files.
 It neither changes measurement readiness nor establishes physical fit. Use the

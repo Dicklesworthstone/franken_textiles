@@ -571,10 +571,22 @@ async function standaloneBodyCheck(page, settle, work, nativeDir) {
   assert.deepEqual(JSON.parse(measured),JSON.parse(nativeMeasurements));
   assert.equal(expected.measurements_sha256,sha(nativeMeasurements));
   assert.equal(report.measurements_sha256,sha(measured));
-  assert.deepEqual(report,{...expected,measurements_sha256:sha(measured)});assert.equal(report.cloth_simulated,false);
+  expected.measurements_sha256=sha(measured);
+  if(expected.model_fit_measurements) {
+    assert.equal(expected.model_fit_measurements.source_measurements_sha256,sha(nativeMeasurements));
+    expected.model_fit_measurements.source_measurements_sha256=sha(measured);
+  }
+  assert.deepEqual(report,expected);assert.equal(report.cloth_simulated,false);
   assert.equal(report.body.model_sha256,modelHash);assert.equal(report.body.provenance,"MODEL_FIT");
   assert.equal(await page.locator("#resGate").innerHTML(),gate);
   assert.equal(await page.locator("#bodyCheckReadings tr").count(),Object.keys(report.body.readings_mm).length+1);
+  const estimatesLink='#bodyCheckFiles a[download="model_fit_measurements.json"]';
+  if(report.model_fit_measurements) {
+    const supplement=JSON.parse(await download(estimatesLink,"model_fit_measurements.json"));
+    assert.deepEqual(supplement,report.model_fit_measurements);
+    assert.ok(supplement.records.length && supplement.records.every(r=>r.provenance==="MODEL_FIT" && r.sigma_mm>0));
+    assert.match(await page.locator("#bodyCheckReadings").textContent(),/Basis for σ/);
+  } else assert.equal(await page.locator(estimatesLink).count(),0);
   if(source)assert.ok((await download('#bodyCheckFiles a[download="body_fit.json"]',"body_fit.json")).equals(source));
   await page.evaluate(()=>{window.__holdBodyCheck=true;});await page.click("#bodyCheckGo");
   await page.waitForFunction(()=>!!window.__heldEvidence,null,{timeout:120000});

@@ -148,6 +148,71 @@ pub fn make_record(
     Ok(record)
 }
 
+/// Anny predictions for untargeted dimensions and dimensions targeted only by a chart during
+/// record fusion. Explicit fused-only targets remain supplied targets. The caller passes the
+/// current measurement file used to fit, the available tape readings in mm and the fitted names.
+pub fn model_fit_records<'a>(
+    measurements: &Value,
+    readings: impl Iterator<Item = (&'a str, Option<f64>)>,
+    target_names: impl Iterator<Item = &'a str>,
+) -> Vec<Value> {
+    let wearer = &measurements["wearer"];
+    let stature = wearer["stature_mm"]
+        .as_f64()
+        .or_else(|| measurements["fused"]["stature"]["value_mm"].as_f64());
+    let priors = stature.and_then(|h| {
+        crate::priors_for(h, wearer["age_months"].as_f64(), wearer["sex"].as_str()).ok()
+    });
+    let targets: Vec<_> = target_names.collect();
+    // Fusion groups repeats by provenance and method, including records from older CLI versions.
+    let method = format!(
+        "ftx body: Anny 0.6.1 fitted to {} tape measurements",
+        targets.len()
+    );
+    readings
+        .filter_map(|(name, value)| {
+            let value = value?;
+            let targeted = targets.contains(&name);
+            if targeted {
+                let fused = &measurements["fused"][name];
+                let chart_only = measurements["records"].is_array()
+                    && !(name == "stature" && wearer["stature_mm"].is_number())
+                    && fused["primary_provenance"] == "CHART_PRIOR"
+                    && fused["flags"]
+                        .as_array()
+                        .is_some_and(|f| f.iter().any(|v| v == "PRIOR_ONLY"));
+                if !chart_only {
+                    return None;
+                }
+            }
+            let (sigma, note) = match priors.as_ref().and_then(|p| p[name]["sigma_mm"].as_f64()) {
+                Some(sigma) => (
+                    sigma,
+                    "σ = the population spread at this stature and age (chart prior)",
+                ),
+                None => (
+                    12.0,
+                    "σ = the catalogue's MODEL_FIT default (no chart prior here)",
+                ),
+            };
+            let mut record = make_record(
+                name,
+                (value * 10.0).round() / 10.0,
+                sigma,
+                "MODEL_FIT",
+                &method,
+                None,
+                note,
+            )
+            .ok()?;
+            if targeted {
+                record["fit_target_provenance"] = json!("CHART_PRIOR");
+            }
+            Some(record)
+        })
+        .collect()
+}
+
 /// Ordered structural errors; booleans are not accepted as numbers. Fused values are recomputed.
 #[must_use]
 pub fn validate(data: &Value) -> Vec<String> {

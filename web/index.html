@@ -879,12 +879,24 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       }
       $("errorBox").classList.add("hidden");
       const body = msg.report.body;
+      const estimates = msg.report.model_fit_measurements;
+      const estimatesByName = new Map((estimates?.records || []).map(r => [r.name, r]));
       $("bodyCheckSummary").innerHTML = bodyFitSummary(body)
-        + `<details><summary>All available body estimates (MODEL_FIT)</summary><div class="scroll"><table id="bodyCheckReadings"><tr><th>Dimension</th><th>Body mm (MODEL_FIT)</th></tr>`
-        + Object.entries(body?.readings_mm || {}).map(([name, value]) => `<tr><td>${esc(human(name))}</td><td>${typeof value === "number" && Number.isFinite(value) ? esc(value) : "unavailable"}</td></tr>`).join("")
+        + `<details><summary>All available body estimates (MODEL_FIT)</summary><div class="scroll"><table id="bodyCheckReadings"><tr><th>Dimension</th><th>Body mm (MODEL_FIT)</th>${estimates ? "<th>Estimate σ (mm)</th><th>Basis for σ</th><th>Fit target</th>" : ""}</tr>`
+        + Object.entries(body?.readings_mm || {}).map(([name, value]) => {
+          const record = estimatesByName.get(name);
+          let target = body.fit?.tape?.[name] ? "Supplied" : "—";
+          if (record) target = record.fit_target_provenance === "CHART_PRIOR" ? "Chart prior only" : "No target";
+          return `<tr><td>${esc(human(name))}</td><td>${typeof value === "number" && Number.isFinite(value) ? esc(value) : "unavailable"}</td>`
+            + (estimates ? `<td>${esc(record?.sigma_mm ?? "—")}</td><td>${esc(record?.notes ?? "—")}</td><td>${target}</td>` : "") + "</tr>";
+        }).join("")
         + "</table></div></details>";
       const u = URL.createObjectURL(new Blob([msg.reportText], { type: "application/json" })); bodyCheckUrls.push(u);
       $("bodyCheckFiles").innerHTML = `<a download="body_check.json" href="${u}">Download body check</a>`;
+      if (estimates) {
+        const url = URL.createObjectURL(new Blob([JSON.stringify(estimates, null, 2)], { type: "application/json" })); bodyCheckUrls.push(url);
+        $("bodyCheckFiles").innerHTML += ` · <a download="model_fit_measurements.json" href="${url}">Download ${estimatesByName.size} MODEL_FIT estimates</a>`;
+      }
       if (typeof msg.bodyFitText === "string") {
         const source = URL.createObjectURL(new Blob([msg.bodyFitText], { type: "application/json" })); bodyCheckUrls.push(source);
         $("bodyCheckFiles").innerHTML += ` · <a download="body_fit.json" href="${source}">Original accepted body fit</a>`;

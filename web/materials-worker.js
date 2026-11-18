@@ -478,6 +478,7 @@ self.onmessage = async ({ data: msg }) => {
         result = json(raw);
         if (result.schema !== "ftx-body-check/1" || result.cloth_simulated !== false || !result.body) throw Error("Incomplete body check; no current result published.");
         files = [file("body_check.json", raw), file("measurements.json", msg.measurements)];
+        if (result.model_fit_measurements) files.push(file("model_fit_measurements.json", result.model_fit_measurements));
         if (msg.bodyFit != null) files.push(file("body_fit.json", msg.bodyFit));
         break;
       }

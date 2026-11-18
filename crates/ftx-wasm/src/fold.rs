@@ -39,6 +39,14 @@ pub fn load_body(bytes: &[u8]) -> Result<AnnyModel, String> {
         .map_err(|r| r.message)
 }
 
+fn model_fit_records(fit: &TapeFit, measurements: &Value) -> Vec<Value> {
+    ftx_measure::model_fit_records(
+        measurements,
+        TAPE_FIELDS.into_iter().zip(fit.readings),
+        fit.residuals.iter().map(|r| r.name.as_str()),
+    )
+}
+
 // Raw fitter outputs, in mm/kg. Supplied targets may be priors; predictions never become evidence.
 fn body_report(wearer: &Wearer, fit: &TapeFit) -> Value {
     let tape: Map<String, Value> = fit
@@ -92,13 +100,23 @@ pub fn inspect_body(
     if !data.is_object() {
         return Err("body-check measurements must be an object".into());
     }
-    if data.get("records").is_some() || data.get("schema").is_some() {
+    // A tape-only target file can carry the ordinary schema label without original records.
+    // With original records the fused block is only a cache. Imported shapes retain their
+    // existing source-admission rules.
+    let fused_only = accepted_report.is_none()
+        && data["schema"] == "fabric-measurements/1"
+        && data["fused"].is_object()
+        && data["wearer"].is_object();
+    if data.get("records").is_some() || (data.get("schema").is_some() && !fused_only) {
         let errors = ftx_measure::validate(&data);
         if !errors.is_empty() {
             return Err(format!("body-check measurements: {}", errors.join("; ")));
         }
         data = ftx_measure::fuse(&data, true).map_err(|e| e.message)?;
     }
+    let measurements_sha256 = ftx_core::receipt::sha256_hex(measurements.as_bytes());
+    let mut report = json!({"schema":"ftx-body-check/1","measurements_sha256":measurements_sha256,
+        "cloth_simulated":false});
     let (mut body, params) = if let Some(report) = accepted_report {
         let (shape, description) =
             ftx_body::accepted_shape::prepare(model, model_sha256, report.as_bytes(), Some(&data))
@@ -111,6 +129,14 @@ pub fn inspect_body(
         let wearer = Wearer::from_measurements(&data).map_err(|e| e.message)?;
         let targets = tape_targets(&data).map_err(|e| e.message)?;
         let fit = fit_tape(model, &wearer, &targets, &Pose::drape()).map_err(|e| e.message)?;
+        let records = model_fit_records(&fit, &data);
+        if !records.is_empty() {
+            // Replaying predictions alone must never turn the source's stature into new evidence.
+            report["model_fit_measurements"] = json!({"schema":"fabric-measurements/1",
+                "wearer":{"reference":crate::page::truthy(&data["wearer"]["reference"])},
+                "source_measurements_sha256":measurements_sha256,"model_sha256":model_sha256,
+                "records":records});
+        }
         (body_report(&wearer, &fit), fit.params)
     };
     if let Some(occupied) =
@@ -120,9 +146,8 @@ pub fn inspect_body(
         body["nappy_occupancy"] = occupied.description;
     }
     body["model_sha256"] = json!(model_sha256);
-    Ok(json!({"schema":"ftx-body-check/1", "body":body,
-        "measurements_sha256":ftx_core::receipt::sha256_hex(measurements.as_bytes()),
-        "cloth_simulated":false}))
+    report["body"] = body;
+    Ok(report)
 }
 
 /// Drapes `pattern` on `model` fitted to `measurements`, judged by `fit_spec`. `self_contact_mm` > 0 turns
@@ -358,7 +383,8 @@ fn fold_on_source(
             "body: fitted in {} iterations, {:.2} kg",
             fit.iterations, fit.mass_kg
         ));
-        let description = body_report(&wearer, &fit);
+        let mut description = body_report(&wearer, &fit);
+        description["model_fit"] = Value::Array(model_fit_records(&fit, &data));
         (fit.params, description)
     };
     if !legs.is_standing() {
@@ -568,6 +594,17 @@ mod tests {
             got["fit"]["weight_kg"]["residual_kg"],
             fit.mass_kg - 10.0001
         );
+        let records = model_fit_records(
+            &fit,
+            &json!({"wearer":{"stature_mm":1500,"age_months":120}}),
+        );
+        assert_eq!(records.len(), TAPE_FIELDS.len() - 3);
+        assert!(records.iter().all(|r| {
+            r["sigma_mm"] == 12.0
+                && r["method"] == "ftx body: Anny 0.6.1 fitted to 2 tape measurements"
+                && r["notes"].as_str().unwrap().contains("no chart prior")
+                && !["head", "arm_length", "chest"].contains(&r["name"].as_str().unwrap())
+        }));
         wearer.weight_kg = None;
         assert!(body_report(&wearer, &fit)["fit"]["weight_kg"].is_null());
     }

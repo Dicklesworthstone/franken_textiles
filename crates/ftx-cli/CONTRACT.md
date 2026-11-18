@@ -343,8 +343,9 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
   `pose_geometry` reporting rest-vs-posed skin and `clothing_collider` volume change, LBS volume-loss
   advisories and exact self-intersection audits, the phenotype and every local change in use). Exit 0; an unknown pose is refused. Both reports carry
-  `model_fit`: every available tape reading the file lacks, read off the fitted body, as a `fabric-measurements/1`
-  record with provenance `MODEL_FIT` and the population spread as σ (the chart prior's at the wearer's
+  `model_fit`: available readings with no target or only a chart-derived target from record fusion.
+  The latter also record `fit_target_provenance: CHART_PRIOR`. Explicit fused-only targets stay supplied.
+  Each is a `fabric-measurements/1` record with provenance `MODEL_FIT` and the population spread as σ (the chart prior's at the wearer's
   stature and age, else the catalogue's 12 mm), so it can be added to the file as a model value, never
   as a measurement (`tests/body_model_fit.rs`, which needs the model). Unrequested missing sections
   do not block fitting: `readings_mm` and `model_fit` omit them, and `tape_evaluation` reports partial

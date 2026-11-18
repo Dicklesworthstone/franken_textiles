@@ -714,6 +714,13 @@ function bodyCheckResult(parent, report) {
   if (!imported) {
     const scale = document.createElement("p"); scale.textContent = "Fit scale is the larger of supplied uncertainty and the existing fitting tolerance. Scaled residuals are diagnostics, not confidence intervals."; parent.append(scale);
   }
+  if (report.model_fit_measurements?.records.length) {
+    const estimates = table(parent, "Body estimates for missing dimensions",
+      ["Dimension", "MODEL_FIT mm", "σ mm", "Basis for σ", "Fit target"]);
+    for (const record of report.model_fit_measurements.records)
+      cells(estimates, [record.name, metric(record.value_mm), metric(record.sigma_mm), record.notes,
+        record.fit_target_provenance === "CHART_PRIOR" ? "Chart prior only" : "No target"]);
+  }
   return { body_source: imported ? "Accepted shape, no refit" : "Tape-fitted MODEL_FIT shape",
     model_mass_kg: body.mass_kg, fit_iterations: body.fit?.iterations, cloth_simulated: report.cloth_simulated };
 }

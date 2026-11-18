@@ -346,7 +346,7 @@ fn fitted_body(model: &AnnyModel, meas: &Value) -> Result<(Wearer, TapeFit), Ref
 }
 
 /// The fitted body as `drape` reports it and `body` writes it.
-fn body_json(w: &Wearer, fit: &TapeFit) -> serde_json::Map<String, Value> {
+fn body_json(w: &Wearer, fit: &TapeFit, measurements: &Value) -> serde_json::Map<String, Value> {
     let mm = |v: f64| (v * 10.0).round() / 10.0;
     let kg = |v: f64| (v * 100.0).round() / 100.0;
     let named =
@@ -389,56 +389,15 @@ fn body_json(w: &Wearer, fit: &TapeFit) -> serde_json::Map<String, Value> {
             "pose":"a_pose_35","provenance":"MODEL_FIT","unavailable_fields":unavailable}),
     );
     m.insert("mass_kg".into(), json!(kg(fit.mass_kg)));
-    m.insert("model_fit".into(), Value::Array(model_fit_records(w, fit)));
-    m
-}
-
-/// The body's available readings of [`TAPE_FIELDS`] measurements the fit was not given, as `fabric-measurements/1`
-/// records with provenance `MODEL_FIT` (plan §9.4: read off the fitted body, never passed off as measured)
-/// and the population spread as σ: the chart prior's σ at the wearer's stature and age, or the catalogue's
-/// `MODEL_FIT` default (12 mm) outside the charts.
-fn model_fit_records(w: &Wearer, fit: &TapeFit) -> Vec<Value> {
-    let sex = if w.gender == 0.0 {
-        Some("M")
-    } else if w.gender == 1.0 {
-        Some("F")
-    } else {
-        None
-    };
-    let priors = ftx_measure::priors_for(w.stature_mm, Some(w.years * 12.0), sex).ok();
-    let method = format!(
-        "ftx body: Anny 0.6.1 fitted to {} tape measurements",
-        fit.residuals.len()
+    m.insert(
+        "model_fit".into(),
+        Value::Array(ftx_measure::model_fit_records(
+            measurements,
+            TAPE_FIELDS.into_iter().zip(fit.readings),
+            fit.residuals.iter().map(|r| r.name.as_str()),
+        )),
     );
-    TAPE_FIELDS
-        .iter()
-        .zip(fit.readings)
-        .filter(|(n, _)| !fit.residuals.iter().any(|r| r.name == **n))
-        .filter_map(|(n, v)| {
-            let v = v?;
-            let chart = priors.as_ref().and_then(|p| p[*n]["sigma_mm"].as_f64());
-            let (sigma, note) = match chart {
-                Some(s) => (
-                    s,
-                    "σ = the population spread at this stature and age (chart prior)",
-                ),
-                None => (
-                    12.0,
-                    "σ = the catalogue's MODEL_FIT default (no chart prior here)",
-                ),
-            };
-            ftx_measure::make_record(
-                n,
-                (v * 10.0).round() / 10.0,
-                sigma,
-                "MODEL_FIT",
-                &method,
-                None,
-                note,
-            )
-            .ok()
-        })
-        .collect()
+    m
 }
 
 /// `ftx body`: the body fitted to a measurement file, posed, as `body.obj` and `body.json`
@@ -477,7 +436,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ftx_body::body_pose_geometry_json(&model, &rest.vertices, &posed.vertices, &skin)?;
     let ph = fit.params.phenotype;
     let labels = &model.data().header.labels.local_changes;
-    let mut doc = body_json(&w, &fit);
+    let mut doc = body_json(&w, &fit, &meas);
     if let Some(occupied) = occupancy {
         doc.entry("readings_mm").or_insert_with(|| json!({}))["seat_over_nappy"] =
             json!(occupied.seat_over_nappy_mm);
@@ -1289,7 +1248,7 @@ mod tests {
             free: [0.0; FREE.len()],
             iterations: 3,
         };
-        let body = Value::Object(body_json(&wearer, &fit));
+        let body = Value::Object(body_json(&wearer, &fit, &json!({})));
         let row = &body["fit"]["tape"]["waist"];
         assert_eq!(row["body_mm"], 100.0); // Preserve the historical display precision.
         assert_eq!(row["residual_mm"], 100.0004 - 100.0);

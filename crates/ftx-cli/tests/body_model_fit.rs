@@ -115,7 +115,64 @@ fn unmeasured_readings_come_back_as_model_fit() {
     let model_bytes = std::fs::read(ftx_body::default_model_path().unwrap()).unwrap();
     let hash = sha256_hex(&model_bytes);
     let model = ftx_wasm::fold::load_body(&model_bytes).unwrap();
+    let explicit = ftx_wasm::fold::inspect_body(&model, &hash, &meas.to_string(), None).unwrap();
+    assert_eq!(
+        explicit["model_fit_measurements"]["records"]
+            .as_array()
+            .unwrap(),
+        records
+    );
+    assert_eq!(
+        explicit["body"]["fit"]["tape"].as_object().unwrap().len(),
+        4
+    );
+    // A schema label on explicit targets is allowed. Present, malformed records still refuse.
+    let mut malformed = meas.clone();
+    malformed["records"] = Value::Null;
+    assert!(
+        ftx_wasm::fold::inspect_body(&model, &hash, &malformed.to_string(), None)
+            .unwrap_err()
+            .contains("records must be a list")
+    );
     let check = ftx_wasm::fold::inspect_body(&model, &hash, saved_text, None).unwrap();
+    let supplement = &check["model_fit_measurements"];
+    assert_eq!(supplement["source_measurements_sha256"], sha256_hex(saved));
+    assert_eq!(supplement["model_sha256"], hash);
+    assert_eq!(supplement["wearer"], json!({"reference":false}));
+    assert!(ftx_measure::validate(supplement).is_empty());
+    let estimates = supplement["records"].as_array().unwrap();
+    assert_eq!(estimates.len(), ftx_body::TAPE_FIELDS.len() - 2);
+    let priors = ftx_measure::priors_for(920.0, Some(30.0), Some("F")).unwrap();
+    for estimate in estimates {
+        let name = estimate["name"].as_str().unwrap();
+        assert!(!["stature", "head"].contains(&name));
+        assert_eq!(estimate["provenance"], "MODEL_FIT");
+        assert_eq!(estimate["fit_target_provenance"], "CHART_PRIOR");
+        assert_eq!(estimate["sigma_mm"], priors[name]["sigma_mm"]);
+        let predicted = check["body"]["readings_mm"][name].as_f64().unwrap();
+        assert_eq!(estimate["value_mm"], (predicted * 10.0).round() / 10.0);
+    }
+    let replay = ftx_measure::fuse(supplement, false).unwrap();
+    assert_eq!(replay["fused"]["chest"]["primary_provenance"], "MODEL_FIT");
+    assert!(replay["fused"].get("stature").is_none());
+    let mut input = request["body"].clone();
+    input["supplemental_same_wearer"] = json!(true);
+    input["supplemental_measurements"] = json!([supplement.to_string()]);
+    let imported = ftx_wasm::page::body_file(
+        &ftx_core::pyjson::PyJson::parse(&input.to_string()).unwrap(),
+        "2026-10-13",
+    )
+    .unwrap();
+    assert_eq!(imported["fused"]["head"], data["fused"]["head"]);
+    let gate =
+        ftx_measure::readiness(&imported, "bodice", &Default::default(), "2026-10-13").unwrap();
+    assert!(
+        gate["blocking"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "chest")
+    );
     let wearer = ftx_body::Wearer::from_measurements(&data).unwrap();
     let fit = ftx_body::fit_tape(
         &model,

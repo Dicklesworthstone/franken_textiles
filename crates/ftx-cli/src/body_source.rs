@@ -138,7 +138,7 @@ pub(super) fn prepare_bound(
         };
         let measurements = measurements.ok_or_else(|| bad_input("--measurements is required"))?;
         let (wearer, fit) = fitted_body(&model, measurements)?;
-        let mut description = body_json(&wearer, &fit);
+        let mut description = body_json(&wearer, &fit, measurements);
         let params =
             if let Some(occupied) = ftx_body::nappy_occupancy(&model, &fit.params, measurements)? {
                 description

@@ -1656,6 +1656,13 @@ test('compiled WASM material body check matches the native fitter without a garm
     assert.equal(response.type,'result',response.message);assert.equal(response.files[0].text,expected);assert.equal(response.files[1].text,measurements);p.current().emit(response);
     const report=response.result,body=report.body;assert.equal(report.schema,'ftx-body-check/1');assert.equal(report.cloth_simulated,false);
     assert.equal(report.measurements_sha256,hash(measurements));assert.equal(body.model_sha256,hash(bytes));assert.equal(body.provenance,'MODEL_FIT');
+    const download=response.files.find(f=>f.name==='model_fit_measurements.json');
+    if(native.model_fit.length) {
+      const supplement=JSON.parse(download.text);
+      assert.deepEqual(supplement,report.model_fit_measurements);
+      assert.deepEqual(supplement.records,native.model_fit);
+      assert.equal(supplement.source_measurements_sha256,hash(measurements));
+    } else assert.equal(download,undefined);
     // The CLI intentionally rounds displayed readings/mass; its residuals and fit scales are raw.
     // Keep the existing cross-target relative tolerance rather than rounding those diagnostics.
     const close=(a,b)=>assert.ok(Math.abs(a-b)<=1e-9*(1+Math.abs(b)),`${a} != ${b}`);
