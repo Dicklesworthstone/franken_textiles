@@ -26,6 +26,39 @@ fn bending_energy_of_a_cylinder() {
     }
 }
 
+/// The two sides of an eased seam keep their cut lengths, even in separate pattern frames.
+#[test]
+fn eased_seam_bends_with_each_panels_own_triangle() {
+    let upper = (
+        [0, 1, 2],
+        [Vec2::ZERO, Vec2::new(4., 0.), Vec2::new(1., 2.)],
+    );
+    let lower = (
+        [1, 0, 3],
+        [Vec2::new(8., 6.), Vec2::new(8., 4.), Vec2::new(9., 5.)],
+    );
+    for panels in [[upper, lower], [lower, upper]] {
+        let model = ClothModel::from_triangles(
+            4,
+            &panels.map(|p| p.0),
+            &panels.map(|p| p.1),
+            cotton(),
+            1.,
+            0.2,
+        )
+        .unwrap();
+        let hinge = &model.hinges[0];
+        for (&opposite, area) in hinge.v[2..].iter().zip(hinge.areas) {
+            assert_eq!(area, if opposite == 2 { 4. } else { 1. });
+        }
+        // Endpoint cotangents are (1/2, 3/2) on the long edge and (1, 1) on the short.
+        for (vertex, coefficient) in hinge.v.into_iter().zip(hinge.k) {
+            assert_eq!(coefficient, [2.5, 1.5, -2., -2.][vertex]);
+        }
+        assert_eq!(hinge.weight, 3. / 5.);
+    }
+}
+
 /// Uniaxial-stress modulus of an orthotropic sheet at angle θ to the warp, from the compliance S = Q⁻¹.
 fn uniaxial_modulus(q: &[[f64; 3]; 3], theta: f64) -> f64 {
     let m = Mat3::from_rows(*q);

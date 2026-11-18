@@ -102,7 +102,7 @@ impl ClothModel {
 
     /// Builds the model from triangles that each carry their own rest coordinates, so a vertex may sit
     /// at different rest positions in different triangles: a seam welded across the pattern, or a tube
-    /// closed on itself. A hinge across such a weld maps its second triangle rigidly onto the first.
+    /// closed on itself. A welded hinge uses the cut geometry from each side of the seam.
     /// `rest` (per vertex) keeps the first rest position seen for each vertex.
     ///
     /// # Errors
@@ -168,22 +168,12 @@ impl ClothModel {
                 [_] => {}
                 [(a, b, o1, t1), (_, _, o2, t2)] => {
                     let v = [*a, *b, *o1, *o2];
-                    // The stencil in the first triangle's rest frame; the second triangle's opposite
-                    // vertex mapped by the rigid motion that takes its copy of the edge onto the first's.
                     let at = |t: usize, i: usize| {
                         tri_rest[t][tris[t].iter().position(|&j| j == i).unwrap_or(0)]
                     };
-                    let (pa, pb, po1) = (at(*t1, *a), at(*t1, *b), at(*t1, *o1));
-                    let (qa, qb, qo2) = (at(*t2, *a), at(*t2, *b), at(*t2, *o2));
-                    let po2 = if (qa, qb) == (pa, pb) {
-                        qo2 // the same frame (no weld): use it as is, bit for bit
-                    } else {
-                        let (u, w) = ((pb - pa).normalized(), (qb - qa).normalized());
-                        let (cos, sin) = (u.dot(w), w.cross(u));
-                        let r = qo2 - qa;
-                        pa + Vec2::new(cos * r.x - sin * r.y, sin * r.x + cos * r.y)
-                    };
-                    let h = Hinge::new(v, [pa, pb, po1, po2]).ok_or_else(|| {
+                    let first = [*a, *b, *o1].map(|i| at(*t1, i));
+                    let second = [*a, *b, *o2].map(|i| at(*t2, i));
+                    let h = Hinge::from_rest_triangles(v, first, second).ok_or_else(|| {
                         Refusal::new(
                             RefusalCode::DegenerateGeometry,
                             format!("hinge on edge {key:?} is degenerate"),

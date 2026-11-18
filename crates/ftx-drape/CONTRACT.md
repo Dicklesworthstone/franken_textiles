@@ -603,8 +603,9 @@ frame (+u along the grain).
   bias G12. Each normal strain is softened under compression by
   `φ(e) = r·e + (1 − r)·δ·tanh(e/δ)` (r = √s, δ = 1e-3): C² at zero strain (a plain kink made Newton cycle
   100 iterations a step on a sagging sheet; the blend converges in 1–2) and stiffness → s·Q in compression.
-- Bending: Bergou's quadratic hinges, weight `3a/(A₀+A₁)²` with each triangle's area handed to its interior
-  hinges; constant PSD Hessian.
+- Bergou's quadratic bending hinges use weight `3a/(A₀+A₁)²` and a constant PSD Hessian. Each triangle
+  contributes its own rest area and endpoint cotangents, including at a weld with unequal cut lengths.
+  Each triangle's area is distributed among its interior hinges.
 - Elastic (`ElasticSegment`): a tension-only spring per segment, `(EA/r)·g(l − r)` with g zero below
   −δ, cubic across [−δ, 0] and `e²/2 + δe/2 + δ²/6` above (δ = `ELASTIC_ONSET` = 0.1 mm): C², no force
   when slack, so a casing's elastic only ever pulls it in; PSD Hessian.

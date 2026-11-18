@@ -458,11 +458,28 @@ impl Hinge {
     #[must_use]
     pub fn new(v: [usize; 4], rest: [Vec2; 4]) -> Option<Self> {
         let [x0, x1, x2, x3] = rest;
-        let (e0, e1, e2, e3, e4) = (x1 - x0, x2 - x0, x3 - x0, x2 - x1, x3 - x1);
-        let (c01, c02, c03, c04) = (cot(e0, e1), cot(e0, e2), cot(-e0, e3), cot(-e0, e4));
-        let a0 = 0.5 * e0.cross(e1).abs();
-        let a1 = 0.5 * e0.cross(e2).abs();
-        let k = [c03 + c04, c01 + c02, -c01 - c03, -c02 - c04];
+        Self::from_rest_triangles(v, [x0, x1, x2], [x0, x1, x3])
+    }
+
+    /// Both rest triangles give the edge endpoints in `v[0], v[1]` order. An eased seam can have a
+    /// different cut length on each side, so each triangle supplies its own angles and area.
+    pub(crate) fn from_rest_triangles(
+        v: [usize; 4],
+        first: [Vec2; 3],
+        second: [Vec2; 3],
+    ) -> Option<Self> {
+        let geometry = |[a, b, opposite]: [Vec2; 3]| {
+            let edge = b - a;
+            let arm = opposite - a;
+            (
+                cot(edge, arm),
+                cot(-edge, opposite - b),
+                0.5 * edge.cross(arm).abs(),
+            )
+        };
+        let (start0, end0, a0) = geometry(first);
+        let (start1, end1, a1) = geometry(second);
+        let k = [end0 + end1, start0 + start1, -start0 - end0, -start1 - end1];
         (a0 > 0.0 && a1 > 0.0 && k.iter().all(|c| c.is_finite())).then(|| Self {
             v,
             k,

@@ -97,7 +97,9 @@ after the first zero-gravity step. Both the 12- and 18-step sewing schedules fin
 
 **The fitted KAT 9 digest also fails its pin.** The six-step 92 cm release test produced
 `ec7277dc9a2a05ccb75ed883568fddd43121d00b5968217ce46ec95593fe356a` on both
-`4b9a7b9b` and the revised drape. It expects `7693994660a8605f5d0081abffde860400c955b109f61d050042d49f1fcac336`.
+`4b9a7b9b` and the phase-start repair. After correcting the bending geometry of eased seams, the
+native release digest is `ac9dc730cd353d39ad02638c124b2fa5f257c297b45eea29f1173caef679aae8`.
+The pin is `7693994660a8605f5d0081abffde860400c955b109f61d050042d49f1fcac336`.
 
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
