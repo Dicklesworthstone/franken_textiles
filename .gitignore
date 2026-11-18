@@ -64,3 +64,16 @@ __pycache__/
 .rch/
 node_modules/
 .playwright-browsers/
+
+# Next.js gallery build products and the packaged copy of the Rust workbench.
+/showcase/.next/
+/showcase/.wrangler/
+/showcase/out/
+/showcase/public/workbench/
+/showcase/next-env.d.ts
+/showcase/AGENTS.md
+/showcase/*.tsbuildinfo
+# Public turntables made exclusively from the two synthetic exhibition patterns.
+!/showcase/public/media/bolero.mp4
+!/showcase/public/media/trousers.mp4
+!/showcase/public/media/construction.mp4

@@ -1,0 +1,221 @@
+import * as THREE from "three";
+
+export type Garment = "bolero" | "trousers";
+export type StudioMode = "cloth" | "construction" | "strain";
+
+type Exhibit = {
+  vertices: number;
+  triangles: number[];
+  panels: Record<string, [number, number]>;
+  seams: Record<string, { side_a: number[]; side_b: number[] }>;
+  frames: number[];
+  sourceFrames: number;
+  strainRgb: number[];
+};
+
+// One small repeat tile, anchored to the flat board so the weave follows the panels.
+function weaveTexture() {
+  const side = 64;
+  const data = new Uint8Array(side * side * 4);
+  for (let y = 0; y < side; y++) {
+    for (let x = 0; x < side; x++) {
+      const warp = Math.floor(x / 8);
+      const weft = Math.floor(y / 8);
+      const ridge = ((warp + weft) % 2 ? x : y) % 8;
+      const value = Math.round(191 + 55 * Math.sin((ridge + 0.5) * Math.PI / 8));
+      const i = 4 * (y * side + x);
+      data.set([value, value, value, 255], i);
+    }
+  }
+  const map = new THREE.DataTexture(data, side, side, THREE.RGBAFormat);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  map.generateMipmaps = true;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  map.magFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  return map;
+}
+
+async function fetchAsset(path: string, signal: AbortSignal) {
+  const response = await fetch(path, { signal });
+  if (!response.ok) throw new Error(`Could not load ${path} (${response.status})`);
+  return response;
+}
+
+export async function loadGarment(garment: Garment, signal: AbortSignal) {
+  const root = `/exhibits/${garment}`;
+  const [data, buffer]: [Exhibit, ArrayBuffer] = await Promise.all([
+    fetchAsset(root + ".json", signal).then((r) => r.json()),
+    fetchAsset(root + ".bin", signal).then((r) => r.arrayBuffer()),
+  ]);
+  const frames = new Float32Array(buffer);
+  const stride = data.vertices * 3;
+  if (!stride || frames.length !== stride * data.frames.length ||
+      data.strainRgb.length !== stride || data.frames[0] !== 0 ||
+      data.frames.at(-1) !== data.sourceFrames - 1) {
+    throw new Error("Incomplete garment replay");
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setIndex(data.triangles);
+  const position = new THREE.Float32BufferAttribute(new Float32Array(stride), 3);
+  position.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("position", position);
+  const uv = new Float32Array(data.vertices * 2);
+  for (let i = 0; i < data.vertices; i++) {
+    uv[i * 2] = frames[i * 3] * 70;
+    uv[i * 2 + 1] = frames[i * 3 + 2] * 70;
+  }
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  const panelColors = new Float32Array(stride);
+  const palette = ["#e3b24a", "#71a989", "#df8269", "#718cab", "#cfbc9b", "#c384aa", "#7db5bd"];
+  for (const [index, [start, end]] of Object.values(data.panels).entries()) {
+    const color = new THREE.Color(palette[index % palette.length]);
+    for (let i = start; i < end; i++) color.toArray(panelColors, i * 3);
+  }
+  const strainColors = new Float32Array(stride);
+  const rgb = new THREE.Color();
+  for (let i = 0; i < stride; i += 3) {
+    rgb.setRGB(data.strainRgb[i] / 255, data.strainRgb[i + 1] / 255, data.strainRgb[i + 2] / 255, THREE.SRGBColorSpace);
+    rgb.toArray(strainColors, i);
+  }
+  const colors = new THREE.BufferAttribute(panelColors.slice(), 3);
+  geometry.setAttribute("color", colors);
+
+  const texture = weaveTexture();
+  const cloth = new THREE.MeshPhysicalMaterial({
+    color: "#d55728", map: texture, bumpMap: texture, bumpScale: 0.00008,
+    roughness: 0.91, sheen: 0.62, sheenRoughness: 0.88, sheenColor: "#d59873",
+    side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+  });
+  // Tint the reverse face so the viewer can read open cuffs and the jacket interior.
+  cloth.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace("#include <color_fragment>",
+      "#include <color_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= vec3(0.40, 0.30, 0.35);");
+  };
+  const cut = new THREE.MeshStandardMaterial({
+    vertexColors: true, side: THREE.DoubleSide, roughness: 0.93,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+  });
+  const strain = new THREE.MeshBasicMaterial({
+    vertexColors: true, side: THREE.DoubleSide, toneMapped: false,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+  });
+  const group = new THREE.Group();
+  const fabric = new THREE.Mesh<THREE.BufferGeometry, THREE.Material>(geometry, cloth);
+  fabric.castShadow = fabric.receiveShadow = true;
+  const lattice = new THREE.MeshBasicMaterial({
+    color: "#ffdfad", side: THREE.DoubleSide, wireframe: true,
+    transparent: true, opacity: 0.38, depthWrite: false,
+  });
+  const wire = new THREE.Mesh(geometry, lattice);
+  const edges: number[] = [];
+  for (const { side_a, side_b } of Object.values(data.seams)) {
+    for (const side of [side_a, side_b]) {
+      for (let i = 1; i < side.length; i++) edges.push(side[i - 1], side[i]);
+    }
+  }
+  const seamGeometry = new THREE.BufferGeometry();
+  seamGeometry.setAttribute("position", position);
+  seamGeometry.setIndex(edges);
+  const thread = new THREE.LineBasicMaterial({
+    color: "#ffdfaa", transparent: true, opacity: 0.73, depthWrite: false,
+  });
+  const seams = new THREE.LineSegments(seamGeometry, thread);
+  wire.renderOrder = 1;
+  seams.renderOrder = 2;
+  // The bound moves at every frame; the camera is always composed around the entire exhibit.
+  fabric.frustumCulled = wire.frustumCulled = seams.frustumCulled = false;
+  group.add(fabric, wire, seams);
+  const seamNames = Object.keys(data.seams).sort();
+  const capacity = Math.max(0, ...Object.values(data.seams).flatMap(s => [s.side_a.length, s.side_b.length]));
+  // Both sides share the animated vertex buffer. Fixed screen-size dots remain legible from the
+  // board to the sewn endpoint, where the larger outer dot is visible around the smaller one.
+  function markSide(color: number, diameter: number, order: number) {
+    const path = new THREE.BufferGeometry();
+    path.setAttribute("position", position);
+    const indices = new THREE.BufferAttribute(new Uint32Array(capacity), 1);
+    path.setIndex(indices);
+    const ink = new THREE.LineBasicMaterial({ color, toneMapped: false, depthTest: false, depthWrite: false });
+    const dot = new THREE.PointsMaterial({ color, size: diameter, sizeAttenuation: false,
+      toneMapped: false, depthTest: false, depthWrite: false });
+    dot.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace("#include <clipping_planes_fragment>",
+        "#include <clipping_planes_fragment>\nif (distance(gl_PointCoord, vec2(0.5)) > 0.5) discard;");
+    };
+    const line = new THREE.Line(path, ink);
+    const points = new THREE.Points(path, dot);
+    line.renderOrder = order;
+    points.renderOrder = order + 1;
+    line.frustumCulled = points.frustumCulled = line.visible = points.visible = false;
+    group.add(line, points);
+    return {
+      select(side: number[] | undefined) {
+        line.visible = points.visible = !!side;
+        if (!side) return;
+        indices.array.set(side);
+        indices.needsUpdate = true;
+        path.setDrawRange(0, side.length);
+      },
+      dispose() { path.dispose(); ink.dispose(); dot.dispose(); },
+    };
+  }
+  const sideA = markSide(0x40f3ee, 9, 3);
+  const sideB = markSide(0xffb44c, 5, 5);
+  let selected: Exhibit["seams"][string] | undefined;
+  let lastFrame = -1;
+  let showingStrain = false;
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  function pose(mode: StudioMode, time: number, showWire: boolean, aspect: number, seam?: string) {
+    const sourceFrame = (mode === "strain" ? 1 : THREE.MathUtils.clamp(time, 0, 1)) * (data.sourceFrames - 1);
+    if (lastFrame !== sourceFrame) {
+      let right = data.frames.findIndex((v) => v >= sourceFrame);
+      if (right < 0) right = data.frames.length - 1;
+      const left = Math.max(0, right - 1);
+      const mix = (sourceFrame - data.frames[left]) / Math.max(1, data.frames[right] - data.frames[left]);
+      const a = left * stride;
+      const b = right * stride;
+      for (let j = 0; j < stride; j += 3) {
+        // Right-handed Z-up, front -Y → right-handed Y-up, front +Z.
+        position.setXYZ(j / 3,
+          THREE.MathUtils.lerp(frames[a + j], frames[b + j], mix),
+          THREE.MathUtils.lerp(frames[a + j + 2], frames[b + j + 2], mix),
+          -THREE.MathUtils.lerp(frames[a + j + 1], frames[b + j + 1], mix));
+      }
+      position.needsUpdate = true;
+      geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
+      geometry.boundingBox!.getSize(size);
+      geometry.boundingBox!.getCenter(center);
+      lastFrame = sourceFrame;
+    }
+    const scale = 1.66 / Math.max(size.y + size.z * 0.16, Math.hypot(size.x, size.z) / aspect, 0.001);
+    group.scale.setScalar(scale);
+    group.position.copy(center).multiplyScalar(-scale);
+    fabric.material = mode === "strain" ? strain : mode === "construction" ? cut : cloth;
+    if (showingStrain !== (mode === "strain")) {
+      showingStrain = mode === "strain";
+      colors.copyArray(showingStrain ? strainColors : panelColors);
+      colors.needsUpdate = true;
+    }
+    const pair = mode === "construction" && seam && Object.hasOwn(data.seams, seam) ? data.seams[seam] : undefined;
+    if (selected !== pair) {
+      selected = pair;
+      sideA.select(pair?.side_a);
+      sideB.select(pair?.side_b);
+      cut.color.setHex(pair ? 0x747b79 : 0xffffff);
+      lattice.opacity = pair ? 0.12 : 0.38;
+    }
+    wire.visible = showWire;
+    seams.visible = mode !== "strain" && !pair;
+  }
+  return { group, pose, seamNames, dispose() {
+    geometry.dispose();
+    seamGeometry.dispose();
+    sideA.dispose();
+    sideB.dispose();
+    for (const material of [cloth, cut, strain, lattice, thread]) material.dispose();
+    texture.dispose();
+  }};
+}
