@@ -175,6 +175,27 @@ fn array(v: &Value) -> Result<&Vec<Value>, Refusal> {
         .ok_or_else(|| bad("body-fit shape receipt has a missing or malformed array"))
 }
 
+/// Shape coefficients and bounds lie in [-1, 1]. JSON writers may spell their
+/// integral values as either integers or floats. Preserve exact structure and values.
+fn same_shape_data(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(k, v)| b.get(k).is_some_and(|other| same_shape_data(v, other)))
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_shape_data(x, y))
+        }
+        (Value::Number(a), Value::Number(b)) => {
+            a == b
+                || a.as_f64()
+                    .is_some_and(|x| (-1.0..=1.0).contains(&x) && Some(x) == b.as_f64())
+        }
+        _ => a == b,
+    }
+}
+
 fn digest(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
@@ -260,7 +281,7 @@ impl AcceptedShape {
         let variables = array(&config["shape_parameters"])?;
         if !(1..=12).contains(&shape.len())
             || shape.len() != variables.len()
-            || report["model"]["shape"] != config["shape_parameters"]
+            || !same_shape_data(&report["model"]["shape"], &config["shape_parameters"])
         {
             return Err(bad("body-fit shape vector and named layout disagree"));
         }
@@ -291,7 +312,7 @@ impl AcceptedShape {
         let expanded = json!({"provenance":"MODEL_FIT", "phenotype":{
             "gender":p.gender,"age":p.age,"muscle":p.muscle,"weight":p.weight,
             "height":p.height,"proportions":p.proportions},"local_changes":params.local_changes});
-        if solution["anny_parameters"] != expanded {
+        if !same_shape_data(&solution["anny_parameters"], &expanded) {
             return Err(bad(
                 "body-fit expanded parameters do not reproduce its named shared shape",
             ));
@@ -379,6 +400,17 @@ mod tests {
         assert_eq!(accepted.years, 2.5);
         assert_eq!(accepted.input_sha256, "b".repeat(64));
         assert_eq!(v, receipt());
+    }
+    #[test]
+    fn saved_shape_accepts_integral_json_spellings_without_rounding() {
+        let mut v = receipt();
+        v["model"]["shape"][1]["lower"] = json!(-1);
+        let expanded = &mut v["solution"]["anny_parameters"];
+        expanded["phenotype"]["gender"] = json!(1);
+        expanded["local_changes"][1] = json!(0);
+        assert_eq!(read(&v).unwrap().params.local_changes, [-0.2, 0.0]);
+        v["solution"]["anny_parameters"]["phenotype"]["gender"] = json!(1.0_f64.next_down());
+        assert!(read(&v).is_err());
     }
     #[test]
     fn rejected_missing_or_contradictory_evidence_never_yields_a_shape() {

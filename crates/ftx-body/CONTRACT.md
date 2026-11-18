@@ -238,7 +238,8 @@ all sparse, reordered and repeated-index rows retain the indexed path. The file 
 native/browser importer. It checks an ACCEPTED `ftx-body-fit/1` report against the
 caller-supplied digest of the same array-verified pinned model, reconstructs the
 named parameters, checks declared wearer age/sex, and recomputes MODEL_FIT tape
-predictions at 35 degrees. It retains source residuals, exact report/request
+predictions at 35 degrees. Parameter bounds and coefficients compare by exact numeric
+value, including when a browser serializes `1.0` as `1`. It retains source residuals, exact report/request
 identities and signed comparisons with the supplied target sigma without refitting or inventing
 uncertainty. A reused accepted shape has no new fitting weights or normalized fitting residuals.
 Measurements must already be validated and fused by the caller. Missing anatomy
