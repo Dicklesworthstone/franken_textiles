@@ -3,6 +3,9 @@
 import dynamic from "next/dynamic";
 import {useEffect,useMemo,useState} from "react";
 import InlineFilm from "../InlineFilm";
+import SiteHeader from "../site/SiteHeader";
+import SiteFooter from "../site/SiteFooter";
+import Crumbs from "../site/Crumbs";
 import type {Model} from "./Scene";
 import {loadSurface,loadTopology,section,type Layout,type Cut} from "./surface";
 
@@ -74,8 +77,8 @@ export default function TrouserStudy({study}:{study:Study}){
   const choices=study.cases.filter(r=>station==="Elastic"?r.posture==="standing":
     !r.id.startsWith("elastic-")&&(!cut||!r.refusal));
   if(station==="Elastic")choices.sort((a,b)=>a.stiffness-b.stiffness);
-  return <main className="ts-page">
-    <header className="ts-nav"><a href="/" aria-label="FrankenTextiles home"><span className="mark" aria-hidden="true"><i/><i/><i/><i/></span> FrankenTextiles</a><a href="/sections/studies/">Drape gallery ↗</a></header>
+  return <><SiteHeader/><main id="main" className="ts-page">
+    <Crumbs trail={[["Exhibition","/"],["Drape gallery","/#studies"],["Room to move"]]}/>
     <div className="ts-wrap">
       <header className="ts-heading"><div><p className="ts-kicker">The trouser study</p><h1>Room to <em>move.</em></h1></div>
         <p>One pattern, seven cut pieces. Bend the form, change the elastic, or take a section through the folds.</p></header>
@@ -111,5 +114,5 @@ export default function TrouserStudy({study}:{study:Study}){
         <p>The gap is the solver’s mean seat-ring clearance. Negative waistband shift means the band dropped. The slice uses display geometry rounded to 0.1 mm. Its left-to-right span is a geometric dimension across the section. Physical fit requires a sewn sample.</p>
         <a href="/exhibits/trouser-study/study.json" download>Download the run summaries and synthetic inputs ↓</a></details>
     </div>
-  </main>;
+  </main><SiteFooter/></>;
 }

@@ -90,6 +90,9 @@ bun run deploy
 - `frankentextiles-www` (`www-redirect/`) answers `www.franken-textiles.com` with a permanent redirect
   to the same path on the bare domain.
 
+Afterwards, `sh scripts/check-deploy.sh` confirms the published site: page statuses, the `www` and
+HTTPS redirects, byte-range answers for the films, caching and the content security policy.
+
 An API token needs the *Workers Scripts: Edit* account permission, and *Workers Routes: Edit* and
 *DNS: Edit* on the zone so Wrangler can attach the two custom domains. Leave `FTX_SITE_ORIGIN` unset
 for this build, so canonical links and share-card URLs name `franken-textiles.com`.
