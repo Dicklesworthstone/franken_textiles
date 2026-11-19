@@ -1,3 +1,38 @@
+# Cloudflare applies these to the static files in out/. `next dev` does not read this file.
+
+# Build output is content-hashed: a changed file gets a new name, so the old one may be kept forever.
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Films, geometry, patterns and the wasm module keep their names between releases.
+# Serve the cached copy for an hour, then refresh it in the background.
+/media/*
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/exhibits/*
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/fitted-bodies/*
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/patterns/*
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/workbench/pkg/*
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/icons/*
+  Cache-Control: public, max-age=86400
+
+# Every page. The content policy keeps requests on this site: scripts, images, films and data may
+# only come from here, so a page cannot send a visitor's pattern, measurements or photographs
+# anywhere else. 'unsafe-inline' is required by the statically exported pages and the workbench
+# viewers; 'wasm-unsafe-eval' lets the Rust module compile; scripts from data: are the fold viewer's
+# own bundled three.js modules, which it carries inside its single file.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: SAMEORIGIN
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Strict-Transport-Security: max-age=15552000
+  Content-Security-Policy: default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'
+
+# Share-card routes have no file extension, so their type is stated here.
 /sections/:section/opengraph-image
   Content-Type: image/png
 /sections/:section/twitter-image

@@ -5,7 +5,7 @@
     "dev": "next dev",
     "workbench": "sh scripts/stage-workbench.sh",
     "build": "bun run workbench && next build",
-    "deploy": "bun run build && wrangler deploy",
+    "deploy": "bun run build && wrangler deploy && wrangler deploy --config www-redirect/wrangler.jsonc",
     "films": "node scripts/render-films.mjs"
   },
   "dependencies": {

@@ -68,6 +68,10 @@ node_modules/
 # Next.js gallery build products and the packaged copy of the Rust workbench.
 /showcase/.next/
 /showcase/.wrangler/
+# Wrangler reads a Cloudflare API token from here; it must never be committed.
+/showcase/.env
+/showcase/.env.*
+/showcase/.dev.vars
 /showcase/out/
 /showcase/public/workbench/
 /showcase/next-env.d.ts

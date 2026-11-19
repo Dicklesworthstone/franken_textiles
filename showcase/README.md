@@ -79,14 +79,29 @@ For a prebuilt release from this checkout, set `FTX_WASM_ARTIFACT` to its absolu
 ## Publish on Cloudflare
 
 ```sh
-bun run build
-bunx --no-install wrangler deploy
+export CLOUDFLARE_API_TOKEN=...   # or run `bunx --no-install wrangler login` in a terminal with a browser
+bun run deploy
 ```
 
-`wrangler.jsonc` serves the static Next.js export from `out/` as the
-`frankentextiles-studio` Worker and binds its custom domain to `franken-textiles.com`.
-Authenticate Wrangler to the Cloudflare account that owns the zone before publishing.
-The site serves its own fonts, videos, geometry and workbench assets.
+`bun run deploy` builds the site and publishes two Workers to the Cloudflare account that owns the zone:
+
+- `frankentextiles-studio` (`wrangler.jsonc`) serves the static Next.js export from `out/` at
+  `franken-textiles.com`.
+- `frankentextiles-www` (`www-redirect/`) answers `www.franken-textiles.com` with a permanent redirect
+  to the same path on the bare domain.
+
+An API token needs the *Workers Scripts: Edit* account permission, and *Workers Routes: Edit* and
+*DNS: Edit* on the zone so Wrangler can attach the two custom domains. Leave `FTX_SITE_ORIGIN` unset
+for this build, so canonical links and share-card URLs name `franken-textiles.com`.
+
+`public/_headers` sets long-lived caching for the hashed build output, an hour for films, geometry
+and the wasm module, and a content security policy that keeps every request on the site itself.
+A workbench page therefore cannot send a pattern, measurements or a photograph anywhere else. Cloudflare
+serves the workbench pages without their `.html` extension and redirects the longer form.
+
+The site serves its own fonts, videos, geometry and workbench assets. Besides the exhibition it has
+`/how-it-works/`, `/get-started/`, a `robots.txt`, a sitemap and a web manifest. The commands printed on
+`/get-started/` were run against this repository; rerun them before changing that page.
 
 ## Share a section
 

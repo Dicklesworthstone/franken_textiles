@@ -1,0 +1,11 @@
+{
+  // A second, tiny Worker so the www host redirects without putting a script in front of the site's static files.
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "frankentextiles-www",
+  "main": "index.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "www.franken-textiles.com", "custom_domain": true }
+  ]
+}

@@ -22,6 +22,10 @@ for (const [name,id] of Object.entries(tools)) {
     tags.push(meta(attr,network+":image",new URL("/workbench/social/"+filename,origin).href),meta(attr,network+":image:alt",describePlate(id)));
     if(network==="og") tags.push(meta(attr,"og:image:type","image/png"),meta(attr,"og:image:width","1200"),meta(attr,"og:image:height","630"));
   }
-  const source=await readFile(`../web/${name}.html`,"utf8");
+  // Cloudflare serves these pages without their extension, so that is the address to index.
+  const canonical=new URL(name==="index"?"/workbench/":"/workbench/"+name,origin).href;
+  tags.push(`<link rel="canonical" href="${escape(canonical)}">`,meta("property","og:url",canonical),meta("property","og:site_name","FrankenTextiles"));
+  const icons='<link rel="icon" href="/favicon.ico" sizes="32x32"><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-icon.png">';
+  const source=(await readFile(`../web/${name}.html`,"utf8")).replace('<link rel="icon" href="data:,">',icons);
   await writeFile(`${out}/${name}.html`,source.replace("</head>",tags.join("\n")+"\n</head>"));
 }
