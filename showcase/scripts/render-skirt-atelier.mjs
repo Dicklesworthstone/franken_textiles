@@ -11,15 +11,33 @@ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTA
   args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
 try{
   const page=await browser.newPage({viewport:{width:1104,height:620},reducedMotion:"reduce",userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
+  page.setDefaultTimeout(120000);
   await page.goto(new URL("/studies/skirt/?capture=film",process.env.FTX_STUDIO_URL||"http://127.0.0.1:3000").href);
   const room=page.locator(".sa-room"),shot=page.locator(".sa-canvas canvas");
   await page.locator('canvas[data-run="flare-680"]').waitFor();await page.evaluate(()=>document.fonts.ready);
-  const alpha=await page.evaluate(()=>{window.ftxSkirtCamera(.34);return document.querySelector(".sa-canvas canvas").toDataURL("image/png").split(",")[1];});
-  const buf=Buffer.from(alpha,"base64"),{width,height}=await sharp(buf).metadata();
-  await sharp(buf).extract({left:Math.floor((width-height*.81)/2),top:0,width:Math.floor(height*.81),height}).webp({quality:94}).toFile(resolve(out,"form.webp"));
+  async function poster(filename){
+    const alpha=await page.evaluate(()=>{window.ftxSkirtCamera(.34);return document.querySelector(".sa-canvas canvas").toDataURL("image/png").split(",")[1];});
+    const buf=Buffer.from(alpha,"base64"),{width,height}=await sharp(buf).metadata();
+    const crop=Math.min(width,Math.floor(height*.81));
+    if((await sharp(buf).stats()).channels[3].max===0)throw Error("Empty garment capture");
+    await sharp(buf).extract({left:Math.floor((width-crop)/2),top:0,width:crop,height}).webp({quality:94}).toFile(resolve(out,filename));
+  }
+  if(process.argv.includes("--posters-only")){
+    const study=await (await page.request.get(new URL("/atelier/study.json",page.url()).href)).json();
+    const requested=process.argv.slice(process.argv.indexOf("--posters-only")+1);
+    for(const key of requested.length?requested:Object.keys(study.runs)){
+      if(!study.runs[key])throw Error("Unknown skirt run "+key);
+      const [cut,waist]=key.split("-");
+      await page.goto(new URL(`/studies/skirt/?capture=poster&cut=${cut}&waist=${waist}`,page.url()).href,{waitUntil:"domcontentloaded"});
+      await page.locator(`canvas[data-run="${key}"][data-surface="Check"]`).waitFor();
+      await poster(key==="flare-680"?"form.webp":key+".webp");
+    }
+    await browser.close();process.exit(0);
+  }
+  await poster("form.webp");
   await page.addStyleTag({content:`
     .sa-room{position:fixed!important;inset:0!important;z-index:1000}.sa-inside{height:100%;max-width:none;padding:0 50px;grid-template-columns:43% 57%}
-    .sa-intro{display:block;padding:0}.sa-intro fieldset,.sa-form-toggle,.sa-deck,.sa-fit,.sa-display figcaption,.sa-measure,nextjs-portal{display:none}
+    .sa-intro{display:block;padding:0}.sa-intro fieldset,.sa-view-controls,.sa-deck,.sa-fit,.sa-display figcaption,nextjs-portal{display:none}
     .sa-intro h1{font-size:94px}.sa-intro .sa-label{font-size:12px}.sa-intro .film-reading{margin-top:24px;color:#fff0ce;font:18px var(--sans);line-height:1.5}
   `});
   await page.locator(".sa-intro").evaluate(el=>{

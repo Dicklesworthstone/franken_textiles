@@ -2,7 +2,7 @@
 
 A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
 
-- **Change the skirt cut.** At `/studies/skirt/`, compare the two six-gore skirts on the same fitted adult figure. The hem overlay, replay, residuals and printable patterns come from the native runs.
+- **Change the skirt cut.** At `/studies/skirt/`, compare column and flared skirts graded to the selected adult waist. Inspect the bound edge up close, then compare the body and garment sections on the same horizontal plane. Each published size has its own native trajectory, flat source and full-size A4 pattern.
 - **Change the wearer and raise the arms.** The drape room on the homepage and `/sections/studies/` shows
   the same bolero on synthetic Anny forms fitted to 48, 52 and 54 cm chest targets. Choose
   a 35°, 75° or 90° arm pose, turn the figure, or replay the flat pieces joining. At the
@@ -38,6 +38,14 @@ downloadable H.264 films, play muted while visible, pause offscreen and respect
 reduced motion. The cover is an AI-generated illustration. The films show the actual exhibits.
 
 ## Print the garments
+
+The skirt generator builds new workspaces with `python3 showcase/scripts/prepare-skirt-atelier.py WORK --inputs`.
+Use `WORK --solve CUT WAIST_MM` for each cut and size, then `WORK --package OUTPUT`. Packaging checks the
+flat waist, joined sewing lines, truing and printed calibration squares. Only settled endpoints with zero gating
+flags enter the cut selector. From `showcase/`, `node scripts/render-skirt-atelier.mjs NEW_DIR --posters-only`
+captures every published grade. Omit `--posters-only` to record the film. The generated Glen check in
+`public/atelier/glen-check.webp` depicts a 16 cm square of oatmeal, chestnut and charcoal yarn with a rust
+overcheck. It follows the flat panel coordinates. All three surface finishes share the native synthetic sheet mechanics.
 
 The gallery and film players link to tiled A4 sewing patterns. Print at actual size and measure both squares on the guide, 100 mm and 4 inches. The cutting studio's PDF follows the draft that was transferred into it.
 
