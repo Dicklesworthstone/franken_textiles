@@ -13,10 +13,11 @@ import TorsoSlice from "../construction/TorsoSlice";
 
 const Making = dynamic(() => import("../atelier3d/SolverDrape"), { ssr: false });
 
-// A plain-weave cotton in the fitting room's green, self-lined. The colour is for display; the drape's own
-// fabric constants are in the note below.
+// A plain-weave cotton in the fitting room's sprig print, self-lined. The print runs with each piece's grain, so
+// it shows how the cloth turns and gathers. Colour and print are for display; the drape's own fabric constants
+// are in the note below.
 const looks: Record<string, DrapeLook> = {
-  cotton: { fabric: { colour: "#0f5f4d", lining: "#0c4a3c", sheen: "#5fb59b", weave: "plain", yarnPitchMm: 0.7, thickness: 0.0012, nap: 0.3, wrinkleMm: 14 }, edge: "hem" },
+  cotton: { fabric: { colour: "#0e6766", lining: "#0b5352", sheen: "#7fc4b4", weave: "plain", yarnPitchMm: 0.7, thickness: 0.0012, nap: 0.3, wrinkleMm: 14, print: "sprig" }, edge: "hem" },
 };
 const cameras = ["Full length", "Bodice", "Waist profile", "Back"] as const;
 const views: Record<(typeof cameras)[number], DrapeView> = {

@@ -62,6 +62,40 @@ export function weaveMaps(kind: WeaveKind, anisotropy = 8) {
 /** Texture repeats per metre of cloth for a given yarn pitch. */
 export const weaveRepeat = (yarnPitchMm: number) => 1000 / (THREADS * yarnPitchMm);
 
+/** Side of one repeat of [`sprigPrint`] on the cloth, in metres. */
+export const PRINT_TILE_M = 0.33;
+
+/** A printed cotton: flower sprigs scattered on a teal ground, as one tile that repeats without an edge. */
+export function sprigPrint() {
+  const tau = Math.PI * 2;
+  const canvas = document.createElement("canvas"); canvas.width = canvas.height = 512;
+  const c = canvas.getContext("2d")!;
+  c.fillStyle = "#0e6766"; c.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 512; i += 3) {
+    c.fillStyle = i % 2 ? "rgba(244,250,213,.10)" : "rgba(22,43,55,.10)"; c.fillRect(i, 0, 1, 512);
+    c.fillStyle = "rgba(243,240,211,.07)"; c.fillRect(0, i, 512, 1);
+  }
+  function leaf(x: number, y: number, angle: number, length: number, color: string) {
+    c.save(); c.translate(x, y); c.rotate(angle); c.fillStyle = color; c.beginPath();
+    c.ellipse(0, -length * .5, length * .20, length * .57, 0, 0, tau); c.fill(); c.restore();
+  }
+  // Tile the same sprig across each margin so the fabric repeats without a hard edge.
+  for (const [x, y, s, angle] of [[49, 29, .78, .48], [178, 174, .85, -.55], [375, 94, .95, .18], [245, 384, .83, .46], [477, 349, .72, -.73], [50, 481, .65, -.3]]) {
+    for (const dx of [-512, 0, 512]) for (const dy of [-512, 0, 512]) {
+      c.save(); c.translate(x + dx, y + dy); c.rotate(angle); c.scale(s * 1.43, s * 1.43);
+      c.strokeStyle = "#cfbc81"; c.lineWidth = 2; c.beginPath(); c.moveTo(0, 36); c.quadraticCurveTo(-10, 8, 0, -21); c.stroke();
+      leaf(-3, 21, -.88, 19, "#a4b785"); leaf(-3, 8, .75, 17, "#9dba97"); leaf(-4, 1, -.73, 15, "#b0c394");
+      for (let p = 0; p < 6; p++) leaf(0, -21, p * tau / 6, 13, p % 2 ? "#f8c49c" : "#fff0c5");
+      c.strokeStyle = "#b4b08a"; c.lineWidth = 1.65; c.beginPath(); c.moveTo(-4, 11); c.quadraticCurveTo(5, 1, 13, -2); c.stroke();
+      for (let p = 0; p < 5; p++) leaf(14, -3, p * tau / 5 + .7, 6.8, "#e79271");
+      c.fillStyle = "#cf714c"; c.beginPath(); c.arc(0, -21, 3.6, 0, tau); c.fill(); c.restore();
+    }
+  }
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace; map.wrapS = map.wrapT = THREE.RepeatWrapping; map.anisotropy = 4;
+  return map;
+}
+
 export interface Fabric {
   /** Face colour of the cloth. */
   colour: string;
@@ -78,6 +112,11 @@ export interface Fabric {
   nap?: number;
   /** Wavelength in millimetres of the fine wrinkles drawn where the cloth is compressed. A stiffer cloth wrinkles wider. */
   wrinkleMm?: number;
+  /**
+   * A print on the face, in place of the plain colour. It is laid out in flat-pattern coordinates, so it runs with
+   * each piece's grain, breaks at the seams as a cut print does, and follows the cloth as it drapes.
+   */
+  print?: "sprig";
 }
 
 export const fabrics = {
@@ -104,8 +143,9 @@ export function clothMaterial(fabric: Fabric, reverse = false, inject?: ClothSha
   maps.normal.repeat.set(repeat, repeat);
   // Cloth is matte: almost no mirror-like highlight, and a soft return of light from the fibres at grazing
   // angles. A tight highlight is what makes a smooth simulated surface read as plastic.
+  const print = fabric.print && !reverse ? sprigPrint() : null;
   const material = new THREE.MeshPhysicalMaterial({
-    color: reverse ? fabric.lining : fabric.colour,
+    color: reverse ? fabric.lining : print ? "#ffffff" : fabric.colour,
     map: maps.colour, normalMap: maps.normal, normalScale: new THREE.Vector2(0.7, 0.7),
     roughness: 1, metalness: 0, specularIntensity: 0.16,
     sheen: reverse ? 0.2 : fabric.nap ?? 0.6, sheenRoughness: 0.85, sheenColor: fabric.sheen,
@@ -114,12 +154,13 @@ export function clothMaterial(fabric: Fabric, reverse = false, inject?: ClothSha
   // The scene may change these while it runs (the gain is zero while pieces are still being assembled).
   const uniforms = { wrinkleLength: { value: (fabric.wrinkleMm ?? 11) / 1000 }, wrinkleGain: { value: 0.62 } };
   material.onBeforeCompile = shader => {
-    Object.assign(shader.uniforms, uniforms, inject?.uniforms, { yarnsPerMetre: { value: 1000 / fabric.yarnPitchMm } });
+    Object.assign(shader.uniforms, uniforms, inject?.uniforms, { yarnsPerMetre: { value: 1000 / fabric.yarnPitchMm } },
+      print ? { clothPrint: { value: print } } : null);
     shader.vertexShader = "attribute float fold; attribute vec2 press; varying vec2 clothMetres; varying float clothFold; varying vec2 clothPress;\n"
       + (inject?.vertexHead ?? "") + shader.vertexShader.replace(
       "#include <begin_vertex>", "#include <begin_vertex>\nclothMetres = uv; clothFold = fold; clothPress = press;\n" + (inject?.vertexBody ?? ""));
     shader.fragmentShader = `varying vec2 clothMetres; varying float clothFold; varying vec2 clothPress;
-uniform float wrinkleLength; uniform float wrinkleGain; uniform float yarnsPerMetre;
+uniform float wrinkleLength; uniform float wrinkleGain; uniform float yarnsPerMetre;${print ? " uniform sampler2D clothPrint;" : ""}
 ${inject?.fragmentHead ?? ""}
 float clothHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float clothNoise(vec2 p){
@@ -138,7 +179,8 @@ vec2 clothWrinkle(vec2 at, vec2 across){
   float seen = 1. - smoothstep(1., 2.4, fwidth(phase));     // gone before they are finer than a pixel
   return vec2(cos(phase) * seen, mix(.5, .5 - .5 * cos(phase), seen));
 }
-` + shader.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>
+` + shader.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>${print ? `
+  diffuseColor.rgb *= texture2D(clothPrint, clothMetres * ${(1 / PRINT_TILE_M).toFixed(4)}).rgb;` : ""}
   // Uneven dye take-up and nap at a few centimetres, not a flat fill.
   float mottle = clothNoise(clothMetres * 38.) * .62 + clothNoise(clothMetres * 131.) * .38;
   diffuseColor.rgb *= .93 + .14 * mottle;
@@ -166,6 +208,6 @@ vec2 clothWrinkle(vec2 at, vec2 across){
   ${inject?.colour ?? ""}`).replace("#include <normal_fragment_maps>", `#include <normal_fragment_maps>
   normal = clothBump(-vViewPosition, normal, wrinkleHeight);`);
   };
-  material.customProgramCacheKey = () => "atelier-cloth-2-" + (reverse ? "reverse-" : "face-") + (inject?.key ?? "plain");
-  return { material, uniforms, dispose() { material.dispose(); maps.colour.dispose(); maps.normal.dispose(); } };
+  material.customProgramCacheKey = () => "atelier-cloth-3-" + (reverse ? "reverse-" : "face-") + (print ? "print-" : "") + (inject?.key ?? "plain");
+  return { material, uniforms, dispose() { material.dispose(); maps.colour.dispose(); maps.normal.dispose(); print?.dispose(); } };
 }
