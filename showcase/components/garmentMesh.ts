@@ -16,7 +16,7 @@ export type Exhibit = {
 };
 
 // One small repeat tile, anchored to the flat board so the weave follows the panels.
-function weaveTexture() {
+export function weaveTexture() {
   const side = 64;
   const data = new Uint8Array(side * side * 4);
   for (let y = 0; y < side; y++) {

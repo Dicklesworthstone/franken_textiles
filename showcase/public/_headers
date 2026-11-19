@@ -6,3 +6,13 @@
   Content-Type: image/png
 /experiments/:kind/twitter-image
   Content-Type: image/png
+
+# Serve the exported pages and local workbenches without edge-injected scripts.
+/
+  Cache-Control: public, max-age=0, must-revalidate, no-transform
+/:page/
+  Cache-Control: public, max-age=0, must-revalidate, no-transform
+/:group/:page/
+  Cache-Control: public, max-age=0, must-revalidate, no-transform
+/workbench/:page
+  Cache-Control: public, max-age=0, must-revalidate, no-transform

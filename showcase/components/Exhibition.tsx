@@ -23,6 +23,9 @@ const wardrobe = [
 
 const films = [
   { id:"drape-room", title:"Raising the sleeve", detail:"Body & cloth study" },
+  { id:"trouser-posture", title:"Bending the knee", detail:"Trouser posture" },
+  { id:"trouser-elastic", title:"Holding the waist", detail:"Elastic casings" },
+  { id:"trouser-section", title:"Inside the folds", detail:"Cross-section" },
   { id:"studio-tour", title:"From pattern to stitch", detail:"Studio tour" },
   { id:"wardrobe-reel", title:"Inside the wardrobe", detail:"Exhibition reel" },
   ...wardrobe.map(s=>({ id:"wardrobe-"+s.id, title:s.title, detail:s.detail })),
@@ -192,6 +195,10 @@ export default function Exhibition({section}: {section?: string}) {
     else if (params.get("film") === "studio-tour") setItem({ tour: true });
     else if (params.get("film") === "wardrobe-reel") setItem({ reel: true });
     else if (params.get("film") === "drape-room") setItem({ poseRoom: true });
+    else if (params.get("film")?.startsWith("trouser-")) {
+      const selection=films.find(f=>f.id===params.get("film"));
+      if(selection){setScreening(selection);setFilmChosen(true);projection.current?.scrollIntoView({block:"start"});}
+    }
     else if (params.get("film") === "rig-cylinder") setItem({ rig: "cylinder" });
     else if (params.get("film") === "rig-strip") setItem({ rig: "strip" });
     else {

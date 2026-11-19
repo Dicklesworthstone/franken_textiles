@@ -69,6 +69,7 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
         <fieldset><legend>Arm angle <small>from the side</small></legend><div className="dr-options">{angles.map(a=><button key={a} aria-label={a+" degree arm pose"} aria-pressed={angle===a} onClick={()=>{if(a!==angle){beginChange();setAngle(a);}}}>{a}°</button>)}</div></fieldset>
         <div className="dr-patterns"><span>Full-size sewing patterns</span><a className="dr-pattern" download href="/patterns/bolero.pdf">Bolero <span aria-hidden="true">↓</span></a>
           <a className="dr-pattern" download href="/patterns/trousers.pdf">Trousers <span aria-hidden="true">↓</span></a></div>
+        <a className="dr-next-study" href="/studies/trousers/">Explore the trouser cross-sections <span aria-hidden="true">↗</span></a>
       </div>
       <figure className="dr-display">
         <div className="dr-stage"><div className="dr-stage-head"><span>Zouave bolero</span><button className="dr-length" disabled={!shown||!lower.available} aria-pressed={full} onClick={()=>setFull(v=>!v)}>{full?"Jacket detail":"Full figure"}</button></div>

@@ -34,7 +34,7 @@ A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
   in the workbench to inspect its corners. The starting exercise names three pieces and sets the back hem to 180 mm.
   The print link alongside the exercise opens the native bolero draft.
 
-The chart-based drafts and recorded drapes are separate examples. The homepage has ten
+The chart-based drafts and recorded drapes are separate examples. The homepage has thirteen
 downloadable H.264 films. Gallery previews play muted while visible, pause offscreen and respect
 reduced motion. The cover is an AI-generated illustration. The films show the actual exhibits.
 
@@ -180,3 +180,41 @@ sh scripts/render-wardrobe-reel.sh /path/to/new-reel
 The [ranked exhibit ideas](../.beads/showcase-ideas.jsonl) include acceptance checks and dependencies.
 The next garment studies are a wrap skirt with adjustable overlap, a period waistcoat with working
 pocket details, and a second checked sundress draft that corrects insufficient ease.
+
+## Room to move
+
+At `/studies/trousers/`, three benches share one seven-piece pattern and a fitted 92 cm synthetic
+form. The posture bench compares two shallow bends with standing. The full seat and squat open
+as body-only views with their native refusal. The elastic bench compares casing stiffness in
+newtons. Changing 5 N to 60 N reduces the final waistband drop from 16.6 mm to 2.8 mm.
+The section bench cuts both meshes at the same height above the sole and draws the intersection
+at a common scale. All three benches link to the original thirteen-page sewing PDF.
+
+From the repo root, the following reproduces the nine inputs, six drapes and three refusals with
+the pinned model installed. The second command records three six-second H.264 films from a
+running site into a new directory.
+
+```sh
+python3 showcase/scripts/prepare-trouser-study.py --solve /path/to/new-runs /path/to/new-surfaces
+FTX_STUDIO_URL=http://localhost:3000 CHROMIUM_EXECUTABLE=/path/to/chrome node showcase/scripts/render-trouser-study.mjs /path/to/new-films
+```
+
+### Ranked exhibit ideas
+
+| Rank | Exhibit | What the visitor can learn or make | Issue |
+| --- | --- | --- | --- |
+| 1 | Trouser cross-sections · shipped | Slide a plane through the folds to see exactly where the cloth leaves room around each leg. | ftx-oew |
+| 2 | Elastic waistband · shipped | Compare casing stiffness with the distance the same waistband actually drops. | ftx-1ef |
+| 3 | Trouser posture · shipped | Examine shallow bends and see where deep flexion prevents the solver from starting. | ftx-ksp |
+| 4 | Wash and recut | Turn the measured warp and weft shrinkage after five washes into a compensated cutting pattern. | ftx-8mf |
+| 5 | Heat through layers | Build an exploded stack of measured sheets, change the boundary temperatures and inspect the temperature drop through each layer. | ftx-6ic |
+| 6 | Use the remnant | Fit a second garment into the exact polygon left on the cutting table after the first. | ftx-k4g |
+| 7 | Repair a seam | Walk mismatched sewing lines, make an alteration and see if they join after the correction. | ftx-9r5 |
+| 8 | Redraft the sundress | Change the ease that triggered a flat warning and print the second cut. | ftx-ahm |
+| 9 | Assemble a paper pattern | Arrange actual PDF tiles against their registration marks and master outline. | ftx-qiu |
+| 10 | Follow the braid in 3D | Pause a registered embroidery path at its placement stop and inspect that point on the dolman. | ftx-f9t |
+| 11 | Compare two dress drapes | Orbit two native dress runs at the same scale once qualified garment surfaces are available. | ftx-9zm |
+| 12 | Start the swatches sliding | Put a pair of surfaces on a virtual sled and find the transition from sticking to sliding. | ftx-13b |
+| 13 | Turn the lining out | Inspect facings and construction order inside a lined jacket. | ftx-z55 |
+| 14 | Tie a wrap skirt | Change its overlap and see how that changes coverage on the form. | ftx-kod |
+| 15 | Build a period waistcoat | Examine the working pocket and reconstruct its pieces from period references. | ftx-n4x |
