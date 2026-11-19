@@ -1031,6 +1031,12 @@ fn add_run_fields(
         "gather_zone_vertices".into(),
         json!(w.iter().filter(|&&v| v < 1.0).count()),
     );
+    // The reference's cloth resists compression as stiffly as tension (factor 1). A softer factor is a
+    // different cloth model, in which cloth shorter than its pattern stands for folds finer than the
+    // mesh, so a report made with one names it. Reports at the reference's factor are unchanged.
+    if opts.compression < 1.0 {
+        o.insert("compression_factor".into(), json!(opts.compression));
+    }
     o.insert("relax_iters".into(), json!(scene.start.relax_iterations));
     if let Some(original) = scene.start_backtracked_from {
         o.insert(

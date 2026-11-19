@@ -107,6 +107,12 @@ Accepted reports retain body/self contact counts, sampled active gaps and final 
 adding simulation steps. Pressure remains unavailable without a justified physical contact area; a quiet
 window does not establish physical grip or fit. See the [drape contract](crates/ftx-drape/CONTRACT.md).
 
+The reference cloth resists being shortened as stiffly as being stretched, so on a mesh too coarse to fold,
+loose cloth stands away as a smooth shell. `drape --compression F` (0 < F ≤ 1, default 1) lets it shorten along
+warp and weft instead, which stands for folds finer than the mesh without resolving them. It is a different
+cloth model with an authored factor; reports made with it carry `compression_factor`, and softer values solve
+more slowly.
+
 For a Newton step that stalls, `drape --time-subdivision` or `round --sim --time-subdivision`
 can retry smaller intervals without loosening the convergence tolerance. Optional
 `--subdivision-max-halvings 8` and `--subdivision-max-trials 4096` bound the retries; the trial

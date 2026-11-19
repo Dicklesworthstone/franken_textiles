@@ -426,6 +426,14 @@ The report records `fabric: {areal_kg_m2, tensile_N_m, bending_Nm}` and `area_m2
   reference sets structural stiffness to `base + w·(max − base)`, with tension base = max = E_t·L and compression
   base = 0.03·E_t·L, max = E_t·L. So **compression = E_t·L·(0.03 + 0.97·w)**.
 - **Why:** real gathers are pleats far smaller than the mesh.
+- **Measured limit (native solver, 2026-11-19): a longer zone does not make a gathered skirt hang.** An adult
+  sundress skirt gathered 1.3 to 1 on a 20 mm mesh leaves its waist seam sideways and drops as a box. Zones of
+  50, 200 and 300 mm gave centre-front waist clearances of 92.8, 101.0 and 100.7 mm (1 mm cloth contact), and a
+  zone longer than the skirt lowered the hem about 15 mm and kept the step. The step is carried by hoop
+  compression: the hanging skirt pulls its rim inward with about 1 N/m, and 3 % of an 8,000 N/m cloth over a
+  10 cm band resists with about 20 N/m. No zone-length option was added. `ftx drape --compression` (a native
+  option, default the reference's 1) softens compression everywhere instead: at 0.10 nothing changed, at 0.02 the
+  hem fell a further 6 to 16 mm and the skirt hangs as an A-line from the front, still stepped in profile.
 - **Report:** `gather_zone_vertices` = the count of vertices with w < 1.
 - **Evidence:** without gather zones, the 872 mm gathered trouser top pushed its 530 mm casing open by 40 % and the
   trousers slid off. With zones, gathered bands finish 2–10 % over their rest length; without, +11 to +59 %.

@@ -732,6 +732,11 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
             .parse()
             .map_err(|_| bad_input("--spacing-mm must be a positive distance in millimetres"))?;
     }
+    if let Some(factor) = args.options.get("compression") {
+        opts.compression = factor.parse().map_err(|_| {
+            bad_input("--compression must be a fraction of the tensile stiffness in (0, 1]")
+        })?;
+    }
     for (name, slot) in [
         ("sew", &mut opts.sew_steps),
         ("drape", &mut opts.drape_steps),
@@ -905,6 +910,7 @@ fn cmd_drape_bound(
             "model",
             "self-contact-mm",
             "spacing-mm",
+            "compression",
             "self-mu",
             "elastic-ea",
             "elastic-hold-steps",
@@ -1705,6 +1711,20 @@ mod tests {
         for value in ["0", "-1", "NaN", "inf", "fine"] {
             let args =
                 parse(&["drape", "no-pattern.json", "--spacing-mm", value].map(String::from))
+                    .unwrap();
+            assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        }
+    }
+
+    #[test]
+    fn compression_is_the_reference_stiffness_unless_asked_and_refuses_outside_its_range() {
+        let default = drape_options(&parse(&["drape".into()]).unwrap()).unwrap();
+        assert_eq!(default.compression, 1.0);
+        let args = parse(&["drape", "--compression", "0.02"].map(String::from)).unwrap();
+        assert_eq!(drape_options(&args).unwrap().compression, 0.02);
+        for value in ["0", "-0.1", "1.5", "NaN", "inf", "soft"] {
+            let args =
+                parse(&["drape", "no-pattern.json", "--compression", value].map(String::from))
                     .unwrap();
             assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
         }
