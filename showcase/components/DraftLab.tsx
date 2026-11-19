@@ -68,8 +68,8 @@ function Drawing({ piece, miniature = false, reference }: { piece: Piece; miniat
   </svg>;
 }
 
-type Result = Omit<Reply, "files" | "preview"> & { pieces: Piece[]; files: { url: string; name: string; type: string }[] };
-export type CutDraft = { program: string; label: string; pattern: string };
+type Result = Omit<Reply, "files" | "preview"> & { pieces: Piece[]; files: { url: string; blob: Blob; name: string; type: string }[] };
+export type CutDraft = { program: string; label: string; pattern: string; pdf: Blob };
 export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onPlanCut?: (draft: CutDraft) => void }) {
   const section = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(false);
@@ -121,10 +121,10 @@ export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onP
         try {
           if ("error" in data) throw new Error(data.error);
           const pieces = readPieces(data.preview);
-          const files = Object.entries(data.files).map(([type, file]) => ({
-            name: file.name, type, url: URL.createObjectURL(new Blob([file.bytes],
-              { type: type === "svg" ? "image/svg+xml" : "application/pdf" })),
-          }));
+          const files = Object.entries(data.files).map(([type, file]) => {
+            const blob = new Blob([file.bytes], { type: type === "svg" ? "image/svg+xml" : "application/pdf" });
+            return { name: file.name, type, blob, url: URL.createObjectURL(blob) };
+          });
           setResult({key:data.key,pieces,files,pattern:data.pattern,checks:data.checks,flat:data.flat,
             passed:data.passed,total:data.total,offTarget:data.offTarget});
           setProblem(undefined);
@@ -184,9 +184,10 @@ export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onP
       <div className="dl-downloads">{fresh?.files.map(f => <a href={f.url} download={f.name} key={f.type}>
         {f.type === "pdf" ? "A4 pattern PDF" : "Master SVG"} <span aria-hidden="true">↓</span>
       </a>)}</div>
-      {onPlanCut && fresh?.flat === "CONVERGED" && fresh.pattern &&
+      {onPlanCut && fresh?.flat === "CONVERGED" && fresh.pattern && fresh.files.some(f => f.type === "pdf") &&
         <button className="dl-plan-cut" type="button" onClick={() => onPlanCut({program,
-          label:`${preset.name} · ${height} cm · ${preset.label.toLowerCase()} ${value}${preset.unit}`, pattern:fresh.pattern})}>
+          label:`${preset.name} · ${height} cm · ${preset.label.toLowerCase()} ${value}${preset.unit}`, pattern:fresh.pattern,
+          pdf:fresh.files.find(f => f.type === "pdf")!.blob})}>
           Plan this cut <span aria-hidden="true">→</span>
         </button>}
     </div>

@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
+import type { CutDraft } from "./DraftLab";
 
 const DraftLab = dynamic(() => import("./DraftLab"));
 const CutLab = dynamic(() => import("./CutLab"));
@@ -13,9 +14,10 @@ const stations = [
   { id: "stitch", name: "Machine embroidery", short: "Stitch", action: "Follow the needle" },
 ] as const;
 
-export default function LabBench() {
-  const [current, setCurrent] = useState(0);
-  const [draft, setDraft] = useState<{ program: string; label: string; pattern: string }>();
+export default function LabBench({initialStation,heading:Heading="h2"}: {initialStation?: "draft" | "cut" | "stitch";heading?:"h1"|"h2"}) {
+  const initial = Math.max(0, stations.findIndex(s => s.id === initialStation));
+  const [current, setCurrent] = useState(initial);
+  const [draft, setDraft] = useState<CutDraft>();
   const [transfer, setTransfer] = useState(0);
   const [visited, setVisited] = useState<number[]>([]);
   const tabs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -25,25 +27,30 @@ export default function LabBench() {
   }
   useEffect(() => {
     const restore = () => {
-      const requested = new URLSearchParams(location.search).get("lab");
+      const requested = new URLSearchParams(location.search).get("lab") ?? location.pathname.split("/")[2];
       const idx = stations.findIndex(s => s.id === requested);
-      activate(idx < 0 ? 0 : idx);
+      activate(idx < 0 ? initial : idx);
     };
     restore();
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
-  }, []);
+  }, [initial]);
 
   function select(idx: number) {
     activate(idx);
     const url = new URL(location.href);
-    url.searchParams.set("lab", stations[idx].id);
-    url.hash = "studio";
+    if (url.pathname.startsWith("/sections/")) {
+      url.pathname = "/sections/" + stations[idx].id + "/";
+      url.searchParams.delete("lab");
+    } else {
+      url.searchParams.set("lab", stations[idx].id);
+      url.hash = "studio";
+    }
     history.replaceState(history.state, "", url);
   }
   const { id } = stations[current];
   return <section id="studio" className="paper studio-bench"><div className="wrap">
-    <div className="studio-intro"><div><p className="kicker">The worktable</p><h2>Hands-on studios<span>.</span></h2></div>
+    <div className="studio-intro"><div><p className="kicker">The worktable</p><Heading className="section-title"><a href="/sections/studio/">Hands-on studios<span>.</span></a></Heading></div>
       <p>Change a parameter. Inspect the result. Take the actual pattern, cutting marker, or stitch file with you.</p></div>
     <div className="station-tabs" role="tablist" aria-label="Choose a studio">
       {stations.map((s, i) => <button key={s.id} role="tab" id={`tab-${s.id}`}
@@ -75,5 +82,6 @@ export default function LabBench() {
     <div id="studio-stitch" className="station-body" role="tabpanel" aria-labelledby="tab-stitch" hidden={id !== "stitch"}>
       {visited.includes(2) && <StitchLab active={id === "stitch"}/>}
     </div>
+    <a className="station-permalink" href={`/sections/${id}/`}>Link to this studio ↗</a>
   </div></section>;
 }

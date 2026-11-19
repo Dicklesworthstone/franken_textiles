@@ -1,0 +1,8 @@
+/sections/:section/opengraph-image
+  Content-Type: image/png
+/sections/:section/twitter-image
+  Content-Type: image/png
+/experiments/:kind/opengraph-image
+  Content-Type: image/png
+/experiments/:kind/twitter-image
+  Content-Type: image/png

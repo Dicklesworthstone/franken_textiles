@@ -3,16 +3,17 @@
 import { useState } from "react";
 import "./trace-reveal.css";
 
-export default function TraceReveal() {
+export default function TraceReveal({heading:Heading="h2"}: {heading?:"h1"|"h2"}) {
   const [reveal, setReveal] = useState(53);
   return <section className="trace-reveal" id="tracing" aria-labelledby="trace-title"><div className="wrap trace-layout">
     <div className="trace-about">
       <p className="kicker">Raster tracing</p>
-      <h2 id="trace-title">Read the <em>lines.</em></h2>
+      <Heading className="section-title" id="trace-title"><a href="/sections/tracing/">Read the <em>lines.</em></a></Heading>
       <p>Slide across this synthetic bolero sheet to see the piece outlines, corners, and grain directions recovered by the Rust tracer.</p>
       <dl><div><dt>Pieces found</dt><dd>3</dd></div><div><dt>Scale</dt><dd>Unscaled</dd></div></dl>
       <a href="/workbench/trace.html?sample=bolero" className="trace-open">Trace this sheet <span aria-hidden="true">↗</span></a>
       <a className="trace-source" href="/labs/trace-bolero.png" download="bolero-practice-sheet.png">Download source PNG ↓</a>
+      <a className="trace-source" href="/patterns/bolero.pdf" download>Full-size bolero sewing pattern (A4 PDF) ↓</a>
     </div>
     <figure>
       <div className="trace-compare">

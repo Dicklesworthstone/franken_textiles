@@ -245,6 +245,7 @@ export default function StitchLab({ active }: { active: boolean }) {
       <div className="stitch-options"><label><input type="checkbox" checked={view === "needle"} onChange={e => setView(e.target.checked ? "needle" : "panel")}/> Needle loupe</label>
         <label><input type="checkbox" checked={travel} onChange={e => setTravel(e.target.checked)}/> Jump moves</label></div>
       {design && <a className="stitch-download" download={`ZOUAVE_BOLERO_${panel}_920_mm_stature_soutache.dst`} href={file}>Download this DST <span aria-hidden="true">↓</span></a>}
+      <a className="stitch-download" href="/patterns/bolero.pdf" download>Full-size bolero pattern PDF ↓</a>
     </div>
   </div>;
 }

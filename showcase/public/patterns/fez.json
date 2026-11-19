@@ -1,0 +1,355 @@
+{
+ "fabric": {
+  "areal_g_m2": 350,
+  "id": "felt",
+  "kind": "felt",
+  "name": "wool felt",
+  "width_mm": 900
+ },
+ "meta": {
+  "origin": "DRAFT",
+  "program": "drafting.fez",
+  "round": 0,
+  "sa_mm": 7,
+  "size_label": "920 mm stature",
+  "solved": {
+   "base_girth_mm": 496.2,
+   "height_mm": 96.0,
+   "sector_deg": 64.1,
+   "slant_mm": 97.5,
+   "top_girth_mm": 387.0
+  },
+  "style": {
+   "head_ease": 10.0,
+   "height_frac": 0.62,
+   "top_frac": 0.78
+  },
+  "title": "Fez (one-piece crown, round tip)"
+ },
+ "pieces": [
+  {
+   "cut": {
+    "qty": 1
+   },
+   "edges": [
+    {
+     "curve": {
+      "c": [
+       [
+        0.32672,
+        -0.09391
+       ],
+       [
+        0.67328,
+        -0.09391
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "b0",
+     "id": "base_0",
+     "sa": 0,
+     "to": "b1"
+    },
+    {
+     "curve": {
+      "c": [
+       [
+        0.32672,
+        -0.09391
+       ],
+       [
+        0.67328,
+        -0.09391
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "b1",
+     "id": "base_1",
+     "sa": 0,
+     "to": "b2"
+    },
+    {
+     "from": "b2",
+     "id": "back_r",
+     "to": "t2"
+    },
+    {
+     "curve": {
+      "c": [
+       [
+        0.32672,
+        0.0939
+       ],
+       [
+        0.67328,
+        0.09391
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "t2",
+     "id": "top_1",
+     "to": "t1"
+    },
+    {
+     "curve": {
+      "c": [
+       [
+        0.32672,
+        0.09391
+       ],
+       [
+        0.67328,
+        0.0939
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "t1",
+     "id": "top_0",
+     "to": "t0"
+    },
+    {
+     "from": "t0",
+     "id": "back_l",
+     "to": "b0"
+    }
+   ],
+   "grain": [
+    [
+     0.0,
+     -423.7377038494107
+    ],
+    [
+     0.0,
+     -365.2299874183205
+    ]
+   ],
+   "id": "crown",
+   "material": "felt",
+   "name": "FEZ CROWN",
+   "notches": [
+    {
+     "edge": "top_1",
+     "id": "n_top_1_0",
+     "s": 0.25,
+     "type": "V"
+    },
+    {
+     "edge": "top_1",
+     "id": "n_top_1_1",
+     "s": 0.75,
+     "type": "V"
+    },
+    {
+     "edge": "top_0",
+     "id": "n_top_0_0",
+     "s": 0.25,
+     "type": "V"
+    },
+    {
+     "edge": "top_0",
+     "id": "n_top_0_1",
+     "s": 0.75,
+     "type": "V"
+    }
+   ],
+   "note": "Stiffen with buckram or heavy fusible interfacing",
+   "role": "hat_crown",
+   "sim": false,
+   "vertices": {
+    "b0": [
+     -235.346,
+     -375.598
+    ],
+    "b1": [
+     0.0,
+     -443.24
+    ],
+    "b2": [
+     235.346,
+     -375.598
+    ],
+    "t0": [
+     -183.57,
+     -292.967
+    ],
+    "t1": [
+     0.0,
+     -345.727
+    ],
+    "t2": [
+     183.57,
+     -292.967
+    ]
+   }
+  },
+  {
+   "cut": {
+    "qty": 1
+   },
+   "drills": [
+    {
+     "d": 3,
+     "p": [
+      0.0,
+      0.0
+     ]
+    }
+   ],
+   "edges": [
+    {
+     "curve": {
+      "c": [
+       [
+        0.27614,
+        -0.27614
+       ],
+       [
+        0.72386,
+        -0.27614
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "p0",
+     "id": "q0",
+     "to": "p1"
+    },
+    {
+     "curve": {
+      "c": [
+       [
+        0.27614,
+        -0.27614
+       ],
+       [
+        0.72386,
+        -0.27614
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "p1",
+     "id": "q1",
+     "to": "p2"
+    },
+    {
+     "curve": {
+      "c": [
+       [
+        0.27614,
+        -0.27614
+       ],
+       [
+        0.72386,
+        -0.27614
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "p2",
+     "id": "q2",
+     "to": "p3"
+    },
+    {
+     "curve": {
+      "c": [
+       [
+        0.27614,
+        -0.27614
+       ],
+       [
+        0.72386,
+        -0.27614
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "p3",
+     "id": "q3",
+     "to": "p0"
+    }
+   ],
+   "grain": [
+    [
+     0,
+     -30.799346277257406
+    ],
+    [
+     0,
+     30.799346277257406
+    ]
+   ],
+   "id": "tip",
+   "material": "felt",
+   "name": "FEZ TIP",
+   "notches": [
+    {
+     "edge": "q0",
+     "id": "n_q0",
+     "s": 0.5,
+     "type": "V"
+    },
+    {
+     "edge": "q1",
+     "id": "n_q1",
+     "s": 0.5,
+     "type": "V"
+    },
+    {
+     "edge": "q2",
+     "id": "n_q2",
+     "s": 0.5,
+     "type": "V"
+    },
+    {
+     "edge": "q3",
+     "id": "n_q3",
+     "s": 0.5,
+     "type": "V"
+    }
+   ],
+   "note": "Tassel at the centre mark",
+   "role": "hat_tip",
+   "sim": false,
+   "vertices": {
+    "p0": [
+     0.0,
+     -61.599
+    ],
+    "p1": [
+     61.599,
+     0.0
+    ],
+    "p2": [
+     0.0,
+     61.599
+    ],
+    "p3": [
+     -61.599,
+     0.0
+    ]
+   }
+  }
+ ],
+ "schema": "fabric-pattern/1",
+ "seams": [
+  {
+   "a": "crown/back_r",
+   "b": "crown/back_l",
+   "id": "back",
+   "reverse": true
+  },
+  {
+   "a": "crown/top_1+top_0",
+   "b": "tip/q0+q1+q2+q3",
+   "id": "tip",
+   "reverse": true
+  }
+ ],
+ "style": "FEZ",
+ "units": "mm"
+}

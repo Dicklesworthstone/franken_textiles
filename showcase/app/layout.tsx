@@ -9,13 +9,7 @@ import "./style.css";
 export const metadata: Metadata = {
   title: "FrankenTextiles — The Pattern Room",
   description: "A hands-on sewing studio. Draft a pattern, plan a cutting layout, follow an embroidery needle, and inspect garments sewn in three dimensions.",
-  metadataBase: new URL("https://franken-textiles.com"),
-  openGraph: {
-    title: "The Pattern Room · FrankenTextiles",
-    description: "From flat pattern to finished stitch. Explore the open-source sewing studio in your browser.",
-    type: "website",
-    images: [{ url: "/media/atelier-cover.webp", alt: "Linen and paper patterns on the studio cutting table" }],
-  },
+  metadataBase: new URL(process.env.FTX_SITE_ORIGIN ?? "https://franken-textiles.com"),
 };
 
 export default function Layout({ children }: { children: React.ReactNode }) {

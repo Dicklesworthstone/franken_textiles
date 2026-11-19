@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import type { CutDraft as Draft } from "./DraftLab";
 import "./cut-lab.css";
 
 const garments = [["zouave_bolero", "Zouave bolero"], ["zouave_trousers", "Gathered trousers"], ["fez", "Fez cap"]];
@@ -11,7 +12,6 @@ type Marker = {
 };
 type Piece = { label: string; outline: string; grain: string; internal: string[]; drills: {x: number; y: number; r: number}[]; copy: number };
 type Preview = { plan: Marker; pieces: Piece[]; download: string; live: boolean; custom: boolean };
-type Draft = { program: string; label: string; pattern: string };
 
 function inspect(plan: Marker, live: boolean, custom: boolean): Preview {
   const document = new DOMParser().parseFromString(plan.svg, "image/svg+xml");
@@ -77,6 +77,13 @@ function CuttingBoard({ draft }: { draft?: Draft }) {
   const [garment, setGarment] = useState(draft ? "custom" : garments[0][0]);
   const custom = garment === "custom" ? draft : undefined;
   const program = custom?.program ?? garment;
+  const [customPdf, setCustomPdf] = useState("");
+  useEffect(() => {
+    if (!draft) return;
+    const url = URL.createObjectURL(draft.pdf);
+    setCustomPdf(url);
+    return () => URL.revokeObjectURL(url);
+  }, [draft]);
   const [material, setMaterial] = useState(materials[1][0]);
   const [copies, setCopies] = useState(2);
   const [selected, select] = useState(0);
@@ -152,6 +159,8 @@ function CuttingBoard({ draft }: { draft?: Draft }) {
         <div><dt>Cloth used by pieces</dt><dd>{ready ? (current.yield*100).toFixed(1)+"%" : "—"}</dd></div>
       </dl>
       {ready && preview && <a className="cut-save" href={preview.download} download={`${custom ? "custom-" : ""}${program}-${Math.round(current.width)}mm-${copies}x-marker.svg`}>Download marker SVG <span aria-hidden="true">↓</span></a>}
+      {ready && (!custom || customPdf) && <a className="cut-save" href={custom ? customPdf : `/patterns/chart-${program}.pdf`}
+        download={`${program}-A4.pdf`}>Full-size pattern PDF ↓</a>}
       <p className="cut-source">{ready && <a href={current.source} target="_blank" rel="noreferrer">Supplier width ↗</a>} Single-ply plan with a 4 mm cutting gap and 10 mm margins. SVG dimensions are full scale.</p>
     </div>
   </div>;

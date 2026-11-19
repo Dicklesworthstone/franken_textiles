@@ -40,6 +40,16 @@ try{
   }
   await pose(-.17,128,66);
   await writeFile(poster,await page.screenshot({type:"jpeg",quality:94}),{flag:"wx"});
+  await select("Blue","Dressed");
+  await page.setViewportSize({width:1000,height:850});
+  await pose(.24,151.4,47.6);
+  await writeFile(path.join(dest,"hussar.jpg"),await page.screenshot({type:"jpeg",quality:95}),{flag:"wx"});
+  if(process.env.HUSSAR_STILLS_ONLY==="1") {
+    console.log("Rendered the film poster and clean portrait in "+dest);
+    await browser.close();
+    process.exit(0);
+  }
+  await page.setViewportSize({width:1280,height:720});
   await page.evaluate(()=>{
     const plate=document.createElement("aside");plate.id="hussar-film-plate";
     plate.style.cssText="position:fixed;inset:auto 3.6% 3.8%;z-index:100;pointer-events:none;color:#f5efd9;display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid #d8c89d80;padding:8px 0 0;text-shadow:0 1px 4px #23332b;font:500 12px ui-monospace,monospace;letter-spacing:1.4px";
@@ -49,10 +59,10 @@ try{
   const encoder=spawn("ffmpeg",["-v","error","-n","-f","image2pipe","-framerate",String(fps),"-i","pipe:0","-an","-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-movflags","+faststart",output],{stdio:["pipe","ignore","inherit"]});
   const done=once(encoder,"close");encoder.stdin.on("error",()=>{});
   const shots=[
-    {reg:"Compare",layer:"Dressed",label:"BLUE AND YELLOW HUSSARS   /   1761",start:[-.17,128,66],end:[.12,100,110]},
-    {reg:"Blue",layer:"Dolman",label:"PUTBUS   /   BRAIDED DOLMAN",start:[-.5,126,33],end:[.16,127,38]},
+    {reg:"Blue",layer:"Dressed",label:"PUTBUS   /   BRAIDED DOLMAN",start:[.32,151,47],end:[-.21,140,54]},
+    {reg:"Compare",layer:"Dressed",label:"BLUE AND YELLOW HUSSARS   /   1761",start:[-.18,119,78],end:[.12,99,111]},
     {reg:"Compare",layer:"Pelisse",label:"TWO PELISSES   /   FUR-TRIMMED FRONTS",start:[-.37,118,49],end:[.34,117,54]},
-    {reg:"Compare",layer:"Dressed",label:"SWEDISH POMERANIA   /   1761",start:[.31,115,98],end:[-.17,128,66]},
+    {reg:"Yellow",layer:"Dressed",label:"WRANGEL   /   CHAMOIS PELISSE",start:[.42,133,59],end:[.1,151,47]},
   ];
   try{
     for(const [shotIndex, shot] of shots.entries()){

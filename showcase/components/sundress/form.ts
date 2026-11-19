@@ -22,11 +22,45 @@ export const dress = { bust:cm(bustCheck.finished_mm),waist:cm(waistCheck.finish
   gatheredEdge:cm(width(skirt,"wl","wr")+width(back,"wl","wr")),hem:cm(width(skirt,"hl","hr")+width(back,"hl","hr")),
   shoulderToWaist:cm(front.rt[1]-front.wr[1]),skirtLength:cm(skirt.wr[1]-skirt.hr[1]) };
 export const samples=native.runs.map(run=>({name:run.form,bust:cm(point(run,"bust").body_mm),waist:cm(point(run,"waist").body_mm)}));
-export const initial = { height: 168, bust:samples[0].bust, waist:samples[0].waist, left: 14, right: 19 };
+export const initial = { height: 168, bust:samples[0].bust, waist:samples[0].waist, weight:52, left: 14, right: 19 };
 export type Form = typeof initial;
 export type Arm = "left" | "right";
-export const shoulderLine = (height: number) => height * .85;
-export const hemLine = (height: number) => shoulderLine(height) - dress.shoulderToWaist - dress.skirtLength;
+export type Readings = Pick<Form,"height"|"weight"|"bust"|"waist"> & {hem:number};
+export const round=(n:number)=>Math.round(n*10)/10;
+
+// Upper seam-line profiles from the native cubic pattern. The shoulder, neckline and armhole
+// coordinates are shared by the PDF and the wrapped illustration.
+const tops=["bodice_front","bodice_back"].map(id=>{
+  const v=vertices(id),piece=pattern.pieces.find(p=>p.id===id)!;
+  const edges:readonly {id:string;from:string;to:string;curve?:{c:number[][]}}[]=piece.edges;
+  const poly:number[][]=[];
+  for(const edge of edges.filter(e=>["arm_R","strap_outer_R","shoulder_R","strap_inner_R","neck_R"].includes(e.id))){
+    const a=v[edge.from],d=v[edge.to],dx=d[0]-a[0],dy=d[1]-a[1];
+    if(poly.length===0)poly.push(a);
+    if(edge.curve){
+      const [b,c]=edge.curve.c.map(([t,h])=>[a[0]+dx*t-dy*h,a[1]+dy*t+dx*h]);
+      for(let i=1;i<=42;i++){
+        const t=i/42,s=1-t;
+        poly.push([0,1].map(k=>s**3*a[k]+3*s*s*t*b[k]+3*s*t*t*c[k]+t**3*d[k]));
+      }
+    }else poly.push(d);
+  }
+  return {poly,halfWidth:v.ur[0]};
+});
+export function cutPosition(a:number){
+  const isFront=Math.cos(a)>=0,edge=tops[isFront?0:1],x=Math.asin(Math.min(1,Math.abs(Math.sin(a))))/(Math.PI/2)*edge.halfWidth;
+  return {x:cm(x)*Math.sign(Math.sin(a)),isFront};
+}
+export function neckline(a:number){
+  const {x,isFront}=cutPosition(a),xx=Math.abs(x)*10,{poly}=tops[isFront?0:1];
+  let height=235;
+  for(let i=1;i<poly.length;i++){
+    const p=poly[i-1],q=poly[i];if(xx<Math.min(p[0],q[0])-.0001||xx>Math.max(p[0],q[0])+.0001)continue;
+    const t=Math.abs(q[0]-p[0])<1e-6?0:(xx-p[0])/(q[0]-p[0]);
+    height=Math.max(height,p[1]+(q[1]-p[1])*t);
+  }
+  return cm(height);
+}
 
 // Scale a polygonal ellipse to its specified girth. The same section is used for the model and dress.
 const unitSections = new Map<number, number>();

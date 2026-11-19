@@ -1,4 +1,8 @@
 :root{--ink:#202c33;--dark:#16232b;--paper:#f7f4ed;--lime:#ffba8c;--muted:#bbbfbc;--rule:#465059;--rust:#a24628;--serif:"Instrument Serif",Georgia,serif;--sans:"DM Sans",Arial,sans-serif;--mono:"IBM Plex Mono",monospace}
+.garment-patterns{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem 1.3rem;padding:.65rem 0;font-size:.86rem;line-height:1.45}
+.garment-patterns a{text-decoration:underline;text-underline-offset:.23em}
+.card .garment-patterns{padding:.3rem .1rem .9rem}
+.player>.garment-patterns{padding:.5rem 1.5rem 1rem}
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;scroll-padding-top:18px}
 body{margin:0;color:var(--paper);background:var(--ink);font-family:var(--sans);font-size:16px;-webkit-font-smoothing:antialiased}
@@ -61,6 +65,9 @@ p.kicker::before{content:"";width:22px;height:2px;background:currentColor}
 .material-gallery .material-caption>span{color:#e1d3ba}.wardrobe-gallery .material-caption>span{color:#515d53}
 .wardrobe-gallery{border-bottom:1px solid #d1ccbe}.wardrobe-gallery .section-top>p{max-width:37ch;font-size:15px;line-height:1.55;margin:0;color:#58605b}
 .inline-film{width:100%;height:100%;display:block;object-fit:cover}
+.station-permalink{display:inline-block;margin-top:14px;font-size:13px;text-decoration:underline;text-underline-offset:3px}
+.section-title{font:400 clamp(47px,4.4vw,70px)/1.05 var(--serif);letter-spacing:-.036em;margin:10px 0 0}
+.section-title a>span{color:#b66544}.material-gallery .section-title a>span{color:#eac39a}.films .section-title a>span{color:var(--lime)}
 .exhibit-film{margin:0 0 12px}.exhibit-film .inline-film{aspect-ratio:16/9;height:auto;object-fit:contain;background:#293a35;border-radius:4px}.exhibit-film figcaption{font:500 12px var(--mono);margin:7px 0}
 .card-open{position:absolute;inset:0;z-index:1;border:0;padding:0;background:none;color:#fff;display:block}
 .inline-transport{position:absolute;z-index:2;bottom:10px;left:10px;color:#fff4e6;background:#182420e3;border:1px solid #b8bead;border-radius:100%;width:34px;height:34px;display:grid;place-items:center;font:600 14px/1 var(--sans)}

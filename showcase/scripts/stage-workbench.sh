@@ -13,3 +13,4 @@ cp web/calibration/* "$dest/calibration/"
 wasm-bindgen --target web --no-typescript --remove-name-section --remove-producers-section \
   --out-dir "$dest/pkg" "$artifact"
 gzip -6n -c "$dest/pkg/ftx_wasm_bg.wasm" > "$dest/pkg/ftx_wasm_bg.wasm.gz"
+(cd showcase && bun scripts/workbench-share.tsx)

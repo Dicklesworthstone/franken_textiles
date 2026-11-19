@@ -1,0 +1,689 @@
+{
+ "fabric": {
+  "areal_g_m2": 280,
+  "id": "trouser",
+  "kind": "woven",
+  "name": "wool flannel",
+  "width_mm": 1500
+ },
+ "meta": {
+  "draft_body": {
+   "reference": {
+    "available_measurements": [
+     "across_back",
+     "ankle",
+     "arm_length",
+     "back_neck_to_waist",
+     "calf",
+     "chest",
+     "crotch_height",
+     "head",
+     "hip",
+     "knee",
+     "knee_height",
+     "neck_base",
+     "outseam",
+     "shoulder_length",
+     "stature",
+     "thigh",
+     "total_crotch_length",
+     "upper_arm",
+     "waist",
+     "waist_height",
+     "wrist"
+    ],
+    "complete_tape_sections": true,
+    "fit_claim": false,
+    "input_measurements_sha256": "8e5f1a11985b8dba6cba61f7f5398ac01ea343ab61e984cfd08f9da505cd6262",
+    "measurement_geometry_sha256": "e58b002679aaafaa7c292372426ff6bb2156dbcc52a1529906902846c3d33bf5",
+    "measurement_pose": "standard_straight_arm_drape_35_degrees",
+    "measurement_values_sha256": "337c299c34fa87efdf42bf6ee4d23170701fed3e10aecf13c7448bcb22f047b2",
+    "model_sha256": "8f0bb151ba19975437147d239b7ff237642a7fa63659a6fac49fa23c299a0915",
+    "provenance": "MODEL_FIT",
+    "schema": "ftx-flat-fit-body/1",
+    "shape_sha256": "686ded4b038ca18b45d67bfa343666d2fe46ca1a152e772a433e9f2685f57550",
+    "shape_source": {
+     "kind": "tape_fit",
+     "refitted": true
+    },
+    "uncertainty_propagated": false
+   },
+   "supplemental_measurements": {
+    "foot_pass": {
+     "source": {
+      "flags": [],
+      "p1_p99_mm": [
+       170.8,
+       240.6
+      ],
+      "primary_provenance": "MEASURED_TAPE",
+      "sigma_mm": 4.7,
+      "sources": [
+       {
+        "definition_id": "SKILL:heel-instep",
+        "method": "synthetic tape input for trouser replay",
+        "provenance": "MEASURED_TAPE",
+        "sigma_mm": 5.0,
+        "used": true,
+        "value_mm": 200.0,
+        "weight": 0.9
+       },
+       {
+        "auto_prior": true,
+        "definition_id": "SKILL:heel-instep",
+        "method": "1.40 \u00d7 ankle prior",
+        "note": "UNCERTAIN placeholder",
+        "provenance": "CHART_PRIOR",
+        "sigma_mm": 15.0,
+        "used": true,
+        "value_mm": 205.7,
+        "weight": 0.1
+       }
+      ],
+      "unit": "mm",
+      "value_mm": 200.6
+     },
+     "value_mm": 200.6
+    }
+   }
+  },
+  "origin": "DRAFT",
+  "program": "drafting.zouave_trousers",
+  "round": 0,
+  "sa_mm": 10,
+  "size_label": "920 mm stature",
+  "solved": {
+   "back_crotch_ext_mm": 148.7,
+   "band_mm": 599.9,
+   "crotch_target_mm": 433.5,
+   "cuff_mm": 232.0,
+   "elastic_cut_mm": 518.9,
+   "leg_to_cuff_top_mm": 388.8
+  },
+  "style": {
+   "back_rise_extra": 20.0,
+   "blouse_drop": 40.0,
+   "casing_height": 30.0,
+   "cb_slant": 15.0,
+   "crotch_ease": 30.0,
+   "cuff_ease": 25.0,
+   "cuff_height": 30.0,
+   "cuff_level": "calf",
+   "elastic_frac": 0.95,
+   "elastic_overlap": 20.0,
+   "front_ext_frac": 0.065,
+   "fullness": 60.0,
+   "leg_gather": 1.8,
+   "nappy": false,
+   "rise_ease": 15.0,
+   "seat_ease": 80.0
+  },
+  "title": "Zouave full trousers (elastic casing, gathered into cuffs)"
+ },
+ "pieces": [
+  {
+   "cut": {
+    "qty": 2
+   },
+   "edges": [
+    {
+     "from": "hem_side",
+     "id": "hem",
+     "to": "hem_in"
+    },
+    {
+     "from": "hem_in",
+     "id": "inseam",
+     "to": "crotch_pt"
+    },
+    {
+     "curve": {
+      "c": [
+       [
+        0.10836,
+        0.21876
+       ],
+       [
+        0.63866,
+        0.17898
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "crotch_pt",
+     "id": "crotch",
+     "to": "cf_hip"
+    },
+    {
+     "from": "cf_hip",
+     "id": "cf",
+     "to": "waist_cf"
+    },
+    {
+     "from": "waist_cf",
+     "id": "waist",
+     "to": "waist_side"
+    },
+    {
+     "from": "waist_side",
+     "id": "outseam",
+     "to": "hem_side"
+    }
+   ],
+   "grain": [
+    [
+     124.75208902942683,
+     -328.79206168479107
+    ],
+    [
+     124.75208902942683,
+     -167.84481671141123
+    ]
+   ],
+   "id": "tr_front",
+   "material": "trouser",
+   "name": "TROUSER FRONT",
+   "notches": [],
+   "placement": {
+    "part": "leg",
+    "radius_mm": 118.0,
+    "theta_deg": 28.06,
+    "x0": 212.46363338004258,
+    "y0_landmark": "waist"
+   },
+   "role": "pant_front",
+   "vertices": {
+    "cf_hip": [
+     212.464,
+     -73.065
+    ],
+    "crotch_pt": [
+     249.504,
+     -147.845
+    ],
+    "hem_in": [
+     222.867,
+     -388.792
+    ],
+    "hem_side": [
+     26.637,
+     -388.792
+    ],
+    "waist_cf": [
+     212.464,
+     0.0
+    ],
+    "waist_side": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  {
+   "cut": {
+    "qty": 2
+   },
+   "edges": [
+    {
+     "from": "hem_in",
+     "id": "hem",
+     "to": "hem_side"
+    },
+    {
+     "from": "hem_side",
+     "id": "outseam",
+     "to": "waist_side"
+    },
+    {
+     "from": "waist_side",
+     "id": "waist",
+     "to": "waist_cb"
+    },
+    {
+     "from": "waist_cb",
+     "id": "cb",
+     "to": "cb_hip"
+    },
+    {
+     "curve": {
+      "c": [
+       [
+        0.13152,
+        0.18205
+       ],
+       [
+        0.60088,
+        0.20066
+       ]
+      ],
+      "type": "cubic"
+     },
+     "from": "cb_hip",
+     "id": "crotch",
+     "to": "crotch_pt"
+    },
+    {
+     "from": "crotch_pt",
+     "id": "inseam",
+     "to": "hem_in"
+    }
+   ],
+   "grain": [
+    [
+     33.28088410250608,
+     -328.79206168479107
+    ],
+    [
+     33.28088410250608,
+     -167.84481671141123
+    ]
+   ],
+   "id": "tr_back",
+   "material": "trouser",
+   "name": "TROUSER BACK",
+   "notches": [],
+   "placement": {
+    "part": "leg",
+    "radius_mm": 118.0,
+    "theta_deg": 151.94,
+    "x0": 0.0,
+    "y0_landmark": "waist"
+   },
+   "role": "pant_back",
+   "vertices": {
+    "cb_hip": [
+     0.0,
+     -73.065
+    ],
+    "crotch_pt": [
+     -148.743,
+     -147.845
+    ],
+    "hem_in": [
+     -77.359,
+     -379.511
+    ],
+    "hem_side": [
+     143.921,
+     -379.511
+    ],
+    "waist_cb": [
+     15.0,
+     20.0
+    ],
+    "waist_side": [
+     232.464,
+     0.0
+    ]
+   }
+  },
+  {
+   "cut": {
+    "qty": 1
+   },
+   "edges": [
+    {
+     "from": "b0",
+     "id": "bot_bR",
+     "to": "b1"
+    },
+    {
+     "from": "b1",
+     "id": "bot_fR",
+     "to": "b2"
+    },
+    {
+     "from": "b2",
+     "id": "bot_fL",
+     "to": "b3"
+    },
+    {
+     "from": "b3",
+     "id": "bot_bL",
+     "to": "b4"
+    },
+    {
+     "from": "b4",
+     "id": "end_r",
+     "to": "t4"
+    },
+    {
+     "from": "t4",
+     "id": "top",
+     "to": "t0"
+    },
+    {
+     "from": "t0",
+     "id": "end_l",
+     "to": "b0"
+    }
+   ],
+   "grain": [
+    [
+     40,
+     20.0
+    ],
+    [
+     559.8545335201703,
+     20.0
+    ]
+   ],
+   "id": "waistband",
+   "internal": [
+    {
+     "kind": "draw",
+     "label": "FOLD (elastic casing)",
+     "pts": [
+      [
+       0,
+       30.0
+      ],
+      [
+       599.8545335201703,
+       30.0
+      ]
+     ]
+    }
+   ],
+   "material": "trouser",
+   "name": "WAIST CASING",
+   "notches": [],
+   "note": "Elastic 25 mm wide: cut 519 mm (includes 20 mm overlap)",
+   "placement": {
+    "clearance_mm": 15,
+    "part": "torso",
+    "theta_deg": 180.0,
+    "x0": 0.0,
+    "y0": 0.0,
+    "y0_landmark": "waist"
+   },
+   "role": "waistband",
+   "sim_scale": [
+    0.8755,
+    0.5
+   ],
+   "vertices": {
+    "b0": [
+     0.0,
+     0.0
+    ],
+    "b1": [
+     152.023,
+     0.0
+    ],
+    "b2": [
+     299.927,
+     0.0
+    ],
+    "b3": [
+     447.831,
+     0.0
+    ],
+    "b4": [
+     599.855,
+     0.0
+    ],
+    "t0": [
+     0.0,
+     60.0
+    ],
+    "t4": [
+     599.855,
+     60.0
+    ]
+   }
+  },
+  {
+   "cut": {
+    "qty": 2
+   },
+   "edges": [
+    {
+     "from": "b0",
+     "id": "bottom",
+     "to": "b1"
+    },
+    {
+     "from": "b1",
+     "id": "end_r",
+     "to": "t1"
+    },
+    {
+     "from": "t1",
+     "id": "top_back",
+     "to": "tm"
+    },
+    {
+     "from": "tm",
+     "id": "top_front",
+     "to": "t0"
+    },
+    {
+     "from": "t0",
+     "id": "end_l",
+     "to": "b0"
+    }
+   ],
+   "grain": [
+    [
+     20,
+     15.0
+    ],
+    [
+     211.95005566567357,
+     15.0
+    ]
+   ],
+   "id": "cuff",
+   "internal": [
+    {
+     "kind": "draw",
+     "label": "FOLD",
+     "pts": [
+      [
+       0,
+       30.0
+      ],
+      [
+       231.95005566567357,
+       30.0
+      ]
+     ]
+    }
+   ],
+   "material": "trouser",
+   "name": "LEG CUFF",
+   "notches": [],
+   "placement": {
+    "part": "leg",
+    "radius_mm": 38.9,
+    "theta_deg": -90.0,
+    "x0": 0.0,
+    "y0": 30.0,
+    "y0_landmark": "calf"
+   },
+   "role": "cuff",
+   "sim_scale": [
+    1.0,
+    0.5
+   ],
+   "vertices": {
+    "b0": [
+     0.0,
+     0.0
+    ],
+    "b1": [
+     231.95,
+     0.0
+    ],
+    "t0": [
+     0.0,
+     60.0
+    ],
+    "t1": [
+     231.95,
+     60.0
+    ],
+    "tm": [
+     109.017,
+     60.0
+    ]
+   }
+  }
+ ],
+ "schema": "fabric-pattern/1",
+ "seams": [
+  {
+   "a": "tr_front.R/crotch+cf",
+   "b": "tr_front.L/cf+crotch",
+   "id": "crotch_front_R",
+   "reverse": true
+  },
+  {
+   "a": "tr_front.R/inseam",
+   "b": "tr_back.R/inseam",
+   "id": "inseam_R",
+   "reverse": true
+  },
+  {
+   "a": "tr_front.L/inseam",
+   "b": "tr_back.L/inseam",
+   "id": "inseam_L",
+   "reverse": true
+  },
+  {
+   "a": "tr_front.R/outseam",
+   "b": "tr_back.R/outseam",
+   "id": "outseam_R",
+   "reverse": true
+  },
+  {
+   "a": "tr_front.L/outseam",
+   "b": "tr_back.L/outseam",
+   "id": "outseam_L",
+   "reverse": true
+  },
+  {
+   "a": "tr_front.R/hem",
+   "b": "cuff.R/top_front",
+   "id": "cuff_front_R",
+   "kind": "gather",
+   "ratio": 1.8,
+   "ratio_band": [
+    1.4,
+    2.4
+   ],
+   "reverse": true
+  },
+  {
+   "a": "tr_front.L/hem",
+   "b": "cuff.L/top_front",
+   "id": "cuff_front_L",
+   "kind": "gather",
+   "ratio": 1.8,
+   "ratio_band": [
+    1.4,
+    2.4
+   ],
+   "reverse": true
+  },
+  {
+   "a": "tr_back.R/hem",
+   "b": "cuff.R/top_back",
+   "id": "cuff_back_R",
+   "kind": "gather",
+   "ratio": 1.8,
+   "ratio_band": [
+    1.4,
+    2.4
+   ],
+   "reverse": true
+  },
+  {
+   "a": "tr_back.L/hem",
+   "b": "cuff.L/top_back",
+   "id": "cuff_back_L",
+   "kind": "gather",
+   "ratio": 1.8,
+   "ratio_band": [
+    1.4,
+    2.4
+   ],
+   "reverse": true
+  },
+  {
+   "a": "cuff.R/end_r",
+   "b": "cuff.R/end_l",
+   "id": "cuff_end_R",
+   "reverse": true
+  },
+  {
+   "a": "cuff.L/end_r",
+   "b": "cuff.L/end_l",
+   "id": "cuff_end_L",
+   "reverse": true
+  },
+  {
+   "a": "tr_back.R/cb+crotch",
+   "b": "tr_back.L/crotch+cb",
+   "id": "crotch_back",
+   "reverse": true
+  },
+  {
+   "a": "tr_back.R/waist",
+   "b": "waistband/bot_bR",
+   "id": "casing_bot_bR",
+   "kind": "gather",
+   "ratio": 1.437,
+   "ratio_band": [
+    1.0,
+    2.0
+   ],
+   "reverse": true
+  },
+  {
+   "a": "tr_front.R/waist",
+   "b": "waistband/bot_fR",
+   "id": "casing_bot_fR",
+   "kind": "gather",
+   "ratio": 1.437,
+   "ratio_band": [
+    1.0,
+    2.0
+   ],
+   "reverse": true
+  },
+  {
+   "a": "tr_front.L/waist",
+   "b": "waistband/bot_fL",
+   "id": "casing_bot_fL",
+   "kind": "gather",
+   "ratio": 1.437,
+   "ratio_band": [
+    1.0,
+    2.0
+   ],
+   "reverse": true
+  },
+  {
+   "a": "tr_back.L/waist",
+   "b": "waistband/bot_bL",
+   "id": "casing_bot_bL",
+   "kind": "gather",
+   "ratio": 1.437,
+   "ratio_band": [
+    1.0,
+    2.0
+   ],
+   "reverse": true
+  },
+  {
+   "a": "waistband/end_r",
+   "b": "waistband/end_l",
+   "id": "casing_cb",
+   "reverse": true
+  }
+ ],
+ "style": "ZOUAVE_TROUSER",
+ "units": "mm"
+}

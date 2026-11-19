@@ -2,10 +2,10 @@
 
 A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
 
-- **Wear the sundress.** At `/wardrobe/sundress/`, drag either hand or use the arm controls,
-  change the adult form’s dimensions, and compare the body and dress circumferences. The cut
-  stays fixed. The live figure is geometric. The four-panel pattern, SVG and tiled A4 PDF come
-  from the native pipeline.
+- **Wear the sundress.** At `/wardrobe/sundress/`, drag either hand or use the arm controls.
+  Adjust stature, body mass, bust and waist on an adult figure sampled from the native Anny fit.
+  The browser interpolates fitted surfaces and arm poses. The dress keeps its original cut.
+  The four-panel pattern, SVG and tiled A4 PDF come from the native pipeline.
 - **Dress a hussar.** At `/wardrobe/hussar/`, compare the Swedish Blue and Yellow regiments of
   1761, remove the pelisse, and inspect the chest cord. The reconstructed garment and its native
   two-pass DST braid sampler share an original motif. The page cites the Swedish military-history
@@ -59,6 +59,21 @@ bunx --no-install wrangler deploy
 `frankentextiles-studio` Worker and binds its custom domain to `franken-textiles.com`.
 Authenticate Wrangler to the Cloudflare account that owns the zone before publishing.
 The site serves its own fonts, videos, geometry and workbench assets.
+
+## Share a section
+
+Each section heading links to its own page. The wardrobe, material experiments and local
+workbenches also have individual cards. Open Graph previews are 1200 × 630 and X previews
+are 1200 × 600. Next.js builds the artwork from local exhibit renders, actual studio drawings
+and the studio fonts. Each format has its own versioned URL.
+
+For a preview deployment, set `FTX_SITE_ORIGIN` to its public HTTPS origin when running the
+build. This gives crawlers the correct absolute image URLs. To check the published pages and
+download both card formats, run:
+
+```sh
+python3 scripts/check-share-images.py https://franken-textiles.com
+```
 
 ## Rebuild exhibition media
 

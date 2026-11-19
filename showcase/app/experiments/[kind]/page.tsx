@@ -2,8 +2,6 @@ import { notFound } from "next/navigation";
 import MaterialLab from "../../../components/MaterialLab";
 import { experiments } from "../../../components/materialExperiments";
 
-export const dynamicParams = false;
-export const generateStaticParams = () => Object.keys(experiments).map(kind => ({ kind }));
 type Props = { params: Promise<{ kind: string }> };
 async function rig({ params }: Props) {
   const { kind } = await params;

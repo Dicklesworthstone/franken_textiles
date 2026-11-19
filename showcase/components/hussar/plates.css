@@ -1,0 +1,14 @@
+.regimental-plates{border-block:1px solid #b9ad99;margin:3rem 0;padding:clamp(24px,4vw,60px) 0;display:grid;grid-template-columns:minmax(250px,.78fr) 1.55fr;align-items:center;gap:clamp(22px,4vw,66px);scroll-margin-top:24px}
+.plate-text h2{font:clamp(40px,5vw,68px)/.99 var(--serif);margin:.4rem 0 1rem}
+.plate-text p{line-height:1.55;margin:.65rem 0}
+.plate-text>a,.regimental-portrait strong{font-weight:650}
+.plate-text>a{text-decoration:underline;text-underline-offset:4px}
+.period-figures{display:flex;gap:1rem;margin:1.2rem 0 .7rem}
+.period-figures figure{margin:0;flex:1;min-width:0;text-align:center;background:#fffdf7;padding:12px 6px 6px;color:#322c23}
+.period-figures img{height:clamp(144px,15vw,224px);width:auto;max-width:100%;object-fit:contain}
+.period-figures figcaption{display:flex;justify-content:center;gap:5px;flex-wrap:wrap;font-size:.81rem}
+.plate-text .plate-credit{font-size:.78rem}
+.regimental-portrait{margin:0}
+.regimental-portrait img{display:block;width:100%;height:auto}
+.regimental-portrait figcaption{display:flex;flex-wrap:wrap;align-items:baseline;gap:.45rem 1.2rem;margin-top:.8rem;font-size:.88rem;line-height:1.5}
+@media(max-width:780px){.regimental-plates{grid-template-columns:1fr}.period-figures{max-width:300px}.regimental-portrait{grid-row:2}}

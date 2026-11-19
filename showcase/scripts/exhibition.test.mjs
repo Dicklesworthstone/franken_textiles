@@ -56,17 +56,38 @@ test("strip controls and readouts agree with the exported Rust states", async ()
   } finally {await p.close();}
 });
 
-test("wearer changes keep the sundress cut fixed and show the native signed ease", async () => {
+test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", async () => {
   const p=await browser.newPage({...opts,reducedMotion:"reduce",viewport:{width:390,height:844}});
   try {
     await p.goto(new URL("/wardrobe/sundress/",site).href);
     await p.locator("canvas[data-ready]").waitFor();
-    const cases=await p.evaluate(async()=>(await (await fetch("/sundress/fit-comparison.json")).json()).runs);
-    for(const item of cases) {
+    const [cases,body]=await p.evaluate(()=>Promise.all(["/sundress/fit-comparison.json","/fitted-bodies/sundress.json"].map(async url=>(await fetch(url)).json())));
+    const reference=body.samples.find(sample=>sample.name==="reference");
+    for(const item of cases.runs) {
       await p.getByRole("button",{name:item.form,exact:true}).click();
-      const shown=await p.locator(".sd-table b").allTextContents();
-      assert.deepEqual(shown.map(Number),item.points.map(point=>point.ease_mm/10));
+      for(const point of item.points){
+        let tape=reference.outcomes[point.id];
+        for(const target of item.points){
+          const sample=body.samples.find(s=>s.name===target.id+"High");
+          const t=(target.body_mm/10-reference.targets[target.id])/(sample.targets[target.id]-reference.targets[target.id]);
+          tape+=t*(sample.outcomes[point.id]-reference.outcomes[point.id]);
+        }
+        const row=p.locator(".sd-table>div").filter({hasText:point.id});
+        await p.waitForFunction(({id,v})=>document.querySelector('[data-fitted="'+id+'"]').textContent===v,{id:point.id,v:tape.toFixed(1)});
+        assert.equal(Number(await row.locator("span").first().textContent()),point.finished_mm/10);
+        assert.equal(Number(await row.locator("b").textContent()),Number((point.finished_mm/10-tape).toFixed(1)));
+      }
     }
+    await p.getByRole("button",{name:"Reset",exact:true}).click();
+    await p.getByRole("slider",{name:"Body mass target"}).press("End");
+    const fittedWeight=body.samples.find(s=>s.name==="weightHigh").outcomes.weight.toFixed(1);
+    await p.locator('[data-model-mass="'+fittedWeight+'"]').waitFor();
+    assert.notEqual(Number(fittedWeight),body.domains.weight[1]);
+    const stage=p.locator(".sd-scene canvas"),before=await stage.screenshot();
+    await p.getByRole("button",{name:"Raised",exact:true}).click();
+    assert.equal(await p.getByRole("button",{name:"Raised",exact:true}).getAttribute("aria-pressed"),"true");
+    assert.notDeepEqual(await stage.screenshot(),before);
+    assert.equal(await p.getByRole("link",{name:"Three native flat checks"}).getAttribute("href"),"/sundress/fit-comparison.json");
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth),390);
   } finally {await p.close();}
 });
