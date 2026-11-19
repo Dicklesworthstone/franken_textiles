@@ -83,10 +83,10 @@ export function napFibres(roots:T.Vector3[],length:number,seed:number,down:numbe
 /** A soft, flat tapered feather. Barbs originate independently along the curved shaft. */
 export function plumeGeometry(height:number,lean:number,seed:number) {
   const random=seedRandom(seed),pos:number[]=[],colors:number[]=[],indices:number[]=[];
-  for(let i=0;i<830;i++){
+  for(let i=0;i<1600;i++){
     const t=.015+.97*random();
     const root=new T.Vector3(lean*t*t,t*height,.4*Math.sin(Math.PI*t));
-    const breadth=.12+2.05*Math.pow(Math.sin(Math.PI*t),.78);
+    const breadth=.16+2.76*Math.pow(t,.61)*(.65+.35*Math.sin(Math.PI*t));
     const angle=random()*turn, reach=breadth*(.46+.62*random());
     const end=root.clone().add(new T.Vector3(Math.cos(angle)*reach,.8+height*.11*t+random()*1.4,Math.sin(angle)*reach*.54));
     const rib=end.clone().sub(root).normalize();
@@ -100,4 +100,34 @@ export function plumeGeometry(height:number,lean:number,seed:number) {
   const g=new T.BufferGeometry();g.setAttribute("position",new T.Float32BufferAttribute(pos,3));
   g.setAttribute("color",new T.Float32BufferAttribute(colors,3));g.setIndex(indices);g.computeVertexNormals();
   return g;
+}
+
+/** Each leg blends into one half of the seat between the crotch and waist. */
+export function buckskinBreeches(sign:number){
+  const rows=[[79.7,7.03,7.59,9.48,0],[82.6,7.93,8.47,9.16,0],[85.6,8.39,9.03,8.84,0],
+    [88.3,8.59,9.48,8.51,.11],[90.5,8.76,9.92,8.31,.40],[92.8,8.50,10.18,8.07,.78],
+    [95.1,8.12,10.44,7.9,1],[98.4,7.9,10.13,7.75,1],[100.6,7.8,9.88,7.54,1]];
+  const points:number[]=[],uv:number[]=[],indices:number[]=[],n=80;
+  rows.forEach(([y,w,d,c,join],j)=>{
+    for(let i=0;i<=n;i++){
+      const u=i/n,a=u*turn, side=Math.sin(a), outer=Math.max(0,side);
+      const x=sign*T.MathUtils.lerp(c+w*side,(w+c)*outer,join);
+      const fold=(1-join)*Math.sin(4*a+.31*y)*.16;
+      points.push(x,y,T.MathUtils.lerp(d,d*(1-.05*outer),join)*Math.cos(a)+.5+fold);
+      uv.push(u,(y-79.7)/21);
+      if(i<n&&j<rows.length-1){const k=j*(n+1)+i;indices.push(k,k+1,k+n+1,k+1,k+n+2,k+n+1);}
+    }
+  });
+  if(sign<0)for(let i=0;i<indices.length;i+=3){const v=indices[i];indices[i]=indices[i+1];indices[i+1]=v;}
+  const geom=new T.BufferGeometry();geom.setAttribute("position",new T.Float32BufferAttribute(points,3));
+  geom.setAttribute("uv",new T.Float32BufferAttribute(uv,2));geom.setIndex(indices);geom.computeVertexNormals();
+  return geom;
+}
+
+/** Lower the relaxed forearm forward from the elbow, placing the glove and hand in the same pose. */
+export function restArm(x:number,y:number,z:number,sign:number):Point3 {
+  const t=1-T.MathUtils.smoothstep(y,84,113);
+  const angle=-(sign<0?.25:.13)*t, elbow=112;
+  return [x-sign*(sign<0?1.65:.4)*t,elbow+(y-elbow)*Math.cos(angle)-z*Math.sin(angle),
+    z*Math.cos(angle)+(y-elbow)*Math.sin(angle)];
 }

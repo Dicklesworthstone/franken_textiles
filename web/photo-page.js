@@ -1,5 +1,7 @@
 const $ = id => document.getElementById(id);
 let worker = null, ticket = 0, busy = false, scale = null, bitmap = null, pending = [];
+let examplePhoto = null;
+const activePhoto = () => $("photo").files[0] ?? examplePhoto;
 let sourceUrls = [], resultUrls = [], draftUrls = [];
 let pointSource = null;
 let importedOptions = null;
@@ -173,7 +175,7 @@ function controls() {
   $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
   $("paper").disabled=charuco; $("sheet").disabled=!charuco; $("calibration").disabled=!charuco;
   $("clearCalibration").disabled=!calibrated;
-  $("analyze").disabled=busy || cameraBusy || sectionBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
+  $("analyze").disabled=busy || cameraBusy || sectionBusy || !activePhoto() || (charuco && !$("sheet").files.length);
   $("measure").disabled=busy || cameraBusy || sectionBusy || scale?.ok !== true || pending.length>0;
   $("openWorkbench").disabled=busy || cameraBusy || sectionBusy || photoRecords===null;
   $("returnMaterials").disabled=busy || cameraBusy || sectionBusy || photoRecords===null || !materialsTarget;
@@ -219,6 +221,7 @@ function kill() { worker?.terminate(); worker=null; busy=false; controls(); }
 function revoke(urls) { urls.forEach(u=>URL.revokeObjectURL(u)); urls.length=0; }
 function withdraw(source=false) {
   photoRecords=null;
+  $("sampleReading").textContent="";
   if(workbenchTransfer && workbenchTransfer.kind!=="section") workbenchTransfer.records=null;
   ++ticket; kill(); $("pointFile").value=""; $("optionsFile").value=""; revoke(resultUrls); $("downloads").replaceChildren();
   $("draftFile").value=""; revoke(draftUrls); $("draftDownloads").replaceChildren();
@@ -247,11 +250,18 @@ function draw() {
     c.strokeStyle=inliers.has(id)?"#00cddd":"#b66d00"; c.lineWidth=Math.max(2,canvas.width/600);
     c.beginPath(); c.arc(p[0]+.5,p[1]+.5,Math.max(4,canvas.width/250),0,2*Math.PI); c.stroke();
   }
-  c.fillStyle="#dc3030";
   let pairs=[];
-  try { pairs=Object.values(JSON.parse($("points").value)).flatMap(p=>Array.isArray(p)?p:(p.points||[])); } catch {}
-  for(const p of [...pairs,...pending]) if(Array.isArray(p)&&p.length===2&&p.every(Number.isFinite)) {
-    c.beginPath(); c.arc(p[0]+.5,p[1]+.5,Math.max(3,canvas.width/200),0,2*Math.PI); c.fill();
+  try { pairs=Object.values(pointPairs()).map(p=>Array.isArray(p)?p:(p.points||[])); } catch {}
+  const valid=p=>Array.isArray(p)&&p.length===2&&p.every(Number.isFinite);
+  c.save(); c.setLineDash([canvas.width/130,canvas.width/210]);
+  for(const pair of pairs) if(pair.length===2 && pair.every(valid)) {
+    c.beginPath(); c.moveTo(pair[0][0]+.5,pair[0][1]+.5); c.lineTo(pair[1][0]+.5,pair[1][1]+.5);
+    c.lineWidth=Math.max(2,canvas.width/400); c.strokeStyle="#ffe09a"; c.stroke();
+  }
+  c.restore();
+  for(const p of [...pairs.flat(),...pending]) if(valid(p)) {
+    c.beginPath(); c.arc(p[0]+.5,p[1]+.5,Math.max(3,canvas.width/195),0,2*Math.PI);
+    c.fillStyle="#a53f22"; c.fill(); c.lineWidth=Math.max(1.5,canvas.width/650); c.strokeStyle="#fff8e6"; c.stroke();
   }
 }
 function options() {
@@ -1924,7 +1934,7 @@ function withdrawSection(source=false) {
 }
 function keepSectionSource(side) {
   if(busy || cameraBusy || sectionBusy || !photoRecords) return;
-  sectionSources[side]={file:photoRecords,label:`Measured snapshot of ${$("photo").files[0]?.name || "the current photo"}`};
+  sectionSources[side]={file:photoRecords,label:`Measured snapshot of ${activePhoto()?.name || "the current photo"}`};
   $(side==="width"?"sectionWidthFile":"sectionDepthFile").value="";
   withdrawSection(true);
   $("sectionStatus").textContent="Photo result retained. You may choose the next photo; review both sources before calculating.";
@@ -2175,9 +2185,9 @@ async function runCamera() {
     stopCamera(); $("cameraError").textContent=String(e.message || e); $("cameraStatus").textContent="No calibration published.";
   }
 }
-async function run(op) {
+async function run(op, sampleDefaults=false) {
   if(cameraBusy || (op==="measure" && pending.length>0)) return;
-  const file=$("photo").files[0], points=pointText(), opts=options(), paper=$("paper").value;
+  const file=activePhoto(), points=pointText(), opts=options(), paper=$("paper").value;
   const referenceMode=$("referenceMode").value, charuco=referenceMode==="charuco";
   const sheetFile=charuco?$("sheet").files[0]:null, calibrationFile=charuco?$("calibration").files[0]:null;
   const generated=charuco?generatedCalibration:null;
@@ -2205,7 +2215,9 @@ async function run(op) {
       if(current!==worker || m.request!==ticket) return;
       if(m.type==="progress") {status(m.text); return;}
       kill();
-      if(m.type==="error") {$("error").textContent=m.message; status("No measurements published."); return;}
+      if(m.type==="error") {$("error").textContent=m.message; status("No measurements published.");
+        if(file===examplePhoto) $("sampleReading").textContent=m.message;
+        return;}
       try {
         if(op==="analyze") {
           const preview=new Blob([m.preview],{type:"image/png"}), decoded=await createImageBitmap(preview);
@@ -2225,8 +2237,18 @@ async function run(op) {
             if(calibration) link($("sourceDownloads"),calibration,"photo-calibration.json","application/json",sourceUrls);
           }
           status(scale.ok?"Review the detected sheet, then choose point pairs.":"Reference rejected; no measurement calibration available.");
+          if (sampleDefaults && scale.ok && file === examplePhoto) {
+            $("name").value="chalk_span";
+            $("points").value=JSON.stringify({chalk_span:[[879,245],[879,525]]});
+            draw();
+            return run("measure");
+          }
         } else {
           const result=JSON.parse(m.report); $("report").textContent=m.report; $("result").hidden=false;
+          if (file === examplePhoto) {
+            const span=result.records.find(row=>row.name==="chalk_span");
+            if (span) $("sampleReading").textContent=`Measured ${Number(span.value_mm).toFixed(1)} mm · uncertainty σ ${Number(span.sigma_mm).toFixed(1)} mm`;
+          }
           for(const r of result.records) {
             const row=document.createElement("tr");
             for(const value of [r.name,r.value_mm ?? r.value_deg,r.sigma_mm ?? r.sigma_deg,r.value_deg===undefined?"mm":"deg"]) {
@@ -2248,6 +2270,24 @@ async function run(op) {
   } catch(e) {if(id!==ticket)return; withdraw(); $("error").textContent=String(e.message||e); status("No measurements published.");}
 }
 $("analyze").onclick=()=>run("analyze"); $("measure").onclick=()=>run("measure");
+async function openSleeveSample() {
+  withdraw(true);
+  const opening=ticket;
+  $("sampleReading").textContent="Detecting the A4 reference…";
+  try {
+    const response=await fetch(new URL("atelier-assets/photo-example-sleeve.jpg",import.meta.url));
+    if(!response.ok) throw Error("The sleeve sample could not load.");
+    const blob=await response.blob();
+    if(opening!==ticket) return;
+    examplePhoto=new File([blob],"synthetic-sleeve.jpg",{type:"image/jpeg"});
+    $("photo").value=""; $("referenceMode").value="plain"; $("paper").value="a4";
+    importedOptions=null;
+    $("distance").value="1500"; $("depth").value="0"; $("click").value="1"; $("level").value="0.5"; $("bootstrap").value="200";
+    await run("analyze",true);
+  } catch(err) { if(opening===ticket) $("sampleReading").textContent=err.message; }
+}
+$("photoSample").onclick=openSleeveSample;
+$("photo").addEventListener("change",()=>{examplePhoto=null; $("sampleReading").textContent="";});
 $("pointFile").addEventListener("change",loadPoints);
 $("draftFile").addEventListener("change",loadDraft); $("saveDraft").onclick=saveDraft;
 $("optionsFile").addEventListener("change",loadOptions);
@@ -2663,3 +2703,6 @@ window.addEventListener("pagehide",()=>{
   clearBodyCapture(true); bodyPreparedSource=null; withdrawBodyTargets(); withdrawBodyPoints(); withdrawBodyStarts(); withdrawBodyFit(); withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
 });
 controls();
+const photoQuery=new URL(location.href).searchParams;
+const sampleVisit=[...photoQuery.keys()].every(key=>key.startsWith("utm_") || ["gclid","fbclid","sample"].includes(key));
+if (sampleVisit && (!photoQuery.has("sample") || photoQuery.get("sample")==="sleeve") && !window.opener && !$("photo").files.length) void openSleeveSample();

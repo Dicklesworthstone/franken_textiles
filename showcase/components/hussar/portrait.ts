@@ -1,5 +1,7 @@
 import * as T from "three";
 import {applyNativeEyes,applyNativeSkin} from "../nativeSkin";
+import {restArm} from "./haberdashery";
+import {applyGarmentStudy,registerGarment} from "./garmentSurface";
 
 type EyePosition = ArrayLike<number>;
 
@@ -126,12 +128,13 @@ const eyePigment = `
   diffuseColor.rgb = mix(diffuseColor.rgb,paintedSkin(portraitPosition,diffuseColor.rgb), .83);
 `;
 
-export function buildWearer(body: FittedHussar, blue: boolean, maps: Complexion) {
+export function buildWearer(body: FittedHussar, blue: boolean, maps: Complexion, selectedPlate:{value:T.Texture}) {
   const complexion = blue ? "#bc876f" : "#aa785f";
   const skin = new T.MeshStandardMaterial({color: complexion, roughness:.63});
   const eyes = new T.MeshPhysicalMaterial({color:"#c3b5a3", roughness:.31, clearcoat:.38, clearcoatRoughness:.23});
   const hands = new T.MeshStandardMaterial({color:complexion, roughness:.69});
   const buckskin = new T.MeshStandardMaterial({color:"#bf9c68",roughness:.91});
+  applyGarmentStudy(buckskin,selectedPlate,.98);
   paintSurface(skin, body, maps, skinPigment, {
     blushColor:"#b87264", lipColor:"#954f51", hairColor:blue?"#483329":"#3d2e27",
   });
@@ -155,12 +158,13 @@ export function buildWearer(body: FittedHussar, blue: boolean, maps: Complexion)
   head.position.set(0, 151.4, .2);
   wearer.add(head);
   for (const [index, geometry] of [body.rightHand, body.leftHand].entries()) {
-    const hand = new T.Mesh(geometry, hands);
+    const hand = new T.Mesh(geometry.clone(), hands);
     const sign = index === 0 ? -1 : 1;
-    hand.position.set(sign*26.1, 86.5, 3.45);
-    hand.rotation.y=-sign*.23;
+    hand.position.set(...restArm(sign*26.1,86.5,3.45,sign));
+    hand.rotation.set(sign<0?-.23:-.13,-sign*.23,0);
+    registerGarment(hand);
     wearer.add(hand);handMeshes.push(hand);
   }
   return {wearer, gloves(on:boolean){for(const hand of handMeshes){hand.material=on?buckskin:hands;hand.scale.setScalar(on?1.025:1);}},
-    dispose(){headGeometry.dispose();skin.dispose();eyes.dispose();hands.dispose();buckskin.dispose();}};
+    dispose(){headGeometry.dispose();handMeshes.forEach(h=>h.geometry.dispose());skin.dispose();eyes.dispose();hands.dispose();buckskin.dispose();}};
 }

@@ -20,6 +20,7 @@ const art: Record<string, Artwork> = {
   trace: {file:"public/labs/trace-overlay.webp"},
   source: {file:"public/labs/trace-bolero.png"},
   calibration: {file:"public/workbench/calibration/calib-sheet-a4.png"},
+  sleeve: {file:"public/workbench/atelier-assets/photo-example-sleeve.jpg"},
   "material-detail": {file:"public/media/rig-strip.jpg",crop:[426,70,445,590]},
 };
 const fontSpecs = [

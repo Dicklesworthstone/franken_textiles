@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import { experiments, loadExperiment, type Rig, type Experiment } from "./materialExperiments";
-import InlineFilm from "./InlineFilm";
+import InlineFilm, { PlaybackMark } from "./InlineFilm";
 import "./material-lab.css";
 
 const Scene = dynamic(() => import("./MaterialScene"), { ssr: false });
@@ -87,7 +87,7 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
               <table className="rig-values"><thead><tr><th>Cut</th><th>Force</th><th>Mid-width</th></tr></thead>
                 <tbody>{data.specimens.map((s,i)=><tr key={s.name}><th><i style={{background:inks[i]}}/>{s.name}</th>
                   <td>{fmt(r.forces[i],3)} N</td><td>{fmt(r.widths[i],2)} mm</td></tr>)}</tbody></table>}
-            <button className="rig-play" onClick={()=>{if(step===data.readings.length-1)setStep(0);setPlaying(!playing);}}>{playing?"Ⅱ  Pause":"▶  Play the cycle"}</button>
+            <button className="rig-play" onClick={()=>{if(step===data.readings.length-1)setStep(0);setPlaying(!playing);}}><PlaybackMark playing={playing}/> {playing?"Pause":"Play the cycle"}</button>
             {cylinder && <p className="rig-threshold">{r.slip ? `Grip-slip threshold exceeded (${data.limit} N).` : `Within the ${data.limit} N grip-slip threshold.`}</p>}
           </>}
         </section>

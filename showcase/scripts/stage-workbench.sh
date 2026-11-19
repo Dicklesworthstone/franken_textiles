@@ -7,8 +7,9 @@ if [ -z "${FTX_WASM_ARTIFACT:-}" ]; then
   cargo build --release --locked --target wasm32-unknown-unknown -p ftx-wasm
 fi
 dest=showcase/public/workbench
-mkdir -p "$dest/pkg" "$dest/calibration"
-cp web/*.js web/*.html "$dest/"
+mkdir -p "$dest/pkg" "$dest/calibration" "$dest/atelier-assets"
+cp web/*.js web/*.html web/*.css "$dest/"
+cp web/atelier-assets/* "$dest/atelier-assets/"
 cp web/calibration/* "$dest/calibration/"
 wasm-bindgen --target web --no-typescript --remove-name-section --remove-producers-section \
   --out-dir "$dest/pkg" "$artifact"

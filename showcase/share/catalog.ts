@@ -16,7 +16,7 @@ const midnight = ["#172930","#f5ead5","#ecaa78"] as Plate["colors"];
 const oxblood = ["#43262e","#faebd9","#efb896"] as Plate["colors"];
 
 export const plates = {
-  home: {title:["The pattern","room."],caption:"A sewing studio for exploring patterns, cloth and the finished stitch.",category:"The sewing studio",specimen:"Paper patterns and wool on the cutting table",colors:midnight,images:["atelier"],layout:"cover"},
+  home: {title:["The pattern","room."],caption:"A sewing studio for exploring patterns, cloth and the finished stitch.",category:"The sewing studio",specimen:"Paper patterns and linen on the cutting table",colors:midnight,images:["atelier"],layout:"cover"},
   wardrobe: {title:["The","wardrobe."],caption:"Explore a garden sundress and two Swedish regimental uniforms in three dimensions.",category:"Garment collection",specimen:"Sundress & hussar dolman",colors:oxblood,images:["dress","hussar"],layout:"pair"},
   sundress: {title:["The garden","sundress."],caption:"Pose the adult form and see how much ease a fixed gathered dress leaves.",category:"The fitting room",specimen:"Floral bodice and gathered skirt",colors:["#dce5d3","#183e37","#93532e"],images:["dress"]},
   hussar: {title:["The hussar’s","cabinet."],caption:"Examine the braided dolman and fur-trimmed pelisse of two Swedish regiments.",category:"Historical wardrobe",specimen:"Swedish cavalry uniforms · 1761",colors:["#1c3036","#f4ecda","#e1b55f"],images:["hussar"]},
@@ -30,10 +30,10 @@ export const plates = {
   studies: {title:["The drape","gallery."],caption:"Follow flat panels through wrapping, sewing and settling in native garment replays.",category:"Cloth in three dimensions",specimen:"Five bolero panels · ten seams",colors:["#222924","#f6e9cf","#f39b65"],images:["bolero"]},
   tracing: {title:["Read","the lines."],caption:"Reveal the piece outlines, grain lines and corners recovered from a practice pattern sheet.",category:"Raster tracing",specimen:"Bolero sheet · native contour review",colors:paper,images:["trace"]},
   films: {title:["The screening","room."],caption:"Watch the garments, material rigs and workshops in nine short films.",category:"Exhibition films",specimen:"Frames from the exhibition",colors:["#191d1d","#f2e8da","#e4a578"],images:["hussar","bolero","dress"],layout:"contact"},
-  tools: {title:["The local","workbenches."],caption:"Bring a pattern, material record or calibration sheet to the tools that run on your device.",category:"Browser workbenches",specimen:"Pattern sheet & calibration board",colors:paper,images:["draft","calibration"],layout:"pair"},
+  tools: {title:["The local","workbenches."],caption:"Draft, bind cloth, trace a sheet and measure a sleeve with the Rust engine in your browser.",category:"Browser workbenches",specimen:"Pattern pieces & a Photo Workbench sample",colors:paper,images:["draft","sleeve"],layout:"pair"},
   patternTool: {title:["The pattern","workbench."],caption:"Open a pattern, validate its pieces and seams, and inspect the manufacturing files.",category:"Browser workbench",specimen:"Native pattern document · millimetres",colors:midnight,images:["construction"]},
   materialTool: {title:["The material","workbench."],caption:"Inspect material records and run fabric experiments in your browser.",category:"Browser workbench",specimen:"Fabric specimen · clamped strip",colors:["#2a423f","#f3eddb","#c5d8a5"],images:["material-detail"]},
   traceTool: {title:["Trace a","pattern."],caption:"Review recovered pieces and corners from a raster pattern sheet on your own device.",category:"Browser workbench",specimen:"Source sheet & recovered edge geometry",colors:["#e6dfce","#343932","#924634"],images:["source","trace"],layout:"pair"},
-  photoTool: {title:["Photo","measurements."],caption:"Use a scale reference to review local image measurements and calibration.",category:"Browser workbench",specimen:"Printable ChArUco reference",colors:["#dce6df","#253b35","#944c35"],images:["calibration"]},
+  photoTool: {title:["Photo","measurements."],caption:"Measure two chalk marks across a sleeve using an A4 sheet to recover scale.",category:"Browser workbench",specimen:"Indigo sleeve · A4 reference",colors:["#dce6df","#253b35","#944c35"],images:["sleeve"]},
 } satisfies Record<string, Plate>;
 export type PlateId = keyof typeof plates;

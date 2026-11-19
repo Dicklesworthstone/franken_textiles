@@ -15,7 +15,37 @@ function sectionGrid(rows:number,columns:number,point:(u:number,v:number)=>numbe
   g.computeVertexNormals();return g;
 }
 
-export function styleFigure(g:T.BufferGeometry,f:Face){
+// Both atlas views were painted against the same orthographic capture of the
+// reference mesh. Use rest-space centimetres so changing a tape never slides a feature.
+function projectPortrait(material:T.MeshStandardMaterial,texture:T.Texture,restSpace:boolean,eye=false){
+  const previous=material.onBeforeCompile, key=material.customProgramCacheKey();
+  material.onBeforeCompile=function(shader,renderer){
+    previous.call(this,shader,renderer);
+    shader.uniforms.figurePortrait={value:texture};
+    const pos=restSpace?"skinRest":"position";
+    const attrs=eye?"attribute vec3 skinRest;\n":"";
+    shader.vertexShader=attrs+"varying vec3 figurePoint; varying vec3 figureNormal;\n"+shader.vertexShader.replace(
+      "#include <begin_vertex>",`#include <begin_vertex>\nfigurePoint=${pos}; figureNormal=normal;`);
+    shader.fragmentShader="uniform sampler2D figurePortrait; varying vec3 figurePoint; varying vec3 figureNormal;\n"+
+      shader.fragmentShader.replace("#include <alphamap_fragment>",`#include <alphamap_fragment>
+      vec3 fp=figurePoint, fn=normalize(figureNormal);
+      float y=(fp.y-155.5)*cos(.10);
+      vec2 fv=vec2(.25+fp.x/52.25,138./304.+(y-fp.z*sin(.10))/26.125);
+      vec2 sv=vec2(.75-fp.z/52.25,138./304.+(y-abs(fp.x)*sin(.10))/26.125);
+      vec3 frontPigment=texture2D(figurePortrait,fv).rgb, sidePigment=texture2D(figurePortrait,sv).rgb;
+      float edge=smoothstep(142.5,147.5,fp.y);
+      float front=step(.002,fv.x)*step(fv.x,.498)*${eye?"1.0":"smoothstep(.04,.50,fn.z)*smoothstep(-3.,1.,fp.z)"};
+      float side=step(.502,sv.x)*step(sv.x,.998)*smoothstep(.12,.68,abs(fn.x));
+      ${eye?"":"front*=smoothstep(.9,1.12,frontPigment.r/max(frontPigment.g,.001));"}
+      side*=smoothstep(.9,1.12,sidePigment.r/max(sidePigment.g,.001));
+      diffuseColor.rgb=mix(diffuseColor.rgb,sidePigment,side*edge*.95);
+      diffuseColor.rgb=mix(diffuseColor.rgb,frontPigment,front*edge*.97);
+    `);
+  };
+  material.customProgramCacheKey=()=>key+(eye?"-fitted-iris":restSpace?"-fitted-face":"-coiffure");
+}
+
+export function styleFigure(g:T.BufferGeometry,f:Face,portrait:T.Texture|null){
   const p=g.getAttribute("position"),idx=g.getIndex()!,eyeY=f.eyeLeft[1],eyeZ=f.eyeLeft[2];
   const eyes={left:{value:new T.Vector3()},right:{value:new T.Vector3()}};
   const eye=new T.MeshStandardMaterial({color:"#ede0cf",roughness:.26});
@@ -35,8 +65,10 @@ export function styleFigure(g:T.BufferGeometry,f:Face){
       }`);
   };
   applyNativeEyes(eye,"sundress");
+  if(portrait)projectPortrait(eye,portrait,true,true);
   const skin=new T.MeshStandardMaterial({color:0xffffff,vertexColors:true,roughness:.7});
   applyNativeSkin(skin,"sundress");
+  if(portrait)projectPortrait(skin,portrait,true);
   const skinColor=new T.Color("#c38a70"),lip=new T.Color("#a35c54"),blush=new T.Color("#c47c72");
   const colors=new Float32Array(p.count*3),color=new T.Color();
   for(let i=0;i<p.count;i++){
@@ -65,6 +97,7 @@ export function styleFigure(g:T.BufferGeometry,f:Face){
     picker.set(new T.Vector3(x,y,eyeZ+15),new T.Vector3(0,0,-1));return picker.intersectObject(shell,false)[0]?.point.z??eyeZ;
   }
   const hair=new T.MeshStandardMaterial({color:0xffffff,roughness:.62,vertexColors:true,side:T.DoubleSide});
+  if(portrait)projectPortrait(hair,portrait,false);
   const dark=new T.Color("#352825"),chestnut=new T.Color("#664c40"),tip=new T.Color("#7b5949");
   const rootZ=f.headTop[2]-.55,topY=f.headTop[1];
   function sweep(u:number,v:number){
@@ -109,7 +142,7 @@ export function styleFigure(g:T.BufferGeometry,f:Face){
   }
   const locks=new T.BufferGeometry();locks.setAttribute("position",new T.Float32BufferAttribute(strands,3));
   locks.setAttribute("color",new T.Float32BufferAttribute(strandColors,3));
-  head.add(new T.LineSegments(locks,new T.LineBasicMaterial({vertexColors:true,transparent:true,opacity:.52})));
+  head.add(new T.LineSegments(locks,new T.LineBasicMaterial({vertexColors:true,transparent:true,opacity:portrait ? .14 : .52})));
   // Braided low chignon, gathered into the native nape hairline.
   const bunG=sectionGrid(38,120,(u,v)=>{
     const a=tau*u,b=Math.PI*(v-.5),r=1+.043*Math.cos(9*a+5*b)+.025*Math.cos(18*a+10*b);
@@ -117,12 +150,14 @@ export function styleFigure(g:T.BufferGeometry,f:Face){
   },(u,v)=>shade(u+.24,v*1.6));
   const bun=new T.Mesh(bunG,hair);bun.castShadow=true;head.add(bun);
   for(const sign of [-1,1]){
-    const browG=sectionGrid(3,30,(u,v)=>{
-      const x=sign*(1.37+3.55*u),y=eyeY+1.04+.56*Math.sin(Math.PI*u)-.09*u+
-        (v-.5)*(.12+.34*Math.sin(Math.PI*(.16+.84*u)));
-      return [x,y,faceZ(x,y)+.048];
-    },(u,v)=>dark.clone().lerp(chestnut,.18+.45*v+.10*Math.sin(85*u)));
-    const brow=new T.Mesh(browG,hair);head.add(brow);
+    if(!portrait){
+      const browG=sectionGrid(3,30,(u,v)=>{
+        const x=sign*(1.37+3.55*u),y=eyeY+1.04+.56*Math.sin(Math.PI*u)-.09*u+
+          (v-.5)*(.12+.34*Math.sin(Math.PI*(.16+.84*u)));
+        return [x,y,faceZ(x,y)+.048];
+      },(u,v)=>dark.clone().lerp(chestnut,.18+.45*v+.10*Math.sin(85*u)));
+      head.add(new T.Mesh(browG,hair));
+    }
     const pin=new T.Mesh(new T.SphereGeometry(.26,16,12),new T.MeshStandardMaterial({color:"#c6a46b",metalness:.63,roughness:.36}));
     pin.position.set(sign*7.83,eyeY-4.7,rootZ+.86);head.add(pin);
   }

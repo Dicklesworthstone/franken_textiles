@@ -12,6 +12,51 @@ before(async () => {
 after(async () => { await browser?.close(); });
 const opts = { userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0", viewport: { width: 1120, height: 820 } };
 
+test("the photo workbench detects the demo sheet, measures the marks and clears the demo on upload", async () => {
+  const page=await browser.newPage({...opts,viewport:{width:390,height:844}});
+  try {
+    await page.goto(new URL("/workbench/photo.html",site).href);
+    await page.locator("#values tr").first().waitFor({timeout:60000});
+    const cells=await page.locator("#values tr").first().locator("td").allTextContents();
+    assert.equal(cells[0],"chalk_span");
+    assert.ok(Math.abs(Number(cells[1])-200)<.5);
+    assert.ok(Number(cells[2])>0);
+    assert.equal(await page.locator("#image").evaluate(canvas=>canvas.width),1200);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    const source=await page.request.get(new URL("/workbench/atelier-assets/photo-example-sleeve.jpg",site).href);
+    await page.locator("#photo").setInputFiles({name:"own-sleeve.jpg",mimeType:"image/jpeg",buffer:await source.body()});
+    assert.ok(await page.locator("#result").isHidden());
+    assert.equal(await page.locator("#points").inputValue(),"{}");
+    await page.locator("#analyze").click();
+    await page.locator("#preview").waitFor();
+    assert.equal(await page.locator("#points").inputValue(),"{}");
+  } finally { await page.close(); }
+});
+
+test("each gallery garment has a downloadable full-size sewing PDF", async () => {
+  const page=await browser.newPage(opts);
+  try {
+    for (const [route,expected] of [
+      ["/sections/wardrobe/",["/sundress/pattern-A4.pdf","/patterns/hussar-blue.pdf","/patterns/hussar-yellow.pdf"]],
+      ["/sections/studies/",["/patterns/bolero.pdf","/patterns/trousers.pdf"]],
+      ["/sections/tracing/",["/patterns/bolero.pdf"]],
+    ]) {
+      await page.goto(new URL(route,site).href);
+      for(const path of expected) {
+        assert.ok(await page.locator('a[download][href="'+path+'"]').first().isVisible());
+        const pdf=await page.request.get(new URL(path,site).href);
+        assert.equal(pdf.status(),200);
+        assert.equal((await pdf.body()).subarray(0,5).toString(),"%PDF-");
+      }
+    }
+    await page.goto(new URL("/sections/films/",site).href);
+    await page.getByRole("button",{name:/The hussar’s cabinet/}).click();
+    assert.ok(await page.locator('.screening a[href="/patterns/hussar-yellow.pdf"]').isVisible());
+    await page.getByRole("button",{name:/Anatomy of a seam/}).click();
+    assert.ok(await page.locator('.screening a[href="/patterns/bolero.pdf"]').isVisible());
+  } finally {await page.close();}
+});
+
 test("visible preview plays, preserves a deliberate pause, and leaves the screen quiet", async () => {
   const p = await browser.newPage({ ...opts, reducedMotion:"no-preference" });
   try {

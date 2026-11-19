@@ -7,6 +7,7 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { buildUniform, type Framing, type Layer, type Regiment, type RegimentView } from "./uniform";
 import { loadHussarBody } from "../fittedBody";
 import type { Complexion, FittedHussar } from "./portrait";
+import {disposeGarmentMaps,loadGarmentMaps,type GarmentMaps} from "./garmentSurface";
 
 type Settings = {regiment:RegimentView;layer:Layer;framing:{preset:Framing}};
 declare global {interface Window {ftxHussarFrame?: (yaw:number,target:number,span:number)=>void}}
@@ -42,9 +43,21 @@ export default function HussarScene({regiment,layer,framing,onFailure}:{onFailur
     scene.add(key,key.target,rimLight,rimLight.target);
     const plinth=new T.Mesh(new T.CylinderGeometry(41,43,3.8,72),new T.MeshStandardMaterial({color:0x3b423d,roughness:.83}));plinth.position.y=-1.85;scene.add(plinth);
     const rim=new T.Mesh(new T.CylinderGeometry(42.8,43,1.15,72),new T.MeshStandardMaterial({color:0x927344,metalness:.72,roughness:.4}));rim.position.y=-3.65;scene.add(rim);
+    plinth.receiveShadow=true;
+    const floor=new T.Mesh(new T.PlaneGeometry(1100,1100),new T.ShadowMaterial({color:0x111712,opacity:.24}));
+    floor.rotation.x=-Math.PI/2;floor.position.y=-4.28;floor.receiveShadow=true;scene.add(floor);
+    const contactCanvas=document.createElement("canvas");contactCanvas.width=contactCanvas.height=96;
+    const brush=contactCanvas.getContext("2d")!, contactFade=brush.createRadialGradient(48,48,9,48,48,47);
+    contactFade.addColorStop(0,"rgba(7,11,9,.8)");contactFade.addColorStop(.5,"rgba(7,11,9,.46)");
+    contactFade.addColorStop(1,"rgba(7,11,9,0)");brush.fillStyle=contactFade;brush.fillRect(0,0,96,96);
+    const contactMap=new T.CanvasTexture(contactCanvas);
+    const contactMaterial=new T.MeshBasicMaterial({map:contactMap,transparent:true,depthWrite:false});
+    const contactGeometry=new T.PlaneGeometry(16.5,34);
+    const contacts=new T.Group();scene.add(contacts);
+    for(let i=0;i<4;i++){const patch=new T.Mesh(contactGeometry,contactMaterial);patch.rotation.x=-Math.PI/2;contacts.add(patch);}
     const orbit=new OrbitControls(camera,el);orbit.enablePan=false;orbit.minZoom=.62;orbit.maxZoom=4;orbit.rotateSpeed=.72;
     let height=112,aspect=1,models:ReturnType<typeof buildUniform>[]=[],previous: Settings|undefined;
-    let mounted=true, pending:Settings|undefined, body:FittedHussar|undefined, complexion:Complexion|undefined;
+    let mounted=true, pending:Settings|undefined, body:FittedHussar|undefined, complexion:Complexion|undefined, garmentMaps:GarmentMaps|undefined;
     function disposeFitted(source:FittedHussar){source.head.dispose();source.leftHand.dispose();source.rightHand.dispose();}
     function draw(){renderer.render(scene,camera);}
     function project(){camera.left=-height*aspect;camera.right=height*aspect;camera.top=height;camera.bottom=-height;camera.updateProjectionMatrix();}
@@ -56,20 +69,26 @@ export default function HussarScene({regiment,layer,framing,onFailure}:{onFailur
     const resize=()=>{const w=surface.clientWidth,h=surface.clientHeight;if(!w||!h)return;aspect=w/h;renderer.setSize(w,h,false);project();draw();};
     function change(next:Settings){
       pending=next;
-      if(!body||!complexion)return;
-      const fitted=body, maps=complexion;
+      if(!body||!complexion||!garmentMaps)return;
+      const fitted=body, maps=complexion, garments=garmentMaps;
       const paired=next.regiment==="Compare";
       if(next.regiment!==previous?.regiment){
         models.forEach(m=>{scene.remove(m.outfit);m.dispose();});
         const choices:Regiment[]=next.regiment==="Compare"?["Blue","Yellow"]:[next.regiment];
         models=choices.map((choice,i)=>{
-          const model=buildUniform(choice,fitted,maps);scene.add(model.outfit);
+          const model=buildUniform(choice,fitted,maps,garments);scene.add(model.outfit);
           model.outfit.position.x=paired?(i===0?-41:41):0;
           model.outfit.traverse(part=>{if(part instanceof T.Mesh){part.castShadow=true;part.receiveShadow=true;}});
           return model;
         });
       }
       models.forEach(m=>m.setLayer(next.layer));plinth.visible=rim.visible=next.layer!=="Pelisse";
+      floor.visible=contacts.visible=next.layer!=="Pelisse";
+      contacts.children.forEach((foot,index)=>{
+        const pair=Math.floor(index/2);
+        foot.visible=paired||pair===0;
+        foot.position.set((paired?(pair===0?-41:41):0)+(index%2===0?-10.5:10.5),.12,2.65);
+      });
       renderer.shadowMap.needsUpdate=true;
       plinth.scale.x=rim.scale.x=paired?2.2:1;
       const isolated = next.layer === "Pelisse";
@@ -102,16 +121,17 @@ export default function HussarScene({regiment,layer,framing,onFailure}:{onFailur
       if(!mounted)texture.dispose();
       return texture;
     };
-    Promise.all([loadHussarBody(),loadPigment("front"),loadPigment("side")]).then(([source,front,side])=>{
-      if(!mounted){disposeFitted(source);return;}
+    Promise.all([loadHussarBody(),loadPigment("front"),loadPigment("side"),loadGarmentMaps(textureLoader)]).then(([source,front,side,garments])=>{
+      if(!mounted){disposeFitted(source);disposeGarmentMaps(garments);return;}
       body=source;
       complexion={front,side};
+      garmentMaps=garments;
       if(pending)change(pending);
     }).catch(()=>{if(mounted)onFailure();});
     if(new URLSearchParams(location.search).has("capture"))window.ftxHussarFrame=orient;
     return ()=>{mounted=false;apply.current=null;if(window.ftxHussarFrame===orient)delete window.ftxHussarFrame;
       ro.disconnect();orbit.removeEventListener("change",draw);orbit.dispose();el.removeEventListener("keydown",keydown);el.removeEventListener("webglcontextlost",failure);
-      models.forEach(m=>m.dispose());if(body)disposeFitted(body);complexion?.front.dispose();complexion?.side.dispose();key.shadow.dispose();plinth.geometry.dispose();plinth.material.dispose();rim.geometry.dispose();rim.material.dispose();lights.dispose();renderer.dispose();renderer.forceContextLoss();el.remove();};
+      models.forEach(m=>m.dispose());if(body)disposeFitted(body);if(garmentMaps)disposeGarmentMaps(garmentMaps);complexion?.front.dispose();complexion?.side.dispose();key.shadow.dispose();floor.geometry.dispose();floor.material.dispose();contactMap.dispose();contactGeometry.dispose();contactMaterial.dispose();plinth.geometry.dispose();plinth.material.dispose();rim.geometry.dispose();rim.material.dispose();lights.dispose();renderer.dispose();renderer.forceContextLoss();el.remove();};
   },[onFailure]);
   useEffect(()=>{apply.current?.({regiment,layer,framing});},[regiment,layer,framing,onFailure]);
   return <div className="hu-scene" ref={host}/>;

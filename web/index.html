@@ -65,18 +65,24 @@ details > summary { cursor: pointer; color: var(--accent); margin: 4px 0; }
 .hidden { display: none; }
 code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
 </style>
+<link rel="stylesheet" href="workbench.css">
+<script defer src="atelier-assets/navigation.js"></script>
 </head>
-<body>
+<body class="wb wb-pattern">
 <main>
-  <h1>Pattern Workbench</h1>
-  <p class="mut">Draft a sewing pattern from measurements, check every seam and fit point, and download print-at-home
-    PDFs and cutter files. It runs FrankenTextiles in this page (Rust compiled to WebAssembly), so
-    nothing you type leaves your browser. Open the <a href="materials.html">material workbench</a> to inspect
-    source records, change per-piece materials, and recompute drape, heat, cutting, sewing and costs.
-    You can also <a href="trace.html">trace, name and scale a PNG pattern
-    sheet</a>, then load its pattern JSON here for garment and measurement checks.</p>
+  <header class="wb-hero">
+    <div class="wb-intro"><h1>Pattern Workbench</h1>
+      <p>Draft a garment to measurements, walk its seams and print the pieces at full scale.</p>
+      <a class="wb-jump" href="#garment">Choose a garment <span aria-hidden="true">↓</span></a></div>
+    <figure><img src="atelier-assets/drafting.webp" width="900" height="550" alt="Copper linen, paper pattern pieces and tailor’s shears on the cutting table"><figcaption>The cutting table</figcaption></figure>
+  </header>
+  <aside id="draftOverview" class="wb-overview" hidden aria-label="Current draft">
+    <img id="draftThumbnail" alt="Current pattern sheet in miniature">
+    <div><strong id="draftName"></strong><span id="draftSummary"></span></div>
+    <div class="wb-overview-actions"><a href="#results">View checked draft</a><a id="draftPdf" class="wb-download" hidden>Download A4 PDF</a></div>
+  </aside>
 
-  <section>
+  <section id="garment">
     <h2>1. Garment</h2>
     <div class="seg" id="programs"></div>
     <div id="auditBox" class="hidden">
@@ -94,7 +100,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     </div>
   </section>
 
-  <section>
+  <section id="measurements">
     <h2>2. Body</h2>
     <p><a href="photo.html">Measure photo landmarks locally</a> with a blank Letter/A4 reference,
       then send or add their records below alongside stature and the other required measurements.</p>
@@ -327,6 +333,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   let bodyCheckable = false, bodyChecking = false, bodyCheckRequest = 0, bodyCheckUrls = [];
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
   const patternQuery = new URL(location.href).searchParams;
+  let startExample = !patternQuery.has("blank") && patternQuery.get("sample") !== "blank" && ![...patternQuery.keys()].some(key => /(?:Import|Return)$/.test(key));
+  let automaticRound = false;
   let bodyFitToken = patternQuery.get("bodyFitImport"), bodyImportRead = 0, requestBodyImport = null;
   let receivedBodyModel = null, manualBodyModel = null, receivedBodyFit = null, bodyImportProblem = null;
   const bodyImportUrls = [];
@@ -531,6 +539,17 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       $("resPreview").src = u;
     } else $("resPreview").removeAttribute("src");
     const v = res.validation || {};
+    if (res.preview_svg) {
+      const thumbnail = window.workbenchSheetPreview?.(res.preview_svg);
+      if (thumbnail) urls.push(thumbnail);
+      $("draftThumbnail").src = thumbnail || $("resPreview").src;
+      $("draftName").textContent = res.title;
+      $("draftSummary").textContent = [res.status, `${(v.seams || []).length} seams checked`, `${(v.points || []).length} measurement points`].join(" · ");
+      const pdf = $("resFiles").querySelector('a[download$="_A4.pdf"]');
+      $("draftPdf").hidden = !pdf;
+      if (pdf) { $("draftPdf").href = pdf.href; $("draftPdf").download = pdf.download; }
+      $("draftOverview").hidden = false;
+    }
     $("resPoints").innerHTML = "<tr><th>Point of measure</th><th>Body</th><th>Finished</th><th>Ease</th><th>Target</th><th></th></tr>" +
       (v.points || []).map((p) => `<tr><td>${esc(p.label)}</td><td>${p.body_mm ?? ""}</td><td>${p.finished_mm ?? ""}</td><td>${p.ease_mm ?? ""}</td>
         <td>${(p.target_mm || []).map((x) => Math.round(x)).join(" / ")}</td><td class="${esc(p.status)}">${esc(p.status)}</td></tr>`).join("") +
@@ -543,7 +562,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("resChecks").innerHTML = ex ? `<p class="${ex.pass ? "PASS" : "FAIL"}">${esc(ex.checks)}</p>` +
       (ex.failures.length || ex.skipped.length ? "<ul>" + ex.failures.concat(ex.skipped).map((f) => `<li>${esc(f)}</li>`).join("") + "</ul>" : "") : "<p>not run</p>";
     $("resSolved").textContent = JSON.stringify(res.solved || {}, null, 1);
-    $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!automaticRound) $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+    automaticRound = false;
   }
   function showError(message, detail) {
     $("errorBox").classList.remove("hidden");
@@ -706,6 +726,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     urls.forEach((u) => URL.revokeObjectURL(u)); urls = [];
     $("results").classList.add("hidden"); $("resFiles").innerHTML = "";
     $("resPreview").removeAttribute("src"); $("foldBox").classList.add("hidden");
+    $("draftOverview").hidden = true; $("draftThumbnail").removeAttribute("src"); $("draftPdf").removeAttribute("href");
     invalidateFold();
     $("go").disabled = !ready || dead;
     if (ready && !dead) status("Inputs changed; draft and check again.");
@@ -851,7 +872,15 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       $("go").disabled = false; $("go").textContent = "Draft and check";
       status(`Ready (${msg.version}; ${msg.dxf}).`);
       requestBodyImport?.();requestMaterialImport?.();
-    } else if (msg.type === "fields") { if (msg.program === bodyProgram()) { fields = msg.rows; renderFields(); } }
+    } else if (msg.type === "fields") {
+      if (msg.program === bodyProgram()) {
+        fields = msg.rows; renderFields();
+        if (startExample && program !== "audit" && bodyMode() === "chart" && !$("go").disabled) {
+          void runRound(true);
+        }
+        startExample = false;
+      }
+    }
     else if (msg.type === "result") {
       $("go").disabled = false; status("Done.");
       renderResult(msg.res, msg.blobs);
@@ -1020,7 +1049,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("resetStyle").addEventListener("click", () => {
     $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); invalidateRound();
   });
-  async function runRound() {
+  async function runRound(automatic = false) {
+    automaticRound = automatic === true;
     // disable first: reading an uploaded file is async, and a second click would start a second run
     invalidateRound(false, true);
     const request = roundRequest;

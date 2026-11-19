@@ -2,7 +2,8 @@ import * as T from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import sampler from "../../public/wardrobe/hussar/braid-sampler.json";
 import {buildWearer, type Complexion, type FittedHussar} from "./portrait";
-import {broadclothTexture,napFibres,plumeGeometry,seedRandom,soutache} from "./haberdashery";
+import {broadclothTexture,buckskinBreeches,napFibres,plumeGeometry,restArm,seedRandom,soutache} from "./haberdashery";
+import {applyGarmentStudy,registerGarment,type GarmentMaps} from "./garmentSurface";
 
 export type Regiment = "Blue" | "Yellow";
 export type RegimentView = Regiment | "Compare";
@@ -30,7 +31,7 @@ function shell(rows: Profile[], from=0, to=tau, folds=0) {
   g.setIndex(tri);g.computeVertexNormals();return g;
 }
 
-export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:Complexion) {
+export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:Complexion, swatches:GarmentMaps) {
   const blue=regiment==="Blue", grain=broadclothTexture(), random=seedRandom(blue?1761:1765);
   const mat=(color:T.ColorRepresentation,roughness=.8,metalness=0,cloth=false)=>new T.MeshPhysicalMaterial({
     color,roughness,metalness,side:T.DoubleSide,...(cloth?{map:grain,bumpMap:grain,bumpScale:.032,sheen:.22,sheenRoughness:.85}:{}),
@@ -48,6 +49,12 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
   const featherBarbs=new T.MeshStandardMaterial({color:"#e0daca",vertexColors:true,roughness:.98,side:T.DoubleSide});
   const extraMaterials:T.Material[]=[];
   const felt=mat("#20252b",.97,0,true), darkCord=mat("#3b3830",.9,0,true);
+  const selectedPlate={value:swatches[regiment].Dressed};
+  for(const m of [wool,outer,cuff,lining,gaiter,fur]){
+    m.map=m.bumpMap=swatches.wool;m.bumpScale=.105;
+  }
+  for(const m of [wool,outer,cuff,lining,fur,gaiter,boots,bootEdge,buff,chamois,felt,yellow,darkCord])
+    applyGarmentStudy(m,selectedPlate,.97);
   function mesh(parent:T.Object3D,g:T.BufferGeometry,m:T.Material) {
     const o=new T.Mesh(g,m);parent.add(o);return o;
   }
@@ -135,13 +142,14 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
       const t=i/rows, x=side*(-11.85+23.80*t), y=2.45+42.5*t;
       for(const [j,k] of [-1,1].entries()){
         const bx=x+k*halfWidth*.847, by=y-k*halfWidth*.527*side;
-        const lift=reverse?.20:.87*(1-T.MathUtils.smoothstep(t,.86,1))+.13;
+        const lift=reverse?.42:.41*(1-T.MathUtils.smoothstep(t,.86,1))+.57;
         const z=(reverse?-1:1)*(front(bx,by)+lift);
         positions.push(bx,96+by,z);uv.push(j,t);
         edges[j].push([bx,96+by,z+(reverse?-.035:.035)]);
       }
       if(i<rows){const a=i*2;tri.push(a,a+2,a+1,a+1,a+2,a+3);}
     }
+    if(!reverse)for(let i=0;i<tri.length;i+=3){const k=tri[i];tri[i]=tri[i+1];tri[i+1]=k;}
     const g=new T.BufferGeometry();g.setAttribute("position",new T.Float32BufferAttribute(positions,3));
     g.setAttribute("uv",new T.Float32BufferAttribute(uv,2));g.setIndex(tri);g.computeVertexNormals();
     mesh(shoulderCord,g,chamois);edges.forEach(p=>tube(shoulderCord,welt,p,.066));
@@ -154,7 +162,7 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
           let shoulder=39;
           for(let y=48.5;y>=39;y-=.11){const [w,d]=profile(y);if((bx/w)**2+(bz/d)**2<=1){shoulder=y;break;}}
           const margin=Math.min(1,4*Math.sin(a));
-          v.push(bx,T.MathUtils.lerp(p[1],96+shoulder+.16,margin),bz);map.push(j,i/15);
+          v.push(bx,T.MathUtils.lerp(p[1],96+shoulder+.87,margin),bz);map.push(j,i/15);
         }
         if(i<15){const k=2*i;tris.push(k,k+2,k+1,k+1,k+2,k+3);}
       }
@@ -164,13 +172,11 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
   }
   crossbelt(1,2.57,false);crossbelt(1,2.57,true);
   crossbelt(-1,1.07,false);crossbelt(-1,1.07,true);
-  mesh(base,shell([[92,14,10],[96,14.4,10.25],[99,13.8,9.8]]),buff);
   for(const s of [-1,1]){
     mesh(shoulderCord,shell([[83.8,3.88,4.1,s*26.1,3.5],[85.4,4.75,4.95,s*26.0,3.46],[87.1,5.33,5.35,s*26.0,3.3],[89.4,5.51,5.60,s*25.93,2.83],[92.0,5.74,5.76,s*25.72,2.53]],0,tau,.025),chamois);
     ring(shoulderCord,welt,91.95,5.75,5.76,.11,s*25.72,2.53);
     const leg:Profile[]=[[37,3.7,3.7,s*10.5,0],[46,4.1,4.45,s*10.5,.55],[47.7,4.45,5.2,s*10.5,.6],[49,5.6,6.15,s*10,0],[50.5,5.25,5.8,s*10,.15],[52.5,5.8,6.1,s*10,.1],[56,5.82,6.1,s*10.1,.1],[60,6.4,6.7,s*10.5,.5],[63,6.95,7.55,s*10.3,1.1],[65,6.85,7.43,s*10.3,1.4],[74,7.7,8.8,s*9.8,.4],[88,8.5,9.4,s*8.5,.6],[93,8.4,9.1,s*7.8,.3],[98,7,8,s*7,.1]];
-    const breeches:Profile[]=[[79.6,7.10,7.71,s*9.5,.43],[83.4,8.07,8.61,s*9.05,.45],...leg.filter(row=>row[0]>=88)];
-    mesh(base,shell(breeches,0,tau,.018),buff);
+    mesh(base,buckskinBreeches(s),buff);
     const hose=leg.filter(row=>row[0]<=88).map(([y,w,d,x,z]):Profile=>[y,w+.16,d+.16,x,z]);
     hose[hose.length-1]=[83.1,8.56,9.37,s*9.08,.45];
     const charivade=shell(hose,0,tau,.023);
@@ -208,9 +214,15 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
     const a=tau*i/18;const barrel=oval(base,agedGold,[15.6*Math.sin(a),99.22,11.50*Math.cos(a)],[.41,1.76,.40]);barrel.rotation.y=a;
     for(let k=0;k<3;k++)oval(base,brass,[15.68*Math.sin(a),98.15+k*.97,11.56*Math.cos(a)],[.47,.25,.47]);
   }
-  for(const s of [-1,1]) {
-    tube(base,yellow,[[s*12,99.4,7],[s*14,97.4,8],[s*17,88.8,8]],.65);
-    oval(base,yellow,[s*17,87.8,8],[1.06,2,1.15]);
+  for(let k=0;k<2;k++) {
+    const x=-15.2-k*1.72,y=90.6-k*2.8;
+    tube(base,yellow,[[-12.4,99.6,6.9],[-14.5-k*.41,97.4,7.6],[x,y,7.4]],.27);
+    oval(base,yellow,[x,y-.39,7.4],[.64,.96,.59]);
+    for(let i=0;i<26;i++){
+      const a=i*tau/26;
+      tube(base,i%4===0?darkCord:yellow,[[x+.19*Math.sin(a),y-.93,7.4+.19*Math.cos(a)],
+        [x+.38*Math.sin(a),y-2.1,7.4+.38*Math.cos(a)],[x+.68*Math.sin(a),y-4.15+random()*.81,7.4+.65*Math.cos(a)]],.060);
+    }
   }
   mesh(base,shell([[145.2,6.7,6.75,0,-.3],[147.2,7.1,7.55,0,-.75],[149.6,7.0,7.92,0,-1.0],[151.5,6.75,7.7,0,-1.0],[151.6,5.1,6.1,0,-1.0]]),felt);
   headwear.position.y=168;
@@ -243,7 +255,7 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
   }
   const cordSide=blue?-1:1;
   for(let k=0;k<2;k++){
-    const x=cordSide*(9.0+k*.5), bottom=blue?-26-k*2.4:-8-k*2;
+    const x=cordSide*(blue?11.4+k*.8:9.0+k*.5), bottom=blue?-22-k*4:-8-k*2;
     tube(headwear,cord,[[cordSide*7.5,13.55,-2.0],[x,5.5,-1.35],[x+cordSide*.64,-3,-.9],[x+cordSide*.27,bottom+.9,-.65]],.20);
     const tx=x+cordSide*.27;oval(headwear,cord,[tx,bottom,-.65],[.60,.93,.52]);
     for(let i=0;i<21;i++){
@@ -253,7 +265,7 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
   }
   const feather=new T.Group();feather.position.set(blue?-4.3:3.8,15.6,.58);
   headwear.add(feather);tube(feather,plume,[[0,0,0],[-.35,5,.1],[-1.02,12,.21],[-2.0,20.8,.06]],.10);
-  mesh(feather,plumeGeometry(22.2,-2.01,blue?1001:1002),featherBarbs);
+  mesh(feather,plumeGeometry(21,blue?-4.0:-1.7,blue?1001:1002),featherBarbs);
   const combine=(group:T.Group)=>{
     const bins = new Map<T.Material, T.BufferGeometry[]>();
     group.updateMatrixWorld(true);
@@ -275,6 +287,19 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
     }
   };
   const groups=[base,dolman,pelisse,headwear,shoulderCord];groups.forEach(combine);
+  for(const group of [dolman,shoulderCord]){
+    group.traverse(part=>{
+      if(!(part instanceof T.Mesh))return;
+      const geometry=part.geometry, points=geometry.getAttribute("position"), baseY=group.position.y;
+      for(let i=0;i<points.count;i++){
+        const x=points.getX(i), y=baseY+points.getY(i);
+        if(Math.abs(x)<17.7||y>113)continue;
+        const moved=restArm(x,y,points.getZ(i),Math.sign(x));
+        points.setXYZ(i,moved[0],moved[1]-baseY,moved[2]);
+      }
+      geometry.computeVertexNormals();geometry.computeBoundingSphere();
+    });
+  }
   if(hatRoots.length)headwear.add(new T.LineSegments(napFibres(hatRoots,.94,761,-1),pileInk));
   pelisse.add(new T.LineSegments(napFibres(pileRoots,.73,762,-1),pileInk));
   const draped = pelisse.clone();
@@ -285,21 +310,23 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
     for(let i=0;i<points.count;i++){
       const x=points.getX(i),y=points.getY(i),z=points.getZ(i);
       const shoulder=T.MathUtils.smoothstep(y,22,50);
-      const ripple=Math.sin(x*.43+y*.08)*(.41+.56*(1-shoulder));
-      points.setXYZ(i,25.2-8.4*shoulder+.29*z+.060*x+(x*x/676)*2.1+ripple,
-        96.3+.986*y-.076*x*shoulder-.042*z*shoulder,
+      const ripple=Math.sin(x*.51+y*.061)*(.60+1.04*(1-shoulder));
+      points.setXYZ(i,24.7-8.7*shoulder+.34*z+.060*x+(x*x/676)*2.1+ripple,
+        96.3+.986*y-.076*x*shoulder-.042*z*shoulder-3.55*shoulder-.69*Math.max(0,y-47),
         -2.7+.68*x+.63*z+.44*Math.sin(y*.16+x*.08));
     }
     if(part instanceof T.Mesh)geometry.computeVertexNormals();
     geometry.computeBoundingSphere();part.geometry=geometry;
   });
   groups.push(draped);pelisse.position.y=96;
-  const portrait = buildWearer(body, blue, complexion);
+  groups.forEach(group=>registerGarment(group,group===pelisse ? (blue ? -41 : 41) : undefined));
+  const portrait = buildWearer(body, blue, complexion, selectedPlate);
   const outfit=new T.Group();outfit.add(...groups, portrait.wearer);
   return {outfit, setLayer(layer:Layer){portrait.wearer.visible=base.visible=headwear.visible=layer!=="Pelisse";dolman.visible=layer!=="Pelisse";pelisse.visible=layer==="Pelisse";
     shoulderCord.visible=layer==="Dressed";
     draped.visible=layer==="Dressed";
     portrait.gloves(layer==="Dressed");
+    selectedPlate.value=layer==="Pelisse" ? swatches.pelisses : swatches[regiment][layer==="Dolman"?"Dolman":"Dressed"];
   },dispose(){
     groups.forEach(group => group.traverse(o=>{if(o instanceof T.Mesh||o instanceof T.LineSegments)o.geometry.dispose();}));
     portrait.dispose();

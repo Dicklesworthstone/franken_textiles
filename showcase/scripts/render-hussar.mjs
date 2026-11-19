@@ -10,8 +10,12 @@ const base=new URL(process.argv[2] || "http://localhost:3000");
 const dest=path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/",import.meta.url)));
 const fps=24, frames=fps*9, poster=path.join(dest,"wardrobe-hussar.jpg"), output=path.join(dest,"wardrobe-hussar.mp4");
 const startFrame = Number(process.env.HUSSAR_START_FRAME ?? 0);
+const endFrame = Number(process.env.HUSSAR_END_FRAME ?? frames);
 if (!Number.isInteger(startFrame) || startFrame < 0 || startFrame >= frames) {
   throw new Error("HUSSAR_START_FRAME must be an integer from 0 through " + (frames - 1));
+}
+if (!Number.isInteger(endFrame) || endFrame <= startFrame || endFrame > frames) {
+  throw new Error("HUSSAR_END_FRAME must follow HUSSAR_START_FRAME and be at most " + frames);
 }
 const ease=t=>t*t*(3-2*t);
 await mkdir(dest,{recursive:true});
@@ -46,9 +50,7 @@ try{
   await writeFile(path.join(dest,"hussar.jpg"),await page.screenshot({type:"jpeg",quality:95}),{flag:"wx"});
   if(process.env.HUSSAR_STILLS_ONLY==="1") {
     console.log("Rendered the film poster and clean portrait in "+dest);
-    await browser.close();
-    process.exit(0);
-  }
+  } else {
   await page.setViewportSize({width:1280,height:720});
   await page.evaluate(()=>{
     const plate=document.createElement("aside");plate.id="hussar-film-plate";
@@ -68,10 +70,11 @@ try{
     for(const [shotIndex, shot] of shots.entries()){
       const shotLength = frames / shots.length;
       const first = Math.max(0, startFrame - shotIndex * shotLength);
-      if (first >= shotLength) continue;
+      const last = Math.min(shotLength, endFrame - shotIndex * shotLength);
+      if (first >= last) continue;
       await select(shot.reg,shot.layer);
       await page.evaluate(text=>document.querySelector("#hussar-film-plate span").textContent=text,shot.label);
-      for(let i=first;i<shotLength;i++){
+      for(let i=first;i<last;i++){
         const t=ease(i/(shotLength-1));const [a,y,span]=shot.start.map((v,k)=>v+(shot.end[k]-v)*t);
         await pose(a,y,span);
         const bytes=await page.screenshot({type:"jpeg",quality:92});
@@ -79,5 +82,6 @@ try{
       }
     }
   } finally {encoder.stdin.end();const [code]=await done;if(code!==0)throw Error("FFmpeg failed: "+code);}
-  console.log(`Rendered ${frames-startFrame} frames to ${output}`);
+  console.log(`Rendered ${endFrame-startFrame} frames to ${output}`);
+  }
 }finally{await browser.close();}

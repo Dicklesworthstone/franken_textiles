@@ -19,13 +19,17 @@ table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px;bord
 a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError,#sectionError,#bodyFitError,#bodyStartsError,#bodyCaptureError{color:#a02020}small{color:#42515a}
 [hidden]{display:none!important}
 </style>
+<link rel="stylesheet" href="workbench.css">
+<script defer src="atelier-assets/navigation.js"></script>
 </head>
-<body>
-<h1>Photo measurements and body fitting</h1>
-<p>Measure lengths or angles using a flat reference sheet in the photo: blank US Letter/A4
-  or a printed ChArUco calibration board, with optional lens calibration created here or retained from an earlier session.
-  Photos and clicks stay in this browser; nothing is uploaded or saved in browser storage.
-  <a href="index.html">Return to the Pattern Workbench</a>.</p>
+<body class="wb wb-photo"><main>
+<header class="wb-hero">
+  <div class="wb-intro"><h1>Photo measurements</h1>
+    <p>Two chalk marks sit 200 mm apart on this synthetic sleeve. See what the camera recovers using a sheet of A4 as its reference.</p>
+    <p id="sampleReading" aria-live="polite"></p>
+    <a class="wb-jump" href="#preview">Inspect the landmarks <span aria-hidden="true">↓</span></a></div>
+  <figure><img src="atelier-assets/photo-example-sleeve.jpg" alt="A marked synthetic sleeve and a blank reference sheet laid flat on dark fabric"><figcaption>Sleeve study · planar reference</figcaption></figure>
+</header>
 <section>
   <details>
     <summary><b>Calibrate a camera locally</b> — optional</summary>
@@ -70,6 +74,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
 </section>
 <section>
   <h2>1. Find the reference sheet</h2>
+  <button id="photoSample" type="button">Reload sleeve example</button>
   <p>Show all four paper edges against a darker background. Verify the actual paper size and keep
     the sheet flat, square to the camera and near the landmarks' plane. A detected reference cannot
     prove its printed size or remove depth error.</p>
@@ -625,5 +630,5 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <details><summary>Complete body fit, original evidence and source identities</summary><pre id="bodyFitReport"></pre></details>
   </div>
 </section>
-<script type="module" src="photo-page.js"></script>
+</main><script type="module" src="photo-page.js"></script>
 </body></html>

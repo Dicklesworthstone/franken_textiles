@@ -28,6 +28,9 @@ let savedStudy = null, savedStudyRead = 0, studySavedFor = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
 const sourceQuery = new URL(window.location.href).searchParams;
+const studioLinen = "fs/il019-dusty-lotus-softened";
+let openStudioExample = !sourceQuery.has("blank") && sourceQuery.get("sample") !== "blank" && ![...sourceQuery.keys()].some(key => /(?:Import|Return)$/.test(key));
+let studioRevision = 0;
 const traceImport = !sourceQuery.has("roundImport") && sourceQuery.has("traceImport");
 let roundRead = 0, roundToken = sourceQuery.get(traceImport ? "traceImport" : "roundImport");
 const roundFiles = new Map();
@@ -269,6 +272,7 @@ function guidedSourceStudies(id) {
   return used ? ["study", "scenario", ...scenarioKeys] : scenarioKeys;
 }
 function controls() {
+  $("loadMaterialExample").disabled = !ready || !!pending;
   for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
   const guided = guidedStudyMode();
   const authoredFit = fitMode() === "guided", fitKind = $("guidedFitKind").value || "vertical";
@@ -605,7 +609,10 @@ function clear(keys) {
       s.comparison.replaceChildren(); s.summary.textContent = ""; s.study = null; s.adoptions = [];
     }
     if (key === "fold") { drape = null; $("viewer").hidden = true; $("viewer").removeAttribute("src"); }
-    if (key === "cut") { $("marker").hidden = true; $("marker").removeAttribute("src"); }
+    if (key === "cut") {
+      $("marker").hidden = true; $("marker").removeAttribute("src");
+      $("cutOverview").hidden = true; $("cutThumbnail").removeAttribute("src");
+    }
     if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
     if (key === "sewPreview") { $("sewingPreview").hidden = true; $("sewingPreview").removeAttribute("src"); }
     if (key === "sew") {
@@ -644,7 +651,11 @@ function start() {
   catch (e) { error(String(e.message || e)); return; }
   worker.onmessage = ({ data: msg }) => {
     if (generation !== epoch) return;
-    if (msg.type === "ready") { ready = true; $("status").textContent = "Ready. Inspect a material or load a pattern."; controls(); return; }
+    if (msg.type === "ready") {
+      ready = true; $("status").textContent = "Ready. Inspect a material or load a pattern."; controls();
+      if (openStudioExample) { openStudioExample = false; void loadStudioExample(); }
+      return;
+    }
     if (msg.type === "loadError") { ready = false; error(`Cannot load web/pkg: ${msg.message}. Build the browser bundle first.`); controls(); return; }
     if (msg.request !== pending?.id) return;
     if (msg.type === "progress") { $("progress").textContent = msg.text; return; }
@@ -656,6 +667,19 @@ function start() {
       show(op, msg, request); $("status").textContent = `${op} complete. Results describe only the retained inputs.`;
     }
     $("progress").textContent = ""; controls();
+    if (msg.type === "result" && request.studio === studioRevision) {
+      if (op === "catalog") {
+        $("catalog").value = studioLinen;
+        void execute("inspect", studioRevision);
+      } else if (op === "inspect") {
+        $("assign").click();
+        void execute("bind", studioRevision);
+      } else if (op === "bind") {
+        void execute("cut", studioRevision);
+      } else if (op === "cut") {
+        $("status").textContent = "Linen example ready. The cut layout and source-backed properties are available below.";
+      }
+    }
   };
   worker.onerror = e => {
     if (generation !== epoch) return;
@@ -4864,7 +4888,17 @@ function show(op, msg, request) {
     for (const f of msg.files) {
       const url = link(op, s.links, f);
       if (op === "fold" && f.mime === "text/html") { $("viewer").src = url; $("viewer").hidden = false; }
-      if (op === "cut" && f.mime === "image/svg+xml") { $("marker").src = url; $("marker").hidden = false; }
+      if (op === "cut" && f.mime === "image/svg+xml") {
+        const preview = f.text && window.workbenchSheetPreview?.(f.text);
+        if (preview) urls.get(op).push(preview);
+        $("marker").src = $("cutThumbnail").src = preview || url; $("marker").hidden = false;
+        const index = Number($("rollPreview").value || 1) - 1, roll = r.rolls[index];
+        if (roll) {
+          $("cutMaterialName").textContent = roll.material?.authored?.name || roll.material?.authored?.id || "Current roll";
+          $("cutOverviewMetrics").textContent = `${roll.placements.length} pieces · ${Math.round(roll.length_m * 1000)} mm of cloth · ${(roll.utilization * 100).toFixed(1)}% yield`;
+          $("cutOverview").hidden = false;
+        }
+      }
       if (op === "stock" && f.mime === "image/svg+xml") { $("stockMarker").src = url; $("stockMarker").hidden = false; }
       if (op === "sewPreview" && f.name === "sewing-preview.svg" && f.mime === "image/svg+xml") {
         $("sewingPreview").src = url; $("sewingPreview").hidden = false;
@@ -6445,7 +6479,7 @@ async function runSavedStudy() {
     pending = null; error(String(e.message || e)); $("status").textContent = "Saved study refused; no current result published."; controls();
   }
 }
-async function execute(op) {
+async function execute(op, studio = null) {
   if (!ready || pending) return;
   if (op === "bind") clear(["bind", ...boundOperations]);
   else if (op === "fold") clear(["fold", "heat", "vaporSurface", "coverage"]);
@@ -6455,7 +6489,7 @@ async function execute(op) {
     else if (originSource) { $("selection").value = originSource.selectionJson; clear(["thermalPoint"]); }
     ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
   }
-  const id = ++sequence; pending = { id, op }; $("error").hidden = true;
+  const id = ++sequence; pending = { id, op, studio }; $("error").hidden = true;
   $("status").textContent = `Running ${op}…`; controls();
   try {
     const msg = { type: op, request: id };
@@ -7391,6 +7425,34 @@ function installPattern(raw, label, garments = [], data = parsePattern(raw)) {
     }
   }
 }
+async function loadStudioExample() {
+  const revision = ++studioRevision, generation = epoch;
+  try {
+    const response = await fetch(new URL("./atelier-assets/bolero.json", import.meta.url));
+    if (!response.ok) throw Error("The bundled bolero pattern could not be opened.");
+    const raw = await response.text();
+    if (revision !== studioRevision || generation !== epoch || pending) return;
+    clearRoundSources(); resetPatternInput(); $("patternFile").value = "";
+    installPattern(raw, "Studio bolero");
+    $("materialPdf").hidden = false;
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([JSON.stringify({copies: 1, gap_mm: 4, edge_margin_mm: 10, end_margin_mm: 10,
+      nesting: {passes: 2, work_limit: 2500000}})], "bolero-roll-options.json", {type: "application/json"}));
+    $("cutOptions").files = transfer.files;
+    $("query").value = "linen";
+    $("selection").value = text({id: studioLinen, allow_estimates: false});
+    controls();
+    await execute("catalog", revision);
+  } catch (e) {
+    if (revision === studioRevision) { error(String(e.message || e)); controls(); }
+  }
+}
+$("loadMaterialExample").onclick = loadStudioExample;
+for (const event of ["input", "change", "click"]) document.addEventListener(event, e => {
+  if (e.isTrusted && e.target.closest("main :is(input,select,textarea,button)") && e.target.id !== "loadMaterialExample") {
+    ++studioRevision; openStudioExample = false;
+  }
+}, true);
 function installDerivedPattern(raw, label) {
   const data = parsePattern(raw), retainedOutfit = outfit;
   const garments = retainedOutfit ? JSON.parse(retainedOutfit.composition_json).garments : [];
@@ -7404,6 +7466,7 @@ function installDerivedPattern(raw, label) {
     "A derived pattern is now the current pattern. Received measurement, fit and body snapshots remain selected. Review them before recomputing this pattern.";
 }
 function resetPatternInput(keepImport = false, keepFitTargets = false) {
+  $("materialPdf").hidden = true;
   cancelPhotoReturn();
   forgetSavedStudy();
   ++patternRead; source = null; sourceText = null; outfit = null; adoptedImport = false;

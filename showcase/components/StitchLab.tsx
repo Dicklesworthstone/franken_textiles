@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { PlaybackMark } from "./InlineFilm";
 import "./stitch-lab.css";
 
 const panels = [
@@ -240,7 +241,7 @@ export default function StitchLab({ active }: { active: boolean }) {
       <input id="stitch-timeline" type="range" min="0" max={count} step="1" value={position} disabled={!design}
         aria-valuetext={`Stitch ${position} of ${count}. ${phase}`} onChange={e => seek(Number(e.target.value))}/>
       <div className="stitch-buttons"><button disabled={!design} className="stitch-play" onClick={play}>
-        <span aria-hidden="true">{playing ? "Ⅱ" : "▶"}</span> {playing ? "Pause" : stopped ? "Stitch braid" : position === count ? "Replay stitches" : "Play stitches"}</button>
+        <PlaybackMark playing={playing}/> {playing ? "Pause" : stopped ? "Stitch braid" : position === count ? "Replay stitches" : "Play stitches"}</button>
         <button className="stitch-skip" disabled={!design || Boolean(stopped)} onClick={() => { if (design) { seek(design.stop); setView("panel"); } }}>Braid stop</button></div>
       <div className="stitch-options"><label><input type="checkbox" checked={view === "needle"} onChange={e => setView(e.target.checked ? "needle" : "panel")}/> Needle loupe</label>
         <label><input type="checkbox" checked={travel} onChange={e => setTravel(e.target.checked)}/> Jump moves</label></div>

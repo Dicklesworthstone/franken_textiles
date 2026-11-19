@@ -31,7 +31,7 @@ export default function HussarLab(){
       <p>Dress the figure in Putbus’s blue or Wrangel’s black and chamois. <a className="hu-compare-link" href="#regimental-plates">Compare with the museum plate ↓</a></p></div>
     <div className="hu-desk"><div className="hu-figure">
       <div className="hu-stage">{failed?<WardrobeFilm compact/>:<Scene regiment={regiment} layer={layer} framing={framing} onFailure={onFailure}/>}
-      {!failed&&<><span className="hu-plate">Swedish Pomerania · Uniform pattern of 1761</span><span className="hu-tag">{regiment==="Compare"?"Blue, 1761 at left · Yellow, 1765 at right":blue?"Putbus’s Blue Hussars · 1761 plate":"Wrangel’s Yellow Hussars · 1765 plate"}</span></>}</div>
+      {!failed&&<><span className="hu-plate">Swedish Pomerania · Uniform pattern of 1761</span><span className="hu-tag">{regiment==="Compare"?"Blue, 1761 at left · Yellow, 1765 at right":blue?"Putbus’s Blue Hussars · 1761 dress":"Wrangel’s Yellow Hussars · 1765 dress"}</span></>}</div>
       <div className="hu-cam"><span>{failed?"Recorded wardrobe tour":"Drag to turn · Scroll to zoom"}</span>
         {!failed && choice("Camera", ["Bust","Uniform","Chest","Reverse"] as const, framing.preset, preset => setFraming({preset}))}
       </div>
@@ -46,6 +46,10 @@ export default function HussarLab(){
         blue?"Dark blue broadcloth and yellow lace belong to the Blue regiment. A black felt mirliton and a braided barrel sash complete the silhouette.":"The Yellow regiment wore a black dolman with yellow cuffs and white lace, a chamois pelisse and a fur cap with a yellow bag."}</p>
       <div className="hu-pattern-links">{(regiment==="Compare"?["Blue","Yellow"]:[regiment]).map(name=>
         <a key={name} href={`/patterns/hussar-${name.toLowerCase()}.pdf`} download>Download {name} ensemble pattern PDF ↓</a>)}</div>
+      <details className="hu-pattern-notes"><summary>Size, pieces and printing</summary>
+        <p>Chest 100 cm, waist 86 cm, head 58 cm. Each reconstructed cut has 49 templates covering the dolman, pelisse, breeches, charivades, cap, gauntlets, stock, sash and crossbelt. Supply boots, buttons, plume and hardware separately.</p>
+        <p>Print at actual size on A4. The Blue set has 81 pages and the Yellow set has 79. Check both the 100 mm and 4 inch squares before joining the sheets. Test the cut in a toile.</p>
+      </details>
     </aside></div>
     <HussarReferences/>
     <section className="hu-reel"><div><p className="kicker">Wardrobe film</p><h2>Around the figure.</h2><p>Watch the camera move from the braided chest to the full silhouette and its second regimental colorway.</p><a href="/media/wardrobe-hussar.mp4" download>Download the film ↓</a></div>{!failed && <WardrobeFilm/>}</section>
@@ -53,7 +57,7 @@ export default function HussarLab(){
       <div><p className="kicker">From cord to machine</p><h2>Take a braid sample.</h2><p>The 3D uniform is an illustrated reconstruction. Its chest braid starts with this original flat loop. The native FrankenTextiles exporter wrote the two-pass Tajima file, including the stop to lay the cord.</p>
         <div className="hu-files"><a href="/wardrobe/hussar/braid-sampler.dst" download>Download DST ↓</a><a href="/wardrobe/hussar/braid-sampler.json" download>Pattern JSON ↓</a></div></div></section>
     <details className="hu-history"><summary>Historical references and model scope</summary>
-      <p>The Swedish military-history museums describe the uniform pattern of 1761 on page 39. Schützercrantz’s plate on page 40 depicts the Blue trooper in 1761 and the Yellow trooper in 1765. The face, neck and hands use a synthetic adult male fitted with FrankenTextiles’ native Anny body model. The skin textures were generated for this figure. The separate garment geometry, facial grooming and cloth folds are illustrations. The native embroidery export applies to the flat sampler.</p>
+      <p>The Swedish military-history museums describe the uniform pattern of 1761 on page 39. Schützercrantz’s plate on page 40 depicts the Blue trooper in 1761 and the Yellow trooper in 1765. The face, neck and hands use a synthetic adult male fitted with FrankenTextiles’ native Anny body model. The figure and garments use generated surface textures. The folds, grooming and garment dimensions are interpretive. The native embroidery export applies to the flat sampler.</p>
       <p><a href={source}>Swedish cavalry uniforms, pp. 38–39 ↗</a> · <a href="https://historicalsoldiers.com/">Historical Soldiers visual reference ↗</a></p></details>
     </div></main>;
 }

@@ -23,23 +23,34 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 .study-goals{display:grid;grid-template-columns:minmax(0,2fr) minmax(90px,1fr);gap:6px 12px;align-items:center}.study-goals label{margin:4px 0}.study-goals input[type=number]{width:100%;min-width:0}.study-goals small{grid-column:1/-1}
 @media(max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}main{padding:14px}}
 </style>
+<link rel="stylesheet" href="workbench.css">
+<script defer src="atelier-assets/navigation.js"></script>
 </head>
-<body><main>
-<header><a href="index.html">Drafting &amp; fitting</a> · <a href="trace.html">Pattern tracing</a>
-<h1>Material workbench</h1>
-<p>Keep the pattern. Change the material. Recompute from one frozen source of truth.</p>
-<p class="note">Your selected files stay in this tab, not in browser storage or on a server. The downloaded fold-up viewer includes its libraries and opens offline. A catalog entry is not necessarily fully characterized. Calculated drape, heat and process plans are not measured fit, warmth ratings or hardware authorization.</p>
-<p id="status" role="status">Loading local engine…</p><p id="error" role="alert" hidden></p>
-<button id="cancel" disabled>Cancel current operation</button></header>
+<body class="wb wb-materials"><main>
+<header class="wb-hero">
+  <div class="wb-intro"><h1>Material Workbench</h1>
+    <p>Inspect a fabric’s source measurements, assign it to a pattern and see which calculations the evidence supports.</p>
+    <a class="wb-jump" href="#materialCatalog">Browse fabrics <span aria-hidden="true">↓</span></a></div>
+  <figure><img src="atelier-assets/material-rig.webp" alt="Three clamped fabric samples oriented along warp, weft and bias in the virtual strip test"><figcaption>Virtual strip test · fabric orientation</figcaption></figure>
+</header>
+<aside id="cutOverview" class="wb-overview" hidden aria-label="Current cutting layout">
+  <img id="cutThumbnail" alt="Miniature of the current native roll layout">
+  <div><strong id="cutMaterialName"></strong><span id="cutOverviewMetrics"></span></div>
+  <div class="wb-overview-actions"><a href="#materialMarker">View cutting layout</a><a href="#capabilities">Inspect fabric</a></div>
+</aside>
+<div class="wb-engine"><p id="status" role="status">Loading local engine…</p><button id="cancel" disabled>Cancel current operation</button></div>
+<p id="error" role="alert" hidden></p>
 <div class="grid">
 <section id="materialCatalog"><h2>1. Inspect materials</h2>
+<div class="wb-example-row"><p class="wb-sample">Studio example · Softened linen on a bolero</p><button type="button" id="loadMaterialExample">Restore linen example</button></div>
 <label>Search the built-in catalog <input id="query" type="search" placeholder="linen, wool, leather, knit…"></label>
 <button id="search" data-command="catalog">Search</button>
 <label>Catalog record <select id="catalog" size="7" aria-label="Catalog records"></select></label>
+<details><summary>Edit or import the source selection</summary>
 <label>Or load a source-bearing selection JSON <input id="selectionFile" type="file" accept=".json,application/json"></label>
 <label>Selection to inspect <textarea id="selection" rows="5" spellcheck="false">{"id":"fs/il019-dusty-lotus-softened","allow_estimates":false}</textarea></label>
 <p class="note">Estimates stay disabled unless this selection explicitly sets <code>allow_estimates</code> to <code>true</code>. A digest-locked selection cannot be edited in place; author a new selection deliberately.</p>
-<button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
+</details><button id="inspect" class="primary" data-command="inspect">Inspect sources &amp; capabilities</button>
 <label>Optional comparison name <input id="studyCandidateName" type="text" maxlength="80" placeholder="e.g. lightweight shell"></label>
 <button id="addStudyCandidate" disabled>Add inspected material to comparison</button>
 <small><a href="#materialPattern">Load a pattern in section 2</a> to enable the shortlist. Keep up to seven individual materials or saved configurations, then
@@ -223,6 +234,9 @@ missing body friction, hysteresis or clamp-slip mechanics.</p>
 </details>
 </section>
 <section id="materialPattern"><h2>2. Bind the same pattern</h2>
+<p id="patternName">No pattern loaded. Export pattern.json from the drafting page or load an existing pattern.</p>
+<p id="materialPdf" hidden><a class="wb-download" href="atelier-assets/bolero-a4.pdf" download="studio-bolero-a4.pdf">Download this bolero · A4 PDF</a></p>
+<figure class="wb-marker" id="materialMarker"><img id="marker" alt="Current native cutting layout on the selected material roll" hidden><figcaption>Native roll layout</figcaption></figure>
 <p id="roundImportNote" hidden><span id="roundImportText"></span>
 <button id="clearRoundImport" type="button">Clear received round</button></p>
 <label>Original pattern or joint outfit JSON <input id="patternFile" type="file" accept=".json,application/json"></label>
@@ -253,11 +267,10 @@ recover omitted garment components, or supply missing material properties.</p>
 you can select it when adopting the pattern, or choose your own under Fit, exports and mechanical drape. After adopting the pattern, assign materials and freeze selections
 to use the existing consumers. Changing an import input withdraws its review, adopted pattern and any fit specification still selected from that import.</p>
 </details>
-<p class="note">A <code>ftx-outfit-drape/1</code> request composes independently authored garments for one contact solve.
+<details><summary>Working with multi-garment outfits</summary><p class="note">A <code>ftx-outfit-drape/1</code> request composes independently authored garments for one contact solve.
 The original request and source correspondence remain downloadable; the exact composed pattern drives assignments and every consumer below.
 Choose a whole garment, every outfit piece, or an individual piece for substitution. Garment-prefixed piece names keep independent seams and accessory attachments separate. Joint drapes require cloth self-contact;
-scenario requests must also supply <code>options.self_contact</code>. Placements and layer order must already be authored.</p>
-<p id="patternName">No pattern loaded. Export pattern.json from the drafting page or load an existing pattern.</p>
+scenario requests must also supply <code>options.self_contact</code>. Placements and layer order must already be authored.</p></details>
 <label>Assign the inspected selection to <select id="target"><option value="">Pattern default (preserve explicit piece choices)</option></select></label>
 <button id="assign" disabled>Assign inspected material</button><button id="reset" disabled>Clear pending assignments</button>
 <pre id="edits">No pending substitutions.</pre>
@@ -2437,7 +2450,6 @@ Download the original source files to revise a study. Saved files stay on your d
 </section>
 <section><h2>Current results</h2><pre id="progress" aria-live="polite"></pre>
 <div id="outputs"></div><iframe id="viewer" title="Current material drape" sandbox="allow-scripts" hidden></iframe>
-<img id="marker" alt="First material roll preview" hidden>
 <img id="stockMarker" alt="First allocated finite-stock item with defect exclusions" hidden>
 <img id="sewingPreview" alt="Independent flat source frames for the selected sewing operation" hidden></section>
 </main><script type="module" src="materials-page.js"></script></body></html>

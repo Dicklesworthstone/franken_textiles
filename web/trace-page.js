@@ -7,9 +7,12 @@ let worker, epoch = 0, request = 0, pending = null;
 let ready = false, busy = false, hasSheet = false;
 let sheetSource = null, traceOptions = null, restoredEdits = null, draftLoading = false;
 let reviewPattern = null, workbenchTransfer = null;
-let useExhibitSheet = new URL(location.href).searchParams.get("sample") === "bolero";
+const query = new URL(location.href).searchParams;
+let useExhibitSheet = !query.has("blank") && query.get("sample") !== "blank" && ![...query.keys()].some(key => /(?:Import|Return)$/.test(key));
 let runExhibitOnReady = useExhibitSheet;
+let applyExhibitEdits = useExhibitSheet;
 $("exhibitSource").hidden = !useExhibitSheet;
+$("traceReferencePdf").hidden = !useExhibitSheet;
 const urls = [], draftUrls = [], editFields = ["names", "targets", "labels"];
 const editText = id => restoredEdits?.[id]?.displayed === $(id).value ? restoredEdits[id].text : $(id).value;
 
@@ -29,6 +32,7 @@ function clearDraft() {
   for(const url of draftUrls.splice(0)) URL.revokeObjectURL(url);
 }
 function clearResults() {
+  $("traceReading").hidden = true; $("traceJump").href = "#source"; $("traceJump").textContent = "Open the sheet ↓";
   reviewPattern = null; $("openPattern").disabled = $("openMaterials").disabled = true;
   if(workbenchTransfer) workbenchTransfer.pattern = null;
   clearDraft();
@@ -92,6 +96,14 @@ function startWorker() {
       hasSheet = true;
       show(msg);
       controls();
+      if (applyExhibitEdits) {
+        applyExhibitEdits = false;
+        $("names").value = JSON.stringify({ pieces: {
+          p1: { id: "back", name: "Back" }, p2: { id: "front", name: "Right front" }, p3: { id: "sleeve", name: "Sleeve" }
+        } }, null, 2);
+        $("targets").value = JSON.stringify([{ reference: "back/e2", target_mm: 180 }], null, 2);
+        $("apply").click();
+      }
     }
   };
   worker.onerror = (event) => {
@@ -145,7 +157,7 @@ $("trace").onclick = async () => {
   try {
     let file = $("image").files[0];
     if (!file && useExhibitSheet) {
-      const response = await fetch(new URL("../labs/trace-bolero.png", import.meta.url));
+      const response = await fetch(new URL("./atelier-assets/trace-bolero.png", import.meta.url));
       if (!response.ok) throw Error("Could not load the bolero studio sample. Retry or select a local image.");
       file = await response.blob();
       if (generation !== epoch || pending !== id) return;
@@ -171,13 +183,25 @@ $("apply").onclick = () => {
   worker.postMessage({ type: "review", request: id, names, targets, labels });
 };
 
-$("cancel").onclick = startWorker;
+$("cancel").onclick = () => { applyExhibitEdits = false; startWorker(); };
+$("loadTraceExample").onclick = () => {
+  for (const control of sourceControls) {
+    if (control instanceof HTMLSelectElement) control.selectedIndex = 0;
+    else if (control.type === "checkbox") control.checked = control.defaultChecked;
+    else control.value = control.defaultValue;
+  }
+  useExhibitSheet = runExhibitOnReady = applyExhibitEdits = true;
+  $("exhibitSource").hidden = false;
+  $("traceReferencePdf").hidden = false;
+  startWorker();
+};
 for (const input of sourceControls) input.addEventListener("change", () => {
   // Source or trace-setting changes require a new trace, not an edit of the old sheet.
-  runExhibitOnReady = false;
+  runExhibitOnReady = applyExhibitEdits = false;
   if (input === $("image")) {
     useExhibitSheet = false;
     $("exhibitSource").hidden = true;
+    $("traceReferencePdf").hidden = true;
   }
   $("names").value = "{}"; $("targets").value = "[]"; $("labels").value = "[]";
   startWorker();
@@ -240,6 +264,9 @@ function show({ report, files }) {
     p.textContent = `${piece.id}: edges ${piece.edges.join(", ")}; corners ${piece.vertices.join(", ")}`;
     $("pieces").append(p);
   }
+  const extraViews = document.createElement("details"), extraTitle = document.createElement("summary"), extraGrid = document.createElement("div");
+  extraTitle.textContent = "Inspect the audit overlay and source crops";
+  extraGrid.className = "wb-trace-crops"; extraViews.append(extraTitle, extraGrid);
   for (const { name, bytes } of files) {
     const png = name.endsWith(".png");
     const blob = new Blob([bytes], { type: png ? "image/png" : name.endsWith(".zip") ? "application/zip" : "application/json" });
@@ -251,12 +278,18 @@ function show({ report, files }) {
     $("files").append(a);
     if (png && name !== "mask.png") {
       const figure = document.createElement("figure"), image = document.createElement("img"), caption = document.createElement("figcaption");
-      image.src = url; image.alt = name; image.loading = "lazy";
-      caption.textContent = name;
-      figure.append(image, caption); $("pictures").append(figure);
+      const primary = name === "overlay.png";
+      image.src = url; image.loading = primary ? "eager" : "lazy";
+      caption.textContent = primary ? "Traced contours and edge identifiers" : name === "round0_audit.png" ? "Round-zero audit overlay" : "Source crop · " + name.split("/").pop().replace(/\.png$/, "");
+      image.alt = caption.textContent;
+      figure.append(image, caption); (primary ? $("pictures") : extraGrid).append(figure);
     }
   }
+  if (extraGrid.childElementCount) $("pictures").append(extraViews);
   $("results").hidden = false;
+  $("traceReading").textContent = `${report.pieces.length} pieces · ${report.scale_status.toLowerCase()} scale` +
+    (report.scale_fit?.targets?.length ? ` · ${report.scale_fit.targets[0].fitted_mm.toFixed(1)} mm on ${report.scale_fit.targets[0].ref}` : "");
+  $("traceReading").hidden = false; $("traceJump").href = "#results"; $("traceJump").textContent = "See the traced pieces ↓";
   $("status").textContent = "Review ready. Inspect the scale residuals and every audit finding.";
 }
 

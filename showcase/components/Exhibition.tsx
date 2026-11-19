@@ -6,7 +6,7 @@ import { repo, studies, type Study, type View } from "../app/studies";
 import LabBench from "../components/LabBench";
 import TraceReveal from "../components/TraceReveal";
 import { experiments, type Rig } from "../components/materialExperiments";
-import InlineFilm from "../components/InlineFilm";
+import InlineFilm, { PlaybackMark } from "../components/InlineFilm";
 import GarmentPatterns from "./GarmentPatterns";
 import type { PanelOutline } from "../components/garmentMesh";
 
@@ -33,7 +33,7 @@ function Mark() {
 }
 
 function Arrow({ diagonal = false }: { diagonal?: boolean }) {
-  return <span aria-hidden="true" className="arrow">{diagonal ? "↗" : "→"}</span>;
+  return <span aria-hidden="true" className={diagonal ? "arrow arrow-diagonal" : "arrow"}/>;
 }
 
 function Capture({ study }: { study: Study }) {
@@ -160,7 +160,7 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
         <div className="transport"><button disabled={!available} aria-label={playing ? "Pause replay" : "Play replay"} onClick={() => {
           if (playing) play(false);
           else { const start = frame >= 1 ? 0 : frame; setFrame(start); animationStart.current = performance.now() - start * 9500; play(true); }
-        }}>{playing ? "Ⅱ" : "▶"}</button>
+        }}><PlaybackMark playing={playing}/></button>
           <input aria-label="Fold replay position" type="range" min="0" max="1" step="0.001" value={frame}
             onChange={e => { play(false); setFrame(Number(e.target.value)); }}/>
           <span className="mono phase">{phase}</span></div></>}
@@ -223,7 +223,7 @@ export default function Exhibition({section}: {section?: string}) {
           <h1 id="hero-title">The pattern<br/><em>room.</em></h1>
           <p>Draft the pieces, follow the fold, and see where every stitch lands. A sewing studio you can explore in your browser.</p>
           <div className="actions"><a className="primary" href="#wardrobe">Explore the wardrobe <span aria-hidden="true">↓</span></a>
-            <button className="watch" onClick={() => setItem({ tour: true })}><span className="play-ring">▶</span> Watch the studio tour</button></div>
+            <button className="watch" onClick={() => setItem({ tour: true })}><span className="play-ring"><PlaybackMark/></span> Watch the studio tour</button></div>
         </div><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/>
           <button className="card-open" aria-label="Open the wardrobe reel" onClick={()=>setItem({reel:true})}/></div>
           <figcaption><span>Inside the wardrobe</span><button onClick={()=>setItem({reel:true})}>View reel <Arrow diagonal/></button></figcaption>
@@ -271,12 +271,19 @@ export default function Exhibition({section}: {section?: string}) {
           setFilmChosen(true);setScreening(f);
           if(projection.current && projection.current.getBoundingClientRect().bottom<120) projection.current.scrollIntoView({block:"start"});
         }}>
-          <img src={`/media/${f.id}.jpg`} alt="" loading="lazy"/><span><small className="mono">{f.detail}</small><strong>{f.title}</strong></span><span className="play-ring">▶</span></button>)}</div>
+          <img src={`/media/${f.id}.jpg`} alt="" loading="lazy"/><span><small className="mono">{f.detail}</small><strong>{f.title}</strong></span><span className="play-ring"><PlaybackMark/></span></button>)}</div>
       </div></section>}
-      {show("tools") && <section className="paper"><div className="wrap bench"><div><p className="kicker">Local browser tools</p><Heading className="section-title"><a href="/sections/tools/">Bring your own project<span>.</span></a></Heading>
-        <p>Start from a scan, a material sample, or a measured draft. Your files stay in your browser. The drape studies use synthetic bodies. Physical fit takes a muslin or a dressed photo.</p></div>
-        <div className="bench-links"><a href="/workbench/index.html">Pattern workbench <Arrow diagonal/></a><a href="/workbench/trace.html">Trace a pattern sheet <Arrow diagonal/></a>
-          <a href="/workbench/materials.html">Material workbench <Arrow diagonal/></a><a href="/workbench/photo.html">Photo measurements <Arrow diagonal/></a></div>
+      {show("tools") && <section className="paper"><div className="wrap workbench-library"><div className="section-top"><div><p className="kicker">Run FrankenTextiles in your browser</p><Heading className="section-title"><a href="/sections/tools/">The workbenches<span>.</span></a></Heading></div>
+        <p>Each opens with a working example. Load your own files when you’re ready. Everything runs on your device.</p></div>
+        <div className="workbench-shelves">{[
+          ["index","Pattern drafting","Change the bolero’s cut and print its pieces.","drafting.webp"],
+          ["trace","Pattern tracing","Recover three cut pieces from a scanned sheet.","trace-review.webp"],
+          ["materials","Material studies","Inspect the cloth and its material properties.","material-rig.webp"],
+          ["photo","Photo measurements","Measure the chalk marks on a sleeve using an A4 reference.","photo-example-sleeve.jpg"],
+        ].map(([page,title,description,image])=><a key={page} href={`/workbench/${page}.html`}>
+          <img src={`/workbench/atelier-assets/${image}`} alt="" loading="lazy"/>
+          <div><h3>{title}</h3><p>{description}</p></div><Arrow diagonal/>
+        </a>)}</div>
       </div></section>}
     </main>
     <footer className="base"><div className="wrap"><a className="wordmark" href="/"><Mark/>Franken<span>Textiles</span></a><a href={repo}>Source on GitHub <Arrow diagonal/></a></div></footer>

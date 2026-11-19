@@ -32,12 +32,20 @@ function heightRuler() {
 
 export default function SundressScene({form,view,onArm,onError,onReadings}:Props){
   const host=useRef<HTMLDivElement>(null);
-  const [native,setNative]=useState<Awaited<ReturnType<typeof loadSundressBody>>|null>(null);
+  const [native,setNative]=useState<(Awaited<ReturnType<typeof loadSundressBody>>&{portrait:T.Texture|null})|null>(null);
   const latest=useRef({form,view,onArm,onError,onReadings}),redraw=useRef<(()=>void)|null>(null);
   useEffect(()=>{latest.current={form,view,onArm,onError,onReadings};redraw.current?.();},[form,view,onArm,onError,onReadings]);
   useEffect(()=>{
-    let alive=true;loadSundressBody().then(body=>{if(alive)setNative(body);else body.geometry.dispose();}).catch(()=>{if(alive)latest.current.onError();});
-    return ()=>{alive=false;};
+    let alive=true;
+    let portrait:T.Texture|null=null;
+    const image=new T.TextureLoader().loadAsync("/sundress/complexion.webp").catch(()=>null);
+    Promise.all([loadSundressBody(),image]).then(([body,texture])=>{
+      portrait=texture;
+      if(!alive){body.geometry.dispose();texture?.dispose();return;}
+      if(texture)texture.colorSpace=T.SRGBColorSpace;
+      setNative({...body,portrait:texture});
+    }).catch(()=>{void image.then(texture=>texture?.dispose());if(alive)latest.current.onError();});
+    return ()=>{alive=false;portrait?.dispose();};
   },[]);
   useEffect(()=>{
     if(!native)return;
@@ -61,7 +69,7 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
     Object.assign(light.shadow.camera,{left:-120,right:120,top:135,bottom:-135,near:.1,far:650});light.shadow.camera.updateProjectionMatrix();
     light.shadow.bias=-.00012;light.shadow.normalBias=.05;scene.add(light,light.target);
     const rim=new T.DirectionalLight(0xffdbb4,1.65);rim.position.set(100,170,-165);scene.add(rim);
-    const styled=styleFigure(native.geometry,native.landmarks),body=new T.Mesh(native.geometry,styled.materials);
+    const styled=styleFigure(native.geometry,native.landmarks,native.portrait),body=new T.Mesh(native.geometry,styled.materials);
     body.castShadow=body.receiveShadow=true;
     const garment=buildDress(),wrap=registerDress(garment,native.geometry,native.armAt);
     const ruler=heightRuler();scene.add(body,styled.head,garment,ruler);

@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 
+export function PlaybackMark({playing=false}: {playing?:boolean}) {
+  return <span aria-hidden="true" className={playing ? "playback-mark is-playing" : "playback-mark"}/>;
+}
+
 export default function InlineFilm({ id, title, controls = false, requested = false }: { id: string; title: string; controls?: boolean; requested?: boolean }) {
   const video = useRef<HTMLVideoElement>(null);
   const toggle = useRef<() => void>(()=>{});
@@ -43,6 +47,6 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
   return <>
     <video ref={video} className="inline-film" poster={`/media/${id}.jpg`} preload="none" muted loop playsInline controls={controls} aria-label={title}/>
     {!controls && <button type="button" className="inline-transport" aria-label={`${playing?"Pause":"Play"} ${title} preview`}
-      onClick={()=>toggle.current()}><span aria-hidden="true">{playing?"Ⅱ":"▶"}</span></button>}
+      onClick={()=>toggle.current()}><PlaybackMark playing={playing}/></button>}
   </>;
 }
