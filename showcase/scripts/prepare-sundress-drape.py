@@ -14,12 +14,15 @@ HERE = Path(__file__).resolve().parent
 dress = run_path(str(HERE / "prepare-sundress.py"), run_name="sundress")
 packing = run_path(str(HERE / "prepare-hussar-drape.py"), run_name="packing")
 
-# Wrap radii of the two bodice and two skirt panels (mm). They only set where the cloth starts.
-START_RADIUS = {"bodice": 177, "skirt": 255}
+# Wrap radii of the two bodice and two skirt panels (mm): where the cloth starts. The settled skirt is not
+# independent of its start. From 255 mm it settles standing well away from the waist front and back; from
+# 200 mm the gathers tangle and the solver reports the skirt sliding 62 mm; 220 mm settles clean with the
+# smallest step of the three. All three were run at 20 mm with the arguments below.
+START_RADIUS = {"bodice": 177, "skirt": 220}
 # Cloth collides with the form, not yet with itself: the gathered waist starts with its folds crossed, and
 # the solver refuses self-contact from a crossed start. 15 degrees of arm is too close to the trunk for this
 # form's posed surface; 22 passes its audit.
-DRAPE_ARGS = ["--spacing-mm", "20", "--time-subdivision", "--arm-deg", "22", "--drape", "100", "--max-settle-steps", "150"]
+DRAPE_ARGS = ["--spacing-mm", "20", "--time-subdivision", "--arm-deg", "22", "--drape", "150", "--max-settle-steps", "256"]
 
 
 def inputs():
