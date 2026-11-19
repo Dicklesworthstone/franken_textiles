@@ -38,11 +38,11 @@ try{
   async function pose(yaw,y,span){
     await page.evaluate(async ([angle,y,span])=>{window.ftxHussarFrame(angle,y,span);await new Promise(r=>requestAnimationFrame(r));},[yaw,y,span]);
   }
-  await pose(-.17,128,66);
+  await pose(-.17,136,75);
   await writeFile(poster,await page.screenshot({type:"jpeg",quality:94}),{flag:"wx"});
   await select("Blue","Dressed");
   await page.setViewportSize({width:1000,height:850});
-  await pose(.24,151.4,47.6);
+  await pose(.24,154,56);
   await writeFile(path.join(dest,"hussar.jpg"),await page.screenshot({type:"jpeg",quality:95}),{flag:"wx"});
   if(process.env.HUSSAR_STILLS_ONLY==="1") {
     console.log("Rendered the film poster and clean portrait in "+dest);
@@ -59,10 +59,10 @@ try{
   const encoder=spawn("ffmpeg",["-v","error","-n","-f","image2pipe","-framerate",String(fps),"-i","pipe:0","-an","-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-movflags","+faststart",output],{stdio:["pipe","ignore","inherit"]});
   const done=once(encoder,"close");encoder.stdin.on("error",()=>{});
   const shots=[
-    {reg:"Blue",layer:"Dressed",label:"PUTBUS   /   BRAIDED DOLMAN",start:[.32,151,47],end:[-.21,140,54]},
-    {reg:"Compare",layer:"Dressed",label:"BLUE AND YELLOW HUSSARS   /   1761",start:[-.18,119,78],end:[.12,99,111]},
+    {reg:"Blue",layer:"Dressed",label:"PUTBUS   /   BLUE TROOPER 1761",start:[.32,154,56],end:[-.21,149,61]},
+    {reg:"Compare",layer:"Dressed",label:"BLUE AND YELLOW HUSSARS   /   1761 UNIFORM",start:[-.18,127,84],end:[.12,101,112]},
     {reg:"Compare",layer:"Pelisse",label:"TWO PELISSES   /   FUR-TRIMMED FRONTS",start:[-.37,118,49],end:[.34,117,54]},
-    {reg:"Yellow",layer:"Dressed",label:"WRANGEL   /   CHAMOIS PELISSE",start:[.42,133,59],end:[.1,151,47]},
+    {reg:"Yellow",layer:"Dressed",label:"WRANGEL   /   YELLOW TROOPER 1765",start:[.42,143,67],end:[.1,154,56]},
   ];
   try{
     for(const [shotIndex, shot] of shots.entries()){

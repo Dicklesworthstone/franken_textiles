@@ -132,10 +132,11 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
     const positions:number[]=[],uv:number[]=[],tri:number[]=[],edges:XYZ[][]=[[],[]];
     const rows=54;
     for(let i=0;i<=rows;i++){
-      const t=i/rows, x=side*(-13.5+26.5*t), y=6.15+40.0*t;
+      const t=i/rows, x=side*(-11.85+23.80*t), y=2.45+42.5*t;
       for(const [j,k] of [-1,1].entries()){
         const bx=x+k*halfWidth*.847, by=y-k*halfWidth*.527*side;
-        const z=(reverse?-1:1)*(front(bx,by)+(reverse?.24:.99));
+        const lift=reverse?.20:.87*(1-T.MathUtils.smoothstep(t,.86,1))+.13;
+        const z=(reverse?-1:1)*(front(bx,by)+lift);
         positions.push(bx,96+by,z);uv.push(j,t);
         edges[j].push([bx,96+by,z+(reverse?-.035:.035)]);
       }
@@ -148,7 +149,13 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
       const left=edges[0][rows],right=edges[1][rows],v:number[]=[],tris:number[]=[],map:number[]=[];
       for(let i=0;i<=15;i++){
         const a=Math.PI*i/15;
-        for(const [j,p] of [left,right].entries()){v.push(p[0],p[1]+2.6*Math.sin(a),p[2]*Math.cos(a));map.push(j,i/15);}
+        for(const [j,p] of [left,right].entries()){
+          const bx=p[0],bz=p[2]*Math.cos(a);
+          let shoulder=39;
+          for(let y=48.5;y>=39;y-=.11){const [w,d]=profile(y);if((bx/w)**2+(bz/d)**2<=1){shoulder=y;break;}}
+          const margin=Math.min(1,4*Math.sin(a));
+          v.push(bx,T.MathUtils.lerp(p[1],96+shoulder+.16,margin),bz);map.push(j,i/15);
+        }
         if(i<15){const k=2*i;tris.push(k,k+2,k+1,k+1,k+2,k+3);}
       }
       const bridge=new T.BufferGeometry();bridge.setAttribute("position",new T.Float32BufferAttribute(v,3));
@@ -159,10 +166,11 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
   crossbelt(-1,1.07,false);crossbelt(-1,1.07,true);
   mesh(base,shell([[92,14,10],[96,14.4,10.25],[99,13.8,9.8]]),buff);
   for(const s of [-1,1]){
-    mesh(shoulderCord,shell([[83.8,3.7,3.8,s*26.1,3.5],[85.4,4.49,4.65,s*26.0,3.46],[89.4,4.90,4.91,s*25.93,3.04],[92.0,5.31,5.12,s*25.72,2.53]],0,tau,.035),chamois);
-    ring(shoulderCord,welt,91.95,5.32,5.12,.11,s*25.72,2.53);
+    mesh(shoulderCord,shell([[83.8,3.88,4.1,s*26.1,3.5],[85.4,4.75,4.95,s*26.0,3.46],[87.1,5.33,5.35,s*26.0,3.3],[89.4,5.51,5.60,s*25.93,2.83],[92.0,5.74,5.76,s*25.72,2.53]],0,tau,.025),chamois);
+    ring(shoulderCord,welt,91.95,5.75,5.76,.11,s*25.72,2.53);
     const leg:Profile[]=[[37,3.7,3.7,s*10.5,0],[46,4.1,4.45,s*10.5,.55],[47.7,4.45,5.2,s*10.5,.6],[49,5.6,6.15,s*10,0],[50.5,5.25,5.8,s*10,.15],[52.5,5.8,6.1,s*10,.1],[56,5.82,6.1,s*10.1,.1],[60,6.4,6.7,s*10.5,.5],[63,6.95,7.55,s*10.3,1.1],[65,6.85,7.43,s*10.3,1.4],[74,7.7,8.8,s*9.8,.4],[88,8.5,9.4,s*8.5,.6],[93,8.4,9.1,s*7.8,.3],[98,7,8,s*7,.1]];
-    mesh(base,shell(leg,0,tau,.027),buff);
+    const breeches:Profile[]=[[79.6,7.10,7.71,s*9.5,.43],[83.4,8.07,8.61,s*9.05,.45],...leg.filter(row=>row[0]>=88)];
+    mesh(base,shell(breeches,0,tau,.018),buff);
     const hose=leg.filter(row=>row[0]<=88).map(([y,w,d,x,z]):Profile=>[y,w+.16,d+.16,x,z]);
     hose[hose.length-1]=[83.1,8.56,9.37,s*9.08,.45];
     const charivade=shell(hose,0,tau,.023);
@@ -192,6 +200,8 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
       tube(base,bootEdge,fold,.085);
     }
     mesh(base,shell([[.25,5.05,11.6,s*10.5,4.7],[1.9,5.4,12.2,s*10.5,5]]),bootEdge);
+    const heel=mesh(base,new T.BoxGeometry(7.05,1.8,5.98),bootEdge);
+    heel.position.set(s*10.5,.98,-3.3);
   }
   for(let i=0;i<12;i++)ring(base,i%3===0?darkCord:yellow,97.15+i*.37,15.42+(i%3)*.08,11.36,.265);
   for(let i=0;i<18;i++){

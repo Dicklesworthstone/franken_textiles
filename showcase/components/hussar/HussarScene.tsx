@@ -75,8 +75,8 @@ export default function HussarScene({regiment,layer,framing,onFailure}:{onFailur
       const isolated = next.layer === "Pelisse";
       const detail = next.framing.preset === "Chest";
       const bust = next.framing.preset === "Bust" && !isolated;
-      const targetHeight = bust ? 145 : detail ? 125 : isolated ? 117 : 99;
-      const preferredSpan = bust ? 53 : detail ? (isolated ? 28 : 41) : (isolated ? 42 : 109);
+      const targetHeight = bust ? 151 : detail ? 125 : isolated ? 117 : 101;
+      const preferredSpan = bust ? 59 : detail ? (isolated ? 28 : 41) : (isolated ? 42 : 113);
       const span = Math.max(preferredSpan, (paired ? 76 : 32) / aspect);
       const yaw = next.framing.preset === "Reverse" ? Math.PI - .28 : isolated ? .34 : -.27;
       camera.zoom = 1;
