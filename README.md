@@ -10,18 +10,24 @@
 
 </div>
 
-**FrankenTextiles makes sewing patterns that demonstrably sew together and fit a specific body, and writes
-the files people and machines need to make them.**
+**FrankenTextiles is a fitting room for a sewist and a vision-capable AI agent.** Start with a garment
+brief, a measured draft or an existing 2D pattern. The agent can sew a candidate on a fitted body in
+simulation, look at the result, identify the pattern edge under a pixel and try a different cut. Each
+round keeps its inputs, views and checks so the sewist and agent can compare alternatives.
 
-Give it a garment idea, an existing pattern, or a pattern sheet an image model drew. Give it whatever you
-know about the wearer: a few tape measurements, photos with a sheet of paper in frame, a short video, or just
-age and height. It drafts or traces the pattern, checks every seam and every fit point on the flat pattern,
-fits a realistic body model to the wearer, sews the pieces together around that body with a contact-correct
-cloth solver, and exports print-at-home PDFs, DXF for cutting services, HPGL for plotters, cutter files and
-embroidery files for the braid.
+The sewist supplies the design intent. The agent interprets the silhouette, wrinkles and reference
+images and chooses a revision. FrankenTextiles checks the flat seams and ease, solves cloth contact,
+reports uncertainty and writes the PDFs and manufacturing files. A muslin or dressed photo supplies
+the evidence of fit on the wearer.
 
 It is the mechanical core of the `fabric-pattern-creation-and-alteration` agent skill, rebuilt in Rust so it
 is deterministic, testable against known answers, and runs in a browser with nothing to install.
+
+In this synthetic bolero fitting, the simulated cuffs covered most of the hands. Shortening the
+sleeve draft by 50 mm brought the cuffs back towards the wrists. Both rounds used the same body,
+pose, material and fit contract. [Run the visual fitting skill](.agents/skills/visual-pattern-fitting/SKILL.md).
+
+![Front views of the same bolero before and after shortening its sleeves, with the flat sleeve outlines for comparison](showcase/public/fittings/sleeve-revision.png)
 
 **[The Pattern Room](showcase/README.md)** lets you pose an adult dress form inside a fixed sundress,
 compare two Swedish hussar uniforms from 1761, or follow a single flat sleeve into a sewn bolero.

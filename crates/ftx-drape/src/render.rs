@@ -310,6 +310,25 @@ pub struct Camera {
     pub focal_over_sensor: f64,
 }
 
+impl Camera {
+    fn axes(self) -> (Vec3, Vec3, Vec3) {
+        let forward = (self.target - self.eye).normalized();
+        let right = forward.cross(Vec3::new(0.0, 0.0, 1.0)).normalized();
+        (forward, right, right.cross(forward))
+    }
+
+    fn pixel_rays(self, [w, h]: [usize; 2]) -> impl Fn(usize, usize) -> Vec3 {
+        let (forward, right, up) = self.axes();
+        let half_w = 0.5 / self.focal_over_sensor;
+        let aspect = h as f64 / w as f64;
+        move |x, y| {
+            let px = ((x as f64 + 0.5) / w as f64 * 2.0 - 1.0) * half_w;
+            let py = (1.0 - (y as f64 + 0.5) / h as f64 * 2.0) * half_w * aspect;
+            (forward + right * px + up * py).normalized()
+        }
+    }
+}
+
 /// The sRGB encode of linear light in [0, 1], then 8 bits (frankensim `fs-img` `film.rs`).
 fn srgb8(linear: f64) -> u8 {
     let l = linear.clamp(0.0, 1.0);
@@ -336,9 +355,7 @@ fn radical_inverse(mut k: u32, b: u32) -> f64 {
 #[must_use]
 pub fn render(meshes: &[&ColouredMesh], cam: Camera, width: usize, height: usize) -> Vec<u8> {
     let scene = Scene::new(meshes);
-    let fwd = (cam.target - cam.eye).normalized();
-    let right = fwd.cross(Vec3::new(0.0, 0.0, 1.0)).normalized();
-    let up = right.cross(fwd);
+    let (fwd, right, up) = cam.axes();
     // lights in the camera's frame: key from the upper left, fill from the right
     let key = (up * 0.8 - right * 0.6 - fwd * 0.9).normalized();
     let fill = (right * 0.7 + up * 0.2 - fwd * 0.6).normalized();
@@ -351,12 +368,9 @@ pub fn render(meshes: &[&ColouredMesh], cam: Camera, width: usize, height: usize
             [r * c, r * s, det::sqrt((1.0 - u).max(0.0))]
         })
         .collect();
-    let half_w = 0.5 / cam.focal_over_sensor;
-    let aspect = height as f64 / width as f64;
+    let ray = cam.pixel_rays([width, height]);
     let pixel = |x: usize, y: usize| -> [u8; 3] {
-        let px = ((x as f64 + 0.5) / width as f64 * 2.0 - 1.0) * half_w;
-        let py = (1.0 - (y as f64 + 0.5) / height as f64 * 2.0) * half_w * aspect;
-        let d = (fwd + right * px + up * py).normalized();
+        let d = ray(x, y);
         let o = [cam.eye.x, cam.eye.y, cam.eye.z];
         let dd = [d.x, d.y, d.z];
         let rgb = match scene.cast(o, dd, f64::INFINITY, false) {
@@ -487,16 +501,14 @@ pub fn png(width: usize, height: usize, rgb: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The reference's six stills of a drape: (name, PNG). `garment` and `strain` are the same cloth in the
-/// seam and in the strain colours.
-#[must_use]
-pub fn stills(
-    body: &ColouredMesh,
-    garment: &ColouredMesh,
-    strain: &ColouredMesh,
-    width: usize,
-    height: usize,
-) -> Vec<(String, Vec<u8>)> {
+fn still_camera(body: &ColouredMesh, garment: &ColouredMesh, view: &str) -> Option<Camera> {
+    let az: f64 = match view {
+        "front" | "strain_front" => 0.0,
+        "side" => 90.0,
+        "back" | "strain_back" => 180.0,
+        "three_quarter" => 35.0,
+        _ => return None,
+    };
     let zs = |m: &ColouredMesh| {
         m.vertices
             .iter()
@@ -510,28 +522,90 @@ pub fn stills(
     let zc = (0.5 * (glo + ghi))
         .max(blo + 0.25 * tall)
         .min(blo + 0.8 * tall);
-    let target = Vec3::new(0.0, 0.0, zc);
-    let shots: [(&str, f64, &ColouredMesh); 6] = [
-        ("front", 0.0, garment),
-        ("side", 90.0, garment),
-        ("back", 180.0, garment),
-        ("three_quarter", 35.0, garment),
-        ("strain_front", 0.0, strain),
-        ("strain_back", 180.0, strain),
-    ];
-    shots
-        .iter()
-        .map(|&(name, az, cloth)| {
-            let (s, c) = det::sin_cos(az.to_radians());
-            let cam = Camera {
-                eye: Vec3::new(2.0 * s, -2.0 * c, zc + 0.12),
-                target,
-                focal_over_sensor: 50.0 / 36.0,
-            };
-            let rgb = render(&[body, cloth], cam, width, height);
-            (format!("still_{name}.png"), png(width, height, &rgb))
-        })
-        .collect()
+    let (s, c) = det::sin_cos(az.to_radians());
+    Some(Camera {
+        eye: Vec3::new(2.0 * s, -2.0 * c, zc + 0.12),
+        target: Vec3::new(0.0, 0.0, zc),
+        focal_over_sensor: 50.0 / 36.0,
+    })
+}
+
+/// First visible surface along the exact ray used for an unscaled native still.
+#[derive(Debug, PartialEq)]
+pub enum StillHit {
+    /// The ray missed both meshes.
+    Background,
+    /// The body occludes any cloth behind the first hit.
+    Body,
+    /// The first hit belongs to the garment endpoint.
+    Garment {
+        /// Native garment vertex indices, before the renderer concatenates body and cloth.
+        vertices: [usize; 3],
+        /// Intersection in the posed, z-up simulation frame.
+        position_m: Vec3,
+    },
+}
+
+/// Pixels start at the upper-left. `None` denotes an unknown view or coordinates outside the image.
+#[must_use]
+pub fn pick_still(
+    body: &ColouredMesh,
+    garment: &ColouredMesh,
+    view: &str,
+    size: [usize; 2],
+    pixel: [usize; 2],
+) -> Option<StillHit> {
+    if pixel[0] >= size[0] || pixel[1] >= size[1] {
+        return None;
+    }
+    let cam = still_camera(body, garment, view)?;
+    let d = cam.pixel_rays(size)(pixel[0], pixel[1]);
+    let scene = Scene::new(&[body, garment]);
+    let hit = scene.cast(
+        [cam.eye.x, cam.eye.y, cam.eye.z],
+        [d.x, d.y, d.z],
+        f64::INFINITY,
+        false,
+    );
+    Some(match hit {
+        None => StillHit::Background,
+        Some(h) if h.tri < body.triangles.len() => StillHit::Body,
+        Some(h) => StillHit::Garment {
+            vertices: garment.triangles[h.tri - body.triangles.len()],
+            position_m: cam.eye + d * h.t,
+        },
+    })
+}
+
+/// The reference's six stills of a drape. Construction and strain use the same geometry.
+#[must_use]
+pub fn stills(
+    body: &ColouredMesh,
+    garment: &ColouredMesh,
+    strain: &ColouredMesh,
+    width: usize,
+    height: usize,
+) -> Vec<(String, Vec<u8>)> {
+    [
+        "front",
+        "side",
+        "back",
+        "three_quarter",
+        "strain_front",
+        "strain_back",
+    ]
+    .iter()
+    .map(|&name| {
+        let cloth = if name.starts_with("strain_") {
+            strain
+        } else {
+            garment
+        };
+        let cam = still_camera(body, garment, name).expect("known native still");
+        let rgb = render(&[body, cloth], cam, width, height);
+        (format!("still_{name}.png"), png(width, height, &rgb))
+    })
+    .collect()
 }
 
 /// A schematic felt fez (spec 04 §9.9), from finished radii/height in metres. Its base is open;

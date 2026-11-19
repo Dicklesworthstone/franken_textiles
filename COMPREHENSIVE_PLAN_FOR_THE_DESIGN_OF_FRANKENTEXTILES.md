@@ -92,7 +92,11 @@ the specs state exact behaviour.
 
 - A parent or home sewist making clothes for a particular child or adult, through the skill or the browser
   page, with no install.
-- An agent running the skill's round loop (draft → validate → drape → alter → repeat → export).
+- A vision-capable agent working with a sewist. The agent reads the brief and the rendered garment,
+  locates the visible feature on the flat piece, proposes an edit and compares the next dressed
+  round against the same brief. The engine supplies deterministic geometry, simulation, refusal
+  reasons and manufacturing checks. Choosing a silhouette or accepting a tradeoff belongs to the
+  sewist and agent. A real wearing trial supplies independent fit evidence.
 - A pattern maker or small producer who needs industry files and a believable fit check before cutting cloth.
 
 ### 1.4 What FrankenTextiles is not

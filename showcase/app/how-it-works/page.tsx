@@ -5,7 +5,7 @@ import { repo } from "../../components/site/links";
 
 export const metadata: Metadata = {
   title: "How it works · FrankenTextiles",
-  description: "How FrankenTextiles turns measurements into a checked sewing pattern: a fitted body model, a seam-by-seam flat check, a cloth simulation with contact and friction, and the files to cut and stitch it.",
+  description: "Follow a visual fitting from a long bolero sleeve to a revised sewing pattern. Inspect the simulated garment, find the flat edge, and compare two cuts on the same body.",
   alternates: { canonical: "/how-it-works/" },
 };
 
@@ -45,13 +45,31 @@ export default function HowItWorks() {
     <section className="ft-hero"><div className="wrap ft-hero-grid">
       <div><p className="kicker">How it works</p>
         <h1>From a tape measure to <em>cut cloth</em>.</h1></div>
-      <div><p className="ft-lead">Give it a garment idea, a pattern you already have, or a pattern sheet that an image model drew.
-        Tell it what you know about the wearer. It drafts or traces the pattern, checks every seam, fits a body model,
-        sews the pieces together in simulation, and writes the files to make it.</p>
+      <div><p className="ft-lead">A sewist sets the brief. A vision-capable agent inspects the dressed body, edits the flat
+        pattern and tries another cut. FrankenTextiles sews each version in simulation and keeps the views, seam checks
+        and files that let you decide what to make.</p>
         <div className="ft-hero-actions"><a className="primary" href="/get-started/">Get started <span aria-hidden="true" className="arrow"/></a>
           <a className="ft-text-link" href="/#drape-room">See a garment sewn <span aria-hidden="true" className="arrow"/></a></div></div>
     </div></section>
     <div className="ft-tape" aria-hidden="true"/>
+
+    <section id="visual-fitting" className="ft-block"><div className="wrap ft-block-grid">
+      <div className="ft-block-head"><p className="kicker">A visual fitting</p><h2>Let the hands show.</h2>
+        <p>Two bolero cuts, one reference body and one change to the flat pattern.</p></div>
+      <div className="ft-prose">
+        <a href="/fittings/sleeve-revision.png"><img src="/fittings/sleeve-revision.png" width="2000" height="683"
+          style={{width:"100%",height:"auto"}} alt="The original cuffs cover the hands. The revised cuffs end near the wrists. The flat sleeve outlines share the same cap and differ at the hem."/></a>
+        <p>Both drapes settled. In the first front view, most of each hand was still inside a sleeve.
+          A pixel at the left cuff traced back to the <code>hem</code> edge of the <code>sleeve</code> pattern piece.
+          Shortening the draft from 385 to 335 mm exposed the hands while keeping the sleeve cap and body cut.</p>
+        <p>The revised sleeve is 15 mm longer than the reference arm. Both runs used the same pose, material and
+          body measurements. A wearing trial would establish how the cuff sits on a person.</p>
+        <div className="ft-hero-actions"><a className="ft-text-link" href="/fittings/bolero-revision-A4.pdf" download>
+          Print the revised A4 pattern <span aria-hidden="true" className="arrow"/></a>
+          <a className="ft-text-link" href={repo+"/blob/main/.agents/skills/visual-pattern-fitting/SKILL.md"}>
+          Reproduce the fitting <span aria-hidden="true" className="arrow"/></a></div>
+      </div>
+    </div></section>
 
     <section className="ft-block"><div className="wrap ft-block-grid">
       <div className="ft-block-head"><p className="kicker">Why it exists</p><h2>A drawing is not a pattern.</h2></div>

@@ -23,6 +23,7 @@ mod export;
 mod fabric;
 mod fold;
 mod import;
+mod inspect_pixel;
 mod materials;
 mod measure;
 mod outfit;
@@ -76,6 +77,7 @@ const USAGE: &str = "usage:
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--model PATH] [--json]
   ftx render DRAPE_DIR [--res 960x540] [--json]
+  ftx inspect-pixel ROUND_DIR --view front|side|back|three_quarter|strain_front|strain_back --pixel X,Y [--json]
   ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]
   ftx report WS [--json]
   ftx sim-points SIMDIR --pattern P --measurements M [--json]
@@ -1201,6 +1203,7 @@ fn main() -> ExitCode {
         Some("import") => emit("import", args.json, import::cmd_import(&args)),
         Some("draft") => emit("draft", args.json, draft::cmd_draft(&args)),
         Some("render") => emit("render", args.json, render::cmd_render(&args)),
+        Some("inspect-pixel") => emit("inspect-pixel", args.json, inspect_pixel::run(&args)),
         Some("viewer") => emit("viewer", args.json, fold::cmd_viewer(&args)),
         Some("report") => emit("report", args.json, round::cmd_report(&args)),
         Some("sim-points") => emit("sim-points", args.json, fold::sim_points(&args)),

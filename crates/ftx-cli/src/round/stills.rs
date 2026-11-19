@@ -138,6 +138,55 @@ mod tests {
     }
 
     #[test]
+    fn inspect_pixel_identifies_the_visible_panel_and_its_authored_edge() {
+        let rd = scene();
+        let sim = json!({"settled":false,"gating":["moving"]});
+        let (rendering, images) = publish(&rd, 7, Some(&sim), Some((96, 72))).unwrap();
+        let entry = json!({"round":7,"sim":sim,"rendering":rendering,"images":images});
+        super::super::write_json(&rd.join("round.json"), &entry).unwrap();
+        super::super::write_json(
+            &rd.join("pattern.json"),
+            &json!({"schema":"fabric-pattern/1","units":"mm","pieces":[{
+            "id":"panel","cut":{"qty":2},"vertices":{"A":[0,0],"B":[60,0],"C":[60,70],"D":[0,70]},
+            "edges":[{"id":"hem","from":"A","to":"B"},{"id":"outer","from":"B","to":"C"},
+            {"id":"upper","from":"C","to":"D"},{"id":"inner","from":"D","to":"A"}]}],"seams":[]}),
+        )
+        .unwrap();
+        super::super::write_json(&rd.join("sim/mesh_map.json"), &json!({"vertices":4,"inst_range":{"panel.L":[0,4]},
+            "edges":{"panel.L/hem":[0,1],"panel.L/outer":[1,2],"panel.L/upper":[2,3],"panel.L/inner":[3,0]}})).unwrap();
+        let pick = |view: &str, pixel: &str| {
+            let argv = [
+                "inspect-pixel",
+                rd.to_str().unwrap(),
+                "--view",
+                view,
+                "--pixel",
+                pixel,
+            ]
+            .map(String::from);
+            crate::inspect_pixel::run(&crate::parse(&argv).unwrap()).map(|r| r.0)
+        };
+        let r = pick("front", "48,58").unwrap();
+        assert_eq!(r["hit"]["instance"], "panel.L");
+        assert_eq!(r["hit"]["piece"], "panel");
+        assert_eq!(r["hit"]["nearest_edge"]["source_edge"], "hem");
+        assert_eq!(
+            r["hit"]["nearest_edge"]["from"],
+            json!({"vertex":"A","xy_mm":[0,0]})
+        );
+        assert_eq!(r["gating"], json!(["moving"]));
+        assert_eq!(pick("strain_front", "48,58").unwrap()["hit"], r["hit"]);
+        assert_eq!(pick("back", "48,36").unwrap()["hit"]["surface"], "body");
+        assert_eq!(
+            pick("front", "0,0").unwrap()["hit"]["surface"],
+            "background"
+        );
+        assert!(pick("front", "96,0").is_err());
+        assert!(pick("front", "-1,4").is_err());
+        assert!(pick("../preview", "0,0").is_err());
+    }
+
+    #[test]
     fn skipped_and_failed_physics_never_open_apparent_success_artifacts() {
         let rd = scene();
         let failed = json!({"settled":false,"gating":["solver failed"],"refusal":{"code":"io"}});

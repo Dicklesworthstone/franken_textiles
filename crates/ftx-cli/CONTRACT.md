@@ -1,5 +1,12 @@
 # ftx-cli contract
 
+`ftx inspect-pixel ROUND_DIR --view VIEW --pixel X,Y --json` casts the saved still's ray through
+the body and garment endpoint. Pixels are zero-based from the original PNG's upper left. A cloth
+hit names the physical instance, authored piece, nearest sampled boundary in posed 3D, its distance
+in mm and the authored edge endpoints in flat millimetres. A body or background hit has no pattern
+edge. The round retains its original gating flags. Older completed rounds with native stills work
+from their existing OBJ files and mesh map.
+
 **Initial drafting from a selected body.** `ftx draft PROGRAM --model PATH` fits
 the supplied tape evidence; `--body-fit REPORT [--model PATH]` reuses the selected
 accepted shape without refitting. Both supply dimensions and placement through
