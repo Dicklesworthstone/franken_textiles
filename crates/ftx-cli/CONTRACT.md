@@ -377,6 +377,25 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   into DRAPE_DIR as `still_{front,side,back,three_quarter,strain_front,strain_back}.png`, printing
   `{"stills": {view: path}}` as the reference's `blender_sew.py --stills-from` does; no Blender. A missing
   or unreadable OBJ, empty mesh or non-finite geometry is refused (`io`, `invalid_document`).
+- `ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM]
+  [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--res WxH] [--json]`: where a pattern
+  starts on the body, for a person or an agent authoring placements and judging a cut by eye. It runs the
+  drape's own scope admission, mesh, isometric wrap, pre-sew and relaxation (spec 04 §2–4) and **stops
+  before contact admission and dynamics**, so it answers in seconds and also shows a start `ftx drape`
+  would refuse. It writes `wrap/` (each piece on its cylinder) and `start/` (pre-sewn and relaxed), each
+  with `body.obj`, `garment.obj`, `garment_strain.obj` and the six `still_*.png` of `ftx render`, plus
+  `placement.json`. Cloth is coloured by source piece (a mirrored copy is the lighter tint of its pair);
+  a vertex inside the collision body is magenta. The strain views show seam travel in `wrap/` (green 0 to
+  red 150 mm) and edge strain in `start/` on a ±15 % ramp, because a kinematic start saturates the ±3 %
+  ramp of a finished drape. `placement.json` gives, per instance, the resolved radius and anchor, its
+  angular and height span in the part frame of the right-hand copy, vertices inside the body at both
+  stages, and the start's edge strain (percentiles and a least-squares mean along pattern x, pattern y
+  and in shear); per seam, how far its pairs travel from the wrap; the torso, arm and leg frames with
+  every landmark height and section radius the wrap uses; and `body_surface`, the result of the drape's
+  own self-intersection audit of the posed body, reported and not enforced here. Lengths are millimetres; OBJ files are metres.
+  **No-claim boundary:** nothing here is a drape, a fit or an admission, and start-state strain is a
+  property of the kinematic start, not of the garment at rest. Unit tests cover the strain fit and the
+  piece colouring; the command itself has been exercised on the 1761 dolman, not against an oracle.
 - `ftx alter OP PATTERN --out OUT [...]` with OP `slash-spread` (`--piece --axis x|y --at --add`), `move`
   (`--piece --vertex [--dx] [--dy]`), `true-seam` (`--seam [--end start|end]`), `cap-ease` (`--piece
   --seams S1,S2 --target`) or `transfer-curve` (`--from SRC.json:INSTANCE/EDGE`, split at the last `:`,

@@ -330,6 +330,7 @@ ftx round WS --pattern DIR/pattern.json --measurements M.json --sim --export  # 
 ftx qualify --ws WS                                            # three chest qualification bands (-20/0/+20 mm)
 ftx body --measurements M.json --out DIR                       # fit Anny to tape measurements and write body.obj
 ftx measure fit-body OBS.json --model MODEL.ftxbody --out accepted-fit.json  # prepared multi-frame observations
+ftx place P.json --measurements M.json --out NEW_DIR           # look before draping: stills and numbers of the wrap and the pre-sewn start, no solver
 ftx drape P.json --measurements M.json --fit F.json --out DIR  # the cloth solver on its own (body-only contact by default; --self-contact / --two-start-sew opt-in)
 ftx export all P.json --out DIR                                # all files + 51 acceptance checks
 ftx import garmentcode G.json --out NEW_DIR --annotations A.json # evaluated panels + optional sewing annotations

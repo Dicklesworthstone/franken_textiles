@@ -27,6 +27,7 @@ mod inspect_pixel;
 mod materials;
 mod measure;
 mod outfit;
+mod place;
 mod render;
 mod round;
 mod trace;
@@ -76,6 +77,8 @@ const USAGE: &str = "usage:
               [--legs standing|seated|squat] [--leg-fraction F] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--model PATH] [--json]
+  ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
+            [--legs standing|seated|squat] [--leg-fraction F] [--res 960x540] [--json] (start-state stills and numbers; no drape)
   ftx render DRAPE_DIR [--res 960x540] [--json]
   ftx inspect-pixel ROUND_DIR --view front|side|back|three_quarter|strain_front|strain_back --pixel X,Y [--json]
   ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]
@@ -1202,6 +1205,7 @@ fn main() -> ExitCode {
     match args.positional.first().map(String::as_str) {
         Some("import") => emit("import", args.json, import::cmd_import(&args)),
         Some("draft") => emit("draft", args.json, draft::cmd_draft(&args)),
+        Some("place") => emit("place", args.json, place::run(&args)),
         Some("render") => emit("render", args.json, render::cmd_render(&args)),
         Some("inspect-pixel") => emit("inspect-pixel", args.json, inspect_pixel::run(&args)),
         Some("viewer") => emit("viewer", args.json, fold::cmd_viewer(&args)),
