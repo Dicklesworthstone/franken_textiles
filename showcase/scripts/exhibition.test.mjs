@@ -17,7 +17,7 @@ test("the skirt atelier displays the selected native trajectory and its matching
   try {
     await page.goto(new URL("/studies/skirt/?cut=column&waist=800",site).href);
     await page.locator('canvas[data-run="column-800"]').waitFor();
-    assert.ok(await page.getByRole("button",{name:"Flared",exact:true}).isDisabled());
+    assert.ok(await page.getByRole("button",{name:"Flared",exact:true}).isEnabled());
     const data=await (await page.request.get(new URL("/atelier/study.json",site).href)).json();
     for(const cut of ["column","flare"]){
       await page.getByRole("button",{name:"68 centimetre form waist"}).click();
@@ -27,11 +27,13 @@ test("the skirt atelier displays the selected native trajectory and its matching
         await page.locator('canvas[data-run="'+key+'"]').waitFor();
         const mm=Object.values(run.hemHeights);
         assert.equal(await page.locator(".sa-reading strong").nth(1).innerText(),(Math.max(...mm)-Math.min(...mm)).toFixed(1)+" mm");
+        const pattern=await page.locator(".sa-pdf").getAttribute("href");
+        assert.equal(pattern,"/atelier/"+run.patternStem+".pdf");
+        const pdf=await page.request.get(new URL(pattern,site).href);
+        assert.equal(pdf.status(),200);
+        assert.equal((await pdf.body()).subarray(0,5).toString(),"%PDF-");
+        assert.match(await page.locator(".sa-section").innerText(),/Centre-front gap/);
       }
-      const path=await page.locator(".sa-pdf").getAttribute("href");
-      assert.equal(path,"/atelier/"+cut+".pdf");
-      const bytes=await (await page.request.get(new URL(path,site).href)).body();
-      assert.equal(bytes.subarray(0,5).toString(),"%PDF-");
     }
     await page.getByRole("button",{name:"Compare hems"}).click();
     await page.locator('canvas[data-surface="Hems"]').waitFor();

@@ -8,13 +8,15 @@ import { plates, type Plate, type PlateId } from "./catalog";
 type Artwork = { file: string; crop?: [left: number, top: number, width: number, height: number]; contain?: string };
 const art: Record<string, Artwork> = {
   "skirt-editorial": {file:"public/atelier/skirt-editorial.webp"},
-  "skirt-cloth": {file:"public/atelier/cover.jpg",crop:[472,0,632,620]},
+  "skirt-column": {file:"public/atelier/column-680.webp"},
+  "skirt-flare": {file:"public/atelier/form.webp"},
   atelier: {file:"public/media/atelier-cover.webp"},
   pose: {file:"public/media/drape-room-mobile.webp"},
   load: {file:"public/media/drape-room-contact.webp"},
   "trouser-form": {file:"public/media/trouser-form.jpg"},
   dress: {file:"share/art/sundress.jpg"},
   hussar: {file:"share/art/hussar.jpg"},
+  regiments: {file:"public/media/wardrobe-hussar.jpg"},
   draft: {file:"share/art/draft.jpg",crop:[477,0,730,710]},
   cut: {file:"share/art/cut.jpg"},
   stitch: {file:"share/art/stitch.jpg"},
