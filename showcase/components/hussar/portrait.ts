@@ -2,6 +2,7 @@ import * as T from "three";
 import {applyNativeEyes,applyNativeSkin} from "../nativeSkin";
 import {restArm} from "./haberdashery";
 import {applyGarmentStudy,registerGarment} from "./garmentSurface";
+import {formMaterial} from "../atelier3d/studio";
 
 type EyePosition = ArrayLike<number>;
 
@@ -129,17 +130,12 @@ const eyePigment = `
 `;
 
 export function buildWearer(body: FittedHussar, blue: boolean, maps: Complexion, selectedPlate:{value:T.Texture}) {
-  const complexion = blue ? "#bc876f" : "#aa785f";
-  const skin = new T.MeshStandardMaterial({color: complexion, roughness:.63});
-  const eyes = new T.MeshPhysicalMaterial({color:"#c3b5a3", roughness:.31, clearcoat:.38, clearcoatRoughness:.23});
-  const hands = new T.MeshStandardMaterial({color:complexion, roughness:.69});
+  // The head and hands are a tailor's form in the fitted body's own shape. Skin, a face and hair are not part
+  // of the body model, so none are painted on. `blue` and `maps` remain in the signature for the callers.
+  void blue; void maps;
+  const skin = formMaterial(), eyes = formMaterial(), hands = formMaterial();
   const buckskin = new T.MeshStandardMaterial({color:"#bf9c68",roughness:.91});
   applyGarmentStudy(buckskin,selectedPlate,.98);
-  paintSurface(skin, body, maps, skinPigment, {
-    blushColor:"#b87264", lipColor:"#954f51", hairColor:blue?"#483329":"#3d2e27",
-  });
-  paintSurface(eyes, body, maps, eyePigment, {irisColor:blue?"#485341":"#634a37"});
-  applyNativeSkin(skin,"hussar");applyNativeSkin(hands,"hussar");applyNativeEyes(eyes,"hussar");
   const wearer = new T.Group();
   const handMeshes:T.Mesh[]=[];
   // Nest the cropped shoulder edge below the high stock. Visible facial geometry and eye groups stay in their native frame.
