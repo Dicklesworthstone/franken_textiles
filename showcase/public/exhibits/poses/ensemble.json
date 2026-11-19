@@ -1,9 +1,11 @@
 {
   "case": "520-35",
-  "frames": 48,
+  "frames": 136,
   "phases": {
     "drape": 36,
-    "sew": 12
+    "fold": 70,
+    "sew": 12,
+    "zip": 18
   },
   "counts": [
     2012,

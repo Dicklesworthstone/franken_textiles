@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { axes, dress, initial, samples, round, type Arm, type Readings } from "./form";
 import type { View } from "./SundressScene";
 import SundressSewn from "./SundressSewn";
+import ConstructionStudy from "../construction/ConstructionStudy";
 import InlineFilm from "../InlineFilm";
 import SiteHeader from "../site/SiteHeader";
 import SiteFooter from "../site/SiteFooter";
@@ -33,6 +34,8 @@ export default function SundressLab(){
     <div className="wrap sd-wrap"><div className="sd-head"><div><p className="kicker">The fitting room</p><h1>The garden sundress<em>.</em></h1></div>
       <div className="sd-intro"><p>A narrow-strapped bodice and a gathered skirt, cut in a single size. Pose the fitted Anny figure and change her proportions to see how much room the pattern leaves.</p>
         <a href="/sundress/pattern-A4.pdf" download>Full-size sewing pattern PDF ↓</a><small>A4 · 38 pages · print at 100%</small></div></div>
+      <ConstructionStudy choices={["sundress"]}/>
+      <SundressSewn/>
       <div className="sd-desk"><section className="sd-board" aria-label="Interactive sundress">
         <div className="sd-stage">{failed?<InlineFilm id="wardrobe-sundress" title="Recorded geometric sundress study" controls/>:
           <Scene form={form} view={view} onArm={arm} onError={fail} onReadings={setBody}/>}
@@ -62,14 +65,13 @@ export default function SundressLab(){
           <button key={name} disabled={failed} aria-pressed={form.left===left&&form.right===right} onClick={()=>setForm(p=>({...p,left,right}))}>{name}</button>)}</div>
         <details><summary>Adjust each arm</summary>{(["left","right"] as const).map(side=><label key={side}>{side} arm<output>{form[side]}°</output><input type="range" min="4" max="125" value={form[side]} disabled={failed} aria-label={side+" arm angle"} onChange={e=>arm(side,Number(e.target.value))}/></label>)}</details>
       </section></div>
-      <SundressSewn/>
       <div className="sd-notes"><div><h2>One dress, different proportions</h2>
         <p>The flat pattern measures {dress.shoulderToWaist} cm from shoulder to waist and {dress.skirtLength} cm from waist to hem. {body&&<>In this preview, the nominal hem sits <strong>{body.hem.toFixed(1)} cm</strong> above the floor.</>}</p>
         <p>The synthetic adult comes from the native Anny body model. The controls interpolate fitted shapes and five arm poses. Model readings interpolate the native tape and mass results. Ease compares those readings with the fixed flat pattern.</p>
-        <p>The dress on the adjustable figure is geometry drawn round her: it wraps the bodice, opens the side where cloth runs short, and its skirt folds are illustrative. <a href="#sewn">The solver’s own drape of the pattern</a> is shown beneath that figure, on the reference form only. Physical fit requires a sewn sample.</p>
+        <p>The adjustable figure shows flat-pattern ease. Its bodice opens where cloth runs short and its skirt folds are illustrative. <a href="#sewn">Replay the native cloth solve</a> on the reference form to inspect the sewn shape. Physical fit requires a sewn sample.</p>
         <details><summary>Cut and sew the dress</summary><p>Print the cover at actual size and check the 10 cm and 4 inch squares in both directions. Assemble the 37 tiles by their matching diamonds. Cut one front and one back of both bodice and skirt on the marked grain. The solid cut lines include a 10 mm seam allowance.</p>
           <p>Join the shoulder seams, bind the neckline and armholes, and sew the side seams with an opening for your chosen closure. Gather each 50.7 cm skirt waist to its matching 39 cm bodice waist. Join the waist, fit the closure and finish the hem.</p></details>
-        <details><summary>Native solver evidence</summary><p>All eight seam checks passed for the reference pattern. An earlier attempt at the dynamic drape, on a 45 mm mesh with cloth-to-cloth contact, stopped during sewing; its refusal is kept below. The drape shown on this page uses a 20 mm mesh and contact with the form only, and settles.</p>
+        <details><summary>Native solver evidence</summary><p>All eight seam checks passed for the reference pattern. The first 45 mm attempt stopped during sewing. Moving the starting panels clear of one another let the current solve reach a settled endpoint with body and cloth contact active.</p>
           <a href="/fitted-bodies/sundress.json" download>Download native body targets and outcomes ↓</a><br/><a href="/exhibits/sundress/dress-summary.json" download>Download the settled drape’s summary ↓</a><br/><a href="/sundress/drape-result.json" download>Download the earlier refused attempt ↓</a></details></div>
         <div className="sd-links"><figure className="exhibit-film"><InlineFilm id="wardrobe-sundress" title="Garden sundress fitting-room film" controls/><figcaption>The sundress in motion</figcaption></figure>
           <a href="/sundress/master.svg" download>Download full-scale pattern SVG ↓</a>

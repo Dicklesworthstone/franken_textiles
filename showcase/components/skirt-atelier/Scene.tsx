@@ -4,9 +4,10 @@ import * as T from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 import {finishEdges,linenCover} from "./textiles";
 import {ClothShell} from "../atelier3d/cloth";
+import {cuttingTable,sewingFrame,type SewingPhases} from "../construction/replay";
 
 export type Surface="Check"|"Linen"|"Print"|"Panels"|"Strain"|"Hems";
-type Topology={tri:number[];uvMm:number[];panels:number[][];seams:number[][];joins:{side_a:number[];side_b:number[]}[];waist:number[][];hem:number[][];frames:number[]};
+type Topology={tri:number[];uvMm:number[];panels:number[][];seams:number[][];joins:{side_a:number[];side_b:number[]}[];waist:number[][];hem:number[][];frames:number[];phases:SewingPhases};
 type Bust={xyz:number[];tri:number[];capStart:number;stitches:number[];lowerXYZ:number[];lowerTri:number[]};
 type Props={cut:string;waist:number;patternStem:string;surface:Surface;step:number;detail:boolean;dressForm:boolean;alternateHem?:number[];ready:(key:string)=>void;fail:(key:string)=>void};
 declare global {interface Window {ftxSkirtCamera?:(angle:number)=>void}}
@@ -53,11 +54,15 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
     controls.addEventListener("change",paint);
     const keydown=(e:KeyboardEvent)=>{if(e.key==="ArrowLeft"||e.key==="ArrowRight"){e.preventDefault();cameraAt(controls.getAzimuthalAngle()+(e.key==="ArrowLeft"?-.15:.15));}};
     canvas.addEventListener("keydown",keydown);
+    let board:T.Box3|null=null;
     const resize=()=>{const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;
-      const a=w/h,half=closeup.current?Math.max(.205,.23/a):dressForm?Math.max(.744,.34/a):Math.max(.432,.295/a);
+      const a=w/h,normal=closeup.current?Math.max(.205,.23/a):dressForm?Math.max(.744,.34/a):Math.max(.432,.295/a);
+      const span=board?.getSize(new T.Vector3());
+      const half=span?Math.max(normal,span.y*.6,Math.hypot(span.x,span.z)*.58/a):normal;
       Object.assign(camera,{left:-half*a,right:half*a,top:half,bottom:-half});
       camera.updateProjectionMatrix();renderer.setSize(w,h,false);paint();};
-    reframe.current=()=>{const y=closeup.current ? .068 : dressForm ? -.035 : -.205;camera.position.y+=y-controls.target.y;controls.target.y=y;camera.zoom=1;controls.update();resize();};
+    reframe.current=()=>{const focus=board?.getCenter(new T.Vector3())??new T.Vector3(0,closeup.current ? .068 : dressForm ? -.035 : -.205,0);
+      camera.position.add(focus.clone().sub(controls.target));controls.target.copy(focus);camera.zoom=1;controls.update();resize();};
     reframe.current();
     const observer=new ResizeObserver(resize);observer.observe(el);resize();
     const scrollPage=(e:WheelEvent)=>{if(document.activeElement!==canvas&&!e.ctrlKey)e.stopImmediatePropagation();};
@@ -120,9 +125,11 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
       const neckZ=neck.reduce((s,i)=>s+bp[i*3+2],0)/Math.max(1,neck.length);
       turned([[.043,.569],[.046,.573],[.046,.578],[.043,.582],[.026,.583],[.022,.589],[.016,.593],[.014,.604],[.02,.608],[.021,.615],[.019,.623],[.013,.629],[.001,.633]],wood,neckZ);
       turned([[.044,.575],[.0468,.576],[.0468,.578],[.044,.579]],brass,neckZ);
+      const displayForm=scene.children.filter(o=>o.visible&&(o instanceof T.Mesh||o instanceof T.LineSegments));
       const n=top.uvMm.length/2,k=top.frames.length,frameBytes=n*3*2;
       if(data.byteLength!==frameBytes*k+n*3)throw Error("Skirt frames do not match the pattern");
       const source=new Int16Array(data,0,n*3*k),color=new Uint8Array(data,frameBytes*k);
+      const arrange=cuttingTable(positions(source,n),top.panels);
       const grain=loader.load("/materials/linen-normal.webp");
       grain.wrapS=grain.wrapT=T.RepeatWrapping;grain.repeat.set(410/270.7,410/271.3);grain.anisotropy=8;maps.push(grain);
       const flax=loader.load("/materials/linen.webp");
@@ -183,10 +190,15 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
       geom.setAttribute("position",clothXYZ);stitchGeometry.setAttribute("position",seamXYZ);hemGeometry.setAttribute("position",hemXYZ);
       let prev=-1;
       refresh.current=()=>{
-        const {surface,step}=current.current,frame=Math.round((k-1)*step/100);
+        const {surface,step}=current.current,frame=sewingFrame(top.frames,top.phases,step);
         if(frame!==prev){
           const xyz=positions(source,n,n*3*frame);
+          arrange(xyz,Math.max(0,1-top.frames[frame]/(top.phases.fold-1)));
           shell.update(xyz);clothXYZ.array.set(xyz);clothXYZ.needsUpdate=true;geom.computeVertexNormals();geom.computeBoundingSphere();
+          const tracking=top.frames[frame]<top.phases.fold+top.phases.zip;
+          for(const obj of displayForm)obj.visible=top.frames[frame]>=top.phases.fold-1;
+          if(tracking||board){board=tracking?new T.Box3().setFromBufferAttribute(clothXYZ):null;reframe.current?.();}
+          canvas.dataset.nativeFrame=String(top.frames[frame]);
           edgePairs.forEach((v,i)=>seamXYZ.setXYZ(i,xyz[3*v],xyz[3*v+1],xyz[3*v+2]));
           bound.forEach((v,i)=>hemXYZ.setXYZ(i,xyz[3*v],xyz[3*v+1],xyz[3*v+2]));
           seamXYZ.needsUpdate=hemXYZ.needsUpdate=true;

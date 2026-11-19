@@ -3,6 +3,7 @@ import dynamic from "next/dynamic";
 import {useCallback,useEffect,useRef,useState} from "react";
 import study from "../../public/atelier/study.json";
 import InlineFilm from "../InlineFilm";
+import ConstructionStudy from "../construction/ConstructionStudy";
 import type {Surface} from "./Scene";
 import "./atelier.css";
 
@@ -45,7 +46,7 @@ export default function Atelier({home=false}:{home?:boolean}){
   useEffect(()=>{
     if(!playing)return;
     const start=performance.now();let frame=0;
-    function tick(time:number){const pct=Math.min(100,Math.round((time-start)/38));setStep(pct);
+    function tick(time:number){const pct=Math.min(100,Math.max(0,Math.round((time-start-600)/72)));setStep(pct);
       if(pct<100)frame=requestAnimationFrame(tick);else setPlaying(false);}
     const observer=new IntersectionObserver(([entry])=>{if(!entry.isIntersecting)setPlaying(false);});observer.observe(hero.current!);
     const hide=()=>{if(document.hidden)setPlaying(false);};document.addEventListener("visibilitychange",hide);
@@ -70,6 +71,7 @@ export default function Atelier({home=false}:{home?:boolean}){
           <fieldset className="sa-cut"><legend>Silhouette</legend><div>{(["column","flare"] as Cut[]).map(c=><button key={c} aria-pressed={cut===c} disabled={!runs[c+"-"+waist]} onClick={()=>select(c,waist)}><SkirtIcon cut={c}/>{cutName(c)}</button>)}</div></fieldset>
           <fieldset className="sa-waists"><legend>Form waist <span>/ cm</span></legend><div>{waists.filter(w=>runs[cut+"-"+w]).map(w=><button key={w} aria-label={w/10+" centimetre form waist"} aria-pressed={waist===w} onClick={()=>select(cut,w)}>{w/10}</button>)}</div></fieldset>
           <p className="sa-fit">{(run.tape.hip.body_mm/10).toFixed(1)} cm fitted hip · {ease>=0?"+":""}{ease.toFixed(1)} cm flat waist ease</p>
+          <fieldset className="sa-waists"><legend>Sew this cut</legend><div>{[[0,"Flat pattern"],[45,"Join gores"],[100,"Sewn skirt"]].map(([pct,label])=><button key={pct} disabled={!shown} aria-pressed={step===pct} onClick={()=>{setPlaying(false);setStep(Number(pct));if(surface==="Hems"||surface==="Strain")setSurface("Check");}}>{label}</button>)}</div></fieldset>
         </div>
         <figure className="sa-display" aria-label="Fitted dress form">
           {!shown&&<img className="sa-poster" alt={cutName(cut)+" skirt on the "+waist/10+" cm form"} src={"/atelier/"+(key==="flare-680"?"form":key)+".webp"} fetchPriority="high"/>}
@@ -87,6 +89,7 @@ export default function Atelier({home=false}:{home?:boolean}){
       <button className="sa-replay" disabled={!shown} onClick={()=>{if(playing){setPlaying(false);return;}if(surface==="Strain"||surface==="Hems")setSurface("Check");setStep(0);setPlaying(true);}}><span className={"playback-mark"+(playing?" is-playing":"")}/>{playing?"Pause replay":"Replay drape"}</button>
       <a className="sa-pdf" href={"/atelier/"+run.patternStem+".pdf"} download>Print this cut <span aria-hidden="true">↓</span><small>{waist/10} cm waist · A4 PDF</small></a>
     </div></div>
+    {!home&&<ConstructionStudy key={cut} choices={[cut]}/>}
     <WaistSection section={run.section}/>
     <div className="sa-method"><div>
       <details><summary>Measurements &amp; solver notes</summary>

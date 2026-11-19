@@ -21,6 +21,13 @@ export interface ClothTopology {
 /** How far a refined midpoint moves from the flat chord toward the curved surface (0 flat, 1 full). */
 const CURVE = 0.75;
 
+// Two per-vertex readings of the solver's surface are passed to the material, which uses them for shading
+// detail the solver's mesh is too coarse to carry as geometry:
+//   `fold`  the surface's curvature at the vertex in 1/m, from how far its neighbours rise above it along
+//           its normal: positive in the bottom of a fold seen from the face, negative on a ridge;
+//   `press` how much the cloth is shortened relative to its flat pattern, and in which pattern direction,
+//           as (amount·cos 2θ, amount·sin 2θ) so that it interpolates without a sign.
+
 export class ClothShell {
   readonly geometry = new THREE.BufferGeometry();
   private readonly n: number;                // solver vertices
@@ -35,6 +42,13 @@ export class ClothShell {
   private readonly out: Float32Array;        // per outline slot, pointing away from the piece
   private readonly position: THREE.BufferAttribute;
   private readonly normal: THREE.BufferAttribute;
+  private readonly fold: Float32Array;       // per solver vertex
+  private readonly press: Float32Array;      // per solver vertex, two numbers
+  private readonly around: Float32Array;     // scratch: neighbour sum (3), neighbour count, edge-length sum
+  private readonly weight: Float32Array;     // scratch: triangle area gathered at each vertex
+  private restInverse?: Float32Array;        // per solver triangle, the inverse of its two flat edge vectors
+  /** Scales `press` before it reaches the material: 0 hides drawn wrinkles while pieces are still being assembled. */
+  detail = 1;
   /**
    * Displayed thickness in metres, applied at the next `update`. A diagram view sets it near zero, so
    * that lines drawn on the solver's own surface (the mesh, a seam) are not buried inside the cloth.
@@ -93,6 +107,10 @@ export class ClothShell {
     this.points = new Float32Array(m * 3);
     this.normals = new Float32Array(m * 3);
     this.out = new Float32Array(b * 3);
+    this.fold = new Float32Array(n);
+    this.press = new Float32Array(n * 2);
+    this.around = new Float32Array(n * 5);
+    this.weight = new Float32Array(n);
     this.position = new THREE.BufferAttribute(new Float32Array(total * 3), 3).setUsage(THREE.DynamicDrawUsage);
     this.normal = new THREE.BufferAttribute(new Float32Array(total * 3), 3).setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute("position", this.position);
@@ -132,6 +150,69 @@ export class ClothShell {
     return target;
   }
 
+  /**
+   * Give the cloth's flat pattern (two numbers per solver vertex, metres). With it, `update` also measures
+   * how far each part of the surface is shortened relative to the pattern.
+   */
+  rest(flat: ArrayLike<number>) {
+    const { coarse } = this, inverse = this.restInverse = new Float32Array((coarse.length / 3) * 4);
+    for (let t = 0, o = 0; t < coarse.length; t += 3, o += 4) {
+      const a = coarse[t] * 2, b = coarse[t + 1] * 2, c = coarse[t + 2] * 2;
+      const ux = flat[b] - flat[a], uy = flat[b + 1] - flat[a + 1], vx = flat[c] - flat[a], vy = flat[c + 1] - flat[a + 1];
+      const det = ux * vy - vx * uy;
+      if (Math.abs(det) < 1e-12) continue;            // a degenerate flat triangle measures nothing
+      inverse[o] = vy / det; inverse[o + 1] = -vx / det; inverse[o + 2] = -uy / det; inverse[o + 3] = ux / det;
+    }
+  }
+
+  /** Measure `fold` and `press` on the solver's own triangles and hand them to the geometry. */
+  private measure() {
+    const { n, coarse, points, normals, pairs, fold, press, around, weight, restInverse } = this;
+    around.fill(0); press.fill(0); weight.fill(0);
+    for (let t = 0, o = 0; t < coarse.length; t += 3, o += 4) {
+      const ia = coarse[t], ib = coarse[t + 1], ic = coarse[t + 2], a = ia * 3, b = ib * 3, c = ic * 3;
+      const ux = points[b] - points[a], uy = points[b + 1] - points[a + 1], uz = points[b + 2] - points[a + 2];
+      const vx = points[c] - points[a], vy = points[c + 1] - points[a + 1], vz = points[c + 2] - points[a + 2];
+      const wx = vx - ux, wy = vy - uy, wz = vz - uz;
+      const lengths = [Math.hypot(ux, uy, uz), Math.hypot(wx, wy, wz), Math.hypot(vx, vy, vz)];
+      // Every vertex hears from the other two of its triangle. An interior edge is heard twice, which a mean ignores.
+      for (const [i, j, k, l1, l2] of [[ia, ib, ic, lengths[0], lengths[2]], [ib, ic, ia, lengths[1], lengths[0]], [ic, ia, ib, lengths[2], lengths[1]]] as const) {
+        const o5 = i * 5;
+        around[o5] += points[j * 3] + points[k * 3]; around[o5 + 1] += points[j * 3 + 1] + points[k * 3 + 1]; around[o5 + 2] += points[j * 3 + 2] + points[k * 3 + 2];
+        around[o5 + 3] += 2; around[o5 + 4] += l1 + l2;
+      }
+      if (!restInverse) continue;
+      // The pattern-to-surface stretch: columns F1, F2 are where the pattern's x and y directions go.
+      const p = restInverse[o], q = restInverse[o + 1], r = restInverse[o + 2], s = restInverse[o + 3];
+      if (p === 0 && q === 0 && r === 0 && s === 0) continue;
+      const f1x = ux * p + vx * r, f1y = uy * p + vy * r, f1z = uz * p + vz * r;
+      const f2x = ux * q + vx * s, f2y = uy * q + vy * s, f2z = uz * q + vz * s;
+      const c11 = f1x * f1x + f1y * f1y + f1z * f1z, c22 = f2x * f2x + f2y * f2y + f2z * f2z, c12 = f1x * f2x + f1y * f2y + f1z * f2z;
+      const half = (c11 - c22) / 2, root = Math.hypot(half, c12), least = Math.max(0, (c11 + c22) / 2 - root);
+      const amount = Math.max(0, 1 - Math.sqrt(least));     // 0.2 means a fifth shorter than the pattern
+      // The shortest direction is at right angles to the longest, so its doubled angle is opposite.
+      const turn = root > 1e-12 ? 1 / root : 0, area = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+      const x = -half * turn * amount * area, y = -c12 * turn * amount * area;
+      for (const i of [ia, ib, ic]) { press[i * 2] += x; press[i * 2 + 1] += y; weight[i] += area; }
+    }
+    // A sewn seam is one surface: both of its vertices take the sum of what each heard.
+    for (let p = 0; p < pairs.length; p += 2) {
+      const i = pairs[p], j = pairs[p + 1], a = i * 3, c = j * 3;
+      const dx = points[a] - points[c], dy = points[a + 1] - points[c + 1], dz = points[a + 2] - points[c + 2];
+      if (dx * dx + dy * dy + dz * dz > 1e-6) continue;
+      for (let k = 0; k < 5; k++) around[i * 5 + k] = around[j * 5 + k] = around[i * 5 + k] + around[j * 5 + k];
+    }
+    for (let i = 0; i < n; i++) {
+      const o5 = i * 5, count = around[o5 + 3] || 1, reach = around[o5 + 4] / count || 1, a = i * 3;
+      const lift = (around[o5] / count - points[a]) * normals[a] + (around[o5 + 1] / count - points[a + 1]) * normals[a + 1] + (around[o5 + 2] / count - points[a + 2]) * normals[a + 2];
+      fold[i] = 2 * lift / (reach * reach);      // a curvature in 1/m, so it does not depend on the mesh size
+      const area = weight[i] || 1;
+      press[i * 2] *= this.detail / area; press[i * 2 + 1] *= this.detail / area;
+    }
+    this.attribute("fold", fold, 1, true);
+    this.attribute("press", press, 2, true);
+  }
+
   /** Place the shell around the solver's vertex positions (x, y, z per vertex, y up). */
   update(solver: ArrayLike<number>) {
     const { n, m, coarse, points, normals, out, pairs, parents } = this, b = this.rimVertex.length, half = this.thickness / 2;
@@ -158,6 +239,7 @@ export class ClothShell {
       const length = Math.hypot(normals[i], normals[i + 1], normals[i + 2]) || 1;
       normals[i] /= length; normals[i + 1] /= length; normals[i + 2] /= length;
     }
+    this.measure();
     // Refine. A midpoint starts on the chord and moves toward the tangent planes at its two ends.
     // Both pieces at a sewn seam see the same end points and normals, so they refine identically.
     for (let v = n, p = 0; v < m; v++, p += 2) {

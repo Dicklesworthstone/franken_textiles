@@ -406,6 +406,9 @@ def generate(regiment, out, ftx):
         bad=[s for s in validation["seams"] if s["status"]!="PASS"]
         if bad or validation.get("structure_errors"): raise ValueError((bad,validation.get("structure_errors")))
         native("export","a4",pattern,"--out",scratch/"pages","--layout-width","1100","--created","2026-11-19T00:00")
+        native("export","svg",pattern,"--out",scratch/"sheet","--layout-width","1100")
+        svg,=(scratch/"sheet").glob("*_master_mm.svg")
+        with (out/(name+".svg")).open("xb") as f, svg.open("rb") as src: shutil.copyfileobj(src,f)
         check=native("check",scratch/"pages","--pattern-ref",pattern)
         pdf,=(scratch/"pages").glob("*_A4.pdf")
         with (out/(name+".pdf")).open("xb") as f, pdf.open("rb") as src: shutil.copyfileobj(src,f)

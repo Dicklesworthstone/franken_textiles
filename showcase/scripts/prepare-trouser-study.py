@@ -91,12 +91,19 @@ def package(scratch, output):
                 raise ValueError("Different trouser cut in " + key)
             body, topology = read_obj(folder/"body.obj")
             cloth, triangles = read_obj(folder/"garment_strain.obj")
+            pc2=(folder/"fold.pc2").read_bytes()
+            mesh_map=json.loads((folder/"mesh_map.json").read_text())
+            phases=mesh_map["frames"]
+            steps=sum(phases.values())
+            assert struct.unpack_from("<12siiffi",pc2)==(b"POINTCACHE2\0",1,len(cloth),1.,1.,steps)
+            trajectory=np.frombuffer(pc2,dtype="<f4",offset=32).reshape(steps,len(cloth),3)
+            assert np.array_equal(trajectory[-1],cloth[:,:3].astype("<f4"))
+            kept=sorted(set(range(0,steps,4)) | {0,phases["fold"]-1,phases["fold"]+phases["zip"]-1,steps-1})
+            store(output/(key+"-sewing.gz"),quantize(trajectory[kept]))
+            row.update(frames=kept,phases=phases,pc2Sha256=hashlib.sha256(pc2).hexdigest())
             if key=="squat-25":
-                pc2=(folder/"fold.pc2").read_bytes()
-                assert struct.unpack_from("<12sii",pc2)==(b"POINTCACHE2\0",1,len(cloth))
-                flat_run=np.frombuffer(pc2,dtype="<f4",count=len(cloth)*3,offset=32).reshape(-1,3)
+                flat_run=trajectory[0]
                 store(output/("mesh-"+key+".gz"),faces.astype("<u2").tobytes()+quantize(flat_run[:,[0,2]]))
-                mesh_map=json.loads((folder/"mesh_map.json").read_text())
                 (output/(key+"-topology.json")).write_text(json.dumps({"triangles":triangles.flatten().tolist(),"seams":mesh_map["seams"],"panels":mesh_map["inst_range"]},separators=(",",":"))+"\n")
                 row.update(clothVertices=len(cloth),spacingMm=20,meshKey=key)
             elif triangles.flatten().tolist() != template["triangles"] or len(cloth) != count:

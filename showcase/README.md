@@ -58,7 +58,16 @@ The gallery and film players link to tiled A4 sewing patterns. Print at actual s
 | Gathered trousers | Matched the retained pattern to the native replay, including the waistband, legs and cuffs. | Reviewed the gathered silhouette and all thirteen A4 pages, including calibration geometry. |
 | Fez | Checked the 92 cm synthetic chart draft at its 62% crown setting and walked both cap seams. | The five-page native export matches the browser PDF byte-for-byte. Both calibration squares were measured from PDF coordinates. |
 
-The hussar patterns are original reconstructions of textile items. Footwear and metal fittings are supplied separately. A muslin or dressed photograph is still needed to assess fit on a person. The sundress's native drape stopped during sewing, so the wardrobe shows a geometric preview on the fitted body.
+The hussar patterns are original reconstructions of textile items. Footwear and metal fittings are supplied separately. A muslin or dressed photograph is still needed to assess fit on a person. The sundress replay now uses the native solver with cloth-to-cloth contact enabled. A separate adjustable figure illustrates changes in flat ease.
+
+The homepage construction player shows the flat pieces, matching seams and dressed endpoint for each reference cut. The material maps use the same CC0 linen scan as the load experiments. The two dolmans share a solved jacket shell. The fez rolls up from its drafted cone geometry. For the ensemble both garments come from a single joint solve. The film translates pieces on the cutting board for legibility and interpolates recorded frames for playback.
+
+To reproduce a construction film, use Blender 4.5 with FFmpeg on the path. For the two skirts, bolero, trousers and ensemble, pass the matching native drape directory after the destination. The renderer checks its point-cache digest against the selected exhibit. The sundress and both dolmans use the packaged solver data directly.
+
+```sh
+blender -b -P showcase/scripts/render-construction.py -- sundress /path/to/new-dress-film
+blender -b -P showcase/scripts/render-construction.py -- ensemble /path/to/new-outfit-film /path/to/joint-drape
+```
 
 The original surface data for both figures come from the native Anny model. The face pigment and historical portrait are synthetic illustrations. The full model stays local. Run `scripts/prepare-fitted-bodies.py --help` for the display-sample inputs. To reproduce the historical PDFs, run `python3 scripts/prepare-hussar-patterns.py NEW_DIR`. For the replay PDFs and fez, use `python3 scripts/prepare-study-patterns.py NEW_DIR`.
 

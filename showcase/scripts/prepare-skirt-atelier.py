@@ -286,8 +286,10 @@ def package(folder,output):
             colored,tri=read(d/"garment_strain.obj")
             assert np.array_equal(colored[:,:3].astype("<f4"),xyz[-1]) and pat.read_bytes()==Path(r["pattern"]).read_bytes()
             start=nf-m["frames"]["drape"]-m["frames"]["sew"]
-            # Keep the faster early motion as well as the exact settled endpoint.
-            frames=sorted(set([*range(start,min(start+80,nf),3),*range(start+80,nf,16),nf-1]))
+            # The board, last wrapped pose and first sewn frame are visible chapters of the replay.
+            fold=m["frames"]["fold"]
+            frames=sorted(set([0,*range(0,fold,4),fold-1,*range(fold,start,3),start-1,
+                *range(start,min(start+80,nf),3),*range(start+80,nf,16),nf-1]))
             uv=np.zeros((n,2))
             for a,b in m["inst_range"].values():
                 uv[a:b]=xyz[0,a:b][:,[0,2]]-xyz[0,a:b][:,[0,2]].min(axis=0)
@@ -295,7 +297,7 @@ def package(folder,output):
                  "panels":list(m["inst_range"].values()),"seams":[s["side_a"] for s in m["seams"].values()],
                  "joins":[{"side_a":s["side_a"],"side_b":s["side_b"]} for s in m["seams"].values()],
                  "waist":[v for k,v in m["edges"].items() if k.endswith("/waist")],
-                 "hem":[v for k,v in m["edges"].items() if k.endswith("/hem")],"frames":frames}
+                 "hem":[v for k,v in m["edges"].items() if k.endswith("/hem")],"frames":frames,"phases":m["frames"]}
             (output/(stem+"-mesh.json")).write_bytes(compact(top))
             payload=replay["quantize"](xyz[frames])+np.rint(255*colored[:,3:]).astype("u1").tobytes()
             (output/(key+".gz")).write_bytes(gzip.compress(payload,mtime=0))

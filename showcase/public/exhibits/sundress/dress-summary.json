@@ -3,7 +3,7 @@
  "triangles": 6448,
  "frames": 37,
  "phases": {
-  "drape": 227,
+  "drape": 348,
   "fold": 70,
   "sew": 12,
   "zip": 18
@@ -16,7 +16,7 @@
   "skirt_back",
   "skirt_front"
  ],
- "sourcePc2Sha256": "54b7f3330c867099e6cc6f5bb1dcfbe5060a105b6071511de5b271da34f7228f",
+ "sourcePc2Sha256": "256bf178149b941562b45b20a6c14f48e79bad1aae5b8b07e15b2ba32cbff312",
  "style": "GARDEN_SUNDRESS",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -28,23 +28,25 @@
   "--drape",
   "150",
   "--max-settle-steps",
-  "256"
+  "256",
+  "--self-contact-mm",
+  "1"
  ],
  "armDeg": 22.0,
  "settled": true,
  "gating": [],
  "flags": [
-  "the body rides up 89 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)"
+  "the body rides up 80 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)"
  ],
  "edgeStrainPercent": {
-  "max": 10.79,
-  "min": -19.54,
-  "p95": 0.88
+  "max": 9.9,
+  "min": -20.27,
+  "p95": 0.87
  },
  "massKg": 0.22079033603815004,
  "areaM2": 1.104,
  "sewingPairs": 154,
- "selfContact": false,
+ "selfContact": true,
  "scope": {
   "basis": "complete_pattern",
   "excluded_instances": [],
@@ -193,5 +195,5 @@
    "target_mm": 1010.0
   }
  },
- "wallSeconds": 297.0
+ "wallSeconds": 566.7
 }

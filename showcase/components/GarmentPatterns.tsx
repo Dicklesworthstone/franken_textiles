@@ -20,7 +20,9 @@ const exhibits: Record<string, (keyof typeof patterns)[]> = {
 };
 
 export default function GarmentPatterns({exhibit}: {exhibit: string}) {
-  const list = exhibits[exhibit];
+  const cut=exhibit.replace(/^construction-/,"");
+  const list = cut==="ensemble" ? ["bolero","trousers"] as const :
+    exhibits[cut] ?? (Object.hasOwn(patterns,cut)?[cut as keyof typeof patterns]:undefined);
   if (!list) return null;
   return <div className="garment-patterns">
     {list.map(key => <a key={key} href={patterns[key][1]} download>

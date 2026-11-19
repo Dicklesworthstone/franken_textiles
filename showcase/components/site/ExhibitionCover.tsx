@@ -1,4 +1,5 @@
 import "./exhibition-cover.css";
+import ConstructionStudy from "../construction/ConstructionStudy";
 
 const features=[
   {img:"voile",name:"The garden sundress",action:"Pose the fitted body",href:"/wardrobe/sundress/",pdf:"/sundress/pattern-A4.pdf"},
@@ -6,15 +7,7 @@ const features=[
   {img:"cut",name:"The cutting table",action:"Lay out a real pattern",href:"/sections/cut/"},
 ];
 export function ExhibitionCover(){
-  return <section className="ec-cover"><div className="ec-copy">
-    <p>FrankenTextiles <span>/</span> The pattern room</p>
-    <h1>The shape<br/><em>of cloth.</em></h1>
-    <div className="ec-rule"/>
-    <div className="ec-intro">Change the body. Change the cut. Follow a sewing pattern from a flat sheet to the folds it makes under gravity.</div>
-    <div className="ec-actions"><a href="/studies/skirt/">Explore the skirt in 3D <span aria-hidden="true">↗</span></a>
-      <a href="/atelier/flare.pdf" download>Full-size pattern ↓</a></div>
-  </div><figure><img src="/atelier/skirt-editorial.webp" width="1536" height="1024" fetchPriority="high" alt="Editorial illustration of a madder-red floral skirt held out to show the sweep of its hem"/>
-    <figcaption>Six-gore skirt <span>·</span> Editorial illustration</figcaption></figure></section>;
+  return <ConstructionStudy hero/>;
 }
 export function ExhibitionFeatures(){return <section className="ec-gallery" aria-label="Explore the collection">
   <div className="ec-heading"><h2>On the worktable</h2><span>Illustrated studies</span></div>

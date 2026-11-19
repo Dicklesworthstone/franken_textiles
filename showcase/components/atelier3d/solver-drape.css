@@ -1,0 +1,27 @@
+/* From flat pattern to sewn article: the stage, its four stage buttons, the replay bar and the flat pattern strip.
+   A page restyles it through the custom properties on .mk. */
+.mk{--mk-ground:radial-gradient(ellipse at 45% 30%,#5e6a61 0%,#3f4b43 50%,#27332d 100%);--mk-ink:#f0ead8;--mk-accent:#e4d6ab;--mk-bar:#2a3832;--mk-height:clamp(440px,46vw,660px);min-width:0;display:flex;flex-direction:column}
+.mk-stage{position:relative;height:var(--mk-height);background:var(--mk-ground);overflow:hidden}
+.mk-canvas,.mk-canvas canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.mk-canvas canvas{cursor:grab}.mk-canvas canvas:active{cursor:grabbing}
+.mk-failed{position:absolute;inset:0;display:grid;place-items:center;margin:0;padding:24px;color:var(--mk-ink);font-size:14px;text-align:center}
+.mk-steps{position:absolute;top:12px;left:12px;right:12px;margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px;pointer-events:none}
+.mk .mk-steps button{pointer-events:auto;display:flex;align-items:center;gap:7px;border:1px solid #ffffff3d;background:#1b2621c7;color:#e6e1cf;border-radius:999px;padding:5px 12px 5px 6px;font:500 11.5px/1.2 var(--sans);cursor:pointer}
+.mk .mk-steps button:disabled{opacity:.6;cursor:default}
+.mk-steps b{display:grid;place-items:center;width:19px;height:19px;border-radius:50%;background:#ffffff2b;font:600 10px/1 var(--mono)}
+.mk .mk-steps .is-now button{background:var(--mk-accent);border-color:var(--mk-accent);color:#25312b}
+.mk-steps .is-now b{background:#25312b;color:var(--mk-accent)}
+.mk .mk-steps .is-done button{color:#b9c6b5}.mk-steps .is-done b{background:#ffffff18}
+.mk-bar{display:flex;align-items:center;gap:12px;padding:9px 14px 10px;background:var(--mk-bar);color:var(--mk-ink)}
+.mk .mk-play{border:0;border-radius:50%;background:var(--mk-accent);color:#28352f;width:32px;height:32px;padding:0;display:grid;place-items:center;flex-shrink:0;cursor:pointer}
+.mk .mk-play:disabled{opacity:.45;cursor:default}
+.mk-bar input{flex:1;min-width:0;accent-color:var(--mk-accent);height:22px;margin:0}
+.mk-bar>span{font:500 10px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;min-width:13.5em;text-align:right}
+.mk-pattern{margin:0;background:#f6f1e3;border-top:1px solid #cfc9b6;padding:10px 14px 9px}
+.mk-pattern svg{display:block;width:100%;max-height:168px}
+.mk-pattern text{font-family:var(--mono);fill:#4c5148}
+.mk-pattern figcaption{display:flex;flex-wrap:wrap;justify-content:space-between;gap:5px 18px;font-size:12px;line-height:1.4;color:#4f5a50;margin-top:5px}
+.mk-pattern label{display:flex;align-items:center;gap:6px;font-weight:600;cursor:pointer}
+.mk-pattern input{accent-color:#35473c;margin:0}
+@media(max-width:760px){.mk{--mk-height:clamp(390px,108vw,540px)}.mk .mk-steps button{font-size:10.5px;padding:4px 9px 4px 5px}.mk-bar>span{min-width:0}}
+@media(pointer:coarse){.mk .mk-play{width:44px;height:44px}.mk-bar input{height:44px}.mk .mk-steps button{min-height:32px}}

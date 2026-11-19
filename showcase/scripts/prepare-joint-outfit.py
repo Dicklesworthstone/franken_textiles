@@ -46,13 +46,14 @@ def package(folder,output):
     layouts=[json.loads((public/f"exhibits/{name}.json").read_text()) for name in cuts]
     assert sum(x["vertices"] for x in layouts)==n
     assert np.array_equal(tri.flatten(),np.concatenate([layouts[0]["triangles"],np.array(layouts[1]["triangles"])+layouts[0]["vertices"]]))
-    steps=sum(report["frames"].values())
+    phases=json.loads((folder/"mesh_map.json").read_text())["frames"]
+    assert frames==sum(phases.values()) and phases["sew"]+phases["drape"]==sum(report["frames"].values())
     # Coordinates as float32 exactly as written by the native PC2. Both garments use the same frame.
     payload=b"".join([struct.pack("<II",len(used),faces.size),body[used].astype("<f4").tobytes(),
-                     remap.astype("<u4").tobytes(),np.concatenate([xyz[0:1],xyz[-steps:]]).astype("<f4").tobytes()])
+                     remap.astype("<u4").tobytes(),xyz.tobytes()])
     output.mkdir(parents=True,exist_ok=True)
     (output/"ensemble.gz").write_bytes(gzip.compress(payload,mtime=0))
-    meta={"case":"520-35","frames":steps,"phases":report["frames"],"counts":[x["vertices"] for x in layouts],
+    meta={"case":"520-35","frames":frames,"phases":phases,"counts":[x["vertices"] for x in layouts],
           "waistbandShift":report["bands"]["trousers::waistband"]["shift_mm"],"strain":report["global_strain_pct"],
           "settled":report["numerical"]["settled"],"gating":report["gating"],"advisories":report["flags"],
           "selfContact":report["self_contact"]["enabled"],"pc2Sha256":hashlib.sha256(cache).hexdigest(),

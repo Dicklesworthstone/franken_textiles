@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { weaveMaps } from "./weave";
 
 // One lighting set-up for every figure on the site: soft light from all round, a warm key light
 // that casts the fold shadows, and a cool rim light that separates the figure from the backdrop.
@@ -65,14 +66,35 @@ export function lightStudio(renderer: THREE.WebGLRenderer, scene: THREE.Scene, t
 }
 
 /**
- * The body is shown as a tailor's form: the fitted body's own shape in a plain matt finish.
- * It carries no skin, face or hair, because none of those come from the body model.
+ * The body is shown as a tailor's form: the fitted body's own shape, covered in unbleached linen as a
+ * dressmaker's dummy is. It carries no skin, face or hair, because none of those come from the body model.
+ *
+ * `scale` is how many of the scene's units make a metre (1 for metres, 100 for a scene in centimetres), which
+ * sets the size of the linen's weave. `inset` draws the form that far inside its own surface (in scene units),
+ * for a scene whose flat cloth facets would otherwise let a curved limb show through.
  */
-export function formMaterial(colour = "#c4b6a2") {
-  return new THREE.MeshPhysicalMaterial({
-    color: colour, roughness: 0.82, metalness: 0,
-    sheen: 0.22, sheenRoughness: 0.55, sheenColor: "#f1e3cf", envMapIntensity: 0.8,
+export function formMaterial(colour = "#bfb09a", { scale = 1, inset = 0 }: { scale?: number; inset?: number } = {}) {
+  const maps = weaveMaps("plain"), linen = maps.colour;
+  maps.normal.dispose();
+  const material = new THREE.MeshPhysicalMaterial({
+    color: colour, roughness: 1, metalness: 0, specularIntensity: 0.12,
+    sheen: 0.35, sheenRoughness: 0.9, sheenColor: "#f4ead8", envMapIntensity: 0.85,
   });
+  material.onBeforeCompile = shader => {
+    shader.uniforms.linen = { value: linen };
+    shader.vertexShader = "varying vec3 formAt; varying vec3 formFacing;\n" + shader.vertexShader.replace("#include <begin_vertex>",
+      `#include <begin_vertex>\nformAt = position; formFacing = normal;${inset ? `\ntransformed -= objectNormal * ${inset.toFixed(5)};` : ""}`);
+    // The weave is laid on from three sides and blended by which way the surface faces: a body has no pattern
+    // coordinates of its own. About 1.6 mm from yarn to yarn, a coarse tailor's linen.
+    shader.fragmentShader = "varying vec3 formAt; varying vec3 formFacing; uniform sampler2D linen;\n" + shader.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>
+  vec3 facing = pow(abs(normalize(formFacing)), vec3(4.)); facing /= facing.x + facing.y + facing.z;
+  vec3 at = formAt * ${(52 / scale).toFixed(4)};
+  float weave = dot(facing, vec3(texture2D(linen, at.yz).r, texture2D(linen, at.xz).r, texture2D(linen, at.xy).r));
+  diffuseColor.rgb *= .74 + .34 * weave;`);
+  };
+  material.customProgramCacheKey = () => "atelier-form-" + scale + "-" + inset;
+  material.addEventListener("dispose", () => linen.dispose());
+  return material;
 }
 
 /** A floor that shows only the figure's shadow, so the figure stands on the page's own backdrop. */

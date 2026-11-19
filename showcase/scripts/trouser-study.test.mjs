@@ -18,6 +18,10 @@ test("posture, elastic and cutaway views follow their own native results",async(
       if(run.refusal){assert.equal(await choice.count(),0);continue;}
       await choice.click();
       await page.locator(`canvas[data-run="${run.id}"][data-cloth="true"]`).waitFor();
+      for(const [name,frame] of [["Flat pattern",0],["Join seams",run.phases.fold-1],["Sewn trousers",run.frames.at(-1)]]){
+        await page.locator(".ts-bench").getByRole("button",{name,exact:true}).click();
+        await page.locator(`canvas[data-run="${run.id}"][data-native-frame="${frame}"]`).waitFor();
+      }
       assert.equal(await page.locator(".ts-values dd").last().textContent(),run.waistbandShift.toFixed(1)+" mm");
     }
     await button("Cross-section").click();

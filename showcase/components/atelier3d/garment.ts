@@ -41,12 +41,15 @@ function distanceTo(edges: number[], flat: ArrayLike<number>, topology: GarmentT
   return result;
 }
 
-const hook = (edge: DressOptions["edge"]) => ({
+const hook = (edge: DressOptions["edge"], tintAmount: { value: number }) => ({
   key: "garment-" + edge,
-  vertexHead: "attribute float cutDistance; attribute float seamDistance; varying float edgeMetres; varying float seamMetres;\n",
-  vertexBody: "edgeMetres = cutDistance; seamMetres = seamDistance;\n",
-  fragmentHead: "varying float edgeMetres; varying float seamMetres;\n",
+  uniforms: { tintAmount },
+  vertexHead: "attribute float cutDistance; attribute float seamDistance; attribute vec3 tint; varying float edgeMetres; varying float seamMetres; varying vec3 pieceTint;\n",
+  vertexBody: "edgeMetres = cutDistance; seamMetres = seamDistance; pieceTint = tint;\n",
+  fragmentHead: "varying float edgeMetres; varying float seamMetres; varying vec3 pieceTint; uniform float tintAmount;\n",
   colour: `
+  // While a garment is being assembled each cut piece can carry its own colour, as on the flat pattern.
+  diffuseColor.rgb = mix(diffuseColor.rgb, pieceTint * (.8 + .16 * (mottle - .5)), tintAmount);
   // A sewn seam is a shallow ditch with a row of topstitching beside it.
   float seamWidth = max(fwidth(seamMetres), 0.00012);
   float ditch = 1. - smoothstep(0., .0012 + seamWidth, seamMetres);
@@ -75,6 +78,7 @@ const hook = (edge: DressOptions["edge"]) => ({
 export function dressCloth(topology: GarmentTopology, flat: ArrayLike<number>, fabric: Fabric, options: DressOptions = {}) {
   const shell = new ClothShell(topology, fabric.thickness, options.sewn, options.levels ?? displayLevels());
   shell.attribute("uv", flat, 2);
+  shell.rest(flat);
   const n = topology.vertices, count = new Map<number, number>();
   const key = (a: number, b: number) => Math.min(a, b) * n + Math.max(a, b);
   const triangles = topology.triangles;
@@ -89,8 +93,10 @@ export function dressCloth(topology: GarmentTopology, flat: ArrayLike<number>, f
   for (const [e, uses] of count) if (uses === 1 && !sewn.has(e)) cutEdges.push(Math.floor(e / n), e % n);
   shell.attribute("seamDistance", distanceTo(seamEdges, flat, topology), 1);
   shell.attribute("cutDistance", distanceTo(cutEdges, flat, topology), 1);
-  const face = clothMaterial(fabric, false, hook(options.edge ?? "hem"));
-  const reverse = clothMaterial(fabric, true);
+  const tintAmount = { value: 0 };
+  const face = clothMaterial(fabric, false, hook(options.edge ?? "hem", tintAmount));
+  // The reverse carries the same seams, hems and piece colours: a piece seen from behind is still that piece.
+  const reverse = clothMaterial(fabric, true, hook(options.edge ?? "hem", tintAmount));
   // Lines drawn on the cloth must not fight with it for depth.
   for (const { material } of [face, reverse]) { material.polygonOffset = true; material.polygonOffsetFactor = 1; material.polygonOffsetUnits = 1; }
   const materials: THREE.Material[] = [face.material, reverse.material, face.material];
@@ -99,6 +105,12 @@ export function dressCloth(topology: GarmentTopology, flat: ArrayLike<number>, f
   mesh.frustumCulled = false;   // the cloth moves every frame; the camera always frames the whole exhibit
   return {
     mesh, shell, materials,
+    /** How much of each piece's own colour shows over the cloth's (0 none, 1 all). Set the colours with `tints`. */
+    tintAmount,
+    /** One colour per solver vertex (r, g, b in 0..1), usually constant over a cut piece. */
+    tints: (colours: ArrayLike<number>) => { shell.attribute("tint", colours, 3); },
+    /** Scales the fine wrinkles drawn where the cloth is compressed. */
+    wrinkleGain: face.uniforms.wrinkleGain,
     /** Move the garment to the solver's vertex positions (y up). */
     update: (points: ArrayLike<number>) => shell.update(points),
     dispose() { shell.dispose(); face.dispose(); reverse.dispose(); },

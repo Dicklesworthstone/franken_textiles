@@ -9,6 +9,7 @@ import { experiments, type Rig } from "../components/materialExperiments";
 import InlineFilm, { PlaybackMark, filmFile } from "../components/InlineFilm";
 import GarmentPatterns from "./GarmentPatterns";
 import DrapeRoom from "./DrapeRoom";
+import ConstructionStudy,{constructionFilms} from "./construction/ConstructionStudy";
 import {ExhibitionCover,ExhibitionFeatures} from "./site/ExhibitionCover";
 import SiteHeader from "./site/SiteHeader";
 import SiteFooter from "./site/SiteFooter";
@@ -28,6 +29,7 @@ const wardrobe = [
 ] as const;
 
 const films = [
+  ...constructionFilms,
   { id:"drape-room", title:"Raising the sleeve", detail:"Body & cloth study" },
   { id:"skirt-atelier", title:"Two hems in motion", detail:"Adult skirt drape" },
   { id:"trouser-posture", title:"Bending the knee", detail:"Trouser posture" },
@@ -75,7 +77,7 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
   const title = study?.title ?? garment?.title ?? (rig ? experiments[rig].title : "reel" in item ? "Inside the wardrobe" : "poseRoom" in item ? "Raising the sleeve" : "A tour of the pattern room");
   const dialog = useRef<HTMLDialogElement>(null);
   const [film, setFilm] = useState("film" in item ? item.film : true);
-  const [frame, setFrame] = useState(study?.mode === "construction" ? 0 : 1);
+  const [frame, setFrame] = useState(0);
   const [mode, setMode] = useState<View>(study?.mode ?? "cloth");
   const [wire, setWire] = useState(study?.id === "construction");
   const [seams, setSeams] = useState<string[]>([]);
@@ -198,7 +200,7 @@ export default function Exhibition({section}: {section?: string}) {
     else if (params.get("film") === "studio-tour") setItem({ tour: true });
     else if (params.get("film") === "wardrobe-reel") setItem({ reel: true });
     else if (params.get("film") === "drape-room") setItem({ poseRoom: true });
-    else if (params.get("film")?.startsWith("trouser-")) {
+    else if (/^(trouser-|construction-)/.test(params.get("film")??"")) {
       const selection=films.find(f=>f.id===params.get("film"));
       if(selection){setScreening(selection);setFilmChosen(true);projection.current?.scrollIntoView({block:"start"});}
     }
@@ -225,7 +227,8 @@ export default function Exhibition({section}: {section?: string}) {
     <SiteHeader skipTo="#exhibition"/>
     <main id="exhibition">
       {!section && <><ExhibitionCover/><ExhibitionFeatures/></>}
-      {section==="wardrobe"&&<ExhibitionFeatures/>}
+      {section==="wardrobe"&&<ConstructionStudy choices={["sundress","blue","yellow","column","flare","fez"]}/>}
+      {section==="studies"&&<ConstructionStudy choices={["bolero","trousers","ensemble"]}/>}
       {show("studies") && <DrapeRoom/>}
       {!section && <section className="dr-index" aria-label="Explore more of the studio"><div className="wrap">
         <a href="/studies/trousers/?bench=posture&amp;run=squat-25"><img src="/media/trouser-posture.jpg" alt=""/><div><small>Body &amp; cloth</small><strong>Bend the knees in trousers</strong></div><Arrow diagonal/></a>
@@ -238,7 +241,7 @@ export default function Exhibition({section}: {section?: string}) {
         <div className="section-top"><div><p className="kicker">Interactive garments</p><Heading className="section-title"><a href="/sections/wardrobe/">The wardrobe<span>.</span></a></Heading></div>
           <p>Take a garment off the rail. Turn it around, change the figure, or look beneath a layer.</p></div>
         <div className="material-pair">{wardrobe.map(s=><article key={s.id} data-reveal>
-          <div className="material-cover"><InlineFilm id={"wardrobe-"+s.id} title={s.title}/>
+          <div className="material-cover"><InlineFilm id={"construction-"+(s.id==="hussar"?"blue":"sundress")} title={s.title}/>
             <a className="card-open" aria-label={"Explore "+s.title} href={`/wardrobe/${s.id}/`}><span className="launch"><Arrow diagonal/></span></a></div>
           <a className="material-caption" href={`/wardrobe/${s.id}/`}><div className="mono">{s.detail}</div><h3>{s.title}</h3><span>{s.action} <Arrow/></span></a>
           <GarmentPatterns exhibit={s.id}/>

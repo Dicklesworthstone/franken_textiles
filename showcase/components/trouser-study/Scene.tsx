@@ -7,11 +7,12 @@ import type {loadSurface,loadTopology} from "./surface";
 import {dressCloth} from "../atelier3d/garment";
 import {fabrics} from "../atelier3d/weave";
 import {formMaterial,lightStudio,prepareRenderer} from "../atelier3d/studio";
+import {cuttingTable,sewingFrame,type SewingPhases} from "../construction/replay";
 
 export type Model = Awaited<ReturnType<typeof loadSurface>> & {
-  mesh:Awaited<ReturnType<typeof loadTopology>>; floor:number; key:string
+  mesh:Awaited<ReturnType<typeof loadTopology>>; floor:number; key:string; replay:Int16Array; frames:number[]; phases:SewingPhases
 };
-type Props = {model:Model; plane:number|null; clip:boolean; strain:boolean; view:number; onError:()=>void};
+type Props = {model:Model; plane:number|null; clip:boolean; strain:boolean; view:number; step:number; onError:()=>void};
 declare global {interface Window {ftxTrouserCamera?:(angle:number)=>void}}
 
 export default function Scene(props:Props) {
@@ -93,10 +94,19 @@ export default function Scene(props:Props) {
     sheet.add(new T.LineSegments(edge,border));
     studio.frame(new T.Vector3(0,(ceiling+floor)/2,.085),(ceiling-floor)*.78);
     const render=()=>renderer.render(scene,camera);
-    let view=-1;
+    let view=-1,lastFrame=-1,board:T.Box3|null=null;
+    const neutral=new T.Vector3(0,(ceiling+floor)/2,.085);
+    const xyz=new Float32Array(model.cloth.length),attr=new T.BufferAttribute(xyz,3);
+    function sample(index:number){
+      const offset=index*xyz.length;
+      for(let i=0;i<xyz.length;i+=3){
+        xyz[i]=model.replay[offset+i]/10000;xyz[i+1]=model.replay[offset+i+2]/10000;xyz[i+2]=-model.replay[offset+i+1]/10000;
+      }
+      return xyz;
+    }
+    const arrange=cuttingTable(sample(0),Object.values(model.mesh.garment.panels??{}));
     function orbit(angle:number){
-      controls.target.set(0,(ceiling+floor)/2,.085);
-      camera.position.set(1.7*Math.sin(angle),controls.target.y+.27,.085+1.7*Math.cos(angle));
+      camera.position.set(1.7*Math.sin(angle),.27,1.7*Math.cos(angle)).add(controls.target);
       controls.update();render();
     }
     function update(p:Props){
@@ -106,6 +116,17 @@ export default function Scene(props:Props) {
       cutPlane.constant=p.clip&&sheet.visible?Math.min(y,ceiling):ceiling;
       const limit=p.clip&&sheet.visible?[cutPlane]:[];
       if(cloth){
+        const index=sewingFrame(model.frames,model.phases,p.step),frame=model.frames[index];
+        if(index!==lastFrame){
+          sample(index);arrange(xyz,Math.max(0,1-frame/(model.phases.fold-1)));
+          cloth.update(xyz);
+          board=frame<model.phases.fold+model.phases.zip?new T.Box3().setFromBufferAttribute(attr):null;
+          const focus=board?.getCenter(new T.Vector3())??neutral;
+          camera.position.add(focus.clone().sub(controls.target));controls.target.copy(focus);controls.update();
+          body.visible=frame>=model.phases.fold-1;
+          canvas.dataset.nativeFrame=String(frame);lastFrame=index;size();
+        }
+        cap.visible=cap.visible&&body.visible;
         for(const material of cloth.materials)material.clippingPlanes=limit;
         ink.clippingPlanes=limit;cloth.mesh.material=p.strain?[ink,ink,ink]:cloth.materials;
       }
@@ -115,7 +136,8 @@ export default function Scene(props:Props) {
     }
     function size(){
       const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;
-      const half=Math.max((ceiling-floor)*.69,.31*h/w);
+      const span=board?.getSize(new T.Vector3());
+      const half=Math.max((ceiling-floor)*.69,.31*h/w,span?span.y*.62:0,span?Math.hypot(span.x,span.z)*.6*h/w:0);
       camera.left=-half*w/h;camera.right=-camera.left;camera.top=half;camera.bottom=-half;
       camera.updateProjectionMatrix();renderer.setSize(w,h,false);render();
     }

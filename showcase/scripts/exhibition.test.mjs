@@ -12,10 +12,37 @@ before(async () => {
 after(async () => { await browser?.close(); });
 const opts = { userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0", viewport: { width: 1120, height: 820 } };
 
+test("every construction study pairs a full-size cut with its three film chapters",async()=>{
+  const page=await browser.newPage({...opts,reducedMotion:"reduce",viewport:{width:390,height:844}});
+  try{
+    await page.goto(site);
+    const stage=page.locator("#construction"),select=stage.getByRole("combobox");
+    const choices=await select.locator("option").evaluateAll(options=>options.map(o=>o.value));
+    assert.equal(choices.length,9);
+    for(const garment of choices){
+      await select.selectOption(garment);
+      const motion=stage.locator(`[data-garment="${garment}"]`);
+      for(const chapter of ["Flat pattern","Join the pieces","Sewn article"]){
+        await motion.getByRole("button",{name:chapter,exact:true}).click();
+        await motion.locator(".construction-still").evaluate(img=>img.decode());
+        assert.equal(await motion.locator("video").evaluate(v=>v.paused),true);
+      }
+      await motion.getByRole("button",{name:"Play construction film"}).click();
+      await page.waitForFunction(()=>document.querySelector("#construction video")?.currentTime>0.05);
+      assert.equal(await motion.locator("video").evaluate(v=>Math.round(v.duration*16)),96);
+      for(const url of await stage.locator("a[download]").evaluateAll(links=>links.map(l=>l.href))){
+        const pdf=await page.request.get(url);
+        assert.equal((await pdf.body()).subarray(0,5).toString(),"%PDF-");
+      }
+    }
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  }finally{await page.close();}
+});
+
 test("the skirt atelier displays the selected native trajectory and its matching cut", async () => {
   const page=await browser.newPage({...opts,reducedMotion:"reduce"});
   try {
-    await page.goto(new URL("/studies/skirt/?cut=column&waist=800",site).href);
+    await page.goto(new URL("/studies/skirt/?cut=column&waist=800",site).href,{waitUntil:"domcontentloaded"});
     await page.locator('canvas[data-run="column-800"]').waitFor();
     assert.ok(await page.getByRole("button",{name:"Flared",exact:true}).isEnabled());
     const data=await (await page.request.get(new URL("/atelier/study.json",site).href)).json();
@@ -25,6 +52,11 @@ test("the skirt atelier displays the selected native trajectory and its matching
       for(const [key,run] of Object.entries(data.runs).filter(([k])=>k.startsWith(cut+"-"))){
         await page.getByRole("button",{name:run.waist/10+" centimetre form waist"}).click();
         await page.locator('canvas[data-run="'+key+'"]').waitFor();
+        await page.locator(".sa-intro").getByRole("button",{name:"Flat pattern"}).click();
+        await page.locator('canvas[data-run="'+key+'"][data-native-frame="0"]').waitFor();
+        await page.getByRole("button",{name:"Join gores"}).click();
+        await page.locator('canvas[data-run="'+key+'"][data-native-frame="69"]').waitFor();
+        await page.getByRole("button",{name:"Sewn skirt"}).click();
         const mm=Object.values(run.hemHeights);
         assert.equal(await page.locator(".sa-reading strong").nth(1).innerText(),(Math.max(...mm)-Math.min(...mm)).toFixed(1)+" mm");
         const pattern=await page.locator(".sa-pdf").getAttribute("href");
@@ -72,7 +104,7 @@ test("the drape room pairs each body and pose with its native cloth and endpoint
     await page.getByRole("button",{name:"52 centimetre chest"}).click();
     await page.getByRole("button",{name:"35 degree arm pose"}).click();
     await page.getByRole("button",{name:"Coupled outfit"}).click();
-    await page.locator('canvas[data-run="520-35"][data-coupled="true"][data-native-frame="47"]').waitFor();
+    await page.locator('canvas[data-run="520-35"][data-coupled="true"][data-native-frame="135"]').waitFor();
     assert.equal(await page.locator(".dr-readings strong").nth(1).textContent(),"-2.2 mm");
     await page.getByRole("slider",{name:"Sewing replay frame"}).press("Home");
     await page.locator('canvas[data-coupled="true"][data-native-frame="0"]').waitFor();
@@ -214,13 +246,17 @@ test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", asy
     assert.notDeepEqual(await stage.screenshot(),before);
     assert.equal(await p.getByRole("link",{name:"Three native flat checks"}).getAttribute("href"),"/sundress/fit-comparison.json");
     // The solver's drape of the same pattern replays the packaged frames: the settled endpoint first, the flat cut at frame zero.
-    const sewn=p.locator(".sd-sewn-scene canvas[data-ready]"),summary=await (await p.request.get(new URL("/exhibits/sundress/dress-summary.json",site).href)).json();
+    const sewn=p.locator(".sd-making canvas[data-ready]"),summary=await (await p.request.get(new URL("/exhibits/sundress/dress-summary.json",site).href)).json();
     await sewn.waitFor();
     assert.equal(summary.settled,true);assert.deepEqual(summary.gating,[]);
     const endpoint=await sewn.getAttribute("data-frame");
     assert.equal(Number(endpoint),Object.values(summary.phases).reduce((a,b)=>a+b)-1);
     await p.getByRole("slider",{name:"Sewing replay frame"}).fill("0");
-    await p.waitForFunction(()=>document.querySelector(".sd-sewn-scene canvas").dataset.frame==="0");
+    await p.waitForFunction(()=>document.querySelector(".sd-making canvas").dataset.frame==="0");
+    // The flat pattern is shown under the stage, one outline per cut piece, and the four stages are named.
+    assert.equal(await p.locator(".sd-making .mk-pattern path").count(),summary.instances.length);
+    assert.deepEqual(await p.locator(".sd-making .mk-steps button").allTextContents(),["1Cut flat","2Wrapped round the form","3Seams sewn","4Hung under gravity"]);
+    assert.equal(await p.locator(".sd-making .mk-steps .is-now").textContent(),"1Cut flat");
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth),390);
   } finally {await p.close();}
 });
@@ -229,7 +265,22 @@ test("the hussar wardrobe connects the dressed figure, pattern front and native 
   const p=await browser.newPage({...opts,reducedMotion:"reduce"});
   try {
     await p.goto(new URL("/wardrobe/hussar/",site).href);
+    const book=p.locator(".regimental-cuts");
+    await book.scrollIntoViewIfNeeded();
+    for(const regiment of ["blue","yellow"]){
+      await book.getByRole("combobox",{name:"Regiment",exact:true}).selectOption(regiment);
+      await book.getByRole("button",{name:"Cap",exact:true}).click();
+      await book.locator('option[value="'+(regiment==="blue"?"mirliton_wall":"busby_wall")+'"]').waitFor({state:"attached"});
+      const seen=new Set();
+      for(const article of await book.locator(".regimental-items button").all()){
+        await article.click();
+        for(const id of await book.getByLabel("Flat piece").locator("option").evaluateAll(o=>o.map(x=>x.value)))seen.add(id);
+        assert.ok(await book.locator(".regimental-cut svg path.dl-cut").count()>0);
+      }
+      assert.equal(seen.size,49);
+    }
     const cabinet=p.locator("#dress-study");
+    await cabinet.scrollIntoViewIfNeeded();
     await cabinet.locator("canvas[data-ready='Compare-Dressed']").waitFor({timeout:90000});
     await cabinet.getByRole("radio",{name:"Yellow",exact:true}).check();
     await cabinet.getByRole("radio",{name:"Side",exact:true}).check();

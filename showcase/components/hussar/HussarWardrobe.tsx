@@ -1,9 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import {useCallback,useState} from "react";
+import {useCallback,useEffect,useRef,useState} from "react";
 import type {Layer,Framing,RegimentView} from "./RegimentalStudy";
 import type {Mount,Section,PieceReading} from "./PatternMount";
+import RegimentalCuts from "./RegimentalCuts";
 
 const Scene=dynamic(()=>import("./HussarScene"),{ssr:false});
 
@@ -20,10 +21,15 @@ export default function HussarWardrobe(){
   const [reading,readPiece]=useState<PieceReading|null>(null);
   const [framing,setFraming]=useState<{preset:Framing}>({preset:"Uniform"});
   const [failed,setFailed]=useState(false), failure=useCallback(()=>setFailed(true),[]);
+  const cabinet=useRef<HTMLElement>(null),[near,setNear]=useState(false);
+  useEffect(()=>{
+    const observer=new IntersectionObserver(([entry])=>{if(entry.isIntersecting){setNear(true);observer.disconnect();}},{rootMargin:"400px"});
+    observer.observe(cabinet.current!);return()=>observer.disconnect();
+  },[]);
   const names=regiment==="Compare"?["Blue","Yellow"]:[regiment];
-  return <section className="costume-cabinet" aria-labelledby="costume-heading" id="dress-study">
+  return <><section ref={cabinet} className="costume-cabinet" aria-labelledby="costume-heading" id="dress-study">
     <div className="costume-display"><div className="hu-stage costume-stage" data-layer={layer}>
-      {failed?<img className="costume-fallback" src="/wardrobe/hussar/regimental-portrait.webp" alt="Costume interpretation of Putbus’s Blue Hussar and Wrangel’s Yellow Hussar in full dress"/>:
+      {failed||!near?<img loading="lazy" className="costume-fallback" src="/wardrobe/hussar/regimental-portrait.webp" alt="Costume interpretation of Putbus’s Blue Hussar and Wrangel’s Yellow Hussar in full dress"/>:
         <Scene regiment={regiment} layer={layer} framing={framing} section={section} layout={layout} onFailure={failure} onPiece={readPiece}/>}
       <span className="hu-plate">{layer==="Dressed"?"Costume reconstruction":"Pattern study · "+layer}</span>
       <span className="hu-tag">{layer!=="Dressed"?layer+" · "+section:regiment==="Compare"?"Putbus, 1761 · Wrangel, 1765":regiment==="Blue"?"Putbus’s Blue Hussars · 1761":"Wrangel’s Yellow Hussars · 1765"}</span>
@@ -46,5 +52,5 @@ export default function HussarWardrobe(){
       <a className="costume-jump" href="#native-dolman">Watch the dolman sew together ↓</a>
       <div className="costume-files">{names.map(name=><a href={"/patterns/hussar-"+name.toLowerCase()+".pdf"} download key={name}>{name} ensemble PDF ↓</a>)}</div>
     </aside>
-  </section>;
+  </section><RegimentalCuts/></>;
 }

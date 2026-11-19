@@ -6,6 +6,7 @@ import joint from "../public/exhibits/poses/ensemble.json";
 import {dressCloth} from "./atelier3d/garment";
 import {fabrics} from "./atelier3d/weave";
 import {formMaterial,lightStudio,prepareRenderer,shadowFloor} from "./atelier3d/studio";
+import {cuttingTable} from "./construction/replay";
 
 export default function CoupledScene({frame,onReady,onError}:{frame:number;onReady:(key:string)=>void;onError:(key:string)=>void}){
   const host=useRef<HTMLDivElement>(null),step=useRef(frame),update=useRef<()=>void>(()=>{});
@@ -47,10 +48,10 @@ export default function CoupledScene({frame,onReady,onError}:{frame:number;onRea
       tall=extent.y*.54;wide=Math.max(extent.x,extent.z)*.56;
       camera.position.add(new T.Vector3(0,middle.y-controls.target.y,0));controls.target.set(0,middle.y,middle.z);controls.update();resize();
       const floor=shadowFloor(body.boundingBox!.min.y-.0005);scene.add(floor.mesh);disposables.push(floor);
-      // One block of flat pattern positions, then one block per recorded frame. Bolero vertices come first.
+      // The first native sample supplies flat pattern coordinates. Bolero vertices come first.
       const packed=new Float32Array(data,8+bn*12+bi*4);
-      if(packed.length!==n*3*(1+joint.frames))throw Error("Mismatched native outfit cache");
-      const last=joint.frames*n*3;
+      if(packed.length!==n*3*joint.frames)throw Error("Mismatched native outfit cache");
+      const last=(joint.frames-1)*n*3;
       // Right-handed Z-up, front -Y → right-handed Y-up, front +Z.
       const upright=(from:number,count:number,out=new Float32Array(count*3))=>{
         for(let i=0;i<count*3;i+=3){out[i]=packed[from+i];out[i+1]=packed[from+i+2];out[i+2]=-packed[from+i+1];}
@@ -63,8 +64,22 @@ export default function CoupledScene({frame,onReady,onError}:{frame:number;onRea
         scene.add(garment.mesh);disposables.push(garment);
         return {garment,start,points:new Float32Array(layout.vertices*3)};
       });
-      update.current=()=>{const index=Math.round((joint.frames-1)*step.current/135),offset=(index+1)*n*3;
-        for(const {garment,start,points} of garments)garment.update(upright(offset+start*3,points.length/3,points));
+      const xyz=new Float32Array(n*3),ranges:number[][]=[];
+      for(const [layout,start] of [[upper,0],[lower,upper.vertices]] as const)
+        for(const [a,b] of Object.values(layout.panels) as number[][])ranges.push([a+start,b+start]);
+      const arrange=cuttingTable(upright(0,n,xyz),ranges);
+      update.current=()=>{const index=Math.round((joint.frames-1)*step.current/135);
+        upright(index*n*3,n,xyz);arrange(xyz,Math.max(0,1-index/(joint.phases.fold-1)));
+        const board=new T.Box3(),tracking=index<joint.phases.fold+joint.phases.zip;
+        for(const {garment,start,points} of garments){
+          points.set(xyz.subarray(start*3,start*3+points.length));garment.update(points);
+          if(tracking)board.union(new T.Box3().setFromBufferAttribute(new T.BufferAttribute(points,3)));
+        }
+        figure.visible=floor.mesh.visible=index>=joint.phases.fold-1;
+        const focus=tracking?board.getCenter(new T.Vector3()):middle;
+        const span=tracking?board.getSize(new T.Vector3()):extent;
+        tall=Math.max(extent.y*.54,span.y*.58);wide=tracking?Math.hypot(span.x,span.z)*.57:Math.max(extent.x,extent.z)*.56;
+        camera.position.add(focus.clone().sub(controls.target));controls.target.copy(focus);controls.update();resize();
         canvas.dataset.nativeFrame=String(index);draw();};
       update.current();canvas.dataset.run=joint.case;canvas.dataset.full="true";canvas.dataset.coupled="true";onReady(joint.case);
     }).catch(()=>{if(!signal.aborted)onError(joint.case);});

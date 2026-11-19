@@ -10,6 +10,12 @@ async function packed(name: string, signal: AbortSignal) {
   return new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
 
+export async function loadSewing(id:string,vertices:number,frames:number,signal:AbortSignal){
+  const raw=new Int16Array(await packed(id+"-sewing.gz",signal));
+  if(raw.length!==3*vertices*frames)throw Error("Incomplete trouser sewing replay");
+  return raw;
+}
+
 export async function loadTopology(layout:Layout, signal:AbortSignal, key?:string) {
   const [buffer, garment] = await Promise.all([packed(key?"mesh-"+key+".gz":"mesh.gz", signal), fetch(key?base+key+"-topology.json":"/exhibits/trousers.json",{signal}).then(async r=>{
     if(!r.ok) throw Error("Missing trouser pattern");

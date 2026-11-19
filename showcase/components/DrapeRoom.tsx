@@ -26,7 +26,7 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
   const run=experiment.cases[key];
   const flags=full?joint.gating:run.flags;
   const nativeStep=Math.round(frame*(joint.frames-1)/135);
-  const stageLabel=full?(nativeStep<joint.phases.sew?"Coupled sewing":"Coupled gravity")+" · "+(nativeStep+1)+"/"+joint.frames:phase(frame);
+  const stageLabel=full?phase(nativeStep)+" · "+(nativeStep+1)+"/"+joint.frames:phase(frame);
   const shown=ready===key && failed!==key;
   const onReady=useCallback((id:string)=>setReady(id),[]);
   const onError=useCallback((id:string)=>{setFailed(id);play(false);},[]);
@@ -74,6 +74,8 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
         <div className="dr-patterns"><span>Full-size sewing patterns</span><a className="dr-pattern" download href="/patterns/bolero.pdf">Bolero <span aria-hidden="true">↓</span></a>
           <a className="dr-pattern" download href="/patterns/trousers.pdf">Trousers <span aria-hidden="true">↓</span></a></div>
         <a className="dr-next-study" href="/studies/trousers/">Explore the trouser cross-sections <span aria-hidden="true">↗</span></a>
+        <fieldset><legend>{full?"Sew both garments":"Sew the bolero"}</legend><div className="dr-options">{[[0,"Cut"],[75,"Join seams"],[135,"Dressed"]].map(([at,label])=>
+          <button key={at} aria-pressed={frame===at} disabled={!shown} onClick={()=>{play(false);setFrame(Number(at));setMode(full||at===135?"cloth":"construction");}}>{label}</button>)}</div></fieldset>
       </div>
       <figure className="dr-display">
         <div className="dr-stage"><div className="dr-stage-head"><span>{full?"Bolero and trousers":"Zouave bolero"}</span><button className="dr-length" aria-pressed={full} onClick={switchGarment}>{full?"Jacket only":"Coupled outfit"}</button></div>
@@ -102,7 +104,7 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
         </figcaption>
       </figure>
       <details className="dr-method"><summary>How the cloth was simulated <span>{flags.length?(run.settled?"Contact thickness incomplete":"Cloth still moving"):"Settled"}</span></summary>
-        {full?<><p>Both garments share one native cloth solve on a synthetic 92 cm body. The replay contains all 12 sewing steps and 36 gravity steps, with contact between the body and cloth and between the two garments. Both cuts use the same synthetic material properties. The colors distinguish the garments.</p>
+        {full?<><p>Both garments share one native cloth solve on a synthetic 92 cm body. The first 88 frames lay out, wrap and pair the twelve cut pieces. The next 12 sewing steps and 36 gravity steps include contact with the body and between garments. Both cuts use the same synthetic material properties. The colors distinguish the garments.</p>
           {joint.advisories.map(note=><p key={note}>Starting placement advisory · {note}.</p>)}
           <p><a href="/exhibits/poses/ensemble-request.json" download>Download the two-pattern solver input</a> · <a href="/exhibits/poses/ensemble.json" download>Download endpoint readings</a></p></>:<><p>Each combination replays a separate FrankenTextiles run with the same pattern and fabric. The first 88 frames illustrate assembly. The final 48 show native sewing and gravity steps on the fitted synthetic 92 cm form. The readings above describe the endpoint. The corded edge, the weave and the 2 mm thickness are drawn for display, and the surface between solver points is smoothed. The form carries no skin or face.</p>
         <p>The mean gap averages the distance at the chest ring. Edge strain is the change in edge length over the whole garment. This run’s endpoint range is {run.edgeStrainPercent.min}% to +{run.edgeStrainPercent.max}%. Contact shows the magnitude of the body’s barrier force at each welded cloth vertex, in newtons. Physical fit requires a sewn sample.</p>

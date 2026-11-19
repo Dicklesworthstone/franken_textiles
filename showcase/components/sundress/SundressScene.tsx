@@ -67,7 +67,8 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
     const rim=new T.DirectionalLight(0xffdbb4,1.65);rim.position.set(100,170,-165);scene.add(rim);
     // The figure is a tailor's form in the fitted body's own shape. Skin, a face and hair are not part of the
     // body model, so none are drawn.
-    const form=formMaterial(),body=new T.Mesh(native.geometry,[form,form]);
+    // This scene is in centimetres.
+    const form=formMaterial(undefined,{scale:100}),body=new T.Mesh(native.geometry,[form,form]);
     body.castShadow=body.receiveShadow=true;
     const garment=buildDress(),wrap=registerDress(garment,native.geometry,native.armAt);
     const ruler=heightRuler();scene.add(body,garment,ruler);

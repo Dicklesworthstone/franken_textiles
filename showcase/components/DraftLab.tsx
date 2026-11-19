@@ -13,10 +13,10 @@ type FileBytes = { bytes: Uint8Array<ArrayBuffer>; name: string };
 type Reply = { key: string; preview: string; pattern: string; flat: string; checks: string; passed: number;
   total: number; offTarget: string[]; files: Partial<Record<"pdf" | "svg", FileBytes>> };
 type Selection = { key: string; program: Garment; height: number; style: Record<string, number> };
-type Piece = { id: string; name: string; quantity: string; allowance: string; cut: string[];
+export type Piece = { id: string; name: string; quantity: string; allowance: string; cut: string[];
   sew: string[]; marks: string[]; trim: string[]; left: number; top: number; width: number; height: number };
 
-function readPieces(source: string): Piece[] {
+export function readPieces(source: string): Piece[] {
   const sheet = new DOMParser().parseFromString(source, "image/svg+xml");
   const pieces = Array.from(sheet.querySelectorAll("g[data-piece]"), g => {
     const paths = (selector: string) => Array.from(g.querySelectorAll(selector), path => path.getAttribute("d") || "");
@@ -40,7 +40,7 @@ function readPieces(source: string): Piece[] {
   return pieces;
 }
 
-function Drawing({ piece, miniature = false, reference }: { piece: Piece; miniature?: boolean; reference?: Piece }) {
+export function Drawing({ piece, miniature = false, reference }: { piece: Piece; miniature?: boolean; reference?: Piece }) {
   const width = Math.max(piece.width, reference?.width ?? 0), height = Math.max(piece.height, reference?.height ?? 0);
   const pad = Math.max(width, height) * (miniature ? 0.06 : 0.13);
   const right = piece.left + piece.width, bottom = piece.top + piece.height;
@@ -184,6 +184,7 @@ export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onP
       <div className="dl-downloads">{fresh?.files.map(f => <a href={f.url} download={f.name} key={f.type}>
         {f.type === "pdf" ? "A4 pattern PDF" : "Master SVG"} <span aria-hidden="true">↓</span>
       </a>)}</div>
+      <a href={"/?garment="+({zouave_bolero:"bolero",zouave_trousers:"trousers",fez:"fez"}[program])+"#construction"}>Watch the reference {preset.name.toLowerCase()} take shape ↗</a>
       {onPlanCut && fresh?.flat === "CONVERGED" && fresh.pattern && fresh.files.some(f => f.type === "pdf") &&
         <button className="dl-plan-cut" type="button" onClick={() => onPlanCut({program,
           label:`${preset.name} · ${height} cm · ${preset.label.toLowerCase()} ${value}${preset.unit}`, pattern:fresh.pattern,
