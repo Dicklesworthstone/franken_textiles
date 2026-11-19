@@ -1,0 +1,231 @@
+{
+  "command": "validate",
+  "exit": 0,
+  "ok": true,
+  "result": {
+    "completeness": [],
+    "missing_measurements": [],
+    "points": [
+      {
+        "authority": "ANALYTIC",
+        "body_mm": 900.0,
+        "body_sigma_mm": 0.0,
+        "ease_mm": 40.0,
+        "finished_mm": 940.0,
+        "id": "bust",
+        "label": "Finished bodice bust",
+        "residual_mm": 0.0,
+        "status": "IN_BAND",
+        "target_mm": [
+          20,
+          40,
+          65
+        ]
+      },
+      {
+        "authority": "ANALYTIC",
+        "body_mm": 720.0,
+        "body_sigma_mm": 0.0,
+        "ease_mm": 60.0,
+        "finished_mm": 780.0,
+        "id": "waist",
+        "label": "Finished waist",
+        "residual_mm": 0.0,
+        "status": "IN_BAND",
+        "target_mm": [
+          25,
+          60,
+          90
+        ]
+      }
+    ],
+    "seams": [
+      {
+        "a": "bodice_front/side_lower_R+side_upper_R",
+        "b": "bodice_back/side_upper_L+side_lower_L",
+        "len_a_mm": 240.3,
+        "len_b_mm": 240.3,
+        "notch_match": "none",
+        "ratio": 1.0,
+        "residual_mm": 0.0,
+        "seam": "bodice_side_R",
+        "status": "PASS",
+        "target_ratio": "1.000"
+      },
+      {
+        "a": "bodice_front/shoulder_R",
+        "b": "bodice_back/shoulder_L",
+        "len_a_mm": 25.0,
+        "len_b_mm": 25.0,
+        "notch_match": "none",
+        "ratio": 1.0,
+        "residual_mm": 0.0,
+        "seam": "shoulder_R",
+        "status": "PASS",
+        "target_ratio": "1.000"
+      },
+      {
+        "a": "skirt_front/side_hem_R+side_R",
+        "b": "skirt_back/side_L+side_hem_L",
+        "len_a_mm": 623.8,
+        "len_b_mm": 623.8,
+        "notch_match": "none",
+        "ratio": 1.0,
+        "residual_mm": 0.0,
+        "seam": "skirt_side_R",
+        "status": "PASS",
+        "target_ratio": "1.000"
+      },
+      {
+        "a": "bodice_front/side_upper_L+side_lower_L",
+        "b": "bodice_back/side_lower_R+side_upper_R",
+        "len_a_mm": 240.3,
+        "len_b_mm": 240.3,
+        "notch_match": "none",
+        "ratio": 1.0,
+        "residual_mm": -0.0,
+        "seam": "bodice_side_L",
+        "status": "PASS",
+        "target_ratio": "1.000"
+      },
+      {
+        "a": "bodice_front/shoulder_L",
+        "b": "bodice_back/shoulder_R",
+        "len_a_mm": 25.0,
+        "len_b_mm": 25.0,
+        "notch_match": "none",
+        "ratio": 1.0,
+        "residual_mm": 0.0,
+        "seam": "shoulder_L",
+        "status": "PASS",
+        "target_ratio": "1.000"
+      },
+      {
+        "a": "skirt_front/side_L+side_hem_L",
+        "b": "skirt_back/side_hem_R+side_R",
+        "len_a_mm": 623.8,
+        "len_b_mm": 623.8,
+        "notch_match": "none",
+        "ratio": 1.0,
+        "residual_mm": 0.0,
+        "seam": "skirt_side_L",
+        "status": "PASS",
+        "target_ratio": "1.000"
+      },
+      {
+        "a": "skirt_front/gather",
+        "b": "bodice_front/waist",
+        "len_a_mm": 507.0,
+        "len_b_mm": 390.0,
+        "notch_match": "none",
+        "ratio": 1.3,
+        "residual_mm": 0.0,
+        "seam": "gather_front",
+        "status": "PASS",
+        "target_ratio": "1.300"
+      },
+      {
+        "a": "skirt_back/gather",
+        "b": "bodice_back/waist",
+        "len_a_mm": 507.0,
+        "len_b_mm": 390.0,
+        "notch_match": "none",
+        "ratio": 1.3,
+        "residual_mm": 0.0,
+        "seam": "gather_back",
+        "status": "PASS",
+        "target_ratio": "1.300"
+      }
+    ],
+    "status": "CONVERGED",
+    "summary": {
+      "points_out_of_band": 0,
+      "seams_failing": 0,
+      "truing_failing": 0
+    },
+    "truing": [
+      {
+        "angle_sum_deg": 180.0,
+        "at": "bodice_front:ur + bodice_back:ul",
+        "deviation_deg": 0.0,
+        "end": "end",
+        "line": "arm_R / arm_L",
+        "message": "",
+        "seam": "bodice_side_R",
+        "status": "PASS"
+      },
+      {
+        "angle_sum_deg": 180.0,
+        "at": "bodice_front:rt + bodice_back:lt",
+        "deviation_deg": 0.0,
+        "end": "start",
+        "line": "strap_outer_R / strap_outer_L",
+        "message": "",
+        "seam": "shoulder_R",
+        "status": "PASS"
+      },
+      {
+        "angle_sum_deg": 180.0,
+        "at": "bodice_front:ri + bodice_back:li",
+        "deviation_deg": 0.0,
+        "end": "end",
+        "line": "strap_inner_R / strap_inner_L",
+        "message": "",
+        "seam": "shoulder_R",
+        "status": "PASS"
+      },
+      {
+        "angle_sum_deg": 180.0,
+        "at": "skirt_front:hr + skirt_back:hl",
+        "deviation_deg": 0.0,
+        "end": "start",
+        "line": "hem / hem",
+        "message": "",
+        "seam": "skirt_side_R",
+        "status": "PASS"
+      },
+      {
+        "angle_sum_deg": 180.0,
+        "at": "bodice_front:ul + bodice_back:ur",
+        "deviation_deg": 0.0,
+        "end": "start",
+        "line": "arm_L / arm_R",
+        "message": "",
+        "seam": "bodice_side_L",
+        "status": "PASS"
+      },
+      {
+        "angle_sum_deg": 180.0,
+        "at": "bodice_front:li + bodice_back:ri",
+        "deviation_deg": 0.0,
+        "end": "start",
+        "line": "strap_inner_L / strap_inner_R",
+        "message": "",
+        "seam": "shoulder_L",
+        "status": "PASS"
+      },
+      {
+        "angle_sum_deg": 180.0,
+        "at": "bodice_front:lt + bodice_back:rt",
+        "deviation_deg": 0.0,
+        "end": "end",
+        "line": "strap_outer_L / strap_outer_R",
+        "message": "",
+        "seam": "shoulder_L",
+        "status": "PASS"
+      },
+      {
+        "angle_sum_deg": 180.0,
+        "at": "skirt_front:hl + skirt_back:hr",
+        "deviation_deg": 0.0,
+        "end": "end",
+        "line": "hem / hem",
+        "message": "",
+        "seam": "skirt_side_L",
+        "status": "PASS"
+      }
+    ],
+    "worst": []
+  },
+  "schema": "ftx-cli/1"
+}

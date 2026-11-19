@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { type Garment, type StudioMode, loadGarment } from "./garmentMesh";
+import { type Garment, type StudioMode, type PanelOutline, loadGarment } from "./garmentMesh";
 
 type StudioProps = {
   garment: Garment;
@@ -17,6 +17,8 @@ type StudioProps = {
   onReady?: () => void;
   onError?: () => void;
   onSeams?: (names: string[]) => void;
+  panel?: string;
+  onPanels?: (panels: PanelOutline[]) => void;
   onStrain?: (strain: { min: number; max: number; p95: number }) => void;
 };
 
@@ -24,15 +26,15 @@ const homeYaw = 0.32;
 const homeElevation = 0.15;
 
 export default function Studio({ garment, mode = "cloth", frame = 1, wire = false, seam, spread = 0, yaw,
-  resetKey = 0, onReady, onError, onSeams, onStrain }: StudioProps) {
+  resetKey = 0, onReady, onError, onSeams, onStrain, panel, onPanels }: StudioProps) {
   const host = useRef<HTMLDivElement>(null);
-  const state = useRef({ mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain });
+  const state = useRef({ mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain, panel, onPanels });
   const redraw = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    state.current = { mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain };
+    state.current = { mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain, panel, onPanels };
     redraw.current?.();
-  }, [mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain]);
+  }, [mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain, panel, onPanels]);
 
   useEffect(() => {
     const surface = host.current;
@@ -115,7 +117,7 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     function update() {
       if (!garmentMesh || !width || !height) return;
       const view = state.current;
-      garmentMesh.pose(view.mode, view.frame, view.wire, width / height, view.seam, view.spread);
+      garmentMesh.pose(view.mode, view.frame, view.wire, width / height, view.seam, view.spread, view.panel);
       if (lastReset !== view.resetKey) {
         lastReset = view.resetKey;
         reset();
@@ -177,6 +179,7 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
       garmentMesh = result;
       scene.add(result.group);
       state.current.onSeams?.(result.seamNames);
+      state.current.onPanels?.(result.panels);
       state.current.onStrain?.(result.strainRange);
       update();
     }).catch(() => {

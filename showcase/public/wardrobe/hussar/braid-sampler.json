@@ -1,0 +1,13 @@
+{
+  "schema":"fabric-pattern/1",
+  "units":"mm",
+  "meta":{"style":"HUSSAR_BRAID","sa_mm":0,"note":"Original flat braid sampler for the 1761 hussar interpretation. Its 100 by 36 mm board and loop are illustrative."},
+  "pieces":[{
+    "id":"braid","name":"Chest braid sampler","cut":{"qty":1},
+    "vertices":{"a":[0,0],"b":[100,0],"c":[100,36],"d":[0,36]},
+    "edges":[{"id":"bottom","from":"a","to":"b"},{"id":"right","from":"b","to":"c"},{"id":"top","from":"c","to":"d"},{"id":"left","from":"d","to":"a"}],
+    "grain":[[5,4],[5,30]],
+    "decor":[{"kind":"soutache","width_mm":2,"closed":false,"pts":[[5,18],[19,17],[33,16],[49,15],[64,16],[77,19],[83,25],[86,28],[90,28],[92,25],[91,22],[87,20],[80,21],[84,17],[88,15],[91,13],[90,10],[86,9],[82,11],[79,15],[76,19],[68,21],[52,22],[35,21],[19,20],[5,20]]}]
+  }],
+  "seams":[]
+}

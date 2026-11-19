@@ -1,0 +1,39 @@
+.rig-page{min-height:100vh;background:#f5f2e9;color:#253337}
+.rig-mast{height:67px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #c9c6bb}
+.rig-mast>a:last-child,.rig-links a{font-size:14px;font-weight:600}
+.rig-wrap{padding-block:clamp(25px,4vw,66px)}
+.rig-heading{display:flex;justify-content:space-between;align-items:end;gap:30px;margin-bottom:24px}
+.rig-heading h1{font:400 clamp(55px,6.3vw,102px)/.99 var(--serif);letter-spacing:-.046em;margin:8px 0 0}
+.rig-heading h1 em{color:#aa5c3e}
+.rig-heading>p,.rig-notes p,.rig-notes li{font-size:15px;line-height:1.55;color:#505951}
+.rig-heading>p{max-width:360px;margin:0 0 4px}
+.rig-desk{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(275px,.78fr);border:1px solid #b5b6a7;border-radius:5px;overflow:hidden}
+.rig-instrument{min-width:0;background:#e4e1d5}
+.rig-stage{height:clamp(352px,36vw,570px);position:relative;background:radial-gradient(ellipse at 35% 20%,#d6cebf 0%,#b3a99a 60%,#948b7e)}
+.rig-stage.strip{background:radial-gradient(ellipse at 35% 20%,#d3dcd5,#adbdb6 65%,#8c9f9c)}
+.rig-stage video,.rig-poster,.rig-scene,.rig-scene canvas{display:block;width:100%;height:100%;object-fit:contain}
+.rig-scene canvas{cursor:grab}.rig-scene canvas:active{cursor:grabbing}
+.rig-plate,.rig-annot{position:absolute;pointer-events:none;color:#273c3a}
+.rig-plate{top:14px;left:16px;letter-spacing:.13em}.rig-annot{bottom:14px;left:16px;display:flex;align-items:center;gap:5px;background:#f5f3e6dd;border:1px solid #b0b3a2;padding:6px 9px;border-radius:2px;font:500 11px var(--mono)}
+.rig-annot i,.rig-values i{display:inline-block;width:9px;height:9px;border-radius:50%;background:#2f626a}
+.rig-annot i:nth-of-type(2){background:#9a572b}.rig-annot i:nth-of-type(3){background:#66723d}.rig-annot i:not(:first-child){margin-left:7px}
+.rig-viewbar,.rig-viewbar>div,.rig-presets{display:flex;align-items:center;flex-wrap:wrap;gap:5px}
+.rig-viewbar{padding:9px 12px;justify-content:space-between;border-top:1px solid #b5b6a7}
+.rig-viewbar button,.rig-presets button{border:1px solid #bdbdaf;border-radius:3px;background:#eeeae0;color:#343f3c;padding:6px 9px;font-size:12px}
+.rig-viewbar label{font-size:12px}.rig-viewbar input,.rig-slider input{accent-color:#854528}
+.rig-console{padding:clamp(20px,2.5vw,40px);background:#fcf9ef;display:flex;flex-direction:column;justify-content:center}
+.rig-console h2,.rig-notes h2{font:400 36px/1 var(--serif);margin:0 0 20px}
+.rig-slider{display:grid;grid-template-columns:1fr auto;font-size:13px;font-weight:600;gap:9px}.rig-slider output{font:500 13px var(--mono)}.rig-slider input{margin:0;width:100%;grid-column:1/-1}
+.rig-presets{gap:4px;margin:10px 0}.rig-presets button{font-size:11px;padding:4px 7px}.rig-presets button[aria-pressed=true]{background:#31423f;color:white}
+.rig-chart{margin:14px 0}.rig-chart figcaption,.rig-chart div{display:flex;align-items:center;justify-content:space-between;color:#59645c;font:500 10px var(--mono)}
+.rig-chart svg{width:100%;height:65px;display:block}
+.rig-values{width:100%;margin:0 0 14px;border-collapse:collapse;font:500 13px var(--mono)}
+.rig-values div{display:flex;justify-content:space-between;border-top:1px solid #d9d8c9;padding:7px 0}
+.rig-values th,.rig-values td{border-top:1px solid #d9d8c9;padding:6px 0;text-align:right}.rig-values th:first-child{text-align:left}.rig-values th{font-weight:500}
+.rig-values dt,.rig-values thead{font:400 12px var(--sans);color:#57625b}.rig-values dd{margin:0}.rig-values i{margin-right:5px}
+.rig-play{border:0;border-radius:3px;background:#30413b;color:#fffae6;padding:10px 16px;font-size:13px;font-weight:600;align-self:start}
+.rig-threshold{font-size:12px;color:#714526;margin:10px 0 0}
+.rig-notes{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(230px,.6fr);gap:8%;padding-block:34px}.rig-notes h2{margin-bottom:10px}.rig-notes p{max-width:65ch;margin:8px 0}
+.rig-notes summary{font-size:13px;font-weight:600;cursor:pointer}.rig-notes details{margin-top:15px}.rig-notes li{font-size:13px;overflow-wrap:anywhere}
+.rig-links{display:grid;align-content:start}.rig-links a{border-top:1px solid #c6c7b9;padding:10px 0}
+@media(max-width:760px){.rig-heading{align-items:start;display:block}.rig-heading>p{margin:12px 0 0;max-width:59ch}.rig-desk{grid-template-columns:1fr}.rig-stage{height:clamp(280px,62vw,410px)}.rig-notes{grid-template-columns:1fr;gap:18px}.rig-console{padding:20px}.rig-chart{max-width:540px}.rig-mast{height:57px}}

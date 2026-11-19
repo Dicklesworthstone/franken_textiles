@@ -2,19 +2,32 @@
 
 A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
 
+- **Wear the sundress.** At `/wardrobe/sundress/`, drag either hand or use the arm controls,
+  change the adult form’s dimensions, and compare the body and dress circumferences. The cut
+  stays fixed. The live figure is geometric. The four-panel pattern, SVG and tiled A4 PDF come
+  from the native pipeline.
+- **Dress a hussar.** At `/wardrobe/hussar/`, compare the Swedish Blue and Yellow regiments of
+  1761, remove the pelisse, and inspect the chest cord. The reconstructed garment and its native
+  two-pass DST braid sampler share an original motif. The page cites the Swedish military-history
+  museums’ description of both uniforms.
+- **Test the cloth.** `/experiments/strip/` compares warp, weft and bias cuts of the same synthetic
+  material. `/experiments/cylinder/` shows a specimen twisting and compressing between two holders.
+  Geometry, grip forces, torque, residuals and protocol discrepancies come from downloadable Rust
+  experiment reports. The web camera and holder models are illustrative.
 - **Draft.** Choose a bolero, trousers or a fez, change the chart size and ease, and pin a piece
   to compare its outline. Download the resulting SVG or tiled A4 PDF.
 - **Cut.** Send that exact draft to the cutting table. Change the fabric width and garment count,
   inspect piece and grain placement, and download the full-scale SVG marker.
 - **Stitch.** Follow a Tajima DST needle path, pause at the braid placement stop, switch panels,
   and download the machine file being replayed.
-- **Drape.** Orbit two native synthetic garment runs in WebGL. Scrub from flat pattern to settled
-  garment, separate panels to see the construction, select a seam or inspect endpoint strain.
+- **Drape.** Orbit two native synthetic garment runs in WebGL. Follow a single panel from its
+  flat outline to its place in the sewn garment, or inspect a seam and its endpoint strain.
 - **Trace.** Reveal the Rust tracer's review of a synthetic bolero sheet, then open the same PNG
   in the workbench to inspect its corners and name the recovered pieces. The sample has no scale calibration.
 
-The chart-based drafts and recorded drapes are separate examples. The studio tour and three
-garment films are available as downloadable H.264 videos. The cover is an AI-generated illustration.
+The chart-based drafts and recorded drapes are separate examples. The homepage has nine
+downloadable H.264 films. Gallery previews play muted while visible, pause offscreen and respect
+reduced motion. The cover is an AI-generated illustration. The films show the actual exhibits.
 
 ## Run locally
 
@@ -79,3 +92,29 @@ and the embroidery timeline. Stage the workbench before recording, then run:
 ```sh
 CHROMIUM_EXECUTABLE=/path/to/chrome node scripts/render-studio-tour.mjs http://localhost:3000 /path/to/new-tour
 ```
+
+For the material exhibits, build the `ftx-materials` binary and run the following from this directory.
+The preparation script reads the repository’s cylinder and clamped-strip fixtures, runs the solver,
+and saves its inputs and outputs. Both material films use the same state selection as the web views.
+
+```sh
+python3 scripts/prepare-material-experiments.py /path/to/new-reports
+CHROMIUM_EXECUTABLE=/path/to/chrome node scripts/render-material-experiments.mjs http://localhost:3000 /path/to/new-films
+FTX_STUDIO_URL=http://localhost:3000 CHROMIUM_EXECUTABLE=/path/to/chrome node --test scripts/exhibition.test.mjs
+```
+
+To reproduce the fixed sundress pattern, build the native `ftx` binary and choose a new output
+directory. The optional `--record-drape --model /path/to/converted-model` records the native
+solver outcome on a synthetic adult body. The wardrobe films capture the two live WebGL exhibits.
+The last command edits the published films in `public/media/` into the homepage loop.
+
+```sh
+python3 scripts/prepare-sundress.py /path/to/new-dress
+CHROMIUM_EXECUTABLE=/path/to/chrome node scripts/render-sundress.mjs http://localhost:3000 /path/to/new-sundress-film
+CHROMIUM_EXECUTABLE=/path/to/chrome node scripts/render-hussar.mjs http://localhost:3000 /path/to/new-hussar-film
+sh scripts/render-wardrobe-reel.sh /path/to/new-reel
+```
+
+The [ranked exhibit ideas](../.beads/showcase-ideas.jsonl) include acceptance checks and dependencies.
+The next garment studies are a wrap skirt with adjustable overlap, a period waistcoat with working
+pocket details, and a second checked sundress draft that corrects insufficient ease.

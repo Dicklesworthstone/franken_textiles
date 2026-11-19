@@ -23,12 +23,12 @@ embroidery files for the braid.
 It is the mechanical core of the `fabric-pattern-creation-and-alteration` agent skill, rebuilt in Rust so it
 is deterministic, testable against known answers, and runs in a browser with nothing to install.
 
-**[The Pattern Room](showcase/README.md)** lets you draft a bolero, trousers or a fez in the browser.
-Pin a piece, change its ease and send the revised pattern straight to the cutting table. Compare
-fabric widths, download a full-scale cutting marker, or follow the embroidery needle to the stop
-where the maker lays the braid. The WebGL gallery replays two native drapes on synthetic bodies.
-A tracing exhibit opens its practice sheet in the local workbench, and four downloadable films
-tour the tools and garment studies.
+**[The Pattern Room](showcase/README.md)** lets you pose an adult dress form inside a fixed sundress,
+compare two Swedish hussar uniforms from 1761, or follow a single flat sleeve into a sewn bolero.
+The sundress reports signed pattern ease as the wearer's dimensions change. The historical wardrobe
+includes a machine-readable braid sample. Two material experiments replay native grip forces and
+specimen geometry as you stretch or twist the cloth. The gallery also lets you draft a bolero, trousers
+or a fez and send the actual pattern to the cutting table. Rendered films play alongside the exhibits.
 
 ---
 

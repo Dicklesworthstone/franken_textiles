@@ -1,0 +1,22 @@
+.sd-page{background:#f7f4eb;color:#24372f;min-height:100vh}
+.sd-nav{display:flex;align-items:center;justify-content:space-between;height:67px;border-bottom:1px solid #c6c7b6}.sd-nav>a:last-child,.sd-links a{font-size:14px;font-weight:600}
+.sd-wrap{padding-block:clamp(25px,4vw,66px)}
+.sd-head{display:flex;justify-content:space-between;align-items:end;gap:30px;margin-bottom:24px}.sd-head h1{font:400 clamp(49px,6vw,97px)/.99 var(--serif);letter-spacing:-.045em;margin:8px 0 0}.sd-head h1 em{color:#ae633f}
+.sd-head>p,.sd-notes p{font-size:15px;line-height:1.55;color:#515c50}.sd-head>p{max-width:355px;margin:0 0 4px}
+.sd-desk{display:grid;grid-template-columns:minmax(0,1.68fr) minmax(284px,.76fr);border:1px solid #bbc0b2;border-radius:5px;overflow:hidden}
+.sd-board{min-width:0;background:#e7e5d9}.sd-stage{position:relative;height:clamp(455px,42vw,620px);background:radial-gradient(ellipse at 37% 22%,#e4e8d9 0%,#c4cfc0 56%,#9ba99c 100%)}
+.sd-stage video,.sd-scene,.sd-scene canvas{width:100%;height:100%;display:block;object-fit:contain}.sd-scene canvas{cursor:grab}
+.sd-stage-caption{position:absolute;bottom:14px;left:15px;border:1px solid #b9bcae;background:#fbf9eddc;border-radius:2px;display:flex;align-items:center;gap:7px;padding:7px 10px;font:500 10px var(--mono);pointer-events:none}.sd-stage-caption i{width:9px;height:9px;border-radius:50%;background:#1b6864}.sd-stage-caption span{color:#989e8d}
+.sd-viewbar,.sd-viewbar>div,.sd-section,.sd-poses{display:flex;align-items:center;gap:6px}.sd-viewbar,.sd-section{justify-content:space-between}.sd-viewbar{padding:9px 12px;border-top:1px solid #c2c4b8;flex-wrap:wrap}.sd-viewbar p{font-size:12px;margin:0;color:#47534a}
+.sd-page button{background:#f0eee3;border:1px solid #bfc3b6;border-radius:3px;color:#354538;font-size:12px;padding:6px 9px}.sd-page button[aria-pressed=true]{background:#2a4b42;color:#fffaeb;border-color:#2a4b42}
+.sd-controls{background:#fffcf2;align-content:center;padding:clamp(18px,2.3vw,35px)}.sd-section h2,.sd-notes h2{font:400 31px/1.04 var(--serif);margin:0}.sd-section{margin:0 0 12px}.sd-section span{font:500 11px var(--mono);color:#657160}.sd-page .sd-reset{border:0;background:none;text-decoration:underline}
+.sd-controls label{display:grid;grid-template-columns:1fr auto;gap:7px;font-size:13px;font-weight:600;margin:10px 0}.sd-controls output{font:500 12px var(--mono)}.sd-controls input{display:block;grid-column:1/-1;width:100%;margin:0;accent-color:#29746b}
+.sd-lines{padding:15px 0 12px}.sd-table{display:grid;grid-template-columns:1fr auto auto;column-gap:19px;row-gap:0;font:500 12px var(--mono)}
+.sd-table>span{font:400 11px var(--sans);color:#607064;padding:2px 0 5px}.sd-table>div{display:contents}.sd-table>div>*{padding:5px 0;border-top:1px solid #dfe1d3}.sd-table span:not(:first-child),.sd-table b{text-align:right}
+.sd-table strong{font:600 13px var(--sans);text-transform:capitalize}.sd-table b{color:#326750}.sd-table .sd-negative{color:#a2412c}.sd-lines p,.sd-controls summary{font-size:12px;color:#586357;line-height:1.45;margin:6px 0}
+.sd-controls details{margin-top:7px}.sd-controls summary{cursor:pointer}.sd-controls details label{text-transform:capitalize}
+.sd-cross{display:flex;gap:10px}.sd-cross figure{margin:4px 0;flex:1;text-align:center}.sd-cross svg{display:block;width:100%;height:56px}.sd-cross figcaption{font:500 10px var(--mono)}.sd-cross .sd-short{color:#933e27}
+@media(min-width:761px){.sd-board{display:flex;flex-direction:column}.sd-stage{flex:1;min-height:clamp(455px,42vw,620px)}}
+.sd-notes summary,.sd-notes details a{font-size:13px;font-weight:600;cursor:pointer}.sd-notes details{margin-top:13px}.sd-notes details a{text-decoration:underline}
+.sd-notes{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(240px,.6fr);gap:8%;padding-block:32px}.sd-notes p{margin:8px 0;max-width:67ch}.sd-links{display:grid;align-content:start}.sd-links a{border-top:1px solid #c8cbbd;padding:9px 0}
+@media(max-width:760px){.sd-nav{height:57px}.sd-head{display:block}.sd-head>p{margin-top:12px;max-width:62ch}.sd-desk,.sd-notes{grid-template-columns:1fr}.sd-stage{height:clamp(350px,86vw,490px)}.sd-notes{gap:20px}.sd-viewbar p{font-size:11px}}

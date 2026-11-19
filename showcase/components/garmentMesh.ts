@@ -2,6 +2,7 @@ import * as THREE from "three";
 
 export type Garment = "bolero" | "trousers";
 export type StudioMode = "cloth" | "construction" | "strain";
+export type PanelOutline = { name: string; path: string; box: string; color: string };
 
 type Exhibit = {
   vertices: number;
@@ -85,6 +86,24 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
   geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   const panelColors = new Float32Array(stride);
   const palette = ["#e3b24a", "#71a989", "#df8269", "#718cab", "#cfbc9b", "#c384aa", "#7db5bd"];
+  // Count edges once on the flat board. Only exterior edges belong to the panel silhouette.
+  const boundary = new Map<number,number>();
+  for (let t=0; t<data.triangles.length; t+=3) for (let j=0;j<3;j++){
+    const a=data.triangles[t+j], b=data.triangles[t+(j+1)%3];
+    const key=Math.min(a,b)*data.vertices+Math.max(a,b);
+    boundary.set(key,(boundary.get(key)??0)+1);
+  }
+  const outer=[...boundary].filter(([,count])=>count===1).map(([key])=>[Math.floor(key/data.vertices),key%data.vertices]);
+  const panels: PanelOutline[]=Object.entries(data.panels).map(([name,[start,end]],i)=>{
+    const flat=(v:number)=>[frames[v*3]*1000,-frames[v*3+2]*1000];
+    const edges=outer.filter(([a,b])=>a>=start && b<end);
+    const coords=edges.flatMap(([a,b])=>[flat(a),flat(b)]);
+    const xs=coords.map(p=>p[0]), ys=coords.map(p=>p[1]);
+    const x=Math.min(...xs),y=Math.min(...ys),w=Math.max(...xs)-x,h=Math.max(...ys)-y;
+    const pad=Math.max(w,h)*.05;
+    return {name,color:palette[i%palette.length],path:edges.map(([a,b])=>"M"+flat(a).join(",")+"L"+flat(b).join(",")).join(" "),
+      box:[x-pad,y-pad,w+2*pad,h+2*pad].join(" ")};
+  });
   for (const [index, [start, end]] of Object.values(data.panels).entries()) {
     const color = new THREE.Color(palette[index % palette.length]);
     for (let i = start; i < end; i++) color.toArray(panelColors, i * 3);
@@ -182,9 +201,10 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
   let lastFrame = -1;
   let lastSpread = -1;
   let showingStrain = false;
+  let highlighted = "";
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
-  function pose(mode: StudioMode, time: number, showWire: boolean, aspect: number, seam?: string, spread = 0) {
+  function pose(mode: StudioMode, time: number, showWire: boolean, aspect: number, seam?: string, spread = 0, panel = "") {
     const sourceFrame = (mode === "strain" ? 1 : THREE.MathUtils.clamp(time, 0, 1)) * (data.sourceFrames - 1);
     const separation = mode === "construction" ? THREE.MathUtils.clamp(spread, 0, 1) : 0;
     if (lastFrame !== sourceFrame || lastSpread !== separation) {
@@ -213,9 +233,16 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
     group.scale.setScalar(scale);
     group.position.copy(center).multiplyScalar(-scale);
     fabric.material = mode === "strain" ? strain : mode === "construction" ? cut : cloth;
-    if (showingStrain !== (mode === "strain")) {
+    const focus = mode === "construction" && Object.hasOwn(data.panels,panel) ? panel : "";
+    if (showingStrain !== (mode === "strain") || highlighted !== focus) {
+      highlighted=focus;
       showingStrain = mode === "strain";
       colors.copyArray(showingStrain ? strainColors : panelColors);
+      if (focus) {
+        const [start,end]=data.panels[focus];
+        const muted=new THREE.Color("#465052");
+        for(let v=0;v<data.vertices;v++) if(v<start || v>=end) colors.setXYZ(v,muted.r,muted.g,muted.b);
+      }
       colors.needsUpdate = true;
     }
     const pair = mode === "construction" && seam && Object.hasOwn(data.seams, seam) ? data.seams[seam] : undefined;
@@ -229,7 +256,7 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
     wire.visible = showWire;
     seams.visible = mode !== "strain" && !pair;
   }
-  return { group, pose, seamNames, strainRange: data.summary.edgeStrainPercent, dispose() {
+  return { group, pose, seamNames, panels, strainRange: data.summary.edgeStrainPercent, dispose() {
     geometry.dispose();
     seamGeometry.dispose();
     sideA.dispose();

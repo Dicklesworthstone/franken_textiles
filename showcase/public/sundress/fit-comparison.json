@@ -1,0 +1,157 @@
+{
+  "basis": "Native flat validation of one fixed pattern against three synthetic adult forms.",
+  "fit": {
+    "schema": "fabric-fit/1",
+    "garment": "Garden sundress",
+    "points": [
+      {
+        "id": "bust",
+        "label": "Finished bodice bust",
+        "kind": "girth",
+        "instances": [
+          "bodice_front",
+          "bodice_back"
+        ],
+        "landmark": "waist",
+        "dy": 200,
+        "body": "chest",
+        "target_mm": [
+          20,
+          40,
+          65
+        ]
+      },
+      {
+        "id": "waist",
+        "label": "Finished waist",
+        "kind": "path",
+        "refs": [
+          "bodice_front/waist",
+          "bodice_back/waist"
+        ],
+        "body": "waist",
+        "target_mm": [
+          25,
+          60,
+          90
+        ]
+      }
+    ]
+  },
+  "runs": [
+    {
+      "form": "Reference",
+      "status": "CONVERGED",
+      "points": [
+        {
+          "authority": "ANALYTIC",
+          "body_mm": 900.0,
+          "body_sigma_mm": 0.0,
+          "ease_mm": 40.0,
+          "finished_mm": 940.0,
+          "id": "bust",
+          "label": "Finished bodice bust",
+          "residual_mm": 0.0,
+          "status": "IN_BAND",
+          "target_mm": [
+            20,
+            40,
+            65
+          ]
+        },
+        {
+          "authority": "ANALYTIC",
+          "body_mm": 720.0,
+          "body_sigma_mm": 0.0,
+          "ease_mm": 60.0,
+          "finished_mm": 780.0,
+          "id": "waist",
+          "label": "Finished waist",
+          "residual_mm": 0.0,
+          "status": "IN_BAND",
+          "target_mm": [
+            25,
+            60,
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "form": "Close",
+      "status": "NOT_CONVERGED",
+      "points": [
+        {
+          "authority": "ANALYTIC",
+          "body_mm": 935.0,
+          "body_sigma_mm": 0.0,
+          "ease_mm": 5.0,
+          "finished_mm": 940.0,
+          "id": "bust",
+          "label": "Finished bodice bust",
+          "residual_mm": -15.0,
+          "status": "LOW",
+          "target_mm": [
+            20,
+            40,
+            65
+          ]
+        },
+        {
+          "authority": "ANALYTIC",
+          "body_mm": 770.0,
+          "body_sigma_mm": 0.0,
+          "ease_mm": 10.0,
+          "finished_mm": 780.0,
+          "id": "waist",
+          "label": "Finished waist",
+          "residual_mm": -15.0,
+          "status": "LOW",
+          "target_mm": [
+            25,
+            60,
+            90
+          ]
+        }
+      ]
+    },
+    {
+      "form": "Beyond garment",
+      "status": "NOT_CONVERGED",
+      "points": [
+        {
+          "authority": "ANALYTIC",
+          "body_mm": 965.0,
+          "body_sigma_mm": 0.0,
+          "ease_mm": -25.0,
+          "finished_mm": 940.0,
+          "id": "bust",
+          "label": "Finished bodice bust",
+          "residual_mm": -45.0,
+          "status": "LOW",
+          "target_mm": [
+            20,
+            40,
+            65
+          ]
+        },
+        {
+          "authority": "ANALYTIC",
+          "body_mm": 805.0,
+          "body_sigma_mm": 0.0,
+          "ease_mm": -25.0,
+          "finished_mm": 780.0,
+          "id": "waist",
+          "label": "Finished waist",
+          "residual_mm": -50.0,
+          "status": "LOW",
+          "target_mm": [
+            25,
+            60,
+            90
+          ]
+        }
+      ]
+    }
+  ]
+}
