@@ -25,7 +25,16 @@
  ],
  "sourcePc2Sha256": "c2ac08ab2b4eeaad10c7663ede588c64890e39dc14ca69b45203fa9591e52e79",
  "style": "HUSSAR_BLUE",
- "spacingMm": null,
+ "spacingMm": 20.0,
+ "solverArguments": [
+  "--spacing-mm",
+  "20",
+  "--time-subdivision",
+  "--arm-deg",
+  "20",
+  "--drape",
+  "60"
+ ],
  "armDeg": 20.0,
  "settled": true,
  "gating": [

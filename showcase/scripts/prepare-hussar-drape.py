@@ -127,7 +127,10 @@ def locate(points, flat, triangles):
     return anchors
 
 
-def package(source, pattern_path, destination, name):
+def package(source, pattern_path, destination, name, drape_args=()):
+    """Pack a finished drape. `drape_args` are the solver arguments it was run with, recorded as given."""
+    drape_args = [str(a) for a in drape_args]
+    spacing = float(drape_args[drape_args.index("--spacing-mm") + 1]) if "--spacing-mm" in drape_args else None
     mesh = json.loads((source / "mesh_map.json").read_text())
     report = json.loads((source / "sim_report.json").read_text())
     pattern = json.loads(pattern_path.read_text())
@@ -205,7 +208,7 @@ def package(source, pattern_path, destination, name):
         "sourcePc2Sha256": hashlib.sha256(cache).hexdigest(),
         "sourcePatternSha256": hashlib.sha256(pattern_path.read_bytes()).hexdigest(),
         "summary": {
-            "style": report["style"], "spacingMm": report.get("spacing_mm"), "armDeg": report["arm_deg"],
+            "style": report["style"], "spacingMm": spacing, "solverArguments": drape_args, "armDeg": report["arm_deg"],
             "settled": numerical["settled"], "gating": report["gating"], "flags": report["flags"],
             "edgeStrainPercent": report["global_strain_pct"], "massKg": report["mass_kg"],
             "areaM2": report["area_m2"], "sewingPairs": report["sewing_pairs"],
@@ -262,7 +265,7 @@ def solve_and_package(description, documents, drape_args, default_name):
         # Compare as JSON: a tuple in `document` is a list once written.
         if json.loads((args.work / name).read_text()) != json.loads(json.dumps(document)):
             raise SystemExit(f"{args.work}/{name} is not what this script drapes; solve again into a new directory")
-    package(args.work / "drape", args.work / "pattern.json", args.destination, args.name)
+    package(args.work / "drape", args.work / "pattern.json", args.destination, args.name, drape_args)
 
 
 if __name__ == "__main__":
