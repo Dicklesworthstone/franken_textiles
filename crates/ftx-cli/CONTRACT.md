@@ -391,8 +391,11 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   angular and height span in the part frame of the right-hand copy, vertices inside the body at both
   stages, and the start's edge strain (percentiles and a least-squares mean along pattern x, pattern y
   and in shear); per seam, how far its pairs travel from the wrap; the torso, arm and leg frames with
-  every landmark height and section radius the wrap uses; and `body_surface`, the result of the drape's
-  own self-intersection audit of the posed body, reported and not enforced here. Lengths are millimetres; OBJ files are metres.
+  every landmark height and section radius the wrap uses; `body_surface`, the result of the drape's
+  own self-intersection audit of the posed body, reported and not enforced here; and `cloth_contact`,
+  every pair of start-state cloth triangles that cross (one vertex per sewing group, so a sewn seam is
+  adjacency), counted per pair of pieces and painted yellow in `start/`. That is the first thing
+  `ftx drape --self-contact-mm` refuses on; its thickness clearance is not tested here. Lengths are millimetres; OBJ files are metres.
   **No-claim boundary:** nothing here is a drape, a fit or an admission, and start-state strain is a
   property of the kinematic start, not of the garment at rest. Unit tests cover the strain fit and the
   piece colouring; the command itself has been exercised on the 1761 dolman, not against an oracle.

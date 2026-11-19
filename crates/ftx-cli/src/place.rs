@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use ftx_body::{BodyFrames, clothing_skin, pose_deltas, skin_mesh};
+use ftx_core::intersection::{indexed_triangle_pair, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_drape::scene::{
     PartFrames, casings_at_cut_length, elastic_casings, placements, wrapped_positions,
@@ -44,6 +45,8 @@ const PIECE_COLOUR_NAMES: [&str; 10] = [
 ];
 /// Cloth vertices inside the collision body are painted this colour in `start/` and `wrap/`.
 const INSIDE_BODY: [f64; 3] = [1.0, 0.0, 1.0];
+/// Vertices of start-state cloth triangles that cross another cloth triangle are painted this colour.
+const CROSSING_CLOTH: [f64; 3] = [1.0, 0.86, 0.0];
 /// Wrap-stage seam travel that saturates the red end of the `wrap/` strain-view ramp (m).
 const GAP_RAMP_M: f64 = 0.15;
 /// Overlapping-triangle budget of the drape's static body-surface audit (`ftx_drape::scene::build_scene`).
@@ -101,19 +104,86 @@ fn slot_colour((slot, left): (usize, bool)) -> [f64; 3] {
     }
 }
 
-/// Per-vertex colours: the instance colour, or [`INSIDE_BODY`] where the vertex is inside the body.
-fn piece_colours(mesh: &GarmentMesh, slots: &[(usize, bool)], depth: &[f64]) -> Vec<[f64; 3]> {
+/// Per-vertex colours: the instance colour, [`INSIDE_BODY`] where the vertex is inside the body, or
+/// [`CROSSING_CLOTH`] where it belongs to a triangle that crosses another cloth triangle.
+fn piece_colours(
+    mesh: &GarmentMesh,
+    slots: &[(usize, bool)],
+    depth: &[f64],
+    crossing: &[bool],
+) -> Vec<[f64; 3]> {
     mesh.owner
         .iter()
-        .zip(depth)
-        .map(|(&k, &d)| {
-            if d < 0.0 {
+        .enumerate()
+        .map(|(v, &k)| {
+            if depth[v] < 0.0 {
                 INSIDE_BODY
+            } else if crossing[v] {
+                CROSSING_CLOTH
             } else {
                 slot_colour(slots[k])
             }
         })
         .collect()
+}
+
+/// Every pair of start-state cloth triangles that intersect beyond a shared vertex or edge, as pairs
+/// of source face indices. The test runs on the mesh `ftx drape --self-contact-mm` audits first: one
+/// vertex per sewing group, collapsed triangles dropped, so a sewn seam is adjacency, not a crossing.
+///
+/// # Errors
+/// Whatever [`validate_mesh`] refuses (a non-finite vertex or a zero-area welded triangle).
+fn cloth_crossings(
+    faces: &[[usize; 3]],
+    groups: &[Vec<usize>],
+    x: &[Vec3],
+) -> Result<Vec<(usize, usize)>, Refusal> {
+    let mut weld: Vec<usize> = (0..x.len()).collect();
+    for group in groups {
+        if let Some(&first) = group.first() {
+            for &v in group {
+                weld[v] = first;
+            }
+        }
+    }
+    let (mut triangles, mut source) = (Vec::new(), Vec::new());
+    for (f, face) in faces.iter().enumerate() {
+        let t = face.map(|v| weld[v]);
+        if t[0] != t[1] && t[1] != t[2] && t[0] != t[2] {
+            triangles.push(t);
+            source.push(f);
+        }
+    }
+    validate_mesh(x, &triangles)?;
+    let bounds: Vec<([f64; 3], [f64; 3])> = triangles
+        .iter()
+        .map(|t| {
+            let p = t.map(|v| [x[v].x, x[v].y, x[v].z]);
+            let fold = |pick: fn(f64, f64) -> f64| {
+                [0, 1, 2].map(|axis| pick(pick(p[0][axis], p[1][axis]), p[2][axis]))
+            };
+            (fold(f64::min), fold(f64::max))
+        })
+        .collect();
+    // Sweep along x; exact tests only where the boxes overlap on all three axes.
+    let mut order: Vec<usize> = (0..triangles.len()).collect();
+    order.sort_by(|&a, &b| bounds[a].0[0].total_cmp(&bounds[b].0[0]));
+    let mut pairs = Vec::new();
+    for (i, &a) in order.iter().enumerate() {
+        for &b in &order[i + 1..] {
+            if bounds[b].0[0] > bounds[a].1[0] {
+                break;
+            }
+            let apart = (1..3).any(|axis| {
+                bounds[a].0[axis] > bounds[b].1[axis] || bounds[b].0[axis] > bounds[a].1[axis]
+            });
+            if !apart && indexed_triangle_pair(x, triangles[a], triangles[b]).is_some() {
+                pairs.push((source[a].min(source[b]), source[a].max(source[b])));
+            }
+        }
+    }
+    pairs.sort_unstable();
+    Ok(pairs)
 }
 
 /// Per-vertex colours for the wrap stage: grey where nothing is sewn, green to red by how far the
@@ -480,13 +550,40 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
     let slots = piece_slots(&mesh.instances);
     let (strain_colours, strain_summaries) = start_strain(&mesh, &start.relaxed);
+    // Cloth crossing cloth in the start: what refuses a drape with self-contact before it begins.
+    let mut crossing = vec![false; mesh.verts2d.len()];
+    let cloth_contact = match cloth_crossings(&mesh.faces, &start.groups, &start.relaxed) {
+        Ok(pairs) => {
+            let mut between = std::collections::BTreeMap::<(&str, &str), usize>::new();
+            for &(a, b) in &pairs {
+                for face in [mesh.faces[a], mesh.faces[b]] {
+                    for v in face {
+                        crossing[v] = true;
+                    }
+                }
+                let (p, q) = (
+                    mesh.instances[mesh.owner[mesh.faces[a][0]]].as_str(),
+                    mesh.instances[mesh.owner[mesh.faces[b][0]]].as_str(),
+                );
+                *between.entry((p.min(q), p.max(q))).or_default() += 1;
+            }
+            let mut by_pieces: Vec<_> = between.into_iter().collect();
+            by_pieces.sort_by_key(|row| std::cmp::Reverse(row.1));
+            json!({
+                "crossing_triangle_pairs": pairs.len(),
+                "by_pieces": by_pieces.iter().map(|((a, b), n)| json!({"a": a, "b": b, "triangle_pairs": n})).collect::<Vec<_>>(),
+                "basis": "start-state triangles, one vertex per sewing group, that intersect beyond a shared vertex or edge; thickness clearance is not tested here",
+            })
+        }
+        Err(refusal) => json!({"unavailable": refusal}),
+    };
     let body_obj = super::obj(&full.vertices, &full.triangles, None).into_bytes();
     let wrap_stills = write_stage(
         &out.join("wrap"),
         &body_obj,
         &mesh,
         &wrapped,
-        &piece_colours(&mesh, &slots, &wrap_depth),
+        &piece_colours(&mesh, &slots, &wrap_depth, &vec![false; mesh.verts2d.len()]),
         &travel_colours(&mesh, &wrapped),
         size,
     )?;
@@ -495,7 +592,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         &body_obj,
         &mesh,
         &start.relaxed,
-        &piece_colours(&mesh, &slots, &start_depth),
+        &piece_colours(&mesh, &slots, &start_depth, &crossing),
         &strain_colours,
         size,
     )?;
@@ -525,11 +622,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         },
         "wrap": {"vertices_inside_body": inside(&wrap_depth)},
         "body_surface": body_surface,
+        "cloth_contact": cloth_contact,
         "body": body_report(&frames),
         "views": {
             "wrap": "pieces on their cylinders; still_front/side/back/three_quarter coloured by piece, still_strain_* by the distance each seam vertex travels to its partner (green 0 mm to red 150 mm, grey unsewn)",
             "start": "pre-sewn and relaxed; coloured by piece, still_strain_* by edge strain (blue −15 % compressed, white 0, red +15 % stretched)",
             "magenta": "cloth vertex inside the collision body",
+            "yellow": "start-state cloth triangle that crosses another cloth triangle",
         },
         "stills": {"wrap": wrap_stills, "start": start_stills},
         "no_claim": "No contact admission and no dynamics ran. This is not a drape or a fit; ftx drape decides whether the start is accepted.",
@@ -548,6 +647,25 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         text.push_str(&format!(
             "  BODY POSE NOT ADMITTED by the drape's surface audit: {message}\n"
         ));
+    }
+    if let Some(pairs) = report["cloth_contact"]["crossing_triangle_pairs"].as_u64() {
+        text.push_str(&format!(
+            "  cloth crosses cloth in {pairs} triangle pair(s) of the start"
+        ));
+        for row in report["cloth_contact"]["by_pieces"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(6)
+        {
+            text.push_str(&format!(
+                "; {} × {}: {}",
+                row["a"].as_str().unwrap_or(""),
+                row["b"].as_str().unwrap_or(""),
+                row["triangle_pairs"]
+            ));
+        }
+        text.push('\n');
     }
     for i in report["instances"].as_array().into_iter().flatten() {
         text.push_str(&format!(
@@ -594,7 +712,31 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
 #[cfg(test)]
 mod tests {
-    use super::{mean_strain, piece_slots, slot_colour};
+    use super::{cloth_crossings, mean_strain, piece_slots, slot_colour};
+    use ftx_core::Vec3;
+
+    #[test]
+    fn a_sewn_seam_is_adjacency_and_a_pierced_panel_is_a_crossing() {
+        let p = |x: f64, y: f64, z: f64| Vec3::new(x, y, z);
+        // Face 0 lies in z = 0. Face 1 pierces its interior. Face 2 is sewn to face 0 along one edge
+        // through duplicate vertices, as two pattern pieces are before welding.
+        let x = [
+            p(0.0, 0.0, 0.0),
+            p(1.0, 0.0, 0.0),
+            p(0.0, 1.0, 0.0),
+            p(0.2, 0.2, -1.0),
+            p(0.3, 0.2, 1.0),
+            p(0.2, 0.3, 1.0),
+            p(0.0, 0.0, 0.0),
+            p(1.0, 0.0, 0.0),
+            p(0.5, -1.0, 0.2),
+        ];
+        let faces = [[0, 1, 2], [3, 4, 5], [6, 7, 8]];
+        let sewn = [vec![0, 6], vec![1, 7]];
+        assert_eq!(cloth_crossings(&faces, &sewn, &x).unwrap(), [(0, 1)]);
+        // Unsewn, the coincident edge is a contact between differently indexed vertices.
+        assert_eq!(cloth_crossings(&faces, &[], &x).unwrap(), [(0, 1), (0, 2)]);
+    }
 
     #[test]
     fn mean_strain_recovers_a_uniform_strain_from_hex_edges() {
