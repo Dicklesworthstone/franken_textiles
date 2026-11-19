@@ -47,7 +47,8 @@ export function applyNativeSkin(material:MeshStandardMaterial, garment:"hussar"|
         float ridge=pigmentNoise(cm*vec3(18.,28.,21.)+27.);
         float pore=smoothstep(.53,.86,pigmentNoise(cm*34.+18.))*visibleGrain;
         float pigmentContrast=(cloud-.5)*.064+(ridge-.5)*visibleGrain*.034;
-        float cheek=exp(-pow((abs(cm.x)-3.7)/3.0,2.)-pow((cm.y-${garment==="hussar"?"10.8":"153.8"})/3.8,2.));
+        vec2 skinCheekOffset=vec2((abs(cm.x)-3.7)/3.0,(cm.y-${garment==="hussar"?"10.8":"153.8"})/3.8);
+        float cheek=exp(-dot(skinCheekOffset,skinCheekOffset));
         float fleck=smoothstep(.76,.90,pigmentNoise(cm*3.9+54.))*(.12+faceZone*(.24+.64*cheek));
         // Epidermal melanin variation and clustered freckles are pigment, separate from
         // the capillary tint around thin skin and the wet regions of the face.
