@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const base=new URL(process.argv[2] || "http://localhost:3000");
 const dest=path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/",import.meta.url)));
-const fps=16, frames=fps*8, poster=path.join(dest,"wardrobe-hussar.jpg"), output=path.join(dest,"wardrobe-hussar.mp4");
+const fps=20, frames=fps*10, poster=path.join(dest,"wardrobe-hussar.jpg"), output=path.join(dest,"wardrobe-hussar.mp4");
 const startFrame = Number(process.env.HUSSAR_START_FRAME ?? 0);
 const endFrame = Number(process.env.HUSSAR_END_FRAME ?? frames);
 if (!Number.isInteger(startFrame) || startFrame < 0 || startFrame >= frames) {
@@ -24,29 +24,35 @@ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTA
 try{
   const page=await browser.newPage({viewport:{width:960,height:540},deviceScaleFactor:1,reducedMotion:"reduce",
     userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
-  await page.goto(new URL("/wardrobe/hussar/?capture=1",base).href);
-  await page.waitForFunction(()=>typeof window.ftxHussarFrame==="function" && document.querySelector("canvas[data-ready]"),undefined,{timeout:120000});
+  page.setDefaultTimeout(120000);
+  await page.routeWebSocket(/\/_next\/webpack-hmr/,()=>{});
+  await page.goto(new URL("/wardrobe/hussar/?costumeCapture=1",base).href);
+  await page.waitForFunction(()=>typeof window.ftxCostumeFrame==="function" && document.querySelector(".costume-stage canvas[data-ready]"),undefined,{timeout:120000});
   await page.evaluate(()=>document.fonts.ready);
   async function select(reg,layer){
-    // The instrument fills the viewport during capture, so drive the original buttons programmatically.
     await page.evaluate(([reg,layer])=>{
-      for(const text of [reg,layer]){
-        const button=[...document.querySelectorAll(".hu-choice button")].find(b=>b.textContent===text);
-        if(!button)throw Error("Missing wardrobe control: "+text);button.click();
-      }
+      for(const val of [reg,layer])document.querySelector('.costume-choices input[value="'+val+'"]').click();
     },[reg,layer]);
-    await page.waitForFunction(wanted=>document.querySelector("canvas")?.dataset.ready===wanted,reg+"-"+layer);
+    await page.waitForFunction(wanted=>document.querySelector(".costume-stage canvas")?.dataset.ready===wanted,reg+"-"+layer);
   }
-  await select("Compare","Dolman");
-  await page.addStyleTag({content:".hu-stage{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:99}.hu-tag,.hu-plate,nextjs-portal{display:none!important}"});
+  await select("Compare","Dressed");
+  await page.addStyleTag({content:".costume-stage{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:99}.hu-tag,.hu-plate,nextjs-portal{display:none!important}"});
   async function pose(yaw,y,span){
-    await page.evaluate(async ([angle,y,span])=>{window.ftxHussarFrame(angle,y,span);await new Promise(r=>requestAnimationFrame(r));},[yaw,y,span]);
+    await page.evaluate(async ([angle,y,span])=>{
+      await new Promise(r=>requestAnimationFrame(r));
+      const canvas=document.querySelector(".costume-stage canvas[data-ready]");
+      if(!canvas||!window.ftxCostumeFrame)throw Error("The wardrobe camera is unavailable");
+      window.ftxCostumeFrame(angle,y,span);
+      const gl=canvas.getContext("webgl2"),width=gl.drawingBufferWidth, pixels=new Uint8Array(width*4);
+      gl.readPixels(0,Math.floor(gl.drawingBufferHeight*.5),width,1,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+      if(!pixels.some((value,index)=>index%4===3&&value>64))throw Error("Empty wardrobe render at "+angle);
+    },[yaw,y,span]);
   }
-  await pose(-.17,136,75);
+  await pose(.045,137,77);
   await writeFile(poster,await page.screenshot({type:"jpeg",quality:94}),{flag:"wx"});
-  await select("Blue","Dolman");
+  await select("Blue","Dressed");
   await page.setViewportSize({width:1000,height:850});
-  await pose(.24,154,56);
+  await pose(.04,150,61);
   await writeFile(path.join(dest,"hussar.jpg"),await page.screenshot({type:"jpeg",quality:95}),{flag:"wx"});
   if(process.env.HUSSAR_STILLS_ONLY==="1") {
     console.log("Rendered the film poster and clean portrait in "+dest);
@@ -61,10 +67,11 @@ try{
   const encoder=spawn("ffmpeg",["-v","error","-n","-f","image2pipe","-framerate",String(fps),"-i","pipe:0","-an","-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-movflags","+faststart",output],{stdio:["pipe","ignore","inherit"]});
   const done=once(encoder,"close");encoder.stdin.on("error",()=>{});
   const shots=[
-    {reg:"Blue",layer:"Dolman",label:"PUTBUS   /   BLUE DOLMAN 1761",start:[.32,128,40],end:[-.21,130,43]},
-    {reg:"Compare",layer:"Dolman",label:"BLUE AND YELLOW HUSSARS   /   REGIMENTAL DRESS",start:[-.18,127,84],end:[.12,101,112]},
-    {reg:"Compare",layer:"Pelisse",label:"TWO PELISSES   /   FUR-TRIMMED FRONTS",start:[-.37,118,49],end:[.34,117,54]},
-    {reg:"Yellow",layer:"Dolman",label:"WRANGEL   /   WHITE CORD ON BLACK WOOL",start:[.42,128,45],end:[.1,126,35]},
+    {reg:"Blue",layer:"Dressed",label:"PUTBUS · 1761   /   COSTUME STUDY",start:[-.14,149,64],end:[.13,143,71]},
+    {reg:"Compare",layer:"Dressed",label:"THE TWO REGIMENTS   /   COSTUME STUDY",start:[.04,103,113],end:[.28,105,111]},
+    {reg:"Blue",layer:"Dolman",label:"DOLMAN FRONTS   /   THE PRINTABLE CUT",start:[-.25,126,30],end:[.36,126,27]},
+    {reg:"Compare",layer:"Pelisse",label:"PELISSE FRONTS   /   BRAID PLACEMENT",start:[-.14,125,38],end:[.14,124,32]},
+    {reg:"Yellow",layer:"Dressed",label:"WRANGEL · 1765   /   COSTUME STUDY",start:[.89,144,68],end:[.70,153,57]},
   ];
   try{
     for(const [shotIndex, shot] of shots.entries()){

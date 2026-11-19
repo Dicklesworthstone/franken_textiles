@@ -8,7 +8,7 @@ export interface SiteLink { href: string; label: string; note: string }
 export const exhibits: SiteLink[] = [
   { href: "/studies/skirt/", label: "Skirt atelier", note: "Compare two hems on fitted adult forms" },
   { href: "/#drape-room", label: "Drape room", note: "Sew five flat pieces onto a fitted body" },
-  { href: "/#wardrobe", label: "Wardrobe", note: "A sundress and two hussar uniforms of 1761" },
+  { href: "/#wardrobe", label: "Wardrobe", note: "A sundress and Swedish hussars of 1761 and 1765" },
   { href: "/#studio", label: "Studios", note: "Draft a pattern, lay it on the roll, follow the needle" },
   { href: "/#materials", label: "Materials", note: "Pull and twist cloth between two grips" },
   { href: "/#studies", label: "Drape gallery", note: "Follow panels from the board to the sewn garment" },

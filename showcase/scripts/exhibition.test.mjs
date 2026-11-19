@@ -215,14 +215,26 @@ test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", asy
   } finally {await p.close();}
 });
 
-test("regiment, layer and camera selections reach the hussar scene", async () => {
+test("the hussar wardrobe connects the dressed figure, pattern front and native sewing replay", async () => {
   const p=await browser.newPage({...opts,reducedMotion:"reduce"});
   try {
     await p.goto(new URL("/wardrobe/hussar/",site).href);
-    await p.getByRole("button",{name:"Compare",exact:true}).click();
-    await p.getByRole("button",{name:"Pelisse",exact:true}).click();
-    await p.getByRole("button",{name:"Chest",exact:true}).click();
-    await p.locator("canvas[data-ready='Compare-Pelisse']").waitFor();
+    const cabinet=p.locator("#dress-study");
+    await cabinet.locator("canvas[data-ready='Compare-Dressed']").waitFor({timeout:90000});
+    await cabinet.getByRole("radio",{name:"Yellow",exact:true}).check();
+    await cabinet.getByRole("radio",{name:"Side",exact:true}).check();
+    await cabinet.getByRole("radio",{name:"Pelisse",exact:true}).check();
+    await cabinet.getByRole("radio",{name:"Flat",exact:true}).check();
+    await cabinet.locator("canvas[data-ready='Yellow-Pelisse'][data-piece='pelisse_front']").waitFor();
+    const pattern=await (await p.request.get(new URL("/patterns/hussar-yellow.json",site).href)).json();
+    const front=pattern.pieces.find(piece=>piece.id==="pelisse_front");
+    assert.equal(await cabinet.locator("dt",{hasText:"Cord paths per cut"}).locator("..").locator("dd").textContent(),
+      String(front.decor.filter(row=>row.kind==="soutache").length));
+    await cabinet.getByRole("link",{name:"Watch the dolman sew together"}).click();
+    const replay=p.locator("#native-dolman");
+    await replay.getByRole("button",{name:"Yellow",exact:true}).click();
+    await replay.getByRole("slider",{name:"Sewing replay frame"}).press("Home");
+    await replay.locator("canvas[data-ready='Yellow'][data-frame='0']").waitFor();
     const file=p.getByRole("link",{name:"Download DST"});
     const dst=await file.evaluate(async a=>new Uint8Array(await (await fetch(a.href)).arrayBuffer()).slice(0,3).join(","));
     assert.equal(dst,"76,65,58"); // Tajima header begins with "LA:".

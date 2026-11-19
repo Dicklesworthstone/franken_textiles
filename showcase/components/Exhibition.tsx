@@ -24,7 +24,7 @@ declare global { interface Window { ftxFrame?: CaptureFn } }
 
 const wardrobe = [
   {id:"sundress", title:"The garden sundress", detail:"Dress study", action:"Pose the figure and change its measurements"},
-  {id:"hussar", title:"The hussar’s cabinet", detail:"Sweden · 1761", action:"Inspect the braid, cuffs and layers"},
+  {id:"hussar", title:"The hussar’s cabinet", detail:"Sweden · 1761 & 1765", action:"Inspect the braid, cuffs and layers"},
 ] as const;
 
 const films = [

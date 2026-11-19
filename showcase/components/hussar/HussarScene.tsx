@@ -4,26 +4,25 @@ import { useEffect, useRef } from "react";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { buildUniform, type Framing, type Layer, type Regiment, type RegimentView } from "./uniform";
-import { loadHussarBody } from "../fittedBody";
-import type { Complexion, FittedHussar } from "./portrait";
-import {disposeGarmentMaps,loadGarmentMaps,type GarmentMaps} from "./garmentSurface";
+import {readStudy,type Framing,type Layer,type Regiment,type RegimentView} from "./RegimentalStudy";
+import {makeMount,selectedPiece,type Ensemble,type Section,type Mount,type PieceReading} from "./PatternMount";
 
-type Settings = {regiment:RegimentView;layer:Layer;framing:{preset:Framing}};
-declare global {interface Window {ftxHussarFrame?: (yaw:number,target:number,span:number)=>void}}
-export default function HussarScene({regiment,layer,framing,onFailure}:{onFailure:()=>void}&Settings){
+type Settings = {regiment:RegimentView;layer:Layer;framing:{preset:Framing};section:Section;layout:Mount};
+declare global {interface Window {ftxCostumeFrame?: (yaw:number,target:number,span:number)=>void}}
+export default function HussarScene({regiment,layer,framing,section,layout,onFailure,onPiece}:{onFailure:()=>void;onPiece:(value:PieceReading|null)=>void}&Settings){
   const host=useRef<HTMLDivElement>(null), apply=useRef<((s:Settings)=>void)|null>(null);
   useEffect(()=>{
     const surface=host.current!;
     let renderer:T.WebGLRenderer;
-    try {renderer=new T.WebGLRenderer({alpha:true,antialias:true,powerPreference:"low-power"});}
+    const capture=new URLSearchParams(location.search).has("costumeCapture");
+    try {renderer=new T.WebGLRenderer({alpha:true,antialias:true,powerPreference:"low-power",preserveDrawingBuffer:capture});}
     catch {onFailure();return;}
     renderer.setPixelRatio(Math.min(2,devicePixelRatio));renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=.99;
     renderer.shadowMap.enabled=true;
     renderer.shadowMap.type=T.PCFSoftShadowMap;
     renderer.shadowMap.autoUpdate=false;
     const el=renderer.domElement;el.tabIndex=0;el.setAttribute("role","img");
-    el.setAttribute("aria-label","Swedish hussar garment model. Drag or use arrow keys to orbit, and plus or minus to zoom.");surface.appendChild(el);
+    el.setAttribute("aria-label","Swedish regimental costume and pattern study. Drag or use arrow keys to orbit, and plus or minus to zoom.");surface.appendChild(el);
     const scene=new T.Scene(), camera=new T.OrthographicCamera(-110,110,110,-110,1,1800);
     const env=new T.PMREMGenerator(renderer), room=new RoomEnvironment(), lights=env.fromScene(room,.05);
     room.dispose();env.dispose();scene.environment=lights.texture;scene.environmentIntensity=.36;
@@ -41,11 +40,8 @@ export default function HussarScene({regiment,layer,framing,onFailure}:{onFailur
     rimLight.position.set(109,191,-112);
     rimLight.target.position.y=135;
     scene.add(key,key.target,rimLight,rimLight.target);
-    const plinth=new T.Mesh(new T.CylinderGeometry(41,43,3.8,72),new T.MeshStandardMaterial({color:0x3b423d,roughness:.83}));plinth.position.y=-1.85;scene.add(plinth);
-    const rim=new T.Mesh(new T.CylinderGeometry(42.8,43,1.15,72),new T.MeshStandardMaterial({color:0x927344,metalness:.72,roughness:.4}));rim.position.y=-3.65;scene.add(rim);
-    plinth.receiveShadow=true;
     const floor=new T.Mesh(new T.PlaneGeometry(1100,1100),new T.ShadowMaterial({color:0x111712,opacity:.24}));
-    floor.rotation.x=-Math.PI/2;floor.position.y=-4.28;floor.receiveShadow=true;scene.add(floor);
+    floor.rotation.x=-Math.PI/2;floor.position.y=-.6;floor.receiveShadow=true;scene.add(floor);
     const contactCanvas=document.createElement("canvas");contactCanvas.width=contactCanvas.height=96;
     const brush=contactCanvas.getContext("2d")!, contactFade=brush.createRadialGradient(48,48,9,48,48,47);
     contactFade.addColorStop(0,"rgba(7,11,9,.8)");contactFade.addColorStop(.5,"rgba(7,11,9,.46)");
@@ -56,10 +52,22 @@ export default function HussarScene({regiment,layer,framing,onFailure}:{onFailur
     const contacts=new T.Group();scene.add(contacts);
     for(let i=0;i<4;i++){const patch=new T.Mesh(contactGeometry,contactMaterial);patch.rotation.x=-Math.PI/2;contacts.add(patch);}
     const orbit=new OrbitControls(camera,el);orbit.enablePan=false;orbit.minZoom=.62;orbit.maxZoom=4;orbit.rotateSpeed=.72;
-    let height=112,aspect=1,models:ReturnType<typeof buildUniform>[]=[],previous: Settings|undefined;
-    let mounted=true, pending:Settings|undefined, body:FittedHussar|undefined, complexion:Complexion|undefined, garmentMaps:GarmentMaps|undefined;
-    function disposeFitted(source:FittedHussar){source.head.dispose();source.leftHand.dispose();source.rightHand.dispose();}
-    function draw(){renderer.render(scene,camera);}
+    let height=112,aspect=1,previous:Settings|undefined,pending:Settings|undefined, mounted=true;
+    const studies:Partial<Record<Regiment,Awaited<ReturnType<typeof readStudy>>>>={};
+    const ensembles:Partial<Record<Regiment,Ensemble>>={}, mounts:ReturnType<typeof makeMount>[]=[];
+    let wool:T.Texture|undefined;
+    function clearCuts(){for(const cut of mounts){scene.remove(cut.group);cut.dispose();}mounts.length=0;}
+    function draw(){
+      const yaw=orbit.getAzimuthalAngle(),pair=pending?.regiment==="Compare";
+      const position=(object:T.Object3D,offset:number)=>{object.position.x=offset*Math.cos(yaw);object.position.z=-offset*Math.sin(yaw);};
+      for(const [name,study] of Object.entries(studies)){study.angle(yaw);position(study.figure,pair?(name==="Blue"?-36:36):0);}
+      mounts.forEach((cut,i)=>position(cut.group,pair?(i===0?-25:25):0));
+      contacts.children.forEach((foot,i)=>{
+        const x=pair?(i<2?-36:36):0;
+        foot.position.set(x*Math.cos(yaw)+(i%2===0?-7:7),-.45,-x*Math.sin(yaw)+.5);
+      });
+      renderer.render(scene,camera);
+    }
     function project(){camera.left=-height*aspect;camera.right=height*aspect;camera.top=height;camera.bottom=-height;camera.updateProjectionMatrix();}
     function orient(yaw:number,y:number,span:number,elevation=.075) {
       height=span;project();orbit.target.set(0,y,0);
@@ -69,37 +77,44 @@ export default function HussarScene({regiment,layer,framing,onFailure}:{onFailur
     const resize=()=>{const w=surface.clientWidth,h=surface.clientHeight;if(!w||!h)return;aspect=w/h;renderer.setSize(w,h,false);project();draw();};
     function change(next:Settings){
       pending=next;
-      if(!body||!complexion||!garmentMaps)return;
-      const fitted=body, maps=complexion, garments=garmentMaps;
+      if(!studies.Blue||!studies.Yellow||!ensembles.Blue||!ensembles.Yellow||!wool)return;
       const paired=next.regiment==="Compare";
-      if(next.regiment!==previous?.regiment){
-        models.forEach(m=>{scene.remove(m.outfit);m.dispose();});
-        const choices:Regiment[]=next.regiment==="Compare"?["Blue","Yellow"]:[next.regiment];
-        models=choices.map((choice,i)=>{
-          const model=buildUniform(choice,fitted,maps,garments);scene.add(model.outfit);
-          model.outfit.position.x=paired?(i===0?-41:41):0;
-          model.outfit.traverse(part=>{if(part instanceof T.Mesh){part.castShadow=true;part.receiveShadow=true;}});
-          return model;
-        });
+      const dressed=next.layer==="Dressed";
+      // The eight costume elevations support a level turn around the figure. The measured flat
+      // pieces can also be examined from above or below their physical display support.
+      orbit.minPolarAngle=dressed?Math.PI/2-.13:.2;
+      orbit.maxPolarAngle=dressed?Math.PI/2+.10:Math.PI-.2;
+      if(next.regiment!==previous?.regiment||next.layer!==previous?.layer||next.section!==previous.section||next.layout!==previous.layout){
+        clearCuts();
+        for(const name of ["Blue","Yellow"] as const){
+          const x=paired?(name==="Blue"?-34:34):0,visible=paired||next.regiment===name,study=studies[name]!;
+          study.figure.position.x=x;study.figure.visible=dressed&&visible;
+          if(visible&&next.layer!=="Dressed"){
+            const cut=makeMount(selectedPiece(ensembles[name]!,next.layer,next.section),name,next.layout,wool);
+            cut.group.position.x=paired?x*.73:0;scene.add(cut.group);mounts.push(cut);
+          }
+        }
       }
-      models.forEach(m=>m.setLayer(next.layer));plinth.visible=rim.visible=next.layer!=="Pelisse";
-      floor.visible=contacts.visible=next.layer!=="Pelisse";
+      floor.visible=dressed&&!paired;contacts.visible=dressed;
       contacts.children.forEach((foot,index)=>{
         const pair=Math.floor(index/2);
         foot.visible=paired||pair===0;
-        foot.position.set((paired?(pair===0?-41:41):0)+(index%2===0?-10.5:10.5),.12,2.65);
+        foot.position.set((paired?(pair===0?-34:34):0)+(index%2===0?-7:7),-.45,.5);
       });
       renderer.shadowMap.needsUpdate=true;
-      plinth.scale.x=rim.scale.x=paired?2.2:1;
-      const isolated = next.layer === "Pelisse";
       const detail = next.framing.preset === "Chest";
-      const bust = next.framing.preset === "Bust" && !isolated;
-      const targetHeight = bust ? 151 : detail ? 125 : isolated ? 117 : 101;
-      const preferredSpan = bust ? 59 : detail ? (isolated ? 28 : 41) : (isolated ? 42 : 113);
-      const span = Math.max(preferredSpan, (paired ? 76 : 32) / aspect);
-      const yaw = next.framing.preset === "Reverse" ? Math.PI - .28 : isolated ? .34 : -.27;
+      const bust = next.framing.preset === "Bust";
+      const targetHeight=dressed?(bust?155:detail?135:103):125;
+      const maxExtent=Math.max(14,...mounts.map(c=>c.extent.y));
+      const preferredSpan=dressed?(bust?58:detail?39:115):Math.max(16,maxExtent*(detail?.48:.63));
+      const sceneWidth=dressed?(paired?74:36):Math.max(16,...mounts.map(c=>c.extent.x*.57))+(paired?25:0);
+      const span=Math.max(preferredSpan,sceneWidth/aspect);
+      const yaw=next.framing.preset==="Reverse"?Math.PI:next.framing.preset==="Side"?Math.PI/2:dressed?.05:-.13;
       camera.zoom = 1;
-      orient(yaw, targetHeight, span);
+      orient(yaw, targetHeight, span,dressed?.014:.07);
+      const reading=mounts[0]?.reading??null;
+      el.dataset.piece=reading?.id??"";
+      onPiece(reading);
       previous = next;
       el.dataset.ready = next.regiment + "-" + next.layer;
     }
@@ -114,25 +129,22 @@ export default function HussarScene({regiment,layer,framing,onFailure}:{onFailur
     const ro=new ResizeObserver(resize);ro.observe(surface);resize();orbit.addEventListener("change",draw);
     el.addEventListener("keydown",keydown);el.addEventListener("webglcontextlost",failure);
     apply.current=change;
-    const textureLoader=new T.TextureLoader();
-    const loadPigment=async(name:string)=>{
-      const texture=await textureLoader.loadAsync("/wardrobe/hussar/complexion-"+name+".webp");
-      texture.colorSpace=T.SRGBColorSpace; texture.anisotropy=4;
-      if(!mounted)texture.dispose();
-      return texture;
+    const readPattern=async(reg:string):Promise<Ensemble>=>{
+      const response=await fetch("/patterns/hussar-"+reg+".json");
+      if(!response.ok)throw Error("Could not load "+reg+" ensemble");return response.json();
     };
-    Promise.all([loadHussarBody(),loadPigment("front"),loadPigment("side"),loadGarmentMaps(textureLoader)]).then(([source,front,side,garments])=>{
-      if(!mounted){disposeFitted(source);disposeGarmentMaps(garments);return;}
-      body=source;
-      complexion={front,side};
-      garmentMaps=garments;
+    Promise.all([readStudy("Blue"),readStudy("Yellow"),readPattern("blue"),readPattern("yellow"),new T.TextureLoader().loadAsync("/wardrobe/hussar/broadcloth.webp")]).then(([blue,yellow,blueCut,yellowCut,map])=>{
+      if(!mounted){blue.dispose();yellow.dispose();map.dispose();return;}
+      studies.Blue=blue;studies.Yellow=yellow;ensembles.Blue=blueCut;ensembles.Yellow=yellowCut;
+      wool=map;map.wrapS=map.wrapT=T.RepeatWrapping;map.colorSpace=T.SRGBColorSpace;map.anisotropy=4;
+      scene.add(blue.figure,yellow.figure);
       if(pending)change(pending);
     }).catch(()=>{if(mounted)onFailure();});
-    if(new URLSearchParams(location.search).has("capture"))window.ftxHussarFrame=orient;
-    return ()=>{mounted=false;apply.current=null;if(window.ftxHussarFrame===orient)delete window.ftxHussarFrame;
+    if(capture)window.ftxCostumeFrame=orient;
+    return ()=>{mounted=false;apply.current=null;if(window.ftxCostumeFrame===orient)delete window.ftxCostumeFrame;
       ro.disconnect();orbit.removeEventListener("change",draw);orbit.dispose();el.removeEventListener("keydown",keydown);el.removeEventListener("webglcontextlost",failure);
-      models.forEach(m=>m.dispose());if(body)disposeFitted(body);if(garmentMaps)disposeGarmentMaps(garmentMaps);complexion?.front.dispose();complexion?.side.dispose();key.shadow.dispose();floor.geometry.dispose();floor.material.dispose();contactMap.dispose();contactGeometry.dispose();contactMaterial.dispose();plinth.geometry.dispose();plinth.material.dispose();rim.geometry.dispose();rim.material.dispose();lights.dispose();renderer.dispose();renderer.forceContextLoss();el.remove();};
-  },[onFailure]);
-  useEffect(()=>{apply.current?.({regiment,layer,framing});},[regiment,layer,framing,onFailure]);
+      clearCuts();Object.values(studies).forEach(s=>s.dispose());wool?.dispose();key.shadow.dispose();floor.geometry.dispose();floor.material.dispose();contactMap.dispose();contactGeometry.dispose();contactMaterial.dispose();lights.dispose();renderer.dispose();renderer.forceContextLoss();el.remove();};
+  },[onFailure,onPiece]);
+  useEffect(()=>{apply.current?.({regiment,layer,framing,section,layout});},[regiment,layer,framing,section,layout,onFailure]);
   return <div className="hu-scene" ref={host}/>;
 }

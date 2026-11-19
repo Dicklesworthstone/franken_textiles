@@ -11,3 +11,32 @@
 .hu-pattern-links{display:grid;gap:7px;margin-top:14px;font-size:13px;font-weight:600}
 .hu-stage:has(.hu-scene):not(:has(canvas[data-ready]))::before{content:"";position:absolute;inset:0;pointer-events:none;background:#39483e url(/media/wardrobe-hussar.jpg) center/cover no-repeat}
 @media(pointer:coarse){.hu-choice button{min-height:44px}}
+/* The sewing replay sits under the camera row, on the same dark ground as the stage. */
+.hu-replay{display:flex;align-items:center;gap:12px;padding:9px 15px 11px;border-top:1px solid #4d5b51;color:#ece9d8}
+.hu-replay>button{border:0;border-radius:50%;background:#e4d6ab;color:#28352f;width:30px;height:30px;display:grid;place-items:center;flex-shrink:0}
+.hu-replay>button:disabled{opacity:.45}
+.hu-replay input{flex:1;min-width:0;accent-color:#d9c489;height:22px;margin:0}
+.hu-replay>span{font:500 10px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;min-width:9.5em;text-align:right}
+.hu-readings{display:grid;grid-template-columns:repeat(3,1fr);margin:16px 0 4px;border-block:1px solid #d5d0bf}
+.hu-readings>div{padding:9px 10px 8px 0}.hu-readings>div+div{padding-left:10px;border-left:1px solid #ddd8c8}
+.hu-readings dt{font-size:11px;color:#5f6a60}.hu-readings abbr{text-decoration:none}
+.hu-readings dd{margin:2px 0 0;font:400 clamp(21px,2vw,29px)/1.15 var(--serif);font-variant-numeric:lining-nums tabular-nums;color:#27433a}
+.hu-method{margin-top:22px;border:1px solid #cbc7b6;border-radius:5px;background:#faf6e9;padding:14px clamp(14px,2.2vw,26px)}
+.hu-method summary{font:600 14px var(--sans);cursor:pointer;display:flex;justify-content:space-between;gap:14px;align-items:baseline}
+.hu-method summary>span{font:500 10px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#8a5a2c}
+.hu-method p{font-size:15px;line-height:1.55;color:#4c584f;max-width:86ch;margin:10px 0}
+.hu-method a{font-weight:600;font-size:14px;text-decoration:underline;text-underline-offset:3px}
+.hu-warning{border-left:3px solid #b9783c;padding-left:10px;color:#6d4a22!important}
+.hu-flags summary{font:500 13px var(--sans);cursor:pointer;color:#5c675e}.hu-flags p{font-size:13px;margin:6px 0}
+@media(pointer:coarse){.hu-replay>button{width:44px;height:44px}.hu-replay input{height:44px}}
+.costume-cabinet{display:grid;grid-template-columns:minmax(0,1.58fr) minmax(265px,.72fr);border:1px solid #aaa18f;margin:0 0 clamp(35px,6vw,82px);background:#f9f5e9;color:#292d29}
+.costume-display{background:#2c2c29;min-width:0;color:#f7ebd1}.costume-stage.hu-stage{height:clamp(455px,42vw,680px);background:radial-gradient(ellipse at 43% 40%,#a49379 0%,#796d5b 45%,#4c4a42 88%)}
+.costume-stage.hu-stage[data-layer=Dressed]{background:radial-gradient(ellipse at 45% 45%,#a89981 0%,#81745e 44%,#514f46 100%)}
+.costume-fallback{width:100%;height:100%;object-fit:cover}.costume-stage.hu-stage:has(.hu-scene):not(:has(canvas[data-ready]))::before{background:#655b4c url(/media/wardrobe-hussar.jpg) center/cover}
+.costume-settings{align-self:center;padding:clamp(19px,2.5vw,42px)}.costume-settings h2{font:400 clamp(33px,3.6vw,57px)/1.01 var(--serif);letter-spacing:-.03em;margin:5px 0 16px}
+.costume-settings>p:not(.kicker){font-size:14px;line-height:1.5;color:#4e534b}.costume-camera{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:9px;padding:12px 15px}.costume-camera>span,.costume-choices legend{font-size:12px}
+.hu-page .costume-choices{display:flex;gap:5px;flex-wrap:wrap;margin:10px 0}.costume-choices legend{padding:0 0 4px;font-weight:650}.costume-camera .costume-choices legend{position:absolute;clip-path:inset(50%)}.costume-camera .costume-choices{margin:0}.costume-choices label{position:relative}
+.costume-choices input{position:absolute;opacity:0;inset:0;margin:0}.costume-choices span{display:block;padding:6px 9px;font-size:12px;line-height:1.3;border:1px solid #a5a394;border-radius:2px;cursor:pointer}.costume-choices input:checked+span{border-color:#3b463a;background:#3b463a;color:#fff9e8}.costume-camera .costume-choices input:checked+span{background:#e5d5ae;color:#282b25}
+.costume-choices input:focus-visible+span{outline:2px solid #9f4a2b;outline-offset:2px}.costume-sources{display:flex;min-height:94px;gap:8px;margin:13px 0 8px}.costume-sources a{display:flex;align-items:end;gap:5px;flex:1;justify-content:center;min-width:0;padding:5px 5px 3px;background:#fffdf8;border-bottom:1px solid #c7baa2;color:#48473e}.costume-sources img{height:88px;width:auto;max-width:55%;object-fit:contain}.costume-sources span{font-size:11px}
+.costume-jump,.costume-files a{text-decoration:underline;text-underline-offset:3px;font-size:13px;font-weight:600}.costume-files{display:flex;flex-wrap:wrap;gap:7px 15px;margin-top:9px}.costume-jump{display:inline-block;margin-top:4px}#native-dolman{scroll-margin-top:24px}
+@media(max-width:760px){.costume-cabinet{grid-template-columns:1fr}.costume-stage.hu-stage{height:clamp(365px,94vw,480px)}.costume-settings{padding:21px}.costume-camera{padding:8px 10px}.costume-sources{max-width:360px}.costume-choices span{padding:9px}}
