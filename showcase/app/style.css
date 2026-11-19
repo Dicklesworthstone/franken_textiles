@@ -16,6 +16,14 @@ a:focus-visible,button:focus-visible,input:focus-visible,canvas:focus-visible{ou
 .skip:focus{top:1rem}
 .wrap{width:min(1440px,100%);margin:auto;padding-inline:clamp(22px,5.3vw,88px)}
 .mast{background:var(--paper);color:var(--ink);border-bottom:1px solid #d9d4c9}
+.mast-explore{display:none}
+@media(max-width:680px){
+ .mast{position:relative;z-index:5}.mast .nav nav>a:not(.worklink){display:none}
+ .mast .nav{gap:6px}.mast .nav nav{flex-shrink:0;gap:8px;white-space:nowrap}.mast .nav .worklink{padding:8px}.mast .nav .worklink .arrow{display:none}
+ .mast-explore{display:block;position:relative}.mast-explore summary{cursor:pointer;padding:9px 3px}
+ .mast-explore>div{position:absolute;top:100%;right:0;background:#f8f4ec;border:1px solid #cec4b5;width:175px;padding:5px 13px;border-radius:3px;box-shadow:0 6px 15px #342e292b}
+ .mast-explore>div a{display:block;padding:9px 0}.mast-explore>div a+a{border-top:1px solid #e0d7c9}
+}
 .nav,.base>.wrap,.actions,.filters,.tools,.seg,.control-row,.player-foot,.bench,.section-top{display:flex;align-items:center}
 .nav,.base>.wrap,.control-row,.player-foot,.bench,.section-top{justify-content:space-between}
 .nav{height:70px}

@@ -8,7 +8,7 @@ import "./style.css";
 
 export const metadata: Metadata = {
   title: "FrankenTextiles — The Pattern Room",
-  description: "A hands-on sewing studio. Draft a pattern, plan a cutting layout, follow an embroidery needle, and inspect garments sewn in three dimensions.",
+  description: "Change the body, raise its arms and see where a tailored bolero pulls. Explore native cloth physics, measured drafts and full-size sewing patterns in your browser.",
   metadataBase: new URL(process.env.FTX_SITE_ORIGIN ?? "https://franken-textiles.com"),
 };
 

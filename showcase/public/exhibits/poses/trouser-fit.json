@@ -1,0 +1,121 @@
+{
+ "garment": "zouave_trousers",
+ "points": [
+  {
+   "body": "hip",
+   "id": "seat",
+   "instances": [
+    "tr_front.R",
+    "tr_front.L",
+    "tr_back.R",
+    "tr_back.L"
+   ],
+   "kind": "girth",
+   "label": "Seat fullness (design ease)",
+   "landmark": "hip",
+   "target_mm": [
+    200,
+    320,
+    480
+   ]
+  },
+  {
+   "body": "total_crotch_length",
+   "id": "crotch",
+   "kind": "path",
+   "label": "Total crotch length ease",
+   "refs": [
+    "tr_front.R/crotch",
+    "tr_front.R/cf",
+    "tr_back.R/cb",
+    "tr_back.R/crotch"
+   ],
+   "target_mm": [
+    15,
+    30,
+    50
+   ]
+  },
+  {
+   "body": "hip",
+   "id": "casing_pass",
+   "kind": "path",
+   "label": "Elastic casing passes over the seat",
+   "refs": [
+    "waistband/bot_bR",
+    "waistband/bot_fR",
+    "waistband/bot_fL",
+    "waistband/bot_bL"
+   ],
+   "target_mm": [
+    20,
+    40,
+    120
+   ]
+  },
+  {
+   "body": "waist",
+   "id": "elastic_hold",
+   "kind": "path",
+   "label": "Relaxed elastic vs waist (must be shorter to hold)",
+   "refs": [
+    "waistband/bot_bR",
+    "waistband/bot_fR",
+    "waistband/bot_fL",
+    "waistband/bot_bL"
+   ],
+   "scale": 0.8317,
+   "target_mm": [
+    -63.0,
+    -26.3,
+    -5.0
+   ]
+  },
+  {
+   "body": "foot_pass",
+   "id": "cuff_pass",
+   "kind": "path",
+   "label": "Cuff passes over the foot",
+   "refs": [
+    "cuff.R/bottom"
+   ],
+   "target_mm": [
+    10,
+    25,
+    60
+   ]
+  },
+  {
+   "body": "calf",
+   "id": "cuff_fit",
+   "kind": "path",
+   "label": "Cuff ease at the calf",
+   "refs": [
+    "cuff.R/bottom"
+   ],
+   "target_mm": [
+    10,
+    25,
+    45
+   ]
+  },
+  {
+   "body": "waist_height",
+   "body_offset_mm": -177.0,
+   "from": "waist_side",
+   "id": "leg_blouse",
+   "instance": "tr_front.R",
+   "kind": "vertical",
+   "label": "Leg length blousing over the calf cuff",
+   "target_mm": [
+    15,
+    40,
+    80
+   ],
+   "to": "hem_side"
+  }
+ ],
+ "schema": "fabric-fit/1",
+ "seam_tol_mm": 3.0,
+ "truing_tol_deg": 8.0
+}

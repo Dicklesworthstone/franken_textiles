@@ -8,10 +8,11 @@ import TraceReveal from "../components/TraceReveal";
 import { experiments, type Rig } from "../components/materialExperiments";
 import InlineFilm, { PlaybackMark } from "../components/InlineFilm";
 import GarmentPatterns from "./GarmentPatterns";
+import DrapeRoom from "./DrapeRoom";
 import type { PanelOutline } from "../components/garmentMesh";
 
 const Studio = dynamic(() => import("../components/Studio"), { ssr: false });
-type Exhibit = { study: Study; film: boolean } | { tour: true } | { rig: Rig } | { reel: true } | { garment: (typeof wardrobe)[number] };
+type Exhibit = { study: Study; film: boolean } | { tour: true } | { rig: Rig } | { reel: true } | { poseRoom: true } | { garment: (typeof wardrobe)[number] };
 type CaptureFn = (progress: number, yaw: number) => Promise<void>;
 declare global { interface Window { ftxFrame?: CaptureFn } }
 
@@ -21,6 +22,7 @@ const wardrobe = [
 ] as const;
 
 const films = [
+  { id:"drape-room", title:"Raising the sleeve", detail:"Body & cloth study" },
   { id:"studio-tour", title:"From pattern to stitch", detail:"Studio tour" },
   { id:"wardrobe-reel", title:"Inside the wardrobe", detail:"Exhibition reel" },
   ...wardrobe.map(s=>({ id:"wardrobe-"+s.id, title:s.title, detail:s.detail })),
@@ -63,8 +65,8 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
   const study = "study" in item ? item.study : undefined;
   const rig = "rig" in item ? item.rig : undefined;
   const garment = "garment" in item ? item.garment : undefined;
-  const mediaId = study?.id ?? (garment ? "wardrobe-"+garment.id : rig ? "rig-" + rig : "reel" in item ? "wardrobe-reel" : "studio-tour");
-  const title = study?.title ?? garment?.title ?? (rig ? experiments[rig].title : "reel" in item ? "Inside the wardrobe" : "A tour of the pattern room");
+  const mediaId = study?.id ?? (garment ? "wardrobe-"+garment.id : rig ? "rig-" + rig : "reel" in item ? "wardrobe-reel" : "poseRoom" in item ? "drape-room" : "studio-tour");
+  const title = study?.title ?? garment?.title ?? (rig ? experiments[rig].title : "reel" in item ? "Inside the wardrobe" : "poseRoom" in item ? "Raising the sleeve" : "A tour of the pattern room");
   const dialog = useRef<HTMLDialogElement>(null);
   const [film, setFilm] = useState("film" in item ? item.film : true);
   const [frame, setFrame] = useState(study?.mode === "construction" ? 0 : 1);
@@ -168,7 +170,7 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
     <footer className="player-foot">{live ? <p>Native Rust fold replay on a synthetic body.</p> :
       <a download={`frankentextiles-${mediaId}.mp4`} href={`/media/${mediaId}.mp4`}>Download MP4 ↓</a>}
       {study ? <button onClick={changePlayer}>{live ? "Watch film" : "Open 3D study"} <Arrow/></button> :
-        garment ? <a href={`/wardrobe/${garment.id}/`}>Open garment study <Arrow/></a> : rig ? <a href={`/experiments/${rig}/`}>Open experiment <Arrow/></a> : "reel" in item ? <a href="/sections/wardrobe/">Explore the wardrobe <Arrow/></a> : <a href="/sections/studio/">Try the studios <Arrow/></a>}</footer>
+        garment ? <a href={`/wardrobe/${garment.id}/`}>Open garment study <Arrow/></a> : rig ? <a href={`/experiments/${rig}/`}>Open experiment <Arrow/></a> : "reel" in item ? <a href="/sections/wardrobe/">Explore the wardrobe <Arrow/></a> : "poseRoom" in item ? <a href="/sections/studies/#drape-room">Try the drape room <Arrow/></a> : <a href="/sections/studio/">Try the studios <Arrow/></a>}</footer>
     <GarmentPatterns exhibit={mediaId}/>
   </dialog>;
 }
@@ -189,6 +191,7 @@ export default function Exhibition({section}: {section?: string}) {
     if (id) setCapture(studies.find(study => study.id === id));
     else if (params.get("film") === "studio-tour") setItem({ tour: true });
     else if (params.get("film") === "wardrobe-reel") setItem({ reel: true });
+    else if (params.get("film") === "drape-room") setItem({ poseRoom: true });
     else if (params.get("film") === "rig-cylinder") setItem({ rig: "cylinder" });
     else if (params.get("film") === "rig-strip") setItem({ rig: "strip" });
     else {
@@ -212,23 +215,21 @@ export default function Exhibition({section}: {section?: string}) {
     <a className="skip" href="#exhibition">Skip to the exhibition</a>
     <header className="mast"><div className="wrap nav">
       <a className="wordmark" href="/" aria-label="FrankenTextiles home"><Mark/>Franken<span>Textiles</span></a>
-      <nav aria-label="Main navigation"><a href="/sections/wardrobe/">Wardrobe</a><a href="/sections/studio/">Studios</a><a href="/sections/films/">Films</a>
-      <a className="worklink" href="/workbench/index.html">Open workbench <Arrow diagonal/></a></nav>
+      <nav aria-label="Main navigation"><a href="/sections/studies/#drape-room">Drape room</a><a href="/sections/wardrobe/">Wardrobe</a><a href="/sections/studio/">Studios</a><a href="/sections/films/">Films</a>
+      <details className="mast-explore"><summary>Explore</summary><div>
+        <a href="/sections/studies/#drape-room">The drape room</a><a href="/sections/wardrobe/">The wardrobe</a>
+        <a href="/sections/materials/">Cloth under load</a><a href="/sections/studio/">Draft, cut and stitch</a><a href="/sections/films/">Screening room</a>
+      </div></details>
+      <a className="worklink" href="/sections/tools/">Workbenches <Arrow diagonal/></a></nav>
     </div></header>
     <main id="exhibition">
-      {!section && <section className="atelier-hero" aria-labelledby="hero-title">
-        <img className="cover-photo" src="/media/atelier-cover.webp" alt="" fetchPriority="high"/>
-        <div className="wrap hero-inner"><div className="hero-copy">
-          <p className="kicker">Open-source sewing studio</p>
-          <h1 id="hero-title">The pattern<br/><em>room.</em></h1>
-          <p>Draft the pieces, follow the fold, and see where every stitch lands. A sewing studio you can explore in your browser.</p>
-          <div className="actions"><a className="primary" href="#wardrobe">Explore the wardrobe <span aria-hidden="true">↓</span></a>
-            <button className="watch" onClick={() => setItem({ tour: true })}><span className="play-ring"><PlaybackMark/></span> Watch the studio tour</button></div>
-        </div><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/>
-          <button className="card-open" aria-label="Open the wardrobe reel" onClick={()=>setItem({reel:true})}/></div>
-          <figcaption><span>Inside the wardrobe</span><button onClick={()=>setItem({reel:true})}>View reel <Arrow diagonal/></button></figcaption>
-        </figure></div>
-      </section>}
+      {show("studies") && <DrapeRoom home={!section}/>}
+      {!section && <section className="dr-index" aria-label="Explore more of the studio"><div className="wrap">
+        <a href="/wardrobe/sundress/"><img src="/media/wardrobe-sundress.jpg" alt=""/><div><small>Body model</small><strong>Pose the sundress</strong></div><Arrow diagonal/></a>
+        <a href="/experiments/strip/"><img src="/media/rig-strip.jpg" alt=""/><div><small>Textile mechanics</small><strong>Pull cloth on the bias</strong></div><Arrow diagonal/></a>
+        <div className="dr-reel"><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/></div></figure>
+          <button onClick={()=>setItem({reel:true})}><span><small>Studio film</small><strong>Inside the wardrobe</strong></span><Arrow diagonal/></button></div>
+      </div></section>}
       {show("wardrobe") && <section id="wardrobe" className="paper wardrobe-gallery"><div className="wrap collection">
         <div className="section-top"><div><p className="kicker">Interactive garments</p><Heading className="section-title"><a href="/sections/wardrobe/">The wardrobe<span>.</span></a></Heading></div>
           <p>Take a garment off the rail. Turn it around, change the figure, or look beneath a layer.</p></div>

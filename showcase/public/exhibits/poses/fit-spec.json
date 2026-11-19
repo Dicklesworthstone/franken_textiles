@@ -1,0 +1,139 @@
+{
+ "garment": "zouave_bolero",
+ "points": [
+  {
+   "body": "chest",
+   "dy": -24.0,
+   "id": "chest",
+   "instances": [
+    "front.R",
+    "front.L",
+    "back"
+   ],
+   "kind": "girth",
+   "label": "Chest ease (fronts edge to edge)",
+   "landmark": "chest",
+   "target_mm": [
+    70,
+    100,
+    130
+   ]
+  },
+  {
+   "body": "across_back",
+   "id": "across_back",
+   "instances": [
+    "back"
+   ],
+   "kind": "girth",
+   "label": "Across-back ease",
+   "landmark": "across_back",
+   "target_mm": [
+    10,
+    25,
+    45
+   ]
+  },
+  {
+   "at_vertex": "ua_f",
+   "body": "upper_arm",
+   "id": "bicep",
+   "instance": "sleeve.R",
+   "kind": "width",
+   "label": "Bicep ease",
+   "target_mm": [
+    35,
+    50,
+    70
+   ]
+  },
+  {
+   "body": "arm_length",
+   "from": "top",
+   "id": "sleeve_length",
+   "instance": "sleeve.R",
+   "kind": "vertical",
+   "label": "Sleeve length over arm length",
+   "target_mm": [
+    0,
+    15,
+    35
+   ],
+   "to": "hem_f"
+  },
+  {
+   "body": "hand_pass",
+   "id": "cuff_pass",
+   "kind": "path",
+   "label": "Sleeve hem passes the hand",
+   "refs": [
+    "sleeve.R/hem"
+   ],
+   "target_mm": [
+    10,
+    25,
+    60
+   ]
+  },
+  {
+   "body": "neck_base",
+   "id": "neckline",
+   "kind": "path",
+   "label": "Neckline ease (open front)",
+   "refs": [
+    "front.R/neck",
+    "front.L/neck",
+    "back/neck.R",
+    "back/neck.L"
+   ],
+   "target_mm": [
+    30,
+    50,
+    90
+   ]
+  },
+  {
+   "body": "back_neck_to_waist",
+   "from": "cbn",
+   "id": "back_length",
+   "instance": "back",
+   "kind": "vertical",
+   "label": "Back length vs nape-to-waist",
+   "target_mm": [
+    -10,
+    10,
+    30
+   ],
+   "to": "cb_hem"
+  }
+ ],
+ "schema": "fabric-fit/1",
+ "seam_tol_mm": 3.0,
+ "truing": [
+  {
+   "end": "start",
+   "seam": "side_R"
+  },
+  {
+   "end": "end",
+   "seam": "side_L"
+  },
+  {
+   "end": "start",
+   "seam": "shoulder_R"
+  },
+  {
+   "end": "end",
+   "seam": "shoulder_L"
+  },
+  {
+   "end": "end",
+   "seam": "underarm_R"
+  },
+  {
+   "end": "start",
+   "seam": "underarm_L"
+  }
+ ],
+ "truing_tol_deg": 8.0
+}

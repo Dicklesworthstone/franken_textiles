@@ -2,6 +2,14 @@
 
 A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
 
+- **Change the wearer and raise the arms.** The homepage and `/sections/studies/` open with
+  the same bolero on synthetic Anny forms fitted to 48, 52 and 54 cm chest targets. Choose
+  a 35°, 75° or 90° arm pose, turn the figure, or replay the flat pieces joining. At the
+  52 cm target, raising the arms from 35° to 75° changes the mean chest gap from 20.6 to
+  4.9 mm. The color views show native panel identities, endpoint strain, or the magnitude
+  of the barrier reaction at each welded cloth vertex in newtons. The full-figure and rear
+  views include gathered trousers independently draped on the same posed body. Both
+  full-size A4 patterns are available beside the controls.
 - **Wear the sundress.** At `/wardrobe/sundress/`, drag either hand or use the arm controls.
   Adjust stature, body mass, bust and waist on an adult figure sampled from the native Anny fit.
   The browser interpolates fitted surfaces and arm poses. The dress keeps its original cut.
@@ -26,7 +34,7 @@ A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
   in the workbench to inspect its corners. The starting exercise names three pieces and sets the back hem to 180 mm.
   The print link alongside the exercise opens the native bolero draft.
 
-The chart-based drafts and recorded drapes are separate examples. The homepage has nine
+The chart-based drafts and recorded drapes are separate examples. The homepage has ten
 downloadable H.264 films. Gallery previews play muted while visible, pause offscreen and respect
 reduced motion. The cover is an AI-generated illustration. The films show the actual exhibits.
 
@@ -96,6 +104,25 @@ python3 scripts/check-share-images.py https://franken-textiles.com
 ```
 
 ## Rebuild exhibition media
+
+For the homepage experiment, run the following from the repository root with the pinned Anny
+model installed, a built `target/release/ftx` and Python with NumPy. Use a fresh scratch path.
+
+```sh
+python3 showcase/scripts/prepare-drape-room.py --solve /path/to/new-runs /path/to/new-display-data
+```
+
+The generator runs 18 native drapes. It verifies the patterns, paired body meshes and replay
+topology, then maps each welded force to its exact endpoint position before quantizing
+display positions to 0.1 mm. The two layers do not have a joint contact solve. Four of the
+nine jacket runs have no gating flags. Three are still moving at the last gravity step, and
+two stop short of the prescribed contact thickness. All nine trouser runs settled without
+gating flags. The exhibit exposes each selected run's result and downloadable body residuals.
+
+The figure's face uses original synthetic front and profile coloring registered to the native
+head surface. The atlas, stand, lighting and illustrated gold binding belong to the display.
+From `showcase/`, `node scripts/render-drape-room.mjs /path/to/new-film` records the two
+52 cm poses and their native contact map into an eight-second H.264 film with FFmpeg.
 
 Each garment comes from a 12 mm mesh with a 2 mm cloth self-contact thickness on a synthetic
 92 cm body. The data files include the native PC2 digest, panel ranges, paired seam indices,

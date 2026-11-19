@@ -12,6 +12,38 @@ before(async () => {
 after(async () => { await browser?.close(); });
 const opts = { userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0", viewport: { width: 1120, height: 820 } };
 
+test("the drape room pairs each body and pose with its native cloth and endpoint loads", async () => {
+  const page=await browser.newPage({...opts,reducedMotion:"reduce"});
+  try {
+    await page.goto(site);
+    const reports=await (await page.request.get(new URL("/exhibits/poses/runs.json",site).href)).json();
+    for(const chest of [48,52,54])for(const angle of [35,75,90]){
+      const id=chest*10+"-"+angle,run=reports.cases[id];
+      await page.getByRole("button",{name:chest+" centimetre chest"}).click();
+      await page.getByRole("button",{name:angle+" degree arm pose"}).click();
+      await page.locator('canvas[data-run="'+id+'"]').waitFor({timeout:30000});
+      assert.equal(await page.locator(".dr-readings strong").nth(1).textContent(),run.chestClearance.toFixed(1)+" mm");
+      assert.equal(await page.locator(".dr-method summary span").textContent(),
+        run.flags.length||run.trousers.flags?.length?(run.settled?"Contact thickness incomplete":"Cloth still moving"):"Settled");
+      await page.getByRole("button",{name:"Contact",exact:true}).click();
+      await page.locator('canvas[data-mode="contact"][data-frame="135"]').waitFor();
+      assert.equal(await page.locator(".dr-readings strong").last().textContent(),run.peakBodyForceN.toFixed(2)+" N");
+    }
+    await page.getByRole("button",{name:"Lay the five cut pieces flat"}).click();
+    await page.locator('canvas[data-mode="construction"][data-frame="0"]').waitFor();
+    await page.getByRole("button",{name:"Play sewing replay"}).click();
+    await page.waitForFunction(()=>Number(document.querySelector(".dr-stage canvas")?.dataset.frame)>2);
+    await page.getByRole("button",{name:"Pause sewing replay"}).click();
+    await page.setViewportSize({width:390,height:844});
+    await page.getByRole("button",{name:"52 centimetre chest"}).click();
+    await page.getByRole("button",{name:"35 degree arm pose"}).click();
+    await page.getByRole("button",{name:"Full figure"}).click();
+    await page.locator('canvas[data-run="520-35"][data-full="true"]').waitFor();
+    assert.ok(await page.locator(".dr-settings a[download]").count()===2);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  } finally {await page.close();}
+});
+
 test("the photo workbench detects the demo sheet, measures the marks and clears the demo on upload", async () => {
   const page=await browser.newPage({...opts,viewport:{width:390,height:844}});
   try {
@@ -61,6 +93,7 @@ test("visible preview plays, preserves a deliberate pause, and leaves the screen
   const p = await browser.newPage({ ...opts, reducedMotion:"no-preference" });
   try {
     await p.goto(site);
+    await p.locator(".hero-screen").scrollIntoViewIfNeeded();
     await p.waitForFunction(()=>document.querySelector(".hero-screen video")?.currentTime>.1);
     await p.getByRole("button",{name:"Pause Inside the wardrobe preview"}).click();
     await p.locator("#tracing").scrollIntoViewIfNeeded();

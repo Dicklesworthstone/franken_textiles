@@ -8,6 +8,7 @@ const patterns = {
 } as const;
 
 const exhibits: Record<string, (keyof typeof patterns)[]> = {
+  "drape-room": ["bolero","trousers"],
   bolero: ["bolero"], construction: ["bolero"], trousers: ["trousers"], fez: ["fez"],
   sundress: ["dress"], hussar: ["blue", "yellow"],
   "wardrobe-sundress": ["dress"], "wardrobe-hussar": ["blue", "yellow"],

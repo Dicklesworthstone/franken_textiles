@@ -8,6 +8,8 @@ import { plates, type Plate, type PlateId } from "./catalog";
 type Artwork = { file: string; crop?: [left: number, top: number, width: number, height: number]; contain?: string };
 const art: Record<string, Artwork> = {
   atelier: {file:"public/media/atelier-cover.webp"},
+  pose: {file:"public/media/drape-room-mobile.webp"},
+  load: {file:"public/media/drape-room-contact.webp"},
   dress: {file:"share/art/sundress.jpg"},
   hussar: {file:"share/art/hussar.jpg"},
   draft: {file:"share/art/draft.jpg",crop:[477,0,730,710]},
