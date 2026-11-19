@@ -4,8 +4,8 @@ import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { buildDress } from "./model";
 import { registerDress } from "./registration";
-import { styleFigure } from "./styling";
 import { loadSundressBody } from "../fittedBody";
+import { formMaterial } from "../atelier3d/studio";
 import { initial, type Arm, type Form, type Readings } from "./form";
 
 export type View = "Full length" | "Bodice" | "Side seam";
@@ -32,20 +32,16 @@ function heightRuler() {
 
 export default function SundressScene({form,view,onArm,onError,onReadings}:Props){
   const host=useRef<HTMLDivElement>(null);
-  const [native,setNative]=useState<(Awaited<ReturnType<typeof loadSundressBody>>&{portrait:T.Texture|null})|null>(null);
+  const [native,setNative]=useState<Awaited<ReturnType<typeof loadSundressBody>>|null>(null);
   const latest=useRef({form,view,onArm,onError,onReadings}),redraw=useRef<(()=>void)|null>(null);
   useEffect(()=>{latest.current={form,view,onArm,onError,onReadings};redraw.current?.();},[form,view,onArm,onError,onReadings]);
   useEffect(()=>{
     let alive=true;
-    let portrait:T.Texture|null=null;
-    const image=new T.TextureLoader().loadAsync("/sundress/complexion.webp").catch(()=>null);
-    Promise.all([loadSundressBody(),image]).then(([body,texture])=>{
-      portrait=texture;
-      if(!alive){body.geometry.dispose();texture?.dispose();return;}
-      if(texture)texture.colorSpace=T.SRGBColorSpace;
-      setNative({...body,portrait:texture});
-    }).catch(()=>{void image.then(texture=>texture?.dispose());if(alive)latest.current.onError();});
-    return ()=>{alive=false;portrait?.dispose();};
+    loadSundressBody().then(body=>{
+      if(!alive){body.geometry.dispose();return;}
+      setNative(body);
+    }).catch(()=>{if(alive)latest.current.onError();});
+    return ()=>{alive=false;};
   },[]);
   useEffect(()=>{
     if(!native)return;
@@ -55,7 +51,7 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
     catch{latest.current.onError();return;}
     renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.65));renderer.outputColorSpace=T.SRGBColorSpace;
     renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=.94;
-    renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFSoftShadowMap;
+    renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFShadowMap;
     const el=renderer.domElement;surface.appendChild(el);el.tabIndex=0;
     el.setAttribute("role","img");el.setAttribute("aria-label","Fitted adult Anny model wearing a garden sundress. Drag an arm to raise it. Drag the background or press arrow keys to orbit. Use plus and minus to zoom.");
     const scene=new T.Scene(),camera=new T.OrthographicCamera(-100,100,100,-100,1,1800);
@@ -67,15 +63,17 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
     const light=new T.DirectionalLight(0xfff0e2,2.08);light.position.set(-115,240,165);light.target.position.set(0,75,0);
     light.shadow.mapSize.set(2048,2048);light.castShadow=true;
     Object.assign(light.shadow.camera,{left:-120,right:120,top:135,bottom:-135,near:.1,far:650});light.shadow.camera.updateProjectionMatrix();
-    light.shadow.bias=-.00012;light.shadow.normalBias=.05;scene.add(light,light.target);
+    light.shadow.bias=-.00012;light.shadow.normalBias=.05;light.shadow.radius=3.5;scene.add(light,light.target);
     const rim=new T.DirectionalLight(0xffdbb4,1.65);rim.position.set(100,170,-165);scene.add(rim);
-    const styled=styleFigure(native.geometry,native.landmarks,native.portrait),body=new T.Mesh(native.geometry,styled.materials);
+    // The figure is a tailor's form in the fitted body's own shape. Skin, a face and hair are not part of the
+    // body model, so none are drawn.
+    const form=formMaterial(),body=new T.Mesh(native.geometry,[form,form]);
     body.castShadow=body.receiveShadow=true;
     const garment=buildDress(),wrap=registerDress(garment,native.geometry,native.armAt);
-    const ruler=heightRuler();scene.add(body,styled.head,garment,ruler);
+    const ruler=heightRuler();scene.add(body,garment,ruler);
     function fit(params:Form):Readings{
       const {landmarks,height,bust,waist,weight}=native!.apply(params);
-      styled.apply(landmarks);return {height,bust,waist,weight,hem:wrap(landmarks)};
+      return {height,bust,waist,weight,hem:wrap(landmarks)};
     }
     const plinth=new T.Mesh(new T.CylinderGeometry(32,33.25,2.25,80),new T.MeshStandardMaterial({color:0xb7a99a,roughness:.91}));
     plinth.position.y=-.6;plinth.receiveShadow=plinth.castShadow=true;scene.add(plinth);
