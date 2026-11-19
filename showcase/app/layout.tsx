@@ -7,8 +7,15 @@ import "@fontsource/instrument-serif/latin-400-italic.css";
 import "./style.css";
 
 export const metadata: Metadata = {
-  title: "FrankenTextiles — The Drape Studies",
-  description: "Explore real sewing patterns in three dimensions. Orbit a draped garment, follow its seams, and replay its journey from pattern board to cloth.",
+  title: "FrankenTextiles — The Pattern Room",
+  description: "A hands-on sewing studio. Draft a pattern, plan a cutting layout, follow an embroidery needle, and inspect garments sewn in three dimensions.",
+  metadataBase: new URL("https://franken-textiles.com"),
+  openGraph: {
+    title: "The Pattern Room · FrankenTextiles",
+    description: "From flat pattern to finished stitch. Explore the open-source sewing studio in your browser.",
+    type: "website",
+    images: [{ url: "/media/atelier-cover.webp", alt: "Linen and paper patterns on the studio cutting table" }],
+  },
 };
 
 export default function Layout({ children }: { children: React.ReactNode }) {

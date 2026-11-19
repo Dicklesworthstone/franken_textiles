@@ -3,9 +3,11 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { repo, studies, type Study, type View } from "./studies";
+import LabBench from "../components/LabBench";
+import TraceReveal from "../components/TraceReveal";
 
 const Studio = dynamic(() => import("../components/Studio"), { ssr: false });
-type Exhibit = { study: Study; film: boolean };
+type Exhibit = { study: Study; film: boolean } | { tour: true };
 type CaptureFn = (progress: number, yaw: number) => Promise<void>;
 declare global { interface Window { ftxFrame?: CaptureFn } }
 
@@ -41,21 +43,25 @@ function Capture({ study }: { study: Study }) {
 }
 
 function Player({ item, close }: { item: Exhibit; close: () => void }) {
-  const { study } = item;
+  const study = "study" in item ? item.study : undefined;
+  const mediaId = study?.id ?? "studio-tour";
+  const title = study?.title ?? "A tour of the pattern room";
   const dialog = useRef<HTMLDialogElement>(null);
-  const [film, setFilm] = useState(item.film);
-  const [frame, setFrame] = useState(study.mode === "construction" ? 0 : 1);
-  const [mode, setMode] = useState<View>(study.mode);
-  const [wire, setWire] = useState(study.id === "construction");
+  const [film, setFilm] = useState("film" in item ? item.film : true);
+  const [frame, setFrame] = useState(study?.mode === "construction" ? 0 : 1);
+  const [mode, setMode] = useState<View>(study?.mode ?? "cloth");
+  const [wire, setWire] = useState(study?.id === "construction");
   const [seams, setSeams] = useState<string[]>([]);
   const [seam, setSeam] = useState("");
+  const [spread, setSpread] = useState(0);
+  const [strain, setStrain] = useState<{ min: number; max: number; p95: number }>();
   const [resetKey, reset] = useState(0);
   const [playing, play] = useState(false);
   const [available, setAvailable] = useState(false);
   const [failed, setFailed] = useState(false);
   const ready = useCallback(() => setAvailable(true), []);
   const error = useCallback(() => { setFailed(true); play(false); }, []);
-  const live = !film && !failed;
+  const live = study !== undefined && !film && !failed;
   const animationStart = useRef(0);
   useEffect(() => {
     const el = dialog.current!;
@@ -96,16 +102,16 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
       const box = e.currentTarget.getBoundingClientRect();
       if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) close();
     } }}>
-    <header className="player-head"><div><span className="mono">{live ? "Interactive study" : "Studio film"} / Fig. {study.figure}</span>
-      <h2 id="player-title">{study.title}</h2></div>
+    <header className="player-head"><div><span className="mono">{live ? "Interactive study" : "Studio film"}{study && ` / Fig. ${study.figure}`}</span>
+      <h2 id="player-title">{title}</h2></div>
       <button className="close" onClick={close} aria-label="Close study">×</button></header>
     {live ? <div className="stage"><Studio garment={study.garment} mode={mode}
       frame={mode === "strain" ? 1 : frame} wire={wire} resetKey={resetKey} onReady={ready} onError={error}
-      seam={mode === "construction" ? seam : ""} onSeams={setSeams}/>
+      seam={mode === "construction" ? seam : ""} spread={spread} onSeams={setSeams} onStrain={setStrain}/>
       {!available && <span className="loading mono" role="status">Loading geometry…</span>}
       {available && <span className="orbit-note mono">Drag to orbit · Scroll to zoom</span>}
-    </div> : <video className="movie" key={study.id} controls playsInline autoPlay={!failed}
-      poster={`/media/${study.id}.jpg`} src={`/media/${study.id}.mp4`} aria-label={`${study.title} turntable film`}/>}
+    </div> : <video className="movie" key={mediaId} controls playsInline autoPlay={!failed}
+      poster={`/media/${mediaId}.jpg`} src={`/media/${mediaId}.mp4`} aria-label={title}/>}
     {failed && <p role="status" className="fallback">WebGL is unavailable on this device. The film shows the same garment.</p>}
     {live && <div className="controls">
       <div className="control-row"><div className="seg" aria-label="Garment view">
@@ -117,19 +123,26 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
         <label>Inspect seam <select value={seam} onChange={e => setSeam(e.target.value)}>
           <option value="">All seams</option>{seams.map(name => <option key={name} value={name}>{name.replaceAll("_", " ")}</option>)}
         </select></label>{seam && <span><i/> Side A <i/> Side B</span>}
+        <label className="exploder">Exploded view <input aria-label="Exploded view" type="range" min="0" max="1" step=".02" value={spread}
+          onChange={event => setSpread(Number(event.target.value))}/></label>
+        {spread > 0 && <small>Panels spaced apart for inspection.</small>}
       </div>}
-      {mode === "strain" ? <div className="strain-key"><span/>Endpoint edge strain · −3% compression to +3% tension</div> :
+      {mode === "strain" ? <div className="strain-key"><span/>Color scale −3% to +3%.
+        {strain && <strong>Endpoint range {strain.min}% to +{strain.max}%</strong>}</div> :
+        <><div className="phase-jumps" aria-label="Replay landmarks">{([[0,"Flat pattern"],[69,"Wrapped"],[99,"Sewn"],[135,"Settled"]] as const).map(([tick,title]) =>
+          <button key={tick} aria-pressed={sample === tick} onClick={() => { play(false); setFrame(tick / 135); }}>{title}</button>)}</div>
         <div className="transport"><button disabled={!available} aria-label={playing ? "Pause replay" : "Play replay"} onClick={() => {
           if (playing) play(false);
           else { const start = frame >= 1 ? 0 : frame; setFrame(start); animationStart.current = performance.now() - start * 9500; play(true); }
         }}>{playing ? "Ⅱ" : "▶"}</button>
           <input aria-label="Fold replay position" type="range" min="0" max="1" step="0.001" value={frame}
             onChange={e => { play(false); setFrame(Number(e.target.value)); }}/>
-          <span className="mono phase">{phase}</span></div>}
+          <span className="mono phase">{phase}</span></div></>}
     </div>}
     <footer className="player-foot">{live ? <p>Native Rust fold replay on a synthetic body.</p> :
-      <a download={`frankentextiles-${study.id}.mp4`} href={`/media/${study.id}.mp4`}>Download MP4 ↓</a>}
-      <button onClick={changePlayer}>{live ? "Watch film" : "Open 3D study"} <Arrow/></button></footer>
+      <a download={`frankentextiles-${mediaId}.mp4`} href={`/media/${mediaId}.mp4`}>Download MP4 ↓</a>}
+      {study ? <button onClick={changePlayer}>{live ? "Watch film" : "Open 3D study"} <Arrow/></button> :
+        <a href="#studio" onClick={close}>Try the studios <Arrow/></a>}</footer>
   </dialog>;
 }
 
@@ -138,55 +151,70 @@ export default function Home() {
   const [item, setItem] = useState<Exhibit | null>(null);
   const [capture, setCapture] = useState<Study>();
   useEffect(() => {
-    const id = new URLSearchParams(location.search).get("capture");
+    const params = new URLSearchParams(location.search);
+    const id = params.get("capture");
     if (id) setCapture(studies.find(study => study.id === id));
+    else if (params.get("film") === "studio-tour") setItem({ tour: true });
+    else {
+      const study = studies.find(s => s.id === (params.get("study") ?? params.get("film")));
+      if (study) setItem({ study, film: !params.has("study") });
+    }
   }, []);
+  function closePlayer() {
+    setItem(null);
+    const url = new URL(location.href);
+    if (url.searchParams.has("study") || url.searchParams.has("film")) {
+      url.searchParams.delete("study");
+      url.searchParams.delete("film");
+      history.replaceState(history.state, "", url);
+    }
+  }
   if (capture) return <Capture study={capture}/>;
   return <>
-    <a className="skip" href="#studies">Skip to studies</a>
+    <a className="skip" href="#studio">Skip to the studios</a>
     <header className="mast"><div className="wrap nav">
       <a className="wordmark" href="#" aria-label="FrankenTextiles home"><Mark/>Franken<span>Textiles</span></a>
-      <nav aria-label="Main navigation"><a href="#studies">Studies</a><a href="#films">Films</a>
+      <nav aria-label="Main navigation"><a href="#studio">Studios</a><a href="#studies">Drape gallery</a><a href="#films">Films</a>
       <a className="worklink" href="/workbench/index.html">Open workbench <Arrow diagonal/></a></nav>
     </div></header>
     <main>
-      <section className="hero" aria-labelledby="hero-title"><div className="wrap hero-grid">
-        <div className="hero-text"><div className="eyebrow"><i/> Computational textile studio</div>
-          <h1 id="hero-title">The drape<br/><em>studies.</em></h1>
-          <p>From flat pattern to folded cloth. Explore the geometry, seams, and movement of garments sewn by the FrankenTextiles solver.</p>
-          <div className="actions"><a className="primary" href="#studies">Explore studies <Arrow/></a>
-            <button className="watch" onClick={() => setItem({ study: studies[0], film: true })}><span className="play-ring">▶</span> Watch the film</button></div>
-        </div>
-        <figure className="hero-plate"><div className="plate-grid"/><div className="hero-picture" role="img" aria-label="Copper bolero with an open front and a cutaway revealing the triangular mesh on one sleeve"/>
-          <div aria-hidden="true" className="crop tl"/><div aria-hidden="true" className="crop tr"/>
-          <div aria-hidden="true" className="crop bl"/><div aria-hidden="true" className="crop br"/>
-          <span className="plate-id mono">FTX — 001</span>
-          <button className="orbit-link mono" aria-label="Open the Zouave bolero 3D study" onClick={() => setItem({ study: studies[0], film: false })}><i/> View in 3D <Arrow diagonal/></button>
-          <figcaption><span className="mono">Fig. 01</span><em>Zouave bolero</em></figcaption>
-        </figure>
-      </div></section>
+      <section className="atelier-hero" aria-labelledby="hero-title">
+        <img className="cover-photo" src="/media/atelier-cover.webp" alt="" fetchPriority="high"/>
+        <div className="wrap hero-inner"><div className="hero-copy">
+          <p className="kicker">Open-source sewing studio</p>
+          <h1 id="hero-title">The pattern<br/><em>room.</em></h1>
+          <p>Draft the pieces, follow the fold, and see where every stitch lands. A sewing studio you can explore in your browser.</p>
+          <div className="actions"><a className="primary" href="#studio">Try the studios <span aria-hidden="true">↓</span></a>
+            <button className="watch" onClick={() => setItem({ tour: true })}><span className="play-ring">▶</span> Watch the studio tour</button></div>
+        </div></div>
+      </section>
+      <LabBench/>
       <section id="studies" className="paper"><div className="wrap collection">
-        <div className="section-top"><div><div className="eyebrow dark"><i/> Interactive WebGL</div><h2>Study collection<span>.</span></h2></div>
+        <div className="section-top"><div><p className="kicker">Cloth in three dimensions</p><h2>The drape gallery<span>.</span></h2></div>
           <div className="filters" aria-label="Filter studies">{["All studies","Garments","Construction"].map(k =>
             <button key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>{k}</button>)}</div></div>
         <div className="cards">{studies.filter(s => filter === "All studies" || s.group === filter).map(s =>
           <button key={s.id} className="card" onClick={() => setItem({study:s,film:false})}>
             <div className="thumb"><img src={`/media/${s.id}.jpg`} alt="" loading="lazy"/><span className="thumb-id mono">Fig. {s.figure}</span><span className="launch"><Arrow diagonal/></span></div>
-            <div className="card-text"><span className="mono">{s.label}</span><h3>{s.title}</h3><p>{s.description}</p></div>
+            <div className="card-text"><span className="mono">{s.detail}</span><h3>{s.title}</h3><p>{s.description}</p></div>
           </button>)}</div>
       </div></section>
+      <TraceReveal/>
       <section id="films" className="films"><div className="wrap film-grid">
-        <div><div className="eyebrow"><i/> Rendered with FFmpeg</div><h2>Screening room<span>.</span></h2>
-          <p>Short films of the recorded folds and a closer look at the sewn mesh.</p></div>
-        <div className="film-list">{studies.map(s => <button key={s.id} onClick={() => setItem({study:s,film:true})}>
+        <div><p className="kicker">Films</p><h2>Screening room<span>.</span></h2>
+          <p>Watch a pattern move from the board to the needle, or look closely at a single garment.</p></div>
+        <div className="film-list"><button onClick={() => setItem({ tour: true })}>
+          <img src="/media/studio-tour.jpg" alt="" loading="lazy"/><span><small className="mono">Studio tour</small><strong>From pattern to stitch</strong></span><span className="play-ring">▶</span></button>
+          {studies.map(s => <button key={s.id} onClick={() => setItem({study:s,film:true})}>
           <img src={`/media/${s.id}.jpg`} alt="" loading="lazy"/><span><small className="mono">Film {s.figure}</small><strong>{s.title}</strong></span><span className="play-ring">▶</span></button>)}</div>
       </div></section>
-      <section className="paper"><div className="wrap bench"><div><div className="eyebrow dark"><i/> Pattern workbench</div><h2>Try your own pattern<span>.</span></h2>
-        <p>Draft, check seams, and export printable pieces locally in your browser. The studies use synthetic bodies. Physical fit takes a muslin or a dressed photo.</p></div>
-        <a className="primary ink" href="/workbench/index.html">Open workbench <Arrow diagonal/></a>
+      <section className="paper"><div className="wrap bench"><div><p className="kicker">Local browser tools</p><h2>Bring your own project<span>.</span></h2>
+        <p>Start from a scan, a material sample, or a measured draft. Your files stay in your browser. The drape studies use synthetic bodies. Physical fit takes a muslin or a dressed photo.</p></div>
+        <div className="bench-links"><a href="/workbench/index.html">Pattern workbench <Arrow diagonal/></a><a href="/workbench/trace.html">Trace a pattern sheet <Arrow diagonal/></a>
+          <a href="/workbench/materials.html">Material workbench <Arrow diagonal/></a><a href="/workbench/photo.html">Photo measurements <Arrow diagonal/></a></div>
       </div></section>
     </main>
     <footer className="base"><div className="wrap"><a className="wordmark" href="#"><Mark/>Franken<span>Textiles</span></a><a href={repo}>Source on GitHub <Arrow diagonal/></a></div></footer>
-    {item && <Player item={item} close={() => setItem(null)}/>}
+    {item && <Player item={item} close={closePlayer}/>}
   </>;
 }

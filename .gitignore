@@ -73,7 +73,8 @@ node_modules/
 /showcase/next-env.d.ts
 /showcase/AGENTS.md
 /showcase/*.tsbuildinfo
-# Public turntables made exclusively from the two synthetic exhibition patterns.
+# Public films rendered from the synthetic garment studies and studio examples.
 !/showcase/public/media/bolero.mp4
 !/showcase/public/media/trousers.mp4
 !/showcase/public/media/construction.mp4
+!/showcase/public/media/studio-tour.mp4

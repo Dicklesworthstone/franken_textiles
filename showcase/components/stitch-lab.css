@@ -1,0 +1,75 @@
+.stitch-lab {
+  --stitch-paper: #f4efe5;
+  --stitch-ink: #282724;
+  --stitch-line: #c8c0af;
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(235px, .85fr);
+  overflow: hidden;
+  border: 1px solid var(--stitch-line);
+  border-radius: 5px;
+  color: var(--stitch-ink);
+  background: var(--stitch-paper);
+}
+.stitch-figure { display: flex; flex-flow: column; min-width: 0; }
+.stitch-cloth {
+  position: relative;
+  flex: 1;
+  min-height: 360px;
+  isolation: isolate;
+  background-color: #25324c;
+  background-image:
+    radial-gradient(ellipse at 42% 30%, transparent 15%, #10172988 100%),
+    repeating-linear-gradient(38deg, #d6caca0d 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(128deg, #0e162a55 0 1px, transparent 1px 3px);
+}
+.stitch-cloth > canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+.stitch-inset { position: absolute; right: 12px; bottom: 12px; width: clamp(80px,17%,125px); padding: 5px 6px; border: 1px solid #8f99aa99; border-radius: 3px; background: #23304a; color: #fff0d7; }
+.stitch-inset:hover { border-color: #efd8b6; }
+.stitch-inset canvas { display: block; width: 100%; aspect-ratio: 1.35; }
+.stitch-inset span { font: 500 9px var(--mono, monospace); }
+.stitch-caption, .stitch-label, .stitch-key, .stitch-progress output {
+  font-family: var(--mono, monospace);
+  font-size: 10px;
+  letter-spacing: .09em;
+}
+.stitch-caption { position: absolute; z-index: 1; top: 14px; left: 18px; color: #e0d9cc; text-transform: uppercase; }
+.stitch-caption b { display: block; font: italic 21px/1.1 var(--serif, Georgia, serif); text-transform: none; letter-spacing: 0; margin-top: 3px; }
+.stitch-key { display: flex; align-items: center; gap: 15px; min-height: 42px; padding: 8px 15px; color: #ede6d8; background: #1e283d; letter-spacing: .02em; }
+.stitch-key span { display: flex; gap: 5px; align-items: center; }
+.stitch-key i { width: 14px; height: 2px; background: #dac9a5; }
+.stitch-key span:nth-child(2) i { height: 3px; background: #e9a96e; }
+.stitch-phase { margin-left: auto; }
+.stitch-desk { display: flex; flex-direction: column; min-width: 0; justify-content: center; padding: clamp(20px, 3vw, 42px); }
+.stitch-label { color: #7c492b; text-transform: uppercase; }
+.stitch-desk h3 { margin: 6px 0; font: 400 clamp(29px, 3vw, 48px)/.98 var(--serif, Georgia, serif); letter-spacing: -.035em; }
+.stitch-top p { color: #564f43; margin: 12px 0 20px; font-size: 14px; line-height: 1.52; max-width: 39ch; }
+.stitch-field, .stitch-dim, .stitch-progress { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; }
+.stitch-field { align-items: center; }
+.stitch-field select { background: #f9f6ef; border: 1px solid var(--stitch-line); border-radius: 3px; color: var(--stitch-ink); font: inherit; padding: 7px 8px; }
+.stitch-dim { margin: 11px 0 17px; border-bottom: 1px solid var(--stitch-line); padding-bottom: 14px; }
+.stitch-dim strong { font-weight: 600; }
+.stitch-progress output { color: #605244; }
+.stitch-desk input[type="range"] { padding: 0; width: 100%; margin: 7px 0 10px; accent-color: #82532c; }
+.stitch-buttons, .stitch-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.stitch-buttons button { border: 1px solid var(--stitch-line); border-radius: 3px; padding: 8px 10px; font: 600 12px/1.35 var(--sans, sans-serif); }
+.stitch-buttons button:disabled { opacity: .55; cursor: default; }
+.stitch-play { background: #313b50; border-color: #313b50 !important; color: #fff8e9; }
+.stitch-play span { font-size: 10px; margin-right: 3px; }
+.stitch-skip { color: #4f4537; background: transparent; }
+.stitch-options { margin: 14px 0; gap: 12px; }
+.stitch-options label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.stitch-options input { accent-color: #82532c; margin: 0; }
+.stitch-download { align-self: flex-start; border-bottom: 1px solid #a48269; font-size: 13px; font-weight: 600; padding: 3px 0; }
+.stitch-download span { margin-left: 8px; }
+.stitch-error { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 8px; color: #fff8e9; }
+.stitch-error button { padding: 6px 10px; border: 1px solid #8997a9; background: #33405c; color: inherit; }
+@media(max-width: 700px) {
+  .stitch-lab { grid-template-columns: 1fr; }
+  .stitch-cloth { min-height: 0; aspect-ratio: 1.25; }
+  .stitch-key { min-height: 34px; }
+  .stitch-desk { padding: 21px; }
+  .stitch-desk h3 { font-size: 32px; }
+}
+@media(max-width: 390px) {
+  .stitch-key { gap: 8px; font-size: 9px; padding-inline: 8px; }
+}

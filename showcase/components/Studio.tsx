@@ -11,26 +11,28 @@ type StudioProps = {
   frame?: number;
   wire?: boolean;
   seam?: string;
+  spread?: number;
   yaw?: number;
   resetKey?: number;
   onReady?: () => void;
   onError?: () => void;
   onSeams?: (names: string[]) => void;
+  onStrain?: (strain: { min: number; max: number; p95: number }) => void;
 };
 
 const homeYaw = 0.32;
 const homeElevation = 0.15;
 
-export default function Studio({ garment, mode = "cloth", frame = 1, wire = false, seam, yaw,
-  resetKey = 0, onReady, onError, onSeams }: StudioProps) {
+export default function Studio({ garment, mode = "cloth", frame = 1, wire = false, seam, spread = 0, yaw,
+  resetKey = 0, onReady, onError, onSeams, onStrain }: StudioProps) {
   const host = useRef<HTMLDivElement>(null);
-  const state = useRef({ mode, frame, wire, seam, yaw, resetKey, onReady, onError, onSeams });
+  const state = useRef({ mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain });
   const redraw = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    state.current = { mode, frame, wire, seam, yaw, resetKey, onReady, onError, onSeams };
+    state.current = { mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain };
     redraw.current?.();
-  }, [mode, frame, wire, seam, yaw, resetKey, onReady, onError, onSeams]);
+  }, [mode, frame, wire, seam, spread, yaw, resetKey, onReady, onError, onSeams, onStrain]);
 
   useEffect(() => {
     const surface = host.current;
@@ -113,7 +115,7 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     function update() {
       if (!garmentMesh || !width || !height) return;
       const view = state.current;
-      garmentMesh.pose(view.mode, view.frame, view.wire, width / height, view.seam);
+      garmentMesh.pose(view.mode, view.frame, view.wire, width / height, view.seam, view.spread);
       if (lastReset !== view.resetKey) {
         lastReset = view.resetKey;
         reset();
@@ -175,6 +177,7 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
       garmentMesh = result;
       scene.add(result.group);
       state.current.onSeams?.(result.seamNames);
+      state.current.onStrain?.(result.strainRange);
       update();
     }).catch(() => {
       if (!controller.signal.aborted) state.current.onError?.();

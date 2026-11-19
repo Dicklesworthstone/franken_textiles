@@ -11,6 +11,7 @@ type Exhibit = {
   frames: number[];
   sourceFrames: number;
   strainRgb: number[];
+  summary: { edgeStrainPercent: { min: number; max: number; p95: number } };
 };
 
 // One small repeat tile, anchored to the flat board so the weave follows the panels.
@@ -57,6 +58,21 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
     throw new Error("Incomplete garment replay");
   }
   const geometry = new THREE.BufferGeometry();
+  // Diagram offsets are uniform within each cut piece, derived from its sewn endpoint.
+  const endpoint = frames.subarray(frames.length - stride);
+  const finalBounds = new THREE.Box3();
+  const point = new THREE.Vector3();
+  for (let i = 0; i < stride; i += 3) finalBounds.expandByPoint(point.fromArray(endpoint, i));
+  const finalCenter = finalBounds.getCenter(new THREE.Vector3());
+  const dimensions = finalBounds.getSize(new THREE.Vector3());
+  const extent = Math.max(dimensions.x, dimensions.y, dimensions.z);
+  const offsets = new Float32Array(stride);
+  for (const [start, end] of Object.values(data.panels)) {
+    const panelBounds = new THREE.Box3();
+    for (let v = start; v < end; v++) panelBounds.expandByPoint(point.fromArray(endpoint, 3 * v));
+    const delta = panelBounds.getCenter(new THREE.Vector3()).sub(finalCenter).normalize().multiplyScalar(extent * 0.38);
+    for (let v = start; v < end; v++) delta.toArray(offsets, 3 * v);
+  }
   geometry.setIndex(data.triangles);
   const position = new THREE.Float32BufferAttribute(new Float32Array(stride), 3);
   position.setUsage(THREE.DynamicDrawUsage);
@@ -164,12 +180,14 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
   const sideB = markSide(0xffb44c, 5, 5);
   let selected: Exhibit["seams"][string] | undefined;
   let lastFrame = -1;
+  let lastSpread = -1;
   let showingStrain = false;
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
-  function pose(mode: StudioMode, time: number, showWire: boolean, aspect: number, seam?: string) {
+  function pose(mode: StudioMode, time: number, showWire: boolean, aspect: number, seam?: string, spread = 0) {
     const sourceFrame = (mode === "strain" ? 1 : THREE.MathUtils.clamp(time, 0, 1)) * (data.sourceFrames - 1);
-    if (lastFrame !== sourceFrame) {
+    const separation = mode === "construction" ? THREE.MathUtils.clamp(spread, 0, 1) : 0;
+    if (lastFrame !== sourceFrame || lastSpread !== separation) {
       let right = data.frames.findIndex((v) => v >= sourceFrame);
       if (right < 0) right = data.frames.length - 1;
       const left = Math.max(0, right - 1);
@@ -179,9 +197,9 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
       for (let j = 0; j < stride; j += 3) {
         // Right-handed Z-up, front -Y → right-handed Y-up, front +Z.
         position.setXYZ(j / 3,
-          THREE.MathUtils.lerp(frames[a + j], frames[b + j], mix),
-          THREE.MathUtils.lerp(frames[a + j + 2], frames[b + j + 2], mix),
-          -THREE.MathUtils.lerp(frames[a + j + 1], frames[b + j + 1], mix));
+          THREE.MathUtils.lerp(frames[a + j], frames[b + j], mix) + offsets[j] * separation,
+          THREE.MathUtils.lerp(frames[a + j + 2], frames[b + j + 2], mix) + offsets[j + 2] * separation,
+          -(THREE.MathUtils.lerp(frames[a + j + 1], frames[b + j + 1], mix) + offsets[j + 1] * separation));
       }
       position.needsUpdate = true;
       geometry.computeVertexNormals();
@@ -189,6 +207,7 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
       geometry.boundingBox!.getSize(size);
       geometry.boundingBox!.getCenter(center);
       lastFrame = sourceFrame;
+      lastSpread = separation;
     }
     const scale = 1.66 / Math.max(size.y + size.z * 0.16, Math.hypot(size.x, size.z) / aspect, 0.001);
     group.scale.setScalar(scale);
@@ -210,7 +229,7 @@ export async function loadGarment(garment: Garment, signal: AbortSignal) {
     wire.visible = showWire;
     seams.visible = mode !== "strain" && !pair;
   }
-  return { group, pose, seamNames, dispose() {
+  return { group, pose, seamNames, strainRange: data.summary.edgeStrainPercent, dispose() {
     geometry.dispose();
     seamGeometry.dispose();
     sideA.dispose();

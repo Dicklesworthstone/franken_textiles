@@ -23,10 +23,12 @@ embroidery files for the braid.
 It is the mechanical core of the `fabric-pattern-creation-and-alteration` agent skill, rebuilt in Rust so it
 is deterministic, testable against known answers, and runs in a browser with nothing to install.
 
-**[The Drape Studies](showcase/README.md)** is the Next.js exhibition. Orbit the synthetic bolero and
-trousers, scrub from the pattern board to the settled garment, inspect the sewn mesh, or watch the
-three FFmpeg films. The site also includes the working browser pattern, material, tracing and
-measurement tools.
+**[The Pattern Room](showcase/README.md)** lets you draft a bolero, trousers or a fez in the browser.
+Pin a piece, change its ease and send the revised pattern straight to the cutting table. Compare
+fabric widths, download a full-scale cutting marker, or follow the embroidery needle to the stop
+where the maker lays the braid. The WebGL gallery replays two native drapes on synthetic bodies.
+A tracing exhibit opens its practice sheet in the local workbench, and four downloadable films
+tour the tools and garment studies.
 
 ---
 

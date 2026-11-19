@@ -3,6 +3,9 @@
   "name": "frankentextiles-studio",
   "compatibility_date": "2026-11-01",
   "workers_dev": true,
+  "routes": [
+    { "pattern": "franken-textiles.com", "custom_domain": true }
+  ],
   "assets": {
     "directory": "./out",
     "not_found_handling": "404-page"

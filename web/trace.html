@@ -31,6 +31,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; max-hei
 <p>Your image and JSON stay in this browser. The worker runs the same Rust geometry and review renderer as <code>ftx trace</code>, <code>annotate</code> and <code>audit</code>. No upload, Python or OpenCV is required.</p>
 <p class="warning">Review images are <strong>not for cutting</strong>. A traced drawing starts UNSCALED. Known lengths establish scale, not sewability or fit. After review, download <code>pattern.json</code> and load it as “Someone else's pattern” in the <a href="index.html">Pattern Workbench</a> with your measurements.</p>
 <section id="source"><h2>1. Choose and trace a sheet</h2>
+<p id="exhibitSource" hidden>The selected studio sample is a synthetic bolero sheet. Choose a file below to replace it.</p>
 <label>PNG, JPEG or WebP image (up to 16 MiB and 4 million decoded pixels)<input type="file" id="image" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"></label>
 <p>Use an already correctly oriented image: like the Python skill, the trace ignores a photo's EXIF rotation. Transparent areas count as white. Oversized inputs are refused, not automatically resized. An animated WebP gives its first frame. Convert HEIC to PNG or JPEG before opening. Changing the source or settings resets the edits below.</p>
 <div class="row">

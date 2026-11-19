@@ -7,12 +7,15 @@ let worker, epoch = 0, request = 0, pending = null;
 let ready = false, busy = false, hasSheet = false;
 let sheetSource = null, traceOptions = null, restoredEdits = null, draftLoading = false;
 let reviewPattern = null, workbenchTransfer = null;
+let useExhibitSheet = new URL(location.href).searchParams.get("sample") === "bolero";
+let runExhibitOnReady = useExhibitSheet;
+$("exhibitSource").hidden = !useExhibitSheet;
 const urls = [], draftUrls = [], editFields = ["names", "targets", "labels"];
 const editText = id => restoredEdits?.[id]?.displayed === $(id).value ? restoredEdits[id].text : $(id).value;
 
 function controls() {
   for (const element of [...sourceControls, ...editControls]) element.disabled = busy;
-  $("trace").disabled = busy || !ready || !$("image").files.length;
+  $("trace").disabled = busy || !ready || (!$("image").files.length && !useExhibitSheet);
   $("apply").disabled = busy || !ready || !hasSheet;
   $("cancel").disabled = !busy;
   $("saveDraft").disabled = busy || !hasSheet || !sheetSource?.source_sha256;
@@ -72,8 +75,12 @@ function startWorker() {
     }
     if (msg.type === "ready") {
       ready = true;
-      $("status").textContent = "Ready. Choose a PNG, JPEG or WebP and trace it.";
+      $("status").textContent = useExhibitSheet ? "Ready to trace the studio sample." : "Ready. Choose a PNG, JPEG or WebP and trace it.";
       controls();
+      if (runExhibitOnReady) {
+        runExhibitOnReady = false;
+        $("trace").click();
+      }
       return;
     }
     if (msg.request !== pending) return;
@@ -136,7 +143,13 @@ $("trace").onclick = async () => {
   sheetSource = restoredEdits = null;
   $("names").value = "{}"; $("targets").value = "[]"; $("labels").value = "[]";
   try {
-    const file = $("image").files[0];
+    let file = $("image").files[0];
+    if (!file && useExhibitSheet) {
+      const response = await fetch(new URL("../labs/trace-bolero.png", import.meta.url));
+      if (!response.ok) throw Error("Could not load the bolero studio sample. Retry or select a local image.");
+      file = await response.blob();
+      if (generation !== epoch || pending !== id) return;
+    }
     if (!file || file.size > 16 * 1024 * 1024) throw new Error("Select a PNG, JPEG or WebP no larger than 16 MiB.");
     const options = imageOptions();
     traceOptions = options;
@@ -161,6 +174,11 @@ $("apply").onclick = () => {
 $("cancel").onclick = startWorker;
 for (const input of sourceControls) input.addEventListener("change", () => {
   // Source or trace-setting changes require a new trace, not an edit of the old sheet.
+  runExhibitOnReady = false;
+  if (input === $("image")) {
+    useExhibitSheet = false;
+    $("exhibitSource").hidden = true;
+  }
   $("names").value = "{}"; $("targets").value = "[]"; $("labels").value = "[]";
   startWorker();
 });
