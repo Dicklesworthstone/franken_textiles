@@ -2,26 +2,25 @@
 
 A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
 
-- **Change the wearer and raise the arms.** The homepage and `/sections/studies/` open with
+- **Change the skirt cut.** At `/studies/skirt/`, compare the two six-gore skirts on the same fitted adult figure. The hem overlay, replay, residuals and printable patterns come from the native runs.
+- **Change the wearer and raise the arms.** The drape room on the homepage and `/sections/studies/` shows
   the same bolero on synthetic Anny forms fitted to 48, 52 and 54 cm chest targets. Choose
   a 35°, 75° or 90° arm pose, turn the figure, or replay the flat pieces joining. At the
   52 cm target, raising the arms from 35° to 75° changes the mean chest gap from 20.6 to
   4.9 mm. The color views show native panel identities, endpoint strain, or the magnitude
-  of the barrier reaction at each welded cloth vertex in newtons. The full-figure and rear
-  views include gathered trousers independently draped on the same posed body. Both
+  of the barrier reaction at each welded cloth vertex in newtons. Choose **Coupled outfit** for 12 sewing and 36 gravity steps with the bolero and trousers in one contact solve at 52 cm and 35°. Both
   full-size A4 patterns are available beside the controls.
 - **Wear the sundress.** At `/wardrobe/sundress/`, drag either hand or use the arm controls.
   Adjust stature, body mass, bust and waist on an adult figure sampled from the native Anny fit.
   The browser interpolates fitted surfaces and arm poses. The dress keeps its original cut.
   The four-panel pattern, SVG and tiled A4 PDF come from the native pipeline.
 - **Dress a hussar.** At `/wardrobe/hussar/`, compare the Swedish Blue and Yellow regiments of
-  1761, remove the pelisse, and inspect the chest cord. The reconstructed garment and its native
+  1761, turn the isolated pelisse, and inspect the dolman's chest cord. The reconstructed garment and its native
   two-pass DST braid sampler share an original motif. The page cites the Swedish military-history
   museums’ description of both uniforms.
 - **Test the cloth.** `/experiments/strip/` compares warp, weft and bias cuts of the same synthetic
   material. `/experiments/cylinder/` shows a specimen twisting and compressing between two holders.
-  Geometry, grip forces, torque, residuals and protocol discrepancies come from downloadable Rust
-  experiment reports. The web camera and holder models are illustrative.
+  Both fixtures use the synthetic sheet from the coupled outfit. The 16 × 24 planar strip has separate source readings for Sperl et al.’s SJ1 jersey. The 32 × 8 cylinder includes self-contact and compares its grip reaction with a second 24 × 8 run at the same time. The films follow the recorded loading order. The rendered surface uses the CC0 [Rough Linen scan](https://polyhaven.com/a/rough_linen) photographed by colormass and processed by Rico Cilliers. Its 270.7 × 271.3 mm color and normal maps provide appearance only.
 - **Draft.** Choose a bolero, trousers or a fez, change the chart size and ease, and pin a piece
   to compare its outline. Download the resulting SVG or tiled A4 PDF.
 - **Cut.** Send that exact draft to the cutting table. Change the fabric width and garment count,
@@ -34,8 +33,8 @@ A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
   in the workbench to inspect its corners. The starting exercise names three pieces and sets the back hem to 180 mm.
   The print link alongside the exercise opens the native bolero draft.
 
-The chart-based drafts and recorded drapes are separate examples. The homepage has thirteen
-downloadable H.264 films. Gallery previews play muted while visible, pause offscreen and respect
+The chart-based drafts and recorded drapes are separate examples. Gallery previews use
+downloadable H.264 films, play muted while visible, pause offscreen and respect
 reduced motion. The cover is an AI-generated illustration. The films show the actual exhibits.
 
 ## Print the garments
@@ -121,6 +120,27 @@ download both card formats, run:
 python3 scripts/check-share-images.py https://franken-textiles.com
 ```
 
+## How cloth and bodies are drawn
+
+Every scene that shows a solver result uses `components/atelier3d/`, so cloth and bodies look the
+same everywhere and no scene invents its own lighting or materials.
+
+- **Cloth.** The solver's vertices are never moved. Around them the cloth is drawn as a shell with a
+  face, a reverse and an edge, 2 mm thick, the same thickness the solver holds layers apart at.
+  Between solver vertices the surface is refined for display (each triangle split in four, twice,
+  following the vertex normals), which rounds a sleeve that would otherwise show flat facets.
+  The weave is laid out in flat-pattern coordinates, so it follows each piece's grain. Seams are
+  drawn as a ditch with topstitching and unsewn edges as a corded binding or a turned hem. The weave,
+  the seam finish and the edge finish are drawing, not simulation.
+- **Bodies.** A body is shown as a tailor's form: the fitted body's own shape in a plain matt finish.
+  Skin, a face and hair are not part of the body model, so none are drawn.
+- **What must not be shown.** A pose with no garment on it, or two garments that were solved
+  separately in a view where they overlap. A run the solver refuses is left out of the exhibit and
+  its refusal goes in the notes.
+
+To add a scene, call `prepareRenderer`, `lightStudio`, `formMaterial` and `dressCloth`; `CoupledScene.tsx`
+is the shortest complete example.
+
 ## Rebuild exhibition media
 
 For the homepage experiment, run the following from the repository root with the pinned Anny
@@ -202,13 +222,12 @@ pocket details, and a second checked sundress draft that corrects insufficient e
 ## Room to move
 
 At `/studies/trousers/`, three benches share one seven-piece pattern and a fitted 92 cm synthetic
-form. The posture bench compares two shallow bends with standing. The full seat and squat open
-as body-only views with their native refusal. The elastic bench compares casing stiffness in
+form. The posture bench compares standing, shallow bends and a clothed quarter squat (25° hip flexion, 27.5° knee flexion). The bench lists deeper poses refused by the solver. The elastic bench compares casing stiffness in
 newtons. Changing 5 N to 60 N reduces the final waistband drop from 16.6 mm to 2.8 mm.
 The section bench cuts both meshes at the same height above the sole and draws the intersection
 at a common scale. All three benches link to the original thirteen-page sewing PDF.
 
-From the repo root, the following reproduces the nine inputs, six drapes and three refusals with
+From the repo root, the following reproduces the inputs, drapes and refusals with
 the pinned model installed. The second command records three six-second H.264 films from a
 running site into a new directory.
 
