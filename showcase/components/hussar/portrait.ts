@@ -25,7 +25,7 @@ const faceCoordinates = `
     vec2 distance = offset / radius;
     return exp(-dot(distance, distance) * 1.8);
   }
-  float pigmentNoise(vec3 p) {
+  float portraitNoise(vec3 p) {
     return fract(sin(dot(floor(p), vec3(12.9898, 78.233, 32.711))) * 43758.5453);
   }
   vec3 paintedSkin(vec3 p, vec3 fallback) {
@@ -73,16 +73,16 @@ const skinPigment = `
   float eyeHeight = eye.y;
   float front = smoothstep(eye.z - 3.5, eye.z - .5, p.z);
   float side = abs(p.x);
-  float cheek = ovalFalloff(vec2(lateral - .8, p.y - eyeHeight + 2.8), vec2(2.1, 2.0));
+  float cheekArea = ovalFalloff(vec2(lateral - .8, p.y - eyeHeight + 2.8), vec2(2.1, 2.0));
   float nose = ovalFalloff(vec2(p.x, p.y - eyeHeight*.64), vec2(1.35, 1.3));
   float lipY = eyeHeight*.385 - .10*abs(p.x);
   float lips = ovalFalloff(vec2(p.x, p.y-lipY), vec2(2.32, .69));
   float orbit = ovalFalloff(vec2(lateral, p.y-eyeHeight), vec2(1.96, .94));
   float ear = smoothstep(6.7, 8.0, side) * ovalFalloff(vec2(p.z-eye.z+9.1, p.y-eyeHeight+2.0), vec2(3.2, 4.1));
-  vec3 skin = mix(diffuseColor.rgb, blushColor, (.24*cheek+.16*nose)*front+.21*ear);
+  vec3 skin = mix(diffuseColor.rgb, blushColor, (.24*cheekArea+.16*nose)*front+.21*ear);
   skin = mix(skin, lipColor, lips*.97*front);
   skin *= 1.0-.19*orbit*front;
-  float grain = pigmentNoise(p*33.0);
+  float grain = portraitNoise(p*33.0);
   skin *= .988 + grain*.024;
 
   // Pigment follows the fitted surface. The sculpt supplies the lips, eyelids, ears and nose.
