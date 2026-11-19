@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { dressCloth } from "./atelier3d/garment";
+import { fabrics } from "./atelier3d/weave";
 
 export type Garment = "bolero" | "trousers";
 export type StudioMode = "cloth" | "construction" | "strain" | "contact";
@@ -81,12 +83,12 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
   const position = new THREE.Float32BufferAttribute(new Float32Array(stride), 3);
   position.setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute("position", position);
-  const uv = new Float32Array(data.vertices * 2);
+  // The first frame is the flat pattern board: its x and z are each vertex's place on the cut piece, in metres.
+  const flat = new Float32Array(data.vertices * 2);
   for (let i = 0; i < data.vertices; i++) {
-    uv[i * 2] = frames[i * 3] * 70;
-    uv[i * 2 + 1] = frames[i * 3 + 2] * 70;
+    flat[i * 2] = frames[i * 3];
+    flat[i * 2 + 1] = frames[i * 3 + 2];
   }
-  geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   const panelColors = new Float32Array(stride);
   const palette = ["#e3b24a", "#71a989", "#df8269", "#718cab", "#cfbc9b", "#c384aa", "#7db5bd"];
   // Count edges once on the flat board. Only exterior edges belong to the panel silhouette.
@@ -117,8 +119,11 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     rgb.setRGB(data.strainRgb[i] / 255, data.strainRgb[i + 1] / 255, data.strainRgb[i + 2] / 255, THREE.SRGBColorSpace);
     rgb.toArray(strainColors, i);
   }
-  const colors = new THREE.BufferAttribute(panelColors.slice(), 3);
-  geometry.setAttribute("color", colors);
+  // The garment itself: a shell with thickness, woven on the grain, seams and edges finished.
+  const dressed = dressCloth({ vertices: data.vertices, triangles: data.triangles, seams: Object.values(data.seams), panels: data.panels },
+    flat, onBody ? fabrics.greenWool : fabrics.madderWool, { sewn: endpoint, edge: onBody ? "braid" : "hem" });
+  const shell = dressed.shell;
+  shell.attribute("color", panelColors, 3, true);
   const contactColors = loads && new Float32Array(stride);
   if (loads && contactColors) {
     const palette = ["#23394c","#56b7ad","#f4c06d","#b42d32"].map(v=>new THREE.Color(v));
@@ -129,51 +134,6 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     });
   }
 
-  const texture = weaveTexture();
-  const cloth = new THREE.MeshPhysicalMaterial({
-    color: onBody ? "#175458" : "#d55728", map: texture, bumpMap: texture, bumpScale: 0.00008,
-    roughness: 0.91, sheen: 0.62, sheenRoughness: 0.88, sheenColor: onBody ? "#6e9c8c" : "#d59873",
-    side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
-  });
-  // Tint the reverse face so the viewer can read open cuffs and the jacket interior.
-  cloth.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace("#include <color_fragment>",
-      "#include <color_fragment>\nif (!gl_FrontFacing) diffuseColor.rgb *= vec3(0.40, 0.30, 0.35);");
-  };
-  if (onBody) {
-    // Bind the illustrated braid to the unjoined cut perimeter, in flat-pattern metres.
-    const sewn=new Set<number>();
-    const edgeKey=(a:number,b:number)=>Math.min(a,b)*data.vertices+Math.max(a,b);
-    for(const pair of Object.values(data.seams))for(const side of [pair.side_a,pair.side_b]){
-      for(let i=1;i<side.length;i++)sewn.add(edgeKey(side[i-1],side[i]));
-    }
-    const distance=new Float32Array(data.vertices);
-    for(const [start,end] of Object.values(data.panels)){
-      const trim=outer.filter(([a,b])=>a>=start&&b<end&&!sewn.has(edgeKey(a,b)));
-      for(let i=start;i<end;i++){
-        let best=Infinity;
-        for(const [a,b] of trim){
-          const dx=frames[b*3]-frames[a*3],dy=frames[b*3+2]-frames[a*3+2];
-          const x=frames[i*3]-frames[a*3],y=frames[i*3+2]-frames[a*3+2];
-          const t=Math.max(0,Math.min(1,(x*dx+y*dy)/(dx*dx+dy*dy||1)));
-          best=Math.min(best,(x-t*dx)**2+(y-t*dy)**2);
-        }
-        distance[i]=Math.min(.08,Math.sqrt(best));
-      }
-    }
-    geometry.setAttribute("cutDistance",new THREE.BufferAttribute(distance,1));
-    cloth.onBeforeCompile=shader=>{
-      shader.vertexShader="attribute float cutDistance; varying float edgeMetres;\n"+shader.vertexShader.replace(
-        "#include <begin_vertex>","#include <begin_vertex>\nedgeMetres=cutDistance;");
-      shader.fragmentShader="varying float edgeMetres;\n"+shader.fragmentShader.replace("#include <color_fragment>",`#include <color_fragment>
-        float w=max(fwidth(edgeMetres),0.00015);
-        float border=1.-smoothstep(.006-w,.006+w,edgeMetres);
-        float cord=1.-smoothstep(.00065,.00065+w,min(abs(edgeMetres-.0015),abs(edgeMetres-.0047)));
-        diffuseColor.rgb=mix(diffuseColor.rgb,diffuseColor.rgb*.43,border);
-        diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.51,.302,.113),cord*.94);
-        if(!gl_FrontFacing)diffuseColor.rgb*=vec3(.48,.44,.47);`);
-    };
-  }
   const cut = new THREE.MeshStandardMaterial({
     vertexColors: true, side: THREE.DoubleSide, roughness: 0.93,
     polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
@@ -183,8 +143,8 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
   });
   const group = new THREE.Group();
-  const fabric = new THREE.Mesh<THREE.BufferGeometry, THREE.Material>(geometry, cloth);
-  fabric.castShadow = fabric.receiveShadow = true;
+  const fabric = dressed.mesh;
+  const woven = dressed.materials, cutAll = [cut, cut, cut], strainAll = [strain, strain, strain];
   const lattice = new THREE.MeshBasicMaterial({
     color: "#ffdfad", side: THREE.DoubleSide, wireframe: true,
     transparent: true, opacity: 0.38, depthWrite: false,
@@ -269,7 +229,7 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
           -(THREE.MathUtils.lerp(frames[a + j + 1], frames[b + j + 1], mix) + offsets[j + 1] * separation));
       }
       position.needsUpdate = true;
-      geometry.computeVertexNormals();
+      shell.update(position.array);
       geometry.computeBoundingBox();
       geometry.boundingBox!.getSize(size);
       geometry.boundingBox!.getCenter(center);
@@ -281,18 +241,18 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
       group.scale.setScalar(scale);
       group.position.copy(center).multiplyScalar(-scale);
     }
-    fabric.material = endpointView ? strain : mode === "construction" ? cut : cloth;
+    fabric.material = endpointView ? strainAll : mode === "construction" ? cutAll : woven;
     const focus = mode === "construction" && Object.hasOwn(data.panels,panel) ? panel : "";
     if (colorMode !== mode || highlighted !== focus) {
       highlighted=focus;
       colorMode = mode;
-      colors.copyArray(mode==="contact" && contactColors ? contactColors : mode==="strain" ? strainColors : panelColors);
+      const shown = (mode==="contact" && contactColors ? contactColors : mode==="strain" ? strainColors : panelColors).slice();
       if (focus) {
         const [start,end]=data.panels[focus];
         const muted=new THREE.Color("#465052");
-        for(let v=0;v<data.vertices;v++) if(v<start || v>=end) colors.setXYZ(v,muted.r,muted.g,muted.b);
+        for(let v=0;v<data.vertices;v++) if(v<start || v>=end) muted.toArray(shown,v*3);
       }
-      colors.needsUpdate = true;
+      shell.attribute("color", shown, 3, true);
     }
     const pair = mode === "construction" && seam && Object.hasOwn(data.seams, seam) ? data.seams[seam] : undefined;
     if (selected !== pair) {
@@ -303,14 +263,15 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
       lattice.opacity = pair ? 0.12 : 0.38;
     }
     wire.visible = showWire;
-    seams.visible = !endpointView && !pair;
+    // On the woven cloth a seam is shown by the cloth itself. The drawn seam lines belong to the cut-panel diagram.
+    seams.visible = mode === "construction" && !pair;
   }
   return { group, pose, seamNames, panels, strainRange: data.summary.edgeStrainPercent, dispose() {
     geometry.dispose();
     seamGeometry.dispose();
     sideA.dispose();
     sideB.dispose();
-    for (const material of [cloth, cut, strain, lattice, thread]) material.dispose();
-    texture.dispose();
+    dressed.dispose();
+    for (const material of [cut, strain, lattice, thread]) material.dispose();
   }};
 }

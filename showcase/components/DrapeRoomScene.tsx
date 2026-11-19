@@ -4,6 +4,9 @@ import { useEffect, useRef } from "react";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createGarmentMesh, type Exhibit, type StudioMode } from "./garmentMesh";
+import { dressCloth } from "./atelier3d/garment";
+import { fabrics } from "./atelier3d/weave";
+import { formMaterial, lightStudio, prepareRenderer } from "./atelier3d/studio";
 
 type Props = {
   run: string; strain: {min: number; max: number; p95: number};
@@ -19,13 +22,16 @@ async function response(path: string, signal: AbortSignal) {
 }
 
 async function readRun(run: string, strain: Props["strain"], outfit: boolean, signal: AbortSignal) {
-  const [layout, trousers, packed]: [Exhibit, Exhibit|null, ArrayBuffer] = await Promise.all([
+  const unpack = async (r: Response) => {
+    if (!r.body) throw Error("Empty garment replay.");
+    return new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  };
+  const [layout, trousers, packed, trouserBoard]: [Exhibit, Exhibit|null, ArrayBuffer, ArrayBuffer|null] = await Promise.all([
     response("/exhibits/bolero.json", signal).then(r => r.json()),
     outfit ? response("/exhibits/trousers.json", signal).then(r=>r.json()) : null,
-    response("/exhibits/poses/"+run+".bin.gz", signal).then(async r => {
-      if (!r.body) throw Error("Empty garment replay.");
-      return new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
-    }),
+    response("/exhibits/poses/"+run+".bin.gz", signal).then(unpack),
+    // The trouser study file ends with each trouser vertex's place on its flat cut piece.
+    outfit ? response("/exhibits/trouser-study/mesh.gz", signal).then(unpack) : null,
   ]);
   const header = new DataView(packed);
   const vertices = header.getUint32(0,true), indices = header.getUint32(4,true);
@@ -39,12 +45,18 @@ async function readRun(run: string, strain: Props["strain"], outfit: boolean, si
   const triangles = new Uint16Array(packed, offset, indices);
   offset += indices * 2;
   const frames = coordinates(layout.frames.length * layout.vertices * 3);
-  const lower=trousers ? new T.BufferGeometry() : null;
-  if(trousers && lower){
-    lower.setAttribute("position",new T.BufferAttribute(coordinates(trousers.vertices*3),3));
-    lower.setIndex(trousers.triangles);lower.rotateX(-Math.PI/2);lower.computeVertexNormals();
+  let lower: ReturnType<typeof dressCloth> | null = null;
+  if(trousers && trouserBoard){
+    const native=coordinates(trousers.vertices*3), upright=new Float32Array(native.length);
+    // Right-handed Z-up, front -Y → right-handed Y-up, front +Z.
+    for(let i=0;i<native.length;i+=3){upright[i]=native[i];upright[i+1]=native[i+2];upright[i+2]=-native[i+1];}
+    const board=new Int16Array(trouserBoard, trouserBoard.byteLength-4*trousers.vertices, 2*trousers.vertices);
+    lower=dressCloth({vertices:trousers.vertices,triangles:trousers.triangles,seams:Object.values(trousers.seams),panels:trousers.panels},
+      Float32Array.from(board,n=>n/10000), fabrics.rustTwill, {sewn:upright,edge:"hem"});
+    lower.update(upright);
   }
   // Packed forces follow int16 coordinates and may start on a two-byte boundary.
+  if (!outfit) offset = packed.byteLength - layout.vertices * 7;
   const view = new DataView(packed,offset);
   const forces = Float32Array.from({length:layout.vertices},(_,i)=>view.getFloat32(i*4,true));
   offset += layout.vertices*4;
@@ -85,18 +97,9 @@ export default function DrapeRoomScene(props: Props) {
     canvas.setAttribute("aria-label","Bolero on its fitted Anny form. Drag or use left and right arrows to turn. Pinch or use plus and minus to zoom. Home resets the camera.");
     el.append(canvas);
     renderer.setClearColor(0,0);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
-    renderer.outputColorSpace=T.SRGBColorSpace; renderer.toneMapping=T.ACESFilmicToneMapping;
-    renderer.toneMappingExposure=1.12; renderer.localClippingEnabled=true;
-    renderer.shadowMap.enabled=true; renderer.shadowMap.type=T.PCFShadowMap;
+    prepareRenderer(renderer); renderer.localClippingEnabled=true;
     const scene=new T.Scene();
-    scene.add(new T.HemisphereLight(0xfff5e5,0x705a54,1.65));
-    const key=new T.DirectionalLight(0xffead3,3.1); key.position.set(-1.1,1.7,1.5);key.castShadow=true;
-    key.shadow.mapSize.set(1024,1024);
-    Object.assign(key.shadow.camera,{left:-.8,right:.8,top:.8,bottom:-.8,near:.05,far:4});
-    key.shadow.camera.updateProjectionMatrix(); key.shadow.bias=-.00027;key.shadow.normalBias=.0006;
-    const rim=new T.DirectionalLight(0xf1fbff,1.7);rim.position.set(.9,.8,-1.1);
-    scene.add(key,rim);
+    const studio=lightStudio(renderer,scene,"warm");
     const camera=new T.OrthographicCamera(-1,1,1,-1,.02,6);
     const reverse=new T.OrthographicCamera(-1,1,.56,-.56,.02,6);
     const controls=new OrbitControls(camera,canvas);
@@ -104,49 +107,13 @@ export default function DrapeRoomScene(props: Props) {
     controls.enablePan=false;controls.enableZoom=false; // A wheel over the landing page still scrolls.
     controls.minPolarAngle=.65;controls.maxPolarAngle=1.73;
     controls.touches.ONE=T.TOUCH.ROTATE;
-    const plaster=new T.MeshStandardMaterial({color:"#c99777",roughness:.86});
-    const registration=new T.Matrix4();
-    const portrait=new T.TextureLoader().load("/media/drape-room-portrait.webp",()=>render());
-    portrait.colorSpace=T.SRGBColorSpace;
-    function pigment(material:T.MeshStandardMaterial,eye=false){
-      material.onBeforeCompile=shader=>{
-        shader.uniforms.faceAtlas={value:portrait};shader.uniforms.headFrame={value:registration};
-        shader.vertexShader="uniform mat4 headFrame; varying vec3 headPoint; varying vec3 headNormal;\n"+shader.vertexShader.replace(
-          "#include <begin_vertex>","#include <begin_vertex>\nheadPoint=(headFrame*modelMatrix*vec4(position,1.)).xyz; headNormal=normalize(mat3(modelMatrix)*normal);");
-        shader.fragmentShader="uniform sampler2D faceAtlas; varying vec3 headPoint; varying vec3 headNormal;\n"+shader.fragmentShader.replace("#include <color_fragment>",`#include <color_fragment>
-          vec3 p=headPoint, n=normalize(headNormal);
-          vec3 front=texture2D(faceAtlas,vec2(.25+p.x/.496,.5+(p.y-.388)/.248)).rgb;
-          vec3 side=texture2D(faceAtlas,vec2(.75-(p.z-.067)/.496,.5+(p.y-.388)/.248)).rgb;
-          float frontness=smoothstep(.18,.78,n.z)*smoothstep(.082,.111,p.z);
-          float face=smoothstep(.096,.12,p.z)*(1.-smoothstep(.043,.062,abs(p.x)));
-          frontness=max(frontness,face);
-          vec3 color=mix(side,front,${eye?"1.0":"frontness"});
-          float scalp=smoothstep(.334,.368,p.y)*smoothstep(.08,.73,-n.z);
-          vec3 crop=texture2D(faceAtlas,vec2(.82+abs(p.x)*.55,.5+(clamp(p.y,.407,.454)-.388)/.248)).rgb;
-          color=mix(color,crop*.83,scalp);
-          float skin=smoothstep(.286,.320,p.y)*smoothstep(-.015,.005,color.r-color.g);
-          diffuseColor.rgb=mix(diffuseColor.rgb,color*.88,${eye?"1.0":"skin"});`).replace("#include <opaque_fragment>",
-            `outgoingLight=mix(outgoingLight,color*1.03,${eye?"0.69":"skin*.38"});\n#include <opaque_fragment>`);
-      };
-      material.customProgramCacheKey=()=>eye?"drape-eyes":"drape-portrait";
-    }
-    pigment(plaster);
+    // The body is a tailor's form in the fitted body's own shape. Nothing is painted onto it.
+    const plaster=formMaterial();
     const bust=plaster.clone();
-    pigment(bust);
     bust.clippingPlanes=[new T.Plane(new T.Vector3(0,1,0),-.033)];bust.clipShadows=true;
     const form=new T.Mesh(new T.BufferGeometry(),[bust,plaster]);
     const empty=form.geometry;
     form.castShadow=form.receiveShadow=true;scene.add(form);
-    const eyes=new T.Group(),eyeMaterial=new T.MeshStandardMaterial({roughness:.48});
-    pigment(eyeMaterial,true);
-    const eyeGeometry=new T.SphereGeometry(.011,20,14);
-    for(const x of [-.027,.027]){
-      const eye=new T.Mesh(eyeGeometry,eyeMaterial);eye.position.set(x,.3843,.1208);eyes.add(eye);
-    }
-    eyes.matrixAutoUpdate=false;scene.add(eyes);
-    const twill=new T.MeshStandardMaterial({color:"#996540",roughness:.95,side:T.DoubleSide});
-    const trousers=new T.Mesh(empty,twill);trousers.castShadow=trousers.receiveShadow=true;
-    trousers.visible=false;scene.add(trousers);
     const brass=new T.MeshStandardMaterial({color:"#a08255",metalness:.5,roughness:.42});
     const lacquer=new T.MeshStandardMaterial({color:"#423b34",roughness:.52});
     const pedestal=new T.Group();scene.add(pedestal);
@@ -156,7 +123,7 @@ export default function DrapeRoomScene(props: Props) {
     }
     stand(.016,.018,.149,-.031,brass);stand(.095,.105,.014,-.104,lacquer,.78);
     stand(.102,.105,.003,-.112,brass,.78);
-    const groundMaterial=new T.ShadowMaterial({opacity:.095});
+    const groundMaterial=new T.ShadowMaterial({opacity:.2});
     const ground=new T.Mesh(new T.PlaneGeometry(8,8),groundMaterial);
     ground.rotation.x=-Math.PI/2;ground.position.y=-.114;ground.receiveShadow=true;scene.add(ground);
     const pad=document.createElement("canvas");pad.width=pad.height=64;
@@ -202,6 +169,8 @@ export default function DrapeRoomScene(props: Props) {
         reverse.top=halfY;reverse.bottom=-halfY;reverse.right=halfY*(w-mainWidth)/h;reverse.left=-reverse.right;
         reverse.position.set(-.52,.25,-1.75);reverse.lookAt(0,.01,.065);reverse.updateProjectionMatrix();
       }
+      form.visible=frame>=88;
+      pedestal.visible=ground.visible=form.visible&&!current.lower;
       current.garment.pose(mode,t,false,mainWidth/h);
       canvas.dataset.companion=String(companion);canvas.dataset.full=String(full);
       canvas.dataset.frame=String(Math.round(t*135));canvas.dataset.mode=mode;
@@ -214,13 +183,17 @@ export default function DrapeRoomScene(props: Props) {
       delete canvas.dataset.run;
       readRun(run,strain,outfit,controller.signal).then(result=>{
         if(controller.signal.aborted){result.dispose();return;}
-        if(current){scene.remove(current.garment.group);current.dispose();}
+        if(current){scene.remove(current.garment.group);if(current.lower)scene.remove(current.lower.mesh);current.dispose();}
         current=result;loaded=run;form.geometry=result.body;
-        registration.fromArray(latest.current.registration);
-        eyes.matrix.copy(registration).invert();eyes.matrixWorldNeedsUpdate=true;
         form.material=[result.lower?plaster:bust,plaster];
-        trousers.visible=!!result.lower;trousers.geometry=result.lower??empty;pedestal.visible=!result.lower;
-        ground.visible=!result.lower;footShadow.visible=!!result.lower;footShadow.position.y=result.floor-.001;
+        if(result.lower)scene.add(result.lower.mesh);
+        pedestal.visible=!result.lower;
+        // A whole figure stands on the floor; the bust alone stands on its pedestal.
+        ground.position.y=result.lower?result.floor-.0005:-.114;
+        footShadow.visible=!!result.lower;footShadow.position.y=result.floor+.0005;
+        result.body.computeBoundingSphere();
+        const subject=result.body.boundingSphere!;
+        studio.frame(result.lower?subject.center:new T.Vector3(0,.2,.06),result.lower?subject.radius:.42);
         scene.add(result.garment.group);update();
         latest.current.onReady(run);
       }).catch(()=>{if(!controller.signal.aborted)latest.current.onError(run);});
@@ -261,9 +234,9 @@ export default function DrapeRoomScene(props: Props) {
       request?.abort();observer.disconnect();controls.removeEventListener("change",render);controls.dispose();
       canvas.removeEventListener("keydown",keys);canvas.removeEventListener("dblclick",home);canvas.removeEventListener("webglcontextlost",lost);
       canvas.removeEventListener("touchstart",start);canvas.removeEventListener("touchmove",move);canvas.removeEventListener("touchend",end);
-      current?.dispose();empty.dispose();bust.dispose();plaster.dispose();portrait.dispose();eyeMaterial.dispose();eyeGeometry.dispose();twill.dispose();ground.geometry.dispose();groundMaterial.dispose();
+      current?.dispose();empty.dispose();bust.dispose();plaster.dispose();ground.geometry.dispose();groundMaterial.dispose();
       shadowMap.dispose();footInk.dispose();footShadow.geometry.dispose();
-      pedestal.children.forEach(m=>(m as T.Mesh).geometry.dispose());brass.dispose();lacquer.dispose();key.shadow.dispose();
+      pedestal.children.forEach(m=>(m as T.Mesh).geometry.dispose());brass.dispose();lacquer.dispose();studio.dispose();
       renderer.dispose();renderer.forceContextLoss();canvas.remove();draw.current=()=>{};change.current=()=>{};
       if(window.ftxPoseCamera===capture)delete window.ftxPoseCamera;
     };
