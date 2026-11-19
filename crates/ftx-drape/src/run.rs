@@ -1037,6 +1037,19 @@ fn add_run_fields(
     if opts.compression < 1.0 {
         o.insert("compression_factor".into(), json!(opts.compression));
     }
+    // A seam's declared band of pleats is likewise an authored model of folds the mesh does not resolve.
+    let bands: Vec<Value> = mesh
+        .seams
+        .iter()
+        .filter_map(|s| {
+            s.gather_relief.map(|band| {
+                json!({"seam": s.id, "relief_mm": band.relief_mm, "compression": band.compression})
+            })
+        })
+        .collect();
+    if !bands.is_empty() {
+        o.insert("gather_relief".into(), json!(bands));
+    }
     o.insert("relax_iters".into(), json!(scene.start.relax_iterations));
     if let Some(original) = scene.start_backtracked_from {
         o.insert(

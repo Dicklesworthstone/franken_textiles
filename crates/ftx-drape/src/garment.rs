@@ -31,6 +31,20 @@ pub struct SeamRecord {
     pub side_b: Vec<usize>,
     /// `seam.ratio` (default 1).
     pub ratio: f64,
+    /// `seam.gather_relief_mm` and `seam.gather_compression` when the seam declares either (spec 04 §5.4,
+    /// native extension): the depth of the band of pleats below a gathered seam and the cloth's compression
+    /// factor inside it. `None` is the reference's gather zone.
+    pub gather_relief: Option<GatherRelief>,
+}
+
+/// A gathered seam's own band of pleats (spec 04 §5.4, native extension).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GatherRelief {
+    /// Distance from the seam's long side over which the cloth keeps the floor factor, before the
+    /// reference's [`crate::start::GATHER_ZONE_MM`] ramp back to the cloth's own factor begins. Millimetres.
+    pub relief_mm: f64,
+    /// Compression factor at the floor, in (0, 1]. The reference's is [`crate::start::GATHER_COMPRESSION`].
+    pub compression: f64,
 }
 
 /// The garment mesh: 2D rest positions (mm, after `sim_scale`), CCW triangles and the sewing records.
@@ -361,6 +375,40 @@ pub fn build_garment(pattern: &Pattern, spacing: f64) -> Result<GarmentMesh, Ref
             None => 1.0,
             Some(v) => number(v, &format!("seam {} ratio", s.id_text()))?,
         };
+        let declared = |key: &str| {
+            s.0.get(key)
+                .map(|v| number(v, &format!("seam {} {key}", s.id_text())))
+                .transpose()
+        };
+        let gather_relief = match (
+            declared("gather_relief_mm")?,
+            declared("gather_compression")?,
+        ) {
+            (None, None) => None,
+            (relief, compression) => {
+                let relief = GatherRelief {
+                    relief_mm: relief.unwrap_or(0.0),
+                    compression: compression.unwrap_or(crate::start::GATHER_COMPRESSION),
+                };
+                let valid = relief.relief_mm.is_finite()
+                    && relief.relief_mm >= 0.0
+                    && relief.compression > 0.0
+                    && relief.compression <= 1.0;
+                if !valid {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "seam {}: gather_relief_mm must be a length of 0 or more and gather_compression a factor in (0, 1] (got {} and {})",
+                            s.id_text(),
+                            relief.relief_mm,
+                            relief.compression
+                        ),
+                    )
+                    .repair("Omit both for the reference's gather zone: 3 % compression at the seam, back to the cloth's own within 50 mm."));
+                }
+                Some(relief)
+            }
+        };
         seam_info.push((
             s.id_text(),
             ia.id.clone(),
@@ -369,6 +417,7 @@ pub fn build_garment(pattern: &Pattern, spacing: f64) -> Result<GarmentMesh, Ref
             eb,
             rev,
             ratio,
+            gather_relief,
         ));
     }
 
@@ -428,7 +477,7 @@ pub fn build_garment(pattern: &Pattern, spacing: f64) -> Result<GarmentMesh, Ref
     }
 
     let pos = |id: &str| ids.iter().position(|x| *x == id).unwrap_or(0);
-    for (sid, ia, ea, ib, eb, rev, ratio) in seam_info {
+    for (sid, ia, ea, ib, eb, rev, ratio, gather_relief) in seam_info {
         let pa = path_indices(&mesh.index, &ia, &ea);
         let mut pb = path_indices(&mesh.index, &ib, &eb);
         if rev {
@@ -456,6 +505,7 @@ pub fn build_garment(pattern: &Pattern, spacing: f64) -> Result<GarmentMesh, Ref
             side_a: pa,
             side_b: pb,
             ratio,
+            gather_relief,
         });
     }
     for inst in &insts {
@@ -634,6 +684,85 @@ mod tests {
         let refusal = simulation_scope(&Pattern::new(raw)).unwrap_err();
         assert!(refusal.message.contains("nothing to drape"));
         assert!(!refusal.repairs.is_empty());
+    }
+
+    /// A skirt top gathered 1.3 to 1 into a band. A seam that declares nothing has no relief field, so the
+    /// scene keeps the reference's weights. A declared 100 mm band holds weight 0 and its own floor for
+    /// 100 mm, is half way back 25 mm later and is plain cloth by the hem.
+    #[test]
+    fn a_gathered_seam_may_declare_its_band_of_pleats() {
+        let pattern = |seam: Value| {
+            Pattern::new(json!({
+                "schema": "fabric-pattern/1", "units": "mm",
+                "pieces": [rect("skirt", 260.0, 300.0), rect("band", 200.0, 60.0)],
+                "seams": [seam]
+            }))
+        };
+        let gathered = json!({"id": "g", "a": "skirt/top", "b": "band/bottom", "ratio": 1.3});
+        let plain = build_garment(&pattern(gathered.clone()), 20.0).unwrap();
+        assert_eq!(plain.seams[0].gather_relief, None);
+        assert!(crate::start::gather_relief(&plain).is_none());
+
+        let mut seam = gathered.clone();
+        seam["gather_relief_mm"] = json!(100.0);
+        seam["gather_compression"] = json!(0.002);
+        let mesh = build_garment(&pattern(seam), 20.0).unwrap();
+        assert_eq!(
+            mesh.seams[0].gather_relief,
+            Some(GatherRelief {
+                relief_mm: 100.0,
+                compression: 0.002
+            })
+        );
+        // The start state's weights are the reference's whether or not a band is declared.
+        assert_eq!(
+            crate::start::gather_weights(&mesh),
+            crate::start::gather_weights(&plain)
+        );
+        let (weights, floors) = crate::start::gather_relief(&mesh).unwrap();
+        let (lo, hi) = mesh.inst_range[0];
+        // Distance is to the nearest sample of the seam's long side (the skirt top), as in the reference.
+        let seam_samples = &mesh.seams[0].side_a;
+        let mut seen = [false; 3];
+        for v in lo..hi {
+            let d = seam_samples
+                .iter()
+                .map(|&j| {
+                    let step = mesh.verts2d[v] - mesh.verts2d[j];
+                    step.x.hypot(step.y)
+                })
+                .fold(f64::INFINITY, f64::min);
+            let want = ((d - 100.0) / 50.0).clamp(0.0, 1.0);
+            assert!((weights[v] - want).abs() < 1e-9, "weight at {d} mm");
+            assert_eq!(
+                floors[v],
+                if d < 150.0 {
+                    0.002
+                } else {
+                    crate::start::GATHER_COMPRESSION
+                }
+            );
+            seen[0] |= d > 1.0 && d <= 100.0;
+            seen[1] |= d > 100.0 && d < 150.0;
+            seen[2] |= d >= 150.0;
+        }
+        assert_eq!(
+            seen, [true; 3],
+            "the mesh samples the band, the ramp and the plain cloth"
+        );
+        let (band_lo, band_hi) = mesh.inst_range[1];
+        assert!(weights[band_lo..band_hi].iter().all(|&w| w == 1.0));
+
+        for (key, bad) in [
+            ("gather_relief_mm", json!(-1.0)),
+            ("gather_compression", json!(0.0)),
+            ("gather_compression", json!(1.5)),
+        ] {
+            let mut seam = gathered.clone();
+            seam[key] = bad;
+            let refusal = build_garment(&pattern(seam), 20.0).unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::OutOfRange, "{key}");
+        }
     }
 
     /// Two rectangles sewn right edge (curved) to left edge: matched samples, CCW triangles covering

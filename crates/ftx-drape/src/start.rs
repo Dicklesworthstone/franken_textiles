@@ -183,12 +183,35 @@ pub fn edge_strain(x: &[Vec3], rest2d: &[Vec2], edges: &[(usize, usize)]) -> Vec
 /// 0.15), rising to 1 at [`GATHER_ZONE_MM`] from it, 1 elsewhere.
 #[must_use]
 pub fn gather_weights(mesh: &GarmentMesh) -> Vec<f64> {
+    gather_field(mesh, false).0
+}
+
+/// The cloth model's compression weight and floor per vertex when a gathered seam declares its own band of
+/// pleats (`gather_relief_mm`, `gather_compression`; spec 04 §5.4, native extension), `None` when none does.
+/// Within `gather_relief_mm` of such a seam's long side the weight stays 0, then rises to 1 over
+/// [`GATHER_ZONE_MM`]; the floor is the seam's `gather_compression` wherever that seam sets the weight and
+/// [`GATHER_COMPRESSION`] elsewhere. The start state keeps the reference's [`gather_weights`].
+#[must_use]
+pub fn gather_relief(mesh: &GarmentMesh) -> Option<(Vec<f64>, Vec<f64>)> {
+    mesh.seams
+        .iter()
+        .any(|s| s.gather_relief.is_some())
+        .then(|| gather_field(mesh, true))
+}
+
+/// Weight and floor per vertex. With `declared` false every seam uses the reference's zone and floor.
+fn gather_field(mesh: &GarmentMesh, declared: bool) -> (Vec<f64>, Vec<f64>) {
     let r2 = &mesh.verts2d;
     let mut w = vec![1.0_f64; r2.len()];
+    let mut floor = vec![GATHER_COMPRESSION; r2.len()];
     for s in &mesh.seams {
         if (s.ratio - 1.0).abs() <= 0.15 {
             continue;
         }
+        let (relief, low) = match s.gather_relief.filter(|_| declared) {
+            Some(band) => (band.relief_mm, band.compression),
+            None => (0.0, GATHER_COMPRESSION),
+        };
         let length = |side: &[usize]| {
             let seg: Vec<f64> = side
                 .windows(2)
@@ -205,10 +228,14 @@ pub fn gather_weights(mesh: &GarmentMesh) -> Vec<f64> {
                 .iter()
                 .map(|&j| norm2(r2[i] - r2[j]))
                 .fold(f64::INFINITY, f64::min);
-            w[i] = w[i].min((d / GATHER_ZONE_MM).clamp(0.0, 1.0));
+            // With no relief this is the reference's `d / 50 mm` exactly (`d − 0` is `d`).
+            let here = ((d - relief) / GATHER_ZONE_MM).clamp(0.0, 1.0);
+            if here < w[i] {
+                (w[i], floor[i]) = (here, low);
+            }
         }
     }
-    w
+    (w, floor)
 }
 
 /// Sewing groups: connected components of the sewing pairs, each sorted, ordered by smallest member.

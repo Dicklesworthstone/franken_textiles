@@ -966,6 +966,8 @@ fn build_scene_inner(
     let mut source_triangles = Vec::new();
     let mut tri_bending = Vec::new();
     let low = GATHER_COMPRESSION.min(compression);
+    // A gathered seam that declares its own band of pleats replaces the weights and the floor (spec 04 §5.4).
+    let relief = crate::start::gather_relief(&mesh);
     for f in &mesh.faces {
         let t = f.map(|v| weld[v]);
         if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
@@ -1013,6 +1015,14 @@ fn build_scene_inner(
         if casing_instances.contains(&mesh.owner[f[0]]) {
             // a casing at its cut length, drawn up by its elastic: gathered all through
             tri_compression.push(low);
+        } else if let Some((weights, floors)) = &relief {
+            let w = f.iter().map(|&v| weights[v]).sum::<f64>() / 3.0;
+            let floor = f
+                .iter()
+                .map(|&v| floors[v])
+                .fold(f64::INFINITY, f64::min)
+                .min(compression);
+            tri_compression.push(floor + w * (compression - floor));
         } else {
             let w = f.iter().map(|&v| start.gather_weights[v]).sum::<f64>() / 3.0;
             tri_compression.push(low + w * (compression - low));

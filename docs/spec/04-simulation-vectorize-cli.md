@@ -431,9 +431,21 @@ The report records `fabric: {areal_kg_m2, tensile_N_m, bending_Nm}` and `area_m2
   50, 200 and 300 mm gave centre-front waist clearances of 92.8, 101.0 and 100.7 mm (1 mm cloth contact), and a
   zone longer than the skirt lowered the hem about 15 mm and kept the step. The step is carried by hoop
   compression: the hanging skirt pulls its rim inward with about 1 N/m, and 3 % of an 8,000 N/m cloth over a
-  10 cm band resists with about 20 N/m. No zone-length option was added. `ftx drape --compression` (a native
-  option, default the reference's 1) softens compression everywhere instead: at 0.10 nothing changed, at 0.02 the
-  hem fell a further 6 to 16 mm and the skirt hangs as an A-line from the front, still stepped in profile.
+  10 cm band resists with about 20 N/m. `ftx drape --compression` (a native option, default the reference's 1)
+  softens compression everywhere instead: at 0.10 nothing changed, at 0.02 the hem fell a further 6 to 16 mm and
+  the skirt hangs as an A-line from the front, still stepped in profile (99.2 mm at centre front); at 0.001 the
+  step went and the whole skirt crumpled.
+- **Native extension: a gathered seam's own band of pleats.** A seam may declare `gather_relief_mm` (a length
+  of 0 or more, default 0) and `gather_compression` (a factor in (0, 1], default 0.03); anything else refuses
+  (`out_of_range`). In the cloth model, and only there, such a seam's weight becomes
+  `w = clip((d − gather_relief_mm) / 50 mm, 0, 1)` and the floor under it `gather_compression` in place of
+  0.03, so the cloth stays that free to shorten for the declared depth and returns to its own stiffness over the
+  following 50 mm. The start state, its relaxation and `gather_zone_vertices` keep the reference's weights. A
+  seam that declares neither behaves exactly as the reference, and so does every fixture. Both numbers are
+  authored: they stand for pleats finer than the mesh, are not resolved folds, and have no measured source; a
+  report made with them lists each such seam under `gather_relief`. On the skirt above, 120 mm at 0.002 let it
+  leave the waist as a bell: clearance 84.7 mm at centre front and 25.6 mm at centre back, against 92.8 and
+  45.3 mm. The reference's own slide check then gates on the skirt coming down 116 mm under gravity.
 - **Report:** `gather_zone_vertices` = the count of vertices with w < 1.
 - **Evidence:** without gather zones, the 872 mm gathered trouser top pushed its 530 mm casing open by 40 % and the
   trousers slid off. With zones, gathered bands finish 2–10 % over their rest length; without, +11 to +59 %.
