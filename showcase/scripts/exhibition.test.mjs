@@ -172,6 +172,8 @@ test("strip controls and readouts agree with the exported Rust states", async ()
     await p.goto(new URL("/experiments/cylinder/",site).href);
     await p.getByRole("button",{name:"Compressed",exact:true}).click();
     assert.deepEqual(await p.locator(".rig-refinement b").allTextContents(),["-0.63 N","-0.97 N"]);
+    await p.getByText("Solver notes and residuals",{exact:true}).click();
+    assert.ok(await p.getByText("48 × 12 mesh: the solve did not converge.",{exact:true}).isVisible());
     await p.getByRole("button",{name:"Mid-section",exact:true}).click();
     assert.equal(await p.getByRole("button",{name:"Mid-section",exact:true}).getAttribute("aria-pressed"),"true");
   } finally {await p.close();}

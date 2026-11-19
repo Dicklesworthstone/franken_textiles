@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def solve(binary, kind, request, scratch):
     source = scratch / f"{kind}.json"
     source.write_text(json.dumps(request), encoding="utf-8")
-    result = subprocess.run([binary, f"{kind}-experiment", source], check=True, stdout=subprocess.PIPE)
+    result = subprocess.run([binary, f"{kind}-experiment", source], check=True, capture_output=True)
     return json.loads(result.stdout)
 
 
@@ -44,8 +44,22 @@ if __name__ == "__main__":
         cylinder["fixture"]["cells"]=[24,8]
         coarser=solve(args.binary,"cylinder",cylinder,scratch)
         assert [s["time_s"] for s in detailed["states"]]==[s["time_s"] for s in coarser["states"]]
+        further_meshes = []
+        for cells in ([36, 10], [40, 8], [48, 12]):
+            cylinder["fixture"]["cells"] = cells
+            try:
+                run = solve(args.binary, "cylinder", cylinder, scratch)
+            except subprocess.CalledProcessError as error:
+                refusal = json.loads(error.stderr)["refusal"]
+                if refusal["code"] != "not_converged":
+                    raise
+                further_meshes.append({"cells": cells, "refusal": refusal})
+            else:
+                further_meshes.append({"cells": cells, "inputSha256": run["input_sha256"],
+                    "readings": [{"time": s["time_s"], "force": s["upper_force_n"]} for s in run["states"]]})
         save(args.output/"cylinder-refinement.json",{"cells":[24,8],"inputSha256":coarser["input_sha256"],
-             "readings":[{"time":s["time_s"],"force":s["upper_force_n"]} for s in coarser["states"]]})
+             "readings":[{"time":s["time_s"],"force":s["upper_force_n"]} for s in coarser["states"]],
+             "additionalMeshes":further_meshes})
         strip = json.loads((ROOT / "examples/strip-identification/synthetic-forward.json").read_text())
         strip["material"]=fabric
         strip["controls"]["max_newton"]=300

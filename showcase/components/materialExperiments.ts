@@ -31,14 +31,20 @@ export async function loadExperiment(kind: Rig, signal: AbortSignal): Promise<Ex
       fixture: Fixture & { nominal_free_height_m: number; grip_slip_force_limit_n: number } }; protocol_audit: { discrepancies: string[] } } = await response.json();
     const second=await fetch("/materials/cylinder-refinement.json",{signal});
     if(!second.ok)throw Error("The mesh comparison could not be loaded.");
-    const coarse:{readings:{time:number;force:number}[]}=await second.json();
+    const coarse:{
+      readings:{time:number;force:number}[];
+      additionalMeshes?:{cells:number[];refusal?:{code:string}}[];
+    }=await second.json();
     const comparison=r.states.map((state,i)=>{const row=coarse.readings[i];
       if(row?.time!==state.time_s)throw Error("Different experiment schedules.");return row.force;});
     return { kind, comparison, specimens: [{ name: "Cylinder", cells: r.input.fixture.cells, triangles: r.triangles.flat(),
       frames: r.states, width: r.isometric_mesh_radius_m * 2000, height: r.input.fixture.nominal_free_height_m * 1000 }],
       readings: r.states.map(s => ({ coordinate: s.time_s, forces: [s.upper_force_n], widths: [],
         torque: s.upper_torque_nm, angle: s.rotation_deg, gap: s.holder_separation_m * 1000, slip: s.slip_limit_exceeded, residual: s.free_dynamic_residual_n })),
-      limit: r.input.fixture.grip_slip_force_limit_n, notes: r.protocol_audit.discrepancies };
+      limit: r.input.fixture.grip_slip_force_limit_n, notes: [
+        ...(coarse.additionalMeshes ?? []).map(run => `${run.cells.join(" × ")} mesh: ${run.refusal ? "the solve did not converge." : "the full loading cycle completed."}`),
+        ...r.protocol_audit.discrepancies,
+      ] };
   }
   const runs: { name: string; report: { input: { fixture: Fixture }; states: StripState[] } }[] = await response.json();
   const source=await fetch("/materials/jersey-readings.json",{signal});

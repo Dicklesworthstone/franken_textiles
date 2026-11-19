@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const revisions:Record<string,string>=JSON.parse(process.env.NEXT_PUBLIC_FILM_REVISIONS??"{}");
-export function filmFile(id:string,ext:"mp4"|"jpg"="mp4") {
-  const name=id+"."+ext;
-  return "/media/"+name+(revisions[name]?"?v="+revisions[name]:"");
+const revisions: Record<string, string> = JSON.parse(process.env.NEXT_PUBLIC_FILM_REVISIONS ?? "{}");
+export function filmFile(id: string, ext: "mp4" | "jpg" = "mp4") {
+  const name = `${id}.${ext}`;
+  return revisions[name] ? `/media/${name}?v=${revisions[name]}` : `/media/${name}`;
 }
 
 export function PlaybackMark({playing=false}: {playing?:boolean}) {

@@ -67,7 +67,7 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
           <div className={`rig-stage ${kind}`}>
             {failed ? <InlineFilm controls id={`rig-${kind}`} title={meta.title}/> :
               data ? <Scene data={data} step={step} mesh={mesh} focus={focus} camera={camera} onFailure={onFailure}/> :
-                <img className="rig-poster" src={`/media/rig-${kind}.jpg`} alt="Rendered view of the specimen holders"/>}
+                <img className="rig-poster" src={filmFile("rig-"+kind,"jpg")} alt="Rendered view of the specimen holders"/>}
             {!failed && <><span className="rig-plate mono">{cylinder?"Torsion · 50 mm gauge":"Tensile test · 100 mm gauge"}</span>
               <div className="rig-annot">{cylinder ? r && (camera.name==="Top"?<>Dashed · mounted <b>Solid · current section</b></>:<><b>{fmt(r.gap,1)} mm</b> between grips · {fmt(r.angle,1)}° twist</>) :
                 focus===-1?"Warp · Weft · Bias":data&&r&&<><b>{data.specimens[focus].name} cut</b> · {fmt(r.widths[focus],2)} mm at centre</>}</div></>}
@@ -99,7 +99,7 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
       <div className="rig-notes"><div><h2>About the specimen</h2><p>{cylinder ?
         "The grips close to 45 mm on a 50 mm tube. Select Mid-section to look into the folds halfway up its height. Both runs use the coupled outfit’s synthetic fabric, with cloth self-contact enabled." :
         "The three strips use the same material as the coupled outfit, cut along the warp, weft or bias. A 16 × 24 mesh gives each strip room to narrow between the fixed-width jaws. Each slider position is a separate planar equilibrium. This test covers tension and in-plane contraction."}</p>
-        {r&&data?.comparison&&<p className="rig-refinement">At {fmt(r.coordinate,3)} s, the upper grip reaction is <b>{fmt(r.forces[0],2)} N</b> on the displayed 32 × 8 mesh and <b>{fmt(data.comparison[step],2)} N</b> on a 24 × 8 mesh. <a href="/materials/cylinder-refinement.json" download>Comparison readings ↓</a></p>}
+        {r&&data?.comparison&&<p className="rig-refinement">At {fmt(r.coordinate,3)} s, the upper grip reaction is <b>{fmt(r.forces[0],2)} N</b> on the displayed 32 × 8 mesh and <b>{fmt(data.comparison[step],2)} N</b> on a 24 × 8 mesh. The predicted load at peak compression still depends on the mesh. <a href="/materials/cylinder-refinement.json" download>Comparison readings ↓</a></p>}
         {data && r && <details><summary>Solver notes and residuals</summary><p>Maximum free force residual at this state: {r.residual.toExponential(2)} N.</p>
           {data.notes.length>0 && <ul>{data.notes.map(note=><li key={note}>{note}</li>)}</ul>}
           <p>The blue surface uses the Rough Linen material photographed by colormass and processed by Rico Cilliers. Its color and yarn relief are illustrative. <a href="https://polyhaven.com/a/rough_linen">Poly Haven scan ↗</a></p></details>}{!cylinder&&data?.bench&&r&&<section className="rig-measured"><p className="kicker">Measured specimen · SJ1</p><h3>What did the lab measure?</h3>
@@ -108,7 +108,8 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
             <a href="/materials/jersey-readings.json" download>Source rows and license ↓</a> · <a href="https://doi.org/10.1145/3528223.3530167">Read the experiment ↗</a></section>}</div>
         <div className="rig-links"><figure className="exhibit-film"><InlineFilm controls id={`rig-${kind}`} title={meta.title+" film"}/><figcaption>{cylinder?"The full loading cycle":"Three cuts under tension"}</figcaption></figure>
           <a href={filmFile("rig-"+kind)} download>Download film ↓</a><a href={`/materials/${kind}.json`} download>Download solver report{cylinder?"":"s"} ↓</a>
-          <a href={`/experiments/${cylinder?"strip":"cylinder"}/`}>{experiments[cylinder?"strip":"cylinder"].title} →</a></div></div>
+          <a href={`/experiments/${cylinder?"strip":"cylinder"}/`}>{experiments[cylinder?"strip":"cylinder"].title} →</a>
+          <a href="/sections/studies/?outfit=joint#drape-room">See the same fabric in a jacket and trousers →</a></div></div>
     </div>
   </main><SiteFooter/></>;
 }
