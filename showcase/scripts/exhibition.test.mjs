@@ -18,7 +18,7 @@ test("every construction study pairs a full-size cut with its three film chapter
     await page.goto(site);
     const stage=page.locator("#construction"),select=stage.getByRole("combobox");
     const choices=await select.locator("option").evaluateAll(options=>options.map(o=>o.value));
-    assert.equal(choices.length,9);
+    assert.equal(choices.length,10);
     for(const garment of choices){
       await select.selectOption(garment);
       const motion=stage.locator(`[data-garment="${garment}"]`);
@@ -151,6 +151,8 @@ test("each gallery garment has a downloadable full-size sewing PDF", async () =>
       }
     }
     await page.goto(new URL("/sections/films/",site).href);
+    await page.getByRole("button",{name:/Lightly eased sundress/}).click();
+    assert.ok(await page.locator('.screening a[href="/exhibits/sundress/light-A4.pdf"]').isVisible());
     await page.getByRole("button",{name:/The hussar’s cabinet/}).click();
     assert.ok(await page.locator('.screening a[href="/patterns/hussar-yellow.pdf"]').isVisible());
     await page.getByRole("button",{name:/Anatomy of a seam/}).click();
@@ -257,6 +259,25 @@ test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", asy
     assert.equal(await p.locator(".sd-making .mk-pattern path").count(),summary.instances.length);
     assert.deepEqual(await p.locator(".sd-making .mk-steps button").allTextContents(),["1Cut flat","2Wrapped round the form","3Seams sewn","4Hung under gravity"]);
     assert.equal(await p.locator(".sd-making .mk-steps .is-now").textContent(),"1Cut flat");
+    const cutSelector=p.getByRole("group",{name:"Skirt waist cut"});
+    const sections=[];
+    for(const [id,title] of [["light","Lightly eased waist"],["dress","Gathered waist"]]){
+      await cutSelector.getByRole("button",{name:new RegExp(title)}).click();
+      const base=new URL("/exhibits/sundress/"+id,site).href;
+      const native=await (await p.request.get(base+"-summary.json")).json();
+      await sewn.waitFor(); await p.locator(".sd-making .mk-steps button").nth(3).click();
+      await p.waitForFunction(frame=>document.querySelector(".sd-making canvas")?.dataset.frame===String(frame),
+        Object.values(native.phases).reduce((a,b)=>a+b)-1);
+      assert.equal(await p.locator("#sewn h3").textContent(),title);
+      const section=await (await p.request.get(base+"-section.json")).json();
+      sections.push(section); assert.ok((await p.locator(".sd-slice").textContent()).includes(section.frontGapMm+" mm"));
+      const href=await p.getByRole("link",{name:"Full-size A4 pattern for this cut"}).getAttribute("href");
+      const pdf=await p.request.get(new URL(href,site).href);
+      assert.equal((await pdf.body()).subarray(0,5).toString(),"%PDF-");
+    }
+    assert.equal(sections[0].heightMm,sections[1].heightMm);
+    assert.deepEqual(sections[0].body,sections[1].body);
+    assert.notDeepEqual(sections[0].cloth,sections[1].cloth);
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth),390);
   } finally {await p.close();}
 });

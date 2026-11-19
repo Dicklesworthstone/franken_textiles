@@ -227,7 +227,7 @@ export default function Exhibition({section}: {section?: string}) {
     <SiteHeader skipTo="#exhibition"/>
     <main id="exhibition">
       {!section && <><ExhibitionCover/><ExhibitionFeatures/></>}
-      {section==="wardrobe"&&<ConstructionStudy choices={["sundress","blue","yellow","column","flare","fez"]}/>}
+      {section==="wardrobe"&&<ConstructionStudy choices={["sundress","eased","blue","yellow","column","flare","fez"]}/>}
       {section==="studies"&&<ConstructionStudy choices={["bolero","trousers","ensemble"]}/>}
       {show("studies") && <DrapeRoom/>}
       {!section && <section className="dr-index" aria-label="Explore more of the studio"><div className="wrap">
@@ -244,7 +244,7 @@ export default function Exhibition({section}: {section?: string}) {
           <div className="material-cover"><InlineFilm id={"construction-"+(s.id==="hussar"?"blue":"sundress")} title={s.title}/>
             <a className="card-open" aria-label={"Explore "+s.title} href={`/wardrobe/${s.id}/`}><span className="launch"><Arrow diagonal/></span></a></div>
           <a className="material-caption" href={`/wardrobe/${s.id}/`}><div className="mono">{s.detail}</div><h3>{s.title}</h3><span>{s.action} <Arrow/></span></a>
-          <GarmentPatterns exhibit={s.id}/>
+          <GarmentPatterns exhibit={s.id==="sundress"?"sundress-cuts":s.id}/>
         </article>)}</div>
       </div></section>}
       {(show("studio") || studio) && <LabBench initialStation={studio} heading={Heading}/>}

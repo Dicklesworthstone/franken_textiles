@@ -82,8 +82,9 @@ def fez():
 def load(name, native):
     if name == "fez":
         return fez()
-    if name in ("sundress","blue","yellow"):
-        source = PUBLIC / "exhibits" / ("sundress/dress" if name=="sundress" else "hussar/dolman")
+    packed = {"sundress":"sundress/dress", "eased":"sundress/light", "blue":"hussar/dolman", "yellow":"hussar/dolman"}
+    if name in packed:
+        source = PUBLIC / "exhibits" / packed[name]
         layout = document(source.with_suffix(".json"))
         data = gzip.decompress(source.with_suffix(".gz").read_bytes())
         nb,ni,n,nf = struct.unpack_from("<4I",data)
@@ -176,10 +177,10 @@ def render(args):
     scene.world.node_tree.nodes["Background"].inputs[0].default_value=(.72,.77,.85,1)
     scene.world.node_tree.nodes["Background"].inputs[1].default_value=.20
     scene.view_settings.look="AgX - Medium High Contrast"
-    colors={"sundress":(.16,.38,.29),"blue":(.013,.022,.049),"yellow":(.019,.019,.022),
+    colors={"sundress":(.16,.38,.29),"eased":(.16,.38,.29),"blue":(.013,.022,.049),"yellow":(.019,.019,.022),
         "trousers":(.052,.103,.137),"bolero":(.27,.042,.028),"ensemble":(.03,.14,.105),
         "fez":(.26,.017,.021),"column":(.28,.16,.09),"flare":(.32,.15,.07)}
-    textile={"sundress":"atelier/madder.webp","flare":"atelier/madder.webp","column":"atelier/glen-check.webp"}.get(name)
+    textile={"sundress":"atelier/madder.webp","eased":"atelier/madder.webp","flare":"atelier/madder.webp","column":"atelier/glen-check.webp"}.get(name)
     fabric=material("Woven face",colors[name],True,textile,.16 if name=="column" else .30)
     cloth=surface("Cut pieces",initial,tri,fabric)
     paper=material("Pattern tissue",(.68,.46,.245))
@@ -332,7 +333,7 @@ def render(args):
 
 if __name__=="__main__":
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument("garment",choices=["sundress","blue","yellow","bolero","trousers","column","flare","ensemble","fez"])
+    p.add_argument("garment",choices=["sundress","eased","blue","yellow","bolero","trousers","column","flare","ensemble","fez"])
     p.add_argument("out",type=Path);p.add_argument("native",type=Path,nargs="?");p.add_argument("--proof",action="store_true")
     p.add_argument("--samples",type=int,default=5)
     args=p.parse_args(sys.argv[sys.argv.index("--")+1:]);args.out.mkdir(exist_ok=True,parents=True);render(args)

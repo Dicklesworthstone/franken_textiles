@@ -189,10 +189,12 @@ def compact(data):
     return (json.dumps(data,separators=(",",":"),allow_nan=False)+"\n").encode()
 
 
-def waist_section(body, body_faces, cloth, cloth_faces, waist_edges, waist_height):
-    """Cut both endpoint surfaces with one horizontal plane just below the whole bound edge."""
+def waist_section(body, body_faces, cloth, cloth_faces, waist_edges, waist_height, height_above_sole_mm=None):
+    """Intersect both endpoint surfaces just below the bound edge, or at a common comparison height."""
     rim = cloth[np.unique(np.concatenate(waist_edges))]
-    height = float(rim[:,2].min()) - .008
+    floor = float(body[:,2].min()) * 1000
+    height = (float(rim[:,2].min()) - .008 if height_above_sole_mm is None
+              else (height_above_sole_mm + floor) / 1000)
     def segments(vertices, faces):
         triangles = vertices[faces,:3]
         plane = triangles[:,:,2] - height
@@ -238,7 +240,6 @@ def waist_section(body, body_faces, cloth, cloth_faces, waist_edges, waist_heigh
         a,b=cross[:,0],cross[:,1]
         intercept=sign*(a[:,1]-a[:,0]*(b[:,1]-a[:,1])/(b[:,0]-a[:,0]))
         return intercept[intercept>0].min()
-    floor = body[:,2].min()*1000
     return {"body":pack(skin),"cloth":pack(sewn),"heightMm":round(height*1000-floor,1),
             "frontGapMm":round(float(depth(sewn,-1)-depth(skin,-1)),1),
             "backGapMm":round(float(depth(sewn,1)-depth(skin,1)),1),

@@ -6,6 +6,7 @@ import "./construction.css";
 
 const studies = {
   sundress: {name:"Garden sundress", cut:"Four pieces", text:"The front and back bodices meet at the shoulders. The longer skirt edges gather into their shorter waist seams.", pdf:"/sundress/pattern-A4.pdf", href:"/wardrobe/sundress/#sewn"},
+  eased: {name:"Lightly eased sundress", cut:"Four pieces · revised waist", text:"Each skirt panel loses 97.5 mm at the waist while keeping its original hem. Follow the narrower cut onto the same bodice and wearer.", pdf:"/exhibits/sundress/light-A4.pdf", href:"/wardrobe/sundress/?garment=eased#sewn"},
   column: {name:"Column skirt", cut:"Six gores · 68 cm form", text:"Six long curved panels close around the high hip. Their nearly straight lower edges give the column its narrow sweep.",pdf:"/atelier/column.pdf", href:"/studies/skirt/?cut=column&waist=680#skirt-atelier"},
   flare: {name:"Flared skirt", cut:"Six gores · 68 cm form", text:"Each gore widens from the waist to the hem. Joined edge to edge, the six pieces give the hem 168 cm of sweep.",pdf:"/atelier/flare.pdf", href:"/studies/skirt/?cut=flare&waist=680#skirt-atelier"},
   blue: {name:"Blue Hussar dolman", cut:"1761 · jacket shell", text:"The paired fronts carry the cord from the cutting table onto the chest. The back, side pieces and two-part sleeves close around the form.",pdf:"/patterns/hussar-blue.pdf", href:"/wardrobe/hussar/#native-dolman"},
@@ -16,7 +17,7 @@ const studies = {
   fez: {name:"Felt fez", cut:"Crown and tip · geometric assembly", text:"Close the two ends of the curved crown and its upper edge becomes a circle. The round tip fits that opening. The fold follows the drafted cone dimensions.",pdf:"/patterns/fez.pdf", href:"/sections/draft/"},
 } as const;
 export type Garment = keyof typeof studies;
-const all:readonly Garment[] = ["flare","column","sundress","blue","yellow","bolero","trousers","ensemble","fez"];
+const all:readonly Garment[] = ["flare","column","sundress","eased","blue","yellow","bolero","trousers","ensemble","fez"];
 export const constructionFilms=all.map(id=>({id:"construction-"+id,title:studies[id].name+" · from cut to cloth",detail:studies[id].cut}));
 const chapters = [
   {name:"Flat pattern", image:"cut", frame:0},
@@ -75,17 +76,19 @@ function Motion({garment, hero}:{garment:Garment;hero:boolean}) {
   </div>;
 }
 
-export default function ConstructionStudy({choices=all,hero=false}:{choices?:readonly Garment[];hero?:boolean}) {
-  const [selected,select]=useState<Garment>(choices[0]),id=useId(),study=studies[selected];
+export default function ConstructionStudy({choices=all,hero=false,value,onSelect}:{choices?:readonly Garment[];hero?:boolean;value?:Garment;onSelect?:(garment:Garment)=>void}) {
+  const [local,select]=useState<Garment>(choices[0]),id=useId();
+  const selected=value??local,study=studies[selected];
   useEffect(()=>{
+    if(value!==undefined)return;
     const key=new URLSearchParams(location.search).get("garment") as Garment|null;
     if(key&&choices.includes(key))select(key);
-  },[choices]);
+  },[choices,value]);
   return <section id={hero?"construction":undefined} className={"construction-study"+(hero?" construction-hero":"")} aria-labelledby={id}>
     <div className="construction-copy">
       <p className="construction-eyebrow">{hero?"FrankenTextiles / Construction studies":"Construction study"}</p>
       {hero?<h1 id={id}>From cut<br/><em>to cloth.</em></h1>:<h2 id={id}>From cut <em>to cloth.</em></h2>}
-      {choices.length>1?<label className="construction-select">Choose a garment<select value={selected} onChange={e=>select(e.target.value as Garment)}>
+      {choices.length>1?<label className="construction-select">Choose a garment<select value={selected} onChange={e=>(onSelect??select)(e.target.value as Garment)}>
         {choices.map(k=><option key={k} value={k}>{studies[k].name}</option>)}</select></label>:<h3>{study.name}</h3>}
       <p className="construction-spec">{study.cut}</p><p className="construction-description">{study.text}</p>
       <div className="construction-links">{hero&&<a href={study.href}>Open the study ↗</a>}

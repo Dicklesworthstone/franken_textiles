@@ -1,9 +1,9 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { axes, dress, initial, samples, round, type Arm, type Readings } from "./form";
 import type { View } from "./SundressScene";
-import SundressSewn from "./SundressSewn";
+import SundressSewn, {type DressCut} from "./SundressSewn";
 import ConstructionStudy from "../construction/ConstructionStudy";
 import InlineFilm from "../InlineFilm";
 import SiteHeader from "../site/SiteHeader";
@@ -24,6 +24,8 @@ function EaseSection({name,girth}:{name:"bust"|"waist";girth:number}){
 }
 
 export default function SundressLab(){
+  const [cut,setCut]=useState<DressCut>("dress");
+  useEffect(()=>{if(new URLSearchParams(location.search).get("garment")==="eased")setCut("light");},[]);
   const [form,setForm]=useState(initial),[view,setView]=useState<View>("Full length"),[failed,setFailed]=useState(false);
   const [body,setBody]=useState<Readings|null>(null);
   const arm=useCallback((side:Arm,angle:number)=>setForm(p=>({...p,[side]:angle})),[]);
@@ -32,10 +34,10 @@ export default function SundressLab(){
   return <><SiteHeader/><main id="main" className="sd-page">
     <Crumbs trail={[["Exhibition","/"],["Wardrobe","/#wardrobe"],["The garden sundress"]]}/>
     <div className="wrap sd-wrap"><div className="sd-head"><div><p className="kicker">The fitting room</p><h1>The garden sundress<em>.</em></h1></div>
-      <div className="sd-intro"><p>A narrow-strapped bodice and a gathered skirt, cut in a single size. Pose the fitted Anny figure and change her proportions to see how much room the pattern leaves.</p>
-        <a href="/sundress/pattern-A4.pdf" download>Full-size sewing pattern PDF ↓</a><small>A4 · 38 pages · print at 100%</small></div></div>
-      <ConstructionStudy choices={["sundress"]}/>
-      <SundressSewn/>
+      <div className="sd-intro"><p>Follow a four-piece dress from the cutting table to a fitted Anny form. Compare two skirt cuts, then change the wearer’s proportions to explore the bodice ease.</p>
+        <a href={cut==="light"?"/exhibits/sundress/light-A4.pdf":"/sundress/pattern-A4.pdf"} download>Full-size sewing pattern PDF ↓</a><small>A4 · {cut==="light"?37:38} pages · print at 100%</small></div></div>
+      <ConstructionStudy choices={["sundress","eased"]} value={cut==="light"?"eased":"sundress"} onSelect={garment=>setCut(garment==="eased"?"light":"dress")}/>
+      <SundressSewn cut={cut} setCut={setCut}/>
       <div className="sd-desk"><section className="sd-board" aria-label="Interactive sundress">
         <div className="sd-stage">{failed?<InlineFilm id="wardrobe-sundress" title="Recorded geometric sundress study" controls/>:
           <Scene form={form} view={view} onArm={arm} onError={fail} onReadings={setBody}/>}
@@ -68,7 +70,7 @@ export default function SundressLab(){
       <div className="sd-notes"><div><h2>One dress, different proportions</h2>
         <p>The flat pattern measures {dress.shoulderToWaist} cm from shoulder to waist and {dress.skirtLength} cm from waist to hem. {body&&<>In this preview, the nominal hem sits <strong>{body.hem.toFixed(1)} cm</strong> above the floor.</>}</p>
         <p>The synthetic adult comes from the native Anny body model. The controls interpolate fitted shapes and five arm poses. Model readings interpolate the native tape and mass results. Ease compares those readings with the fixed flat pattern.</p>
-        <p>The adjustable figure shows flat-pattern ease. Its bodice opens where cloth runs short and its skirt folds are illustrative. <a href="#sewn">Replay the native cloth solve</a> on the reference form to inspect the sewn shape. Physical fit requires a sewn sample.</p>
+        <p>The adjustable figure shows the original gathered cut and the flat-pattern ease of its bodice. Its bodice opens where cloth runs short and its skirt folds are illustrative. <a href="#sewn">Compare the two native cloth solves</a> on the reference form to inspect the sewn shapes. Physical fit requires a sewn sample.</p>
         <details><summary>Cut and sew the dress</summary><p>Print the cover at actual size and check the 10 cm and 4 inch squares in both directions. Assemble the 37 tiles by their matching diamonds. Cut one front and one back of both bodice and skirt on the marked grain. The solid cut lines include a 10 mm seam allowance.</p>
           <p>Join the shoulder seams, bind the neckline and armholes, and sew the side seams with an opening for your chosen closure. Gather each 50.7 cm skirt waist to its matching 39 cm bodice waist. Join the waist, fit the closure and finish the hem.</p></details>
         <details><summary>Native solver evidence</summary><p>All eight seam checks passed for the reference pattern. The first 45 mm attempt stopped during sewing. Moving the starting panels clear of one another let the current solve reach a settled endpoint with body and cloth contact active.</p>

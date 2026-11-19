@@ -20,7 +20,10 @@ def panel(name, label, angle, nodes, lines, grain, note):
             "x0": 0, "y0": 0, "theta_deg": angle}}
 
 
-def dress():
+def dress(gather_ratio=1.3):
+    waist_edge = 390 * gather_ratio
+    waist_note = (f"Ease {waist_edge:g} mm evenly onto the 390 mm bodice waist."
+                  if gather_ratio == 1.05 else f"Gather {waist_edge:g} mm evenly to the 390 mm bodice waist.")
     pieces = []
     for side, angle, neck in [("front", 0, 300), ("back", 180, 321)]:
         nodes = [("wl",-195,0),("wr",195,0),("br",235,180),("ur",235,235),("ro",128,384),
@@ -36,10 +39,10 @@ def dress():
         pieces.append(panel("bodice_"+side, side.title()+" bodice", angle, nodes, lines,
                      [[0,40],[0,240]],"Bind armholes and neckline; finish shoulder seams. Allow for a side opening."))
         nodes = [("hl",-420,-600),("hr",420,-600),("lr",420,-570),
-                 ("wr",253.5,0),("wl",-253.5,0),("ll",-420,-570)]
+                 ("wr",waist_edge / 2,0),("wl",-waist_edge / 2,0),("ll",-420,-570)]
         lines = [(tag,None) for tag in ["hem","side_hem_R","side_R","gather","side_L","side_hem_L"]]
         pieces.append(panel("skirt_"+side, side.title()+" skirt", angle, nodes, lines,
-                     [[0,-470],[0,-70]],"Gather 507 mm evenly to the 390 mm bodice waist."))
+                     [[0,-470],[0,-70]],waist_note))
     seams = []
     def join(name, a, b, **extra):
         seams.append({"id": name, "a": a, "b": b, "reverse": True, **extra})
@@ -52,7 +55,7 @@ def dress():
         back = "side_L+side_hem_L" if other=="L" else "side_hem_R+side_R"
         join("skirt_side_"+side,"skirt_front/"+front,"skirt_back/"+back)
     for side in ["front","back"]:
-        join("gather_"+side,"skirt_"+side+"/gather","bodice_"+side+"/waist",kind="gather",ratio=1.3)
+        join("gather_"+side,"skirt_"+side+"/gather","bodice_"+side+"/waist",kind="gather",ratio=gather_ratio)
     return {"schema":"fabric-pattern/1","units":"mm","style":"GARDEN_SUNDRESS",
             "meta":{"title":"Garden sundress","size_label":"Synthetic adult study","sa_mm":10,
                     "origin":"VECTOR_EDIT","note":"Design study. Verify a muslin and choose a closure and finishes."},
@@ -137,6 +140,7 @@ def comparisons(ftx, pattern, fit, directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--gather-ratio", type=float, choices=(1.3, 1.05), default=1.3)
     parser.add_argument("--ftx", type=Path, default=Path(__file__).resolve().parents[2] / "target/release/ftx")
     parser.add_argument("--record-drape", action="store_true",
                         help="Also run the contact solver and record its outcome (requires the local Anny model).")
@@ -145,7 +149,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     pattern = out / "pattern.json"
-    write_json(pattern, dress())
+    write_json(pattern, dress(args.gather_ratio))
 
     def native(*argv):
         process = subprocess.run([str(args.ftx), *map(str, argv), "--json"], capture_output=True, text=True)

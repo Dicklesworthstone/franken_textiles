@@ -72,7 +72,7 @@ export default function HussarLab() {
       {drape.gating.map(flag => <p key={flag} className="hu-warning">Solver flag · {flag}</p>)}
       <details className="hu-flags"><summary>{drape.flags.length - drape.gating.length} advisory notes from the solver</summary>
         {drape.flags.filter(flag => !drape.gating.includes(flag)).map(flag => <p key={flag}>{flag}</p>)}</details>
-      <p><a href="/exhibits/hussar/dolman-summary.json" download>Download the solver summary and every flag ↓</a></p>
+      <p><a href="/exhibits/hussar/dolman-pattern.json" download>Exact jacket pattern and starting placements ↓</a> · <a href="/exhibits/hussar/dolman-summary.json" download>Solver summary and flags ↓</a></p>
     </details>
     <HussarWardrobe/>
     <HussarReferences />

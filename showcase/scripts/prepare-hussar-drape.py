@@ -127,7 +127,7 @@ def locate(points, flat, triangles):
     return anchors
 
 
-def package(source, pattern_path, destination, name, drape_args=()):
+def package(source, pattern_path, destination, name, drape_args=(), section=None):
     """Pack a finished drape. `drape_args` are the solver arguments it was run with, recorded as given."""
     drape_args = [str(a) for a in drape_args]
     spacing = float(drape_args[drape_args.index("--spacing-mm") + 1]) if "--spacing-mm" in drape_args else None
@@ -223,8 +223,12 @@ def package(source, pattern_path, destination, name, drape_args=()):
               "sourcePc2Sha256": metadata["sourcePc2Sha256"], **metadata["summary"]}
     destination.mkdir(parents=True, exist_ok=True)
     outputs = {destination / f"{name}.json": (json.dumps(metadata, separators=(",", ":")) + "\n").encode(),
+               destination / f"{name}-pattern.json": pattern_path.read_bytes(),
                destination / f"{name}-summary.json": (json.dumps(digest, indent=1) + "\n").encode(),
                destination / f"{name}.gz": gzip.compress(payload, mtime=0)}
+    if section:
+        result = section(body, body_faces, xyz[-1], triangles, mesh, report)
+        outputs[destination / f"{name}-section.json"] = (json.dumps(result, separators=(",", ":"), allow_nan=False) + "\n").encode()
     for path, data in outputs.items():
         if path.exists() and path.read_bytes() != data:
             raise ValueError(f"{path} already holds a different drape. Use a new output directory.")
@@ -236,7 +240,7 @@ def package(source, pattern_path, destination, name, drape_args=()):
           f"{len(used)} body vertices, {len(outputs[destination / (name + '.gz')]):,} bytes")
 
 
-def solve_and_package(description, documents, drape_args, default_name):
+def solve_and_package(description, documents, drape_args, default_name, section=None, argv=None):
     """The command line shared by every exhibit packed this way (the sundress script calls it too).
 
     `documents` maps `pattern.json`, `measures.json` and optionally `fit.json` to the drape's inputs.
@@ -247,7 +251,7 @@ def solve_and_package(description, documents, drape_args, default_name):
     parser.add_argument("--name", default=default_name)
     parser.add_argument("--solve", action="store_true", help="Create WORK and run the drape first.")
     parser.add_argument("--model", type=Path, help="Converted Anny model for --solve.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.solve:
         if not args.model:
             parser.error("--solve needs --model")
@@ -265,7 +269,7 @@ def solve_and_package(description, documents, drape_args, default_name):
         # Compare as JSON: a tuple in `document` is a list once written.
         if json.loads((args.work / name).read_text()) != json.loads(json.dumps(document)):
             raise SystemExit(f"{args.work}/{name} is not what this script drapes; solve again into a new directory")
-    package(args.work / "drape", args.work / "pattern.json", args.destination, args.name, drape_args)
+    package(args.work / "drape", args.work / "pattern.json", args.destination, args.name, drape_args, section)
 
 
 if __name__ == "__main__":

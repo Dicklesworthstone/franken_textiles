@@ -33,7 +33,7 @@
 .sd-replay>button:disabled{opacity:.45}.sd-replay input{flex:1;min-width:0;accent-color:#29746b;height:22px;margin:0}
 .sd-replay>span{font:500 10px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;min-width:9.5em;text-align:right;color:#47534a}
 .sd-sewn-text{background:#fffcf2;padding:clamp(20px,2.6vw,40px);align-self:stretch}
-.sd-sewn-text h2{font:400 clamp(30px,3vw,46px)/1.05 var(--serif);margin:8px 0 14px}
+.sd-sewn-text h3,.sd-cut-picker h2{font:400 clamp(30px,3vw,46px)/1.05 var(--serif);margin:8px 0 14px}
 .sd-sewn-text p{font-size:15px;line-height:1.55;color:#515c50;margin:8px 0}
 .sd-sewn-text summary{font:600 13px var(--sans);cursor:pointer;margin-top:6px}.sd-sewn-text details p{font-size:14px}
 .sd-sewn-text a{font-weight:600;font-size:14px;text-decoration:underline;text-underline-offset:3px}
@@ -44,3 +44,13 @@
 .sd-flag{border-left:3px solid #b9783c;padding-left:10px;color:#6d4a22!important}
 @media(max-width:760px){.sd-sewn{grid-template-columns:1fr}.sd-sewn-stage{min-height:clamp(360px,96vw,500px)}}
 @media(pointer:coarse){.sd-page .sd-replay>button{width:44px;height:44px}.sd-replay input{height:44px}}
+.sd-slice{display:flex;align-items:center;gap:15px;background:#f4eddf;color:#453b30;padding:12px;margin:15px 0;flex-wrap:wrap}
+.sd-slice svg{flex:1 1 128px;width:40%;max-height:140px}.sd-slice figcaption{flex:2 1 160px;display:grid;gap:5px;font:400 13px/1.45 var(--sans)}.sd-slice figcaption strong{font:400 21px var(--serif)}.sd-slice a{text-decoration:underline;text-underline-offset:2px}
+.sd-cut-picker{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);align-items:center;gap:clamp(18px,4vw,60px);padding:clamp(18px,2.6vw,38px);border-bottom:1px solid #bbc0b2;background:#faf7ee}
+.sd-cut-picker p{margin:0}.sd-cut-picker p:last-child{max-width:50ch;color:#515c50;font-size:15px;line-height:1.5}
+.sd-cut-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.sd-cut-options button{display:grid;justify-items:start;text-align:left;gap:10px;padding:14px;min-width:0}
+.sd-cut-options button svg{width:62px;max-width:100%;fill:currentColor;fill-opacity:.14;stroke:currentColor;stroke-width:12}.sd-cut-options button path{fill:none;stroke:#ac593c;stroke-width:28}
+.sd-cut-options button[aria-pressed=true] path{stroke:#e8ad77}
+.sd-cut-options strong,.sd-cut-options small{display:block}.sd-cut-options strong{font:500 17px/1.15 var(--serif)}.sd-cut-options small{font:400 11px/1.5 var(--mono);margin-top:4px}
+@media(max-width:760px){.sd-cut-picker{grid-template-columns:1fr}.sd-cut-options button{padding:10px}}

@@ -4,6 +4,7 @@ import {useCallback,useEffect,useRef,useState} from "react";
 import study from "../../public/atelier/study.json";
 import InlineFilm from "../InlineFilm";
 import ConstructionStudy from "../construction/ConstructionStudy";
+import TorsoSlice from "../construction/TorsoSlice";
 import type {Surface} from "./Scene";
 import "./atelier.css";
 
@@ -14,18 +15,12 @@ const waists=Array.from(new Set(Object.values(runs).map(r=>r.waist))).sort((a,b)
 const surfaces:Surface[]=["Check","Linen","Print","Panels","Strain","Hems"];
 type Section={body:number[][];cloth:number[][];heightMm:number;edgeAboveWaistMm:number;frontGapMm:number;backGapMm:number};
 function WaistSection({section}:{section:Section}){
-  const lines=[...section.body,...section.cloth];
-  const xs=lines.flatMap(([x,,u])=>[x,u]),ys=lines.flatMap(([,y,,v])=>[y,v]);
-  const x=Math.min(...xs)-8,y=Math.min(...ys)-8,w=Math.max(...xs)-x+8,h=Math.max(...ys)-y+8;
-  const path=(segments:number[][])=>segments.map(([a,b,c,d])=>`M${a} ${b}L${c} ${d}`).join("");
   const offset=section.edgeAboveWaistMm;
   return <div className="sa-section"><div><h2>At the waist</h2>
     <p>A horizontal slice through the worn skirt and torso, {(section.heightMm/10).toFixed(1)} cm above the sole. The median height of the bound edge is {offset===0?"level with":`${Math.abs(offset)} mm ${offset<0?"below":"above"}`} the form’s natural waist.</p>
     <div className="sa-key"><span>Body</span><span>Cloth</span></div>
     <p className="sa-gaps">Centre-front gap {section.frontGapMm} mm · Centre-back gap {section.backGapMm} mm</p></div>
-    <svg viewBox={`${x} ${y} ${w} ${h}`} role="img" aria-label="Plan view of the fitted torso and the skirt cut at the same height">
-      <path d={path(section.body)} fill="none" stroke="#735042" strokeWidth="1.8"/><path d={path(section.cloth)} fill="none" stroke="#a72942" strokeWidth="1.6"/>
-    </svg></div>;
+    <TorsoSlice {...section}/></div>;
 }
 function cutName(cut:Cut){return cut==="flare"?"Flared":"Column";}
 function SkirtIcon({cut}:{cut:Cut}){

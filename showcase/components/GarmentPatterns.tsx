@@ -5,6 +5,7 @@ const patterns = {
   trousers: ["Gathered trousers", "/patterns/trousers.pdf"],
   fez: ["Fez", "/patterns/fez.pdf"],
   dress: ["Garden sundress", "/sundress/pattern-A4.pdf"],
+  eased: ["Lightly eased sundress", "/exhibits/sundress/light-A4.pdf"],
   blue: ["Blue Hussars", "/patterns/hussar-blue.pdf"],
   yellow: ["Yellow Hussars", "/patterns/hussar-yellow.pdf"],
 } as const;
@@ -14,7 +15,7 @@ const exhibits: Record<string, (keyof typeof patterns)[]> = {
   "drape-room": ["bolero","trousers"],
   "trouser-posture":["trousers"], "trouser-elastic":["trousers"], "trouser-section":["trousers"],
   bolero: ["bolero"], construction: ["bolero"], trousers: ["trousers"], fez: ["fez"],
-  sundress: ["dress"], hussar: ["blue", "yellow"],
+  sundress: ["dress"], "sundress-cuts": ["dress","eased"], hussar: ["blue", "yellow"],
   "wardrobe-sundress": ["dress"], "wardrobe-hussar": ["blue", "yellow"],
   "studio-tour": ["bolero"], "wardrobe-reel": ["dress", "blue", "yellow", "bolero"],
 };
