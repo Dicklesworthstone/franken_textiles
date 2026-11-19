@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { type Garment, type StudioMode, type PanelOutline, loadGarment } from "./garmentMesh";
+import { lightStudio, prepareRenderer } from "./atelier3d/studio";
 
 type StudioProps = {
   garment: Garment;
@@ -52,28 +53,12 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     canvas.setAttribute("role", "img");
     canvas.setAttribute("aria-label", `Interactive ${garment} garment. Drag or use arrow keys to orbit. Pinch or use plus and minus to zoom. Home resets the view.`);
     surface.appendChild(canvas);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    prepareRenderer(renderer);
     renderer.setClearColor(0, 0);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.08;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
     const scene = new THREE.Scene();
-    scene.add(new THREE.HemisphereLight(0xfff2d8, 0x544650, 1.35));
-    const key = new THREE.DirectionalLight(0xffe1c8, 2.65);
-    key.position.set(-3, 4, 3);
-    key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
-    Object.assign(key.shadow.camera, { left: -2.2, right: 2.2, top: 2.2, bottom: -2.2, near: 0.1, far: 12 });
-    key.shadow.camera.updateProjectionMatrix();
-    key.shadow.bias = -0.0003;
-    key.shadow.normalBias = 0.002;
-    const rim = new THREE.DirectionalLight(0xffbc87, 2.0);
-    rim.position.set(2, 1, -2);
-    const fill = new THREE.DirectionalLight(0xc4d0f9, 0.6);
-    fill.position.set(3, 0.5, 2);
-    scene.add(key, rim, fill);
+    // The garment is scaled to fill a stage about two units across.
+    const studio = lightStudio(renderer, scene, "warm");
+    studio.frame(new THREE.Vector3(0, 0, 0), 1.5);
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 40);
     const orbit = new OrbitControls(camera, canvas);
     orbit.minZoom = 0.4;
@@ -118,8 +103,10 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
       if (!garmentMesh || !width || !height) return;
       const view = state.current;
       garmentMesh.pose(view.mode, view.frame, view.wire, width / height, view.seam, view.spread, view.panel);
-      if (lastReset !== view.resetKey) {
-        lastReset = view.resetKey;
+      // `resetKey` is a counter the parent bumps to ask for the home view.
+      const resets = view.resetKey;
+      if (lastReset !== resets) {
+        lastReset = resets;
         reset();
       }
       if (lastYaw !== view.yaw) {
@@ -197,7 +184,7 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
       orbit.removeEventListener("end", up);
       orbit.dispose();
       garmentMesh?.dispose();
-      key.shadow.dispose();
+      studio.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       canvas.remove();
