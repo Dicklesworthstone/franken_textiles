@@ -122,7 +122,7 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
   // The garment itself: a shell with thickness, woven on the grain, seams and edges finished.
   const dressed = dressCloth({ vertices: data.vertices, triangles: data.triangles, seams: Object.values(data.seams), panels: data.panels },
     flat, onBody ? fabrics.greenWool : fabrics.madderWool, { sewn: endpoint, edge: onBody ? "braid" : "hem" });
-  const shell = dressed.shell;
+  const shell = dressed.shell, clothThickness = shell.thickness;
   shell.attribute("color", panelColors, 3, true);
   const contactColors = loads && new Float32Array(stride);
   if (loads && contactColors) {
@@ -214,7 +214,11 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     const endpointView = mode === "strain" || mode === "contact";
     const sourceFrame = (endpointView ? 1 : THREE.MathUtils.clamp(time, 0, 1)) * (data.sourceFrames - 1);
     const separation = mode === "construction" ? THREE.MathUtils.clamp(spread, 0, 1) : 0;
-    if (lastFrame !== sourceFrame || lastSpread !== separation) {
+    // The mesh and the seam lines are drawn on the solver's own surface. A diagram view therefore
+    // draws the cloth with almost no thickness, so those lines are not buried inside it.
+    const thickness = mode === "cloth" && !showWire ? clothThickness : 0.00004;
+    const moved = lastFrame !== sourceFrame || lastSpread !== separation;
+    if (moved) {
       let right = data.frames.findIndex((v) => v >= sourceFrame);
       if (right < 0) right = data.frames.length - 1;
       const left = Math.max(0, right - 1);
@@ -229,12 +233,15 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
           -(THREE.MathUtils.lerp(frames[a + j + 1], frames[b + j + 1], mix) + offsets[j + 1] * separation));
       }
       position.needsUpdate = true;
-      shell.update(position.array);
       geometry.computeBoundingBox();
       geometry.boundingBox!.getSize(size);
       geometry.boundingBox!.getCenter(center);
       lastFrame = sourceFrame;
       lastSpread = separation;
+    }
+    if (moved || shell.thickness !== thickness) {
+      shell.thickness = thickness;
+      shell.update(position.array);
     }
     if (!onBody) {
       const scale = 1.66 / Math.max(size.y + size.z * 0.16, Math.hypot(size.x, size.z) / aspect, 0.001);

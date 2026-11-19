@@ -35,12 +35,18 @@ export class ClothShell {
   private readonly out: Float32Array;        // per outline slot, pointing away from the piece
   private readonly position: THREE.BufferAttribute;
   private readonly normal: THREE.BufferAttribute;
+  /**
+   * Displayed thickness in metres, applied at the next `update`. A diagram view sets it near zero, so
+   * that lines drawn on the solver's own surface (the mesh, a seam) are not buried inside the cloth.
+   */
+  thickness: number;
 
   /**
    * `sewn` is any pose in which the seams are closed; it settles which end of each run meets which.
    * `levels` is how many times each triangle is split in four for display.
    */
-  constructor(topology: ClothTopology, private readonly thickness: number, sewn?: ArrayLike<number>, levels = 2) {
+  constructor(topology: ClothTopology, thickness: number, sewn?: ArrayLike<number>, levels = 2) {
+    this.thickness = thickness;
     const n = this.n = topology.vertices;
     this.coarse = Uint32Array.from(topology.triangles);
     let tris = this.coarse, count = n;
