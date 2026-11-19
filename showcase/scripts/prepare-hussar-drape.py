@@ -89,7 +89,8 @@ def read_obj(path):
 def replay_frames(phases):
     """Source frame indices kept for the page: a thinned fold-up, every phase boundary, the endpoint."""
     keep, start = set(), 0
-    for phase, stride in (("fold", 7), ("zip", 6), ("sew", 2), ("drape", 6)):
+    # A long settle is thinned further, to about fourteen gravity frames.
+    for phase, stride in (("fold", 7), ("zip", 6), ("sew", 2), ("drape", max(6, -(-phases["drape"] // 14)))):
         end = start + phases[phase]
         if end > start:
             keep.update(range(start, end, stride))
@@ -232,28 +233,38 @@ def package(source, pattern_path, destination, name):
           f"{len(used)} body vertices, {len(outputs[destination / (name + '.gz')]):,} bytes")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+def solve_and_package(description, documents, drape_args, default_name):
+    """The command line shared by every exhibit packed this way (the sundress script calls it too).
+
+    `documents` maps `pattern.json`, `measures.json` and optionally `fit.json` to the drape's inputs.
+    """
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("work", type=Path)
     parser.add_argument("destination", type=Path)
-    parser.add_argument("--name", default="dolman")
+    parser.add_argument("--name", default=default_name)
     parser.add_argument("--solve", action="store_true", help="Create WORK and run the drape first.")
     parser.add_argument("--model", type=Path, help="Converted Anny model for --solve.")
     args = parser.parse_args()
-    pattern, measures = inputs()
     if args.solve:
         if not args.model:
             parser.error("--solve needs --model")
         args.work.mkdir(parents=True, exist_ok=False)
-        (args.work / "pattern.json").write_text(json.dumps(pattern, indent=1))
-        (args.work / "measures.json").write_text(json.dumps(measures, indent=1))
+        for name, document in documents.items():
+            (args.work / name).write_text(json.dumps(document, indent=1))
+        fit = ["--fit", args.work / "fit.json"] if "fit.json" in documents else []
         # Exit code 2 is a finished drape that carries gating flags; the page reports them.
-        done = subprocess.run([FTX, "drape", args.work / "pattern.json", "--measurements", args.work / "measures.json",
-                               "--model", args.model, "--out", args.work / "drape", "--json", *DRAPE_ARGS],
+        done = subprocess.run([FTX, "drape", args.work / "pattern.json", "--measurements", args.work / "measures.json", *fit,
+                               "--model", args.model, "--out", args.work / "drape", "--json", *drape_args],
                               stdout=subprocess.DEVNULL)
         if done.returncode not in (0, 2):
             raise SystemExit(f"ftx drape refused (exit {done.returncode}); run `ftx place` on {args.work}/pattern.json to look")
-    for name, document in (("pattern.json", pattern), ("measures.json", measures)):
-        if json.loads((args.work / name).read_text()) != document:
+    for name, document in documents.items():
+        # Compare as JSON: a tuple in `document` is a list once written.
+        if json.loads((args.work / name).read_text()) != json.loads(json.dumps(document)):
             raise SystemExit(f"{args.work}/{name} is not what this script drapes; solve again into a new directory")
     package(args.work / "drape", args.work / "pattern.json", args.destination, args.name)
+
+
+if __name__ == "__main__":
+    pattern, measures = inputs()
+    solve_and_package(__doc__, {"pattern.json": pattern, "measures.json": measures}, DRAPE_ARGS, "dolman")

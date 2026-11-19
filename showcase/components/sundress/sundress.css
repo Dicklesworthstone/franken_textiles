@@ -22,3 +22,25 @@
 .sd-notes summary,.sd-notes details a{font-size:13px;font-weight:600;cursor:pointer}.sd-notes details{margin-top:13px}.sd-notes details a{text-decoration:underline}
 .sd-notes{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(240px,.6fr);gap:8%;padding-block:32px}.sd-notes p{margin:8px 0;max-width:67ch}.sd-links{display:grid;align-content:start}.sd-links a{border-top:1px solid #c8cbbd;padding:9px 0}
 @media(max-width:760px){.sd-nav{height:57px}.sd-head{display:block}.sd-head>p{margin-top:12px;max-width:62ch}.sd-desk,.sd-notes{grid-template-columns:1fr}.sd-stage{height:clamp(350px,86vw,490px)}.sd-notes{gap:20px}.sd-viewbar p{font-size:11px}}
+/* The solver's own drape of the pattern, under the adjustable figure. */
+.sd-sewn{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(280px,.9fr);margin-top:28px;border:1px solid #bbc0b2;border-radius:5px;overflow:hidden;scroll-margin-top:84px}
+.sd-sewn-board{min-width:0;background:#e7e5d9;display:flex;flex-direction:column}
+.sd-sewn-stage{position:relative;flex:1;min-height:clamp(430px,40vw,600px);background:radial-gradient(ellipse at 40% 24%,#5d6a60 0%,#3e4b43 52%,#27332d 100%)}
+.sd-sewn-scene,.sd-sewn-scene canvas{width:100%;height:100%;display:block}.sd-sewn-scene{position:absolute;inset:0}.sd-sewn-scene canvas{cursor:grab}
+.sd-sewn-failed{position:absolute;inset:0;display:grid;place-items:center;margin:0;padding:24px;color:#ece9d8;font-size:14px;text-align:center}
+.sd-replay{display:flex;align-items:center;gap:12px;padding:8px 12px 10px;border-top:1px solid #c2c4b8}
+.sd-page .sd-replay>button{border:0;border-radius:50%;background:#2a4b42;color:#fffaeb;width:30px;height:30px;padding:0;display:grid;place-items:center;flex-shrink:0}
+.sd-replay>button:disabled{opacity:.45}.sd-replay input{flex:1;min-width:0;accent-color:#29746b;height:22px;margin:0}
+.sd-replay>span{font:500 10px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;min-width:9.5em;text-align:right;color:#47534a}
+.sd-sewn-text{background:#fffcf2;padding:clamp(20px,2.6vw,40px);align-self:stretch}
+.sd-sewn-text h2{font:400 clamp(30px,3vw,46px)/1.05 var(--serif);margin:8px 0 14px}
+.sd-sewn-text p{font-size:15px;line-height:1.55;color:#515c50;margin:8px 0}
+.sd-sewn-text summary{font:600 13px var(--sans);cursor:pointer;margin-top:6px}.sd-sewn-text details p{font-size:14px}
+.sd-sewn-text a{font-weight:600;font-size:14px;text-decoration:underline;text-underline-offset:3px}
+.sd-readings{display:grid;grid-template-columns:repeat(3,1fr);margin:16px 0 10px;border-block:1px solid #d5d7c9}
+.sd-readings>div{padding:9px 10px 8px 0}.sd-readings>div+div{padding-left:10px;border-left:1px solid #dfe1d3}
+.sd-readings dt{font-size:11px;color:#607064}.sd-readings abbr{text-decoration:none}
+.sd-readings dd{margin:2px 0 0;font:400 clamp(21px,2vw,29px)/1.15 var(--serif);font-variant-numeric:lining-nums tabular-nums;color:#24493f}
+.sd-flag{border-left:3px solid #b9783c;padding-left:10px;color:#6d4a22!important}
+@media(max-width:760px){.sd-sewn{grid-template-columns:1fr}.sd-sewn-stage{min-height:clamp(360px,96vw,500px)}}
+@media(pointer:coarse){.sd-page .sd-replay>button{width:44px;height:44px}.sd-replay input{height:44px}}

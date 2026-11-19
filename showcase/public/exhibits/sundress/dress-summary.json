@@ -1,0 +1,186 @@
+{
+ "vertices": 3458,
+ "triangles": 6448,
+ "frames": 37,
+ "phases": {
+  "drape": 158,
+  "fold": 70,
+  "sew": 12,
+  "zip": 18
+ },
+ "cords": 0,
+ "buttons": 0,
+ "instances": [
+  "bodice_back",
+  "bodice_front",
+  "skirt_back",
+  "skirt_front"
+ ],
+ "sourcePc2Sha256": "8899262de0248a0bd375d23c7ac59b363fa3f2163736f92588c522d3fff16b45",
+ "style": "GARDEN_SUNDRESS",
+ "spacingMm": null,
+ "armDeg": 22.0,
+ "settled": true,
+ "gating": [],
+ "flags": [
+  "the body rides up 86 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)"
+ ],
+ "edgeStrainPercent": {
+  "max": 11.08,
+  "min": -20.2,
+  "p95": 0.94
+ },
+ "massKg": 0.22079033603815004,
+ "areaM2": 1.104,
+ "sewingPairs": 154,
+ "selfContact": false,
+ "scope": {
+  "basis": "complete_pattern",
+  "excluded_instances": [],
+  "excluded_seams": [],
+  "simulated_instances": [
+   "bodice_front",
+   "skirt_front",
+   "bodice_back",
+   "skirt_back"
+  ],
+  "simulated_seams": [
+   {
+    "id": "bodice_side_R",
+    "index": 0
+   },
+   {
+    "id": "shoulder_R",
+    "index": 1
+   },
+   {
+    "id": "skirt_side_R",
+    "index": 2
+   },
+   {
+    "id": "bodice_side_L",
+    "index": 3
+   },
+   {
+    "id": "shoulder_L",
+    "index": 4
+   },
+   {
+    "id": "skirt_side_L",
+    "index": 5
+   },
+   {
+    "id": "gather_front",
+    "index": 6
+   },
+   {
+    "id": "gather_back",
+    "index": 7
+   }
+  ]
+ },
+ "fabric": {
+  "areal_kg_m2": 0.2,
+  "bending_Nm": 3e-05,
+  "tensile_N_m": 8000.0
+ },
+ "bodyFit": {
+  "arm_length": {
+   "body_mm": 564.8,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": -0.08134694870045678,
+   "residual_mm": -0.16269389740091356,
+   "sigma_mm": null,
+   "target_mm": 565.0
+  },
+  "back_neck_to_waist": {
+   "body_mm": 427.2,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 1.1096556526715915,
+   "residual_mm": 2.219311305343183,
+   "sigma_mm": null,
+   "target_mm": 425.0
+  },
+  "chest": {
+   "body_mm": 899.2,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": -0.2744968938871655,
+   "residual_mm": -0.8234906816614966,
+   "sigma_mm": null,
+   "target_mm": 900.0
+  },
+  "crotch_height": {
+   "body_mm": 770.0,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": -0.006465680695953324,
+   "residual_mm": -0.012931361391906648,
+   "sigma_mm": null,
+   "target_mm": 770.0
+  },
+  "head": {
+   "body_mm": 550.3,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": 0.09382200789912076,
+   "residual_mm": 0.2814660236973623,
+   "sigma_mm": null,
+   "target_mm": 550.0
+  },
+  "hip": {
+   "body_mm": 959.8,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": -0.07182408882245757,
+   "residual_mm": -0.21547226646737272,
+   "sigma_mm": null,
+   "target_mm": 960.0
+  },
+  "knee_height": {
+   "body_mm": 470.2,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 0.08225093401634354,
+   "residual_mm": 0.16450186803268707,
+   "sigma_mm": null,
+   "target_mm": 470.0
+  },
+  "neck_base": {
+   "body_mm": 355.1,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": 1.7047028405726792,
+   "residual_mm": 5.1141085217180375,
+   "sigma_mm": null,
+   "target_mm": 350.0
+  },
+  "shoulder_length": {
+   "body_mm": 122.6,
+   "effective_sigma_mm": 5.0,
+   "normalized_residual": -0.48389385353026737,
+   "residual_mm": -2.419469267651337,
+   "sigma_mm": null,
+   "target_mm": 125.0
+  },
+  "stature": {
+   "body_mm": 1677.9,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": -1.0601296805293714,
+   "residual_mm": -2.120259361058743,
+   "sigma_mm": null,
+   "target_mm": 1680.0
+  },
+  "waist": {
+   "body_mm": 719.6,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": -0.1232744900017148,
+   "residual_mm": -0.3698234700051444,
+   "sigma_mm": null,
+   "target_mm": 720.0
+  },
+  "waist_height": {
+   "body_mm": 1012.2,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 1.1234731909433435,
+   "residual_mm": 2.246946381886687,
+   "sigma_mm": null,
+   "target_mm": 1010.0
+  }
+ },
+ "wallSeconds": 250.6
+}

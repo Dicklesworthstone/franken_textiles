@@ -185,7 +185,7 @@ test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", asy
   const p=await browser.newPage({...opts,reducedMotion:"reduce",viewport:{width:390,height:844}});
   try {
     await p.goto(new URL("/wardrobe/sundress/",site).href);
-    await p.locator("canvas[data-ready]").waitFor();
+    await p.locator(".sd-scene canvas[data-ready]").waitFor();
     const [cases,body]=await p.evaluate(()=>Promise.all(["/sundress/fit-comparison.json","/fitted-bodies/sundress.json"].map(async url=>(await fetch(url)).json())));
     const reference=body.samples.find(sample=>sample.name==="reference");
     for(const item of cases.runs) {
@@ -213,6 +213,14 @@ test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", asy
     assert.equal(await p.getByRole("button",{name:"Raised",exact:true}).getAttribute("aria-pressed"),"true");
     assert.notDeepEqual(await stage.screenshot(),before);
     assert.equal(await p.getByRole("link",{name:"Three native flat checks"}).getAttribute("href"),"/sundress/fit-comparison.json");
+    // The solver's drape of the same pattern replays the packaged frames: the settled endpoint first, the flat cut at frame zero.
+    const sewn=p.locator(".sd-sewn-scene canvas[data-ready]"),summary=await (await p.request.get(new URL("/exhibits/sundress/dress-summary.json",site).href)).json();
+    await sewn.waitFor();
+    assert.equal(summary.settled,true);assert.deepEqual(summary.gating,[]);
+    const endpoint=await sewn.getAttribute("data-frame");
+    assert.equal(Number(endpoint),Object.values(summary.phases).reduce((a,b)=>a+b)-1);
+    await p.getByRole("slider",{name:"Sewing replay frame"}).fill("0");
+    await p.waitForFunction(()=>document.querySelector(".sd-sewn-scene canvas").dataset.frame==="0");
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth),390);
   } finally {await p.close();}
 });
