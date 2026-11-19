@@ -2,6 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
+const revisions:Record<string,string>=JSON.parse(process.env.NEXT_PUBLIC_FILM_REVISIONS??"{}");
+export function filmFile(id:string,ext:"mp4"|"jpg"="mp4") {
+  const name=id+"."+ext;
+  return "/media/"+name+(revisions[name]?"?v="+revisions[name]:"");
+}
+
 export function PlaybackMark({playing=false}: {playing?:boolean}) {
   return <span aria-hidden="true" className={playing ? "playback-mark is-playing" : "playback-mark"}/>;
 }
@@ -22,7 +28,7 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
     const reduced = matchMedia("(prefers-reduced-motion: reduce)");
     const saveData = (navigator as Navigator & {connection?: {saveData?:boolean}}).connection?.saveData;
     let visible = false, manual: boolean | undefined = requested || undefined, automaticPause = false;
-    const path = "/media/" + id + ".mp4";
+    const path = filmFile(id);
     function pause() {
       if (el.paused) return;
       automaticPause=true; el.pause();
@@ -52,7 +58,7 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
     };
   },[id,controls,requested]);
   return <>
-    <video ref={video} className="inline-film" poster={near ? `/media/${id}.jpg` : undefined} preload="none" muted loop playsInline controls={controls} aria-label={title}/>
+    <video ref={video} className="inline-film" poster={near ? filmFile(id,"jpg") : undefined} preload="none" muted loop playsInline controls={controls} aria-label={title}/>
     {!controls && <button type="button" className="inline-transport" aria-label={`${playing?"Pause":"Play"} ${title} preview`}
       onClick={()=>toggle.current()}><PlaybackMark playing={playing}/></button>}
   </>;

@@ -10,7 +10,12 @@
 .rig-desk{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(275px,.78fr);border:1px solid #b5b6a7;border-radius:5px;overflow:hidden}
 .rig-instrument{min-width:0;background:#e4e1d5}
 .rig-stage{height:clamp(352px,36vw,570px);position:relative;background:radial-gradient(ellipse at 35% 20%,#d6cebf 0%,#b3a99a 60%,#948b7e)}
-.rig-stage.strip{background:radial-gradient(ellipse at 35% 20%,#d3dcd5,#adbdb6 65%,#8c9f9c)}
+.rig-stage,.rig-stage.strip{background:radial-gradient(ellipse at 35% 22%,#f1ede2,#d5cfc0 70%,#c2b9aa)}
+.rig-viewbar button[aria-pressed=true]{color:#fff;background:#354944}
+.rig-measured{border-top:1px solid #c6c0b2;margin-top:24px;padding-top:16px}
+.rig-measured h3{font:400 30px var(--serif);margin:4px 0}.rig-measured div{display:flex;gap:25px;margin:13px 0}
+.rig-measured div span{font:500 11px var(--mono)}.rig-measured strong{display:block;font-size:16px;margin-top:4px}
+.rig-measured a,.rig-notes details a{text-decoration:underline;text-underline-offset:3px;font-size:13px}
 .rig-stage video,.rig-poster,.rig-scene,.rig-scene canvas{display:block;width:100%;height:100%;object-fit:contain}
 .rig-scene canvas{cursor:grab}.rig-scene canvas:active{cursor:grabbing}
 .rig-plate,.rig-annot{position:absolute;pointer-events:none;color:#273c3a}

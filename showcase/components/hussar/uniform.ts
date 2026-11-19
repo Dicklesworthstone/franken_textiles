@@ -7,7 +7,7 @@ import {applyGarmentStudy,registerGarment,type GarmentMaps} from "./garmentSurfa
 
 export type Regiment = "Blue" | "Yellow";
 export type RegimentView = Regiment | "Compare";
-export type Layer = "Dressed" | "Dolman" | "Pelisse";
+export type Layer = "Dolman" | "Pelisse";
 export type Framing = "Bust" | "Uniform" | "Chest" | "Reverse";
 type Profile = [height: number, width: number, depth: number, cx?: number, cz?: number];
 type XYZ = [number, number, number];
@@ -302,31 +302,14 @@ export function buildUniform(regiment: Regiment, body: FittedHussar, complexion:
   }
   if(hatRoots.length)headwear.add(new T.LineSegments(napFibres(hatRoots,.94,761,-1),pileInk));
   pelisse.add(new T.LineSegments(napFibres(pileRoots,.73,762,-1),pileInk));
-  const draped = pelisse.clone();
-  draped.traverse(part=>{
-    if(!(part instanceof T.Mesh || part instanceof T.LineSegments))return;
-    const geometry=part.geometry.clone();
-    const points=geometry.getAttribute("position");
-    for(let i=0;i<points.count;i++){
-      const x=points.getX(i),y=points.getY(i),z=points.getZ(i);
-      const shoulder=T.MathUtils.smoothstep(y,22,50);
-      const ripple=Math.sin(x*.51+y*.061)*(.60+1.04*(1-shoulder));
-      points.setXYZ(i,24.7-8.7*shoulder+.34*z+.060*x+(x*x/676)*2.1+ripple,
-        96.3+.986*y-.076*x*shoulder-.042*z*shoulder-3.55*shoulder-.69*Math.max(0,y-47),
-        -2.7+.68*x+.63*z+.44*Math.sin(y*.16+x*.08));
-    }
-    if(part instanceof T.Mesh)geometry.computeVertexNormals();
-    geometry.computeBoundingSphere();part.geometry=geometry;
-  });
-  groups.push(draped);pelisse.position.y=96;
+  pelisse.position.y=96;
   groups.forEach(group=>registerGarment(group,group===pelisse ? (blue ? -41 : 41) : undefined));
   const portrait = buildWearer(body, blue, complexion, selectedPlate);
   const outfit=new T.Group();outfit.add(...groups, portrait.wearer);
   return {outfit, setLayer(layer:Layer){portrait.wearer.visible=base.visible=headwear.visible=layer!=="Pelisse";dolman.visible=layer!=="Pelisse";pelisse.visible=layer==="Pelisse";
-    shoulderCord.visible=layer==="Dressed";
-    draped.visible=layer==="Dressed";
-    portrait.gloves(layer==="Dressed");
-    selectedPlate.value=layer==="Pelisse" ? swatches.pelisses : swatches[regiment][layer==="Dolman"?"Dolman":"Dressed"];
+    shoulderCord.visible=false;
+    portrait.gloves(false);
+    selectedPlate.value=layer==="Pelisse" ? swatches.pelisses : swatches[regiment].Dolman;
   },dispose(){
     groups.forEach(group => group.traverse(o=>{if(o instanceof T.Mesh||o instanceof T.LineSegments)o.geometry.dispose();}));
     portrait.dispose();

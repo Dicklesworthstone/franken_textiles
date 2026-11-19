@@ -11,10 +11,12 @@ const origin=process.env.FTX_STUDIO_URL||"http://127.0.0.1:3000";
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||chromium.executablePath(),
   args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
 const productions=[
-  {id:"trouser-posture",tab:"Posture",title:"Bending the knee",cuts:[["Standing","standing"],["Shallow squat","squat-12"],["Full squat","squat"]]},
+  {id:"trouser-posture",tab:"Posture",title:"Bending the knee",cuts:[["Standing","standing"],["Shallow squat","squat-12"],["Quarter squat","squat-25"]]},
   {id:"trouser-elastic",tab:"Elastic",title:"Holding the waist",cuts:[["5 N","elastic-5"],["15 N","standing"],["60 N","elastic-60"]]},
   {id:"trouser-section",tab:"Cross-section",title:"Inside the folds",cuts:[["Standing","standing"]]},
 ];
+const selected=process.argv[3]?productions.filter(f=>f.id===process.argv[3]):productions;
+if(!selected.length)throw Error("Choose trouser-posture, trouser-elastic or trouser-section.");
 try {
   const page=await browser.newPage({viewport:{width:960,height:540},reducedMotion:"reduce",userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
   await page.goto(new URL("/studies/trousers/?capture=film",origin).href);
@@ -37,8 +39,7 @@ try {
     slate.innerHTML="<small>FrankenTextiles / Studies</small><h2></h2><p></p><label></label><div class='ts-inset'></div>";
     document.querySelector(".ts-stage").append(slate);
   });
-  const stage=page.locator(".ts-stage");
-  for(const {id,tab,title,cuts} of productions){
+  for(const {id,tab,title,cuts} of selected){
     await page.getByRole("button",{name:tab,exact:true}).evaluate(b=>b.click());
     const isSlice=tab==="Cross-section";
     const encoder=spawn("ffmpeg",["-v","error","-f","image2pipe","-framerate","16","-i","pipe:0","-an","-c:v","libx264",
@@ -64,15 +65,15 @@ try {
           desk.querySelector("h2").innerHTML=words.slice(0,-1).join(" ")+"<br><em>"+words.at(-1)+".</em>";
           desk.querySelector("p").textContent=tab==="Cross-section"?height+" mm above sole":tab==="Elastic"?button+" elastic stiffness":button+" posture";
           const metric=document.querySelectorAll(".ts-values dd");
-          desk.querySelector("label").textContent=tab==="Cross-section"?"Plane through the native mesh":tab==="Elastic"?"Waistband shift "+metric[1].textContent:key==="squat"?"Body only · cloth solve refused":"Mean seat gap "+metric[0].textContent;
+          desk.querySelector("label").textContent=tab==="Cross-section"?"Plane through the native mesh":tab==="Elastic"?"Waistband shift "+metric[1].textContent:"Mean seat gap "+metric[0].textContent;
           const inset=desk.querySelector(".ts-inset");inset.replaceChildren();
           if(tab==="Cross-section"){
             const chart=document.querySelector(".ts-panel .ts-diagram").cloneNode(true);
             chart.querySelector("pattern").id="film-grid";chart.querySelector("rect").setAttribute("fill","url(#film-grid)");inset.append(chart);
           }
-          window.ftxTrouserCamera(tab==="Posture"?.46+1.04*i/95:.42+.56*Math.sin(i/95*Math.PI));
+          window.ftxTrouserCamera(tab==="Posture"?1.25+.25*i/95:.42+.56*Math.sin(i/95*Math.PI));
         },{tab,title,key,button,i,height});
-        const frame=await stage.screenshot({type:"jpeg",quality:92});
+        const frame=await page.screenshot({type:"jpeg",quality:92});
         if(i===28)await writeFile(resolve(out,id+".jpg"),frame,{flag:"wx"});
         if(!encoder.stdin.write(frame))await once(encoder.stdin,"drain");
       }

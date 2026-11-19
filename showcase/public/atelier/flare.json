@@ -1,0 +1,867 @@
+{
+  "schema": "fabric-pattern/1",
+  "units": "mm",
+  "style": "SIX_GORE_FLARE",
+  "meta": {
+    "title": "Six-gore skirt \u2014 flare",
+    "size_label": "Synthetic adult study",
+    "sa_mm": 10,
+    "note": "Six panels. Bound waist and a side zip. Allow for hems and test the cut in a muslin."
+  },
+  "pieces": [
+    {
+      "id": "gore_1",
+      "name": "Front gore",
+      "cut": {
+        "qty": 1
+      },
+      "vertices": {
+        "hl": [
+          -140.0,
+          -590
+        ],
+        "hr": [
+          140.0,
+          -590
+        ],
+        "pr": [
+          87.0,
+          -180
+        ],
+        "wr": [
+          65.0,
+          0
+        ],
+        "wl": [
+          -65.0,
+          0
+        ],
+        "pl": [
+          -87.0,
+          -180
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "hl",
+          "to": "hr"
+        },
+        {
+          "id": "right_lower",
+          "from": "hr",
+          "to": "pr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14393624677459935,
+                -0.018606392875740892
+              ],
+              [
+                0.8545132204857556,
+                0.006611705644524279
+              ]
+            ]
+          }
+        },
+        {
+          "id": "right_upper",
+          "from": "pr",
+          "to": "wr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.33177229047561124,
+                -0.012772168835908041
+              ],
+              [
+                0.6825203746502858,
+                0.038803065320520615
+              ]
+            ]
+          }
+        },
+        {
+          "id": "waist",
+          "from": "wr",
+          "to": "wl"
+        },
+        {
+          "id": "left_upper",
+          "from": "wl",
+          "to": "pl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.31747962534971413,
+                0.038803065320520615
+              ],
+              [
+                0.6682277095243888,
+                -0.012772168835908041
+              ]
+            ]
+          }
+        },
+        {
+          "id": "left_lower",
+          "from": "pl",
+          "to": "hl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14548677951424444,
+                0.006611705644524279
+              ],
+              [
+                0.8560637532254006,
+                -0.018606392875740892
+              ]
+            ]
+          }
+        }
+      ],
+      "grain": [
+        [
+          0,
+          -490
+        ],
+        [
+          0,
+          -95
+        ]
+      ],
+      "note": "Join the marked gore edges. Leave an opening in the left side seam for a zip. Finish the waist with binding.",
+      "placement": {
+        "part": "torso",
+        "y0_landmark": "waist",
+        "x0": 0,
+        "y0": 0,
+        "theta_deg": 0,
+        "radius_mm": 277.38
+      }
+    },
+    {
+      "id": "gore_2",
+      "name": "Front right gore",
+      "cut": {
+        "qty": 1
+      },
+      "vertices": {
+        "hl": [
+          -140.0,
+          -590
+        ],
+        "hr": [
+          140.0,
+          -590
+        ],
+        "pr": [
+          87.0,
+          -180
+        ],
+        "wr": [
+          65.0,
+          0
+        ],
+        "wl": [
+          -65.0,
+          0
+        ],
+        "pl": [
+          -87.0,
+          -180
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "hl",
+          "to": "hr"
+        },
+        {
+          "id": "right_lower",
+          "from": "hr",
+          "to": "pr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14393624677459935,
+                -0.018606392875740892
+              ],
+              [
+                0.8545132204857556,
+                0.006611705644524279
+              ]
+            ]
+          }
+        },
+        {
+          "id": "right_upper",
+          "from": "pr",
+          "to": "wr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.33177229047561124,
+                -0.012772168835908041
+              ],
+              [
+                0.6825203746502858,
+                0.038803065320520615
+              ]
+            ]
+          }
+        },
+        {
+          "id": "waist",
+          "from": "wr",
+          "to": "wl"
+        },
+        {
+          "id": "left_upper",
+          "from": "wl",
+          "to": "pl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.31747962534971413,
+                0.038803065320520615
+              ],
+              [
+                0.6682277095243888,
+                -0.012772168835908041
+              ]
+            ]
+          }
+        },
+        {
+          "id": "left_lower",
+          "from": "pl",
+          "to": "hl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14548677951424444,
+                0.006611705644524279
+              ],
+              [
+                0.8560637532254006,
+                -0.018606392875740892
+              ]
+            ]
+          }
+        }
+      ],
+      "grain": [
+        [
+          0,
+          -490
+        ],
+        [
+          0,
+          -95
+        ]
+      ],
+      "note": "Join the marked gore edges. Leave an opening in the left side seam for a zip. Finish the waist with binding.",
+      "placement": {
+        "part": "torso",
+        "y0_landmark": "waist",
+        "x0": 0,
+        "y0": 0,
+        "theta_deg": 60,
+        "radius_mm": 277.38
+      }
+    },
+    {
+      "id": "gore_3",
+      "name": "Back right gore",
+      "cut": {
+        "qty": 1
+      },
+      "vertices": {
+        "hl": [
+          -140.0,
+          -590
+        ],
+        "hr": [
+          140.0,
+          -590
+        ],
+        "pr": [
+          87.0,
+          -180
+        ],
+        "wr": [
+          65.0,
+          0
+        ],
+        "wl": [
+          -65.0,
+          0
+        ],
+        "pl": [
+          -87.0,
+          -180
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "hl",
+          "to": "hr"
+        },
+        {
+          "id": "right_lower",
+          "from": "hr",
+          "to": "pr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14393624677459935,
+                -0.018606392875740892
+              ],
+              [
+                0.8545132204857556,
+                0.006611705644524279
+              ]
+            ]
+          }
+        },
+        {
+          "id": "right_upper",
+          "from": "pr",
+          "to": "wr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.33177229047561124,
+                -0.012772168835908041
+              ],
+              [
+                0.6825203746502858,
+                0.038803065320520615
+              ]
+            ]
+          }
+        },
+        {
+          "id": "waist",
+          "from": "wr",
+          "to": "wl"
+        },
+        {
+          "id": "left_upper",
+          "from": "wl",
+          "to": "pl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.31747962534971413,
+                0.038803065320520615
+              ],
+              [
+                0.6682277095243888,
+                -0.012772168835908041
+              ]
+            ]
+          }
+        },
+        {
+          "id": "left_lower",
+          "from": "pl",
+          "to": "hl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14548677951424444,
+                0.006611705644524279
+              ],
+              [
+                0.8560637532254006,
+                -0.018606392875740892
+              ]
+            ]
+          }
+        }
+      ],
+      "grain": [
+        [
+          0,
+          -490
+        ],
+        [
+          0,
+          -95
+        ]
+      ],
+      "note": "Join the marked gore edges. Leave an opening in the left side seam for a zip. Finish the waist with binding.",
+      "placement": {
+        "part": "torso",
+        "y0_landmark": "waist",
+        "x0": 0,
+        "y0": 0,
+        "theta_deg": 120,
+        "radius_mm": 277.38
+      }
+    },
+    {
+      "id": "gore_4",
+      "name": "Back gore",
+      "cut": {
+        "qty": 1
+      },
+      "vertices": {
+        "hl": [
+          -140.0,
+          -590
+        ],
+        "hr": [
+          140.0,
+          -590
+        ],
+        "pr": [
+          87.0,
+          -180
+        ],
+        "wr": [
+          65.0,
+          0
+        ],
+        "wl": [
+          -65.0,
+          0
+        ],
+        "pl": [
+          -87.0,
+          -180
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "hl",
+          "to": "hr"
+        },
+        {
+          "id": "right_lower",
+          "from": "hr",
+          "to": "pr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14393624677459935,
+                -0.018606392875740892
+              ],
+              [
+                0.8545132204857556,
+                0.006611705644524279
+              ]
+            ]
+          }
+        },
+        {
+          "id": "right_upper",
+          "from": "pr",
+          "to": "wr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.33177229047561124,
+                -0.012772168835908041
+              ],
+              [
+                0.6825203746502858,
+                0.038803065320520615
+              ]
+            ]
+          }
+        },
+        {
+          "id": "waist",
+          "from": "wr",
+          "to": "wl"
+        },
+        {
+          "id": "left_upper",
+          "from": "wl",
+          "to": "pl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.31747962534971413,
+                0.038803065320520615
+              ],
+              [
+                0.6682277095243888,
+                -0.012772168835908041
+              ]
+            ]
+          }
+        },
+        {
+          "id": "left_lower",
+          "from": "pl",
+          "to": "hl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14548677951424444,
+                0.006611705644524279
+              ],
+              [
+                0.8560637532254006,
+                -0.018606392875740892
+              ]
+            ]
+          }
+        }
+      ],
+      "grain": [
+        [
+          0,
+          -490
+        ],
+        [
+          0,
+          -95
+        ]
+      ],
+      "note": "Join the marked gore edges. Leave an opening in the left side seam for a zip. Finish the waist with binding.",
+      "placement": {
+        "part": "torso",
+        "y0_landmark": "waist",
+        "x0": 0,
+        "y0": 0,
+        "theta_deg": 180,
+        "radius_mm": 277.38
+      }
+    },
+    {
+      "id": "gore_5",
+      "name": "Back left gore",
+      "cut": {
+        "qty": 1
+      },
+      "vertices": {
+        "hl": [
+          -140.0,
+          -590
+        ],
+        "hr": [
+          140.0,
+          -590
+        ],
+        "pr": [
+          87.0,
+          -180
+        ],
+        "wr": [
+          65.0,
+          0
+        ],
+        "wl": [
+          -65.0,
+          0
+        ],
+        "pl": [
+          -87.0,
+          -180
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "hl",
+          "to": "hr"
+        },
+        {
+          "id": "right_lower",
+          "from": "hr",
+          "to": "pr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14393624677459935,
+                -0.018606392875740892
+              ],
+              [
+                0.8545132204857556,
+                0.006611705644524279
+              ]
+            ]
+          }
+        },
+        {
+          "id": "right_upper",
+          "from": "pr",
+          "to": "wr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.33177229047561124,
+                -0.012772168835908041
+              ],
+              [
+                0.6825203746502858,
+                0.038803065320520615
+              ]
+            ]
+          }
+        },
+        {
+          "id": "waist",
+          "from": "wr",
+          "to": "wl"
+        },
+        {
+          "id": "left_upper",
+          "from": "wl",
+          "to": "pl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.31747962534971413,
+                0.038803065320520615
+              ],
+              [
+                0.6682277095243888,
+                -0.012772168835908041
+              ]
+            ]
+          }
+        },
+        {
+          "id": "left_lower",
+          "from": "pl",
+          "to": "hl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14548677951424444,
+                0.006611705644524279
+              ],
+              [
+                0.8560637532254006,
+                -0.018606392875740892
+              ]
+            ]
+          }
+        }
+      ],
+      "grain": [
+        [
+          0,
+          -490
+        ],
+        [
+          0,
+          -95
+        ]
+      ],
+      "note": "Join the marked gore edges. Leave an opening in the left side seam for a zip. Finish the waist with binding.",
+      "placement": {
+        "part": "torso",
+        "y0_landmark": "waist",
+        "x0": 0,
+        "y0": 0,
+        "theta_deg": 240,
+        "radius_mm": 277.38
+      }
+    },
+    {
+      "id": "gore_6",
+      "name": "Front left gore",
+      "cut": {
+        "qty": 1
+      },
+      "vertices": {
+        "hl": [
+          -140.0,
+          -590
+        ],
+        "hr": [
+          140.0,
+          -590
+        ],
+        "pr": [
+          87.0,
+          -180
+        ],
+        "wr": [
+          65.0,
+          0
+        ],
+        "wl": [
+          -65.0,
+          0
+        ],
+        "pl": [
+          -87.0,
+          -180
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "hl",
+          "to": "hr"
+        },
+        {
+          "id": "right_lower",
+          "from": "hr",
+          "to": "pr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14393624677459935,
+                -0.018606392875740892
+              ],
+              [
+                0.8545132204857556,
+                0.006611705644524279
+              ]
+            ]
+          }
+        },
+        {
+          "id": "right_upper",
+          "from": "pr",
+          "to": "wr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.33177229047561124,
+                -0.012772168835908041
+              ],
+              [
+                0.6825203746502858,
+                0.038803065320520615
+              ]
+            ]
+          }
+        },
+        {
+          "id": "waist",
+          "from": "wr",
+          "to": "wl"
+        },
+        {
+          "id": "left_upper",
+          "from": "wl",
+          "to": "pl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.31747962534971413,
+                0.038803065320520615
+              ],
+              [
+                0.6682277095243888,
+                -0.012772168835908041
+              ]
+            ]
+          }
+        },
+        {
+          "id": "left_lower",
+          "from": "pl",
+          "to": "hl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.14548677951424444,
+                0.006611705644524279
+              ],
+              [
+                0.8560637532254006,
+                -0.018606392875740892
+              ]
+            ]
+          }
+        }
+      ],
+      "grain": [
+        [
+          0,
+          -490
+        ],
+        [
+          0,
+          -95
+        ]
+      ],
+      "note": "Join the marked gore edges. Leave an opening in the left side seam for a zip. Finish the waist with binding.",
+      "placement": {
+        "part": "torso",
+        "y0_landmark": "waist",
+        "x0": 0,
+        "y0": 0,
+        "theta_deg": 300,
+        "radius_mm": 277.38
+      }
+    }
+  ],
+  "seams": [
+    {
+      "id": "join_1",
+      "a": "gore_1/right_lower+right_upper",
+      "b": "gore_2/left_upper+left_lower",
+      "reverse": true
+    },
+    {
+      "id": "join_2",
+      "a": "gore_2/right_lower+right_upper",
+      "b": "gore_3/left_upper+left_lower",
+      "reverse": true
+    },
+    {
+      "id": "join_3",
+      "a": "gore_3/right_lower+right_upper",
+      "b": "gore_4/left_upper+left_lower",
+      "reverse": true
+    },
+    {
+      "id": "join_4",
+      "a": "gore_4/right_lower+right_upper",
+      "b": "gore_5/left_upper+left_lower",
+      "reverse": true
+    },
+    {
+      "id": "join_5",
+      "a": "gore_5/right_lower+right_upper",
+      "b": "gore_6/left_upper+left_lower",
+      "reverse": true
+    },
+    {
+      "id": "join_6",
+      "a": "gore_6/right_lower+right_upper",
+      "b": "gore_1/left_upper+left_lower",
+      "reverse": true
+    }
+  ]
+}

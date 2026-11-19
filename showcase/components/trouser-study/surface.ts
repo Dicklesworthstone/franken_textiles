@@ -2,7 +2,7 @@ const base = "/exhibits/trouser-study/";
 export type Surface = { positions: Float32Array; indices: Uint16Array };
 export type Cut = { path: string; left: number; right: number; front: number; back: number };
 export type Layout = {bodyVertices: number; bodyIndices: number; clothVertices: number};
-type GarmentLayout = {triangles: number[]; seams: Record<string, {side_a:number[]}>};
+type GarmentLayout = {triangles: number[]; seams: Record<string, {side_a:number[]; side_b:number[]}>; panels?: Record<string,[number,number]>};
 
 async function packed(name: string, signal: AbortSignal) {
   const response = await fetch(base+name, {signal});
@@ -10,15 +10,17 @@ async function packed(name: string, signal: AbortSignal) {
   return new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
 
-export async function loadTopology(layout:Layout, signal:AbortSignal) {
-  const [buffer, garment] = await Promise.all([packed("mesh.gz", signal), fetch("/exhibits/trousers.json",{signal}).then(async r=>{
+export async function loadTopology(layout:Layout, signal:AbortSignal, key?:string) {
+  const [buffer, garment] = await Promise.all([packed(key?"mesh-"+key+".gz":"mesh.gz", signal), fetch(key?base+key+"-topology.json":"/exhibits/trousers.json",{signal}).then(async r=>{
     if(!r.ok) throw Error("Missing trouser pattern");
     return await r.json() as GarmentLayout;
   })]);
   const body = new Uint16Array(buffer,0,layout.bodyIndices);
-  const uv = Float32Array.from(new Int16Array(buffer,body.byteLength),n=>n/10000*48);
-  if(uv.length !== 2*layout.clothVertices) throw Error("Incomplete trouser grain coordinates");
-  return {body, cloth:new Uint16Array(garment.triangles), uv, seams:Object.values(garment.seams).map(s=>s.side_a)};
+  // Each cloth vertex's place on its flat cut piece, in metres. The weave and the seam finish are laid out in these.
+  const flat = Float32Array.from(new Int16Array(buffer,body.byteLength),n=>n/10000);
+  if(flat.length !== 2*layout.clothVertices) throw Error("Incomplete trouser grain coordinates");
+  return {body, cloth:new Uint16Array(garment.triangles), flat,
+    garment:{vertices:layout.clothVertices, triangles:garment.triangles, seams:Object.values(garment.seams), panels:garment.panels}};
 }
 
 export async function loadSurface(name:string, hasCloth:boolean, layout:Layout, signal:AbortSignal) {

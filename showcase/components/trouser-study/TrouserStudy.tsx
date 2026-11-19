@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import {useEffect,useMemo,useState} from "react";
-import InlineFilm from "../InlineFilm";
+import InlineFilm,{filmFile} from "../InlineFilm";
 import SiteHeader from "../site/SiteHeader";
 import SiteFooter from "../site/SiteFooter";
 import Crumbs from "../site/Crumbs";
@@ -10,7 +10,7 @@ import type {Model} from "./Scene";
 import {loadSurface,loadTopology,section,type Layout,type Cut} from "./surface";
 
 const Scene=dynamic(()=>import("./Scene"),{ssr:false});
-type Run={id:string;label:string;surface?:string;posture:string;fraction:number;stiffness:number;seatGap?:number;
+type Run={id:string;label:string;surface?:string;posture:string;fraction:number;stiffness:number;seatGap?:number;meshKey?:string;clothVertices?:number;spacingMm?:number;
   waistbandShift?:number;strain?:{p95:number};flags?:string[];refusal?:{code:string;message:string;repairs:string[]}};
 type Study=Layout&{cases:Run[]};
 const stations=["Posture","Elastic","Cross-section"] as const;
@@ -35,9 +35,9 @@ function Drawing({body,cloth,height}:{body:Cut|null;cloth:Cut|null;height:number
 export default function TrouserStudy({study}:{study:Study}){
   const [station,setStation]=useState<Station>("Posture"),[id,setId]=useState("standing");
   const [model,setModel]=useState<Model>(),[error,setError]=useState(""),[gpu,setGpu]=useState(true);
-  const [mesh,setMesh]=useState<Awaited<ReturnType<typeof loadTopology>>>();
   const [view,setView]=useState(0),[strain,setStrain]=useState(false),[clip,setClip]=useState(false);
   const [height,setHeight]=useState(280);
+  const [requested,setRequested]=useState("");
   const run=study.cases.find(r=>r.id===id)!;
   const visible=model?.key===id?model:undefined;
   const cut=station==="Cross-section";
@@ -46,25 +46,21 @@ export default function TrouserStudy({study}:{study:Study}){
     const tab=stations.find(s=>s.toLowerCase()===params.get("bench"));
     const row=study.cases.find(r=>r.id===params.get("run"));
     if(tab)setStation(tab);
-    if(row && (tab==="Elastic"?row.posture==="standing":!row.id.startsWith("elastic-")&&!(tab==="Cross-section"&&row.refusal)))setId(row.id);
+    if(row?.refusal)setRequested(row.label+" was refused by the solver. Showing the dressed standing run.");
+    else if(row && (tab==="Elastic"?row.posture==="standing":!row.id.startsWith("elastic-"))){setId(row.id);if(row.posture!=="standing")setView(1);}
   },[study]);
   useEffect(()=>{
-    const controller=new AbortController();
-    loadTopology(study,controller.signal).then(v=>{if(!controller.signal.aborted)setMesh(v);}).catch(()=>{
-      if(!controller.signal.aborted)setError("The mesh could not be loaded.");
-    });return()=>controller.abort();
-  },[study]);
-  useEffect(()=>{
-    if(!mesh||!run.surface)return;
+    if(!run.surface||run.refusal)return;
     const controller=new AbortController();setError("");
-    loadSurface(run.surface,!run.refusal,study,controller.signal).then(data=>{
+    const layout={...study,clothVertices:run.clothVertices??study.clothVertices};
+    Promise.all([loadSurface(run.surface,true,layout,controller.signal),loadTopology(layout,controller.signal,run.meshKey)]).then(([data,mesh])=>{
       if(controller.signal.aborted)return;
       let floor=Infinity;
       for(let i=1;i<data.body.length;i+=3)floor=Math.min(floor,data.body[i]);
       setModel({...data,key:run.id,mesh,floor});
     }).catch(()=>{if(!controller.signal.aborted)setError("This surface could not be loaded.");});
     return()=>controller.abort();
-  },[run,mesh,study]);
+  },[run,study]);
   const y=(visible?.floor??0)+height/1000;
   const contours=useMemo(()=>!cut||!visible?null:{
     body:section({positions:visible.body,indices:visible.mesh.body},y),
@@ -74,8 +70,7 @@ export default function TrouserStudy({study}:{study:Study}){
     setStation(tab);setStrain(false);setClip(false);
     if((tab==="Elastic"&&run.posture!=="standing")||(tab!=="Elastic"&&(id.startsWith("elastic-")||run.refusal)))setId("standing");
   }
-  const choices=study.cases.filter(r=>station==="Elastic"?r.posture==="standing":
-    !r.id.startsWith("elastic-")&&(!cut||!r.refusal));
+  const choices=study.cases.filter(r=>!!r.surface&&!r.refusal&&(station==="Elastic"?r.posture==="standing":!r.id.startsWith("elastic-")));
   if(station==="Elastic")choices.sort((a,b)=>a.stiffness-b.stiffness);
   return <><SiteHeader/><main id="main" className="ts-page">
     <Crumbs trail={[["Exhibition","/"],["Drape gallery","/#studies"],["Room to move"]]}/>
@@ -85,21 +80,21 @@ export default function TrouserStudy({study}:{study:Study}){
       <nav className="ts-tabs" aria-label="Trouser experiments">{stations.map(s=><button key={s} aria-pressed={station===s} onClick={()=>choose(s)}>{s}</button>)}</nav>
       <div className="ts-bench">
         <figure className="ts-figure"><div className="ts-stage">
-          <div className="ts-mark"><span>{run.refusal?"Posed body form":"Gathered trousers"}</span><small>{station==="Elastic"?run.stiffness+" N elastic":run.label}</small></div>
+          <div className="ts-mark"><span>Gathered trousers</span><small>{station==="Elastic"?run.stiffness+" N elastic":run.label}</small></div>
           {visible&&gpu?<Scene model={visible} plane={cut?y:null} clip={cut&&clip} strain={strain&&!cut} view={view} onError={()=>setGpu(false)}/>:
             <div className="ts-placeholder"><img src="/media/trouser-form.jpg" alt="Reference rendering of the standing trouser study"/><span role="status">{error||(!gpu?"Recorded view · WebGL unavailable":"Loading surface…")}</span></div>}
           <div className="ts-cameras" aria-label="Camera">{["Three-quarter","Profile","Back"].map((name,i)=><button key={name} aria-pressed={view===i} onClick={()=>setView(i)}>{name}</button>)}</div>
-        </div><figcaption><span>{run.refusal?"Body geometry only":cut?"Section plane shown at scale":strain?"Native endpoint strain":"Native garment surface"}</span><span>Drag to orbit</span></figcaption></figure>
+        </div><figcaption><span>{cut?"Section plane shown at scale":strain?"Native endpoint strain":"Native garment surface"}</span><span>Drag to orbit</span></figcaption></figure>
         <aside className="ts-panel">
           <h2>{cut?"Inside the folds":station==="Elastic"?"At the waistband":"Bend the knees"}</h2>
-          <p>{cut?"Move a horizontal plane through the form. Each line traces its intersection with a real mesh.":station==="Elastic"?"Change the axial stiffness of the elastic casings. The waist and both cuffs use the same value.":"Compare independently sewn poses of the same synthetic 92 cm figure. Shallow bends use one eighth of the full joint rotations."}</p>
+          <p>{cut?"Move a horizontal plane through the form. Each line traces its intersection with a real mesh.":station==="Elastic"?"Change the axial stiffness of the elastic casings. The waist and both cuffs use the same value.":"Compare the sewn trousers on the same 92 cm figure. In the quarter squat, the hips bend 25° and the knees bend 27.5°."}</p>
+          {requested&&<p role="status">{requested}</p>}
           <fieldset><legend>{station==="Elastic"?"Elastic stiffness":"Body posture"}</legend><div className="ts-options">{choices.map(r=>
-            <button key={r.id} aria-pressed={id===r.id} onClick={()=>setId(r.id)}>{station==="Elastic"?r.stiffness+" N":r.label}</button>)}</div></fieldset>
+            <button key={r.id} aria-pressed={id===r.id} onClick={()=>{setRequested("");setId(r.id);if(station==="Posture"&&r.posture!=="standing")setView(1);}}>{station==="Elastic"?r.stiffness+" N":r.label}</button>)}</div></fieldset>
           {cut?<><label className="ts-range">Height above sole <strong>{height} mm</strong><input type="range" min="100" max="490" step="1" value={height} onChange={e=>setHeight(Number(e.target.value))}/></label>
             <Drawing body={contours?.body??null} cloth={contours?.cloth??null} height={height}/>
             <label className="ts-check"><input type="checkbox" checked={clip} onChange={e=>setClip(e.target.checked)}/> Cut away above the plane</label>
             {contours&&<p className="ts-note">{contours.cloth?"Cloth spans "+(contours.cloth.right-contours.cloth.left).toFixed(1)+" mm from left to right at this height.":"The plane clears the trouser cloth at this height."}</p>}</>:
-          run.refusal?<div className="ts-reason" role="status"><h3>Cloth solve refused</h3><p>{id==="elastic-0"?"The cloth already crosses itself during placement.":"The posed body intersects itself before the garment can be sewn."} The form shows the requested pose.</p><details><summary>Native diagnostic</summary><p>{run.refusal.message}</p></details></div>:
           <><dl className="ts-values"><div><dt>Mean seat gap</dt><dd>{run.seatGap?.toFixed(1)} <small>mm</small></dd></div><div><dt>Waistband shift</dt><dd>{run.waistbandShift?.toFixed(1)} <small>mm</small></dd></div></dl>
             <label className="ts-check"><input type="checkbox" checked={strain} onChange={e=>setStrain(e.target.checked)}/> Show endpoint edge strain</label>
             {strain&&<p className="ts-note">Blue under compression · red under tension. 95th percentile {run.strain?.p95.toFixed(2)}%.</p>}</>}
@@ -108,9 +103,10 @@ export default function TrouserStudy({study}:{study:Study}){
         </aside>
       </div>
       <section className="ts-films"><header><p className="ts-kicker">On film</p><h2>Three views of the <em>cut.</em></h2></header>
-        {[["trouser-posture","Bending the knee"],["trouser-elastic","Holding the waist"],["trouser-section","Inside the folds"]].map(([film,title])=><figure key={film}><div><InlineFilm id={film} title={title}/></div><figcaption>{title}<a href={"/media/"+film+".mp4"} download aria-label={"Download "+title}>MP4 ↓</a></figcaption></figure>)}
+        {[["trouser-posture","Bending the knee"],["trouser-elastic","Holding the waist"],["trouser-section","Inside the folds"]].map(([film,title])=><figure key={film}><div><InlineFilm id={film} title={title}/></div><figcaption>{title}<a href={filmFile(film)} download aria-label={"Download "+title}>MP4 ↓</a></figcaption></figure>)}
       </section>
-      <details className="ts-method"><summary>Pattern, poses and solver readings</summary><p>The seven panels and seventeen seams come from the downloadable pattern. The fabric finish is illustrative. The drapes use a 12 mm mesh, 2 mm self-contact thickness and synthetic material parameters. A full seat bends the hips and knees by 90°. The squat bends them by 100° and 110°, with 10° at the ankles. Each case starts at its prescribed posture. Chair and floor contact are outside the calculation.</p>
+      <details className="ts-method"><summary>Pattern, poses and solver readings</summary><p>The seven panels and seventeen seams come from the downloadable pattern. The drapes use 2 mm self-contact thickness and synthetic fabric parameters. The quarter squat uses 20 mm meshing and the other cases use 12 mm. Each starts at its prescribed posture. Chair and floor contact are outside the calculation.</p>
+        <p>The full squat and full seat were refused because the posed body crosses itself. The zero-elastic run had a cloth crossing at placement. Diagnostics are retained in the downloadable results.</p>
         <p>The gap is the solver’s mean seat-ring clearance. Negative waistband shift means the band dropped. The slice uses display geometry rounded to 0.1 mm. Its left-to-right span is a geometric dimension across the section. Physical fit requires a sewn sample.</p>
         <a href="/exhibits/trouser-study/study.json" download>Download the run summaries and synthetic inputs ↓</a></details>
     </div>

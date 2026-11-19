@@ -1,4 +1,6 @@
 const patterns = {
+  column: ["Column skirt", "/atelier/column.pdf"],
+  flare: ["Flared skirt", "/atelier/flare.pdf"],
   bolero: ["Zouave bolero", "/patterns/bolero.pdf"],
   trousers: ["Gathered trousers", "/patterns/trousers.pdf"],
   fez: ["Fez", "/patterns/fez.pdf"],
@@ -8,6 +10,7 @@ const patterns = {
 } as const;
 
 const exhibits: Record<string, (keyof typeof patterns)[]> = {
+  "skirt-atelier":["column","flare"],
   "drape-room": ["bolero","trousers"],
   "trouser-posture":["trousers"], "trouser-elastic":["trousers"], "trouser-section":["trousers"],
   bolero: ["bolero"], construction: ["bolero"], trousers: ["trousers"], fez: ["fez"],

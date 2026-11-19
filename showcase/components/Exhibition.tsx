@@ -6,9 +6,10 @@ import { studies, type Study, type View } from "../app/studies";
 import LabBench from "../components/LabBench";
 import TraceReveal from "../components/TraceReveal";
 import { experiments, type Rig } from "../components/materialExperiments";
-import InlineFilm, { PlaybackMark } from "../components/InlineFilm";
+import InlineFilm, { PlaybackMark, filmFile } from "../components/InlineFilm";
 import GarmentPatterns from "./GarmentPatterns";
 import DrapeRoom from "./DrapeRoom";
+import {ExhibitionCover,ExhibitionFeatures} from "./site/ExhibitionCover";
 import SiteHeader from "./site/SiteHeader";
 import SiteFooter from "./site/SiteFooter";
 import Reveal from "./site/Reveal";
@@ -28,6 +29,7 @@ const wardrobe = [
 
 const films = [
   { id:"drape-room", title:"Raising the sleeve", detail:"Body & cloth study" },
+  { id:"skirt-atelier", title:"Two hems in motion", detail:"Adult skirt drape" },
   { id:"trouser-posture", title:"Bending the knee", detail:"Trouser posture" },
   { id:"trouser-elastic", title:"Holding the waist", detail:"Elastic casings" },
   { id:"trouser-section", title:"Inside the folds", detail:"Cross-section" },
@@ -172,7 +174,7 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
           <span className="mono phase">{phase}</span></div></>}
     </div>}
     <footer className="player-foot">{live ? <p>Native Rust fold replay on a synthetic body.</p> :
-      <a download={`frankentextiles-${mediaId}.mp4`} href={`/media/${mediaId}.mp4`}>Download MP4 ↓</a>}
+      <a download={`frankentextiles-${mediaId}.mp4`} href={filmFile(mediaId)}>Download MP4 ↓</a>}
       {study ? <button onClick={changePlayer}>{live ? "Watch film" : "Open 3D study"} <Arrow/></button> :
         garment ? <a href={`/wardrobe/${garment.id}/`}>Open garment study <Arrow/></a> : rig ? <a href={`/experiments/${rig}/`}>Open experiment <Arrow/></a> : "reel" in item ? <a href="/sections/wardrobe/">Explore the wardrobe <Arrow/></a> : "poseRoom" in item ? <a href="/sections/studies/#drape-room">Try the drape room <Arrow/></a> : <a href="/sections/studio/">Try the studios <Arrow/></a>}</footer>
     <GarmentPatterns exhibit={mediaId}/>
@@ -222,9 +224,11 @@ export default function Exhibition({section}: {section?: string}) {
   return <>
     <SiteHeader skipTo="#exhibition"/>
     <main id="exhibition">
-      {show("studies") && <DrapeRoom home={!section}/>}
+      {!section && <><ExhibitionCover/><ExhibitionFeatures/></>}
+      {section==="wardrobe"&&<ExhibitionFeatures/>}
+      {show("studies") && <DrapeRoom/>}
       {!section && <section className="dr-index" aria-label="Explore more of the studio"><div className="wrap">
-        <a href="/wardrobe/sundress/"><img src="/media/wardrobe-sundress.jpg" alt=""/><div><small>Body model</small><strong>Pose the sundress</strong></div><Arrow diagonal/></a>
+        <a href="/studies/trousers/?bench=posture&amp;run=squat-25"><img src="/media/trouser-posture.jpg" alt=""/><div><small>Body &amp; cloth</small><strong>Bend the knees in trousers</strong></div><Arrow diagonal/></a>
         <a href="/experiments/strip/"><img src="/media/rig-strip.jpg" alt=""/><div><small>Textile mechanics</small><strong>Pull cloth on the bias</strong></div><Arrow diagonal/></a>
         <div className="dr-reel"><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/></div></figure>
           <button onClick={()=>setItem({reel:true})}><span><small>Studio film</small><strong>Inside the wardrobe</strong></span><Arrow diagonal/></button></div>
@@ -266,7 +270,7 @@ export default function Exhibition({section}: {section?: string}) {
       {show("films") && <section id="films" className="films"><div className="wrap film-grid">
         <div className="screening" ref={projection}><p className="kicker">Films</p><Heading className="section-title"><a href="/sections/films/">Screening room<span>.</span></a></Heading>
           <InlineFilm key={screening.id} id={screening.id} title={screening.title} controls requested={filmChosen}/>
-          <div className="screening-caption"><strong>{screening.title}</strong><a href={`/media/${screening.id}.mp4`} download>Download MP4 ↓</a></div>
+          <div className="screening-caption"><strong>{screening.title}</strong><a href={filmFile(screening.id)} download>Download MP4 ↓</a></div>
           <GarmentPatterns exhibit={screening.id}/></div>
         <div className="film-list">{films.map(f=><button key={f.id} aria-pressed={f.id===screening.id} onClick={()=>{
           setFilmChosen(true);setScreening(f);

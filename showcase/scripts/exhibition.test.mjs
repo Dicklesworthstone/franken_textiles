@@ -12,6 +12,38 @@ before(async () => {
 after(async () => { await browser?.close(); });
 const opts = { userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0", viewport: { width: 1120, height: 820 } };
 
+test("the skirt atelier displays the selected native trajectory and its matching cut", async () => {
+  const page=await browser.newPage({...opts,reducedMotion:"reduce"});
+  try {
+    await page.goto(new URL("/studies/skirt/?cut=column&waist=800",site).href);
+    await page.locator('canvas[data-run="column-800"]').waitFor();
+    assert.ok(await page.getByRole("button",{name:"Flared",exact:true}).isDisabled());
+    const data=await (await page.request.get(new URL("/atelier/study.json",site).href)).json();
+    for(const cut of ["column","flare"]){
+      await page.getByRole("button",{name:"68 centimetre form waist"}).click();
+      await page.getByRole("button",{name:cut==="column"?"Column":"Flared",exact:true}).click();
+      for(const [key,run] of Object.entries(data.runs).filter(([k])=>k.startsWith(cut+"-"))){
+        await page.getByRole("button",{name:run.waist/10+" centimetre form waist"}).click();
+        await page.locator('canvas[data-run="'+key+'"]').waitFor();
+        const mm=Object.values(run.hemHeights);
+        assert.equal(await page.locator(".sa-reading strong").nth(1).innerText(),(Math.max(...mm)-Math.min(...mm)).toFixed(1)+" mm");
+      }
+      const path=await page.locator(".sa-pdf").getAttribute("href");
+      assert.equal(path,"/atelier/"+cut+".pdf");
+      const bytes=await (await page.request.get(new URL(path,site).href)).body();
+      assert.equal(bytes.subarray(0,5).toString(),"%PDF-");
+    }
+    await page.getByRole("button",{name:"Compare hems"}).click();
+    await page.locator('canvas[data-surface="Hems"]').waitFor();
+    await page.getByRole("button",{name:"Strain",exact:true}).click();
+    await page.locator('canvas[data-surface="Strain"][data-step="100"]').waitFor();
+    await page.getByRole("button",{name:"Replay drape"}).click();
+    await page.waitForFunction(()=>Number(document.querySelector(".sa-canvas canvas").dataset.step)<95);
+    await page.setViewportSize({width:375,height:812});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  } finally {await page.close();}
+});
+
 test("the drape room pairs each body and pose with its native cloth and endpoint loads", async () => {
   const page=await browser.newPage({...opts,reducedMotion:"reduce"});
   try {
@@ -24,7 +56,7 @@ test("the drape room pairs each body and pose with its native cloth and endpoint
       await page.locator('canvas[data-run="'+id+'"]').waitFor({timeout:30000});
       assert.equal(await page.locator(".dr-readings strong").nth(1).textContent(),run.chestClearance.toFixed(1)+" mm");
       assert.equal(await page.locator(".dr-method summary span").textContent(),
-        run.flags.length||run.trousers.flags?.length?(run.settled?"Contact thickness incomplete":"Cloth still moving"):"Settled");
+        run.flags.length?(run.settled?"Contact thickness incomplete":"Cloth still moving"):"Settled");
       await page.getByRole("button",{name:"Contact",exact:true}).click();
       await page.locator('canvas[data-mode="contact"][data-frame="135"]').waitFor();
       assert.equal(await page.locator(".dr-readings strong").last().textContent(),run.peakBodyForceN.toFixed(2)+" N");
@@ -37,8 +69,11 @@ test("the drape room pairs each body and pose with its native cloth and endpoint
     await page.setViewportSize({width:390,height:844});
     await page.getByRole("button",{name:"52 centimetre chest"}).click();
     await page.getByRole("button",{name:"35 degree arm pose"}).click();
-    await page.getByRole("button",{name:"Full figure"}).click();
-    await page.locator('canvas[data-run="520-35"][data-full="true"]').waitFor();
+    await page.getByRole("button",{name:"Coupled outfit"}).click();
+    await page.locator('canvas[data-run="520-35"][data-coupled="true"][data-native-frame="47"]').waitFor();
+    assert.equal(await page.locator(".dr-readings strong").nth(1).textContent(),"-2.2 mm");
+    await page.getByRole("slider",{name:"Sewing replay frame"}).press("Home");
+    await page.locator('canvas[data-coupled="true"][data-native-frame="0"]').waitFor();
     assert.ok(await page.locator(".dr-settings a[download]").count()===2);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   } finally {await page.close();}
@@ -131,6 +166,14 @@ test("strip controls and readouts agree with the exported Rust states", async ()
     });
     assert.deepEqual(rows,expected);
     await p.locator(".rig-scene canvas[data-step='4']").waitFor();
+    assert.deepEqual(await p.locator(".rig-measured strong").allTextContents(),["0.12 N","-0.01 N","0.04 N"]);
+    await p.getByRole("button",{name:"Weft",exact:true}).click();
+    await p.locator('canvas[data-specimen="Weft"]').waitFor();
+    await p.goto(new URL("/experiments/cylinder/",site).href);
+    await p.getByRole("button",{name:"Compressed",exact:true}).click();
+    assert.deepEqual(await p.locator(".rig-refinement b").allTextContents(),["-0.63 N","-0.97 N"]);
+    await p.getByRole("button",{name:"Mid-section",exact:true}).click();
+    assert.equal(await p.getByRole("button",{name:"Mid-section",exact:true}).getAttribute("aria-pressed"),"true");
   } finally {await p.close();}
 });
 

@@ -14,12 +14,11 @@ test("posture, elastic and cutaway views follow their own native results",async(
     for(const run of cases){
       const elastic=run.id.startsWith("elastic-");
       await button(elastic?"Elastic":"Posture").click();
-      await button(elastic?run.stiffness+" N":run.label).click();
-      await page.locator(`canvas[data-run="${run.id}"][data-cloth="${!run.refusal}"]`).waitFor();
-      if(run.refusal){
-        assert.equal(await page.locator(".ts-values dd").count(),0);
-        assert.match(await page.locator(".ts-reason details p").textContent(),/intersect/);
-      }else assert.equal(await page.locator(".ts-values dd").last().textContent(),run.waistbandShift.toFixed(1)+" mm");
+      const choice=button(elastic?run.stiffness+" N":run.label);
+      if(run.refusal){assert.equal(await choice.count(),0);continue;}
+      await choice.click();
+      await page.locator(`canvas[data-run="${run.id}"][data-cloth="true"]`).waitFor();
+      assert.equal(await page.locator(".ts-values dd").last().textContent(),run.waistbandShift.toFixed(1)+" mm");
     }
     await button("Cross-section").click();
     for(const [label,key,span] of [["Standing","standing",318.899],["Shallow seat","sit-12",314.658],["Shallow squat","squat-12",304.131]]){

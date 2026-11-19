@@ -10,7 +10,7 @@ const base = process.argv[2] || "http://localhost:3000";
 const dest = path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/", import.meta.url)));
 const kinds = process.argv[4] ? [process.argv[4]] : ["cylinder","strip"];
 const ua = "OpenAI File Downloader, XaiImageApiFetch/1.0";
-const fps = 24, frames = fps * 7;
+const fps = 16, frames = fps * 7;
 await mkdir(dest,{recursive:true});
 const browser = await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(),
   args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
@@ -45,12 +45,18 @@ try {
     const done=once(encoder,"close");encoder.stdin.on("error",()=>{});
     try {
       for(let k=0;k<frames;k++){
-        const t=k/(frames-1), cycle=(1-Math.cos(t*2*Math.PI))/2, i=Math.round(cycle*last);
+        const t=k/(frames-1),cut=Math.min(2,Math.floor(t*3));
+        if(kind==="strip"){
+          const target=["Warp","Weft","Bias"][cut];
+          await page.getByRole("button",{name:target,exact:true}).evaluate(el=>{if(el.getAttribute("aria-pressed")!=="true")el.click();});
+        }
+        const i=Math.round((kind==="cylinder"?t:Math.min(1,(t*3-cut)*1.4))*last);
         await pose(i, (kind==="cylinder"?.35:.05)+Math.sin(t*2*Math.PI)*(kind==="cylinder"?.89:.30));
         await page.evaluate(kind=>{
           const time=document.querySelector(".rig-slider output").textContent;
-          const value=kind==="cylinder"?document.querySelector(".rig-values dd").textContent:document.querySelector(".rig-values tbody tr td").textContent;
-          document.querySelector("#film-reading span").textContent=kind==="cylinder"?time+"   /   UPPER GRIP  "+value:time+" EXTENSION   /   WARP  "+value;
+          const cut=document.querySelector(".rig-scene canvas").dataset.specimen;
+          const value=kind==="cylinder"?document.querySelector(".rig-values dd").textContent:[...document.querySelectorAll(".rig-values tbody tr")].find(row=>row.querySelector("th").textContent===cut).querySelector("td").textContent;
+          document.querySelector("#film-reading span").textContent=kind==="cylinder"?time+"   /   UPPER GRIP  "+value:time+" EXTENSION   /   "+cut.toUpperCase()+"  "+value;
         },kind);
         const frame=await page.screenshot({type:"jpeg",quality:89});
         await new Promise((resolve,reject)=>encoder.stdin.write(frame,error=>error?reject(error):resolve()));

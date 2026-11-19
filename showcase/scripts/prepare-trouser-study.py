@@ -20,6 +20,7 @@ CASES = [
     ("standing", "Standing", "standing", 1, 15),
     ("sit-12", "Shallow seat", "seated", .125, 15),
     ("squat-12", "Shallow squat", "squat", .125, 15),
+    ("squat-25", "Quarter squat", "squat", .25, 15),
     ("seated", "Full seat", "seated", 1, 15),
     ("squat", "Full squat", "squat", 1, 15),
     *((f"elastic-{ea}", f"{ea} N", "standing", 1, ea) for ea in (0, 5, 30, 60)),
@@ -39,7 +40,7 @@ def run_cases(scratch):
         subprocess.run([ftx, "body", "--measurements", tapes, "--pose", pose,
                         "--out", scratch / ("body-" + pose), "--json"], check=True, stdout=subprocess.DEVNULL)
     for key, _, posture, fraction, stiffness in CASES:
-        command = [ftx, "drape", PATTERN, "--fit", FIT, "--measurements", tapes, "--spacing-mm", "12",
+        command = [ftx, "drape", PATTERN, "--fit", FIT, "--measurements", tapes, "--spacing-mm", "20" if key=="squat-25" else "12",
                    "--self-contact-mm", "2", "--self-mu", "0.4", "--arm-deg", "35", "--elastic-ea",
                    str(stiffness), "--legs", posture, "--leg-fraction", str(fraction), "--out", scratch/key, "--json"]
         run = subprocess.run(command, capture_output=True)
@@ -82,12 +83,7 @@ def package(scratch, output):
         rows.append(row)
         if "refusal" in outcome:
             row["refusal"] = outcome["refusal"]
-            # Full poses come from the same native tape fit. Only show a body on a refused run.
-            if posture != "standing" and fraction != 1:
-                continue
-            source = scratch/("body-" + ("drape" if posture=="standing" else posture))/"body.obj"
-            body, topology = read_obj(source)
-            payload = b""
+            continue
         else:
             folder = scratch/key
             report = json.loads((folder/"sim_report.json").read_text())
@@ -95,7 +91,15 @@ def package(scratch, output):
                 raise ValueError("Different trouser cut in " + key)
             body, topology = read_obj(folder/"body.obj")
             cloth, triangles = read_obj(folder/"garment_strain.obj")
-            if triangles.flatten().tolist() != template["triangles"] or len(cloth) != count:
+            if key=="squat-25":
+                pc2=(folder/"fold.pc2").read_bytes()
+                assert struct.unpack_from("<12sii",pc2)==(b"POINTCACHE2\0",1,len(cloth))
+                flat_run=np.frombuffer(pc2,dtype="<f4",count=len(cloth)*3,offset=32).reshape(-1,3)
+                store(output/("mesh-"+key+".gz"),faces.astype("<u2").tobytes()+quantize(flat_run[:,[0,2]]))
+                mesh_map=json.loads((folder/"mesh_map.json").read_text())
+                (output/(key+"-topology.json")).write_text(json.dumps({"triangles":triangles.flatten().tolist(),"seams":mesh_map["seams"],"panels":mesh_map["inst_range"]},separators=(",",":"))+"\n")
+                row.update(clothVertices=len(cloth),spacingMm=20,meshKey=key)
+            elif triangles.flatten().tolist() != template["triangles"] or len(cloth) != count:
                 raise ValueError("Different garment topology in " + key)
             colors = np.rint(cloth[:, 3:] * 255).astype("u1")
             payload = quantize(cloth[:, :3]) + colors.tobytes()

@@ -11,7 +11,7 @@ type StripState = Frame & { extension_fraction: number; force_n: number; mid_wid
 type Fixture = { cells: [number, number]; width_m: number; gauge_length_m: number };
 export type Specimen = { name: string; cells: [number, number]; triangles: number[]; frames: Frame[]; width: number; height: number };
 export type Reading = { coordinate: number; forces: number[]; widths: number[]; angle: number; torque: number; gap: number; slip: boolean; residual: number };
-export type Experiment = { kind: Rig; specimens: Specimen[]; readings: Reading[]; limit: number; notes: string[] };
+export type Experiment = { kind: Rig; specimens: Specimen[]; readings: Reading[]; limit: number; notes: string[]; bench?:{points:number[][]}; comparison?:number[] };
 
 // Same alternating diagonals and row-major vertex numbering as ftx_drape::cloth::grid.
 function stripTriangles([nx, ny]: [number, number]) {
@@ -29,14 +29,25 @@ export async function loadExperiment(kind: Rig, signal: AbortSignal): Promise<Ex
   if (kind === "cylinder") {
     const r: { states: CylinderState[]; triangles: number[][]; isometric_mesh_radius_m: number; input: {
       fixture: Fixture & { nominal_free_height_m: number; grip_slip_force_limit_n: number } }; protocol_audit: { discrepancies: string[] } } = await response.json();
-    return { kind, specimens: [{ name: "Cylinder", cells: r.input.fixture.cells, triangles: r.triangles.flat(),
+    const second=await fetch("/materials/cylinder-refinement.json",{signal});
+    if(!second.ok)throw Error("The mesh comparison could not be loaded.");
+    const coarse:{readings:{time:number;force:number}[]}=await second.json();
+    const comparison=r.states.map((state,i)=>{const row=coarse.readings[i];
+      if(row?.time!==state.time_s)throw Error("Different experiment schedules.");return row.force;});
+    return { kind, comparison, specimens: [{ name: "Cylinder", cells: r.input.fixture.cells, triangles: r.triangles.flat(),
       frames: r.states, width: r.isometric_mesh_radius_m * 2000, height: r.input.fixture.nominal_free_height_m * 1000 }],
       readings: r.states.map(s => ({ coordinate: s.time_s, forces: [s.upper_force_n], widths: [],
         torque: s.upper_torque_nm, angle: s.rotation_deg, gap: s.holder_separation_m * 1000, slip: s.slip_limit_exceeded, residual: s.free_dynamic_residual_n })),
       limit: r.input.fixture.grip_slip_force_limit_n, notes: r.protocol_audit.discrepancies };
   }
   const runs: { name: string; report: { input: { fixture: Fixture }; states: StripState[] } }[] = await response.json();
-  return { kind, specimens: runs.map(({ name, report }) => {
+  const source=await fetch("/materials/jersey-readings.json",{signal});
+  if(!source.ok)throw Error("The measured strip data could not be loaded.");
+  const bench:{rows:{extension:number;force:number[]}[]}=await source.json();
+  return { kind, bench:{points:runs[0].report.states.map(s=>{
+    const row=bench.rows.find(row=>row.extension===s.extension_fraction);
+    if(!row)throw Error("No measured reading at this extension");return row.force;
+  })}, specimens: runs.map(({ name, report }) => {
     const f = report.input.fixture;
     return { name, triangles: stripTriangles(f.cells), cells: f.cells, frames: report.states, width: f.width_m * 1000, height: f.gauge_length_m * 1000 };
   }), readings: runs[0].report.states.map((s, k) => ({ coordinate: s.extension_fraction * 100,

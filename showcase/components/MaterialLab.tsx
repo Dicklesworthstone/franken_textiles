@@ -3,14 +3,14 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import { experiments, loadExperiment, type Rig, type Experiment } from "./materialExperiments";
-import InlineFilm, { PlaybackMark } from "./InlineFilm";
+import InlineFilm, { PlaybackMark, filmFile } from "./InlineFilm";
 import SiteHeader from "./site/SiteHeader";
 import SiteFooter from "./site/SiteFooter";
 import Crumbs from "./site/Crumbs";
 import "./material-lab.css";
 
 const Scene = dynamic(() => import("./MaterialScene"), { ssr: false });
-const views = ["Perspective","Front","Top"] as const;
+const views = ["Perspective","Fabric detail","Front","Top"] as const;
 const inks = ["#2f626a","#9a572b","#66723d"];
 const fmt = (value: number, places: number) => (Math.abs(value)<.5*10**-places ? 0 : value).toFixed(places);
 
@@ -35,6 +35,7 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
   const cylinder=kind==="cylinder", meta=experiments[kind];
   const [data,setData]=useState<Experiment>(),[problem,setProblem]=useState(false),[retry,setRetry]=useState(0);
   const [step,setStep]=useState(0),[mesh,setMesh]=useState(false),[playing,setPlaying]=useState(false);
+  const [focus,setFocus]=useState(2);
   const [failed,setFailed]=useState(false),[camera,setCamera]=useState<{name:typeof views[number];revision:number}>({name:"Perspective",revision:0});
   const onFailure=useCallback(()=>setFailed(true),[]);
   useEffect(()=>{
@@ -42,7 +43,7 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
     setData(undefined);setProblem(false);setPlaying(false);setFailed(false);
     loadExperiment(kind,controller.signal).then(result=>{
       if(controller.signal.aborted)return;
-      setStep(cylinder ? result.readings.findIndex(r=>r.coordinate===1.5) : result.readings.length-1);
+      setStep(cylinder ? result.readings.findIndex(r=>r.coordinate===2.5) : result.readings.length-1);
       setData(result);
     }).catch(()=>{if(!controller.signal.aborted)setProblem(true);});
     return ()=>controller.abort();
@@ -65,14 +66,14 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
         <section className="rig-instrument" aria-label="Interactive test rig">
           <div className={`rig-stage ${kind}`}>
             {failed ? <InlineFilm controls id={`rig-${kind}`} title={meta.title}/> :
-              data ? <Scene data={data} step={step} mesh={mesh} camera={camera} onFailure={onFailure}/> :
+              data ? <Scene data={data} step={step} mesh={mesh} focus={focus} camera={camera} onFailure={onFailure}/> :
                 <img className="rig-poster" src={`/media/rig-${kind}.jpg`} alt="Rendered view of the specimen holders"/>}
-            {!failed && <><span className="rig-plate mono">{cylinder?"Cylindrical holder":"Tensile grips"}</span>
-              <div className="rig-annot">{cylinder ? r && <><b>{fmt(r.angle,1)}°</b> holder rotation</> :
-                <><i/> Warp <i/> Weft <i/> Bias</>}</div></>}
+            {!failed && <><span className="rig-plate mono">{cylinder?"Torsion · 50 mm gauge":"Tensile test · 100 mm gauge"}</span>
+              <div className="rig-annot">{cylinder ? r && (camera.name==="Top"?<>Dashed · mounted <b>Solid · current section</b></>:<><b>{fmt(r.gap,1)} mm</b> between grips · {fmt(r.angle,1)}° twist</>) :
+                focus===-1?"Warp · Weft · Bias":data&&r&&<><b>{data.specimens[focus].name} cut</b> · {fmt(r.widths[focus],2)} mm at centre</>}</div></>}
           </div>
           {failed ? <p className="rig-viewbar">WebGL is unavailable. The film shows the recorded experiment.</p> :
-          <div className="rig-viewbar"><div aria-label="Camera angle">{views.map(name=><button key={name} onClick={()=>setCamera(c=>({name,revision:c.revision+1}))}>{name}</button>)}</div>
+          <div className="rig-viewbar">{!cylinder&&<div aria-label="Displayed specimen">{["Warp","Weft","Bias","All cuts"].map((name,i)=><button key={name} aria-pressed={focus===(i===3?-1:i)} onClick={()=>setFocus(i===3?-1:i)}>{name}</button>)}</div>}<div aria-label="Camera angle">{views.map(name=><button key={name} aria-pressed={camera.name===name} onClick={()=>setCamera(c=>({name,revision:c.revision+1}))}>{name==="Top"?(cylinder?"Mid-section":"Reverse"):name}</button>)}</div>
             <label><input type="checkbox" checked={mesh} onChange={e=>setMesh(e.target.checked)}/> Solver mesh</label></div>}
         </section>
         <section className="rig-console" aria-label="Experiment controls">
@@ -96,13 +97,17 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
         </section>
       </div>
       <div className="rig-notes"><div><h2>About the specimen</h2><p>{cylinder ?
-        "The Rust cloth solver advances a synthetic tube between two rigid holders. Rotation, compression and prescribed slip follow the input schedule. The force is the upper holder’s reaction before tare." :
-        "All three strips use the same synthetic material and ideal grips. Only the material direction changes. Each point is an independent planar equilibrium solved by Rust."}</p>
+        "The grips close to 45 mm on a 50 mm tube. Select Mid-section to look into the folds halfway up its height. Both runs use the coupled outfit’s synthetic fabric, with cloth self-contact enabled." :
+        "The three strips use the same material as the coupled outfit, cut along the warp, weft or bias. A 16 × 24 mesh gives each strip room to narrow between the fixed-width jaws. Each slider position is a separate planar equilibrium. This test covers tension and in-plane contraction."}</p>
+        {r&&data?.comparison&&<p className="rig-refinement">At {fmt(r.coordinate,3)} s, the upper grip reaction is <b>{fmt(r.forces[0],2)} N</b> on the displayed 32 × 8 mesh and <b>{fmt(data.comparison[step],2)} N</b> on a 24 × 8 mesh. <a href="/materials/cylinder-refinement.json" download>Comparison readings ↓</a></p>}
         {data && r && <details><summary>Solver notes and residuals</summary><p>Maximum free force residual at this state: {r.residual.toExponential(2)} N.</p>
           {data.notes.length>0 && <ul>{data.notes.map(note=><li key={note}>{note}</li>)}</ul>}
-          <p>The reports include the exact model inputs, evidence and assumptions.</p></details>}</div>
+          <p>The blue surface uses the Rough Linen material photographed by colormass and processed by Rico Cilliers. Its color and yarn relief are illustrative. <a href="https://polyhaven.com/a/rough_linen">Poly Haven scan ↗</a></p></details>}{!cylinder&&data?.bench&&r&&<section className="rig-measured"><p className="kicker">Measured specimen · SJ1</p><h3>What did the lab measure?</h3>
+            <p>At the same {r.coordinate}% extension, Sperl and colleagues recorded these forces on a 100 × 60 mm polyester–spandex jersey. The blue specimen above uses a synthetic material law.</p>
+            <div>{data.bench.points[step].map((n,i)=><span key={i}>{data.specimens[i].name}<strong>{fmt(n,2)} N</strong></span>)}</div>
+            <a href="/materials/jersey-readings.json" download>Source rows and license ↓</a> · <a href="https://doi.org/10.1145/3528223.3530167">Read the experiment ↗</a></section>}</div>
         <div className="rig-links"><figure className="exhibit-film"><InlineFilm controls id={`rig-${kind}`} title={meta.title+" film"}/><figcaption>{cylinder?"The full loading cycle":"Three cuts under tension"}</figcaption></figure>
-          <a href={`/media/rig-${kind}.mp4`} download>Download film ↓</a><a href={`/materials/${kind}.json`} download>Download solver report{cylinder?"":"s"} ↓</a>
+          <a href={filmFile("rig-"+kind)} download>Download film ↓</a><a href={`/materials/${kind}.json`} download>Download solver report{cylinder?"":"s"} ↓</a>
           <a href={`/experiments/${cylinder?"strip":"cylinder"}/`}>{experiments[cylinder?"strip":"cylinder"].title} →</a></div></div>
     </div>
   </main><SiteFooter/></>;

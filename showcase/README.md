@@ -85,7 +85,7 @@ bun run deploy
 `bun run deploy` builds the site and publishes two Workers to the Cloudflare account that owns the zone:
 
 - `frankentextiles-studio` (`wrangler.jsonc`) serves the static Next.js export from `out/` at
-  `franken-textiles.com`.
+  `franken-textiles.com`. Its Worker redirects HTTP to HTTPS and handles byte ranges for MP4 seeking.
 - `frankentextiles-www` (`www-redirect/`) answers `www.franken-textiles.com` with a permanent redirect
   to the same path on the bare domain.
 

@@ -7,6 +7,8 @@ import { plates, type Plate, type PlateId } from "./catalog";
 
 type Artwork = { file: string; crop?: [left: number, top: number, width: number, height: number]; contain?: string };
 const art: Record<string, Artwork> = {
+  "skirt-editorial": {file:"public/atelier/skirt-editorial.webp"},
+  "skirt-cloth": {file:"public/atelier/cover.jpg",crop:[472,0,632,620]},
   atelier: {file:"public/media/atelier-cover.webp"},
   pose: {file:"public/media/drape-room-mobile.webp"},
   load: {file:"public/media/drape-room-contact.webp"},

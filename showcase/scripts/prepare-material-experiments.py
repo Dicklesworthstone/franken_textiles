@@ -34,13 +34,34 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as folder:
         scratch = Path(folder)
         cylinder = json.loads((ROOT / "tests/fixtures/materials/synthetic-cylinder-experiment.json").read_text())
-        cylinder["controls"].update(max_step_s=0.125, max_steps=64)
-        save(args.output / "cylinder.json", solve(args.binary, "cylinder", cylinder, scratch))
+        outfit=json.loads((ROOT/"tests/fixtures/materials/synthetic-joint-outfit.json").read_text())
+        fabric=outfit["garments"][0]["pattern"]["fabric"]["material"]
+        cylinder["material"]=fabric
+        cylinder["fixture"].update(cells=[32,8],self_contact=True)
+        cylinder["controls"].update(max_newton=300,velocity_tolerance_m_s=1e-8,max_step_s=0.125,max_steps=256)
+        detailed=solve(args.binary,"cylinder",cylinder,scratch)
+        save(args.output/"cylinder.json",detailed)
+        cylinder["fixture"]["cells"]=[24,8]
+        coarser=solve(args.binary,"cylinder",cylinder,scratch)
+        assert [s["time_s"] for s in detailed["states"]]==[s["time_s"] for s in coarser["states"]]
+        save(args.output/"cylinder-refinement.json",{"cells":[24,8],"inputSha256":coarser["input_sha256"],
+             "readings":[{"time":s["time_s"],"force":s["upper_force_n"]} for s in coarser["states"]]})
         strip = json.loads((ROOT / "examples/strip-identification/synthetic-forward.json").read_text())
-        strip["fixture"]["cells"] = [4, 4]
+        strip["material"]=fabric
+        strip["controls"]["max_newton"]=300
+        strip["fixture"]["cells"] = [16, 24]
         strip["extensions"] = [n / 100 for n in range(9)]
         reports = []
         for name, axis in [("Warp", [0, 1]), ("Weft", [1, 0]), ("Bias", [math.sqrt(0.5)] * 2)]:
             strip["fixture"]["warp_axis"] = axis
             reports.append({"name": name, "report": solve(args.binary, "strip", strip, scratch)})
         save(args.output / "strip.json", reports)
+        source=ROOT/"crates/ftx-pattern/src/material_catalog/knit-strip-measurements.json"
+        actual=json.loads(subprocess.check_output([args.binary,"strip-acquisition",source]))
+        curves=[next(c for c in actual["curves"] if c["specimen"]=="SJ1" and c["direction"]==d) for d in ("warp","weft","bias")]
+        rows=[]
+        for extension in strip["extensions"]:
+            observations=[next(r for r in c["observations"] if r["branch"]=="loading" and r["extension_fraction"]==extension) for c in curves]
+            rows.append({"extension":extension,"force":[r["force_n"] for r in observations],"csvLines":[r["csv_line"] for r in observations]})
+        save(args.output/"jersey-readings.json",{"specimen":"SJ1","units":"N","directions":["warp","weft","bias"],"rows":rows,
+              "sources":[c["source"] for c in curves],"protocol":actual["protocol"],"license":actual["license"]})

@@ -7,7 +7,7 @@ import "@fontsource/instrument-serif/latin-400-italic.css";
 import "./style.css";
 import { repo, siteOrigin } from "../components/site/links";
 
-const description = "Change the body, raise its arms and see where a tailored bolero pulls. Explore native cloth physics, measured drafts and full-size sewing patterns in your browser.";
+const description = "Change the cut of a six-panel skirt on a fitted adult form. Explore native cloth physics, pose a tailored bolero and print the full-size sewing patterns.";
 
 export const metadata: Metadata = {
   title: "FrankenTextiles — The Pattern Room",
