@@ -1,6 +1,6 @@
 {
- "vertices": 2497,
- "triangles": 4281,
+ "vertices": 2595,
+ "triangles": 4473,
  "frames": 33,
  "phases": {
   "drape": 60,
@@ -23,7 +23,7 @@
   "dolman_undersleeve.L",
   "dolman_undersleeve.R"
  ],
- "sourcePc2Sha256": "2d46060845e8a6f1df88191ef7c56874f95df0da16e905cc6a88e1e4af2a7488",
+ "sourcePc2Sha256": "c2ac08ab2b4eeaad10c7663ede588c64890e39dc14ca69b45203fa9591e52e79",
  "style": "HUSSAR_BLUE",
  "spacingMm": null,
  "armDeg": 20.0,
@@ -32,24 +32,20 @@
   "body thickness ramp did not reach its target"
  ],
  "flags": [
-  "seam dolman_cap_rear_mid_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_rear_high_L is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_collar_front_L is distorted in the drape (p90 18 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_front_high_R is distorted in the drape (p90 8 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_rear_high_R is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_collar_front_R is distorted in the drape (p90 18 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "the body rides up 37 mm with arms at 20\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
+  "seam dolman_collar_front_L is distorted in the drape (p90 14 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_collar_front_R is distorted in the drape (p90 14 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "the body rides up 43 mm with arms at 20\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
   "body thickness ramp did not reach its target",
   "Declared simulation subset: 2 instance(s) and 6 seam(s) excluded; see simulation_scope. Results describe only the simulated subset."
  ],
  "edgeStrainPercent": {
-  "max": 32.36,
-  "min": -12.16,
-  "p95": 9.51
+  "max": 22.03,
+  "min": -12.48,
+  "p95": 6.32
  },
- "massKg": 0.2835075511922139,
- "areaM2": 0.7461,
- "sewingPairs": 322,
+ "massKg": 0.29438584832109344,
+ "areaM2": 0.7747,
+ "sewingPairs": 324,
  "selfContact": false,
  "scope": {
   "basis": "declared_subset",
@@ -344,5 +340,5 @@
    "target_mm": 1070.0
   }
  },
- "wallSeconds": 373.3
+ "wallSeconds": 970.3
 }

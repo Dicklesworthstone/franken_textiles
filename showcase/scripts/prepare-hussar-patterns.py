@@ -9,12 +9,16 @@ from pathlib import Path
 
 from hussar_accessories import accessories
 
-# Millimetres let out on each side of both side-back seams at armscye level (see coats()).
-BLADE_EASE = 11
-# Millimetres added to each front at the underarm (see coats()).
-CHEST_EASE = 0
-# Millimetres added to each half of the upper sleeve at the underarm line (see coats()).
-SLEEVE_EASE = 0
+# Three allowances over the first draft, each found by draping a trial cut on the fitted form and reading
+# the solver's report (see coats() for what each moves). In drapes at 20 mm with the arms at 20 degrees:
+# blade 11 alone gave edge strain P95 9.5 % and six distorted seams; these three gave 6.3 % and two.
+# A fourth trial that also dropped the shoulder tip 22 mm was worse (8.5 %, fourteen) and is not kept.
+# Millimetres let out on each side of both side-back seams at armscye level.
+BLADE_EASE = 14
+# Millimetres added to each front, and to each side-back panel, at the underarm.
+CHEST_EASE = 10
+# Millimetres added to each half of the upper sleeve at the underarm line.
+SLEEVE_EASE = 14
 
 
 def length(a, b, controls=()):
@@ -109,7 +113,7 @@ def coats(regiment, outer):
     sw,sb=74+grow*.4,91+grow*.4+CHEST_EASE
     bw=148+grow*.6
     # Blade ease: each side of the side-back seam is let out by this much at armscye level and tapers to
-    # nothing at the hem. The first drape on the fitted form stretched the back 11 % across the blades.
+    # nothing at the hem, so the waist stays as drafted.
     blade=BLADE_EASE
     under_y,neck_y=240+(12 if outer else 0),457
     fneck=(76+(4 if outer else 0),462)

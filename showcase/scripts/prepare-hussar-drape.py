@@ -36,8 +36,8 @@ PLACEMENTS = {
     "dolman_back": {"part": "torso", "theta_deg": 180, "x0": 0, "y0_landmark": "snp", "y0": 455, "radius_mm": 205},
     "dolman_front": {"part": "torso", "theta_deg": -3, "x0": 0, "y0_landmark": "snp", "y0": 455, "radius_mm": 205},
     "dolman_side": {"part": "torso", "theta_deg": 249, "x0": 65, "y0_landmark": "snp", "y0": 455, "radius_mm": 205},
-    "dolman_topsleeve": {"part": "arm", "theta_deg": -90, "x0": 0, "y0_landmark": "shoulder_tip", "y0": 146, "radius_mm": 58},
-    "dolman_undersleeve": {"part": "arm", "theta_deg": 90, "x0": 0, "y0_landmark": "shoulder_tip", "y0": 146, "radius_mm": 58},
+    "dolman_topsleeve": {"part": "arm", "theta_deg": -90, "x0": 0, "y0_landmark": "shoulder_tip", "y0": 146, "radius_mm": 62},
+    "dolman_undersleeve": {"part": "arm", "theta_deg": 90, "x0": 0, "y0_landmark": "shoulder_tip", "y0": 146, "radius_mm": 62},
     "dolman_collar": {"part": "torso", "theta_deg": 180, "x0": 206, "y0_landmark": "snp", "y0": 0, "clearance_mm": 10},
 }
 # The front fastens edge to edge with loops and buttons. It is modelled as a closed seam, which takes the
