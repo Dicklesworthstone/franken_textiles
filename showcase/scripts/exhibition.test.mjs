@@ -250,7 +250,12 @@ test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", asy
     // The solver's drape of the same pattern replays the packaged frames: the settled endpoint first, the flat cut at frame zero.
     const sewn=p.locator(".sd-making canvas[data-ready]"),summary=await (await p.request.get(new URL("/exhibits/sundress/dress-summary.json",site).href)).json();
     await sewn.waitFor();
-    assert.equal(summary.settled,true);assert.deepEqual(summary.gating,[]);
+    // The gathered cut declares a band of pleats, so its skirt top comes down under gravity and the solver's slide check
+    // gates on both skirt panels. Nothing else may gate, and the page shows each flag and says what it measured.
+    assert.equal(summary.settled,true);
+    assert.deepEqual(summary.gating.map(flag=>flag.replace(/ slid \d+ mm down after gravity: .*/,"")),["skirt_front","skirt_back"]);
+    for(const flag of summary.gating)await p.locator(".sd-sewn .sd-flag",{hasText:flag}).waitFor();
+    await p.locator(".sd-sewn p",{hasText:"worded for a garment slipping off the body"}).waitFor();
     const endpoint=await sewn.getAttribute("data-frame");
     assert.equal(Number(endpoint),Object.values(summary.phases).reduce((a,b)=>a+b)-1);
     await p.getByRole("slider",{name:"Sewing replay frame"}).fill("0");

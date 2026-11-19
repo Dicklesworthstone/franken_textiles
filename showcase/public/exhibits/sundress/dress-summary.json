@@ -3,7 +3,7 @@
  "triangles": 6448,
  "frames": 37,
  "phases": {
-  "drape": 348,
+  "drape": 245,
   "fold": 70,
   "sew": 12,
   "zip": 18
@@ -16,7 +16,7 @@
   "skirt_back",
   "skirt_front"
  ],
- "sourcePc2Sha256": "256bf178149b941562b45b20a6c14f48e79bad1aae5b8b07e15b2ba32cbff312",
+ "sourcePc2Sha256": "1996f9abfb173b039db48c098d5e6dd1161cb7a1e1dbe0d2438f84b30cbf4d42",
  "style": "GARDEN_SUNDRESS",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -34,14 +34,19 @@
  ],
  "armDeg": 22.0,
  "settled": true,
- "gating": [],
+ "gating": [
+  "skirt_front slid 87 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
+  "skirt_back slid 87 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)"
+ ],
  "flags": [
-  "the body rides up 80 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)"
+  "skirt_front slid 87 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
+  "skirt_back slid 87 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
+  "the body rides up 76 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)"
  ],
  "edgeStrainPercent": {
-  "max": 9.9,
-  "min": -20.27,
-  "p95": 0.87
+  "max": 9.86,
+  "min": -35.59,
+  "p95": 0.66
  },
  "massKg": 0.22079033603815004,
  "areaM2": 1.104,
@@ -195,5 +200,5 @@
    "target_mm": 1010.0
   }
  },
- "wallSeconds": 566.7
+ "wallSeconds": 2064.6
 }
