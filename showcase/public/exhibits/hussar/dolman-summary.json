@@ -1,0 +1,348 @@
+{
+ "vertices": 2497,
+ "triangles": 4281,
+ "frames": 33,
+ "phases": {
+  "drape": 60,
+  "fold": 70,
+  "sew": 12,
+  "zip": 18
+ },
+ "cords": 24,
+ "buttons": 24,
+ "instances": [
+  "dolman_back.L",
+  "dolman_back.R",
+  "dolman_collar",
+  "dolman_front.L",
+  "dolman_front.R",
+  "dolman_side.L",
+  "dolman_side.R",
+  "dolman_topsleeve.L",
+  "dolman_topsleeve.R",
+  "dolman_undersleeve.L",
+  "dolman_undersleeve.R"
+ ],
+ "sourcePc2Sha256": "2d46060845e8a6f1df88191ef7c56874f95df0da16e905cc6a88e1e4af2a7488",
+ "style": "HUSSAR_BLUE",
+ "spacingMm": null,
+ "armDeg": 20.0,
+ "settled": true,
+ "gating": [
+  "body thickness ramp did not reach its target"
+ ],
+ "flags": [
+  "seam dolman_cap_rear_mid_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_high_L is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_collar_front_L is distorted in the drape (p90 18 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_high_R is distorted in the drape (p90 8 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_high_R is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_collar_front_R is distorted in the drape (p90 18 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "the body rides up 37 mm with arms at 20\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
+  "body thickness ramp did not reach its target",
+  "Declared simulation subset: 2 instance(s) and 6 seam(s) excluded; see simulation_scope. Results describe only the simulated subset."
+ ],
+ "edgeStrainPercent": {
+  "max": 32.36,
+  "min": -12.16,
+  "p95": 9.51
+ },
+ "massKg": 0.2835075511922139,
+ "areaM2": 0.7461,
+ "sewingPairs": 322,
+ "selfContact": false,
+ "scope": {
+  "basis": "declared_subset",
+  "excluded_instances": [
+   {
+    "instance": "dolman_cuff.R",
+    "piece": "dolman_cuff",
+    "reason": "sim_false"
+   },
+   {
+    "instance": "dolman_cuff.L",
+    "piece": "dolman_cuff",
+    "reason": "sim_false"
+   }
+  ],
+  "excluded_seams": [
+   {
+    "a": "dolman_topsleeve.L/cuff",
+    "b": "dolman_cuff.L/wrist_top",
+    "excluded_instances": [
+     "dolman_cuff.L"
+    ],
+    "id": "dolman_wrist_upper_L",
+    "index": 10
+   },
+   {
+    "a": "dolman_undersleeve.L/cuff",
+    "b": "dolman_cuff.L/wrist_under",
+    "excluded_instances": [
+     "dolman_cuff.L"
+    ],
+    "id": "dolman_wrist_under_L",
+    "index": 11
+   },
+   {
+    "a": "dolman_cuff.L/start",
+    "b": "dolman_cuff.L/end",
+    "excluded_instances": [
+     "dolman_cuff.L"
+    ],
+    "id": "dolman_cuff_closed_L",
+    "index": 12
+   },
+   {
+    "a": "dolman_topsleeve.R/cuff",
+    "b": "dolman_cuff.R/wrist_top",
+    "excluded_instances": [
+     "dolman_cuff.R"
+    ],
+    "id": "dolman_wrist_upper_R",
+    "index": 25
+   },
+   {
+    "a": "dolman_undersleeve.R/cuff",
+    "b": "dolman_cuff.R/wrist_under",
+    "excluded_instances": [
+     "dolman_cuff.R"
+    ],
+    "id": "dolman_wrist_under_R",
+    "index": 26
+   },
+   {
+    "a": "dolman_cuff.R/start",
+    "b": "dolman_cuff.R/end",
+    "excluded_instances": [
+     "dolman_cuff.R"
+    ],
+    "id": "dolman_cuff_closed_R",
+    "index": 27
+   }
+  ],
+  "simulated_instances": [
+   "dolman_back.R",
+   "dolman_back.L",
+   "dolman_front.R",
+   "dolman_front.L",
+   "dolman_side.R",
+   "dolman_side.L",
+   "dolman_topsleeve.R",
+   "dolman_topsleeve.L",
+   "dolman_undersleeve.R",
+   "dolman_undersleeve.L",
+   "dolman_collar"
+  ],
+  "simulated_seams": [
+   {
+    "id": "dolman_side_L",
+    "index": 0
+   },
+   {
+    "id": "dolman_side_back_L",
+    "index": 1
+   },
+   {
+    "id": "dolman_shoulder_L",
+    "index": 2
+   },
+   {
+    "id": "dolman_forearm_L",
+    "index": 3
+   },
+   {
+    "id": "dolman_elbow_L",
+    "index": 4
+   },
+   {
+    "id": "dolman_cap_front_low_L",
+    "index": 5
+   },
+   {
+    "id": "dolman_cap_front_high_L",
+    "index": 6
+   },
+   {
+    "id": "dolman_cap_rear_low_L",
+    "index": 7
+   },
+   {
+    "id": "dolman_cap_rear_mid_L",
+    "index": 8
+   },
+   {
+    "id": "dolman_cap_rear_high_L",
+    "index": 9
+   },
+   {
+    "id": "dolman_collar_front_L",
+    "index": 13
+   },
+   {
+    "id": "dolman_collar_back_L",
+    "index": 14
+   },
+   {
+    "id": "dolman_side_R",
+    "index": 15
+   },
+   {
+    "id": "dolman_side_back_R",
+    "index": 16
+   },
+   {
+    "id": "dolman_shoulder_R",
+    "index": 17
+   },
+   {
+    "id": "dolman_forearm_R",
+    "index": 18
+   },
+   {
+    "id": "dolman_elbow_R",
+    "index": 19
+   },
+   {
+    "id": "dolman_cap_front_low_R",
+    "index": 20
+   },
+   {
+    "id": "dolman_cap_front_high_R",
+    "index": 21
+   },
+   {
+    "id": "dolman_cap_rear_low_R",
+    "index": 22
+   },
+   {
+    "id": "dolman_cap_rear_mid_R",
+    "index": 23
+   },
+   {
+    "id": "dolman_cap_rear_high_R",
+    "index": 24
+   },
+   {
+    "id": "dolman_collar_front_R",
+    "index": 28
+   },
+   {
+    "id": "dolman_collar_back_R",
+    "index": 29
+   },
+   {
+    "id": "dolman_center_back",
+    "index": 30
+   },
+   {
+    "id": "dolman_front_closure",
+    "index": 31
+   }
+  ]
+ },
+ "fabric": {
+  "areal_kg_m2": 0.38,
+  "bending_Nm": 0.00012,
+  "tensile_N_m": 10000.0
+ },
+ "bodyFit": {
+  "arm_length": {
+   "body_mm": 598.8,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": -0.07511554988462876,
+   "residual_mm": -0.15023109976925753,
+   "sigma_mm": null,
+   "target_mm": 599.0
+  },
+  "back_neck_to_waist": {
+   "body_mm": 457.9,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 3.9457284966427153,
+   "residual_mm": 7.891456993285431,
+   "sigma_mm": null,
+   "target_mm": 450.0
+  },
+  "chest": {
+   "body_mm": 998.2,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": -0.6071176752016451,
+   "residual_mm": -1.8213530256049353,
+   "sigma_mm": null,
+   "target_mm": 1000.0
+  },
+  "crotch_height": {
+   "body_mm": 816.6,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 0.2801985260403512,
+   "residual_mm": 0.5603970520807025,
+   "sigma_mm": null,
+   "target_mm": 816.0
+  },
+  "head": {
+   "body_mm": 580.6,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": 0.21133142374022404,
+   "residual_mm": 0.6339942712206721,
+   "sigma_mm": null,
+   "target_mm": 580.0
+  },
+  "hip": {
+   "body_mm": 980.1,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": 0.03301611073300137,
+   "residual_mm": 0.09904833219900411,
+   "sigma_mm": null,
+   "target_mm": 980.0
+  },
+  "knee_height": {
+   "body_mm": 499.1,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 0.5448657754904218,
+   "residual_mm": 1.0897315509808436,
+   "sigma_mm": null,
+   "target_mm": 498.0
+  },
+  "neck_base": {
+   "body_mm": 391.6,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": 0.5269043213054184,
+   "residual_mm": 1.5807129639162554,
+   "sigma_mm": null,
+   "target_mm": 390.0
+  },
+  "shoulder_length": {
+   "body_mm": 148.2,
+   "effective_sigma_mm": 5.0,
+   "normalized_residual": 0.6445843842636861,
+   "residual_mm": 3.222921921318431,
+   "sigma_mm": null,
+   "target_mm": 145.0
+  },
+  "stature": {
+   "body_mm": 1773.4,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": -3.290392822378294,
+   "residual_mm": -6.580785644756588,
+   "sigma_mm": null,
+   "target_mm": 1780.0
+  },
+  "waist": {
+   "body_mm": 860.5,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": 0.17311113635203887,
+   "residual_mm": 0.5193334090561166,
+   "sigma_mm": null,
+   "target_mm": 860.0
+  },
+  "waist_height": {
+   "body_mm": 1076.3,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 3.1662593636015117,
+   "residual_mm": 6.3325187272030234,
+   "sigma_mm": null,
+   "target_mm": 1070.0
+  }
+ },
+ "wallSeconds": 373.3
+}

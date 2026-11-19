@@ -9,6 +9,13 @@ from pathlib import Path
 
 from hussar_accessories import accessories
 
+# Millimetres let out on each side of both side-back seams at armscye level (see coats()).
+BLADE_EASE = 11
+# Millimetres added to each front at the underarm (see coats()).
+CHEST_EASE = 0
+# Millimetres added to each half of the upper sleeve at the underarm line (see coats()).
+SLEEVE_EASE = 0
+
 
 def length(a, b, controls=()):
     points = [a, *controls, b]
@@ -96,9 +103,14 @@ def coats(regiment, outer):
         stitch(seams,prefix+"_"+tag,prefix+"_"+a,prefix+"_"+b,**kw)
     # Horizontal dimensions are distributed from CF to side, side-back and CB.
     grow = 13 if outer else 0
-    fw,fb=249+grow,286+grow
-    sw,sb=74+grow*.4,91+grow*.4
+    # Chest ease widens the front at the underarm only. The side-back panel takes the same slope, so the
+    # chest gains twice this on each half and the waist stays as drafted.
+    fw,fb=249+grow,286+grow+CHEST_EASE
+    sw,sb=74+grow*.4,91+grow*.4+CHEST_EASE
     bw=148+grow*.6
+    # Blade ease: each side of the side-back seam is let out by this much at armscye level and tapers to
+    # nothing at the hem. The first drape on the fitted form stretched the back 11 % across the blades.
+    blade=BLADE_EASE
     under_y,neck_y=240+(12 if outer else 0),457
     fneck=(76+(4 if outer else 0),462)
     shoulder=(fneck[0]+139+grow,425)
@@ -115,26 +127,29 @@ def coats(regiment, outer):
         else: hi=cf_y
     fw_neck=length(fneck,(0,cf_y),neck_curve)
     # Side-back division passes through the rear armscye, with matching shaped longitudinal seams.
-    side_inner=(0,under_y+38)
+    side_inner=(-blade,under_y+38)
     side_outer=(sb,under_y)
-    side_curve=[(sb-28,under_y+4),(25,under_y+19)]
+    side_curve=[(sb-28,under_y+4),(25-blade*.5,under_y+19)]
     # Transfer the front side-seam slope to the back. Keep the upper side-back width.
     side_dx=fb-fw
     side_shift=sw+side_dx-sb
     side_nodes=[("hem",(side_shift,0)),("side",(sw,0)),("armscye",(sw+side_dx,under_y)),
-                ("back_join",(side_shift,under_y+38))]
-    # The translated side-back seam has identical length on the central back panel.
-    back_edge=(bw,under_y+38)
+                ("back_join",(side_shift-blade,under_y+38))]
+    # The side-back seam is the same curve on both panels, mirrored, so its two sides walk equal.
+    seam_h=under_y+38
+    back_edge=(bw+blade,seam_h)
     back_shoulder=(bn[0]+shoulder[0]-fneck[0],bn[1]-37)
-    back_arm=[(bw+36,under_y+64),(back_shoulder[0]-6,365)]
+    back_arm=[(bw+36+blade*.6,under_y+64),(back_shoulder[0]-6,365)]
     add("back","centre back",[("hem",(0,0)),("side_back",(bw,0)),("armscye",back_edge),
          ("shoulder",back_shoulder),("neck",bn),("center",(0,450))],
-         curves={"side_back":[(bw-4,85),(bw-9,172)],"armscye":back_arm,"neck":back_neck})
+         curves={"side_back":[(bw-4+blade*85/seam_h,85),(bw-9+blade*172/seam_h,172)],"armscye":back_arm,"neck":back_neck})
     front_walk=length((fb,under_y),shoulder,front_arm)
     back_walk=length(side_outer,side_inner,side_curve)+length(back_edge,back_shoulder,back_arm)
     # Divide the crescent underarm and upper sleeve at front/elbow seams. Walk each
     # cap half to its matching armscye, allowing two percent ease in broadcloth.
-    a,b=116+grow*.5,132+grow*.5
+    # A wider upper sleeve takes the same armscye with a lower, flatter cap, which lets the arm lift
+    # without dragging the body of the jacket up with it.
+    a,b=116+grow*.5+SLEEVE_EASE,132+grow*.5+SLEEVE_EASE
     w=57+grow*.35
     uf,ub=(-w,24),(w,24)
     trough=(0,0)
@@ -187,7 +202,7 @@ def coats(regiment, outer):
     shifted=lambda row:[(x+side_shift,y) for x,y in row]
     side_nodes[2:3]=[("rear_low",(sw+side_dx,under_y)),("rear_high",shifted([lower_back])[0])]
     add("side","side back",side_nodes,curves={"side":[(sw,72),(sw+side_dx-9,under_y-54)],"rear_low":shifted(sc0),"rear_high":shifted(sc1),
-        "back_join":[(side_shift+9,172),(side_shift+4,85)]})
+        "back_join":[(side_shift+9-blade*172/seam_h,172),(side_shift+4-blade*85/seam_h,85)]})
     rear_mid,rc0,rc1=split_walk((ba,24),peak,upper(ba,h,False),side_walk*1.02-bu)
     upper_nodes=[("cuff",(-68,wrist_y)),("elbow",(78,wrist_y+6)),("rear_low",(ba,24)),("rear_high",rear_mid),
                  ("front_cap",peak),("forearm",(-fa,24))]
@@ -398,6 +413,10 @@ if __name__=="__main__":
     cli=argparse.ArgumentParser(description=__doc__)
     cli.add_argument("output",type=Path)
     cli.add_argument("--ftx",type=Path,default=Path(__file__).resolve().parents[2]/"target/release/ftx")
+    cli.add_argument("--blade-ease",type=float,default=BLADE_EASE,help="Trial value in mm; the committed cut uses the default.")
+    cli.add_argument("--chest-ease",type=float,default=CHEST_EASE,help="Trial value in mm; the committed cut uses the default.")
+    cli.add_argument("--sleeve-ease",type=float,default=SLEEVE_EASE,help="Trial value in mm; the committed cut uses the default.")
     args=cli.parse_args()
+    BLADE_EASE,CHEST_EASE,SLEEVE_EASE=args.blade_ease,args.chest_ease,args.sleeve_ease
     args.output.mkdir(parents=True,exist_ok=True)
     for variant in ("blue","yellow"): generate(variant,args.output,args.ftx.resolve())
