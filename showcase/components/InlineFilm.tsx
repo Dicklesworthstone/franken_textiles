@@ -10,6 +10,13 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
   const video = useRef<HTMLVideoElement>(null);
   const toggle = useRef<() => void>(()=>{});
   const [playing,setPlaying] = useState(false);
+  // A poster is fetched as soon as it is in the markup, so name it only when the film is about to scroll into view.
+  const [near,setNear] = useState(false);
+  useEffect(() => {
+    const observer=new IntersectionObserver(([entry])=>{ if(entry.isIntersecting){setNear(true);observer.disconnect();} },{rootMargin:"900px 0px"});
+    observer.observe(video.current!);
+    return ()=>observer.disconnect();
+  },[]);
   useEffect(() => {
     const el = video.current!;
     const reduced = matchMedia("(prefers-reduced-motion: reduce)");
@@ -45,7 +52,7 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
     };
   },[id,controls,requested]);
   return <>
-    <video ref={video} className="inline-film" poster={`/media/${id}.jpg`} preload="none" muted loop playsInline controls={controls} aria-label={title}/>
+    <video ref={video} className="inline-film" poster={near ? `/media/${id}.jpg` : undefined} preload="none" muted loop playsInline controls={controls} aria-label={title}/>
     {!controls && <button type="button" className="inline-transport" aria-label={`${playing?"Pause":"Play"} ${title} preview`}
       onClick={()=>toggle.current()}><PlaybackMark playing={playing}/></button>}
   </>;

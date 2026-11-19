@@ -36,5 +36,7 @@ export const plates = {
   materialTool: {title:["The material","workbench."],caption:"Inspect material records and run fabric experiments in your browser.",category:"Browser workbench",specimen:"Fabric specimen · clamped strip",colors:["#2a423f","#f3eddb","#c5d8a5"],images:["material-detail"]},
   traceTool: {title:["Trace a","pattern."],caption:"Review recovered pieces and corners from a raster pattern sheet on your own device.",category:"Browser workbench",specimen:"Source sheet & recovered edge geometry",colors:["#e6dfce","#343932","#924634"],images:["source","trace"],layout:"pair"},
   photoTool: {title:["Photo","measurements."],caption:"Measure two chalk marks across a sleeve using an A4 sheet to recover scale.",category:"Browser workbench",specimen:"Indigo sleeve · A4 reference",colors:["#dce6df","#253b35","#944c35"],images:["sleeve"]},
+  howItWorks: {title:["From tape","to cloth."],caption:"How measurements become a checked sewing pattern, a simulated garment and the files to make it.",category:"How it works",specimen:"Measure · fit · draft · drape · cut",colors:paper,images:["draft","pose"],layout:"pair"},
+  getStarted: {title:["Get","started."],caption:"Open a workbench in your browser, or build the command-line tool and draft a first pattern.",category:"Get started",specimen:"Four workbenches · one command-line tool",colors:midnight,images:["cut"]},
 } satisfies Record<string, Plate>;
 export type PlateId = keyof typeof plates;

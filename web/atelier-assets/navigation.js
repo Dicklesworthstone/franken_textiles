@@ -16,8 +16,10 @@
   mast.className = "wb-mast";
   const inGallery = location.pathname.includes("/workbench/");
   mast.innerHTML = '<div class="wb-mast-inner"><a class="wb-brand" href="' + (inGallery ? "../" : "index.html") + '">' +
-    icon('<path d="m5 20 9.5-15c1.8-2.7 4.6-2.7 4.1.1-.2 1.6-2.3 3.5-4.7 4.6L5 20Z"/><path d="M16 6c-2-3-6-3.5-8.5-.8C4.5 8.3 6.9 11.3 4 13.1"/>') +
+    // The same four slanted bars as the site header, so the workbench reads as part of it.
+    '<svg aria-hidden="true" viewBox="0 0 34 28"><g transform="translate(9.5 0) skewX(-19)" fill="currentColor"><rect x="1" y="5" width="4.6" height="17" rx=".8"/><rect x="7.5" width="4.6" height="26" rx=".8"/><rect x="14" y="5" width="4.6" height="22" rx=".8"/><rect x="20.5" y="8" width="4.6" height="14" rx=".8"/></g></svg>' +
     'Franken<span>Textiles</span></a><nav aria-label="Workbenches">' +
+    (inGallery ? '<a class="wb-back" href="../">' + icon('<path d="M19 12H5m6-6-6 6 6 6"/>') + 'Exhibition</a>' : '') +
     pages.map(([name, path, title, design]) => '<a href="' + path + '"' + (document.body.classList.contains("wb-" + name) ? ' aria-current="page"' : '') + '>' + icon(design) + title + '</a>').join("") +
     '</nav><button type="button" class="wb-theme" aria-label="Change color theme">' +
     icon('<path d="M20.5 14A8.7 8.7 0 0 1 10 3.5 8.9 8.9 0 1 0 20.5 14Z"/>') + '</button></div>';
@@ -76,6 +78,8 @@
   revealFragment();
   const footer = document.createElement("footer");
   footer.className = "wb-footer";
-  footer.innerHTML = '<b>FrankenTextiles</b><span>Files and calculations stay in your browser.</span>';
+  footer.innerHTML = '<b>FrankenTextiles</b><span>Files and calculations stay in your browser.</span>' +
+    (inGallery ? '<nav aria-label="FrankenTextiles site"><a href="../">Exhibition</a><a href="../how-it-works/">How it works</a>' +
+      '<a href="../get-started/">Get started</a><a href="https://github.com/Dicklesworthstone/franken_textiles">Source</a></nav>' : '');
   document.body.append(footer);
 })();

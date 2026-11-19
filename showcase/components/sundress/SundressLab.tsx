@@ -4,6 +4,9 @@ import { useCallback, useState } from "react";
 import { axes, dress, initial, samples, round, type Arm, type Readings } from "./form";
 import type { View } from "./SundressScene";
 import InlineFilm from "../InlineFilm";
+import SiteHeader from "../site/SiteHeader";
+import SiteFooter from "../site/SiteFooter";
+import Crumbs from "../site/Crumbs";
 import "./sundress.css";
 
 const Scene=dynamic(()=>import("./SundressScene"),{ssr:false});
@@ -24,8 +27,8 @@ export default function SundressLab(){
   const arm=useCallback((side:Arm,angle:number)=>setForm(p=>({...p,[side]:angle})),[]);
   const fail=useCallback(()=>setFailed(true),[]);
   const measurements=[["Stature","height",154,184,"cm"],["Body mass","weight",45,74,"kg"],["Bust girth","bust",78,108,"cm"],["Waist girth","waist",60,94,"cm"]] as const;
-  return <main className="sd-page">
-    <header className="sd-nav wrap"><a className="wordmark" href="/">Franken<span>Textiles</span></a><a href="/#wardrobe">← Wardrobe</a></header>
+  return <><SiteHeader/><main id="main" className="sd-page">
+    <Crumbs trail={[["Exhibition","/"],["Wardrobe","/#wardrobe"],["The garden sundress"]]}/>
     <div className="wrap sd-wrap"><div className="sd-head"><div><p className="kicker">The fitting room</p><h1>The garden sundress<em>.</em></h1></div>
       <div className="sd-intro"><p>A narrow-strapped bodice and a gathered skirt, cut in a single size. Pose the fitted Anny figure and change her proportions to see how much room the pattern leaves.</p>
         <a href="/sundress/pattern-A4.pdf" download>Full-size sewing pattern PDF ↓</a><small>A4 · 38 pages · print at 100%</small></div></div>
@@ -70,5 +73,5 @@ export default function SundressLab(){
           <a href="/sundress/master.svg" download>Download full-scale pattern SVG ↓</a>
           <a href="/sundress/pattern.json" download>Download FrankenTextiles pattern ↓</a><a href="/sundress/fit-comparison.json" download>Three native flat checks ↓</a><a href="/media/wardrobe-sundress.mp4" download>Download fitting-room film ↓</a></div>
       </div></div>
-  </main>;
+  </main><SiteFooter/></>;
 }

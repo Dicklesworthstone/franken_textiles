@@ -4,6 +4,9 @@ import dynamic from "next/dynamic";
 import { useCallback, useState } from "react";
 import InlineFilm from "../InlineFilm";
 import HussarReferences from "./HussarReferences";
+import SiteHeader from "../site/SiteHeader";
+import SiteFooter from "../site/SiteFooter";
+import Crumbs from "../site/Crumbs";
 import { type Layer, type Framing, type RegimentView } from "./uniform";
 import sampler from "../../public/wardrobe/hussar/braid-sampler.json";
 import "./hussar.css";
@@ -26,7 +29,7 @@ export default function HussarLab(){
   const [layer, setLayer] = useState<Layer>("Dressed");
   const [framing, setFraming] = useState<{ preset: Framing }>({preset:"Bust"});
   const [failed,setFailed]=useState(false);const onFailure=useCallback(()=>setFailed(true),[]);const blue=regiment==="Blue";
-  return <main className="hu-page"><header className="hu-mast wrap"><a className="wordmark" href="/">Franken<span>Textiles</span></a><a href="/#wardrobe">← Wardrobe</a></header>
+  return <><SiteHeader/><main id="main" className="hu-page"><Crumbs trail={[["Exhibition","/"],["Wardrobe","/#wardrobe"],["The hussar’s cabinet"]]}/>
     <div className="wrap hu-wrap"><div className="hu-heading"><div><p className="kicker">Swedish uniforms / pattern of 1761</p><h1>The hussar’s cabinet<em>.</em></h1></div>
       <p>Dress the figure in Putbus’s blue or Wrangel’s black and chamois. <a className="hu-compare-link" href="#regimental-plates">Compare with the museum plate ↓</a></p></div>
     <div className="hu-desk"><div className="hu-figure">
@@ -59,5 +62,5 @@ export default function HussarLab(){
     <details className="hu-history"><summary>Historical references and model scope</summary>
       <p>The Swedish military-history museums describe the uniform pattern of 1761 on page 39. Schützercrantz’s plate on page 40 depicts the Blue trooper in 1761 and the Yellow trooper in 1765. The face, neck and hands use a synthetic adult male fitted with FrankenTextiles’ native Anny body model. The figure and garments use generated surface textures. The folds, grooming and garment dimensions are interpretive. The native embroidery export applies to the flat sampler.</p>
       <p><a href={source}>Swedish cavalry uniforms, pp. 38–39 ↗</a> · <a href="https://historicalsoldiers.com/">Historical Soldiers visual reference ↗</a></p></details>
-    </div></main>;
+    </div></main><SiteFooter/></>;
 }

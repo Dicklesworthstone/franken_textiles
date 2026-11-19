@@ -4,6 +4,9 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import { experiments, loadExperiment, type Rig, type Experiment } from "./materialExperiments";
 import InlineFilm, { PlaybackMark } from "./InlineFilm";
+import SiteHeader from "./site/SiteHeader";
+import SiteFooter from "./site/SiteFooter";
+import Crumbs from "./site/Crumbs";
 import "./material-lab.css";
 
 const Scene = dynamic(() => import("./MaterialScene"), { ssr: false });
@@ -54,8 +57,8 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
   function seek(i:number){setPlaying(false);setStep(i);}
   const stages=cylinder ? [[0,"Mounted"],[1.5,"Twisted"],[2.5,"Compressed"],[3.5,"Final pull"]] as const :
     [[0,"Relaxed"],[4,"4% pull"],[8,"8% pull"]] as const;
-  return <main className="rig-page">
-    <header className="rig-mast wrap"><a className="wordmark" href="/">Franken<span>Textiles</span></a><a href="/#materials">← Material studies</a></header>
+  return <><SiteHeader/><main id="main" className="rig-page">
+    <Crumbs trail={[["Exhibition","/"],["Material studies","/#materials"],[meta.title]]}/>
     <div className="wrap rig-wrap">
       <div className="rig-heading"><div><p className="kicker">Material studies / Fig. {meta.figure}</p><h1>{meta.title}<em>.</em></h1></div><p>{meta.subtitle}</p></div>
       <div className="rig-desk">
@@ -102,5 +105,5 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
           <a href={`/media/rig-${kind}.mp4`} download>Download film ↓</a><a href={`/materials/${kind}.json`} download>Download solver report{cylinder?"":"s"} ↓</a>
           <a href={`/experiments/${cylinder?"strip":"cylinder"}/`}>{experiments[cylinder?"strip":"cylinder"].title} →</a></div></div>
     </div>
-  </main>;
+  </main><SiteFooter/></>;
 }

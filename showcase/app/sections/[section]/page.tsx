@@ -9,8 +9,8 @@ async function sectionId({params}: Props) {
   return section;
 }
 export async function generateMetadata(props:Props) {
-  const card=plates[await sectionId(props)];
-  return {title:card.title.join(" ").replace(/\.$/,"")+" · FrankenTextiles",description:card.caption};
+  const section=await sectionId(props), card=plates[section];
+  return {title:card.title.join(" ").replace(/\.$/,"")+" · FrankenTextiles",description:card.caption,alternates:{canonical:`/sections/${section}/`}};
 }
 export default async function Section(props:Props) {
   return <Exhibition section={await sectionId(props)}/>;

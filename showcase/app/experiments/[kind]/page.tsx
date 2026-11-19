@@ -9,8 +9,8 @@ async function rig({ params }: Props) {
   return kind;
 }
 export async function generateMetadata(props: Props) {
-  const meta = experiments[await rig(props)];
-  return { title: meta.title + " · FrankenTextiles", description: meta.subtitle };
+  const kind = await rig(props), meta = experiments[kind];
+  return { title: meta.title + " · FrankenTextiles", description: meta.subtitle, alternates: { canonical: `/experiments/${kind}/` } };
 }
 export default async function ExperimentPage(props: Props) {
   return <MaterialLab kind={await rig(props)}/>;

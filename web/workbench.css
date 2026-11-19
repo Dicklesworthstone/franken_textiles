@@ -104,6 +104,9 @@
 .wb :is(.warning,#error){padding:8px 14px;border-left:3px solid var(--action);color:var(--text);background:var(--inset)}
 .wb .wb-footer{border-top:1px solid var(--edge);padding-block:22px;display:flex;flex-wrap:wrap;gap:6px 20px;align-items:baseline;color:var(--secondary);font-size:13px}
 .wb-footer b{font:400 24px var(--serif);color:var(--text)}
+.wb-footer nav{display:flex;flex-wrap:wrap;gap:6px 20px;margin-left:auto}
+.wb-footer a{color:inherit;text-underline-offset:3px}.wb-footer a:hover{color:var(--action)}
+.wb-mast nav .wb-back{margin-right:auto;color:var(--text)}
 .wb :is(section,details){scroll-margin-top:16px}
 .wb :is(.hidden,[hidden]){display:none!important}
 @media(max-width:760px){

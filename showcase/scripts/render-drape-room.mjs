@@ -20,7 +20,7 @@ try {
     .dr-stage{position:fixed!important;inset:0!important;width:960px!important;height:540px!important;z-index:12}
     .dr-room,.dr-display{overflow:visible!important;isolation:auto!important}
     .dr-mount{left:24%!important;width:76%!important}
-    .dr-stage-head,.dr-stage-foot,.dr-flat,.dr-reverse,.dr-legend,.mast,nextjs-portal{display:none!important}
+    .dr-stage-head,.dr-stage-foot,.dr-flat,.dr-reverse,.dr-legend,.ft-head,nextjs-portal{display:none!important}
     .film-slate{position:absolute;left:4%;top:23%;width:29%;pointer-events:none;color:#332d28}
     .film-slate small,.film-slate span{font:500 11px/1.5 var(--mono);letter-spacing:.08em;text-transform:uppercase}
     .film-slate h1{font:400 69px/.9 var(--serif);letter-spacing:-.035em;margin:17px 0 25px}.film-slate em{color:#805334}

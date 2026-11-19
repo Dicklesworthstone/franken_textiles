@@ -2,13 +2,18 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { repo, studies, type Study, type View } from "../app/studies";
+import { studies, type Study, type View } from "../app/studies";
 import LabBench from "../components/LabBench";
 import TraceReveal from "../components/TraceReveal";
 import { experiments, type Rig } from "../components/materialExperiments";
 import InlineFilm, { PlaybackMark } from "../components/InlineFilm";
 import GarmentPatterns from "./GarmentPatterns";
 import DrapeRoom from "./DrapeRoom";
+import SiteHeader from "./site/SiteHeader";
+import SiteFooter from "./site/SiteFooter";
+import Reveal from "./site/Reveal";
+import { Claims, Deliverables, Manifesto, Pipeline, StartHere } from "./site/Story";
+import { workbench } from "./site/links";
 import type { PanelOutline } from "../components/garmentMesh";
 
 const Studio = dynamic(() => import("../components/Studio"), { ssr: false });
@@ -32,10 +37,6 @@ const films = [
   ...(Object.keys(experiments) as Rig[]).map(rig=>({ id:"rig-"+rig, title:experiments[rig].title, detail:"Material study" })),
   ...studies.map(s=>({ id:s.id, title:s.title, detail:"Drape study" })),
 ];
-
-function Mark() {
-  return <span className="mark" aria-hidden="true"><i/><i/><i/><i/></span>;
-}
 
 function Arrow({ diagonal = false }: { diagonal?: boolean }) {
   return <span aria-hidden="true" className={diagonal ? "arrow arrow-diagonal" : "arrow"}/>;
@@ -219,16 +220,7 @@ export default function Exhibition({section}: {section?: string}) {
   }
   if (capture) return <Capture study={capture}/>;
   return <>
-    <a className="skip" href="#exhibition">Skip to the exhibition</a>
-    <header className="mast"><div className="wrap nav">
-      <a className="wordmark" href="/" aria-label="FrankenTextiles home"><Mark/>Franken<span>Textiles</span></a>
-      <nav aria-label="Main navigation"><a href="/sections/studies/#drape-room">Drape room</a><a href="/sections/wardrobe/">Wardrobe</a><a href="/sections/studio/">Studios</a><a href="/sections/films/">Films</a>
-      <details className="mast-explore"><summary>Explore</summary><div>
-        <a href="/sections/studies/#drape-room">The drape room</a><a href="/sections/wardrobe/">The wardrobe</a>
-        <a href="/sections/materials/">Cloth under load</a><a href="/sections/studio/">Draft, cut and stitch</a><a href="/sections/films/">Screening room</a>
-      </div></details>
-      <a className="worklink" href="/sections/tools/">Workbenches <Arrow diagonal/></a></nav>
-    </div></header>
+    <SiteHeader skipTo="#exhibition"/>
     <main id="exhibition">
       {show("studies") && <DrapeRoom home={!section}/>}
       {!section && <section className="dr-index" aria-label="Explore more of the studio"><div className="wrap">
@@ -237,10 +229,11 @@ export default function Exhibition({section}: {section?: string}) {
         <div className="dr-reel"><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/></div></figure>
           <button onClick={()=>setItem({reel:true})}><span><small>Studio film</small><strong>Inside the wardrobe</strong></span><Arrow diagonal/></button></div>
       </div></section>}
+      {!section && <><Manifesto/><Pipeline/></>}
       {show("wardrobe") && <section id="wardrobe" className="paper wardrobe-gallery"><div className="wrap collection">
         <div className="section-top"><div><p className="kicker">Interactive garments</p><Heading className="section-title"><a href="/sections/wardrobe/">The wardrobe<span>.</span></a></Heading></div>
           <p>Take a garment off the rail. Turn it around, change the figure, or look beneath a layer.</p></div>
-        <div className="material-pair">{wardrobe.map(s=><article key={s.id}>
+        <div className="material-pair">{wardrobe.map(s=><article key={s.id} data-reveal>
           <div className="material-cover"><InlineFilm id={"wardrobe-"+s.id} title={s.title}/>
             <a className="card-open" aria-label={"Explore "+s.title} href={`/wardrobe/${s.id}/`}><span className="launch"><Arrow diagonal/></span></a></div>
           <a className="material-caption" href={`/wardrobe/${s.id}/`}><div className="mono">{s.detail}</div><h3>{s.title}</h3><span>{s.action} <Arrow/></span></a>
@@ -251,7 +244,7 @@ export default function Exhibition({section}: {section?: string}) {
       {show("materials") && <section className="material-gallery" id="materials"><div className="wrap">
         <div className="section-top"><div><p className="kicker">Material studies</p><Heading className="section-title"><a href="/sections/materials/">Cloth under load<span>.</span></a></Heading></div>
           <p>Two experiments from the Rust solver. Move the grips and see what changes in the cloth.</p></div>
-        <div className="material-pair">{(Object.keys(experiments) as Rig[]).map(kind=><article key={kind}>
+        <div className="material-pair">{(Object.keys(experiments) as Rig[]).map(kind=><article key={kind} data-reveal>
           <div className="material-cover"><InlineFilm id={"rig-"+kind} title={experiments[kind].title}/>
             <a className="card-open" aria-label={"Explore "+experiments[kind].title} href={`/experiments/${kind}/`}><span className="launch"><Arrow diagonal/></span></a></div>
           <a className="material-caption" href={`/experiments/${kind}/`}><h3>{experiments[kind].title}</h3><span>{experiments[kind].action} <Arrow/></span></a>
@@ -281,20 +274,23 @@ export default function Exhibition({section}: {section?: string}) {
         }}>
           <img src={`/media/${f.id}.jpg`} alt="" loading="lazy"/><span><small className="mono">{f.detail}</small><strong>{f.title}</strong></span><span className="play-ring"><PlaybackMark/></span></button>)}</div>
       </div></section>}
-      {show("tools") && <section className="paper"><div className="wrap workbench-library"><div className="section-top"><div><p className="kicker">Run FrankenTextiles in your browser</p><Heading className="section-title"><a href="/sections/tools/">The workbenches<span>.</span></a></Heading></div>
+      {!section && <Deliverables/>}
+      {show("tools") && <section id="workbenches" className="paper workbench-band"><div className="wrap workbench-library"><div className="section-top"><div><p className="kicker">Run FrankenTextiles in your browser</p><Heading className="section-title"><a href="/sections/tools/">The workbenches<span>.</span></a></Heading></div>
         <p>Each opens with a working example. Load your own files when you’re ready. Everything runs on your device.</p></div>
         <div className="workbench-shelves">{[
           ["index","Pattern drafting","Change the bolero’s cut and print its pieces.","drafting.webp"],
           ["trace","Pattern tracing","Recover three cut pieces from a scanned sheet.","trace-review.webp"],
           ["materials","Material studies","Inspect the cloth and its material properties.","material-rig.webp"],
           ["photo","Photo measurements","Measure the chalk marks on a sleeve using an A4 reference.","photo-example-sleeve.jpg"],
-        ].map(([page,title,description,image])=><a key={page} href={`/workbench/${page}.html`}>
+        ].map(([page,title,description,image])=><a key={page} data-reveal href={workbench(page as "index"|"trace"|"materials"|"photo")}>
           <img src={`/workbench/atelier-assets/${image}`} alt="" loading="lazy"/>
           <div><h3>{title}</h3><p>{description}</p></div><Arrow diagonal/>
         </a>)}</div>
       </div></section>}
+      {!section && <><Claims/><StartHere/></>}
     </main>
-    <footer className="base"><div className="wrap"><a className="wordmark" href="/"><Mark/>Franken<span>Textiles</span></a><a href={repo}>Source on GitHub <Arrow diagonal/></a></div></footer>
+    <SiteFooter/>
+    <Reveal/>
     {item && <Player item={item} close={closePlayer}/>}
   </>;
 }
