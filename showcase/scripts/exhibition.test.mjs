@@ -328,6 +328,13 @@ test("the hussar wardrobe connects the dressed figure, pattern front and native 
     await replay.getByRole("button",{name:"Yellow",exact:true}).click();
     await replay.getByRole("slider",{name:"Sewing replay frame"}).press("Home");
     await replay.locator("canvas[data-ready='Yellow'][data-frame='0']").waitFor();
+    for (const width of [1120,375]) {
+      await p.setViewportSize({width,height:820});
+      const stage=replay.locator(".mk-stage");
+      const [controls, canvas, caption]=await Promise.all([".mk-steps","canvas",".hu-tag"].map(selector=>stage.locator(selector).boundingBox()));
+      assert.ok(controls.y+controls.height<=canvas.y+1 && canvas.y+canvas.height<=caption.y+1,
+        "The entire cut has its own viewport between the controls and the caption");
+    }
     const file=p.getByRole("link",{name:"Download DST"});
     const dst=await file.evaluate(async a=>new Uint8Array(await (await fetch(a.href)).arrayBuffer()).slice(0,3).join(","));
     assert.equal(dst,"76,65,58"); // Tajima header begins with "LA:".

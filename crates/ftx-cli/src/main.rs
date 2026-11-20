@@ -61,7 +61,7 @@ const USAGE: &str = "usage:
             [--model PATH] [--body-fit REPORT] (draft from a tape-fitted or accepted body; MODEL_FIT, not new measurements)
   ftx validate PATTERN --measurements M [--fit F] [--model PATH] [--body-fit REPORT] [--flat-body] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
-            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N] [--res WIDTHxHEIGHT]
+            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
@@ -993,33 +993,44 @@ fn cmd_drape_bound(
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
     let started = std::time::Instant::now();
+    let mut refused = None;
     let mut run = if let Some(prepared) = &outfit {
-        prepared.drape(&spec, &body, &opts, |line| eprintln!("{line}"))?
+        prepared.drape_observed(
+            &spec,
+            &body,
+            &opts,
+            |line| eprintln!("{line}"),
+            &mut refused,
+        )
+    } else if let Some(policy) = pair {
+        ftx_drape::two_start::drape_observed(
+            &pattern,
+            &spec,
+            &body,
+            &opts,
+            &policy,
+            |line| eprintln!("{line}"),
+            &mut refused,
+        )
     } else {
-        match pair {
-            Some(policy) => {
-                ftx_drape::two_start::drape(&pattern, &spec, &body, &opts, &policy, |line| {
-                    eprintln!("{line}")
-                })?
-            }
-            None => {
-                // A refusal after the first step leaves the cloth as it last was to look at.
-                let mut refused = None;
-                let run = drape_observed(
-                    &pattern,
-                    &spec,
-                    &body,
-                    &opts,
-                    |line| eprintln!("{line}"),
-                    &mut refused,
-                );
-                run.map_err(|refusal| {
-                    let body_obj = obj(&full.vertices, &full.triangles, None).into_bytes();
-                    place::refused_stills(refusal, refused.as_ref(), &out, &body_obj)
-                })?
-            }
-        }
-    };
+        drape_observed(
+            &pattern,
+            &spec,
+            &body,
+            &opts,
+            |line| eprintln!("{line}"),
+            &mut refused,
+        )
+    }
+    .map_err(|refusal| match refused.as_ref() {
+        Some(state) => place::refused_stills(
+            refusal,
+            Some(state),
+            &out,
+            obj(&full.vertices, &full.triangles, None).as_bytes(),
+        ),
+        None => refusal,
+    })?;
     run.report["body_contact_proxy"] = skin.contact_proxy_basis_with_rest(&rest_skin);
     let mut report = run.report.clone();
     report["qualification_basis"] = ftx_drape::qualify::qualification_basis(&body, &material)?;

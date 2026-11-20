@@ -406,8 +406,8 @@ pub fn drape(
 /// [`drape`], and when it refuses once the start state has been admitted, `refused` receives the mesh and
 /// the positions the refusal is about so that the caller can show them: the last accepted state when
 /// sewing, draping or settling refuses (the admitted start if the first sewing step does), or the frame
-/// that crosses the displayed wearer. An earlier refusal (meshing, placement, the start audit) leaves
-/// `refused` as it was: [`crate::start_state`] is what to look at then.
+/// that crosses a surface in the replay. An earlier refusal clears `refused`; [`crate::start_state`]
+/// describes failures during placement and the start audit.
 ///
 /// # Errors
 /// As [`drape`]. The refusal is the same with or without an observer.
@@ -419,6 +419,7 @@ pub fn drape_observed(
     mut progress: impl FnMut(&str),
     refused: &mut Option<RefusedRun>,
 ) -> Result<DrapeRun, Refusal> {
+    *refused = None;
     let scope = simulation_scope(pattern)?;
     let material = crate::material::resolve(pattern, opts)?;
     let opts = &material.options;
@@ -549,9 +550,8 @@ pub fn drape_observed(
             drape.max_speed
         ));
     }
-    if opts.self_contact.is_some() && !body.display.1.is_empty() {
-        let mut display =
-            crate::animation::DisplayBodyContact::new(body.display.0, body.display.1)?;
+    if opts.self_contact.is_some() {
+        let mut display = crate::animation::ReplayContact::new(body.display.0, body.display.1)?;
         let first_sewn = FOLD_FRAMES + ZIP_FRAMES;
         for (index, frame) in frames.iter().enumerate().skip(first_sewn - 1) {
             if let Err(refusal) = display.check(frame, &scene.mesh.faces, index) {

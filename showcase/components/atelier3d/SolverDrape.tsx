@@ -11,9 +11,8 @@ import { formMaterial, lightStudio, prepareRenderer, shadowFloor } from "./studi
 import "./solver-drape.css";
 
 // From flat pattern to sewn article: a replay of one packaged `ftx drape` run (scripts/prepare-hussar-drape.py).
-// It opens on the cut pieces lying flat, each in its own colour and joined by threads to the edge it will be
-// sewn to, and plays the solver's own frames: the pieces wrap round the form, the seams close, the garment
-// hangs. The flat pattern stays in view underneath, in the same colours.
+// Panels bend independently on the cutting table before the cut to the recorded sewing states.
+// The flat pattern stays in view underneath, in the same colours.
 //
 // What this file adds is display only, and each exhibit's method note says so: cloth thickness and weave,
 // smoothing between solver points, the piece colours and threads, cord drawn along the pattern's decoration
@@ -21,7 +20,7 @@ import "./solver-drape.css";
 
 export interface DrapeInfo { frames: number; phases: { fold: number; zip: number; sew: number; drape: number }; sourceFrames: number[] }
 /** Where the camera looks (metres above the floor), half the height it shows, and its angle round the form. */
-export interface DrapeView { target: number; span: number; yaw: number }
+export interface DrapeView { target: number; span: number; yaw: number; fitWidth?: boolean }
 export interface DrapeLook { fabric: Fabric; edge?: "braid" | "hem"; cord?: string; button?: string }
 type Pose = (yaw: number, targetCm: number, spanCm: number) => void;
 declare global { interface Window { ftxHussarFrame?: Pose; ftxDressFrameDrape?: Pose; ftxMakingFrame?: Pose } }
@@ -174,8 +173,8 @@ export default function SolverDrape(props: SolverDrapeProps) {
       Object.assign(camera, { left: -half * aspect, right: half * aspect, top: half, bottom: -half });
       camera.updateProjectionMatrix();
     };
-    function orient(yaw: number, target: number, half: number, wide = 0.34, elevation = 0.07) {
-      span = half; reach = wide; camera.zoom = 1; project(); orbit.target.set(stand.x, stand.y + target, stand.z);
+    function orient(yaw: number, target: number, half: number, wide = 0.34, elevation = 0.07, x=stand.x, z=stand.z) {
+      span = half; reach = wide; camera.zoom = 1; project(); orbit.target.set(x, stand.y + target, z);
       camera.position.set(4 * Math.sin(yaw) * Math.cos(elevation), 4 * Math.sin(elevation), 4 * Math.cos(yaw) * Math.cos(elevation)).add(orbit.target);
       orbit.update(); draw();
     }
@@ -194,7 +193,7 @@ export default function SolverDrape(props: SolverDrapeProps) {
         default: return;
       }
       e.preventDefault(); steered = true;
-      const zoom = camera.zoom; orient(yaw, orbit.target.y - stand.y, span, reach, T.MathUtils.clamp(lift, -0.28, 0.66));
+      const zoom = camera.zoom; orient(yaw, orbit.target.y - stand.y, span, reach, T.MathUtils.clamp(lift, -0.28, 0.66), orbit.target.x, orbit.target.z);
       camera.zoom = zoom; camera.updateProjectionMatrix(); draw();
     };
     const lost = (e: Event) => { e.preventDefault(); fail.current(); };
@@ -258,6 +257,11 @@ export default function SolverDrape(props: SolverDrapeProps) {
       };
       const topology = { vertices: n, triangles: pack.triangles, seams: Object.values(pack.seams), panels: pack.panels };
       const sewn = Float32Array.from(upright(frameCount - 1));
+      const dressedBounds = new T.Box3().setFromArray(sewn).union(box), extent = dressedBounds.getSize(new T.Vector3());
+      const frameForm = (view:DrapeView) => {
+        const halfWidth = view.fitWidth ? 0.53*(extent.x*Math.abs(Math.cos(view.yaw))+extent.z*Math.abs(Math.sin(view.yaw))) : undefined;
+        orient(view.yaw,view.target,view.span,halfWidth);
+      };
 
       // One colour per cut piece, on the cloth while it is assembled and on the flat pattern under the stage.
       const colours = new Map<string, string>(), tints = new Float32Array(n * 3), tone = new T.Color();
@@ -271,6 +275,10 @@ export default function SolverDrape(props: SolverDrapeProps) {
       // The flat cut fills the opening view: the pieces lie on a board in front of the form.
       const arrange = cuttingTable(upright(0), Object.values(pack.panels));
       const boardBounds = new T.Box3(), boardSize = new T.Vector3(), boardCentre = new T.Vector3();
+      const frameBoard = () => {
+        boardBounds.setFromArray(points); boardBounds.getCenter(boardCentre); boardBounds.getSize(boardSize);
+        orient(0,boardCentre.y-stand.y,boardSize.y*0.54+.015,boardSize.x*0.54+.015,0,boardCentre.x,boardCentre.z);
+      };
 
       // Threads: each seam's two edges, point to matching point, until the seam has closed.
       const ends: number[] = [];
@@ -279,7 +287,8 @@ export default function SolverDrape(props: SolverDrapeProps) {
         const length = Math.min(seam.side_a.length, seam.side_b.length);
         if (!length) continue;
         const flipped = apart(seam.side_a[0], seam.side_b[0]) > apart(seam.side_a[0], seam.side_b[length - 1]);
-        for (let i = 0; i < length; i += 2) ends.push(seam.side_a[i], seam.side_b[flipped ? length - 1 - i : i]);
+        const i = Math.floor((length-1)/2);
+        ends.push(seam.side_a[i], seam.side_b[flipped ? length - 1 - i : i]);
       }
       const threadXYZ = new T.BufferAttribute(new Float32Array(ends.length * 3), 3).setUsage(T.DynamicDrawUsage);
       const threadShape = new T.BufferGeometry().setAttribute("position", threadXYZ);
@@ -342,24 +351,21 @@ export default function SolverDrape(props: SolverDrapeProps) {
           shownLook = next.look; shownFrame = -1;
         }
         const index = Math.max(0, Math.min(frameCount - 1, Math.round(next.frame < 0 ? frameCount - 1 : next.frame))), stage = stageOf(drape, index);
+        const sourceIndex=sampleIndex(pack.frames,pack.phases,pack.frames[index]);
+        const onBoard=pack.frames[sourceIndex]<pack.phases.fold;
         if (index !== shownFrame) {
           // Wrinkles are read off the settled cloth only: while pieces are still travelling they mean nothing.
           garment!.shell.detail = stage === 3 ? 1 : 0;
-          const sourceIndex=sampleIndex(pack.frames,pack.phases,pack.frames[index]);
-          const onBoard=pack.frames[sourceIndex]<pack.phases.fold;
           upright(sourceIndex);
           if(onBoard)arrange(points);
           mount.visible=!onBoard;
           garment!.update(points); carryTrim(look.fabric.thickness);
-          threads.visible = stage < 3; if (threads.visible) carryThreads();
+          threads.visible = stage === 1; if (threads.visible) carryThreads();
           studio.key.shadow.needsUpdate = true; shownFrame = index; el.dataset.frame = String(pack.frames[sourceIndex]);
           // Follow the making unless the visitor has taken the camera: wide on the flat cut, then in on the form.
           if (!steered) {
             const view = next.views[next.view.preset];
-            if(onBoard){
-              boardBounds.setFromArray(points);boardBounds.getCenter(boardCentre);boardBounds.getSize(boardSize);
-              orient(0,boardCentre.y-stand.y,boardSize.y/2+.10,boardSize.x/2+.09);
-            }else orient(view.yaw,view.target,view.span);
+            if(onBoard) frameBoard(); else frameForm(view);
             shownView = next.view;
           }
         }
@@ -367,7 +373,9 @@ export default function SolverDrape(props: SolverDrapeProps) {
         const fade = stage < 2 ? 1 : stage === 2 ? 1 - 0.5 * (index - wrapped) / Math.max(1, firstHung - wrapped) : Math.max(0, 0.5 - 0.5 * (index - firstHung) / Math.max(1, Math.min(4, hung - firstHung)));
         garment!.tintAmount.value = next.tinted ? 1 : fade;
         if (next.view !== shownView) {
-          const view = next.views[next.view.preset]; steered = false; orient(view.yaw, view.target, view.span); shownView = next.view;
+          steered = false;
+          if(onBoard) frameBoard(); else frameForm(next.views[next.view.preset]);
+          shownView = next.view;
         }
         draw(); el.dataset.ready = next.look;
       }
@@ -400,7 +408,7 @@ export default function SolverDrape(props: SolverDrapeProps) {
       <button type="button" className="mk-play" onClick={replay} disabled={!info} aria-label={playing ? "Pause the making" : "Play the making from the flat pattern"}><PlaybackMark playing={playing} /></button>
       <input type="range" min="0" max={info ? info.frames - 1 : 1} value={shown} disabled={!info} aria-label="Sewing replay frame" aria-valuetext={info ? STAGES[stage] : "Loading"}
         onChange={event => { offered.current = true; play(false); setFrame(Number(event.target.value)); }} />
-      <span>{info ? (shown === info.frames - 1 ? "Settled" : STAGES[stage]) : "Loading the drape…"}</span>
+      <span>{info ? (shown === info.frames - 1 ? "Final frame" : STAGES[stage]) : "Loading the drape…"}</span>
     </div>}
     {sheet && <figure className="mk-pattern">
       <svg viewBox={`${sheet.box[0] - 30} ${sheet.box[1] - 30} ${sheet.box[2] - sheet.box[0] + 60} ${sheet.box[3] - sheet.box[1] + 130}`} role="img"

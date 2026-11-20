@@ -2,9 +2,9 @@
 # Package the existing local workbenches with the native project's pinned WASM bindings.
 set -eu
 cd "$(dirname "$0")/../.."
-artifact="${FTX_WASM_ARTIFACT:-${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/ftx_wasm.wasm}"
+artifact="${FTX_WASM_ARTIFACT:-${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/wasm-release/ftx_wasm.wasm}"
 if [ -z "${FTX_WASM_ARTIFACT:-}" ]; then
-  cargo build --release --locked --target wasm32-unknown-unknown -p ftx-wasm
+  cargo build --profile wasm-release --locked --target wasm32-unknown-unknown -p ftx-wasm
 fi
 dest=showcase/public/workbench
 mkdir -p "$dest/pkg" "$dest/calibration" "$dest/atelier-assets"

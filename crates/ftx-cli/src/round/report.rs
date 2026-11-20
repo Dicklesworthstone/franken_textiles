@@ -403,6 +403,22 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
             out.push_str("<strong>Advisory flags</strong>");
             list(&mut out, &sim["advisory"]);
             if let Some(dir) = round_dir(&entry["dir"]) {
+                if sim.get("refusal").is_some() {
+                    link(
+                        &mut out,
+                        ws,
+                        &format!("{dir}/sim_failure.json"),
+                        "Simulation refusal and repairs",
+                    )?;
+                    for (view, label) in super::stills::VIEWS {
+                        link(
+                            &mut out,
+                            ws,
+                            &format!("{dir}/sim/refused/still_{view}.png"),
+                            &format!("Refused run · {label}"),
+                        )?;
+                    }
+                }
                 for (name, label) in [
                     ("fold_viewer.html", "Open drape viewer"),
                     ("sim_report.json", "Full drape report"),

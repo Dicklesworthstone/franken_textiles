@@ -222,8 +222,17 @@ mod tests {
         assert!(!html.contains("untrusted.invalid"));
         assert!(!html.contains("rounds/006"));
         entry["sim"]["refusal"] = json!({"code":"io","message":"solver failed"});
+        let diagnostic = rd.join("sim/refused");
+        std::fs::create_dir(&diagnostic).unwrap();
+        std::fs::copy(
+            rd.join("sim/still_front.png"),
+            diagnostic.join("still_front.png"),
+        )
+        .unwrap();
         let html = super::super::report::render(ws, &[entry.clone()]).unwrap();
         assert!(!html.contains("loading=\"lazy\""));
+        assert!(html.contains("href=\"rounds/007/sim/refused/still_front.png\""));
+        assert!(!html.contains("href=\"rounds/007/sim/refused/still_back.png\""));
         entry["rendering"] = json!({"status":"FAILED","refusal":{"message":"<bad mesh>"}});
         let html = super::super::report::render(ws, &[entry]).unwrap();
         assert!(html.contains("Stills failed"));

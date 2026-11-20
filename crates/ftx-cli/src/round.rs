@@ -28,6 +28,7 @@ pub(super) const BOOLEAN_OPTIONS: &[&str] = &[
 const SIM_OPTIONS: &[&str] = &[
     "sew",
     "drape",
+    "spacing-mm",
     "max-settle-steps",
     "static-equilibrium",
     "static-tol-mm",
@@ -331,6 +332,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "sim",
             "sew",
             "drape",
+            "spacing-mm",
             "max-settle-steps",
             "static-equilibrium",
             "static-tol-mm",

@@ -237,4 +237,79 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
     assert_eq!(view["phase"][4], "Sewn starting position");
     let suffix = view["contact_replay"]["positions_f32"].as_str().unwrap();
     assert_eq!(suffix.len(), 16 * 12 * 3 * 4 / 3 * 4);
+    let map_path = dir.join("sim/mesh_map.json");
+    let mut map: Value = serde_json::from_slice(&std::fs::read(&map_path).unwrap()).unwrap();
+    let refuse = |message: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args(["viewer", "sim", "--out", "unchecked.html", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            result["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(message)
+        );
+        assert!(!dir.join("unchecked.html").exists());
+    };
+    save(
+        &dir.join("sim/sim_report.json"),
+        &json!({"self_contact":{"enabled":true}, "animation":{"first_physical_frame":17}}),
+    );
+    refuse("first physical frame");
+    map.as_object_mut().unwrap().remove("frames");
+    save(&map_path, &map);
+    refuse("frame counts");
+}
+
+#[test]
+fn viewer_checks_cloth_crossings_even_in_frames_it_would_drop() {
+    let dir = setup().join("sim");
+    save(
+        &dir.join("mesh_map.json"),
+        &json!({"units":"m","vertices":6,"frames":{"fold":3,"zip":2,"sew":0,"drape":125}}),
+    );
+    save(
+        &dir.join("sim_report.json"),
+        &json!({"self_contact":{"enabled":true},"animation":{"first_physical_frame":4}}),
+    );
+    std::fs::write(dir.join("body.obj"), "v 0 0 5\nv 1 0 5\nv 0 1 5\nf 1 2 3\n").unwrap();
+    std::fs::write(
+        dir.join("garment.obj"),
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nv 1 0 1\nv 0 1 1\nf 1 2 3\nf 4 5 6\n",
+    )
+    .unwrap();
+    let clear = vec![
+        Vec3::ZERO,
+        Vec3::new(1., 0., 0.),
+        Vec3::new(0., 1., 0.),
+        Vec3::new(0.2, 0.2, 1.),
+        Vec3::new(0.4, 0.2, 1.),
+        Vec3::new(0.2, 0.4, 1.),
+    ];
+    let mut frames = vec![clear; 130];
+    let viewer = |name: &str| {
+        Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args(["viewer", ".", "--out", name, "--json"])
+            .output()
+            .unwrap()
+    };
+    std::fs::write(dir.join("fold.pc2"), pc2(&frames)).unwrap();
+    assert!(viewer("clear.html").status.success());
+    // At 60 display samples from 130 source frames, frame 30 lies between 28 and 31.
+    frames[30][3].z = -1.;
+    std::fs::write(dir.join("fold.pc2"), pc2(&frames)).unwrap();
+    let output = viewer("crossing.html");
+    assert!(!output.status.success());
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["refusal"]["code"], "intersecting_trajectory");
+    assert_eq!(
+        result["refusal"]["message"],
+        "physical frame 30: cloth triangle 0 crosses cloth triangle 1"
+    );
+    assert!(!dir.join("crossing.html").exists());
 }

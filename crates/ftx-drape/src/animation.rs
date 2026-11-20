@@ -553,16 +553,16 @@ pub fn viewer_payload(
     payload
 }
 
-/// Check the actual display skin, including fingers outside the capped clothing collider.
+/// Check cloth against itself and the full display skin, including fingers outside the collider.
 /// Coordinates are rounded once as in the displayed PC2. Touching a surface is admissible.
-pub struct DisplayBodyContact {
+pub struct ReplayContact {
     triangles: Vec<[Vec3; 3]>,
     boxes: Vec<(Vec3, Vec3)>,
     index: crate::bvh::QueryBvh,
     candidates: Vec<usize>,
 }
 
-impl DisplayBodyContact {
+impl ReplayContact {
     /// Build the static body index. Malformed vertex indices or unrepresentable coordinates refuse.
     pub fn new(vertices: &[Vec3], faces: &[[usize; 3]]) -> Result<Self, Refusal> {
         let points = display_points(vertices)?;
@@ -587,11 +587,13 @@ impl DisplayBodyContact {
         faces: &[[usize; 3]],
         frame: usize,
     ) -> Result<(), Refusal> {
-        use ftx_core::intersection::{IntersectionKind, triangle_triangle};
+        use ftx_core::intersection::{IntersectionKind, indexed_triangle_pair, triangle_triangle};
         let points = display_points(vertices)?;
+        let mut cloth_boxes = Vec::with_capacity(faces.len());
         for (cloth_id, face) in faces.iter().enumerate() {
             let cloth = display_triangle(&points, *face)?;
             let bounds = crate::contact::aabb(&cloth);
+            cloth_boxes.push(bounds);
             self.index.query(bounds, &mut self.candidates);
             for &body_id in &self.candidates {
                 if crate::bvh::overlaps(bounds, self.boxes[body_id])
@@ -601,6 +603,29 @@ impl DisplayBodyContact {
                     return Err(Refusal::new(RefusalCode::IntersectingTrajectory,
                         format!("physical frame {frame}: cloth triangle {cloth_id} crosses displayed body triangle {body_id}"))
                         .repair("move the hand or foot away from the garment, or revise the panel placement and drape again"));
+                }
+            }
+        }
+        // PC2 contains separate vertices on the two sides of a welded seam. Boundary
+        // contact is legal. Reject an interior crossing even between incident faces.
+        let cloth_index = crate::bvh::QueryBvh::build(&cloth_boxes);
+        for (a, &bounds) in cloth_boxes.iter().enumerate() {
+            cloth_index.query(bounds, &mut self.candidates);
+            for &b in &self.candidates {
+                if b > a
+                    && crate::bvh::overlaps(bounds, cloth_boxes[b])
+                    && indexed_triangle_pair(&points, faces[a], faces[b])
+                        == Some(IntersectionKind::Crossing)
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::IntersectingTrajectory,
+                        format!(
+                            "physical frame {frame}: cloth triangle {a} crosses cloth triangle {b}"
+                        ),
+                    )
+                    .repair(
+                        "inspect the recorded panel positions and drape again with cloth contact",
+                    ));
                 }
             }
         }
@@ -772,7 +797,7 @@ mod tests {
     #[test]
     fn displayed_hand_crossing_refuses_even_with_clear_neighbouring_poses() {
         let hand = [Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
-        let mut body = DisplayBodyContact::new(&hand, &[[0, 1, 2]]).unwrap();
+        let mut body = ReplayContact::new(&hand, &[[0, 1, 2]]).unwrap();
         let crossed = [
             Vec3::new(0.2, 0.2, -0.2),
             Vec3::new(0.4, 0.2, 0.2),
@@ -784,6 +809,32 @@ mod tests {
         assert_eq!(refusal.code, RefusalCode::IntersectingTrajectory);
         assert!(refusal.message.contains("frame 88"));
         body.check(&raised, &[[0, 1, 2]], 89).unwrap();
+    }
+
+    #[test]
+    fn recorded_cloth_can_touch_its_seam_but_cannot_cross_another_panel() {
+        let mut contact = ReplayContact::new(&[], &[]).unwrap();
+        let mut points = [
+            Vec3::ZERO,
+            Vec3::new(1., 0., 0.),
+            Vec3::new(0., 1., 0.),
+            Vec3::ZERO,
+            Vec3::new(1., 0., 0.),
+            Vec3::new(0., -1., 0.),
+        ];
+        let faces = [[0, 1, 2], [3, 4, 5]];
+        contact.check(&points, &faces, 12).unwrap();
+        points[3..].copy_from_slice(&[
+            Vec3::new(0.2, 0.2, -0.2),
+            Vec3::new(0.4, 0.2, 0.2),
+            Vec3::new(0.2, 0.4, 0.2),
+        ]);
+        let err = contact.check(&points, &faces, 13).unwrap_err();
+        assert_eq!(err.code, RefusalCode::IntersectingTrajectory);
+        assert!(
+            err.message
+                .contains("13: cloth triangle 0 crosses cloth triangle 1")
+        );
     }
 
     /// Horn's rotation recovers a known rotation and translation; slerp ends at its ends.

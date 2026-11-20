@@ -1,11 +1,13 @@
 /* From flat pattern to sewn article: the stage, its four stage buttons, the replay bar and the flat pattern strip.
    A page restyles it through the custom properties on .mk. */
 .mk{--mk-ground:radial-gradient(ellipse at 45% 30%,#5e6a61 0%,#3f4b43 50%,#27332d 100%);--mk-ink:#f0ead8;--mk-accent:#e4d6ab;--mk-bar:#2a3832;--mk-height:clamp(440px,46vw,660px);min-width:0;display:flex;flex-direction:column}
-.mk-stage{position:relative;height:var(--mk-height);background:var(--mk-ground);overflow:hidden}
-.mk-canvas,.mk-canvas canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.mk-stage{position:relative;height:var(--mk-height);display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--mk-ground);overflow:hidden}
+.mk-canvas{grid-row:2;position:relative;min-height:0}
+.mk-canvas canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.mk-stage>.hu-tag,.mk-stage>.sd-stage-caption{grid-row:3;position:static;justify-self:start;margin:5px 12px 10px}
 .mk-canvas canvas{cursor:grab}.mk-canvas canvas:active{cursor:grabbing}
 .mk-failed{position:absolute;inset:0;display:grid;place-items:center;margin:0;padding:24px;color:var(--mk-ink);font-size:14px;text-align:center}
-.mk-steps{position:absolute;top:12px;left:12px;right:12px;margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px;pointer-events:none}
+.mk-steps{grid-row:1;margin:0;padding:10px 12px 4px;list-style:none;display:flex;flex-wrap:wrap;gap:6px;pointer-events:none}
 .mk .mk-steps button{pointer-events:auto;display:flex;align-items:center;gap:7px;border:1px solid #ffffff3d;background:#1b2621c7;color:#e6e1cf;border-radius:999px;padding:5px 12px 5px 6px;font:500 11.5px/1.2 var(--sans);cursor:pointer}
 .mk .mk-steps button:disabled{opacity:.6;cursor:default}
 .mk-steps b{display:grid;place-items:center;width:19px;height:19px;border-radius:50%;background:#ffffff2b;font:600 10px/1 var(--mono)}

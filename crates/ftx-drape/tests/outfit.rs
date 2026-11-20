@@ -1281,7 +1281,7 @@ fn a_refused_phase_leaves_the_last_accepted_state_to_look_at() {
         .unwrap()
         .remove("placement");
     unplaced["pieces"][0]["sim"] = json!(false);
-    let mut nothing = None;
+    let mut nothing = Some(state);
     assert!(
         drape_observed(
             &ftx_pattern::Pattern::new(unplaced),

@@ -13,10 +13,10 @@ const looks: Record<Regiment, DrapeLook> = {
   Yellow: { fabric: { colour: "#161717", lining: "#b7aa90", sheen: "#55595d", weave: "plain", yarnPitchMm: 0.9, thickness: 0.0022, nap: 0.8, wrinkleMm: 16 }, cord: "#dedacb", button: "#b9b8b2" },
 };
 const views: Record<Framing, DrapeView> = {
-  Jacket: { target: 1.3, span: 0.5, yaw: -0.3 },
+  Jacket: { target: 1.3, span: 0.5, yaw: -0.3, fitWidth: true },
   Chest: { target: 1.33, span: 0.25, yaw: -0.22 },
-  Reverse: { target: 1.3, span: 0.5, yaw: Math.PI - 0.3 },
-  Figure: { target: 0.9, span: 0.96, yaw: -0.3 },
+  Reverse: { target: 1.3, span: 0.5, yaw: Math.PI - 0.3, fitWidth: true },
+  Figure: { target: 0.9, span: 0.96, yaw: -0.3, fitWidth: true },
 };
 // The jacket ends at the waist, so the form is shown as a jacket mount that ends at the hip.
 const HIP_LINE = 0.94;

@@ -390,8 +390,25 @@ impl Prepared {
         options: &DrapeOptions,
         progress: impl FnMut(&str),
     ) -> Result<DrapeRun, Refusal> {
+        self.drape_observed(fit_spec, body, options, progress, &mut None)
+    }
+
+    /// Drape the outfit and retain the failing solve's geometry for inspection.
+    ///
+    /// # Errors
+    /// As for [`Self::drape`].
+    pub fn drape_observed(
+        &self,
+        fit_spec: &Value,
+        body: &DrapeBody,
+        options: &DrapeOptions,
+        progress: impl FnMut(&str),
+        refused: &mut Option<crate::run::RefusedRun>,
+    ) -> Result<DrapeRun, Refusal> {
+        *refused = None;
         check_options(options)?;
-        let mut run = crate::run::drape(&self.pattern, fit_spec, body, options, progress)?;
+        let mut run =
+            crate::run::drape_observed(&self.pattern, fit_spec, body, options, progress, refused)?;
         let owners = run
             .scene
             .mesh

@@ -311,6 +311,8 @@ fn simulation_options_are_checked_before_workspace_mutation() {
         vec!["--self-mu", "0.3"],
         vec!["--model", "model.ftxbody"],
         vec!["--sim", "--self-contact-mm", "NaN"],
+        vec!["--sim", "--spacing-mm", "-1"],
+        vec!["--spacing-mm", "20"],
         vec!["--sim", "--self-mu", "0.3"],
         vec!["--sim", "--sew", "0", "--drape", "0"],
     ] {

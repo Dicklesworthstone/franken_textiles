@@ -323,18 +323,36 @@ pub fn drape(
     body: &DrapeBody,
     opts: &DrapeOptions,
     policy: &TwoStartOptions,
-    mut progress: impl FnMut(&str),
+    progress: impl FnMut(&str),
 ) -> Result<DrapeRun, Refusal> {
+    drape_observed(pattern, fit_spec, body, opts, policy, progress, &mut None)
+}
+
+/// Keep diagnostic geometry from the member of the two-start comparison that refused.
+///
+/// # Errors
+/// As for [`drape`].
+pub fn drape_observed(
+    pattern: &Pattern,
+    fit_spec: &Value,
+    body: &DrapeBody,
+    opts: &DrapeOptions,
+    policy: &TwoStartOptions,
+    mut progress: impl FnMut(&str),
+    refused: &mut Option<crate::run::RefusedRun>,
+) -> Result<DrapeRun, Refusal> {
+    *refused = None;
     policy.validate(opts)?;
     let mut solve = |name: &str, options: &DrapeOptions| {
         progress(&format!(
             "two-start {name}: {} sewing steps",
             options.sew_steps
         ));
-        crate::run::drape(pattern, fit_spec, body, options, &mut progress).map_err(|mut r| {
-            r.message = format!("two-start {name}: {}", r.message);
-            r
-        })
+        crate::run::drape_observed(pattern, fit_spec, body, options, &mut progress, refused)
+            .map_err(|mut r| {
+                r.message = format!("two-start {name}: {}", r.message);
+                r
+            })
     };
     let mut primary = solve("primary", opts)?;
     let alternate = solve(
