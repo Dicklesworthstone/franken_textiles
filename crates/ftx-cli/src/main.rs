@@ -64,10 +64,10 @@ const USAGE: &str = "usage:
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
             [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
-            [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
+            [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
-  ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N]
+  ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--time-step-s SECONDS] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--self-contact-mm MM] [--self-mu MU] [--json]
@@ -764,6 +764,11 @@ fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
 /// Validate settings before reading files, fitting the body or creating outputs.
 fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     let mut opts = DrapeOptions::default();
+    if let Some(seconds) = args.options.get("time-step-s") {
+        opts.step = seconds
+            .parse()
+            .map_err(|_| bad_input("--time-step-s must be a positive duration in seconds"))?;
+    }
     if let Some(mm) = args.options.get("spacing-mm") {
         opts.spacing = mm
             .parse()
@@ -1001,6 +1006,7 @@ fn cmd_drape_bound(
             "integrator",
             "rho-inf",
             "model",
+            "time-step-s",
             "self-contact-mm",
             "spacing-mm",
             "compression",
@@ -1848,6 +1854,33 @@ mod tests {
             drape_options(&parse(&["drape", "--self-contact-mm", "0"].map(String::from)).unwrap())
                 .unwrap();
         assert_eq!(zero.self_contact.unwrap().thickness, 0.0);
+    }
+
+    #[test]
+    fn nominal_time_step_is_in_seconds_and_validated_before_reading_a_pattern() {
+        let args = parse(
+            &[
+                "drape",
+                "--time-step-s",
+                "0.001",
+                "--sew",
+                "40",
+                "--drape",
+                "60",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let opts = drape_options(&args).unwrap();
+        assert_eq!(
+            (opts.step, opts.sew_steps, opts.drape_steps),
+            (0.001, 40, 60)
+        );
+        for value in ["0", "-1", "NaN", "inf", "fast"] {
+            let args =
+                parse(&["drape", "absent.json", "--time-step-s", value].map(String::from)).unwrap();
+            assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        }
     }
 
     #[test]

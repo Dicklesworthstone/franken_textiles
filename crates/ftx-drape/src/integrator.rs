@@ -30,8 +30,11 @@ pub enum TimeIntegrator {
     ///
     /// In the 30 mm radius sewn-band case (`ftx-xd85`), `0.8` refuses during
     /// sewing at both 10 ms and 5 ms, including with the default subdivision
-    /// budget. The same 10 ms case completes at `0.0`. These observations are
-    /// specific to that band, contact geometry and Newton strategy.
+    /// budget. With AdaptiveIlu it completes at `0.8` with 1 ms nominal steps
+    /// from the start (40 sewing and 60 gravity steps), including with 2 mm
+    /// self-contact. In the CLI these are `--time-step-s 0.001 --sew 40 --drape 60`.
+    /// The same 10 ms case completes at `0.0`. This schedule qualifies this
+    /// band and contact geometry.
     GeneralizedAlpha {
         /// Spectral radius at infinite frequency, in `[0, 1]`.
         rho_inf: f64,
