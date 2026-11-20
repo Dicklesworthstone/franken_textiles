@@ -11,7 +11,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::{project_psd, project_psd_translation_free};
