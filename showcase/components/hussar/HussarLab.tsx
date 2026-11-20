@@ -56,7 +56,7 @@ export default function HussarLab() {
         <div><dt>Panels sewn</dt><dd>{drape.instances.length}</dd></div>
         <div><dt>Solver points</dt><dd>{drape.vertices.toLocaleString("en")}</dd></div>
         <div><dt>Edge strain <abbr title="95th percentile">P95</abbr></dt><dd>{drape.edgeStrainPercent.p95.toFixed(1)} %</dd></div>
-        <div><dt>Body offset</dt><dd>{drape.bodyOffsetMm.achieved.toFixed(3)} / {drape.bodyOffsetMm.target} mm</dd></div>
+        <div><dt>Body offset</dt><dd>{drape.bodyOffsetMm.achieved.toFixed(3)} <small>/ {drape.bodyOffsetMm.target} mm</small></dd></div>
       </dl>
       <div className="hu-pattern-links">{(["Blue", "Yellow"] as const).map(name =>
         <a key={name} href={`/patterns/hussar-${name.toLowerCase()}.pdf`} download>Download {name} ensemble pattern PDF ↓</a>)}</div>

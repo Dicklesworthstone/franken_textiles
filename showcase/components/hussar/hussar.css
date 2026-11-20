@@ -21,8 +21,9 @@
 .hu-replay>button:disabled{opacity:.45}
 .hu-replay input{flex:1;min-width:0;accent-color:#d9c489;height:22px;margin:0}
 .hu-replay>span{font:500 10px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;min-width:9.5em;text-align:right}
-.hu-readings{display:grid;grid-template-columns:repeat(3,1fr);margin:16px 0 4px;border-block:1px solid #d5d0bf}
-.hu-readings>div{padding:9px 10px 8px 0}.hu-readings>div+div{padding-left:10px;border-left:1px solid #ddd8c8}
+.hu-readings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0 4px;border-block:1px solid #d5d0bf}
+.hu-readings>div{padding:9px 10px 8px 0}.hu-readings>div:nth-child(even){padding:9px 0 8px 10px;border-left:1px solid #ddd8c8}
+.hu-readings>div:nth-child(n+3){border-top:1px solid #ddd8c8}.hu-readings dd small{display:inline-block;font:400 .58em/1.2 var(--sans);white-space:nowrap}
 .hu-readings dt{font-size:11px;color:#5f6a60}.hu-readings abbr{text-decoration:none}
 .hu-readings dd{margin:2px 0 0;font:400 clamp(21px,2vw,29px)/1.15 var(--serif);font-variant-numeric:lining-nums tabular-nums;color:#27433a}
 .hu-method{margin-top:22px;border:1px solid #cbc7b6;border-radius:5px;background:#faf6e9;padding:14px clamp(14px,2.2vw,26px)}

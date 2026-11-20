@@ -81,7 +81,7 @@ export default function HowItWorks() {
         <p>The revised drape passed its contact checks. With the arms raised, the bolero still rode up 28 mm and the chest fabric stretched by 1.6% on average. The separate flat-pattern check remained open in both rounds.</p>
         <div className="ft-hero-actions"><a className="ft-text-link" href="/patterns/bolero.pdf" download>Print this bolero at actual size</a>
           <a className="ft-text-link" href="/exhibits/poses/bolero-start.json" download>Download the revised placements</a>
-          <a className="ft-text-link" href="/sections/studies/#drape-room">Turn the dressed bolero</a></div>
+          <a className="ft-text-link" href="/sections/studies/?chest=54&arm=90&surface=cloth#drape-room">Turn the raised-arm bolero</a></div>
       </div>
     </div></section>
 
