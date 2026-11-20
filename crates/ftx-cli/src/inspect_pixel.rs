@@ -114,9 +114,36 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .as_u64()
         .ok_or_else(|| bad_input("missing round number"))?;
     let refused = round["sim"]["refusal"].is_object();
-    let folder = if refused { "sim/refused" } else { "sim" };
-    let scene = dir.join(folder);
     let file = format!("still_{view}.png");
+    crate::round::regular(&dir.join("sim"), true)?;
+    let folder = if refused {
+        let diagnosis = dir.join("sim/refused");
+        crate::round::regular(&diagnosis, true)?;
+        let placement = diagnosis.join("placement.json");
+        if round["sim"]["refusal"]["code"] == "intersecting_start"
+            && crate::round::regular(&placement, false)?
+        {
+            let (report, _) = fold::document(&placement)?;
+            let expected = Path::new("start").join(&file);
+            if !report["stills"]["start"].as_array().is_some_and(|names| {
+                names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|name| Path::new(&name.replace('\\', "/")).ends_with(&expected))
+            }) {
+                return Err(bad_input(
+                    "the placement report did not publish this start view",
+                ));
+            }
+            "sim/refused/start"
+        } else {
+            "sim/refused"
+        }
+    } else {
+        "sim"
+    };
+    let start = folder == "sim/refused/start";
+    let scene = dir.join(folder);
     let image = format!("rounds/{n:03}/{folder}/{file}");
     if !refused
         && (round["rendering"]["status"] != "PASS"
@@ -130,20 +157,18 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "this round did not publish the requested still; run a fresh round with --stills",
         ));
     }
-    crate::round::regular(&dir.join("sim"), true)?;
     crate::round::regular(&scene, true)?;
     let path = scene.join(&file);
     crate::round::regular(&path, false)?;
     let map_path = scene.join("mesh_map.json");
-    let diagnostic_map = if refused {
-        if !crate::round::regular(&map_path, false)? {
-            return Err(bad_input(
-                "this refused round has no diagnostic source-edge map; inspect its saved images or run a fresh round to trace pixels",
-            ));
-        }
+    let diagnostic_map = if refused && crate::round::regular(&map_path, false)? {
         let (map, _) = fold::document(&map_path)?;
         let pose = &map["refused_pose"];
-        if pose["phase"].as_str().is_none() || pose["accepted_steps"].as_u64().is_none() {
+        if pose["phase"].as_str().is_none()
+            || pose["accepted_steps"].as_u64().is_none()
+            || start != (pose["phase"] == "placement")
+            || (start && pose["accepted_steps"] != 0)
+        {
             return Err(bad_input(
                 "the source-edge map does not identify a refused pose",
             ));
@@ -163,10 +188,12 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         u32::from_be_bytes(header[16..20].try_into().unwrap()) as usize,
         u32::from_be_bytes(header[20..24].try_into().unwrap()) as usize,
     ];
-    let dimensions = diagnostic_map
-        .as_ref()
-        .map_or(&round["rendering"], |map| &map["refused_pose"]);
-    if dimensions["width"] != size[0] || dimensions["height"] != size[1] {
+    let dimensions = if refused {
+        diagnostic_map.as_ref().map(|map| &map["refused_pose"])
+    } else {
+        Some(&round["rendering"])
+    };
+    if dimensions.is_some_and(|d| d["width"] != size[0] || d["height"] != size[1]) {
         return Err(bad_input("still dimensions differ from the saved round"));
     }
     if pixel[0] >= size[0] || pixel[1] >= size[1] {
@@ -192,6 +219,10 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             let normal_map;
             let map = if let Some(map) = &diagnostic_map {
                 map
+            } else if refused {
+                return Err(bad_input(
+                    "this refused round has no diagnostic source-edge map; compare its saved views or run a fresh round to trace the garment edge",
+                ));
             } else {
                 crate::round::regular(&map_path, false)?;
                 normal_map = fold::document(&map_path)?.0;
@@ -215,14 +246,23 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     };
     let mut result = json!({"round":n,"image":image,"size_px":size,"pixel":pixel,"hit":hit,
         "basis":round["basis"], "gating":round["sim"]["gating"],"advisory":round["sim"]["advisory"]});
-    if let Some(map) = diagnostic_map {
-        result["refused_pose"] = map["refused_pose"].clone();
+    if refused {
+        if let Some(map) = diagnostic_map {
+            result["refused_pose"] = map["refused_pose"].clone();
+        } else if start {
+            result["refused_pose"] = json!({"phase":"placement","accepted_steps":0});
+        }
         result["refusal"] = round["sim"]["refusal"].clone();
+        let label = if start {
+            "Refused start"
+        } else {
+            "Refused pose"
+        };
         return Ok((
             result,
             0,
             format!(
-                "Refused pose · {text}\n{}",
+                "{label} · {text}\n{}",
                 round["sim"]["refusal"]["message"].as_str().unwrap_or("")
             ),
         ));

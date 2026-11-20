@@ -7,7 +7,7 @@ import re
 import struct
 import subprocess
 from html import escape
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from xml.etree import ElementTree
 
 
@@ -16,22 +16,50 @@ def load_panel(directory, view, instance):
     number = entry["round"]
     sim = entry.get("sim") or {}
     refused = isinstance(sim.get("refusal"), dict)
-    folder = "sim/refused" if refused else "sim"
-    name = f"{folder}/still_{view}.png"
+    scene = directory / "sim"
+    if scene.is_symlink():
+        raise ValueError(f"round {number} has a linked scene directory")
+    title = "Drape"
     rendering = entry.get("rendering") or {}
+    dimensions = None if refused else rendering
+    filename = f"still_{view}.png"
+    if refused:
+        scene = scene / "refused"
+        if scene.is_symlink():
+            raise ValueError(f"round {number} has a linked refusal directory")
+        title = "Refused pose"
+        placement = scene / "placement.json"
+        if sim["refusal"].get("code") == "intersecting_start":
+            if placement.is_symlink():
+                raise ValueError(f"round {number} has a linked placement report")
+            if placement.exists():
+                # The native report can contain paths from before the workspace was moved.
+                # Check its stage and filename, then read only from this round.
+                report = json.loads(placement.read_bytes())
+                stills = report.get("stills") if isinstance(report, dict) else None
+                listed = stills.get("start") if isinstance(stills, dict) else None
+                if not isinstance(listed, list) or not any(
+                    isinstance(p, str) and PureWindowsPath(p).parts[-2:] == ("start", filename)
+                    for p in listed
+                ):
+                    raise ValueError(f"round {number} did not publish the requested start view")
+                scene = scene / "start"
+                title = "Refused start"
+    path = scene / filename
+    name = path.relative_to(directory).as_posix()
     if not refused and (not sim or "refusal" in sim or rendering.get("status") != "PASS"
                         or f"rounds/{number:03d}/{name}" not in entry["images"]):
         raise ValueError(f"round {number} has no published {view} still")
-    path = directory / name
-    if any(p.is_symlink() for p in (directory / "sim", directory / folder, path)):
+    if scene.is_symlink() or path.is_symlink():
         raise ValueError(f"round {number} has a linked still or scene directory")
     png = path.read_bytes()
     if not png.startswith(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"):
         raise ValueError(f"round {number} has an invalid native PNG")
+    if not png.endswith(b"\0\0\0\0IEND\xae\x42\x60\x82"):
+        raise ValueError(f"round {number} has an incomplete native PNG")
     size = struct.unpack(">II", png[16:24])
-    dimensions = None if refused else rendering
     if refused:
-        mapping = directory / folder / "mesh_map.json"
+        mapping = scene / "mesh_map.json"
         if mapping.is_symlink():
             raise ValueError(f"round {number} has a linked diagnostic mesh map")
         if mapping.exists():
@@ -39,6 +67,10 @@ def load_panel(directory, view, instance):
             if (not isinstance(dimensions, dict) or not isinstance(dimensions.get("phase"), str)
                     or type(dimensions.get("accepted_steps")) is not int or dimensions["accepted_steps"] < 0):
                 raise ValueError(f"round {number} has no identified pose in its diagnostic mesh map")
+            placement_view = title == "Refused start"
+            if ((dimensions["phase"] == "placement") != placement_view
+                    or (placement_view and dimensions["accepted_steps"] != 0)):
+                raise ValueError(f"round {number} has a mesh map from a different stage")
     if not all(size) or (dimensions is not None and size != (dimensions["width"], dimensions["height"])):
         raise ValueError(f"still differs from the dimensions recorded in round {number}")
     preview = ElementTree.parse(directory / "preview.svg")
@@ -53,12 +85,12 @@ def load_panel(directory, view, instance):
         raise ValueError(f"unrecognised flat outline for {instance}")
     x_mid = (min(x for x, _ in pts) + max(x for x, _ in pts)) / 2
     y_top = min(y for _, y in pts)
-    return entry, base64.b64encode(png).decode(), size, [(x-x_mid, y-y_top) for x, y in pts]
+    return entry, title, base64.b64encode(png).decode(), size, [(x-x_mid, y-y_top) for x, y in pts]
 
 
 def compare(before, after, view, instance, crop):
     rows = [load_panel(rd, view, instance) for rd in (before, after)]
-    points = [p for _, _, _, outline in rows for p in outline]
+    points = [p for _, _, _, _, outline in rows for p in outline]
     half_width, height = max(abs(x) for x, _ in points), max(y for _, y in points)
     if not half_width or not height:
         raise ValueError("flat outline has no drawable area")
@@ -70,11 +102,10 @@ def compare(before, after, view, instance, crop):
         parts.append(f'<text x="{x}" y="{y}" font-family="DejaVu Sans,sans-serif" '
                      f'font-size="{size}" fill="{colour}">{escape(str(content))}</text>')
     outlines = []
-    for i, (entry, png, (w, h), outline) in enumerate(rows):
+    for i, (entry, title, png, (w, h), outline) in enumerate(rows):
         x = 15 + 446*i
         ink = ["#8a5327", "#126552"][i]
         refused = "refusal" in entry["sim"]
-        title = "Refused pose" if refused else "Drape"
         label(x, 29, f'{title} · round {entry["round"]:03d} · {view.replace("_"," ")}', 19, ink)
         left, top, cw, ch = crop or (0, 0, w, h)
         if min(left, top) < 0 or min(cw, ch) <= 0 or left+cw > w or top+ch > h:

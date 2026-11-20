@@ -208,6 +208,10 @@ mod tests {
                 .message
                 .contains("no diagnostic source-edge map")
         );
+        let archived = pick("front", "0,0").unwrap();
+        assert_eq!(archived["hit"]["surface"], "background");
+        assert_eq!(archived["refusal"], original);
+        assert!(archived.get("refused_pose").is_none());
         // Distinct physical copy from the apparent successful endpoint.
         let pose = json!({"phase":"settle","accepted_steps":2,"width":96,"height":72});
         let mut map = json!({"vertices":4,"inst_range":{"panel.R":[0,4]},"refused_pose":pose,
@@ -235,6 +239,50 @@ mod tests {
                 .message
                 .contains("dimensions")
         );
+
+        // A placement refusal has its own image, geometry and source map even if an
+        // interrupted round still contains plausible results in the parent directory.
+        let mut failed_start = failed;
+        failed_start["sim"]["refusal"]["code"] = json!("intersecting_start");
+        std::fs::write(rd.join("round.json"), failed_start.to_string()).unwrap();
+        let start = diagnosis.join("start");
+        std::fs::create_dir(&start).unwrap();
+        for name in ["body.obj", "garment.obj", "still_front.png"] {
+            std::fs::copy(diagnosis.join(name), start.join(name)).unwrap();
+        }
+        super::super::write_json(
+            &diagnosis.join("placement.json"),
+            &json!({
+                "stills":{"start":["relocated/work/start/still_front.png"]}
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            pick("front", "0,0").unwrap()["refused_pose"]["phase"],
+            "placement"
+        );
+        assert!(
+            pick("front", "48,58")
+                .unwrap_err()
+                .message
+                .contains("source-edge map")
+        );
+        assert!(
+            pick("strain_front", "48,58")
+                .unwrap_err()
+                .message
+                .contains("did not publish")
+        );
+        super::super::write_json(&start.join("mesh_map.json"), &map).unwrap();
+        assert!(pick("front", "48,58").is_err());
+        map["refused_pose"] =
+            json!({"phase":"placement","accepted_steps":0,"width":96,"height":72});
+        std::fs::write(start.join("mesh_map.json"), map.to_string()).unwrap();
+        let hit = pick("front", "48,58").unwrap();
+        assert_eq!(hit["image"], "rounds/007/sim/refused/start/still_front.png");
+        assert_eq!(hit["refusal"]["code"], "intersecting_start");
+        assert_eq!(hit["hit"]["instance"], "panel.R");
+        assert_eq!(hit["hit"]["nearest_edge"]["source_edge"], "hem");
     }
 
     #[test]

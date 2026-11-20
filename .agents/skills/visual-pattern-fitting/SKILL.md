@@ -25,14 +25,20 @@ inspectable pictures. Read its `basis`, `sim.gating`, `sim.advisory` and `render
 For a refused solve with saved diagnostics, open `sim/refused/still_front.png` and read
 `sim.refusal`. The image shows the state associated with the failure. Use the same `inspect-pixel`
 command below on that image to trace an edge. The result retains the refusal, phase and accepted
-step count. Older refusal archives lack the source-edge map and can still be compared visually.
+step count when recorded. Older archives can still be compared visually. With a convergence
+refusal, try a smaller `--time-step-s` from the start and increase `--sew` and `--drape`
+proportionally to preserve the physical durations. For a tighter dynamic solve, lower
+`--newton-tol-m-s` and compare the reported force residuals as well as the images.
 
 A solve refused at its start (`intersecting_start`) has no cloth state. It leaves the views of
 `ftx place` instead. Open `sim/refused/start/still_back.png` and `still_front.png`: cloth inside the
 body is magenta and cloth crossing cloth is yellow. The first repair in `sim.refusal` names the
 piece pairs that cross, and `sim/refused/placement.json` gives each piece's angles, heights and
-radius. Change the placement or the pose and run a new round. `inspect-pixel` does not read these
-views. While you adjust placements, `ftx place pattern.json --measurements measurements.json
+radius. Layers that only touch or cloth inside the clearance distance can leave both colours absent.
+Read the refusal message. If the posed body failed admission, change the pose first.
+Use `inspect-pixel` on the start PNG to identify its panel and nearest authored edge. The result
+records the placement phase and zero accepted steps. Older starts without a map support body and
+background picks. While you adjust placements, `ftx place pattern.json --measurements measurements.json
 --out NEW_DIR` writes the same views in seconds without the solver. A joint outfit leaves them
 too, with each piece named `garment::piece`.
 
@@ -80,7 +86,9 @@ python3 .agents/skills/visual-pattern-fitting/scripts/compare_rounds.py \
   "$work/rounds/000" "$work/rounds/001" --instance sleeve.L --out "$work/sleeve-comparison.svg"
 ```
 
-Open the self-contained SVG. Either side may show a refused pose, marked with its failure code.
+Open the self-contained SVG. Each side is labelled with the evidence it shows. “Refused start”
+shows the pre-sewn placement before dynamics. “Refused pose” shows the state recorded by a failed
+solve. Both retain the original refusal code.
 For a vision tool that accepts raster images, use a new `.png`
 output path with Node and the showcase dependencies installed. The outlines are aligned at their top centres.
 Inspect the new images even when the flat verdict improves. Retain a revision if it advances

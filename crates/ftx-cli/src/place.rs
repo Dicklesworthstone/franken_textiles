@@ -470,6 +470,24 @@ fn write_stage(
     Ok(written)
 }
 
+fn write_refused_map(
+    refusal: &mut Refusal,
+    dir: &Path,
+    mesh: &GarmentMesh,
+    phase: &str,
+    accepted_steps: usize,
+    (width, height): (usize, usize),
+) {
+    let mut map = ftx_drape::animation::pattern_mesh_map(mesh);
+    map["refused_pose"] = json!({ "phase": phase, "accepted_steps": accepted_steps, "width": width, "height": height });
+    if let Err(error) = workspace::write_json(&dir.join("mesh_map.json"), &map) {
+        refusal.repairs.push(format!(
+            "The diagnostic source-edge map could not be saved: {}",
+            error.message
+        ));
+    }
+}
+
 /// When a drape refuses once its start has been admitted: draws the cloth state the refusal is about under
 /// `OUT/refused` (the files and stills of a `place` stage: coloured by piece, and by edge strain on the
 /// start-state ramp) and puts where to look first among the refusal's repairs. That state is the last
@@ -504,15 +522,14 @@ pub(super) fn refused_stills(
     )
     .is_ok()
     {
-        let mut map = ftx_drape::animation::pattern_mesh_map(&state.mesh);
-        map["refused_pose"] = json!({"phase":state.phase, "accepted_steps":state.accepted_steps,
-            "width":size.0, "height":size.1});
-        if let Err(error) = workspace::write_json(&dir.join("mesh_map.json"), &map) {
-            refusal.repairs.push(format!(
-                "The diagnostic source-edge map could not be saved: {}",
-                error.message
-            ));
-        }
+        write_refused_map(
+            &mut refusal,
+            &dir,
+            &state.mesh,
+            state.phase,
+            state.accepted_steps,
+            size,
+        );
         refusal.repairs.insert(
             0,
             format!(
@@ -596,8 +613,16 @@ pub(super) fn start_stills(mut refusal: Refusal, staging: &Staging, out: &Path) 
         return refusal;
     };
     if std::fs::create_dir(&dir).is_ok()
-        && let Ok(placement) = stages(staging, size, &dir)
+        && let Ok((placement, mesh)) = stages(staging, size, &dir)
     {
+        write_refused_map(
+            &mut refusal,
+            &dir.join("start"),
+            &mesh,
+            "placement",
+            0,
+            size,
+        );
         refusal.repairs.insert(0, start_repair(&dir, &placement));
     }
     refusal
@@ -624,12 +649,12 @@ pub(super) struct Staging<'a> {
 }
 
 /// Writes `out/wrap`, `out/start` and `out/placement.json` into the existing, empty directory `out`, with
-/// stills of `size` pixels, and returns the placement report.
-pub(super) fn stages(
+/// stills of `size` pixels, and returns the report and the exact mesh used for both stages.
+fn stages(
     staging: &Staging,
     size: (usize, usize),
     out: &Path,
-) -> Result<Value, Refusal> {
+) -> Result<(Value, GarmentMesh), Refusal> {
     let Staging {
         pattern: source,
         label,
@@ -774,7 +799,7 @@ pub(super) fn stages(
         report["skinning"] = json!(skinning.as_str());
     }
     workspace::write_json(&out.join("placement.json"), &report)?;
-    Ok(report)
+    Ok((report, mesh))
 }
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
@@ -821,7 +846,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
-    let report = stages(
+    let (report, _) = stages(
         &Staging {
             pattern: &source,
             label: pattern_path,
@@ -1117,6 +1142,17 @@ mod tests {
         assert_eq!(placement["pattern"], "outfit.json");
         assert_eq!(placement["spacing_mm"], 10.0);
         assert_eq!(placement["instances"][0]["instance"], "panel");
+        let (map, _) = crate::fold::document(&dir.join("start/mesh_map.json")).unwrap();
+        assert_eq!(map["vertices"], placement["vertices"]);
+        assert_eq!(map["refused_pose"]["phase"], "placement");
+        assert_eq!(map["refused_pose"]["accepted_steps"], 0);
+        assert!(
+            map["edges"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|edge| edge.starts_with("panel/"))
+        );
         assert_eq!(placement["body_surface"]["admitted"], true);
         assert!(placement.get("skinning").is_none());
         for name in [
