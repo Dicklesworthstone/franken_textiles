@@ -22838,6 +22838,44 @@ test('opt-in Newton strategy, Generalized-alpha integrator, microclimate and low
     drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
       integrator: { kind: 'generalized_alpha', rho_inf: 1.5 } } } });
   assert.match(bad.e.roundImportText.textContent, /refused/);
+  // Non-preset custom pcg_iters in handoff must refuse explicitly rather than silently rewriting to 64.
+  const customToken = 'c'.repeat(32), custom = await pageModule({ roundToken: customToken });
+  await custom.windowEvents.message({ origin: 'https://unit.invalid', source: custom.opener, data: { type: 'ftx-round-sources', token: customToken, files,
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+      newton_strategy: { kind: 'adaptive_ilu', pcg_iters: 128, max_shifts: 4 } } } });
+  assert.match(custom.e.roundImportText.textContent, /refused/);
+
+  // 2b. Material workbench interactive UI controls for microclimate and lowerVisco:
+  //     enablement, request dispatch, result rendering, and stale-output invalidation on change.
+  assert.equal(p.e.microclimate.disabled, true);
+  assert.equal(p.e.lowerVisco.disabled, true);
+  p.select('microclimateRequest', '{"schema":"ftx-microclimate/1"}');
+  p.e.microclimateRequest.handlers.change();
+  assert.equal(p.e.microclimate.disabled, false);
+  await p.e.microclimate.onclick();
+  assert.equal(p.current().messages.at(-1).type, 'microclimate');
+  assert.equal(p.current().messages.at(-1).microclimateRequest, '{"schema":"ftx-microclimate/1"}');
+  p.emit({ schema: 'ftx-microclimate-report/1', air: { density_kg_m3: 1.2 } },
+    [{ name: 'microclimate-report.json', text: '{}', mime: 'application/json' }]);
+  const microSec = section(p, 'Microclimate air, convection and radiosity');
+  assert.equal(microSec.hidden, false);
+  assert.match(microSec.children[1].textContent, /ftx-microclimate-report\/1/);
+  p.e.microclimateRequest.handlers.change();
+  assert.equal(microSec.hidden, true, 'changing microclimate request file must invalidate stale output');
+
+  p.select('viscoRequest', '{"schema":"ftx-fractional-zener-lowering/1"}');
+  p.e.viscoRequest.handlers.change();
+  assert.equal(p.e.lowerVisco.disabled, false);
+  await p.e.lowerVisco.onclick();
+  assert.equal(p.current().messages.at(-1).type, 'lowerVisco');
+  assert.equal(p.current().messages.at(-1).viscoRequest, '{"schema":"ftx-fractional-zener-lowering/1"}');
+  p.emit({ schema: 'ftx-fractional-zener-lowering-report/1', branches: [] },
+    [{ name: 'viscoelastic-lowering-report.json', text: '{}', mime: 'application/json' }]);
+  const viscoSec = section(p, 'Fractional viscoelastic Prony lowering');
+  assert.equal(viscoSec.hidden, false);
+  assert.match(viscoSec.children[1].textContent, /ftx-fractional-zener-lowering-report\/1/);
+  p.e.viscoRequest.handlers.change();
+  assert.equal(viscoSec.hidden, true, 'changing viscoelastic lowering file must invalidate stale output');
 
   // 3. materials-worker.js routes opt-in newtonStrategy/integrator to fold_up_configured, keeps defaults on legacy fold_up,
   //    refuses bogus inputs fail-closed, and handles microclimate + lowerVisco directly.
@@ -22943,4 +22981,35 @@ test('opt-in Newton strategy, Generalized-alpha integrator, microclimate and low
   idx.e.foldGo.handlers.click();
   assert.equal(idx.messages.length, beforeIdxBad);
   assert.match(idx.e.errorText.textContent, /rho_inf/);
+
+  // 6. Reverse handoff (materials.html -> index.html materialImport) preserves presets and refuses custom non-preset params.
+  const revToken = 'f'.repeat(32);
+  const rev = draftingPage({ materialToken: revToken });
+  rev.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await rev.windowEvents.message({ origin: 'https://unit.invalid', source: rev.opener, data: {
+    type: 'ftx-material-pattern', token: revToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '1'.repeat(64),
+    evaluatedInputs: {
+      fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        newton_strategy: { kind: 'trust_region_steihaug', initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 },
+        integrator: { kind: 'generalized_alpha', rho_inf: 0.3 } }
+    }
+  } });
+  assert.equal(rev.e.drapeNewtonStrategy.value, 'trust_region');
+  assert.equal(rev.e.drapeIntegrator.value, 'generalized_alpha');
+  assert.equal(rev.e.drapeRhoInf.value, '0.3');
+  assert.equal(rev.e.drapeRhoInf.disabled, false);
+
+  const revBadToken = '9'.repeat(32);
+  const revBad = draftingPage({ materialToken: revBadToken });
+  revBad.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await revBad.windowEvents.message({ origin: 'https://unit.invalid', source: revBad.opener, data: {
+    type: 'ftx-material-pattern', token: revBadToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '1'.repeat(64),
+    evaluatedInputs: {
+      fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        newton_strategy: { kind: 'adaptive_ilu', pcg_iters: 32, max_shifts: 4 } }
+    }
+  } });
+  assert.match(revBad.e.traceImportText.textContent, /refused/);
 });
