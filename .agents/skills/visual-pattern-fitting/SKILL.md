@@ -33,8 +33,8 @@ body is magenta and cloth crossing cloth is yellow. The first repair in `sim.ref
 piece pairs that cross, and `sim/refused/placement.json` gives each piece's angles, heights and
 radius. Change the placement or the pose and run a new round. `inspect-pixel` does not read these
 views. While you adjust placements, `ftx place pattern.json --measurements measurements.json
---out NEW_DIR` writes the same views in seconds without the solver. A joint outfit, or a round
-with `--fabric`, `--two-start-sew` or `--elastic-ea`, leaves no start views.
+--out NEW_DIR` writes the same views in seconds without the solver. A joint outfit leaves them
+too, with each piece named `garment::piece`.
 
 For a completed solve, open the current round's `sim/still_front.png`
 as an image, then a second angle or strain view as the question requires. `preview.svg` shows

@@ -299,12 +299,12 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   admitted start if the first sewing step does), or the recorded frame that crosses the displayed wearer when
   the full-body check refuses. It is not a drape or a fit. A refusal of the start itself
   (`intersecting_start`: the posed body crossing itself, cloth inside the body, cloth crossing cloth) has
-  no solver state, so the command runs `ftx place` on the same pattern, body, pose and spacing and leaves
-  that command's files under `DIR/refused/` (`start/`, `wrap/`, `placement.json`); the first repair names
-  them with the number of cloth vertices inside the body and of crossing triangle pairs, largest piece
-  pair first. This is skipped, and `DIR` left empty, for an outfit and with `--fabric`, `--two-start-sew`
-  or `--elastic-ea`, whose start `ftx place` does not build; any other early refusal also leaves `DIR`
-  empty. Numerical options are
+  no solver state, so the command draws the two `ftx place` stages from the pattern and body the solver
+  was given (an outfit merged, a `--fabric` or `--elastic-ea` override applied; both members of
+  `--two-start-sew` share this start) and leaves them under `DIR/refused/` (`start/`, `wrap/`,
+  `placement.json`); the first repair names them with the number of cloth vertices inside the body and of
+  crossing triangle pairs, largest piece pair first. Any other early refusal leaves `DIR` empty.
+  Numerical options are
   validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
   with a repair message. Both `sim_report.json` and the CLI result contain a
   `self_contact` object with enabled/audit status, parameters and nearby final gap when enabled.

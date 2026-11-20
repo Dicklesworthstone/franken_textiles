@@ -5,7 +5,8 @@
 //! It builds the same mesh, isometric wrap, pre-sew and relaxation as `ftx drape` (spec 04 §2–4) and
 //! stops before contact admission and dynamics. It therefore answers in seconds and also shows a start
 //! the solver would refuse. `wrap/` is each placed piece on its cylinder; `start/` is the pre-sewn,
-//! relaxed start. Both are directories `ftx render` reads, already rendered here.
+//! relaxed start. Both are directories `ftx render` reads, already rendered here. A drape refused at its
+//! start writes the same two stages from the pattern and body it was given ([`start_stills`]).
 //!
 //! No-claim boundary: nothing here is a drape, a fit or an admission. `ftx drape` remains the only
 //! authority on whether a start is accepted. Lengths in the report are millimetres; OBJ files are
@@ -13,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ftx_body::{BodyFrames, clothing_skin, pose_deltas, skin_mesh};
+use ftx_body::{BodyFrames, SkinningMode, clothing_skin, pose_deltas, skin_mesh};
 use ftx_core::intersection::{indexed_triangle_pair, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_drape::scene::{
@@ -527,58 +528,118 @@ pub(super) fn refused_stills(
     refusal
 }
 
-pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(
-        args,
-        "place",
-        &[
-            "measurements",
-            "out",
-            "model",
-            "body-fit",
-            "spacing-mm",
-            "arm-deg",
-            "legs",
-            "leg-fraction",
-            "skinning",
-            "res",
-        ],
-    )?;
-    let opts = super::drape_options(args)?;
-    let pose = super::drape_pose(args)?;
-    let skinning = super::parse_skinning(args)?;
-    let pattern_path = args
-        .positional
-        .get(1)
-        .ok_or_else(|| bad_input("ftx place needs a pattern file"))?;
-    let (raw, _) = super::read_json(pattern_path)?;
-    let source = Pattern::new(raw);
-    // The same scope rule as a drape: an unplaced attachment refuses instead of vanishing.
-    let scope = ftx_drape::garment::simulation_scope(&source)?;
-    let material = ftx_drape::material::resolve(&source, &opts)?;
-    let spacing = material.options.spacing;
-    let (meas, _) = super::read_json(required(args, "measurements")?)?;
-    let meas = super::current_measurements(meas)?;
-    let size = render::resolution(args.options.get("res").map(String::as_str))?;
-    let out = PathBuf::from(required(args, "out")?);
-    super::reserve_output(&out, "place")?;
+/// What a start refusal tells its reader to open, with the counts behind the two warning colours taken
+/// from the placement report written beside the stills.
+fn start_repair(dir: &Path, placement: &Value) -> String {
+    let dir = dir.display();
+    let mut text = format!(
+        "Look at {dir}/start/still_*.png (the pre-sewn start) and {dir}/wrap/still_*.png (each piece on \
+         its cylinder), drawn as ftx place draws them: {} cloth vertices inside the body are magenta",
+        placement["start"]["vertices_inside_body"]
+            .as_u64()
+            .unwrap_or(0)
+    );
+    if let Some(pairs) = placement["cloth_contact"]["crossing_triangle_pairs"].as_u64() {
+        text.push_str(&format!(
+            "; {pairs} pair(s) of cloth triangles that cross are yellow"
+        ));
+        // The report lists piece pairs with the most crossings first.
+        let named: Vec<String> = placement["cloth_contact"]["by_pieces"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(4)
+            .map(|row| {
+                format!(
+                    "{} × {}: {}",
+                    row["a"].as_str().unwrap_or("?"),
+                    row["b"].as_str().unwrap_or("?"),
+                    row["triangle_pairs"]
+                )
+            })
+            .collect();
+        if !named.is_empty() {
+            text.push_str(&format!(" ({})", named.join("; ")));
+        }
+    }
+    // The audit's own words: it also refuses over its pair budget or the body's topology, not only a
+    // surface that crosses itself.
+    if let Some(message) = placement["body_surface"]["refusal"]["message"].as_str() {
+        text.push_str(&format!(
+            "; the posed body itself was not admitted ({message}), which no placement can repair"
+        ));
+    }
+    text.push_str(&format!(
+        ". {dir}/placement.json lists each piece's angles, heights and radius. No dynamics ran: this is \
+         not a drape or a fit."
+    ));
+    text
+}
 
-    let body_source::PreparedBody { model, params, .. } =
-        body_source::prepare_bound(args, Some(&meas), None)?;
-    let rest = model.rest(&params)?;
-    let posed =
-        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
-    let skin = clothing_skin(&model, &posed.vertices)?;
-    let full = skin_mesh(&posed.vertices, &model.data().faces)?;
-    let frames = BodyFrames::new(&model, &posed)?;
+/// When a drape refuses its start (`intersecting_start`: the posed body, cloth inside it, cloth crossing
+/// cloth) there is no solver state to show. What was refused is what `ftx place` draws, so the two
+/// placement stages of the drape's own pattern and body are written under `OUT/refused` and named first
+/// among the repairs. If they cannot be produced the refusal is returned unchanged.
+pub(super) fn start_stills(mut refusal: Refusal, staging: &Staging, out: &Path) -> Refusal {
+    let dir = out.join("refused");
+    let Ok(size) = render::resolution(None) else {
+        return refusal;
+    };
+    if std::fs::create_dir(&dir).is_ok()
+        && let Ok(placement) = stages(staging, size, &dir)
+    {
+        refusal.repairs.insert(0, start_repair(&dir, &placement));
+    }
+    refusal
+}
+
+/// What the two placement stages are drawn from: a resolved pattern, the material options that shape its
+/// mesh, and a posed body. `ftx place` builds these from its command line. A drape refused at its start
+/// hands over its own, so the pictures show the start the solver was given.
+pub(super) struct Staging<'a> {
+    /// The pattern as the solver meshes it: an outfit already merged, a fabric override already applied.
+    pub pattern: &'a Pattern,
+    /// How the report names that pattern: the path it was read from.
+    pub label: &'a str,
+    /// Mesh edge length (mm).
+    pub spacing: f64,
+    /// Elastic stiffness EA (N), which sets a casing's cut length.
+    pub elastic_ea: f64,
+    pub frames: &'a dyn PartFrames,
+    /// The collision body's vertices (m) and triangles: hands and feet left out.
+    pub collision: (&'a [Vec3], &'a [[usize; 3]]),
+    /// The whole displayed body surface, drawn behind the cloth.
+    pub display: (&'a [Vec3], &'a [[usize; 3]]),
+    pub skinning: SkinningMode,
+}
+
+/// Writes `out/wrap`, `out/start` and `out/placement.json` into the existing, empty directory `out`, with
+/// stills of `size` pixels, and returns the placement report.
+pub(super) fn stages(
+    staging: &Staging,
+    size: (usize, usize),
+    out: &Path,
+) -> Result<Value, Refusal> {
+    let Staging {
+        pattern: source,
+        label,
+        spacing,
+        elastic_ea,
+        frames,
+        collision: skin,
+        display: full,
+        skinning,
+    } = *staging;
+    // The same scope rule as a drape: an unplaced attachment refuses instead of vanishing.
+    let scope = ftx_drape::garment::simulation_scope(source)?;
 
     // An elastic casing is meshed at its cut length, exactly as the drape does.
-    let elastics = elastic_casings(&source, material.options.elastic_ea)?;
+    let elastics = elastic_casings(source, elastic_ea)?;
     let cut_length;
     let pattern = if elastics.is_empty() {
-        &source
+        source
     } else {
-        cut_length = casings_at_cut_length(&source, &elastics);
+        cut_length = casings_at_cut_length(source, &elastics);
         &cut_length
     };
     let mesh = build_garment(pattern, spacing)?;
@@ -589,7 +650,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         )
         .repair("Give each simulated piece a placement record (spec 04 §3.1)."));
     }
-    let places = placements(pattern, &mesh, &frames)?;
+    let places = placements(pattern, &mesh, frames)?;
     let wrapped = wrapped_positions(&mesh, &places);
     if let Some(v) = wrapped.iter().position(|p| !p.is_finite()) {
         return Err(Refusal::new(
@@ -605,13 +666,11 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     // The drape refuses a posed body whose own surface crosses itself (arms against the trunk, a deep
     // squat) before it places any cloth. Report that here instead of stopping: the pictures still help.
-    let body_surface =
-        match ftx_drape::collider::audit_surface(&skin.vertices, &skin.triangles, BODY_AUDIT_PAIRS)
-        {
-            Ok(_) => json!({"admitted": true}),
-            Err(refusal) => json!({"admitted": false, "refusal": refusal}),
-        };
-    let tree = NearestTree::new(skin.vertices.clone(), skin.triangles.clone())?;
+    let body_surface = match ftx_drape::collider::audit_surface(skin.0, skin.1, BODY_AUDIT_PAIRS) {
+        Ok(_) => json!({"admitted": true}),
+        Err(refusal) => json!({"admitted": false, "refusal": refusal}),
+    };
+    let tree = NearestTree::new(skin.0.to_vec(), skin.1.to_vec())?;
     let start = start_state(&mesh, wrapped.clone(), &tree);
     let depth = |x: &[Vec3]| -> Vec<f64> { x.iter().map(|p| tree.signed_distance(*p)).collect() };
     let (wrap_depth, start_depth) = (depth(&wrapped), depth(&start.relaxed));
@@ -645,7 +704,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         Err(refusal) => json!({"unavailable": refusal}),
     };
-    let body_obj = super::obj(&full.vertices, &full.triangles, None).into_bytes();
+    let body_obj = super::obj(full.0, full.1, None).into_bytes();
     let wrap_stills = write_stage(
         &out.join("wrap"),
         &body_obj,
@@ -668,7 +727,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let p95 = start.block_p95.last().copied().unwrap_or(f64::NAN);
     let inside = |d: &[f64]| d.iter().filter(|v| **v < 0.0).count();
     let mut report = json!({
-        "pattern": pattern_path,
+        "pattern": label,
         "spacing_mm": spacing,
         "vertices": mesh.verts2d.len(),
         "simulation_scope": scope,
@@ -691,7 +750,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "wrap": {"vertices_inside_body": inside(&wrap_depth)},
         "body_surface": body_surface,
         "cloth_contact": cloth_contact,
-        "body": body_report(&frames),
+        "body": body_report(frames),
         "views": {
             "wrap": "pieces on their cylinders; still_front/side/back/three_quarter coloured by piece, still_strain_* by the distance each seam vertex travels to its partner (green 0 mm to red 150 mm, grey unsewn)",
             "start": "pre-sewn and relaxed; coloured by piece, still_strain_* by edge strain (blue −15 % compressed, white 0, red +15 % stretched)",
@@ -705,14 +764,77 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         report["skinning"] = json!(skinning.as_str());
     }
     workspace::write_json(&out.join("placement.json"), &report)?;
+    Ok(report)
+}
+
+pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(
+        args,
+        "place",
+        &[
+            "measurements",
+            "out",
+            "model",
+            "body-fit",
+            "spacing-mm",
+            "arm-deg",
+            "legs",
+            "leg-fraction",
+            "skinning",
+            "res",
+        ],
+    )?;
+    let opts = super::drape_options(args)?;
+    let pose = super::drape_pose(args)?;
+    let skinning = super::parse_skinning(args)?;
+    let pattern_path = args
+        .positional
+        .get(1)
+        .ok_or_else(|| bad_input("ftx place needs a pattern file"))?;
+    let (raw, _) = super::read_json(pattern_path)?;
+    let source = Pattern::new(raw);
+    // Refuse an unplaced attachment before the body is fitted; the stages apply the same rule.
+    ftx_drape::garment::simulation_scope(&source)?;
+    let material = ftx_drape::material::resolve(&source, &opts)?;
+    let spacing = material.options.spacing;
+    let (meas, _) = super::read_json(required(args, "measurements")?)?;
+    let meas = super::current_measurements(meas)?;
+    let size = render::resolution(args.options.get("res").map(String::as_str))?;
+    let out = PathBuf::from(required(args, "out")?);
+    super::reserve_output(&out, "place")?;
+
+    let body_source::PreparedBody { model, params, .. } =
+        body_source::prepare_bound(args, Some(&meas), None)?;
+    let rest = model.rest(&params)?;
+    let posed =
+        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
+    let skin = clothing_skin(&model, &posed.vertices)?;
+    let full = skin_mesh(&posed.vertices, &model.data().faces)?;
+    let frames = BodyFrames::new(&model, &posed)?;
+    let report = stages(
+        &Staging {
+            pattern: &source,
+            label: pattern_path,
+            spacing,
+            elastic_ea: material.options.elastic_ea,
+            frames: &frames,
+            collision: (&skin.vertices, &skin.triangles),
+            display: (&full.vertices, &full.triangles),
+            skinning,
+        },
+        size,
+        &out,
+    )?;
 
     let mut text = format!(
         "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}\n",
-        mesh.verts2d.len(),
-        p95,
-        start.relax_iterations,
-        inside(&wrap_depth),
-        inside(&start_depth),
+        report["vertices"],
+        report["start"]["plain_edge_strain_p95"]
+            .as_f64()
+            .unwrap_or(f64::NAN),
+        report["start"]["relax_iterations"],
+        report["wrap"]["vertices_inside_body"],
+        report["start"]["vertices_inside_body"],
     );
     if let Some(message) = report["body_surface"]["refusal"]["message"].as_str() {
         text.push_str(&format!(
@@ -871,6 +993,185 @@ mod tests {
         ] {
             assert_eq!(unchanged.repairs, ["try --time-subdivision"]);
         }
+    }
+
+    #[test]
+    fn a_refused_start_is_drawn_from_the_drapes_own_pattern_and_body() {
+        use ftx_core::{Refusal, RefusalCode};
+        use ftx_drape::PartFrame;
+        use ftx_drape::scene::PartFrames;
+        use serde_json::json;
+
+        struct Form;
+        impl PartFrames for Form {
+            fn frame(&self, _: &str) -> Option<PartFrame> {
+                Some(PartFrame {
+                    origin: Vec3::ZERO,
+                    up: Vec3::new(0., 0., 1.),
+                    front: Vec3::new(0., -1., 0.),
+                    lat: Vec3::new(1., 0., 0.),
+                })
+            }
+            fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+                Some(20.)
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                30.
+            }
+        }
+        let pattern = ftx_pattern::Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm", "seams": [],
+            "pieces": [{
+                "id": "panel", "cut": {"qty": 1}, "grain": [[0, 0], [0, 20]],
+                "vertices": {"a": [0, 0], "b": [20, 0], "c": [20, 20], "d": [0, 20]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"}, {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"}, {"id": "left", "from": "d", "to": "a"}
+                ],
+                "placement": {"part": "torso", "radius_mm": 40.0, "x0": 10}
+            }]
+        }));
+        // A closed box 60 mm square about the torso axis, in metres, wound outward: the panel's
+        // cylinder (40 mm) clears it.
+        let (a, z0, z1) = (0.03, -0.02, 0.14);
+        let vertices = [
+            Vec3::new(-a, -a, z0),
+            Vec3::new(a, -a, z0),
+            Vec3::new(a, a, z0),
+            Vec3::new(-a, a, z0),
+            Vec3::new(-a, -a, z1),
+            Vec3::new(a, -a, z1),
+            Vec3::new(a, a, z1),
+            Vec3::new(-a, a, z1),
+        ];
+        let triangles = [
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
+        ];
+        let staging = super::Staging {
+            pattern: &pattern,
+            label: "outfit.json",
+            spacing: 10.0,
+            elastic_ea: ftx_drape::run::DrapeOptions::default().elastic_ea,
+            frames: &Form,
+            collision: (&vertices, &triangles),
+            display: (&vertices, &triangles),
+            skinning: ftx_body::SkinningMode::LinearBlend,
+        };
+        let refusal = || {
+            Refusal::new(
+                RefusalCode::IntersectingStart,
+                "cloth triangles 3 and 9 intersect",
+            )
+            .repair("separate the layers")
+        };
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let out = std::env::temp_dir().join(format!("ftx-start-{}-{time}", std::process::id()));
+        std::fs::create_dir_all(&out).unwrap();
+
+        let shown = super::start_stills(refusal(), &staging, &out);
+        assert_eq!(shown.code, RefusalCode::IntersectingStart);
+        assert_eq!(shown.message, "cloth triangles 3 and 9 intersect");
+        assert_eq!(shown.repairs.len(), 2, "{:?}", shown.repairs);
+        let dir = out.join("refused");
+        assert!(
+            shown.repairs[0].starts_with(&format!(
+                "Look at {}/start/still_*.png (the pre-sewn start)",
+                dir.display()
+            )),
+            "{}",
+            shown.repairs[0]
+        );
+        assert!(shown.repairs[0].contains(
+            "0 cloth vertices inside the body are magenta; 0 pair(s) of cloth triangles that cross \
+             are yellow. "
+        ));
+        assert_eq!(shown.repairs[1], "separate the layers");
+        // The report describes the pattern and body that were handed over, not a second reading of them.
+        let (placement, _) = crate::fold::document(&dir.join("placement.json")).unwrap();
+        assert_eq!(placement["pattern"], "outfit.json");
+        assert_eq!(placement["spacing_mm"], 10.0);
+        assert_eq!(placement["instances"][0]["instance"], "panel");
+        assert_eq!(placement["body_surface"]["admitted"], true);
+        assert!(placement.get("skinning").is_none());
+        for name in [
+            "wrap/garment.obj",
+            "wrap/still_front.png",
+            "start/body.obj",
+            "start/still_strain_back.png",
+        ] {
+            let file = dir.join(name);
+            assert!(
+                std::fs::metadata(&file).is_ok_and(|m| m.len() > 0),
+                "{}",
+                file.display()
+            );
+        }
+
+        // Already drawn, or nowhere to draw it: the refusal comes back exactly as it was.
+        for unchanged in [
+            super::start_stills(refusal(), &staging, &out),
+            super::start_stills(refusal(), &staging, &out.join("missing/parent")),
+        ] {
+            assert_eq!(unchanged.repairs, ["separate the layers"]);
+        }
+    }
+
+    #[test]
+    fn a_start_refusal_says_where_the_start_is_drawn_and_what_the_colours_count() {
+        use serde_json::json;
+
+        let dir = std::path::Path::new("out/refused");
+        let crossing = super::start_repair(
+            dir,
+            &json!({
+                "start": {"vertices_inside_body": 7},
+                "cloth_contact": {"crossing_triangle_pairs": 31, "by_pieces": [
+                    {"a": "front.L", "b": "front.R", "triangle_pairs": 27},
+                    {"a": "back", "b": "front.L", "triangle_pairs": 4},
+                ]},
+                "body_surface": {"admitted": true},
+            }),
+        );
+        assert!(crossing.starts_with("Look at out/refused/start/still_*.png"));
+        assert!(crossing.contains("out/refused/wrap/still_*.png"));
+        assert!(crossing.contains("7 cloth vertices inside the body are magenta"));
+        assert!(crossing.contains(
+            "31 pair(s) of cloth triangles that cross are yellow (front.L × front.R: 27; back × front.L: 4)"
+        ));
+        assert!(crossing.contains("out/refused/placement.json"));
+        assert!(crossing.ends_with("not a drape or a fit."));
+        assert!(!crossing.contains("posed body"));
+
+        // A body the audit did not admit is reported in the audit's own words; an unavailable crossing
+        // check is not reported as zero crossings.
+        let pose = super::start_repair(
+            dir,
+            &json!({
+                "start": {"vertices_inside_body": 0},
+                "cloth_contact": {"unavailable": {"code": "degenerate_geometry"}},
+                "body_surface": {"admitted": false, "refusal": {"code": "budget_exceeded",
+                    "message": "body surface audit exceeds its 1000000 candidate-pair budget"}},
+            }),
+        );
+        assert!(pose.contains(
+            "0 cloth vertices inside the body are magenta; the posed body itself was not admitted \
+             (body surface audit exceeds its 1000000 candidate-pair budget), which no placement can repair"
+        ));
+        assert!(!pose.contains("yellow"));
     }
 
     #[test]
