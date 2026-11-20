@@ -546,6 +546,13 @@ pub fn drape_observed(
             drape.max_speed
         ));
     }
+    if opts.self_contact.is_some() && !body.display.1.is_empty() {
+        let mut display =
+            crate::animation::DisplayBodyContact::new(body.display.0, body.display.1)?;
+        for (index, frame) in frames.iter().enumerate().skip(FOLD_FRAMES + ZIP_FRAMES - 1) {
+            display.check(frame, &scene.mesh.faces, index)?;
+        }
+    }
     let fold = FoldUp {
         frames,
         fold: FOLD_FRAMES,

@@ -833,6 +833,11 @@ cuts to the audited welded configuration on its last frame. Playback steps acros
 cut. The bundled viewer carries the physical frames at PC2 precision in an optional
 `contact_replay` field. Native `drape`, `round` and browser folds enable a 2 mm cloth
 contact offset by default. An explicit zero offset retains the crossing barrier.
+Before publication, native and browser contact runs check each recorded physical frame
+at PC2 precision against the complete display skin, including hands and feet outside
+the capped collider. Reopening a protected PC2 applies the same check before thinning
+the frames. A proper crossing refuses with `intersecting_trajectory`, the source-frame
+number and both triangle IDs. Touching is permitted.
 
 - **Header**, 32 bytes, little-endian:
 

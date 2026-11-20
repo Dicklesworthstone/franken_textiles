@@ -294,6 +294,13 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let starts = [0, fold_n, fold_n + zip_n, fold_n + zip_n + sew_n];
     let contact = report["self_contact"]["enabled"] == true && map["frames"].is_object();
     let physical_start = (fold_n + zip_n).saturating_sub(1);
+    if contact {
+        let mut display =
+            ftx_drape::animation::DisplayBodyContact::new(&body.vertices, &body.triangles)?;
+        for frame in physical_start..n {
+            display.check(&cache.frame(frame)?, &garment.triangles, frame)?;
+        }
+    }
     let stations =
         report["animation"]["first_physical_frame"].as_u64() == Some(physical_start as u64);
     let keep = 60usize;

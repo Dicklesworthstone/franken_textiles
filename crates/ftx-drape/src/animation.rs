@@ -9,7 +9,7 @@
 use std::fmt::Write as _;
 
 use ftx_core::np::linspace;
-use ftx_core::{Vec3, det};
+use ftx_core::{Refusal, RefusalCode, Vec3, det};
 use serde_json::{Value, json};
 
 use crate::eigen::jacobi_eigh;
@@ -553,6 +553,92 @@ pub fn viewer_payload(
     payload
 }
 
+/// Check the actual display skin, including fingers outside the capped clothing collider.
+/// Coordinates are rounded once as in the displayed PC2. Touching a surface is admissible.
+pub struct DisplayBodyContact {
+    triangles: Vec<[Vec3; 3]>,
+    boxes: Vec<(Vec3, Vec3)>,
+    index: crate::bvh::QueryBvh,
+    candidates: Vec<usize>,
+}
+
+impl DisplayBodyContact {
+    /// Build the static body index. Malformed vertex indices or unrepresentable coordinates refuse.
+    pub fn new(vertices: &[Vec3], faces: &[[usize; 3]]) -> Result<Self, Refusal> {
+        let points = display_points(vertices)?;
+        let triangles = faces
+            .iter()
+            .map(|face| display_triangle(&points, *face))
+            .collect::<Result<Vec<_>, _>>()?;
+        let boxes: Vec<_> = triangles.iter().map(|t| crate::contact::aabb(t)).collect();
+        let index = crate::bvh::QueryBvh::build(&boxes);
+        Ok(Self {
+            triangles,
+            boxes,
+            index,
+            candidates: Vec::new(),
+        })
+    }
+
+    /// Return the first proper crossing in face order, with its native frame and both face IDs.
+    pub fn check(
+        &mut self,
+        vertices: &[Vec3],
+        faces: &[[usize; 3]],
+        frame: usize,
+    ) -> Result<(), Refusal> {
+        use ftx_core::intersection::{IntersectionKind, triangle_triangle};
+        let points = display_points(vertices)?;
+        for (cloth_id, face) in faces.iter().enumerate() {
+            let cloth = display_triangle(&points, *face)?;
+            let bounds = crate::contact::aabb(&cloth);
+            self.index.query(bounds, &mut self.candidates);
+            for &body_id in &self.candidates {
+                if crate::bvh::overlaps(bounds, self.boxes[body_id])
+                    && triangle_triangle(cloth, self.triangles[body_id])
+                        == Some(IntersectionKind::Crossing)
+                {
+                    return Err(Refusal::new(RefusalCode::IntersectingTrajectory,
+                        format!("physical frame {frame}: cloth triangle {cloth_id} crosses displayed body triangle {body_id}"))
+                        .repair("move the hand or foot away from the garment, or revise the panel placement and drape again"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn display_points(vertices: &[Vec3]) -> Result<Vec<Vec3>, Refusal> {
+    vertices
+        .iter()
+        .map(|p| {
+            let q = Vec3::new(
+                f64::from(p.x as f32),
+                f64::from(p.y as f32),
+                f64::from(p.z as f32),
+            );
+            if q.is_finite() {
+                Ok(q)
+            } else {
+                Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "unrepresentable display vertex",
+                ))
+            }
+        })
+        .collect()
+}
+
+fn display_triangle(points: &[Vec3], face: [usize; 3]) -> Result<[Vec3; 3], Refusal> {
+    match face.map(|v| points.get(v).copied()) {
+        [Some(a), Some(b), Some(c)] => Ok([a, b, c]),
+        _ => Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "display triangle index out of range",
+        )),
+    }
+}
+
 /// Preserve sub-grid clearances when creating a viewer from a solve or a saved PC2.
 /// `cut` indexes the retained frames; the iterator starts at the admitted welded pose.
 pub fn add_contact_replay<'a>(
@@ -682,6 +768,23 @@ pub fn sync_viewer_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn displayed_hand_crossing_refuses_even_with_clear_neighbouring_poses() {
+        let hand = [Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
+        let mut body = DisplayBodyContact::new(&hand, &[[0, 1, 2]]).unwrap();
+        let crossed = [
+            Vec3::new(0.2, 0.2, -0.2),
+            Vec3::new(0.4, 0.2, 0.2),
+            Vec3::new(0.2, 0.4, 0.2),
+        ];
+        let raised = crossed.map(|v| v + Vec3::new(0., 0., 1.));
+        body.check(&raised, &[[0, 1, 2]], 87).unwrap();
+        let refusal = body.check(&crossed, &[[0, 1, 2]], 88).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::IntersectingTrajectory);
+        assert!(refusal.message.contains("frame 88"));
+        body.check(&raised, &[[0, 1, 2]], 89).unwrap();
+    }
 
     /// Horn's rotation recovers a known rotation and translation; slerp ends at its ends.
     #[test]

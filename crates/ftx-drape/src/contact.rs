@@ -104,7 +104,7 @@ fn cell_range(lo: Vec3, hi: Vec3, cell: f64) -> ([i64; 3], [i64; 3]) {
     ([f(lo.x), f(lo.y), f(lo.z)], [f(hi.x), f(hi.y), f(hi.z)])
 }
 
-fn aabb(points: &[Vec3]) -> (Vec3, Vec3) {
+pub(crate) fn aabb(points: &[Vec3]) -> (Vec3, Vec3) {
     points.iter().fold(
         (
             Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),

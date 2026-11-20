@@ -31,6 +31,8 @@ pub enum RefusalCode {
     InwardWound,
     /// A drape start state that already intersects.
     IntersectingStart,
+    /// A recorded physical garment pose crosses the visible wearer.
+    IntersectingTrajectory,
     /// A file could not be read or written.
     Io,
 }
@@ -51,6 +53,7 @@ impl RefusalCode {
             Self::BudgetExceeded => "budget_exceeded",
             Self::InwardWound => "inward_wound",
             Self::IntersectingStart => "intersecting_start",
+            Self::IntersectingTrajectory => "intersecting_trajectory",
             Self::Io => "io",
         }
     }

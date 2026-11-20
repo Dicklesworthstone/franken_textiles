@@ -23,11 +23,10 @@ START_RADIUS = {"bodice": 177, "skirt": 270}
 DRAPE_ARGS = ["--spacing-mm", "20", "--time-subdivision", "--arm-deg", "22", "--drape", "150", "--max-settle-steps", "256", "--self-contact-mm", "1"]
 
 
-# The gathered waist is modelled as a band of pleats (spec 04 §5.4, native extension): for 150 mm below each
-# gather seam the cloth is nearly free to shorten, standing for pleats finer than the 20 mm mesh. Authored,
-# not measured. Without it the same skirt left the waist as a shelf (92.8 mm clear at centre front against
-# 71.0 mm with it). The solver treats a ratio within 0.15 of 1 as ungathered, so the eased cut declares none.
-PLEAT_BAND = {"gather_relief_mm": 150, "gather_compression": 0.0005}
+# This authored band represents pleats below the resolution of the 20 mm mesh.
+# A 150 mm band at 0.0005 compression crossed the full fingers during sewing.
+# The 120 mm band clears the displayed hands throughout the recorded trajectory.
+PLEAT_BAND = {"gather_relief_mm": 120, "gather_compression": 0.002}
 
 
 def inputs(gather_ratio=1.3):

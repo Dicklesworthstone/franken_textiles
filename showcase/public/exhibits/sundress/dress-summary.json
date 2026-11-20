@@ -3,7 +3,7 @@
  "triangles": 6448,
  "frames": 37,
  "phases": {
-  "drape": 245,
+  "drape": 150,
   "fold": 70,
   "sew": 12,
   "zip": 18
@@ -16,7 +16,7 @@
   "skirt_back",
   "skirt_front"
  ],
- "sourcePc2Sha256": "1996f9abfb173b039db48c098d5e6dd1161cb7a1e1dbe0d2438f84b30cbf4d42",
+ "sourcePc2Sha256": "ead2922d75d6cf1bbc562d8280ef9d829c790976883cf2edc1bb613489478f13",
  "style": "GARDEN_SUNDRESS",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -35,18 +35,18 @@
  "armDeg": 22.0,
  "settled": true,
  "gating": [
-  "skirt_front slid 87 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
-  "skirt_back slid 87 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)"
+  "skirt_front slid 116 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
+  "skirt_back slid 116 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)"
  ],
  "flags": [
-  "skirt_front slid 87 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
-  "skirt_back slid 87 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
-  "the body rides up 76 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)"
+  "skirt_front slid 116 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
+  "skirt_back slid 116 mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)",
+  "the body rides up 74 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)"
  ],
  "edgeStrainPercent": {
-  "max": 9.86,
-  "min": -35.59,
-  "p95": 0.66
+  "max": 11.28,
+  "min": -26.76,
+  "p95": 0.77
  },
  "massKg": 0.22079033603815004,
  "areaM2": 1.104,
@@ -200,16 +200,16 @@
    "target_mm": 1010.0
   }
  },
- "wallSeconds": 2064.6,
+ "wallSeconds": 806.9,
  "gatherRelief": [
   {
-   "compression": 0.0005,
-   "relief_mm": 150.0,
+   "compression": 0.002,
+   "relief_mm": 120.0,
    "seam": "gather_front"
   },
   {
-   "compression": 0.0005,
-   "relief_mm": 150.0,
+   "compression": 0.002,
+   "relief_mm": 120.0,
    "seam": "gather_back"
   }
  ]

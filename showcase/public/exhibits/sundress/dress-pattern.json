@@ -709,8 +709,8 @@
    "reverse": true,
    "kind": "gather",
    "ratio": 1.3,
-   "gather_relief_mm": 150.0,
-   "gather_compression": 0.0005
+   "gather_relief_mm": 120.0,
+   "gather_compression": 0.002
   },
   {
    "id": "gather_back",
@@ -719,8 +719,8 @@
    "reverse": true,
    "kind": "gather",
    "ratio": 1.3,
-   "gather_relief_mm": 150.0,
-   "gather_compression": 0.0005
+   "gather_relief_mm": 120.0,
+   "gather_compression": 0.002
   }
  ]
 }
