@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import TorsoSlice from "../construction/TorsoSlice";
 
 type Sample = {
   name: string;
   pdf: string;
-  section: { frontGapMm: number; backGapMm: number; heightMm: number };
+  section: { frontGapMm: number; backGapMm: number; heightMm: number; body:number[][]; cloth:number[][] };
   report: {
     armDeg: number; sourcePc2Sha256: string; spacingMm: number;
     bodyFit: Record<string, { body_mm: number; residual_mm: number }>;
@@ -64,6 +65,9 @@ export default function MuslinTrial({ cuts }: { cuts: Record<typeof variants[num
   return <section className="sd-toile" id="muslin" aria-labelledby="muslin-title">
     <div><p className="kicker">At the sewing table</p><h2 id="muslin-title">Try both skirts on one bodice.</h2>
       <p>Changing from gathered to eased gives a predicted waist-gap change of {signed(rows[0].predictedChange)} mm at centre front and {signed(rows[1].predictedChange)} mm at centre back. A negative change brings the skirt closer to the form.</p>
+      <figure className="sd-toile-section"><TorsoSlice body={section.body} cloth={section.cloth} otherCut={cuts.light.section.cloth} compare/>
+        <p>Waist section, {section.heightMm} mm above the soles. Read from the form to the first fold along the dotted line.</p>
+        <figcaption><span>Form</span><span>Gathered</span><span>Eased</span></figcaption></figure>
       <nav aria-label="Muslin trial patterns">{variants.map(id => <a key={id} href={cuts[id].pdf} download>{cuts[id].name} · A4 PDF ↓</a>)}</nav>
       <details><summary>Set up the physical comparison</summary><ol>{steps.map(step => <li key={step}>{step}</li>)}</ol><p>{model}</p></details>
     </div>

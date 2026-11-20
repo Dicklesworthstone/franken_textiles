@@ -36,7 +36,7 @@ export default function SundressLab(){
     <Crumbs trail={[["Exhibition","/"],["Wardrobe","/#wardrobe"],["The garden sundress"]]}/>
     <div className="wrap sd-wrap"><div className="sd-head"><div><p className="kicker">The fitting room</p><h1>The garden sundress<em>.</em></h1></div>
       <div className="sd-intro"><p>Follow a four-piece dress from the cutting table to a fitted Anny form. Compare two skirt cuts, then change the wearer’s proportions to explore the bodice ease.</p>
-        <a href={chosen.pdf} download>Full-size sewing pattern PDF ↓</a><small>A4 · {chosen.pages} pages · print at 100%</small></div></div>
+        <a href={chosen.pdf} download>Full-size sewing pattern PDF ↓</a><small>A4 · {chosen.pages} pages · print at 100%</small><a href="#muslin">Compare a sewn sample</a></div></div>
       <ConstructionStudy choices={["sundress","eased"]} value={cut==="light"?"eased":"sundress"} onSelect={garment=>setCut(garment==="eased"?"light":"dress")}/>
       <SundressSewn cut={cut} setCut={setCut}/>
       <div className="sd-desk"><section className="sd-board" aria-label="Interactive sundress">

@@ -308,6 +308,9 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
   try {
     await page.goto(new URL("/wardrobe/sundress/?garment=eased#muslin", site).href);
     const trial = page.locator("#muslin"), notes = page.getByLabel("Form, cloth, repeat readings and discrepancies");
+    const slice = trial.getByRole("img", {name:/Both waist cuts/});
+    assert.equal(await slice.locator("path").count(), 3);
+    assert.equal(await slice.locator("line").count(), 1);
     const save = trial.getByRole("button", {name:"Save worksheet"});
     const download = async () => {
       const pending = page.waitForEvent("download");
