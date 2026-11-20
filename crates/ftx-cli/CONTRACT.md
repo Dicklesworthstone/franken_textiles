@@ -301,12 +301,15 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   refusal's first repair. The state is the last accepted one when sewing, draping or settling refuses (the
   admitted start if the first sewing step does), or the recorded frame that crosses the displayed wearer when
   the full-body check refuses. It is not a drape or a fit. A refusal of the start itself
-  (`intersecting_start`: the posed body crossing itself, cloth inside the body, cloth crossing cloth) has
-  no solver state, so the command draws the two `ftx place` stages from the pattern and body the solver
-  was given (an outfit merged, a `--fabric` or `--elastic-ea` override applied; both members of
-  `--two-start-sew` share this start) and leaves them under `DIR/refused/` (`start/`, `wrap/`,
-  `placement.json`); the first repair names them with the number of cloth vertices inside the body and of
-  crossing triangle pairs, largest piece pair first. Any other early refusal leaves `DIR` empty.
+  (`intersecting_start`: a posed body the surface audit does not admit, cloth inside or too near the
+  body, cloth layers crossing or touching) has no solver state, so the command draws the two `ftx place`
+  stages from the pattern and body the solver was given (an outfit merged, a `--fabric` or `--elastic-ea`
+  override applied; both members of `--two-start-sew` share this start) and leaves them under
+  `DIR/refused/` (`start/`, `wrap/`, `placement.json`). The first repair names them, quotes the body
+  audit when the pose was not admitted, and gives the number of cloth vertices inside the body (magenta)
+  and of crossing triangle pairs (yellow), largest piece pair first. Those marks test penetration and
+  crossing only: layers that merely touch, or cloth inside the body's offset surface with no vertex inside
+  the body, are refused with both counts at zero. Any other early refusal leaves `DIR` empty.
   Numerical options are
   validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
   with a repair message. Both `sim_report.json` and the CLI result contain a

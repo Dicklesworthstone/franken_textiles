@@ -429,6 +429,13 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                     )?;
                     for (stage, name) in [("start", "Refused start"), ("wrap", "As wrapped")] {
                         for (view, label) in super::stills::VIEWS {
+                            // The wrap stage's second colouring is how far each seam vertex has to
+                            // travel to its partner, not strain.
+                            let label = if stage == "wrap" {
+                                label.replace("strain", "seam travel")
+                            } else {
+                                label.to_string()
+                            };
                             link(
                                 &mut out,
                                 ws,
@@ -594,8 +601,11 @@ mod tests {
         ));
         let refused = ws.join("rounds/003/sim/refused");
         std::fs::create_dir_all(refused.join("start")).unwrap();
+        std::fs::create_dir_all(refused.join("wrap")).unwrap();
         std::fs::write(refused.join("placement.json"), "{}").unwrap();
         std::fs::write(refused.join("start/still_front.png"), "png").unwrap();
+        std::fs::write(refused.join("start/still_strain_front.png"), "png").unwrap();
+        std::fs::write(refused.join("wrap/still_strain_front.png"), "png").unwrap();
         let entry = json!({"round":3,"dir":"rounds/003",
             "sim":{"refusal":{"code":"intersecting_start"},"gating":["refused"],"advisory":[]}});
         let html = render(&ws, &[entry]).unwrap();
@@ -605,8 +615,15 @@ mod tests {
         assert!(html.contains(
             "href=\"rounds/003/sim/refused/start/still_front.png\">Refused start · Front</a>"
         ));
-        // Only what was written is linked: here no wrap stage and no other view.
-        assert!(!html.contains("refused/wrap/"));
+        // The same file name is edge strain in the start and seam travel in the wrap.
+        assert!(html.contains(
+            "href=\"rounds/003/sim/refused/start/still_strain_front.png\">Refused start · Front strain</a>"
+        ));
+        assert!(html.contains(
+            "href=\"rounds/003/sim/refused/wrap/still_strain_front.png\">As wrapped · Front seam travel</a>"
+        ));
+        // Only what was written is linked.
+        assert!(!html.contains("refused/wrap/still_front.png"));
         assert!(!html.contains("refused/start/still_back.png"));
     }
 }

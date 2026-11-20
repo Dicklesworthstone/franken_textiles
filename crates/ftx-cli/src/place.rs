@@ -534,14 +534,26 @@ fn start_repair(dir: &Path, placement: &Value) -> String {
     let dir = dir.display();
     let mut text = format!(
         "Look at {dir}/start/still_*.png (the pre-sewn start) and {dir}/wrap/still_*.png (each piece on \
-         its cylinder), drawn as ftx place draws them: {} cloth vertices inside the body are magenta",
+         its cylinder), drawn as ftx place draws them."
+    );
+    // A body that is not admitted comes first: nothing below repairs it. The audit's own words are
+    // quoted because it also refuses over its pair budget or the body's topology, not only a surface
+    // that crosses itself.
+    if let Some(message) = placement["body_surface"]["refusal"]["message"].as_str() {
+        text.push_str(&format!(
+            " The posed body itself was not admitted ({message}): change the pose first, since no \
+             placement repairs that."
+        ));
+    }
+    text.push_str(&format!(
+        " Magenta marks cloth vertices inside the body ({} in the start)",
         placement["start"]["vertices_inside_body"]
             .as_u64()
             .unwrap_or(0)
-    );
+    ));
     if let Some(pairs) = placement["cloth_contact"]["crossing_triangle_pairs"].as_u64() {
         text.push_str(&format!(
-            "; {pairs} pair(s) of cloth triangles that cross are yellow"
+            "; yellow marks cloth triangles that cross other cloth ({pairs} pair(s)"
         ));
         // The report lists piece pairs with the most crossings first.
         let named: Vec<String> = placement["cloth_contact"]["by_pieces"]
@@ -559,19 +571,16 @@ fn start_repair(dir: &Path, placement: &Value) -> String {
             })
             .collect();
         if !named.is_empty() {
-            text.push_str(&format!(" ({})", named.join("; ")));
+            text.push_str(&format!(": {}", named.join("; ")));
         }
+        text.push(')');
     }
-    // The audit's own words: it also refuses over its pair budget or the body's topology, not only a
-    // surface that crosses itself.
-    if let Some(message) = placement["body_surface"]["refusal"]["message"].as_str() {
-        text.push_str(&format!(
-            "; the posed body itself was not admitted ({message}), which no placement can repair"
-        ));
-    }
+    // A start is also refused with both counts at zero: the drape's admission tests thickness, the marks
+    // test only penetration and crossing.
     text.push_str(&format!(
-        ". {dir}/placement.json lists each piece's angles, heights and radius. No dynamics ran: this is \
-         not a drape or a fit."
+        ". Layers that only touch, and cloth too near the body without a vertex inside it, are refused \
+         as well and carry neither mark: go by the refusal's message for those. {dir}/placement.json \
+         lists each piece's angles, heights and radius. No dynamics ran: this is not a drape or a fit."
     ));
     text
 }
@@ -1095,9 +1104,10 @@ mod tests {
             "{}",
             shown.repairs[0]
         );
+        // Nothing crosses here, and the text says the marks do not cover every refused start.
         assert!(shown.repairs[0].contains(
-            "0 cloth vertices inside the body are magenta; 0 pair(s) of cloth triangles that cross \
-             are yellow. "
+            "Magenta marks cloth vertices inside the body (0 in the start); yellow marks cloth \
+             triangles that cross other cloth (0 pair(s)). Layers that only touch"
         ));
         assert_eq!(shown.repairs[1], "separate the layers");
         // The report describes the pattern and body that were handed over, not a second reading of them.
@@ -1148,10 +1158,12 @@ mod tests {
         );
         assert!(crossing.starts_with("Look at out/refused/start/still_*.png"));
         assert!(crossing.contains("out/refused/wrap/still_*.png"));
-        assert!(crossing.contains("7 cloth vertices inside the body are magenta"));
         assert!(crossing.contains(
-            "31 pair(s) of cloth triangles that cross are yellow (front.L × front.R: 27; back × front.L: 4)"
+            "ftx place draws them. Magenta marks cloth vertices inside the body (7 in the start); \
+             yellow marks cloth triangles that cross other cloth (31 pair(s): front.L × front.R: 27; \
+             back × front.L: 4). Layers that only touch"
         ));
+        assert!(crossing.contains("carry neither mark: go by the refusal's message for those."));
         assert!(crossing.contains("out/refused/placement.json"));
         assert!(crossing.ends_with("not a drape or a fit."));
         assert!(!crossing.contains("posed body"));
@@ -1167,9 +1179,11 @@ mod tests {
                     "message": "body surface audit exceeds its 1000000 candidate-pair budget"}},
             }),
         );
+        // The body comes before the cloth marks: nothing after it repairs a pose.
         assert!(pose.contains(
-            "0 cloth vertices inside the body are magenta; the posed body itself was not admitted \
-             (body surface audit exceeds its 1000000 candidate-pair budget), which no placement can repair"
+            "ftx place draws them. The posed body itself was not admitted (body surface audit exceeds \
+             its 1000000 candidate-pair budget): change the pose first, since no placement repairs \
+             that. Magenta marks cloth vertices inside the body (0 in the start). Layers that only touch"
         ));
         assert!(!pose.contains("yellow"));
     }
