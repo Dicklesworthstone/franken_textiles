@@ -12,7 +12,7 @@ type Props = {
   frame: number; mode: StudioMode; reset: number;
   onReady: (run: string) => void; onError: (run: string) => void;
 };
-declare global {interface Window {ftxPoseCamera?: (yaw:number, y:number, half:number, z?:number)=>void}}
+declare global {interface Window {ftxPoseCamera?: (yaw:number, y:number, half?:number, z?:number)=>void}}
 
 async function response(path: string, signal: AbortSignal) {
   const result = await fetch(path, {signal});
@@ -40,6 +40,11 @@ async function readRun(run: string, strain: Props["strain"], timeline: Props["ti
     return points;
   }
   const skin = coordinates(vertices*3);
+  // The form turns about this Z-up body axis. Raised fingertips set the widest view.
+  let turnRadius=0;
+  for(let i=0;i<skin.length;i+=3){
+    turnRadius=Math.max(turnRadius,Math.hypot(skin[i],-skin[i+1]-.065));
+  }
   const triangles = new Uint32Array(packed, offset, indices);
   offset += indices * 4;
   const frames = coordinates(layout.frames.length * layout.vertices * 3);
@@ -62,7 +67,7 @@ async function readRun(run: string, strain: Props["strain"], timeline: Props["ti
   body.setIndex([...torso,...arms]);
   body.addGroup(0,torso.length,0);body.addGroup(torso.length,arms.length,1);
   body.computeBoundingBox();
-  return {body,garment,frames:layout.sourceFrames,dispose(){body.dispose();garment.dispose();}};
+  return {body,garment,halfWidth:Math.max(.50,turnRadius*1.12),frames:layout.sourceFrames,dispose(){body.dispose();garment.dispose();}};
 }
 
 export default function DrapeRoomScene(props: Props) {
@@ -130,7 +135,7 @@ export default function DrapeRoomScene(props: Props) {
       const opened=Math.max(0,1-t*2.2);
       const centerY=.177;
       camera.position.y+=centerY-controls.target.y; controls.target.y=centerY;
-      const half=Math.max(.34,(.47+opened*.23)/(w/h))+opened*.045;
+      const half=Math.max(.36,(current.halfWidth+opened*.23)/(w/h))+opened*.045;
       camera.top=half;camera.bottom=-half;camera.left=-half*w/h;camera.right=-camera.left;camera.updateProjectionMatrix();
       current.garment.pose(mode,t,false,w/h);
       form.visible=pedestal.visible=ground.visible=current.garment.sampledFrame>=87;
@@ -154,7 +159,7 @@ export default function DrapeRoomScene(props: Props) {
     };
     function resize(){w=el.clientWidth;h=el.clientHeight;if(w&&h){renderer.setSize(w,h,false);update();}}
     const observer=new ResizeObserver(resize);observer.observe(el);
-    const capture=(yaw:number,y:number,half:number,z=.067)=>{
+    const capture=(yaw:number,y:number,half=Math.max(.36,(current?.halfWidth??.50)*h/w),z=.067)=>{
       camera.zoom=1;controls.target.set(0,y,z);
       camera.position.set(Math.sin(yaw)*1.8,y,z+Math.cos(yaw)*1.8);
       camera.top=half;camera.bottom=-half;camera.left=-half*w/h;camera.right=-camera.left;

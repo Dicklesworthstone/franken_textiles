@@ -71,7 +71,7 @@ try {
     await page.locator(".dr-modes button").filter({hasText:mode==="contact"?/^Contact$/:/^Wool$/}).evaluate(button=>button.click());
     await page.locator(`canvas[data-run="520-${angle}"][data-mode="${mode}"]`).waitFor();
     await page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      window.ftxPoseCamera(.32,.17,.36,.067);done();
+      window.ftxPoseCamera(.32,.17);done();
     }))));
     await sharp(await stage.screenshot()).webp({quality:90}).toFile(resolve(destination,name+".webp"));
   }
