@@ -5,9 +5,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 if cargo --list 2>/dev/null | grep -qw lbuild; then
-  cargo lbuild --locked --release --target wasm32-unknown-unknown -p ftx-wasm
+  cargo lbuild --locked --profile wasm-release --target wasm32-unknown-unknown -p ftx-wasm
 else
-  cargo build --locked --release --target wasm32-unknown-unknown -p ftx-wasm
+  cargo build --locked --profile wasm-release --target wasm32-unknown-unknown -p ftx-wasm
 fi
-wasm-bindgen --target web --out-dir web/pkg "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/ftx_wasm.wasm"
+wasm-bindgen --target web --remove-name-section --remove-producers-section --out-dir web/pkg "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/wasm-release/ftx_wasm.wasm"
 echo "built web/pkg; serve the page with: python3 -m http.server -d web 8000  (then open http://localhost:8000/)"

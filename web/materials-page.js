@@ -4892,8 +4892,8 @@ function show(op, msg, request) {
         const preview = f.text && window.workbenchSheetPreview?.(f.text);
         if (preview) urls.get(op).push(preview);
         $("marker").src = $("cutThumbnail").src = preview || url; $("marker").hidden = false;
-        const index = Number($("rollPreview").value || 1) - 1, roll = r.rolls[index];
-        if (roll) {
+        const index = Number($("rollPreview").value || 1) - 1, roll = r.rolls?.[index];
+        if (roll && Array.isArray(roll.placements) && Number.isFinite(roll.length_m) && Number.isFinite(roll.utilization)) {
           $("cutMaterialName").textContent = roll.material?.authored?.name || roll.material?.authored?.id || "Current roll";
           $("cutOverviewMetrics").textContent = `${roll.placements.length} pieces · ${Math.round(roll.length_m * 1000)} mm of cloth · ${(roll.utilization * 100).toFixed(1)}% yield`;
           $("cutOverview").hidden = false;

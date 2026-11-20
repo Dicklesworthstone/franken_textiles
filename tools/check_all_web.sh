@@ -31,8 +31,8 @@ WORK="${FTX_WEB_CHECK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/ftx-check-all-web.XXXXXX
 
 echo "[check_all_web] 1/5 Building web/pkg and Node WASM bindings..."
 sh tools/build_web.sh
-WASM_FILE="$TARGET_DIR/wasm32-unknown-unknown/release/ftx_wasm.wasm"
-wasm-bindgen --target nodejs --out-dir "$WORK/node-pkg" "$WASM_FILE"
+WASM_FILE="$TARGET_DIR/wasm32-unknown-unknown/wasm-release/ftx_wasm.wasm"
+wasm-bindgen --target nodejs --remove-name-section --remove-producers-section --out-dir "$WORK/node-pkg" "$WASM_FILE"
 
 if cargo --list 2>/dev/null | grep -qw lbuild; then
   CARGO_BUILD=lbuild

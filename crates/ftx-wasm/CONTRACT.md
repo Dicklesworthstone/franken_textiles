@@ -487,8 +487,11 @@ the separate check. MODEL_FIT predictions and residuals cannot change measuremen
 physical fit. The ordinary fold-up remains a separate action with its existing placement/contact gates.
 
 **The page.** `web/index.html` is the skill's `browser/index.html` with its Pyodide worker replaced by
-`web/worker.js` (a module worker loading `web/pkg`, built by `tools/build_web.sh`: release wasm32 build plus
-`wasm-bindgen --target web`, 3.2 MB). A round (draft, checks, every export, the zip) takes about a second.
+`web/worker.js` (a module worker loading `web/pkg`, built by `tools/build_web.sh`: `--profile wasm-release`
+with `opt-level = "s"`, thin LTO, single codegen unit, `panic = "abort"`, symbol stripping, and
+`wasm-bindgen --target web --remove-name-section --remove-producers-section`, producing a 15 MiB raw /
+4.3 MiB gzipped `ftx_wasm_bg.wasm` bundle down from 27.95 MiB / 6.3 MiB gzipped under default `--release`,
+and originally 3.2 MB in October 2026 before the materials/photo/trace workbenches were added). A round (draft, checks, every export, the zip) takes about a second.
 After a round whose pattern has fold-up placements, the page offers the fold-up: the wearer picks the
 converted model file (145 MB, read in about 0.1 s, kept for later rounds), and the worker drapes the round's
 own `pattern.json`, `measurements.json` and `fit_spec.json`, then shows the flags, the viewer in the page

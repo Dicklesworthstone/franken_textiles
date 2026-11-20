@@ -58,7 +58,8 @@ async function pageModule() {
   const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
     querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
-  }, window: { location: { href: 'https://unit.invalid/materials.html' }, opener: null,
+    addEventListener: () => {},
+  }, window: { location: { href: 'https://unit.invalid/materials.html?blank=1' }, opener: null,
     addEventListener: (name, fn) => { windowEvents[name] = fn; } } });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
   await module.link(specifier => {

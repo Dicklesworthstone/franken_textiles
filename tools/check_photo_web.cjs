@@ -38,7 +38,8 @@ async function photoHandoff(browser,origin) {
     assert.equal(await d.failure(),null);return fs.readFileSync(await d.path());
   };
   try {
-    await source.goto(origin+"/photo.html");
+    await source.goto(origin+"/photo.html?sample=blank");
+    for(const s of await source.locator("details.wb-fold > summary").all()) await s.click();
     await source.setInputFiles("#photo",path.join(native,"photo.jpg"));await source.selectOption("#paper","letter");
     await source.click("#analyze");await source.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Review the detected"));
     await source.fill("#points",fs.readFileSync(path.join(native,"points-jpeg.json"),"utf8"));
@@ -58,7 +59,7 @@ async function photoHandoff(browser,origin) {
     assert.equal(measurements.measurement_imports[0],text);assert.equal(measurements.fused.across_back.primary_provenance,"PHOTO_ESTIMATED");
     assert.equal(measurements.taken_on,null);assert.match(await receiver.textContent("#resGate"),/before cutting cloth/);
     await receiver.screenshot({path:path.join(work,"photo-handoff-workbench.png"),fullPage:true});
-    const manual=await context.newPage();await manual.goto(origin+"/index.html");await ready(manual);await prepare(manual);
+    const manual=await context.newPage();await manual.goto(origin+"/index.html?blank=1");await ready(manual);await prepare(manual);
     await manual.locator("#supplementalEvidence").evaluate(e=>{e.open=true;});
     await manual.setInputFiles("#supplementalFiles",{name:"photo-measurements.json",mimeType:"application/json",buffer:Buffer.from(text)});
     await manual.check("#supplementalConsent");assert.deepEqual(await run(manual),transferred,"Complete round ZIP equals ordinary manual upload");
@@ -106,7 +107,8 @@ async function sectionWorkflow(browser,origin) {
     assert.equal(await page.isDisabled("#sectionWorkbench"),true);
   };
   try {
-    await page.goto(origin+"/photo.html");
+    await page.goto(origin+"/photo.html?sample=blank");
+    for(const s of await page.locator("details.wb-fold > summary").all()) await s.click();
     await source("#sectionWidthFile",front);await source("#sectionDepthFile",side);
     assert.equal(await page.isDisabled("#sectionRun"),true,"Explicit wearer and anatomical-level review is required");
     await page.check("#sectionConsent");await calculate();assert.equal(await page.textContent("#sectionError"),"");
@@ -218,7 +220,8 @@ async function triangulationWorkflow(browser,origin) {
     await page.setInputFiles("#triangulationNoise",noise?source(name+"-noise.json"):[]);
   };
   try {
-    await page.goto(origin+"/photo.html");
+    await page.goto(origin+"/photo.html?sample=blank");
+    for(const s of await page.locator("details.wb-fold > summary").all()) await s.click();
     if(cameraNoiseOnly) {
       await page.setInputFiles("#triangulationInput",source("camera-input.json"));
       for(const [click,lens,name] of [[false,false,"sheet-result.json"],[true,false,"sheet-click-result.json"],[false,true,"lens-sheet-result.json"],[true,true,"all-result.json"]]) {
@@ -413,7 +416,7 @@ async function bodyModelFileHandoff(browser,origin,received=false) {
   const original=fs.readFileSync(path.join(native,'model.ftxbody')),model=path.join(work,received?'received-model.ftxbody':'manual-model.ftxbody');
   fs.writeFileSync(model,original,{flag:'wx'});
   try {
-    let page=await context.newPage();await page.goto(origin+'/index.html');
+    let page=await context.newPage();await page.goto(origin+'/index.html?blank=1');
     await page.waitForFunction(()=>/^Ready/.test(document.getElementById('status').textContent));
     await page.click('#go');
     await page.waitForFunction(()=>!document.getElementById('results').classList.contains('hidden') || !document.getElementById('errorBox').classList.contains('hidden'));
@@ -514,7 +517,8 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
     return download("body-fit-input-edited.json");
   };
   try {
-    await page.goto(origin+"/photo.html");
+    await page.goto(origin+"/photo.html?sample=blank");
+    for(const s of await page.locator("details.wb-fold > summary").all()) await s.click();
     await page.setInputFiles("#bodyFitModel",path.join(native,"model.ftxbody"));
     await page.locator("#bodyCaptureImages").evaluate(element=>{element.closest("details").open=true;});
     await page.setInputFiles("#bodyCaptureImages",images.map(name=>path.join(native,name)));
@@ -677,7 +681,8 @@ async function bodyFitWorkflow(browser,origin) {
     assert.equal(await page.locator('#bodyFitDownloads a').count(),0);
   };
   try {
-    await page.goto(origin+'/photo.html');
+    await page.goto(origin+'/photo.html?sample=blank');
+    for(const s of await page.locator('details.wb-fold > summary').all()) await s.click();
     await page.setInputFiles('#bodyFitModel',path.join(native,'model.ftxbody'));
     await page.locator('#bodyFitIterations').evaluate(e=>{e.closest('details').open=true;});
     // A declared draft is reviewable before it has enough starts to run the fitter.
@@ -939,7 +944,7 @@ const server=http.createServer((req,res)=>{
   if(req.method!=="GET" || !file.startsWith(base+path.sep)) {res.writeHead(403).end();return;}
   fs.readFile(file,(error,data)=>{
     if(error) {res.writeHead(404).end();return;}
-    const mime={".html":"text/html",".js":"text/javascript",".wasm":"application/wasm",".png":"image/png"}[path.extname(file)] || "application/octet-stream";
+    const mime={".html":"text/html",".js":"text/javascript",".wasm":"application/wasm",".png":"image/png",".css":"text/css",".json":"application/json",".webp":"image/webp",".woff2":"font/woff2",".jpg":"image/jpeg",".svg":"image/svg+xml",".pdf":"application/pdf"}[path.extname(file)] || "application/octet-stream";
     res.writeHead(200,{"Content-Type":mime});res.end(data);
   });
 });
@@ -972,7 +977,8 @@ const server=http.createServer((req,res)=>{
     if(bodyPhotoOnly) {await bodyPhotoCaptureWorkflow(browser,origin);return;}
     if(bodyFitOnly) {await bodyFitWorkflow(browser,origin);await bodyModelFileHandoff(browser,origin);await bodyModelFileHandoff(browser,origin,true);return;}
     if(triangulationOnly||cameraNoiseOnly||bundleOnly||stillOnly) {await triangulationWorkflow(browser,origin);return;}
-    await page.goto(origin+"/photo.html");
+    await page.goto(origin+"/photo.html?sample=blank");
+    for(const s of await page.locator("details.wb-fold > summary").all()) await s.click();
     if(charucoOnly) {
       const sheetName=fs.existsSync(path.join(native,'calib-sheet-letter.json'))?'calib-sheet-letter':'calib-sheet-a4';
       const source=fs.readFileSync(path.join(native,sheetName+'.json'),'utf8'),sheet=JSON.parse(source);
@@ -1226,7 +1232,7 @@ const server=http.createServer((req,res)=>{
     assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+"/")&&r.method==="GET"));
     assert.equal(await page.evaluate(()=>localStorage.length),0);
     console.log("PASS: source/paper/options/points/cancellation withdraw old outputs; wrong paper, blank/transparent/corrupt image, invalid points/options refuse. No uploads, third-party requests, storage or page errors. Artifacts:",work);
-    await page.goto(origin+"/index.html");
+    await page.goto(origin+"/index.html?blank=1");
     await page.waitForFunction(()=>/^Ready/.test(document.getElementById("status").textContent),null,{timeout:30000});
     await page.check('input[name="program"][value="zouave_trousers"]');
     await page.check('input[name="bodyMode"][value="file"]');

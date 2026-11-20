@@ -2703,6 +2703,6 @@ window.addEventListener("pagehide",()=>{
   clearBodyCapture(true); bodyPreparedSource=null; withdrawBodyTargets(); withdrawBodyPoints(); withdrawBodyStarts(); withdrawBodyFit(); withdrawTriangulation(); withdrawSection(true); withdrawCamera(); withdraw(true);
 });
 controls();
-const photoQuery=new URL(location.href).searchParams;
+const photoQuery=new URL(window.location.href).searchParams;
 const sampleVisit=[...photoQuery.keys()].every(key=>key.startsWith("utm_") || ["gclid","fbclid","sample"].includes(key));
 if (sampleVisit && (!photoQuery.has("sample") || photoQuery.get("sample")==="sleeve") && !window.opener && !$("photo").files.length) void openSleeveSample();

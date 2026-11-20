@@ -1438,13 +1438,14 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   class LocalURL extends URL {}
   LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id); blobs.set(id, blob); return id; };
   LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); blobs.delete(id); };
-  const openerMessages=[],opener={postMessage:(data,origin)=>openerMessages.push({data,origin})},popups=[];
-  const window={opener,location:{href:'https://unit.invalid/materials.html'+(roundToken?'?roundImport='+roundToken:traceToken?'?traceImport='+traceToken:'')},
+  const openerMessages=[],opener={postMessage:(data,origin)=>openerMessages.push({data,origin})},popups=[],documentEvents={};
+  const window={opener,location:{href:'https://unit.invalid/materials.html'+(roundToken?'?roundImport='+roundToken:traceToken?'?traceImport='+traceToken:'?blank=1')},
     open:url=>{const messages=[],target={closed:false,postMessage:(data,origin)=>messages.push({data,origin})};popups.push({url,target,messages});return target;},
     addEventListener:(name,fn)=>{const old=windowEvents[name];windowEvents[name]=old?(...args)=>Promise.all([old(...args),fn(...args)]):fn;}};
   const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, TextDecoder, TextEncoder,crypto:require('node:crypto').webcrypto, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
     querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
+    addEventListener: (name, fn) => { const old = documentEvents[name]; documentEvents[name] = old ? (...args) => { old(...args); fn(...args); } : fn; },
   }, window });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
   await module.link(specifier => {
@@ -5693,7 +5694,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   class LocalURL extends URL {}
   LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
-  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:materialToken?'?materialImport='+materialToken:photoToken?'?photoImport='+photoToken:bodyToken?'?bodyFitImport='+bodyToken:'')},
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,crypto:{getRandomValues:a=>a.fill(5)},location:{href:'https://unit.invalid/'+(traceToken?'?traceImport='+traceToken:materialToken?'?materialImport='+materialToken:photoToken?'?photoImport='+photoToken:bodyToken?'?bodyFitImport='+bodyToken:'?blank=1')},
     window:{opener,open:(url,target)=>{const popup={url,target,closed:false,messages:[],postMessage(data,origin){this.messages.push({data,origin});}};popups.push(popup);return popup;},
       addEventListener:(name,fn)=>{const previous=windowEvents[name];windowEvents[name]=(...args)=>{previous?.(...args);return fn(...args);};}},
     localStorage:{getItem:key=>audit&&key==='fab-wb-program'?'"audit"':null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},

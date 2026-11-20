@@ -88,7 +88,7 @@ const server = http.createServer((req, res) => {
   const target = path.resolve(web, '.' + new URL(req.url, 'http://localhost').pathname);
   if (!target.startsWith(web + path.sep) && target !== web) { res.writeHead(403); return res.end(); }
   const file = target === web ? path.join(web, 'index.html') : target;
-  const mime = { '.html':'text/html', '.js':'text/javascript', '.wasm':'application/wasm' }[path.extname(file)] || 'application/octet-stream';
+  const mime = { '.html':'text/html', '.js':'text/javascript', '.wasm':'application/wasm', '.css':'text/css', '.json':'application/json', '.webp':'image/webp', '.woff2':'font/woff2', '.png':'image/png', '.jpg':'image/jpeg', '.svg':'image/svg+xml', '.pdf':'application/pdf' }[path.extname(file)] || 'application/octet-stream';
   fs.readFile(file, (e, data) => { res.writeHead(e ? 404 : 200, { 'Content-Type':mime }); res.end(e ? 'not found' : data); });
 });
 (async () => {
@@ -116,9 +116,16 @@ const server = http.createServer((req, res) => {
     assert.equal(await run('bind'), ''); return JSON.parse(await download('pattern.json'));
   };
   try {
-    if (instanceTemperatureProof || pairedWaterProof) await page.goto(origin+'/materials.html');
-    else { await page.goto(origin); await page.click('a[href="materials.html"]'); }
+    if (instanceTemperatureProof || pairedWaterProof) await page.goto(origin+'/materials.html?blank=1');
+    else {
+      await page.goto(origin+'/?blank=1');
+      await page.click('a[href="materials.html"]');
+      await page.waitForURL(url => url.pathname.endsWith('/materials.html'));
+      await page.goto(origin+'/materials.html?blank=1');
+    }
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    await page.locator('summary', { hasText: 'Edit or import the source selection' }).click();
+    for (const summary of await page.locator('details.wb-fold > summary').all()) await summary.click();
     if (pairedWaterProof) {
       const retained=name=>fs.readFileSync(path.join(pairedWaterProof,name),'utf8');
       const single=JSON.parse(retained('single-scenario.json')),study=JSON.parse(retained('study.json'));

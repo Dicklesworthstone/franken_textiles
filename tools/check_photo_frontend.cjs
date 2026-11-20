@@ -122,7 +122,7 @@ class Element {
   append(...items){this.children.push(...items);}
   replaceChildren(...items){this.children=items;}
   getContext(){const element=this,mark=(kind,args)=>(element.drawing ||= []).push([kind,...args]);return {
-    drawImage(...args){mark('image',args);},beginPath(){},moveTo(){},lineTo(){},closePath(){},stroke(){},arc(){},fill(){},
+    drawImage(...args){mark('image',args);},save(){},restore(){},setLineDash(){},beginPath(){},moveTo(){},lineTo(){},closePath(){},stroke(){},arc(){},fill(){},
     fillRect(...args){mark('fill',args);},fillText(...args){(element.labels ||= []).push(args);mark('label',args);}};}
 }
 const file=(text,name='source.json')=>{const bytes=new TextEncoder().encode(text);return {name,size:bytes.length,arrayBuffer:async()=>bytes.buffer};};

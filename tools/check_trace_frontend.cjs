@@ -80,6 +80,7 @@ class Element {
   constructor() { this._value = ''; this.files = []; this.children = []; this.handlers = {}; this.checked = false; }
   get value() { return this._value; }
   set value(v) { this._value=this.type==='textarea'?v.replace(/\r\n?/g,'\n'):v; if(this.type==='file' && v==='')this.files=[]; }
+  get childElementCount() { return this.children.length; }
   addEventListener(name, fn) { this.handlers[name] = fn; }
   append(...items) { this.children.push(...items); }
   replaceChildren(...items) { this.children = items; }
@@ -102,13 +103,15 @@ async function pageModule() {
   class LocalURL extends URL {}
   LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id);blobs.set(id,blob);return id; };
   LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true);blobs.delete(id); };
+  const pageLocation = { href: 'https://unit.invalid/trace.html?blank=1' };
   const context = vm.createContext({ Worker, URL: LocalURL, Blob, TextEncoder, TextDecoder, Uint8Array, JSON, Number,
+    location: pageLocation,
     crypto:{getRandomValues:a=>{a.fill(popups.length+1);return a;}},
     document: {
       getElementById: id => { assert.ok(elements[id], `missing HTML id ${id}`); return elements[id]; },
       querySelectorAll: q => q.startsWith('#source') ? source : edits,
       createElement: () => new Element(),
-    }, window: { addEventListener:(name,fn)=>{events[name]=fn;},open:(url,target)=>{
+    }, window: { location: pageLocation, addEventListener:(name,fn)=>{events[name]=fn;},open:(url,target)=>{
       if(popupBlocked)return null;
       const child={url,target,messages:[],postMessage(m,origin){this.messages.push({data:m,origin});}};popups.push(child);return child;
     } }
