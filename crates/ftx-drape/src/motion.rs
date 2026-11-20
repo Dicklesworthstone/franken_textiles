@@ -455,7 +455,18 @@ pub(crate) fn advance_body_coupled<S: Clone>(
                 None
             },
         };
+        let pre_v = (trial.integrator != crate::TimeIntegrator::ImplicitEuler)
+            .then(|| trial.v.clone());
+        let pre_mass = (trial.integrator != crate::TimeIntegrator::ImplicitEuler)
+            .then(|| trial.model.mass.clone());
         accept(&mut trial, &sample, &mut coupled)?;
+        if pre_v.as_deref().is_some_and(|v| v != trial.v.as_slice())
+            || pre_mass
+                .as_deref()
+                .is_some_and(|m| m != trial.model.mass.as_slice())
+        {
+            trial.reset_acceleration();
+        }
         report.samples.push(sample);
         work = trial;
         step = (h * 2.0).min(options.max_step_s);

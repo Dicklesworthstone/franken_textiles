@@ -300,6 +300,12 @@ fn attach(
     if let Some(policy) = opts.static_equilibrium {
         comparison["shared_settings"]["static_equilibrium"] = json!(policy);
     }
+    if !opts.newton_strategy.is_default() {
+        comparison["shared_settings"]["newton_strategy"] = json!(opts.newton_strategy);
+    }
+    if !opts.integrator.is_default() {
+        comparison["shared_settings"]["integrator"] = json!(opts.integrator);
+    }
     for f in &flags {
         flag(&mut primary.report, f)?;
     }

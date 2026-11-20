@@ -243,7 +243,10 @@ impl WindingOctree {
         let dist = d.norm();
         if dist > self.beta * node.radius && dist > 0.0 {
             let inv_d = 1.0 / dist;
-            return (d * inv_d).dot(node.moment) / (4.0 * PI * dist * dist);
+            let inv_d2 = inv_d * inv_d;
+            if inv_d.is_finite() && inv_d2.is_finite() {
+                return (d * inv_d).dot(node.moment) * inv_d2 / (4.0 * PI);
+            }
         }
         if node.children.is_empty() {
             let mut sum = 0.0;

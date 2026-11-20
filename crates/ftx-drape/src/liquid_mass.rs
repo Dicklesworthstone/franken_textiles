@@ -1715,6 +1715,7 @@ impl Solver {
         if mixing.is_some() {
             self.v = accepted_velocity;
         }
+        self.reset_acceleration();
         Ok(report)
     }
 
