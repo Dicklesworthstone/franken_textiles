@@ -15,7 +15,8 @@ and against the compiled `web/pkg/ftx_wasm_bg.wasm` bundle + native `ftx-materia
 `tools/check_materials_wasm.cjs`. Both browser workbenches (`web/index.html` + `web/worker.js` and
 `web/materials.html` + `web/materials-page.js` + `web/materials-worker.js`) expose opt-in
 `drapeNewtonStrategy` / `drapeIntegrator` / `drapeRhoInf` controls with fail-closed validation,
-round-handoff preservation, stale-fold invalidation, and `microclimate` / `lowerVisco` worker
+round-handoff preservation (refusing non-preset strategy parameters instead of rewriting them),
+stale-fold invalidation, and interactive `microclimate` / `lowerVisco` controls and worker
 operations while keeping legacy `fold_up` untouched when default.
 These establish numerical solver/recurrence behavior only, not benchmarked speedups, empirical
 textile characterization, or physical garment fit.

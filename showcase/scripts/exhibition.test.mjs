@@ -364,6 +364,16 @@ test("the hussar wardrobe connects the dressed figure, pattern front and native 
   const p=await browser.newPage({...opts,reducedMotion:"reduce"});
   try {
     await p.goto(new URL("/wardrobe/hussar/",site).href);
+    const replay = p.locator("details.hu-flags").filter({ has: p.getByText("Replay this jacket with FrankenTextiles", { exact: true }) });
+    await replay.locator("summary").click();
+    const summary = await (await p.request.get(new URL("/exhibits/hussar/dolman-summary.json", site).href)).json();
+    const measurements = replay.getByRole("link", { name: "synthetic body measurements" });
+    const tapes = await (await p.request.get(new URL(await measurements.getAttribute("href"), site).href)).json();
+    assert.equal(tapes.fused.chest.value_mm, 1000);
+    const command = await replay.textContent();
+    assert.ok(command.includes(summary.solverArguments.join(" ")) && command.includes(summary.sourcePc2Sha256));
+    assert.ok(command.includes("ftx viewer dolman --check-contact"));
+    assert.ok((await p.locator(".hu-readings").textContent()).includes(`${summary.bodyOffsetMm.achieved.toFixed(3)} / ${summary.bodyOffsetMm.target} mm`));
     const book=p.locator(".regimental-cuts");
     await book.scrollIntoViewIfNeeded();
     for(const regiment of ["blue","yellow"]){

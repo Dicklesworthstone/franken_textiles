@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useState } from "react";
 import InlineFilm, { filmFile } from "../InlineFilm";
+import CodeBlock from "../site/CodeBlock";
 import HussarReferences from "./HussarReferences";
 import HussarWardrobe from "./HussarWardrobe";
 import ConstructionStudy from "../construction/ConstructionStudy";
@@ -55,6 +56,7 @@ export default function HussarLab() {
         <div><dt>Panels sewn</dt><dd>{drape.instances.length}</dd></div>
         <div><dt>Solver points</dt><dd>{drape.vertices.toLocaleString("en")}</dd></div>
         <div><dt>Edge strain <abbr title="95th percentile">P95</abbr></dt><dd>{drape.edgeStrainPercent.p95.toFixed(1)} %</dd></div>
+        <div><dt>Body offset</dt><dd>{drape.bodyOffsetMm.achieved.toFixed(3)} / {drape.bodyOffsetMm.target} mm</dd></div>
       </dl>
       <div className="hu-pattern-links">{(["Blue", "Yellow"] as const).map(name =>
         <a key={name} href={`/patterns/hussar-${name.toLowerCase()}.pdf`} download>Download {name} ensemble pattern PDF ↓</a>)}</div>
@@ -70,9 +72,15 @@ export default function HussarLab() {
       <p>The cut was revised by draping it and looking. Trial drapes of the first draft pulled tight across the shoulder blades and distorted the sleeve-cap seams. Three allowances followed: 14 mm let out on each side of the side-back seams at the armscye, 10 mm on each front and side-back panel at the underarm, and 14 mm on each half of the upper sleeve, which lowers its cap. Between the first allowance alone and all three, the 95th-percentile edge strain fell from 9.5% to 6.3% and the seams the solver called distorted from six to two. Those trials had the arms 20° from the side and no cloth-to-cloth contact, so their figures are not the ones of the run shown here, which are given above and below. A steeper shoulder was also tried and made the drape worse, so it was dropped. The PDF is the revised cut.</p>
       <p>The fabric constants are placeholders for a lined wool ({(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m², bending {drape.fabric.bending_Nm} N·m) and have no measured source. Edge strain over the whole jacket runs from {drape.edgeStrainPercent.min}% to +{drape.edgeStrainPercent.max}%. Nothing here shows that the jacket fits a person. That needs a toile.</p>
       {drape.gating.map(flag => <p key={flag} className="hu-warning">Solver flag · {flag}</p>)}
+      <p>The body offset is the clearance the solver builds up between the cloth and its collision surface. This run reached {drape.bodyOffsetMm.achieved.toFixed(3)} mm of the requested {drape.bodyOffsetMm.target} mm.</p>
       <details className="hu-flags"><summary>{drape.flags.length - drape.gating.length} advisory notes from the solver</summary>
         {drape.flags.filter(flag => !drape.gating.includes(flag)).map(flag => <p key={flag}>{flag}</p>)}</details>
-      <p><a href="/exhibits/hussar/dolman-pattern.json" download>Exact jacket pattern and starting placements ↓</a> · <a href="/exhibits/hussar/dolman-summary.json" download>Solver summary and flags ↓</a></p>
+      <details className="hu-flags"><summary>Replay this jacket with FrankenTextiles</summary>
+        <p>Save the <a href="/exhibits/hussar/dolman-pattern.json" download>jacket pattern and starting placements</a> and <a href="/exhibits/hussar/dolman-measures.json" download>synthetic body measurements</a> together. With the converted Anny 0.6.1 model installed, run these commands in that directory.</p>
+        <CodeBlock title="Sew the dolman and check the recorded surfaces" code={`ftx drape dolman-pattern.json --measurements dolman-measures.json ${drape.solverArguments.join(" ")} --out dolman\nftx viewer dolman --check-contact`}/>
+        <p>Recorded <code>fold.pc2</code> SHA-256 · <code style={{ overflowWrap: "anywhere" }}>{drape.sourcePc2Sha256}</code></p>
+      </details>
+      <p><a href="/exhibits/hussar/dolman-summary.json" download>Download the solver summary and flags ↓</a></p>
     </details>
     <HussarWardrobe/>
     <HussarReferences />

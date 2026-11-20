@@ -67,6 +67,10 @@
  "areaM2": 0.7747,
  "sewingPairs": 324,
  "selfContact": true,
+ "bodyOffsetMm": {
+  "target": 1.5,
+  "achieved": 0.8091370168267825
+ },
  "scope": {
   "basis": "declared_subset",
   "excluded_instances": [

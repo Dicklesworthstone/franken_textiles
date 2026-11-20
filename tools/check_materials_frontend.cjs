@@ -22819,6 +22819,8 @@ test('opt-in Newton strategy, Generalized-alpha integrator, microclimate and low
   const trMsg = p.current().messages.at(-1);
   assert.deepEqual(plain(trMsg.newtonStrategy), { kind: 'trust_region_steihaug', initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 });
   assert.equal(trMsg.integrator, undefined);
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } },
+    [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
 
   // 2. Round handoff -> Material workbench preserves explicit newton_strategy + integrator and refuses malformed.
   const token = 'a'.repeat(32);

@@ -129,7 +129,7 @@ def locate(points, flat, triangles):
     return anchors
 
 
-def package(source, pattern_path, destination, name, drape_args=(), section=None):
+def package(source, pattern_path, destination, name, drape_args=(), section=None, replay_inputs=()):
     """Pack a finished drape. `drape_args` are the solver arguments it was run with, recorded as given."""
     subprocess.run([FTX, "viewer", source, "--check-contact"], check=True)
     drape_args = [str(a) for a in drape_args]
@@ -202,6 +202,7 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
         body[used].astype("<f4").tobytes(), remap.astype("<u4").tobytes(),
         flat.astype("<f4").tobytes(), xyz[frames].astype("<f4").tobytes()])
     numerical = report["numerical"]
+    last_phase = numerical["drape"] if numerical["drape"]["steps"] else numerical["sew"]
     metadata = {
         "units": "m", "vertices": n, "triangles": triangles.flatten().tolist(),
         "panels": mesh["inst_range"], "seams": mesh["seams"],
@@ -216,6 +217,7 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
             "edgeStrainPercent": report["global_strain_pct"], "massKg": report["mass_kg"],
             "areaM2": report["area_m2"], "sewingPairs": report["sewing_pairs"],
             "selfContact": report["self_contact"].get("enabled", False),
+            "bodyOffsetMm": {"target": report["cloth_offset_mm"], "achieved": 1000 * last_phase["thickness"]},
             "scope": report["simulation_scope"], "fabric": report["fabric"],
             "bodyFit": report["body"].get("fit", {}).get("tape"), "wallSeconds": report["wall_s"],
         },
@@ -234,6 +236,8 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
                destination / f"{name}-pattern.json": pattern_path.read_bytes(),
                destination / f"{name}-summary.json": (json.dumps(digest, indent=1) + "\n").encode(),
                destination / f"{name}.gz": gzip.compress(payload, mtime=0)}
+    for path in replay_inputs:
+        outputs[destination / f"{name}-{path.name}"] = path.read_bytes()
     if section:
         result = section(body, body_faces, xyz[-1], triangles, mesh, report)
         outputs[destination / f"{name}-section.json"] = (json.dumps(result, separators=(",", ":"), allow_nan=False) + "\n").encode()
@@ -277,7 +281,8 @@ def solve_and_package(description, documents, drape_args, default_name, section=
         # Compare as JSON: a tuple in `document` is a list once written.
         if json.loads((args.work / name).read_text()) != json.loads(json.dumps(document)):
             raise SystemExit(f"{args.work}/{name} is not what this script drapes; solve again into a new directory")
-    package(args.work / "drape", args.work / "pattern.json", args.destination, args.name, drape_args, section)
+    replay_inputs = [args.work / name for name in documents if name != "pattern.json"]
+    package(args.work / "drape", args.work / "pattern.json", args.destination, args.name, drape_args, section, replay_inputs)
 
 
 if __name__ == "__main__":
