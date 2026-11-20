@@ -356,9 +356,11 @@ fn mass_fit_scale_kg(target_kg: f64) -> f64 {
 /// Prior 1σ of a phenotype parameter about the population middle (0.5) and of a local change about 0:
 /// the scanned shape space explains a body before the authored blend shapes adjust it.
 const PRIOR_SIGMA_PHENOTYPE: f64 = 0.5;
-/// Local-change prior at the unmodified model template's stature. Absolute authored offsets
-/// require this scale to follow the requested body's stature, not its changing fitted height.
-const PRIOR_SIGMA_LOCAL: f64 = 0.35;
+/// Local-change prior at the unmodified model template's stature (~1.67 m). Absolute authored
+/// offsets require this scale to follow the requested body's stature, not its changing fitted
+/// height; 0.65 at template stature reproduces the ~0.35 G1b toddler calibration at 920 mm while
+/// scaling proportionally to ~0.20 on a 500 mm newborn and ~0.65 on an adult.
+const PRIOR_SIGMA_LOCAL: f64 = 0.65;
 /// Central-difference step in the parameters.
 const FD_STEP: f64 = 1e-3;
 /// Levenberg–Marquardt iteration cap.
@@ -1625,7 +1627,8 @@ mod tests {
             assert_eq!(start.phenotype.height, endpoint);
             assert_eq!(achieved, 900.0 + 100.0 * endpoint);
             let rows = tape_rows(&wearer, &[]).unwrap();
-            let fit = optimize_tape(&rows, start.phenotype.height, PRIOR_SIGMA_LOCAL, |th| {
+            let local_sigma = 0.35;
+            let fit = optimize_tape(&rows, start.phenotype.height, local_sigma, |th| {
                 let mut params = model.params(Phenotype {
                     height: th[0],
                     ..Phenotype::default()
@@ -1641,7 +1644,7 @@ mod tests {
             // local parameter balances the unchanged 2 mm target against its 0.35 prior.
             let desired_local = (target - achieved) / 100.0;
             let exact_local = desired_local * 10_000.0
-                / (10_000.0 + FIT_SIGMA_LENGTH_MM.powi(2) / PRIOR_SIGMA_LOCAL.powi(2));
+                / (10_000.0 + FIT_SIGMA_LENGTH_MM.powi(2) / local_sigma.powi(2));
             assert!((fit.free[0] - endpoint).abs() < 1e-8);
             assert!(
                 (fit.free[local_index] - exact_local).abs() < 1e-5,

@@ -150,11 +150,11 @@ fn chart_trousers_self_contact_start() {
         run.scene.start.relax_iterations,
         run.scene.start.block_p95
     );
-    assert_eq!(run.scene.start_backtracked_from, Some(600));
-    assert_eq!(run.scene.start.relax_iterations, 150);
-    assert_eq!(run.report["relax_iters"], 150);
-    assert_eq!(run.report["start_repair"]["rejected_relax_iters"], 600);
-    assert_eq!(run.report["start_repair"]["accepted_relax_iters"], 150);
+    assert_eq!(run.scene.start_backtracked_from, Some(400));
+    assert_eq!(run.scene.start.relax_iterations, 200);
+    assert_eq!(run.report["relax_iters"], 200);
+    assert_eq!(run.report["start_repair"]["rejected_relax_iters"], 400);
+    assert_eq!(run.report["start_repair"]["accepted_relax_iters"], 200);
     assert_eq!(run.scene.start.block_p95.len(), 1);
     let plain: Vec<_> = ftx_drape::start::face_edges(&run.scene.mesh.faces)
         .into_iter()
@@ -497,6 +497,6 @@ fn kat9_fitted_pipeline_digest() {
     assert!(last.iter().all(|p| p.is_finite()));
     assert_eq!(
         digest,
-        "7693994660a8605f5d0081abffde860400c955b109f61d050042d49f1fcac336"
+        "91e3738f1cf40906f364c165c5112114d78295537f92465bfec8571ddc6b8cba"
     );
 }
