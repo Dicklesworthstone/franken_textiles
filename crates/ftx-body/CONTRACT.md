@@ -188,14 +188,18 @@ adult). Deeper LBS flexion (`adult` `squat 0.50`: `12` pairs, `−2.03 %`; `todd
 `squat` `0.75–1.00`: `82–286` hip/knee crease pairs and `−2.64 %` to `−7.03 %` enclosed-volume loss)
 triggers `lbs_volume_loss_advisory` beyond `3 %` and refuses direct contact-collider start admission
 (`IntersectingStart`). Opt-in deterministic Dual-Quaternion Skinning (`SkinningMode::DualQuaternion`,
-`AnnyModel::pose_dqs` / `pose_with_skinning`, plan §9.2; Kavan et al. 2007 with largest-weight pivot
+`AnnyModel::pose_dqs` / `pose_with_skinning`, plan §9.2; Kavan et al. 2008 DLB with largest-weight pivot
 hemisphere alignment and Shepperd rotation-matrix quaternion extraction) leaves default `AnnyModel::pose`
-bit-identical to upstream LBS while cutting full-bend enclosed-volume collapse 4.0×–7.3× on `clothing_skin`
-(`toddler_2.5y` seated `−4.70 % → −0.64 %`, squat `−5.61 % → −0.83 %`; `adult_30y` seated `−5.63 % → −1.42 %`,
-squat `−6.64 % → −1.68 %`, keeping all four well below the `3 %` volume-loss advisory threshold in
-`tests/drape_poses.rs::dqs_reduces_volume_collapse_on_deep_seated_and_squat_poses`). Soft-tissue crease
+bit-identical to upstream LBS (`8.82e-16 m`) while cutting full-bend enclosed-volume collapse 4.0×–7.3× on
+both full `skin_mesh` (`toddler_2.5y` seated `−4.70 % → −0.64 %`, squat `−5.61 % → −0.83 %`; `adult_30y`
+seated `−5.63 % → −1.42 %`, squat `−6.64 % → −1.68 %`) and `clothing_skin` (`toddler_2.5y` seated
+`−4.91 % → −0.67 %`, squat `−5.83 % → −0.84 %`; `adult_30y` seated `−5.89 % → −1.49 %`, squat
+`−6.91 % → −1.73 %`), keeping all four well below the `3 %` volume-loss advisory threshold in
+`tests/drape_poses.rs::dqs_reduces_volume_collapse_on_deep_seated_and_squat_poses`. Soft-tissue crease
 overlaps on full `90°–110°` bends remain genuinely present (`160–336` pairs) and still refuse direct
-contact-start admission without anatomical crease correctives.
+contact-start admission without anatomical crease correctives. Non-finite transforms or weights fail
+closed with `RefusalCode::NonFinite` rather than silently fabricating an identity rotation. Exposed in
+the CLI via opt-in `--skinning lbs|dqs` on `ftx body` and `ftx drape`.
 
 **Frames and landmarks** (`BodyFrames`, definitions in the `landmarks.rs` table). On the posed body, in
 mm: floor, waist (Anny's waist loop), crotch, chest (the armpit), across back, hip, knee, calf, ankle,

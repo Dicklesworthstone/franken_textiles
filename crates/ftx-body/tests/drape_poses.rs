@@ -257,19 +257,31 @@ fn dqs_reduces_volume_collapse_on_deep_seated_and_squat_poses() {
                 .pose_geometry_against_rest(&rest_collider, DEFAULT_POSE_AUDIT_PAIR_BUDGET)
                 .unwrap();
             println!(
-                "{label:12} {pose_name:8} | LBS vol {:+6.2}% ({:3} col pairs) | DQS vol {:+6.2}% ({:3} col pairs)",
+                "{label:12} {pose_name:8} | skin LBS {:+6.2}% -> DQS {:+6.2}% | clothing LBS {:+6.2}% ({:3} pairs) -> DQS {:+6.2}% ({:3} pairs)",
                 lbs_geo.volume_change_fraction * 100.0,
-                lbs_col.self_intersections.intersecting_pairs,
                 dqs_geo.volume_change_fraction * 100.0,
+                lbs_col.volume_change_fraction * 100.0,
+                lbs_col.self_intersections.intersecting_pairs,
+                dqs_col.volume_change_fraction * 100.0,
                 dqs_col.self_intersections.intersecting_pairs,
             );
             assert!(dqs_skin.report.volume > 0.0 && dqs_skin.report.volume.is_finite());
             if matches!(legs, Legs::Seated | Legs::Squat) {
                 assert!(
                     dqs_geo.volume_change_fraction.abs() < lbs_geo.volume_change_fraction.abs(),
-                    "{label} {pose_name}: DQS volume change ({:.2}%) should be smaller than LBS ({:.2}%)",
+                    "{label} {pose_name}: DQS full-skin volume change ({:.2}%) should be smaller than LBS ({:.2}%)",
                     dqs_geo.volume_change_fraction * 100.0,
                     lbs_geo.volume_change_fraction * 100.0,
+                );
+                assert!(
+                    dqs_col.volume_change_fraction.abs() < lbs_col.volume_change_fraction.abs(),
+                    "{label} {pose_name}: DQS clothing-skin volume change ({:.2}%) should be smaller than LBS ({:.2}%)",
+                    dqs_col.volume_change_fraction * 100.0,
+                    lbs_col.volume_change_fraction * 100.0,
+                );
+                assert!(
+                    !dqs_geo.lbs_volume_loss_advisory && !dqs_col.lbs_volume_loss_advisory,
+                    "{label} {pose_name}: DQS should stay within the 3% volume-loss advisory threshold"
                 );
             }
         }

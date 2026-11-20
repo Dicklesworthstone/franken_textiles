@@ -459,6 +459,12 @@ impl AnnyModel {
                 &transforms,
             ),
         };
+        if vertices.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!("{} skinning produced a non-finite vertex", mode.as_str()),
+            ));
+        }
         Ok(PosedBody {
             vertices,
             bone_poses,

@@ -29,8 +29,8 @@ pub use data::{AnnyData, default_model_path};
 pub use drape::{
     DEFAULT_POSE_AUDIT_PAIR_BUDGET, JointRotation, LBS_VOLUME_CHANGE_ADVISORY_FRACTION, Legs, Pose,
     PoseGeometryReport, SkinIntersectionAudit, SkinMesh, SkinReport, body_pose_geometry_json,
-    clothing_skin, joint_rotations, nappy_local_changes, pose_deltas, posed_skin, skin_mesh,
-    trimmed_skin,
+    body_pose_geometry_json_with_skinning, clothing_skin, joint_rotations, nappy_local_changes,
+    pose_deltas, posed_skin, posed_skin_with_skinning, skin_mesh, trimmed_skin,
 };
 pub use fit::{
     FREE, MAX_NAPPY_SIZE, N_PHENOTYPE, N_TAPE, NappyOccupancy, TAPE_FIELDS, TapeFit, TapeResidual,

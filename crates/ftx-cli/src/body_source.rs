@@ -197,7 +197,14 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "body",
-        &["body-fit", "measurements", "out", "pose", "model"],
+        &[
+            "body-fit",
+            "measurements",
+            "out",
+            "pose",
+            "skinning",
+            "model",
+        ],
     )?;
     if args.positional.len() != 1 {
         return Err(bad_input("body takes named options, not positional files"));
@@ -215,6 +222,7 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
             ));
         }
     };
+    let skinning = crate::parse_skinning(args)?;
     let out = PathBuf::from(required(args, "out")?);
     absent(&out)?;
     let measurements = args
@@ -229,12 +237,21 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         source_bytes,
     } = prepare(args, measurements.as_ref().map(|m| &m.0))?;
     let rest = model.rest(&params)?;
-    let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
+    let posed =
+        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
     let skin = skin_mesh(&posed.vertices, &model.data().faces)?;
-    let pose_geometry =
-        ftx_body::body_pose_geometry_json(&model, &rest.vertices, &posed.vertices, &skin)?;
+    let pose_geometry = ftx_body::body_pose_geometry_json_with_skinning(
+        &model,
+        &rest.vertices,
+        &posed.vertices,
+        &skin,
+        skinning,
+    )?;
     description.insert("schema".into(), json!("ftx-body/1"));
     description.insert("pose".into(), json!(pose_name));
+    if skinning != ftx_body::SkinningMode::LinearBlend {
+        description.insert("skinning".into(), json!(skinning.as_str()));
+    }
     description.insert("pose_geometry".into(), pose_geometry);
     if let Some((_, bytes)) = measurements {
         description.insert("measurements_sha256".into(), json!(sha256_hex(&bytes)));
@@ -250,8 +267,13 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     workspace::write_new(&out.join("body.obj"), mesh.as_bytes())?;
     workspace::write_new(&out.join("body_fit.json"), &evidence)?;
     workspace::write_new(&out.join("body.json"), &report)?;
+    let skinning_note = if skinning == ftx_body::SkinningMode::LinearBlend {
+        String::new()
+    } else {
+        format!(", skinning {}", skinning.as_str())
+    };
     let text = format!(
-        "BODY: reused accepted shape without refitting; pose {pose_name}\n{}\nwrote {}",
+        "BODY: reused accepted shape without refitting; pose {pose_name}{skinning_note}\n{}\nwrote {}",
         doc["no_claim"].as_str().unwrap(),
         out.display()
     );

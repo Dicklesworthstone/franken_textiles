@@ -990,9 +990,23 @@ pub fn posed_skin(
     pose: &Pose,
     t: f64,
 ) -> Result<SkinMesh, Refusal> {
+    posed_skin_with_skinning(model, params, pose, t, crate::SkinningMode::LinearBlend)
+}
+
+/// Posed skin with an explicit [`crate::SkinningMode`].
+///
+/// # Errors
+/// As [`AnnyModel::rest`], [`pose_deltas`], [`AnnyModel::pose_with_skinning`] and [`skin_mesh`].
+pub fn posed_skin_with_skinning(
+    model: &AnnyModel,
+    params: &BodyParams,
+    pose: &Pose,
+    t: f64,
+    skinning: crate::SkinningMode,
+) -> Result<SkinMesh, Refusal> {
     let rest = model.rest(params)?;
     let deltas = pose_deltas(model, &rest, pose, t)?;
-    let posed = model.pose(&rest, &deltas)?;
+    let posed = model.pose_with_skinning(&rest, &deltas, skinning)?;
     skin_mesh(&posed.vertices, &model.data().faces)
 }
 
@@ -1008,6 +1022,28 @@ pub fn body_pose_geometry_json(
     rest_vertices: &[Vec3],
     posed_vertices: &[Vec3],
     posed_skin: &SkinMesh,
+) -> Result<serde_json::Value, Refusal> {
+    body_pose_geometry_json_with_skinning(
+        model,
+        rest_vertices,
+        posed_vertices,
+        posed_skin,
+        crate::SkinningMode::LinearBlend,
+    )
+}
+
+/// Rest-to-posed geometry diagnostics for `ftx-body/1` with an explicit [`crate::SkinningMode`].
+/// Default [`crate::SkinningMode::LinearBlend`] output is unchanged; [`crate::SkinningMode::DualQuaternion`]
+/// records `"skinning": "dqs"` and its corresponding no-claim notice.
+///
+/// # Errors
+/// As [`body_pose_geometry_json`].
+pub fn body_pose_geometry_json_with_skinning(
+    model: &AnnyModel,
+    rest_vertices: &[Vec3],
+    posed_vertices: &[Vec3],
+    posed_skin: &SkinMesh,
+    skinning: crate::SkinningMode,
 ) -> Result<serde_json::Value, Refusal> {
     let rest_skin = skin_mesh(rest_vertices, &model.data().faces)?;
     let skin_report =
@@ -1040,12 +1076,33 @@ pub fn body_pose_geometry_json(
     } else {
         serde_json::Value::Null
     };
-    Ok(serde_json::json!({
-        "skin": skin_report,
-        "clothing_collider": clothing_collider,
-        "lbs_advisory_threshold_fraction": LBS_VOLUME_CHANGE_ADVISORY_FRACTION,
-        "no_claim": "Linear-blend-skinning mesh diagnostics only; neither soft-tissue volume conservation nor anatomical contact clearance is claimed."
-    }))
+    let mut doc = serde_json::Map::new();
+    doc.insert("skin".into(), serde_json::json!(skin_report));
+    doc.insert("clothing_collider".into(), clothing_collider);
+    doc.insert(
+        "lbs_advisory_threshold_fraction".into(),
+        serde_json::json!(LBS_VOLUME_CHANGE_ADVISORY_FRACTION),
+    );
+    match skinning {
+        crate::SkinningMode::LinearBlend => {
+            doc.insert(
+                "no_claim".into(),
+                serde_json::json!(
+                    "Linear-blend-skinning mesh diagnostics only; neither soft-tissue volume conservation nor anatomical contact clearance is claimed."
+                ),
+            );
+        }
+        crate::SkinningMode::DualQuaternion => {
+            doc.insert("skinning".into(), serde_json::json!(skinning.as_str()));
+            doc.insert(
+                "no_claim".into(),
+                serde_json::json!(
+                    "Dual-quaternion skinning mesh diagnostics only; reduces linear-blend volume collapse at deep joint bends, but neither soft-tissue volume conservation nor anatomical contact clearance is claimed."
+                ),
+            );
+        }
+    }
+    Ok(serde_json::Value::Object(doc))
 }
 
 #[cfg(test)]

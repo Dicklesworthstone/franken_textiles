@@ -193,13 +193,42 @@ pub enum SkinningMode {
     DualQuaternion,
 }
 
+impl SkinningMode {
+    /// Stable CLI/report identifier (`"lbs"` or `"dqs"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LinearBlend => "lbs",
+            Self::DualQuaternion => "dqs",
+        }
+    }
+
+    /// Parses `"lbs"` or `"dqs"`.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "lbs" => Some(Self::LinearBlend),
+            "dqs" => Some(Self::DualQuaternion),
+            _ => None,
+        }
+    }
+}
+
 /// Converts a right-handed orthonormal rotation matrix into a unit quaternion `[w, x, y, z]`
-/// via Shepperd's branch-stable method.
+/// via Shepperd's branch-stable method. Non-finite or degenerate zero matrices return NaNs rather
+/// than silently fabricating an identity rotation.
 fn rotmat_to_unit_quaternion(m: &Mat3) -> [f64; 4] {
     let r = &m.rows;
+    if r.iter().flatten().any(|v| !v.is_finite()) {
+        return [f64::NAN; 4];
+    }
     let trace = r[0][0] + r[1][1] + r[2][2];
     let q = if trace > 0.0 {
-        let s = 2.0 * (trace + 1.0).max(0.0).sqrt();
+        let diag = trace + 1.0;
+        if !(diag > 0.0 && diag.is_finite()) {
+            return [f64::NAN; 4];
+        }
+        let s = 2.0 * diag.sqrt();
         [
             0.25 * s,
             (r[2][1] - r[1][2]) / s,
@@ -207,7 +236,11 @@ fn rotmat_to_unit_quaternion(m: &Mat3) -> [f64; 4] {
             (r[1][0] - r[0][1]) / s,
         ]
     } else if r[0][0] >= r[1][1] && r[0][0] >= r[2][2] {
-        let s = 2.0 * (1.0 + r[0][0] - r[1][1] - r[2][2]).max(0.0).sqrt();
+        let diag = 1.0 + r[0][0] - r[1][1] - r[2][2];
+        if !(diag > 0.0 && diag.is_finite()) {
+            return [f64::NAN; 4];
+        }
+        let s = 2.0 * diag.sqrt();
         [
             (r[2][1] - r[1][2]) / s,
             0.25 * s,
@@ -215,7 +248,11 @@ fn rotmat_to_unit_quaternion(m: &Mat3) -> [f64; 4] {
             (r[0][2] + r[2][0]) / s,
         ]
     } else if r[1][1] >= r[2][2] {
-        let s = 2.0 * (1.0 + r[1][1] - r[0][0] - r[2][2]).max(0.0).sqrt();
+        let diag = 1.0 + r[1][1] - r[0][0] - r[2][2];
+        if !(diag > 0.0 && diag.is_finite()) {
+            return [f64::NAN; 4];
+        }
+        let s = 2.0 * diag.sqrt();
         [
             (r[0][2] - r[2][0]) / s,
             (r[0][1] + r[1][0]) / s,
@@ -223,7 +260,11 @@ fn rotmat_to_unit_quaternion(m: &Mat3) -> [f64; 4] {
             (r[1][2] + r[2][1]) / s,
         ]
     } else {
-        let s = 2.0 * (1.0 + r[2][2] - r[0][0] - r[1][1]).max(0.0).sqrt();
+        let diag = 1.0 + r[2][2] - r[0][0] - r[1][1];
+        if !(diag > 0.0 && diag.is_finite()) {
+            return [f64::NAN; 4];
+        }
+        let s = 2.0 * diag.sqrt();
         [
             (r[1][0] - r[0][1]) / s,
             (r[0][2] + r[2][0]) / s,
@@ -235,14 +276,20 @@ fn rotmat_to_unit_quaternion(m: &Mat3) -> [f64; 4] {
     if norm > 0.0 && norm.is_finite() {
         [q[0] / norm, q[1] / norm, q[2] / norm, q[3] / norm]
     } else {
-        [1.0, 0.0, 0.0, 0.0]
+        [f64::NAN; 4]
     }
 }
 
 /// Converts a rigid transform `(R, t)` into a unit dual quaternion `(q_r, q_d)` where
 /// `q_d = 0.5 * (0, t) * q_r`.
 fn affine_to_dual_quaternion(a: &Affine) -> ([f64; 4], [f64; 4]) {
+    if !a.t.is_finite() {
+        return ([f64::NAN; 4], [f64::NAN; 4]);
+    }
     let qr = rotmat_to_unit_quaternion(&a.m);
+    if qr.iter().any(|v| !v.is_finite()) {
+        return ([f64::NAN; 4], [f64::NAN; 4]);
+    }
     let (w, x, y, z) = (qr[0], qr[1], qr[2], qr[3]);
     let t = a.t;
     let qd = [
@@ -259,6 +306,9 @@ fn affine_to_dual_quaternion(a: &Affine) -> ([f64; 4], [f64; 4]) {
 /// hemisphere of its highest-weight bone (fixed slot tie-break for determinism), blends and
 /// normalizes the dual quaternion, then applies the resulting rigid screw motion to `rest[i]`.
 /// `indices` and `weights` are V × K row-major.
+///
+/// # Panics
+/// If `indices.len() != rest.len() * k` or `weights.len() != rest.len() * k`.
 #[must_use]
 pub fn dual_quaternion_skinning(
     rest: &[Vec3],
@@ -267,22 +317,41 @@ pub fn dual_quaternion_skinning(
     k: usize,
     transforms: &[Affine],
 ) -> Vec<Vec3> {
+    assert_eq!(indices.len(), rest.len() * k);
+    assert_eq!(weights.len(), rest.len() * k);
+    if k == 0 {
+        return rest.to_vec();
+    }
     let dqs: Vec<([f64; 4], [f64; 4])> = transforms.iter().map(affine_to_dual_quaternion).collect();
+    let nan = Vec3::new(f64::NAN, f64::NAN, f64::NAN);
     rest.iter()
         .enumerate()
         .map(|(i, &p)| {
+            if !p.is_finite() {
+                return nan;
+            }
             let base = i * k;
-            // Deterministic pivot: largest-weight active bone (earliest slot on tie).
-            let mut pivot_slot = 0;
-            let mut max_w = f64::NEG_INFINITY;
+            // Deterministic pivot: largest-magnitude active bone weight (earliest slot on tie).
+            let mut pivot_slot: Option<usize> = None;
+            let mut max_abs_w = 0.0;
             for s in 0..k {
                 let w = weights[base + s];
-                if w > max_w {
-                    max_w = w;
-                    pivot_slot = s;
+                if !w.is_finite() {
+                    return nan;
+                }
+                let abs_w = w.abs();
+                if abs_w > max_abs_w {
+                    max_abs_w = abs_w;
+                    pivot_slot = Some(s);
                 }
             }
-            let pivot_r = dqs[indices[base + pivot_slot] as usize].0;
+            let Some(pivot) = pivot_slot else {
+                return p;
+            };
+            let pivot_r = dqs[indices[base + pivot] as usize].0;
+            if pivot_r.iter().any(|v| !v.is_finite()) {
+                return nan;
+            }
             let mut br = [0.0; 4];
             let mut bd = [0.0; 4];
             for s in 0..k {
@@ -291,6 +360,9 @@ pub fn dual_quaternion_skinning(
                     continue;
                 }
                 let (qr, qd) = dqs[indices[base + s] as usize];
+                if qr.iter().chain(&qd).any(|v| !v.is_finite()) {
+                    return nan;
+                }
                 let dot = pivot_r[0] * qr[0]
                     + pivot_r[1] * qr[1]
                     + pivot_r[2] * qr[2]
@@ -303,7 +375,7 @@ pub fn dual_quaternion_skinning(
             }
             let norm = (br[0] * br[0] + br[1] * br[1] + br[2] * br[2] + br[3] * br[3]).sqrt();
             if !(norm > 0.0 && norm.is_finite()) {
-                return p;
+                return nan;
             }
             let inv = 1.0 / norm;
             let qr = [br[0] * inv, br[1] * inv, br[2] * inv, br[3] * inv];
@@ -426,9 +498,18 @@ mod tests {
 
     #[test]
     fn dqs_matches_lbs_on_rigid_and_single_bone_transforms() {
+        let a135 = 135.0_f64.to_radians();
         let cases = [
             Affine::IDENTITY,
             Affine::from_rotvec(Vec3::new(0.4, -0.7, 1.1), Vec3::new(0.3, -0.5, 0.8)),
+            // Non-180-degree rotations with trace < 0 and nonzero w (verifies w sign in branches 2-4).
+            Affine::from_rotvec(Vec3::new(a135, 0.0, 0.0), Vec3::new(0.5, -0.2, 0.7)),
+            Affine::from_rotvec(Vec3::new(0.0, a135, 0.0), Vec3::new(-0.3, 0.9, -0.1)),
+            Affine::from_rotvec(Vec3::new(0.0, 0.0, a135), Vec3::new(0.2, 0.4, -0.8)),
+            Affine::from_rotvec(
+                Vec3::new(1.0, -0.4, 0.25) * (a135 / (1.0_f64 + 0.16 + 0.0625).sqrt()),
+                Vec3::new(-0.4, 0.2, 0.6),
+            ),
             // 180-degree rotations around every cardinal axis and diagonal (Shepperd branches).
             Affine::from_rotvec(
                 Vec3::new(std::f64::consts::PI, 0.0, 0.0),
@@ -465,6 +546,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dqs_edge_cases_and_non_finite_propagation() {
+        let pts = [Vec3::new(0.2, -0.3, 0.5)];
+        // k == 0 returns rest vertices without panicking.
+        assert_eq!(
+            dual_quaternion_skinning(&pts, &[], &[], 0, &[Affine::IDENTITY]),
+            pts
+        );
+        // All-zero weights return rest vertices without indexing any bone transform.
+        let bad = Affine {
+            m: Mat3::from_rows([[f64::NAN; 3]; 3]),
+            t: Vec3::ZERO,
+        };
+        assert_eq!(
+            dual_quaternion_skinning(&pts, &[0, 0], &[0.0, 0.0], 2, &[bad]),
+            pts
+        );
+        // Active non-finite transform propagates NaN instead of fabricating identity.
+        let out = dual_quaternion_skinning(&pts, &[0], &[1.0], 1, &[bad]);
+        assert!(
+            !out[0].is_finite(),
+            "non-finite transform must not yield finite output: {:?}",
+            out[0]
+        );
+        // Non-finite weight propagates NaN.
+        let out_w = dual_quaternion_skinning(&pts, &[0], &[f64::NAN], 1, &[Affine::IDENTITY]);
+        assert!(!out_w[0].is_finite());
+        // Slightly non-orthonormal f32-like bone roll (~1e-7) projects cleanly onto SO(3).
+        let mut r = rotvec_to_rotmat(Vec3::new(0.3, -0.5, 0.7));
+        r.rows[0][0] += 1e-7;
+        r.rows[1][2] -= 1e-7;
+        let approx = Affine {
+            m: r,
+            t: Vec3::new(0.1, -0.2, 0.3),
+        };
+        let lbs = linear_blend_skinning(&pts, &[0], &[1.0], 1, &[approx]);
+        let dqs = dual_quaternion_skinning(&pts, &[0], &[1.0], 1, &[approx]);
+        assert!((lbs[0] - dqs[0]).norm() < 1e-6);
+        assert_eq!(SkinningMode::parse("lbs"), Some(SkinningMode::LinearBlend));
+        assert_eq!(
+            SkinningMode::parse("dqs"),
+            Some(SkinningMode::DualQuaternion)
+        );
+        assert_eq!(SkinningMode::parse("other"), None);
     }
 
     #[test]

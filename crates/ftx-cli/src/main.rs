@@ -40,8 +40,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, FREE, Legs, Pose, TAPE_FIELDS, TapeFit, Wearer, clothing_skin,
-    default_model_path, fit_tape, pose_deltas, skin_mesh, tape_targets,
+    AnnyModel, BodyFrames, FREE, Legs, Pose, SkinningMode, TAPE_FIELDS, TapeFit, Wearer,
+    clothing_skin, default_model_path, fit_tape, pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_core::Vec3;
 use ftx_core::receipt::sha256_hex;
@@ -69,14 +69,14 @@ const USAGE: &str = "usage:
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--self-contact-mm MM] [--self-mu MU] [--json]
-            [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N]
+            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--max-settle-steps N]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--json]
-  ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
-  ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--model PATH] [--json]
+  ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
+  ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
             [--legs standing|seated|squat] [--leg-fraction F] [--res 960x540] [--json] (start-state stills and numbers; no drape)
   ftx render DRAPE_DIR [--res 960x540] [--json]
@@ -417,13 +417,28 @@ fn body_json(w: &Wearer, fit: &TapeFit, measurements: &Value) -> serde_json::Map
     m
 }
 
+pub(crate) fn parse_skinning(args: &Args) -> Result<SkinningMode, Refusal> {
+    match args.options.get("skinning").map(String::as_str) {
+        None | Some("lbs") => Ok(SkinningMode::LinearBlend),
+        Some("dqs") => Ok(SkinningMode::DualQuaternion),
+        Some(other) => Err(
+            bad_input(format!("--skinning {other}: no such skinning mode"))
+                .repair("--skinning lbs or dqs"),
+        ),
+    }
+}
+
 /// `ftx body`: the body fitted to a measurement file, posed, as `body.obj` and `body.json`
 /// (`ftx-body/1`: the fit, the readings, the phenotype and the local changes in use).
 fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if args.options.contains_key("body-fit") {
         return body_source::cmd_body(args);
     }
-    known_options(args, "body", &["measurements", "out", "pose", "model"])?;
+    known_options(
+        args,
+        "body",
+        &["measurements", "out", "pose", "skinning", "model"],
+    )?;
     let (meas, meas_bytes) = read_json(required(args, "measurements")?)?;
     let meas = current_measurements(meas)?;
     let out = PathBuf::from(required(args, "out")?);
@@ -439,6 +454,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 .repair("--pose drape, rest, arms-up, seated or squat"));
         }
     };
+    let skinning = parse_skinning(args)?;
     reserve_output(&out, "body")?;
     let model = load_model(args)?;
     let (w, fit) = fitted_body(&model, &meas)?;
@@ -447,10 +463,16 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .as_ref()
         .map_or(&fit.params, |occupied| &occupied.params);
     let rest = model.rest(params)?;
-    let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
+    let posed =
+        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
     let skin = skin_mesh(&posed.vertices, &model.data().faces)?;
-    let pose_geometry =
-        ftx_body::body_pose_geometry_json(&model, &rest.vertices, &posed.vertices, &skin)?;
+    let pose_geometry = ftx_body::body_pose_geometry_json_with_skinning(
+        &model,
+        &rest.vertices,
+        &posed.vertices,
+        &skin,
+        skinning,
+    )?;
     let ph = fit.params.phenotype;
     let labels = &model.data().header.labels.local_changes;
     let mut doc = body_json(&w, &fit, &meas);
@@ -462,6 +484,9 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     doc.insert("schema".into(), json!("ftx-body/1"));
     doc.insert("measurements_sha256".into(), json!(sha256_hex(&meas_bytes)));
     doc.insert("pose".into(), json!(pose_name));
+    if skinning != SkinningMode::LinearBlend {
+        doc.insert("skinning".into(), json!(skinning.as_str()));
+    }
     doc.insert("pose_geometry".into(), pose_geometry);
     doc.insert(
         "phenotype".into(),
@@ -493,8 +518,13 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .unwrap_or_default()
             .as_bytes(),
     )?;
+    let skinning_note = if skinning == SkinningMode::LinearBlend {
+        String::new()
+    } else {
+        format!(", skinning {}", skinning.as_str())
+    };
     let text = format!(
-        "{} mm, {:.2} kg, {} tape measurements fitted (largest residual {:.1} mm); pose {pose_name}\nwrote {}",
+        "{} mm, {:.2} kg, {} tape measurements fitted (largest residual {:.1} mm); pose {pose_name}{skinning_note}\nwrote {}",
         (fit.readings[0].expect("stature is always fitted") * 10.0).round() / 10.0,
         fit.mass_kg,
         fit.residuals.len(),
@@ -928,6 +958,7 @@ fn cmd_drape_bound(
             "arm-deg",
             "legs",
             "leg-fraction",
+            "skinning",
             "body-fit",
             "two-start-sew",
             "fabric",
@@ -940,6 +971,7 @@ fn cmd_drape_bound(
     let opts = drape_options(args)?;
     let pair = two_start::options(args, &opts)?;
     let pose = drape_pose(args)?;
+    let skinning = parse_skinning(args)?;
     let pattern_path = args
         .positional
         .get(1)
@@ -981,7 +1013,8 @@ fn cmd_drape_bound(
     } = body_source::prepare_bound(args, Some(&meas), expected_model_sha256)?;
     let rest = model.rest(&params)?;
     let rest_skin = clothing_skin(&model, &rest.vertices)?;
-    let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
+    let posed =
+        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
     let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
@@ -1060,6 +1093,9 @@ fn cmd_drape_bound(
         }
         if pose.leg_fraction != 1.0 {
             b.insert("leg_fraction".into(), json!(pose.leg_fraction));
+        }
+        if skinning != SkinningMode::LinearBlend {
+            b.insert("skinning".into(), json!(skinning.as_str()));
         }
         o.insert("body".into(), Value::Object(b));
     }
@@ -1836,5 +1872,67 @@ mod tests {
         assert!(r.message.contains("--measurment"), "{}", r.message);
         let ok = parse(&["validate", "p.json", "--fit", "f.json"].map(String::from)).unwrap();
         assert!(known_options(&ok, "validate", &["measurements", "fit"]).is_ok());
+    }
+
+    #[test]
+    fn skinning_option_parses_default_explicit_and_refuses_unknown() {
+        let default_args = parse(&["body"].map(String::from)).unwrap();
+        assert_eq!(
+            parse_skinning(&default_args).unwrap(),
+            SkinningMode::LinearBlend
+        );
+        let lbs_args = parse(&["body", "--skinning", "lbs"].map(String::from)).unwrap();
+        assert_eq!(
+            parse_skinning(&lbs_args).unwrap(),
+            SkinningMode::LinearBlend
+        );
+        let dqs_args = parse(&["body", "--skinning", "dqs"].map(String::from)).unwrap();
+        assert_eq!(
+            parse_skinning(&dqs_args).unwrap(),
+            SkinningMode::DualQuaternion
+        );
+        let bad_args = parse(&["body", "--skinning", "bogus"].map(String::from)).unwrap();
+        let err = parse_skinning(&bad_args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("--skinning bogus"), "{}", err.message);
+
+        // Both `ftx body` and `ftx drape` must refuse invalid `--skinning` before creating outputs.
+        let dir = drape_scratch();
+        let out = dir.join("body-out");
+        let meas = dir.join("measurements.json");
+        std::fs::write(&meas, b"{}").unwrap();
+        let body_args = parse(&[
+            "body".into(),
+            "--measurements".into(),
+            meas.to_string_lossy().into_owned(),
+            "--out".into(),
+            out.to_string_lossy().into_owned(),
+            "--skinning".into(),
+            "bogus".into(),
+            "--model".into(),
+            dir.join("absent.ftxbody").to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let body_err = cmd_body(&body_args).unwrap_err();
+        assert_eq!(body_err.code, RefusalCode::InvalidDocument);
+        assert!(!out.exists());
+
+        let pat = dir.join("pattern.json");
+        std::fs::write(&pat, b"{}").unwrap();
+        let drape_out = dir.join("drape-out");
+        let drape_args = parse(&[
+            "drape".into(),
+            pat.to_string_lossy().into_owned(),
+            "--measurements".into(),
+            meas.to_string_lossy().into_owned(),
+            "--out".into(),
+            drape_out.to_string_lossy().into_owned(),
+            "--skinning".into(),
+            "bogus".into(),
+        ])
+        .unwrap();
+        let drape_err = cmd_drape(&drape_args).unwrap_err();
+        assert_eq!(drape_err.code, RefusalCode::InvalidDocument);
+        assert!(!drape_out.exists());
     }
 }
