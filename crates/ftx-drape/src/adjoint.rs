@@ -331,10 +331,61 @@ impl Solver {
         dj_dq: [f64; 4],
         dj_db: f64,
     ) -> Result<ConstitutiveGradient, Refusal> {
-        if !dj_dq.iter().all(|v| v.is_finite()) || !dj_db.is_finite() {
+        let zero_rxn = vec![Vec3::ZERO; self.x.len()];
+        self.constitutive_gradient_with_reactions(dj_dx, &zero_rxn, dj_dq, dj_db)
+    }
+
+    /// Compute the exact IFT sensitivity of a linear Dirichlet reaction-force / torque functional
+    /// `F(p) = Σ_{(i,k) fixed} reaction_weights[i][k] * R_i[k](x*(p), p)` at a converged static
+    /// cloth equilibrium (for example axial holder force `F_z` or torque `τ_z = Σ (x_i × R_i)_z`
+    /// in clamped strip or cylindrical-holder identification).
+    ///
+    /// Uses a single adjoint solve `H_{FF} λ_F = H_{FD} c_D` (reusing the cached `LdltFactor` when
+    /// valid) with `λ_D = -c_D`, yielding `dF/dp = -(∂R/∂p)ᵀ λ` without finite differences.
+    ///
+    /// # Errors
+    /// Same admission and linear-residual refusals as [`Solver::constitutive_gradient_with_reactions`].
+    pub fn reaction_gradient(
+        &mut self,
+        reaction_weights: &[Vec3],
+    ) -> Result<ConstitutiveGradient, Refusal> {
+        let zero_x = vec![Vec3::ZERO; self.x.len()];
+        self.constitutive_gradient_with_reactions(&zero_x, reaction_weights, [0.0; 4], 0.0)
+    }
+
+    /// Unified exact IFT sensitivity of `Φ(p) = J(x_F(p), Q, B) + c_Dᵀ R_D(x_F(p), x_D, Q, B)`,
+    /// combining a free-DOF geometry objective (`dj_dx`) and a fixed-DOF Dirichlet reaction
+    /// functional (`reaction_weights` restricted to fixed DOFs).
+    ///
+    /// # Errors
+    /// Refuses fail-closed on length mismatch, non-finite inputs/outputs, heterogeneous or
+    /// history-bearing cloth models, or adjoint linear-residual failure.
+    pub fn constitutive_gradient_with_reactions(
+        &mut self,
+        dj_dx: &[Vec3],
+        reaction_weights: &[Vec3],
+        dj_dq: [f64; 4],
+        dj_db: f64,
+    ) -> Result<ConstitutiveGradient, Refusal> {
+        if dj_dx.len() != self.x.len() || reaction_weights.len() != self.x.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "adjoint input lengths ({}, {}) must match vertex count {}",
+                    dj_dx.len(),
+                    reaction_weights.len(),
+                    self.x.len()
+                ),
+            ));
+        }
+        if dj_dx.iter().any(|v| !v.is_finite())
+            || reaction_weights.iter().any(|v| !v.is_finite())
+            || !dj_dq.iter().all(|v| v.is_finite())
+            || !dj_db.is_finite()
+        {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
-                "explicit objective derivatives must be finite",
+                "explicit objective and reaction derivatives must be finite",
             ));
         }
         if !self.is_homogeneous_elastic_for_adjoint() {
@@ -344,7 +395,38 @@ impl Solver {
                  (no per-element overrides, nonlinear membrane laws, panel bending, or material history)",
             ));
         }
-        let adjoint = self.equilibrium_adjoint(dj_dx)?;
+
+        let has_fixed_weights = reaction_weights
+            .iter()
+            .enumerate()
+            .any(|(i, w)| (0..3).any(|k| self.is_fixed_dof(i, k) && w[k] != 0.0));
+        let eff_dj_dx: Vec<Vec3> = if has_fixed_weights {
+            let h_fd_c = self.fixed_to_free_hessian_mul(reaction_weights);
+            let h_fd_nodal = self.unpack_free(&h_fd_c);
+            dj_dx
+                .iter()
+                .zip(&h_fd_nodal)
+                .map(|(&a, &b)| a + b)
+                .collect()
+        } else {
+            dj_dx.to_vec()
+        };
+
+        let mut adjoint = self.equilibrium_adjoint(&eff_dj_dx)?;
+        // Set λ_D = -c_D on fixed (Dirichlet) DOFs so -(∂R/∂p)ᵀ λ = c_Dᵀ (∂R_D/∂p) - λ_Fᵀ (∂R_F/∂p).
+        if has_fixed_weights {
+            for (i, w) in reaction_weights.iter().enumerate() {
+                if self.is_fixed_dof(i, 0) {
+                    adjoint.lambda[i].x = -w.x;
+                }
+                if self.is_fixed_dof(i, 1) {
+                    adjoint.lambda[i].y = -w.y;
+                }
+                if self.is_fixed_dof(i, 2) {
+                    adjoint.lambda[i].z = -w.z;
+                }
+            }
+        }
         let lam = &adjoint.lambda;
 
         // Membrane pullback: (∂R/∂Q)ᵀ λ = Σ_e A_e [e0*w0, e1*w1, e1*w0 + e0*w1, e2*w2].
@@ -594,5 +676,88 @@ mod tests {
             verdict.pass,
             "compression-softened IFT adjoint failed FD gate: {verdict:?}"
         );
+    }
+
+    #[test]
+    fn ift_reaction_gradient_matches_central_fd_on_clamped_tensile_and_bent_strip() {
+        // Clamped strip stretched along x, sheared along y, and deflected out-of-plane along z
+        // so right-clamp axial force F_x and torque τ_z = Σ (x_i × R_i)_z depend nontrivially on
+        // all 5 constitutive parameters [E1, E2, nu12, G12, B] through both direct ∂R_D/∂p and
+        // indirect interior equilibrium deformation dx_F/dp.
+        let make = |e1: f64, e2: f64, nu12: f64, g12: f64, bending: f64| {
+            let (rest, tris) = grid(0.12, 0.08, 4, 3, Vec2::ZERO);
+            let x: Vec<Vec3> = rest
+                .iter()
+                .map(|p| {
+                    let s = p.x / 0.12;
+                    Vec3::new(p.x * 1.06, p.y + 0.012 * s, 0.015 * s * (1.0 - 0.3 * s))
+                })
+                .collect();
+            let fixed: Vec<[bool; 3]> = rest
+                .iter()
+                .map(|p| {
+                    if p.x == 0.0 || (p.x - 0.12).abs() < 1e-12 {
+                        [true, true, true]
+                    } else {
+                        [false, false, false]
+                    }
+                })
+                .collect();
+            let mat = Membrane::orthotropic(e1, e2, nu12, g12, 0.15);
+            let model = ClothModel::new(rest, &tris, mat, bending, 0.2).unwrap();
+            let mut s = Solver::new(model, x, &fixed, Vec3::new(0.0, 0.0, -9.81));
+            s.tol = 1e-14;
+            s
+        };
+        let (e1, e2, nu12, g12, bending) = (320.0, 210.0, 0.24, 55.0, 8e-4);
+        let mut base = make(e1, e2, nu12, g12, bending);
+        base.static_solve().unwrap();
+
+        // Linear reaction functional: axial force + torque about z at the right clamp (x == 0.12).
+        let weights: Vec<Vec3> = base
+            .model
+            .rest
+            .iter()
+            .zip(&base.x)
+            .map(|(r, p)| {
+                if (r.x - 0.12).abs() < 1e-12 {
+                    // w · R = R.x + 2.0 * (p.x * R.y - p.y * R.x)
+                    Vec3::new(1.0 - 2.0 * p.y, 2.0 * p.x, 0.5)
+                } else {
+                    Vec3::ZERO
+                }
+            })
+            .collect();
+        let grad = base.reaction_gradient(&weights).unwrap();
+        let d_ortho = orthotropic_chain_rule(e1, e2, nu12, g12, grad.dq).unwrap();
+        let analytic = [
+            d_ortho[0],
+            d_ortho[1],
+            d_ortho[2],
+            d_ortho[3],
+            grad.d_bending,
+        ];
+        let p0 = [e1, e2, nu12, g12, bending];
+        let dirs = vec![
+            vec![10.0, 0.0, 0.0, 0.0, 0.0],
+            vec![0.0, 10.0, 0.0, 0.0, 0.0],
+            vec![0.0, 0.0, 1e-2, 0.0, 0.0],
+            vec![0.0, 0.0, 0.0, 5.0, 0.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1e-4],
+            vec![5.0, -4.0, 5e-3, 3.0, -5e-5],
+        ];
+        let eval_rxn = |p: &[f64]| -> f64 {
+            let mut s = make(p[0], p[1], p[2], p[3], p[4]);
+            s.x = base.x.clone();
+            s.static_solve().unwrap();
+            let rxn = s.nodal_reactions();
+            weights.iter().zip(&rxn).map(|(w, r)| w.dot(*r)).sum()
+        };
+        let verdict = verify_gradient(&eval_rxn, &p0, &analytic, &dirs, 1e-3, 1e-5);
+        assert!(
+            verdict.pass,
+            "IFT reaction-force/torque gradient failed FD gate: {verdict:?}"
+        );
+        assert_eq!(verdict.informative_directions, dirs.len());
     }
 }

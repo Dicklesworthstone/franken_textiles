@@ -816,3 +816,23 @@ pub fn material_inspect(selection: &str) -> Result<String, wasm_bindgen::JsError
 pub fn material_bind(pattern: &str, changes: &str) -> Result<String, wasm_bindgen::JsError> {
     bind(pattern, changes).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
+
+/// Evaluate `ftx-fractional-zener-lowering/1` JSON: certify a nonnegative Prony series over the
+/// declared frequency band via Lawson–Hanson NNLS and optionally replay strain steps with exact
+/// exponential recursion. Identical to `ftx materials lower-visco`.
+///
+/// # Errors
+/// Oversized input/steps, invalid JSON/schema, invalid parameters, or unmet NNLS error gate.
+pub fn lower_visco(input: &str) -> Result<String, Refusal> {
+    ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json(input)
+}
+
+/// Browser binding for [`lower_visco`].
+///
+/// # Errors
+/// Same refusals as [`lower_visco`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_lower_visco(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    lower_visco(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}

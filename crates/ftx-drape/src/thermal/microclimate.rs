@@ -25,6 +25,8 @@ use std::collections::BTreeMap;
 
 use ftx_core::{Refusal, RefusalCode, det};
 use ftx_pattern::materials::{Evidence, Source};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::thermal::steady::exterior::{AmbientRadiation, Exterior};
 
@@ -122,7 +124,7 @@ pub fn saturation_pressure_water_pa(temperature_k: f64) -> Result<f64, Refusal> 
 /// Prandtl number `Pr = μ c_p / κ` is DERIVED, never hardcoded. No-claim: for moist air,
 /// transport coefficients `(μ, κ)` retain the dry-air fits (valid to ~1–2% up to `x_w ≤ 0.15`,
 /// refused above) and supersaturation (`RH > 1`) is refused.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct MoistAirState {
     /// Absolute temperature [K].
     pub temperature_k: f64,
@@ -319,7 +321,8 @@ impl MoistAirState {
 // ---------------------------------------------------------------------------
 
 /// Stable identifier for the 12 validity-gated Nusselt convection correlations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CorrelationId {
     /// Circular duct, fully developed laminar, constant wall temperature (`Nu = 3.66`).
     CircularDuctLaminarCwt,
@@ -486,7 +489,8 @@ impl CorrelationId {
 }
 
 /// Heat-flow direction for Dittus–Boelter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ThermalDirection {
     /// Wall heats the fluid (`n = 0.4`).
     #[default]
@@ -1006,7 +1010,7 @@ impl ViewFactorMatrix {
 
 /// Result of solving the N-patch gray-diffuse radiosity equations
 /// `J_i − (1 − ε_i) Σ_j F_ij J_j = ε_i σ T_i⁴`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RadiosityResult {
     /// Surface radiosities `J_i` [W/m²].
     pub radiosity_w_m2: Vec<f64>,
@@ -1179,6 +1183,234 @@ fn solve_dense(matrix: &[Vec<f64>], rhs: &[f64]) -> Result<Vec<f64>, Refusal> {
         }
     }
     Ok(x)
+}
+
+/// Request schema identifier for [`evaluate_json`].
+pub const MICROCLIMATE_REQUEST_SCHEMA: &str = "ftx-microclimate/1";
+/// Report schema identifier emitted by [`evaluate_json`].
+pub const MICROCLIMATE_REPORT_SCHEMA: &str = "ftx-microclimate-report/1";
+
+const MAX_MICROCLIMATE_INPUT_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MicroclimateRequest {
+    schema: String,
+    air: AirInput,
+    #[serde(default)]
+    convection: Option<ConvectionInput>,
+    #[serde(default)]
+    enclosure: Option<EnclosureInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AirInput {
+    temperature_c: f64,
+    pressure_pa: f64,
+    relative_humidity: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConvectionInput {
+    correlation: CorrelationId,
+    characteristic_length_m: f64,
+    #[serde(default)]
+    wind_speed_m_s: Option<f64>,
+    #[serde(default)]
+    delta_t_k: Option<f64>,
+    #[serde(default)]
+    gravity_m_s2: Option<f64>,
+    #[serde(default)]
+    reynolds: Option<f64>,
+    #[serde(default)]
+    rayleigh: Option<f64>,
+    #[serde(default)]
+    length_over_hydraulic_diameter: Option<f64>,
+    #[serde(default)]
+    aspect_ratio: Option<f64>,
+    #[serde(default)]
+    direction: ThermalDirection,
+    #[serde(default)]
+    surface_temperature_range_c: Option<[f64; 2]>,
+    #[serde(default)]
+    allow_estimates: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnclosureInput {
+    areas_m2: Vec<f64>,
+    emissivities: Vec<f64>,
+    temperatures_c: Vec<f64>,
+    view_factors: Vec<Vec<f64>>,
+    #[serde(default)]
+    row_sum_abs_tol: Option<f64>,
+    #[serde(default)]
+    reciprocity_rel_tol: Option<f64>,
+}
+
+/// Evaluate a bounded `ftx-microclimate/1` JSON request (moist-air thermophysics, optional
+/// validity-gated Nusselt convection + checked `Exterior`, and optional N-patch gray-diffuse
+/// radiosity enclosure) and return canonical `ftx-microclimate-report/1` JSON.
+///
+/// # Errors
+/// [`RefusalCode::BudgetExceeded`] if input exceeds 16 MiB; [`RefusalCode::InvalidDocument`] on
+/// malformed JSON, unknown fields, mismatched schema, or contradictory inputs;
+/// [`RefusalCode::OutOfRange`] or [`RefusalCode::NotConverged`] on physics-domain violations.
+pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
+    if input.len() > MAX_MICROCLIMATE_INPUT_BYTES {
+        return Err(refusal(
+            RefusalCode::BudgetExceeded,
+            "microclimate input exceeds 16 MiB",
+        ));
+    }
+    let req: MicroclimateRequest = serde_json::from_str(input)
+        .map_err(|e| refusal(RefusalCode::InvalidDocument, e.to_string()))?;
+    if req.schema != MICROCLIMATE_REQUEST_SCHEMA {
+        return Err(refusal(
+            RefusalCode::InvalidDocument,
+            format!(
+                "expected schema {MICROCLIMATE_REQUEST_SCHEMA:?}, got {:?}",
+                req.schema
+            ),
+        ));
+    }
+    if !req.air.temperature_c.is_finite() {
+        return Err(refusal(
+            RefusalCode::OutOfRange,
+            "air temperature_c must be finite",
+        ));
+    }
+    let air = MoistAirState::moist_air(
+        req.air.temperature_c + 273.15,
+        req.air.pressure_pa,
+        req.air.relative_humidity,
+    )?;
+
+    let convection = if let Some(conv) = req.convection {
+        if conv.wind_speed_m_s.is_some() && conv.reynolds.is_some() {
+            return Err(refusal(
+                RefusalCode::InvalidDocument,
+                "supply either wind_speed_m_s or reynolds, not both",
+            ));
+        }
+        if conv.delta_t_k.is_some() && conv.rayleigh.is_some() {
+            return Err(refusal(
+                RefusalCode::InvalidDocument,
+                "supply either delta_t_k or rayleigh, not both",
+            ));
+        }
+        let reynolds = match (conv.wind_speed_m_s, conv.reynolds) {
+            (Some(u), None) => Some(air.reynolds(u, conv.characteristic_length_m)?),
+            (None, r) => r,
+            (Some(_), Some(_)) => unreachable!(),
+        };
+        let rayleigh = match (conv.delta_t_k, conv.rayleigh) {
+            (Some(dt), None) => {
+                let g = conv.gravity_m_s2.unwrap_or(9.81);
+                Some(air.rayleigh(dt, conv.characteristic_length_m, g)?)
+            }
+            (None, r) => r,
+            (Some(_), Some(_)) => unreachable!(),
+        };
+        let inputs = CorrelationInputs {
+            reynolds,
+            prandtl: Some(air.prandtl),
+            length_over_hydraulic_diameter: conv.length_over_hydraulic_diameter,
+            aspect_ratio: conv.aspect_ratio,
+            rayleigh,
+            direction: conv.direction,
+        };
+        let nu_res = evaluate_convection(conv.correlation, inputs)?;
+        let h_w_m2_k = nu_res
+            .heat_transfer_coefficient(air.thermal_conductivity, conv.characteristic_length_m)?;
+        let exterior = match conv.surface_temperature_range_c {
+            Some(range) => Some(nu_res.to_exterior(
+                &air,
+                conv.characteristic_length_m,
+                range,
+                conv.allow_estimates,
+                None,
+            )?),
+            None => None,
+        };
+        Some(json!({
+            "correlation": conv.correlation,
+            "name": nu_res.id.name(),
+            "citation": nu_res.id.citation(),
+            "nu": nu_res.nu,
+            "h_w_m2_k": h_w_m2_k,
+            "discrepancy_rel": nu_res.discrepancy_rel,
+            "groups": nu_res.groups,
+            "evidence": Evidence::Estimate,
+            "exterior": exterior,
+        }))
+    } else {
+        None
+    };
+
+    let enclosure = if let Some(enc) = req.enclosure {
+        let mut tol = ViewFactorTolerance::default();
+        if let Some(rs) = enc.row_sum_abs_tol {
+            tol.row_sum_abs = rs;
+        }
+        if let Some(rr) = enc.reciprocity_rel_tol {
+            tol.reciprocity_rel = rr;
+        }
+        let vf = ViewFactorMatrix::admit(enc.areas_m2, enc.view_factors, tol)?;
+        let max_reciprocity_residual = vf.max_reciprocity_residual();
+        let model = GrayDiffuseEnclosure::new(enc.emissivities, vf)?;
+        let temps_k: Vec<f64> = enc
+            .temperatures_c
+            .iter()
+            .map(|&t| {
+                if !t.is_finite() {
+                    return Err(refusal(
+                        RefusalCode::OutOfRange,
+                        "enclosure surface temperatures must be finite",
+                    ));
+                }
+                Ok(t + 273.15)
+            })
+            .collect::<Result<_, _>>()?;
+        let sol = model.solve(&temps_k)?;
+        Some(json!({
+            "radiosity_w_m2": sol.radiosity_w_m2,
+            "irradiation_w_m2": sol.irradiation_w_m2,
+            "net_outward_flux_w_m2": sol.net_outward_flux_w_m2,
+            "net_outward_heat_w": sol.net_outward_heat_w,
+            "enclosure_energy_closure_w": sol.enclosure_energy_closure_w,
+            "linear_residual_max_w_m2": sol.linear_residual_max_w_m2,
+            "max_reciprocity_residual": max_reciprocity_residual,
+        }))
+    } else {
+        None
+    };
+
+    let report = json!({
+        "schema": MICROCLIMATE_REPORT_SCHEMA,
+        "air": {
+            "temperature_c": req.air.temperature_c,
+            "temperature_k": air.temperature_k,
+            "pressure_pa": air.pressure_pa,
+            "relative_humidity": req.air.relative_humidity,
+            "water_mole_fraction": air.water_mole_fraction,
+            "density_kg_m3": air.density,
+            "sound_speed_m_s": air.sound_speed,
+            "dynamic_viscosity_pa_s": air.dynamic_viscosity,
+            "kinematic_viscosity_m2_s": air.kinematic_viscosity,
+            "thermal_conductivity_w_m_k": air.thermal_conductivity,
+            "thermal_diffusivity_m2_s": air.thermal_diffusivity,
+            "specific_heat_cp_j_kg_k": air.specific_heat_cp,
+            "prandtl": air.prandtl,
+        },
+        "convection": convection,
+        "enclosure": enclosure,
+        "no_claim": "First-principles ideal moist-air thermophysics, validity-gated convection correlations (Evidence::Estimate), and gray-diffuse enclosure radiosity; not measured garment film coefficients, whole-wearer comfort, or physical fit."
+    });
+    serde_json::to_string(&report).map_err(|e| refusal(RefusalCode::InvalidDocument, e.to_string()))
 }
 
 #[cfg(test)]

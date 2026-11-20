@@ -4,6 +4,7 @@
 //! `parallel_forward_kinematic`, `linear_blend_skinning`) so results agree to rounding.
 
 use ftx_core::{Mat3, Vec3, det};
+use serde::{Deserialize, Serialize};
 
 /// A homogeneous transform `[M | t]` (bottom row `0 0 0 1`), column-vector convention:
 /// `p' = M·p + t`.
@@ -184,16 +185,24 @@ pub fn forward_kinematics(
 /// [`SkinningMode::DualQuaternion`] blends rigid bone transforms in dual-quaternion space (Kavan
 /// et al., 2008 DLB), avoiding linear-blend candy-wrapper twist collapse and reducing joint-hinge
 /// volume loss on deep seated/squat bends; it is opt-in and never replaces LBS Anny parity.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SkinningMode {
     /// Upstream Anny linear blend skinning (default).
     #[default]
+    #[serde(rename = "lbs")]
     LinearBlend,
     /// Kavan et al. (2008) Dual-Quaternion Linear Blending (DLB) with largest-weight pivot alignment.
+    #[serde(rename = "dqs")]
     DualQuaternion,
 }
 
 impl SkinningMode {
+    /// Returns `true` for the default linear blend skinning mode.
+    #[must_use]
+    pub const fn is_lbs(self) -> bool {
+        matches!(self, Self::LinearBlend)
+    }
+
     /// Stable CLI/report identifier (`"lbs"` or `"dqs"`).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -586,12 +595,31 @@ mod tests {
         let lbs = linear_blend_skinning(&pts, &[0], &[1.0], 1, &[approx]);
         let dqs = dual_quaternion_skinning(&pts, &[0], &[1.0], 1, &[approx]);
         assert!((lbs[0] - dqs[0]).norm() < 1e-6);
+        assert!(SkinningMode::LinearBlend.is_lbs());
+        assert!(!SkinningMode::DualQuaternion.is_lbs());
         assert_eq!(SkinningMode::parse("lbs"), Some(SkinningMode::LinearBlend));
         assert_eq!(
             SkinningMode::parse("dqs"),
             Some(SkinningMode::DualQuaternion)
         );
         assert_eq!(SkinningMode::parse("other"), None);
+        assert_eq!(
+            serde_json::to_value(SkinningMode::LinearBlend).unwrap(),
+            serde_json::json!("lbs")
+        );
+        assert_eq!(
+            serde_json::to_value(SkinningMode::DualQuaternion).unwrap(),
+            serde_json::json!("dqs")
+        );
+        assert_eq!(
+            serde_json::from_value::<SkinningMode>(serde_json::json!("lbs")).unwrap(),
+            SkinningMode::LinearBlend
+        );
+        assert_eq!(
+            serde_json::from_value::<SkinningMode>(serde_json::json!("dqs")).unwrap(),
+            SkinningMode::DualQuaternion
+        );
+        assert!(serde_json::from_value::<SkinningMode>(serde_json::json!("other")).is_err());
     }
 
     #[test]

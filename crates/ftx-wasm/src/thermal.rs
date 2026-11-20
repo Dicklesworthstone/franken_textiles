@@ -288,3 +288,23 @@ pub fn steady_coverage(input: &str) -> Result<String, Refusal> {
 pub fn thermal_steady_coverage(input: &str) -> Result<String, wasm_bindgen::JsError> {
     steady_coverage(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
+
+/// Evaluate `ftx-microclimate/1` JSON (USSA-1976 / Buck moist-air properties, validity-gated
+/// Nusselt convection correlations with checked `Evidence::Estimate` `Exterior`, and N-patch
+/// gray-diffuse radiosity enclosure). Identical to `ftx materials microclimate`.
+///
+/// # Errors
+/// Oversized input, invalid schema/JSON, out-of-domain dimensionless groups, or singular enclosure.
+pub fn microclimate(input: &str) -> Result<String, Refusal> {
+    ftx_drape::thermal::microclimate::evaluate_json(input)
+}
+
+/// Browser binding for [`microclimate`].
+///
+/// # Errors
+/// Same refusals as [`microclimate`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn thermal_microclimate(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    microclimate(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}

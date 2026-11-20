@@ -18,6 +18,8 @@
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use ftx_core::{Refusal, RefusalCode, det};
+use serde::Deserialize;
+use serde_json::json;
 
 fn out_of_range(msg: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::OutOfRange, msg)
@@ -513,6 +515,124 @@ fn ls_solve_subset(a: &[f64], b: &[f64], rows: usize, cols: usize, idx: &[usize]
     z
 }
 
+/// Request schema identifier for [`evaluate_lowering_json`].
+pub const LOWERING_REQUEST_SCHEMA: &str = "ftx-fractional-zener-lowering/1";
+/// Report schema identifier emitted by [`evaluate_lowering_json`].
+pub const LOWERING_REPORT_SCHEMA: &str = "ftx-fractional-zener-lowering-report/1";
+
+const MAX_LOWERING_INPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_REPLAY_STEPS: usize = 65_536;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoweringRequest {
+    schema: String,
+    e0: f64,
+    e_inf: f64,
+    alpha: f64,
+    tau_s: f64,
+    f_lo_hz: f64,
+    f_hi_hz: f64,
+    n_terms: usize,
+    rel_tol: f64,
+    #[serde(default)]
+    replay_steps: Vec<ReplayStep>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplayStep {
+    dt_s: f64,
+    strain: f64,
+}
+
+/// Evaluate a bounded `ftx-fractional-zener-lowering/1` JSON request: lower a 4-parameter
+/// [`FractionalZener`] solid to a certified nonnegative [`ExactPronyModel`] via Lawson–Hanson NNLS
+/// over `[f_lo_hz, f_hi_hz]`, optionally replaying piecewise-linear strain steps through exact
+/// exponential recursion with full thermodynamic work/stored/dissipated-energy accounting.
+///
+/// # Errors
+/// [`RefusalCode::BudgetExceeded`] on input over 16 MiB or more than 65,536 replay steps;
+/// [`RefusalCode::InvalidDocument`] on invalid JSON, unknown fields, or mismatched schema;
+/// [`RefusalCode::OutOfRange`] on invalid parameters or unmet NNLS error gate.
+pub fn evaluate_lowering_json(input: &str) -> Result<String, Refusal> {
+    if input.len() > MAX_LOWERING_INPUT_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "fractional-Zener lowering input exceeds 16 MiB",
+        ));
+    }
+    let req: LoweringRequest = serde_json::from_str(input)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    if req.schema != LOWERING_REQUEST_SCHEMA {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!(
+                "expected schema {LOWERING_REQUEST_SCHEMA:?}, got {:?}",
+                req.schema
+            ),
+        ));
+    }
+    if req.replay_steps.len() > MAX_REPLAY_STEPS {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "replay_steps length {} exceeds cap {MAX_REPLAY_STEPS}",
+                req.replay_steps.len()
+            ),
+        ));
+    }
+    let fz = FractionalZener::new(req.e0, req.e_inf, req.alpha, req.tau_s)?;
+    let lowered = lower_to_prony(&fz, req.f_lo_hz, req.f_hi_hz, req.n_terms, req.rel_tol)?;
+    let terms: Vec<_> = lowered
+        .model
+        .terms
+        .iter()
+        .map(|&(modulus, tau_s)| json!({ "modulus": modulus, "tau_s": tau_s }))
+        .collect();
+    let replay = if req.replay_steps.is_empty() {
+        None
+    } else {
+        let mut st = lowered.model.state();
+        let mut t_s = 0.0f64;
+        let mut trace = Vec::with_capacity(req.replay_steps.len());
+        for s in &req.replay_steps {
+            let stress = lowered.model.step(&mut st, s.strain, s.dt_s)?;
+            t_s += s.dt_s;
+            trace.push(json!({
+                "time_s": t_s,
+                "strain": st.strain,
+                "stress": stress,
+                "work": st.work,
+                "stored": st.stored,
+                "dissipated": st.dissipated,
+            }));
+        }
+        Some(json!({
+            "final_time_s": t_s,
+            "final_strain": st.strain,
+            "final_stress": st.stress,
+            "work": st.work,
+            "stored": st.stored,
+            "dissipated": st.dissipated,
+            "steps": trace,
+        }))
+    };
+    let report = json!({
+        "schema": LOWERING_REPORT_SCHEMA,
+        "e_eq": lowered.model.e_eq,
+        "terms": terms,
+        "band_hz": [req.f_lo_hz, req.f_hi_hz],
+        "band_rad_s": [lowered.band_rad_s.0, lowered.band_rad_s.1],
+        "sup_rel_err": lowered.sup_rel_err,
+        "verification_points": lowered.verification_points,
+        "replay": replay,
+        "no_claim": "Certified in-band NNLS Prony approximation and exact-exponential 1D recurrence only; valid solely inside band_hz and not an empirical textile characterization or physical fit claim."
+    });
+    serde_json::to_string(&report)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +696,42 @@ mod tests {
 
         // Impossible tolerance refuses fail-closed.
         assert!(lower_to_prony(&fz, 0.01, 100.0, 3, 1e-6).is_err());
+    }
+
+    #[test]
+    fn evaluate_lowering_json_certifies_prony_replays_history_and_refuses_bad_band() {
+        let req = serde_json::json!({
+            "schema": LOWERING_REQUEST_SCHEMA,
+            "e0": 200.0,
+            "e_inf": 500.0,
+            "alpha": 0.35,
+            "tau_s": 1.0,
+            "f_lo_hz": 0.01,
+            "f_hi_hz": 100.0,
+            "n_terms": 14,
+            "rel_tol": 0.02,
+            "replay_steps": [
+                { "dt_s": 0.0, "strain": 0.05 },
+                { "dt_s": 0.5, "strain": 0.05 },
+                { "dt_s": 0.5, "strain": 0.0 }
+            ]
+        });
+        let raw = evaluate_lowering_json(&req.to_string()).unwrap();
+        let rep: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(rep["schema"], LOWERING_REPORT_SCHEMA);
+        assert!(rep["sup_rel_err"].as_f64().unwrap() <= 0.02);
+        assert!(!rep["terms"].as_array().unwrap().is_empty());
+        assert!(rep["replay"]["dissipated"].as_f64().unwrap() > 0.0);
+        assert_eq!(rep["replay"]["steps"].as_array().unwrap().len(), 3);
+
+        // Unmet tolerance and unknown fields refuse fail-closed.
+        let mut tight = req.clone();
+        tight["n_terms"] = serde_json::json!(2);
+        tight["rel_tol"] = serde_json::json!(1e-6);
+        assert!(evaluate_lowering_json(&tight.to_string()).is_err());
+
+        let mut extra = req;
+        extra["bogus"] = serde_json::json!(1);
+        assert!(evaluate_lowering_json(&extra.to_string()).is_err());
     }
 }

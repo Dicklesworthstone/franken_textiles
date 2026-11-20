@@ -184,6 +184,57 @@ mod tests {
         assert!(pick("front", "96,0").is_err());
         assert!(pick("front", "-1,4").is_err());
         assert!(pick("../preview", "0,0").is_err());
+
+        // Apparent success artifacts can survive a failed writer. Only the refused pose owns
+        // diagnostic pixels, even when both directories contain a complete set of views.
+        let diagnosis = rd.join("sim/refused");
+        std::fs::create_dir(&diagnosis).unwrap();
+        let original = json!({"code":"not_converged","message":"failed to settle"});
+        let failed = json!({"round":7,"sim":{"refusal":original,"gating":["failed to settle"]},
+            "rendering":{"status":"SKIPPED"},"images":[]});
+        std::fs::write(rd.join("round.json"), failed.to_string()).unwrap();
+        assert!(pick("front", "48,58").is_err());
+        for name in [
+            "body.obj",
+            "garment.obj",
+            "still_front.png",
+            "still_strain_front.png",
+        ] {
+            std::fs::copy(rd.join("sim").join(name), diagnosis.join(name)).unwrap();
+        }
+        assert!(
+            pick("front", "48,58")
+                .unwrap_err()
+                .message
+                .contains("no diagnostic source-edge map")
+        );
+        // Distinct physical copy from the apparent successful endpoint.
+        let pose = json!({"phase":"settle","accepted_steps":2,"width":96,"height":72});
+        let mut map = json!({"vertices":4,"inst_range":{"panel.R":[0,4]},"refused_pose":pose,
+            "edges":{"panel.R/hem":[0,1],"panel.R/outer":[1,2],"panel.R/upper":[2,3],"panel.R/inner":[3,0]}});
+        super::super::write_json(&diagnosis.join("mesh_map.json"), &map).unwrap();
+        let hit = pick("strain_front", "48,58").unwrap();
+        assert_eq!(
+            hit["image"],
+            "rounds/007/sim/refused/still_strain_front.png"
+        );
+        assert_eq!(hit["refused_pose"], pose);
+        assert_eq!(hit["refusal"], original);
+        assert_eq!(hit["hit"]["instance"], "panel.R");
+        assert_eq!(hit["hit"]["nearest_edge"]["source_edge"], "hem");
+        assert_eq!(
+            pick("front", "0,0").unwrap()["hit"]["surface"],
+            "background"
+        );
+        assert!(pick("side", "48,36").is_err());
+        map["refused_pose"]["width"] = json!(95);
+        std::fs::write(diagnosis.join("mesh_map.json"), map.to_string()).unwrap();
+        assert!(
+            pick("front", "48,58")
+                .unwrap_err()
+                .message
+                .contains("dimensions")
+        );
     }
 
     #[test]

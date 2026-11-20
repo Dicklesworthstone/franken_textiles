@@ -7,6 +7,12 @@ in mm and the authored edge endpoints in flat millimetres. A body or background 
 edge. The round retains its original gating flags. Older completed rounds with native stills work
 from their existing OBJ files and mesh map.
 
+If a simulation refused after admitting its start, use a pixel from `sim/refused/still_VIEW.png`.
+Picking uses the matching diagnostic meshes and source-edge map. The result includes the original
+`refusal`, the `refused_pose.phase`, and its `accepted_steps`. A successful pick identifies a surface
+on that saved state. The simulation verdict stays failed. Refusal archives made before the
+diagnostic map was added can still be viewed and compared visually.
+
 **Initial drafting from a selected body.** `ftx draft PROGRAM --model PATH` fits
 the supplied tape evidence; `--body-fit REPORT [--model PATH]` reuses the selected
 accepted shape without refitting. Both supply dimensions and placement through

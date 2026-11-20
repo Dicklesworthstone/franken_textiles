@@ -1,5 +1,5 @@
 //! `ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM]
-//! [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--res WxH]`: where a pattern
+//! [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--res WxH]`: where a pattern
 //! starts on the body, as pictures and numbers.
 //!
 //! It builds the same mesh, isometric wrap, pre-sew and relaxation as `ftx drape` (spec 04 §2–4) and
@@ -540,11 +540,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "arm-deg",
             "legs",
             "leg-fraction",
+            "skinning",
             "res",
         ],
     )?;
     let opts = super::drape_options(args)?;
     let pose = super::drape_pose(args)?;
+    let skinning = super::parse_skinning(args)?;
     let pattern_path = args
         .positional
         .get(1)
@@ -564,7 +566,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let body_source::PreparedBody { model, params, .. } =
         body_source::prepare_bound(args, Some(&meas), None)?;
     let rest = model.rest(&params)?;
-    let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
+    let posed = model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
     let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
@@ -664,7 +666,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
     let p95 = start.block_p95.last().copied().unwrap_or(f64::NAN);
     let inside = |d: &[f64]| d.iter().filter(|v| **v < 0.0).count();
-    let report = json!({
+    let mut report = json!({
         "pattern": pattern_path,
         "spacing_mm": spacing,
         "vertices": mesh.verts2d.len(),
@@ -698,6 +700,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "stills": {"wrap": wrap_stills, "start": start_stills},
         "no_claim": "No contact admission and no dynamics ran. This is not a drape or a fit; ftx drape decides whether the start is accepted.",
     });
+    if !skinning.is_lbs() {
+        report["skinning"] = json!(skinning.as_str());
+    }
     workspace::write_json(&out.join("placement.json"), &report)?;
 
     let mut text = format!(

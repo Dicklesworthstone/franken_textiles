@@ -49,6 +49,7 @@ use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
 use ftx_drape::run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape_observed, viewer};
 use ftx_drape::stepping::SubdivisionOptions;
+use ftx_drape::{NewtonStrategy, TimeIntegrator};
 use ftx_pattern::{Measurements, Pattern, alter, format_table, validate};
 use serde_json::{Value, json};
 
@@ -61,9 +62,10 @@ const USAGE: &str = "usage:
             [--model PATH] [--body-fit REPORT] (draft from a tape-fitted or accepted body; MODEL_FIT, not new measurements)
   ftx validate PATTERN --measurements M [--fit F] [--model PATH] [--body-fit REPORT] [--flat-body] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
-            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--max-settle-steps N] [--res WIDTHxHEIGHT]
+            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
+            [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.8]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
@@ -72,13 +74,14 @@ const USAGE: &str = "usage:
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--max-settle-steps N]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
+            [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.8]
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
-              [--legs standing|seated|squat] [--leg-fraction F] [--json]
+              [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
-            [--legs standing|seated|squat] [--leg-fraction F] [--res 960x540] [--json] (start-state stills and numbers; no drape)
+            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--res 960x540] [--json] (start-state stills and numbers; no drape)
   ftx render DRAPE_DIR [--res 960x540] [--json]
   ftx inspect-pixel ROUND_DIR --view front|side|back|three_quarter|strain_front|strain_back --pixel X,Y [--json]
   ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]
@@ -113,6 +116,8 @@ const USAGE: &str = "usage:
   ftx materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json [--json]
   ftx materials thermal-map SIM_REPORT.json BODY.obj PROJECTION.json [--json]
   ftx materials thermal-motion MOTION.json [--json]
+  ftx materials microclimate REQUEST.json [--json]
+  ftx materials lower-visco REQUEST.json [--json]
   ftx materials sew-plan|sew-stitches PATTERN.json OPTIONS.json [--json]
   ftx materials select-sewing PATTERN.json REQUEST.json [--json]
   ftx materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg [--json]
@@ -851,6 +856,44 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
             .parse()
             .map_err(|_| bad_input("--elastic-ea must be a number of newtons (0: no elastic)"))?;
     }
+    if let Some(strategy) = args.options.get("newton-strategy") {
+        opts.newton_strategy = match strategy.as_str() {
+            "projected" => NewtonStrategy::ProjectedNewton,
+            "adaptive-ilu" => NewtonStrategy::adaptive_ilu_default(),
+            "trust-region" => NewtonStrategy::trust_region_default(),
+            _ => {
+                return Err(bad_input(
+                    "--newton-strategy must be projected, adaptive-ilu or trust-region",
+                ));
+            }
+        };
+    }
+    if let Some(integrator) = args.options.get("integrator") {
+        opts.integrator = match integrator.as_str() {
+            "implicit-euler" => {
+                if args.options.contains_key("rho-inf") {
+                    return Err(bad_input("--rho-inf requires --integrator generalized-alpha"));
+                }
+                TimeIntegrator::ImplicitEuler
+            }
+            "generalized-alpha" => {
+                let rho_inf = match args.options.get("rho-inf") {
+                    Some(v) => v.parse::<f64>().map_err(|_| {
+                        bad_input("--rho-inf must be a finite spectral radius in [0, 1]")
+                    })?,
+                    None => 0.8,
+                };
+                TimeIntegrator::GeneralizedAlpha { rho_inf }
+            }
+            _ => {
+                return Err(bad_input(
+                    "--integrator must be implicit-euler or generalized-alpha",
+                ));
+            }
+        };
+    } else if args.options.contains_key("rho-inf") {
+        return Err(bad_input("--rho-inf requires --integrator generalized-alpha"));
+    }
     opts.validate()?;
     Ok(opts)
 }
@@ -950,6 +993,9 @@ fn cmd_drape_bound(
             "time-subdivision",
             "subdivision-max-halvings",
             "subdivision-max-trials",
+            "newton-strategy",
+            "integrator",
+            "rho-inf",
             "model",
             "self-contact-mm",
             "spacing-mm",
@@ -1936,5 +1982,126 @@ mod tests {
         let drape_err = cmd_drape(&drape_args).unwrap_err();
         assert_eq!(drape_err.code, RefusalCode::InvalidDocument);
         assert!(!drape_out.exists());
+
+        // `ftx round`, `ftx qualify`, and `ftx place` also enforce `--skinning` upfront.
+        let round_no_sim = parse(&[
+            "round".into(),
+            dir.join("absent-ws").to_string_lossy().into_owned(),
+            "--skinning".into(),
+            "dqs".into(),
+        ])
+        .unwrap();
+        let round_no_sim_err = round::cmd_round(&round_no_sim).unwrap_err();
+        assert_eq!(round_no_sim_err.code, RefusalCode::InvalidDocument);
+        assert!(
+            round_no_sim_err
+                .message
+                .contains("--skinning requires --sim or --stills"),
+            "{}",
+            round_no_sim_err.message
+        );
+
+        let round_bad = parse(&[
+            "round".into(),
+            dir.join("absent-ws").to_string_lossy().into_owned(),
+            "--sim".into(),
+            "--skinning".into(),
+            "bogus".into(),
+        ])
+        .unwrap();
+        let round_bad_err = round::cmd_round(&round_bad).unwrap_err();
+        assert_eq!(round_bad_err.code, RefusalCode::InvalidDocument);
+        assert!(round_bad_err.message.contains("--skinning bogus"));
+
+        let qual_out = dir.join("qual-out");
+        let qual_args = parse(&[
+            "qualify".into(),
+            "--measurements".into(),
+            meas.to_string_lossy().into_owned(),
+            "--out".into(),
+            qual_out.to_string_lossy().into_owned(),
+            "--skinning".into(),
+            "bogus".into(),
+        ])
+        .unwrap();
+        let qual_err = round::cmd_qualify(&qual_args).unwrap_err();
+        assert_eq!(qual_err.code, RefusalCode::InvalidDocument);
+        assert!(qual_err.message.contains("--skinning bogus"));
+        assert!(!qual_out.exists());
+
+        let place_out = dir.join("place-out");
+        let place_args = parse(&[
+            "place".into(),
+            pat.to_string_lossy().into_owned(),
+            "--measurements".into(),
+            meas.to_string_lossy().into_owned(),
+            "--out".into(),
+            place_out.to_string_lossy().into_owned(),
+            "--skinning".into(),
+            "bogus".into(),
+        ])
+        .unwrap();
+        let place_err = place::run(&place_args).unwrap_err();
+        assert_eq!(place_err.code, RefusalCode::InvalidDocument);
+        assert!(place_err.message.contains("--skinning bogus"));
+        assert!(!place_out.exists());
+    }
+
+    #[test]
+    fn newton_strategy_and_integrator_cli_options_parse_and_refuse_fail_closed() {
+        let def = drape_options(&parse(&["drape".into()]).unwrap()).unwrap();
+        assert_eq!(def.newton_strategy, NewtonStrategy::ProjectedNewton);
+        assert_eq!(def.integrator, TimeIntegrator::ImplicitEuler);
+
+        let ilu = drape_options(
+            &parse(&["drape", "--newton-strategy", "adaptive-ilu"].map(String::from)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ilu.newton_strategy, NewtonStrategy::adaptive_ilu_default());
+
+        let tr = drape_options(
+            &parse(
+                &[
+                    "drape",
+                    "--newton-strategy",
+                    "trust-region",
+                    "--integrator",
+                    "generalized-alpha",
+                    "--rho-inf",
+                    "0.6",
+                ]
+                .map(String::from),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tr.newton_strategy, NewtonStrategy::trust_region_default());
+        assert_eq!(tr.integrator, TimeIntegrator::GeneralizedAlpha { rho_inf: 0.6 });
+
+        // Default rho_inf for generalized-alpha is 0.8.
+        let ga_def = drape_options(
+            &parse(&["drape", "--integrator", "generalized-alpha"].map(String::from)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ga_def.integrator,
+            TimeIntegrator::GeneralizedAlpha { rho_inf: 0.8 }
+        );
+
+        // Invalid combinations refuse before file I/O.
+        for bad in [
+            vec!["--newton-strategy", "bogus"],
+            vec!["--integrator", "verlet"],
+            vec!["--rho-inf", "0.5"],
+            vec!["--integrator", "implicit-euler", "--rho-inf", "0.5"],
+            vec!["--integrator", "generalized-alpha", "--rho-inf", "1.5"],
+            vec!["--integrator", "generalized-alpha", "--rho-inf", "NaN"],
+        ] {
+            let mut argv = vec!["drape", "absent-pattern.json"];
+            argv.extend(bad);
+            let args = parse(&argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
+            let err = cmd_drape(&args).unwrap_err();
+            assert_ne!(err.code, RefusalCode::Io, "{}", err.message);
+        }
     }
 }

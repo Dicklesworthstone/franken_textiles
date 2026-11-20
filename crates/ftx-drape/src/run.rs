@@ -1728,4 +1728,34 @@ mod self_contact_tests {
         assert_eq!(report["thickness_mm"], 1.5);
         assert!(report["nearby_min_final_gap_mm"].is_null());
     }
+
+    #[test]
+    fn drape_options_wire_newton_strategy_and_generalized_alpha_end_to_end() {
+        let mut opts = DrapeOptions::default();
+        assert!(opts.validate().is_ok());
+
+        // Invalid solver strategy and integrator parameters refuse up front.
+        opts.newton_strategy = NewtonStrategy::AdaptiveIlu {
+            pcg_iters: 0,
+            max_shifts: 4,
+        };
+        assert!(opts.validate().is_err());
+        opts.newton_strategy = NewtonStrategy::TrustRegionSteihaug {
+            initial_radius: 0.5,
+            max_radius: 0.1,
+            min_radius: 1e-12,
+            cg_iters: 0,
+        };
+        assert!(opts.validate().is_err());
+        opts.newton_strategy = NewtonStrategy::ProjectedNewton;
+        opts.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 1.2 };
+        assert!(opts.validate().is_err());
+
+        // Valid opt-in configurations pass validation cleanly.
+        opts.newton_strategy = NewtonStrategy::adaptive_ilu_default();
+        opts.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.8 };
+        assert!(opts.validate().is_ok());
+        opts.newton_strategy = NewtonStrategy::trust_region_default();
+        assert!(opts.validate().is_ok());
+    }
 }

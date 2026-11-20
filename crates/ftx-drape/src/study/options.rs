@@ -152,4 +152,34 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn newton_strategy_and_integrator_are_opt_in_and_round_trip() {
+        let ordinary = serde_json::to_value(DrapeOptions::default()).unwrap();
+        assert!(ordinary.get("newton_strategy").is_none());
+        assert!(ordinary.get("integrator").is_none());
+
+        let mut declared = ordinary.clone();
+        declared["newton_strategy"] = serde_json::json!({
+            "kind": "adaptive_ilu",
+            "pcg_iters": 64,
+            "max_shifts": 4
+        });
+        declared["integrator"] = serde_json::json!({
+            "kind": "generalized_alpha",
+            "rho_inf": 0.8
+        });
+        let options: DrapeOptions = serde_json::from_value(declared.clone()).unwrap();
+        options.validate().unwrap();
+        assert_eq!(serde_json::to_value(options).unwrap(), declared);
+
+        // Invalid rho_inf and unknown fields must refuse fail-closed.
+        let mut bad_rho = declared.clone();
+        bad_rho["integrator"]["rho_inf"] = serde_json::json!(1.5);
+        let bad_opts: DrapeOptions = serde_json::from_value(bad_rho).unwrap();
+        assert!(bad_opts.validate().is_err());
+
+        declared["integrator"]["extra"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
+    }
 }

@@ -22,7 +22,11 @@ ftx round "$work" --pattern pattern.json --measurements measurements.json --fit 
 
 Use the returned `result.dir` relative to the workspace. A round can exit 2 and still have
 inspectable pictures. Read its `basis`, `sim.gating`, `sim.advisory` and `rendering.status`.
-A refused solve has no dressed endpoint to inspect. Open the current round's `sim/still_front.png`
+For a refused solve with saved diagnostics, open `sim/refused/still_front.png` and read
+`sim.refusal`. The image shows the state associated with the failure. Use the same `inspect-pixel`
+command below on that image to trace an edge. The result retains the refusal, phase and accepted
+step count. Older refusal archives lack the source-edge map and can still be compared visually.
+For a completed solve, open the current round's `sim/still_front.png`
 as an image, then a second angle or strain view as the question requires. `preview.svg` shows
 the flat pieces and construction diagnostics. `report.html` in the workspace ties the evidence together.
 
@@ -60,7 +64,8 @@ python3 .agents/skills/visual-pattern-fitting/scripts/compare_rounds.py \
   "$work/rounds/000" "$work/rounds/001" --instance sleeve.L --out "$work/sleeve-comparison.svg"
 ```
 
-Open the self-contained SVG. For a vision tool that accepts raster images, use a new `.png`
+Open the self-contained SVG. Either side may show a refused pose, marked with its failure code.
+For a vision tool that accepts raster images, use a new `.png`
 output path with Node and the showcase dependencies installed. The outlines are aligned at their top centres.
 Inspect the new images even when the flat verdict improves. Retain a revision if it advances
 the brief and its construction checks support it. A competing silhouette can start from any

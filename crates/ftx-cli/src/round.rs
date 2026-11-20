@@ -36,6 +36,9 @@ const SIM_OPTIONS: &[&str] = &[
     "time-subdivision",
     "subdivision-max-halvings",
     "subdivision-max-trials",
+    "newton-strategy",
+    "integrator",
+    "rho-inf",
     "elastic-ea",
     "elastic-hold-steps",
     "model",
@@ -45,6 +48,7 @@ const SIM_OPTIONS: &[&str] = &[
     "arm-deg",
     "legs",
     "leg-fraction",
+    "skinning",
     "two-start-sew",
     "spread-vertex-mm",
     "spread-hem-mm",
@@ -350,6 +354,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "arm-deg",
             "legs",
             "leg-fraction",
+            "skinning",
             "two-start-sew",
             "spread-vertex-mm",
             "spread-hem-mm",
@@ -376,6 +381,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let run_options = super::drape_options(args)?;
         super::two_start::options(args, &run_options)?;
         super::drape_pose(args)?;
+        super::parse_skinning(args)?;
     } else if let Some(key) = SIM_OPTIONS
         .iter()
         .find(|&&k| !matches!(k, "model" | "body-fit") && args.options.contains_key(k))
@@ -851,6 +857,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             "arm-deg",
             "legs",
             "leg-fraction",
+            "skinning",
         ],
     )?;
     if args.positional.len() > 2 || (args.options.contains_key("ws") && args.positional.len() > 1) {
@@ -864,6 +871,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         .or_else(|| args.positional.get(1))
         .map(PathBuf::from);
     let pose = super::drape_pose(args)?;
+    let skinning = super::parse_skinning(args)?;
     let fabric_override = super::fabric::load(args)?;
 
     let (data, meas_bytes, mut pat, out, _ws_lock) = if let Some(ws) = ws_arg {
@@ -921,7 +929,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     } = super::body_source::prepare(args, Some(&data))?;
     let rest = model.rest(&params)?;
     let rest_skin = clothing_skin(&model, &rest.vertices)?;
-    let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
+    let posed = model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
     let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
@@ -1010,6 +1018,9 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
                 }
                 if pose.leg_fraction != 1.0 {
                     b.insert("leg_fraction".into(), json!(pose.leg_fraction));
+                }
+                if !skinning.is_lbs() {
+                    b.insert("skinning".into(), json!(skinning.as_str()));
                 }
                 o.insert("body".into(), Value::Object(b));
             }

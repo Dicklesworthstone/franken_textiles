@@ -151,6 +151,34 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
+    if action == "microclimate" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials microclimate REQUEST.json [--json]",
+            ));
+        };
+        let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
+        let out = ftx_drape::thermal::microclimate::evaluate_json(&raw)?;
+        let result: Value =
+            serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "lower-visco" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials lower-visco REQUEST.json [--json]",
+            ));
+        };
+        let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
+        let out = ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json(&raw)?;
+        let result: Value =
+            serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if matches!(action, "cut-plan" | "cut-job" | "cut-price" | "cut-svg") {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {

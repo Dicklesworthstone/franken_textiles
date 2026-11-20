@@ -3,8 +3,8 @@
 //! fit report), with the body model read from bytes the page was given and the fold-up viewer page as text.
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyFrames, Legs, Pose, TAPE_FIELDS, TapeFit, Wearer, clothing_skin,
-    fit_tape, pose_deltas, skin_mesh, tape_targets,
+    AnnyData, AnnyModel, BodyFrames, Legs, Pose, SkinningMode, TAPE_FIELDS, TapeFit, Wearer,
+    clothing_skin, fit_tape, pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_drape::{
     run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape, viewer},
@@ -213,6 +213,9 @@ pub struct FoldSettings {
     pub legs: Legs,
     /// Fraction of the selected leg rotations, from standing (0) to the full posture (1).
     pub leg_fraction: f64,
+    /// Skinning operator (`"lbs"` default; `"dqs"` opt-in dual-quaternion linear blending).
+    #[serde(default, skip_serializing_if = "SkinningMode::is_lbs")]
+    pub skinning: SkinningMode,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
     pub max_settle_steps: usize,
     /// Independent frictionless static comparison, with no change to the dynamic fold or its time.
@@ -221,6 +224,12 @@ pub struct FoldSettings {
     /// Explicit convergence-driven time bisection, sharing one trial budget across the whole drape.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_subdivision: Option<ftx_drape::stepping::SubdivisionOptions>,
+    /// Nonlinear globalization and linear-solve strategy (omitted when legacy `ProjectedNewton`).
+    #[serde(default, skip_serializing_if = "ftx_drape::NewtonStrategy::is_default")]
+    pub newton_strategy: ftx_drape::NewtonStrategy,
+    /// Structural time-integration scheme (omitted when legacy `ImplicitEuler`).
+    #[serde(default, skip_serializing_if = "ftx_drape::TimeIntegrator::is_default")]
+    pub integrator: ftx_drape::TimeIntegrator,
 }
 
 impl Default for FoldSettings {
@@ -231,9 +240,12 @@ impl Default for FoldSettings {
             arm_abduction_deg: Pose::A_POSE_DEG,
             legs: Legs::Standing,
             leg_fraction: 1.0,
+            skinning: SkinningMode::LinearBlend,
             max_settle_steps: 0,
             static_equilibrium: None,
             time_subdivision: None,
+            newton_strategy: ftx_drape::NewtonStrategy::ProjectedNewton,
+            integrator: ftx_drape::TimeIntegrator::ImplicitEuler,
         }
     }
 }
@@ -312,9 +324,12 @@ fn fold_on_source(
         arm_abduction_deg,
         legs,
         leg_fraction,
+        skinning,
         max_settle_steps,
         static_equilibrium,
         time_subdivision,
+        newton_strategy,
+        integrator,
     } = options;
     let m = |r: ftx_core::Refusal| r.to_string();
     let mut pose = Pose::drape();
@@ -334,6 +349,8 @@ fn fold_on_source(
         max_settle_steps,
         static_equilibrium,
         time_subdivision,
+        newton_strategy,
+        integrator,
         ..DrapeOptions::default()
     };
     opts.self_contact = Some(ftx_drape::contact::ContactParams {
@@ -390,6 +407,9 @@ fn fold_on_source(
     if leg_fraction != 1.0 {
         description["leg_fraction"] = json!(leg_fraction);
     }
+    if !skinning.is_lbs() {
+        description["skinning"] = json!(skinning);
+    }
     if source.is_none() && arm_abduction_deg != Pose::A_POSE_DEG {
         description["pose"] = json!(format!(
             "drape: arms at {arm_abduction_deg}° and straight, hands and feet left out of contact"
@@ -406,7 +426,7 @@ fn fold_on_source(
     }
     let rest_skin = clothing_skin(model, &rest.vertices).map_err(m)?;
     let posed = model
-        .pose(&rest, &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?)
+        .pose_with_skinning(&rest, &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?, skinning)
         .map_err(m)?;
     let skin = clothing_skin(model, &posed.vertices).map_err(m)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces).map_err(m)?;
@@ -507,6 +527,30 @@ mod tests {
                 .static_equilibrium
                 .is_none()
         );
+    }
+
+    #[test]
+    fn configured_fold_retains_opt_in_dqs_skinning_and_omits_default_lbs() {
+        let default = serde_json::to_value(FoldSettings::default()).unwrap();
+        assert!(default.get("skinning").is_none());
+        let parsed_default: FoldSettings = serde_json::from_value(default.clone()).unwrap();
+        assert_eq!(parsed_default.skinning, SkinningMode::LinearBlend);
+
+        let mut explicit_lbs = default.clone();
+        explicit_lbs["skinning"] = json!("lbs");
+        let parsed_lbs: FoldSettings = serde_json::from_value(explicit_lbs).unwrap();
+        assert_eq!(parsed_lbs.skinning, SkinningMode::LinearBlend);
+        assert_eq!(serde_json::to_value(parsed_lbs).unwrap(), default);
+
+        let mut configured_dqs = default.clone();
+        configured_dqs["skinning"] = json!("dqs");
+        let parsed_dqs: FoldSettings = serde_json::from_value(configured_dqs.clone()).unwrap();
+        assert_eq!(parsed_dqs.skinning, SkinningMode::DualQuaternion);
+        assert_eq!(serde_json::to_value(parsed_dqs).unwrap(), configured_dqs);
+
+        let mut invalid = default;
+        invalid["skinning"] = json!("bogus");
+        assert!(serde_json::from_value::<FoldSettings>(invalid).is_err());
     }
 
     #[test]
