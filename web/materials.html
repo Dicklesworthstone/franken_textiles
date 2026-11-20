@@ -138,6 +138,17 @@ Different reported protocols require explicit admission in the request. Estimate
 require their own selection consent. This fixed-resistance, isothermal calculation does not determine
 sweat availability, actual wearer cooling, condensation or garment comfort; it does not add an
 evaporation term to the separate dry-heat simulation.</p>
+<details><summary>Microclimate air, convection, radiosity and fractional viscoelastic lowering</summary>
+<label>Microclimate request JSON (<code>ftx-microclimate/1</code>) <input id="microclimateRequest" type="file" accept=".json,application/json"></label>
+<button id="microclimate" data-command="microclimate" disabled>Evaluate microclimate air, convection and radiosity</button>
+<p class="note">Computes USSA-1976 / Buck moist-air properties, validity-gated Nusselt correlations (emitted explicitly as
+<code>Estimate</code> exterior records, never promoted to measured film data) and optional N-patch gray-diffuse radiosity enclosures.
+Runs locally without a garment or body model; does not establish garment warmth, comfort or physical fit.</p>
+<label>Fractional-Zener lowering request JSON (<code>ftx-fractional-zener-lowering/1</code>) <input id="viscoRequest" type="file" accept=".json,application/json"></label>
+<button id="lowerVisco" data-command="lowerVisco" disabled>Lower fractional viscoelastic model to Prony branches</button>
+<p class="note">Fits nonnegative log-spaced Prony branches to a fractional-Zener viscoelastic law and optionally replays an exact
+unconditional exponential stress/dissipation history. Numerical model lowering only; never replaces measured textile relaxation data.</p>
+</details>
 <h3>Identify behavior from swatch measurements</h3>
 <label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch, shear and optional area response</option><option value="linear">Linear orthotropic stretch and shear</option><option value="bending">Directional bending and preferred curvature</option><option value="friction_pair">Kinetic friction between two materials</option><option value="friction_self">Same-material kinetic friction</option><option value="friction_body">Kinetic friction against a declared body counterface</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option><option value="clamped_strip">Clamped strip forces and transverse widths</option></select></label>
 <label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>

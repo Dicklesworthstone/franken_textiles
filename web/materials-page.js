@@ -12,7 +12,7 @@ const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "stockIdentities", "stockPrice", "cutJob", "price", "sew", "sewPreview"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "linearizeOrigin", "treatment", "vapor", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit", "cylinderFit", "outfit", "thermalPoint", "thermalHistory", "garmentcode", "bodyCheck"];
+  "stripAcquisition", "stripExperiment", "stripHistory", "cylinderExperiment", "stripFit", "cylinderFit", "outfit", "thermalPoint", "thermalHistory", "microclimate", "lowerVisco", "garmentcode", "bodyCheck"];
 const selectionOperations = ["inspect", "pressure", "linearizeOrigin", "calibrate", "stripFit", "cylinderFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
@@ -214,6 +214,7 @@ for (const op of operations) {
     pressure: "Pressure-conditioned material", linearizeOrigin: "Bounded origin membrane approximation",
     treatment: "Laundering and dimensional treatment", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
     thermalPoint: "Material at the stated temperature", thermalHistory: "Dry heating and cooling history",
+    microclimate: "Microclimate air, convection and radiosity", lowerVisco: "Fractional viscoelastic Prony lowering",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripHistory: "Strip loading and recovery", cylinderExperiment: "Cylindrical-holder forward experiment", vaporSurface: "Vapor transfer on this drape",
     stripFit: "Clamped-strip identification", cylinderFit: "Cylindrical-holder identification", outfit: "Imported joint outfit", cutJob: "Complete mixed cutting job",
@@ -542,6 +543,8 @@ function controls() {
   $("thermalPoint").disabled ||= !$("selection").value.trim() || !$("thermalPointTemperature").value.trim() ||
     !Number.isFinite(Number($("thermalPointTemperature").value));
   $("thermalHistory").disabled ||= !has("thermalRequest");
+  $("microclimate").disabled ||= !has("microclimateRequest");
+  $("lowerVisco").disabled ||= !has("viscoRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
@@ -6601,6 +6604,8 @@ async function execute(op, studio = null) {
       msg.treatmentRequest = await read("treatmentRequest");
     }
     else if (op === "vapor") msg.vaporRequest = await read("vaporRequest");
+    else if (op === "microclimate") msg.microclimateRequest = await read("microclimateRequest");
+    else if (op === "lowerVisco") msg.viscoRequest = await read("viscoRequest");
     else if (op === "calibrate") {
       msg.calibrationMode = $("calibrationMode").value;
       msg.allowEstimates = $("calibrationEstimates").checked;
@@ -7745,7 +7750,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"],
   drapeNewtonStrategy:["fold","heat","vaporSurface","coverage"], drapeIntegrator:["fold","heat","vaporSurface","coverage"], drapeRhoInf:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
-  stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
+  stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"], microclimateRequest:["microclimate"], viscoRequest:["lowerVisco"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], cylinderExperimentRequest:["cylinderExperiment"], vaporSurfaceConditions:["vaporSurface"],
   treatmentRequest:["treatment"], screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:[] })) {
