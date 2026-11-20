@@ -88,19 +88,23 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
       <figure className="sd-slice"><TorsoSlice {...section} otherCut={cut==="light"?gatheredSection.cloth:easedSection.cloth}/><figcaption><strong>Through the wearer’s waist</strong>
         <span>Both cuts are sectioned at {(section.heightMm/10).toFixed(1)} cm above the sole. This cloth (red) clears the torso (brown) by <b>{section.frontGapMm} mm</b> at centre front and <b>{section.backGapMm} mm</b> at centre back.</span>
         <a href={source+"-section.json"} download>Section coordinates ↓</a></figcaption></figure>
-      <details open><summary>What the solver did, and what is drawn</summary>
-        <p>The reference form has a 90 cm bust and a 72 cm waist, with arms {drape.armDeg}° from the side. The solver took {drape.phases.sew} sewing steps and {drape.phases.drape} gravity steps. {drape.settled && !gating.length ? "The run settled with no gating flags." : "The run carries the flags listed below."} Each skirt waist is {ratio} times the length of the bodice edge it joins.</p>
-        <p>The front panel starts {skirtRadius("front")} mm from the body axis and the back starts {skirtRadius("back")} mm away. The 1 mm cloth-contact barrier stays active through sewing and settling. {band
-          ? <>For {band.depth} mm below the waist seam the solver lets the cloth shorten at {band.percent} % of its tensile stiffness. This models pleats finer than the {drape.spacingMm} mm mesh. The narrow pleats drawn below the waist illustrate that shortening. The side view shows the broader folds resolved by the mesh.</>
-          : <>Look at the waist in profile. Its broad folds stand away from the form on the {drape.spacingMm} mm mesh.</>} Finer gathers and real-world fit still need comparison with a sewn sample.</p>
-        <p>The viewer draws weave, piece colors and seam guides on the recorded cloth surface. The fabric uses synthetic defaults of {(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m² and {drape.fabric.bending_Nm} N·m bending stiffness. The interactive form is drawn 2.5 mm inside the solver surface.</p>
-        <p>All {1 + drape.phases.sew + drape.phases.drape} recorded physical states passed checks for cloth crossing the body, hands or other cloth panels.</p>
+      <div className="sd-sewn-flags">
         {gating.map(flag => <p key={flag} className="sd-flag">Solver flag · {flag}</p>)}
         {flags.filter(flag => !gating.includes(flag)).map(flag => <p key={flag} className="sd-flag">Solver note · {flag.startsWith("the body rides up ")
           ? <>The front hem settled {section.hemRiseMm.front} mm above its starting height, and the back hem settled {section.hemRiseMm.back} mm above its starting height.</>
           : flag}</p>)}
         <p><a href={source+"-pattern.json"} download>Exact pattern and starting placements ↓</a> · <a href={source+"-summary.json"} download>Solver summary ↓</a></p>
-      </details>
+      </div>
     </div>
+    <details className="sd-sewn-method" open><summary>What the solver did, and what is drawn</summary>
+      <div>
+        <p>The reference form has a 90 cm bust and a 72 cm waist, with arms {drape.armDeg}° from the side. The solver took {drape.phases.sew} sewing steps and {drape.phases.drape} gravity steps. {drape.settled && !gating.length ? "The run settled with no gating flags." : "The run carries the flags listed beside the replay."} Each skirt waist is {ratio} times the length of the bodice edge it joins.</p>
+        <p>The front panel starts {skirtRadius("front")} mm from the body axis and the back starts {skirtRadius("back")} mm away. The 1 mm cloth-contact barrier stays active through sewing and settling. {band
+          ? <>For {band.depth} mm below the waist seam the solver lets the cloth shorten at {band.percent} % of its tensile stiffness. This models pleats finer than the {drape.spacingMm} mm mesh. The narrow pleats drawn below the waist illustrate that shortening. The side view shows the broader folds resolved by the mesh.</>
+          : <>Look at the waist in profile. Its broad folds stand away from the form on the {drape.spacingMm} mm mesh.</>} Finer gathers and real-world fit still need comparison with a sewn sample.</p>
+        <p>The viewer draws weave, piece colors and seam guides on the recorded cloth surface. The fabric uses synthetic defaults of {(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m² and {drape.fabric.bending_Nm} N·m bending stiffness. The interactive form is drawn 2.5 mm inside the solver surface.</p>
+        <p>All {1 + drape.phases.sew + drape.phases.drape} recorded physical states passed checks for cloth crossing the body, hands or other cloth panels.</p>
+      </div>
+    </details>
   </section><MuslinTrial cuts={cuts}/></>;
 }

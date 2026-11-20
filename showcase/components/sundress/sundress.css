@@ -42,7 +42,16 @@
 .sd-readings dt{font-size:11px;color:#607064}.sd-readings abbr{text-decoration:none}
 .sd-readings dd{margin:2px 0 0;font:400 clamp(21px,2vw,29px)/1.15 var(--serif);font-variant-numeric:lining-nums tabular-nums;color:#24493f}
 .sd-flag{border-left:3px solid #b9783c;padding-left:10px;color:#6d4a22!important}
-@media(max-width:760px){.sd-sewn{grid-template-columns:1fr}.sd-sewn-stage{min-height:clamp(360px,96vw,500px)}}
+.sd-sewn-flags{margin-top:16px}.sd-sewn-text .sd-sewn-flags .sd-flag{font-size:14px}
+/* The stage takes the height the text beside it needs, so the board never ends in a blank block. */
+.sd-sewn .sd-making{flex:1}.sd-sewn .sd-making .mk-stage{height:auto;flex:1 0 var(--mk-height)}
+.sd-sewn-method{grid-column:1/-1;background:#faf7ee;border-top:1px solid #bbc0b2;padding:14px clamp(18px,2.6vw,38px) 18px}
+.sd-sewn-method summary{font:600 14px var(--sans);cursor:pointer}
+.sd-sewn-method>div{columns:2 340px;column-gap:clamp(28px,4vw,64px);margin-top:10px}
+.sd-sewn-method p{font-size:14px;line-height:1.55;color:#515c50;margin:0 0 10px;break-inside:avoid}
+@media(max-width:1099px){.sd-sewn{grid-template-columns:1fr}}
+@media(min-width:761px) and (max-width:1099px){.sd-sewn .sd-making{--mk-height:clamp(480px,62vw,600px)}}
+@media(max-width:760px){.sd-sewn-stage{min-height:clamp(360px,96vw,500px)}}
 @media(pointer:coarse){.sd-page .sd-replay>button{width:44px;height:44px}.sd-replay input{height:44px}}
 .sd-slice{display:flex;align-items:center;gap:15px;background:#f4eddf;color:#453b30;padding:12px;margin:15px 0;flex-wrap:wrap}
 .sd-slice svg{flex:1 1 128px;width:40%;max-height:140px}.sd-slice figcaption{flex:2 1 160px;display:grid;gap:5px;font:400 13px/1.45 var(--sans)}.sd-slice figcaption strong{font:400 21px var(--serif)}.sd-slice a{text-decoration:underline;text-underline-offset:2px}
