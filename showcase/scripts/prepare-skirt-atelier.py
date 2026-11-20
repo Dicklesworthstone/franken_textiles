@@ -12,10 +12,10 @@ from runpy import run_path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-FTX = ROOT/"target/release/ftx"
 HERE = Path(__file__).resolve().parent
 adult = run_path(str(HERE/"prepare-sundress.py"))
 replay = run_path(str(HERE/"prepare-drape-room.py"))
+FTX = replay["FTX"]
 CUTS = {"column": 1260, "flare": 1680}
 WAISTS = [650, 680, 700, 710, 740, 800]
 # These two endpoints use the 27 mm triangulations from the visual fitting rounds.
@@ -265,6 +265,7 @@ def package(folder,output):
             if r["gating"] or not r["numerical"]["settled"]:
                 summary["provisional"][key]={"gating":r["gating"],"settled":r["numerical"]["settled"]}
                 continue
+            replay["check_contact"](d)
             pat=folder/(key+"-pattern.json")
             stem=cut if w==680 else key
             validation=subprocess.run([FTX,"validate",pat,"--measurements",folder/f"form-{w}.json",

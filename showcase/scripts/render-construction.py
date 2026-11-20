@@ -108,7 +108,8 @@ def load(name, native):
         expected = document(PUBLIC/"exhibits/poses/ensemble.json")["pc2Sha256"]
     else:
         expected = next(c["pc2Sha256"] for c in document(PUBLIC/"exhibits/trouser-study/study.json")["cases"] if c["id"]=="standing")
-    assert hashlib.sha256(pointcache).hexdigest() == expected, "The film must show the published run"
+    if hashlib.sha256(pointcache).hexdigest() != expected:
+        raise ValueError("The film must show the published run")
     magic,version,n,_,_,nf = struct.unpack_from("<12siiffi",pointcache)
     assert magic==b"POINTCACHE2\0" and version==1 and nf==sum(mesh["frames"].values())
     frames = np.frombuffer(pointcache,"<f4",offset=32).reshape(nf,n,3)
@@ -206,9 +207,7 @@ def film_pose(i, name, frames, ids, phases, panels, gap, height):
         target = np.interp(i,[0,12,55,60],[0,0,fold-1,fold-1])
         available = np.flatnonzero(ids<fold)
     else:
-        # The archived bolero's final setup sample crosses the wearer. Start that
-        # shot at the first accepted sewing step, as in the browser pose study.
-        start = fold+zip_count if name == "bolero" else fold+zip_count-1
+        start = fold+zip_count-1
         target = np.interp(i,[61,74,89,95],[start,start+sew,ids[-1],ids[-1]])
         available = np.flatnonzero(ids>=start)
     index = available[np.abs(ids[available]-target).argmin()]

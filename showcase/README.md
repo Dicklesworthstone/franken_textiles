@@ -6,8 +6,8 @@ A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
 - **Change the wearer and raise the arms.** The drape room on the homepage and `/sections/studies/` shows
   the same bolero on synthetic Anny forms fitted to 48, 52 and 54 cm chest targets. Choose
   a 35°, 75° or 90° arm pose, turn the figure, or replay the flat pieces joining. At the
-  52 cm target, raising the arms from 35° to 75° changes the mean chest gap from 20.6 to
-  4.9 mm. The color views show native panel identities, endpoint strain, or the magnitude
+  52 cm target, the mean chest gap is 23.8 mm at 35° and 8.0 mm at 75°.
+  The color views show native panel identities, endpoint strain, or the magnitude
   of the barrier reaction at each welded cloth vertex in newtons. Choose **Coupled outfit** for 12 sewing and 36 gravity steps with the bolero and trousers in one contact solve at 52 cm and 35°. Both
   full-size A4 patterns are available beside the controls.
 - **Wear the sundress.** At `/wardrobe/sundress/`, drag either hand or use the arm controls.
@@ -171,22 +171,21 @@ model installed, a built `target/release/ftx` and Python with NumPy. Use a fresh
 python3 showcase/scripts/prepare-drape-room.py --solve /path/to/new-runs /path/to/new-display-data
 ```
 
-The generator runs 18 native drapes. It verifies the patterns, paired body meshes and replay
-topology, then maps each welded force to its exact endpoint position before quantizing
-display positions to 0.1 mm. The two layers do not have a joint contact solve. Four of the
-nine jacket runs have no gating flags. Three are still moving at the last gravity step, and
-two stop short of the prescribed contact thickness. All nine trouser runs settled without
-gating flags. The exhibit exposes each selected run's result and downloadable body residuals.
+The generator sews the same five jacket pieces in nine body and arm combinations. All panels
+start 25 mm higher along their placement axes. The native checker reviews the admitted starting
+position, each sewing step and each gravity step against the complete body and the other cloth.
+All nine runs settled without gating flags. The 48 cm, 75° case needed six additional gravity
+steps. The other eight settled within the initial 96. Each download includes the exact frame
+numbers, endpoint readings and body-fit residuals. The coupled outfit has its own solver run.
 
-The figure's face uses original synthetic front and profile coloring registered to the native
-head surface. The atlas, stand, lighting and illustrated gold binding belong to the display.
+The figure uses the native fitted surface. The stand, lighting and gold binding belong to the display.
 From `showcase/`, `node scripts/render-drape-room.mjs /path/to/new-film` records the two
 52 cm poses and their native contact map into an eight-second H.264 film with FFmpeg.
 
 Each garment comes from a 12 mm mesh with a 2 mm cloth self-contact thickness on a synthetic
 92 cm body. The data files include the native PC2 digest, panel ranges, paired seam indices,
-solver summary, and original frame numbers. The viewer selects from 49 retained native samples
-across each 136-frame fold. The strain view uses the native endpoint colors. Physical fit
+solver summary, and original frame numbers. The pose viewer preserves the native float32 body
+and cloth coordinates, including the start and end of each phase. The strain view uses the native endpoint colors. Physical fit
 requires evidence from a real garment.
 
 Run the extractor against a synthetic native drape directory containing `fold.pc2`,

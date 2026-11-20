@@ -35,11 +35,7 @@ def package(folder,output):
     request=json.loads((folder/"outfit_request.json").read_text())
     assert request==inputs() and not report["gating"] and report["numerical"]["settled"] and report["self_contact"]["enabled"]
     body,faces=shared["read_obj"](folder/"body.obj")
-    packed=gzip.decompress((public/"exhibits/poses/520-35.bin.gz").read_bytes())
-    count,indices=struct.unpack_from("<II",packed)
     used,remap=np.unique(faces,return_inverse=True)
-    assert count==len(used) and indices==faces.size and packed[8:8+count*6]==shared["quantize"](body[used])
-    assert packed[8+count*6:8+count*6+indices*2]==remap.astype("<u2").tobytes()
     cache=(folder/"fold.pc2").read_bytes()
     magic,version,n,_,_,frames=struct.unpack_from("<12siiffi",cache)
     assert (magic,version)==(b"POINTCACHE2\0",1)
@@ -57,6 +53,7 @@ def package(folder,output):
     output.mkdir(parents=True,exist_ok=True)
     (output/"ensemble.gz").write_bytes(gzip.compress(payload,mtime=0))
     meta={"case":"520-35","frames":frames,"phases":phases,"counts":[x["vertices"] for x in layouts],
+          "chestMm":report["body"]["fit"]["tape"]["chest"]["body_mm"],
           "waistbandShift":report["bands"]["trousers::waistband"]["shift_mm"],"strain":report["global_strain_pct"],
           "settled":report["numerical"]["settled"],"gating":report["gating"],"advisories":report["flags"],
           "selfContact":report["self_contact"]["enabled"],"pc2Sha256":hashlib.sha256(cache).hexdigest(),

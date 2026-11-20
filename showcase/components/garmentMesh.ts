@@ -208,9 +208,7 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     const separation = mode === "construction" ? THREE.MathUtils.clamp(spread, 0, 1) : 0;
     const moved = lastFrame !== sourceFrame || lastSpread !== separation;
     if (moved) {
-      // Some archived pre-sewing placements crossed the hands. The first solver
-      // step and all later body poses in these garment studies clear the skin.
-      const index=sampleIndex(data.frames,data.phases,sourceFrame,data.phases.fold+data.phases.zip);
+      const index=sampleIndex(data.frames,data.phases,sourceFrame);
       sampledFrame=data.frames[index];
       const a=index*stride;
       for (let j = 0; j < stride; j += 3) {

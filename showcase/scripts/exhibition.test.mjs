@@ -90,16 +90,18 @@ test("the drape room pairs each body and pose with its native cloth and endpoint
       await page.locator('canvas[data-run="'+id+'"]').waitFor({timeout:30000});
       assert.equal(await page.locator(".dr-readings strong").nth(1).textContent(),run.chestClearance.toFixed(1)+" mm");
       assert.equal(await page.locator(".dr-method summary span").textContent(),
-        run.flags.length?(run.settled?"Contact thickness incomplete":"Cloth still moving"):"Settled");
+        !run.settled?"Cloth still moving":run.flags.length?"Review solver flags":"Settled");
       await page.getByRole("button",{name:"Contact",exact:true}).click();
-      await page.locator('canvas[data-mode="contact"][data-frame="135"]').waitFor();
+      await page.locator(`canvas[data-mode="contact"][data-frame="${run.sourceFrames-1}"]`).waitFor();
       assert.equal(await page.locator(".dr-readings strong").last().textContent(),run.peakBodyForceN.toFixed(2)+" N");
     }
     await page.getByRole("button",{name:"Lay the five cut pieces flat"}).click();
     await page.locator('canvas[data-mode="construction"][data-frame="0"]').waitFor();
     const timeline=page.getByRole("slider",{name:"Sewing replay frame"});
+    await timeline.fill("86");
+    await page.locator('canvas[data-frame="86"][data-native-frame="69"]').waitFor();
     await timeline.fill("87");
-    await page.locator('canvas[data-frame="87"][data-native-frame="69"]').waitFor();
+    await page.locator('canvas[data-frame="87"][data-native-frame="87"]').waitFor();
     await timeline.fill("88");
     await page.locator('canvas[data-frame="88"][data-native-frame="88"]').waitFor();
     await timeline.press("Home");

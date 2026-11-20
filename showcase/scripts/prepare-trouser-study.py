@@ -35,7 +35,7 @@ def run_cases(scratch):
     scratch.mkdir(parents=True, exist_ok=False)
     tapes = scratch / "tapes.json"
     tapes.write_text(json.dumps(shared["synthetic_tapes"](520)))
-    ftx = ROOT / "target/release/ftx"
+    ftx = shared["FTX"]
     for pose in ("drape", "seated", "squat"):
         subprocess.run([ftx, "body", "--measurements", tapes, "--pose", pose,
                         "--out", scratch / ("body-" + pose), "--json"], check=True, stdout=subprocess.DEVNULL)
@@ -86,6 +86,7 @@ def package(scratch, output):
             continue
         else:
             folder = scratch/key
+            shared["check_contact"](folder)
             report = json.loads((folder/"sim_report.json").read_text())
             if hashlib.sha256(Path(report["pattern"]).read_bytes()).hexdigest() != pattern_hash:
                 raise ValueError("Different trouser cut in " + key)

@@ -28,8 +28,6 @@
 .dr-stage-head,.dr-stage-foot{position:absolute;z-index:2;left:20px;right:20px;display:flex;justify-content:space-between;align-items:center;gap:8px}
 .dr-stage-head{top:15px;pointer-events:none}.dr-stage-head>span:first-child{font:italic 400 clamp(22px,2vw,31px)/1 var(--serif);color:#514137}.dr-stamp{color:#594f43;font-size:9px;letter-spacing:.14em}
 .dr-length{pointer-events:auto;background:#faf3e3bd;border:1px solid #b3a78e;color:#514637;padding:6px 11px;border-radius:16px;font-size:11px}
-.dr-reverse{display:none;position:absolute;z-index:1;bottom:14%;right:0;width:36%;text-align:center;pointer-events:none;color:#685b4d;font:500 9px var(--mono);letter-spacing:.12em;text-transform:uppercase}
-.dr-stage:has(.is-ready canvas[data-companion=true]) .dr-reverse{display:block}
 .dr-mount,.dr-poster,.dr-canvas,.dr-canvas canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .dr-poster{object-fit:contain;pointer-events:none}.dr-mount{visibility:hidden}.dr-mount.is-ready{visibility:visible}
 .dr-canvas canvas{cursor:grab}.dr-canvas canvas:active{cursor:grabbing}

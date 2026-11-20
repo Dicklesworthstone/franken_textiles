@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright-core";
+import sharp from "sharp";
 
 const destination=resolve(process.argv[2]);
 await mkdir(destination);
@@ -20,7 +21,7 @@ try {
     .dr-stage{position:fixed!important;inset:0!important;width:960px!important;height:540px!important;z-index:12}
     .dr-room,.dr-display{overflow:visible!important;isolation:auto!important}
     .dr-mount{left:24%!important;width:76%!important}
-    .dr-stage-head,.dr-stage-foot,.dr-flat,.dr-reverse,.dr-legend,.ft-head,nextjs-portal{display:none!important}
+    .dr-stage-head,.dr-stage-foot,.dr-flat,.dr-legend,.ft-head,nextjs-portal{display:none!important}
     .film-slate{position:absolute;left:4%;top:23%;width:29%;pointer-events:none;color:#332d28}
     .film-slate small,.film-slate span{font:500 11px/1.5 var(--mono);letter-spacing:.08em;text-transform:uppercase}
     .film-slate h1{font:400 69px/.9 var(--serif);letter-spacing:-.035em;margin:17px 0 25px}.film-slate em{color:#805334}
@@ -54,4 +55,24 @@ try {
   } finally {encoder.stdin.end();}
   const [code]=await finished;
   if(code!==0)throw Error("FFmpeg exited with "+code);
+  await page.addStyleTag({content:`
+    .dr-stage{width:100vw!important;height:100vh!important}
+    .dr-mount{left:0!important;width:100%!important}
+    .film-slate{display:none}
+  `});
+  for(const [name,width,height,angle,mode] of [
+    ["drape-room-contact",692,542,75,"contact"],
+    ["drape-room-mobile",692,542,35,"cloth"],
+    ["drape-room",1170,719,35,"cloth"],
+  ]){
+    await page.setViewportSize({width,height});
+    await page.getByRole("button",{name:angle+" degree arm pose"}).evaluate(button=>button.click());
+    await page.locator(`canvas[data-run="520-${angle}"]`).waitFor();
+    await page.locator(".dr-modes button").filter({hasText:mode==="contact"?/^Contact$/:/^Wool$/}).evaluate(button=>button.click());
+    await page.locator(`canvas[data-run="520-${angle}"][data-mode="${mode}"]`).waitFor();
+    await page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      window.ftxPoseCamera(.32,.17,.36,.067);done();
+    }))));
+    await sharp(await stage.screenshot()).webp({quality:90}).toFile(resolve(destination,name+".webp"));
+  }
 } finally {await browser.close();}

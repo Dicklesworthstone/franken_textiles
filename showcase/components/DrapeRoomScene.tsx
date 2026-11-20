@@ -4,13 +4,12 @@ import { useEffect, useRef } from "react";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createGarmentMesh, type Exhibit, type StudioMode } from "./garmentMesh";
-import { dressCloth } from "./atelier3d/garment";
-import { fabrics } from "./atelier3d/weave";
 import { formMaterial, lightStudio, prepareRenderer } from "./atelier3d/studio";
 
 type Props = {
   run: string; strain: {min: number; max: number; p95: number};
-  frame: number; mode: StudioMode; reset: number; outfit: boolean; full: boolean; registration:number[];
+  timeline: Pick<Exhibit,"frames"|"sourceFrames"|"phases"> & {sourcePc2Sha256:string};
+  frame: number; mode: StudioMode; reset: number;
   onReady: (run: string) => void; onError: (run: string) => void;
 };
 declare global {interface Window {ftxPoseCamera?: (yaw:number, y:number, half:number, z?:number)=>void}}
@@ -21,45 +20,30 @@ async function response(path: string, signal: AbortSignal) {
   return result;
 }
 
-async function readRun(run: string, strain: Props["strain"], outfit: boolean, signal: AbortSignal) {
+async function readRun(run: string, strain: Props["strain"], timeline: Props["timeline"], signal: AbortSignal) {
   const unpack = async (r: Response) => {
     if (!r.body) throw Error("Empty garment replay.");
     return new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
   };
-  const [layout, trousers, packed, trouserBoard]: [Exhibit, Exhibit|null, ArrayBuffer, ArrayBuffer|null] = await Promise.all([
-    response("/exhibits/bolero.json", signal).then(r => r.json()),
-    outfit ? response("/exhibits/trousers.json", signal).then(r=>r.json()) : null,
-    response("/exhibits/poses/"+run+".bin.gz", signal).then(unpack),
-    // The trouser study file ends with each trouser vertex's place on its flat cut piece.
-    outfit ? response("/exhibits/trouser-study/mesh.gz", signal).then(unpack) : null,
+  const revision="?pc2="+timeline.sourcePc2Sha256;
+  const [topology, packed]: [Exhibit, ArrayBuffer] = await Promise.all([
+    response("/exhibits/bolero.json"+revision, signal).then(r => r.json()),
+    response("/exhibits/poses/"+run+".bin.gz"+revision, signal).then(unpack),
   ]);
+  const layout = {...topology, frames:timeline.frames, sourceFrames:timeline.sourceFrames, phases:timeline.phases};
   const header = new DataView(packed);
   const vertices = header.getUint32(0,true), indices = header.getUint32(4,true);
   let offset = 8;
   function coordinates(length: number) {
-    const encoded = new Int16Array(packed, offset, length);
-    offset += 2 * length;
-    return Float32Array.from(encoded, x => x / 10000);
+    const points = new Float32Array(packed, offset, length);
+    offset += 4 * length;
+    return points;
   }
   const skin = coordinates(vertices*3);
-  const triangles = new Uint16Array(packed, offset, indices);
-  offset += indices * 2;
+  const triangles = new Uint32Array(packed, offset, indices);
+  offset += indices * 4;
   const frames = coordinates(layout.frames.length * layout.vertices * 3);
-  let lower: ReturnType<typeof dressCloth> | null = null;
-  if(trousers && trouserBoard){
-    const native=coordinates(trousers.vertices*3), upright=new Float32Array(native.length);
-    // Right-handed Z-up, front -Y → right-handed Y-up, front +Z.
-    for(let i=0;i<native.length;i+=3){upright[i]=native[i];upright[i+1]=native[i+2];upright[i+2]=-native[i+1];}
-    const board=new Int16Array(trouserBoard, trouserBoard.byteLength-4*trousers.vertices, 2*trousers.vertices);
-    lower=dressCloth({vertices:trousers.vertices,triangles:trousers.triangles,seams:Object.values(trousers.seams),panels:trousers.panels},
-      Float32Array.from(board,n=>n/10000), fabrics.rustTwill, {sewn:upright,edge:"hem"});
-    lower.update(upright);
-  }
-  // Packed forces follow int16 coordinates and may start on a two-byte boundary.
-  if (!outfit) offset = packed.byteLength - layout.vertices * 7;
-  const view = new DataView(packed,offset);
-  const forces = Float32Array.from({length:layout.vertices},(_,i)=>view.getFloat32(i*4,true));
-  offset += layout.vertices*4;
+  const forces = coordinates(layout.vertices);
   const rgb = new Uint8Array(packed, offset);
   if (rgb.length !== layout.vertices*3) throw Error("Incomplete garment colors.");
   const garment = createGarmentMesh({...layout, strainRgb:rgb, summary:{edgeStrainPercent:strain}}, frames, true, forces);
@@ -78,7 +62,7 @@ async function readRun(run: string, strain: Props["strain"], outfit: boolean, si
   body.setIndex([...torso,...arms]);
   body.addGroup(0,torso.length,0);body.addGroup(torso.length,arms.length,1);
   body.computeBoundingBox();
-  return {body,garment,lower,floor:body.boundingBox!.min.y,dispose(){lower?.dispose();body.dispose();garment.dispose();}};
+  return {body,garment,frames:layout.sourceFrames,dispose(){body.dispose();garment.dispose();}};
 }
 
 export default function DrapeRoomScene(props: Props) {
@@ -101,7 +85,6 @@ export default function DrapeRoomScene(props: Props) {
     const scene=new T.Scene();
     const studio=lightStudio(renderer,scene,"warm");
     const camera=new T.OrthographicCamera(-1,1,1,-1,.02,6);
-    const reverse=new T.OrthographicCamera(-1,1,.56,-.56,.02,6);
     const controls=new OrbitControls(camera,canvas);
     canvas.style.touchAction="pan-y";
     controls.enablePan=false;controls.enableZoom=false; // A wheel over the landing page still scrolls.
@@ -127,75 +110,44 @@ export default function DrapeRoomScene(props: Props) {
     const groundMaterial=new T.ShadowMaterial({opacity:.2});
     const ground=new T.Mesh(new T.PlaneGeometry(8,8),groundMaterial);
     ground.rotation.x=-Math.PI/2;ground.position.y=-.114;ground.receiveShadow=true;scene.add(ground);
-    const pad=document.createElement("canvas");pad.width=pad.height=64;
-    const ctx=pad.getContext("2d")!, gradient=ctx.createRadialGradient(32,32,0,32,32,32);
-    gradient.addColorStop(0,"rgba(55,40,24,.32)");gradient.addColorStop(.45,"rgba(55,40,24,.17)");gradient.addColorStop(1,"rgba(55,40,24,0)");
-    ctx.fillStyle=gradient;ctx.fillRect(0,0,64,64);
-    const shadowMap=new T.CanvasTexture(pad);shadowMap.colorSpace=T.SRGBColorSpace;
-    const footInk=new T.MeshBasicMaterial({map:shadowMap,transparent:true,depthWrite:false,toneMapped:false});
-    const footShadow=new T.Mesh(new T.PlaneGeometry(.34,.22),footInk);
-    footShadow.rotation.x=-Math.PI/2;footShadow.position.z=.07;scene.add(footShadow);
     let current: Awaited<ReturnType<typeof readRun>> | undefined;
     let request: AbortController | undefined;
-    let loaded="", reset=latest.current.reset, lastFull=false;
-    let w=1,h=1,mainWidth=1;
+    let loaded="", reset=latest.current.reset;
+    let w=1,h=1;
     function home(){
       camera.zoom=1;controls.target.set(0,.178,.065);
       camera.position.set(.55,.42,1.8);camera.updateProjectionMatrix();controls.update();
     }
     function render(){
       if(!loaded)return;
-      renderer.setScissorTest(true);renderer.setScissor(0,0,mainWidth,h);renderer.setViewport(0,0,mainWidth,h);
       renderer.render(scene,camera);
-      if(mainWidth<w){
-        renderer.setScissor(mainWidth,0,w-mainWidth,h);renderer.setViewport(mainWidth,0,w-mainWidth,h);
-        renderer.render(scene,reverse);
-      }
     }
     function update(){
-      const {mode,frame,reset:nextReset,run,full}=latest.current;
+      const {mode,frame,reset:nextReset,run}=latest.current;
       if(!current||loaded!==run)return;
-      if(reset!==nextReset||full!==lastFull){reset=nextReset;lastFull=full;home();}
-      const t=mode==="strain"||mode==="contact"?1:frame/135;
+      if(reset!==nextReset){reset=nextReset;home();}
+      const t=mode==="strain"||mode==="contact"?1:frame/(current.frames-1);
       const opened=Math.max(0,1-t*2.2);
-      const companion=!!current.lower&&w>=580&&!full&&frame>=88;
-      mainWidth=companion?Math.round(w*.64):w;
-      const fullFigure=full&&!!current.lower;
-      const centerY=fullFigure ? .01 : .177;
+      const centerY=.177;
       camera.position.y+=centerY-controls.target.y; controls.target.y=centerY;
-      const half=Math.max(fullFigure ? .53 : .34, (.47+opened*.23)/(mainWidth/h)) + opened*.045;
-      camera.top=half;camera.bottom=-half;camera.left=-half*mainWidth/h;camera.right=-camera.left;camera.updateProjectionMatrix();
-      if(companion){
-        const halfY=Math.max(.61,.49*h/(w-mainWidth));
-        reverse.top=halfY;reverse.bottom=-halfY;reverse.right=halfY*(w-mainWidth)/h;reverse.left=-reverse.right;
-        reverse.position.set(-.52,.25,-1.75);reverse.lookAt(0,.01,.065);reverse.updateProjectionMatrix();
-      }
-      form.visible=frame>=88;
-      pedestal.visible=ground.visible=form.visible&&!current.lower;
-      current.garment.pose(mode,t,false,mainWidth/h);
+      const half=Math.max(.34,(.47+opened*.23)/(w/h))+opened*.045;
+      camera.top=half;camera.bottom=-half;camera.left=-half*w/h;camera.right=-camera.left;camera.updateProjectionMatrix();
+      current.garment.pose(mode,t,false,w/h);
+      form.visible=pedestal.visible=ground.visible=current.garment.sampledFrame>=87;
       canvas.dataset.nativeFrame=String(current.garment.sampledFrame);
-      canvas.dataset.companion=String(companion);canvas.dataset.full=String(full);
-      canvas.dataset.frame=String(Math.round(t*135));canvas.dataset.mode=mode;
+      canvas.dataset.frame=String(Math.round(t*(current.frames-1)));canvas.dataset.mode=mode;
       canvas.dataset.run=loaded;render();
     }
     draw.current=update;
     change.current=()=>{
-      const {run,strain,outfit}=latest.current;
+      const {run,strain,timeline}=latest.current;
       request?.abort();const controller=new AbortController();request=controller;
       delete canvas.dataset.run;
-      readRun(run,strain,outfit,controller.signal).then(result=>{
+      readRun(run,strain,timeline,controller.signal).then(result=>{
         if(controller.signal.aborted){result.dispose();return;}
-        if(current){scene.remove(current.garment.group);if(current.lower)scene.remove(current.lower.mesh);current.dispose();}
+        if(current){scene.remove(current.garment.group);current.dispose();}
         current=result;loaded=run;form.geometry=result.body;
-        form.material=[result.lower?plaster:bust,plaster];
-        if(result.lower)scene.add(result.lower.mesh);
-        pedestal.visible=!result.lower;
-        // A whole figure stands on the floor; the bust alone stands on its pedestal.
-        ground.position.y=result.lower?result.floor-.0005:-.114;
-        footShadow.visible=!!result.lower;footShadow.position.y=result.floor+.0005;
-        result.body.computeBoundingSphere();
-        const subject=result.body.boundingSphere!;
-        studio.frame(result.lower?subject.center:new T.Vector3(0,.2,.06),result.lower?subject.radius:.42);
+        studio.frame(new T.Vector3(0,.2,.06),.42);
         scene.add(result.garment.group);update();
         latest.current.onReady(run);
       }).catch(()=>{if(!controller.signal.aborted)latest.current.onError(run);});
@@ -203,7 +155,7 @@ export default function DrapeRoomScene(props: Props) {
     function resize(){w=el.clientWidth;h=el.clientHeight;if(w&&h){renderer.setSize(w,h,false);update();}}
     const observer=new ResizeObserver(resize);observer.observe(el);
     const capture=(yaw:number,y:number,half:number,z=.067)=>{
-      mainWidth=w;camera.zoom=1;controls.target.set(0,y,z);
+      camera.zoom=1;controls.target.set(0,y,z);
       camera.position.set(Math.sin(yaw)*1.8,y,z+Math.cos(yaw)*1.8);
       camera.top=half;camera.bottom=-half;camera.left=-half*w/h;camera.right=-camera.left;
       camera.updateProjectionMatrix();controls.update();render();
@@ -237,7 +189,6 @@ export default function DrapeRoomScene(props: Props) {
       canvas.removeEventListener("keydown",keys);canvas.removeEventListener("dblclick",home);canvas.removeEventListener("webglcontextlost",lost);
       canvas.removeEventListener("touchstart",start);canvas.removeEventListener("touchmove",move);canvas.removeEventListener("touchend",end);
       current?.dispose();empty.dispose();bust.dispose();plaster.dispose();ground.geometry.dispose();groundMaterial.dispose();
-      shadowMap.dispose();footInk.dispose();footShadow.geometry.dispose();
       pedestal.children.forEach(m=>(m as T.Mesh).geometry.dispose());brass.dispose();lacquer.dispose();studio.dispose();
       renderer.dispose();renderer.forceContextLoss();canvas.remove();draw.current=()=>{};change.current=()=>{};
       if(window.ftxPoseCamera===capture)delete window.ftxPoseCamera;

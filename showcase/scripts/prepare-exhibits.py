@@ -11,11 +11,31 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import struct
+import subprocess
+
+FTX = Path(os.environ.get("FTX_BIN", Path(__file__).resolve().parents[2] / "target/release/ftx"))
+
+
+def check_contact(directory):
+    subprocess.run([FTX, "viewer", directory, "--check-contact"], check=True)
+
+
+def replay_frames(phases):
+    indices = set(range(0, sum(phases.values()), 3))
+    start = 0
+    for phase in ("fold", "zip", "sew", "drape"):
+        end = start + phases[phase]
+        if end > start:
+            indices.update((start, end - 1))
+        start = end
+    return sorted(indices)
 
 
 def package(name, source, destination):
+    check_contact(source)
     mesh = json.loads((source / "mesh_map.json").read_text())
     report = json.loads((source / "sim_report.json").read_text())
     cache = (source / "fold.pc2").read_bytes()
@@ -34,14 +54,7 @@ def package(name, source, destination):
 
     # Copy the original float32 samples without re-quantizing positions. Keep
     # the start and end of every phase even when off the regular sampling grid.
-    indices = set(range(0, count, 3))
-    start = 0
-    for phase in ("fold", "zip", "sew", "drape"):
-        end = start + phases[phase]
-        if end > start:
-            indices.update((start, end - 1))
-        start = end
-    frames = sorted(indices)
+    frames = replay_frames(phases)
     points = memoryview(cache)[header.size:]
     positions = b"".join(points[i * frame_bytes : (i + 1) * frame_bytes] for i in frames)
 
