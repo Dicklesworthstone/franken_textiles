@@ -1295,3 +1295,73 @@ fn a_refused_phase_leaves_the_last_accepted_state_to_look_at() {
     );
     assert!(nothing.is_none());
 }
+
+/// When the recorded cloth crosses a part of the displayed wearer that the collision body leaves out (a
+/// hand, a foot), the refusal hands back the frame that crosses, so that it can be drawn.
+#[test]
+fn a_crossing_of_the_displayed_wearer_hands_back_the_frame_that_crosses() {
+    use ftx_core::RefusalCode;
+    use ftx_drape::run::{drape, drape_observed};
+
+    let skin = skin();
+    let pattern = ftx_pattern::Pattern::new(panel(40.0));
+    let opts = options();
+    // Where the panel ends up when nothing is in its way.
+    let clear = drape(&pattern, &json!({}), &body(&skin), &opts, |_| {}).unwrap();
+    let settled = clear.fold.frames.last().unwrap();
+    let middle = settled.iter().fold(Vec3::ZERO, |sum, p| sum + *p) * (1.0 / settled.len() as f64);
+    let outward = Vec3::new(middle.x, middle.y, 0.0) * (1.0 / middle.x.hypot(middle.y));
+    // The same wearer with a thin "finger" through that spot, drawn but not collided with.
+    let mut vertices = skin.vertices.clone();
+    let mut triangles = skin.triangles.clone();
+    let n = vertices.len();
+    vertices.extend([
+        middle - outward * 0.012,
+        middle + outward * 0.012 + Vec3::new(0.0, 0.0, 0.0015),
+        middle + outward * 0.012 - Vec3::new(0.0, 0.0, 0.0015),
+    ]);
+    triangles.push([n, n + 1, n + 2]);
+    let with_finger = DrapeBody {
+        frames: &Form,
+        collision: (&skin.vertices, &skin.triangles),
+        display: (&vertices, &triangles),
+        arm_deg: 35.,
+    };
+
+    let mut refused = None;
+    let refusal = drape_observed(
+        &pattern,
+        &json!({}),
+        &with_finger,
+        &opts,
+        |_| {},
+        &mut refused,
+    )
+    .err()
+    .expect("cloth through the displayed finger must refuse");
+    assert_eq!(
+        refusal.code,
+        RefusalCode::IntersectingTrajectory,
+        "{}",
+        refusal.message
+    );
+    let state = refused.expect("the crossing frame is handed back");
+    assert!(["sew", "drape"].contains(&state.phase));
+    assert!(state.accepted_steps <= 3);
+    assert_eq!(state.positions.len(), state.mesh.verts2d.len());
+    // It is one of the frames the clear run recorded too (the finger takes no part in the dynamics), and it
+    // is the frame the refusal names.
+    let index = clear
+        .fold
+        .frames
+        .iter()
+        .position(|frame| *frame == state.positions)
+        .expect("the handed-back state is a recorded frame");
+    assert!(
+        refusal
+            .message
+            .contains(&format!("physical frame {index}:")),
+        "{}",
+        refusal.message
+    );
+}

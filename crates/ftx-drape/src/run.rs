@@ -359,17 +359,18 @@ fn add_simulation_scope(report: &mut Value, scope: Value) {
     report["simulation_scope"] = scope;
 }
 
-/// Where a run had got to when sewing, draping or settling refused: enough to draw the cloth as it last
-/// was. It is the last accepted state before a refusal, not a drape, a fit or a result.
+/// The cloth state a refusal is about, enough to draw it: the last accepted state when sewing, draping or
+/// settling refuses, or the recorded frame that crosses the displayed wearer when the full-body check
+/// refuses. It is not a drape, a fit or a result.
 #[derive(Clone, Debug)]
 pub struct RefusedRun {
     /// The garment mesh (faces, instances, flat coordinates).
     pub mesh: GarmentMesh,
-    /// The last accepted positions, one per mesh vertex, metres.
+    /// The positions of that state, one per mesh vertex, metres.
     pub positions: Vec<Vec3>,
-    /// The phase that refused: `sew`, `drape` or `settle`.
+    /// The phase the state belongs to: `sew`, `drape` or `settle`.
     pub phase: &'static str,
-    /// Nominal steps of that phase accepted before the refusal.
+    /// Nominal steps of that phase accepted when the state was reached.
     pub accepted_steps: usize,
 }
 
@@ -402,9 +403,11 @@ pub fn drape(
     drape_observed(pattern, fit_spec, body, opts, progress, &mut None)
 }
 
-/// [`drape`], and when sewing, draping or settling refuses, `refused` receives the mesh and the last
-/// accepted positions so that the caller can show them. A refusal before the first step (meshing,
-/// placement, the start audit) leaves `refused` as it was: [`crate::start_state`] is what to look at then.
+/// [`drape`], and when it refuses once the start state has been admitted, `refused` receives the mesh and
+/// the positions the refusal is about so that the caller can show them: the last accepted state when
+/// sewing, draping or settling refuses (the admitted start if the first sewing step does), or the frame
+/// that crosses the displayed wearer. An earlier refusal (meshing, placement, the start audit) leaves
+/// `refused` as it was: [`crate::start_state`] is what to look at then.
 ///
 /// # Errors
 /// As [`drape`]. The refusal is the same with or without an observer.
@@ -549,8 +552,20 @@ pub fn drape_observed(
     if opts.self_contact.is_some() && !body.display.1.is_empty() {
         let mut display =
             crate::animation::DisplayBodyContact::new(body.display.0, body.display.1)?;
-        for (index, frame) in frames.iter().enumerate().skip(FOLD_FRAMES + ZIP_FRAMES - 1) {
-            display.check(frame, &scene.mesh.faces, index)?;
+        let first_sewn = FOLD_FRAMES + ZIP_FRAMES;
+        for (index, frame) in frames.iter().enumerate().skip(first_sewn - 1) {
+            if let Err(refusal) = display.check(frame, &scene.mesh.faces, index) {
+                // The frame that crosses the wearer is the one to look at: hand it back as the state after
+                // that many accepted steps of its phase (settling steps count as draping).
+                let first_draped = first_sewn + opts.sew_steps;
+                let (phase, phase_start) = if index < first_draped {
+                    ("sew", first_sewn)
+                } else {
+                    ("drape", first_draped)
+                };
+                *refused = refused_run(&scene, &frames[..=index], phase, phase_start);
+                return Err(refusal);
+            }
         }
     }
     let fold = FoldUp {

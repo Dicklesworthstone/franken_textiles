@@ -469,13 +469,14 @@ fn write_stage(
     Ok(written)
 }
 
-/// When a drape refuses after its first step: draws the cloth as it last was under `OUT/refused` (the files
-/// and stills of a `place` stage: coloured by piece, and by edge strain on the start-state ramp) and puts
-/// where to look first among the refusal's repairs.
+/// When a drape refuses once its start has been admitted: draws the cloth state the refusal is about under
+/// `OUT/refused` (the files and stills of a `place` stage: coloured by piece, and by edge strain on the
+/// start-state ramp) and puts where to look first among the refusal's repairs. That state is the last
+/// accepted one when a step refuses, or the recorded frame that crosses the displayed wearer.
 ///
-/// No claim: it is the last accepted state before the refusal, not a drape or a fit. Inside-body marking
-/// needs the collision body and is not drawn. If the pictures cannot be written the refusal is returned
-/// unchanged: its pictures never replace or delay a refusal.
+/// No claim: it is not a drape or a fit. Inside-body marking needs the collision body and is not drawn. If
+/// the pictures cannot be written the refusal is returned unchanged: its pictures never replace or delay a
+/// refusal.
 pub(super) fn refused_stills(
     mut refusal: Refusal,
     state: Option<&ftx_drape::run::RefusedRun>,
@@ -505,9 +506,9 @@ pub(super) fn refused_stills(
         refusal.repairs.insert(
             0,
             format!(
-                "Look at {}/still_*.png: the cloth as it last was, after {} accepted {} step(s). It is the \
-                 last accepted state before this refusal, not a drape or a fit; still_strain_* shows edge \
-                 strain from blue (15 % short) through white to red (15 % stretched).",
+                "Look at {}/still_*.png: the cloth after {} accepted {} step(s), the state this refusal is \
+                 about. It is not a drape or a fit; still_strain_* shows edge strain from blue (15 % short) \
+                 through white to red (15 % stretched).",
                 dir.display(),
                 state.accepted_steps,
                 state.phase
