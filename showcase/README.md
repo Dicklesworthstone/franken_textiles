@@ -60,7 +60,7 @@ The gallery and film players link to tiled A4 sewing patterns. Print at actual s
 
 The hussar patterns are original reconstructions of textile items. Footwear and metal fittings are supplied separately. A muslin or dressed photograph is still needed to assess fit on a person. The two sundress replays use the same fitted body and a 1 mm cloth contact barrier. The gathered cut declares a band of pleats on its two waist seams (`gather_relief_mm` 150, `gather_compression` 0.0005, spec 04 §5.4): an authored stand-in for pleats finer than the 20 mm mesh, without which that skirt left the waist as a shelf 92.8 mm clear at centre front. With it the clearance is 71.0 mm, and the report carries two slide flags for the skirt top coming down under gravity. Changing each skirt waist edge from 507 to 409.5 mm with the bodice and hem fixed reduces the clearance to 55.5 mm; that cut is under the solver's gather threshold and declares no band. The study includes both point-cache replays, cross-sections and full-size PDFs. Reproduce the second cut with `prepare-sundress.py --gather-ratio 1.05` and `prepare-sundress-drape.py --lightly-eased`. The separate adjustable figure illustrates changes in flat bodice ease.
 
-The homepage construction player shows the flat pieces, matching seams and dressed endpoint for each reference cut. The material maps use the same CC0 linen scan as the load experiments. The two dolmans share a solved jacket shell. The fez rolls up from its drafted cone geometry. For the ensemble both garments come from a single joint solve. The film translates pieces on the cutting board for legibility and interpolates recorded frames for playback.
+The homepage construction player shows the flat pieces, matching seams and dressed endpoint for each reference cut. The material maps use the same CC0 linen scan as the load experiments. The two dolmans share a solved jacket shell. The fez rolls up from its drafted cone geometry. For the ensemble both garments come from a single joint solve. Each curved panel occupies its own space on the board. The film cuts to the admitted start and plays the recorded sewing and gravity positions.
 
 To reproduce a construction film, use Blender 4.5 with FFmpeg on the path. For the two skirts, bolero, trousers and ensemble, pass the matching native drape directory after the destination. The renderer checks its point-cache digest against the selected exhibit. The sundress and both dolmans use the packaged solver data directly.
 
@@ -181,7 +181,7 @@ From `showcase/`, `node scripts/render-drape-room.mjs /path/to/new-film` records
 
 Each garment comes from a 12 mm mesh with a 2 mm cloth self-contact thickness on a synthetic
 92 cm body. The data files include the native PC2 digest, panel ranges, paired seam indices,
-solver summary, and original frame numbers. The viewer interpolates 49 retained native samples
+solver summary, and original frame numbers. The viewer selects from 49 retained native samples
 across each 136-frame fold. The strain view uses the native endpoint colors. Physical fit
 requires evidence from a real garment.
 

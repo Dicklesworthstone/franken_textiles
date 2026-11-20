@@ -152,7 +152,7 @@ onmessage = async (ev) => {
       if (!Number.isFinite(armDeg) || armDeg < 0 || armDeg > 180) {
         throw new Error("Supply a finite drape arm angle from 0 to 180 degrees.");
       }
-      const settings = { self_contact_mm: msg.selfContactMm ?? 0, two_start: !!msg.twoStart,
+      const settings = { self_contact_mm: msg.selfContactMm ?? 2, two_start: !!msg.twoStart,
         arm_abduction_deg: armDeg, legs: msg.legs ?? "standing",
         leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0 };
       if (!["standing", "seated", "squat"].includes(settings.legs) ||
@@ -181,8 +181,8 @@ onmessage = async (ev) => {
       const fold = configured
         ? ftx.fold_up_configured(body, docs.pattern, docs.measurements, docs.fit, JSON.stringify(settings), imported ? msg.bodyFit : undefined)
         : imported
-        ? ftx.fold_up_with_body_fit(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm, !!msg.twoStart, msg.bodyFit, msg.armDeg)
-        : ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm, !!msg.twoStart);
+        ? ftx.fold_up_with_body_fit(body, docs.pattern, docs.measurements, docs.fit, settings.self_contact_mm, !!msg.twoStart, msg.bodyFit, msg.armDeg)
+        : ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, settings.self_contact_mm, !!msg.twoStart);
       try {
         const reportText = fold.report(); // preserve numerical JSON for source-locked thermal replay
         const report = JSON.parse(reportText);

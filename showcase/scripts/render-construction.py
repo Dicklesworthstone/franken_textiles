@@ -54,6 +54,7 @@ def fez():
     lid = len(angles)*5
     faces.extend((lid,lid+1+j,lid+2+j) for j in range(96))
     ring = np.column_stack((top*np.sin(angles),-top*np.cos(angles),np.zeros_like(angles)))
+    ring[-1] = ring[0]
     frames = []
     for t in np.linspace(0,1,71):
         a = sector+(2*math.pi-sector)*t
@@ -75,6 +76,11 @@ def fez():
         cap[:,1] = y*math.cos(turn)
         cap[:,2] = y*math.sin(turn)+h+(1-t)*.035
         cap[:,0] += (1-t)*.31
+        if t == 1:
+            for row in rows:
+                row[-1] = row[0]
+            cap[1:] = rows[-1]
+            cap[0,2] = rows[-1][0,2]
         frames.append(np.vstack([*rows,cap]))
     return np.array(frames),np.arange(71),np.array(faces),{"crown":(0,lid),"tip":(lid,lid+98)},None,None,{},{}
 
@@ -163,6 +169,50 @@ def set_curve(obj,paths):
 def ease(t):
     t=np.clip(t,0,1);return t*t*(3-2*t)
 
+def cutting_table(xyz, panels, gap, height):
+    """Translate the current shapes into disjoint cells; their extents change as they roll."""
+    result = xyz.copy()
+    groups = sorted(panels.values())
+    cols = math.ceil(len(groups)/2) if len(groups)>3 else len(groups)
+    row_top = 0.
+    for start in range(0,len(groups),cols):
+        row = groups[start:start+cols]
+        x = depth = 0.
+        for a,b in row:
+            lo,hi = xyz[a:b].min(0),xyz[a:b].max(0)
+            result[a:b] += [x-lo[0], -(lo[1]+hi[1])/2, row_top-hi[2]]
+            x += hi[0]-lo[0]+gap
+            depth = max(depth,hi[2]-lo[2])
+        for a,b in row:
+            result[a:b,0] -= (x-gap)/2
+        row_top -= depth+gap
+    result[:,2] += height-(row_top+gap)/2
+    return result
+
+
+def film_pose(i, name, frames, ids, phases, panels, gap, height):
+    """Panel study, then a shot cut to the admitted sewn state. No in-between solver poses."""
+    staging = i < 61
+    if name == "fez":
+        if staging:
+            source = round(np.interp(i,[0,12,60],[0,0,70]))
+            return cutting_table(frames[source],panels,gap,height),True
+        xyz = frames[-1].copy()
+        a,b = panels["tip"]
+        xyz[a:b,2] += .035*(1-ease((i-61)/26))
+        return xyz,False
+    fold,zip_count,sew = phases["fold"],phases["zip"],phases["sew"]
+    if staging:
+        target = np.interp(i,[0,12,55,60],[0,0,fold-1,fold-1])
+        available = np.flatnonzero(ids<fold)
+    else:
+        start = fold+zip_count-1
+        target = np.interp(i,[61,74,89,95],[start,start+sew,ids[-1],ids[-1]])
+        available = np.flatnonzero(ids>=start)
+    index = available[np.abs(ids[available]-target).argmin()]
+    xyz = frames[index]
+    return (cutting_table(xyz,panels,gap,height) if staging else xyz), staging
+
 
 def render(args):
     frames,ids,tri,panels,body,body_tri,layout,phases=load(args.garment,args.native)
@@ -195,7 +245,6 @@ def render(args):
         mask*=2
     else:
         mask=np.zeros(len(initial),dtype=np.int32)
-    thick=cloth.modifiers.new("Cut edge thickness","SOLIDIFY");thick.thickness=.0008;thick.offset=0
     form=None;stand=[]
     if body is not None:
         if name in ("blue","yellow","bolero"):
@@ -245,22 +294,8 @@ def render(args):
     area("Fill",(2,-3,1.5),52,2.8,(.76,.85,1))
     bpy.ops.object.camera_add();cam=bpy.context.object;scene.camera=cam;cam.data.type="ORTHO";cam.data.clip_end=120
     # Compact cutting-table arrangement. Translation only, applied per flat piece at its true scale.
-    offsets=np.zeros_like(initial);groups=sorted(panels.values())
-    cols=math.ceil(len(groups)/2) if len(groups)>3 else len(groups)
     gap=.045*size
-    row_top=0
-    for row in range(0,len(groups),cols):
-        pieces=groups[row:row+cols];x=0;row_h=0
-        for a,b in pieces:
-            lo=initial[a:b].min(0);hi=initial[a:b].max(0)
-            offsets[a:b]=[x-lo[0],-lo[1],row_top-hi[2]]
-            x+=hi[0]-lo[0]+gap;row_h=max(row_h,hi[2]-lo[2])
-        for a,b in pieces:offsets[a:b,0]-=(x-gap)/2
-        row_top-=row_h+gap
-    board=initial+offsets
-    offsets[:,2]+=final_mid[2]-(board[:,2].min()+board[:,2].max())/2
-    offsets[:,1]+=final.min(0)[1]-.15*size
-    board=initial+offsets
+    board=cutting_table(initial,panels,gap,final_mid[2])
     # Ink the sewing line on the actual boundary. Each label names one cut instance.
     edges=np.sort(np.vstack([tri[:,[0,1]],tri[:,[1,2]],tri[:,[2,0]]]),axis=1)
     edges,counts=np.unique(edges,axis=0,return_counts=True);boundary=edges[counts==1]
@@ -285,14 +320,7 @@ def render(args):
         for t in (.25,.7):pairs.append([a[round(t*(len(a)-1))],b[round(t*(len(b)-1))]])
     thread=curves("Matching edges",pairs,material("Basting thread",(.85,.56,.21)),size*.001) if pairs else None
     def compose(i):
-        keys=[0,12,43,58,74,88,95]
-        milestones=[0,0,phases.get("fold",70)*.60,phases.get("fold",70)-1,
-            phases.get("fold",70)+phases.get("zip",0)+phases.get("sew",0)-1,ids[-1],ids[-1]]
-        if name=="fez":milestones=[0,0,30,44,60,70,70]
-        src=np.interp(i,keys,milestones)
-        r=min(np.searchsorted(ids,src,side="right"),len(ids)-1);l=max(0,r-1)
-        blend=(src-ids[l])/max(1,ids[r]-ids[l])
-        xyz=(frames[l]*(1-blend)+frames[r]*blend)+offsets*(1-ease((i-12)/44))
+        xyz,staging=film_pose(i,name,frames,ids,phases,panels,gap,final_mid[2])
         cloth.data.vertices.foreach_set("co",xyz.astype("f").ravel())
         cloth.data.polygons.foreach_set("material_index",np.ones(len(tri),dtype=np.int32) if i<=12 else mask[tri[:,0]])
         cloth.data.update();outline.hide_render=i>12
@@ -302,8 +330,8 @@ def render(args):
             for o,point in zip(studs,carry(xyz,buttons,.003)):o.location=point
         if thread:
             thread.hide_render=not 46<=i<=68;set_curve(thread,xyz[np.asarray(pairs)])
-        if form:form.hide_render=i<56
-        for mount in stand:mount.hide_render=i<56
+        if form:form.hide_render=staging
+        for mount in stand:mount.hide_render=staging
         ground.location.z=min(floor,xyz[:,2].min())-.002
         yaw=.34*ease((i-13)/57)+.32*ease((i-78)/17)
         direction=Vector((math.sin(yaw),-math.cos(yaw),.065+.07*ease((i-20)/50))).normalized()

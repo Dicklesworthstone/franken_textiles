@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { dressCloth } from "./atelier3d/garment";
 import { fabrics } from "./atelier3d/weave";
+import {cuttingTable,sampleIndex} from "./construction/replay";
 
 export type Garment = "bolero" | "trousers";
 export type StudioMode = "cloth" | "construction" | "strain" | "contact";
@@ -12,6 +13,7 @@ export type Exhibit = {
   panels: Record<string, [number, number]>;
   seams: Record<string, { side_a: number[]; side_b: number[] }>;
   frames: number[];
+  phases: {fold:number; zip:number};
   sourceFrames: number;
   strainRgb: ArrayLike<number>;
   summary: { edgeStrainPercent: { min: number; max: number; p95: number } };
@@ -64,21 +66,10 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     throw new Error("Incomplete garment replay");
   }
   const geometry = new THREE.BufferGeometry();
-  // Diagram offsets are uniform within each cut piece, derived from its sewn endpoint.
   const endpoint = frames.subarray(frames.length - stride);
-  const finalBounds = new THREE.Box3();
-  const point = new THREE.Vector3();
-  for (let i = 0; i < stride; i += 3) finalBounds.expandByPoint(point.fromArray(endpoint, i));
-  const finalCenter = finalBounds.getCenter(new THREE.Vector3());
-  const dimensions = finalBounds.getSize(new THREE.Vector3());
-  const extent = Math.max(dimensions.x, dimensions.y, dimensions.z);
-  const offsets = new Float32Array(stride);
-  for (const [start, end] of Object.values(data.panels)) {
-    const panelBounds = new THREE.Box3();
-    for (let v = start; v < end; v++) panelBounds.expandByPoint(point.fromArray(endpoint, 3 * v));
-    const delta = panelBounds.getCenter(new THREE.Vector3()).sub(finalCenter).normalize().multiplyScalar(extent * 0.38);
-    for (let v = start; v < end; v++) delta.toArray(offsets, 3 * v);
-  }
+  const boardPoints=new Float32Array(stride);
+  for(let j=0;j<stride;j+=3){boardPoints[j]=frames[j];boardPoints[j+1]=frames[j+2];boardPoints[j+2]=-frames[j+1];}
+  const arrange=cuttingTable(boardPoints,Object.values(data.panels));
   geometry.setIndex(data.triangles);
   const position = new THREE.Float32BufferAttribute(new Float32Array(stride), 3);
   position.setUsage(THREE.DynamicDrawUsage);
@@ -122,7 +113,7 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
   // The garment itself: a shell with thickness, woven on the grain, seams and edges finished.
   const dressed = dressCloth({ vertices: data.vertices, triangles: data.triangles, seams: Object.values(data.seams), panels: data.panels },
     flat, onBody ? fabrics.greenWool : fabrics.madderWool, { sewn: endpoint, edge: onBody ? "braid" : "hem" });
-  const shell = dressed.shell, clothThickness = shell.thickness;
+  const shell = dressed.shell;
   shell.attribute("color", panelColors, 3, true);
   const contactColors = loads && new Float32Array(stride);
   if (loads && contactColors) {
@@ -214,24 +205,16 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     const endpointView = mode === "strain" || mode === "contact";
     const sourceFrame = (endpointView ? 1 : THREE.MathUtils.clamp(time, 0, 1)) * (data.sourceFrames - 1);
     const separation = mode === "construction" ? THREE.MathUtils.clamp(spread, 0, 1) : 0;
-    // The mesh and the seam lines are drawn on the solver's own surface. A diagram view therefore
-    // draws the cloth with almost no thickness, so those lines are not buried inside it.
-    const thickness = mode === "cloth" && !showWire ? clothThickness : 0.00004;
     const moved = lastFrame !== sourceFrame || lastSpread !== separation;
     if (moved) {
-      let right = data.frames.findIndex((v) => v >= sourceFrame);
-      if (right < 0) right = data.frames.length - 1;
-      const left = Math.max(0, right - 1);
-      const mix = (sourceFrame - data.frames[left]) / Math.max(1, data.frames[right] - data.frames[left]);
-      const a = left * stride;
-      const b = right * stride;
+      const index=sampleIndex(data.frames,data.phases,sourceFrame);
+      const a=index*stride;
       for (let j = 0; j < stride; j += 3) {
         // Right-handed Z-up, front -Y → right-handed Y-up, front +Z.
         position.setXYZ(j / 3,
-          THREE.MathUtils.lerp(frames[a + j], frames[b + j], mix) + offsets[j] * separation,
-          THREE.MathUtils.lerp(frames[a + j + 2], frames[b + j + 2], mix) + offsets[j + 2] * separation,
-          -(THREE.MathUtils.lerp(frames[a + j + 1], frames[b + j + 1], mix) + offsets[j + 1] * separation));
+          frames[a+j], frames[a+j+2], -frames[a+j+1]);
       }
+      if(data.frames[index]<data.phases.fold || separation>0)arrange(position.array as Float32Array,.035+.14*separation);
       position.needsUpdate = true;
       geometry.computeBoundingBox();
       geometry.boundingBox!.getSize(size);
@@ -239,10 +222,7 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
       lastFrame = sourceFrame;
       lastSpread = separation;
     }
-    if (moved || shell.thickness !== thickness) {
-      shell.thickness = thickness;
-      shell.update(position.array);
-    }
+    if (moved) shell.update(position.array);
     if (!onBody) {
       const scale = 1.66 / Math.max(size.y + size.z * 0.16, Math.hypot(size.x, size.z) / aspect, 0.001);
       group.scale.setScalar(scale);

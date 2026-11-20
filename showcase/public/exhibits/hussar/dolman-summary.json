@@ -1,9 +1,9 @@
 {
  "vertices": 2595,
  "triangles": 4473,
- "frames": 33,
+ "frames": 37,
  "phases": {
-  "drape": 60,
+  "drape": 180,
   "fold": 70,
   "sew": 12,
   "zip": 18
@@ -23,7 +23,7 @@
   "dolman_undersleeve.L",
   "dolman_undersleeve.R"
  ],
- "sourcePc2Sha256": "c2ac08ab2b4eeaad10c7663ede588c64890e39dc14ca69b45203fa9591e52e79",
+ "sourcePc2Sha256": "5fa9c05f8e57a0789b17811c7dc905c3924514e179235d2a62c4ed9c70f84112",
  "style": "HUSSAR_BLUE",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -31,31 +31,42 @@
   "20",
   "--time-subdivision",
   "--arm-deg",
-  "20",
+  "45",
   "--drape",
-  "60"
+  "60",
+  "--self-contact-mm",
+  "1",
+  "--max-settle-steps",
+  "120"
  ],
- "armDeg": 20.0,
+ "armDeg": 45.0,
  "settled": true,
  "gating": [
   "body thickness ramp did not reach its target"
  ],
  "flags": [
-  "seam dolman_collar_front_L is distorted in the drape (p90 14 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_collar_front_R is distorted in the drape (p90 14 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "the body rides up 43 mm with arms at 20\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
+  "seam dolman_cap_front_low_L is distorted in the drape (p90 11 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_high_L is distorted in the drape (p90 12 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_mid_L is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_collar_front_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_low_R is distorted in the drape (p90 12 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_high_R is distorted in the drape (p90 15 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_low_R is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_mid_R is distorted in the drape (p90 18 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_collar_front_R is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "the body rides up 43 mm with arms at 45\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
   "body thickness ramp did not reach its target",
   "Declared simulation subset: 2 instance(s) and 6 seam(s) excluded; see simulation_scope. Results describe only the simulated subset."
  ],
  "edgeStrainPercent": {
-  "max": 22.03,
-  "min": -12.48,
-  "p95": 6.32
+  "max": 34.22,
+  "min": -15.23,
+  "p95": 6.89
  },
  "massKg": 0.29438584832109344,
  "areaM2": 0.7747,
  "sewingPairs": 324,
- "selfContact": false,
+ "selfContact": true,
  "scope": {
   "basis": "declared_subset",
   "excluded_instances": [
@@ -349,5 +360,5 @@
    "target_mm": 1070.0
   }
  },
- "wallSeconds": 970.3
+ "wallSeconds": 651.5
 }

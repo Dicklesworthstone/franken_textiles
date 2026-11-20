@@ -5,8 +5,8 @@ media="$(CDPATH='' cd -- "$(dirname -- "$0")/../public/media" && pwd)"
 dest="${1:-$media}"
 mkdir -p "$dest"
 ffmpeg -hide_banner -loglevel error -n \
-  -ss 0.6 -t 3 -i "$media/wardrobe-sundress.mp4" \
-  -ss 0.8 -t 3 -i "$media/wardrobe-hussar.mp4" \
+  -ss 0.2 -t 3 -i "$media/construction-sundress.mp4" \
+  -ss 3.0 -t 3 -i "$media/construction-blue.mp4" \
   -ss 1.2 -t 2.5 -i "$media/rig-cylinder.mp4" \
   -ss 2.8 -t 2.5 -i "$media/bolero.mp4" \
   -ss 1 -t 2.5 -i "$media/rig-strip.mp4" \

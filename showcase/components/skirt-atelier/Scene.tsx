@@ -143,7 +143,7 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
       woven.wrapS=woven.wrapT=T.MirroredRepeatWrapping;woven.repeat.setScalar(410/160);woven.colorSpace=T.SRGBColorSpace;woven.anisotropy=8;maps.push(woven);
       const check=dyed.clone();check.color.set(0xffffff);check.map=woven;materials.push(check);
       for(const face of [dyed,lining,print,reverse,check])finishEdges(face);
-      const shell=new ClothShell({vertices:n,triangles:top.tri,seams:top.joins},.00045,positions(source,n,n*3*(k-1)),1);
+      const shell=new ClothShell({vertices:n,triangles:top.tri,seams:top.joins},0,positions(source,n,n*3*(k-1)),0);
       shell.attribute("uv",top.uvMm.map(x=>x/410),2);
       const waistDistance=new Float32Array(n);
       for(const [start,end] of top.panels){
@@ -193,10 +193,10 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
         const {surface,step}=current.current,frame=sewingFrame(top.frames,top.phases,step);
         if(frame!==prev){
           const xyz=positions(source,n,n*3*frame);
-          arrange(xyz,Math.max(0,1-top.frames[frame]/(top.phases.fold-1)));
+          const tracking=top.frames[frame]<top.phases.fold;
+          if(tracking)arrange(xyz);
           shell.update(xyz);clothXYZ.array.set(xyz);clothXYZ.needsUpdate=true;geom.computeVertexNormals();geom.computeBoundingSphere();
-          const tracking=top.frames[frame]<top.phases.fold+top.phases.zip;
-          for(const obj of displayForm)obj.visible=top.frames[frame]>=top.phases.fold-1;
+          for(const obj of displayForm)obj.visible=!tracking;
           if(tracking||board){board=tracking?new T.Box3().setFromBufferAttribute(clothXYZ):null;reframe.current?.();}
           canvas.dataset.nativeFrame=String(top.frames[frame]);
           edgePairs.forEach((v,i)=>seamXYZ.setXYZ(i,xyz[3*v],xyz[3*v+1],xyz[3*v+2]));

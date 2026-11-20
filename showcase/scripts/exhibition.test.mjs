@@ -55,7 +55,7 @@ test("the skirt atelier displays the selected native trajectory and its matching
         await page.locator(".sa-intro").getByRole("button",{name:"Flat pattern"}).click();
         await page.locator('canvas[data-run="'+key+'"][data-native-frame="0"]').waitFor();
         await page.getByRole("button",{name:"Join gores"}).click();
-        await page.locator('canvas[data-run="'+key+'"][data-native-frame="69"]').waitFor();
+        await page.locator('canvas[data-run="'+key+'"][data-native-frame="87"]').waitFor();
         await page.getByRole("button",{name:"Sewn skirt"}).click();
         const mm=Object.values(run.hemHeights);
         assert.equal(await page.locator(".sa-reading strong").nth(1).innerText(),(Math.max(...mm)-Math.min(...mm)).toFixed(1)+" mm");
@@ -262,7 +262,7 @@ test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", asy
     await p.waitForFunction(()=>document.querySelector(".sd-making canvas").dataset.frame==="0");
     // The flat pattern is shown under the stage, one outline per cut piece, and the four stages are named.
     assert.equal(await p.locator(".sd-making .mk-pattern path").count(),summary.instances.length);
-    assert.deepEqual(await p.locator(".sd-making .mk-steps button").allTextContents(),["1Cut flat","2Wrapped round the form","3Seams sewn","4Hung under gravity"]);
+    assert.deepEqual(await p.locator(".sd-making .mk-steps button").allTextContents(),["1Cut flat","2Shape the panels","3Seams sewn","4Hung under gravity"]);
     assert.equal(await p.locator(".sd-making .mk-steps .is-now").textContent(),"1Cut flat");
     const cutSelector=p.getByRole("group",{name:"Skirt waist cut"});
     const sections=[];

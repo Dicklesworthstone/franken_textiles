@@ -47,8 +47,9 @@ CLOSURE = {"id": "dolman_front_closure", "a": "dolman_front.R/opening", "b": "do
 # Placeholder constants for a lined wool, the same as the bolero exhibit's. They have no measured source.
 FABRIC = {"areal_g_m2": 380, "bending_Nm": 0.00012, "id": "shell", "kind": "woven", "name": "wool broadcloth, lined",
           "sim_note": "lined-jacket composite (UNCERTAIN)", "tensile_N_m": 10000.0, "width_mm": 1500}
-# 15 degrees fails the solver's audit of the posed body (arm against trunk); 20 passes.
-DRAPE_ARGS = ["--spacing-mm", "20", "--time-subdivision", "--arm-deg", "20", "--drape", "60"]
+# At 20 degrees the sleeve crosses the torso cloth. At 45 both cloth and body start audits pass.
+DRAPE_ARGS = ["--spacing-mm", "20", "--time-subdivision", "--arm-deg", "45", "--drape", "60",
+              "--self-contact-mm", "1", "--max-settle-steps", "120"]
 
 
 def inputs():

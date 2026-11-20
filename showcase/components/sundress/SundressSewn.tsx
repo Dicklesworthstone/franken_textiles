@@ -52,7 +52,7 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
   const ratio = waistSeam.ratio;
   // A gathered waist may declare a band of pleats for the solver; the eased cut has none.
   const band = waistSeam.gather_relief_mm && waistSeam.gather_compression
-    ? { depth: waistSeam.gather_relief_mm, percent: waistSeam.gather_compression * 100 } : null;
+    ? { depth: waistSeam.gather_relief_mm, percent: Number((waistSeam.gather_compression * 100).toPrecision(3)) } : null;
   const flags = drape.flags as string[], gating = drape.gating as string[];
   return <section className="sd-sewn" id="sewn" aria-labelledby="sewn-title">
     <div className="sd-cut-picker">
@@ -91,10 +91,10 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
         <p>The skirt starts 270 mm from the body axis. The contact audit finds zero crossings there and the 1 mm cloth-to-cloth barrier stays active through sewing and settling. {band
           ? <>The gathers are modelled as a band of pleats. For {band.depth} mm below the waist seam the solver lets the cloth shorten almost freely, at {band.percent} % of its stiffness in tension, which stands for pleats finer than its {drape.spacingMm} mm mesh. The band is authored, not measured. Without it this skirt left the waist as a shelf, 92.8 mm clear at centre front. The fine pleats drawn under the seam mark where the solver’s cloth is shorter than its pattern. They are not folds the solver resolved. In profile a small ledge remains at the back.</>
           : <>Look at the waist in profile. Its broad folds stand away from the form on the {drape.spacingMm} mm mesh.</>} Finer gathers and real-world fit still need comparison with a sewn sample.</p>
-        <p>The weave, thickness, smoothing, piece colors and connecting threads are drawn for display. The fabric uses synthetic defaults of {(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m² and {drape.fabric.bending_Nm} N·m bending stiffness. The interactive form is drawn 2.5 mm inside the solver surface.</p>
+        <p>The viewer draws weave, piece colors and seam guides on the recorded cloth surface. The fabric uses synthetic defaults of {(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m² and {drape.fabric.bending_Nm} N·m bending stiffness. The interactive form is drawn 2.5 mm inside the solver surface.</p>
         {gating.map(flag => <p key={flag} className="sd-flag">Solver flag · {flag}</p>)}
         {flags.filter(flag => !gating.includes(flag)).map(flag => <p key={flag} className="sd-flag">Solver note · {flag}</p>)}
-        {flags.some(flag => flag.includes("slid")) && <p>The slide flags compare each skirt panel before and after gravity and are worded for a garment slipping off the body. What they measured here is the gathered top of the skirt coming down to hang from the waist once its pleats could close. The waist seam itself stays sewn to the bodice.</p>}
+        {flags.some(flag => flag.includes("slid")) && <p>The slide flags compare how high each skirt panel’s corners sit after sewing and after gravity, and are worded for a garment slipping off the body. What they measured here is the gathered top of the skirt coming down to hang from the waist once its pleats could close. The waist seam itself stays sewn to the bodice.</p>}
         {flags.some(flag => flag.includes("rides up")) && <p>That note is worded for a sleeved jacket. What it measured here is that the hems settled that far above where the flat pattern places them: the waist seam sits above this form’s waist.</p>}
         <p><a href={source+"-pattern.json"} download>Exact pattern and starting placements ↓</a> · <a href={source+"-summary.json"} download>Solver summary ↓</a></p>
       </details>

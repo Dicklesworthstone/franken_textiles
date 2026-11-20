@@ -6,7 +6,7 @@ import joint from "../public/exhibits/poses/ensemble.json";
 import {dressCloth} from "./atelier3d/garment";
 import {fabrics} from "./atelier3d/weave";
 import {formMaterial,lightStudio,prepareRenderer,shadowFloor} from "./atelier3d/studio";
-import {cuttingTable} from "./construction/replay";
+import {cuttingTable,displayFrame} from "./construction/replay";
 
 export default function CoupledScene({frame,onReady,onError}:{frame:number;onReady:(key:string)=>void;onError:(key:string)=>void}){
   const host=useRef<HTMLDivElement>(null),step=useRef(frame),update=useRef<()=>void>(()=>{});
@@ -68,14 +68,14 @@ export default function CoupledScene({frame,onReady,onError}:{frame:number;onRea
       for(const [layout,start] of [[upper,0],[lower,upper.vertices]] as const)
         for(const [a,b] of Object.values(layout.panels) as number[][])ranges.push([a+start,b+start]);
       const arrange=cuttingTable(upright(0,n,xyz),ranges);
-      update.current=()=>{const index=Math.round((joint.frames-1)*step.current/135);
-        upright(index*n*3,n,xyz);arrange(xyz,Math.max(0,1-index/(joint.phases.fold-1)));
-        const board=new T.Box3(),tracking=index<joint.phases.fold+joint.phases.zip;
+      update.current=()=>{const index=displayFrame(Math.round((joint.frames-1)*step.current/135),joint.phases);
+        const board=new T.Box3(),tracking=index<joint.phases.fold;
+        upright(index*n*3,n,xyz);if(tracking)arrange(xyz);
         for(const {garment,start,points} of garments){
           points.set(xyz.subarray(start*3,start*3+points.length));garment.update(points);
           if(tracking)board.union(new T.Box3().setFromBufferAttribute(new T.BufferAttribute(points,3)));
         }
-        figure.visible=floor.mesh.visible=index>=joint.phases.fold-1;
+        figure.visible=floor.mesh.visible=!tracking;
         const focus=tracking?board.getCenter(new T.Vector3()):middle;
         const span=tracking?board.getSize(new T.Vector3()):extent;
         tall=Math.max(extent.y*.54,span.y*.58);wide=tracking?Math.hypot(span.x,span.z)*.57:Math.max(extent.x,extent.z)*.56;

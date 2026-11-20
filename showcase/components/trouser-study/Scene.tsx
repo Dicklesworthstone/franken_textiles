@@ -118,12 +118,13 @@ export default function Scene(props:Props) {
       if(cloth){
         const index=sewingFrame(model.frames,model.phases,p.step),frame=model.frames[index];
         if(index!==lastFrame){
-          sample(index);arrange(xyz,Math.max(0,1-frame/(model.phases.fold-1)));
+          const staging=frame<model.phases.fold;
+          sample(index);if(staging)arrange(xyz);
           cloth.update(xyz);
-          board=frame<model.phases.fold+model.phases.zip?new T.Box3().setFromBufferAttribute(attr):null;
+          board=staging?new T.Box3().setFromBufferAttribute(attr):null;
           const focus=board?.getCenter(new T.Vector3())??neutral;
           camera.position.add(focus.clone().sub(controls.target));controls.target.copy(focus);controls.update();
-          body.visible=frame>=model.phases.fold-1;
+          body.visible=!staging;
           canvas.dataset.nativeFrame=String(frame);lastFrame=index;size();
         }
         cap.visible=cap.visible&&body.visible;

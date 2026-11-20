@@ -12,12 +12,7 @@ export interface DressOptions {
   sewn?: ArrayLike<number>;
   /** How the unsewn edges are finished: a bound edge with two cords, or a turned and stitched hem. */
   edge?: "braid" | "hem";
-  /** How many times each solver triangle is split in four for display. Defaults to 2, or 1 on a device with few cores. */
-  levels?: number;
 }
-
-// Two levels draw sixteen triangles for each of the solver's. A phone with few cores gets four.
-const displayLevels = () => typeof navigator !== "undefined" && (navigator.hardwareConcurrency ?? 8) <= 4 ? 1 : 2;
 
 /** For every vertex, the flat-pattern distance in metres to the nearest of the given edges, capped at 8 cm. */
 function distanceTo(edges: number[], flat: ArrayLike<number>, topology: GarmentTopology) {
@@ -76,7 +71,9 @@ const hook = (edge: DressOptions["edge"], tintAmount: { value: number }) => ({
  * flat pattern in metres (two numbers per vertex), which is what lays the weave along the grain.
  */
 export function dressCloth(topology: GarmentTopology, flat: ArrayLike<number>, fabric: Fabric, options: DressOptions = {}) {
-  const shell = new ClothShell(topology, fabric.thickness, options.sewn, options.levels ?? displayLevels());
+  // Curved tessellation or an extruded shell can extend past a neighbouring panel.
+  // Yarn, seam relief and smooth normals shade the exact contact surface.
+  const shell = new ClothShell(topology, 0, options.sewn, 0);
   shell.attribute("uv", flat, 2);
   shell.rest(flat);
   const n = topology.vertices, count = new Map<number, number>();

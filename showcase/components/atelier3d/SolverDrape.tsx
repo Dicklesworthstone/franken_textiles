@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PlaybackMark } from "../InlineFilm";
+import {cuttingTable,sampleIndex} from "../construction/replay";
 import { dressCloth } from "./garment";
 import type { Fabric } from "./weave";
 import { formMaterial, lightStudio, prepareRenderer, shadowFloor } from "./studio";
@@ -58,17 +59,20 @@ interface Sheet { box: [number, number, number, number]; pieces: Outline[] }
 const TRUNK_HALF_WIDTH = 0.27, FORM_INSET = 0.0025;
 // One colour per cut piece while it is being assembled; a mirrored pair shares its colour.
 const PIECE_COLOURS = ["#c9785c", "#d9b25f", "#7fa6a0", "#8c8fb8", "#b98fb0", "#9cb37a", "#6f9bc0", "#c2a878", "#d08f6b", "#a8a59c"];
-const STAGES = ["Cut flat", "Wrapped round the form", "Seams sewn", "Hung under gravity"] as const;
+const STAGES = ["Cut flat", "Shape the panels", "Seams sewn", "Hung under gravity"] as const;
 const stem = (panel: string) => panel.replace(/\.[RLC]$/, "");
+/** A visitor who prefers no motion, and a film capture, start on the finished garment and not on the flat cut. */
+const startsFinished = () => matchMedia("(prefers-reduced-motion: reduce)").matches || new URLSearchParams(location.search).has("capture");
 
 /** Which of the four stages a kept frame belongs to. */
 function stageOf(info: DrapeInfo, index: number) {
   const f = info.sourceFrames[index], { fold, zip, sew } = info.phases;
-  return f === 0 ? 0 : f < fold ? 1 : f < fold + zip + sew ? 2 : 3;
+  return f === 0 ? 0 : f < fold + zip - 1 ? 1 : f < fold + zip + sew ? 2 : 3;
 }
 /** The first kept frame of a stage; the last stage is entered at its end, the settled garment. */
 function stageStart(info: DrapeInfo, stage: number) {
   if (stage >= 3) return info.frames - 1;
+  if (stage === 1) return sampleIndex(info.sourceFrames,info.phases,info.phases.fold-1);
   for (let i = 0; i < info.frames; i++) if (stageOf(info, i) >= stage) return i;
   return info.frames - 1;
 }
@@ -111,12 +115,10 @@ export default function SolverDrape(props: SolverDrapeProps) {
   const fail = useRef(() => { setFailed(true); play(false); latest.current.onFailure?.(); });
 
   // Play the making once, the first time most of the stage is on screen. A visitor who prefers no motion
-  // starts on the finished garment and can play or scrub.
+  // starts on the finished garment and can play or scrub. (The opening frame itself is set when the drape loads.)
   useEffect(() => {
     if (!info || offered.current) return;
-    const still = matchMedia("(prefers-reduced-motion: reduce)").matches || new URLSearchParams(location.search).has("capture");
-    if (still) { offered.current = true; setFrame(info.frames - 1); return; }
-    setFrame(0);
+    if (startsFinished()) { offered.current = true; return; }
     const watch = new IntersectionObserver(([entry]) => {
       if (!entry.isIntersecting || offered.current) return;
       offered.current = true; began.current = performance.now(); play(true); watch.disconnect();
@@ -225,7 +227,7 @@ export default function SolverDrape(props: SolverDrapeProps) {
       const box = body.boundingBox!;
       stand.set((box.min.x + box.max.x) / 2, box.min.y, (box.min.z + box.max.z) / 2);
       const floor = shadowFloor(box.min.y - 0.0005, 0.26); floor.mesh.position.x = stand.x; floor.mesh.position.z = stand.z;
-      scene.add(floor.mesh); disposables.push(floor);
+      const mount = new T.Group(); scene.add(mount); mount.add(floor.mesh); disposables.push(floor);
       if (mountAt !== undefined) {
         // The solver draped the garment on the whole body. Below the line the pelvis and legs are left out
         // and a plate, a pole and a base are drawn, as on a museum jacket form.
@@ -243,10 +245,10 @@ export default function SolverDrape(props: SolverDrapeProps) {
         plate.scale.set(size.x + 0.009, 1, size.y + 0.009); plate.position.set(centre.x, hip + 0.012, centre.y);
         const pole = new T.Mesh(new T.CylinderGeometry(0.014, 0.014, hip - stand.y - 0.018, 24), iron); pole.position.set(centre.x, (hip + stand.y) / 2 - 0.009, centre.y);
         const foot = new T.Mesh(new T.CylinderGeometry(0.17, 0.19, 0.02, 56), iron); foot.position.set(centre.x, stand.y + 0.01, centre.y);
-        for (const part of [plate, pole, foot]) { part.castShadow = part.receiveShadow = true; scene.add(part); disposables.push(part.geometry); }
+        for (const part of [plate, pole, foot]) { part.castShadow = part.receiveShadow = true; mount.add(part); disposables.push(part.geometry); }
         disposables.push(wood, iron);
       }
-      const figure = new T.Mesh(body, form); figure.castShadow = figure.receiveShadow = true; scene.add(figure);
+      const figure = new T.Mesh(body, form); figure.castShadow = figure.receiveShadow = true; mount.add(figure);
 
       const points = new Float32Array(n * 3);
       const upright = (index: number) => {
@@ -267,8 +269,8 @@ export default function SolverDrape(props: SolverDrapeProps) {
       setSheet(patternSheet(pack, flat, colours));
 
       // The flat cut fills the opening view: the pieces lie on a board in front of the form.
-      const flatBox = new T.Box3().setFromArray(upright(0)), flatMiddle = flatBox.getCenter(new T.Vector3()), flatSize = flatBox.getSize(new T.Vector3());
-      const flatView = { target: flatMiddle.y - stand.y, span: flatSize.y / 2 + 0.16, reach: flatSize.x / 2 + 0.07 };
+      const arrange = cuttingTable(upright(0), Object.values(pack.panels));
+      const boardBounds = new T.Box3(), boardSize = new T.Vector3(), boardCentre = new T.Vector3();
 
       // Threads: each seam's two edges, point to matching point, until the seam has closed.
       const ends: number[] = [];
@@ -308,8 +310,10 @@ export default function SolverDrape(props: SolverDrapeProps) {
       const trim = new T.Group(); scene.add(trim);
       const cords = pack.cords.map(() => { const mesh = new T.Mesh(new T.BufferGeometry(), cordMaterial); mesh.castShadow = true; mesh.frustumCulled = false; trim.add(mesh); return mesh; });
       const buttons = new T.InstancedMesh(buttonShape, buttonMaterial, pack.buttons.length); buttons.castShadow = true; buttons.frustumCulled = false; trim.add(buttons);
-      disposables.push(cordMaterial, buttonMaterial, buttonShape, { dispose() { for (const mesh of cords) mesh.geometry.dispose(); } });
-      let garment: ReturnType<typeof dressCloth> | undefined, shownLook: string | undefined, shownFrame = -1, shownView: string | undefined;
+      disposables.push(cordMaterial, buttonMaterial, buttonShape, buttons, { dispose() { for (const mesh of cords) mesh.geometry.dispose(); } });
+      // `shownView` is the page's view object, not its name: choosing the same preset again is a new object, and
+      // brings the camera back after the visitor has turned it.
+      let garment: ReturnType<typeof dressCloth> | undefined, shownLook: string | undefined, shownFrame = -1, shownView: SolverDrapeProps["view"] | undefined;
       const place = new T.Matrix4(), spot = new T.Vector3(), up = new T.Vector3(0, 0, 1), turn = new T.Quaternion(), squash = new T.Vector3(1, 1, 0.55);
       function carryTrim(thickness: number) {
         pack.cords.forEach((cord, k) => {
@@ -324,7 +328,8 @@ export default function SolverDrape(props: SolverDrapeProps) {
         });
         buttons.instanceMatrix.needsUpdate = true;
       }
-      const wrapped = stageStart(drape, 2), hung = stageStart(drape, 3) === frameCount - 1 ? frameCount - 1 : stageStart(drape, 3);
+      // Kept-frame indices: the first frame of sewing, the first under gravity, and the settled endpoint.
+      const wrapped = stageStart(drape, 2), hung = frameCount - 1;
       let firstHung = frameCount - 1;
       for (let i = 0; i < frameCount; i++) if (stageOf(drape, i) === 3) { firstHung = i; break; }
       function change() {
@@ -340,26 +345,37 @@ export default function SolverDrape(props: SolverDrapeProps) {
         if (index !== shownFrame) {
           // Wrinkles are read off the settled cloth only: while pieces are still travelling they mean nothing.
           garment!.shell.detail = stage === 3 ? 1 : 0;
-          garment!.update(upright(index)); carryTrim(look.fabric.thickness);
+          const sourceIndex=sampleIndex(pack.frames,pack.phases,pack.frames[index]);
+          const onBoard=pack.frames[sourceIndex]<pack.phases.fold;
+          upright(sourceIndex);
+          if(onBoard)arrange(points);
+          mount.visible=!onBoard;
+          garment!.update(points); carryTrim(look.fabric.thickness);
           threads.visible = stage < 3; if (threads.visible) carryThreads();
-          studio.key.shadow.needsUpdate = true; shownFrame = index; el.dataset.frame = String(pack.frames[index]);
+          studio.key.shadow.needsUpdate = true; shownFrame = index; el.dataset.frame = String(pack.frames[sourceIndex]);
           // Follow the making unless the visitor has taken the camera: wide on the flat cut, then in on the form.
           if (!steered) {
-            const view = next.views[next.view.preset], t = T.MathUtils.smootherstep(index / Math.max(1, wrapped), 0, 1);
-            orient(view.yaw * t, T.MathUtils.lerp(flatView.target, view.target, t), T.MathUtils.lerp(flatView.span, view.span, t), T.MathUtils.lerp(flatView.reach, 0.34, t));
-            shownView = next.view.preset;
+            const view = next.views[next.view.preset];
+            if(onBoard){
+              boardBounds.setFromArray(points);boardBounds.getCenter(boardCentre);boardBounds.getSize(boardSize);
+              orient(0,boardCentre.y-stand.y,boardSize.y/2+.10,boardSize.x/2+.09);
+            }else orient(view.yaw,view.target,view.span);
+            shownView = next.view;
           }
         }
         // Pieces keep their own colours until the seams are sewn, then take the cloth's as the garment hangs.
         const fade = stage < 2 ? 1 : stage === 2 ? 1 - 0.5 * (index - wrapped) / Math.max(1, firstHung - wrapped) : Math.max(0, 0.5 - 0.5 * (index - firstHung) / Math.max(1, Math.min(4, hung - firstHung)));
         garment!.tintAmount.value = next.tinted ? 1 : fade;
-        if (next.view.preset !== shownView) {
-          const view = next.views[next.view.preset]; steered = false; orient(view.yaw, view.target, view.span); shownView = next.view.preset;
+        if (next.view !== shownView) {
+          const view = next.views[next.view.preset]; steered = false; orient(view.yaw, view.target, view.span); shownView = next.view;
         }
         draw(); el.dataset.ready = next.look;
       }
       disposables.push({ dispose() { garment?.dispose(); } });
-      apply.current = change; change(); setInfo(drape);
+      // Draw the opening frame straight away, so the finished garment does not flash before the flat cut.
+      const opening = startsFinished() ? frameCount - 1 : 0;
+      latest.current = { ...latest.current, frame: opening };
+      apply.current = change; change(); setFrame(opening); setInfo(drape);
     }).catch(() => { if (!signal.aborted) fail.current(); });
     return () => {
       abort.abort(); apply.current = null; if (captureHook && window[captureHook] === pose) delete window[captureHook];
