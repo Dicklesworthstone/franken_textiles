@@ -8,6 +8,24 @@ has no Python or native-library runtime dependency. It does not install or opera
 
 ## Select once, reuse the existing consumers
 
+### Derive a convection estimate from declared air and flow
+
+In **Microclimate air, convection, radiosity and fractional viscoelastic lowering**, choose
+**Author air and exterior convection**. Enter air temperature, absolute pressure and relative
+humidity, then select air properties alone or one of the four exterior plate/cylinder correlations.
+Declare the characteristic length and either wind speed or the positive surface/air temperature
+difference and gravity. The existing Rust engine derives the dimensionless groups and refuses
+out-of-domain inputs; the browser does not implement another thermophysical or convection solver.
+
+An optional exterior record requires an explicitly declared surface-temperature range. Consent to
+estimated coefficients remains a separate unchecked choice. This is a constant-coefficient model
+at the authored operating point, not dynamically recomputed airflow or a measured garment film.
+The result shows air properties, native groups, coefficient, citation and model-discrepancy allowance
+without presenting that allowance as a confidence interval. Original request and report downloads
+retain the worker's exact text. Original JSON mode continues to support duct correlations and
+complete radiative enclosures. Draft edits cancel stale microclimate work without cancelling
+unrelated garment consumers; switching modes preserves inactive drafts.
+
 ### Author convection and ambient radiation
 
 For steady independent-sheet heat, choose **Author uniform conditions** in section 3 and enable

@@ -22781,6 +22781,88 @@ test('opt-in DQS skinning routes through fold_up_configured, invalidates stale d
   assert.equal(idx.e.drapeSkinning.value, 'dqs');
 });
 
+function authorMicroclimate(page,correlation='churchill_chu_vertical_plate') {
+  for(const [suffix,value] of Object.entries({Temperature:'20',Pressure:'101325',Humidity:'50',Length:'0.4',Wind:'1',
+    Delta:'10',Gravity:'9.81',Min:'5',Max:'45',Correlation:correlation}))page.e['microclimate'+suffix].value=value;
+  page.e.microclimateMode.value='form';page.e.microclimateMode.handlers.change();
+}
+function microclimateReport() {
+  return {schema:'ftx-microclimate-report/1',air:{temperature_c:20,pressure_pa:101325,relative_humidity:0.5,
+    water_mole_fraction:0.01,density_kg_m3:1.2,specific_heat_cp_j_kg_k:1005,thermal_conductivity_w_m_k:0.026,prandtl:0.71},
+    convection:{correlation:'churchill_chu_vertical_plate',name:'convection.churchill-chu-vertical-plate',
+      citation:'<literal correlation source>',nu:40,h_w_m2_k:2.6,discrepancy_rel:0.2,groups:{Pr:0.71,Ra:1e7},evidence:'estimate',exterior:null},
+    enclosure:null,no_claim:'Synthetic UI transport fixture; no measured garment film or physical fit.'};
+}
+test('guided microclimate runs air and exterior flow through the existing native worker',async()=>{
+  const page=await pageModule();authorMicroclimate(page);
+  assert.equal(page.e.microclimate.disabled,false);assert.equal(page.e.microclimateRequest.disabled,true);
+  assert.equal(page.e.microclimateWind.disabled,true);assert.equal(page.e.microclimateNatural.hidden,false);
+  page.e.microclimateExterior.checked=true;page.e.microclimateExterior.handlers.change();
+  assert.equal(page.e.microclimateMin.disabled,false);
+  await page.e.microclimate.onclick();
+  const message=page.current().messages.at(-1),request=JSON.parse(message.microclimateRequest);
+  assert.equal(message.type,'microclimate');
+  assert.deepEqual(request,{schema:'ftx-microclimate/1',air:{temperature_c:20,pressure_pa:101325,relative_humidity:0.5},
+    convection:{correlation:'churchill_chu_vertical_plate',characteristic_length_m:0.4,delta_t_k:10,gravity_m_s2:9.81,
+      surface_temperature_range_c:[5,45],allow_estimates:false}});
+  const raw=' '+JSON.stringify(microclimateReport())+'\n',calls=[];
+  const worker=await workerModule({bindings:{default:()=>Promise.resolve(),thermal_microclimate:input=>{calls.push(input);return raw;}}});
+  const response=await worker.send(message);assert.equal(response.type,'result',response.message);
+  assert.deepEqual(calls,[message.microclimateRequest]);
+  assert.equal(response.files[0].text,raw);assert.equal(response.files[1].text,message.microclimateRequest);
+  page.current().emit(response);
+  const output=section(page,'Microclimate air, convection and radiosity');
+  assert.equal(output.hidden,false);assert.match(output.children[1].textContent,/ftx-microclimate-report\/1/);
+  assert.match(JSON.stringify(output),/Coefficient \(W\/m² K\)/);assert.match(JSON.stringify(output),/<literal correlation source>/);
+  assert.match(JSON.stringify(output),/not a confidence interval/);
+  page.e.microclimateCorrelation.value='flat_plate_laminar_average';page.e.microclimateCorrelation.handlers.change();
+  assert.equal(page.e.microclimateWind.disabled,false);assert.equal(page.e.microclimateDelta.disabled,true);
+  page.e.microclimateAllowEstimates.checked=true;
+  await page.e.microclimate.onclick();
+  const forced=JSON.parse(page.current().messages.at(-1).microclimateRequest).convection;
+  assert.equal(forced.wind_speed_m_s,1);assert.equal(forced.allow_estimates,true);
+  assert.equal(Object.hasOwn(forced,'delta_t_k'),false);assert.equal(Object.hasOwn(forced,'reynolds'),false);
+  page.emit(microclimateReport());
+  page.e.microclimateCorrelation.value='air';page.e.microclimateCorrelation.handlers.change();
+  page.e.microclimateMin.value='';
+  await page.e.microclimate.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(page.current().messages.at(-1).microclimateRequest),'convection'),false);
+});
+
+test('guided microclimate edits cancel stale work and downloads without erasing inactive drafts',async()=>{
+  const page=await pageModule();authorMicroclimate(page);await page.e.microclimate.onclick();
+  const stale=page.current(),request=stale.messages.at(-1).request;
+  page.e.microclimateHumidity.value='65';page.e.microclimateHumidity.handlers.input();
+  assert.equal(stale.dead,true);assert.notEqual(page.current(),stale);page.ready();
+  stale.emit({type:'result',request,result:microclimateReport(),files:[]});
+  assert.equal(section(page,'Microclimate air, convection and radiosity').hidden,true);
+  await page.e.microclimate.onclick();page.emit(microclimateReport(),[{name:'microclimate-report.json',text:'{}',mime:'application/json'}]);
+  const downloads=[...page.live];assert.equal(downloads.length,1);
+  page.e.microclimateMode.value='file';page.e.microclimateMode.handlers.change();
+  assert.equal(page.live.size,0);assert.equal(page.e.microclimateHumidity.value,'65');
+  const original=' {"schema":"ftx-microclimate/1","air":{"temperature_c":20.0,"pressure_pa":101325.0,"relative_humidity":-0.0}}\n';
+  page.select('microclimateRequest',original);page.e.microclimateRequest.handlers.change();
+  await page.e.microclimate.onclick();assert.equal(page.current().messages.at(-1).microclimateRequest,original);
+  const fileWorker=page.current();page.e.microclimateTemperature.value='';page.e.microclimateTemperature.handlers.input();
+  assert.equal(fileWorker.dead,false,'inactive guided draft must not cancel the original-file request');
+  page.emit(microclimateReport());page.e.microclimateMode.value='form';page.e.microclimateMode.handlers.change();
+  assert.equal(page.e.microclimateHumidity.value,'65');assert.equal(page.e.microclimateForm.hidden,false);
+});
+
+test('guided microclimate rejects blank and impossible inputs before dispatch without cancelling unrelated work',async()=>{
+  const page=await pageModule();authorMicroclimate(page);
+  page.e.microclimatePressure.value='';await page.e.microclimate.onclick();
+  assert.match(page.e.error.textContent,/finite absolute air pressure/);assert.equal(page.current().messages.length,0);
+  page.e.microclimatePressure.value='0';await page.e.microclimate.onclick();
+  assert.match(page.e.error.textContent,/positive/);assert.equal(page.current().messages.length,0);
+  page.e.microclimatePressure.value='101325';page.e.microclimateHumidity.value='101';await page.e.microclimate.onclick();
+  assert.match(page.e.error.textContent,/humidity/);assert.equal(page.current().messages.length,0);
+  page.select('viscoRequest','{"schema":"ftx-fractional-zener-lowering/1"}');page.e.viscoRequest.handlers.change();
+  await page.e.lowerVisco.onclick();const unrelated=page.current();
+  page.e.microclimateHumidity.value='50';page.e.microclimateHumidity.handlers.input();
+  assert.equal(unrelated.dead,false);assert.equal(unrelated.messages.at(-1).type,'lowerVisco');
+});
+
 test('opt-in Newton strategy, Generalized-alpha integrator, microclimate and lowerVisco wire through both workbenches and workers', async () => {
   // 1. Material workbench page: adaptive_ilu + generalized_alpha fold message, summary, invalidation, fail-closed refusal, handoff.
   const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');

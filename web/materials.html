@@ -139,7 +139,40 @@ require their own selection consent. This fixed-resistance, isothermal calculati
 sweat availability, actual wearer cooling, condensation or garment comfort; it does not add an
 evaporation term to the separate dry-heat simulation.</p>
 <details><summary>Microclimate air, convection, radiosity and fractional viscoelastic lowering</summary>
+<label>Microclimate input <select id="microclimateMode"><option value="file">Original JSON request</option><option value="form">Author air and exterior convection</option></select></label>
 <label>Microclimate request JSON (<code>ftx-microclimate/1</code>) <input id="microclimateRequest" type="file" accept=".json,application/json"></label>
+<fieldset id="microclimateForm" hidden><legend>Air and exterior flow</legend>
+<label>Air temperature (°C) <input id="microclimateTemperature" type="number" step="any" value="20"></label>
+<label>Absolute air pressure (Pa) <input id="microclimatePressure" type="number" min="0" step="any" value="101325"></label>
+<label>Relative humidity (%) <input id="microclimateHumidity" type="number" min="0" max="100" step="any" value="50"></label>
+<label>External convection model <select id="microclimateCorrelation">
+<option value="air">Air properties only</option>
+<option value="churchill_chu_vertical_plate">Still air — vertical plate (Churchill–Chu)</option>
+<option value="flat_plate_laminar_average">Wind along a flat plate — laminar average</option>
+<option value="flat_plate_turbulent_average">Wind along a flat plate — mixed/turbulent average</option>
+<option value="churchill_bernstein_cylinder">Wind across a cylinder (Churchill–Bernstein)</option>
+</select></label>
+<fieldset id="microclimateConvection" hidden><legend>Declared geometry and flow</legend>
+<label>Characteristic length (m): plate flow length / vertical height / cylinder diameter
+<input id="microclimateLength" type="number" min="0" step="any" value="0.4"></label>
+<label id="microclimateWindField">Wind speed (m/s) <input id="microclimateWind" type="number" min="0" step="any" value="1"></label>
+<fieldset id="microclimateNatural" hidden><legend>Buoyancy conditions</legend>
+<label>Absolute surface–air temperature difference (K) <input id="microclimateDelta" type="number" min="0" step="any" value="10"></label>
+<label>Gravity (m/s²) <input id="microclimateGravity" type="number" min="0" step="any" value="9.81"></label>
+</fieldset>
+<label><input id="microclimateExterior" type="checkbox"> Prepare a constant exterior coefficient for an explicitly declared surface-temperature range</label>
+<fieldset id="microclimateExteriorFields" hidden><legend>Approximation domain and consent</legend>
+<label>Minimum surface temperature (°C) <input id="microclimateMin" type="number" step="any" placeholder="Declare minimum"></label>
+<label>Maximum surface temperature (°C) <input id="microclimateMax" type="number" step="any" placeholder="Declare maximum"></label>
+<label><input id="microclimateAllowEstimates" type="checkbox"> I allow this correlation-derived estimate, not a measured garment film</label>
+</fieldset>
+</fieldset>
+<p class="note">Rust derives air properties, Reynolds/Rayleigh/Prandtl groups and the coefficient from these inputs, then checks the correlation's domain.
+The humid-air model currently admits −20 to 50 °C and a bounded water-vapor fraction; it refuses unsupported conditions rather than clamping.
+Choose the geometry yourself: neither a garment mesh nor a fiber name establishes a plate or cylinder model.
+The optional exterior coefficient stays constant across its declared surface range; this does not recalculate airflow or natural convection as cloth temperatures change.
+Use original JSON for duct correlations or a complete radiative enclosure.</p>
+</fieldset>
 <button id="microclimate" data-command="microclimate" disabled>Evaluate microclimate air, convection and radiosity</button>
 <p class="note">Computes USSA-1976 / Buck moist-air properties, validity-gated Nusselt correlations (emitted explicitly as
 <code>Estimate</code> exterior records, never promoted to measured film data) and optional N-patch gray-diffuse radiosity enclosures.
