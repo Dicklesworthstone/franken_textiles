@@ -108,8 +108,9 @@ export default function DrapeRoomScene(props: Props) {
     controls.minPolarAngle=.65;controls.maxPolarAngle=1.73;
     controls.touches.ONE=T.TOUCH.ROTATE;
     // The body is a tailor's form in the fitted body's own shape. Nothing is painted onto it.
-    const plaster=formMaterial();
+    const plaster=formMaterial(undefined,{inset:.0025});
     const bust=plaster.clone();
+    bust.onBeforeCompile=plaster.onBeforeCompile;bust.customProgramCacheKey=plaster.customProgramCacheKey;
     bust.clippingPlanes=[new T.Plane(new T.Vector3(0,1,0),-.033)];bust.clipShadows=true;
     const form=new T.Mesh(new T.BufferGeometry(),[bust,plaster]);
     const empty=form.geometry;

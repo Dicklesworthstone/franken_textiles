@@ -22,7 +22,7 @@ test("every construction study pairs a full-size cut with its three film chapter
     for(const garment of choices){
       await select.selectOption(garment);
       const motion=stage.locator(`[data-garment="${garment}"]`);
-      for(const chapter of ["Flat pattern","Join the pieces","Sewn article"]){
+      for(const chapter of ["Flat pattern","Match the edges","Sewn article"]){
         await motion.getByRole("button",{name:chapter,exact:true}).click();
         await motion.locator(".construction-still").evaluate(img=>img.decode());
         assert.equal(await motion.locator("video").evaluate(v=>v.paused),true);

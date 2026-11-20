@@ -21,7 +21,7 @@ const all:readonly Garment[] = ["flare","column","sundress","eased","blue","yell
 export const constructionFilms=all.map(id=>({id:"construction-"+id,title:studies[id].name+" · from cut to cloth",detail:studies[id].cut}));
 const chapters = [
   {name:"Flat pattern", image:"cut", frame:0},
-  {name:"Join the pieces", image:"join", frame:53},
+  {name:"Match the edges", image:"join", frame:53},
   {name:"Sewn article", image:"sewn", frame:90},
 ] as const;
 
@@ -90,7 +90,8 @@ export default function ConstructionStudy({choices=all,hero=false,value,onSelect
       {hero?<h1 id={id}>From cut<br/><em>to cloth.</em></h1>:<h2 id={id}>From cut <em>to cloth.</em></h2>}
       {choices.length>1?<label className="construction-select">Choose a garment<select value={selected} onChange={e=>(onSelect??select)(e.target.value as Garment)}>
         {choices.map(k=><option key={k} value={k}>{studies[k].name}</option>)}</select></label>:<h3>{study.name}</h3>}
-      <p className="construction-spec">{study.cut}</p><p className="construction-description">{study.text}</p>
+      <p className="construction-spec">{study.cut}</p><p className="construction-description">{study.text}
+        {selected!=="fez"&&" Lines on the board mark matching edges. The film cuts to the checked seam placement, then follows the cloth under gravity."}</p>
       <div className="construction-links">{hero&&<a href={study.href}>Open the study ↗</a>}
         <a href={study.pdf} download>{selected==="ensemble"?"Jacket pattern":"Full-size pattern"} ↓</a>
         {selected==="ensemble"&&<a href="/patterns/trousers.pdf" download>Trouser pattern ↓</a>}</div>

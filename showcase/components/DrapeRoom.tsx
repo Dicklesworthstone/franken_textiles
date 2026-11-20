@@ -104,6 +104,7 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
         </figcaption>
       </figure>
       <details className="dr-method"><summary>How the cloth was simulated <span>{flags.length?(run.settled?"Contact thickness incomplete":"Cloth still moving"):"Settled"}</span></summary>
+        <p>The display form sits 2.5 mm inside the recorded body so its surface stays behind the jacket at the shoulders. The cloth positions and clearance readings come from the original solve.</p>
         {full?<><p>Both garments share one native cloth solve on a synthetic 92 cm body. Twelve panels bend separately on the board. The replay cuts to their checked placement on the form. The next 12 sewing steps and 36 gravity steps include contact with the body and between garments. Both cuts use the same synthetic material properties. The colors distinguish the garments.</p>
           {joint.advisories.map(note=><p key={note}>Starting placement advisory · {note}.</p>)}
           <p><a href="/exhibits/poses/ensemble-request.json" download>Download the two-pattern solver input</a> · <a href="/exhibits/poses/ensemble.json" download>Download endpoint readings</a></p></>:<><p>Each combination replays a separate FrankenTextiles run with the same pattern and fabric. The flat panels bend on the board before the view cuts to their checked position on the synthetic 92 cm form. The final 48 frames show native sewing and gravity steps. The weave and cord mark the cloth surface. The readings above describe the endpoint.</p>

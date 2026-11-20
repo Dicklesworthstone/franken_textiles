@@ -32,7 +32,7 @@ export default function CoupledScene({frame,onReady,onError}:{frame:number;onRea
       Object.assign(camera,{left:-half*a,right:half*a,top:half,bottom:-half});camera.updateProjectionMatrix();renderer.setSize(w,h,false);draw();};
     const observer=new ResizeObserver(resize);observer.observe(el);resize();
     const studio=lightStudio(renderer,scene,"warm");
-    const body=new T.BufferGeometry(),form=formMaterial();
+    const body=new T.BufferGeometry(),form=formMaterial(undefined,{inset:.0025});
     const disposables:{dispose():void}[]=[];
     async function get(path:string){const r=await fetch(path,{signal});if(!r.ok||!r.body)throw Error("Missing coupled drape");return r;}
     Promise.all([get("/exhibits/poses/ensemble.gz").then(r=>new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()),
