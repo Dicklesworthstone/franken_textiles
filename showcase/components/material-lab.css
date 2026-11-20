@@ -26,7 +26,9 @@
 .rig-viewbar{padding:9px 12px;justify-content:space-between;border-top:1px solid #b5b6a7}
 .rig-viewbar button,.rig-presets button{border:1px solid #bdbdaf;border-radius:3px;background:#eeeae0;color:#343f3c;padding:6px 9px;font-size:12px}
 .rig-viewbar label{font-size:12px}.rig-viewbar input,.rig-slider input{accent-color:#854528}
-.rig-console{padding:clamp(20px,2.5vw,40px);background:#fcf9ef;display:flex;flex-direction:column;justify-content:center}
+/* 470px: just under the console's height once its readings have loaded (471 to 502 px at 320 to 1024 px wide,
+   both experiments), so the notes below do not jump when they arrive. */
+.rig-console{padding:clamp(20px,2.5vw,40px);background:#fcf9ef;display:flex;flex-direction:column;justify-content:center;min-height:470px}
 .rig-console h2,.rig-notes h2{font:400 36px/1 var(--serif);margin:0 0 20px}
 .rig-slider{display:grid;grid-template-columns:1fr auto;font-size:13px;font-weight:600;gap:9px}.rig-slider output{font:500 13px var(--mono)}.rig-slider input{margin:0;width:100%;grid-column:1/-1}
 .rig-presets{gap:4px;margin:10px 0}.rig-presets button{font-size:11px;padding:4px 7px}.rig-presets button[aria-pressed=true]{background:#31423f;color:white}
