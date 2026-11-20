@@ -338,7 +338,8 @@ pub fn pc2(frames: &[Vec<Vec3>]) -> Vec<u8> {
 #[must_use]
 pub fn mesh_map(mesh: &GarmentMesh, fold: &FoldUp) -> Value {
     let mut map = pattern_mesh_map(mesh);
-    map["frames"] = json!({"fold": fold.fold, "zip": fold.zip, "sew": fold.sew, "drape": fold.drape});
+    map["frames"] =
+        json!({"fold": fold.fold, "zip": fold.zip, "sew": fold.sew, "drape": fold.drape});
     map
 }
 

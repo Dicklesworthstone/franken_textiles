@@ -525,7 +525,8 @@ pub struct SettleReport {
 }
 
 /// Nonlinear solver strategy for [`Solver`].
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NewtonStrategy {
     /// Projected Newton with exact LDLᵀ (or cached-factor PCG when `pcg_iters > 0`) and Armijo
     /// backtracking. Default: preserves bit-identical legacy behavior.
@@ -552,6 +553,73 @@ pub enum NewtonStrategy {
         /// Maximum CG matvecs per outer trust-region step (`0` chooses `2 * nfree.max(32)`).
         cg_iters: usize,
     },
+}
+
+impl NewtonStrategy {
+    /// Default parameters for [`NewtonStrategy::AdaptiveIlu`].
+    #[must_use]
+    pub const fn adaptive_ilu_default() -> Self {
+        Self::AdaptiveIlu {
+            pcg_iters: 64,
+            max_shifts: 4,
+        }
+    }
+
+    /// Default parameters for [`NewtonStrategy::TrustRegionSteihaug`].
+    #[must_use]
+    pub const fn trust_region_default() -> Self {
+        Self::TrustRegionSteihaug {
+            initial_radius: 0.05,
+            max_radius: 0.5,
+            min_radius: 1e-12,
+            cg_iters: 0,
+        }
+    }
+
+    /// Whether this is the legacy default [`NewtonStrategy::ProjectedNewton`].
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::ProjectedNewton)
+    }
+
+    /// Validate strategy parameters before meshing or solving.
+    ///
+    /// # Errors
+    /// [`RefusalCode::OutOfRange`] on invalid trust-region radii or zero `AdaptiveIlu` CG cap.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        match *self {
+            Self::ProjectedNewton => Ok(()),
+            Self::AdaptiveIlu { pcg_iters, .. } => {
+                if pcg_iters == 0 {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        "AdaptiveIlu pcg_iters must be positive",
+                    ));
+                }
+                Ok(())
+            }
+            Self::TrustRegionSteihaug {
+                initial_radius,
+                max_radius,
+                min_radius,
+                ..
+            } => {
+                if !(initial_radius.is_finite()
+                    && max_radius.is_finite()
+                    && min_radius.is_finite()
+                    && min_radius > 0.0
+                    && initial_radius >= min_radius
+                    && max_radius >= initial_radius)
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        "trust-region radii must be finite with 0 < min_radius <= initial_radius <= max_radius",
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 /// The cloth state and the solver.
@@ -937,6 +1005,149 @@ impl Solver {
         }
         self.a = a;
         self.accel_initialized = true;
+        Ok(())
+    }
+
+    /// Clear tracked accelerations so the next [`TimeIntegrator::GeneralizedAlpha`] step
+    /// recomputes a consistent initial acceleration `M a₀ = M g − ∇Ψ(x₀)`. Call after changing
+    /// gravity, external loads, or positions discontinuously between phases.
+    pub fn reset_acceleration(&mut self) {
+        self.a.fill(Vec3::ZERO);
+        self.accel_initialized = false;
+    }
+
+    /// Exact static nodal residual `R_i(x) = ∂Ψ/∂x_i − m_i g` (N) on every vertex (free and
+    /// fixed). At a converged static equilibrium `R_i ≈ 0` on free DOFs, and `R_i` on fixed DOFs
+    /// is the exact external support reaction force required to hold those Dirichlet constraints.
+    #[must_use]
+    pub fn nodal_reactions(&self) -> Vec<Vec3> {
+        let mut r = vec![Vec3::ZERO; self.x.len()];
+        let add_local = |r: &mut [Vec3], dofs: &[usize], grad: &[f64]| {
+            for (k, &v) in dofs.iter().enumerate() {
+                r[v].x += grad[3 * k];
+                r[v].y += grad[3 * k + 1];
+                r[v].z += grad[3 * k + 2];
+            }
+        };
+        for (i, e) in self.model.membranes.iter().enumerate() {
+            let l = self
+                .membrane_plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, false))
+                .unwrap_or_else(|| {
+                    self.model.membrane_response(i).map_or_else(
+                        || e.local(&self.x, &self.model.material(i)),
+                        |law| e.response_local(&self.x, law, &self.model.material(i)),
+                    )
+                });
+            add_local(&mut r, &e.v, &l.grad);
+        }
+        for (i, h) in self.model.hinges.iter().enumerate() {
+            let l = h.local(&self.x, self.model.hinge_rigidity(i));
+            add_local(&mut r, &h.v, &l.grad);
+        }
+        for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
+            let l = self
+                .plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, false))
+                .unwrap_or_else(|| p.local(&self.x));
+            add_local(&mut r, &p.v, &l.grad);
+        }
+        for e in &self.model.elastics {
+            let l = e.local(&self.x);
+            add_local(&mut r, &e.v, &l.grad);
+        }
+        for (i, &m) in self.model.mass.iter().enumerate() {
+            r[i] -= self.gravity * m;
+        }
+        if let Some(c) = &self.contact {
+            for block in c.terms(&self.x, true, false).blocks {
+                for (ia, &(va, ka)) in block.dofs.iter().enumerate() {
+                    match ka {
+                        0 => r[va].x += block.grad[ia],
+                        1 => r[va].y += block.grad[ia],
+                        _ => r[va].z += block.grad[ia],
+                    }
+                }
+            }
+        }
+        r
+    }
+
+    /// Matrix-vector product `H_{FD} c_D = (∂R_D / ∂x_F)ᵀ c_D` mapping Dirichlet (fixed) DOF
+    /// weights `c_fixed` into free-DOF adjoint RHS entries at `self.x`.
+    pub(crate) fn fixed_to_free_hessian_mul(&self, c_fixed: &[Vec3]) -> Vec<f64> {
+        let mut out = vec![0.0; self.nfree];
+        let mut accum = |dofs: &[usize], hess: &[f64]| {
+            let n = 3 * dofs.len();
+            for a in 0..n {
+                let Some(fa) = self.free[3 * dofs[a / 3] + a % 3] else {
+                    continue;
+                };
+                for b in 0..n {
+                    let vb = dofs[b / 3];
+                    let kb = b % 3;
+                    if self.free[3 * vb + kb].is_none() {
+                        let w = c_fixed[vb][kb];
+                        if w != 0.0 {
+                            out[fa] += hess[a * n + b] * w;
+                        }
+                    }
+                }
+            }
+        };
+        for (i, e) in self.model.membranes.iter().enumerate() {
+            let l = e.local(&self.x, &self.model.material(i));
+            accum(&e.v, &l.hess);
+        }
+        for (i, h) in self.model.hinges.iter().enumerate() {
+            let l = h.local(&self.x, self.model.hinge_rigidity(i));
+            accum(&h.v, &l.hess);
+        }
+        for e in &self.model.elastics {
+            let l = e.local(&self.x);
+            accum(&e.v, &l.hess);
+        }
+        if let Some(c) = &self.contact {
+            for mut block in c.terms(&self.x, true, false).blocks {
+                let m = block.dofs.len();
+                if !block.psd {
+                    project_psd(&mut block.hess, m);
+                }
+                for (ia, &(va, ka)) in block.dofs.iter().enumerate() {
+                    let Some(fa) = self.free[3 * va + ka] else {
+                        continue;
+                    };
+                    for (ib, &(vb, kb)) in block.dofs.iter().enumerate() {
+                        if self.free[3 * vb + kb].is_none() {
+                            let w = c_fixed[vb][kb];
+                            if w != 0.0 {
+                                out[fa] += block.hess[ia * m + ib] * w;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn is_fixed_dof(&self, vertex: usize, axis: usize) -> bool {
+        self.free[3 * vertex + axis].is_none()
+    }
+
+    pub(crate) fn check_integrator_history(&self) -> Result<(), Refusal> {
+        if self.integrator != TimeIntegrator::ImplicitEuler
+            && (self.relaxation.is_some()
+                || self.plasticity.is_some()
+                || self.membrane_plasticity.is_some())
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "Generalized-alpha integration is not admitted for backward-Euler material-history fields; use TimeIntegrator::ImplicitEuler",
+            ));
+        }
         Ok(())
     }
 

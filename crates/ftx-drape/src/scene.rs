@@ -1420,8 +1420,12 @@ pub(crate) fn run_phase_with_subdivision(
     }
     // Successful empty phases still select their load, as on the ordinary path. A failed
     // subdivided interval must not change gravity or any other part of the accepted state.
+    let target_gravity = Vec3::new(0.0, 0.0, -gravity);
     if policy.is_none() || steps == 0 {
-        scene.solver.gravity = Vec3::new(0.0, 0.0, -gravity);
+        if scene.solver.gravity != target_gravity {
+            scene.solver.gravity = target_gravity;
+            scene.solver.reset_acceleration();
+        }
     }
     let mut rep = PhaseReport::default();
     for k in 0..steps {
@@ -1434,7 +1438,10 @@ pub(crate) fn run_phase_with_subdivision(
                 ));
             }
             let mut candidate = scene.solver.clone();
-            candidate.gravity = Vec3::new(0.0, 0.0, -gravity);
+            if candidate.gravity != target_gravity {
+                candidate.gravity = target_gravity;
+                candidate.reset_acceleration();
+            }
             if let Some(contact) = candidate.contact.as_mut() {
                 ramp_thickness(contact, &candidate.x, scene.target_thickness);
             }

@@ -507,7 +507,10 @@ pub(super) fn refused_stills(
         map["refused_pose"] = json!({"phase":state.phase, "accepted_steps":state.accepted_steps,
             "width":size.0, "height":size.1});
         if let Err(error) = workspace::write_json(&dir.join("mesh_map.json"), &map) {
-            refusal.repairs.push(format!("The diagnostic source-edge map could not be saved: {}", error.message));
+            refusal.repairs.push(format!(
+                "The diagnostic source-edge map could not be saved: {}",
+                error.message
+            ));
         }
         refusal.repairs.insert(
             0,
@@ -833,7 +836,10 @@ mod tests {
         assert!(shown.repairs[0].contains("not a drape or a fit"));
         assert_eq!(shown.repairs[1], "try --time-subdivision");
         let (map, _) = crate::fold::document(&out.join("refused/mesh_map.json")).unwrap();
-        assert_eq!(map["refused_pose"], json!({"phase":"sew","accepted_steps":2,"width":960,"height":540}));
+        assert_eq!(
+            map["refused_pose"],
+            json!({"phase":"sew","accepted_steps":2,"width":960,"height":540})
+        );
         assert!(map.get("frames").is_none());
         for name in [
             "body.obj",

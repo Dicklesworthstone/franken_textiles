@@ -13,9 +13,11 @@
 //! - zero `unsafe`, zero `mul_add`, zero platform `libm`.
 
 use ftx_core::{Refusal, RefusalCode, Vec3};
+use serde::{Deserialize, Serialize};
 
 /// Time-integration scheme for [`crate::cloth::Solver::step`].
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TimeIntegrator {
     /// First-order backward Euler (the legacy default, bit-identical to `HEAD`).
     #[default]
@@ -29,6 +31,28 @@ pub enum TimeIntegrator {
         /// Spectral radius at infinite frequency, in `[0, 1]`.
         rho_inf: f64,
     },
+}
+
+impl TimeIntegrator {
+    /// Whether this is the legacy default [`TimeIntegrator::ImplicitEuler`].
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::ImplicitEuler)
+    }
+
+    /// Validate time-integrator parameters up front.
+    ///
+    /// # Errors
+    /// [`RefusalCode::OutOfRange`] if `rho_inf` is non-finite or outside `[0, 1]`.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        match *self {
+            Self::ImplicitEuler => Ok(()),
+            Self::GeneralizedAlpha { rho_inf } => {
+                GeneralizedAlphaParams::new(rho_inf)?;
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Validated Chung–Hulbert Generalized-α parameters.
