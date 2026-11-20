@@ -603,8 +603,8 @@ fn start_repair(dir: &Path, placement: &Value) -> String {
     text
 }
 
-/// When a drape refuses its start (`intersecting_start`: the posed body, cloth inside it, cloth crossing
-/// cloth) there is no solver state to show. What was refused is what `ftx place` draws, so the two
+/// A start can be refused by the posed-body audit, by cloth inside or too near the body, or by cloth
+/// layers crossing or touching. The refused geometry is what `ftx place` draws, so the two
 /// placement stages of the drape's own pattern and body are written under `OUT/refused` and named first
 /// among the repairs. If they cannot be produced the refusal is returned unchanged.
 pub(super) fn start_stills(mut refusal: Refusal, staging: &Staging, out: &Path) -> Refusal {

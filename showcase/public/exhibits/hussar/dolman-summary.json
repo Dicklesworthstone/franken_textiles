@@ -364,5 +364,6 @@
    "target_mm": 1070.0
   }
  },
- "wallSeconds": 651.5
+ "wallSeconds": 651.5,
+ "finalResidualN": 20.58769464037592
 }

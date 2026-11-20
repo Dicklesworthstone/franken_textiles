@@ -202,7 +202,6 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
         body[used].astype("<f4").tobytes(), remap.astype("<u4").tobytes(),
         flat.astype("<f4").tobytes(), xyz[frames].astype("<f4").tobytes()])
     numerical = report["numerical"]
-    last_phase = numerical["drape"] if numerical["drape"]["steps"] else numerical["sew"]
     metadata = {
         "units": "m", "vertices": n, "triangles": triangles.flatten().tolist(),
         "panels": mesh["inst_range"], "seams": mesh["seams"],
@@ -217,7 +216,6 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
             "edgeStrainPercent": report["global_strain_pct"], "massKg": report["mass_kg"],
             "areaM2": report["area_m2"], "sewingPairs": report["sewing_pairs"],
             "selfContact": report["self_contact"].get("enabled", False),
-            "bodyOffsetMm": {"target": report["cloth_offset_mm"], "achieved": 1000 * last_phase["thickness"]},
             "scope": report["simulation_scope"], "fabric": report["fabric"],
             "bodyFit": report["body"].get("fit", {}).get("tape"), "wallSeconds": report["wall_s"],
         },
@@ -227,6 +225,12 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
     for key, field in (("compressionFactor", "compression_factor"), ("gatherRelief", "gather_relief")):
         if field in report:
             metadata["summary"][key] = report[field]
+    last_phase = next((phase for phase in (numerical.get("drape", {}), numerical.get("sew", {}))
+                       if phase.get("steps")), {})
+    if "thickness" in last_phase and "cloth_offset_mm" in report:
+        metadata["summary"]["bodyOffsetMm"] = {"target": report["cloth_offset_mm"], "achieved": 1000 * last_phase["thickness"]}
+    if last_phase.get("samples"):
+        metadata["summary"]["finalResidualN"] = last_phase["samples"][-1]["solve"]["residual"]
     # The numbers the page states in words, small enough to import without the mesh.
     digest = {"vertices": n, "triangles": len(triangles), "frames": len(frames), "phases": phases,
               "cords": len(cords), "buttons": len(buttons), "instances": names,
