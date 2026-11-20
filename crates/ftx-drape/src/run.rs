@@ -1827,7 +1827,12 @@ mod self_contact_tests {
                 16,
                 0.8,
             ),
-            ("TR rho=0.8", NewtonStrategy::trust_region_default(), 16, 0.8),
+            (
+                "TR rho=0.8",
+                NewtonStrategy::trust_region_default(),
+                16,
+                0.8,
+            ),
             ("PN-exact rho=0.5", NewtonStrategy::ProjectedNewton, 0, 0.5),
             (
                 "ILU rho=0.5",
