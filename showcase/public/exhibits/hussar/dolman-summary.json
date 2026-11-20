@@ -23,7 +23,7 @@
   "dolman_undersleeve.L",
   "dolman_undersleeve.R"
  ],
- "sourcePc2Sha256": "5fa9c05f8e57a0789b17811c7dc905c3924514e179235d2a62c4ed9c70f84112",
+ "sourcePc2Sha256": "3821c9c35586c9c566382e0766adb3beab869b006e636f4e0e57e9f8d4fab3f9",
  "style": "HUSSAR_BLUE",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -45,32 +45,28 @@
   "body thickness ramp did not reach its target"
  ],
  "flags": [
-  "seam dolman_cap_front_low_L is distorted in the drape (p90 11 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_front_high_L is distorted in the drape (p90 12 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_rear_mid_L is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_low_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_high_L is distorted in the drape (p90 11 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_mid_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "seam dolman_collar_front_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "seam dolman_cap_front_low_R is distorted in the drape (p90 12 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_front_high_R is distorted in the drape (p90 15 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_high_R is distorted in the drape (p90 14 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "seam dolman_cap_rear_low_R is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_rear_mid_R is distorted in the drape (p90 18 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_mid_R is distorted in the drape (p90 17 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "seam dolman_collar_front_R is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "the body rides up 43 mm with arms at 45\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
   "body thickness ramp did not reach its target",
   "Declared simulation subset: 2 instance(s) and 6 seam(s) excluded; see simulation_scope. Results describe only the simulated subset."
  ],
  "edgeStrainPercent": {
-  "max": 34.22,
-  "min": -15.23,
-  "p95": 6.89
+  "max": 32.65,
+  "min": -13.79,
+  "p95": 6.57
  },
  "massKg": 0.29438584832109344,
  "areaM2": 0.7747,
  "sewingPairs": 324,
  "selfContact": true,
- "bodyOffsetMm": {
-  "target": 1.5,
-  "achieved": 0.8091370168267825
- },
  "scope": {
   "basis": "declared_subset",
   "excluded_instances": [
@@ -268,102 +264,107 @@
  },
  "bodyFit": {
   "arm_length": {
-   "body_mm": 598.8,
+   "body_mm": 598.9,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": -0.07511554988462876,
-   "residual_mm": -0.15023109976925753,
+   "normalized_residual": -0.05860288866142582,
+   "residual_mm": -0.11720577732285165,
    "sigma_mm": null,
    "target_mm": 599.0
   },
   "back_neck_to_waist": {
-   "body_mm": 457.9,
+   "body_mm": 457.5,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": 3.9457284966427153,
-   "residual_mm": 7.891456993285431,
+   "normalized_residual": 3.7497897654741905,
+   "residual_mm": 7.499579530948381,
    "sigma_mm": null,
    "target_mm": 450.0
   },
   "chest": {
    "body_mm": 998.2,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": -0.6071176752016451,
-   "residual_mm": -1.8213530256049353,
+   "normalized_residual": -0.5974675423335233,
+   "residual_mm": -1.7924026270005697,
    "sigma_mm": null,
    "target_mm": 1000.0
   },
   "crotch_height": {
-   "body_mm": 816.6,
+   "body_mm": 816.3,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": 0.2801985260403512,
-   "residual_mm": 0.5603970520807025,
+   "normalized_residual": 0.17214835033735199,
+   "residual_mm": 0.34429670067470397,
    "sigma_mm": null,
    "target_mm": 816.0
   },
   "head": {
-   "body_mm": 580.6,
+   "body_mm": 580.3,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": 0.21133142374022404,
-   "residual_mm": 0.6339942712206721,
+   "normalized_residual": 0.0975802510701745,
+   "residual_mm": 0.2927407532105235,
    "sigma_mm": null,
    "target_mm": 580.0
   },
   "hip": {
    "body_mm": 980.1,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": 0.03301611073300137,
-   "residual_mm": 0.09904833219900411,
+   "normalized_residual": 0.019215144162747794,
+   "residual_mm": 0.05764543248824339,
    "sigma_mm": null,
    "target_mm": 980.0
   },
   "knee_height": {
-   "body_mm": 499.1,
+   "body_mm": 500.0,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": 0.5448657754904218,
-   "residual_mm": 1.0897315509808436,
+   "normalized_residual": 1.0025765527890371,
+   "residual_mm": 2.0051531055780742,
    "sigma_mm": null,
    "target_mm": 498.0
   },
   "neck_base": {
-   "body_mm": 391.6,
+   "body_mm": 390.5,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": 0.5269043213054184,
-   "residual_mm": 1.5807129639162554,
+   "normalized_residual": 0.15142780413850687,
+   "residual_mm": 0.4542834124155206,
    "sigma_mm": null,
    "target_mm": 390.0
   },
   "shoulder_length": {
-   "body_mm": 148.2,
+   "body_mm": 146.9,
    "effective_sigma_mm": 5.0,
-   "normalized_residual": 0.6445843842636861,
-   "residual_mm": 3.222921921318431,
+   "normalized_residual": 0.38734959732923924,
+   "residual_mm": 1.9367479866461963,
    "sigma_mm": null,
    "target_mm": 145.0
   },
   "stature": {
-   "body_mm": 1773.4,
+   "body_mm": 1773.7,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": -3.290392822378294,
-   "residual_mm": -6.580785644756588,
+   "normalized_residual": -3.1596432917716584,
+   "residual_mm": -6.319286583543317,
    "sigma_mm": null,
    "target_mm": 1780.0
   },
   "waist": {
-   "body_mm": 860.5,
+   "body_mm": 860.8,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": 0.17311113635203887,
-   "residual_mm": 0.5193334090561166,
+   "normalized_residual": 0.27356698372220006,
+   "residual_mm": 0.8207009511666001,
    "sigma_mm": null,
    "target_mm": 860.0
   },
   "waist_height": {
-   "body_mm": 1076.3,
+   "body_mm": 1076.1,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": 3.1662593636015117,
-   "residual_mm": 6.3325187272030234,
+   "normalized_residual": 3.0686016708460784,
+   "residual_mm": 6.137203341692157,
    "sigma_mm": null,
    "target_mm": 1070.0
   }
  },
- "wallSeconds": 651.5,
- "finalResidualN": 20.58769464037592
+ "wallSeconds": 1171.3,
+ "bodyOffsetMm": {
+  "target": 1.5,
+  "achieved": 0.843212342733663
+ },
+ "finalResidualN": 15.017010639347008,
+ "solverRevision": "3b6aa55d7d961d206ce751de4986870468ff780c"
 }

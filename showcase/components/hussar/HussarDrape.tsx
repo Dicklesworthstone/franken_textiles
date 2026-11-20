@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import SolverDrape, { type DrapeLook, type DrapeView } from "../atelier3d/SolverDrape";
+import report from "../../public/exhibits/hussar/dolman-summary.json";
 
 export type Regiment = "Blue" | "Yellow";
 export type Framing = "Jacket" | "Chest" | "Reverse" | "Figure";
@@ -27,7 +28,7 @@ type Props = { regiment: Regiment; framing: { preset: Framing }; onFailure?: () 
 
 /** The 1761 dolman from flat pattern to sewn jacket, as the cloth solver made it: `public/exhibits/hussar/dolman.*`. */
 export default function HussarDrape({ regiment, framing, onFailure, children }: Props) {
-  return <SolverDrape source="/exhibits/hussar/dolman" looks={looks} look={regiment} views={views} view={framing}
+  return <SolverDrape source="/exhibits/hussar/dolman" recording={report.sourcePc2Sha256} looks={looks} look={regiment} views={views} view={framing}
     mountAt={HIP_LINE} className="hu-making" captureHook="ftxHussarFrame" pieceName={pieceName} onFailure={onFailure}
     label="The 1761 dolman from flat pattern to sewn jacket, draped by the cloth solver on a fitted adult form. Drag or use arrow keys to turn, and plus or minus to zoom.">{children}</SolverDrape>;
 }

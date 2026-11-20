@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useState } from "react";
 import InlineFilm, { filmFile } from "../InlineFilm";
 import CodeBlock from "../site/CodeBlock";
+import { repo } from "../site/links";
 import HussarReferences from "./HussarReferences";
 import HussarWardrobe from "./HussarWardrobe";
 import ConstructionStudy from "../construction/ConstructionStudy";
@@ -78,6 +79,8 @@ export default function HussarLab() {
       <details className="hu-flags"><summary>Replay this jacket with FrankenTextiles</summary>
         <p>Save the <a href="/exhibits/hussar/dolman-pattern.json" download>jacket pattern and starting placements</a> and <a href="/exhibits/hussar/dolman-measures.json" download>synthetic body measurements</a> together. With the converted Anny 0.6.1 model installed, run these commands in that directory.</p>
         <CodeBlock title="Sew the dolman and check the recorded surfaces" code={`ftx drape dolman-pattern.json --measurements dolman-measures.json ${drape.solverArguments.join(" ")} --out dolman\nftx viewer dolman --check-contact`}/>
+        {"solverRevision" in drape && typeof drape.solverRevision === "string" &&
+          <p>Native solver used for this recording · <a href={`${repo}/tree/${drape.solverRevision}`}><code>{drape.solverRevision.slice(0, 8)}</code></a></p>}
         <p>Recorded <code>fold.pc2</code> SHA-256 · <code style={{ overflowWrap: "anywhere" }}>{drape.sourcePc2Sha256}</code></p>
       </details>
       <p><a href="/exhibits/hussar/dolman-summary.json" download>Download the solver summary and flags ↓</a></p>

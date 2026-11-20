@@ -71,7 +71,7 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
       })}</div>
     </div>
     <div className="sd-sewn-board">
-      <Making key={cut} source={source} looks={looks} look="cotton" views={views} view={view} className="sd-making"
+      <Making key={cut} source={source} recording={drape.sourcePc2Sha256} looks={looks} look="cotton" views={views} view={view} className="sd-making"
         captureHook="ftxDressFrameDrape" pieceName={panel => pieces[panel] ?? panel}
         label="The garden sundress from flat pattern to sewn dress, made by the cloth solver on the reference form. Drag or use arrow keys to turn, and plus or minus to zoom.">
         <div className="sd-stage-caption"><i /> Fitted Anny body <span>·</span> solver drape</div></Making>

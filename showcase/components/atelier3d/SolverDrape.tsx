@@ -28,6 +28,7 @@ declare global { interface Window { ftxHussarFrame?: Pose; ftxDressFrameDrape?: 
 export interface SolverDrapeProps {
   /** The packaged drape without its extension: `<source>.json` and `<source>.gz`. */
   source: string;
+  recording: string;
   looks: Record<string, DrapeLook>; look: string;
   views: Record<string, DrapeView>; view: { preset: string };
   /** Show the form as a jacket mount, ending it this far above the floor (metres) with a plate and a pole. */
@@ -45,6 +46,7 @@ export interface SolverDrapeProps {
 }
 
 interface Package {
+  sourcePc2Sha256: string;
   vertices: number; triangles: number[]; panels: Record<string, [number, number]>;
   seams: Record<string, { side_a: number[]; side_b: number[] }>;
   frames: number[]; phases: DrapeInfo["phases"];
@@ -105,7 +107,7 @@ function patternSheet(pack: Package, flat: Float32Array, colours: Map<string, st
 }
 
 export default function SolverDrape(props: SolverDrapeProps) {
-  const { source, mountAt, label, captureHook, className, children, pieceName } = props;
+  const { source, recording, mountAt, label, captureHook, className, children, pieceName } = props;
   const root = useRef<HTMLDivElement>(null), host = useRef<HTMLDivElement>(null), apply = useRef<(() => void) | null>(null);
   const [info, setInfo] = useState<DrapeInfo | null>(null), [sheet, setSheet] = useState<Sheet | null>(null);
   const [frame, setFrame] = useState(-1), [playing, play] = useState(false), [failed, setFailed] = useState(false), [tinted, keepTint] = useState(false);
@@ -206,9 +208,10 @@ export default function SolverDrape(props: SolverDrapeProps) {
 
     const get = async (path: string) => { const r = await fetch(path, { signal }); if (!r.ok || !r.body) throw Error("Missing packaged drape"); return r; };
     Promise.all([
-      get(source + ".json").then(r => r.json() as Promise<Package>),
-      get(source + ".gz").then(r => new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()),
+      get(`${source}.json?v=${recording}`).then(r => r.json() as Promise<Package>),
+      get(`${source}.gz?v=${recording}`).then(r => new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()),
     ]).then(([pack, data]) => {
+      if (pack.sourcePc2Sha256 !== recording) throw Error("The garment recording differs from its displayed report");
       if (signal.aborted) return;
       const head = new DataView(data), bodyCount = head.getUint32(0, true), indexCount = head.getUint32(4, true);
       const n = head.getUint32(8, true), frameCount = head.getUint32(12, true);
@@ -392,7 +395,7 @@ export default function SolverDrape(props: SolverDrapeProps) {
       for (const item of disposables) item.dispose();
       body.dispose(); form.dispose(); studio.dispose(); renderer.dispose(); renderer.forceContextLoss(); el.remove();
     };
-  }, [source, mountAt, label, captureHook]);
+  }, [source, recording, mountAt, label, captureHook]);
 
   const shown = info ? Math.max(0, frame < 0 ? info.frames - 1 : frame) : 0, stage = info ? stageOf(info, shown) : 3;
   const name = pieceName ?? ((panel: string) => panel.replace(/_/g, " "));

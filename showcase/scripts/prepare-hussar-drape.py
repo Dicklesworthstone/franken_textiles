@@ -129,13 +129,17 @@ def locate(points, flat, triangles):
     return anchors
 
 
-def package(source, pattern_path, destination, name, drape_args=(), section=None, replay_inputs=()):
+def package(source, pattern_path, destination, name, drape_args=(), section=None, replay_inputs=(), solver_revision=None):
     """Pack a finished drape. `drape_args` are the solver arguments it was run with, recorded as given."""
+    report = json.loads((source / "sim_report.json").read_text())
+    inputs = {path.name: path.read_bytes() for path in replay_inputs}
+    expected = report.get("measurements_sha256")
+    if expected and "measures.json" in inputs and hashlib.sha256(inputs["measures.json"]).hexdigest() != expected:
+        raise ValueError("The measurement bytes differ from the native report. Use the files from the recorded solve.")
     subprocess.run([FTX, "viewer", source, "--check-contact"], check=True)
     drape_args = [str(a) for a in drape_args]
     spacing = float(drape_args[drape_args.index("--spacing-mm") + 1]) if "--spacing-mm" in drape_args else None
     mesh = json.loads((source / "mesh_map.json").read_text())
-    report = json.loads((source / "sim_report.json").read_text())
     pattern = json.loads(pattern_path.read_text())
     cache = (source / "fold.pc2").read_bytes()
     signature, version, n, first, rate, count = HEADER.unpack_from(cache)
@@ -231,6 +235,8 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
         metadata["summary"]["bodyOffsetMm"] = {"target": report["cloth_offset_mm"], "achieved": 1000 * last_phase["thickness"]}
     if last_phase.get("samples"):
         metadata["summary"]["finalResidualN"] = last_phase["samples"][-1]["solve"]["residual"]
+    if solver_revision:
+        metadata["summary"]["solverRevision"] = solver_revision
     # The numbers the page states in words, small enough to import without the mesh.
     digest = {"vertices": n, "triangles": len(triangles), "frames": len(frames), "phases": phases,
               "cords": len(cords), "buttons": len(buttons), "instances": names,
@@ -240,8 +246,8 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
                destination / f"{name}-pattern.json": pattern_path.read_bytes(),
                destination / f"{name}-summary.json": (json.dumps(digest, indent=1) + "\n").encode(),
                destination / f"{name}.gz": gzip.compress(payload, mtime=0)}
-    for path in replay_inputs:
-        outputs[destination / f"{name}-{path.name}"] = path.read_bytes()
+    for filename, data in inputs.items():
+        outputs[destination / f"{name}-{filename}"] = data
     if section:
         result = section(body, body_faces, xyz[-1], triangles, mesh, report)
         outputs[destination / f"{name}-section.json"] = (json.dumps(result, separators=(",", ":"), allow_nan=False) + "\n").encode()
@@ -265,9 +271,13 @@ def solve_and_package(description, documents, drape_args, default_name, section=
     parser.add_argument("work", type=Path)
     parser.add_argument("destination", type=Path)
     parser.add_argument("--name", default=default_name)
+    parser.add_argument("--solver-revision", help="Full Git commit of the native solver that produced this run.")
     parser.add_argument("--solve", action="store_true", help="Create WORK and run the drape first.")
     parser.add_argument("--model", type=Path, help="Converted Anny model for --solve.")
     args = parser.parse_args(argv)
+    if args.solver_revision and (len(args.solver_revision) != 40 or
+                                 any(c not in "0123456789abcdef" for c in args.solver_revision)):
+        parser.error("--solver-revision needs the full lowercase Git commit")
     if args.solve:
         if not args.model:
             parser.error("--solve needs --model")
@@ -286,7 +296,8 @@ def solve_and_package(description, documents, drape_args, default_name, section=
         if json.loads((args.work / name).read_text()) != json.loads(json.dumps(document)):
             raise SystemExit(f"{args.work}/{name} is not what this script drapes; solve again into a new directory")
     replay_inputs = [args.work / name for name in documents if name != "pattern.json"]
-    package(args.work / "drape", args.work / "pattern.json", args.destination, args.name, drape_args, section, replay_inputs)
+    package(args.work / "drape", args.work / "pattern.json", args.destination, args.name, drape_args, section,
+            replay_inputs=replay_inputs, solver_revision=args.solver_revision)
 
 
 if __name__ == "__main__":

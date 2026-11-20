@@ -405,6 +405,10 @@ test("the hussar wardrobe connects the dressed figure, pattern front and native 
     await replay.getByRole("button",{name:"Yellow",exact:true}).click();
     await replay.getByRole("slider",{name:"Sewing replay frame"}).press("Home");
     await replay.locator("canvas[data-ready='Yellow'][data-frame='0']").waitFor();
+    const loaded = await p.evaluate(() => performance.getEntriesByType("resource").map(entry => entry.name));
+    for (const ext of ["json", "gz"]) {
+      assert.ok(loaded.includes(new URL(`/exhibits/hussar/dolman.${ext}?v=${summary.sourcePc2Sha256}`, site).href));
+    }
     for (const width of [1120,375]) {
       await p.setViewportSize({width,height:820});
       const stage=replay.locator(".mk-stage");
