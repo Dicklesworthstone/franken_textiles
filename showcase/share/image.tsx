@@ -5,13 +5,17 @@ import { ImageResponse } from "next/og";
 import sharp from "sharp";
 import { plates, type Plate, type PlateId } from "./catalog";
 
-type Artwork = { file: string; crop?: [left: number, top: number, width: number, height: number]; contain?: string };
+type Artwork = { file: string; crop?: [left: number, top: number, width: number, height: number]; contain?: string; preserveOutline?: boolean };
+const raisedArmStudy = "public/fittings/bolero-raised-start.png";
 const art: Record<string, Artwork> = {
   "flare-cut": {file:"public/media/construction-flare-cut.jpg"},
   "flare-join": {file:"public/media/construction-flare-join.jpg"},
   "flare-sewn": {file:"public/media/construction-flare.jpg"},
   "blue-cut": {file:"public/media/construction-blue-cut.jpg"},
   "blue-join": {file:"public/media/construction-blue-join.jpg"},
+  "bolero-settled": {file:raisedArmStudy,crop:[770,204,722,231]},
+  "bolero-refused": {file:raisedArmStudy,crop:[26,204,724,231]},
+  "bolero-back-cut": {file:raisedArmStudy,crop:[1541,72,434,360],contain:"#f5f1e7",preserveOutline:true},
   "eased-dress": {file:"public/media/construction-eased.jpg"},
   "eased-cut": {file:"public/media/construction-eased-cut.jpg"},
   "eased-join": {file:"public/media/construction-eased-join.jpg"},
@@ -50,13 +54,13 @@ const fonts = () => Promise.all(fontSpecs.map(async ([name,family,weight,style])
 })));
 
 async function picture(key: string, width: number, height: number, whole=false) {
-  const {file,crop,contain} = art[key];
+  const {file,crop,contain,preserveOutline} = art[key];
   let img=sharp(await bytes(file));
   if(crop) {
     const [left,top,w,h]=crop;
     img=img.extract({left,top,width:w,height:h});
   }
-  const data=await img.resize(width,height,{fit:whole&&contain?"contain":"cover",background:contain??"#202927"}).flatten({background:"#f0ede2"}).jpeg({quality:94}).toBuffer();
+  const data=await img.resize(width,height,{fit:(whole||preserveOutline)&&contain?"contain":"cover",background:contain??"#202927"}).flatten({background:"#f0ede2"}).jpeg({quality:94}).toBuffer();
   return <img alt="" width={width} height={height} src={"data:image/jpeg;base64,"+data.toString("base64")}/>;
 }
 
