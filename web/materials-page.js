@@ -4,7 +4,8 @@ import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialSce
   buildGuidedDesignAfterOperations, buildGuidedDesignRestartPoints, buildGuidedFitSpec, GUIDED_FIT_BODY_MEASUREMENTS,
   hasTextileWaterPolicy, hasTextileWaterMechanicsPolicy, buildMaterialSurfaceConditions,
   buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
-  buildMaterialExteriorExchange, buildMicroclimateRequest, buildWorkbenchStudyBundle, parseWorkbenchStudyBundle,
+  buildMaterialExteriorExchange, buildMicroclimateRequest, buildMicroclimateExteriorExchange,
+  buildWorkbenchStudyBundle, parseWorkbenchStudyBundle,
   MAX_WORKBENCH_STUDY_BYTES } from "./materials-study-builder.js";
 import { buildMaterialScreenRequest } from "./materials-screen-builder.js";
 
@@ -90,6 +91,10 @@ const exteriorSuffixes = ["Enabled", "Air", "Coefficient", "Min", "Max", "Refere
 const motionExteriorPrefixes = ["guidedMotionHeatExterior", "guidedMotionCoverageExterior", "guidedMotionExposedExterior"];
 const microclimateFields = ["Temperature", "Pressure", "Humidity", "Correlation", "Length", "Wind", "Delta", "Gravity",
   "Exterior", "Min", "Max", "AllowEstimates"];
+const microclimateTargets = { heatExterior: "steady sheet heat", guidedCoverageExterior: "steady body/layer heat",
+  guidedMotionHeatExterior: "moving sheet heat", guidedMotionCoverageExterior: "moving covered-cloth heat",
+  guidedMotionExposedExterior: "moving exposed-cloth heat" };
+let microclimateExterior = null, microclimateExteriorProblem = "";
 const guidedCoverageDraftFields = ["guidedCoverageInstance", "guidedCoverageLayer", "guidedCoverageInner", "guidedCoverageOuter",
   "guidedCoverageResistance", "guidedCoverageBasis"];
 let guidedScenarioDraftSource = {};
@@ -601,6 +606,7 @@ function controls() {
   $("coverage").disabled ||= !drape || !has("map") || !has("coverageConditions");
   $("clearCoverageBridges").disabled = !has("coverageBridges");
   $("cancel").disabled = !pending;
+  microclimateAdoptionControls();
 }
 function clear(keys) {
   if (studySavedFor && keys.includes(studySavedFor)) keys = [...keys, "studySave"];
@@ -632,6 +638,9 @@ function clear(keys) {
       bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren();
     }
     if (key === "treatment") preparedTreatment = null;
+    if (key === "microclimate") {
+      microclimateExterior = null; microclimateExteriorProblem = ""; $("microclimateReplace").checked = false;
+    }
     if (key === "studySave") {
       studySavedFor = null; $("studySaveFiles").replaceChildren(); $("studySaveStatus").textContent = "";
     }
@@ -5120,6 +5129,9 @@ function guidedMicroclimateRequest() {
   return buildMicroclimateRequest(input);
 }
 function microclimateResult(parent, report) {
+  microclimateExterior = null; microclimateExteriorProblem = ""; $("microclimateReplace").checked = false;
+  try { microclimateExterior = buildMicroclimateExteriorExchange(report); }
+  catch (failure) { microclimateExteriorProblem = failure.message; }
   const air = table(parent, "Air properties from the native model", ["Quantity", "Value", "Unit"]);
   for (const [label, field, unit] of [["Temperature", "temperature_c", "°C"], ["Absolute pressure", "pressure_pa", "Pa"],
     ["Relative humidity", "relative_humidity", "fraction"], ["Water mole fraction", "water_mole_fraction", "fraction"],
@@ -5128,7 +5140,7 @@ function microclimateResult(parent, report) {
     cells(air, [label, metric(report.air?.[field]), unit]);
   }
   if (report.convection) {
-    const convection = report.convection, values = table(parent, "Validity-gated external convection estimate", ["Quantity", "Value"]);
+    const convection = report.convection, values = table(parent, "Validity-gated convection estimate", ["Quantity", "Value"]);
     cells(values, ["Correlation", convection.name]); cells(values, ["Reference", convection.citation]);
     cells(values, ["Nusselt number", metric(convection.nu)]); cells(values, ["Coefficient (W/m² K)", metric(convection.h_w_m2_k)]);
     cells(values, ["Model discrepancy allowance (fraction; not a confidence interval)", metric(convection.discrepancy_rel)]);
@@ -5136,6 +5148,37 @@ function microclimateResult(parent, report) {
   }
   const note = document.createElement("p"); note.textContent = report.no_claim || "Model estimates only; no measured garment film, comfort or fit claim.";
   parent.append(note);
+}
+function microclimateAdoptionControls() {
+  const prefix = $("microclimateTarget").value || "heatExterior", known = Object.hasOwn(microclimateTargets, prefix);
+  const active = known && !$(prefix + "Enabled").disabled;
+  $("microclimateApply").disabled = !ready || !microclimateExterior || !active || !$("microclimateReplace").checked;
+  $("microclimateAdoptionStatus").textContent = !microclimateExterior ? microclimateExteriorProblem ||
+    "Evaluate a convection request with a declared exterior range and explicit estimate consent before copying." :
+    !active ? "Enable the chosen heat consumer and its authored controls before copying. Original-file environments are not overwritten." :
+      `Ready to copy the current native convection estimate into ${microclimateTargets[prefix]}. Confirm replacement of that draft's convection only.`;
+}
+function applyMicroclimateExterior() {
+  const prefix = $("microclimateTarget").value || "heatExterior";
+  if (!ready || !microclimateExterior || !$("microclimateReplace").checked ||
+      !Object.hasOwn(microclimateTargets, prefix) || $(prefix + "Enabled").disabled) {
+    microclimateAdoptionControls(); return;
+  }
+  const exterior = microclimateExterior;
+  for (const [suffix, value] of Object.entries({ Air: exterior.air_c, Coefficient: exterior.convection_w_m2_k,
+    Min: exterior.surface_temperature_range_c[0], Max: exterior.surface_temperature_range_c[1],
+    Reference: exterior.convection_source.reference, Date: exterior.convection_source.accessed_on,
+    Note: exterior.convection_source.note, Conditions: exterior.convection_conditions, Evidence: exterior.convection_evidence })) {
+    $(prefix + suffix).value = String(value);
+  }
+  $(prefix + "Enabled").checked = true; $(prefix + "AllowEstimates").checked = exterior.allow_estimates;
+  $("microclimateReplace").checked = false;
+  if (prefix === "heatExterior") invalidate(["heat", ...guidedSourceStudies("heatConditions")], true);
+  else if (prefix === "guidedCoverageExterior") changedGuidedScenarioDraft();
+  else controls();
+  $("microclimateAdoptionStatus").textContent = `Copied native convection to ${microclimateTargets[prefix]}; its radiation is unchanged. ` +
+    (motionExteriorPrefixes.includes(prefix) ? "Save or replace a motion endpoint to use this draft. Saved endpoints and named cases are unchanged." :
+      "Review the environment and rerun the heat study, or save a new named case. Existing named cases are unchanged.");
 }
 function exteriorInput(prefix, number) {
   if (!$(prefix + "Enabled").checked) return null;
@@ -7803,6 +7846,9 @@ $("supplementalFiles").addEventListener("change", () => supplementalChanged(true
 $("supplementalConsent").addEventListener("change", () => supplementalChanged(false));
 $("clearSupplemental").onclick = () => { clearPhotoEvidence(); $("supplementalFiles").value = ""; supplementalChanged(true); };
 $("microclimateMode").addEventListener("change", () => invalidate(["microclimate"], true));
+$("microclimateTarget").addEventListener("change", () => { $("microclimateReplace").checked = false; controls(); });
+$("microclimateReplace").addEventListener("change", controls);
+$("microclimateApply").onclick = applyMicroclimateExterior;
 for (const suffix of microclimateFields) for (const event of ["input", "change"]) {
   $("microclimate" + suffix).addEventListener(event, () => {
     if (microclimateMode() === "form") invalidate(["microclimate"], true); else controls();

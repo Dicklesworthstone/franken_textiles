@@ -63,6 +63,43 @@ test('guided microclimate refuses unsupported fields, impossible input and mixed
     {correlation:natural.correlation,characteristic_length_m:0.3,delta_t_k:10}])
     assert.throws(()=>build({...microclimateInput(),convection}));
 });
+function microclimateExteriorReport() {
+  return {schema:'ftx-microclimate-report/1',air:{temperature_c:20.1,temperature_k:293.25},
+    convection:{evidence:'estimate',h_w_m2_k:2.6,citation:'test:synthetic convection source <café 🧵>',exterior:{
+      air_c:293.25-273.15,convection_w_m2_k:2.6,surface_temperature_range_c:[5,45],
+      convection_source:{reference:'test:synthetic convection source <café 🧵>',accessed_on:'2026-11-19',
+        note:'Synthetic transport fixture, not independently measured fabric evidence.'},
+      convection_evidence:'estimate',convection_conditions:'Declared synthetic plate and airflow',allow_estimates:true,radiation:null}}};
+}
+test('microclimate exterior handoff preserves native values source range and explicit estimate consent',async()=>{
+  const {buildMicroclimateExteriorExchange:build}=await modulePromise;
+  const report=microclimateExteriorReport(),before=JSON.stringify(report),exterior=build(report);
+  assert.deepEqual(JSON.parse(JSON.stringify(exterior)),report.convection.exterior);
+  assert.notEqual(exterior,report.convection.exterior);
+  exterior.convection_source.note='changed copy';exterior.surface_temperature_range_c[0]=-10;
+  assert.equal(JSON.stringify(report),before,'Editing an adopted draft must not rewrite its native report');
+});
+test('microclimate exterior handoff refuses absent consent promoted evidence or inconsistent native output',async()=>{
+  const {buildMicroclimateExteriorExchange:build}=await modulePromise;
+  for(const report of [null,{}, {schema:'other',convection:microclimateExteriorReport().convection},
+    {schema:'ftx-microclimate-report/1',convection:null}])assert.throws(()=>build(report),/microclimate/i);
+  for(const change of [
+    report=>{report.convection.exterior=null;},
+    report=>{report.convection.evidence='published';},
+    report=>{report.convection.exterior.convection_evidence='measured';},
+    report=>{report.convection.exterior.allow_estimates=false;},
+    report=>{delete report.convection.exterior.allow_estimates;},
+    report=>{report.convection.h_w_m2_k=5;},
+    report=>{report.convection.citation='different source';},
+    report=>{report.air.temperature_k=290;},
+    report=>{delete report.air;},
+    report=>{report.convection.exterior.surface_temperature_range_c=[45,5];},
+    report=>{report.convection.exterior.convection_source.accessed_on='2026-02-30';},
+    report=>{report.convection.exterior.radiation={ambient_c:15,automatic_material_face:true,allow_opaque_gray_approximation:true};},
+  ]) {
+    const report=microclimateExteriorReport();change(report);assert.throws(()=>build(report));
+  }
+});
 const cutting = () => ({copies:1,gap_mm:2,edge_margin_mm:5,end_margin_mm:10});
 const mass = (complete = true) => ({schema:'ftx-assembly-mass/1',inventory_complete:complete,extras:[]});
 const state = () => ({candidates:[{key:'alternative',selection:selection()}],target:{scope:'default'},pieceIds:['front','lining'],

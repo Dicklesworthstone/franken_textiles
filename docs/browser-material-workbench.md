@@ -26,16 +26,41 @@ retain the worker's exact text. Original JSON mode continues to support duct cor
 complete radiative enclosures. Draft edits cancel stale microclimate work without cancelling
 unrelated garment consumers; switching modes preserves inactive drafts.
 
+### Use a calculated convection estimate in garment heat
+
+After evaluating a request with an explicit exterior surface-temperature range and estimate consent,
+use **Use the current convection estimate in a heat draft**. Choose one of five destinations:
+steady sheet heat, steady body/layer heat, or the sheet, covered-cloth or exposed-cloth environment
+of the current motion endpoint. Enable that consumer and its authored environment controls first;
+the handoff does not switch or overwrite an original-file environment. Confirm replacement, then
+select **Copy native convection to heat draft**.
+
+The handoff copies the native air temperature, coefficient, complete source, applicability conditions,
+temperature range and explicit estimate consent. The evidence remains **estimate**. The destination's
+radiation mode, material optical face, radiant temperature and gray-approximation consent stay unchanged;
+enclosure radiosity is not substituted for these independently qualified inputs. Existing bare-body films
+also stay unchanged. Keep the original request and report downloads for the detailed air and flow inputs.
+
+For a steady environment, rerun the study after reviewing the draft. For moving heat, explicitly save
+or replace the intended endpoint. Existing saved endpoints and named cases never change retroactively;
+save a new named case to compare the old environment against the derived estimate. A steady edit cancels
+work that consumed the changed draft, but does not cancel an unrelated calculation or a matrix built from
+already saved cases. Editing calculator inputs retires its result and copy permission, without erasing
+an environment deliberately copied earlier. This is still a constant-coefficient approximation, not
+airflow solved around the changing garment or independently measured textile performance.
+
 ### Author convection and ambient radiation
 
 For steady independent-sheet heat, choose **Author uniform conditions** in section 3 and enable
 **Replace the outside film with qualified convection and optional radiation**. For body/layer
 comparisons, enable the corresponding exterior choice in the authored coverage conditions. Supply
 the prescribed coefficient, air temperature, qualified surface-temperature range, source reference,
-date, note, applicability conditions and evidence class. Estimated coefficients require explicit
+date, note, applicability conditions and evidence class, or copy a current native convection estimate
+as described above. Estimated coefficients require explicit
 consent. The outside reservoir becomes the declared air temperature and its film resistance becomes
-zero; the old film fields remain saved and return when exterior mode is disabled. Wind speed does
-not supply a coefficient automatically.
+zero; the old film fields remain saved and return when exterior mode is disabled. Wind speed alone
+does not establish a coefficient: the separate calculator needs explicit geometry and correlation
+conditions, and its result is adopted only on request.
 
 Radiation is an explicit choice. Name the exact emissivity property and physical face in each
 selected material, or select its qualified optical face mapping. Declare the enclosure temperature

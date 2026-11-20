@@ -22863,6 +22863,134 @@ test('guided microclimate rejects blank and impossible inputs before dispatch wi
   assert.equal(unrelated.dead,false);assert.equal(unrelated.messages.at(-1).type,'lowerVisco');
 });
 
+function eligibleMicroclimateReport() {
+  const report=microclimateReport();report.air.temperature_k=293.15;
+  report.convection.exterior={air_c:20,convection_w_m2_k:report.convection.h_w_m2_k,surface_temperature_range_c:[5,45],
+    convection_source:{reference:report.convection.citation,accessed_on:'2026-11-19',
+      note:'Synthetic transport fixture; model estimate, not a measured garment film.'},
+    convection_evidence:'estimate',convection_conditions:'Synthetic plate and declared airflow <café 🧵>',allow_estimates:true,radiation:null};
+  return report;
+}
+async function evaluateMicroclimateExterior(page,report=eligibleMicroclimateReport()) {
+  authorMicroclimate(page);page.e.microclimateExterior.checked=true;page.e.microclimateAllowEstimates.checked=true;
+  page.e.microclimateExterior.handlers.change();await page.e.microclimate.onclick();
+  const message=page.current().messages.at(-1),raw=' '+JSON.stringify(report)+'\n';
+  assert.equal(message.type,'microclimate',page.e.error.textContent);
+  const worker=await workerModule({bindings:{default:()=>Promise.resolve(),thermal_microclimate:()=>raw}});
+  page.current().emit(await worker.send(message));return {report,raw,request:message.microclimateRequest};
+}
+function adoptMicroclimate(page,target) {
+  page.e.microclimateTarget.value=target;page.e.microclimateTarget.handlers.change();
+  assert.equal(page.e.microclimateReplace.checked,false);assert.equal(page.e.microclimateApply.disabled,true);
+  page.e.microclimateReplace.checked=true;page.e.microclimateReplace.handlers.change();
+  assert.equal(page.e.microclimateApply.disabled,false,page.e.microclimateAdoptionStatus.textContent);
+  page.e.microclimateApply.onclick();assert.equal(page.e.microclimateReplace.checked,false);
+}
+function copiedMicroclimateExterior(report,prior={}) {
+  const result=JSON.parse(JSON.stringify(report.convection.exterior));delete result.radiation;
+  if(prior.radiation)result.radiation=prior.radiation;
+  return result;
+}
+test('microclimate adoption feeds steady sheet and layered heat while preserving native evidence and independent radiation',async()=>{
+  const {p}=await guidedScenarioSetup(true);authorUniformSheetConditions(p,'heat');authorBodyCoverage(p);
+  const priorSheet=authorExterior(p,'heatExterior',{radiation:'explicit',radiant:12}),
+    priorCoverage=authorExterior(p,'guidedCoverageExterior',{radiation:'automatic',radiant:15}),bare=authorBareFilms(p);
+  const native=await evaluateMicroclimateExterior(p),reportBefore=JSON.stringify(native.report);
+  adoptMicroclimate(p,'heatExterior');adoptMicroclimate(p,'guidedCoverageExterior');
+  assert.equal(p.e.heatOutside.disabled,true);assert.equal(p.e.guidedCoverageOutsideFilm.disabled,true);
+  assert.equal(p.e.heatExteriorEvidence.value,'estimate');assert.equal(p.e.guidedCoverageExteriorAllowEstimates.checked,true);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);assert.equal(sent.type,'scenario',p.e.error.textContent);
+  const scenario=JSON.parse(sent.scenarioRequest);
+  assert.deepEqual(scenario.surface.exterior_exchange,[copiedMicroclimateExterior(native.report,priorSheet)]);
+  assert.deepEqual(scenario.coverage.conditions.exterior_exchange,[copiedMicroclimateExterior(native.report,priorCoverage)]);
+  for(const boundary of [scenario.surface.boundaries[0],scenario.coverage.conditions.boundaries[0]]) {
+    assert.equal(boundary.outside_c,20);assert.equal(boundary.outside_resistance_m2_k_w,0);
+  }
+  assert.deepEqual(scenario.coverage.conditions.bare_boundaries,[bare]);
+  const downloads=descendants(section(p,'Microclimate air, convection and radiosity')).filter(node=>node.download);
+  const texts=await Promise.all(downloads.map(node=>p.blobs.get(node.href).text()));
+  assert.ok(texts.includes(native.raw));assert.ok(texts.includes(native.request));
+  assert.equal(JSON.stringify(native.report),reportBefore);
+});
+test('microclimate adoption fills all three moving heat drafts without rewriting saved endpoints',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedCoverageHeatControls(p);
+  guidedMovingTopology(p);guidedDryHeatFilm(p,35,999,0.1,0.2);guidedCoverageHeatFilm(p,'Coverage',30,999,0.2,0.4);
+  p.e.guidedMotionExposedMode.value='films';p.e.guidedMotionExposedMode.handlers.change();
+  guidedCoverageHeatFilm(p,'Exposed',25,999,0.3,0.5);const bare=authorBareFilms(p,'guidedMotionCoverageBare');
+  const originals=[authorExterior(p,'guidedMotionHeatExterior',{radiation:'explicit',radiant:12}),
+    authorExterior(p,'guidedMotionCoverageExterior',{radiation:'automatic',radiant:15}),authorExterior(p,'guidedMotionExposedExterior')];
+  await addGuidedMotion(p,0.002,35);const native=await evaluateMicroclimateExterior(p);
+  await p.e.scenario.onclick();const originalWorker=p.current(),pending=originalWorker.messages.at(-1),before=pending.scenarioRequest;
+  assert.equal(pending.type,'scenario',p.e.error.textContent);
+  for(const target of ['guidedMotionHeatExterior','guidedMotionCoverageExterior','guidedMotionExposedExterior'])adoptMicroclimate(p,target);
+  assert.equal(originalWorker.dead,false,'Only saved endpoints feed the in-flight scenario');
+  assert.equal(pending.scenarioRequest,before);assert.match(p.e.microclimateAdoptionStatus.textContent,/Save or replace a motion endpoint/);
+  p.emit(scenarioReport());await addGuidedMotion(p,0.004,35.2);await p.e.scenario.onclick();
+  const motion=JSON.parse(p.current().messages.at(-1).scenarioRequest).motion;
+  assert.deepEqual(motion.transient_surface.exterior_exchange,[originals[0],copiedMicroclimateExterior(native.report,originals[0])]);
+  assert.deepEqual(motion.transient_coverage.exterior_exchange,[originals[1],copiedMicroclimateExterior(native.report,originals[1])]);
+  assert.deepEqual(motion.transient_coverage.exposed_exterior_exchange,[originals[2],copiedMicroclimateExterior(native.report,originals[2])]);
+  assert.deepEqual(motion.transient_coverage.bare_boundaries,[bare,bare]);
+  for(const boundaries of [motion.transient_surface.boundaries,motion.transient_coverage.boundaries,motion.transient_coverage.exposed_boundaries]) {
+    assert.equal(boundaries[1].outside_c,20);assert.equal(boundaries[1].outside_resistance_m2_k_w,0);
+  }
+});
+test('microclimate adoption freezes new named cases while leaving retained cases and running matrices untouched',async()=>{
+  const {p}=await guidedScenarioSetup(true);guidedNamedCases(p);authorUniformSheetConditions(p,'heat');
+  const original=authorExterior(p,'heatExterior');await saveGuidedCase(p,'original');
+  const native=await evaluateMicroclimateExterior(p);await p.e.scenario.onclick();const running=p.current(),request=running.messages.at(-1).scenarioRequest;
+  adoptMicroclimate(p,'heatExterior');assert.equal(running.dead,false);
+  assert.deepEqual(JSON.parse(request).cases[0].scenario.surface.exterior_exchange,[original]);
+  p.emit(scenarioReport());await saveGuidedCase(p,'derived');await p.e.scenario.onclick();
+  const cases=JSON.parse(p.current().messages.at(-1).scenarioRequest).cases;
+  assert.deepEqual(cases.map(row=>row.scenario.surface.exterior_exchange[0]),[original,copiedMicroclimateExterior(native.report)]);
+});
+test('microclimate adoption requires eligible current native output and cannot overwrite original-file environments',async()=>{
+  const page=await pageModule();authorUniformSheetConditions(page,'heat');authorExterior(page,'heatExterior');
+  for(const change of [report=>{report.convection.exterior=null;},report=>{report.convection.exterior.allow_estimates=false;},
+    report=>{report.convection.exterior.convection_evidence='measured';},report=>{report.convection.h_w_m2_k=99;}]) {
+    const report=eligibleMicroclimateReport();change(report);await evaluateMicroclimateExterior(page,report);
+    page.e.microclimateReplace.checked=true;page.e.microclimateReplace.handlers.change();
+    assert.equal(page.e.microclimateApply.disabled,true);page.e.microclimateApply.onclick();assert.equal(page.e.heatExteriorCoefficient.value,'5');
+  }
+  await evaluateMicroclimateExterior(page);const original=' {"schema":"ftx-steady-surface-conditions/1","opaque":"retained"}\n';
+  page.e.heatConditionsSource.value='file';page.e.heatConditionsSource.handlers.change();
+  page.select('heatConditions',original);page.e.heatConditions.handlers.change();
+  page.e.microclimateReplace.checked=true;page.e.microclimateReplace.handlers.change();
+  assert.equal(page.e.microclimateApply.disabled,true);page.e.microclimateApply.onclick();
+  assert.equal(page.e.heatConditionsSource.value,'file');assert.equal(page.e.heatExteriorCoefficient.value,'5');
+  assert.match(page.e.microclimateAdoptionStatus.textContent,/Original-file environments are not overwritten/);
+  assert.equal(await page.e.heatConditions.files[0].text(),original);
+  page.e.microclimateTarget.value='__proto__';page.e.microclimateTarget.handlers.change();
+  page.e.microclimateReplace.checked=true;page.e.microclimateApply.onclick();assert.equal(page.e.microclimateApply.disabled,true);
+});
+test('microclimate adoption expires with calculator edits but deliberately copied environments remain independent',async()=>{
+  const page=await pageModule();authorUniformSheetConditions(page,'heat');authorExterior(page,'heatExterior');
+  await evaluateMicroclimateExterior(page);page.e.microclimateReplace.checked=true;page.e.microclimateReplace.handlers.change();
+  page.e.microclimateWind.value='2';page.e.microclimateWind.handlers.input();
+  assert.equal(page.e.microclimateApply.disabled,true);assert.equal(page.e.microclimateReplace.checked,false);
+  page.e.microclimateReplace.checked=true;page.e.microclimateApply.onclick();assert.equal(page.e.heatExteriorCoefficient.value,'5');
+  await evaluateMicroclimateExterior(page);adoptMicroclimate(page,'heatExterior');
+  page.e.microclimateTemperature.value='25';page.e.microclimateTemperature.handlers.input();
+  assert.equal(page.e.microclimateApply.disabled,true);assert.equal(page.e.heatExteriorAir.value,'20');
+  assert.equal(page.e.heatExteriorCoefficient.value,'2.6');assert.equal(page.e.heatExteriorEvidence.value,'estimate');
+  await page.e.microclimate.onclick();const stale=page.current(),request=stale.messages.at(-1).request;
+  page.e.microclimateHumidity.value='60';page.e.microclimateHumidity.handlers.input();assert.equal(stale.dead,true);
+  stale.emit({type:'result',op:'microclimate',request,result:eligibleMicroclimateReport(),files:[]});
+  assert.equal(page.e.microclimateApply.disabled,true);assert.equal(page.e.heatExteriorCoefficient.value,'2.6');
+});
+test('microclimate adoption cancels consumed steady inputs even during delayed file reads and leaves unrelated jobs alone',async()=>{
+  const {p}=await guidedScenarioSetup(true);authorUniformSheetConditions(p,'heat');authorExterior(p,'heatExterior');
+  await evaluateMicroclimateExterior(p);let release;
+  p.e.fit.files[0].arrayBuffer=()=>new Promise(resolve=>{release=resolve;});
+  const preparing=p.e.scenario.onclick();await Promise.resolve();assert.equal(typeof release,'function');const stale=p.current();
+  adoptMicroclimate(p,'heatExterior');assert.equal(stale.dead,true);
+  release(utf8Buffer('{}'));await preparing;assert.equal(p.current().messages.length,0,'Retired reads cannot dispatch a stale scenario');
+  p.ready();p.select('viscoRequest','{"schema":"ftx-fractional-zener-lowering/1"}');p.e.viscoRequest.handlers.change();
+  await p.e.lowerVisco.onclick();const unrelated=p.current();adoptMicroclimate(p,'heatExterior');
+  assert.equal(unrelated.dead,false);assert.equal(unrelated.messages.at(-1).type,'lowerVisco');
+});
+
 test('opt-in Newton strategy, Generalized-alpha integrator, microclimate and lowerVisco wire through both workbenches and workers', async () => {
   // 1. Material workbench page: adaptive_ilu + generalized_alpha fold message, summary, invalidation, fail-closed refusal, handoff.
   const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');

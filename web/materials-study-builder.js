@@ -272,6 +272,23 @@ export function buildMaterialExteriorExchange(exterior) {
   return result;
 }
 
+export function buildMicroclimateExteriorExchange(report) {
+  const convection = report?.convection;
+  if (report?.schema !== "ftx-microclimate-report/1" || !convection?.exterior) {
+    throw Error("Evaluate a microclimate request with an explicit exterior surface-temperature range first.");
+  }
+  if (convection.evidence !== "estimate" || convection.exterior.convection_evidence !== "estimate") {
+    throw Error("A correlation-derived exterior must remain estimate evidence.");
+  }
+  const exterior = buildMaterialExteriorExchange(convection.exterior);
+  if (!Number.isFinite(report.air?.temperature_k) || exterior.air_c !== report.air.temperature_k - 273.15 ||
+      exterior.convection_w_m2_k !== convection.h_w_m2_k || exterior.convection_source.reference !== convection.citation) {
+    throw Error("The native convection exterior must match its reported air state, coefficient and source.");
+  }
+  if (exterior.radiation != null) throw Error("Copy convection only; qualify radiation independently in the destination heat draft.");
+  return exterior;
+}
+
 function exteriorBoundary(boundary, exterior) {
   if (boundary.outside_resistance_m2_k_w !== 0 || boundary.outside_c !== exterior.air_c) {
     throw Error("Exterior exchange requires zero outside film resistance and outside_c equal to air_c.");
