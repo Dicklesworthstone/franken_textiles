@@ -1277,19 +1277,9 @@ fn ramp_thickness(c: &mut Contact, x: &[Vec3], target: f64) {
         let old = c.params.thickness;
         let remaining = target - old;
         let mut increment = THICKNESS_RAMP.min(remaining);
-        // A blocked maximum increment must not trap a safe smaller continuation step.
-        for trial in 0..=8 {
-            if trial == 8 {
-                // A loaded panel can clear the current offset by less than the smallest
-                // ordinary trial. Use the measured gap for one final, bounded proposal.
-                c.params.thickness = old;
-                if let Some(gap) = c.min_gap(x, c.params.dhat.max(2.0 * increment)) {
-                    if gap <= 0.0 {
-                        break;
-                    }
-                    increment = increment.min(0.5 * gap);
-                }
-            }
+        // If every bounded trial fails, wait for the cloth to move. Repeatedly spending a
+        // fraction of a stationary panel's last gap drives its barrier force toward infinity.
+        for _ in 0..8 {
             let next = if increment == remaining {
                 target
             } else {
@@ -1905,6 +1895,16 @@ mod grain_tests {
         contact.params.thickness = x[0].z;
         ramp_thickness(&mut contact, &x, 1.5e-3);
         assert_eq!(contact.params.thickness, x[0].z);
+
+        let loaded = x.map(|p| Vec3::new(p.x, p.y, p.z + 1e-6));
+        let gap = contact.min_gap(&loaded, 1e-3).unwrap();
+        for _ in 0..120 {
+            ramp_thickness(&mut contact, &loaded, 1.5e-3);
+        }
+        assert_eq!(contact.min_gap(&loaded, 1e-3), Some(gap));
+        let lifted = x.map(|p| Vec3::new(p.x, p.y, p.z + 4e-6));
+        ramp_thickness(&mut contact, &lifted, 1.5e-3);
+        assert!(contact.params.thickness > x[0].z);
     }
 
     #[test]
@@ -1916,7 +1916,7 @@ mod grain_tests {
                 1.5e-3,
                 0.801e-3,
                 1e-3,
-                0.8005e-3,
+                0.8e-3,
                 false,
             ),
             (
@@ -1963,7 +1963,7 @@ mod grain_tests {
                 1.5e-3,
                 1.410001e-3,
                 1e-3,
-                1.4100005e-3,
+                1.41e-3,
                 false,
             ),
             // The target is clear and preserves >10% of the old gap, but exceeds the step cap.
