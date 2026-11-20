@@ -210,6 +210,8 @@ a side from a name or generating a mirror copy. An explicit `sim: false` remains
 | `ratio_band` | `[lo, hi]` | no | — | Accepted ratio range instead of a single ratio (cap ease, gathers). Legacy alias `band` is consulted **only when the `ratio_band` key is absent**. |
 | `kind` | `plain` \| `ease` \| `gather` \| `dart` | no | — | Informational to validation; the sim and tracer audit use `gather`. |
 | `tol_mm` | number | no | fit spec `seam_tol_mm` (3.0) | Per-seam residual tolerance. |
+| `gather_relief_mm` | number ≥ 0 | no | 0 | Native extension, read only by the cloth solver (spec 04 §5.4): how far below a gathered seam its band of pleats runs. Refused by a drape on a seam whose `ratio` is within 0.15 of 1. Validation ignores it. |
+| `gather_compression` | number in (0, 1] | no | 0.03 | Native extension, read only by the cloth solver (spec 04 §5.4): how freely the cloth shortens inside that band, as a fraction of its stiffness in tension. Same refusal. Validation ignores it. |
 
 Seam ref grammar:
 

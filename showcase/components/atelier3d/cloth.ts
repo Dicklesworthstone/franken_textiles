@@ -169,18 +169,20 @@ export class ClothShell {
   private measure() {
     const { n, coarse, points, normals, pairs, fold, press, around, weight, restInverse } = this;
     around.fill(0); press.fill(0); weight.fill(0);
+    // Vertex `i` hears from the other two of its triangle, `j` and `k`, along edges of the given total length.
+    // An interior edge is heard twice, which a mean ignores. (A function, so the loop below allocates nothing:
+    // it runs for every triangle on every frame.)
+    const hear = (i: number, j: number, k: number, lengths: number) => {
+      const o5 = i * 5, p = j * 3, q = k * 3;
+      around[o5] += points[p] + points[q]; around[o5 + 1] += points[p + 1] + points[q + 1]; around[o5 + 2] += points[p + 2] + points[q + 2];
+      around[o5 + 3] += 2; around[o5 + 4] += lengths;
+    };
     for (let t = 0, o = 0; t < coarse.length; t += 3, o += 4) {
       const ia = coarse[t], ib = coarse[t + 1], ic = coarse[t + 2], a = ia * 3, b = ib * 3, c = ic * 3;
       const ux = points[b] - points[a], uy = points[b + 1] - points[a + 1], uz = points[b + 2] - points[a + 2];
       const vx = points[c] - points[a], vy = points[c + 1] - points[a + 1], vz = points[c + 2] - points[a + 2];
-      const wx = vx - ux, wy = vy - uy, wz = vz - uz;
-      const lengths = [Math.hypot(ux, uy, uz), Math.hypot(wx, wy, wz), Math.hypot(vx, vy, vz)];
-      // Every vertex hears from the other two of its triangle. An interior edge is heard twice, which a mean ignores.
-      for (const [i, j, k, l1, l2] of [[ia, ib, ic, lengths[0], lengths[2]], [ib, ic, ia, lengths[1], lengths[0]], [ic, ia, ib, lengths[2], lengths[1]]] as const) {
-        const o5 = i * 5;
-        around[o5] += points[j * 3] + points[k * 3]; around[o5 + 1] += points[j * 3 + 1] + points[k * 3 + 1]; around[o5 + 2] += points[j * 3 + 2] + points[k * 3 + 2];
-        around[o5 + 3] += 2; around[o5 + 4] += l1 + l2;
-      }
+      const ab = Math.hypot(ux, uy, uz), bc = Math.hypot(vx - ux, vy - uy, vz - uz), ca = Math.hypot(vx, vy, vz);
+      hear(ia, ib, ic, ab + ca); hear(ib, ic, ia, bc + ab); hear(ic, ia, ib, ca + bc);
       if (!restInverse) continue;
       // The pattern-to-surface stretch: columns F1, F2 are where the pattern's x and y directions go.
       const p = restInverse[o], q = restInverse[o + 1], r = restInverse[o + 2], s = restInverse[o + 3];
@@ -193,7 +195,9 @@ export class ClothShell {
       // The shortest direction is at right angles to the longest, so its doubled angle is opposite.
       const turn = root > 1e-12 ? 1 / root : 0, area = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
       const x = -half * turn * amount * area, y = -c12 * turn * amount * area;
-      for (const i of [ia, ib, ic]) { press[i * 2] += x; press[i * 2 + 1] += y; weight[i] += area; }
+      press[ia * 2] += x; press[ia * 2 + 1] += y; weight[ia] += area;
+      press[ib * 2] += x; press[ib * 2 + 1] += y; weight[ib] += area;
+      press[ic * 2] += x; press[ic * 2 + 1] += y; weight[ic] += area;
     }
     // A sewn seam is one surface: both of its vertices take the sum of what each heard.
     for (let p = 0; p < pairs.length; p += 2) {
