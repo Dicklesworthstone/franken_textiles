@@ -49,6 +49,12 @@
 .sd-sewn-method summary{font:600 14px var(--sans);cursor:pointer}
 .sd-sewn-method>div{columns:2 340px;column-gap:clamp(28px,4vw,64px);margin-top:10px}
 .sd-sewn-method p{font-size:14px;line-height:1.55;color:#515c50;margin:0 0 10px;break-inside:avoid}
+.sd-replay{min-width:0}
+.sd-replay>div{columns:auto;display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.sd-replay p{margin:0}
+.sd-replay a{font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.sd-replay .ft-code pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.sd-replay-hash{display:block;overflow-wrap:anywhere}
 /* Until the replay loads: the height of its stage plus its timeline and flat pattern, in their two grounds. */
 .sd-making-wait{--wait-below:262px;flex:1;min-height:calc(clamp(440px,46vw,660px) + var(--wait-below));background:linear-gradient(#3f4b43 0 calc(100% - var(--wait-below)),#f6f1e3 0)}
 @media(max-width:1099px){.sd-sewn{grid-template-columns:1fr}}

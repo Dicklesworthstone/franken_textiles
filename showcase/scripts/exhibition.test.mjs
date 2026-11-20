@@ -346,6 +346,8 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
     assert.doesNotMatch(await front.locator("output").innerText(), /observed/);
     const instructions = page.locator("details").filter({has:page.getByText("Cut and sew the dress", {exact:true})});
     await instructions.locator("summary").click();
+    const replay = page.locator("#sundress-replay");
+    await replay.locator("summary").click();
     for (const [id, name, tiles, edge, svg] of [["light","Lightly eased waist",36,"409.5","/exhibits/sundress/light-master.svg"],["dress","Gathered waist",37,"507","/sundress/master.svg"]]) {
       await page.getByRole("group",{name:"Skirt waist cut"}).getByRole("button",{name:new RegExp(name)}).click();
       const body = await instructions.innerText();
@@ -354,6 +356,17 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
       assert.equal(await page.getByRole("link", {name:"Download full-scale pattern SVG"}).getAttribute("href"), svg);
       const drawing = await page.request.get(new URL(svg,site).href);
       assert.match(await drawing.text(), /fp:schema="fabric-pattern\/1"/);
+      const summary = await (await page.request.get(new URL(`/exhibits/sundress/${id}-summary.json`,site).href)).json();
+      const recipe = await replay.innerText();
+      assert.ok(recipe.includes(`ftx drape ${id}-pattern.json --measurements ${id}-measures.json --fit ${id}-fit.json ${summary.solverArguments.join(" ")} --out ${id}-drape`));
+      assert.ok(recipe.includes(`ftx viewer ${id}-drape --check-contact`) && recipe.includes(summary.sourcePc2Sha256));
+      for (const [label, suffix] of [["starting pattern","pattern"],["synthetic body measurements","measures"],["fit targets","fit"]]) {
+        const href = await replay.getByRole("link", {name:label, exact:true}).getAttribute("href");
+        assert.equal(href, `/exhibits/sundress/${id}-${suffix}.json`);
+        const download = await page.request.get(new URL(href,site).href);
+        assert.equal(download.status(),200);
+        assert.deepEqual(await download.body(), await readFile(new URL("../public"+href,import.meta.url)));
+      }
     }
     await page.reload();
     assert.equal(await notes.inputValue(), ""); assert.equal(await gathered.inputValue(), "");

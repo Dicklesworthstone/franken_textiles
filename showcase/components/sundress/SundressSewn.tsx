@@ -11,6 +11,7 @@ import easedSection from "../../public/exhibits/sundress/light-section.json";
 import easedPattern from "../../public/exhibits/sundress/light-pattern.json";
 import TorsoSlice from "../construction/TorsoSlice";
 import MuslinTrial from "./MuslinTrial";
+import CodeBlock from "../site/CodeBlock";
 
 // The placeholder holds the height of the stage, timeline and flat pattern, so nothing below moves when they load.
 const Making = dynamic(() => import("../atelier3d/SolverDrape"), { ssr: false,
@@ -106,6 +107,13 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
           : <>Look at the waist in profile. Its broad folds stand away from the form on the {drape.spacingMm} mm mesh.</>} Finer gathers and real-world fit still need comparison with a sewn sample.</p>
         <p>The viewer draws weave, piece colors and seam guides on the recorded cloth surface. The fabric uses synthetic defaults of {(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m² and {drape.fabric.bending_Nm} N·m bending stiffness. The interactive form is drawn 2.5 mm inside the solver surface.</p>
         <p>All {1 + drape.phases.sew + drape.phases.drape} recorded physical states passed checks for cloth crossing the body, hands or other cloth panels.</p>
+      </div>
+    </details>
+    <details className="sd-sewn-method sd-replay" id="sundress-replay"><summary>Replay the {cuts[cut].name.toLowerCase()} cut</summary>
+      <div>
+        <p>Save the <a href={source+"-pattern.json"} download>starting pattern</a>, <a href={source+"-measures.json"} download>synthetic body measurements</a> and <a href={source+"-fit.json"} download>fit targets</a> in one directory. With the converted Anny 0.6.1 model installed, run the solver there and check every recorded cloth surface.</p>
+        <CodeBlock key={cut} title={cuts[cut].name+" · native replay"} code={`ftx drape ${cut}-pattern.json --measurements ${cut}-measures.json --fit ${cut}-fit.json ${drape.solverArguments.join(" ")} --out ${cut}-drape\nftx viewer ${cut}-drape --check-contact`}/>
+        <p>Recorded <code>fold.pc2</code> SHA-256<code className="sd-replay-hash">{drape.sourcePc2Sha256}</code></p>
       </div>
     </details>
   </section><MuslinTrial cuts={cuts}/></>;

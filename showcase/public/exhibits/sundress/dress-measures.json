@@ -1,0 +1,56 @@
+{
+ "schema": "fabric-measurements/1",
+ "wearer": {
+  "label": "Synthetic adult form",
+  "stature_mm": 1680,
+  "sex": "female",
+  "age_months": 360
+ },
+ "fused": {
+  "stature": {
+   "value_mm": 1680
+  },
+  "chest": {
+   "value_mm": 900
+  },
+  "waist": {
+   "value_mm": 720
+  },
+  "hip": {
+   "value_mm": 960
+  },
+  "waist_height": {
+   "value_mm": 1010
+  },
+  "back_neck_to_waist": {
+   "value_mm": 425
+  },
+  "shoulder_slope_deg": {
+   "value_deg": 15
+  },
+  "neck_base": {
+   "value_mm": 350
+  },
+  "shoulder_length": {
+   "value_mm": 125
+  },
+  "armscye_depth": {
+   "value_mm": 215
+  },
+  "crotch_height": {
+   "value_mm": 770
+  },
+  "head": {
+   "value_mm": 550
+  },
+  "knee_height": {
+   "value_mm": 470
+  },
+  "arm_length": {
+   "value_mm": 565
+  },
+  "hip_width": {
+   "value_mm": 345
+  }
+ }
+}
