@@ -4842,7 +4842,8 @@ function show(op, msg, request) {
       op === "cylinderFit" ? cylinderCalibrationResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis,
-        legs: r.body?.legs || "standing", leg_fraction: r.body?.leg_fraction ?? 1, settling: r.numerical?.settling,
+        legs: r.body?.legs || "standing", leg_fraction: r.body?.leg_fraction ?? 1,
+        ...(r.body?.skinning ? { skinning: r.body.skinning } : {}), settling: r.numerical?.settling,
         body_source: r.body?.shape_source || "Tape-fitted MODEL_FIT shape", body_fit: r.body?.fit,
         measurement_comparison: r.body?.measurement_comparison } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,
@@ -6553,8 +6554,11 @@ async function execute(op, studio = null) {
         if ($("drapeLegFraction").value.trim() === "" || $("maxSettleSteps").value.trim() === "") {
           throw Error("Supply a leg fraction and maximum extra settling steps.");
         }
+        const skinning = $("drapeSkinning").value;
+        if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
         msg.legs = $("drapeLegs").value;
         msg.legFraction = Number($("drapeLegFraction").value);
+        msg.skinning = skinning;
         msg.maxSettleSteps = Number($("maxSettleSteps").value);
         const subdivision = drapeTimeSubdivision();
         if (subdivision !== undefined) msg.timeSubdivision = subdivision;
@@ -6606,6 +6610,7 @@ async function execute(op, studio = null) {
       ...(op === "fold" ? { model: new Blob([msg.bytes]), bodyFit: msg.bodyFit ?? null,
         drapeSettings: { self_contact_mm: msg.selfContactMm, two_start: msg.twoStart,
           arm_abduction_deg: msg.armDeg, legs: msg.legs, leg_fraction: msg.legFraction, max_settle_steps: msg.maxSettleSteps,
+          ...(msg.skinning !== "lbs" ? { skinning: msg.skinning } : {}),
           ...(msg.timeSubdivision !== undefined ? { time_subdivision: msg.timeSubdivision } : {}) } } : {}) };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
@@ -7665,7 +7670,7 @@ $("supplementalConsent").addEventListener("change", () => supplementalChanged(fa
 $("clearSupplemental").onclick = () => { clearPhotoEvidence(); $("supplementalFiles").value = ""; supplementalChanged(true); };
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], twoStart:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
-  drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
+  drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
@@ -7689,7 +7694,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "fit") { clearImportFit(); $("fitSource").value = "file"; }
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
-    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "maxSettleSteps",
+    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "maxSettleSteps",
       "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
@@ -7831,7 +7836,9 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       if (settings !== undefined && (!settings || typeof settings !== "object" || Array.isArray(settings) ||
           ![0, 2].includes(settings.self_contact_mm) || typeof settings.two_start !== "boolean" ||
           !["standing", "seated", "squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
-          settings.leg_fraction < 0 || settings.leg_fraction > 1 || !Number.isSafeInteger(settings.max_settle_steps) ||
+          settings.leg_fraction < 0 || settings.leg_fraction > 1 ||
+          (settings.skinning !== undefined && !["lbs", "dqs"].includes(settings.skinning)) ||
+          !Number.isSafeInteger(settings.max_settle_steps) ||
           settings.max_settle_steps < 0 || settings.max_settle_steps > 256)) throw Error("Received drape settings are incomplete or outside the supported controls.");
       checkedTimeSubdivision(settings?.time_subdivision);
       const hasArm = settings !== undefined && Object.hasOwn(settings, "arm_abduction_deg");
@@ -7878,6 +7885,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       if (settings !== undefined) {
         $("selfContact").checked = settings.self_contact_mm === 2; $("twoStart").checked = settings.two_start;
         $("drapeLegs").value = settings.legs; $("drapeLegFraction").value = String(settings.leg_fraction);
+        $("drapeSkinning").value = settings.skinning ?? "lbs";
         $("maxSettleSteps").value = String(settings.max_settle_steps);
         setTimeSubdivision(settings.time_subdivision);
       }

@@ -152,9 +152,14 @@ onmessage = async (ev) => {
       if (!Number.isFinite(armDeg) || armDeg < 0 || armDeg > 180) {
         throw new Error("Supply a finite drape arm angle from 0 to 180 degrees.");
       }
+      const skinning = msg.skinning ?? "lbs";
+      if (!["lbs", "dqs"].includes(skinning)) {
+        throw new Error("Choose lbs or dqs skinning.");
+      }
       const settings = { self_contact_mm: msg.selfContactMm ?? 2, two_start: !!msg.twoStart,
         arm_abduction_deg: armDeg, legs: msg.legs ?? "standing",
-        leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0 };
+        leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0,
+        ...(skinning !== "lbs" ? { skinning } : {}) };
       if (!["standing", "seated", "squat"].includes(settings.legs) ||
           !Number.isFinite(settings.leg_fraction) || settings.leg_fraction < 0 || settings.leg_fraction > 1) {
         throw new Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
@@ -173,8 +178,8 @@ onmessage = async (ev) => {
         settings.time_subdivision = { max_halvings: value.max_halvings, max_trials: value.max_trials };
       }
       const configured = (!imported && armDeg !== 35) ||
-        settings.legs !== "standing" || settings.leg_fraction !== 1 || settings.max_settle_steps !== 0 ||
-        settings.time_subdivision !== undefined;
+        settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
+        settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined;
       if (configured && typeof ftx.fold_up_configured !== "function") {
         throw new Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
       }

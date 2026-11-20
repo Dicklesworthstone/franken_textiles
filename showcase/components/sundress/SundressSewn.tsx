@@ -10,6 +10,7 @@ import eased from "../../public/exhibits/sundress/light-summary.json";
 import easedSection from "../../public/exhibits/sundress/light-section.json";
 import easedPattern from "../../public/exhibits/sundress/light-pattern.json";
 import TorsoSlice from "../construction/TorsoSlice";
+import MuslinTrial from "./MuslinTrial";
 
 const Making = dynamic(() => import("../atelier3d/SolverDrape"), { ssr: false });
 
@@ -28,12 +29,12 @@ const views: Record<(typeof cameras)[number], DrapeView> = {
 };
 const pieces: Record<string, string> = { bodice_front: "Bodice front", bodice_back: "Bodice back", skirt_front: "Skirt front", skirt_back: "Skirt back" };
 
-const cuts = {
-  dress: { name: "Gathered waist", report: gathered, section: gatheredSection, pattern: gatheredPattern, pdf: "/sundress/pattern-A4.pdf" },
-  light: { name: "Lightly eased waist", report: eased, section: easedSection, pattern: easedPattern, pdf: "/exhibits/sundress/light-A4.pdf" },
+export const cuts = {
+  dress: { name: "Gathered waist", report: gathered, section: gatheredSection, pattern: gatheredPattern, pdf: "/sundress/pattern-A4.pdf", svg: "/sundress/master.svg", pages: 38 },
+  light: { name: "Lightly eased waist", report: eased, section: easedSection, pattern: easedPattern, pdf: "/exhibits/sundress/light-A4.pdf", svg: "/exhibits/sundress/light-master.svg", pages: 37 },
 };
 const cutIds = ["dress", "light"] as const;
-function frontSkirt(pattern: Pick<typeof gatheredPattern, "pieces">) {
+export function frontSkirt(pattern: Pick<typeof gatheredPattern, "pieces">) {
   const skirt = pattern.pieces.find(piece => piece.id === "skirt_front")!;
   return {
     outline: skirt.edges.map(edge => skirt.vertices[edge.from as keyof typeof skirt.vertices]!.join(",")).join(" "),
@@ -55,7 +56,7 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
     ? { depth: waistSeam.gather_relief_mm, percent: Number((waistSeam.gather_compression * 100).toPrecision(3)) } : null;
   const flags = drape.flags as string[], gating = drape.gating as string[];
   const skirtRadius = (side: string) => cuts[cut].pattern.pieces.find(piece => piece.id === "skirt_" + side)!.placement.radius_mm;
-  return <section className="sd-sewn" id="sewn" aria-labelledby="sewn-title">
+  return <><section className="sd-sewn" id="sewn" aria-labelledby="sewn-title">
     <div className="sd-cut-picker">
       <div><p className="kicker">Pattern revision</p><h2 id="sewn-title">One bodice, two skirt cuts.</h2>
         <p>Both skirts have a 168 cm hem. Each waist edge on the eased cut is 97.5 mm shorter. At the same wearer’s waist, the simulated centre-front gap measures {gatheredSection.frontGapMm} mm on the gathered cut and {easedSection.frontGapMm} mm on the eased cut.</p></div>
@@ -101,5 +102,5 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
         <p><a href={source+"-pattern.json"} download>Exact pattern and starting placements ↓</a> · <a href={source+"-summary.json"} download>Solver summary ↓</a></p>
       </details>
     </div>
-  </section>;
+  </section><MuslinTrial cuts={cuts}/></>;
 }

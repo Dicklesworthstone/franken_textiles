@@ -490,9 +490,12 @@ self.onmessage = async ({ data: msg }) => {
           }
           if (msg.bodyFitConsent !== true) throw Error("Associate the accepted fit with this wearer before draping.");
         }
+        const skinning = msg.skinning ?? "lbs";
+        if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
         const settings = { self_contact_mm: msg.selfContactMm ?? 0, two_start: msg.twoStart ?? false,
           arm_abduction_deg: !imported && msg.armDeg === undefined ? 35 : msg.armDeg, legs: msg.legs ?? "standing",
-          leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0 };
+          leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0,
+          ...(skinning !== "lbs" ? { skinning } : {}) };
         if (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180) {
           throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
         }
@@ -515,8 +518,8 @@ self.onmessage = async ({ data: msg }) => {
           settings.time_subdivision = { max_halvings: value.max_halvings, max_trials: value.max_trials };
         }
         const configured = (!imported && settings.arm_abduction_deg !== 35) ||
-          settings.legs !== "standing" || settings.leg_fraction !== 1 || settings.max_settle_steps !== 0 ||
-          settings.time_subdivision !== undefined;
+          settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
+          settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined;
         if (configured && typeof ftx.fold_up_configured !== "function") {
           throw Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
         }

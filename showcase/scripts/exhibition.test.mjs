@@ -1,5 +1,6 @@
 // Test the served static export, including real media and native specimen reports.
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { chromium } from "playwright-core";
 
@@ -300,6 +301,47 @@ test("sundress ease uses the fitted Anny tapes and preserves the fixed cut", asy
     assert.notDeepEqual(sections[0].cloth,sections[1].cloth);
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth),390);
   } finally {await p.close();}
+});
+
+test("a sewist can compare two muslins privately and retrieve the instructions for the selected cut", async () => {
+  const page = await browser.newPage({...opts, reducedMotion:"reduce", viewport:{width:390,height:844}});
+  try {
+    await page.goto(new URL("/wardrobe/sundress/?garment=eased#muslin", site).href);
+    const trial = page.locator("#muslin"), notes = page.getByLabel("Form, cloth, repeat readings and discrepancies");
+    const save = trial.getByRole("button", {name:"Save worksheet"});
+    const download = async () => {
+      const pending = page.waitForEvent("download");
+      await save.click();
+      return readFile(await (await pending).path(), "utf8");
+    };
+    assert.match(await download(), /observed ____ mm/);
+    const front = trial.getByRole("group", {name:"Centre front"});
+    const [gathered, eased] = await front.getByRole("textbox").all();
+    await gathered.fill("0"); await eased.fill("7,5");
+    assert.match(await front.locator("output").innerText(), /predicted -59.6 mm · observed \+7.5 mm · residual \+67.1 mm/);
+    await notes.fill("Synthetic browser check only.");
+    const sheet = await download();
+    assert.match(sheet, /predicted 90.7 mm, observed 0 mm, residual -90.7 mm/);
+    assert.match(sheet, /predicted -59.6 mm, observed \+7.5 mm, residual \+67.1 mm/);
+    assert.match(sheet, /Synthetic browser check only/);
+    assert.match(sheet, /Native trajectory SHA-256 [a-f0-9]{64}/);
+    await eased.fill("-1"); assert.equal(await save.isDisabled(), true);
+    await eased.fill(""); assert.equal(await save.isEnabled(), true);
+    assert.doesNotMatch(await front.locator("output").innerText(), /observed/);
+    const instructions = page.locator("details").filter({has:page.getByText("Cut and sew the dress", {exact:true})});
+    await instructions.locator("summary").click();
+    for (const [id, name, tiles, edge, svg] of [["light","Lightly eased waist",36,"409.5","/exhibits/sundress/light-master.svg"],["dress","Gathered waist",37,"507","/sundress/master.svg"]]) {
+      await page.getByRole("group",{name:"Skirt waist cut"}).getByRole("button",{name:new RegExp(name)}).click();
+      const body = await instructions.innerText();
+      assert.ok(body.includes(`${tiles} tiles`) && body.includes(`${edge} mm skirt waist`));
+      assert.equal(await page.getByRole("link", {name:"Download FrankenTextiles pattern"}).getAttribute("href"), `/exhibits/sundress/${id}-pattern.json`);
+      assert.equal(await page.getByRole("link", {name:"Download full-scale pattern SVG"}).getAttribute("href"), svg);
+      const drawing = await page.request.get(new URL(svg,site).href);
+      assert.match(await drawing.text(), /fp:schema="fabric-pattern\/1"/);
+    }
+    await page.reload();
+    assert.equal(await notes.inputValue(), ""); assert.equal(await gathered.inputValue(), "");
+  } finally { await page.close(); }
 });
 
 test("the hussar wardrobe connects the dressed figure, pattern front and native sewing replay", async () => {

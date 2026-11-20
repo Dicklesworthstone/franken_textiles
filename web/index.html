@@ -255,6 +255,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <p class="row"><label>Drape arm angle (degrees) <input type="number" id="bodyArmDeg" value="35" min="0" max="180" step="any"></label>
         <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
         <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
+        <label>Skinning <select id="drapeSkinning"><option value="lbs">LBS (Anny default)</option><option value="dqs">DQS (dual-quaternion)</option></select></label>
         <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label></p>
       <p class="row"><label><input type="checkbox" id="splitTimeSteps"> Split stalled time steps</label>
         <label>Maximum halvings <input id="timeMaxHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
@@ -663,13 +664,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (model && model.size > 256 * 1024 * 1024) {
       status("The material workbench supports body models up to 256 MiB. This selected model cannot be transferred."); return;
     }
-    const fraction = $("drapeLegFraction").value.trim(), settling = $("maxSettleSteps").value.trim();
+    const fraction = $("drapeLegFraction").value.trim(), settling = $("maxSettleSteps").value.trim(), skinning = $("drapeSkinning").value;
     const drapeSettings = { self_contact_mm: $("selfContact").checked ? 2 : 0, two_start: $("twoStart").checked,
-      arm_abduction_deg: Number(angle), legs: $("drapeLegs").value, leg_fraction: Number(fraction), max_settle_steps: Number(settling) };
-    if (!fraction || !["standing", "seated", "squat"].includes(drapeSettings.legs) ||
+      arm_abduction_deg: Number(angle), legs: $("drapeLegs").value, leg_fraction: Number(fraction), max_settle_steps: Number(settling),
+      ...(skinning !== "lbs" ? { skinning } : {}) };
+    if (!fraction || !["standing", "seated", "squat"].includes(drapeSettings.legs) || !["lbs", "dqs"].includes(skinning) ||
         !Number.isFinite(drapeSettings.leg_fraction) || drapeSettings.leg_fraction < 0 || drapeSettings.leg_fraction > 1 ||
         !settling || !Number.isSafeInteger(drapeSettings.max_settle_steps) || drapeSettings.max_settle_steps < 0 || drapeSettings.max_settle_steps > 256) {
-      status("Choose a valid drape leg posture, fraction from 0 to 1 and whole settling limit from 0 to 256 before opening materials."); return;
+      status("Choose a valid drape leg posture, fraction from 0 to 1, skinning mode and whole settling limit from 0 to 256 before opening materials."); return;
     }
     try {
       const subdivision = drapeTimeSubdivision();
@@ -962,6 +964,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (r.body?.legs || r.body?.leg_fraction !== undefined) {
         $("foldSummary").innerHTML += `<br>Leg posture: ${esc(r.body.legs || "standing")}, fraction ${esc(r.body.leg_fraction ?? 1)}`;
       }
+      if (r.body?.skinning) {
+        $("foldSummary").innerHTML += `<br>Skinning: ${esc(r.body.skinning)}`;
+      }
       if (r.numerical?.settling) {
         const tail = r.numerical.settling;
         $("foldSummary").innerHTML += `<br>Extra settling: ${esc(tail.steps)} / ${esc(tail.max_steps)} steps, ${esc(tail.duration_s)} s; ${esc(tail.stop_reason)}. Total gravity duration: ${esc(tail.gravity_duration_s)} s.`;
@@ -1043,7 +1048,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("resetStyle").addEventListener("click", () => {
@@ -1186,6 +1191,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if ($("drapeLegFraction").value.trim() === "" || $("maxSettleSteps").value.trim() === "") {
       showError("Supply a leg fraction and maximum extra settling steps."); return;
     }
+    const skinning = $("drapeSkinning").value;
+    if (!["lbs", "dqs"].includes(skinning)) {
+      showError("Choose lbs or dqs skinning."); return;
+    }
     let timeSubdivision;
     try { timeSubdivision = drapeTimeSubdivision(); }
     catch (error) { showError(error.message); return; }
@@ -1197,7 +1206,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       selfContactMm: $("selfContact").checked ? 2 : 0, twoStart: $("twoStart").checked,
       bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
       armDeg: Number(angle), legs: $("drapeLegs").value,
-      legFraction: Number($("drapeLegFraction").value), maxSettleSteps: Number($("maxSettleSteps").value),
+      legFraction: Number($("drapeLegFraction").value), skinning, maxSettleSteps: Number($("maxSettleSteps").value),
       ...(timeSubdivision !== undefined ? { timeSubdivision } : {}) });
   });
   const traceOrigin=new URL(location.href).origin;
@@ -1274,7 +1283,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
                 !settings || ![0,2].includes(settings.self_contact_mm) || typeof settings.two_start!=="boolean" ||
                 !Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg<0 || settings.arm_abduction_deg>180 ||
                 !["standing","seated","squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
-                settings.leg_fraction<0 || settings.leg_fraction>1 || !Number.isSafeInteger(settings.max_settle_steps) ||
+                settings.leg_fraction<0 || settings.leg_fraction>1 ||
+                (settings.skinning !== undefined && !["lbs","dqs"].includes(settings.skinning)) ||
+                !Number.isSafeInteger(settings.max_settle_steps) ||
                 settings.max_settle_steps<0 || settings.max_settle_steps>256)throw Error("Checked drape model or settings are incomplete.");
             checkedTimeSubdivision(settings.time_subdivision);
             if(context.bodyFit !== null && context.bodyFit !== undefined) {
@@ -1295,7 +1306,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             bodyImportProblem=null;materialBodySources=true;++bodyFitRead;const request=bodyRequest=++nextRequest;
             $("bodyArmDeg").value=String(settings.arm_abduction_deg);$("selfContact").checked=settings.self_contact_mm===2;
             $("twoStart").checked=settings.two_start;$("drapeLegs").value=settings.legs;
-            $("drapeLegFraction").value=String(settings.leg_fraction);$("maxSettleSteps").value=String(settings.max_settle_steps);
+            $("drapeLegFraction").value=String(settings.leg_fraction);$("drapeSkinning").value=settings.skinning ?? "lbs";$("maxSettleSteps").value=String(settings.max_settle_steps);
             setTimeSubdivision(settings.time_subdivision);
             showBodyImport();worker.postMessage({type:"clearBody"});worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
           }
