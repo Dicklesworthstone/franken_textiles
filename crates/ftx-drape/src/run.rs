@@ -14,7 +14,7 @@ use crate::animation::{
     viewer_html, viewer_payload, zip_frames,
 };
 use crate::contact::{Contact, ContactParams};
-use crate::garment::{build_garment, simulation_scope};
+use crate::garment::{GarmentMesh, build_garment, simulation_scope};
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{
@@ -359,6 +359,34 @@ fn add_simulation_scope(report: &mut Value, scope: Value) {
     report["simulation_scope"] = scope;
 }
 
+/// Where a run had got to when sewing, draping or settling refused: enough to draw the cloth as it last
+/// was. It is the last accepted state before a refusal, not a drape, a fit or a result.
+#[derive(Clone, Debug)]
+pub struct RefusedRun {
+    /// The garment mesh (faces, instances, flat coordinates).
+    pub mesh: GarmentMesh,
+    /// The last accepted positions, one per mesh vertex, metres.
+    pub positions: Vec<Vec3>,
+    /// The phase that refused: `sew`, `drape` or `settle`.
+    pub phase: &'static str,
+    /// Nominal steps of that phase accepted before the refusal.
+    pub accepted_steps: usize,
+}
+
+fn refused_run(
+    scene: &Scene,
+    frames: &[Vec<Vec3>],
+    phase: &'static str,
+    frames_before_phase: usize,
+) -> Option<RefusedRun> {
+    frames.last().map(|positions| RefusedRun {
+        mesh: scene.mesh.clone(),
+        positions: positions.clone(),
+        phase,
+        accepted_steps: frames.len() - frames_before_phase,
+    })
+}
+
 /// Drapes `pattern` on `body`, calling `progress` with a line per stage.
 ///
 /// # Errors
@@ -369,7 +397,24 @@ pub fn drape(
     fit_spec: &Value,
     body: &DrapeBody,
     opts: &DrapeOptions,
+    progress: impl FnMut(&str),
+) -> Result<DrapeRun, Refusal> {
+    drape_observed(pattern, fit_spec, body, opts, progress, &mut None)
+}
+
+/// [`drape`], and when sewing, draping or settling refuses, `refused` receives the mesh and the last
+/// accepted positions so that the caller can show them. A refusal before the first step (meshing,
+/// placement, the start audit) leaves `refused` as it was: [`crate::start_state`] is what to look at then.
+///
+/// # Errors
+/// As [`drape`]. The refusal is the same with or without an observer.
+pub fn drape_observed(
+    pattern: &Pattern,
+    fit_spec: &Value,
+    body: &DrapeBody,
+    opts: &DrapeOptions,
     mut progress: impl FnMut(&str),
+    refused: &mut Option<RefusedRun>,
 ) -> Result<DrapeRun, Refusal> {
     let scope = simulation_scope(pattern)?;
     let material = crate::material::resolve(pattern, opts)?;
@@ -442,7 +487,8 @@ pub fn drape(
         ("drape", opts.drape_steps, GRAVITY, opts.lag_rounds[1]),
     ] {
         scene.solver.friction_rounds = lag;
-        let rep = run_phase_with_subdivision(
+        let frames_before_phase = frames.len();
+        let rep = match run_phase_with_subdivision(
             &mut scene,
             steps,
             opts.step,
@@ -450,7 +496,13 @@ pub fn drape(
             opts.time_subdivision,
             &mut subdivision_trials,
             |_, x| frames.push(x.to_vec()),
-        )?;
+        ) {
+            Ok(rep) => rep,
+            Err(refusal) => {
+                *refused = refused_run(&scene, &frames, name, frames_before_phase);
+                return Err(refusal);
+            }
+        };
         progress(&format!(
             "{name}: {} steps, {} Newton iterations ({} unconverged), max speed {:.4} m/s",
             rep.steps, rep.iterations, rep.unconverged, rep.max_speed
@@ -459,6 +511,7 @@ pub fn drape(
     }
     let (sew, mut drape) = (phases[0].clone(), phases[1].clone());
     if opts.max_settle_steps > 0 {
+        let frames_before_settling = frames.len();
         for _ in 0..opts.max_settle_steps {
             if consecutive_quiet_steps(&drape) >= SETTLE_QUIET_STEPS
                 && scene
@@ -469,7 +522,7 @@ pub fn drape(
             {
                 break;
             }
-            let step = run_phase_with_subdivision(
+            let step = match run_phase_with_subdivision(
                 &mut scene,
                 1,
                 opts.step,
@@ -477,7 +530,13 @@ pub fn drape(
                 opts.time_subdivision,
                 &mut subdivision_trials,
                 |_, x| frames.push(x.to_vec()),
-            )?;
+            ) {
+                Ok(step) => step,
+                Err(refusal) => {
+                    *refused = refused_run(&scene, &frames, "settle", frames_before_settling);
+                    return Err(refusal);
+                }
+            };
             drape.append(step);
         }
         progress(&format!(

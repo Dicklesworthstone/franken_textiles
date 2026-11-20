@@ -47,7 +47,7 @@ use ftx_core::Vec3;
 use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
-use ftx_drape::run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape, viewer};
+use ftx_drape::run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape_observed, viewer};
 use ftx_drape::stepping::SubdivisionOptions;
 use ftx_pattern::{Measurements, Pattern, alter, format_table, validate};
 use serde_json::{Value, json};
@@ -1002,7 +1002,22 @@ fn cmd_drape_bound(
                     eprintln!("{line}")
                 })?
             }
-            None => drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?,
+            None => {
+                // A refusal after the first step leaves the cloth as it last was to look at.
+                let mut refused = None;
+                let run = drape_observed(
+                    &pattern,
+                    &spec,
+                    &body,
+                    &opts,
+                    |line| eprintln!("{line}"),
+                    &mut refused,
+                );
+                run.map_err(|refusal| {
+                    let body_obj = obj(&full.vertices, &full.triangles, None).into_bytes();
+                    place::refused_stills(refusal, refused.as_ref(), &out, &body_obj)
+                })?
+            }
         }
     };
     run.report["body_contact_proxy"] = skin.contact_proxy_basis_with_rest(&rest_skin);

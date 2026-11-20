@@ -469,6 +469,54 @@ fn write_stage(
     Ok(written)
 }
 
+/// When a drape refuses after its first step: draws the cloth as it last was under `OUT/refused` (the files
+/// and stills of a `place` stage: coloured by piece, and by edge strain on the start-state ramp) and puts
+/// where to look first among the refusal's repairs.
+///
+/// No claim: it is the last accepted state before the refusal, not a drape or a fit. Inside-body marking
+/// needs the collision body and is not drawn. If the pictures cannot be written the refusal is returned
+/// unchanged: its pictures never replace or delay a refusal.
+pub(super) fn refused_stills(
+    mut refusal: Refusal,
+    state: Option<&ftx_drape::run::RefusedRun>,
+    out: &Path,
+    body_obj: &[u8],
+) -> Refusal {
+    let Some(state) = state else { return refusal };
+    let Ok(size) = render::resolution(None) else {
+        return refusal;
+    };
+    let dir = out.join("refused");
+    let slots = piece_slots(&state.mesh.instances);
+    let n = state.positions.len();
+    let pieces = piece_colours(&state.mesh, &slots, &vec![0.0; n], &vec![false; n]);
+    let (strain, _) = start_strain(&state.mesh, &state.positions);
+    if write_stage(
+        &dir,
+        body_obj,
+        &state.mesh,
+        &state.positions,
+        &pieces,
+        &strain,
+        size,
+    )
+    .is_ok()
+    {
+        refusal.repairs.insert(
+            0,
+            format!(
+                "Look at {}/still_*.png: the cloth as it last was, after {} accepted {} step(s). It is the \
+                 last accepted state before this refusal, not a drape or a fit; still_strain_* shows edge \
+                 strain from blue (15 % short) through white to red (15 % stretched).",
+                dir.display(),
+                state.accepted_steps,
+                state.phase
+            ),
+        );
+    }
+    refusal
+}
+
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
@@ -721,6 +769,87 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
 mod tests {
     use super::{cloth_crossings, deepest_mm, mean_strain, piece_slots, slot_colour};
     use ftx_core::Vec3;
+
+    #[test]
+    fn a_refused_drape_leaves_stills_of_its_last_accepted_state_and_says_where() {
+        use ftx_core::{Refusal, RefusalCode};
+        use serde_json::json;
+
+        let pattern = ftx_pattern::Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm",
+            "pieces": [{
+                "id": "panel", "cut": {"qty": 1}, "grain": [[10, 10], [10, 40]],
+                "vertices": {"a": [0, 0], "b": [120, 0], "c": [120, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"}, {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"}, {"id": "left", "from": "d", "to": "a"}
+                ],
+                "placement": {"part": "torso"}
+            }],
+            "seams": []
+        }));
+        let mesh = ftx_drape::build_garment(&pattern, 20.0).unwrap();
+        // The panel standing upright in front of a one-triangle "body", in metres.
+        let positions = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * 0.001, -0.2, 1.0 + p.y * 0.001))
+            .collect();
+        let state = ftx_drape::run::RefusedRun {
+            mesh,
+            positions,
+            phase: "sew",
+            accepted_steps: 2,
+        };
+        let body = b"v -0.2 0 0.8\nv 0.3 0 0.8\nv 0.05 0 1.3\nf 1 2 3\n";
+        let refusal = || {
+            Refusal::new(RefusalCode::NotConverged, "sewing step 3 did not converge")
+                .repair("try --time-subdivision")
+        };
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let out = std::env::temp_dir().join(format!("ftx-refused-{}-{time}", std::process::id()));
+        std::fs::create_dir_all(&out).unwrap();
+
+        let shown = super::refused_stills(refusal(), Some(&state), &out, body);
+        assert_eq!(shown.code, RefusalCode::NotConverged);
+        assert_eq!(shown.message, "sewing step 3 did not converge");
+        assert_eq!(shown.repairs.len(), 2);
+        assert!(
+            shown.repairs[0].contains("refused/still_*.png"),
+            "{}",
+            shown.repairs[0]
+        );
+        assert!(shown.repairs[0].contains("after 2 accepted sew step(s)"));
+        assert!(shown.repairs[0].contains("not a drape or a fit"));
+        assert_eq!(shown.repairs[1], "try --time-subdivision");
+        for name in [
+            "body.obj",
+            "garment.obj",
+            "garment_strain.obj",
+            "still_front.png",
+            "still_strain_back.png",
+        ] {
+            let file = out.join("refused").join(name);
+            assert!(
+                std::fs::metadata(&file).is_ok_and(|m| m.len() > 0),
+                "{}",
+                file.display()
+            );
+        }
+
+        // Nothing to show, or nowhere to write it: the refusal comes back exactly as it was.
+        for unchanged in [
+            super::refused_stills(refusal(), None, &out, body),
+            super::refused_stills(refusal(), Some(&state), &out.join("missing/parent"), body),
+            // `refused/` already exists here, and a run's files are never overwritten.
+            super::refused_stills(refusal(), Some(&state), &out, body),
+        ] {
+            assert_eq!(unchanged.repairs, ["try --time-subdivision"]);
+        }
+    }
 
     #[test]
     fn depth_inside_the_body_is_a_positive_length_and_none_is_plain_zero() {

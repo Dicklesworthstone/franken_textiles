@@ -261,7 +261,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   simulation directory (`fold.pc2`, `mesh_map.json`, `body.obj`, `sim_report.json`) without re-running
   the cloth solver.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N] [--model PATH]
-  [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--two-start] [--pose-end POSE] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
+  [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--compression F] [--two-start] [--pose-end POSE] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does).
   `--elastic-hold-steps N` reports casing displacement during the last N accepted gravity steps;
   it adds no steps and changes no physics. Zero requests no window; N above `--drape` refuses.
@@ -285,7 +285,12 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   being shorter than its pattern along warp and weft. Below 1 it is a different cloth model: a mesh too
   coarse to form a fold lets the cloth shorten there, which stands for folds finer than the mesh without
   resolving them. The factor is authored, has no measured source, and is recorded as `compression_factor`
-  in `sim_report.json` whenever it is not 1. Numerical options are
+  in `sim_report.json` whenever it is not 1. When sewing, draping or settling refuses after its first
+  step, an ordinary drape (not `--two-start-sew`, not an outfit) writes the cloth as it last was under
+  `DIR/refused/`: `body.obj`, `garment.obj` coloured by piece, `garment_strain.obj` and the six stills, as a
+  `ftx place` stage does, and names that directory in the refusal's first repair. It is the last accepted
+  state before the refusal, not a drape or a fit; a refusal before the first step leaves `DIR` empty, and
+  `ftx place` shows that start. Numerical options are
   validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
   with a repair message. Both `sim_report.json` and the CLI result contain a
   `self_contact` object with enabled/audit status, parameters and nearby final gap when enabled.

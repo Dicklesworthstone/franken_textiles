@@ -1220,3 +1220,78 @@ fn attachment_limits_are_outfit_wide_and_empty_groups_leave_physics_unchanged() 
             .contains("1024 groups")
     );
 }
+
+/// A drape that refuses after its first step hands back the cloth as it last was; one that refuses
+/// before any step hands back nothing; and the refusal is the same with or without an observer.
+#[test]
+fn a_refused_phase_leaves_the_last_accepted_state_to_look_at() {
+    use ftx_core::RefusalCode;
+    use ftx_drape::run::{drape, drape_observed};
+    use ftx_drape::stepping::SubdivisionOptions;
+
+    let skin = skin();
+    let pattern = ftx_pattern::Pattern::new(panel(40.0));
+    // Six trials are the fewest the three sewing and three gravity steps may ask for, so the budget runs
+    // out no later than the first settling step.
+    let opts = DrapeOptions {
+        max_settle_steps: 4,
+        time_subdivision: Some(SubdivisionOptions {
+            max_trials: 6,
+            ..SubdivisionOptions::default()
+        }),
+        ..options()
+    };
+    let mut refused = None;
+    let refusal = drape_observed(
+        &pattern,
+        &json!({}),
+        &body(&skin),
+        &opts,
+        |_| {},
+        &mut refused,
+    )
+    .err()
+    .expect("the trial budget cannot cover a settling step");
+    assert_eq!(
+        refusal.code,
+        RefusalCode::BudgetExceeded,
+        "{}",
+        refusal.message
+    );
+    let state = refused.expect("a refusal after the first step keeps the last accepted state");
+    assert!(["sew", "drape", "settle"].contains(&state.phase));
+    assert!(state.accepted_steps < 4);
+    assert_eq!(state.positions.len(), state.mesh.verts2d.len());
+    assert!(state.positions.iter().all(|p| p.is_finite()));
+    // The cloth is where the solver left it: round the body, not back on the flat pattern.
+    assert!(state.positions.iter().all(|p| p.x.hypot(p.y) > 0.03));
+
+    let plain = drape(&pattern, &json!({}), &body(&skin), &opts, |_| {})
+        .err()
+        .expect("the same run refuses without an observer");
+    assert_eq!(
+        (plain.code, &plain.message),
+        (refusal.code, &refusal.message)
+    );
+
+    // A pattern with nothing to place refuses before any step: there is no state to show.
+    let mut unplaced = panel(40.0);
+    unplaced["pieces"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("placement");
+    unplaced["pieces"][0]["sim"] = json!(false);
+    let mut nothing = None;
+    assert!(
+        drape_observed(
+            &ftx_pattern::Pattern::new(unplaced),
+            &json!({}),
+            &body(&skin),
+            &opts,
+            |_| {},
+            &mut nothing
+        )
+        .is_err()
+    );
+    assert!(nothing.is_none());
+}
