@@ -2,9 +2,10 @@
 
 **Opt-in drape solver strategies, Generalized-α, microclimate, and viscoelastic lowering.**
 `fold::FoldSettings` carries opt-in `newton_strategy` (`ProjectedNewton` default omitted from JSON;
-`AdaptiveIlu` and `TrustRegionSteihaug`) and `integrator` (`ImplicitEuler` default omitted from
-JSON; `GeneralizedAlpha { rho_inf }`), forwarding both directly into `ftx_drape::run::DrapeOptions`
-while preserving legacy wire JSON when default. `thermal::microclimate` / wasm32
+`AdaptiveIlu` and `TrustRegionSteihaug`), `integrator` (`ImplicitEuler` default omitted from
+JSON; `GeneralizedAlpha { rho_inf }`), and schedule/tolerance overrides (`step_s`, `sew_steps`,
+`drape_steps`, `newton_tol_m_s`, capped at `sew + drape + settle <= 512`), forwarding them directly
+into `ftx_drape::run::DrapeOptions` while preserving legacy wire JSON when default. `thermal::microclimate` / wasm32
 `thermal_microclimate` delegates to `ftx_drape::thermal::microclimate::evaluate_json`
 (`ftx-microclimate/1`, 16 MiB cap, `Evidence::Estimate` convection + gray-diffuse enclosure), and
 `materials::lower_visco` / wasm32 `material_lower_visco` delegates to

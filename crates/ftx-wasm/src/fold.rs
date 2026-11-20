@@ -223,6 +223,18 @@ pub struct FoldSettings {
     pub skinning: SkinningMode,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
     pub max_settle_steps: usize,
+    /// Optional nominal step duration in seconds (omitted when using the default `0.01 s`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_s: Option<f64>,
+    /// Optional explicit sewing step count (omitted when using the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sew_steps: Option<usize>,
+    /// Optional explicit gravity drape step count (omitted when using the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drape_steps: Option<usize>,
+    /// Optional Newton convergence velocity tolerance in m/s (omitted when using the default `1e-3`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newton_tol_m_s: Option<f64>,
     /// Independent frictionless static comparison, with no change to the dynamic fold or its time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub static_equilibrium: Option<StaticEquilibriumOptions>,
@@ -247,6 +259,10 @@ impl Default for FoldSettings {
             leg_fraction: 1.0,
             skinning: SkinningMode::LinearBlend,
             max_settle_steps: 0,
+            step_s: None,
+            sew_steps: None,
+            drape_steps: None,
+            newton_tol_m_s: None,
             static_equilibrium: None,
             time_subdivision: None,
             newton_strategy: ftx_drape::NewtonStrategy::ProjectedNewton,
@@ -331,6 +347,10 @@ fn fold_on_source(
         leg_fraction,
         skinning,
         max_settle_steps,
+        step_s,
+        sew_steps,
+        drape_steps,
+        newton_tol_m_s,
         static_equilibrium,
         time_subdivision,
         newton_strategy,
@@ -350,14 +370,29 @@ fn fold_on_source(
     if !self_contact_mm.is_finite() || self_contact_mm < 0.0 {
         return Err("self-contact thickness must be finite and nonnegative".into());
     }
+    let defaults = DrapeOptions::default();
     let mut opts = DrapeOptions {
+        step: step_s.unwrap_or(defaults.step),
+        sew_steps: sew_steps.unwrap_or(defaults.sew_steps),
+        drape_steps: drape_steps.unwrap_or(defaults.drape_steps),
+        tol: newton_tol_m_s.unwrap_or(defaults.tol),
         max_settle_steps,
         static_equilibrium,
         time_subdivision,
         newton_strategy,
         integrator,
-        ..DrapeOptions::default()
+        ..defaults
     };
+    if opts
+        .sew_steps
+        .saturating_add(opts.drape_steps)
+        .saturating_add(opts.max_settle_steps)
+        > 512
+    {
+        return Err(
+            "configured fold exceeds the 512-step browser work budget (sew + drape + settle)".into(),
+        );
+    }
     opts.self_contact = Some(ftx_drape::contact::ContactParams {
         thickness: self_contact_mm * 1e-3,
         ..opts.contact
@@ -784,17 +819,34 @@ mod tests {
         use ftx_core::Vec3;
         use ftx_drape::{NewtonStrategy, PartFrame, TimeIntegrator, scene::PartFrames};
 
-        // Default FoldSettings omits newton_strategy and integrator (preserving legacy JSON wire).
+        // Default FoldSettings omits newton_strategy, integrator, and explicit schedule overrides.
         let def_val = serde_json::to_value(FoldSettings::default()).unwrap();
         assert!(def_val.get("newton_strategy").is_none());
         assert!(def_val.get("integrator").is_none());
+        assert!(def_val.get("step_s").is_none());
+        assert!(def_val.get("sew_steps").is_none());
+        assert!(def_val.get("drape_steps").is_none());
+        assert!(def_val.get("newton_tol_m_s").is_none());
 
         let mut custom = def_val;
+        custom["step_s"] = json!(0.001);
+        custom["sew_steps"] = json!(40);
+        custom["drape_steps"] = json!(60);
+        custom["newton_tol_m_s"] = json!(1e-5);
         custom["newton_strategy"] =
             json!({"kind": "adaptive_ilu", "pcg_iters": 64, "max_shifts": 4});
         custom["integrator"] = json!({"kind": "generalized_alpha", "rho_inf": 0.8});
         let parsed: FoldSettings = serde_json::from_value(custom.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap(), custom);
+        assert_eq!(
+            (
+                parsed.step_s,
+                parsed.sew_steps,
+                parsed.drape_steps,
+                parsed.newton_tol_m_s
+            ),
+            (Some(0.001), Some(40), Some(60), Some(1e-5))
+        );
 
         struct Form;
         impl PartFrames for Form {

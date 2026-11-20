@@ -251,6 +251,14 @@ impl Solver {
     /// [`RefusalCode::NotConverged`] if `H(x*)` is singular or the linear residual exceeds
     /// tolerance.
     pub fn equilibrium_adjoint(&mut self, dj_dx: &[Vec3]) -> Result<AdjointSolution, Refusal> {
+        if self.x.len() != self.model.rest.len()
+            || self.model.compression.len() != self.model.membranes.len()
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "adjoint solve requires cloth positions and compression arrays matching the model topology",
+            ));
+        }
         if dj_dx.len() != self.x.len() {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
@@ -267,6 +275,9 @@ impl Solver {
                 "adjoint solve requires finite positions and objective gradient",
             ));
         }
+        self.check_liquid_mass()?;
+        self.model.check_membrane_domains(&self.x)?;
+        self.model.check_panel_bending_domains(&self.x)?;
         let rhs = self.pack_free(dj_dx);
         let nfree = rhs.len();
         if nfree == 0 || rhs.iter().all(|&v| v == 0.0) {

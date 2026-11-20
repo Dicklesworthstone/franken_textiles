@@ -1039,7 +1039,7 @@ impl Solver {
             }
         };
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let l = self
+            let mut l = self
                 .membrane_plasticity
                 .as_ref()
                 .and_then(|field| field.local(i, &self.x, false))
@@ -1049,6 +1049,15 @@ impl Solver {
                         |law| e.response_local(&self.x, law, &self.model.material(i)),
                     )
                 });
+            if let Some(extra) = self
+                .relaxation
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, None))
+            {
+                for (a, b) in l.grad.iter_mut().zip(extra.grad) {
+                    *a += b;
+                }
+            }
             add_local(&mut r, &e.v, &l.grad);
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
@@ -1209,6 +1218,7 @@ impl Solver {
             && self.relaxation.is_none()
             && self.plasticity.is_none()
             && self.membrane_plasticity.is_none()
+            && !self.contact.as_ref().is_some_and(|c| c.has_friction())
     }
 
     /// Test-only helper matching the legacy static / implicit-Euler potential signature.
@@ -2381,6 +2391,12 @@ impl Solver {
         guess: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
         let params = GeneralizedAlphaParams::new(rho_inf)?;
+        if !params.mass_coeff(h).is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("time step {h} s underflows Generalized-alpha inertia scaling"),
+            ));
+        }
         let x0 = self.x.clone();
         let v0 = self.v.clone();
         if let Some(c) = &mut self.contact {

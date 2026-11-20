@@ -1106,6 +1106,12 @@ impl GrayDiffuseEnclosure {
             let eps = self.emissivities[i];
             let t2 = t * t;
             rhs[i] = eps * STEFAN_BOLTZMANN_W_M2_K4 * t2 * t2;
+            if !rhs[i].is_finite() {
+                return Err(refusal(
+                    RefusalCode::NonFinite,
+                    format!("surface {i} emissive power overflowed at {t} K"),
+                ));
+            }
             for j in 0..n {
                 matrix[i][j] =
                     if i == j { 1.0 } else { 0.0 } - (1.0 - eps) * self.view_factors.factors[i][j];
@@ -1129,6 +1135,21 @@ impl GrayDiffuseEnclosure {
             net_outward_heat_w[i] = self.view_factors.areas_m2[i] * net_outward_flux_w_m2[i];
             closure += net_outward_heat_w[i];
             residual_max = residual_max.max((lhs - rhs[i]).abs());
+            if !(irr.is_finite()
+                && net_outward_flux_w_m2[i].is_finite()
+                && net_outward_heat_w[i].is_finite())
+            {
+                return Err(refusal(
+                    RefusalCode::NonFinite,
+                    format!("enclosure surface {i} radiative heat balance overflowed"),
+                ));
+            }
+        }
+        if !(closure.is_finite() && residual_max.is_finite()) {
+            return Err(refusal(
+                RefusalCode::NonFinite,
+                "enclosure energy closure or linear residual became non-finite",
+            ));
         }
         Ok(RadiosityResult {
             radiosity_w_m2,

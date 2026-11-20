@@ -361,6 +361,19 @@ pub fn lower_to_prony(
     const MARGIN: f64 = 10.0;
     let tau_hi = MARGIN / w_lo;
     let tau_lo = 1.0 / (w_hi * MARGIN);
+    if !(w_lo.is_finite()
+        && w_hi.is_finite()
+        && w_lo > 0.0
+        && w_hi > w_lo
+        && tau_lo.is_finite()
+        && tau_hi.is_finite()
+        && tau_lo > 0.0
+        && tau_hi > tau_lo)
+    {
+        return Err(out_of_range(
+            "frequency band overflows or underflows Prony relaxation-time ladder",
+        ));
+    }
     let log_tau_lo = det::ln(tau_lo);
     let log_tau_hi = det::ln(tau_hi);
     let taus: Vec<f64> = (0..n_terms)
@@ -373,6 +386,11 @@ pub fn lower_to_prony(
             det::exp(log_tau_lo + t * (log_tau_hi - log_tau_lo))
         })
         .collect();
+    if taus.iter().any(|&t| !(t.is_finite() && t > 0.0)) {
+        return Err(out_of_range(
+            "Prony relaxation-time ladder became non-finite or non-positive",
+        ));
+    }
 
     let m_samples = (8 * n_terms).max(48);
     let log_w_lo = det::ln(w_lo);
@@ -388,7 +406,14 @@ pub fn lower_to_prony(
     let mut rhs = vec![0.0f64; rows];
     for (i, &w) in omegas.iter().enumerate() {
         let (fe, fi) = fz.modulus(w);
-        let weight = 1.0 / (fe * fe + fi * fi).sqrt();
+        let mag = (fe * fe + fi * fi).sqrt();
+        let weight = 1.0 / mag;
+        if !(fe.is_finite() && fi.is_finite() && mag.is_finite() && weight.is_finite() && weight > 0.0) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "complex modulus evaluation overflowed or underflowed during Prony lowering",
+            ));
+        }
         rhs[i] = (fe - fz.e0) * weight;
         rhs[m_samples + i] = fi * weight;
         for (j, &tau) in taus.iter().enumerate() {
@@ -733,6 +758,8 @@ mod tests {
         let fz = FractionalZener::new(200.0, 500.0, 0.35, 1.0).unwrap();
         let lowered = lower_to_prony(&fz, 0.01, 100.0, 14, 0.02).unwrap();
         assert!(lowered.sup_rel_err <= 0.02, "err = {}", lowered.sup_rel_err);
+        // Overflowing frequency band must refuse cleanly instead of propagating NaN.
+        assert!(lower_to_prony(&fz, 1e-308, 1e308, 8, 0.05).is_err());
         assert!(!lowered.model.terms.is_empty());
 
         // In-band query succeeds; out-of-band query refuses fail-closed.
