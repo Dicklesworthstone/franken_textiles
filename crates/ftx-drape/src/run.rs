@@ -1758,4 +1758,111 @@ mod self_contact_tests {
         opts.newton_strategy = NewtonStrategy::trust_region_default();
         assert!(opts.validate().is_ok());
     }
+
+    #[test]
+    fn xd85_probe() {
+        struct Form;
+        impl PartFrames for Form {
+            fn frame(&self, _: &str) -> Option<crate::start::PartFrame> {
+                Some(crate::start::PartFrame {
+                    origin: Vec3::ZERO,
+                    up: Vec3::new(0., 0., 1.),
+                    front: Vec3::new(0., -1., 0.),
+                    lat: Vec3::new(1., 0., 0.),
+                })
+            }
+            fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+                Some(10.0)
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                30.0
+            }
+        }
+        let mut verts = Vec::new();
+        for z in [-0.04, 0.08] {
+            for i in 0..16 {
+                let (s, c) = ftx_core::det::sin_cos(i as f64 * std::f64::consts::TAU / 16.0);
+                verts.push(Vec3::new(0.03 * c, 0.03 * s, z));
+            }
+        }
+        let mut tris = Vec::new();
+        for i in 0..16 {
+            let j = (i + 1) % 16;
+            tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
+        }
+        let form = Form;
+        let body = DrapeBody {
+            frames: &form,
+            collision: (&verts, &tris),
+            display: (&verts, &tris),
+            arm_deg: 35.0,
+        };
+        let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [{
+                "id": "band",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [w, 0], "c": [w, 20], "d": [0, 20]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "notches": [],
+                "grain": [[0, 0], [0, 20]],
+                "placement": {"part": "torso", "radius_mm": 35, "x0": w / 2.0}
+            }],
+            "seams": [{"id": "join", "a": "band/right", "b": "band/left"}]
+        }));
+
+        for (label, strategy, pcg, rho) in [
+            ("PN-exact rho=0.8", NewtonStrategy::ProjectedNewton, 0, 0.8),
+            ("PN-def rho=0.8", NewtonStrategy::ProjectedNewton, 16, 0.8),
+            (
+                "ILU rho=0.8",
+                NewtonStrategy::adaptive_ilu_default(),
+                16,
+                0.8,
+            ),
+            ("TR rho=0.8", NewtonStrategy::trust_region_default(), 16, 0.8),
+            ("PN-exact rho=0.5", NewtonStrategy::ProjectedNewton, 0, 0.5),
+            (
+                "ILU rho=0.5",
+                NewtonStrategy::adaptive_ilu_default(),
+                16,
+                0.5,
+            ),
+            ("PN-exact rho=0.2", NewtonStrategy::ProjectedNewton, 0, 0.2),
+            (
+                "ILU rho=0.2",
+                NewtonStrategy::adaptive_ilu_default(),
+                16,
+                0.2,
+            ),
+        ] {
+            let opts = DrapeOptions {
+                sew_steps: 4,
+                drape_steps: 6,
+                step: 0.01,
+                pcg_iters: pcg,
+                newton_strategy: strategy,
+                integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: rho },
+                ..DrapeOptions::default()
+            };
+            match drape(&pat, &json!({}), &body, &opts, |_| {}) {
+                Ok(run) => eprintln!(
+                    "OK   {label}: sew_iters={} drape_iters={} sew_fac={} drape_fac={} max_v={:.4}",
+                    run.sew.iterations,
+                    run.drape.iterations,
+                    run.sew.factorizations,
+                    run.drape.factorizations,
+                    run.drape.max_speed
+                ),
+                Err(e) => eprintln!("FAIL {label}: {}", e.message),
+            }
+        }
+    }
 }
