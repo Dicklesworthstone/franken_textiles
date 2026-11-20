@@ -38,6 +38,19 @@ def synthetic_tapes(chest):
     }
 
 
+def publish_tapes(output, chest, tapes):
+    # The gallery solve used four tapes. A full pattern round also asks for the
+    # synthetic hand passage used to draft this fixed sleeve.
+    if tapes != synthetic_tapes(chest):
+        raise ValueError(f"Unexpected recorded tapes for the {chest} mm case")
+    supplemental = json.loads(PATTERN.read_bytes())["meta"]["draft_body"]["supplemental_measurements"]
+    source, = [r for r in supplemental["hand_pass"]["source"]["sources"]
+               if r["used"] and r["provenance"] == "MEASURED_TAPE"]
+    hand = {"name": "hand_pass", **{k: source[k] for k in ("method", "provenance", "value_mm", "sigma_mm")}}
+    document = {**tapes, "records": [*tapes["records"], hand]}
+    (output/f"chest-{chest}.json").write_text(json.dumps(document, indent=2)+"\n")
+
+
 def read_obj(path):
     vertices, faces = [], []
     for line in path.read_text().splitlines():
@@ -151,6 +164,8 @@ def main():
     template = json.loads((PUBLIC/"exhibits/bolero.json").read_text())
     args.output.mkdir(parents=True, exist_ok=False)
     reports = {}
+    for chest in sorted({chest for chest, _ in GRID}):
+        publish_tapes(args.output, chest, json.loads((args.scratch/f"chest-{chest}.json").read_bytes()))
     for chest, angle in GRID:
         key = f"{chest}-{angle}"
         run = json.loads((args.scratch/f"result-{key}.json").read_text())

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import SitePage from "../../components/site/SitePage";
+import BoleroReplay from "../../components/BoleroReplay";
 import CodeBlock from "../../components/site/CodeBlock";
 import { repo, workbenches } from "../../components/site/links";
 
@@ -11,7 +12,6 @@ export const metadata: Metadata = {
 
 const thumbs = ["drafting.webp", "trace-review.webp", "material-rig.webp", "photo-example-sleeve.jpg"];
 
-// Every command and every output line below was run against the repository on 2026-11-18.
 const build = `
 git clone ${repo}
 cd franken_textiles
@@ -37,14 +37,6 @@ const own = `
 ftx measure init --label demo --stature 92cm --age-months 30 --out mine.json
 ftx measure add mine.json --name chest --value 52cm
 `;
-const drape = `
-# the body model is converted once on your machine; see tools/body-model in the repository
-export FTX_ANNY_MODEL=/path/to/anny-0.6.1.ftxbody
-
-ftx drape bolero/pattern.json --measurements m.json --fit bolero/fit_spec.json --out bolero/drape
-> fit: 0 gating, 0 advisory, settled
-`;
-
 const commands = [
   ["ftx draft", "Draft a bolero, trousers or a fez to a measurements file."],
   ["ftx validate", "Walk every seam and check every fit point on the flat pattern."],
@@ -106,9 +98,11 @@ export default function GetStarted() {
     <section className="ft-block"><div className="wrap ft-block-grid">
       <div className="ft-block-head"><p className="kicker">In three dimensions</p><h2>Sew it in simulation.</h2></div>
       <div className="ft-stack">
-        <div className="ft-prose"><p>Draping fits the body model to the measurements, sews the pieces around it and lets the cloth settle.
-          For the bolero this took about half a minute on one processor core.</p></div>
-        <CodeBlock title="Drape" code={drape}/>
+        <div className="ft-prose"><p>Replay the gallery’s five-piece bolero on its 52 cm chest form. This example uses the
+          gallery cut and its checked starting placements. Convert the pinned body model once using
+          {" "}<a href={repo + "/tree/main/tools/body-model"}>the body-model instructions</a>. If it lives outside the default
+          location, point <code>FTX_ANNY_MODEL</code> at the converted file.</p></div>
+        <BoleroReplay chest={52} angle={35} repository/>
         <div className="ft-prose"><p>The output folder holds the report and <code>fold_viewer.html</code>, a single page that replays the
           fold in three dimensions. A result with no flags is a prediction. <a href="/how-it-works/#claims">It is not a fit</a>.</p></div>
       </div>

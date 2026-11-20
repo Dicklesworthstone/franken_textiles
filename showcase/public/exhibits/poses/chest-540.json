@@ -1,0 +1,49 @@
+{
+  "schema": "fabric-measurements/1",
+  "taken_on": "2026-10-13",
+  "fused": {},
+  "wearer": {
+    "age_months": 30.0,
+    "bmi": 16.0,
+    "label": "synthetic",
+    "sex": "F",
+    "stature_mm": 920.0
+  },
+  "records": [
+    {
+      "name": "stature",
+      "value_mm": 920,
+      "sigma_mm": 10,
+      "method": "synthetic tape",
+      "provenance": "MEASURED_TAPE"
+    },
+    {
+      "name": "head",
+      "value_mm": 480,
+      "sigma_mm": 5,
+      "method": "synthetic tape",
+      "provenance": "MEASURED_TAPE"
+    },
+    {
+      "name": "foot_pass",
+      "value_mm": 200,
+      "sigma_mm": 5,
+      "method": "synthetic tape",
+      "provenance": "MEASURED_TAPE"
+    },
+    {
+      "name": "chest",
+      "value_mm": 540,
+      "sigma_mm": 3,
+      "method": "synthetic tape",
+      "provenance": "MEASURED_TAPE"
+    },
+    {
+      "name": "hand_pass",
+      "method": "synthetic tape input for bolero replay",
+      "provenance": "MEASURED_TAPE",
+      "value_mm": 145.0,
+      "sigma_mm": 5.0
+    }
+  ]
+}

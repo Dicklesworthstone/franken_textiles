@@ -92,6 +92,18 @@ test("the drape room pairs each body and pose with its native cloth and endpoint
       assert.equal(await page.locator(".dr-readings strong").nth(1).textContent(),run.chestClearance.toFixed(1)+" mm");
       assert.equal(await page.locator(".dr-method summary span").textContent(),
         !run.settled?"Cloth still moving":run.flags.length?"Review solver flags":"Settled");
+      const method=page.locator(".dr-method");
+      const tapes=await method.locator('a[download][href*="/chest-"]').getAttribute("href");
+      assert.equal(tapes,`/exhibits/poses/chest-${chest*10}.json`);
+      if(angle===35){
+        const input=await (await page.request.get(new URL(tapes,site).href)).json();
+        assert.equal(input.records.find(r=>r.name==="chest").value_mm,chest*10);
+        assert.equal(input.records.find(r=>r.name==="hand_pass").value_mm,145);
+      }
+      const command=await method.locator("pre").textContent();
+      assert.ok(command.includes(`--measurements chest-${chest*10}.json --fit fit-spec.json`));
+      assert.ok(command.includes(`--arm-deg ${angle} `) && command.includes(`ftx viewer bolero-${id} --check-contact`));
+      assert.ok((await method.textContent()).includes(run.sourcePc2Sha256));
       await page.getByRole("button",{name:"Contact",exact:true}).click();
       await page.locator(`canvas[data-mode="contact"][data-frame="${run.sourceFrames-1}"]`).waitFor();
       assert.equal(await page.locator(".dr-readings strong").last().textContent(),run.peakBodyForceN.toFixed(2)+" N");
@@ -118,6 +130,7 @@ test("the drape room pairs each body and pose with its native cloth and endpoint
     await page.getByRole("slider",{name:"Sewing replay frame"}).press("Home");
     await page.locator('canvas[data-coupled="true"][data-native-frame="0"]').waitFor();
     assert.ok(await page.locator(".dr-settings a[download]").count()===2);
+    assert.equal(await page.locator('.dr-method a[href*="/chest-"]').count(),0);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   } finally {await page.close();}
 });

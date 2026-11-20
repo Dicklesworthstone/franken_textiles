@@ -18,7 +18,7 @@ def load_panel(directory, view, instance):
     refused = isinstance(sim.get("refusal"), dict)
     folder = "sim/refused" if refused else "sim"
     name = f"{folder}/still_{view}.png"
-    rendering = entry.get("rendering", {})
+    rendering = entry.get("rendering") or {}
     if not refused and (not sim or "refusal" in sim or rendering.get("status") != "PASS"
                         or f"rounds/{number:03d}/{name}" not in entry["images"]):
         raise ValueError(f"round {number} has no published {view} still")
@@ -36,6 +36,9 @@ def load_panel(directory, view, instance):
             raise ValueError(f"round {number} has a linked diagnostic mesh map")
         if mapping.exists():
             dimensions = json.loads(mapping.read_bytes())["refused_pose"]
+            if (not isinstance(dimensions, dict) or not isinstance(dimensions.get("phase"), str)
+                    or type(dimensions.get("accepted_steps")) is not int or dimensions["accepted_steps"] < 0):
+                raise ValueError(f"round {number} has no identified pose in its diagnostic mesh map")
     if not all(size) or (dimensions is not None and size != (dimensions["width"], dimensions["height"])):
         raise ValueError(f"still differs from the dimensions recorded in round {number}")
     preview = ElementTree.parse(directory / "preview.svg")

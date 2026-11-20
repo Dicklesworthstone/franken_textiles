@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import experiment from "../public/exhibits/poses/runs.json";
 import joint from "../public/exhibits/poses/ensemble.json";
 import { PlaybackMark } from "./InlineFilm";
+import BoleroReplay from "./BoleroReplay";
 import type { StudioMode } from "./garmentMesh";
 import "./drape-room.css";
 
@@ -110,10 +111,10 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
           {joint.advisories.map(note=><p key={note}>Starting placement advisory · {note}.</p>)}
           <p><a href="/exhibits/poses/ensemble-request.json" download>Download the two-pattern solver input</a> · <a href="/exhibits/poses/ensemble.json" download>Download endpoint readings</a></p></>:<><p>Each combination uses the same flat cut and fabric on a synthetic 92 cm form. The panels bend separately on the board, then move to the checked starting position on the wearer. The archive check tests that position, {phases.sew} sewing steps and {phases.drape} gravity steps against the full body and the other cloth panels. The readings describe the endpoint.</p>
         <p>The mean gap averages the distance at the chest ring. Edge strain is the change in edge length over the whole garment. This run’s endpoint range is {run.edgeStrainPercent.min}% to +{run.edgeStrainPercent.max}%. Contact shows the magnitude of the body’s barrier force at each welded cloth vertex, in newtons. Physical fit requires a sewn sample.</p>
+        <BoleroReplay chest={chest} angle={angle}/>
         </>}
         {flags.map(flag=><p key={flag} className="dr-warning">{flag}</p>)}
         <div className="dr-sources"><a href="/exhibits/poses/runs.json" download>Download solver summaries and body-fit residuals ↓</a>
-          {!full&&<a href="/exhibits/poses/bolero-start.json" download>Download the cut and starting placements ↓</a>}
           <a href={full?"?outfit=joint#drape-room":`?chest=${chest}&arm=${angle}&surface=${mode}#drape-room`}>Link to this setup</a><a href="/studies/trousers/?bench=posture&run=squat-25">See the clothed quarter squat</a></div>
       </details>
     </div>
