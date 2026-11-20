@@ -329,6 +329,27 @@ pub fn fold_up_configured(
     )
 }
 
+fn validate_browser_schedule(
+    options: &DrapeOptions,
+    comparison: Option<&TwoStartOptions>,
+) -> Result<(), String> {
+    let longest_sewing = comparison.map_or(options.sew_steps, |policy| {
+        options.sew_steps.max(policy.alternate_sew_steps)
+    });
+    if longest_sewing
+        .saturating_add(options.drape_steps)
+        .saturating_add(options.max_settle_steps)
+        > 512
+    {
+        return Err("configured fold exceeds the 512-step browser work budget per sewing path (sew + drape + settle)".into());
+    }
+    match comparison {
+        Some(policy) => policy.validate(options),
+        None => options.validate(),
+    }
+    .map_err(|reason| reason.to_string())
+}
+
 #[allow(clippy::too_many_arguments)] // Shared adapter preserves the same inputs for both shape sources.
 fn fold_on_source(
     model: &AnnyModel,
@@ -383,22 +404,12 @@ fn fold_on_source(
         integrator,
         ..defaults
     };
-    if opts
-        .sew_steps
-        .saturating_add(opts.drape_steps)
-        .saturating_add(opts.max_settle_steps)
-        > 512
-    {
-        return Err(
-            "configured fold exceeds the 512-step browser work budget (sew + drape + settle)"
-                .into(),
-        );
-    }
     opts.self_contact = Some(ftx_drape::contact::ContactParams {
         thickness: self_contact_mm * 1e-3,
         ..opts.contact
     });
-    opts.validate().map_err(m)?;
+    let comparison = two_start.then(TwoStartOptions::default);
+    validate_browser_schedule(&opts, comparison.as_ref())?;
     let material = ftx_drape::material::resolve(&pat, &opts).map_err(m)?;
     // Occupancy and the bare fitter must consume the same current evidence, including in direct
     // portable calls that have not passed through a saved round.
@@ -482,15 +493,8 @@ fn fold_on_source(
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
-    let run = if two_start {
-        ftx_drape::two_start::drape(
-            &pat,
-            fit_spec,
-            &body,
-            &opts,
-            &TwoStartOptions::default(),
-            &mut progress,
-        )
+    let run = if let Some(policy) = comparison {
+        ftx_drape::two_start::drape(&pat, fit_spec, &body, &opts, &policy, &mut progress)
     } else {
         drape(&pat, fit_spec, &body, &opts, &mut progress)
     }
@@ -571,6 +575,38 @@ mod tests {
                 .unwrap()
                 .static_equilibrium
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn browser_step_budget_covers_both_paths_including_settling() {
+        let comparison = TwoStartOptions::default();
+        let mut options = DrapeOptions {
+            sew_steps: 12,
+            drape_steps: 493,
+            max_settle_steps: 1,
+            ..DrapeOptions::default()
+        };
+        assert!(validate_browser_schedule(&options, Some(&comparison)).is_ok());
+        options.drape_steps += 1;
+        assert!(validate_browser_schedule(&options, None).is_ok());
+        assert!(
+            validate_browser_schedule(&options, Some(&comparison))
+                .unwrap_err()
+                .contains("512")
+        );
+        options.sew_steps = usize::MAX;
+        assert!(
+            validate_browser_schedule(&options, None)
+                .unwrap_err()
+                .contains("512")
+        );
+        options.drape_steps = 60;
+        options.sew_steps = comparison.alternate_sew_steps;
+        assert!(
+            validate_browser_schedule(&options, Some(&comparison))
+                .unwrap_err()
+                .contains("must differ")
         );
     }
 

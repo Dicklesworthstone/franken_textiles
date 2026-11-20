@@ -322,8 +322,11 @@ model, inferred landmarks, readiness or real-person fit claim is added.
 `fold_up_configured(body, pattern, measurements, fit_spec, settings_json, body_fit?)`
 accept explicit `self_contact_mm`, `two_start`, `arm_abduction_deg`, `legs`
 (`standing`, `seated`, `squat`), `leg_fraction` (0..=1), and `max_settle_steps` (0..=256).
-Omitted settings mean 0 mm self-contact, one start, 35° arms, standing legs, full leg fraction,
-and no additional settling. Unknown fields and invalid values refuse. Imported body reports remain
+Omitted settings mean 2 mm self-contact, one start, 35° arms, standing legs, full leg fraction,
+and no additional settling. Set `step_s`, `sew_steps`, `drape_steps` and `newton_tol_m_s`
+to reproduce a specific integration schedule and correction tolerance. Each sewing path has a
+512-step limit across sewing, gravity and extra settling, including the optional 18-step comparison.
+Unknown fields and invalid values refuse. Imported body reports remain
 exact source text; the configured arm angle must agree with `BodyFitSource.arm_deg` in Rust calls.
 Tape fitting and nappy calibration keep their reference pose; requested poses change only garment
 placement, collision and display geometry. The bounded settling tail continues the sewn state at
