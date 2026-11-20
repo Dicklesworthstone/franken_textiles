@@ -16,7 +16,7 @@ const build = `
 git clone ${repo}
 cd franken_textiles
 cargo build --release -p ftx-cli
-# the program is now at target/release/ftx
+export PATH="$PWD/target/release:$PATH"
 `;
 const draft = `
 # reference measurements for a synthetic 92 cm wearer, from population data
@@ -71,11 +71,11 @@ export default function GetStarted() {
     </div></section>
 
     <section className="ft-block" id="command-line"><div className="wrap ft-block-grid">
-      <div className="ft-block-head"><p className="kicker">Command line</p><h2>A first pattern in four commands.</h2>
+      <div className="ft-block-head"><p className="kicker">Command line</p><h2>A first pattern in four steps.</h2>
         <p>You need Git and Rust. The repository pins its own Rust version, and <code>rustup</code> fetches it on the first build.</p></div>
       <div className="ft-stack">
         <div><p className="ft-step-label"><b>01</b><span>Get the source and build the tool.</span></p><CodeBlock title="Build" code={build}/></div>
-        <div><p className="ft-step-label"><b>02</b><span>Draft a bolero. The examples call the program <code>ftx</code>; use its full path, or add it to your path.</span></p>
+        <div><p className="ft-step-label"><b>02</b><span>Draft a bolero from synthetic reference measurements.</span></p>
           <CodeBlock title="Draft" code={draft}/></div>
         <div><p className="ft-step-label"><b>03</b><span>Check it flat. Every seam is walked and each fit point is compared with the body.</span></p>
           <CodeBlock title="Check" code={check}/></div>
