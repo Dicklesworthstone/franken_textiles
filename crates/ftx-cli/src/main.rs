@@ -65,7 +65,7 @@ const USAGE: &str = "usage:
             [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
-            [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.8]
+            [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
@@ -74,7 +74,7 @@ const USAGE: &str = "usage:
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--max-settle-steps N]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
-            [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.8]
+            [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--json]
@@ -883,7 +883,7 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
                     Some(v) => v.parse::<f64>().map_err(|_| {
                         bad_input("--rho-inf must be a finite spectral radius in [0, 1]")
                     })?,
-                    None => 0.8,
+                    None => 0.0,
                 };
                 TimeIntegrator::GeneralizedAlpha { rho_inf }
             }
@@ -2100,17 +2100,17 @@ mod tests {
             TimeIntegrator::GeneralizedAlpha { rho_inf: 0.6 }
         );
 
-        // Default rho_inf for generalized-alpha is 0.8.
+        // Default rho_inf for generalized-alpha is 0.0 (L-stable 2nd-order for stiff IPC contact).
         let ga_def = drape_options(
             &parse(&["drape", "--integrator", "generalized-alpha"].map(String::from)).unwrap(),
         )
         .unwrap();
         assert_eq!(
             ga_def.integrator,
-            TimeIntegrator::GeneralizedAlpha { rho_inf: 0.8 }
+            TimeIntegrator::GeneralizedAlpha { rho_inf: 0.0 }
         );
 
-        // Invalid combinations refuse before file I/O.
+        // Invalid combinations refuse before file I/O on both `drape` and `round --sim`.
         for bad in [
             vec!["--newton-strategy", "bogus"],
             vec!["--integrator", "verlet"],
@@ -2120,10 +2120,36 @@ mod tests {
             vec!["--integrator", "generalized-alpha", "--rho-inf", "NaN"],
         ] {
             let mut argv = vec!["drape", "absent-pattern.json"];
-            argv.extend(bad);
+            argv.extend(bad.iter().copied());
             let args = parse(&argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
             let err = cmd_drape(&args).unwrap_err();
             assert_ne!(err.code, RefusalCode::Io, "{}", err.message);
+
+            let mut round_argv = vec!["round", "absent-ws", "--sim"];
+            round_argv.extend(bad.iter().copied());
+            let round_args =
+                parse(&round_argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
+            let round_err = round::cmd_round(&round_args).unwrap_err();
+            assert_ne!(round_err.code, RefusalCode::Io, "{}", round_err.message);
+            assert!(
+                !round_err.message.contains("unknown option"),
+                "round must recognize solver/integrator options: {}",
+                round_err.message
+            );
         }
+
+        // `ftx round` without `--sim`/`--stills` must refuse solver/integrator flags explicitly.
+        let round_no_sim =
+            parse(&["round", "absent-ws", "--newton-strategy", "adaptive-ilu"].map(String::from))
+                .unwrap();
+        let no_sim_err = round::cmd_round(&round_no_sim).unwrap_err();
+        assert_eq!(no_sim_err.code, RefusalCode::InvalidDocument);
+        assert!(
+            no_sim_err
+                .message
+                .contains("--newton-strategy requires --sim or --stills"),
+            "{}",
+            no_sim_err.message
+        );
     }
 }

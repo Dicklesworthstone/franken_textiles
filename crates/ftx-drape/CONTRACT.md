@@ -11,23 +11,30 @@ pinned `kat` / `kat_contact` digests:
 - `sparse::advanced` + `NewtonStrategy`: `Bsr`, `Precond` (`IdentityPrecond`, `Jacobi`, `Chebyshev`,
   `Ilu0`, `ilu0_shifted`, `ilu0_spd_shifted`), `CsrF32` + `mixed_cg_refine`, fail-closed `pminres`
   with true Euclidean residual and Rigal–Gaches backward-error certification, `eisenstat_walker`,
-  and `steihaug_cg`. `Solver::newton_strategy` adds opt-in `AdaptiveIlu` (SPD-shifted `ILU(0)`-PCG
-  with Eisenstat–Walker forcing) and factorization-free `TrustRegionSteihaug` (unprojected exact
-  Hessian with negative-curvature boundary escape and contact CCD).
+  and `steihaug_cg`. `Solver::newton_strategy` / `DrapeOptions::newton_strategy` adds opt-in
+  `AdaptiveIlu` (SPD-shifted `ILU(0)`-PCG with Eisenstat–Walker forcing) and factorization-free
+  `TrustRegionSteihaug` (unprojected exact Hessian with negative-curvature boundary escape and
+  contact CCD); defaults omit the field from `report["numerical"]` and `DrapeOptions` JSON.
 - `integrator` + `TimeIntegrator`: opt-in second-order Chung–Hulbert `GeneralizedAlpha { rho_inf }`
-  in variational incremental-potential form with automatic consistent initial acceleration,
-  midpoint-consistent friction lag and dual-endpoint/midpoint CCD; refuses backward-Euler material
+  wired through `DrapeOptions::integrator` in variational incremental-potential form with automatic
+  consistent initial acceleration (recomputed on phase gravity changes via `Solver::reset_acceleration`,
+  transactional on step refusal), generalized-midpoint elastic internal forces `x_{n+1-α_f}` and
+  end-of-step IPC barrier + lagged Coulomb friction + CCD at `x_{n+1}`; refuses backward-Euler material
   history fields fail-closed. Verified at `1.0 ± 0.2` (`ImplicitEuler`) and `2.0 ± 0.2`
-  (`GeneralizedAlpha` at `rho_inf ∈ {1.0, 0.5}`) by `ftx-conformance/tests/time_order.rs` using
+  (`GeneralizedAlpha` at `rho_inf ∈ {1.0, 0.5, 0.0}`) by `ftx-conformance/tests/time_order.rs` using
   `ftx_conformance::mms::OrderGate`.
 - `adjoint`: IFT static-equilibrium adjoint (`Solver::equilibrium_adjoint`, reusing verified cached
-  `LdltFactor` or factoring exact `H(x*)` once), `Solver::constitutive_gradient` (exact
-  `dJ/d[Q11, Q22, Q12, Q33]` and `dJ/dB` including compression softening, refusing heterogeneous or
-  history-bearing models fail-closed), `orthotropic_chain_rule`, and fail-closed `verify_gradient`.
+  `LdltFactor` or factoring exact `H(x*)` once), `Solver::nodal_reactions`,
+  `Solver::constitutive_gradient`, `Solver::reaction_gradient`, and
+  `Solver::constitutive_gradient_with_reactions` (exact `d/d[Q11, Q22, Q12, Q33]` and `d/dB` for
+  both free-DOF geometry objectives and fixed-DOF Dirichlet reaction forces/torques including
+  compression softening, refusing heterogeneous or history-bearing models fail-closed),
+  `orthotropic_chain_rule`, and fail-closed `verify_gradient`.
 - `thermal::microclimate`: USSA-1976 dry air / NIST water-vapor `MoistAirState` (Buck 1996
   saturation), 12 validity-gated Nusselt correlations with `NusseltResult::to_exterior` producing
-  explicit `Evidence::Estimate` records (never promoted to measured film data), and N-patch
-  `GrayDiffuseEnclosure` radiosity with row-sum and reciprocity admission.
+  explicit `Evidence::Estimate` records (never promoted to measured film data), N-patch
+  `GrayDiffuseEnclosure` radiosity with row-sum and reciprocity admission, and strict bounded JSON
+  evaluator `evaluate_json` (`ftx-microclimate/1` → `ftx-microclimate-report/1`, 16 MiB cap).
 These tests establish numerical behavior, convergence order, derivative accuracy, and conservation
 only — never runtime speedup (unbenchmarked), empirical material qualification, or physical fit.
 

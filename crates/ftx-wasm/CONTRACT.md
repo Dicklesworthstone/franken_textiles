@@ -1,5 +1,19 @@
 # ftx-wasm
 
+**Opt-in drape solver strategies, Generalized-α, microclimate, and viscoelastic lowering.**
+`fold::FoldSettings` carries opt-in `newton_strategy` (`ProjectedNewton` default omitted from JSON;
+`AdaptiveIlu` and `TrustRegionSteihaug`) and `integrator` (`ImplicitEuler` default omitted from
+JSON; `GeneralizedAlpha { rho_inf }`), forwarding both directly into `ftx_drape::run::DrapeOptions`
+while preserving legacy wire JSON when default. `thermal::microclimate` / wasm32
+`thermal_microclimate` delegates to `ftx_drape::thermal::microclimate::evaluate_json`
+(`ftx-microclimate/1`, 16 MiB cap, `Evidence::Estimate` convection + gray-diffuse enclosure), and
+`materials::lower_visco` / wasm32 `material_lower_visco` delegates to
+`ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json`
+(`ftx-fractional-zener-lowering/1`, 16 MiB cap, ≤ 65,536 replay steps). Byte-for-byte parity with
+the native evaluators is checked by `fold::tests::portable_microclimate_and_lower_visco_match_native_bytes`.
+These establish numerical solver/recurrence behavior only, not benchmarked speedups, empirical
+textile characterization, or physical garment fit.
+
 **Source-bound landmark distance.** The Photo Workbench's straight-distance operation forwards one
 original `ftx-triangulation-distance-input/1` string (up to 16 MiB) to the existing
 `photo::triangulate_distance` / wasm32 `triangulate_distance` authority. It ignores the separate

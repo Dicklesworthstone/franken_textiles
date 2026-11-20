@@ -1110,11 +1110,8 @@ impl Solver {
             accum(&e.v, &l.hess);
         }
         if let Some(c) = &self.contact {
-            for mut block in c.terms(&self.x, true, false).blocks {
+            for block in c.terms(&self.x, true, false).blocks {
                 let m = block.dofs.len();
-                if !block.psd {
-                    project_psd(&mut block.hess, m);
-                }
                 for (ia, &(va, ka)) in block.dofs.iter().enumerate() {
                     let Some(fa) = self.free[3 * va + ka] else {
                         continue;
@@ -1168,7 +1165,7 @@ impl Solver {
     }
 
     pub(crate) fn assemble_static_exact(&self) -> (Vec<f64>, Csr) {
-        self.assemble(&self.x, None, false)
+        self.assemble_ctx(&self.x, StepContext::Static, false, false)
     }
 
     pub(crate) fn cached_factor_solve(&self, rhs: &[f64]) -> Option<Vec<f64>> {
@@ -1242,10 +1239,13 @@ impl Solver {
                 if let Some(field) = &self.relaxation {
                     e += field.energy(&x_eval, Some(h))?;
                 }
-                if let Some(c) = &self.contact {
-                    e += c.terms(&x_eval, false, true).energy;
-                }
                 e /= params.elastic_weight();
+                // Contact barrier and lagged friction enforce end-of-step non-penetration at x_{n+1}
+                // so the barrier blows up on the exact CCD boundary d(x_{n+1}) -> 0 while elastic
+                // internal forces retain 2nd-order Chung-Hulbert midpoint evaluation at x_{n+1-α_f}.
+                if let Some(c) = &self.contact {
+                    e += c.terms(x, false, true).energy;
+                }
                 let cm = params.mass_coeff(h);
                 for (i, m) in self.model.mass.iter().enumerate() {
                     e += 0.5 * cm * m * (x[i] - xt[i]).norm2();
@@ -1308,18 +1308,24 @@ impl Solver {
         }
     }
 
-    /// Gradient over free DOFs and the Hessian (every element block pushed, so the pattern is fixed),
-    /// with element blocks projected to positive semidefinite when `project` is set.
+    /// Test-only helper matching the legacy static / implicit-Euler assembly signature.
+    #[cfg(test)]
     fn assemble(
         &self,
         x: &[Vec3],
         inertia: Option<(&[Vec3], f64)>,
         project: bool,
     ) -> (Vec<f64>, Csr) {
-        self.assemble_ctx(x, StepContext::from_inertia(inertia), project)
+        self.assemble_ctx(x, StepContext::from_inertia(inertia), project, true)
     }
 
-    fn assemble_ctx(&self, x: &[Vec3], ctx: StepContext<'_>, project: bool) -> (Vec<f64>, Csr) {
+    fn assemble_ctx(
+        &self,
+        x: &[Vec3],
+        ctx: StepContext<'_>,
+        project_elements: bool,
+        project_contact: bool,
+    ) -> (Vec<f64>, Csr) {
         let x_eval_buf = match ctx {
             StepContext::GeneralizedAlpha { x0, params, .. } => Some(
                 x.iter()
@@ -1337,12 +1343,12 @@ impl Solver {
         };
         let scale_hess = |v: f64| if hess_scale != 1.0 { v * hess_scale } else { v };
         let mut g = vec![0.0; self.nfree];
-        // The contact blocks (a function of `x_el` alone) come first, so that their positions are known
-        // before anything is pushed; they are still pushed last.
+        // The contact blocks (evaluated at endpoint `x`) come first so their sparsity positions
+        // are known before element blocks are pushed; they are still scattered last.
         let blocks = self
             .contact
             .as_ref()
-            .map(|c| c.terms(x_el, true, dynamic).blocks);
+            .map(|c| c.terms(x, true, dynamic).blocks);
         // Cloth–cloth contact can couple previously unrelated elements. Never scatter those blocks
         // into a stale fixed pattern (CsrFill rejects missing entries): the element pattern plus this
         // iterate's contact couplings is the structure the triplets would assemble to, filled in place
@@ -1379,7 +1385,7 @@ impl Solver {
                        sink: &mut Sink,
                        g: &mut [f64]| {
             let n = 3 * dofs.len();
-            if project && !psd {
+            if project_elements && !psd {
                 project_psd_translation_free(hess, dofs.len());
             }
             for a in 0..n {
@@ -1465,7 +1471,7 @@ impl Solver {
             // couple all four moving vertices across previously unrelated elements.
             for mut block in blocks {
                 let m = block.dofs.len();
-                if !block.psd {
+                if project_contact && !block.psd {
                     project_psd(&mut block.hess, m);
                 }
                 for (ia, &(va, ka)) in block.dofs.iter().enumerate() {
@@ -1475,7 +1481,7 @@ impl Solver {
                     g[fa] += block.grad[ia];
                     for (ib, &(vb, kb)) in block.dofs.iter().enumerate() {
                         if let Some(fb) = self.free[3 * vb + kb] {
-                            sink.push(fa, fb, scale_hess(block.hess[ia * m + ib]));
+                            sink.push(fa, fb, block.hess[ia * m + ib]);
                         }
                     }
                 }
@@ -1568,25 +1574,10 @@ impl Solver {
             .collect()
     }
 
-    fn ccd_step_bound(&self, p: &[f64], ctx: StepContext<'_>) -> f64 {
-        let Some(c) = &self.contact else {
-            return 1.0;
-        };
-        let disp = self.displacement(p);
-        let a_end = c.step_bound(&self.x, &disp);
-        if let StepContext::GeneralizedAlpha { x0, params, .. } = ctx {
-            let w = params.elastic_weight();
-            let x_eval: Vec<Vec3> = self
-                .x
-                .iter()
-                .zip(x0)
-                .map(|(&xn, &xo)| params.eval_pos(xn, xo))
-                .collect();
-            let d_eval: Vec<Vec3> = disp.iter().map(|&d| d * w).collect();
-            a_end.min(c.step_bound(&x_eval, &d_eval))
-        } else {
-            a_end
-        }
+    fn ccd_step_bound(&self, p: &[f64]) -> f64 {
+        self.contact
+            .as_ref()
+            .map_or(1.0, |c| c.step_bound(&self.x, &self.displacement(p)))
     }
 
     /// Projected Newton (or configured [`NewtonStrategy`]) on the potential from the current positions.
@@ -1643,8 +1634,13 @@ impl Solver {
             } => Some((pcg_iters, max_shifts)),
             _ => None,
         };
+        let eta_max = if self.contact.is_some() {
+            PCG_TOL
+        } else {
+            1e-2
+        };
         let mut prev_grad_l2: Option<f64> = None;
-        let mut ew_eta = 0.1f64;
+        let mut ew_eta = eta_max;
         // Once a solve has met negative inertia it keeps projecting: retrying the exact Hessian first
         // cost a second assembly and factorization on almost every iteration of a garment.
         let mut projecting = false;
@@ -1657,7 +1653,7 @@ impl Solver {
                 let t = if adaptive_ilu.is_some() && ctx.is_dynamic() {
                     let gl2 = g_vec.iter().map(|v| v * v).sum::<f64>().sqrt();
                     if let Some(prev) = prev_grad_l2 {
-                        ew_eta = eisenstat_walker(prev, gl2, ew_eta, 1e-8, 0.1, 0.9, 2.0);
+                        ew_eta = eisenstat_walker(prev, gl2, ew_eta, 1e-8, eta_max, 0.9, 2.0);
                     }
                     prev_grad_l2 = Some(gl2);
                     ew_eta
@@ -1672,19 +1668,35 @@ impl Solver {
             let (mut g, mut p) = if projecting {
                 (Vec::new(), None)
             } else {
-                let (g, a) = self.assemble_ctx(&self.x, ctx, false);
+                let (g, a) = self.assemble_ctx(&self.x, ctx, false, true);
                 let lin_tol = next_lin_tol(&g);
-                let p = self.solve_newton_linear(&a, &g, false, lin_tol, adaptive_ilu, &mut rep)?;
+                let p = self.solve_newton_linear(
+                    &a,
+                    &g,
+                    false,
+                    lin_tol,
+                    base_linear_tol,
+                    adaptive_ilu,
+                    &mut rep,
+                )?;
                 (g, p)
             };
             let mut newton_correction = true;
             if p.is_none() {
                 projecting = true;
                 rep.projected_iterations += 1;
-                let (g2, a2) = self.assemble_ctx(&self.x, ctx, true);
+                let (g2, a2) = self.assemble_ctx(&self.x, ctx, true, true);
                 g = g2;
                 let lin_tol = next_lin_tol(&g);
-                p = self.solve_newton_linear(&a2, &g, true, lin_tol, adaptive_ilu, &mut rep)?;
+                p = self.solve_newton_linear(
+                    &a2,
+                    &g,
+                    true,
+                    lin_tol,
+                    base_linear_tol,
+                    adaptive_ilu,
+                    &mut rep,
+                )?;
                 if p.is_none() {
                     newton_correction = false;
                     if !ctx.is_dynamic() {
@@ -1717,7 +1729,7 @@ impl Solver {
                 break;
             }
             // Never step through the body or another cloth layer: cap α by additive CCD.
-            let mut alpha = self.ccd_step_bound(&p, ctx);
+            let mut alpha = self.ccd_step_bound(&p);
             rep.ccd_limited += usize::from(alpha < 1.0);
             let mut accepted = false;
             for _ in 0..50 {
@@ -1739,7 +1751,7 @@ impl Solver {
                     && -slope <= 16.0 * f64::EPSILON * energy.abs().max(e.abs())
                     && (e - energy).abs() <= 16.0 * f64::EPSILON * energy.abs().max(e.abs())
                     && {
-                        let (trial_gradient, _) = self.assemble_ctx(&trial, ctx, false);
+                        let (trial_gradient, _) = self.assemble_ctx(&trial, ctx, false, false);
                         let trial_slope = trial_gradient.iter().zip(&p).map(|(a, b)| a * b).sum();
                         let trial_residual =
                             trial_gradient.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
@@ -1758,6 +1770,9 @@ impl Solver {
                     self.x = trial;
                     energy = e;
                     rep.roundoff_steps += usize::from(precision_step);
+                    if alpha < 0.25 {
+                        ew_eta = (ew_eta * 0.1).max(1e-8);
+                    }
                     accepted = true;
                     break;
                 }
@@ -1771,7 +1786,7 @@ impl Solver {
         }
         rep.energy_end = energy;
         if !rep.converged {
-            let (g, _) = self.assemble_ctx(&self.x, ctx, false);
+            let (g, _) = self.assemble_ctx(&self.x, ctx, false, false);
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
             return Err(Refusal::new(
                 RefusalCode::NotConverged,
@@ -1790,12 +1805,14 @@ impl Solver {
         Ok(rep)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn solve_newton_linear(
         &mut self,
         a: &Csr,
         g: &[f64],
         projected: bool,
         linear_tolerance: f64,
+        fallback_tolerance: f64,
         adaptive_ilu: Option<(usize, usize)>,
         rep: &mut SolveReport,
     ) -> Result<Option<Vec<f64>>, Refusal> {
@@ -1829,7 +1846,7 @@ impl Solver {
                 }
             }
         }
-        self.newton_direction(a, g, projected, linear_tolerance, rep)
+        self.newton_direction(a, g, projected, fallback_tolerance, rep)
     }
 
     /// Trust-region Newton with Steihaug–Toint truncated CG on the exact unprojected Hessian.
@@ -1871,7 +1888,7 @@ impl Solver {
             cg_iters
         };
         for it in 0..self.max_newton {
-            let (g, h_mat) = self.assemble_ctx(&self.x, ctx, false);
+            let (g, h_mat) = self.assemble_ctx(&self.x, ctx, false, false);
             if g.iter().any(|v| !v.is_finite()) {
                 return Err(Refusal::new(
                     RefusalCode::NonFinite,
@@ -1914,7 +1931,7 @@ impl Solver {
                 rep.converged = true;
                 break;
             }
-            let ccd_alpha = self.ccd_step_bound(&p, ctx);
+            let ccd_alpha = self.ccd_step_bound(&p);
             if ccd_alpha < 1.0 {
                 rep.ccd_limited += 1;
                 for v in &mut p {
@@ -1954,7 +1971,7 @@ impl Solver {
                 && (trial_energy - energy).abs()
                     <= 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs())
                 && {
-                    let (tg, _) = self.assemble_ctx(&trial, ctx, false);
+                    let (tg, _) = self.assemble_ctx(&trial, ctx, false, false);
                     let tslope = tg.iter().zip(&p).map(|(a, b)| a * b).sum();
                     let tres = tg.iter().fold(0.0f64, |m, v| m.max(v.abs()));
                     tg.iter().all(|v| v.is_finite())
@@ -1977,7 +1994,7 @@ impl Solver {
         }
         rep.energy_end = energy;
         if !rep.converged {
-            let (g, _) = self.assemble_ctx(&self.x, ctx, false);
+            let (g, _) = self.assemble_ctx(&self.x, ctx, false, false);
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
             return Err(Refusal::new(
                 RefusalCode::NotConverged,
@@ -2308,11 +2325,13 @@ impl Solver {
         let params = GeneralizedAlphaParams::new(rho_inf)?;
         let x0 = self.x.clone();
         let v0 = self.v.clone();
-        if !self.accel_initialized {
+        let a0 = if self.accel_initialized {
+            self.a.clone()
+        } else {
             // Consistent initial acceleration M a₀ = M g − ∇Ψ(x₀) on free DOFs so Generalized-α
-            // preserves full 2nd-order accuracy from step 1.
-            let (g0, _) = self.assemble_ctx(&x0, StepContext::Static, false);
-            let mut a0 = vec![Vec3::ZERO; x0.len()];
+            // preserves full 2nd-order accuracy from step 1 without mutating state before accept.
+            let (g0, _) = self.assemble_ctx(&x0, StepContext::Static, false, false);
+            let mut init = vec![Vec3::ZERO; x0.len()];
             for (i, &m) in self.model.mass.iter().enumerate() {
                 if m > 0.0 {
                     let mut acc = Vec3::ZERO;
@@ -2326,19 +2345,17 @@ impl Solver {
                             }
                         }
                     }
-                    a0[i] = acc;
+                    init[i] = acc;
                 }
             }
-            if a0.iter().any(|a| !a.is_finite()) {
+            if init.iter().any(|a| !a.is_finite()) {
                 return Err(Refusal::new(
                     RefusalCode::NonFinite,
                     "consistent initial acceleration is non-finite",
                 ));
             }
-            self.a = a0;
-            self.accel_initialized = true;
-        }
-        let a0 = self.a.clone();
+            init
+        };
         let xt: Vec<Vec3> = (0..x0.len())
             .map(|i| {
                 let mut p = params.predictor(x0[i], v0[i], a0[i], self.gravity, h);
@@ -2354,12 +2371,11 @@ impl Solver {
                 p
             })
             .collect();
-        let h_eff = params.elastic_weight() * h;
         if let Some(c) = &mut self.contact {
             if let Some(b) = body_start {
-                c.update_lag_motion(&x0, &x0, h_eff, Some(b));
+                c.update_lag_motion(&x0, &x0, h, Some(b));
             } else {
-                c.update_lag(&x0, &x0, h_eff);
+                c.update_lag(&x0, &x0, h);
             }
         } else if let Some(g) = guess {
             if g.len() != self.x.len() {
@@ -2398,16 +2414,10 @@ impl Solver {
             if !c.has_friction() {
                 break;
             }
-            let x_eval: Vec<Vec3> = self
-                .x
-                .iter()
-                .zip(&x0)
-                .map(|(&xn, &xo)| params.eval_pos(xn, xo))
-                .collect();
             if let Some(b) = body_start {
-                c.update_lag_motion(&x0, &x_eval, h_eff, Some(b));
+                c.update_lag_motion(&x0, &self.x, h, Some(b));
             } else {
-                c.update_lag(&x0, &x_eval, h_eff);
+                c.update_lag(&x0, &self.x, h);
             }
             let again = match self.minimize_ctx(ctx) {
                 Ok(rep) => rep,
@@ -2440,6 +2450,8 @@ impl Solver {
             self.x = x0;
             return Err(e);
         }
+        let mut new_v = Vec::with_capacity(x0.len());
+        let mut new_a = Vec::with_capacity(x0.len());
         for i in 0..x0.len() {
             let (mut vn, mut an) = params.corrector(x0[i], v0[i], a0[i], self.x[i], h);
             for k in 0..3 {
@@ -2460,9 +2472,19 @@ impl Solver {
                     }
                 }
             }
-            self.v[i] = vn;
-            self.a[i] = an;
+            if !vn.is_finite() || !an.is_finite() {
+                self.x = x0;
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "generalized-alpha velocity or acceleration became non-finite",
+                ));
+            }
+            new_v.push(vn);
+            new_a.push(an);
         }
+        self.v = new_v;
+        self.a = new_a;
+        self.accel_initialized = true;
         Ok(rep)
     }
 
@@ -3324,5 +3346,39 @@ mod strategy_and_integrator_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn generalized_alpha_refusal_is_transactional_on_acceleration_state() {
+        let rest = vec![Vec2::ZERO, Vec2::new(0.02, 0.0), Vec2::new(0.0, 0.02)];
+        let x: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(200.0, 200.0, 0.1, 40.0, 0.1),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let mut s = Solver::new(
+            model,
+            x.clone(),
+            &[[true; 3], [false; 3], [false; 3]],
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        s.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.7 };
+        assert!(!s.accel_initialized);
+        // Refused warm-start length must leave x, v, a, and accel_initialized completely unchanged.
+        assert!(s.step_with_guess(0.01, Some(&[Vec3::ZERO])).is_err());
+        assert!(!s.accel_initialized);
+        assert_eq!(s.x, x);
+        assert_eq!(s.v, vec![Vec3::ZERO; 3]);
+        assert_eq!(s.a, vec![Vec3::ZERO; 3]);
+        // Refused stalled step (max_newton = 0) must likewise leave acceleration uninitialized.
+        s.max_newton = 0;
+        assert!(s.step(0.01).is_err());
+        assert!(!s.accel_initialized);
+        assert_eq!(s.x, x);
+        assert_eq!(s.a, vec![Vec3::ZERO; 3]);
     }
 }

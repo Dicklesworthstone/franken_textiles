@@ -55,11 +55,11 @@ fn integrate_to(integrator: TimeIntegrator, t_end: f64, steps: usize) -> Vec3 {
 #[test]
 fn generalized_alpha_achieves_second_order_while_implicit_euler_is_first_order() {
     let t_end = 0.016;
-    // Reference solution at fine step (64x finer than coarsest ladder rung) with 2nd-order midpoint.
+    // Reference solution at fine step (128x finer than coarsest ladder rung) with 2nd-order midpoint.
     let x_ref = integrate_to(
         TimeIntegrator::GeneralizedAlpha { rho_inf: 1.0 },
         t_end,
-        512,
+        1024,
     );
 
     let step_counts = [8usize, 16, 32, 64];
@@ -104,13 +104,33 @@ fn generalized_alpha_achieves_second_order_while_implicit_euler_is_first_order()
                 .norm()
         })
         .collect();
-    let ga05_ladder = RefinementLadder::new(hs, ga05_errs).unwrap();
+    let ga05_ladder = RefinementLadder::new(hs.clone(), ga05_errs).unwrap();
     let ga05_verdict = OrderGate { theoretical: 2.0 }
         .check("cloth-galpha-rho05", LadderSide::Primal, &ga05_ladder)
         .expect("Generalized-alpha rho=0.5 should converge at order 2.0 ± 0.2");
     assert!(
         (ga05_verdict.fit.observed - 2.0).abs() <= 0.2,
         "{ga05_verdict:?}"
+    );
+
+    // 4. Generalized-α (rho_inf = 0.0, L-stable IPC contact default; larger β=1.0 error constant
+    // enters the asymptotic O(h²) regime on the 2x-finer ladder) -> order 2.0 ± 0.2.
+    let fine_counts = [16usize, 32, 64, 128];
+    let fine_hs: Vec<f64> = fine_counts.iter().map(|&n| t_end / n as f64).collect();
+    let ga0_errs: Vec<f64> = fine_counts
+        .iter()
+        .map(|&n| {
+            (integrate_to(TimeIntegrator::GeneralizedAlpha { rho_inf: 0.0 }, t_end, n) - x_ref)
+                .norm()
+        })
+        .collect();
+    let ga0_ladder = RefinementLadder::new(fine_hs, ga0_errs).unwrap();
+    let ga0_verdict = OrderGate { theoretical: 2.0 }
+        .check("cloth-galpha-rho0", LadderSide::Primal, &ga0_ladder)
+        .expect("Generalized-alpha rho=0.0 should converge at order 2.0 ± 0.2");
+    assert!(
+        (ga0_verdict.fit.observed - 2.0).abs() <= 0.2,
+        "{ga0_verdict:?}"
     );
 }
 

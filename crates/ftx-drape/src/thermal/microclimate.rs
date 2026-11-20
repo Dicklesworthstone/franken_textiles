@@ -1302,6 +1302,12 @@ pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
                 "supply either delta_t_k or rayleigh, not both",
             ));
         }
+        if conv.gravity_m_s2.is_some() && conv.delta_t_k.is_none() {
+            return Err(refusal(
+                RefusalCode::InvalidDocument,
+                "gravity_m_s2 requires delta_t_k",
+            ));
+        }
         let reynolds = match (conv.wind_speed_m_s, conv.reynolds) {
             (Some(u), None) => Some(air.reynolds(u, conv.characteristic_length_m)?),
             (None, r) => r,
@@ -1625,11 +1631,25 @@ mod tests {
                 < 1e-10
         );
 
-        // Mutually exclusive wind_speed_m_s + reynolds must refuse fail-closed.
+        // Mutually exclusive wind_speed_m_s + reynolds and stray gravity_m_s2 must refuse.
         let mut bad = req.clone();
         bad["convection"]["wind_speed_m_s"] = serde_json::json!(1.0);
         bad["convection"]["reynolds"] = serde_json::json!(1000.0);
         assert!(evaluate_json(&bad.to_string()).is_err());
+
+        let mut stray_g = serde_json::json!({
+            "schema": MICROCLIMATE_REQUEST_SCHEMA,
+            "air": { "temperature_c": 20.0, "pressure_pa": 101325.0, "relative_humidity": 0.5 },
+            "convection": {
+                "correlation": "churchill_chu_vertical_plate",
+                "characteristic_length_m": 0.35,
+                "rayleigh": 1.0e7,
+                "gravity_m_s2": 9.81
+            }
+        });
+        assert!(evaluate_json(&stray_g.to_string()).is_err());
+        stray_g["convection"]["gravity_m_s2"] = serde_json::json!(-9.81);
+        assert!(evaluate_json(&stray_g.to_string()).is_err());
 
         // Unknown field must refuse fail-closed.
         let mut unknown = req;

@@ -864,14 +864,28 @@ mod tests {
         assert!(base.report["numerical"].get("newton_strategy").is_none());
         assert!(base.report["numerical"].get("integrator").is_none());
 
-        // AdaptiveIlu + GeneralizedAlpha completes both zero-gravity sew and gravity drape phases
-        // with consistent acceleration reset across the phase boundary.
-        let ga_opts = DrapeOptions {
+        // AdaptiveIlu completes real sewn garment drape cleanly.
+        let ilu_opts = DrapeOptions {
             newton_strategy: NewtonStrategy::adaptive_ilu_default(),
-            integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: 0.8 },
             ..base_opts
         };
-        let ga = drape(&pat, &json!({}), &body, &ga_opts, |_| {}).unwrap();
+        let ilu = drape(&pat, &json!({}), &body, &ilu_opts, |_| {})
+            .expect("AdaptiveIlu + ImplicitEuler should converge");
+        assert_eq!(
+            ilu.report["numerical"]["newton_strategy"]["kind"],
+            "adaptive_ilu"
+        );
+        assert!(ilu.report["numerical"].get("integrator").is_none());
+
+        // AdaptiveIlu + GeneralizedAlpha(0.0) (L-stable 2nd-order IPC default) completes both
+        // zero-gravity sew and gravity drape phases with consistent acceleration reset.
+        let ga_opts = DrapeOptions {
+            newton_strategy: NewtonStrategy::adaptive_ilu_default(),
+            integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: 0.0 },
+            ..base_opts
+        };
+        let ga = drape(&pat, &json!({}), &body, &ga_opts, |_| {})
+            .expect("AdaptiveIlu + GeneralizedAlpha(0.0) should converge");
         assert_eq!(
             ga.report["numerical"]["newton_strategy"]["kind"],
             "adaptive_ilu"
@@ -887,7 +901,8 @@ mod tests {
             newton_strategy: NewtonStrategy::trust_region_default(),
             ..base_opts
         };
-        let tr = drape(&pat, &json!({}), &body, &tr_opts, |_| {}).unwrap();
+        let tr = drape(&pat, &json!({}), &body, &tr_opts, |_| {})
+            .expect("TrustRegionSteihaug should converge");
         assert_eq!(
             tr.report["numerical"]["newton_strategy"]["kind"],
             "trust_region_steihaug"

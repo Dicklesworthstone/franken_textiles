@@ -9,7 +9,10 @@ deterministic `ftx_core::det::{exp, expm1, ln}`, zero `mul_add`). `ExactPronyMod
 invariance on relaxation holds. `FractionalZener` + `lower_to_prony` fits a nonnegative Prony
 series over a declared frequency band `[ω_min, ω_max]` via log-spaced relaxation times and
 Lawson–Hanson active-set NNLS, verified on a 512-point log sweep and refusing fail-closed if
-`max_rel_err` exceeds tolerance. This establishes numerical recurrence and spectral approximation
+`max_rel_err` exceeds tolerance. `evaluate_lowering_json` exposes the strict bounded JSON contract
+(`ftx-fractional-zener-lowering/1` → `ftx-fractional-zener-lowering-report/1`, 16 MiB input cap,
+≤ 65,536 replay steps) shared by `ftx materials lower-visco`, `ftx-materials lower-visco`, and
+`ftx-wasm::materials::lower_visco`. This establishes numerical recurrence and spectral approximation
 within the declared band only, not empirical textile characterization or physical garment fit.
 
 **Shared material inspection.** `ResolvedMaterial::inspection` retains the existing browser report

@@ -1421,11 +1421,9 @@ pub(crate) fn run_phase_with_subdivision(
     // Successful empty phases still select their load, as on the ordinary path. A failed
     // subdivided interval must not change gravity or any other part of the accepted state.
     let target_gravity = Vec3::new(0.0, 0.0, -gravity);
-    if policy.is_none() || steps == 0 {
-        if scene.solver.gravity != target_gravity {
-            scene.solver.gravity = target_gravity;
-            scene.solver.reset_acceleration();
-        }
+    if (policy.is_none() || steps == 0) && scene.solver.gravity != target_gravity {
+        scene.solver.gravity = target_gravity;
+        scene.solver.reset_acceleration();
     }
     let mut rep = PhaseReport::default();
     for k in 0..steps {
