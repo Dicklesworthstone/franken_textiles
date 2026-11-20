@@ -3198,9 +3198,29 @@ fn parallel_feed_preserves_the_fastest_complete_allocation_when_feed_is_tied() {
         let plan = build(&pattern, request.clone()).unwrap();
         let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
         assert_eq!(parallel.selected.scheduled_feed_milliseconds, 24000);
+        // Feed search reserves two additional complete-allocation DPs (40 work units here),
+        // reducing each cell trial cap from (10000 - 40) / 9 = 1106 to (10000 - 80) / 9 = 1102.
+        assert!(
+            fastest
+                .selected
+                .cells
+                .iter()
+                .all(|cell| cell.schedule_node_limit == 1106)
+        );
+        assert!(
+            parallel
+                .selected
+                .cells
+                .iter()
+                .all(|cell| cell.schedule_node_limit == 1102)
+        );
+        let mut expected = fastest.selected.clone();
+        for cell in &mut expected.cells {
+            cell.schedule_node_limit = 1102;
+        }
         assert_eq!(
             serde_json::to_value(&parallel.selected).unwrap(),
-            serde_json::to_value(&fastest.selected).unwrap()
+            serde_json::to_value(&expected).unwrap()
         );
         assert!(parallel.optimality_proven);
         assert!(
