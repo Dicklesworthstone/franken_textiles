@@ -21,6 +21,8 @@ const svgPath = sampler.pieces[0].decor[0].pts.map(([x, y], i) => `${i ? "L" : "
 const source = "https://sfhm.se/wp-content/uploads/2025/04/SFHM_skriftserie_Svenska_armens_uniformer_del_1_kavalleriet.pdf#page=21";
 const cameras = ["Jacket", "Chest", "Reverse", "Figure"] as const satisfies readonly Framing[];
 const excluded = drape.scope.excluded_instances?.length ?? 0;
+const gating: readonly string[] = drape.gating;
+const advisories = drape.flags.filter(flag => !gating.includes(flag));
 
 function choice<T extends string>(name: string, choices: readonly T[], value: T, set: (v: T) => void) {
   return <fieldset><legend>{name}</legend><div className="hu-choice">{choices.map(item =>
@@ -72,11 +74,11 @@ export default function HussarLab() {
       <p>Each panel bends on its own section of the cutting table. The view then cuts to the solver’s checked starting position on the form. The cord and buttons follow their marks on the pattern. Weave, lighting and seam threads help you read the surface. The jacket mount shows the posed body above the hip and a stand below. Its surface sits 2.5 mm inside the body used for the solve.</p>
       <p>The cut was revised by draping it and looking. Trial drapes of the first draft pulled tight across the shoulder blades and distorted the sleeve-cap seams. Three allowances followed: 14 mm let out on each side of the side-back seams at the armscye, 10 mm on each front and side-back panel at the underarm, and 14 mm on each half of the upper sleeve, which lowers its cap. Between the first allowance alone and all three, the 95th-percentile edge strain fell from 9.5% to 6.3% and the seams the solver called distorted from six to two. Those trials had the arms 20° from the side and no cloth-to-cloth contact, so their figures are not the ones of the run shown here, which are given above and below. A steeper shoulder was also tried and made the drape worse, so it was dropped. The PDF is the revised cut.</p>
       <p>The fabric constants are placeholders for a lined wool ({(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m², bending {drape.fabric.bending_Nm} N·m) and have no measured source. Edge strain over the whole jacket runs from {drape.edgeStrainPercent.min}% to +{drape.edgeStrainPercent.max}%. Nothing here shows that the jacket fits a person. That needs a toile.</p>
-      {drape.gating.map(flag => <p key={flag} className="hu-warning">Solver flag · {flag}</p>)}
+      {gating.map(flag => <p key={flag} className="hu-warning">Solver flag · {flag}</p>)}
       <p>The body offset sets the minimum distance between the cloth and the body’s collision surface. The solver increases it during sewing and gravity while preserving clearance at the closest contact. The largest remaining force component on a free vertex in the final solve was {drape.finalResidualN.toLocaleString("en", { maximumSignificantDigits: 3 })} N.</p>
       <p>On this same form, the <a href={`${repo}/blob/5d785218/showcase/public/exhibits/hussar/dolman-summary.json`}>earlier jacket run</a> reached 0.843 mm of body offset after 180 gravity steps. Tightening the Newton correction tolerance from 0.001 to 0.00001 m/s brought it to 1.441 mm at the same step. Another 23 steps brought it to the full 1.5 mm.</p>
-      <details className="hu-flags"><summary>{drape.flags.length - drape.gating.length} advisory notes from the solver</summary>
-        {drape.flags.filter(flag => !drape.gating.includes(flag)).map(flag => <p key={flag}>{flag}</p>)}</details>
+      <details className="hu-flags"><summary>{advisories.length} advisory notes from the solver</summary>
+        {advisories.map(flag => <p key={flag}>{flag}</p>)}</details>
       <details className="hu-flags"><summary>Replay this jacket with FrankenTextiles</summary>
         <p>Save the <a href="/exhibits/hussar/dolman-pattern.json" download>jacket pattern and starting placements</a> and <a href="/exhibits/hussar/dolman-measures.json" download>synthetic body measurements</a> together. With the converted Anny 0.6.1 model installed, run these commands in that directory.</p>
         <CodeBlock title="Sew the dolman and check the recorded surfaces" code={`ftx drape dolman-pattern.json --measurements dolman-measures.json ${drape.solverArguments.join(" ")} --out dolman\nftx viewer dolman --check-contact`}/>
