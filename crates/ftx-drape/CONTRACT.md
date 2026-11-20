@@ -22,7 +22,11 @@ pinned `kat` / `kat_contact` digests:
   end-of-step IPC barrier + lagged Coulomb friction + CCD at `x_{n+1}`; refuses backward-Euler material
   history fields fail-closed. Verified at `1.0 ± 0.2` (`ImplicitEuler`) and `2.0 ± 0.2`
   (`GeneralizedAlpha` at `rho_inf ∈ {1.0, 0.5, 0.0}`) by `ftx-conformance/tests/time_order.rs` using
-  `ftx_conformance::mms::OrderGate`.
+  `ftx_conformance::mms::OrderGate`. Operating domain for stiff contact (`ftx-xd85`, 30 mm cylinder
+  sewn band, 40 ms sew + 60 ms drape): `rho_inf = 0.0` completes at `10 ms`, whereas `rho_inf = 0.8`
+  refuses honestly at `10 ms`/`5 ms` (unresolved `sew[0]` post-impact bounce) and converges, settles
+  with zero gating flags, agrees between `AdaptiveIlu` and `ProjectedNewton`, and passes independent
+  `ReplayContact` across all physical frames at `1 ms` (`40 × 60`, and also completes at `2 ms`/`0.5 ms`).
 - `adjoint`: IFT static-equilibrium adjoint (`Solver::equilibrium_adjoint`, reusing verified cached
   `LdltFactor` or factoring exact `H(x*)` once), `Solver::nodal_reactions`,
   `Solver::constitutive_gradient`, `Solver::reaction_gradient`, and

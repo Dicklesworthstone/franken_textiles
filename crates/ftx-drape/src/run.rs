@@ -1760,7 +1760,7 @@ mod self_contact_tests {
     }
 
     #[test]
-    fn xd85_probe() {
+    fn xd85_sewn_band_qualifies_generalized_alpha_rho08_operating_domain() {
         struct Form;
         impl PartFrames for Form {
             fn frame(&self, _: &str) -> Option<crate::start::PartFrame> {
@@ -1818,56 +1818,102 @@ mod self_contact_tests {
             "seams": [{"id": "join", "a": "band/right", "b": "band/left"}]
         }));
 
-        for (label, strategy, pcg, rho) in [
-            ("PN-exact rho=0.8", NewtonStrategy::ProjectedNewton, 0, 0.8),
-            ("PN-def rho=0.8", NewtonStrategy::ProjectedNewton, 16, 0.8),
-            (
-                "ILU rho=0.8",
-                NewtonStrategy::adaptive_ilu_default(),
-                16,
-                0.8,
-            ),
-            (
-                "TR rho=0.8",
-                NewtonStrategy::trust_region_default(),
-                16,
-                0.8,
-            ),
-            ("PN-exact rho=0.5", NewtonStrategy::ProjectedNewton, 0, 0.5),
-            (
-                "ILU rho=0.5",
-                NewtonStrategy::adaptive_ilu_default(),
-                16,
-                0.5,
-            ),
-            ("PN-exact rho=0.2", NewtonStrategy::ProjectedNewton, 0, 0.2),
-            (
-                "ILU rho=0.2",
-                NewtonStrategy::adaptive_ilu_default(),
-                16,
-                0.2,
-            ),
-        ] {
-            let opts = DrapeOptions {
+        // 1. Coarse 10 ms step at rho_inf=0.8 retains its honest structured refusal and offers a
+        // targeted repair pointing to smaller time steps or lower rho_inf.
+        let coarse_err = drape(
+            &pat,
+            &json!({}),
+            &body,
+            &DrapeOptions {
                 sew_steps: 4,
                 drape_steps: 6,
                 step: 0.01,
-                pcg_iters: pcg,
-                newton_strategy: strategy,
-                integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: rho },
+                newton_strategy: NewtonStrategy::adaptive_ilu_default(),
+                integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: 0.8 },
                 ..DrapeOptions::default()
-            };
-            match drape(&pat, &json!({}), &body, &opts, |_| {}) {
-                Ok(run) => eprintln!(
-                    "OK   {label}: sew_iters={} drape_iters={} sew_fac={} drape_fac={} max_v={:.4}",
-                    run.sew.iterations,
-                    run.drape.iterations,
-                    run.sew.factorizations,
-                    run.drape.factorizations,
-                    run.drape.max_speed
-                ),
-                Err(e) => eprintln!("FAIL {label}: {}", e.message),
-            }
+            },
+            |_| {},
+        )
+        .err()
+        .expect("coarse 10 ms rho_inf=0.8 run should refuse");
+        assert_eq!(coarse_err.code, RefusalCode::NotConverged);
+        assert!(
+            coarse_err
+                .repairs
+                .iter()
+                .any(|r| r.contains("rho_inf") && r.contains("time step")),
+            "{:?}",
+            coarse_err.repairs
+        );
+
+        // 2. Resolving the exact same 40 ms sew + 60 ms drape schedule at 1 ms with rho_inf=0.8
+        // converges, settles with zero gating flags, agrees between AdaptiveIlu and
+        // ProjectedNewton, and passes an independent ReplayContact audit on every physical frame.
+        let resolved_ilu = drape(
+            &pat,
+            &json!({}),
+            &body,
+            &DrapeOptions {
+                sew_steps: 40,
+                drape_steps: 60,
+                step: 0.001,
+                newton_strategy: NewtonStrategy::adaptive_ilu_default(),
+                integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: 0.8 },
+                ..DrapeOptions::default()
+            },
+            |_| {},
+        )
+        .expect("1 ms resolved 40 ms + 60 ms schedule at rho_inf=0.8 must converge (AdaptiveIlu)");
+        assert_eq!(resolved_ilu.report["numerical"]["settled"], json!(true));
+        assert_eq!(resolved_ilu.report["gating"], json!([]));
+        assert!(
+            resolved_ilu.drape.max_speed <= SETTLE_SPEED_M_S,
+            "max_speed={}",
+            resolved_ilu.drape.max_speed
+        );
+
+        let mut replay = crate::animation::ReplayContact::new(body.display.0, body.display.1)
+            .expect("cylinder display mesh");
+        let first_sewn = resolved_ilu.fold.fold + resolved_ilu.fold.zip;
+        for (idx, frame) in resolved_ilu
+            .fold
+            .frames
+            .iter()
+            .enumerate()
+            .skip(first_sewn - 1)
+        {
+            replay
+                .check(frame, &resolved_ilu.scene.mesh.faces, idx)
+                .expect("every physical frame must remain crossing-free");
         }
+
+        let resolved_pn = drape(
+            &pat,
+            &json!({}),
+            &body,
+            &DrapeOptions {
+                sew_steps: 40,
+                drape_steps: 60,
+                step: 0.001,
+                pcg_iters: 0,
+                newton_strategy: NewtonStrategy::ProjectedNewton,
+                integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: 0.8 },
+                ..DrapeOptions::default()
+            },
+            |_| {},
+        )
+        .expect("1 ms resolved schedule at rho_inf=0.8 must converge (ProjectedNewton)");
+        let max_diff = resolved_ilu
+            .scene
+            .solver
+            .x
+            .iter()
+            .zip(&resolved_pn.scene.solver.x)
+            .map(|(a, b)| (*a - *b).norm())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_diff < 1e-4,
+            "AdaptiveIlu and exact ProjectedNewton diverged at 1 ms rho_inf=0.8: max_diff={max_diff}"
+        );
     }
 }

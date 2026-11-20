@@ -196,6 +196,14 @@ impl Scenario {
         if self.schema != "ftx-drape-scenario/1" {
             return Err(invalid("expected ftx-drape-scenario/1"));
         }
+        let strategy_within_budget = match self.options.newton_strategy {
+            crate::NewtonStrategy::ProjectedNewton => true,
+            crate::NewtonStrategy::AdaptiveIlu {
+                pcg_iters,
+                max_shifts,
+            } => pcg_iters <= 256 && max_shifts <= 16,
+            crate::NewtonStrategy::TrustRegionSteihaug { cg_iters, .. } => cg_iters <= 4096,
+        };
         if !(3..=32_768).contains(&self.max_mesh_points)
             || !(1..=64_000_000).contains(&self.max_vertex_frames)
             || !(1..=32_768).contains(&self.max_motion_trials)
@@ -207,6 +215,7 @@ impl Scenario {
                 > 256
             || self.options.lag_rounds.iter().any(|&n| n > 4)
             || self.options.pcg_iters > 128
+            || !strategy_within_budget
         {
             return Err(budget("scenario exceeds mesh/frame/solver work limits"));
         }

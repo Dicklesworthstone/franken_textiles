@@ -283,7 +283,14 @@ impl MoistAirState {
                 "Reynolds number requires finite positive speed and characteristic length",
             ));
         }
-        Ok(speed_m_s * length_m / self.kinematic_viscosity)
+        let re = speed_m_s * length_m / self.kinematic_viscosity;
+        if !(re.is_finite() && re > 0.0) {
+            return Err(refusal(
+                RefusalCode::NonFinite,
+                "Reynolds number overflowed or underflowed",
+            ));
+        }
+        Ok(re)
     }
 
     /// Rayleigh number `Ra = g β |ΔT| L³ / (ν α)` for ideal-gas thermal expansion `β = 1/T_film`.
@@ -311,8 +318,15 @@ impl MoistAirState {
         }
         let beta = 1.0 / self.temperature_k;
         let l3 = length_m * length_m * length_m;
-        Ok(gravity_m_s2 * beta * delta_t_k * l3
-            / (self.kinematic_viscosity * self.thermal_diffusivity))
+        let ra = gravity_m_s2 * beta * delta_t_k * l3
+            / (self.kinematic_viscosity * self.thermal_diffusivity);
+        if !(ra.is_finite() && ra > 0.0) {
+            return Err(refusal(
+                RefusalCode::NonFinite,
+                "Rayleigh number overflowed or underflowed",
+            ));
+        }
+        Ok(ra)
     }
 }
 
@@ -669,13 +683,13 @@ impl NusseltResult {
         let [t_lo, t_hi] = surface_temperature_range_c;
         if !(t_lo.is_finite()
             && t_hi.is_finite()
-            && t_lo >= -273.15
+            && t_lo > -273.15
             && t_hi >= t_lo
             && (t_hi - t_lo).is_finite())
         {
             return Err(refusal(
                 RefusalCode::OutOfRange,
-                "exterior surface temperature range must be finite, >= -273.15 C, and ordered",
+                "exterior surface temperature range must be finite, > -273.15 C, and ordered",
             ));
         }
         let h =

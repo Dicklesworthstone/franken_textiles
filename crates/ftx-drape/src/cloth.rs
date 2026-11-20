@@ -589,11 +589,20 @@ impl NewtonStrategy {
     pub fn validate(&self) -> Result<(), Refusal> {
         match *self {
             Self::ProjectedNewton => Ok(()),
-            Self::AdaptiveIlu { pcg_iters, .. } => {
+            Self::AdaptiveIlu {
+                pcg_iters,
+                max_shifts,
+            } => {
                 if pcg_iters == 0 {
                     return Err(Refusal::new(
                         RefusalCode::OutOfRange,
                         "AdaptiveIlu pcg_iters must be positive",
+                    ));
+                }
+                if max_shifts > 16 {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        "AdaptiveIlu max_shifts must be at most 16",
                     ));
                 }
                 Ok(())
@@ -1788,7 +1797,7 @@ impl Solver {
         if !rep.converged {
             let (g, _) = self.assemble_ctx(&self.x, ctx, false, false);
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-            return Err(Refusal::new(
+            let mut refusal = Refusal::new(
                 RefusalCode::NotConverged,
                 format!(
                     "Newton did not converge after {} iterations (residual {} N, last correction {} m, {} failed line searches); diagnostics {rep:?}",
@@ -1800,7 +1809,16 @@ impl Solver {
             } else {
                 "check that the external loads have static support or increase the Newton iteration budget"
             })
-            .repair("check the material domain and the garment start state"));
+            .repair("check the material domain and the garment start state");
+            if let StepContext::GeneralizedAlpha { params, .. } = ctx
+                && params.rho_inf > 0.0
+                && self.contact.is_some()
+            {
+                refusal = refusal.repair(
+                    "for Generalized-alpha with rho_inf > 0 on stiff contact transitions, reduce the time step or lower --rho-inf toward 0.0",
+                );
+            }
+            return Err(refusal);
         }
         Ok(rep)
     }
@@ -1908,7 +1926,7 @@ impl Solver {
                 &g,
                 SteihaugConfig {
                     radius: delta,
-                    rel_tol: 1e-10,
+                    rel_tol: 1e-6,
                     max_iters: max_cg,
                 },
             );
@@ -1923,7 +1941,19 @@ impl Solver {
             let mut model_decrease = out.model_decrease;
             let step_inf = p.iter().fold(0.0f64, |m, v| m.max(v.abs()));
             rep.last_step = step_inf;
-            if out.interior_converged
+            let newton_accurate = out.interior_converged || {
+                let mut hp = vec![0.0; self.nfree];
+                h_mat.spmv(&p, &mut hp);
+                let r_norm = hp
+                    .iter()
+                    .zip(&g)
+                    .map(|(a, b)| (a + b) * (a + b))
+                    .sum::<f64>()
+                    .sqrt();
+                let g_norm = g.iter().map(|v| v * v).sum::<f64>().sqrt();
+                g_norm == 0.0 || (r_norm.is_finite() && r_norm <= PCG_TOL * g_norm)
+            };
+            if newton_accurate
                 && !out.hit_boundary
                 && !out.negative_curvature
                 && step_inf / scale < self.tol
@@ -1987,6 +2017,14 @@ impl Solver {
                 self.x = trial;
                 energy = trial_energy;
                 rep.roundoff_steps += usize::from(precision_step);
+                if precision_step
+                    && !out.hit_boundary
+                    && !out.negative_curvature
+                    && step_inf / scale < self.tol
+                {
+                    rep.converged = true;
+                    break;
+                }
             } else if delta < min_radius {
                 rep.line_search_failures += 1;
                 break;

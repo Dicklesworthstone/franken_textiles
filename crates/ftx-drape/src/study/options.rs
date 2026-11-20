@@ -182,4 +182,62 @@ mod tests {
         declared["integrator"]["extra"] = serde_json::json!(true);
         assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
     }
+
+    #[test]
+    fn scenario_validate_enforces_newton_strategy_work_budgets() {
+        let base_scenario = |newton_strategy| crate::study::Scenario {
+            schema: "ftx-drape-scenario/1".into(),
+            options: DrapeOptions {
+                newton_strategy,
+                ..DrapeOptions::default()
+            },
+            fit_spec: serde_json::json!({}),
+            max_mesh_points: 512,
+            max_vertex_frames: 65_536,
+            max_motion_trials: 64,
+            surface: None,
+            vapor_surface: None,
+            coverage: None,
+            vapor_coverage: None,
+            motion: None,
+            material_strain: None,
+            contact_loads: None,
+        };
+
+        base_scenario(NewtonStrategy::ProjectedNewton)
+            .validate()
+            .unwrap();
+        base_scenario(NewtonStrategy::adaptive_ilu_default())
+            .validate()
+            .unwrap();
+        base_scenario(NewtonStrategy::trust_region_default())
+            .validate()
+            .unwrap();
+
+        let err = base_scenario(NewtonStrategy::AdaptiveIlu {
+            pcg_iters: 257,
+            max_shifts: 8,
+        })
+        .validate()
+        .unwrap_err();
+        assert_eq!(err.code, ftx_core::RefusalCode::BudgetExceeded);
+
+        let err = base_scenario(NewtonStrategy::AdaptiveIlu {
+            pcg_iters: 64,
+            max_shifts: 17,
+        })
+        .validate()
+        .unwrap_err();
+        assert_eq!(err.code, ftx_core::RefusalCode::OutOfRange);
+
+        let err = base_scenario(NewtonStrategy::TrustRegionSteihaug {
+            cg_iters: 4097,
+            initial_radius: 0.05,
+            max_radius: 0.5,
+            min_radius: 1e-12,
+        })
+        .validate()
+        .unwrap_err();
+        assert_eq!(err.code, ftx_core::RefusalCode::BudgetExceeded);
+    }
 }

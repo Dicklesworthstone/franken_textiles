@@ -213,23 +213,57 @@ impl ExactPronyModel {
         if state.q.len() != self.terms.len() {
             return Err(out_of_range("Prony state branch count mismatch"));
         }
+        if !state.strain.is_finite()
+            || !state.stress.is_finite()
+            || !state.work.is_finite()
+            || state.q.iter().any(|v| !v.is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "Prony state contains non-finite values",
+            ));
+        }
         let d_eps = strain_new - state.strain;
+        if !d_eps.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "Prony strain increment overflowed",
+            ));
+        }
         let stress_old = state.stress;
+        let mut q_next = Vec::with_capacity(self.terms.len());
         for (j, &(_e, tau)) in self.terms.iter().enumerate() {
             let (a, b) = exact_exp_weights(tau, dt)?;
-            state.q[j] = a * state.q[j] + b * d_eps;
+            let qj = a * state.q[j] + b * d_eps;
+            if !qj.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "Prony internal spring strain overflowed",
+                ));
+            }
+            q_next.push(qj);
         }
         let mut stress = self.e_eq * strain_new;
         let mut stored = 0.5 * self.e_eq * strain_new * strain_new;
         for (j, &(e, _tau)) in self.terms.iter().enumerate() {
-            stress += e * state.q[j];
-            stored += 0.5 * e * state.q[j] * state.q[j];
+            stress += e * q_next[j];
+            stored += 0.5 * e * q_next[j] * q_next[j];
         }
+        let work = state.work + 0.5 * (stress_old + stress) * d_eps;
+        let dissipated = work - stored;
+        if !(stress.is_finite() && stored.is_finite() && work.is_finite() && dissipated.is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "Prony step stress or energy ledger overflowed",
+            ));
+        }
+        state.q = q_next;
         state.strain = strain_new;
         state.stress = stress;
-        state.work += 0.5 * (stress_old + stress) * d_eps;
+        state.work = work;
         state.stored = stored;
-        state.dissipated = state.work - stored;
+        state.dissipated = dissipated;
         Ok(stress)
     }
 }
@@ -421,6 +455,9 @@ fn nnls(a: &[f64], b: &[f64], rows: usize, cols: usize) -> Vec<f64> {
             inner_guard += 1;
             let idx: Vec<usize> = (0..cols).filter(|&j| passive[j]).collect();
             let z = ls_solve_subset(a, b, rows, cols, &idx);
+            if z.iter().any(|v| !v.is_finite()) {
+                break;
+            }
             if z.iter().all(|&v| v > 0.0) {
                 for (k, &j) in idx.iter().enumerate() {
                     x[j] = z[k];
@@ -599,6 +636,12 @@ pub fn evaluate_lowering_json(input: &str) -> Result<String, Refusal> {
         for s in &req.replay_steps {
             let stress = lowered.model.step(&mut st, s.strain, s.dt_s)?;
             t_s += s.dt_s;
+            if !t_s.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "replay cumulative time overflowed",
+                ));
+            }
             trace.push(json!({
                 "time_s": t_s,
                 "strain": st.strain,
@@ -676,6 +719,12 @@ mod tests {
             prev_diss = cyc.dissipated;
         }
         assert!(cyc.dissipated > 0.0);
+
+        // Overflowing strain must refuse NonFinite transactionally without mutating state.
+        let snapshot = cyc.clone();
+        let err = model.step(&mut cyc, 1e200, 0.1).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
+        assert_eq!(cyc, snapshot);
     }
 
     #[test]
