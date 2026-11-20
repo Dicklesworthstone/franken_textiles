@@ -543,20 +543,36 @@ pub fn viewer_payload(
     });
     if extras.contact_replay {
         let cut = kept.partition_point(|&k| k < physical_start);
-        add_contact_replay(&mut payload, cut, kept[cut..].iter().flat_map(|&k| &fold.frames[k]), "Shape the panels separately");
+        add_contact_replay(
+            &mut payload,
+            cut,
+            kept[cut..].iter().flat_map(|&k| &fold.frames[k]),
+            "Shape the panels separately",
+        );
     }
     payload
 }
 
 /// Preserve sub-grid clearances when creating a viewer from a solve or a saved PC2.
 /// `cut` indexes the retained frames; the iterator starts at the admitted welded pose.
-pub fn add_contact_replay<'a>(payload: &mut Value, cut: usize, points: impl Iterator<Item=&'a Vec3>, setup: &str) {
-    let exact: Vec<u8> = points.flat_map(|p| [p.x, p.y, p.z])
-        .flat_map(|coord| (coord as f32).to_le_bytes()).collect();
+pub fn add_contact_replay<'a>(
+    payload: &mut Value,
+    cut: usize,
+    points: impl Iterator<Item = &'a Vec3>,
+    setup: &str,
+) {
+    let exact: Vec<u8> = points
+        .flat_map(|p| [p.x, p.y, p.z])
+        .flat_map(|coord| (coord as f32).to_le_bytes())
+        .collect();
     payload["contact_replay"] = json!({"first_physical":cut, "positions_f32":b64(&exact)});
     if let Some(phases) = payload["phase"].as_array_mut() {
-        for label in phases.iter_mut().take(cut) { *label = json!(setup); }
-        if let Some(first) = phases.get_mut(cut) { *first = json!("Sewn starting position"); }
+        for label in phases.iter_mut().take(cut) {
+            *label = json!(setup);
+        }
+        if let Some(first) = phases.get_mut(cut) {
+            *first = json!("Sewn starting position");
+        }
     }
 }
 

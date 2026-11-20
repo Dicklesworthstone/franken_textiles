@@ -216,12 +216,25 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
         dir.join("sim/fold_viewer.html").display()
     );
 
-    // Custom --out path also works.
+    // A contact-protected historical cache has no panel-station marker. Its first
+    // four display frames must stay on the board. The retained solver suffix is f32.
+    save(
+        &dir.join("sim/sim_report.json"),
+        &json!({"self_contact":{"enabled":true}}),
+    );
     let out_custom = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
         .args(["viewer", "sim", "--out", "custom/viewer.html", "--json"])
         .output()
         .unwrap();
     assert_eq!(out_custom.status.code(), Some(0));
-    assert!(dir.join("custom/viewer.html").is_file());
+    let html = std::fs::read_to_string(dir.join("custom/viewer.html")).unwrap();
+    let (_, data) = html.split_once("\nconst D = ").unwrap();
+    let (data, _) = data.split_once(";\nconst $ = ").unwrap();
+    let view: Value = serde_json::from_str(data).unwrap();
+    assert_eq!(view["contact_replay"]["first_physical"], 4);
+    assert_eq!(view["phase"][3], "Flat pattern board");
+    assert_eq!(view["phase"][4], "Sewn starting position");
+    let suffix = view["contact_replay"]["positions_f32"].as_str().unwrap();
+    assert_eq!(suffix.len(), 16 * 12 * 3 * 4 / 3 * 4);
 }

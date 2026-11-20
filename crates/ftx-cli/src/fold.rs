@@ -294,7 +294,8 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let starts = [0, fold_n, fold_n + zip_n, fold_n + zip_n + sew_n];
     let contact = report["self_contact"]["enabled"] == true && map["frames"].is_object();
     let physical_start = (fold_n + zip_n).saturating_sub(1);
-    let stations = report["animation"]["first_physical_frame"].as_u64() == Some(physical_start as u64);
+    let stations =
+        report["animation"]["first_physical_frame"].as_u64() == Some(physical_start as u64);
     let keep = 60usize;
     let mut kept: Vec<usize> = linspace(0.0, n.saturating_sub(1) as f64, keep.min(n))
         .into_iter()
@@ -310,7 +311,11 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     for &k in &kept {
         // Older PC2 setup paths flew through adjacent panels. Use their original flat
         // pattern board until the accepted pose. New contact runs carry separated stations.
-        let source = if contact && !stations && k < physical_start { 0 } else { k };
+        let source = if contact && !stations && k < physical_start {
+            0
+        } else {
+            k
+        };
         kept_frames.push(cache.frame(source)?);
     }
     let (mut lo, mut hi) = (
@@ -440,8 +445,17 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     });
     if contact {
         let cut = kept.partition_point(|&k| k < physical_start);
-        let setup = if stations { "Shape the panels separately" } else { "Flat pattern board" };
-        ftx_drape::animation::add_contact_replay(&mut payload, cut, kept_frames[cut..].iter().flatten(), setup);
+        let setup = if stations {
+            "Shape the panels separately"
+        } else {
+            "Flat pattern board"
+        };
+        ftx_drape::animation::add_contact_replay(
+            &mut payload,
+            cut,
+            kept_frames[cut..].iter().flatten(),
+            setup,
+        );
     }
     let html = viewer_html(crate::VIEWER_TEMPLATE, &payload).map_err(bad_input)?;
     let out = args

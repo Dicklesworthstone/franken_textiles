@@ -87,3 +87,5 @@ node_modules/
 !/showcase/public/media/wardrobe-sundress.mp4
 !/showcase/public/media/wardrobe-hussar.mp4
 !/showcase/public/media/wardrobe-reel.mp4
+# br doctor per-run artifacts
+.doctor/
