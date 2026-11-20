@@ -418,6 +418,25 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                             &format!("Refused run · {label}"),
                         )?;
                     }
+                    // A run refused before its first step has no state of its own; it leaves the
+                    // files of `ftx place` instead: the pre-sewn start, the pieces as wrapped and
+                    // each piece's placement numbers.
+                    link(
+                        &mut out,
+                        ws,
+                        &format!("{dir}/sim/refused/placement.json"),
+                        "Refused start · placements",
+                    )?;
+                    for (stage, name) in [("start", "Refused start"), ("wrap", "As wrapped")] {
+                        for (view, label) in super::stills::VIEWS {
+                            link(
+                                &mut out,
+                                ws,
+                                &format!("{dir}/sim/refused/{stage}/still_{view}.png"),
+                                &format!("{name} · {label}"),
+                            )?;
+                        }
+                    }
                 }
                 for (name, label) in [
                     ("fold_viewer.html", "Open drape viewer"),
@@ -561,5 +580,33 @@ mod tests {
             text.is_empty(),
             "ordinary tape body gained an image-fit basis"
         );
+    }
+
+    #[test]
+    fn a_round_refused_at_its_start_links_the_placement_views_it_left() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let ws = std::env::temp_dir().join(format!(
+            "ftx-round-start-views-{}-{stamp}",
+            std::process::id()
+        ));
+        let refused = ws.join("rounds/003/sim/refused");
+        std::fs::create_dir_all(refused.join("start")).unwrap();
+        std::fs::write(refused.join("placement.json"), "{}").unwrap();
+        std::fs::write(refused.join("start/still_front.png"), "png").unwrap();
+        let entry = json!({"round":3,"dir":"rounds/003",
+            "sim":{"refusal":{"code":"intersecting_start"},"gating":["refused"],"advisory":[]}});
+        let html = render(&ws, &[entry]).unwrap();
+        assert!(html.contains(
+            "href=\"rounds/003/sim/refused/placement.json\">Refused start · placements</a>"
+        ));
+        assert!(html.contains(
+            "href=\"rounds/003/sim/refused/start/still_front.png\">Refused start · Front</a>"
+        ));
+        // Only what was written is linked: here no wrap stage and no other view.
+        assert!(!html.contains("refused/wrap/"));
+        assert!(!html.contains("refused/start/still_back.png"));
     }
 }

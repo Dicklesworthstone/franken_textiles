@@ -973,6 +973,114 @@ fn write_drape_output(
     workspace::write_new(&out.join("sim_report.json"), &bytes)
 }
 
+/// Options `ftx place` takes with the meaning they have for `ftx drape`: the body, its pose and the mesh
+/// spacing. Given these, the two commands build the same pieces and the same pre-sewn start.
+const START_VIEW_OPTIONS: [&str; 8] = [
+    "measurements",
+    "model",
+    "body-fit",
+    "spacing-mm",
+    "arm-deg",
+    "legs",
+    "leg-fraction",
+    "skinning",
+];
+/// Drape options that change the start in ways `ftx place` does not take. With one of them no start is
+/// drawn: a picture must never show a start the solver did not have.
+const START_VIEW_UNSUPPORTED: [&str; 3] = ["fabric", "two-start-sew", "elastic-ea"];
+
+/// The `ftx place` request that draws where this drape starts, into `OUT/refused`. `None` when the
+/// drape's start is not the one `ftx place` builds: a joint outfit, or an option listed above.
+fn start_view_args(args: &Args, outfit: bool, out: &std::path::Path) -> Option<Args> {
+    if outfit
+        || START_VIEW_UNSUPPORTED
+            .iter()
+            .any(|name| args.options.contains_key(*name))
+    {
+        return None;
+    }
+    let mut options: BTreeMap<String, String> = START_VIEW_OPTIONS
+        .iter()
+        .filter_map(|name| Some(((*name).to_string(), args.options.get(*name)?.clone())))
+        .collect();
+    options.insert(
+        "out".into(),
+        out.join("refused").to_string_lossy().into_owned(),
+    );
+    Some(Args {
+        positional: vec!["place".into(), args.positional.get(1)?.clone()],
+        options,
+        values: Vec::new(),
+        json: false,
+    })
+}
+
+/// What a start refusal tells its reader to open, with the counts behind the two warning colours taken
+/// from the placement report written beside the stills.
+fn start_view_repair(dir: &std::path::Path, placement: &Value) -> String {
+    let dir = dir.display();
+    let mut text = format!(
+        "Look at {dir}/start/still_*.png (the pre-sewn start) and {dir}/wrap/still_*.png (each piece on \
+         its cylinder), drawn as ftx place draws them: {} cloth vertices inside the body are magenta",
+        placement["start"]["vertices_inside_body"]
+            .as_u64()
+            .unwrap_or(0)
+    );
+    if let Some(pairs) = placement["cloth_contact"]["crossing_triangle_pairs"].as_u64() {
+        text.push_str(&format!(
+            "; {pairs} pair(s) of cloth triangles that cross are yellow"
+        ));
+        let mut between: Vec<&Value> = placement["cloth_contact"]["by_pieces"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .collect();
+        between.sort_by_key(|row| std::cmp::Reverse(row["triangle_pairs"].as_u64().unwrap_or(0)));
+        let named: Vec<String> = between
+            .iter()
+            .take(4)
+            .map(|row| {
+                format!(
+                    "{} × {}: {}",
+                    row["a"].as_str().unwrap_or("?"),
+                    row["b"].as_str().unwrap_or("?"),
+                    row["triangle_pairs"]
+                )
+            })
+            .collect();
+        if !named.is_empty() {
+            text.push_str(&format!(" ({})", named.join("; ")));
+        }
+    }
+    if placement["body_surface"]["admitted"] == json!(false) {
+        text.push_str(
+            "; the posed body's own surface crosses itself, which no placement can repair",
+        );
+    }
+    text.push_str(&format!(
+        ". {dir}/placement.json lists each piece's angles, heights and radius. No dynamics ran: this is \
+         not a drape or a fit."
+    ));
+    text
+}
+
+/// A drape refused before its first step has no state of its own to show. What it was refused over is
+/// the posed body, the placements or the start built from them, which is what `ftx place` draws: so that
+/// command runs on the same inputs, and its files are named first among the repairs. When they cannot be
+/// produced the refusal is returned unchanged.
+fn start_views(mut refusal: Refusal, request: Option<Args>) -> Refusal {
+    let Some(request) = request else {
+        return refusal;
+    };
+    let dir = PathBuf::from(&request.options["out"]);
+    if let Ok((placement, _, _)) = place::run(&request) {
+        refusal
+            .repairs
+            .insert(0, start_view_repair(&dir, &placement));
+    }
+    refusal
+}
+
 fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     cmd_drape_bound(args, None)
 }
@@ -1114,6 +1222,9 @@ fn cmd_drape_bound(
             &out,
             obj(&full.vertices, &full.triangles, None).as_bytes(),
         ),
+        None if refusal.code == RefusalCode::IntersectingStart => {
+            start_views(refusal, start_view_args(args, outfit.is_some(), &out))
+        }
         None => refusal,
     })?;
     run.report["body_contact_proxy"] = skin.contact_proxy_basis_with_rest(&rest_skin);
@@ -1861,6 +1972,107 @@ mod tests {
                     .unwrap();
             assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
         }
+    }
+
+    #[test]
+    fn a_start_refusal_asks_ftx_place_for_the_same_body_pose_and_mesh() {
+        let drape = |extra: &[&str]| {
+            let mut argv = vec![
+                "drape",
+                "P.json",
+                "--measurements",
+                "M.json",
+                "--fit",
+                "F.json",
+                "--out",
+                "ignored",
+                "--model",
+                "anny.ftxbody",
+                "--arm-deg",
+                "45",
+                "--spacing-mm",
+                "15",
+                "--self-contact-mm",
+                "1",
+                "--sew",
+                "12",
+            ];
+            argv.extend(extra);
+            parse(&argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap()
+        };
+        let out = std::path::Path::new("round/sim");
+        let request = start_view_args(&drape(&[]), false, out).unwrap();
+        assert_eq!(request.positional, ["place", "P.json"]);
+        let carried: Vec<(&str, &str)> = request
+            .options
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        // The body, pose and spacing go across; solver settings and the fit contract do not, and the
+        // files land beside the drape's own, never over them.
+        assert_eq!(
+            carried,
+            [
+                ("arm-deg", "45"),
+                ("measurements", "M.json"),
+                ("model", "anny.ftxbody"),
+                ("out", "round/sim/refused"),
+                ("spacing-mm", "15"),
+            ]
+        );
+        // A start that `ftx place` does not build is not drawn.
+        assert!(start_view_args(&drape(&[]), true, out).is_none());
+        for option in START_VIEW_UNSUPPORTED {
+            let flag = format!("--{option}");
+            assert!(
+                start_view_args(&drape(&[&flag, "x"]), false, out).is_none(),
+                "{option}"
+            );
+        }
+        // Without a request the refusal comes back as it was.
+        let refusal = Refusal::new(RefusalCode::IntersectingStart, "crossing").repair("move it");
+        assert_eq!(start_views(refusal, None).repairs, ["move it"]);
+    }
+
+    #[test]
+    fn a_start_refusal_says_where_the_start_is_drawn_and_what_the_colours_count() {
+        let dir = std::path::Path::new("out/refused");
+        let crossing = start_view_repair(
+            dir,
+            &json!({
+                "start": {"vertices_inside_body": 7},
+                "cloth_contact": {"crossing_triangle_pairs": 31, "by_pieces": [
+                    {"a": "back", "b": "front.L", "triangle_pairs": 4},
+                    {"a": "front.L", "b": "front.R", "triangle_pairs": 27},
+                ]},
+                "body_surface": {"admitted": true},
+            }),
+        );
+        assert!(crossing.starts_with("Look at out/refused/start/still_*.png"));
+        assert!(crossing.contains("out/refused/wrap/still_*.png"));
+        assert!(crossing.contains("7 cloth vertices inside the body are magenta"));
+        // The pair with the most crossings is named first.
+        assert!(crossing.contains(
+            "31 pair(s) of cloth triangles that cross are yellow (front.L × front.R: 27; back × front.L: 4)"
+        ));
+        assert!(crossing.contains("out/refused/placement.json"));
+        assert!(crossing.ends_with("not a drape or a fit."));
+        assert!(!crossing.contains("posed body"));
+
+        // A pose whose body crosses itself is named as such; an unavailable crossing check is not
+        // reported as zero crossings.
+        let pose = start_view_repair(
+            dir,
+            &json!({
+                "start": {"vertices_inside_body": 0},
+                "cloth_contact": {"unavailable": {"code": "degenerate_geometry"}},
+                "body_surface": {"admitted": false},
+            }),
+        );
+        assert!(
+            pose.contains("0 cloth vertices inside the body are magenta; the posed body's own")
+        );
+        assert!(!pose.contains("yellow"));
     }
 
     #[test]
