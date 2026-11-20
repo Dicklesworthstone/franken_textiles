@@ -201,6 +201,35 @@ pub fn gather_relief(mesh: &GarmentMesh) -> Option<(Vec<f64>, Vec<f64>)> {
         .then(|| gather_field(mesh, true))
 }
 
+/// The instances that hang from a gathered seam with a declared band of pleats: the owner of each such
+/// seam's long side, sorted, without repeats. Empty when no seam declares a band.
+#[must_use]
+pub fn pleat_band_instances(mesh: &GarmentMesh) -> Vec<usize> {
+    let mut instances: Vec<usize> = mesh
+        .seams
+        .iter()
+        .filter(|s| s.gather_relief.is_some() && (s.ratio - 1.0).abs() > GATHER_RATIO_MARGIN)
+        .filter_map(|s| long_side(mesh, s).first().map(|&v| mesh.owner[v]))
+        .collect();
+    instances.sort_unstable();
+    instances.dedup();
+    instances
+}
+
+/// The longer of a seam's two sides on the flat pattern, side a on a tie: the side the reference gathers.
+fn long_side<'a>(mesh: &GarmentMesh, seam: &'a crate::garment::SeamRecord) -> &'a [usize] {
+    let r2 = &mesh.verts2d;
+    let length = |side: &[usize]| {
+        let seg: Vec<f64> = side
+            .windows(2)
+            .map(|p| norm2(r2[p[1]] - r2[p[0]]))
+            .collect();
+        pairwise_sum(&seg)
+    };
+    let (la, lb) = (length(&seam.side_a), length(&seam.side_b));
+    if la >= lb { &seam.side_a } else { &seam.side_b }
+}
+
 /// Weight and floor per vertex. With `declared` false every seam uses the reference's zone and floor.
 fn gather_field(mesh: &GarmentMesh, declared: bool) -> (Vec<f64>, Vec<f64>) {
     let r2 = &mesh.verts2d;
@@ -214,15 +243,7 @@ fn gather_field(mesh: &GarmentMesh, declared: bool) -> (Vec<f64>, Vec<f64>) {
             Some(band) => (band.relief_mm, band.compression),
             None => (0.0, GATHER_COMPRESSION),
         };
-        let length = |side: &[usize]| {
-            let seg: Vec<f64> = side
-                .windows(2)
-                .map(|p| norm2(r2[p[1]] - r2[p[0]]))
-                .collect();
-            pairwise_sum(&seg)
-        };
-        let (la, lb) = (length(&s.side_a), length(&s.side_b));
-        let long = if la >= lb { &s.side_a } else { &s.side_b };
+        let long = long_side(mesh, s);
         let Some(&first) = long.first() else { continue };
         let (lo, hi) = mesh.inst_range[mesh.owner[first]];
         for i in lo..hi {

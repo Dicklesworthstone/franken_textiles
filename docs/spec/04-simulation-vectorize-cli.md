@@ -447,8 +447,10 @@ The report records `fabric: {areal_kg_m2, tensile_N_m, bending_Nm}` and `area_m2
   report made with them lists each such seam under `gather_relief`. On the skirt above, 120 mm at 0.002 let it
   leave the waist as a bell: clearance 84.7 mm at centre front and 25.6 mm at centre back, against 92.8 and
   45.3 mm; 150 mm at 0.0005 gave 71.0 and 11.9 mm and took 34 minutes against 13.5. A small ledge remained at
-  the back waist in profile. The reference's own slide check then gates on the skirt coming down under gravity
-  (116 and 87 mm in those two runs): it is the gathered top closing, and the waist seam stays sewn.
+  the back waist in profile. In both runs the skirt panels' median corner came down under gravity (116 and
+  87 mm) while their waist corners moved under 1 mm: the gathered top closing, with the waist seam where it was
+  sewn. The reference's slide check gated on that; such a piece is now reported under F6n (§6.10) and does not
+  gate.
 - **Report:** `gather_zone_vertices` = the count of vertices with w < 1.
 - **Evidence:** without gather zones, the 872 mm gathered trouser top pushed its 530 mm casing open by 40 % and the
   trousers slid off. With zones, gathered bands finish 2–10 % over their rest length; without, +11 to +59 %.
@@ -549,7 +551,9 @@ Flags:
 Flags:
 
 - `penetration_max_mm > 3.0`: **gating**.
-- A torso piece whose median corner drop is < −20 mm: **gating** "slid".
+- A torso piece whose median corner drop is < −20 mm: **gating** "slid". Native exception: a piece that hangs
+  from a gathered seam with a declared band of pleats (§5.4) and whose least-dropped corner is within 20 mm is
+  reported as having come down and does not gate (§6.10, F6n).
 
 ### 6.5 Hems, balance, LOST, ride-up
 
@@ -621,6 +625,7 @@ Only when some simulated instance has placement part `leg`:
 | F4 | reading TIGHT | `{point_id}: fabric stretched around the body (mean {mean} %, p90 {p90} %)` | advisory; **gating + tightness_gating** when mean > 2.0 |
 | F5 | penetration > 3.0 | `{inst} passes {penetration_max_mm} mm into the body` | gating |
 | F6 | torso piece, median corner drop < −20 | `{inst} slid {abs(median):.0f} mm down after gravity: nothing is holding it up (too big at the shoulders/waist?)` | gating |
+| F6n (native) | as F6, on the long-side piece of a gathered seam that declares a band of pleats (§5.4), when its least-dropped corner moved no more than 20 mm down | `{inst} came down {abs(median):.0f} mm after gravity as the band of pleats below its gathered seam closed; its least-moved corner stayed within {abs(max):.0f} mm, so it is held and did not slide` (replaces F6 for that piece) | advisory |
 | F7 | waistband shift < −25 | `{inst} ended {abs(shift):.0f} mm below the waist: something drags it down (compare the crotch and rise rows of the validation table; look at the stills)` | advisory |
 | F8 | cuff \|shift\| > 25 | `{inst} sits {abs(shift):.0f} mm {below|above} its drafted level: ` + (shift < 0: `its ease lets it slide down the leg, so the blousing is lost (snug the cuff or shorten the leg)`; else `the leg is too short to reach it`) | advisory |
 | F9 | \|balance\| > 10 | `hem out of balance: the {front|back} hangs {abs:.0f} mm higher than the {back|front} (a protruding belly lifts the front: add front length)` | advisory |
@@ -668,6 +673,7 @@ Advisory flags moved with friction and start state in testing, so they are not y
 | `stills` | {front, side, back, three_quarter, strain_front, strain_back: path} | with `--stills`/`--render` |
 | `video` | [paths] | with `--render` |
 | added by the CLI | `wall_s` (r1 seconds) by `fab`; `tightness_qualified` by `round` (§7) | |
+| native, only when used | `compression_factor` (number: `ftx drape --compression` below 1); `gather_relief` (`[{seam, relief_mm, compression}]`: seams that declare a band of pleats, §5.4) | each names a cloth model other than the reference's; a report without them was made with the reference model |
 
 The simulator's stdout ends with the line `SIM_REPORT {"gating", "flags", "settled", "landmarks"}` (JSON).
 

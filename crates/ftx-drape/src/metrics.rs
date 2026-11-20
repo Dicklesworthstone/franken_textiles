@@ -21,6 +21,8 @@ pub const AVG_FRAMES: usize = 15;
 /// Fewest frames the metrics can judge: settledness compares the mean of the last w frames with the
 /// mean of the w before the previous w, w ≥ 2.
 pub const MIN_FRAMES: usize = 6;
+/// Median corner drop (mm, negative is down) past which a torso piece counts as having slid (spec 04 §6, F6).
+const SLIDE_LIMIT_MM: f64 = -20.0;
 
 /// What the metrics read besides the mesh.
 pub struct MetricsInput<'a> {
@@ -315,6 +317,8 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
             .map_or(&Value::Null, |i| &raw["pieces"][i.piece_index])
     };
     let sd_all: Vec<f64> = co.iter().map(|&p| input.body.signed_distance(p)).collect();
+    // Pieces hanging from a gathered seam with a declared band of pleats (spec 04 §5.4, native extension).
+    let banded = crate::start::pleat_band_instances(mesh);
     let mut pieces = Map::new();
     for (k, id) in mesh.instances.iter().enumerate() {
         let (lo, hi) = mesh.inst_range[k];
@@ -345,14 +349,28 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
         }
         if piece_def(id)["placement"]["part"].as_str() == Some("torso")
             && !drift.is_empty()
-            && med < -20.0
+            && med < SLIDE_LIMIT_MM
         {
-            flags.push(format!(
-                "{id} slid {} mm down after gravity: nothing is holding it up (too big at the \
-                 shoulders/waist?)",
-                fixed(med.abs(), 0)
-            ));
-            gating.push(flags.last().cloned().unwrap_or_default());
+            // A piece below a banded seam comes down as its pleats close while the seam stays where it
+            // was sewn. Its median corner then passes the reference's limit although nothing slid, so for
+            // such a piece the least-dropped corner decides: if that one is held, the drop is reported
+            // and does not gate. Every other piece keeps the reference's rule and text.
+            let held = drift.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            if banded.binary_search(&k).is_ok() && held >= SLIDE_LIMIT_MM {
+                flags.push(format!(
+                    "{id} came down {} mm after gravity as the band of pleats below its gathered seam \
+                     closed; its least-moved corner stayed within {} mm, so it is held and did not slide",
+                    fixed(med.abs(), 0),
+                    fixed(held.abs(), 0)
+                ));
+            } else {
+                flags.push(format!(
+                    "{id} slid {} mm down after gravity: nothing is holding it up (too big at the \
+                     shoulders/waist?)",
+                    fixed(med.abs(), 0)
+                ));
+                gating.push(flags.last().cloned().unwrap_or_default());
+            }
         }
         pieces.insert(
             id.clone(),
@@ -555,6 +573,131 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
         }),
     );
     Value::Object(report)
+}
+
+#[cfg(test)]
+mod pleat_band_slide_tests {
+    use super::*;
+    use crate::garment::build_garment;
+
+    /// A 78 mm skirt top gathered 1.3 to 1 onto a 60 mm band, both torso pieces.
+    fn pattern(band_of_pleats: bool) -> Pattern {
+        let piece = |id: &str, x: f64, width: f64| {
+            json!({
+                "id":id, "cut":{"qty":1}, "grain":[[x,0],[x,40]],
+                "vertices":{"a":[x,0],"b":[x+width,0],"c":[x+width,40],"d":[x,40]},
+                "edges":[
+                    {"id":"bottom","from":"a","to":"b"},
+                    {"id":"right","from":"b","to":"c"},
+                    {"id":"top","from":"c","to":"d"},
+                    {"id":"left","from":"d","to":"a"}
+                ],
+                "placement":{"part":"torso"}
+            })
+        };
+        let mut seam = json!({"id":"waist","a":"skirt/top","b":"band/bottom","ratio":1.3});
+        if band_of_pleats {
+            seam["gather_relief_mm"] = json!(30.0);
+        }
+        Pattern::new(json!({
+            "schema":"fabric-pattern/1", "units":"mm",
+            "pieces":[piece("skirt",0.0,78.0),piece("band",100.0,60.0)], "seams":[seam]
+        }))
+    }
+
+    /// The report when the skirt's named corners move by `drop_m` (metres, z up) between the sewn and the
+    /// settled state: `[hem, hem, waist, waist]` for corners a, b, c, d.
+    fn report(pattern: &Pattern, drop_m: [f64; 4]) -> Value {
+        let mesh = build_garment(pattern, 10.0).unwrap();
+        // The cloth lies half a metre above the body plane, so a corner can drop without entering the body.
+        let sewn: Vec<_> = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * MM, p.y * MM, 0.5))
+            .collect();
+        let mut settled = sewn.clone();
+        for (corner, drop) in ["a", "b", "c", "d"].into_iter().zip(drop_m) {
+            settled[mesh.corner[&("skirt".to_string(), corner.to_string())]].z += drop;
+        }
+        let seq = vec![settled; MIN_FRAMES];
+        let body = NearestTree::new(
+            vec![
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(3.0, -1.0, 0.0),
+                Vec3::new(-1.0, 3.0, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        metrics(
+            &mesh,
+            &MetricsInput {
+                pattern,
+                seq: &seq,
+                start: &sewn,
+                after_sew: &sewn,
+                wrapped: &sewn,
+                body: &body,
+                level_y: &|_, _| None,
+                fit_spec: &json!({"points":[]}),
+                spacing: 10.0,
+                arm_deg: 35.0,
+            },
+        )
+    }
+
+    fn mentions(list: &Value, text: &str) -> bool {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|flag| flag.as_str().unwrap().contains(text))
+    }
+
+    #[test]
+    fn a_banded_skirt_whose_seam_stays_put_comes_down_without_gating() {
+        // Hem corners 100 mm down, waist corners still: the median corner is 50 mm down.
+        let came_down = report(&pattern(true), [-0.1, -0.1, 0.0, 0.0]);
+        assert!(
+            mentions(&came_down["flags"], "skirt came down 50 mm"),
+            "{came_down}"
+        );
+        assert!(mentions(
+            &came_down["flags"],
+            "least-moved corner stayed within 0 mm"
+        ));
+        // (The flat synthetic layout has other flags of its own; only the reference's slide flag is at
+        // issue here, in either list.)
+        for list in ["gating", "flags"] {
+            assert!(
+                !mentions(&came_down[list], "nothing is holding it up"),
+                "{}",
+                came_down[list]
+            );
+        }
+        assert_eq!(came_down["pieces"]["skirt"]["corner_drop_median_mm"], -50.0);
+    }
+
+    #[test]
+    fn a_banded_skirt_that_really_slides_still_gates() {
+        let slid = report(&pattern(true), [-0.1, -0.1, -0.06, -0.06]);
+        assert!(
+            mentions(&slid["gating"], "skirt slid 80 mm down after gravity"),
+            "{slid}"
+        );
+    }
+
+    #[test]
+    fn without_a_declared_band_the_reference_rule_is_unchanged() {
+        let reference = report(&pattern(false), [-0.1, -0.1, 0.0, 0.0]);
+        assert!(
+            mentions(
+                &reference["gating"],
+                "skirt slid 50 mm down after gravity: nothing is holding it up"
+            ),
+            "{reference}"
+        );
+        assert!(!mentions(&reference["flags"], "came down"));
+    }
 }
 
 #[cfg(test)]
