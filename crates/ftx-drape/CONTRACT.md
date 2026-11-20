@@ -1,5 +1,36 @@
 # ftx-drape contract
 
+**FrankenSim-lifted solver, integrator, geometry, adjoint, and microclimate extensions.**
+Five deterministic, `#![forbid(unsafe_code)]`, zero-`libm`, zero-`mul_add` modules adapted from
+FrankenSim (`source_root` `f6c2ec6714e374fa3253654042d5ce3aed56e19dffc166f7e212617b226751b3`)
+extend `ftx-drape` without altering default `ProjectedNewton` / `ImplicitEuler` behavior or the
+pinned `kat` / `kat_contact` digests:
+- `winding` + `Body::is_inside` / `Body::winding_number_approx`: Barill et al. dipole octree
+  (`beta = 2.5`) with zero-allocation bottom-up `refit` for moving closed bodies and exact
+  Van Oosterom–Strackee fallback within `|w| ∈ [0.45, 0.55]`, wired into `Contact::first_intersection`.
+- `sparse::advanced` + `NewtonStrategy`: `Bsr`, `Precond` (`IdentityPrecond`, `Jacobi`, `Chebyshev`,
+  `Ilu0`, `ilu0_shifted`, `ilu0_spd_shifted`), `CsrF32` + `mixed_cg_refine`, fail-closed `pminres`
+  with true Euclidean residual and Rigal–Gaches backward-error certification, `eisenstat_walker`,
+  and `steihaug_cg`. `Solver::newton_strategy` adds opt-in `AdaptiveIlu` (SPD-shifted `ILU(0)`-PCG
+  with Eisenstat–Walker forcing) and factorization-free `TrustRegionSteihaug` (unprojected exact
+  Hessian with negative-curvature boundary escape and contact CCD).
+- `integrator` + `TimeIntegrator`: opt-in second-order Chung–Hulbert `GeneralizedAlpha { rho_inf }`
+  in variational incremental-potential form with automatic consistent initial acceleration,
+  midpoint-consistent friction lag and dual-endpoint/midpoint CCD; refuses backward-Euler material
+  history fields fail-closed. Verified at `1.0 ± 0.2` (`ImplicitEuler`) and `2.0 ± 0.2`
+  (`GeneralizedAlpha` at `rho_inf ∈ {1.0, 0.5}`) by `ftx-conformance/tests/time_order.rs` using
+  `ftx_conformance::mms::OrderGate`.
+- `adjoint`: IFT static-equilibrium adjoint (`Solver::equilibrium_adjoint`, reusing verified cached
+  `LdltFactor` or factoring exact `H(x*)` once), `Solver::constitutive_gradient` (exact
+  `dJ/d[Q11, Q22, Q12, Q33]` and `dJ/dB` including compression softening, refusing heterogeneous or
+  history-bearing models fail-closed), `orthotropic_chain_rule`, and fail-closed `verify_gradient`.
+- `thermal::microclimate`: USSA-1976 dry air / NIST water-vapor `MoistAirState` (Buck 1996
+  saturation), 12 validity-gated Nusselt correlations with `NusseltResult::to_exterior` producing
+  explicit `Evidence::Estimate` records (never promoted to measured film data), and N-patch
+  `GrayDiffuseEnclosure` radiosity with row-sum and reciprocity admission.
+These tests establish numerical behavior, convergence order, derivative accuracy, and conservation
+only — never runtime speedup (unbenchmarked), empirical material qualification, or physical fit.
+
 **Drafting and flat checks on a selected body (plan §8).**
 `drafting::PreparedPatternBody` resolves an optional intact accepted report through
 the existing `FittedBody` authority, or fits the supplied tape evidence when the

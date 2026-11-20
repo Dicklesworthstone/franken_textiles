@@ -14,6 +14,7 @@ use crate::materials::{Evidence, Quantity, Source};
 
 mod binding;
 pub mod calibration;
+pub mod exact_exp;
 pub mod heating;
 pub mod parallel;
 

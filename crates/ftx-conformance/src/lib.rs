@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod detaudit;
+pub mod mms;
 pub mod propcheck;
 
 use std::path::PathBuf;

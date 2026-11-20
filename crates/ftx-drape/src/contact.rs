@@ -21,6 +21,7 @@ use crate::distance::{
     Closest, edge_cross_squared, edge_edge_closest, point_triangle_closest, squared_distance,
     squared_distance_f64, squared_distance_grad,
 };
+use crate::winding::{DEFAULT_BETA, WindingOctree, winding_exact};
 
 mod materials;
 mod motion;
@@ -92,6 +93,7 @@ pub struct Body {
     edge_grid: Grid,
     tri_box: Vec<(Vec3, Vec3)>,
     edge_box: Vec<(Vec3, Vec3)>,
+    winding_tree: WindingOctree,
 }
 
 /// Whether two axis-aligned boxes overlap (touching counts).
@@ -335,6 +337,7 @@ impl Body {
             edge_grid: Grid::build(&[], 1.0),
             tri_box: Vec::new(),
             edge_box: Vec::new(),
+            winding_tree: WindingOctree::empty(),
         }
     }
 
@@ -388,6 +391,11 @@ impl Body {
             .map(|e| aabb(&e.map(|v| vertices[v])))
             .collect();
         let vert_box: Vec<(Vec3, Vec3)> = vertices.iter().map(|&v| (v, v)).collect();
+        let winding_tree = if closed {
+            WindingOctree::build(&vertices, &triangles, DEFAULT_BETA)
+        } else {
+            WindingOctree::empty()
+        };
         Ok(Self {
             tri_grid: Grid::build(&tri_box, cell),
             vert_grid: Grid::build(&vert_box, cell),
@@ -398,6 +406,7 @@ impl Body {
             closed,
             tri_box,
             edge_box,
+            winding_tree,
         })
     }
 
@@ -434,22 +443,40 @@ impl Body {
         self.tri_grid = tri_grid;
         self.edge_grid = edge_grid;
         self.vert_grid = vert_grid;
+        if self.closed {
+            self.winding_tree.refit(&self.vertices, &self.triangles);
+        }
         Ok(())
     }
 
-    /// Winding number of the surface about `p` (Van Oosterom–Strackee solid angles): about 1 inside a
-    /// closed, outward-wound body and 0 outside.
+    /// Exact winding number of the surface about `p` (Van Oosterom–Strackee solid angles): about 1
+    /// inside a closed, outward-wound body and 0 outside.
     #[must_use]
     pub fn winding_number(&self, p: Vec3) -> f64 {
-        let mut omega = 0.0;
-        for t in &self.triangles {
-            let [a, b, c] = t.map(|i| self.vertices[i] - p);
-            let (la, lb, lc) = (a.norm(), b.norm(), c.norm());
-            let num = a.dot(b.cross(c));
-            let den = la * lb * lc + a.dot(b) * lc + a.dot(c) * lb + b.dot(c) * la;
-            omega += 2.0 * ftx_core::det::atan2(num, den);
+        winding_exact(&self.vertices, &self.triangles, p)
+    }
+
+    /// O(log F) dipole-accelerated winding number for closed bodies (exact for open meshes).
+    #[must_use]
+    pub fn winding_number_approx(&self, p: Vec3) -> f64 {
+        if self.closed {
+            self.winding_tree
+                .winding(&self.vertices, &self.triangles, p)
+        } else {
+            winding_exact(&self.vertices, &self.triangles, p)
         }
-        omega / (4.0 * std::f64::consts::PI)
+    }
+
+    /// Exact-guarded inside classification (`|w| > 0.5`) using the O(log F) dipole octree with
+    /// exact solid-angle fallback near `|w| = 0.5`.
+    #[must_use]
+    pub fn is_inside(&self, p: Vec3) -> bool {
+        if self.closed {
+            self.winding_tree
+                .is_inside(&self.vertices, &self.triangles, p)
+        } else {
+            winding_exact(&self.vertices, &self.triangles, p).abs() > 0.5
+        }
     }
 }
 
@@ -1361,7 +1388,7 @@ impl Contact {
             let used: std::collections::BTreeSet<usize> =
                 self.cloth.triangles.iter().flatten().copied().collect();
             for cv in used {
-                if find(&mut root, cv) == cv && b.winding_number(x[cv]).abs() > 0.5 {
+                if find(&mut root, cv) == cv && b.is_inside(x[cv]) {
                     return Some(Intersection::Inside { cv });
                 }
             }

@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ad;
+pub mod adjoint;
 pub mod animation;
 pub mod attached_mass;
 pub mod bending;
@@ -27,6 +28,7 @@ pub mod drafting;
 pub mod eigen;
 pub mod elements;
 pub mod garment;
+pub mod integrator;
 pub mod liquid_mass;
 pub mod material;
 pub mod metrics;
@@ -47,10 +49,14 @@ pub mod study_input;
 pub mod thermal;
 pub mod two_start;
 pub mod vapor;
+pub mod winding;
 
-pub use cloth::{ClothModel, SettleReport, SolveReport, Solver, Tube, grid, hex_grid, hex_tube};
+pub use cloth::{
+    ClothModel, NewtonStrategy, SettleReport, SolveReport, Solver, Tube, grid, hex_grid, hex_tube,
+};
 pub use contact::{Body, Contact, ContactParams, Intersection};
 pub use elements::{Hinge, Membrane, MembraneElement};
 pub use garment::{GarmentMesh, GatherRelief, SeamRecord, build_garment};
+pub use integrator::TimeIntegrator;
 pub use nearest::{Nearest, NearestTree};
 pub use start::{PartFrame, StartState, WrapPlacement, start_state, wrap_points};

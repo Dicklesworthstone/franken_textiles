@@ -9,6 +9,7 @@
 //! time; a garment's assembly spent a quarter of its time sorting, and with self-contact the pattern
 //! changes almost every Newton iteration.)
 
+pub mod advanced;
 pub mod direct;
 pub mod precond;
 

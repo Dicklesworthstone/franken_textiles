@@ -1,5 +1,17 @@
 # ftx-pattern contract
 
+**Exact-exponential Prony recursion and Fractional-Zener NNLS lowering**
+(`material_relaxation::exact_exp`). Adapted from FrankenSim `crates/fs-visco` (`source_root`
+`f6c2ec6714e374fa3253654042d5ce3aed56e19dffc166f7e212617b226751b3`; `#![forbid(unsafe_code)]`,
+deterministic `ftx_core::det::{exp, expm1, ln}`, zero `mul_add`). `ExactPronyModel` /
+`ExactPronyState` integrates piecewise-linear strain ramps analytically via `a = exp(-Δt/τ)` and
+`b = -expm1(-Δt/τ)/(Δt/τ)` with exact work/stored/dissipated-energy accounting and step-size
+invariance on relaxation holds. `FractionalZener` + `lower_to_prony` fits a nonnegative Prony
+series over a declared frequency band `[ω_min, ω_max]` via log-spaced relaxation times and
+Lawson–Hanson active-set NNLS, verified on a 512-point log sweep and refusing fail-closed if
+`max_rel_err` exceeds tolerance. This establishes numerical recurrence and spectral approximation
+within the declared band only, not empirical textile characterization or physical garment fit.
+
 **Shared material inspection.** `ResolvedMaterial::inspection` retains the existing browser report
 and frozen source-bearing selection for both native inspection commands. Mechanical coefficients,
 steady conduction, transient storage, width and sewing clearance report independent admission;

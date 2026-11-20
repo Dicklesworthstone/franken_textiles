@@ -16,6 +16,10 @@ use serde::Serialize;
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::{project_psd, project_psd_translation_free};
 use crate::elements::{ElasticSegment, Hinge, Membrane, MembraneElement};
+use crate::integrator::{GeneralizedAlphaParams, TimeIntegrator};
+use crate::sparse::advanced::{
+    Precond, SteihaugConfig, eisenstat_walker, ilu0_spd_shifted, steihaug_cg,
+};
 use crate::sparse::precond::{PcgFailure, pcg};
 use crate::sparse::{Coo, Csr, CsrFill, LdltFactor, LdltOptions, SymbolicLdlt, amd_order};
 
@@ -520,6 +524,36 @@ pub struct SettleReport {
     pub newton_iterations: usize,
 }
 
+/// Nonlinear solver strategy for [`Solver`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum NewtonStrategy {
+    /// Projected Newton with exact LDLᵀ (or cached-factor PCG when `pcg_iters > 0`) and Armijo
+    /// backtracking. Default: preserves bit-identical legacy behavior.
+    #[default]
+    ProjectedNewton,
+    /// Inexact Newton with Eisenstat–Walker adaptive forcing and zero-fill `ILU(0)` (with
+    /// geometric diagonal-shift fallback) preconditioned CG before falling back to exact LDLᵀ.
+    AdaptiveIlu {
+        /// Maximum ILU-PCG iterations attempted per Newton step before factorizing.
+        pcg_iters: usize,
+        /// Maximum geometric diagonal shifts allowed on `ILU(0)` pivot breakdown.
+        max_shifts: usize,
+    },
+    /// Trust-region Newton using Steihaug–Toint truncated CG directly on the unprojected exact
+    /// Hessian, escaping negative curvature (buckling / wrinkling saddles) along the trust-region
+    /// boundary while honoring contact CCD and material strain domains.
+    TrustRegionSteihaug {
+        /// Initial Euclidean trust-region radius (m).
+        initial_radius: f64,
+        /// Maximum trust-region radius (m).
+        max_radius: f64,
+        /// Minimum trust-region radius before refusing (m).
+        min_radius: f64,
+        /// Maximum CG matvecs per outer trust-region step (`0` chooses `2 * nfree.max(32)`).
+        cg_iters: usize,
+    },
+}
+
 /// The cloth state and the solver.
 #[derive(Clone, Debug)]
 pub struct Solver {
@@ -543,6 +577,14 @@ pub struct Solver {
     /// positive-definite factorization, tried before factorizing anew (0: factorize every iteration).
     /// A singular projected factorization can additionally use the bounded, unpreconditioned fallback.
     pub pcg_iters: usize,
+    /// Nonlinear globalization and linear-solve strategy (default: [`NewtonStrategy::ProjectedNewton`]).
+    pub newton_strategy: NewtonStrategy,
+    /// Structural time-integration scheme (default: [`TimeIntegrator::ImplicitEuler`]).
+    pub integrator: TimeIntegrator,
+    /// Nodal accelerations (m/s²) retained by [`TimeIntegrator::GeneralizedAlpha`].
+    a: Vec<Vec3>,
+    /// Whether `a` has been initialized consistently with `M a₀ = M g − ∇Ψ(x₀)`.
+    accel_initialized: bool,
     free: Vec<Option<usize>>,
     nfree: usize,
     symbolic: Option<SymbolicLdlt>,
@@ -566,6 +608,46 @@ pub struct Solver {
 
 /// The relative residual an inexact dynamic Newton direction is solved to.
 const PCG_TOL: f64 = 1e-4;
+
+/// What potential and time-integration stencil `minimize` is solving.
+#[derive(Clone, Copy)]
+enum StepContext<'a> {
+    Static,
+    ImplicitEuler {
+        xt: &'a [Vec3],
+        h: f64,
+    },
+    GeneralizedAlpha {
+        x0: &'a [Vec3],
+        xt: &'a [Vec3],
+        h: f64,
+        params: GeneralizedAlphaParams,
+    },
+}
+
+impl<'a> StepContext<'a> {
+    fn from_inertia(inertia: Option<(&'a [Vec3], f64)>) -> Self {
+        match inertia {
+            None => Self::Static,
+            Some((xt, h)) => Self::ImplicitEuler { xt, h },
+        }
+    }
+
+    fn is_dynamic(self) -> bool {
+        !matches!(self, Self::Static)
+    }
+
+    fn time_step(self) -> Option<f64> {
+        match self {
+            Self::Static => None,
+            Self::ImplicitEuler { h, .. } | Self::GeneralizedAlpha { h, .. } => Some(h),
+        }
+    }
+
+    fn scale(self) -> f64 {
+        self.time_step().unwrap_or(1.0)
+    }
+}
 
 /// Where an assembly's entries go: straight into the fixed pattern once it is known, else a triplet
 /// buffer (the first assembly). Both give the same matrix bit for bit ([`CsrFill`]).
@@ -628,6 +710,8 @@ impl Solver {
         let cached_panel_count = model.panel_bending_patches().len();
         Self {
             v: vec![Vec3::ZERO; n],
+            a: vec![Vec3::ZERO; n],
+            accel_initialized: false,
             model,
             x,
             gravity,
@@ -636,6 +720,8 @@ impl Solver {
             contact: None,
             friction_rounds: 1,
             pcg_iters: 0,
+            newton_strategy: NewtonStrategy::ProjectedNewton,
+            integrator: TimeIntegrator::ImplicitEuler,
             free,
             nfree,
             symbolic: None,
@@ -730,6 +816,7 @@ impl Solver {
         });
         self.symbolic = None;
         self.pattern = None;
+        self.precond = None;
         self.element_pattern = self
             .dynamic_contact()
             .then(|| self.element_blocks_pattern());
@@ -757,6 +844,7 @@ impl Solver {
         self.contact = Some(contact.with_self_contact(&self.x, params)?);
         self.symbolic = None;
         self.pattern = None;
+        self.precond = None;
         self.element_pattern = Some(self.element_blocks_pattern());
         Ok(self)
     }
@@ -818,8 +906,156 @@ impl Solver {
         self.nfree
     }
 
-    /// The potential: incremental (`Some((x̃, h))`) or static (`None`, gravity as potential).
+    /// Current nodal accelerations (m/s²) tracked by [`TimeIntegrator::GeneralizedAlpha`].
+    #[must_use]
+    pub fn acceleration(&self) -> &[Vec3] {
+        &self.a
+    }
+
+    /// Explicitly set nodal accelerations (m/s²) and mark them initialized (bypassing automatic
+    /// consistent-acceleration initialization on the next [`TimeIntegrator::GeneralizedAlpha`] step).
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] on length mismatch; [`RefusalCode::NonFinite`] if any
+    /// entry is non-finite.
+    pub fn set_acceleration(&mut self, a: Vec<Vec3>) -> Result<(), Refusal> {
+        if a.len() != self.x.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "acceleration length {} must match vertex count {}",
+                    a.len(),
+                    self.x.len()
+                ),
+            ));
+        }
+        if a.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "nodal accelerations must be finite",
+            ));
+        }
+        self.a = a;
+        self.accel_initialized = true;
+        Ok(())
+    }
+
+    pub(crate) fn pack_free(&self, v: &[Vec3]) -> Vec<f64> {
+        let mut out = vec![0.0; self.nfree];
+        for (i, p) in v.iter().enumerate() {
+            for k in 0..3 {
+                if let Some(f) = self.free[3 * i + k] {
+                    out[f] = p[k];
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn unpack_free(&self, free_vec: &[f64]) -> Vec<Vec3> {
+        self.displacement(free_vec)
+    }
+
+    pub(crate) fn assemble_static_exact(&self) -> (Vec<f64>, Csr) {
+        self.assemble(&self.x, None, false)
+    }
+
+    pub(crate) fn cached_factor_solve(&self, rhs: &[f64]) -> Option<Vec<f64>> {
+        self.precond.as_ref().map(|f| f.solve(rhs))
+    }
+
+    pub(crate) fn factor_and_solve_exact(
+        &mut self,
+        h: &Csr,
+        rhs: &[f64],
+    ) -> Result<Vec<f64>, Refusal> {
+        let sym = self.symbolic(h)?;
+        let factor = sym.factor(h, &LdltOptions::default()).map_err(|e| {
+            Refusal::new(
+                RefusalCode::NotConverged,
+                format!("exact tangent factorization failed: {e}"),
+            )
+        })?;
+        let sol = factor.solve(rhs);
+        if factor.inertia().negative == 0 && self.pcg_iters > 0 {
+            self.precond = Some(factor);
+        }
+        Ok(sol)
+    }
+
+    pub(crate) fn is_homogeneous_elastic_for_adjoint(&self) -> bool {
+        !self.model.is_heterogeneous()
+            && self.model.element_materials.is_none()
+            && self.model.element_responses.is_none()
+            && self.model.hinge_bending.is_none()
+            && self.model.panel_bending.is_none()
+            && self.relaxation.is_none()
+            && self.plasticity.is_none()
+            && self.membrane_plasticity.is_none()
+    }
+
+    /// Test-only helper matching the legacy static / implicit-Euler potential signature.
+    #[cfg(test)]
     fn potential(&self, x: &[Vec3], inertia: Option<(&[Vec3], f64)>) -> Result<f64, Refusal> {
+        self.potential_ctx(x, StepContext::from_inertia(inertia))
+    }
+
+    /// The potential for the active step context (static, implicit Euler, or Generalized-α).
+    fn potential_ctx(&self, x: &[Vec3], ctx: StepContext<'_>) -> Result<f64, Refusal> {
+        match ctx {
+            StepContext::Static => self.potential_legacy(x, None),
+            StepContext::ImplicitEuler { xt, h } => self.potential_legacy(x, Some((xt, h))),
+            StepContext::GeneralizedAlpha { x0, xt, h, params } => {
+                self.model.check_membrane_domains(x)?;
+                self.model.check_panel_bending_domains(x)?;
+                let x_eval: Vec<Vec3> = x
+                    .iter()
+                    .zip(x0)
+                    .map(|(&xn, &xo)| params.eval_pos(xn, xo))
+                    .collect();
+                self.model.check_membrane_domains(&x_eval)?;
+                self.model.check_panel_bending_domains(&x_eval)?;
+                let panels = self
+                    .plasticity
+                    .as_ref()
+                    .map(|field| field.energy(&self.model, &x_eval, true))
+                    .transpose()?;
+                let membranes = self
+                    .membrane_plasticity
+                    .as_ref()
+                    .map(|field| field.energy(&self.model, &x_eval, true))
+                    .transpose()?;
+                let mut e = self
+                    .model
+                    .elastic_energy_with_fields(&x_eval, panels, membranes);
+                if let Some(field) = &self.relaxation {
+                    e += field.energy(&x_eval, Some(h))?;
+                }
+                if let Some(c) = &self.contact {
+                    e += c.terms(&x_eval, false, true).energy;
+                }
+                e /= params.elastic_weight();
+                let cm = params.mass_coeff(h);
+                for (i, m) in self.model.mass.iter().enumerate() {
+                    e += 0.5 * cm * m * (x[i] - xt[i]).norm2();
+                }
+                if e.is_finite() {
+                    Ok(e)
+                } else {
+                    Err(Refusal::new(
+                        RefusalCode::NonFinite,
+                        "cloth potential is not finite",
+                    ))
+                }
+            }
+        }
+    }
+
+    fn potential_legacy(
+        &self,
+        x: &[Vec3],
+        inertia: Option<(&[Vec3], f64)>,
+    ) -> Result<f64, Refusal> {
         self.model.check_membrane_domains(x)?;
         self.model.check_panel_bending_domains(x)?;
         let panels = self
@@ -869,13 +1105,33 @@ impl Solver {
         inertia: Option<(&[Vec3], f64)>,
         project: bool,
     ) -> (Vec<f64>, Csr) {
+        self.assemble_ctx(x, StepContext::from_inertia(inertia), project)
+    }
+
+    fn assemble_ctx(&self, x: &[Vec3], ctx: StepContext<'_>, project: bool) -> (Vec<f64>, Csr) {
+        let x_eval_buf = match ctx {
+            StepContext::GeneralizedAlpha { x0, params, .. } => Some(
+                x.iter()
+                    .zip(x0)
+                    .map(|(&xn, &xo)| params.eval_pos(xn, xo))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        let x_el = x_eval_buf.as_deref().unwrap_or(x);
+        let dynamic = ctx.is_dynamic();
+        let hess_scale = match ctx {
+            StepContext::GeneralizedAlpha { params, .. } => params.elastic_weight(),
+            _ => 1.0,
+        };
+        let scale_hess = |v: f64| if hess_scale != 1.0 { v * hess_scale } else { v };
         let mut g = vec![0.0; self.nfree];
-        // The contact blocks (a function of `x` alone) come first, so that their positions are known
+        // The contact blocks (a function of `x_el` alone) come first, so that their positions are known
         // before anything is pushed; they are still pushed last.
         let blocks = self
             .contact
             .as_ref()
-            .map(|c| c.terms(x, true, inertia.is_some()).blocks);
+            .map(|c| c.terms(x_el, true, dynamic).blocks);
         // Cloth–cloth contact can couple previously unrelated elements. Never scatter those blocks
         // into a stale fixed pattern (CsrFill rejects missing entries): the element pattern plus this
         // iterate's contact couplings is the structure the triplets would assemble to, filled in place
@@ -922,7 +1178,7 @@ impl Solver {
                 g[fa] += grad[a];
                 for b in 0..n {
                     if let Some(fb) = self.free[3 * dofs[b / 3] + b % 3] {
-                        sink.push(fa, fb, hess[a * n + b]);
+                        sink.push(fa, fb, scale_hess(hess[a * n + b]));
                     }
                 }
             }
@@ -931,17 +1187,17 @@ impl Solver {
             let mut l = self
                 .membrane_plasticity
                 .as_ref()
-                .and_then(|field| field.local(i, x, inertia.is_some()))
+                .and_then(|field| field.local(i, x_el, dynamic))
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
-                        || e.local(x, &self.model.material(i)),
-                        |law| e.response_local(x, law, &self.model.material(i)),
+                        || e.local(x_el, &self.model.material(i)),
+                        |law| e.response_local(x_el, law, &self.model.material(i)),
                     )
                 });
             if let Some(extra) = self
                 .relaxation
                 .as_ref()
-                .and_then(|field| field.local(i, x, inertia.map(|(_, h)| h)))
+                .and_then(|field| field.local(i, x_el, ctx.time_step()))
             {
                 l.energy += extra.energy;
                 for (a, b) in l.grad.iter_mut().zip(extra.grad) {
@@ -955,19 +1211,19 @@ impl Solver {
             scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
-            let mut l = h.local(x, self.model.hinge_rigidity(i));
+            let mut l = h.local(x_el, self.model.hinge_rigidity(i));
             scatter(&h.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
             let mut l = self
                 .plasticity
                 .as_ref()
-                .and_then(|field| field.local(i, x, inertia.is_some()))
-                .unwrap_or_else(|| p.local(x));
+                .and_then(|field| field.local(i, x_el, dynamic))
+                .unwrap_or_else(|| p.local(x_el));
             scatter(&p.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for e in &self.model.elastics {
-            let mut l = e.local(x);
+            let mut l = e.local(x_el);
             scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for (i, &m) in self.model.mass.iter().enumerate() {
@@ -975,12 +1231,17 @@ impl Solver {
                 let Some(f) = self.free[3 * i + k] else {
                     continue;
                 };
-                match inertia {
-                    Some((xt, h)) => {
+                match ctx {
+                    StepContext::ImplicitEuler { xt, h } => {
                         g[f] += m * (x[i][k] - xt[i][k]) / (h * h);
                         sink.push(f, f, m / (h * h));
                     }
-                    None => {
+                    StepContext::GeneralizedAlpha { xt, h, params, .. } => {
+                        let cm = params.mass_coeff(h);
+                        g[f] += cm * m * (x[i][k] - xt[i][k]);
+                        sink.push(f, f, cm * m);
+                    }
+                    StepContext::Static => {
                         g[f] -= m * self.gravity[k];
                         sink.push(f, f, 0.0);
                     }
@@ -1003,7 +1264,7 @@ impl Solver {
                     g[fa] += block.grad[ia];
                     for (ib, &(vb, kb)) in block.dofs.iter().enumerate() {
                         if let Some(fb) = self.free[3 * vb + kb] {
-                            sink.push(fa, fb, block.hess[ia * m + ib]);
+                            sink.push(fa, fb, scale_hess(block.hess[ia * m + ib]));
                         }
                     }
                 }
@@ -1096,8 +1357,33 @@ impl Solver {
             .collect()
     }
 
-    /// Projected Newton on the potential from the current positions.
+    fn ccd_step_bound(&self, p: &[f64], ctx: StepContext<'_>) -> f64 {
+        let Some(c) = &self.contact else {
+            return 1.0;
+        };
+        let disp = self.displacement(p);
+        let a_end = c.step_bound(&self.x, &disp);
+        if let StepContext::GeneralizedAlpha { x0, params, .. } = ctx {
+            let w = params.elastic_weight();
+            let x_eval: Vec<Vec3> = self
+                .x
+                .iter()
+                .zip(x0)
+                .map(|(&xn, &xo)| params.eval_pos(xn, xo))
+                .collect();
+            let d_eval: Vec<Vec3> = disp.iter().map(|&d| d * w).collect();
+            a_end.min(c.step_bound(&x_eval, &d_eval))
+        } else {
+            a_end
+        }
+    }
+
+    /// Projected Newton (or configured [`NewtonStrategy`]) on the potential from the current positions.
     fn minimize(&mut self, inertia: Option<(&[Vec3], f64)>) -> Result<SolveReport, Refusal> {
+        self.minimize_ctx(StepContext::from_inertia(inertia))
+    }
+
+    fn minimize_ctx(&mut self, ctx: StepContext<'_>) -> Result<SolveReport, Refusal> {
         let count = self.model.panel_bending_patches().len();
         if count != self.cached_panel_count {
             self.symbolic = None;
@@ -1106,8 +1392,23 @@ impl Solver {
             self.element_pattern = None;
             self.cached_panel_count = count;
         }
+        if let NewtonStrategy::TrustRegionSteihaug {
+            initial_radius,
+            max_radius,
+            min_radius,
+            cg_iters,
+        } = self.newton_strategy
+        {
+            return self.minimize_trust_region(
+                ctx,
+                initial_radius,
+                max_radius,
+                min_radius,
+                cg_iters,
+            );
+        }
         let mut rep = SolveReport {
-            energy_start: self.potential(&self.x, inertia)?,
+            energy_start: self.potential_ctx(&self.x, ctx)?,
             ..SolveReport::default()
         };
         let mut energy = rep.energy_start;
@@ -1116,33 +1417,66 @@ impl Solver {
             rep.energy_end = energy;
             return Ok(rep);
         }
-        let scale = inertia.map_or(1.0, |(_, h)| h);
+        let scale = ctx.scale();
         // A static Hessian can retain free rigid modes. A loose linear residual could hide an
         // unsupported load in those modes, even when a cached dynamic factor is positive definite.
-        let linear_tolerance = inertia.map_or(LdltOptions::default().zero_pivot_rel, |_| PCG_TOL);
+        let base_linear_tol = if ctx.is_dynamic() {
+            PCG_TOL
+        } else {
+            LdltOptions::default().zero_pivot_rel
+        };
+        let adaptive_ilu = match self.newton_strategy {
+            NewtonStrategy::AdaptiveIlu {
+                pcg_iters,
+                max_shifts,
+            } => Some((pcg_iters, max_shifts)),
+            _ => None,
+        };
+        let mut prev_grad_l2: Option<f64> = None;
+        let mut ew_eta = 0.1f64;
         // Once a solve has met negative inertia it keeps projecting: retrying the exact Hessian first
         // cost a second assembly and factorization on almost every iteration of a garment.
         let mut projecting = false;
         for it in 0..self.max_newton {
+            let mut iter_lin_tol: Option<f64> = None;
+            let mut next_lin_tol = |g_vec: &[f64]| -> f64 {
+                if let Some(t) = iter_lin_tol {
+                    return t;
+                }
+                let t = if adaptive_ilu.is_some() && ctx.is_dynamic() {
+                    let gl2 = g_vec.iter().map(|v| v * v).sum::<f64>().sqrt();
+                    if let Some(prev) = prev_grad_l2 {
+                        ew_eta = eisenstat_walker(prev, gl2, ew_eta, 1e-8, 0.1, 0.9, 2.0);
+                    }
+                    prev_grad_l2 = Some(gl2);
+                    ew_eta
+                } else {
+                    base_linear_tol
+                };
+                iter_lin_tol = Some(t);
+                t
+            };
             // Exact Hessian first (quadratic convergence near a minimum); element blocks projected to
             // PSD only when the factorization reports negative inertia (plan §11.2).
             let (mut g, mut p) = if projecting {
                 (Vec::new(), None)
             } else {
-                let (g, a) = self.assemble(&self.x, inertia, false);
-                let p = self.newton_direction(&a, &g, false, linear_tolerance, &mut rep)?;
+                let (g, a) = self.assemble_ctx(&self.x, ctx, false);
+                let lin_tol = next_lin_tol(&g);
+                let p = self.solve_newton_linear(&a, &g, false, lin_tol, adaptive_ilu, &mut rep)?;
                 (g, p)
             };
             let mut newton_correction = true;
             if p.is_none() {
                 projecting = true;
                 rep.projected_iterations += 1;
-                let (g2, a2) = self.assemble(&self.x, inertia, true);
+                let (g2, a2) = self.assemble_ctx(&self.x, ctx, true);
                 g = g2;
-                p = self.newton_direction(&a2, &g, true, linear_tolerance, &mut rep)?;
+                let lin_tol = next_lin_tol(&g);
+                p = self.solve_newton_linear(&a2, &g, true, lin_tol, adaptive_ilu, &mut rep)?;
                 if p.is_none() {
                     newton_correction = false;
-                    if inertia.is_none() {
+                    if !ctx.is_dynamic() {
                         p = self.static_search_direction(&a2, &g, &mut rep)?;
                     }
                 }
@@ -1172,15 +1506,12 @@ impl Solver {
                 break;
             }
             // Never step through the body or another cloth layer: cap α by additive CCD.
-            let mut alpha = match &self.contact {
-                Some(c) => c.step_bound(&self.x, &self.displacement(&p)),
-                None => 1.0,
-            };
+            let mut alpha = self.ccd_step_bound(&p, ctx);
             rep.ccd_limited += usize::from(alpha < 1.0);
             let mut accepted = false;
             for _ in 0..50 {
                 let trial = self.apply(&self.x, &p, alpha);
-                let e = match self.potential(&trial, inertia) {
+                let e = match self.potential_ctx(&trial, ctx) {
                     Ok(e) => e,
                     // A Newton trial may leave the characterized domain; treat it like an invalid
                     // line-search trial and shorten the step. The accepted state never extrapolates.
@@ -1197,7 +1528,7 @@ impl Solver {
                     && -slope <= 16.0 * f64::EPSILON * energy.abs().max(e.abs())
                     && (e - energy).abs() <= 16.0 * f64::EPSILON * energy.abs().max(e.abs())
                     && {
-                        let (trial_gradient, _) = self.assemble(&trial, inertia, false);
+                        let (trial_gradient, _) = self.assemble_ctx(&trial, ctx, false);
                         let trial_slope = trial_gradient.iter().zip(&p).map(|(a, b)| a * b).sum();
                         let trial_residual =
                             trial_gradient.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
@@ -1229,7 +1560,7 @@ impl Solver {
         }
         rep.energy_end = energy;
         if !rep.converged {
-            let (g, _) = self.assemble(&self.x, inertia, false);
+            let (g, _) = self.assemble_ctx(&self.x, ctx, false);
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
             return Err(Refusal::new(
                 RefusalCode::NotConverged,
@@ -1238,12 +1569,212 @@ impl Solver {
                     rep.iterations, rep.residual, rep.last_step, rep.line_search_failures
                 ),
             )
-            .repair(if inertia.is_some() {
+            .repair(if ctx.is_dynamic() {
                 "increase the Newton iteration budget or reduce the time step"
             } else {
                 "check that the external loads have static support or increase the Newton iteration budget"
             })
             .repair("check the material domain and the garment start state"));
+        }
+        Ok(rep)
+    }
+
+    fn solve_newton_linear(
+        &mut self,
+        a: &Csr,
+        g: &[f64],
+        projected: bool,
+        linear_tolerance: f64,
+        adaptive_ilu: Option<(usize, usize)>,
+        rep: &mut SolveReport,
+    ) -> Result<Option<Vec<f64>>, Refusal> {
+        if let Some((ilu_pcg_iters, max_shifts)) = adaptive_ilu
+            && ilu_pcg_iters > 0
+            && let Ok((ilu, _shift)) = ilu0_spd_shifted(a, max_shifts)
+        {
+            let b: Vec<f64> = g.iter().map(|v| -v).collect();
+            let n = b.len();
+            match pcg(
+                a,
+                &b,
+                |r: &[f64]| {
+                    let mut z = vec![0.0; n];
+                    ilu.apply(r, &mut z);
+                    z
+                },
+                linear_tolerance,
+                ilu_pcg_iters,
+            ) {
+                Ok((p, r)) => {
+                    rep.pcg_iterations += r.iters;
+                    return Ok(Some(p));
+                }
+                Err(PcgFailure::NegativeCurvature(k)) if !projected => {
+                    rep.pcg_iterations += k;
+                    return Ok(None);
+                }
+                Err(PcgFailure::NegativeCurvature(k) | PcgFailure::NotConverged(k)) => {
+                    rep.pcg_iterations += k;
+                }
+            }
+        }
+        self.newton_direction(a, g, projected, linear_tolerance, rep)
+    }
+
+    /// Trust-region Newton with Steihaug–Toint truncated CG on the exact unprojected Hessian.
+    fn minimize_trust_region(
+        &mut self,
+        ctx: StepContext<'_>,
+        initial_radius: f64,
+        max_radius: f64,
+        min_radius: f64,
+        cg_iters: usize,
+    ) -> Result<SolveReport, Refusal> {
+        if !(initial_radius.is_finite()
+            && max_radius.is_finite()
+            && min_radius.is_finite()
+            && min_radius > 0.0
+            && initial_radius >= min_radius
+            && max_radius >= initial_radius)
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "trust-region radii must be finite with 0 < min_radius <= initial_radius <= max_radius",
+            ));
+        }
+        let mut rep = SolveReport {
+            energy_start: self.potential_ctx(&self.x, ctx)?,
+            ..SolveReport::default()
+        };
+        let mut energy = rep.energy_start;
+        if self.nfree == 0 {
+            rep.converged = true;
+            rep.energy_end = energy;
+            return Ok(rep);
+        }
+        let scale = ctx.scale();
+        let mut delta = initial_radius;
+        let max_cg = if cg_iters == 0 {
+            2 * self.nfree.max(32)
+        } else {
+            cg_iters
+        };
+        for it in 0..self.max_newton {
+            let (g, h_mat) = self.assemble_ctx(&self.x, ctx, false);
+            if g.iter().any(|v| !v.is_finite()) {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "trust-region gradient is non-finite",
+                ));
+            }
+            let res_inf = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            rep.iterations = it + 1;
+            rep.residual = res_inf;
+            if res_inf == 0.0 {
+                rep.last_step = 0.0;
+                rep.converged = true;
+                break;
+            }
+            let out = steihaug_cg(
+                &h_mat,
+                &g,
+                SteihaugConfig {
+                    radius: delta,
+                    rel_tol: 1e-10,
+                    max_iters: max_cg,
+                },
+            );
+            rep.pcg_iterations += out.matvecs;
+            if out.step.iter().any(|v| !v.is_finite()) || !out.model_decrease.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "trust-region step or model decrease is non-finite",
+                ));
+            }
+            let mut p = out.step;
+            let mut model_decrease = out.model_decrease;
+            let step_inf = p.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            rep.last_step = step_inf;
+            if out.interior_converged
+                && !out.hit_boundary
+                && !out.negative_curvature
+                && step_inf / scale < self.tol
+            {
+                rep.converged = true;
+                break;
+            }
+            let ccd_alpha = self.ccd_step_bound(&p, ctx);
+            if ccd_alpha < 1.0 {
+                rep.ccd_limited += 1;
+                for v in &mut p {
+                    *v *= ccd_alpha;
+                }
+                let mut hp = vec![0.0; self.nfree];
+                h_mat.spmv(&p, &mut hp);
+                let gp: f64 = g.iter().zip(&p).map(|(a, b)| a * b).sum();
+                let php: f64 = p.iter().zip(&hp).map(|(a, b)| a * b).sum();
+                model_decrease = -gp - 0.5 * php;
+            }
+            let trial = self.apply(&self.x, &p, 1.0);
+            let trial_energy = match self.potential_ctx(&trial, ctx) {
+                Ok(e) => e,
+                Err(e) if e.code == RefusalCode::OutOfRange => {
+                    delta *= 0.25;
+                    rep.halvings += 1;
+                    if delta < min_radius {
+                        rep.line_search_failures += 1;
+                        break;
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let actual = energy - trial_energy;
+            let rho = if model_decrease > 0.0 {
+                actual / model_decrease
+            } else {
+                -1.0
+            };
+            let slope: f64 = g.iter().zip(&p).map(|(a, b)| a * b).sum();
+            let precision_step = !(rho > 1e-4 && model_decrease > 0.0)
+                && ccd_alpha == 1.0
+                && !out.hit_boundary
+                && -slope <= 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs())
+                && (trial_energy - energy).abs()
+                    <= 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs())
+                && {
+                    let (tg, _) = self.assemble_ctx(&trial, ctx, false);
+                    let tslope = tg.iter().zip(&p).map(|(a, b)| a * b).sum();
+                    let tres = tg.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                    tg.iter().all(|v| v.is_finite())
+                        && roundoff_step(energy, trial_energy, 1.0, slope, tslope, res_inf, tres)
+                };
+            if rho < 0.25 && !precision_step {
+                delta *= 0.25;
+                rep.halvings += 1;
+            } else if rho > 0.75 && out.hit_boundary && ccd_alpha == 1.0 {
+                delta = (2.0 * delta).min(max_radius);
+            }
+            if (rho > 1e-4 && model_decrease > 0.0) || precision_step {
+                self.x = trial;
+                energy = trial_energy;
+                rep.roundoff_steps += usize::from(precision_step);
+            } else if delta < min_radius {
+                rep.line_search_failures += 1;
+                break;
+            }
+        }
+        rep.energy_end = energy;
+        if !rep.converged {
+            let (g, _) = self.assemble_ctx(&self.x, ctx, false);
+            rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            return Err(Refusal::new(
+                RefusalCode::NotConverged,
+                format!(
+                    "trust-region Newton did not converge after {} iterations (residual {} N, last correction {} m, {} failed steps); diagnostics {rep:?}",
+                    rep.iterations, rep.residual, rep.last_step, rep.line_search_failures
+                ),
+            ));
         }
         Ok(rep)
     }
@@ -1379,23 +1910,30 @@ impl Solver {
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
         {
+            if self.integrator != TimeIntegrator::ImplicitEuler {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    "Generalized-alpha integration is not admitted for backward-Euler material-history fields; use TimeIntegrator::ImplicitEuler",
+                ));
+            }
             return self.relaxing_step(h, body_start);
         }
         let mut trial = self.clone();
         let report = trial.step_inner(h, body_start)?;
-        if trial.v.iter().any(|v| !v.is_finite()) {
+        if trial.v.iter().any(|v| !v.is_finite()) || trial.a.iter().any(|a| !a.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
-                "the cloth velocity became non-finite",
+                "the cloth velocity or acceleration became non-finite",
             ));
         }
         *self = trial;
         Ok(report)
     }
 
-    /// Implicit-Euler step from the accepted physical state `self.x` (`x_n`), optionally seeding
-    /// free DOFs of the Newton minimizer at `guess` without altering `x_n` in the inertia predictor
-    /// or post-step velocity `(x_{n+1} - x_n) / h`. Falls back to `step` when contact is active.
+    /// Implicit-Euler (or configured [`TimeIntegrator`]) step from the accepted physical state
+    /// `self.x` (`x_n`), optionally seeding free DOFs of the Newton minimizer at `guess` without
+    /// altering `x_n` in the inertia predictor or post-step velocity. Falls back to `step` when
+    /// contact is active.
     pub(crate) fn step_with_guess(
         &mut self,
         h: f64,
@@ -1410,14 +1948,20 @@ impl Solver {
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
         {
+            if self.integrator != TimeIntegrator::ImplicitEuler {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    "Generalized-alpha integration is not admitted for backward-Euler material-history fields; use TimeIntegrator::ImplicitEuler",
+                ));
+            }
             return self.relaxing_step(h, None);
         }
         let mut trial = self.clone();
         let report = trial.step_inner_with_guess(h, None, guess)?;
-        if trial.v.iter().any(|v| !v.is_finite()) {
+        if trial.v.iter().any(|v| !v.is_finite()) || trial.a.iter().any(|a| !a.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
-                "the cloth velocity became non-finite",
+                "the cloth velocity or acceleration became non-finite",
             ));
         }
         *self = trial;
@@ -1442,6 +1986,9 @@ impl Solver {
             ));
         }
         self.audit_self_contact()?;
+        if let TimeIntegrator::GeneralizedAlpha { rho_inf } = self.integrator {
+            return self.step_inner_generalized_alpha(h, rho_inf, body_start, guess);
+        }
         let x0 = self.x.clone();
         let xt: Vec<Vec3> = x0
             .iter()
@@ -1540,6 +2087,174 @@ impl Solver {
         Ok(rep)
     }
 
+    fn step_inner_generalized_alpha(
+        &mut self,
+        h: f64,
+        rho_inf: f64,
+        body_start: Option<&[Vec3]>,
+        guess: Option<&[Vec3]>,
+    ) -> Result<SolveReport, Refusal> {
+        let params = GeneralizedAlphaParams::new(rho_inf)?;
+        let x0 = self.x.clone();
+        let v0 = self.v.clone();
+        if !self.accel_initialized {
+            // Consistent initial acceleration M a₀ = M g − ∇Ψ(x₀) on free DOFs so Generalized-α
+            // preserves full 2nd-order accuracy from step 1.
+            let (g0, _) = self.assemble_ctx(&x0, StepContext::Static, false);
+            let mut a0 = vec![Vec3::ZERO; x0.len()];
+            for (i, &m) in self.model.mass.iter().enumerate() {
+                if m > 0.0 {
+                    let mut acc = Vec3::ZERO;
+                    for k in 0..3 {
+                        if let Some(f) = self.free[3 * i + k] {
+                            let val = -g0[f] / m;
+                            match k {
+                                0 => acc.x = val,
+                                1 => acc.y = val,
+                                _ => acc.z = val,
+                            }
+                        }
+                    }
+                    a0[i] = acc;
+                }
+            }
+            if a0.iter().any(|a| !a.is_finite()) {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "consistent initial acceleration is non-finite",
+                ));
+            }
+            self.a = a0;
+            self.accel_initialized = true;
+        }
+        let a0 = self.a.clone();
+        let xt: Vec<Vec3> = (0..x0.len())
+            .map(|i| {
+                let mut p = params.predictor(x0[i], v0[i], a0[i], self.gravity, h);
+                for k in 0..3 {
+                    if self.free[3 * i + k].is_none() {
+                        match k {
+                            0 => p.x = x0[i].x,
+                            1 => p.y = x0[i].y,
+                            _ => p.z = x0[i].z,
+                        }
+                    }
+                }
+                p
+            })
+            .collect();
+        let h_eff = params.elastic_weight() * h;
+        if let Some(c) = &mut self.contact {
+            if let Some(b) = body_start {
+                c.update_lag_motion(&x0, &x0, h_eff, Some(b));
+            } else {
+                c.update_lag(&x0, &x0, h_eff);
+            }
+        } else if let Some(g) = guess {
+            if g.len() != self.x.len() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "step warm-start length must match vertex count",
+                ));
+            }
+            for (i, (pos, cand)) in self.x.iter_mut().zip(g).enumerate() {
+                if self.free[3 * i].is_some() {
+                    pos.x = cand.x;
+                }
+                if self.free[3 * i + 1].is_some() {
+                    pos.y = cand.y;
+                }
+                if self.free[3 * i + 2].is_some() {
+                    pos.z = cand.z;
+                }
+            }
+        }
+        let ctx = StepContext::GeneralizedAlpha {
+            x0: &x0,
+            xt: &xt,
+            h,
+            params,
+        };
+        let mut rep = match self.minimize_ctx(ctx) {
+            Ok(rep) => rep,
+            Err(e) => {
+                self.x = x0;
+                return Err(e);
+            }
+        };
+        for _ in 0..self.friction_rounds {
+            let Some(c) = &mut self.contact else { break };
+            if !c.has_friction() {
+                break;
+            }
+            let x_eval: Vec<Vec3> = self
+                .x
+                .iter()
+                .zip(&x0)
+                .map(|(&xn, &xo)| params.eval_pos(xn, xo))
+                .collect();
+            if let Some(b) = body_start {
+                c.update_lag_motion(&x0, &x_eval, h_eff, Some(b));
+            } else {
+                c.update_lag(&x0, &x_eval, h_eff);
+            }
+            let again = match self.minimize_ctx(ctx) {
+                Ok(rep) => rep,
+                Err(e) => {
+                    self.x = x0;
+                    return Err(e);
+                }
+            };
+            rep.iterations += again.iterations;
+            rep.projected_iterations += again.projected_iterations;
+            rep.line_search_failures += again.line_search_failures;
+            rep.factorizations += again.factorizations;
+            rep.ccd_limited += again.ccd_limited;
+            rep.halvings += again.halvings;
+            rep.roundoff_steps += again.roundoff_steps;
+            rep.pcg_iterations += again.pcg_iterations;
+            rep.converged = again.converged;
+            rep.energy_end = again.energy_end;
+            rep.residual = again.residual;
+            rep.last_step = again.last_step;
+        }
+        if self.x.iter().any(|p| !p.is_finite()) {
+            self.x = x0;
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "the cloth state became non-finite",
+            ));
+        }
+        if let Err(e) = self.audit_self_contact() {
+            self.x = x0;
+            return Err(e);
+        }
+        for i in 0..x0.len() {
+            let (mut vn, mut an) = params.corrector(x0[i], v0[i], a0[i], self.x[i], h);
+            for k in 0..3 {
+                if self.free[3 * i + k].is_none() {
+                    match k {
+                        0 => {
+                            vn.x = 0.0;
+                            an.x = 0.0;
+                        }
+                        1 => {
+                            vn.y = 0.0;
+                            an.y = 0.0;
+                        }
+                        _ => {
+                            vn.z = 0.0;
+                            an.z = 0.0;
+                        }
+                    }
+                }
+            }
+            self.v[i] = vn;
+            self.a[i] = an;
+        }
+        Ok(rep)
+    }
+
     /// Steps until the largest speed stays below `v_tol` (m/s) for `quiet` consecutive steps, growing
     /// the step from `h0` to `h_max` while Newton converges.
     ///
@@ -1633,6 +2348,8 @@ impl Solver {
         }
         trial.audit_self_contact()?;
         trial.v.fill(Vec3::ZERO);
+        trial.a.fill(Vec3::ZERO);
+        trial.accel_initialized = false;
         *self = trial;
         Ok(rep)
     }
@@ -2225,5 +2942,176 @@ mod self_contact_tests {
             s.step(f64::INFINITY).unwrap_err().code,
             RefusalCode::OutOfRange
         );
+    }
+}
+
+#[cfg(test)]
+mod strategy_and_integrator_tests {
+    use super::*;
+
+    fn hanging_sheet() -> Solver {
+        let (rest, tris) = grid(0.10, 0.08, 4, 3, Vec2::ZERO);
+        let x: Vec<Vec3> = rest
+            .iter()
+            .map(|p| Vec3::new(p.x, p.y, 0.004 * (p.x / 0.10)))
+            .collect();
+        let fixed: Vec<[bool; 3]> = rest
+            .iter()
+            .map(|p| {
+                if p.x == 0.0 {
+                    [true, true, true]
+                } else {
+                    [false, false, false]
+                }
+            })
+            .collect();
+        let model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(120.0, 90.0, 0.2, 30.0, 0.15),
+            2e-4,
+            0.22,
+        )
+        .unwrap();
+        let mut s = Solver::new(model, x, &fixed, Vec3::new(0.0, 0.0, -9.81));
+        s.tol = 1e-10;
+        s
+    }
+
+    #[test]
+    fn adaptive_ilu_and_trust_region_steihaug_match_projected_newton_on_cloth() {
+        let mut ref_solver = hanging_sheet();
+        let rep_ref = ref_solver.step(0.01).unwrap();
+        assert!(rep_ref.converged);
+
+        let mut ilu_solver = hanging_sheet();
+        ilu_solver.newton_strategy = NewtonStrategy::AdaptiveIlu {
+            pcg_iters: 64,
+            max_shifts: 4,
+        };
+        let rep_ilu = ilu_solver.step(0.01).unwrap();
+        assert!(rep_ilu.converged, "{rep_ilu:?}");
+        assert!(
+            rep_ilu.factorizations <= rep_ref.factorizations,
+            "ILU-PCG should not require more LDLT factorizations than ProjectedNewton"
+        );
+        for (a, b) in ref_solver.x.iter().zip(&ilu_solver.x) {
+            assert!(
+                (*a - *b).norm() < 1e-7,
+                "AdaptiveIlu mismatch: {a:?} vs {b:?}"
+            );
+        }
+
+        let mut tr_solver = hanging_sheet();
+        tr_solver.newton_strategy = NewtonStrategy::TrustRegionSteihaug {
+            initial_radius: 0.05,
+            max_radius: 0.5,
+            min_radius: 1e-12,
+            cg_iters: 0,
+        };
+        let rep_tr = tr_solver.step(0.01).unwrap();
+        assert!(rep_tr.converged, "{rep_tr:?}");
+        assert_eq!(
+            rep_tr.factorizations, 0,
+            "Steihaug TR is factorization-free"
+        );
+        for (a, b) in ref_solver.x.iter().zip(&tr_solver.x) {
+            assert!(
+                (*a - *b).norm() < 1e-7,
+                "TrustRegionSteihaug mismatch: {a:?} vs {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn trust_region_steihaug_escapes_buckling_compression_and_honors_contact_ccd() {
+        // Compress a 2-triangle strip along x with small out-of-plane perturbation so the exact
+        // Hessian has negative curvature; Steihaug TR must descend cleanly to equilibrium without
+        // a single factorization.
+        let (rest, tris) = grid(0.06, 0.03, 2, 1, Vec2::ZERO);
+        let x: Vec<Vec3> = rest
+            .iter()
+            .map(|p| {
+                let s = if p.x > 0.0 && p.x < 0.06 { 0.002 } else { 0.0 };
+                Vec3::new(p.x * 0.96, p.y, s)
+            })
+            .collect();
+        let fixed: Vec<[bool; 3]> = rest
+            .iter()
+            .map(|p| {
+                if p.x == 0.0 || (p.x - 0.06).abs() < 1e-12 {
+                    [true, true, true]
+                } else {
+                    [false, false, false]
+                }
+            })
+            .collect();
+        let model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(80.0, 80.0, 0.0, 20.0, 0.1),
+            1e-4,
+            0.2,
+        )
+        .unwrap();
+        let mut s = Solver::new(model, x, &fixed, Vec3::new(0.0, 0.0, -9.81));
+        s.tol = 1e-9;
+        s.newton_strategy = NewtonStrategy::TrustRegionSteihaug {
+            initial_radius: 0.02,
+            max_radius: 0.2,
+            min_radius: 1e-12,
+            cg_iters: 0,
+        };
+        let rep = s.step(0.005).unwrap();
+        assert!(rep.converged, "{rep:?}");
+        assert!(rep.energy_end <= rep.energy_start);
+        assert_eq!(rep.factorizations, 0);
+    }
+
+    #[test]
+    fn generalized_alpha_steps_cleanly_with_contact_without_penetration() {
+        let body = Body::new(
+            vec![
+                Vec3::new(-0.05, -0.05, -0.004),
+                Vec3::new(0.08, -0.05, -0.004),
+                Vec3::new(-0.05, 0.08, -0.004),
+            ],
+            vec![[0, 1, 2]],
+            0.01,
+        )
+        .unwrap();
+        let params = ContactParams {
+            dhat: 1e-3,
+            thickness: 2e-4,
+            kappa: 50.0,
+            mu: 0.2,
+            eps_v: 1e-3,
+        };
+        let rest = vec![Vec2::ZERO, Vec2::new(0.02, 0.0), Vec2::new(0.0, 0.02)];
+        let x: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(200.0, 200.0, 0.1, 40.0, 0.1),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let mut s = Solver::new(model, x, &[[false; 3]; 3], Vec3::new(0.0, 0.0, -9.81))
+            .with_contact(body, params)
+            .unwrap();
+        s.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.7 };
+        s.tol = 1e-9;
+        for _ in 0..15 {
+            let rep = s.step(0.004).unwrap();
+            assert!(rep.converged, "{rep:?}");
+            for p in &s.x {
+                assert!(
+                    p.z > -0.004 + params.thickness,
+                    "cloth penetrated body under GeneralizedAlpha: z={}",
+                    p.z
+                );
+            }
+        }
     }
 }

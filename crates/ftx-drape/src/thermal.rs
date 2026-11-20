@@ -13,6 +13,7 @@ pub mod adaptive;
 pub mod compression;
 pub mod exterior;
 mod heating;
+pub mod microclimate;
 mod nonlinear;
 pub mod request;
 pub mod steady;
