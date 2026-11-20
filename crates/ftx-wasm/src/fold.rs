@@ -900,6 +900,7 @@ mod tests {
         // Keep the original physical durations and audit the sewn start and every accepted frame.
         let fine_opts = DrapeOptions {
             step: 0.001,
+            tol: 1e-7,
             sew_steps: 40,
             drape_steps: 60,
             integrator: parsed.integrator,
@@ -913,6 +914,10 @@ mod tests {
         let fine = drape(&pat, &json!({}), &body, &fine_opts, |_| {}).unwrap();
         assert_eq!((fine.sew.steps, fine.drape.steps), (40, 60));
         assert_eq!(fine.report["gating"], json!([]));
+        for sample in fine.sew.samples.iter().chain(&fine.drape.samples) {
+            assert!(sample.solve.converged && sample.solve.residual < 1e-3);
+        }
+        assert!(fine.drape.samples.last().unwrap().solve.residual < 1e-6);
         let first = fine.fold.fold + fine.fold.zip - 1;
         let physical = &fine.fold.frames[first..];
         assert_eq!(physical.len(), 101);

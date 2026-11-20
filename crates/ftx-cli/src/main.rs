@@ -65,7 +65,7 @@ const USAGE: &str = "usage:
             [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
-            [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
+            [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--time-step-s SECONDS] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
@@ -74,7 +74,7 @@ const USAGE: &str = "usage:
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--max-settle-steps N]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
-            [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
+            [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--json]
@@ -769,6 +769,11 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
             .parse()
             .map_err(|_| bad_input("--time-step-s must be a positive duration in seconds"))?;
     }
+    if let Some(tolerance) = args.options.get("newton-tol-m-s") {
+        opts.tol = tolerance.parse().map_err(|_| {
+            bad_input("--newton-tol-m-s must be a positive correction speed in m/s")
+        })?;
+    }
     if let Some(mm) = args.options.get("spacing-mm") {
         opts.spacing = mm
             .parse()
@@ -1007,6 +1012,7 @@ fn cmd_drape_bound(
             "rho-inf",
             "model",
             "time-step-s",
+            "newton-tol-m-s",
             "self-contact-mm",
             "spacing-mm",
             "compression",
@@ -1863,6 +1869,8 @@ mod tests {
                 "drape",
                 "--time-step-s",
                 "0.001",
+                "--newton-tol-m-s",
+                "1e-7",
                 "--sew",
                 "40",
                 "--drape",
@@ -1872,14 +1880,17 @@ mod tests {
         )
         .unwrap();
         let opts = drape_options(&args).unwrap();
+        assert_eq!(opts.tol, 1e-7);
         assert_eq!(
             (opts.step, opts.sew_steps, opts.drape_steps),
             (0.001, 40, 60)
         );
-        for value in ["0", "-1", "NaN", "inf", "fast"] {
-            let args =
-                parse(&["drape", "absent.json", "--time-step-s", value].map(String::from)).unwrap();
-            assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        for option in ["--time-step-s", "--newton-tol-m-s"] {
+            for value in ["0", "-1", "NaN", "inf", "fast"] {
+                let args =
+                    parse(&["drape", "absent.json", option, value].map(String::from)).unwrap();
+                assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+            }
         }
     }
 

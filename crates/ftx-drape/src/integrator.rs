@@ -32,7 +32,8 @@ pub enum TimeIntegrator {
     /// sewing at both 10 ms and 5 ms, including with the default subdivision
     /// budget. With AdaptiveIlu it completes at `0.8` with 1 ms nominal steps
     /// from the start (40 sewing and 60 gravity steps), including with 2 mm
-    /// self-contact. In the CLI these are `--time-step-s 0.001 --sew 40 --drape 60`.
+    /// self-contact. With `--time-step-s 0.001 --sew 40 --drape 60 --newton-tol-m-s 1e-7`
+    /// every sampled free-force residual stays below 1 mN on that band.
     /// The same 10 ms case completes at `0.0`. This schedule qualifies this
     /// band and contact geometry.
     GeneralizedAlpha {
