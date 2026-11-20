@@ -4,7 +4,7 @@ import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialSce
   buildGuidedDesignAfterOperations, buildGuidedDesignRestartPoints, buildGuidedFitSpec, GUIDED_FIT_BODY_MEASUREMENTS,
   hasTextileWaterPolicy, hasTextileWaterMechanicsPolicy, buildMaterialSurfaceConditions,
   buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
-  buildMaterialExteriorExchange, buildWorkbenchStudyBundle, parseWorkbenchStudyBundle,
+  buildMaterialExteriorExchange, buildMicroclimateRequest, buildWorkbenchStudyBundle, parseWorkbenchStudyBundle,
   MAX_WORKBENCH_STUDY_BYTES } from "./materials-study-builder.js";
 import { buildMaterialScreenRequest } from "./materials-screen-builder.js";
 
@@ -88,6 +88,8 @@ const filmSuffixes = ["Inside", "Outside", "InsideFilm", "OutsideFilm"];
 const exteriorSuffixes = ["Enabled", "Air", "Coefficient", "Min", "Max", "Reference", "Date", "Note", "Conditions",
   "Evidence", "AllowEstimates", "Radiation", "Radiant", "Property", "Face", "GrayConsent"];
 const motionExteriorPrefixes = ["guidedMotionHeatExterior", "guidedMotionCoverageExterior", "guidedMotionExposedExterior"];
+const microclimateFields = ["Temperature", "Pressure", "Humidity", "Correlation", "Length", "Wind", "Delta", "Gravity",
+  "Exterior", "Min", "Max", "AllowEstimates"];
 const guidedCoverageDraftFields = ["guidedCoverageInstance", "guidedCoverageLayer", "guidedCoverageInner", "guidedCoverageOuter",
   "guidedCoverageResistance", "guidedCoverageBasis"];
 let guidedScenarioDraftSource = {};
@@ -543,7 +545,8 @@ function controls() {
   $("thermalPoint").disabled ||= !$("selection").value.trim() || !$("thermalPointTemperature").value.trim() ||
     !Number.isFinite(Number($("thermalPointTemperature").value));
   $("thermalHistory").disabled ||= !has("thermalRequest");
-  $("microclimate").disabled ||= !has("microclimateRequest");
+  microclimateControls();
+  $("microclimate").disabled ||= microclimateMode() !== "form" && !has("microclimateRequest");
   $("lowerVisco").disabled ||= !has("viscoRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
@@ -4835,6 +4838,7 @@ function show(op, msg, request) {
       knifeProgramResult(s.comparison, r.program, op === "stock" ? "Finite-stock plan" : "Cutting plan", r.program_refusal);
     }
     if (op === "fold") nappyOccupancyResult(s.comparison, r.body?.nappy_occupancy);
+    if (op === "microclimate") microclimateResult(s.comparison, r);
     if (op === "cutJob") cuttingJobComparison(op, s.comparison,
       [{ key: "Current bound pattern", cutting_job: { status: "available", result: r } }], false);
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
@@ -5079,6 +5083,59 @@ function exteriorControls(prefix, active, filmPrefix, barePrefix = null) {
     $(barePrefix + "Controls").hidden = !enabled;
     for (const suffix of filmSuffixes) $(barePrefix + suffix).disabled = !active || !enabled;
   }
+}
+function microclimateMode() { return $("microclimateMode").value || "file"; }
+function microclimateControls() {
+  const authored = microclimateMode() === "form", correlation = $("microclimateCorrelation").value || "air";
+  const convection = authored && correlation !== "air", natural = convection && correlation === "churchill_chu_vertical_plate";
+  const exterior = convection && $("microclimateExterior").checked;
+  $("microclimateForm").hidden = !authored; $("microclimateRequest").disabled = authored;
+  $("microclimateConvection").hidden = !convection; $("microclimateNatural").hidden = !natural;
+  $("microclimateWindField").hidden = !convection || natural; $("microclimateExteriorFields").hidden = !exterior;
+  for (const suffix of microclimateFields) $("microclimate" + suffix).disabled = !authored;
+  for (const suffix of ["Length", "Exterior"]) $("microclimate" + suffix).disabled ||= !convection;
+  $("microclimateWind").disabled ||= !convection || natural;
+  for (const suffix of ["Delta", "Gravity"]) $("microclimate" + suffix).disabled ||= !natural;
+  for (const suffix of ["Min", "Max", "AllowEstimates"]) $("microclimate" + suffix).disabled ||= !exterior;
+}
+function guidedMicroclimateRequest() {
+  const number = (suffix, label) => {
+    const raw = $("microclimate" + suffix).value;
+    if (!raw.trim() || !Number.isFinite(Number(raw))) throw Error(`Enter a finite ${label}.`);
+    return Number(raw);
+  };
+  const input = { air: { temperature_c: number("Temperature", "air temperature"),
+    pressure_pa: number("Pressure", "absolute air pressure"), relative_humidity: number("Humidity", "relative humidity") / 100 } };
+  const correlation = $("microclimateCorrelation").value || "air";
+  if (correlation !== "air") {
+    input.convection = { correlation, characteristic_length_m: number("Length", "characteristic length"),
+      ...(correlation === "churchill_chu_vertical_plate" ? {
+        delta_t_k: number("Delta", "absolute surface/air temperature difference"), gravity_m_s2: number("Gravity", "gravity"),
+      } : { wind_speed_m_s: number("Wind", "wind speed") }) };
+    if ($("microclimateExterior").checked) Object.assign(input.convection, {
+      surface_temperature_range_c: [number("Min", "minimum surface temperature"), number("Max", "maximum surface temperature")],
+      allow_estimates: $("microclimateAllowEstimates").checked,
+    });
+  }
+  return buildMicroclimateRequest(input);
+}
+function microclimateResult(parent, report) {
+  const air = table(parent, "Air properties from the native model", ["Quantity", "Value", "Unit"]);
+  for (const [label, field, unit] of [["Temperature", "temperature_c", "°C"], ["Absolute pressure", "pressure_pa", "Pa"],
+    ["Relative humidity", "relative_humidity", "fraction"], ["Water mole fraction", "water_mole_fraction", "fraction"],
+    ["Density", "density_kg_m3", "kg/m³"], ["Specific heat", "specific_heat_cp_j_kg_k", "J/(kg K)"],
+    ["Thermal conductivity", "thermal_conductivity_w_m_k", "W/(m K)"], ["Prandtl number", "prandtl", "1"]]) {
+    cells(air, [label, metric(report.air?.[field]), unit]);
+  }
+  if (report.convection) {
+    const convection = report.convection, values = table(parent, "Validity-gated external convection estimate", ["Quantity", "Value"]);
+    cells(values, ["Correlation", convection.name]); cells(values, ["Reference", convection.citation]);
+    cells(values, ["Nusselt number", metric(convection.nu)]); cells(values, ["Coefficient (W/m² K)", metric(convection.h_w_m2_k)]);
+    cells(values, ["Model discrepancy allowance (fraction; not a confidence interval)", metric(convection.discrepancy_rel)]);
+    for (const [key, value] of Object.entries(convection.groups || {})) cells(values, [key, metric(value)]);
+  }
+  const note = document.createElement("p"); note.textContent = report.no_claim || "Model estimates only; no measured garment film, comfort or fit claim.";
+  parent.append(note);
 }
 function exteriorInput(prefix, number) {
   if (!$(prefix + "Enabled").checked) return null;
@@ -6604,7 +6661,7 @@ async function execute(op, studio = null) {
       msg.treatmentRequest = await read("treatmentRequest");
     }
     else if (op === "vapor") msg.vaporRequest = await read("vaporRequest");
-    else if (op === "microclimate") msg.microclimateRequest = await read("microclimateRequest");
+    else if (op === "microclimate") msg.microclimateRequest = microclimateMode() === "form" ? guidedMicroclimateRequest() : await read("microclimateRequest");
     else if (op === "lowerVisco") msg.viscoRequest = await read("viscoRequest");
     else if (op === "calibrate") {
       msg.calibrationMode = $("calibrationMode").value;
@@ -7745,6 +7802,12 @@ window.addEventListener("message",event=>{
 $("supplementalFiles").addEventListener("change", () => supplementalChanged(true));
 $("supplementalConsent").addEventListener("change", () => supplementalChanged(false));
 $("clearSupplemental").onclick = () => { clearPhotoEvidence(); $("supplementalFiles").value = ""; supplementalChanged(true); };
+$("microclimateMode").addEventListener("change", () => invalidate(["microclimate"], true));
+for (const suffix of microclimateFields) for (const event of ["input", "change"]) {
+  $("microclimate" + suffix).addEventListener(event, () => {
+    if (microclimateMode() === "form") invalidate(["microclimate"], true); else controls();
+  });
+}
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], twoStart:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"],
@@ -7763,6 +7826,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
       $("selectedStockFiles").replaceChildren(); $("selectedStockNote").hidden = true;
     }
     if (id === "studyRequest") $("studyMode").value = "file";
+    if (id === "microclimateRequest") $("microclimateMode").value = "file";
     if (id === "screenRequest") $("screenMode").value = "file";
     if (id === "scenarioRequest") {
       $("scenarioMode").value = "file";

@@ -12,6 +12,57 @@ const modulePromise = (async () => {
 })();
 const selection = (id = 'cloth', hash = 'a', policy = false) =>
   ` {"id":${JSON.stringify(id)},"expected_sha256":"${hash.repeat(64)}","allow_estimates":${policy},"record":{"id":${JSON.stringify(id)},"seed":18446744073709551615,"x":-0.0,"value":1.0,"label":"é 🧵"}}\n`;
+
+const microclimateInput = () => ({air:{temperature_c:20,pressure_pa:101325,relative_humidity:0.5}});
+test('guided microclimate authors air and physical external convection without calculating native groups',async()=>{
+  const {buildMicroclimateRequest:build}=await modulePromise;
+  const air=microclimateInput();
+  assert.deepEqual(JSON.parse(build(air)),{schema:'ftx-microclimate/1',...air});
+  for(const correlation of ['flat_plate_laminar_average','flat_plate_turbulent_average','churchill_bernstein_cylinder']) {
+    const convection={correlation,characteristic_length_m:0.4,wind_speed_m_s:1.25};
+    const result=JSON.parse(build({...air,convection}));
+    assert.deepEqual(result.convection,convection);
+    assert.equal(Object.hasOwn(result.convection,'reynolds'),false);
+    assert.equal(Object.hasOwn(result.convection,'prandtl'),false);
+  }
+  const convection={correlation:'churchill_chu_vertical_plate',characteristic_length_m:0.4,delta_t_k:10,gravity_m_s2:9.81};
+  assert.deepEqual(JSON.parse(build({...air,convection})).convection,convection);
+  assert.deepEqual(air,microclimateInput());
+});
+
+test('guided microclimate retains an explicit exterior range and never invents estimate consent',async()=>{
+  const {buildMicroclimateRequest:build}=await modulePromise;
+  const convection={correlation:'flat_plate_laminar_average',characteristic_length_m:0.3,wind_speed_m_s:2,
+    surface_temperature_range_c:[5,45],allow_estimates:false};
+  for(const allow_estimates of [false,true]) {
+    const input={...microclimateInput(),convection:{...convection,allow_estimates}};
+    const before=JSON.stringify(input),result=JSON.parse(build(input));
+    assert.deepEqual(result.convection,input.convection);
+    assert.equal(JSON.stringify(input),before);
+  }
+  for(const surface_temperature_range_c of [[45,5],[0],[0,Infinity],[-273.15,20]])
+    assert.throws(()=>build({...microclimateInput(),convection:{...convection,surface_temperature_range_c}}),/temperature|range/i);
+  const {allow_estimates,...missingConsent}=convection;
+  assert.throws(()=>build({...microclimateInput(),convection:missingConsent}),/consent/i);
+  assert.throws(()=>build({...microclimateInput(),convection:{...convection,allow_estimates:'true'}}),/consent/i);
+});
+
+test('guided microclimate refuses unsupported fields, impossible input and mixed flow authorities',async()=>{
+  const {buildMicroclimateRequest:build}=await modulePromise;
+  for(const [field,values] of Object.entries({temperature_c:[NaN,Infinity,-273.15,'20'],pressure_pa:[0,-1,Infinity,'101325'],relative_humidity:[-0.01,1.01,NaN,'0.5']}))
+    for(const value of values)assert.throws(()=>build({air:{...microclimateInput().air,[field]:value}}));
+  for(const input of [{air:{...microclimateInput().air,prandtl:0.72}},{...microclimateInput(),enclosure:{}},{...microclimateInput(),convection:null}])
+    assert.throws(()=>build(input));
+  const forced={correlation:'flat_plate_laminar_average',characteristic_length_m:0.3,wind_speed_m_s:2};
+  for(const convection of [{...forced,correlation:'unknown'},{...forced,reynolds:10000},{...forced,delta_t_k:10},
+    {...forced,gravity_m_s2:9.81},{...forced,characteristic_length_m:0},{...forced,wind_speed_m_s:0},
+    {...forced,wind_speed_m_s:Infinity},{...forced,allow_estimates:true}])
+    assert.throws(()=>build({...microclimateInput(),convection}));
+  const natural={correlation:'churchill_chu_vertical_plate',characteristic_length_m:0.3,delta_t_k:10,gravity_m_s2:9.81};
+  for(const convection of [{...natural,wind_speed_m_s:1},{...natural,delta_t_k:0},{...natural,gravity_m_s2:0},
+    {correlation:natural.correlation,characteristic_length_m:0.3,delta_t_k:10}])
+    assert.throws(()=>build({...microclimateInput(),convection}));
+});
 const cutting = () => ({copies:1,gap_mm:2,edge_margin_mm:5,end_margin_mm:10});
 const mass = (complete = true) => ({schema:'ftx-assembly-mass/1',inventory_complete:complete,extras:[]});
 const state = () => ({candidates:[{key:'alternative',selection:selection()}],target:{scope:'default'},pieceIds:['front','lining'],

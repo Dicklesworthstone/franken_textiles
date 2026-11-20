@@ -92,6 +92,48 @@ function temperature(value, label) {
     throw Error(`${label} must be finite and at least -273.15 °C.`);
   }
 }
+export function buildMicroclimateRequest(input) {
+  object(input, ["air", "convection"], ["air"], "Guided microclimate");
+  const airFields = ["temperature_c", "pressure_pa", "relative_humidity"];
+  const air = object(input.air, airFields, airFields, "Microclimate air");
+  const positive = (value, label) => {
+    nonnegative(value, label);
+    if (value === 0) throw Error(`${label} must be positive.`);
+  };
+  temperature(air.temperature_c, "Air temperature");
+  if (air.temperature_c === -273.15) throw Error("Air temperature must exceed absolute zero.");
+  positive(air.pressure_pa, "Absolute air pressure");
+  nonnegative(air.relative_humidity, "Relative humidity");
+  if (air.relative_humidity > 1) throw Error("Relative humidity must be between zero and one.");
+  const request = { schema: "ftx-microclimate/1", air: { ...air } };
+  if (own(input, "convection")) {
+    const natural = input.convection?.correlation === "churchill_chu_vertical_plate";
+    const fields = ["correlation", "characteristic_length_m", ...(natural ? ["delta_t_k", "gravity_m_s2"] : ["wind_speed_m_s"])];
+    const convection = object(input.convection, [...fields, "surface_temperature_range_c", "allow_estimates"], fields, "External convection");
+    if (!["flat_plate_laminar_average", "flat_plate_turbulent_average", "churchill_bernstein_cylinder",
+      "churchill_chu_vertical_plate"].includes(convection.correlation)) {
+      throw Error("Choose a supported external convection correlation; use original JSON for duct or enclosure models.");
+    }
+    positive(convection.characteristic_length_m, "Characteristic length");
+    if (natural) {
+      positive(convection.delta_t_k, "Absolute surface/air temperature difference");
+      positive(convection.gravity_m_s2, "Gravity");
+    } else positive(convection.wind_speed_m_s, "Wind speed");
+    request.convection = { ...convection };
+    if (own(convection, "surface_temperature_range_c") || own(convection, "allow_estimates")) {
+      const range = convection.surface_temperature_range_c;
+      if (!Array.isArray(range) || range.length !== 2) throw Error("Declare both surface-temperature range limits.");
+      for (const value of range) {
+        temperature(value, "Surface temperature");
+        if (value === -273.15) throw Error("Surface temperature must exceed absolute zero.");
+      }
+      if (range[0] > range[1] || !Number.isFinite(range[1] - range[0])) throw Error("Surface-temperature range must be ordered and finite.");
+      if (typeof convection.allow_estimates !== "boolean") throw Error("Exterior estimate consent must be an explicit boolean.");
+      request.convection.surface_temperature_range_c = [...range];
+    }
+  }
+  return JSON.stringify(request);
+}
 function allowance(value, label) {
   if (own(value, "seam_allowance_mm") && value.seam_allowance_mm !== null) nonnegative(value.seam_allowance_mm, label);
   return own(value, "seam_allowance_mm") ? value.seam_allowance_mm : null;
