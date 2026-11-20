@@ -12,6 +12,7 @@ import easedPattern from "../../public/exhibits/sundress/light-pattern.json";
 import TorsoSlice from "../construction/TorsoSlice";
 import MuslinTrial from "./MuslinTrial";
 import CodeBlock from "../site/CodeBlock";
+import { repo } from "../site/links";
 
 // The placeholder holds the height of the stage, timeline and flat pattern, so nothing below moves when they load.
 const Making = dynamic(() => import("../atelier3d/SolverDrape"), { ssr: false,
@@ -111,7 +112,7 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
     </details>
     <details className="sd-sewn-method sd-replay" id="sundress-replay"><summary>Replay the {cuts[cut].name.toLowerCase()} cut</summary>
       <div>
-        <p>Save the <a href={source+"-pattern.json"} download>starting pattern</a>, <a href={source+"-measures.json"} download>synthetic body measurements</a> and <a href={source+"-fit.json"} download>fit targets</a> in one directory. With the converted Anny 0.6.1 model installed, run the solver there and check every recorded cloth surface.</p>
+        <p>Save the <a href={source+"-pattern.json"} download>starting pattern</a>, <a href={source+"-measures.json"} download>synthetic body measurements</a> and <a href={source+"-fit.json"} download>fit targets</a> in one directory. Use the <a href={repo+"/tree/44b960d1b1d541ac1120f570459d4438f481f29e"}>native solver at 44b960d1</a> and the converted Anny 0.6.1 model. Run these commands there to sew the cut and check every recorded cloth surface.</p>
         <CodeBlock key={cut} title={cuts[cut].name+" · native replay"} code={`ftx drape ${cut}-pattern.json --measurements ${cut}-measures.json --fit ${cut}-fit.json ${drape.solverArguments.join(" ")} --out ${cut}-drape\nftx viewer ${cut}-drape --check-contact`}/>
         <p>Recorded <code>fold.pc2</code> SHA-256<code className="sd-replay-hash">{drape.sourcePc2Sha256}</code></p>
       </div>
