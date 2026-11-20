@@ -720,8 +720,9 @@ non-positive thickness gaps (including coplanar overlaps). Every implicit/static
 and after; a failed solve/audit restores positions before returning a refusal. There is no automatic
 cloth–cloth untangler. Self-contact-only simulations use `Body::empty()` through the solver API.
 
-`ftx drape --self-contact-mm MM [--self-mu MU]` enables it on the welded solver mesh. It is off by
-default, preserving body-only behavior for existing placements. The report explicitly distinguishes
+Physical CLI drapes and simulated rounds enable contact on the welded solver mesh at 2 mm by
+default. `--self-contact-mm MM` sets the thickness, including zero, and `--self-mu MU` sets
+friction. Library callers can select a body-only run. The report explicitly distinguishes
 `self_contact.audit = not_simulated` from an enabled, audited run, and records thickness, friction and
 nearby final clearance. The kinematic fold/zip animation is outside that audit. Synthetic tests cover
 brute-force candidate equivalence, two moving layers, force balance and relative friction, dynamic
