@@ -1052,10 +1052,12 @@ fn start_view_repair(dir: &std::path::Path, placement: &Value) -> String {
             text.push_str(&format!(" ({})", named.join("; ")));
         }
     }
-    if placement["body_surface"]["admitted"] == json!(false) {
-        text.push_str(
-            "; the posed body's own surface crosses itself, which no placement can repair",
-        );
+    // The audit's own words: it also refuses over its pair budget or the body's topology, not only a
+    // surface that crosses itself.
+    if let Some(message) = placement["body_surface"]["refusal"]["message"].as_str() {
+        text.push_str(&format!(
+            "; the posed body itself was not admitted ({message}), which no placement can repair"
+        ));
     }
     text.push_str(&format!(
         ". {dir}/placement.json lists each piece's angles, heights and radius. No dynamics ran: this is \
@@ -2059,19 +2061,21 @@ mod tests {
         assert!(crossing.ends_with("not a drape or a fit."));
         assert!(!crossing.contains("posed body"));
 
-        // A pose whose body crosses itself is named as such; an unavailable crossing check is not
-        // reported as zero crossings.
+        // A body the audit did not admit is reported in the audit's own words; an unavailable crossing
+        // check is not reported as zero crossings.
         let pose = start_view_repair(
             dir,
             &json!({
                 "start": {"vertices_inside_body": 0},
                 "cloth_contact": {"unavailable": {"code": "degenerate_geometry"}},
-                "body_surface": {"admitted": false},
+                "body_surface": {"admitted": false, "refusal": {"code": "budget_exceeded",
+                    "message": "body surface audit exceeds its 1000000 candidate-pair budget"}},
             }),
         );
-        assert!(
-            pose.contains("0 cloth vertices inside the body are magenta; the posed body's own")
-        );
+        assert!(pose.contains(
+            "0 cloth vertices inside the body are magenta; the posed body itself was not admitted \
+             (body surface audit exceeds its 1000000 candidate-pair budget), which no placement can repair"
+        ));
         assert!(!pose.contains("yellow"));
     }
 
