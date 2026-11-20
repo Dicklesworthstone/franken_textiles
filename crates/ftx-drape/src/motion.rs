@@ -455,8 +455,8 @@ pub(crate) fn advance_body_coupled<S: Clone>(
                 None
             },
         };
-        let pre_v = (trial.integrator != crate::TimeIntegrator::ImplicitEuler)
-            .then(|| trial.v.clone());
+        let pre_v =
+            (trial.integrator != crate::TimeIntegrator::ImplicitEuler).then(|| trial.v.clone());
         let pre_mass = (trial.integrator != crate::TimeIntegrator::ImplicitEuler)
             .then(|| trial.model.mass.clone());
         accept(&mut trial, &sample, &mut coupled)?;

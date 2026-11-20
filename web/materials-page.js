@@ -5133,19 +5133,15 @@ function checkedNewtonStrategy(value) {
   if (value.kind === "projected_newton" && keys.length === 1) return undefined;
   if (value.kind === "adaptive_ilu" && keys.length === 3 &&
       keys.every(key => ["kind", "pcg_iters", "max_shifts"].includes(key)) &&
-      Number.isSafeInteger(value.pcg_iters) && value.pcg_iters >= 1 && value.pcg_iters <= 256 &&
-      Number.isSafeInteger(value.max_shifts) && value.max_shifts >= 0 && value.max_shifts <= 16) {
-    return { kind: "adaptive_ilu", pcg_iters: value.pcg_iters, max_shifts: value.max_shifts };
+      value.pcg_iters === 64 && value.max_shifts === 4) {
+    return { kind: "adaptive_ilu", pcg_iters: 64, max_shifts: 4 };
   }
   if (value.kind === "trust_region_steihaug" && keys.length === 5 &&
       keys.every(key => ["kind", "initial_radius", "max_radius", "min_radius", "cg_iters"].includes(key)) &&
-      Number.isFinite(value.min_radius) && Number.isFinite(value.initial_radius) && Number.isFinite(value.max_radius) &&
-      value.min_radius > 0 && value.initial_radius >= value.min_radius && value.max_radius >= value.initial_radius &&
-      Number.isSafeInteger(value.cg_iters) && value.cg_iters >= 0 && value.cg_iters <= 4096) {
-    return { kind: "trust_region_steihaug", initial_radius: value.initial_radius, max_radius: value.max_radius,
-      min_radius: value.min_radius, cg_iters: value.cg_iters };
+      value.initial_radius === 0.05 && value.max_radius === 0.5 && value.min_radius === 1e-12 && value.cg_iters === 0) {
+    return { kind: "trust_region_steihaug", initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 };
   }
-  throw Error("Newton strategy must be projected_newton, adaptive_ilu, or trust_region_steihaug with valid bounds.");
+  throw Error("Newton strategy must match one of the supported workbench presets (projected_newton, adaptive_ilu, or trust_region_steihaug).");
 }
 function drapeNewtonStrategy() {
   const mode = $("drapeNewtonStrategy").value;

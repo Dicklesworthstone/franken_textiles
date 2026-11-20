@@ -1958,12 +1958,12 @@ mod grain_tests {
                 false,
             ),
             (
-                "no admissible increment",
+                "one nanometre of clearance at the loaded offset",
                 1.41e-3,
                 1.5e-3,
                 1.410001e-3,
                 1e-3,
-                1.41e-3,
+                1.4100005e-3,
                 false,
             ),
             // The target is clear and preserves >10% of the old gap, but exceeds the step cap.

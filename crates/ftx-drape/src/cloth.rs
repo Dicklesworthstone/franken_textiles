@@ -1899,6 +1899,11 @@ impl Solver {
             return Ok(rep);
         }
         let scale = ctx.scale();
+        let lin_tol = if ctx.is_dynamic() {
+            PCG_TOL
+        } else {
+            LdltOptions::default().zero_pivot_rel
+        };
         let mut delta = initial_radius;
         let max_cg = if cg_iters == 0 {
             2 * self.nfree.max(32)
@@ -1926,7 +1931,7 @@ impl Solver {
                 &g,
                 SteihaugConfig {
                     radius: delta,
-                    rel_tol: 1e-6,
+                    rel_tol: lin_tol,
                     max_iters: max_cg,
                 },
             );
@@ -1951,7 +1956,7 @@ impl Solver {
                     .sum::<f64>()
                     .sqrt();
                 let g_norm = g.iter().map(|v| v * v).sum::<f64>().sqrt();
-                g_norm == 0.0 || (r_norm.is_finite() && r_norm <= PCG_TOL * g_norm)
+                g_norm == 0.0 || (r_norm.is_finite() && r_norm <= lin_tol * g_norm)
             };
             if newton_accurate
                 && !out.hit_boundary
@@ -2034,13 +2039,28 @@ impl Solver {
         if !rep.converged {
             let (g, _) = self.assemble_ctx(&self.x, ctx, false, false);
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-            return Err(Refusal::new(
+            let mut refusal = Refusal::new(
                 RefusalCode::NotConverged,
                 format!(
                     "trust-region Newton did not converge after {} iterations (residual {} N, last correction {} m, {} failed steps); diagnostics {rep:?}",
                     rep.iterations, rep.residual, rep.last_step, rep.line_search_failures
                 ),
-            ));
+            )
+            .repair(if ctx.is_dynamic() {
+                "increase the Newton iteration budget or reduce the time step"
+            } else {
+                "check that the external loads have static support or increase the Newton iteration budget"
+            })
+            .repair("check the material domain and the garment start state");
+            if let StepContext::GeneralizedAlpha { params, .. } = ctx
+                && params.rho_inf > 0.0
+                && self.contact.is_some()
+            {
+                refusal = refusal.repair(
+                    "for Generalized-alpha with rho_inf > 0 on stiff contact transitions, reduce the time step or lower --rho-inf toward 0.0",
+                );
+            }
+            return Err(refusal);
         }
         Ok(rep)
     }
@@ -2363,6 +2383,13 @@ impl Solver {
         let params = GeneralizedAlphaParams::new(rho_inf)?;
         let x0 = self.x.clone();
         let v0 = self.v.clone();
+        if let Some(c) = &mut self.contact {
+            if let Some(b) = body_start {
+                c.update_lag_motion(&x0, &x0, h, Some(b));
+            } else {
+                c.update_lag(&x0, &x0, h);
+            }
+        }
         let a0 = if self.accel_initialized {
             self.a.clone()
         } else {
@@ -2409,13 +2436,9 @@ impl Solver {
                 p
             })
             .collect();
-        if let Some(c) = &mut self.contact {
-            if let Some(b) = body_start {
-                c.update_lag_motion(&x0, &x0, h, Some(b));
-            } else {
-                c.update_lag(&x0, &x0, h);
-            }
-        } else if let Some(g) = guess {
+        if self.contact.is_none()
+            && let Some(g) = guess
+        {
             if g.len() != self.x.len() {
                 return Err(Refusal::new(
                     RefusalCode::InvalidDocument,
@@ -3418,5 +3441,31 @@ mod strategy_and_integrator_tests {
         assert!(!s.accel_initialized);
         assert_eq!(s.x, x);
         assert_eq!(s.a, vec![Vec3::ZERO; 3]);
+
+        // Trust-region static solve matches ProjectedNewton to tight static residual tolerance,
+        // and trust-region refusal attaches structured repair hints.
+        let mut tr_static = Solver::new(
+            s.model.clone(),
+            x.clone(),
+            &[[true; 3], [true; 3], [false; 3]],
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        tr_static.newton_strategy = NewtonStrategy::trust_region_default();
+        let rep_tr = tr_static.static_solve().unwrap();
+        assert!(rep_tr.converged);
+        let mut pn_static = Solver::new(
+            s.model.clone(),
+            x,
+            &[[true; 3], [true; 3], [false; 3]],
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        pn_static.static_solve().unwrap();
+        assert!((tr_static.x[2] - pn_static.x[2]).norm() < 1e-10);
+
+        let mut tr_refuse = tr_static;
+        tr_refuse.max_newton = 0;
+        let err = tr_refuse.step(0.01).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NotConverged);
+        assert!(!err.repairs.is_empty());
     }
 }

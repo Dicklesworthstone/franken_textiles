@@ -1234,12 +1234,15 @@ fn boundary_tau(p: &[f64], d: &[f64], delta: f64) -> f64 {
 pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
     let n = g.len();
     let mut p = vec![0.0f64; n];
-    if n == 0 || !(cfg.radius.is_finite() && cfg.radius > 0.0) {
+    if n == 0
+        || !(cfg.radius.is_finite() && cfg.radius > 0.0)
+        || !(cfg.rel_tol.is_finite() && cfg.rel_tol >= 0.0)
+    {
         return SteihaugOutcome {
             step: p,
             hit_boundary: false,
             negative_curvature: false,
-            interior_converged: true,
+            interior_converged: n == 0,
             matvecs: 0,
             model_decrease: 0.0,
         };
@@ -1287,11 +1290,20 @@ pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
             break;
         }
         let alpha = rr / dhd;
+        if !alpha.is_finite() {
+            let tau = boundary_tau(&p, &d, cfg.radius);
+            for i in 0..n {
+                p[i] += tau * d[i];
+            }
+            hit_boundary = true;
+            break;
+        }
         let mut p_next = p.clone();
         for i in 0..n {
             p_next[i] += alpha * d[i];
         }
-        if norm2(&p_next) >= cfg.radius {
+        let p_next_norm = norm2(&p_next);
+        if !p_next_norm.is_finite() || p_next_norm >= cfg.radius {
             let tau = boundary_tau(&p, &d, cfg.radius);
             for i in 0..n {
                 p[i] += tau * d[i];
@@ -1582,5 +1594,46 @@ mod tests {
         let eta1 = eisenstat_walker(1.0, 0.1, 0.5, 1e-8, 0.5, 0.9, 2.0);
         let eta2 = eisenstat_walker(0.1, 1e-3, eta1, 1e-8, 0.5, 0.9, 2.0);
         assert!(eta1 < 0.5 && eta2 < eta1);
+
+        // Invalid trust-region radius or tolerance must never report interior convergence for n > 0.
+        for bad_cfg in [
+            SteihaugConfig {
+                radius: 0.0,
+                rel_tol: 1e-6,
+                max_iters: 10,
+            },
+            SteihaugConfig {
+                radius: f64::NAN,
+                rel_tol: 1e-6,
+                max_iters: 10,
+            },
+            SteihaugConfig {
+                radius: 0.5,
+                rel_tol: f64::NAN,
+                max_iters: 10,
+            },
+        ] {
+            let bad = steihaug_cg(&h_saddle, &g, bad_cfg);
+            assert!(!bad.interior_converged);
+        }
+
+        // Tiny positive curvature where alpha = rr / dhd overflows to +inf must step cleanly to
+        // the trust-region boundary without producing inf * 0.0 = NaN.
+        let mut tiny_coo = Coo::new(2, 2);
+        tiny_coo.push(0, 0, 1e-320);
+        tiny_coo.push(1, 1, 1e-320);
+        let h_tiny = tiny_coo.assemble();
+        let out_tiny = steihaug_cg(
+            &h_tiny,
+            &[1.0, 0.0],
+            SteihaugConfig {
+                radius: 0.25,
+                rel_tol: 1e-6,
+                max_iters: 10,
+            },
+        );
+        assert!(out_tiny.hit_boundary);
+        assert!(out_tiny.step.iter().all(|v| v.is_finite()));
+        assert!((norm2(&out_tiny.step) - 0.25).abs() < 1e-12);
     }
 }
