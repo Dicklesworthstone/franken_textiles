@@ -177,6 +177,22 @@ Use original JSON for duct correlations or a complete radiative enclosure.</p>
 <p class="note">Computes USSA-1976 / Buck moist-air properties, validity-gated Nusselt correlations (emitted explicitly as
 <code>Estimate</code> exterior records, never promoted to measured film data) and optional N-patch gray-diffuse radiosity enclosures.
 Runs locally without a garment or body model; does not establish garment warmth, comfort or physical fit.</p>
+<fieldset><legend>Use the current convection estimate in a heat draft</legend>
+<label>Destination <select id="microclimateTarget">
+<option value="heatExterior">Steady sheet heat — section 3 authored sheet environment</option>
+<option value="guidedCoverageExterior">Steady body/layer heat — authored scenario coverage</option>
+<option value="guidedMotionHeatExterior">Moving sheet heat — current motion endpoint draft</option>
+<option value="guidedMotionCoverageExterior">Moving covered-cloth heat — current motion endpoint draft</option>
+<option value="guidedMotionExposedExterior">Moving exposed-cloth heat — current motion endpoint draft</option>
+</select></label>
+<label><input id="microclimateReplace" type="checkbox"> Replace this draft's convection with the current estimate; keep its radiation and saved cases</label>
+<button id="microclimateApply" type="button" disabled>Copy native convection to heat draft</button>
+<p id="microclimateAdoptionStatus" role="status">Evaluate a convection request with a declared exterior range and explicit estimate consent before copying.</p>
+<p class="note">Enable the destination heat consumer and choose its authored environment first. Copies the native coefficient, air temperature,
+source, applicability, temperature limits and estimate consent; does not infer optical emissivity or import enclosure radiosity.
+Saved motion endpoints and named cases remain unchanged: save or replace them explicitly after reviewing the copied draft.
+Editing microclimate inputs invalidates the current result, not an environment you already copied.</p>
+</fieldset>
 <label>Fractional-Zener lowering request JSON (<code>ftx-fractional-zener-lowering/1</code>) <input id="viscoRequest" type="file" accept=".json,application/json"></label>
 <button id="lowerVisco" data-command="lowerVisco" disabled>Lower fractional viscoelastic model to Prony branches</button>
 <p class="note">Fits nonnegative log-spaced Prony branches to a fractional-Zener viscoelastic law and optionally replays an exact
