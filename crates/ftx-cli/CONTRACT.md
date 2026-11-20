@@ -308,8 +308,9 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   `DIR/refused/` (`start/`, `wrap/`, `placement.json`). The first repair names them, quotes the body
   audit when the pose was not admitted, and gives the number of cloth vertices inside the body (magenta)
   and of crossing triangle pairs (yellow), largest piece pair first. Those marks test penetration and
-  crossing only: layers that merely touch, or cloth inside the body's offset surface with no vertex inside
-  the body, are refused with both counts at zero. Any other early refusal leaves `DIR` empty.
+  crossing only: layers that merely touch (refused when cloth contact is on), or cloth inside the body's
+  offset surface with no vertex inside the body, are refused with both counts at zero. Any other early
+  refusal leaves `DIR` empty.
   Numerical options are
   validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
   with a repair message. Both `sim_report.json` and the CLI result contain a

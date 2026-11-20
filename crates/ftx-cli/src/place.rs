@@ -578,8 +578,9 @@ fn start_repair(dir: &Path, placement: &Value) -> String {
     // A start is also refused with both counts at zero: the drape's admission tests thickness, the marks
     // test only penetration and crossing.
     text.push_str(&format!(
-        ". Layers that only touch, and cloth too near the body without a vertex inside it, are refused \
-         as well and carry neither mark: go by the refusal's message for those. {dir}/placement.json \
+        ". A start is also refused for layers that only touch (with cloth contact on) and for cloth too \
+         near the body with no vertex inside it; neither carries a mark, so go by the refusal's message \
+         for those. {dir}/placement.json \
          lists each piece's angles, heights and radius. No dynamics ran: this is not a drape or a fit."
     ));
     text
@@ -1107,7 +1108,8 @@ mod tests {
         // Nothing crosses here, and the text says the marks do not cover every refused start.
         assert!(shown.repairs[0].contains(
             "Magenta marks cloth vertices inside the body (0 in the start); yellow marks cloth \
-             triangles that cross other cloth (0 pair(s)). Layers that only touch"
+             triangles that cross other cloth (0 pair(s)). A start is also refused for layers that \
+             only touch (with cloth contact on)"
         ));
         assert_eq!(shown.repairs[1], "separate the layers");
         // The report describes the pattern and body that were handed over, not a second reading of them.
@@ -1161,9 +1163,11 @@ mod tests {
         assert!(crossing.contains(
             "ftx place draws them. Magenta marks cloth vertices inside the body (7 in the start); \
              yellow marks cloth triangles that cross other cloth (31 pair(s): front.L × front.R: 27; \
-             back × front.L: 4). Layers that only touch"
+             back × front.L: 4). A start is also refused for layers that only touch"
         ));
-        assert!(crossing.contains("carry neither mark: go by the refusal's message for those."));
+        assert!(
+            crossing.contains("neither carries a mark, so go by the refusal's message for those.")
+        );
         assert!(crossing.contains("out/refused/placement.json"));
         assert!(crossing.ends_with("not a drape or a fit."));
         assert!(!crossing.contains("posed body"));
@@ -1183,7 +1187,8 @@ mod tests {
         assert!(pose.contains(
             "ftx place draws them. The posed body itself was not admitted (body surface audit exceeds \
              its 1000000 candidate-pair budget): change the pose first, since no placement repairs \
-             that. Magenta marks cloth vertices inside the body (0 in the start). Layers that only touch"
+             that. Magenta marks cloth vertices inside the body (0 in the start). A start is also \
+             refused for layers that only touch"
         ));
         assert!(!pose.contains("yellow"));
     }
