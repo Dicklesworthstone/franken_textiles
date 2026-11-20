@@ -337,6 +337,14 @@ pub fn pc2(frames: &[Vec<Vec3>]) -> Vec<u8> {
 /// `mesh_map.json` (spec 04 §9.2).
 #[must_use]
 pub fn mesh_map(mesh: &GarmentMesh, fold: &FoldUp) -> Value {
+    let mut map = pattern_mesh_map(mesh);
+    map["frames"] = json!({"fold": fold.fold, "zip": fold.zip, "sew": fold.sew, "drape": fold.drape});
+    map
+}
+
+/// Pattern ownership and sampled edges in the original, unwelded garment vertex order.
+#[must_use]
+pub fn pattern_mesh_map(mesh: &GarmentMesh) -> Value {
     let inst_range: serde_json::Map<String, Value> = mesh
         .instances
         .iter()
@@ -369,7 +377,6 @@ pub fn mesh_map(mesh: &GarmentMesh, fold: &FoldUp) -> Value {
         "corners": corners,
         "edges": edges,
         "seams": seams,
-        "frames": {"fold": fold.fold, "zip": fold.zip, "sew": fold.sew, "drape": fold.drape},
         "units": "m",
     })
 }

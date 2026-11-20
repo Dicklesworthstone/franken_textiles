@@ -59,7 +59,7 @@ fn io(path: &Path, e: impl std::fmt::Display) -> Refusal {
 }
 
 /// Never follow a symlink at a workspace-owned output path.
-fn regular(path: &Path, directory: bool) -> Result<bool, Refusal> {
+pub(super) fn regular(path: &Path, directory: bool) -> Result<bool, Refusal> {
     match fs::symlink_metadata(path) {
         Ok(m) if if directory { m.is_dir() } else { m.is_file() } => Ok(true),
         Ok(_) => Err(bad_input(format!(
