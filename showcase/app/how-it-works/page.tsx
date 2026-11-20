@@ -71,6 +71,20 @@ export default function HowItWorks() {
       </div>
     </div></section>
 
+    <section id="raised-arm-start" className="ft-block"><div className="wrap ft-block-grid">
+      <div className="ft-block-head"><p className="kicker">A refused start</p><h2>When the sleeves cross.</h2>
+        <p>One bolero cut on the same synthetic 54 cm chest, with both arms raised to 90°.</p></div>
+      <div className="ft-prose">
+        <a href="/fittings/bolero-raised-start.png"><img src="/fittings/bolero-raised-start.png" width="2000" height="683"
+          loading="lazy" style={{width:"100%",height:"auto"}} alt="Two back views of the bolero, with a yellow contact mark at the right shoulder of the refused start. The flat back-panel outlines coincide."/></a>
+        <p>Six pairs of cloth triangles crossed before sewing began. Picking a marked pixel on the back led to the right armhole in the flat pattern. Moving the five cut pieces 30 mm along their starting axes let the sleeves clear the jacket. Their cutting lines stayed in the same place.</p>
+        <p>The revised drape passed its contact checks. With the arms raised, the bolero still rode up 28 mm and the chest fabric stretched by 1.6% on average. The separate flat-pattern check remained open in both rounds.</p>
+        <div className="ft-hero-actions"><a className="ft-text-link" href="/patterns/bolero.pdf" download>Print this bolero at actual size</a>
+          <a className="ft-text-link" href="/exhibits/poses/bolero-start.json" download>Download the revised placements</a>
+          <a className="ft-text-link" href="/sections/studies/#drape-room">Turn the dressed bolero</a></div>
+      </div>
+    </div></section>
+
     <section className="ft-block"><div className="wrap ft-block-grid">
       <div className="ft-block-head"><p className="kicker">Why it exists</p><h2>A drawing is not a pattern.</h2></div>
       <div className="ft-prose">
