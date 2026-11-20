@@ -13,8 +13,10 @@ use crate::animation::{
     FOLD_FRAMES, FoldUp, SEAM_COLORS, ViewerExtras, ZIP_FRAMES, board_layout, fold_frames,
     viewer_html, viewer_payload, zip_frames,
 };
+use crate::cloth::NewtonStrategy;
 use crate::contact::{Contact, ContactParams};
 use crate::garment::{GarmentMesh, build_garment, simulation_scope};
+use crate::integrator::TimeIntegrator;
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{
@@ -140,6 +142,10 @@ pub struct DrapeOptions {
     /// bolero's from 18.7 to 11.4 s, every reading within 0.2 mm: a factorization costs about 250
     /// conjugate-gradient iterations.
     pub pcg_iters: usize,
+    /// Nonlinear globalization and linear-solve strategy (default: [`NewtonStrategy::ProjectedNewton`]).
+    pub newton_strategy: NewtonStrategy,
+    /// Structural time-integration scheme (default: [`TimeIntegrator::ImplicitEuler`]).
+    pub integrator: TimeIntegrator,
 }
 
 impl Default for DrapeOptions {
@@ -170,6 +176,8 @@ impl Default for DrapeOptions {
             },
             self_contact: None,
             pcg_iters: 20,
+            newton_strategy: NewtonStrategy::ProjectedNewton,
+            integrator: TimeIntegrator::ImplicitEuler,
         }
     }
 }
@@ -181,6 +189,8 @@ impl DrapeOptions {
     /// Non-finite or out-of-range numerical settings, insufficient frames for metrics, or a frame
     /// count that overflows the animation budget.
     pub fn validate(&self) -> Result<(), Refusal> {
+        self.newton_strategy.validate()?;
+        self.integrator.validate()?;
         if let Some(policy) = &self.static_equilibrium {
             policy.validate()?;
         }
@@ -456,6 +466,9 @@ pub fn drape_observed(
     }
     scene.solver.tol = opts.tol;
     scene.solver.pcg_iters = opts.pcg_iters;
+    scene.solver.newton_strategy = opts.newton_strategy;
+    scene.solver.integrator = opts.integrator;
+    scene.solver.check_integrator_history()?;
     if opts.max_settle_steps > 0 {
         scene.solver.check_settling_history()?;
     }
@@ -872,6 +885,12 @@ fn add_numerical_report(
         "drape":drape,
         "basis":"Newton correction/h and instantaneous speed; reference settled remains the legacy window-drift metric, not static stress equilibrium or real fit"
     });
+    if !opts.newton_strategy.is_default() {
+        report["numerical"]["newton_strategy"] = json!(opts.newton_strategy);
+    }
+    if !opts.integrator.is_default() {
+        report["numerical"]["integrator"] = json!(opts.integrator);
+    }
     if let Some(policy) = opts.time_subdivision {
         let intervals: Vec<_> = sew
             .samples

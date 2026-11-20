@@ -1,4 +1,4 @@
-//! Trace a native still pixel through the saved endpoint to an editable source edge.
+//! Trace a pixel in a native drape or refusal still back to an editable source edge.
 use std::{io::Read, path::Path};
 
 use ftx_core::{Refusal, Vec3};
@@ -10,11 +10,11 @@ use crate::{Args, bad_input, fold, known_options, required};
 
 fn garment_hit(
     dir: &Path,
+    map: &Value,
     cloth: &ColouredMesh,
     indices: [usize; 3],
     point: Vec3,
 ) -> Result<Value, Refusal> {
-    let (map, _) = fold::document(&dir.join("sim/mesh_map.json"))?;
     if map["vertices"].as_u64() != Some(cloth.vertices.len() as u64) {
         return Err(bad_input("mesh_map vertex count differs from garment.obj"));
     }
@@ -113,20 +113,40 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let n = round["round"]
         .as_u64()
         .ok_or_else(|| bad_input("missing round number"))?;
-    let file = format!("sim/still_{view}.png");
-    let image = format!("rounds/{n:03}/{file}");
-    if round["rendering"]["status"] != "PASS"
-        || round["sim"].is_null()
+    let refused = round["sim"]["refusal"].is_object();
+    let folder = if refused { "sim/refused" } else { "sim" };
+    let scene = dir.join(folder);
+    let file = format!("still_{view}.png");
+    let image = format!("rounds/{n:03}/{folder}/{file}");
+    if !refused && (round["rendering"]["status"] != "PASS"
+        || !round["sim"].is_object()
         || round["sim"].get("refusal").is_some()
         || !round["images"]
             .as_array()
-            .is_some_and(|v| v.iter().any(|v| v == &image))
+            .is_some_and(|v| v.iter().any(|v| v == &image)))
     {
         return Err(bad_input(
             "this round did not publish the requested still; run a fresh round with --stills",
         ));
     }
-    let path = dir.join(&file);
+    crate::round::regular(&dir.join("sim"), true)?;
+    crate::round::regular(&scene, true)?;
+    let path = scene.join(&file);
+    crate::round::regular(&path, false)?;
+    let map_path = scene.join("mesh_map.json");
+    let diagnostic_map = if refused {
+        if !crate::round::regular(&map_path, false)? {
+            return Err(bad_input("this refused round has no diagnostic source-edge map; inspect its saved images or run a fresh round to trace pixels"));
+        }
+        let (map, _) = fold::document(&map_path)?;
+        let pose = &map["refused_pose"];
+        if pose["phase"].as_str().is_none() || pose["accepted_steps"].as_u64().is_none() {
+            return Err(bad_input("the source-edge map does not identify a refused pose"));
+        }
+        Some(map)
+    } else {
+        None
+    };
     let mut header = [0; 24];
     std::fs::File::open(&path)
         .and_then(|mut f| f.read_exact(&mut header))
@@ -138,7 +158,8 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         u32::from_be_bytes(header[16..20].try_into().unwrap()) as usize,
         u32::from_be_bytes(header[20..24].try_into().unwrap()) as usize,
     ];
-    if round["rendering"]["width"] != size[0] || round["rendering"]["height"] != size[1] {
+    let dimensions = diagnostic_map.as_ref().map_or(&round["rendering"], |map| &map["refused_pose"]);
+    if dimensions["width"] != size[0] || dimensions["height"] != size[1] {
         return Err(bad_input("still dimensions differ from the saved round"));
     }
     if pixel[0] >= size[0] || pixel[1] >= size[1] {
@@ -147,8 +168,11 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             size[0], size[1]
         )));
     }
-    let body = fold::mesh(&dir.join("sim/body.obj"))?;
-    let cloth = fold::mesh(&dir.join("sim/garment.obj"))?;
+    for name in ["body.obj", "garment.obj"] {
+        crate::round::regular(&scene.join(name), false)?;
+    }
+    let body = fold::mesh(&scene.join("body.obj"))?;
+    let cloth = fold::mesh(&scene.join("garment.obj"))?;
     let hit = match pick_still(&body, &cloth, view, size, pixel)
         .ok_or_else(|| bad_input("invalid still pixel"))?
     {
@@ -157,7 +181,15 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         StillHit::Garment {
             vertices,
             position_m,
-        } => garment_hit(dir, &cloth, vertices, position_m)?,
+        } => {
+            let normal_map;
+            let map = if let Some(map) = &diagnostic_map { map } else {
+                crate::round::regular(&map_path, false)?;
+                normal_map = fold::document(&map_path)?.0;
+                &normal_map
+            };
+            garment_hit(dir, map, &cloth, vertices, position_m)?
+        }
     };
     let text = if let Some(edge) = hit.get("nearest_edge") {
         format!(
@@ -172,10 +204,12 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         format!("{view}: {}", hit["surface"].as_str().unwrap_or(""))
     };
-    Ok((
-        json!({"round":n,"image":image,"size_px":size,"pixel":pixel,"hit":hit,
-        "basis":round["basis"], "gating":round["sim"]["gating"],"advisory":round["sim"]["advisory"]}),
-        0,
-        text,
-    ))
+    let mut result = json!({"round":n,"image":image,"size_px":size,"pixel":pixel,"hit":hit,
+        "basis":round["basis"], "gating":round["sim"]["gating"],"advisory":round["sim"]["advisory"]});
+    if let Some(map) = diagnostic_map {
+        result["refused_pose"] = map["refused_pose"].clone();
+        result["refusal"] = round["sim"]["refusal"].clone();
+        return Ok((result, 0, format!("Refused pose · {text}\n{}", round["sim"]["refusal"]["message"].as_str().unwrap_or(""))));
+    }
+    Ok((result, 0, text))
 }

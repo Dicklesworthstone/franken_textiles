@@ -1,6 +1,8 @@
 //! Serialization at the scenario boundary, leaving numerical option definitions unchanged.
 use crate::{
+    cloth::NewtonStrategy,
     contact::ContactParams,
+    integrator::TimeIntegrator,
     run::{DrapeOptions, StaticEquilibriumOptions},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -56,6 +58,10 @@ struct Options {
     contact: ContactParams,
     self_contact: Option<ContactParams>,
     pcg_iters: usize,
+    #[serde(default, skip_serializing_if = "NewtonStrategy::is_default")]
+    newton_strategy: NewtonStrategy,
+    #[serde(default, skip_serializing_if = "TimeIntegrator::is_default")]
+    integrator: TimeIntegrator,
 }
 
 impl Serialize for DrapeOptions {
