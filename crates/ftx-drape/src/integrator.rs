@@ -25,8 +25,13 @@ pub enum TimeIntegrator {
     /// Second-order Chung–Hulbert Generalized-α with high-frequency spectral radius
     /// `rho_inf ∈ [0.0, 1.0]`:
     /// - `1.0`: zero numerical dissipation (midpoint-like energy conservation on linear modes);
-    /// - `0.8`: light high-frequency damping, preserves dynamic cloth swing;
-    /// - `0.0`: annihilates `ω h → ∞` modes in one step while keeping 2nd-order accuracy.
+    /// - `0.8`: light high-frequency damping on linear modes;
+    /// - `0.0`: strongest high-frequency damping.
+    ///
+    /// In the 30 mm radius sewn-band case (`ftx-xd85`), `0.8` refuses during
+    /// sewing at both 10 ms and 5 ms, including with the default subdivision
+    /// budget. The same 10 ms case completes at `0.0`. These observations are
+    /// specific to that band, contact geometry and Newton strategy.
     GeneralizedAlpha {
         /// Spectral radius at infinite frequency, in `[0, 1]`.
         rho_inf: f64,
