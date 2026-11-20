@@ -292,11 +292,15 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let zip_n = map["frames"]["zip"].as_u64().unwrap_or(18) as usize;
     let sew_n = map["frames"]["sew"].as_u64().unwrap_or(12) as usize;
     let starts = [0, fold_n, fold_n + zip_n, fold_n + zip_n + sew_n];
+    let contact = report["self_contact"]["enabled"] == true && map["frames"].is_object();
+    let physical_start = (fold_n + zip_n).saturating_sub(1);
+    let stations = report["animation"]["first_physical_frame"].as_u64() == Some(physical_start as u64);
     let keep = 60usize;
     let mut kept: Vec<usize> = linspace(0.0, n.saturating_sub(1) as f64, keep.min(n))
         .into_iter()
         .map(|v| v.round_ties_even() as usize)
         .chain(starts.iter().map(|&s| s.min(n.saturating_sub(1))))
+        .chain(contact.then_some(physical_start))
         .chain(std::iter::once(n.saturating_sub(1)))
         .collect();
     kept.sort_unstable();
@@ -304,7 +308,10 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
     let mut kept_frames = Vec::with_capacity(kept.len());
     for &k in &kept {
-        kept_frames.push(cache.frame(k)?);
+        // Older PC2 setup paths flew through adjacent panels. Use their original flat
+        // pattern board until the accepted pose. New contact runs carry separated stations.
+        let source = if contact && !stations && k < physical_start { 0 } else { k };
+        kept_frames.push(cache.frame(source)?);
     }
     let (mut lo, mut hi) = (
         Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
@@ -408,7 +415,7 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .collect()
     };
     let r6 = |v: f64| (v * 1e6).round() / 1e6;
-    let payload = json!({
+    let mut payload = json!({
         "schema": "fabric-fold-viewer/1",
         "title": title,
         "vertices": cache.points(),
@@ -431,6 +438,11 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "arm_deg": report["arm_deg"].as_f64().unwrap_or(35.0),
         },
     });
+    if contact {
+        let cut = kept.partition_point(|&k| k < physical_start);
+        let setup = if stations { "Shape the panels separately" } else { "Flat pattern board" };
+        ftx_drape::animation::add_contact_replay(&mut payload, cut, kept_frames[cut..].iter().flatten(), setup);
+    }
     let html = viewer_html(crate::VIEWER_TEMPLATE, &payload).map_err(bad_input)?;
     let out = args
         .options

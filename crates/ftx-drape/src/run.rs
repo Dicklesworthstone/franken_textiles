@@ -1102,6 +1102,9 @@ fn add_run_fields(
             "seam_legend": legend,
         }),
     );
+    if opts.self_contact.is_some() {
+        o["animation"]["first_physical_frame"] = json!(FOLD_FRAMES + ZIP_FRAMES - 1);
+    }
     // FrankenTextiles: no collider inset; the cloth's mid-surface keeps this offset from the body.
     o.insert(
         "cloth_offset_mm".into(),

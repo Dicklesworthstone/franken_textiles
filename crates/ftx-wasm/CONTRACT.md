@@ -436,7 +436,7 @@ studies retain their own evidence. Malformed or refused supplements never fall b
 **The fold-up.** `fold` is `ftx drape` without files: `load_body(bytes)` reads a converted model the page
 was given (`.ftxbody`, with array hashes checked, at most 512 MiB), and `fold_up(model, pattern,
 measurements, fit_spec, self_contact_mm, two_start, progress)` fits Anny to the tape in the drape pose, trims the
-collision skin, sews and drapes (self-contact at `self_contact_mm` when positive, the skill's 2 mm), and
+collision skin, sews and drapes with the cloth crossing barrier (the default offset is 2 mm and an explicit zero retains the barrier), and
 returns the fit report (`sim_report.json` without the CLI's `pattern` and `wall_s`) and the viewer page.
 Its `body` diagnostics retain unrounded target/body/signed residual mm, supplied measurement
 `sigma_mm`, the effective fitting scale and the residual divided by that scale, supplied-weight residual
