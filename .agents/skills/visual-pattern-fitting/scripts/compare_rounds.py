@@ -29,7 +29,14 @@ def load_panel(directory, view, instance):
     if not png.startswith(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"):
         raise ValueError(f"round {number} has an invalid native PNG")
     size = struct.unpack(">II", png[16:24])
-    if not all(size) or (not refused and size != (rendering["width"], rendering["height"])):
+    dimensions = None if refused else rendering
+    if refused:
+        mapping = directory / folder / "mesh_map.json"
+        if mapping.is_symlink():
+            raise ValueError(f"round {number} has a linked diagnostic mesh map")
+        if mapping.exists():
+            dimensions = json.loads(mapping.read_bytes())["refused_pose"]
+    if not all(size) or (dimensions is not None and size != (dimensions["width"], dimensions["height"])):
         raise ValueError(f"still differs from the dimensions recorded in round {number}")
     preview = ElementTree.parse(directory / "preview.svg")
     outline = next((p.get("d") for p in preview.iter("{http://www.w3.org/2000/svg}path")
@@ -59,6 +66,7 @@ def compare(before, after, view, instance, crop):
     def label(x, y, content, size=17, colour="#293934"):
         parts.append(f'<text x="{x}" y="{y}" font-family="DejaVu Sans,sans-serif" '
                      f'font-size="{size}" fill="{colour}">{escape(str(content))}</text>')
+    outlines = []
     for i, (entry, png, (w, h), outline) in enumerate(rows):
         x = 15 + 446*i
         ink = ["#8a5327", "#126552"][i]
@@ -79,8 +87,10 @@ def compare(before, after, view, instance, crop):
         label(x, 391, f'{title} · {state}', 15)
         coords = " ".join(f"{1053+x*scale:.2f},{56+y*scale:.2f}" for x,y in outline)
         dash = ' stroke-dasharray="6 4"' if i == 0 else ''
-        parts.append(f'<polygon points="{coords}" fill="none" stroke="{ink}" stroke-width="2.5"{dash}/>')
+        outlines.append(f'<polygon points="{coords}" fill="none" stroke="{ink}" stroke-width="2.5"{dash}/>')
         label(930, 367+24*i, f'{"Dashed" if i == 0 else "Solid"} · round {entry["round"]:03d}', 15, ink)
+    # Where the two cuts coincide, both colours should remain visible.
+    parts.extend(reversed(outlines))
     label(930, 29, f'{instance} · flat overlay', 18)
     parts.append("</svg>")
     return "\n".join(parts)

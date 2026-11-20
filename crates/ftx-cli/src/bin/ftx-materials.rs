@@ -108,6 +108,8 @@ ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
 ftx-materials thermal-map SIM_REPORT.json BODY.obj PROJECTION.json
 ftx-materials thermal-motion MOTION.json
+ftx-materials microclimate REQUEST.json
+ftx-materials lower-visco REQUEST.json
 ftx-materials cut-plan PATTERN.json OPTIONS.json
 ftx-materials cut-job PATTERN.json REQUEST.json
 ftx-materials cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json
@@ -257,6 +259,16 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
         ["linearize-origin", path] => calibration::linearize_origin(path),
+        ["microclimate", path] => {
+            let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
+            let out = ftx_drape::thermal::microclimate::evaluate_json(&raw)?;
+            serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))
+        }
+        ["lower-visco", path] => {
+            let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
+            let out = ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json(&raw)?;
+            serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))
+        }
         ["calibrate-nonlinear", path] => nonlinear_calibration::run(path, false),
         ["calibrate-nonlinear", path, "--allow-estimates"] => {
             nonlinear_calibration::run(path, true)

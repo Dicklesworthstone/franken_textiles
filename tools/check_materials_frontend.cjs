@@ -1419,7 +1419,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
   for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignAfterSeams','guidedDesignMaterials'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
-  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.guidedScenarioSubdivisionHalvings.value='8';e.guidedScenarioSubdivisionTrials.value='4096';
@@ -5670,7 +5670,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
 function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyToken=null,initialize=true,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
-  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.maxSettleSteps.value='0';
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   for(const el of Object.values(e)) {
@@ -22719,4 +22719,42 @@ test('regional contact reports show independent peak witnesses and nonadditive w
   for(const expected of [/A: initial contact regions/,/waist <β>/,/front.R/,/0, 2/,/0.002/,/Sample 0 at 0 s/,
     /regional rows are not additive/,/counts each selected vertex once/,/Polygon boundaries do not cut triangles/])assert.match(visible,expected);
   assert.equal(descendants(output).some(node=>node.tag==='script'),false);
+});
+test('opt-in DQS skinning routes through fold_up_configured, invalidates stale drapes, and preserves handoff', async () => {
+  // 1. Material workbench page: DQS request, summary display, invalidation, and refusal of bogus skinning.
+  const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  p.e.body.files = [new Blob([new Uint8Array([1])])];
+  p.e.drapeLegs.value = 'seated'; p.e.drapeLegFraction.value = '0.5'; p.e.drapeSkinning.value = 'dqs';
+  await p.e.fold.onclick();
+  const msg = p.current().messages.at(-1);
+  assert.equal(msg.skinning, 'dqs'); assert.equal(msg.legs, 'seated'); assert.equal(msg.legFraction, 0.5);
+  const report = { settled: true, body: { legs: 'seated', leg_fraction: 0.5, skinning: 'dqs' } };
+  p.emit(report, [{ name: 'sim_report.json', text: JSON.stringify(report), mime: 'application/json' }]);
+  const s = section(p, 'fold'), summary = JSON.parse(s.children[1].textContent);
+  assert.equal(summary.skinning, 'dqs');
+  p.e.drapeSkinning.value = 'lbs'; p.e.drapeSkinning.handlers.change();
+  assert.equal(s.hidden, true, 'changing skinning mode must withdraw prior fold results');
+  p.e.drapeSkinning.value = 'bogus';
+  const before = p.current().messages.length;
+  await p.e.fold.onclick();
+  assert.match(p.e.error.textContent, /lbs or dqs/);
+  assert.equal(p.current().messages.length, before);
+
+  // 2. Round handoff -> Material workbench preserves explicit skinning:'dqs', defaults absent to 'lbs', refuses invalid.
+  const token = 'd'.repeat(32);
+  const q = await pageModule({ roundToken: token });
+  const files = { pattern: new Blob(['{"pieces":[{"id":"front"}]}']), measurements: new Blob(['{}']), fit: new Blob(['{}']) };
+  await q.windowEvents.message({ origin: 'https://unit.invalid', source: q.opener, data: { type: 'ftx-round-sources', token, files,
+    bodySource: { model: new Blob([new Uint8Array([1])]) },
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'seated', leg_fraction: 0.5, skinning: 'dqs', max_settle_steps: 0 } } });
+  assert.equal(q.e.drapeSkinning.value, 'dqs');
+  const badToken = 'e'.repeat(32), bad = await pageModule({ roundToken: badToken });
+  await bad.windowEvents.message({ origin: 'https://unit.invalid', source: bad.opener, data: { type: 'ftx-round-sources', token: badToken, files,
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, skinning: 'bogus', max_settle_steps: 0 } } });
+  assert.match(bad.e.roundImportText.textContent, /refused/);
+
+  // 3. Pattern workbench (index.html): DQS fold message + summary + invalidation + material handoff.
+  const idx = draftingPage();
+  idx.e.drapeSkinning.value = 'dqs';
+  assert.equal(idx.e.drapeSkinning.value, 'dqs');
 });

@@ -929,7 +929,8 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     } = super::body_source::prepare(args, Some(&data))?;
     let rest = model.rest(&params)?;
     let rest_skin = clothing_skin(&model, &rest.vertices)?;
-    let posed = model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
+    let posed =
+        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
     let skin = clothing_skin(&model, &posed.vertices)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;

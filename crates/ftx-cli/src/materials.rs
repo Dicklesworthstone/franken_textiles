@@ -160,8 +160,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         };
         let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
         let out = ftx_drape::thermal::microclimate::evaluate_json(&raw)?;
-        let result: Value =
-            serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))?;
+        let result: Value = serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))?;
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
@@ -174,8 +173,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         };
         let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
         let out = ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json(&raw)?;
-        let result: Value =
-            serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))?;
+        let result: Value = serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))?;
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
@@ -765,5 +763,85 @@ mod tests {
         let report = run(&unadmitted).unwrap().0;
         assert_eq!(report["thermal_ready"], false);
         assert_eq!(report["steady_conduction"]["ready"], false);
+    }
+
+    #[test]
+    fn microclimate_and_lower_visco_cli_subcommands_round_trip() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftx-cli-micro-visco-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let micro_path = dir.join("micro.json");
+        std::fs::write(
+            &micro_path,
+            serde_json::to_vec(&json!({
+                "schema": ftx_drape::thermal::microclimate::MICROCLIMATE_REQUEST_SCHEMA,
+                "air": { "temperature_c": 22.0, "pressure_pa": 101325.0, "relative_humidity": 0.45 },
+                "convection": {
+                    "correlation": "churchill_bernstein_cylinder",
+                    "characteristic_length_m": 0.20,
+                    "wind_speed_m_s": 1.5,
+                    "surface_temperature_range_c": [20.0, 38.0],
+                    "allow_estimates": true
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let micro_args = super::super::parse(&[
+            "materials".into(),
+            "microclimate".into(),
+            micro_path.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let (micro_rep, status, _) = run(&micro_args).unwrap();
+        assert_eq!(status, 0);
+        assert_eq!(
+            micro_rep["schema"],
+            ftx_drape::thermal::microclimate::MICROCLIMATE_REPORT_SCHEMA
+        );
+        assert_eq!(micro_rep["convection"]["evidence"], "estimate");
+        assert!(micro_rep["convection"]["h_w_m2_k"].as_f64().unwrap() > 1.0);
+
+        let visco_path = dir.join("visco.json");
+        std::fs::write(
+            &visco_path,
+            serde_json::to_vec(&json!({
+                "schema": ftx_pattern::material_relaxation::exact_exp::LOWERING_REQUEST_SCHEMA,
+                "e0": 150.0,
+                "e_inf": 400.0,
+                "alpha": 0.4,
+                "tau_s": 0.8,
+                "f_lo_hz": 0.01,
+                "f_hi_hz": 100.0,
+                "n_terms": 14,
+                "rel_tol": 0.02,
+                "replay_steps": [
+                    { "dt_s": 0.0, "strain": 0.04 },
+                    { "dt_s": 0.5, "strain": 0.04 }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let visco_args = super::super::parse(&[
+            "materials".into(),
+            "lower-visco".into(),
+            visco_path.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let (visco_rep, status, _) = run(&visco_args).unwrap();
+        assert_eq!(status, 0);
+        assert_eq!(
+            visco_rep["schema"],
+            ftx_pattern::material_relaxation::exact_exp::LOWERING_REPORT_SCHEMA
+        );
+        assert!(visco_rep["sup_rel_err"].as_f64().unwrap() <= 0.02);
+        assert!(visco_rep["replay"]["dissipated"].as_f64().unwrap() > 0.0);
     }
 }

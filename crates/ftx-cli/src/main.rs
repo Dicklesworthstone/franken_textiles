@@ -872,7 +872,9 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
         opts.integrator = match integrator.as_str() {
             "implicit-euler" => {
                 if args.options.contains_key("rho-inf") {
-                    return Err(bad_input("--rho-inf requires --integrator generalized-alpha"));
+                    return Err(bad_input(
+                        "--rho-inf requires --integrator generalized-alpha",
+                    ));
                 }
                 TimeIntegrator::ImplicitEuler
             }
@@ -892,7 +894,9 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
             }
         };
     } else if args.options.contains_key("rho-inf") {
-        return Err(bad_input("--rho-inf requires --integrator generalized-alpha"));
+        return Err(bad_input(
+            "--rho-inf requires --integrator generalized-alpha",
+        ));
     }
     opts.validate()?;
     Ok(opts)
@@ -2076,7 +2080,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tr.newton_strategy, NewtonStrategy::trust_region_default());
-        assert_eq!(tr.integrator, TimeIntegrator::GeneralizedAlpha { rho_inf: 0.6 });
+        assert_eq!(
+            tr.integrator,
+            TimeIntegrator::GeneralizedAlpha { rho_inf: 0.6 }
+        );
 
         // Default rho_inf for generalized-alpha is 0.8.
         let ga_def = drape_options(
