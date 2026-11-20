@@ -16,6 +16,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import os
 import struct
 import subprocess
 from pathlib import Path
@@ -25,7 +26,7 @@ import numpy as np
 HEADER = struct.Struct("<12siiffi")
 CORD_STEP_MM = 5.0
 PUBLIC = Path(__file__).resolve().parents[1] / "public"
-FTX = Path(__file__).resolve().parents[2] / "target/release/ftx"
+FTX = Path(os.environ.get("FTX_BIN", Path(__file__).resolve().parents[2] / "target/release/ftx"))
 
 # Where each dolman panel starts round the form (spec 04 section 3.1). Torso panels sit on one cylinder
 # of 205 mm, anchored where the pattern's neck point (y = 455) meets the form's side neck point; the two
@@ -130,6 +131,7 @@ def locate(points, flat, triangles):
 
 def package(source, pattern_path, destination, name, drape_args=(), section=None):
     """Pack a finished drape. `drape_args` are the solver arguments it was run with, recorded as given."""
+    subprocess.run([FTX, "viewer", source, "--check-contact"], check=True)
     drape_args = [str(a) for a in drape_args]
     spacing = float(drape_args[drape_args.index("--spacing-mm") + 1]) if "--spacing-mm" in drape_args else None
     mesh = json.loads((source / "mesh_map.json").read_text())

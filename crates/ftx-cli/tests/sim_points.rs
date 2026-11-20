@@ -299,10 +299,23 @@ fn viewer_checks_cloth_crossings_even_in_frames_it_would_drop() {
             .unwrap()
     };
     std::fs::write(dir.join("fold.pc2"), pc2(&frames)).unwrap();
+    let contact_only = || {
+        Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args(["viewer", ".", "--check-contact", "--json"])
+            .output()
+            .unwrap()
+    };
+    let checked = contact_only();
+    assert!(checked.status.success());
+    let result: Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert_eq!(result["result"]["checked_frames"], 126);
+    assert!(!dir.join("fold_viewer.html").exists());
     assert!(viewer("clear.html").status.success());
     // At 60 display samples from 130 source frames, frame 30 lies between 28 and 31.
     frames[30][3].z = -1.;
     std::fs::write(dir.join("fold.pc2"), pc2(&frames)).unwrap();
+    assert!(!contact_only().status.success());
     let output = viewer("crossing.html");
     assert!(!output.status.success());
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -312,4 +325,7 @@ fn viewer_checks_cloth_crossings_even_in_frames_it_would_drop() {
         "physical frame 30: cloth triangle 0 crosses cloth triangle 1"
     );
     assert!(!dir.join("crossing.html").exists());
+    save(&dir.join("sim_report.json"), &json!({}));
+    let unprotected: Value = serde_json::from_slice(&contact_only().stdout).unwrap();
+    assert_eq!(unprotected["refusal"]["code"], "invalid_document");
 }

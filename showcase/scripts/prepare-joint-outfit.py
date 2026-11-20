@@ -3,6 +3,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import os
 import struct
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ from runpy import run_path
 import numpy as np
 
 public=Path("showcase/public")
+ftx=Path(os.environ.get("FTX_BIN", Path(__file__).resolve().parents[2] / "target/release/ftx"))
 shared=run_path("showcase/scripts/prepare-drape-room.py")
 cuts=["bolero","trousers"]
 
@@ -28,6 +30,7 @@ def inputs():
     return {"schema":"ftx-outfit-drape/1","garments":garments,"interfaces":[]}
 
 def package(folder,output):
+    subprocess.run([ftx, "viewer", folder, "--check-contact"], check=True)
     report=json.loads((folder/"sim_report.json").read_text())
     request=json.loads((folder/"outfit_request.json").read_text())
     assert request==inputs() and not report["gating"] and report["numerical"]["settled"] and report["self_contact"]["enabled"]
@@ -70,7 +73,7 @@ if __name__=="__main__":
         request=args.directory/"request.json";request.write_text(json.dumps(inputs()))
         tapes=args.directory/"tapes.json";tapes.write_text(json.dumps(shared["synthetic_tapes"](520)))
         dest=args.directory/"drape"
-        subprocess.run(["target/release/ftx","drape",request,"--measurements",tapes,"--out",dest,
+        subprocess.run([ftx,"drape",request,"--measurements",tapes,"--out",dest,
                         "--self-contact-mm","2","--spacing-mm","12","--arm-deg","35","--json"],check=True,stdout=subprocess.DEVNULL)
     else:dest=args.directory
     package(dest,args.output)

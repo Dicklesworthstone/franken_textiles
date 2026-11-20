@@ -82,6 +82,7 @@ const USAGE: &str = "usage:
   ftx render DRAPE_DIR [--res 960x540] [--json]
   ftx inspect-pixel ROUND_DIR --view front|side|back|three_quarter|strain_front|strain_back --pixel X,Y [--json]
   ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]
+  ftx viewer SIMDIR --check-contact [--json]
   ftx report WS [--json]
   ftx sim-points SIMDIR --pattern P --measurements M [--json]
   ftx outfit --measurements M --sim DIR [--sim DIR ...] --out NEW_DIR [--hat P] [--seams] [--res 960x960] [--json]
@@ -198,6 +199,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 continue;
             }
             if name == "allow-estimates"
+                || (name == "check-contact" && argv.first().is_some_and(|s| s == "viewer"))
                 || name == "static-equilibrium"
                 || name == "time-subdivision"
                 || measure::BOOLEAN_OPTIONS.contains(&name)

@@ -838,7 +838,8 @@ at PC2 precision for cloth crossing cloth and for cloth crossing the complete di
 skin, including hands and feet outside the capped collider. Reopening a protected PC2
 requires its phase counts and applies both checks before thinning the frames. A proper
 crossing refuses with `intersecting_trajectory`, the source-frame number and both
-triangle IDs. Touching is permitted.
+triangle IDs. Touching is permitted. `ftx viewer SIMDIR --check-contact` performs this
+check on a protected archive and returns the checked frame count without writing a viewer.
 
 - **Header**, 32 bytes, little-endian:
 

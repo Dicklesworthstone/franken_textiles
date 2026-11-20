@@ -230,9 +230,15 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     use ftx_drape::animation::viewer_html;
     use std::path::PathBuf;
 
-    known_options(args, "viewer", &["out", "pattern"])?;
+    known_options(args, "viewer", &["out", "pattern", "check-contact"])?;
     if args.positional.len() != 2 {
         return Err(bad_input("ftx viewer needs exactly one SIMDIR"));
+    }
+    let check_only = args.options.contains_key("check-contact");
+    if check_only && (args.options.contains_key("out") || args.options.contains_key("pattern")) {
+        return Err(bad_input(
+            "--check-contact takes only the simulation directory",
+        ));
     }
     let dir = Path::new(&args.positional[1]);
     let (report, _) = document(&dir.join("sim_report.json"))?;
@@ -247,6 +253,43 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "garment.obj vertex count does not match fold.pc2",
         ));
     }
+    let n = cache.frames();
+    let fold_n = map["frames"]["fold"].as_u64().unwrap_or(30) as usize;
+    let zip_n = map["frames"]["zip"].as_u64().unwrap_or(18) as usize;
+    let sew_n = map["frames"]["sew"].as_u64().unwrap_or(12) as usize;
+    let starts = [0, fold_n, fold_n + zip_n, fold_n + zip_n + sew_n];
+    let contact = report["self_contact"]["enabled"] == true;
+    if check_only && !contact {
+        return Err(bad_input("--check-contact needs a contact-protected drape"));
+    }
+    if contact && !map["frames"].is_object() {
+        return Err(bad_input(
+            "a contact-protected replay requires the frame counts in mesh_map.json",
+        ));
+    }
+    let physical_start = (fold_n + zip_n).saturating_sub(1);
+    let marker = report["animation"].get("first_physical_frame");
+    if marker.is_some_and(|v| !contact || v.as_u64() != Some(physical_start as u64)) {
+        return Err(bad_input(
+            "the reported first physical frame disagrees with the contact replay",
+        ));
+    }
+    if contact {
+        let mut display =
+            ftx_drape::animation::ReplayContact::new(&body.vertices, &body.triangles)?;
+        for frame in physical_start..n {
+            display.check(&cache.frame(frame)?, &garment.triangles, frame)?;
+        }
+    }
+    if check_only {
+        let checked = n - physical_start;
+        return Ok((
+            json!({"source_frames":n, "first_physical_frame":physical_start, "checked_frames":checked}),
+            0,
+            format!("checked {checked} recorded physical frames against the full body and cloth"),
+        ));
+    }
+    let stations = marker.is_some();
     let strain = match mesh(&dir.join("garment_strain.obj")) {
         Ok(m) if m.vertices.len() == cache.points() => Some(m),
         Ok(_) => {
@@ -256,7 +299,6 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         Err(_) => None,
     };
-
     let pat_doc = if let Some(explicit) = args.options.get("pattern") {
         let (doc, _) = document(Path::new(explicit))?;
         let pat = Pattern::new(doc.clone());
@@ -280,39 +322,11 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             None => None,
         }
     };
-
     let title = pat_doc
         .as_ref()
         .and_then(|p| p["meta"]["title"].as_str().or_else(|| p["style"].as_str()))
         .or_else(|| report["style"].as_str())
         .unwrap_or("Garment");
-
-    let n = cache.frames();
-    let fold_n = map["frames"]["fold"].as_u64().unwrap_or(30) as usize;
-    let zip_n = map["frames"]["zip"].as_u64().unwrap_or(18) as usize;
-    let sew_n = map["frames"]["sew"].as_u64().unwrap_or(12) as usize;
-    let starts = [0, fold_n, fold_n + zip_n, fold_n + zip_n + sew_n];
-    let contact = report["self_contact"]["enabled"] == true;
-    if contact && !map["frames"].is_object() {
-        return Err(bad_input(
-            "a contact-protected replay requires the frame counts in mesh_map.json",
-        ));
-    }
-    let physical_start = (fold_n + zip_n).saturating_sub(1);
-    let marker = report["animation"].get("first_physical_frame");
-    if marker.is_some_and(|v| !contact || v.as_u64() != Some(physical_start as u64)) {
-        return Err(bad_input(
-            "the reported first physical frame disagrees with the contact replay",
-        ));
-    }
-    if contact {
-        let mut display =
-            ftx_drape::animation::ReplayContact::new(&body.vertices, &body.triangles)?;
-        for frame in physical_start..n {
-            display.check(&cache.frame(frame)?, &garment.triangles, frame)?;
-        }
-    }
-    let stations = marker.is_some();
     let keep = 60usize;
     let mut kept: Vec<usize> = linspace(0.0, n.saturating_sub(1) as f64, keep.min(n))
         .into_iter()
