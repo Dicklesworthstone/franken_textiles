@@ -61,14 +61,19 @@ bands, fold-up animation, metrics and flags), `ftx-export` (every deliverable an
 | Does the drape solver exist? | **Yes, and it drapes a drafted garment on a realistic body**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. The garment mesh and start state match the reference (all 42,003 triangles; pre-sew and relaxation to 1e-12 m), and the drafted bolero and trousers sew and drape on an Anny toddler fitted to the wearer's tape (14 and 40 CPU seconds on a laptop with cloth self-contact; pictures below) with no fit flag. In the browser they take about 21 and 60 seconds and come out bit-identical. Compression is as stiff as tension except in gather zones, as in the reference. An elastic casing is simulated as one: on the trousers an elastic of 0.85, 0.95 or 1.0 × the waist grips the toddler (its friction carries the garment) and one of 1.2 × does not, and the report says so. The metrics and flags match the reference's to the bit on recorded drapes, and the fold-up animation plays in a self-contained page. Cloth self-contact holds layers at Blender's 2 mm |
 | Has anything been benchmarked? | **A bounded browser release workload**: 20 retained runs each, after three warmups, on an Apple M5 Ultra give bolero p50/p95 **16.66/17.43 s** and trousers **45.96/46.80 s**, with 2 mm self-contact and every Newton step converged. These are warm fold-click-to-result latencies on a shared desktop, not M4 native timings or a general speed comparison. Inputs, artifact hashes, spread and limits are in the [reality check](docs/reality-check-2026-10-20.md). Other historical timings above remain single observations; the plan's unmeasured numbers remain targets |
 
-**Current verification (2026-11-18).** The ordinary 92 cm browser bolero and trousers complete all
-48 default steps with 2 mm self-contact, full 1.5 mm body offset, numerical settling and no gating flags.
-The trousers recover a fully audited start at 150 relaxation iterations when their 600-iteration
-endpoint and earlier complete blocks intersect. Their source pattern and measurement inputs are
-unchanged. The nominal 80, 92 and 116 cm boleros pass the 15 mm hem bound after correcting
-eased-seam bending and applying friction when cloth first touches the body. The strict chart
-tape-fit check and the fitted-garment digest still fail. Full candidate, physical-fit and
-performance qualification remain open. [Current garment results](FEATURE_PARITY.md)
+**Current verification (2026-11-19).** The strict 92 cm chart tape-fit check (`fit_tape`, 7/7,
+including all 21 chart targets within unchanged G1b tolerances after calibrating stature-scaled local
+regularization to `0.65 × selected_stature / template_stature` under `ftx-w3s.1`), independent tape
+qualification (7/7), Anny forward/pose parity (4/4 + 2/2 including opt-in Dual-Quaternion Skinning
+volume-collapse checks), and all six fitted-garment KATs (`kat_fitted`, 6/6 against the converted
+`anny-0.6.1-default.ftxbody` model) now pass. All three nominal boleros (80, 92 and 116 cm) reach the
+full 1.5 mm body offset, settle numerically, and report zero gating and zero advisory flags; the 92 cm
+chart trousers recover a fully audited complete-block start at 200 relaxation iterations (backtracked
+from 400); and `kat9_fitted_pipeline_digest` matches bit-for-bit between native debug and native
+release (`91e3738f…`, 2073 vertices). The `[profile.wasm-release]` browser bundle is 15 MiB raw /
+4.3 MiB gzipped (down from 27.95 MiB) and passes all WASM-vs-native parity suites, 967/967 pure-Node
+frontend tests, and all three Chromium E2E suites. Full candidate, physical-fit and performance
+qualification remain open. [Current garment results](FEATURE_PARITY.md)
 
 **Historical qualification (2026-11-06).** The garment runs without flags described above are historical
 observations. The original bolero test on nominal fitted bodies now passes under its fixed schedule.
@@ -496,7 +501,8 @@ tests/fixtures/oracle/                                    captured oracle fixtur
 ## FAQ
 
 **Why not keep Python?** The reference stays as the oracle until each subsystem is certified. Rust gives a
-deterministic solver, a single binary for the skill, and a browser build without a 19 MB Python runtime.
+deterministic solver, a single native binary for the skill, and a self-contained browser wasm module
+(15 MiB raw / 4.3 MiB gzipped under `[profile.wasm-release]`) without shipping a Python interpreter runtime.
 
 **Why not SMPL?** Its licences are non-commercial, and SMIL covers infants, not the range here. Anny covers
 newborn to elderly under Apache-2.0 code and CC0 assets.
