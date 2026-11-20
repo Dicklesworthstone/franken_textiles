@@ -1340,7 +1340,7 @@ pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
             "correlation": conv.correlation,
             "name": nu_res.id.name(),
             "citation": nu_res.id.citation(),
-            "nu": nu_res.nu,
+            "nu": nu_res.nusselt,
             "h_w_m2_k": h_w_m2_k,
             "discrepancy_rel": nu_res.discrepancy_rel,
             "groups": nu_res.groups,
@@ -1589,5 +1589,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn evaluate_json_runs_moist_air_convection_enclosure_and_refuses_out_of_domain() {
+        let req = serde_json::json!({
+            "schema": MICROCLIMATE_REQUEST_SCHEMA,
+            "air": { "temperature_c": 20.0, "pressure_pa": 101325.0, "relative_humidity": 0.5 },
+            "convection": {
+                "correlation": "churchill_chu_vertical_plate",
+                "characteristic_length_m": 0.35,
+                "delta_t_k": 12.0,
+                "surface_temperature_range_c": [18.0, 38.0],
+                "allow_estimates": true
+            },
+            "enclosure": {
+                "areas_m2": [1.0, 1.0],
+                "emissivities": [0.92, 0.88],
+                "temperatures_c": [33.0, 20.0],
+                "view_factors": [[0.0, 1.0], [1.0, 0.0]]
+            }
+        });
+        let raw = evaluate_json(&req.to_string()).unwrap();
+        let rep: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(rep["schema"], MICROCLIMATE_REPORT_SCHEMA);
+        assert!(rep["air"]["density_kg_m3"].as_f64().unwrap() > 1.15);
+        assert!(rep["convection"]["h_w_m2_k"].as_f64().unwrap() > 1.0);
+        assert_eq!(rep["convection"]["evidence"], "estimate");
+        assert!(rep["convection"]["exterior"].is_object());
+        assert!(
+            rep["enclosure"]["enclosure_energy_closure_w"]
+                .as_f64()
+                .unwrap()
+                .abs()
+                < 1e-10
+        );
+
+        // Mutually exclusive wind_speed_m_s + reynolds must refuse fail-closed.
+        let mut bad = req.clone();
+        bad["convection"]["wind_speed_m_s"] = serde_json::json!(1.0);
+        bad["convection"]["reynolds"] = serde_json::json!(1000.0);
+        assert!(evaluate_json(&bad.to_string()).is_err());
+
+        // Unknown field must refuse fail-closed.
+        let mut unknown = req;
+        unknown["air"]["guessed"] = serde_json::json!(true);
+        assert!(evaluate_json(&unknown.to_string()).is_err());
     }
 }

@@ -198,6 +198,11 @@ pub struct FoldOptions {
     pub two_start: bool,
 }
 
+/// serde predicate for the default skinning mode (borrowed form).
+fn skinning_is_lbs(mode: &SkinningMode) -> bool {
+    mode.is_lbs()
+}
+
 /// Explicit garment pose and bounded continuation, shared by native and browser adapters.
 /// Defaults preserve the ordinary standing drape with no extra settling steps.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -214,7 +219,7 @@ pub struct FoldSettings {
     /// Fraction of the selected leg rotations, from standing (0) to the full posture (1).
     pub leg_fraction: f64,
     /// Skinning operator (`"lbs"` default; `"dqs"` opt-in dual-quaternion linear blending).
-    #[serde(default, skip_serializing_if = "SkinningMode::is_lbs")]
+    #[serde(default, skip_serializing_if = "skinning_is_lbs")]
     pub skinning: SkinningMode,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
     pub max_settle_steps: usize,
@@ -426,7 +431,11 @@ fn fold_on_source(
     }
     let rest_skin = clothing_skin(model, &rest.vertices).map_err(m)?;
     let posed = model
-        .pose_with_skinning(&rest, &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?, skinning)
+        .pose_with_skinning(
+            &rest,
+            &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?,
+            skinning,
+        )
         .map_err(m)?;
     let skin = clothing_skin(model, &posed.vertices).map_err(m)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces).map_err(m)?;
@@ -767,6 +776,161 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|f| f.as_str() == Some(&tight_flag))
+        );
+    }
+
+    #[test]
+    fn fold_settings_and_sewn_band_drape_support_new_solver_strategies_and_generalized_alpha() {
+        use ftx_core::Vec3;
+        use ftx_drape::{NewtonStrategy, PartFrame, TimeIntegrator, scene::PartFrames};
+
+        // Default FoldSettings omits newton_strategy and integrator (preserving legacy JSON wire).
+        let def_val = serde_json::to_value(FoldSettings::default()).unwrap();
+        assert!(def_val.get("newton_strategy").is_none());
+        assert!(def_val.get("integrator").is_none());
+
+        let mut custom = def_val;
+        custom["newton_strategy"] =
+            json!({"kind": "adaptive_ilu", "pcg_iters": 64, "max_shifts": 4});
+        custom["integrator"] = json!({"kind": "generalized_alpha", "rho_inf": 0.8});
+        let parsed: FoldSettings = serde_json::from_value(custom.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), custom);
+
+        struct Form;
+        impl PartFrames for Form {
+            fn frame(&self, _: &str) -> Option<PartFrame> {
+                Some(PartFrame {
+                    origin: Vec3::ZERO,
+                    up: Vec3::new(0., 0., 1.),
+                    front: Vec3::new(0., -1., 0.),
+                    lat: Vec3::new(1., 0., 0.),
+                })
+            }
+            fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+                Some(10.0)
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                30.0
+            }
+        }
+        let mut verts = Vec::new();
+        for z in [-0.04, 0.08] {
+            for i in 0..16 {
+                let (s, c) = ftx_core::det::sin_cos(i as f64 * std::f64::consts::TAU / 16.0);
+                verts.push(Vec3::new(0.03 * c, 0.03 * s, z));
+            }
+        }
+        let mut tris = Vec::new();
+        for i in 0..16 {
+            let j = (i + 1) % 16;
+            tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
+        }
+        let form = Form;
+        let body = DrapeBody {
+            frames: &form,
+            collision: (&verts, &tris),
+            display: (&verts, &tris),
+            arm_deg: 35.0,
+        };
+        let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [{
+                "id": "band",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [w, 0], "c": [w, 20], "d": [0, 20]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "notches": [],
+                "grain": [[0, 0], [0, 20]],
+                "placement": {"part": "torso", "radius_mm": 35, "x0": w / 2.0}
+            }],
+            "seams": [{"id": "join", "a": "band/right", "b": "band/left"}]
+        }));
+
+        // Default run omits newton_strategy/integrator from report["numerical"].
+        let base_opts = DrapeOptions {
+            sew_steps: 4,
+            drape_steps: 6,
+            step: 0.01,
+            ..DrapeOptions::default()
+        };
+        let base = drape(&pat, &json!({}), &body, &base_opts, |_| {}).unwrap();
+        assert!(base.report["numerical"].get("newton_strategy").is_none());
+        assert!(base.report["numerical"].get("integrator").is_none());
+
+        // AdaptiveIlu + GeneralizedAlpha completes both zero-gravity sew and gravity drape phases
+        // with consistent acceleration reset across the phase boundary.
+        let ga_opts = DrapeOptions {
+            newton_strategy: NewtonStrategy::adaptive_ilu_default(),
+            integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: 0.8 },
+            ..base_opts
+        };
+        let ga = drape(&pat, &json!({}), &body, &ga_opts, |_| {}).unwrap();
+        assert_eq!(
+            ga.report["numerical"]["newton_strategy"]["kind"],
+            "adaptive_ilu"
+        );
+        assert_eq!(
+            ga.report["numerical"]["integrator"]["kind"],
+            "generalized_alpha"
+        );
+        assert_eq!(ga.drape.steps, 6);
+
+        // TrustRegionSteihaug completes real sewn garment drape factorization-free.
+        let tr_opts = DrapeOptions {
+            newton_strategy: NewtonStrategy::trust_region_default(),
+            ..base_opts
+        };
+        let tr = drape(&pat, &json!({}), &body, &tr_opts, |_| {}).unwrap();
+        assert_eq!(
+            tr.report["numerical"]["newton_strategy"]["kind"],
+            "trust_region_steihaug"
+        );
+        assert_eq!(tr.sew.factorizations, 0);
+        assert_eq!(tr.drape.factorizations, 0);
+    }
+
+    #[test]
+    fn portable_microclimate_and_lower_visco_match_native_bytes() {
+        let micro_req = json!({
+            "schema": ftx_drape::thermal::microclimate::MICROCLIMATE_REQUEST_SCHEMA,
+            "air": { "temperature_c": 20.0, "pressure_pa": 101325.0, "relative_humidity": 0.5 },
+            "convection": {
+                "correlation": "churchill_chu_vertical_plate",
+                "characteristic_length_m": 0.30,
+                "delta_t_k": 10.0,
+                "surface_temperature_range_c": [15.0, 40.0],
+                "allow_estimates": true
+            }
+        })
+        .to_string();
+        assert_eq!(
+            crate::thermal::microclimate(&micro_req).unwrap(),
+            ftx_drape::thermal::microclimate::evaluate_json(&micro_req).unwrap()
+        );
+
+        let visco_req = json!({
+            "schema": ftx_pattern::material_relaxation::exact_exp::LOWERING_REQUEST_SCHEMA,
+            "e0": 200.0,
+            "e_inf": 500.0,
+            "alpha": 0.35,
+            "tau_s": 1.0,
+            "f_lo_hz": 0.01,
+            "f_hi_hz": 100.0,
+            "n_terms": 14,
+            "rel_tol": 0.02
+        })
+        .to_string();
+        assert_eq!(
+            crate::materials::lower_visco(&visco_req).unwrap(),
+            ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json(&visco_req)
+                .unwrap()
         );
     }
 }
