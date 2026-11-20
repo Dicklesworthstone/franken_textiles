@@ -12,7 +12,9 @@ import easedPattern from "../../public/exhibits/sundress/light-pattern.json";
 import TorsoSlice from "../construction/TorsoSlice";
 import MuslinTrial from "./MuslinTrial";
 
-const Making = dynamic(() => import("../atelier3d/SolverDrape"), { ssr: false });
+// The placeholder holds the height of the stage, timeline and flat pattern, so nothing below moves when they load.
+const Making = dynamic(() => import("../atelier3d/SolverDrape"), { ssr: false,
+  loading: () => <div className="sd-making-wait" aria-hidden="true" /> });
 
 // A plain-weave cotton in the fitting room's sprig print, self-lined. The print runs with each piece's grain, so
 // it shows how the cloth turns and gathers. Colour and print are for display; the drape's own fabric constants

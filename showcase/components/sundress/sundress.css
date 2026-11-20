@@ -49,9 +49,11 @@
 .sd-sewn-method summary{font:600 14px var(--sans);cursor:pointer}
 .sd-sewn-method>div{columns:2 340px;column-gap:clamp(28px,4vw,64px);margin-top:10px}
 .sd-sewn-method p{font-size:14px;line-height:1.55;color:#515c50;margin:0 0 10px;break-inside:avoid}
+/* Until the replay loads: the height of its stage plus its timeline and flat pattern, in their two grounds. */
+.sd-making-wait{--wait-below:262px;flex:1;min-height:calc(clamp(440px,46vw,660px) + var(--wait-below));background:linear-gradient(#3f4b43 0 calc(100% - var(--wait-below)),#f6f1e3 0)}
 @media(max-width:1099px){.sd-sewn{grid-template-columns:1fr}}
-@media(min-width:761px) and (max-width:1099px){.sd-sewn .sd-making{--mk-height:clamp(480px,62vw,600px)}}
-@media(max-width:760px){.sd-sewn-stage{min-height:clamp(360px,96vw,500px)}}
+@media(min-width:761px) and (max-width:1099px){.sd-sewn .sd-making{--mk-height:clamp(480px,62vw,600px)}.sd-making-wait{min-height:calc(clamp(480px,62vw,600px) + var(--wait-below))}}
+@media(max-width:760px){.sd-sewn-stage{min-height:clamp(360px,96vw,500px)}.sd-making-wait{--wait-below:222px;min-height:calc(clamp(390px,108vw,540px) + var(--wait-below))}}
 @media(pointer:coarse){.sd-page .sd-replay>button{width:44px;height:44px}.sd-replay input{height:44px}}
 .sd-slice{display:flex;align-items:center;gap:15px;background:#f4eddf;color:#453b30;padding:12px;margin:15px 0;flex-wrap:wrap}
 .sd-slice svg{flex:1 1 128px;width:40%;max-height:140px}.sd-slice figcaption{flex:2 1 160px;display:grid;gap:5px;font:400 13px/1.45 var(--sans)}.sd-slice figcaption strong{font:400 21px var(--serif)}.sd-slice a{text-decoration:underline;text-underline-offset:2px}
