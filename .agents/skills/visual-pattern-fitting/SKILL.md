@@ -26,6 +26,16 @@ For a refused solve with saved diagnostics, open `sim/refused/still_front.png` a
 `sim.refusal`. The image shows the state associated with the failure. Use the same `inspect-pixel`
 command below on that image to trace an edge. The result retains the refusal, phase and accepted
 step count. Older refusal archives lack the source-edge map and can still be compared visually.
+
+A solve refused at its start (`intersecting_start`) has no cloth state. It leaves the views of
+`ftx place` instead. Open `sim/refused/start/still_back.png` and `still_front.png`: cloth inside the
+body is magenta and cloth crossing cloth is yellow. The first repair in `sim.refusal` names the
+piece pairs that cross, and `sim/refused/placement.json` gives each piece's angles, heights and
+radius. Change the placement or the pose and run a new round. `inspect-pixel` does not read these
+views. While you adjust placements, `ftx place pattern.json --measurements measurements.json
+--out NEW_DIR` writes the same views in seconds without the solver. A joint outfit, or a round
+with `--fabric`, `--two-start-sew` or `--elastic-ea`, leaves no start views.
+
 For a completed solve, open the current round's `sim/still_front.png`
 as an image, then a second angle or strain view as the question requires. `preview.svg` shows
 the flat pieces and construction diagnostics. `report.html` in the workspace ties the evidence together.
@@ -49,6 +59,12 @@ State what you see and what you expect one edit to change. For measured drafts, 
 parameter and redrafting also rebuilds related curves and markings. For an authored piece,
 `ftx alter move`, `slash-spread`, `true-seam` and `cap-ease` operate on named geometry. Write a
 fresh candidate. Review connected seams, notches and trim affected by the edit.
+
+A gathered seam (`gather_ratio` well away from 1) sews, but the solver's cloth resists shortening
+as strongly as stretching, so the cloth below it can stand away from the body like a shelf. If the
+sewn garment would pleat there, declare `gather_relief_mm` and `gather_compression` on that seam
+(`docs/spec/04-simulation-vectorize-cli.md` §5.4). The drape report lists the band under
+`gather_relief`. Both numbers are authored, with no measured source.
 
 ```sh
 ftx round "$work" --pattern revised/pattern.json --stills --res 840x620 --self-contact-mm 2 \
