@@ -217,6 +217,11 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
             "bodyFit": report["body"].get("fit", {}).get("tape"), "wallSeconds": report["wall_s"],
         },
     }
+    # A softened compression factor or a seam's declared band of pleats is a different cloth model, so a summary
+    # made with one names it. A reference-model drape's report has neither, and its summary is unchanged.
+    for key, field in (("compressionFactor", "compression_factor"), ("gatherRelief", "gather_relief")):
+        if field in report:
+            metadata["summary"][key] = report[field]
     # The numbers the page states in words, small enough to import without the mesh.
     digest = {"vertices": n, "triangles": len(triangles), "frames": len(frames), "phases": phases,
               "cords": len(cords), "buttons": len(buttons), "instances": names,

@@ -524,7 +524,13 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
   took 436 Newton iterations instead of 808 (none unconverged) with every fit reading within 3 mm and the
   same verdict, and the trousers 838 instead of 924 with their bands within 3 mm and the two crotch-seam
   "distorted" advisories gone (p90 strain 4.8–4.9 % instead of 9–10 %: crowding of near-free
-  compression).
+  compression). Two native options change this and are named in the report when used
+  (`compression_factor`, `gather_relief`): `DrapeOptions::compression` (`ftx drape --compression`) lowers
+  the factor outside gather zones, and a gathered seam may declare its own band of pleats
+  (`gather_relief_mm`, `gather_compression`; spec 04 §5.4), which holds its floor for the declared depth
+  before the 50 mm ramp. The band applies to the cloth model only: the start state and its relaxation keep
+  the reference's weights. A band on a seam whose ratio is within 0.15 of 1 is refused, because the solver
+  would not gather that seam and the band would be ignored.
 - Untangling: crossings the exact audit still finds after relaxation are removed by moving the crossing
   cloth edge's ends (or the pierced cloth triangle) 2 mm above the crossed body triangle (or ridge), in
   rounds of up to 50; a piece wholly inside the body is refused.

@@ -30,6 +30,8 @@ pub const RELAX_PUSH_OUT_ITERS: usize = 25;
 pub const RELAX_TARGET_P95: f64 = 0.12;
 /// Cap on the total relaxation iterations.
 pub const RELAX_MAX_ITERS: usize = 1600;
+/// A seam is gathered when its `ratio` differs from 1 by more than this (spec 04 §5.4).
+pub const GATHER_RATIO_MARGIN: f64 = 0.15;
 /// How far from a gathered seam the cloth may draw up in its own plane (mm).
 pub const GATHER_ZONE_MM: f64 = 50.0;
 /// Compression stiffness at a gathered seam, as a fraction of the tensile stiffness (the reference's
@@ -205,7 +207,7 @@ fn gather_field(mesh: &GarmentMesh, declared: bool) -> (Vec<f64>, Vec<f64>) {
     let mut w = vec![1.0_f64; r2.len()];
     let mut floor = vec![GATHER_COMPRESSION; r2.len()];
     for s in &mesh.seams {
-        if (s.ratio - 1.0).abs() <= 0.15 {
+        if (s.ratio - 1.0).abs() <= GATHER_RATIO_MARGIN {
             continue;
         }
         let (relief, low) = match s.gather_relief.filter(|_| declared) {

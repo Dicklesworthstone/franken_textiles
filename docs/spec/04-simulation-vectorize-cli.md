@@ -437,7 +437,8 @@ The report records `fabric: {areal_kg_m2, tensile_N_m, bending_Nm}` and `area_m2
   step went and the whole skirt crumpled.
 - **Native extension: a gathered seam's own band of pleats.** A seam may declare `gather_relief_mm` (a length
   of 0 or more, default 0) and `gather_compression` (a factor in (0, 1], default 0.03); anything else refuses
-  (`out_of_range`). In the cloth model, and only there, such a seam's weight becomes
+  (`out_of_range`), and so does either field on a seam whose `ratio` is within 0.15 of 1, which the solver does
+  not gather and where the band would be ignored. In the cloth model, and only there, such a seam's weight becomes
   `w = clip((d − gather_relief_mm) / 50 mm, 0, 1)` and the floor under it `gather_compression` in place of
   0.03, so the cloth stays that free to shorten for the declared depth and returns to its own stiffness over the
   following 50 mm. The start state, its relaxation and `gather_zone_vertices` keep the reference's weights. A
@@ -445,7 +446,9 @@ The report records `fabric: {areal_kg_m2, tensile_N_m, bending_Nm}` and `area_m2
   authored: they stand for pleats finer than the mesh, are not resolved folds, and have no measured source; a
   report made with them lists each such seam under `gather_relief`. On the skirt above, 120 mm at 0.002 let it
   leave the waist as a bell: clearance 84.7 mm at centre front and 25.6 mm at centre back, against 92.8 and
-  45.3 mm. The reference's own slide check then gates on the skirt coming down 116 mm under gravity.
+  45.3 mm; 150 mm at 0.0005 gave 71.0 and 11.9 mm and took 34 minutes against 13.5. A small ledge remained at
+  the back waist in profile. The reference's own slide check then gates on the skirt coming down under gravity
+  (116 and 87 mm in those two runs): it is the gathered top closing, and the waist seam stays sewn.
 - **Report:** `gather_zone_vertices` = the count of vertices with w < 1.
 - **Evidence:** without gather zones, the 872 mm gathered trouser top pushed its 530 mm casing open by 40 % and the
   trousers slid off. With zones, gathered bands finish 2–10 % over their rest length; without, +11 to +59 %.

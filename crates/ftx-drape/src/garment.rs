@@ -406,6 +406,19 @@ pub fn build_garment(pattern: &Pattern, spacing: f64) -> Result<GarmentMesh, Ref
                     )
                     .repair("Omit both for the reference's gather zone: 3 % compression at the seam, back to the cloth's own within 50 mm."));
                 }
+                // The solver gathers only a seam whose ratio is clear of 1; on any other seam the band
+                // would be ignored, so it is refused instead.
+                if (ratio - 1.0).abs() <= crate::start::GATHER_RATIO_MARGIN {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "seam {}: a band of pleats is declared, but ratio {ratio} is within {} of 1, which the solver does not gather",
+                            s.id_text(),
+                            crate::start::GATHER_RATIO_MARGIN
+                        ),
+                    )
+                    .repair("Remove gather_relief_mm and gather_compression from this seam, or give it the ratio of its gathered length to its sewn length."));
+                }
                 Some(relief)
             }
         };
@@ -763,6 +776,27 @@ mod tests {
             let refusal = build_garment(&pattern(seam), 20.0).unwrap_err();
             assert_eq!(refusal.code, RefusalCode::OutOfRange, "{key}");
         }
+        // A band on a seam the solver does not gather would do nothing, so it refuses and names the ratio.
+        for ratio in [json!(1.1), Value::Null] {
+            let mut seam = gathered.clone();
+            seam["gather_relief_mm"] = json!(100.0);
+            if ratio.is_null() {
+                seam.as_object_mut().unwrap().remove("ratio");
+            } else {
+                seam["ratio"] = ratio;
+            }
+            let refusal = build_garment(&pattern(seam), 20.0).unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::OutOfRange);
+            assert!(
+                refusal.message.contains("does not gather"),
+                "{}",
+                refusal.message
+            );
+        }
+        let mut seam = gathered.clone();
+        seam["gather_relief_mm"] = json!("deep");
+        let refusal = build_garment(&pattern(seam), 20.0).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
     }
 
     /// Two rectangles sewn right edge (curved) to left edge: matched samples, CCW triangles covering

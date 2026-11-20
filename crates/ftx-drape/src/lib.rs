@@ -51,6 +51,6 @@ pub mod vapor;
 pub use cloth::{ClothModel, SettleReport, SolveReport, Solver, Tube, grid, hex_grid, hex_tube};
 pub use contact::{Body, Contact, ContactParams, Intersection};
 pub use elements::{Hinge, Membrane, MembraneElement};
-pub use garment::{GarmentMesh, SeamRecord, build_garment};
+pub use garment::{GarmentMesh, GatherRelief, SeamRecord, build_garment};
 pub use nearest::{Nearest, NearestTree};
 pub use start::{PartFrame, StartState, WrapPlacement, start_state, wrap_points};

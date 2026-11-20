@@ -5,8 +5,9 @@ From the repository root:
   python3 showcase/scripts/prepare-sundress-drape.py NEW_WORK_DIR OUTPUT_DIR --lightly-eased --solve --model MODEL.ftxbody
   python3 showcase/scripts/prepare-sundress-drape.py WORK_DIR OUTPUT_DIR          # repackage a finished drape
 
-The pattern, the form's tapes and the fit points are those of prepare-sundress.py, unchanged. The
-packing and the command line are prepare-hussar-drape.py's. Never use a real wearer's workspace.
+The pattern, the form's tapes and the fit points are those of prepare-sundress.py. This script adds only what
+the drape needs: each piece's starting radius, and on the gathered cut the band of pleats under its waist
+seams. The packing and the command line are prepare-hussar-drape.py's. Never use a real wearer's workspace.
 """
 import argparse
 from pathlib import Path

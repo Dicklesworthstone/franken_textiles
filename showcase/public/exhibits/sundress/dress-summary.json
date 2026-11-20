@@ -200,5 +200,17 @@
    "target_mm": 1010.0
   }
  },
- "wallSeconds": 2064.6
+ "wallSeconds": 2064.6,
+ "gatherRelief": [
+  {
+   "compression": 0.0005,
+   "relief_mm": 150.0,
+   "seam": "gather_front"
+  },
+  {
+   "compression": 0.0005,
+   "relief_mm": 150.0,
+   "seam": "gather_back"
+  }
+ ]
 }

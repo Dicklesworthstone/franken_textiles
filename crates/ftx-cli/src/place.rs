@@ -71,8 +71,16 @@ const TORSO_LANDMARKS: [&str; 14] = [
     "head_centre",
 ];
 
+/// One decimal place. A value that rounds to nothing is 0, not −0, so a report never prints `-0.0`.
 fn round1(v: f64) -> f64 {
-    (v * 10.0).round() / 10.0
+    let rounded = (v * 10.0).round() / 10.0;
+    if rounded == 0.0 { 0.0 } else { rounded }
+}
+
+/// How far the deepest of these vertices is inside the body, in millimetres, from signed distances in
+/// metres (negative inside). 0 when none is inside, never −0.
+fn deepest_mm(depth: &[f64]) -> f64 {
+    round1(1000.0 * depth.iter().copied().fold(0.0, f64::min).abs())
 }
 
 /// `(piece index, mirrored copy)` of each instance, pieces numbered in first-use order.
@@ -334,8 +342,7 @@ fn instance_report(
                 h1 = h1.max(p.h0 + v.y);
             }
             let inside = |depth: &[f64]| depth[lo..hi].iter().filter(|d| **d < 0.0).count();
-            let deepest =
-                |depth: &[f64]| round1(-1000.0 * depth[lo..hi].iter().copied().fold(0.0, f64::min));
+            let deepest = |depth: &[f64]| deepest_mm(&depth[lo..hi]);
             json!({
                 "instance": id,
                 "colour": PIECE_COLOUR_NAMES[slots[k].0 % PIECE_COLOUR_NAMES.len()],
@@ -712,8 +719,21 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cloth_crossings, mean_strain, piece_slots, slot_colour};
+    use super::{cloth_crossings, deepest_mm, mean_strain, piece_slots, slot_colour};
     use ftx_core::Vec3;
+
+    #[test]
+    fn depth_inside_the_body_is_a_positive_length_and_none_is_plain_zero() {
+        assert_eq!(deepest_mm(&[0.004, -0.0123, -0.002, 0.0]), 12.3);
+        for clear in [&[0.004, 0.0][..], &[][..], &[-0.0][..]] {
+            let depth = deepest_mm(clear);
+            assert_eq!(depth, 0.0);
+            assert!(depth.is_sign_positive(), "a report must not print -0.0");
+        }
+        // The same holds for any rounded reading, such as a slightly negative mean shear.
+        assert!(super::round1(-0.04).is_sign_positive());
+        assert_eq!(super::round1(-0.06), -0.1);
+    }
 
     #[test]
     fn a_sewn_seam_is_adjacency_and_a_pierced_panel_is_a_crossing() {
