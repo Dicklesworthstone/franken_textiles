@@ -7,6 +7,10 @@
 @media(max-width:760px){.hu-heading{display:block}.hu-heading>p{margin-top:12px;max-width:50ch}.hu-desk,.hu-reel,.hu-sample{grid-template-columns:1fr}.hu-stage{height:clamp(345px,82vw,490px)}.hu-controls{padding:22px}.hu-reel,.hu-sample{gap:13px}.hu-sample .hu-braid{order:2}.hu-mast{height:57px}}
 .hu-fallback .inline-film{object-fit:contain}
 .hu-film{overflow:hidden}
+/* Before the dolman replay loads, the figure already has the height of its stage, timeline, flat pattern and
+   camera bar, so the page below does not jump. Not for the recorded-film fallback, which is shorter. */
+.hu-figure:not(:has(.hu-fallback)){min-height:calc(clamp(440px,46vw,660px) + 308px)}
+@media(max-width:760px){.hu-figure:not(:has(.hu-fallback)){min-height:calc(clamp(390px,108vw,540px) + 286px)}}
 .hu-compare-link,.hu-pattern-links a{text-decoration:underline;text-underline-offset:3px}
 .hu-pattern-links{display:grid;gap:7px;margin-top:14px;font-size:13px;font-weight:600}
 .hu-stage:has(.hu-scene):not(:has(canvas[data-ready]))::before{content:"";position:absolute;inset:0;pointer-events:none;background:#39483e url(/media/wardrobe-hussar.jpg) center/cover no-repeat}

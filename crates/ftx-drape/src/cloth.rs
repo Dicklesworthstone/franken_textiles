@@ -3451,6 +3451,7 @@ mod strategy_and_integrator_tests {
             Vec3::new(0.0, 0.0, -9.81),
         );
         tr_static.newton_strategy = NewtonStrategy::trust_region_default();
+        tr_static.tol = 1e-12;
         let rep_tr = tr_static.static_solve().unwrap();
         assert!(rep_tr.converged);
         let mut pn_static = Solver::new(
@@ -3459,8 +3460,10 @@ mod strategy_and_integrator_tests {
             &[[true; 3], [true; 3], [false; 3]],
             Vec3::new(0.0, 0.0, -9.81),
         );
+        pn_static.tol = 1e-12;
         pn_static.static_solve().unwrap();
-        assert!((tr_static.x[2] - pn_static.x[2]).norm() < 1e-10);
+        let diff = (tr_static.x[2] - pn_static.x[2]).norm();
+        assert!(diff < 1e-10, "static TR vs PN diff={diff}");
 
         let mut tr_refuse = tr_static;
         tr_refuse.max_newton = 0;
