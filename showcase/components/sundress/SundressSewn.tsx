@@ -54,10 +54,11 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
   const band = waistSeam.gather_relief_mm && waistSeam.gather_compression
     ? { depth: waistSeam.gather_relief_mm, percent: Number((waistSeam.gather_compression * 100).toPrecision(3)) } : null;
   const flags = drape.flags as string[], gating = drape.gating as string[];
+  const skirtRadius = (side: string) => cuts[cut].pattern.pieces.find(piece => piece.id === "skirt_" + side)!.placement.radius_mm;
   return <section className="sd-sewn" id="sewn" aria-labelledby="sewn-title">
     <div className="sd-cut-picker">
       <div><p className="kicker">Pattern revision</p><h2 id="sewn-title">One bodice, two skirt cuts.</h2>
-        <p>Both skirts have a 168 cm hem. Shortening each waist edge by 97.5 mm brings the cloth closer at centre front, from {gatheredSection.frontGapMm} to {easedSection.frontGapMm} mm clear of the same wearer.</p></div>
+        <p>Both skirts have a 168 cm hem. Each waist edge on the eased cut is 97.5 mm shorter. At the same wearer’s waist, the simulated centre-front gap measures {gatheredSection.frontGapMm} mm on the gathered cut and {easedSection.frontGapMm} mm on the eased cut.</p></div>
       <div className="sd-cut-options" role="group" aria-label="Skirt waist cut">{cutIds.map(id => {
         const {outline, waist} = frontSkirt(cuts[id].pattern);
         return <button type="button" key={id} aria-pressed={cut === id} onClick={() => setCut(id)}>
@@ -88,15 +89,15 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
         <a href={source+"-section.json"} download>Section coordinates ↓</a></figcaption></figure>
       <details open><summary>What the solver did, and what is drawn</summary>
         <p>The reference form has a 90 cm bust and a 72 cm waist, with arms {drape.armDeg}° from the side. The solver took {drape.phases.sew} sewing steps and {drape.phases.drape} gravity steps. {drape.settled && !gating.length ? "The run settled with no gating flags." : "The run carries the flags listed below."} Each skirt waist is {ratio} times the length of the bodice edge it joins.</p>
-        <p>The skirt starts 270 mm from the body axis. The contact audit finds zero crossings there and the 1 mm cloth-to-cloth barrier stays active through sewing and settling. {band
-          ? <>The gathers are modelled as a band of pleats. For {band.depth} mm below the waist seam the solver lets the cloth shorten almost freely, at {band.percent} % of its stiffness in tension, which stands for pleats finer than its {drape.spacingMm} mm mesh. The band is authored, not measured. Without it this skirt left the waist as a shelf, 92.8 mm clear at centre front. The fine pleats drawn under the seam mark where the solver’s cloth is shorter than its pattern. They are not folds the solver resolved. In profile a small ledge remains at the back.</>
+        <p>The front panel starts {skirtRadius("front")} mm from the body axis and the back starts {skirtRadius("back")} mm away. The 1 mm cloth-contact barrier stays active through sewing and settling. {band
+          ? <>For {band.depth} mm below the waist seam the solver lets the cloth shorten at {band.percent} % of its tensile stiffness. This models pleats finer than the {drape.spacingMm} mm mesh. The narrow pleats drawn below the waist illustrate that shortening. The side view shows the broader folds resolved by the mesh.</>
           : <>Look at the waist in profile. Its broad folds stand away from the form on the {drape.spacingMm} mm mesh.</>} Finer gathers and real-world fit still need comparison with a sewn sample.</p>
         <p>The viewer draws weave, piece colors and seam guides on the recorded cloth surface. The fabric uses synthetic defaults of {(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m² and {drape.fabric.bending_Nm} N·m bending stiffness. The interactive form is drawn 2.5 mm inside the solver surface.</p>
-        {band && <p>A deeper pleat band let the skirt cross the fingers during sewing. This version clears the complete hands and body in all {1 + drape.phases.sew + drape.phases.drape} recorded physical states.</p>}
+        <p>All {1 + drape.phases.sew + drape.phases.drape} recorded physical states passed checks for cloth crossing the body, hands or other cloth panels.</p>
         {gating.map(flag => <p key={flag} className="sd-flag">Solver flag · {flag}</p>)}
-        {flags.filter(flag => !gating.includes(flag)).map(flag => <p key={flag} className="sd-flag">Solver note · {flag}</p>)}
-        {flags.some(flag => flag.includes("slid")) && <p>The slide flags compare how high each skirt panel’s corners sit after sewing and after gravity, and are worded for a garment slipping off the body. What they measured here is the gathered top of the skirt coming down to hang from the waist once its pleats could close. The waist seam itself stays sewn to the bodice.</p>}
-        {flags.some(flag => flag.includes("rides up")) && <p>That note is worded for a sleeved jacket. What it measured here is that the hems settled that far above where the flat pattern places them: the waist seam sits above this form’s waist.</p>}
+        {flags.filter(flag => !gating.includes(flag)).map(flag => <p key={flag} className="sd-flag">Solver note · {flag.startsWith("the body rides up ")
+          ? <>The front hem settled {section.hemRiseMm.front} mm above its starting height, and the back hem settled {section.hemRiseMm.back} mm above its starting height.</>
+          : flag}</p>)}
         <p><a href={source+"-pattern.json"} download>Exact pattern and starting placements ↓</a> · <a href={source+"-summary.json"} download>Solver summary ↓</a></p>
       </details>
     </div>

@@ -16,7 +16,7 @@
   "skirt_back",
   "skirt_front"
  ],
- "sourcePc2Sha256": "cf0b7a2d71674869bd780c5053bd53be98f938b683a3582f9677bcbf3eae226d",
+ "sourcePc2Sha256": "52ec0606fa64145957241c951032c30ea6eb4c50a62ccdee8b760b9233d58b3b",
  "style": "GARDEN_SUNDRESS",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -36,12 +36,13 @@
  "settled": true,
  "gating": [],
  "flags": [
-  "the body rides up 75 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)"
+  "the body rides up 88 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
+  "start restored to an earlier self-contact-clear relaxation block"
  ],
  "edgeStrainPercent": {
-  "max": 11.94,
-  "min": -4.9,
-  "p95": 1.11
+  "max": 10.99,
+  "min": -6.74,
+  "p95": 1.17
  },
  "massKg": 0.20967533603796454,
  "areaM2": 1.0484,
@@ -99,101 +100,101 @@
  },
  "bodyFit": {
   "arm_length": {
-   "body_mm": 564.8,
+   "body_mm": 565.0,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": -0.08134694870045678,
-   "residual_mm": -0.16269389740091356,
+   "normalized_residual": -0.022933898664746266,
+   "residual_mm": -0.04586779732949253,
    "sigma_mm": null,
    "target_mm": 565.0
   },
   "back_neck_to_waist": {
-   "body_mm": 427.2,
+   "body_mm": 426.5,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": 1.1096556526715915,
-   "residual_mm": 2.219311305343183,
+   "normalized_residual": 0.74598688571254,
+   "residual_mm": 1.49197377142508,
    "sigma_mm": null,
    "target_mm": 425.0
   },
   "chest": {
-   "body_mm": 899.2,
+   "body_mm": 899.6,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": -0.2744968938871655,
-   "residual_mm": -0.8234906816614966,
+   "normalized_residual": -0.14456996854975537,
+   "residual_mm": -0.43370990564926615,
    "sigma_mm": null,
    "target_mm": 900.0
   },
   "crotch_height": {
    "body_mm": 770.0,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": -0.006465680695953324,
-   "residual_mm": -0.012931361391906648,
+   "normalized_residual": 0.006265194006175534,
+   "residual_mm": 0.012530388012351068,
    "sigma_mm": null,
    "target_mm": 770.0
   },
   "head": {
-   "body_mm": 550.3,
+   "body_mm": 550.1,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": 0.09382200789912076,
-   "residual_mm": 0.2814660236973623,
+   "normalized_residual": 0.04224372818998745,
+   "residual_mm": 0.12673118456996235,
    "sigma_mm": null,
    "target_mm": 550.0
   },
   "hip": {
-   "body_mm": 959.8,
+   "body_mm": 959.9,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": -0.07182408882245757,
-   "residual_mm": -0.21547226646737272,
+   "normalized_residual": -0.02395391927075252,
+   "residual_mm": -0.07186175781225757,
    "sigma_mm": null,
    "target_mm": 960.0
   },
   "knee_height": {
-   "body_mm": 470.2,
+   "body_mm": 470.1,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": 0.08225093401634354,
-   "residual_mm": 0.16450186803268707,
+   "normalized_residual": 0.03714826366535817,
+   "residual_mm": 0.07429652733071634,
    "sigma_mm": null,
    "target_mm": 470.0
   },
   "neck_base": {
-   "body_mm": 355.1,
+   "body_mm": 353.0,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": 1.7047028405726792,
-   "residual_mm": 5.1141085217180375,
+   "normalized_residual": 0.9923445511993236,
+   "residual_mm": 2.977033653597971,
    "sigma_mm": null,
    "target_mm": 350.0
   },
   "shoulder_length": {
-   "body_mm": 122.6,
+   "body_mm": 124.4,
    "effective_sigma_mm": 5.0,
-   "normalized_residual": -0.48389385353026737,
-   "residual_mm": -2.419469267651337,
+   "normalized_residual": -0.12683510726000974,
+   "residual_mm": -0.6341755363000487,
    "sigma_mm": null,
    "target_mm": 125.0
   },
   "stature": {
-   "body_mm": 1677.9,
+   "body_mm": 1678.6,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": -1.0601296805293714,
-   "residual_mm": -2.120259361058743,
+   "normalized_residual": -0.6781718080264909,
+   "residual_mm": -1.3563436160529818,
    "sigma_mm": null,
    "target_mm": 1680.0
   },
   "waist": {
-   "body_mm": 719.6,
+   "body_mm": 719.9,
    "effective_sigma_mm": 3.0,
-   "normalized_residual": -0.1232744900017148,
-   "residual_mm": -0.3698234700051444,
+   "normalized_residual": -0.04763434217848802,
+   "residual_mm": -0.14290302653546405,
    "sigma_mm": null,
    "target_mm": 720.0
   },
   "waist_height": {
-   "body_mm": 1012.2,
+   "body_mm": 1011.4,
    "effective_sigma_mm": 2.0,
-   "normalized_residual": 1.1234731909433435,
-   "residual_mm": 2.246946381886687,
+   "normalized_residual": 0.6885496258111061,
+   "residual_mm": 1.3770992516222123,
    "sigma_mm": null,
    "target_mm": 1010.0
   }
  },
- "wallSeconds": 361.4
+ "wallSeconds": 599.0
 }
