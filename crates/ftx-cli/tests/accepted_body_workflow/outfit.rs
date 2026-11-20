@@ -76,7 +76,7 @@ fn joint_accessory_mass_is_published_once_and_replays_through_the_ordinary_drape
     let dir = joint_setup();
     save(&dir.join("outfit.json"), &accessorized());
     let before = std::fs::read(dir.join("outfit.json")).unwrap();
-    let out = command(&dir, "loaded", &["--self-contact-mm", "2"]);
+    let out = command(&dir, "loaded", &[]);
     assert!(
         matches!(out.status.code(), Some(0 | 2)),
         "{} / {}",
@@ -84,6 +84,8 @@ fn joint_accessory_mass_is_published_once_and_replays_through_the_ordinary_drape
         String::from_utf8_lossy(&out.stderr)
     );
     let report = read(&dir.join("loaded/sim_report.json"));
+    assert_eq!(report["self_contact"]["enabled"], true);
+    assert_eq!(report["self_contact"]["audit"], "passed");
     let composed = read(&dir.join("loaded/outfit_pattern.json"));
     let result: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(result["result"]["outfit"], report["outfit"]);
@@ -242,7 +244,7 @@ fn joint_drape_publishes_the_actual_contact_run_and_replayable_sources() {
 fn incomplete_joint_inputs_refuse_before_body_fitting_or_publication() {
     let dir = joint_setup();
     for (name, flags) in [
-        ("disabled", vec![]),
+        ("invalid_offset", vec!["--self-contact-mm", "-1"]),
         (
             "conflicting_start",
             vec!["--self-contact-mm", "2", "--two-start-sew"],

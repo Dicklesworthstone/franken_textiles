@@ -278,17 +278,16 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   `fold_viewer.html`, and the last frame as OBJ for renders elsewhere (metres, z up): `garment.obj` with
   per-vertex seam colours and `garment_strain.obj` with strain colours (`v x y z r g b`, spec 04 §9.4),
   and `body.obj` (the full posed skin). Exit 0 when no gating flag, 2 with gating flags. Without `--fit`, no girth landmarks
-  are read. `--self-contact-mm` opts into cloth–cloth contact on the welded solver mesh, with MM
-  the sum of the layers' half-thicknesses (0 is allowed). `--self-mu` sets its independent friction
-  coefficient (default 0.4); it is refused unless self-contact is enabled. `--compression F` (0 < F ≤ 1,
+  are read. Ordinary drapes enable cloth–cloth contact on the welded solver mesh. `--self-contact-mm`
+  sets the sum of the layers' half-thicknesses (2 mm by default, with the barrier still active at zero).
+  `--self-mu` sets its independent friction coefficient (default 0.4). `--compression F` (0 < F ≤ 1,
   default 1, the reference's cloth, as stiff in compression as in tension) sets how strongly cloth resists
   being shorter than its pattern along warp and weft. Below 1 it is a different cloth model: a mesh too
   coarse to form a fold lets the cloth shorten there, which stands for folds finer than the mesh without
   resolving them. The factor is authored, has no measured source, and is recorded as `compression_factor`
   in `sim_report.json` whenever it is not 1. Numerical options are
   validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
-  not silently untangled. Without the option, body-only behavior is preserved and output explicitly
-  says self-contact was not simulated. Both `sim_report.json` and the CLI result contain a
+  with a repair message. Both `sim_report.json` and the CLI result contain a
   `self_contact` object with enabled/audit status, parameters and nearby final gap when enabled.
   This audit covers sewing/draping solver states, not the kinematic fold/zip animation or fit accuracy.
   `--arm-deg` accepts a finite 0–180 degrees from vertical (default 35), including an explicit zero

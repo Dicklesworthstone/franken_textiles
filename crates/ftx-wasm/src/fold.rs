@@ -149,9 +149,8 @@ pub fn inspect_body(
     Ok(report)
 }
 
-/// Drapes `pattern` on `model` fitted to `measurements`, judged by `fit_spec`. `self_contact_mm` > 0 turns
-/// on cloth self-contact at that thickness (the skill passes Blender's 2 mm); progress lines go to
-/// `progress`.
+/// Drapes `pattern` on the fitted `model`. `self_contact_mm` sets the offset between cloth surfaces.
+/// A zero offset still enforces contact. Progress lines go to `progress`.
 ///
 /// # Errors
 /// A wearer or tape the fit cannot use, a pattern the drape refuses (no fold-up placement, an
@@ -193,7 +192,7 @@ pub struct BodyFitSource<'a> {
 /// Cloth controls shared by tape-fitted and explicitly accepted body sources.
 #[derive(Clone, Copy, Debug)]
 pub struct FoldOptions {
-    /// Cloth self-contact thickness in millimetres; zero disables self-contact.
+    /// Cloth self-contact offset in millimetres. Zero retains the crossing barrier.
     pub self_contact_mm: f64,
     /// Compare the default second sewing duration at the same placement.
     pub two_start: bool,
@@ -204,7 +203,7 @@ pub struct FoldOptions {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FoldSettings {
-    /// Cloth self-contact thickness in millimetres; zero disables self-contact.
+    /// Cloth self-contact offset in millimetres. Zero retains the crossing barrier.
     pub self_contact_mm: f64,
     /// Compare the default second sewing duration at the same placement.
     pub two_start: bool,
@@ -227,7 +226,7 @@ pub struct FoldSettings {
 impl Default for FoldSettings {
     fn default() -> Self {
         Self {
-            self_contact_mm: 0.0,
+            self_contact_mm: 2.0,
             two_start: false,
             arm_abduction_deg: Pose::A_POSE_DEG,
             legs: Legs::Standing,
@@ -337,11 +336,10 @@ fn fold_on_source(
         time_subdivision,
         ..DrapeOptions::default()
     };
-    if self_contact_mm > 0.0 {
-        let mut p = opts.contact;
-        p.thickness = self_contact_mm * 1e-3;
-        opts.self_contact = Some(p);
-    }
+    opts.self_contact = Some(ftx_drape::contact::ContactParams {
+        thickness: self_contact_mm * 1e-3,
+        ..opts.contact
+    });
     opts.validate().map_err(m)?;
     let material = ftx_drape::material::resolve(&pat, &opts).map_err(m)?;
     // Occupancy and the bare fitter must consume the same current evidence, including in direct

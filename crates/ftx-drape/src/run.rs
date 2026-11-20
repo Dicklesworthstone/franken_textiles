@@ -420,7 +420,16 @@ pub fn drape(
     let board = board_layout(&scene.mesh);
     let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);
     let initial_positions = scene.positions();
-    frames.extend(zip_frames(&scene.start.wrapped, &initial_positions));
+    if opts.self_contact.is_some() {
+        for frame in &mut frames {
+            crate::animation::separate_panels(frame, &scene.mesh.inst_range);
+        }
+        let held = frames.last().expect("fold has a final frame").clone();
+        frames.extend(std::iter::repeat_n(held, ZIP_FRAMES - 1));
+        frames.push(initial_positions.clone());
+    } else {
+        frames.extend(zip_frames(&scene.start.wrapped, &initial_positions));
+    }
     let initial_contact = scene
         .solver
         .contact
@@ -1230,6 +1239,7 @@ pub fn viewer(
         &run.scene.mesh,
         &run.fold,
         &ViewerExtras {
+            contact_replay: run.report["self_contact"]["enabled"].as_bool() == Some(true),
             title: if title.is_empty() { "fold-up" } else { title },
             style,
             body: body.display,

@@ -218,6 +218,11 @@ evidence that the authored catalog garment is complete or fits a person.
 
 ## Parity exceptions (reference behaviour changed on purpose)
 
+The native contact-protected fold differs from the reference animation in spec 04 §9.1.
+During setup, panels bend in separate stations. Playback cuts to the accepted welded
+state because interpolating a path from a pattern board to a posed body can cross cloth.
+The reference fold and zip functions remain covered by the kinematics fixtures.
+
 | Behaviour | Reference | Port | Reason |
 |---|---|---|---|
 | Self-contact start admission | kinematic relaxation stops by plain-edge strain, without a cloth self-contact admission policy | only when requested self-contact rejects the final start, select the latest earlier completed 200-iteration block that passes the ordinary scene builder and actual contact policy; otherwise retain refusal | `kat_fitted::chart_trousers_self_contact_start` reproduces a crossed chart-trouser cuff and checks 2 mm recovery plus a 50 mm refusal. Accepted/rejected counts, actual initial strain and a repair advisory are reported. Body-only/reference start fixtures remain unchanged; no audit exemption or physical-fit claim |

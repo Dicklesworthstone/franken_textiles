@@ -80,6 +80,8 @@ try {
 
   const V = D.vertices, F = D.frames;
   const Q = new Uint16Array(bytes(D.positions).buffer);
+  const contact = D.contact_replay;
+  const solved = contact && new Float32Array(bytes(contact.positions_f32).buffer);
   const lo = D.lo, sc = D.hi.map((h, i) => (h - lo[i]) / 65535);
   const pos = new Float32Array(V * 3);
   const geo = new THREE.BufferGeometry();
@@ -138,8 +140,13 @@ try {
   function setFrame(f) {
     frame = Math.max(0, Math.min(F - 1, Math.round(f)));
     const o = frame * V * 3;
+    const physical = solved && frame >= contact.first_physical;
+    const start = physical ? (frame - contact.first_physical) * V * 3 : 0;
+    if (body) body.visible = $("showBody").checked && (!contact || physical);
     for (let i = 0; i < V * 3; i += 3) {
-      const x = lo[0] + Q[o + i] * sc[0], y = lo[1] + Q[o + i + 1] * sc[1], z = lo[2] + Q[o + i + 2] * sc[2];
+      const x = physical ? solved[start+i] : lo[0] + Q[o+i] * sc[0];
+      const y = physical ? solved[start+i+1] : lo[1] + Q[o+i+1] * sc[1];
+      const z = physical ? solved[start+i+2] : lo[2] + Q[o+i+2] * sc[2];
       pos[i] = x; pos[i + 1] = z; pos[i + 2] = -y;
     }
     geo.attributes.position.needsUpdate = true;
@@ -162,7 +169,7 @@ try {
   document.querySelectorAll("input[name=colour]").forEach((el) => el.addEventListener("change", () => {
     geo.setAttribute("color", colours[el.value] || colours.seam_rgb);
   }));
-  $("showBody").addEventListener("change", (e) => { if (body) body.visible = e.target.checked; });
+  $("showBody").addEventListener("change", () => setFrame(frame));
   setFrame(0);
 
   function loop(now) {

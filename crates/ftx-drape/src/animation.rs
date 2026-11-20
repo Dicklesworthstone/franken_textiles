@@ -191,6 +191,24 @@ pub fn fold_frames(
     frames
 }
 
+/// A separate station per panel, along x. Only translate the curved pieces; a point on a
+/// turning sleeve must stay clear of the next piece for its entire displayed pose.
+pub(crate) fn separate_panels(frame: &mut [Vec3], ranges: &[(usize, usize)]) {
+    let mut cursor = 0.0;
+    for &(lo, hi) in ranges {
+        let piece = &mut frame[lo..hi];
+        let min = piece.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let max = piece.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        for p in piece {
+            p.x += cursor - min;
+        }
+        cursor += max - min + 0.04;
+    }
+    for p in frame {
+        p.x -= (cursor - 0.04) / 2.0;
+    }
+}
+
 /// The zip segment: `wrapped + w·(start − wrapped)` with `w = ½ − ½cos(πt)` over [`ZIP_FRAMES`] frames.
 #[must_use]
 pub fn zip_frames(wrapped: &[Vec3], start: &[Vec3]) -> Vec<Vec<Vec3>> {
@@ -379,6 +397,8 @@ fn b64(bytes: &[u8]) -> String {
 
 /// Everything the viewer shows besides the cloth.
 pub struct ViewerExtras<'a> {
+    /// A contact-admitted run cuts from separate panel studies to solver positions.
+    pub contact_replay: bool,
     /// Page title (pattern `meta.title`, else `style`).
     pub title: &'a str,
     /// Pattern style (selects the base seam colour).
@@ -411,10 +431,16 @@ pub fn viewer_payload(
         fold.fold + fold.zip,
         fold.fold + fold.zip + fold.sew,
     ];
+    let physical_start = (fold.fold + fold.zip).saturating_sub(1);
     let mut kept: Vec<usize> = linspace(0.0, n.saturating_sub(1) as f64, keep.min(n))
         .into_iter()
         .map(|v| v.round_ties_even() as usize)
         .chain(starts.iter().map(|&s| s.min(n.saturating_sub(1))))
+        .chain(
+            extras
+                .contact_replay
+                .then_some(physical_start.min(n.saturating_sub(1))),
+        )
         .chain(std::iter::once(n.saturating_sub(1)))
         .collect();
     kept.sort_unstable();
@@ -492,7 +518,7 @@ pub fn viewer_payload(
         .flat_map(|&i| u32::try_from(i).unwrap_or(u32::MAX).to_le_bytes())
         .collect();
     let r6 = |v: f64| (v * 1e6).round() / 1e6;
-    json!({
+    let mut payload = json!({
         "schema": "fabric-fold-viewer/1",
         "title": extras.title,
         "vertices": mesh.verts2d.len(),
@@ -514,7 +540,35 @@ pub fn viewer_payload(
             "settled": extras.settled,
             "arm_deg": extras.arm_deg,
         },
-    })
+    });
+    if extras.contact_replay {
+        let cut = kept.partition_point(|&k| k < physical_start);
+        // Small clearances can be less than one step of the legacy 16-bit display grid.
+        // Keep the ordinary payload readable by older clients and replay the physical suffix
+        // at the same precision as the native PC2 in the bundled viewer.
+        let exact: Vec<u8> = kept[cut..]
+            .iter()
+            .flat_map(|&k| &fold.frames[k])
+            .flat_map(|p| [p.x, p.y, p.z])
+            .flat_map(|coord| (coord as f32).to_le_bytes())
+            .collect();
+        payload["contact_replay"] = json!({"first_physical":cut, "positions_f32":b64(&exact)});
+        payload["phase"] = json!(
+            kept.iter()
+                .zip(phase)
+                .map(|(&k, label)| {
+                    if k < physical_start {
+                        "Shape the panels separately"
+                    } else if k == physical_start {
+                        "Sewn starting position"
+                    } else {
+                        label
+                    }
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+    payload
 }
 
 /// The viewer page: `template` with the payload in place of `/*__FOLD_DATA__*/null` (every `</` written
@@ -730,6 +784,29 @@ mod tests {
             .map(|p| *p + Vec3::new(0.0, 0.1, 0.0))
             .collect();
         let zip = zip_frames(&board, &start);
+        for mut frame in frames {
+            let before = frame.clone();
+            separate_panels(&mut frame, &mesh.inst_range);
+            for &(lo, hi) in &mesh.inst_range {
+                for i in lo..hi {
+                    assert!(((frame[i] - frame[lo]) - (before[i] - before[lo])).norm() < 1e-12);
+                }
+            }
+            for adjacent in mesh.inst_range.windows(2) {
+                let [(a, b), (c, d)] = adjacent else {
+                    unreachable!()
+                };
+                let right = frame[*a..*b]
+                    .iter()
+                    .map(|p| p.x)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let left = frame[*c..*d]
+                    .iter()
+                    .map(|p| p.x)
+                    .fold(f64::INFINITY, f64::min);
+                assert!((left - right - 0.04).abs() < 1e-12);
+            }
+        }
         assert_eq!(zip.len(), ZIP_FRAMES);
         assert_eq!(zip[0], board);
         assert!(

@@ -787,7 +787,18 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     {
         return Err(bad_input(format!("--{name} requires --time-subdivision")));
     }
-    if let Some(mm) = args.options.get("self-contact-mm") {
+    // Placement is also used to inspect failed starts. Physical garment runs always admit
+    // cloth contact, including when a caller deliberately chooses zero contact thickness.
+    let physical = matches!(
+        args.positional.first().map(String::as_str),
+        Some("drape" | "round")
+    );
+    let thickness = args
+        .options
+        .get("self-contact-mm")
+        .map(String::as_str)
+        .or(physical.then_some("2"));
+    if let Some(mm) = thickness {
         let mut p = opts.contact;
         p.thickness = mm
             .parse::<f64>()
@@ -1699,7 +1710,15 @@ mod tests {
         assert_eq!(self_params.mu, 0.2);
         assert_eq!(opts.contact, DrapeOptions::default().contact);
         let default = drape_options(&parse(&["drape".into()]).unwrap()).unwrap();
-        assert!(default.self_contact.is_none());
+        assert_eq!(default.self_contact.unwrap().thickness, 0.002);
+        let round = drape_options(&parse(&["round".into()]).unwrap()).unwrap();
+        assert_eq!(round.self_contact, default.self_contact);
+        let place = drape_options(&parse(&["place".into()]).unwrap()).unwrap();
+        assert!(place.self_contact.is_none());
+        let zero =
+            drape_options(&parse(&["drape", "--self-contact-mm", "0"].map(String::from)).unwrap())
+                .unwrap();
+        assert_eq!(zero.self_contact.unwrap().thickness, 0.0);
     }
 
     #[test]
@@ -1739,7 +1758,7 @@ mod tests {
             vec!["--self-contact-mm", "cloth"],
             vec!["--self-contact-mm", "1", "--self-mu", "-0.1"],
             vec!["--self-contact-mm", "1", "--self-mu", "NaN"],
-            vec!["--self-mu", "0.4"],
+            vec!["--self-mu", "-0.1"],
             vec!["--sew", "0", "--drape", "0"],
             vec!["--elastic-hold-steps", "37"],
             vec!["--elastic-hold-steps", "-1"],

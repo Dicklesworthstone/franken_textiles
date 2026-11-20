@@ -96,8 +96,8 @@ above are not current benchmarks. The new browser release measurements use this 
 boundary and the converted Anny asset. Neither numerical settling nor a clear simulation verdict
 proves that a garment fits a person.
 
-Native `drape` and `round --sim` use body contact by default; add `--self-contact-mm 2` to simulate
-cloth layers against each other. The browser fold form enables that option initially. Ordinary runs
+Native `drape` and `round --sim` check cloth against the body and other cloth by default, with a
+2 mm cloth-to-cloth offset for the synthetic sheet. Use `--self-contact-mm` to change it. Ordinary runs
 execute one sewing schedule. `--two-start-sew 18` optionally compares a second sewing duration at the
 same placement; the browser fold-up exposes the same 12-vs-18 comparison behind an explicit checkbox
 because it runs a second full solve. It reports path sensitivity, not a statistical error bar or proof
@@ -337,7 +337,7 @@ ftx qualify --ws WS                                            # three chest qua
 ftx body --measurements M.json --out DIR                       # fit Anny to tape measurements and write body.obj
 ftx measure fit-body OBS.json --model MODEL.ftxbody --out accepted-fit.json  # prepared multi-frame observations
 ftx place P.json --measurements M.json --out NEW_DIR           # look before draping: stills and numbers of the wrap and the pre-sewn start, no solver
-ftx drape P.json --measurements M.json --fit F.json --out DIR  # the cloth solver on its own (body-only contact by default; --self-contact / --two-start-sew opt-in)
+ftx drape P.json --measurements M.json --fit F.json --out DIR  # garment drape with body and cloth contact
 ftx export all P.json --out DIR                                # all files + 51 acceptance checks
 ftx import garmentcode G.json --out NEW_DIR --annotations A.json # evaluated panels + optional sewing annotations
 ftx trace sheet.png --out DIR                                  # trace a PNG/JPEG/WebP pattern sheet

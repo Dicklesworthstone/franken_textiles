@@ -821,6 +821,13 @@ The spread between rounds 5 and 7, the same pattern, is the noise floor: balance
 
 ### 9.1 `fold.pc2`
 
+Native contact-protected drapes keep the phase counts below. During setup, each panel
+bends in its own station with a 40 mm horizontal gap. The zip holds that diagram and
+cuts to the audited welded configuration on its last frame. Playback steps across this
+cut. The bundled viewer carries the physical frames at PC2 precision in an optional
+`contact_replay` field. Native `drape`, `round` and browser folds enable a 2 mm cloth
+contact offset by default. An explicit zero offset retains the crossing barrier.
+
 - **Header**, 32 bytes, little-endian:
 
   | Bytes | Field |
