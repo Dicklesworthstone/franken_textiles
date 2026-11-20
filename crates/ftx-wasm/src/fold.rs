@@ -390,7 +390,8 @@ fn fold_on_source(
         > 512
     {
         return Err(
-            "configured fold exceeds the 512-step browser work budget (sew + drape + settle)".into(),
+            "configured fold exceeds the 512-step browser work budget (sew + drape + settle)"
+                .into(),
         );
     }
     opts.self_contact = Some(ftx_drape::contact::ContactParams {

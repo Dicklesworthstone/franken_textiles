@@ -408,7 +408,12 @@ pub fn lower_to_prony(
         let (fe, fi) = fz.modulus(w);
         let mag = (fe * fe + fi * fi).sqrt();
         let weight = 1.0 / mag;
-        if !(fe.is_finite() && fi.is_finite() && mag.is_finite() && weight.is_finite() && weight > 0.0) {
+        if !(fe.is_finite()
+            && fi.is_finite()
+            && mag.is_finite()
+            && weight.is_finite()
+            && weight > 0.0)
+        {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
                 "complex modulus evaluation overflowed or underflowed during Prony lowering",

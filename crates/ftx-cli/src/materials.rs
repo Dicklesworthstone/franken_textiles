@@ -158,9 +158,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 "usage: ftx materials microclimate REQUEST.json [--json]",
             ));
         };
-        let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
-        let out = ftx_drape::thermal::microclimate::evaluate_json(&raw)?;
-        let result: Value = serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))?;
+        let result = thermal::microclimate(path)?;
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
@@ -171,9 +169,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 "usage: ftx materials lower-visco REQUEST.json [--json]",
             ));
         };
-        let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
-        let out = ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json(&raw)?;
-        let result: Value = serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))?;
+        let result = thermal::lower_visco(path)?;
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }

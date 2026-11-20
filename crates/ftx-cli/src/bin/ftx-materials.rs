@@ -259,16 +259,8 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
         ["linearize-origin", path] => calibration::linearize_origin(path),
-        ["microclimate", path] => {
-            let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
-            let out = ftx_drape::thermal::microclimate::evaluate_json(&raw)?;
-            serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))
-        }
-        ["lower-visco", path] => {
-            let raw = std::fs::read_to_string(path).map_err(|e| io(path, e))?;
-            let out = ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json(&raw)?;
-            serde_json::from_str(&out).map_err(|e| invalid(e.to_string()))
-        }
+        ["microclimate", path] => steady_workbench::microclimate(path),
+        ["lower-visco", path] => steady_workbench::lower_visco(path),
         ["calibrate-nonlinear", path] => nonlinear_calibration::run(path, false),
         ["calibrate-nonlinear", path, "--allow-estimates"] => {
             nonlinear_calibration::run(path, true)
