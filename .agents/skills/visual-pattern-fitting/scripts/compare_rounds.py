@@ -1,4 +1,4 @@
-"""Put two native dressed stills beside the same physical panel's flat outlines."""
+"""Compare native drape or refusal stills beside the same physical panel's flat outlines."""
 
 import argparse
 import base64
@@ -14,14 +14,22 @@ from xml.etree import ElementTree
 def load_panel(directory, view, instance):
     entry = json.loads((directory / "round.json").read_bytes())
     number = entry["round"]
-    name = f"sim/still_{view}.png"
+    sim = entry.get("sim") or {}
+    refused = isinstance(sim.get("refusal"), dict)
+    folder = "sim/refused" if refused else "sim"
+    name = f"{folder}/still_{view}.png"
     rendering = entry.get("rendering", {})
-    if (rendering.get("status") != "PASS" or f"rounds/{number:03d}/{name}" not in entry["images"]
-            or not entry.get("sim") or "refusal" in entry["sim"]):
+    if not refused and (not sim or "refusal" in sim or rendering.get("status") != "PASS"
+                        or f"rounds/{number:03d}/{name}" not in entry["images"]):
         raise ValueError(f"round {number} has no published {view} still")
-    png = (directory / name).read_bytes()
-    if (not png.startswith(b"\x89PNG\r\n\x1a\n") or
-            struct.unpack(">II", png[16:24]) != (rendering["width"], rendering["height"])):
+    path = directory / name
+    if any(p.is_symlink() for p in (directory / "sim", directory / folder, path)):
+        raise ValueError(f"round {number} has a linked still or scene directory")
+    png = path.read_bytes()
+    if not png.startswith(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"):
+        raise ValueError(f"round {number} has an invalid native PNG")
+    size = struct.unpack(">II", png[16:24])
+    if not all(size) or (not refused and size != (rendering["width"], rendering["height"])):
         raise ValueError(f"still differs from the dimensions recorded in round {number}")
     preview = ElementTree.parse(directory / "preview.svg")
     outline = next((p.get("d") for p in preview.iter("{http://www.w3.org/2000/svg}path")
@@ -35,12 +43,12 @@ def load_panel(directory, view, instance):
         raise ValueError(f"unrecognised flat outline for {instance}")
     x_mid = (min(x for x, _ in pts) + max(x for x, _ in pts)) / 2
     y_top = min(y for _, y in pts)
-    return entry, base64.b64encode(png).decode(), [(x-x_mid, y-y_top) for x, y in pts]
+    return entry, base64.b64encode(png).decode(), size, [(x-x_mid, y-y_top) for x, y in pts]
 
 
 def compare(before, after, view, instance, crop):
     rows = [load_panel(rd, view, instance) for rd in (before, after)]
-    points = [p for _, _, outline in rows for p in outline]
+    points = [p for _, _, _, outline in rows for p in outline]
     half_width, height = max(abs(x) for x, _ in points), max(y for _, y in points)
     if not half_width or not height:
         raise ValueError("flat outline has no drawable area")
@@ -51,19 +59,24 @@ def compare(before, after, view, instance, crop):
     def label(x, y, content, size=17, colour="#293934"):
         parts.append(f'<text x="{x}" y="{y}" font-family="DejaVu Sans,sans-serif" '
                      f'font-size="{size}" fill="{colour}">{escape(str(content))}</text>')
-    for i, (entry, png, outline) in enumerate(rows):
+    for i, (entry, png, (w, h), outline) in enumerate(rows):
         x = 15 + 446*i
         ink = ["#8a5327", "#126552"][i]
-        label(x, 29, f'Round {entry["round"]:03d} · {view.replace("_"," ")}', 19, ink)
-        w, h = entry["rendering"]["width"], entry["rendering"]["height"]
+        refused = "refusal" in entry["sim"]
+        title = "Refused pose" if refused else "Drape"
+        label(x, 29, f'{title} · round {entry["round"]:03d} · {view.replace("_"," ")}', 19, ink)
         left, top, cw, ch = crop or (0, 0, w, h)
         if min(left, top) < 0 or min(cw, ch) <= 0 or left+cw > w or top+ch > h:
             raise ValueError(f'crop outside the {w} × {h} native image')
-        parts.append(f'<svg x="{x}" y="42" width="436" height="300" viewBox="{left} {top} {cw} {ch}" '
-                     f'preserveAspectRatio="xMidYMid slice" overflow="hidden"><image width="{w}" height="{h}" '
+        # Fit the entire requested rectangle, including fingertips at wide aspect ratios.
+        factor = min(436 / cw, 300 / ch)
+        dw, dh = cw * factor, ch * factor
+        parts.append(f'<svg x="{x + (436-dw)/2}" y="{42 + (300-dh)/2}" width="{dw}" height="{dh}" '
+                     f'viewBox="{left} {top} {cw} {ch}" overflow="hidden"><image width="{w}" height="{h}" '
                      f'xlink:href="data:image/png;base64,{png}"/></svg>')
         label(x, 367, f'Flat · {entry["basis"]["flat"]}', 15)
-        label(x, 391, f'Drape · {entry["basis"]["sim"]}', 15)
+        state = entry["sim"]["refusal"]["code"] if refused else entry["basis"]["sim"]
+        label(x, 391, f'{title} · {state}', 15)
         coords = " ".join(f"{1053+x*scale:.2f},{56+y*scale:.2f}" for x,y in outline)
         dash = ' stroke-dasharray="6 4"' if i == 0 else ''
         parts.append(f'<polygon points="{coords}" fill="none" stroke="{ink}" stroke-width="2.5"{dash}/>')

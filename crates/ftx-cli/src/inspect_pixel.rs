@@ -118,12 +118,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let scene = dir.join(folder);
     let file = format!("still_{view}.png");
     let image = format!("rounds/{n:03}/{folder}/{file}");
-    if !refused && (round["rendering"]["status"] != "PASS"
-        || !round["sim"].is_object()
-        || round["sim"].get("refusal").is_some()
-        || !round["images"]
-            .as_array()
-            .is_some_and(|v| v.iter().any(|v| v == &image)))
+    if !refused
+        && (round["rendering"]["status"] != "PASS"
+            || !round["sim"].is_object()
+            || round["sim"].get("refusal").is_some()
+            || !round["images"]
+                .as_array()
+                .is_some_and(|v| v.iter().any(|v| v == &image)))
     {
         return Err(bad_input(
             "this round did not publish the requested still; run a fresh round with --stills",
@@ -136,12 +137,16 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let map_path = scene.join("mesh_map.json");
     let diagnostic_map = if refused {
         if !crate::round::regular(&map_path, false)? {
-            return Err(bad_input("this refused round has no diagnostic source-edge map; inspect its saved images or run a fresh round to trace pixels"));
+            return Err(bad_input(
+                "this refused round has no diagnostic source-edge map; inspect its saved images or run a fresh round to trace pixels",
+            ));
         }
         let (map, _) = fold::document(&map_path)?;
         let pose = &map["refused_pose"];
         if pose["phase"].as_str().is_none() || pose["accepted_steps"].as_u64().is_none() {
-            return Err(bad_input("the source-edge map does not identify a refused pose"));
+            return Err(bad_input(
+                "the source-edge map does not identify a refused pose",
+            ));
         }
         Some(map)
     } else {
@@ -158,7 +163,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         u32::from_be_bytes(header[16..20].try_into().unwrap()) as usize,
         u32::from_be_bytes(header[20..24].try_into().unwrap()) as usize,
     ];
-    let dimensions = diagnostic_map.as_ref().map_or(&round["rendering"], |map| &map["refused_pose"]);
+    let dimensions = diagnostic_map
+        .as_ref()
+        .map_or(&round["rendering"], |map| &map["refused_pose"]);
     if dimensions["width"] != size[0] || dimensions["height"] != size[1] {
         return Err(bad_input("still dimensions differ from the saved round"));
     }
@@ -183,7 +190,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             position_m,
         } => {
             let normal_map;
-            let map = if let Some(map) = &diagnostic_map { map } else {
+            let map = if let Some(map) = &diagnostic_map {
+                map
+            } else {
                 crate::round::regular(&map_path, false)?;
                 normal_map = fold::document(&map_path)?.0;
                 &normal_map
@@ -209,7 +218,14 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if let Some(map) = diagnostic_map {
         result["refused_pose"] = map["refused_pose"].clone();
         result["refusal"] = round["sim"]["refusal"].clone();
-        return Ok((result, 0, format!("Refused pose · {text}\n{}", round["sim"]["refusal"]["message"].as_str().unwrap_or(""))));
+        return Ok((
+            result,
+            0,
+            format!(
+                "Refused pose · {text}\n{}",
+                round["sim"]["refusal"]["message"].as_str().unwrap_or("")
+            ),
+        ));
     }
     Ok((result, 0, text))
 }
