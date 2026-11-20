@@ -97,6 +97,12 @@ test("the drape room pairs each body and pose with its native cloth and endpoint
     }
     await page.getByRole("button",{name:"Lay the five cut pieces flat"}).click();
     await page.locator('canvas[data-mode="construction"][data-frame="0"]').waitFor();
+    const timeline=page.getByRole("slider",{name:"Sewing replay frame"});
+    await timeline.fill("87");
+    await page.locator('canvas[data-frame="87"][data-native-frame="69"]').waitFor();
+    await timeline.fill("88");
+    await page.locator('canvas[data-frame="88"][data-native-frame="88"]').waitFor();
+    await timeline.press("Home");
     await page.getByRole("button",{name:"Play sewing replay"}).click();
     await page.waitForFunction(()=>Number(document.querySelector(".dr-stage canvas")?.dataset.frame)>2);
     await page.getByRole("button",{name:"Pause sewing replay"}).click();

@@ -206,7 +206,9 @@ def film_pose(i, name, frames, ids, phases, panels, gap, height):
         target = np.interp(i,[0,12,55,60],[0,0,fold-1,fold-1])
         available = np.flatnonzero(ids<fold)
     else:
-        start = fold+zip_count-1
+        # The archived bolero's final setup sample crosses the wearer. Start that
+        # shot at the first accepted sewing step, as in the browser pose study.
+        start = fold+zip_count if name == "bolero" else fold+zip_count-1
         target = np.interp(i,[61,74,89,95],[start,start+sew,ids[-1],ids[-1]])
         available = np.flatnonzero(ids>=start)
     index = available[np.abs(ids[available]-target).argmin()]

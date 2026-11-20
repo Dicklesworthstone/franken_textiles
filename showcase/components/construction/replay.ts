@@ -9,16 +9,16 @@ export function sewingFrame(frames:readonly number[], phases:SewingPhases, perce
 
 // The zip is a kinematic interpolation between two different starts. Hold the independent
 // wrapped panels until the first admitted welded state, then cut directly to the solver.
-export function displayFrame(frame:number, phases:Pick<SewingPhases,"fold"|"zip">) {
-  return frame < phases.fold + phases.zip - 1 ? Math.min(frame,phases.fold-1) : frame;
+export function displayFrame(frame:number, phases:Pick<SewingPhases,"fold"|"zip">, firstBodyFrame=phases.fold+phases.zip-1) {
+  return frame < firstBodyFrame ? Math.min(frame,phases.fold-1) : frame;
 }
 
-export function sampleIndex(frames:readonly number[],phases:Pick<SewingPhases,"fold"|"zip">,requested:number) {
-  const target=displayFrame(requested,phases), board=target<phases.fold;
+export function sampleIndex(frames:readonly number[],phases:Pick<SewingPhases,"fold"|"zip">,requested:number,firstBodyFrame=phases.fold+phases.zip-1) {
+  const target=displayFrame(requested,phases,firstBodyFrame), board=target<phases.fold;
   let best=-1;
   for(let i=0;i<frames.length;i++){
     const f=frames[i];
-    if(board ? f>=phases.fold : f<phases.fold+phases.zip-1)continue;
+    if(board ? f>=phases.fold : f<firstBodyFrame)continue;
     if(best<0||Math.abs(f-target)<Math.abs(frames[best]-target))best=i;
   }
   if(best<0)throw Error("Garment replay is missing its cut or physical frames");

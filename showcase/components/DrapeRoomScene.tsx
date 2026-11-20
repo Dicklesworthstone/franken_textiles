@@ -173,6 +173,7 @@ export default function DrapeRoomScene(props: Props) {
       form.visible=frame>=88;
       pedestal.visible=ground.visible=form.visible&&!current.lower;
       current.garment.pose(mode,t,false,mainWidth/h);
+      canvas.dataset.nativeFrame=String(current.garment.sampledFrame);
       canvas.dataset.companion=String(companion);canvas.dataset.full=String(full);
       canvas.dataset.frame=String(Math.round(t*135));canvas.dataset.mode=mode;
       canvas.dataset.run=loaded;render();

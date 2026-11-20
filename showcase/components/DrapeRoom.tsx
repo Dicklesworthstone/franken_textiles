@@ -13,7 +13,7 @@ const CoupledScene=dynamic(()=>import("./CoupledScene"),{ssr:false});
 const chests=[48,52,54] as const, angles=[35,75,90] as const;
 const modes: [StudioMode,string][]=[["cloth","Wool"],["construction","Cut panels"],["strain","Strain"],["contact","Contact"]];
 const endpointMode=(mode:StudioMode)=>mode==="strain"||mode==="contact";
-const phase=(frame:number)=>frame===0?"Flat pattern":frame<87?"Shape the panels":frame<100?"Sewing":frame<135?"Gravity drape":"Final frame";
+const phase=(frame:number,firstBodyFrame:number)=>frame===0?"Flat pattern":frame<firstBodyFrame?"Shape the panels":frame<100?"Sewing":frame<135?"Gravity drape":"Final frame";
 
 export default function DrapeRoom({home=false}:{home?:boolean}){
   const [chest,setChest]=useState<typeof chests[number]>(52),[angle,setAngle]=useState<typeof angles[number]>(35);
@@ -26,7 +26,7 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
   const run=experiment.cases[key];
   const flags=full?joint.gating:run.flags;
   const nativeStep=Math.round(frame*(joint.frames-1)/135);
-  const stageLabel=full?phase(nativeStep)+" · "+(nativeStep+1)+"/"+joint.frames:phase(frame);
+  const stageLabel=full?phase(nativeStep,87)+" · "+(nativeStep+1)+"/"+joint.frames:phase(frame,88);
   const shown=ready===key && failed!==key;
   const onReady=useCallback((id:string)=>setReady(id),[]);
   const onError=useCallback((id:string)=>{setFailed(id);play(false);},[]);
@@ -107,7 +107,7 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
         <p>The display form sits 2.5 mm inside the recorded body so its surface stays behind the jacket at the shoulders. The cloth positions and clearance readings come from the original solve.</p>
         {full?<><p>Both garments share one native cloth solve on a synthetic 92 cm body. Twelve panels bend separately on the board. The replay cuts to their checked placement on the form. The next 12 sewing steps and 36 gravity steps include contact with the body and between garments. Both cuts use the same synthetic material properties. The colors distinguish the garments.</p>
           {joint.advisories.map(note=><p key={note}>Starting placement advisory · {note}.</p>)}
-          <p><a href="/exhibits/poses/ensemble-request.json" download>Download the two-pattern solver input</a> · <a href="/exhibits/poses/ensemble.json" download>Download endpoint readings</a></p></>:<><p>Each combination replays a separate FrankenTextiles run with the same pattern and fabric. The flat panels bend on the board before the view cuts to their checked position on the synthetic 92 cm form. The final 48 frames show native sewing and gravity steps. The weave and cord mark the cloth surface. The readings above describe the endpoint.</p>
+          <p><a href="/exhibits/poses/ensemble-request.json" download>Download the two-pattern solver input</a> · <a href="/exhibits/poses/ensemble.json" download>Download endpoint readings</a></p></>:<><p>Each combination uses the same pattern and fabric on a synthetic 92 cm form. The panels bend separately on the board, then the replay cuts to the first sewing step. An earlier placement crossed the body in seven of the nine runs. All 48 sewing and gravity states in each run clear the complete body. The readings describe the endpoint.</p>
         <p>The mean gap averages the distance at the chest ring. Edge strain is the change in edge length over the whole garment. This run’s endpoint range is {run.edgeStrainPercent.min}% to +{run.edgeStrainPercent.max}%. Contact shows the magnitude of the body’s barrier force at each welded cloth vertex, in newtons. Physical fit requires a sewn sample.</p>
         </>}
         {flags.map(flag=><p key={flag} className="dr-warning">{flag}</p>)}

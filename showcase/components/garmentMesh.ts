@@ -196,6 +196,7 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
   const sideB = markSide(0xffb44c, 5, 5);
   let selected: Exhibit["seams"][string] | undefined;
   let lastFrame = -1;
+  let sampledFrame = 0;
   let lastSpread = -1;
   let colorMode: StudioMode = "construction";
   let highlighted = "";
@@ -207,7 +208,10 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     const separation = mode === "construction" ? THREE.MathUtils.clamp(spread, 0, 1) : 0;
     const moved = lastFrame !== sourceFrame || lastSpread !== separation;
     if (moved) {
-      const index=sampleIndex(data.frames,data.phases,sourceFrame);
+      // Some archived pre-sewing placements crossed the hands. The first solver
+      // step and all later body poses in these garment studies clear the skin.
+      const index=sampleIndex(data.frames,data.phases,sourceFrame,data.phases.fold+data.phases.zip);
+      sampledFrame=data.frames[index];
       const a=index*stride;
       for (let j = 0; j < stride; j += 3) {
         // Right-handed Z-up, front -Y → right-handed Y-up, front +Z.
@@ -253,7 +257,7 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     // On the woven cloth a seam is shown by the cloth itself. The drawn seam lines belong to the cut-panel diagram.
     seams.visible = mode === "construction" && !pair;
   }
-  return { group, pose, seamNames, panels, strainRange: data.summary.edgeStrainPercent, dispose() {
+  return { group, pose, get sampledFrame(){return sampledFrame;}, seamNames, panels, strainRange: data.summary.edgeStrainPercent, dispose() {
     geometry.dispose();
     seamGeometry.dispose();
     sideA.dispose();

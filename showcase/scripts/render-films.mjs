@@ -92,7 +92,7 @@ async function encode(page, study) {
       const frame = Math.round(progress * (sourceFrames - 1));
       phase.textContent = frame === 0 ? "Pattern board"
         : frame < phases.fold ? "Wrapping panels"
-        : frame < phases.fold + phases.zip ? "Closing seams"
+        : frame < phases.fold + phases.zip ? "Match the edges"
         : frame < phases.fold + phases.zip + phases.sew ? "Sewing"
         : frame < sourceFrames - 1 ? "Gravity drape"
         : "Drape endpoint";
