@@ -74,6 +74,7 @@ export default function HussarLab() {
       <p>The fabric constants are placeholders for a lined wool ({(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m², bending {drape.fabric.bending_Nm} N·m) and have no measured source. Edge strain over the whole jacket runs from {drape.edgeStrainPercent.min}% to +{drape.edgeStrainPercent.max}%. Nothing here shows that the jacket fits a person. That needs a toile.</p>
       {drape.gating.map(flag => <p key={flag} className="hu-warning">Solver flag · {flag}</p>)}
       <p>The body offset sets the minimum distance between the cloth and the body’s collision surface. The solver increases it during sewing and gravity while preserving clearance at the closest contact. The largest remaining force component on a free vertex in the final solve was {drape.finalResidualN.toLocaleString("en", { maximumSignificantDigits: 3 })} N.</p>
+      <p>On this same form, the <a href={`${repo}/blob/5d785218/showcase/public/exhibits/hussar/dolman-summary.json`}>earlier jacket run</a> reached 0.843 mm of body offset after 180 gravity steps. Tightening the Newton correction tolerance from 0.001 to 0.00001 m/s brought it to 1.441 mm at the same step. Another 23 steps brought it to the full 1.5 mm.</p>
       <details className="hu-flags"><summary>{drape.flags.length - drape.gating.length} advisory notes from the solver</summary>
         {drape.flags.filter(flag => !drape.gating.includes(flag)).map(flag => <p key={flag}>{flag}</p>)}</details>
       <details className="hu-flags"><summary>Replay this jacket with FrankenTextiles</summary>

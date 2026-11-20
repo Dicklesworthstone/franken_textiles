@@ -50,7 +50,7 @@ FABRIC = {"areal_g_m2": 380, "bending_Nm": 0.00012, "id": "shell", "kind": "wove
           "sim_note": "lined-jacket composite (UNCERTAIN)", "tensile_N_m": 10000.0, "width_mm": 1500}
 # At 20 degrees the sleeve crosses the torso cloth. At 45 both cloth and body start audits pass.
 DRAPE_ARGS = ["--spacing-mm", "20", "--time-subdivision", "--arm-deg", "45", "--drape", "60",
-              "--self-contact-mm", "1", "--max-settle-steps", "120"]
+              "--self-contact-mm", "1", "--max-settle-steps", "256", "--newton-tol-m-s", "0.00001"]
 
 
 def inputs():

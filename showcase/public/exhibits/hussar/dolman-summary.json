@@ -3,7 +3,7 @@
  "triangles": 4473,
  "frames": 37,
  "phases": {
-  "drape": 180,
+  "drape": 203,
   "fold": 70,
   "sew": 12,
   "zip": 18
@@ -23,7 +23,7 @@
   "dolman_undersleeve.L",
   "dolman_undersleeve.R"
  ],
- "sourcePc2Sha256": "3821c9c35586c9c566382e0766adb3beab869b006e636f4e0e57e9f8d4fab3f9",
+ "sourcePc2Sha256": "bac35f900dc2cea6feb29cd3792a5ece4192a393151ba056ef0be65bb482b1d3",
  "style": "HUSSAR_BLUE",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -37,31 +37,31 @@
   "--self-contact-mm",
   "1",
   "--max-settle-steps",
-  "120"
+  "256",
+  "--newton-tol-m-s",
+  "0.00001"
  ],
  "armDeg": 45.0,
  "settled": true,
- "gating": [
-  "body thickness ramp did not reach its target"
- ],
+ "gating": [],
  "flags": [
-  "seam dolman_cap_front_low_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_front_high_L is distorted in the drape (p90 11 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_rear_mid_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_low_L is distorted in the drape (p90 12 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_high_L is distorted in the drape (p90 13 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_low_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_mid_L is distorted in the drape (p90 11 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "seam dolman_collar_front_L is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_front_low_R is distorted in the drape (p90 12 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_front_high_R is distorted in the drape (p90 14 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
-  "seam dolman_cap_rear_low_R is distorted in the drape (p90 9 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_low_R is distorted in the drape (p90 13 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_front_high_R is distorted in the drape (p90 15 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
+  "seam dolman_cap_rear_low_R is distorted in the drape (p90 11 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "seam dolman_cap_rear_mid_R is distorted in the drape (p90 17 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "seam dolman_collar_front_R is distorted in the drape (p90 10 %): if its seam walk passes, this is crowding or pull at that seam (look at the stills), not a length mismatch",
   "the body rides up 43 mm with arms at 45\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
-  "body thickness ramp did not reach its target",
   "Declared simulation subset: 2 instance(s) and 6 seam(s) excluded; see simulation_scope. Results describe only the simulated subset."
  ],
  "edgeStrainPercent": {
-  "max": 32.65,
-  "min": -13.79,
-  "p95": 6.57
+  "max": 32.7,
+  "min": -13.95,
+  "p95": 6.93
  },
  "massKg": 0.29438584832109344,
  "areaM2": 0.7747,
@@ -360,11 +360,11 @@
    "target_mm": 1070.0
   }
  },
- "wallSeconds": 1171.3,
+ "wallSeconds": 1593.3,
  "bodyOffsetMm": {
   "target": 1.5,
-  "achieved": 0.843212342733663
+  "achieved": 1.5
  },
- "finalResidualN": 15.017010639347008,
+ "finalResidualN": 0.00018233673094644309,
  "solverRevision": "3b6aa55d7d961d206ce751de4986870468ff780c"
 }
