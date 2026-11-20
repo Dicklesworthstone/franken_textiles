@@ -39,7 +39,7 @@ async function photoHandoff(browser,origin) {
   };
   try {
     await source.goto(origin+"/photo.html?sample=blank");
-    for(const s of await source.locator("details.wb-fold > summary").all()) await s.click();
+    while(await source.locator("details.wb-fold:not([open]) > summary").count()) await source.locator("details.wb-fold:not([open]) > summary").first().click();
     await source.setInputFiles("#photo",path.join(native,"photo.jpg"));await source.selectOption("#paper","letter");
     await source.click("#analyze");await source.waitForFunction(()=>document.getElementById("status").textContent.startsWith("Review the detected"));
     await source.fill("#points",fs.readFileSync(path.join(native,"points-jpeg.json"),"utf8"));
@@ -108,7 +108,7 @@ async function sectionWorkflow(browser,origin) {
   };
   try {
     await page.goto(origin+"/photo.html?sample=blank");
-    for(const s of await page.locator("details.wb-fold > summary").all()) await s.click();
+    while(await page.locator("details.wb-fold:not([open]) > summary").count()) await page.locator("details.wb-fold:not([open]) > summary").first().click();
     await source("#sectionWidthFile",front);await source("#sectionDepthFile",side);
     assert.equal(await page.isDisabled("#sectionRun"),true,"Explicit wearer and anatomical-level review is required");
     await page.check("#sectionConsent");await calculate();assert.equal(await page.textContent("#sectionError"),"");
@@ -221,7 +221,7 @@ async function triangulationWorkflow(browser,origin) {
   };
   try {
     await page.goto(origin+"/photo.html?sample=blank");
-    for(const s of await page.locator("details.wb-fold > summary").all()) await s.click();
+    while(await page.locator("details.wb-fold:not([open]) > summary").count()) await page.locator("details.wb-fold:not([open]) > summary").first().click();
     if(cameraNoiseOnly) {
       await page.setInputFiles("#triangulationInput",source("camera-input.json"));
       for(const [click,lens,name] of [[false,false,"sheet-result.json"],[true,false,"sheet-click-result.json"],[false,true,"lens-sheet-result.json"],[true,true,"all-result.json"]]) {
@@ -518,7 +518,7 @@ async function bodyPhotoCaptureWorkflow(browser,origin) {
   };
   try {
     await page.goto(origin+"/photo.html?sample=blank");
-    for(const s of await page.locator("details.wb-fold > summary").all()) await s.click();
+    while(await page.locator("details.wb-fold:not([open]) > summary").count()) await page.locator("details.wb-fold:not([open]) > summary").first().click();
     await page.setInputFiles("#bodyFitModel",path.join(native,"model.ftxbody"));
     await page.locator("#bodyCaptureImages").evaluate(element=>{element.closest("details").open=true;});
     await page.setInputFiles("#bodyCaptureImages",images.map(name=>path.join(native,name)));
@@ -682,7 +682,7 @@ async function bodyFitWorkflow(browser,origin) {
   };
   try {
     await page.goto(origin+'/photo.html?sample=blank');
-    for(const s of await page.locator('details.wb-fold > summary').all()) await s.click();
+    while(await page.locator('details.wb-fold:not([open]) > summary').count()) await page.locator('details.wb-fold:not([open]) > summary').first().click();
     await page.setInputFiles('#bodyFitModel',path.join(native,'model.ftxbody'));
     await page.locator('#bodyFitIterations').evaluate(e=>{e.closest('details').open=true;});
     // A declared draft is reviewable before it has enough starts to run the fitter.
@@ -978,7 +978,7 @@ const server=http.createServer((req,res)=>{
     if(bodyFitOnly) {await bodyFitWorkflow(browser,origin);await bodyModelFileHandoff(browser,origin);await bodyModelFileHandoff(browser,origin,true);return;}
     if(triangulationOnly||cameraNoiseOnly||bundleOnly||stillOnly) {await triangulationWorkflow(browser,origin);return;}
     await page.goto(origin+"/photo.html?sample=blank");
-    for(const s of await page.locator("details.wb-fold > summary").all()) await s.click();
+    while(await page.locator("details.wb-fold:not([open]) > summary").count()) await page.locator("details.wb-fold:not([open]) > summary").first().click();
     if(charucoOnly) {
       const sheetName=fs.existsSync(path.join(native,'calib-sheet-letter.json'))?'calib-sheet-letter':'calib-sheet-a4';
       const source=fs.readFileSync(path.join(native,sheetName+'.json'),'utf8'),sheet=JSON.parse(source);

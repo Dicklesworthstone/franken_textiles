@@ -904,9 +904,9 @@ if [ "$WITH_REPLAYS" -eq 1 ]; then
   FTX_COMPRESSION_RADIATION_COVERAGE_REPLAY="$WORK/compression-radiation-coverage" \
   FTX_REGIONAL_COMPRESSION_MOTION_REPLAY="$WORK/regional-compression-motion" \
   FTX_REGIONAL_COMPRESSION_COVERAGE_REPLAY="$WORK/regional-compression-coverage" \
-    node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
+    NODE_OPTIONS="--max-old-space-size=6144" node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
 else
-  FTX_REAL_WASM=1 FTX_GUIDED_SCENARIO_NATIVE="$FTX_MATERIALS_BIN" FTX_TRIANGULATION_LENS_FIXTURES="$WORK/triangulation-lens-fixtures" FTX_TRIANGULATION_CAMERA_FIXTURES="$WORK/triangulation-camera-fixtures" FTX_BODY_RECTIFICATION_FIXTURES="$WORK/body-rectification" node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
+  NODE_OPTIONS="--max-old-space-size=6144" FTX_REAL_WASM=1 FTX_GUIDED_SCENARIO_NATIVE="$FTX_MATERIALS_BIN" FTX_TRIANGULATION_LENS_FIXTURES="$WORK/triangulation-lens-fixtures" FTX_TRIANGULATION_CAMERA_FIXTURES="$WORK/triangulation-camera-fixtures" FTX_BODY_RECTIFICATION_FIXTURES="$WORK/body-rectification" node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_material_screen_builder.cjs
 fi
 node --experimental-vm-modules tools/check_materials_wasm.cjs --native "$FTX_MATERIALS_BIN"
 node --experimental-vm-modules tools/check_strip_wasm.cjs --native "$FTX_MATERIALS_BIN"

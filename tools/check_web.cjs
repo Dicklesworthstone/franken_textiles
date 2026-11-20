@@ -106,14 +106,14 @@ async function directAlterations(browser, origin) {
   const round = async (tab,source) => {await upload(tab,"patternFile",source);await tab.click("#go");await settled(tab);};
   try {
     for (const tab of [page,manual]) {
-      await tab.goto(origin+"/");await tab.waitForFunction(() => !document.getElementById("go").disabled);
+      await tab.goto(origin+"/?blank=1");await tab.waitForFunction(() => !document.getElementById("go").disabled);
       await tab.check('input[name="program"][value="audit"]');
       await tab.check('input[name="bodyMode"][value="file"]');
       await upload(tab,"measFile",measurements);await upload(tab,"fitFile",fit);
     }
     const drafted = await context.newPage();drafted.on("pageerror", e => errors.push(String(e)));
     await drafted.addInitScript(() => localStorage.setItem("fab-wb-nappies","true"));
-    await drafted.goto(origin+"/");await drafted.waitForFunction(() => !document.getElementById("go").disabled);
+    await drafted.goto(origin+"/?blank=1");await drafted.waitForFunction(() => !document.getElementById("go").disabled);
     await drafted.check('input[name="program"][value="zouave_bolero"]');
     await drafted.check('input[name="bodyMode"][value="tape"]');
     await drafted.waitForFunction(() => window.__lastFields?.program === "zouave_bolero");
@@ -160,6 +160,7 @@ async function directAlterations(browser, origin) {
       console.log("PASS browser alteration "+op+": native pattern bytes and complete ordinary-round ZIP agree");
       lastPattern = native;
     }
+    await page.bringToFront();
     await page.locator("#alterSection").screenshot({path:path.join(work,"alteration-controls.png")});
     const originalDownload = await bytes(page,"#alterDownload");
     await page.selectOption("#alterOperation","cap-ease");await page.selectOption("#alterPiece","sleeve");
@@ -216,7 +217,14 @@ async function tracingEdits(browser, origin) {
   const page=await context.newPage();page.on("pageerror",e=>errors.push(String(e)));
   const cases=JSON.parse(fs.readFileSync(path.join(root,"tests/fixtures/oracle/trace/raster_trace.json"))).cases;
   const image=Buffer.from(cases[0].input.png,"base64"),other=Buffer.from(cases.find(c=>c.input.png!==cases[0].input.png).input.png,"base64");
-  const download=async(name,tab=page)=>{const event=tab.waitForEvent("download");await tab.click(`a[download="${name}"]`);const d=await event;assert.equal(await d.failure(),null);return fs.readFileSync(await d.path());};
+  const download=async(name,tab=page)=>{
+    const link=tab.locator(`a[download="${name}"]`);
+    if(await link.count() && !(await link.first().isVisible())) {
+      const closed=tab.locator("details:not([open]) > summary:visible");
+      while(await closed.count()) await closed.first().click();
+    }
+    const event=tab.waitForEvent("download");await tab.click(`a[download="${name}"]`);const d=await event;assert.equal(await d.failure(),null);return fs.readFileSync(await d.path());
+  };
   const action=async id=>{await page.click("#"+id);await page.waitForFunction(()=>/^(Review ready|No current review)/.test(document.getElementById("status").textContent));};
   const trace=async bytes=>{
     await page.setInputFiles("#image",{name:"oracle.png",mimeType:"image/png",buffer:bytes});
@@ -227,8 +235,19 @@ async function tracingEdits(browser, origin) {
     await page.setInputFiles("#draftFile",{name:"trace-edits.json",mimeType:"application/json",buffer:bytes});
     await page.waitForFunction(()=>/^(Edits draft loaded|Draft not loaded)/.test(document.getElementById("status").textContent));
   };
+  const openFolds=async tab=>{
+    const closed=tab.locator("details.wb-fold:not([open]) > summary");
+    while(await closed.count()) await closed.first().click();
+    const prep=tab.locator("details:not([open]) > summary",{hasText:"Image preparation and tracing settings"});
+    if(await prep.count()) await prep.first().click();
+  };
+  const openMaterialFolds=async tab=>{
+    const sel=tab.locator("details:not([open]) > summary",{hasText:"Edit or import the source selection"});
+    if(await sel.count()) await sel.first().click();
+    await openFolds(tab);
+  };
   try {
-    await page.goto(origin+"/trace.html");await trace(image);
+    await page.goto(origin+"/trace.html?blank=1");await openFolds(page);await trace(image);
     assert.equal(await page.isDisabled("#openMaterials"),true,"Unscaled trace cannot bypass scale review through materials");
     assert.equal(await page.locator("#saveDraft").count(),1,"Reopen saved tracing edits");
     assert.equal(await page.locator("#openPattern").count(),1,"Check traced pattern without download/reupload");
@@ -240,7 +259,7 @@ async function tracingEdits(browser, origin) {
     const pattern=await download("pattern.json");
     await page.click("#saveDraft");const draft=JSON.parse(await download("trace-edits.json"));
     assert.equal(draft.source_sha256,sha(image));draft.names=' \r\n'+draft.names+'\r\n';const bytes=Buffer.from(JSON.stringify(draft));
-    await page.reload();await trace(image);await load(bytes);
+    await page.reload();await openFolds(page);await trace(image);await load(bytes);
     assert.match(await page.textContent("#status"),/^Edits draft loaded/);assert.equal(await page.isVisible("#results"),false);
     assert.equal(await page.inputValue("#names"),draft.names.replace(/\r\n/g,"\n"));
     await action("apply");assert.equal(await page.isVisible("#error"),false);
@@ -272,6 +291,7 @@ async function tracingEdits(browser, origin) {
     const directOpened=page.waitForEvent("popup");await page.click("#openMaterials");const directMaterial=await directOpened;
     directMaterial.on("pageerror",e=>errors.push(String(e)));
     await directMaterial.waitForFunction(()=>document.getElementById("roundImportText").textContent.startsWith("Received traced pattern.json")&&!document.getElementById("bind").disabled);
+    await openMaterialFolds(directMaterial);
     assert.equal(await directMaterial.evaluate(()=>window.opener===null),true);
     assert.ok((await directMaterial.textContent("#roundImportText")).includes(sha(image)));
     assert.equal(await directMaterial.isDisabled("#exports"),true,"No automatic binding or export");
@@ -348,6 +368,7 @@ async function tracingEdits(browser, origin) {
     const materialOpened=bench.waitForEvent('popup');await bench.click('#chooseMaterials');const material=await materialOpened;
     material.on('pageerror',e=>errors.push(String(e)));
     await material.waitForFunction(()=>document.getElementById('roundImportText').textContent.startsWith('Received pattern.json')&&!document.getElementById('bind').disabled);
+    await openMaterialFolds(material);
     assert.equal(await material.evaluate(()=>window.opener===null),true);
     assert.equal(await material.isDisabled('#exports'),true,'No automatic material binding');
     assert.equal(await material.isDisabled('#fold'),true,'No body is transferred');
@@ -365,8 +386,9 @@ async function tracingEdits(browser, origin) {
       const archives=tab.locator('a[download$=".zip"]');assert.equal(await archives.count(),1);
       return download(await archives.getAttribute('download'),tab);};
     const materialZip=await exportRound(material),boundPattern=await download('pattern.json',material);
-    const materialManual=await context.newPage();await materialManual.goto(origin+'/materials.html');
+    const materialManual=await context.newPage();await materialManual.goto(origin+'/materials.html?blank=1');
     await materialManual.waitForFunction(()=>document.getElementById('status').textContent.startsWith('Ready'));
+    await openMaterialFolds(materialManual);
     for(const [id,name] of [['patternFile','pattern.json'],['measurements','measurements.json'],['fit','fit_spec.json']])
       await materialManual.setInputFiles('#'+id,{name,mimeType:'application/json',buffer:sources[name]});
     await bind(materialManual);
@@ -376,7 +398,7 @@ async function tracingEdits(browser, origin) {
     assert.equal(await material.isDisabled('#bind'),true);assert.equal(await material.isDisabled('#exports'),true);
     await material.close();await materialManual.close();
     console.log('PASS round-to-material: exact native saved files, explicit binding/exports, complete manual-upload archive equality, no body transfer and clear withdraws outputs.');
-    const manual=await context.newPage();await manual.goto(origin+"/index.html");
+    const manual=await context.newPage();await manual.goto(origin+"/index.html?blank=1");
     await manual.waitForFunction(()=>!document.getElementById("go").disabled);await manual.check('input[name="program"][value="audit"]');
     await manual.setInputFiles("#patternFile",{name:"pattern.json",mimeType:"application/json",buffer:pattern});
     assert.ok((await round(manual)).equals(handed),"Handoff and ordinary file upload produce identical complete export archives");
@@ -1153,8 +1175,10 @@ async function offlineViewer(browser, file) {
         const event = material.waitForEvent("download"); await material.click(`#outputs a[download='${name}']`);
         const file = await event; assert.equal(await file.failure(), null); return fs.readFileSync(await file.path());
       };
-      await material.goto(`http://localhost:${port}/materials.html`);
+      await material.goto(`http://localhost:${port}/materials.html?blank=1`);
       await material.waitForFunction(() => document.getElementById("status").textContent.startsWith("Ready."));
+      const matFolds = material.locator("details.wb-fold:not([open]) > summary");
+      while (await matFolds.count()) await matFolds.first().click();
       await material.setInputFiles("#patternFile",path.join(dir,"pattern.json"));
       await material.waitForFunction(() => !document.getElementById("bind").disabled);
       await material.click("#bind"); await material.waitForFunction(() => document.getElementById("status").textContent.startsWith("bind complete"));

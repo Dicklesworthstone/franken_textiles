@@ -124,8 +124,10 @@ const server = http.createServer((req, res) => {
       await page.goto(origin+'/materials.html?blank=1');
     }
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
-    await page.locator('summary', { hasText: 'Edit or import the source selection' }).click();
-    for (const summary of await page.locator('details.wb-fold > summary').all()) await summary.click();
+    const selSummary = page.locator('details:not([open]) > summary', { hasText: 'Edit or import the source selection' });
+    if (await selSummary.count()) await selSummary.first().click();
+    const closedFolds = page.locator('details.wb-fold:not([open]) > summary');
+    while (await closedFolds.count()) await closedFolds.first().click();
     if (pairedWaterProof) {
       const retained=name=>fs.readFileSync(path.join(pairedWaterProof,name),'utf8');
       const single=JSON.parse(retained('single-scenario.json')),study=JSON.parse(retained('study.json'));

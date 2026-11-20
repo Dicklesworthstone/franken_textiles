@@ -7,7 +7,7 @@ let worker, epoch = 0, request = 0, pending = null;
 let ready = false, busy = false, hasSheet = false;
 let sheetSource = null, traceOptions = null, restoredEdits = null, draftLoading = false;
 let reviewPattern = null, workbenchTransfer = null;
-const query = new URL((window.location || location).href).searchParams;
+const query = new URL((window?.location || globalThis.location)?.href || "https://local.invalid/").searchParams;
 let useExhibitSheet = !query.has("blank") && query.get("sample") !== "blank" && ![...query.keys()].some(key => /(?:Import|Return)$/.test(key));
 let runExhibitOnReady = useExhibitSheet;
 let applyExhibitEdits = useExhibitSheet;
