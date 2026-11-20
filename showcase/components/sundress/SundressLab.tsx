@@ -54,22 +54,24 @@ export default function SundressLab(){
         {measurements.map(([label,key,min,max,unit])=><label key={key}>{label} target<output>{form[key]} {unit}</output>
           <input type="range" min={min} max={max} step={key==="height"||key==="weight"?1:.5} value={form[key]} disabled={failed} aria-label={label+" target"} aria-valuetext={form[key]+" "+unit}
             onChange={e=>{const value=Number(e.currentTarget.value);setForm(p=>({...p,[key]:value}));}}/></label>)}
-        {body&&<p className="sd-actual" data-model-mass={body.weight.toFixed(1)}>Model stature {body.height.toFixed(1)} cm · mass {body.weight.toFixed(1)} kg</p>}
+        {/* The model's readouts hold their place until it reports, so the panel does not grow on load. The
+            placeholders are as long as the text that replaces them, so narrow columns wrap the same way. */}
+        {!failed&&<p className="sd-actual" data-model-mass={body?.weight.toFixed(1)}>Model stature {body?body.height.toFixed(1):"–––.–"} cm · mass {body?body.weight.toFixed(1):"––.–"} kg</p>}
         <div className="sd-lines"><div className="sd-section"><h2>Pattern ease</h2><span>cm</span></div>
           <div className="sd-table"><span>Section</span><span>Dress</span><span>Model</span><span>Ease</span>
           {(["bust","waist"] as const).map(k=><div key={k}><strong>{k}</strong><span>{dress[k]}</span><span data-fitted={k}>{body?body[k].toFixed(1):"—"}</span><b className={body&&dress[k]<body[k]?"sd-negative":""}>{body?signed(dress[k]-body[k]):"—"}</b></div>)}</div>
-          {body&&<><p>{dress.bust<body.bust||dress.waist<body.waist?"The model girth exceeds the available cloth at the negative sections.":
+          {!failed&&<><p>{!body?"Reading the bust and waist from the fitted model.":dress.bust<body.bust||dress.waist<body.waist?"The model girth exceeds the available cloth at the negative sections.":
             dress.bust-body.bust<dress.bustBand[0]||dress.waist-body.waist<dress.waistBand[0]?"Room falls below the flat pattern’s minimum ease target.":
             dress.bust-body.bust>dress.bustBand[2]||dress.waist-body.waist>dress.waistBand[2]?"Room exceeds this pattern’s ease band.":"Both girths are within this pattern’s ease band."}</p>
-          <details><summary>Compare cross-sections</summary><div className="sd-cross"><EaseSection name="bust" girth={body.bust}/><EaseSection name="waist" girth={body.waist}/></div>
-            <p>Solid ellipses represent the model tapes. Dashed lines represent the fixed garment girths at the same scale.</p></details></>}
+          <details><summary>Compare cross-sections</summary>{body&&<><div className="sd-cross"><EaseSection name="bust" girth={body.bust}/><EaseSection name="waist" girth={body.waist}/></div>
+            <p>Solid ellipses represent the model tapes. Dashed lines represent the fixed garment girths at the same scale.</p></>}</details></>}
         </div>
         <div className="sd-section"><h2>Arm pose</h2></div><div className="sd-poses">{([["At rest",14,19],["Reach",83,29],["Raised",115,106]] as const).map(([name,left,right])=>
           <button key={name} disabled={failed} aria-pressed={form.left===left&&form.right===right} onClick={()=>setForm(p=>({...p,left,right}))}>{name}</button>)}</div>
         <details><summary>Adjust each arm</summary>{(["left","right"] as const).map(side=><label key={side}>{side} arm<output>{form[side]}°</output><input type="range" min="4" max="125" value={form[side]} disabled={failed} aria-label={side+" arm angle"} onChange={e=>arm(side,Number(e.target.value))}/></label>)}</details>
       </section></div>
       <div className="sd-notes"><div><h2>One dress, different proportions</h2>
-        <p>The flat pattern measures {dress.shoulderToWaist} cm from shoulder to waist and {dress.skirtLength} cm from waist to hem. {body&&<>In this preview, the nominal hem sits <strong>{body.hem.toFixed(1)} cm</strong> above the floor.</>}</p>
+        <p>The flat pattern measures {dress.shoulderToWaist} cm from shoulder to waist and {dress.skirtLength} cm from waist to hem. {!failed&&<>In this preview, the nominal hem sits <strong>{body?body.hem.toFixed(1):"—"} cm</strong> above the floor.</>}</p>
         <p>The synthetic adult comes from the native Anny body model. The controls interpolate fitted shapes and five arm poses. Model readings interpolate the native tape and mass results. Ease compares those readings with the fixed flat pattern.</p>
         <p>The adjustable figure shows the original gathered cut and the flat-pattern ease of its bodice. Its bodice opens where cloth runs short and its skirt folds are illustrative. <a href="#sewn">Compare the two native cloth solves</a> on the reference form to inspect the sewn shapes. Physical fit requires a sewn sample.</p>
         <details><summary>Cut and sew the dress</summary><p>{chosen.name}. Print the cover at actual size and check the 10 cm and 4 inch squares in both directions. Assemble the {chosen.pages-1} tiles by their matching diamonds. Cut one front and one back of both bodice and skirt on the marked grain. The solid cut lines include a 10 mm seam allowance.</p>
