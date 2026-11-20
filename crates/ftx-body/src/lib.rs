@@ -37,7 +37,7 @@ pub use fit::{
     TapeTarget, Wearer, calibrate_nappy, fit_sigma, fit_stature, fit_tape, is_girth,
     nappy_occupancy, partial_tape_readings, seat_girth, tape_readings, tape_targets,
 };
-pub use kinematics::Affine;
+pub use kinematics::{Affine, SkinningMode, dual_quaternion_skinning};
 pub use landmarks::{BodyFrames, Frame};
 pub use model::{
     AnnyModel, Anthropometry, BodyParams, Phenotype, PosedBody, RestBody, age_parameter_for_years,

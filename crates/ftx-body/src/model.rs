@@ -6,7 +6,10 @@ use std::path::Path;
 use ftx_core::{Mat3, Refusal, RefusalCode, Vec3};
 
 use crate::data::AnnyData;
-use crate::kinematics::{Affine, forward_kinematics, linear_blend_skinning, rest_bone_frames};
+use crate::kinematics::{
+    Affine, SkinningMode, dual_quaternion_skinning, forward_kinematics, linear_blend_skinning,
+    rest_bone_frames,
+};
 
 /// The six exposed phenotype parameters. Each is on its anchor scale (spec 05 §2.1): gender 0 = male,
 /// 1 = female; age is morphological, −1/3 (newborn anchor) … 1 (old), with 0 = birth, 0.05 = 1 y,
@@ -386,13 +389,38 @@ impl AnnyModel {
         })
     }
 
-    /// Poses a rest body with one local-bone delta per bone (spec 05 §5.1): the root's delta is its world
-    /// pose; every other delta moves its bone about its own head in its rest frame.
+    /// Poses a rest body with one local-bone delta per bone (spec 05 §5.1) using upstream Anny
+    /// linear blend skinning: the root's delta is its world pose; every other delta moves its bone
+    /// about its own head in its rest frame.
     ///
     /// # Errors
     /// [`RefusalCode::OutOfRange`] when `deltas` does not have one entry per bone;
     /// [`RefusalCode::NonFinite`] for a non-finite delta.
     pub fn pose(&self, rest: &RestBody, deltas: &[Affine]) -> Result<PosedBody, Refusal> {
+        self.pose_with_skinning(rest, deltas, SkinningMode::LinearBlend)
+    }
+
+    /// Opt-in dual-quaternion skinning variant of [`AnnyModel::pose`] (plan §9.2): preserves local
+    /// rigidity under large joint rotations and reduces LBS volume collapse at deep seated/squat
+    /// bends. Never alters default LBS Anny parity.
+    ///
+    /// # Errors
+    /// As [`AnnyModel::pose`].
+    pub fn pose_dqs(&self, rest: &RestBody, deltas: &[Affine]) -> Result<PosedBody, Refusal> {
+        self.pose_with_skinning(rest, deltas, SkinningMode::DualQuaternion)
+    }
+
+    /// Poses a rest body with an explicit [`SkinningMode`].
+    ///
+    /// # Errors
+    /// [`RefusalCode::OutOfRange`] when `deltas` does not have one entry per bone;
+    /// [`RefusalCode::NonFinite`] for a non-finite delta.
+    pub fn pose_with_skinning(
+        &self,
+        rest: &RestBody,
+        deltas: &[Affine],
+        mode: SkinningMode,
+    ) -> Result<PosedBody, Refusal> {
         let d = &self.data;
         if deltas.len() != d.header.counts.bones {
             return Err(Refusal::new(
@@ -415,13 +443,22 @@ impl AnnyModel {
         }
         let (bone_poses, transforms) =
             forward_kinematics(&rest.bone_frames, deltas, &d.header.labels.bone_parents);
-        let vertices = linear_blend_skinning(
-            &rest.vertices,
-            &d.vertex_bone_indices,
-            &d.vertex_bone_weights,
-            d.header.counts.influences,
-            &transforms,
-        );
+        let vertices = match mode {
+            SkinningMode::LinearBlend => linear_blend_skinning(
+                &rest.vertices,
+                &d.vertex_bone_indices,
+                &d.vertex_bone_weights,
+                d.header.counts.influences,
+                &transforms,
+            ),
+            SkinningMode::DualQuaternion => dual_quaternion_skinning(
+                &rest.vertices,
+                &d.vertex_bone_indices,
+                &d.vertex_bone_weights,
+                d.header.counts.influences,
+                &transforms,
+            ),
+        };
         Ok(PosedBody {
             vertices,
             bone_poses,

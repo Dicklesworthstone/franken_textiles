@@ -178,6 +178,150 @@ pub fn forward_kinematics(
     (poses, transforms)
 }
 
+/// Skinning operator for posing a rest mesh from per-bone transforms (plan §9.2).
+///
+/// [`SkinningMode::LinearBlend`] reproduces upstream Anny bit-for-bit (`spec 05 §5.3`).
+/// [`SkinningMode::DualQuaternion`] blends rigid bone transforms in dual-quaternion space (Kavan
+/// et al., 2008 DLB), avoiding linear-blend candy-wrapper twist collapse and reducing joint-hinge
+/// volume loss on deep seated/squat bends; it is opt-in and never replaces LBS Anny parity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SkinningMode {
+    /// Upstream Anny linear blend skinning (default).
+    #[default]
+    LinearBlend,
+    /// Kavan et al. (2008) Dual-Quaternion Linear Blending (DLB) with largest-weight pivot alignment.
+    DualQuaternion,
+}
+
+/// Converts a right-handed orthonormal rotation matrix into a unit quaternion `[w, x, y, z]`
+/// via Shepperd's branch-stable method.
+fn rotmat_to_unit_quaternion(m: &Mat3) -> [f64; 4] {
+    let r = &m.rows;
+    let trace = r[0][0] + r[1][1] + r[2][2];
+    let q = if trace > 0.0 {
+        let s = 2.0 * (trace + 1.0).max(0.0).sqrt();
+        [
+            0.25 * s,
+            (r[2][1] - r[1][2]) / s,
+            (r[0][2] - r[2][0]) / s,
+            (r[1][0] - r[0][1]) / s,
+        ]
+    } else if r[0][0] >= r[1][1] && r[0][0] >= r[2][2] {
+        let s = 2.0 * (1.0 + r[0][0] - r[1][1] - r[2][2]).max(0.0).sqrt();
+        [
+            (r[2][1] - r[1][2]) / s,
+            0.25 * s,
+            (r[0][1] + r[1][0]) / s,
+            (r[0][2] + r[2][0]) / s,
+        ]
+    } else if r[1][1] >= r[2][2] {
+        let s = 2.0 * (1.0 + r[1][1] - r[0][0] - r[2][2]).max(0.0).sqrt();
+        [
+            (r[0][2] - r[2][0]) / s,
+            (r[0][1] + r[1][0]) / s,
+            0.25 * s,
+            (r[1][2] + r[2][1]) / s,
+        ]
+    } else {
+        let s = 2.0 * (1.0 + r[2][2] - r[0][0] - r[1][1]).max(0.0).sqrt();
+        [
+            (r[1][0] - r[0][1]) / s,
+            (r[0][2] + r[2][0]) / s,
+            (r[1][2] + r[2][1]) / s,
+            0.25 * s,
+        ]
+    };
+    let norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if norm > 0.0 && norm.is_finite() {
+        [q[0] / norm, q[1] / norm, q[2] / norm, q[3] / norm]
+    } else {
+        [1.0, 0.0, 0.0, 0.0]
+    }
+}
+
+/// Converts a rigid transform `(R, t)` into a unit dual quaternion `(q_r, q_d)` where
+/// `q_d = 0.5 * (0, t) * q_r`.
+fn affine_to_dual_quaternion(a: &Affine) -> ([f64; 4], [f64; 4]) {
+    let qr = rotmat_to_unit_quaternion(&a.m);
+    let (w, x, y, z) = (qr[0], qr[1], qr[2], qr[3]);
+    let t = a.t;
+    let qd = [
+        -0.5 * (t.x * x + t.y * y + t.z * z),
+        0.5 * (t.x * w + t.y * z - t.z * y),
+        0.5 * (-t.x * z + t.y * w + t.z * x),
+        0.5 * (t.x * y - t.y * x + t.z * w),
+    ];
+    (qr, qd)
+}
+
+/// Dual-quaternion linear blend skinning (Kavan et al., 2008; plan §9.2): converts each rigid bone
+/// skinning transform to a unit dual quaternion, aligns each vertex's bone influences to the
+/// hemisphere of its highest-weight bone (fixed slot tie-break for determinism), blends and
+/// normalizes the dual quaternion, then applies the resulting rigid screw motion to `rest[i]`.
+/// `indices` and `weights` are V × K row-major.
+#[must_use]
+pub fn dual_quaternion_skinning(
+    rest: &[Vec3],
+    indices: &[u32],
+    weights: &[f64],
+    k: usize,
+    transforms: &[Affine],
+) -> Vec<Vec3> {
+    let dqs: Vec<([f64; 4], [f64; 4])> = transforms.iter().map(affine_to_dual_quaternion).collect();
+    rest.iter()
+        .enumerate()
+        .map(|(i, &p)| {
+            let base = i * k;
+            // Deterministic pivot: largest-weight active bone (earliest slot on tie).
+            let mut pivot_slot = 0;
+            let mut max_w = f64::NEG_INFINITY;
+            for s in 0..k {
+                let w = weights[base + s];
+                if w > max_w {
+                    max_w = w;
+                    pivot_slot = s;
+                }
+            }
+            let pivot_r = dqs[indices[base + pivot_slot] as usize].0;
+            let mut br = [0.0; 4];
+            let mut bd = [0.0; 4];
+            for s in 0..k {
+                let w = weights[base + s];
+                if w == 0.0 {
+                    continue;
+                }
+                let (qr, qd) = dqs[indices[base + s] as usize];
+                let dot = pivot_r[0] * qr[0]
+                    + pivot_r[1] * qr[1]
+                    + pivot_r[2] * qr[2]
+                    + pivot_r[3] * qr[3];
+                let sw = if dot < 0.0 { -w } else { w };
+                for c in 0..4 {
+                    br[c] += sw * qr[c];
+                    bd[c] += sw * qd[c];
+                }
+            }
+            let norm = (br[0] * br[0] + br[1] * br[1] + br[2] * br[2] + br[3] * br[3]).sqrt();
+            if !(norm > 0.0 && norm.is_finite()) {
+                return p;
+            }
+            let inv = 1.0 / norm;
+            let qr = [br[0] * inv, br[1] * inv, br[2] * inv, br[3] * inv];
+            let mut qd = [bd[0] * inv, bd[1] * inv, bd[2] * inv, bd[3] * inv];
+            // Project dual part orthogonal to real part for exact unit dual quaternion.
+            let proj = qr[0] * qd[0] + qr[1] * qd[1] + qr[2] * qd[2] + qr[3] * qd[3];
+            for c in 0..4 {
+                qd[c] -= proj * qr[c];
+            }
+            let qv = Vec3::new(qr[1], qr[2], qr[3]);
+            let dv = Vec3::new(qd[1], qd[2], qd[3]);
+            let rot = p + qv.cross(qv.cross(p) + p * qr[0]) * 2.0;
+            let trans = (dv * qr[0] - qv * qd[0] + qv.cross(dv)) * 2.0;
+            rot + trans
+        })
+        .collect()
+}
+
 /// Linear blend skinning (spec 05 §5.3): transforms blended by weight first, then applied.
 /// `indices` and `weights` are V × K row-major.
 #[must_use]
@@ -277,6 +421,109 @@ mod tests {
             (out[1].z - 1.0).abs() < 1e-15 && (out[1].y.abs() - 1.0).abs() < 1e-15,
             "{:?}",
             out[1]
+        );
+    }
+
+    #[test]
+    fn dqs_matches_lbs_on_rigid_and_single_bone_transforms() {
+        let cases = [
+            Affine::IDENTITY,
+            Affine::from_rotvec(Vec3::new(0.4, -0.7, 1.1), Vec3::new(0.3, -0.5, 0.8)),
+            // 180-degree rotations around every cardinal axis and diagonal (Shepperd branches).
+            Affine::from_rotvec(
+                Vec3::new(std::f64::consts::PI, 0.0, 0.0),
+                Vec3::new(1.0, 2.0, 3.0),
+            ),
+            Affine::from_rotvec(
+                Vec3::new(0.0, std::f64::consts::PI, 0.0),
+                Vec3::new(-1.0, 0.5, 0.2),
+            ),
+            Affine::from_rotvec(
+                Vec3::new(0.0, 0.0, std::f64::consts::PI),
+                Vec3::new(0.0, -2.0, 1.5),
+            ),
+            Affine::from_rotvec(
+                Vec3::new(1.0, 1.0, 1.0) * (std::f64::consts::PI / 3.0_f64.sqrt()),
+                Vec3::new(0.25, -0.75, 0.5),
+            ),
+        ];
+        let pts = [
+            Vec3::new(0.1, -0.2, 0.3),
+            Vec3::new(-0.5, 0.4, 1.2),
+            Vec3::new(0.0, 0.0, 0.0),
+        ];
+        for a in cases {
+            let transforms = [a, a];
+            let indices = [0, 1, 0, 1, 0, 1];
+            let weights = [0.7, 0.3, 1.0, 0.0, 0.25, 0.75];
+            let lbs = linear_blend_skinning(&pts, &indices, &weights, 2, &transforms);
+            let dqs = dual_quaternion_skinning(&pts, &indices, &weights, 2, &transforms);
+            for (l, d) in lbs.iter().zip(&dqs) {
+                assert!(
+                    (*l - *d).norm() < 1e-13,
+                    "rigid mismatch: lbs={l:?} dqs={d:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dqs_preserves_cylinder_radius_under_180_degree_candy_wrapper_twist() {
+        // Two coaxial bones: bone 0 fixed, bone 1 twisted 180 degrees around +Z.
+        // At the midpoint (weights 0.5 / 0.5), LBS collapses the cross-section radius to 0
+        // (candy-wrapper collapse), while DQS preserves the exact unit radius.
+        let transforms = [
+            Affine::IDENTITY,
+            Affine::from_rotvec(Vec3::new(0.0, 0.0, std::f64::consts::PI), Vec3::ZERO),
+        ];
+        let ring: Vec<Vec3> = (0..8)
+            .map(|i| {
+                let a = (i as f64) * std::f64::consts::FRAC_PI_4;
+                let (s, c) = det::sin_cos(a);
+                Vec3::new(c, s, 0.5)
+            })
+            .collect();
+        let indices: Vec<u32> = (0..ring.len()).flat_map(|_| [0u32, 1]).collect();
+        let weights: Vec<f64> = (0..ring.len()).flat_map(|_| [0.5_f64, 0.5]).collect();
+        let lbs = linear_blend_skinning(&ring, &indices, &weights, 2, &transforms);
+        let dqs = dual_quaternion_skinning(&ring, &indices, &weights, 2, &transforms);
+        for (l, d) in lbs.iter().zip(&dqs) {
+            let r_lbs = det::hypot(l.x, l.y);
+            let r_dqs = det::hypot(d.x, d.y);
+            assert!(
+                r_lbs < 1e-12,
+                "LBS should collapse at 180 deg twist, got {r_lbs}"
+            );
+            assert!(
+                (r_dqs - 1.0).abs() < 1e-13,
+                "DQS must preserve radius 1.0, got {r_dqs}"
+            );
+            assert!((d.z - 0.5).abs() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn dqs_antipodal_alignment_and_determinism() {
+        // Bone 0 at 0 deg, bone 1 at 200 deg (shortest arc is -160 deg; dot product < 0).
+        let transforms = [
+            Affine::IDENTITY,
+            Affine::from_rotvec(
+                Vec3::new(0.0, 0.0, 200.0_f64.to_radians()),
+                Vec3::new(0.0, 0.0, 0.2),
+            ),
+        ];
+        let pts = [Vec3::new(1.0, 0.0, 0.0)];
+        let dqs_a = dual_quaternion_skinning(&pts, &[0, 1], &[0.5, 0.5], 2, &transforms);
+        let dqs_b = dual_quaternion_skinning(&pts, &[0, 1], &[0.5, 0.5], 2, &transforms);
+        assert_eq!(dqs_a, dqs_b, "DQS must be bit-deterministic");
+        // Midpoint of shortest arc (0 deg to -160 deg) is -80 deg (radius 1.0, z = 0.1).
+        let r = det::hypot(dqs_a[0].x, dqs_a[0].y);
+        assert!((r - 1.0).abs() < 1e-13, "got radius {r}");
+        assert!((dqs_a[0].z - 0.1).abs() < 1e-13, "got z {}", dqs_a[0].z);
+        assert!(
+            dqs_a[0].y < -0.9,
+            "expected shortest-arc -80 deg, got {:?}",
+            dqs_a[0]
         );
     }
 }

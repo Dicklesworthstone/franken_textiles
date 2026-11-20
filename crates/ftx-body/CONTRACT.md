@@ -71,13 +71,13 @@ reordering. `fit_stature` bisects the height parameter to a stature. `fit_tape` 
 parameters (height, weight, muscle, proportions; prior 1σ = 0.5 about 0.5) and nineteen local changes
 (fifteen `measure-*`, `measure-neck-circ-incr`, `measure-shoulder-dist-incr`, and both head scales, so the
 prior spreads a head change evenly). Local targets are absolute displacements authored on the
-MakeHuman template, so their prior scale about zero is `0.35 × selected_stature / template_stature`.
+MakeHuman template, so their prior scale about zero is `0.65 × selected_stature / template_stature`
+(reproducing ~0.35 at 920 mm toddler stature while scaling proportionally down for newborns and up for adults).
 The reference is the exact loaded template's `max(z) − min(z)`, with the metre-to-millimetre
 conversion at this boundary; no population height is inferred. The selected stature uses the same
 explicit tape-target precedence as fitting, otherwise the wearer stature. This scale is frozen before
-optimization and cannot weaken as an iteration changes fitted height. At the template's stature it
-preserves the original 0.35 scale; proportionately smaller bodies receive proportionately smaller
-absolute local allowances. Invalid, zero or numerically unrepresentable scales refuse. This is a
+optimization and cannot weaken as an iteration changes fitted height. Proportionately smaller bodies
+receive proportionately smaller absolute local allowances. Invalid, zero or numerically unrepresentable scales refuse. This is a
 numerical regularization policy, not a measured anatomical distribution or posterior uncertainty.
 The four phenotype prior scales and existing parameter bounds stay fixed. Calibrated photo fitting
 has no shape prior and retains its independent evidence, observability and multistart gates.
@@ -187,7 +187,15 @@ pairs, `|ΔV/V_rest| ≤ 1.59 %`) across `rest`, `drape` (`35°`), `standing` (`
 adult). Deeper LBS flexion (`adult` `squat 0.50`: `12` pairs, `−2.03 %`; `toddler`/`adult` `seated` and
 `squat` `0.75–1.00`: `82–286` hip/knee crease pairs and `−2.64 %` to `−7.03 %` enclosed-volume loss)
 triggers `lbs_volume_loss_advisory` beyond `3 %` and refuses direct contact-collider start admission
-(`IntersectingStart`).
+(`IntersectingStart`). Opt-in deterministic Dual-Quaternion Skinning (`SkinningMode::DualQuaternion`,
+`AnnyModel::pose_dqs` / `pose_with_skinning`, plan §9.2; Kavan et al. 2007 with largest-weight pivot
+hemisphere alignment and Shepperd rotation-matrix quaternion extraction) leaves default `AnnyModel::pose`
+bit-identical to upstream LBS while cutting full-bend enclosed-volume collapse 4.0×–7.3× on `clothing_skin`
+(`toddler_2.5y` seated `−4.70 % → −0.64 %`, squat `−5.61 % → −0.83 %`; `adult_30y` seated `−5.63 % → −1.42 %`,
+squat `−6.64 % → −1.68 %`, keeping all four well below the `3 %` volume-loss advisory threshold in
+`tests/drape_poses.rs::dqs_reduces_volume_collapse_on_deep_seated_and_squat_poses`). Soft-tissue crease
+overlaps on full `90°–110°` bends remain genuinely present (`160–336` pairs) and still refuse direct
+contact-start admission without anatomical crease correctives.
 
 **Frames and landmarks** (`BodyFrames`, definitions in the `landmarks.rs` table). On the posed body, in
 mm: floor, waist (Anny's waist loop), crotch, chest (the armpit), across back, hip, knee, calf, ankle,

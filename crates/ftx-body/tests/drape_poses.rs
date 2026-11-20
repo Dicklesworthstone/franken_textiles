@@ -212,3 +212,66 @@ fn drape_poses_match_the_package() {
     );
     assert!(fails.is_empty(), "{}", fails.join("\n"));
 }
+
+#[test]
+#[ignore = "needs the converted Anny model (tools/body-model/convert_anny.py)"]
+fn dqs_reduces_volume_collapse_on_deep_seated_and_squat_poses() {
+    use ftx_body::{DEFAULT_POSE_AUDIT_PAIR_BUDGET, age_parameter_for_years, clothing_skin};
+
+    let path = default_model_path().expect("no model path (set FTX_ANNY_MODEL or HOME)");
+    let m = AnnyModel::load(&path, false).unwrap_or_else(|r| panic!("{r}"));
+    for (label, years) in [("toddler_2.5y", 2.5), ("adult_30y", 30.0)] {
+        let params = m.params(Phenotype {
+            age: age_parameter_for_years(years),
+            ..Phenotype::default()
+        });
+        let rest = m.rest(&params).unwrap();
+        let rest_skin = skin_mesh(&rest.vertices, &m.data().faces).unwrap();
+        let rest_collider = clothing_skin(&m, &rest.vertices).unwrap();
+        for (pose_name, legs) in [
+            ("standing", Legs::Standing),
+            ("seated", Legs::Seated),
+            ("squat", Legs::Squat),
+        ] {
+            let pose = Pose {
+                legs,
+                ..Pose::drape()
+            };
+            let deltas = pose_deltas(&m, &rest, &pose, 1.0).unwrap();
+            let lbs = m.pose(&rest, &deltas).unwrap();
+            let dqs = m.pose_dqs(&rest, &deltas).unwrap();
+            let lbs_skin = skin_mesh(&lbs.vertices, &m.data().faces).unwrap();
+            let dqs_skin = skin_mesh(&dqs.vertices, &m.data().faces).unwrap();
+            let lbs_geo = lbs_skin
+                .pose_geometry_against_rest(&rest_skin, DEFAULT_POSE_AUDIT_PAIR_BUDGET)
+                .unwrap();
+            let dqs_geo = dqs_skin
+                .pose_geometry_against_rest(&rest_skin, DEFAULT_POSE_AUDIT_PAIR_BUDGET)
+                .unwrap();
+            let lbs_col = clothing_skin(&m, &lbs.vertices)
+                .unwrap()
+                .pose_geometry_against_rest(&rest_collider, DEFAULT_POSE_AUDIT_PAIR_BUDGET)
+                .unwrap();
+            let dqs_col = clothing_skin(&m, &dqs.vertices)
+                .unwrap()
+                .pose_geometry_against_rest(&rest_collider, DEFAULT_POSE_AUDIT_PAIR_BUDGET)
+                .unwrap();
+            println!(
+                "{label:12} {pose_name:8} | LBS vol {:+6.2}% ({:3} col pairs) | DQS vol {:+6.2}% ({:3} col pairs)",
+                lbs_geo.volume_change_fraction * 100.0,
+                lbs_col.self_intersections.intersecting_pairs,
+                dqs_geo.volume_change_fraction * 100.0,
+                dqs_col.self_intersections.intersecting_pairs,
+            );
+            assert!(dqs_skin.report.volume > 0.0 && dqs_skin.report.volume.is_finite());
+            if matches!(legs, Legs::Seated | Legs::Squat) {
+                assert!(
+                    dqs_geo.volume_change_fraction.abs() < lbs_geo.volume_change_fraction.abs(),
+                    "{label} {pose_name}: DQS volume change ({:.2}%) should be smaller than LBS ({:.2}%)",
+                    dqs_geo.volume_change_fraction * 100.0,
+                    lbs_geo.volume_change_fraction * 100.0,
+                );
+            }
+        }
+    }
+}
