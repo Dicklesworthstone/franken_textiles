@@ -746,7 +746,7 @@ async function generatedReferences(browser, origin, expectedDir) {
   };
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-generated-references-"));
   try {
-    await page.goto(origin); await page.waitForFunction(() => document.querySelectorAll("#sheetDictionaries option").length === 27);
+    await page.goto(origin + "/?blank=1"); await page.waitForFunction(() => document.querySelectorAll("#sheetDictionaries option").length === 27);
     await page.locator("#calibrationSheets summary").click();
     for (const c of cases) {
       await configure(c); await complete(); assert.equal(await panel.locator("a").count(), 3, await page.textContent("#sheetStatus"));
@@ -811,7 +811,8 @@ async function offlineViewer(browser, file) {
     check(frames > 1, "the viewer contains multiple retained frames");
     const slider = page.locator("#frame"), canvas = page.locator("#stage canvas");
     await slider.focus(); await slider.press("Home");
-    check(/Flat pattern/.test(await page.textContent("#phase")), "Home selects the board frame");
+    check(/Flat pattern|Shape the panels separately/.test(await page.textContent("#phase"))
+      && (await page.textContent("#count")) === `1 / ${frames}`, "Home selects the board frame");
     const board = await canvas.screenshot({ path: path.join(work, "board.png") });
     await slider.press("End");
     check(/Draped/.test(await page.textContent("#phase")), "End selects the draped frame");

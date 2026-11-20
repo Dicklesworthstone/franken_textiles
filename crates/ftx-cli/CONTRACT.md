@@ -52,9 +52,12 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 `ftx outfit`, `ftx materials` and immutable `ftx round` workspaces with their local review.
 
 **Garment pose and continuation.** `ftx drape` and `ftx round --sim|--stills` accept
-`--legs standing|seated|squat`, `--leg-fraction 0..1`, and `--max-settle-steps 0..256`.
-Defaults retain the standing pose, full leg fraction and fixed sewing/gravity schedule. Leg
-posture is independent of `--arm-deg`; fitting and nappy calibration retain their reference pose.
+`--legs standing|seated|squat`, `--leg-fraction 0..1`, `--skinning lbs|dqs`, and
+`--max-settle-steps 0..256`. Defaults retain the standing pose, full leg fraction, upstream Anny
+linear blend skinning (`lbs`, omitted from default JSON), and fixed sewing/gravity schedule.
+Opt-in `--skinning dqs` switches posing to deterministic Dual-Quaternion Skinning (also accepted by
+`ftx body`, `ftx qualify`, and `ftx place`), recording `"skinning": "dqs"` in the report when non-default.
+Leg posture is independent of `--arm-deg`; fitting and nappy calibration retain their reference pose.
 Extra settling continues the same sewn cloth at the original time step until the shared numerical
 quiet window or the declared cap. Reports and animations retain all accepted steps and actual
 duration, including both starts when requested. Invalid settings refuse before file I/O. History
@@ -226,8 +229,8 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   (exit 3) and write nothing.
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
   reference's text table, exit 0 CONVERGED, 2 NOT_CONVERGED, 3 BLOCKED.
-- `ftx round WS [--pattern P] [--measurements M] [--sim|--stills] [--arm-deg DEG] [--elastic-hold-steps N]
-  [--res WxH] [--export] [--json]`: a new immutable round with separate construction, physics,
+- `ftx round WS [--pattern P] [--measurements M] [--sim|--stills] [--arm-deg DEG] [--skinning lbs|dqs]
+  [--elastic-hold-steps N] [--res WxH] [--export] [--json]`: a new immutable round with separate construction, physics,
   manufacturing and measurement bases. `--stills` implies simulation and adds six native PNG
   views to the portable review (default 960x540), without Blender. No video is produced; this
   deliberately does not claim the reference's `--render` movie behavior. `--res` needs `--stills`.
@@ -250,7 +253,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   Tests: `round_workflow`, `round_review`, and `round::stills` synthetic triangle scenes; these
   tests do not certify an Anny garment's fit or solve at every requested arm angle.
 - `ftx qualify [WS | --ws WS | --measurements M --out DIR] [--pattern P] [--fabric F] [--model PATH]
-  [--body-fit PATH] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--json]`:
+  [--body-fit PATH] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--json]`:
   runs the three known-answer chest bands (`-20`, `0`,
   `+20` mm ease) at zero gravity (70 sew steps, no drape steps) for the uniform garment fabric or for
   every distinct active simulated `piece.fabric` selection. Band widths use the torso girth
@@ -267,7 +270,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   simulation directory (`fold.pc2`, `mesh_map.json`, `body.obj`, `sim_report.json`) without re-running
   the cloth solver.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N] [--model PATH]
-  [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--compression F] [--two-start] [--pose-end POSE] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
+  [--arm-deg DEG] [--skinning lbs|dqs] [--self-contact-mm MM] [--self-mu MU] [--compression F] [--two-start] [--pose-end POSE] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does).
   `--elastic-hold-steps N` reports casing displacement during the last N accepted gravity steps;
   it adds no steps and changes no physics. Zero requests no window; N above `--drape` refuses.
@@ -365,7 +368,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   without a selection; exhausted work and failed physical solves return structured refusals.
   Accepted coefficients remain partial materials when bending/contact or other properties are absent.
   Exact frozen selections feed ordinary material binding. See `docs/clamped-strip-calibration.md`.
-- `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
+- `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]`:
   reserves a fresh output directory before model loading or fitting; existing directories, files and
   symlinks refuse without changing previous evidence. `body.obj` and `body.json` use the existing
   private create-only writer (mode 0600 on Unix), also refusing a file created during publication.
@@ -401,7 +404,7 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   `{"stills": {view: path}}` as the reference's `blender_sew.py --stills-from` does; no Blender. A missing
   or unreadable OBJ, empty mesh or non-finite geometry is refused (`io`, `invalid_document`).
 - `ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM]
-  [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--res WxH] [--json]`: where a pattern
+  [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--res WxH] [--json]`: where a pattern
   starts on the body, for a person or an agent authoring placements and judging a cut by eye. It runs the
   drape's own scope admission, mesh, isometric wrap, pre-sew and relaxation (spec 04 §2–4) and **stops
   before contact admission and dynamics**, so it answers in seconds and also shows a start `ftx drape`
