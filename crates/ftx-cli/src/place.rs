@@ -861,8 +861,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         &out,
     )?;
 
+    let skinning_note = if skinning.is_lbs() {
+        String::new()
+    } else {
+        format!("; skinning {}", skinning.as_str())
+    };
     let mut text = format!(
-        "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}\n",
+        "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}{skinning_note}\n",
         report["vertices"],
         report["start"]["plain_edge_strain_p95"]
             .as_f64()

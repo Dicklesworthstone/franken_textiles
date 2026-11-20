@@ -1001,7 +1001,8 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             let pattern = Pattern::new(bpat);
             let started = std::time::Instant::now();
             let mut run = drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?;
-            run.report["body_contact_proxy"] = skin.contact_proxy_basis_with_rest(&rest_skin);
+            run.report["body_contact_proxy"] =
+                skin.contact_proxy_basis_with_rest_and_skinning(&rest_skin, skinning);
             let mut report = run.report.clone();
             if let Some(selected) = &fabric_override {
                 report["fabric_override"] = selected.receipt().clone();

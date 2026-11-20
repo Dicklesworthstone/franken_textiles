@@ -257,9 +257,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
         <label>Skinning <select id="drapeSkinning"><option value="lbs">LBS (Anny default)</option><option value="dqs">DQS (dual-quaternion)</option></select></label>
         <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label></p>
+      <p class="row"><label>Newton solver <select id="drapeNewtonStrategy"><option value="projected">Projected Newton (default)</option><option value="adaptive_ilu">Adaptive ILU-PCG</option><option value="trust_region">Trust-region Steihaug</option></select></label>
+        <label>Integrator <select id="drapeIntegrator"><option value="implicit_euler">Implicit Euler (default)</option><option value="generalized_alpha">Generalized-α</option></select></label>
+        <label>Spectral radius ρ<sub>∞</sub> (0–1) <input id="drapeRhoInf" type="number" min="0" max="1" step="0.05" value="0" disabled></label></p>
       <p class="row"><label><input type="checkbox" id="splitTimeSteps"> Split stalled time steps</label>
         <label>Maximum halvings <input id="timeMaxHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
         <label>Maximum step trials <input id="timeMaxTrials" type="number" min="1" max="65535" step="1" value="4096" disabled></label></p>
+      <p class="mut">Projected Newton with Implicit Euler is the default solver. Opt-in Generalized-α (ρ<sub>∞</sub> ∈ [0, 1]; 0 strongest high-frequency damping, 1 zero numerical dissipation) refuses history-dependent materials and may require smaller steps on stiff contact transitions.</p>
       <p class="mut">Retries a stalled step as smaller steps without extending simulated time. The trial limit covers sewing, draping and settling, separately for each start. Exhausting the limits refuses the run.</p>
       <p class="mut">Arm angle applies to tape-fitted or accepted shapes; the default is 35°.
         Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
@@ -578,6 +582,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("bodyFile").disabled = !ready || dead;
     $("draftFromBody").disabled = !ready || dead;
     for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
+    $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
     const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
       && (bodyFitText === null || $("bodyFitConsent").checked);
     $("foldGo").disabled = !available || !foldable;
@@ -642,6 +647,71 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("timeMaxTrials").value = String(settings?.max_trials ?? 4096);
     for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = settings === undefined;
   }
+  function checkedNewtonStrategy(value) {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw Error("Newton strategy must be a valid tagged solver object.");
+    }
+    const keys = Object.keys(value);
+    if (value.kind === "projected_newton" && keys.length === 1) return undefined;
+    if (value.kind === "adaptive_ilu" && keys.length === 3 &&
+        keys.every(key => ["kind", "pcg_iters", "max_shifts"].includes(key)) &&
+        Number.isSafeInteger(value.pcg_iters) && value.pcg_iters >= 1 && value.pcg_iters <= 256 &&
+        Number.isSafeInteger(value.max_shifts) && value.max_shifts >= 0 && value.max_shifts <= 16) {
+      return { kind: "adaptive_ilu", pcg_iters: value.pcg_iters, max_shifts: value.max_shifts };
+    }
+    if (value.kind === "trust_region_steihaug" && keys.length === 5 &&
+        keys.every(key => ["kind", "initial_radius", "max_radius", "min_radius", "cg_iters"].includes(key)) &&
+        Number.isFinite(value.min_radius) && Number.isFinite(value.initial_radius) && Number.isFinite(value.max_radius) &&
+        value.min_radius > 0 && value.initial_radius >= value.min_radius && value.max_radius >= value.initial_radius &&
+        Number.isSafeInteger(value.cg_iters) && value.cg_iters >= 0 && value.cg_iters <= 4096) {
+      return { kind: "trust_region_steihaug", initial_radius: value.initial_radius, max_radius: value.max_radius,
+        min_radius: value.min_radius, cg_iters: value.cg_iters };
+    }
+    throw Error("Newton strategy must be projected_newton, adaptive_ilu, or trust_region_steihaug with valid bounds.");
+  }
+  function drapeNewtonStrategy() {
+    const mode = $("drapeNewtonStrategy").value;
+    if (mode === "projected") return undefined;
+    if (mode === "adaptive_ilu") return { kind: "adaptive_ilu", pcg_iters: 64, max_shifts: 4 };
+    if (mode === "trust_region") return { kind: "trust_region_steihaug", initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 };
+    throw Error("Choose Projected Newton, Adaptive ILU-PCG, or Trust-region Steihaug.");
+  }
+  function setNewtonStrategy(value) {
+    const strategy = checkedNewtonStrategy(value);
+    $("drapeNewtonStrategy").value = strategy === undefined ? "projected" :
+      strategy.kind === "adaptive_ilu" ? "adaptive_ilu" : "trust_region";
+  }
+  function checkedIntegrator(value) {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw Error("Time integrator must be a valid tagged object.");
+    }
+    const keys = Object.keys(value);
+    if (value.kind === "implicit_euler" && keys.length === 1) return undefined;
+    if (value.kind === "generalized_alpha" && keys.length === 2 &&
+        keys.every(key => ["kind", "rho_inf"].includes(key)) &&
+        Number.isFinite(value.rho_inf) && value.rho_inf >= 0 && value.rho_inf <= 1) {
+      return { kind: "generalized_alpha", rho_inf: value.rho_inf };
+    }
+    throw Error("Time integrator must be implicit_euler or generalized_alpha with finite rho_inf in [0, 1].");
+  }
+  function drapeIntegrator() {
+    const mode = $("drapeIntegrator").value;
+    if (mode === "implicit_euler") return undefined;
+    if (mode === "generalized_alpha") {
+      const raw = $("drapeRhoInf").value.trim();
+      if (!raw) throw Error("Supply a finite Generalized-α spectral radius rho_inf from 0 to 1.");
+      return checkedIntegrator({ kind: "generalized_alpha", rho_inf: Number(raw) });
+    }
+    throw Error("Choose Implicit Euler or Generalized-α time integration.");
+  }
+  function setIntegrator(value) {
+    const integrator = checkedIntegrator(value);
+    $("drapeIntegrator").value = integrator === undefined ? "implicit_euler" : "generalized_alpha";
+    $("drapeRhoInf").value = String(integrator?.rho_inf ?? 0);
+    $("drapeRhoInf").disabled = integrator === undefined;
+  }
   let foldUrls = [];
   let materialSources = null, materialTransfer = null;
   const materialOrigin = new URL(location.href).origin;
@@ -676,6 +746,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     try {
       const subdivision = drapeTimeSubdivision();
       if (subdivision !== undefined) drapeSettings.time_subdivision = subdivision;
+      const newtonStrategy = drapeNewtonStrategy();
+      if (newtonStrategy !== undefined) drapeSettings.newton_strategy = newtonStrategy;
+      const integrator = drapeIntegrator();
+      if (integrator !== undefined) drapeSettings.integrator = integrator;
     } catch (error) { status(error.message); return; }
     const bodySource = model || imported ? { model: model || null,
       fit: imported ? new Blob([bodyFitText], { type: "application/json" }) : null,
@@ -967,6 +1041,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (r.body?.skinning) {
         $("foldSummary").innerHTML += `<br>Skinning: ${esc(r.body.skinning)}`;
       }
+      if (r.numerical?.newton_strategy) {
+        $("foldSummary").innerHTML += `<br>Newton solver: ${esc(r.numerical.newton_strategy.kind)}`;
+      }
+      if (r.numerical?.integrator) {
+        const ig = r.numerical.integrator;
+        $("foldSummary").innerHTML += `<br>Integrator: ${esc(ig.kind)}${ig.rho_inf !== undefined ? ` (ρ∞ = ${esc(ig.rho_inf)})` : ""}`;
+      }
       if (r.numerical?.settling) {
         const tail = r.numerical.settling;
         $("foldSummary").innerHTML += `<br>Extra settling: ${esc(tail.steps)} / ${esc(tail.max_steps)} steps, ${esc(tail.duration_s)} s; ${esc(tail.stop_reason)}. Total gravity duration: ${esc(tail.gravity_duration_s)} s.`;
@@ -1048,7 +1129,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("resetStyle").addEventListener("click", () => {
@@ -1195,8 +1276,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (!["lbs", "dqs"].includes(skinning)) {
       showError("Choose lbs or dqs skinning."); return;
     }
-    let timeSubdivision;
-    try { timeSubdivision = drapeTimeSubdivision(); }
+    let timeSubdivision, newtonStrategy, integrator;
+    try {
+      timeSubdivision = drapeTimeSubdivision();
+      newtonStrategy = drapeNewtonStrategy();
+      integrator = drapeIntegrator();
+    }
     catch (error) { showError(error.message); return; }
     foldRequest = ++nextRequest;
     folding = true; foldButton(); dropFold();
@@ -1207,7 +1292,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
       armDeg: Number(angle), legs: $("drapeLegs").value,
       legFraction: Number($("drapeLegFraction").value), skinning, maxSettleSteps: Number($("maxSettleSteps").value),
-      ...(timeSubdivision !== undefined ? { timeSubdivision } : {}) });
+      ...(timeSubdivision !== undefined ? { timeSubdivision } : {}),
+      ...(newtonStrategy !== undefined ? { newtonStrategy } : {}),
+      ...(integrator !== undefined ? { integrator } : {}) });
   });
   const traceOrigin=new URL(location.href).origin;
   if(bodyFitToken && !traceToken && !photoToken && /^[0-9a-f]{32}$/.test(bodyFitToken) && traceOrigin!=="null" && window.opener) {
@@ -1288,6 +1375,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
                 !Number.isSafeInteger(settings.max_settle_steps) ||
                 settings.max_settle_steps<0 || settings.max_settle_steps>256)throw Error("Checked drape model or settings are incomplete.");
             checkedTimeSubdivision(settings.time_subdivision);
+            checkedNewtonStrategy(settings.newton_strategy);
+            checkedIntegrator(settings.integrator);
             if(context.bodyFit !== null && context.bodyFit !== undefined) {
               if(!(context.bodyFit instanceof Blob) || !context.bodyFit.size || context.bodyFit.size>16*1024*1024)throw Error("Accepted body report exceeds 16 MiB.");
               bodyFit=await readJson({files:[context.bodyFit]},"body-fit-report.json");
@@ -1308,6 +1397,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             $("twoStart").checked=settings.two_start;$("drapeLegs").value=settings.legs;
             $("drapeLegFraction").value=String(settings.leg_fraction);$("drapeSkinning").value=settings.skinning ?? "lbs";$("maxSettleSteps").value=String(settings.max_settle_steps);
             setTimeSubdivision(settings.time_subdivision);
+            setNewtonStrategy(settings.newton_strategy);
+            setIntegrator(settings.integrator);
             showBodyImport();worker.postMessage({type:"clearBody"});worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
           }
           materialImportBusy=false;showMaterialInputs();renderPrograms();onProgram(true);

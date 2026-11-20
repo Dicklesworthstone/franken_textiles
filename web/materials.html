@@ -394,6 +394,9 @@ studies below use their separately selected body source.</p>
 <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
 <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
 <label>Skinning <select id="drapeSkinning"><option value="lbs">LBS (Anny default)</option><option value="dqs">DQS (dual-quaternion)</option></select></label>
+<label>Newton solver <select id="drapeNewtonStrategy"><option value="projected">Projected Newton (default)</option><option value="adaptive_ilu">Adaptive ILU-PCG</option><option value="trust_region">Trust-region Steihaug</option></select></label>
+<label>Integrator <select id="drapeIntegrator"><option value="implicit_euler">Implicit Euler (default)</option><option value="generalized_alpha">Generalized-α</option></select></label>
+<label>Spectral radius ρ<sub>∞</sub> (0–1) <input id="drapeRhoInf" type="number" min="0" max="1" step="0.05" value="0" disabled></label>
 <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label>
 <label><input id="splitTimeSteps" type="checkbox"> Split stalled time steps</label>
 <label>Maximum halvings <input id="timeMaxHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
@@ -2229,8 +2232,8 @@ The selected <strong>Body source for body-dependent studies</strong> governs eve
 section-3 measurements at 35°. Accepted-shape mode uses the original report and ordinary arm angle above,
 with explicit wearer association and optional current measurements. It needs no separately authored request file.
 Separate-request mode instead owns its measurements, optional <code>accepted_body_fit</code> report and
-<code>arm_abduction_deg</code> (0–180°, default 35°), <code>legs</code> (<code>standing</code>, <code>seated</code>, <code>squat</code>)
-and <code>leg_fraction</code> (0–1, default 1); section-3 report, pose and measurement edits do not alter that request.
+<code>arm_abduction_deg</code> (0–180°, default 35°), <code>legs</code> (<code>standing</code>, <code>seated</code>, <code>squat</code>),
+<code>leg_fraction</code> (0–1, default 1) and optional <code>skinning</code> (<code>lbs</code> default, or <code>dqs</code>); section-3 report, pose and measurement edits do not alter that request.
 Accepted shapes must match the exact model and are never refitted; optional tapes report residuals only.
 An absent or malformed selected source refuses without switching to another source. Choose measurement mode explicitly
 to return to tape fitting. Original source text is retained in the downloaded <code>body-input.json</code> for replay.

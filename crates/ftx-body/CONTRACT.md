@@ -197,9 +197,12 @@ seated `−5.63 % → −1.42 %`, squat `−6.64 % → −1.68 %`) and `clothing
 `−6.91 % → −1.73 %`), keeping all four well below the `3 %` volume-loss advisory threshold in
 `tests/drape_poses.rs::dqs_reduces_volume_collapse_on_deep_seated_and_squat_poses`. Soft-tissue crease
 overlaps on full `90°–110°` bends remain genuinely present (`160–336` pairs) and still refuse direct
-contact-start admission without anatomical crease correctives. Non-finite transforms or weights fail
-closed with `RefusalCode::NonFinite` rather than silently fabricating an identity rotation. Exposed in
-the CLI via opt-in `--skinning lbs|dqs` on `ftx body` and `ftx drape`.
+contact-start admission without anatomical crease correctives. Non-finite, zero, singular, reflected, or
+non-rigid bone transforms and non-finite weights fail closed with `RefusalCode::NonFinite` rather than
+silently fabricating a rotation. Exposed via opt-in `--skinning lbs|dqs` on `ftx body`, `ftx drape`,
+`ftx round`, `ftx qualify`, and `ftx place`, via `skinning` on `ftx-scenario-body/1` (`BodyRequest`) and
+`FoldSettings`, and via `#drapeSkinning` in both local browser workbenches (`web/index.html`,
+`web/materials.html`).
 
 **Frames and landmarks** (`BodyFrames`, definitions in the `landmarks.rs` table). On the posed body, in
 mm: floor, waist (Anny's waist loop), crotch, chest (the armpit), across back, hip, knee, calf, ankle,

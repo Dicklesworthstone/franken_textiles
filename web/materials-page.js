@@ -252,7 +252,7 @@ function bodyDependentStudies(id) {
   const mode = studyBodyMode();
   const used = id === "body" || (id === "scenarioBody" && mode === "request") ||
     (id === "measurements" && ["measurements", "accepted", "preview"].includes(mode)) ||
-    (["bodyArmDeg", "drapeLegs", "drapeLegFraction"].includes(id) && mode === "preview") ||
+    (["bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id) && mode === "preview") ||
     (["bodyFitFile", "bodyFitConsent", "bodyArmDeg"].includes(id) && mode === "accepted");
   return used ? ["scenario", ...(studyUsesBody() || (id === "body" && savedStudy?.request.onBody) ? ["study"] : [])] : [];
 }
@@ -274,6 +274,7 @@ function guidedSourceStudies(id) {
 function controls() {
   $("loadMaterialExample").disabled = !ready || !!pending;
   for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
+  $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
   const guided = guidedStudyMode();
   const authoredFit = fitMode() === "guided", fitKind = $("guidedFitKind").value || "vertical";
   $("guidedFit").hidden = !authoredFit; $("fitFileField").hidden = authoredFit;
@@ -4843,7 +4844,9 @@ function show(op, msg, request) {
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis,
         legs: r.body?.legs || "standing", leg_fraction: r.body?.leg_fraction ?? 1,
-        ...(r.body?.skinning ? { skinning: r.body.skinning } : {}), settling: r.numerical?.settling,
+        ...(r.body?.skinning ? { skinning: r.body.skinning } : {}),
+        ...(r.numerical?.newton_strategy ? { newton_strategy: r.numerical.newton_strategy } : {}),
+        ...(r.numerical?.integrator ? { integrator: r.numerical.integrator } : {}), settling: r.numerical?.settling,
         body_source: r.body?.shape_source || "Tape-fitted MODEL_FIT shape", body_fit: r.body?.fit,
         measurement_comparison: r.body?.measurement_comparison } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,
@@ -5121,6 +5124,71 @@ function setTimeSubdivision(value) {
   $("timeMaxTrials").value = String(settings?.max_trials ?? 4096);
   for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = settings === undefined;
 }
+function checkedNewtonStrategy(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Error("Newton strategy must be a valid tagged solver object.");
+  }
+  const keys = Object.keys(value);
+  if (value.kind === "projected_newton" && keys.length === 1) return undefined;
+  if (value.kind === "adaptive_ilu" && keys.length === 3 &&
+      keys.every(key => ["kind", "pcg_iters", "max_shifts"].includes(key)) &&
+      Number.isSafeInteger(value.pcg_iters) && value.pcg_iters >= 1 && value.pcg_iters <= 256 &&
+      Number.isSafeInteger(value.max_shifts) && value.max_shifts >= 0 && value.max_shifts <= 16) {
+    return { kind: "adaptive_ilu", pcg_iters: value.pcg_iters, max_shifts: value.max_shifts };
+  }
+  if (value.kind === "trust_region_steihaug" && keys.length === 5 &&
+      keys.every(key => ["kind", "initial_radius", "max_radius", "min_radius", "cg_iters"].includes(key)) &&
+      Number.isFinite(value.min_radius) && Number.isFinite(value.initial_radius) && Number.isFinite(value.max_radius) &&
+      value.min_radius > 0 && value.initial_radius >= value.min_radius && value.max_radius >= value.initial_radius &&
+      Number.isSafeInteger(value.cg_iters) && value.cg_iters >= 0 && value.cg_iters <= 4096) {
+    return { kind: "trust_region_steihaug", initial_radius: value.initial_radius, max_radius: value.max_radius,
+      min_radius: value.min_radius, cg_iters: value.cg_iters };
+  }
+  throw Error("Newton strategy must be projected_newton, adaptive_ilu, or trust_region_steihaug with valid bounds.");
+}
+function drapeNewtonStrategy() {
+  const mode = $("drapeNewtonStrategy").value;
+  if (mode === "projected") return undefined;
+  if (mode === "adaptive_ilu") return { kind: "adaptive_ilu", pcg_iters: 64, max_shifts: 4 };
+  if (mode === "trust_region") return { kind: "trust_region_steihaug", initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 };
+  throw Error("Choose Projected Newton, Adaptive ILU-PCG, or Trust-region Steihaug.");
+}
+function setNewtonStrategy(value) {
+  const strategy = checkedNewtonStrategy(value);
+  $("drapeNewtonStrategy").value = strategy === undefined ? "projected" :
+    strategy.kind === "adaptive_ilu" ? "adaptive_ilu" : "trust_region";
+}
+function checkedIntegrator(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Error("Time integrator must be a valid tagged object.");
+  }
+  const keys = Object.keys(value);
+  if (value.kind === "implicit_euler" && keys.length === 1) return undefined;
+  if (value.kind === "generalized_alpha" && keys.length === 2 &&
+      keys.every(key => ["kind", "rho_inf"].includes(key)) &&
+      Number.isFinite(value.rho_inf) && value.rho_inf >= 0 && value.rho_inf <= 1) {
+    return { kind: "generalized_alpha", rho_inf: value.rho_inf };
+  }
+  throw Error("Time integrator must be implicit_euler or generalized_alpha with finite rho_inf in [0, 1].");
+}
+function drapeIntegrator() {
+  const mode = $("drapeIntegrator").value;
+  if (mode === "implicit_euler") return undefined;
+  if (mode === "generalized_alpha") {
+    const raw = $("drapeRhoInf").value.trim();
+    if (!raw) throw Error("Supply a finite Generalized-α spectral radius rho_inf from 0 to 1.");
+    return checkedIntegrator({ kind: "generalized_alpha", rho_inf: Number(raw) });
+  }
+  throw Error("Choose Implicit Euler or Generalized-α time integration.");
+}
+function setIntegrator(value) {
+  const integrator = checkedIntegrator(value);
+  $("drapeIntegrator").value = integrator === undefined ? "implicit_euler" : "generalized_alpha";
+  $("drapeRhoInf").value = String(integrator?.rho_inf ?? 0);
+  $("drapeRhoInf").disabled = integrator === undefined;
+}
 function drapeArmAngle() {
   const angle = $("bodyArmDeg").value.trim();
   if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
@@ -5154,8 +5222,10 @@ async function studyBodyInput(msg) {
   const mode = studyBodyMode();
   if (mode === "measurements") return measurementInput(msg);
   if (mode === "preview") {
-    const fraction = $("drapeLegFraction").value.trim();
-    const pose = { arm_abduction_deg: drapeArmAngle(), legs: $("drapeLegs").value, leg_fraction: Number(fraction) };
+    const fraction = $("drapeLegFraction").value.trim(), skinning = $("drapeSkinning").value;
+    if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
+    const pose = { arm_abduction_deg: drapeArmAngle(), legs: $("drapeLegs").value, leg_fraction: Number(fraction),
+      ...(skinning !== "lbs" ? { skinning } : {}) };
     if (!fraction || !["standing", "seated", "squat"].includes(pose.legs) ||
         !Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1) {
       throw Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
@@ -6562,6 +6632,10 @@ async function execute(op, studio = null) {
         msg.maxSettleSteps = Number($("maxSettleSteps").value);
         const subdivision = drapeTimeSubdivision();
         if (subdivision !== undefined) msg.timeSubdivision = subdivision;
+        const newtonStrategy = drapeNewtonStrategy();
+        if (newtonStrategy !== undefined) msg.newtonStrategy = newtonStrategy;
+        const integrator = drapeIntegrator();
+        if (integrator !== undefined) msg.integrator = integrator;
         msg.twoStart = $("twoStart").checked;
         msg.armDeg = drapeArmAngle();
         if (has("bodyFitFile")) {
@@ -6611,7 +6685,9 @@ async function execute(op, studio = null) {
         drapeSettings: { self_contact_mm: msg.selfContactMm, two_start: msg.twoStart,
           arm_abduction_deg: msg.armDeg, legs: msg.legs, leg_fraction: msg.legFraction, max_settle_steps: msg.maxSettleSteps,
           ...(msg.skinning !== "lbs" ? { skinning: msg.skinning } : {}),
-          ...(msg.timeSubdivision !== undefined ? { time_subdivision: msg.timeSubdivision } : {}) } } : {}) };
+          ...(msg.timeSubdivision !== undefined ? { time_subdivision: msg.timeSubdivision } : {}),
+          ...(msg.newtonStrategy !== undefined ? { newton_strategy: msg.newtonStrategy } : {}),
+          ...(msg.integrator !== undefined ? { integrator: msg.integrator } : {}) } } : {}) };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
     if (pending?.id !== id) return;
@@ -7670,7 +7746,8 @@ $("supplementalConsent").addEventListener("change", () => supplementalChanged(fa
 $("clearSupplemental").onclick = () => { clearPhotoEvidence(); $("supplementalFiles").value = ""; supplementalChanged(true); };
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], twoStart:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
-  drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
+  drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"],
+  drapeNewtonStrategy:["fold","heat","vaporSurface","coverage"], drapeIntegrator:["fold","heat","vaporSurface","coverage"], drapeRhoInf:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
@@ -7694,7 +7771,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "fit") { clearImportFit(); $("fitSource").value = "file"; }
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
-    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "maxSettleSteps",
+    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps",
       "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
@@ -7704,12 +7781,12 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
       "sewOptions", "sewOptimize", "quotes", "market"].includes(id);
     invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 ||
       id === "treatmentRequest" ||
-      (studyBodyMode() === "preview" && ["drapeLegs", "drapeLegFraction"].includes(id)) ||
+      (studyBodyMode() === "preview" && ["drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id)) ||
       ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions", "vaporSurfaceConditions"].includes(id));
     return scenarioCasesLoading;
   });
 }
-for (const id of ["drapeLegFraction", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials"]) {
+for (const id of ["drapeLegFraction", "drapeRhoInf", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials"]) {
   $(id).addEventListener("input", () => {
     ++roundRead; roundToken = null; window.opener = null;
     invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
@@ -7841,6 +7918,8 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
           !Number.isSafeInteger(settings.max_settle_steps) ||
           settings.max_settle_steps < 0 || settings.max_settle_steps > 256)) throw Error("Received drape settings are incomplete or outside the supported controls.");
       checkedTimeSubdivision(settings?.time_subdivision);
+      checkedNewtonStrategy(settings?.newton_strategy);
+      checkedIntegrator(settings?.integrator);
       const hasArm = settings !== undefined && Object.hasOwn(settings, "arm_abduction_deg");
       if (hasArm && (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180)) {
         throw Error("Received drape arm angle must be from 0 to 180 degrees.");
@@ -7888,6 +7967,8 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         $("drapeSkinning").value = settings.skinning ?? "lbs";
         $("maxSettleSteps").value = String(settings.max_settle_steps);
         setTimeSubdivision(settings.time_subdivision);
+        setNewtonStrategy(settings.newton_strategy);
+        setIntegrator(settings.integrator);
       }
       $("supplementalConsent").checked = false;
       $("bodyFitConsent").checked = false; showReceivedBody();

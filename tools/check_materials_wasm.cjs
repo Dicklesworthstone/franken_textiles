@@ -111,8 +111,46 @@ const parse = JSON.parse;
   assert.notEqual(opticalResults[0].request_sha256,opticalResults[1].request_sha256);
   delete opticalStack.layers[0].record.optical_faces;
   assert.throws(()=>ftx.thermal_steady(JSON.stringify(opticalStack)),/no source-sheet optical face mapping/);
+  const microRequest = {
+    schema: 'ftx-microclimate/1',
+    air: { temperature_c: 20.0, pressure_pa: 101325.0, relative_humidity: 0.5 },
+    convection: {
+      correlation: 'churchill_chu_vertical_plate',
+      characteristic_length_m: 0.30,
+      delta_t_k: 10.0,
+      surface_temperature_range_c: [15.0, 40.0],
+      allow_estimates: true
+    }
+  };
+  const microPath = write('microclimate-request.json', microRequest);
+  const microWasm = await send('microclimate', { microclimateRequest: JSON.stringify(microRequest) });
+  assert.deepEqual(microWasm.result, parse(invoke('microclimate', microPath)));
+  assert.equal(microWasm.result.schema, 'ftx-microclimate-report/1');
+  assert.equal(microWasm.files.map(f => f.name).join(','), 'microclimate-report.json,microclimate-request.json');
+  const badMicro = structuredClone(microRequest); badMicro.air.relative_humidity = 1.5;
+  await context.self.onmessage({ data: { type: 'microclimate', request: sent.length + 1, microclimateRequest: JSON.stringify(badMicro) } });
+  assert.equal(sent.at(-1).type, 'error');
+  const viscoRequest = {
+    schema: 'ftx-fractional-zener-lowering/1',
+    e0: 200.0,
+    e_inf: 500.0,
+    alpha: 0.35,
+    tau_s: 1.0,
+    f_lo_hz: 0.01,
+    f_hi_hz: 100.0,
+    n_terms: 14,
+    rel_tol: 0.02
+  };
+  const viscoPath = write('visco-lowering-request.json', viscoRequest);
+  const viscoWasm = await send('lowerVisco', { viscoRequest: JSON.stringify(viscoRequest) });
+  assert.deepEqual(viscoWasm.result, parse(invoke('lower-visco', viscoPath)));
+  assert.equal(viscoWasm.result.schema, 'ftx-fractional-zener-lowering-report/1');
+  assert.equal(viscoWasm.files.map(f => f.name).join(','), 'viscoelastic-lowering-report.json,viscoelastic-lowering-request.json');
+  const badVisco = structuredClone(viscoRequest); badVisco.alpha = 1.2;
+  await context.self.onmessage({ data: { type: 'lowerVisco', request: sent.length + 1, viscoRequest: JSON.stringify(badVisco) } });
+  assert.equal(sent.at(-1).type, 'error');
   await context.self.onmessage({data:{type:'fold',bytes:new ArrayBuffer(8),pattern:JSON.stringify(original),measurements:'{}',fit:'{}'}});
   assert.equal(sent.at(-1).type,'error');
-  console.log('PASS: compiled WASM + actual worker/native equality for binding, permanent membrane law selection, stock, SVG, sewing, purchasing and frozen thermal surface/coverage; automatic asymmetric optical faces, material-driven changes and malformed model refusal.');
+  console.log('PASS: compiled WASM + actual worker/native equality for binding, permanent membrane law selection, stock, SVG, sewing, purchasing, frozen thermal surface/coverage, microclimate and viscoelastic lowering; automatic asymmetric optical faces, material-driven changes and malformed/out-of-domain refusals.');
   console.log('Browser navigation and successful model-backed drape NOT asserted. Test outputs:',work);
 })().catch(e=>{console.error(e);process.exitCode=1;});

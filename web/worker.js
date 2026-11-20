@@ -177,9 +177,50 @@ onmessage = async (ev) => {
         }
         settings.time_subdivision = { max_halvings: value.max_halvings, max_trials: value.max_trials };
       }
+      if (msg.newtonStrategy !== undefined) {
+        const value = msg.newtonStrategy;
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw Error("Newton strategy must be a valid tagged solver object.");
+        }
+        const keys = Object.keys(value);
+        if (value.kind === "projected_newton" && keys.length === 1) {
+          // Legacy default; omit from FoldSettings JSON.
+        } else if (value.kind === "adaptive_ilu" && keys.length === 3 &&
+            keys.every(key => ["kind", "pcg_iters", "max_shifts"].includes(key)) &&
+            Number.isSafeInteger(value.pcg_iters) && value.pcg_iters >= 1 && value.pcg_iters <= 256 &&
+            Number.isSafeInteger(value.max_shifts) && value.max_shifts >= 0 && value.max_shifts <= 16) {
+          settings.newton_strategy = { kind: "adaptive_ilu", pcg_iters: value.pcg_iters, max_shifts: value.max_shifts };
+        } else if (value.kind === "trust_region_steihaug" && keys.length === 5 &&
+            keys.every(key => ["kind", "initial_radius", "max_radius", "min_radius", "cg_iters"].includes(key)) &&
+            Number.isFinite(value.min_radius) && Number.isFinite(value.initial_radius) && Number.isFinite(value.max_radius) &&
+            value.min_radius > 0 && value.initial_radius >= value.min_radius && value.max_radius >= value.initial_radius &&
+            Number.isSafeInteger(value.cg_iters) && value.cg_iters >= 0 && value.cg_iters <= 4096) {
+          settings.newton_strategy = { kind: "trust_region_steihaug", initial_radius: value.initial_radius,
+            max_radius: value.max_radius, min_radius: value.min_radius, cg_iters: value.cg_iters };
+        } else {
+          throw Error("Newton strategy must be projected_newton, adaptive_ilu, or trust_region_steihaug with valid bounds.");
+        }
+      }
+      if (msg.integrator !== undefined) {
+        const value = msg.integrator;
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw Error("Time integrator must be a valid tagged object.");
+        }
+        const keys = Object.keys(value);
+        if (value.kind === "implicit_euler" && keys.length === 1) {
+          // Legacy default; omit from FoldSettings JSON.
+        } else if (value.kind === "generalized_alpha" && keys.length === 2 &&
+            keys.every(key => ["kind", "rho_inf"].includes(key)) &&
+            Number.isFinite(value.rho_inf) && value.rho_inf >= 0 && value.rho_inf <= 1) {
+          settings.integrator = { kind: "generalized_alpha", rho_inf: value.rho_inf };
+        } else {
+          throw Error("Time integrator must be implicit_euler or generalized_alpha with finite rho_inf in [0, 1].");
+        }
+      }
       const configured = (!imported && armDeg !== 35) ||
         settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
-        settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined;
+        settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
+        settings.newton_strategy !== undefined || settings.integrator !== undefined;
       if (configured && typeof ftx.fold_up_configured !== "function") {
         throw new Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
       }

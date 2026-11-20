@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 
 use ftx_body::{
     Affine, AnnyModel, BodyFrames, BodyParams, Legs, NappyOccupancy, Pose, RestBody, SkinMesh,
-    TAPE_FIELDS, Wearer, accepted_shape::AcceptedShape, clothing_skin, fit_tape, joint_rotations,
-    partial_tape_readings, pose_deltas, skin_mesh, tape_targets,
+    SkinningMode, TAPE_FIELDS, Wearer, accepted_shape::AcceptedShape, clothing_skin, fit_tape,
+    joint_rotations, partial_tape_readings, pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_core::{Mat3, Refusal, Vec3, det};
 use ftx_pattern::{instance::PyError, validate::BodyMeasure};
@@ -39,6 +39,9 @@ pub struct BodyRequest {
         skip_serializing_if = "is_full_leg_fraction"
     )]
     pub leg_fraction: f64,
+    /// Skinning operator (`"lbs"` default; `"dqs"` opt-in dual-quaternion linear blending).
+    #[serde(default, skip_serializing_if = "skinning_is_lbs")]
+    pub skinning: SkinningMode,
 }
 
 fn empty_measurements() -> Value {
@@ -52,6 +55,9 @@ fn full_leg_fraction() -> f64 {
 }
 fn is_full_leg_fraction(fraction: &f64) -> bool {
     *fraction == 1.0
+}
+fn skinning_is_lbs(mode: &SkinningMode) -> bool {
+    mode.is_lbs()
 }
 
 impl BodyRequest {
@@ -79,6 +85,7 @@ impl BodyRequest {
                     "arm_abduction_deg",
                     "legs",
                     "leg_fraction",
+                    "skinning",
                 ]
                 .iter()
                 .any(|k| input.get(k).is_some())
@@ -95,6 +102,7 @@ impl BodyRequest {
                     arm_abduction_deg: default_arm_angle(),
                     legs: Legs::Standing,
                     leg_fraction: 1.0,
+                    skinning: SkinningMode::LinearBlend,
                 }
             }
             _ => {
@@ -181,8 +189,9 @@ pub struct FittedBody {
     collision: SkinMesh,
     display: SkinMesh,
     arm_deg: f64,
-    // Motion begins at this exact selected pose, including legs; public report edits cannot alter it.
+    // Motion begins at this exact selected pose and skinning operator; public report edits cannot alter them.
     initial_pose: Pose,
+    skinning: SkinningMode,
     measurement_pose: Pose,
     params: BodyParams,
     // This geometric proxy never replaces the source shape or inherits edits to the public report.
@@ -294,6 +303,7 @@ impl FittedBody {
             arm_abduction_deg: default_arm_angle(),
             legs: Legs::Standing,
             leg_fraction: 1.0,
+            skinning: SkinningMode::LinearBlend,
         };
         Self::prepare(model, "", &request)
     }
@@ -325,7 +335,11 @@ impl FittedBody {
         pose.leg_fraction = request.leg_fraction;
         let rest = model.rest(occupied_params)?;
         let rest_collision = clothing_skin(model, &rest.vertices)?;
-        let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
+        let posed = model.pose_with_skinning(
+            &rest,
+            &pose_deltas(model, &rest, &pose, 1.0)?,
+            request.skinning,
+        )?;
         let collision = clothing_skin(model, &posed.vertices)?;
         let display = skin_mesh(&posed.vertices, &model.data().faces)?;
         let frames = BodyFrames::new(model, &posed)?;
@@ -347,8 +361,12 @@ impl FittedBody {
         if request.leg_fraction != 1.0 {
             report["pose"]["leg_fraction"] = json!(request.leg_fraction);
         }
+        if !request.skinning.is_lbs() {
+            report["pose"]["skinning"] = json!(request.skinning);
+        }
         report["body_provenance"] = json!("MODEL_FIT");
-        report["body_contact_proxy"] = collision.contact_proxy_basis_with_rest(&rest_collision);
+        report["body_contact_proxy"] =
+            collision.contact_proxy_basis_with_rest_and_skinning(&rest_collision, request.skinning);
         report["physical_validation_claim"] = json!(false);
         let flat_source = json!({"shape_source":report["shape_source"],"measurement_pose":report["measurement_pose"],
             "input_measurements_sha256":report["measurements_sha256"]});
@@ -358,6 +376,7 @@ impl FittedBody {
             display,
             arm_deg: request.arm_abduction_deg,
             initial_pose: pose,
+            skinning: request.skinning,
             measurement_pose,
             params,
             nappy_occupancy: occupancy,
@@ -515,7 +534,7 @@ impl FittedBody {
                         })
                         .collect()
                 };
-                let mut posed = model.pose(&rest, &deltas)?;
+                let mut posed = model.pose_with_skinning(&rest, &deltas, self.skinning)?;
                 let rotation = if exact || previous_rotation == keyframe.root_rotation_rad {
                     keyframe.root_rotation_matrix()?
                 } else {
@@ -1847,7 +1866,10 @@ mod tests {
             json!({"schema":"ftx-scenario-body/1","legs":"kneeling"}),
             json!({"schema":"ftx-scenario-body/1","leg_fraction":1.01}),
             json!({"schema":"ftx-scenario-body/1","leg_fraction":null}),
+            json!({"schema":"ftx-scenario-body/1","skinning":"bogus"}),
+            json!({"schema":"ftx-scenario-body/1","skinning":null}),
             json!({"legs":"seated"}),
+            json!({"skinning":"dqs"}),
             json!({"schema":"ftx-scenario-body/1","measurements":null}),
             json!({"wearer":{"age_months":-1}}),
             json!({"fused":{"waist":{"value_mm":"500"}}}),
@@ -1861,11 +1883,63 @@ mod tests {
         assert_eq!(req.arm_abduction_deg, 35.0);
         assert_eq!(req.legs, Legs::Standing);
         assert_eq!(req.leg_fraction, 1.0);
+        assert_eq!(req.skinning, SkinningMode::LinearBlend);
         let replay = serde_json::to_value(&req).unwrap();
         assert!(replay.get("accepted_body_fit").is_none());
         assert!(replay.get("legs").is_none());
         assert!(replay.get("leg_fraction").is_none());
+        assert!(replay.get("skinning").is_none());
         assert_eq!(BodyRequest::read(&replay).unwrap().measurements, legacy);
+
+        let dqs = BodyRequest::read(&json!({
+            "schema": "ftx-scenario-body/1",
+            "measurements": legacy,
+            "legs": "seated",
+            "leg_fraction": 0.5,
+            "skinning": "dqs"
+        }))
+        .unwrap();
+        assert_eq!(dqs.skinning, SkinningMode::DualQuaternion);
+        assert_eq!(serde_json::to_value(&dqs).unwrap()["skinning"], "dqs");
+
+        let model = model();
+        let hash = "a".repeat(64);
+        let mut dqs_req = request();
+        dqs_req.legs = Legs::Seated;
+        dqs_req.leg_fraction = 0.05;
+        let lbs_body = FittedBody::prepare(&model, &hash, &dqs_req).unwrap();
+        assert!(lbs_body.report["pose"].get("skinning").is_none());
+        assert!(
+            lbs_body.report["body_contact_proxy"]
+                .get("skinning")
+                .is_none()
+        );
+        dqs_req.skinning = SkinningMode::DualQuaternion;
+        let dqs_body = FittedBody::prepare(&model, &hash, &dqs_req).unwrap();
+        assert_eq!(
+            dqs_body.report["shape_sha256"],
+            lbs_body.report["shape_sha256"]
+        );
+        assert_eq!(dqs_body.report["pose"]["skinning"], "dqs");
+        assert_eq!(dqs_body.report["body_contact_proxy"]["skinning"], "dqs");
+        let motion: motion::Request = serde_json::from_value(json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [{"time_s": 0.01, "arm_abduction_deg": 36.0, "leg_pose": {"posture": "squat", "fraction": 0.1}}],
+            "max_step_s": 0.01, "max_trials": 16, "max_pairs": 10000, "max_sample_vertices": 10000
+        }))
+        .unwrap();
+        let path = dqs_body.motion_path(&model, &hash, &motion).unwrap();
+        dqs_req.arm_abduction_deg = 36.0;
+        dqs_req.legs = Legs::Squat;
+        dqs_req.leg_fraction = 0.1;
+        let end = FittedBody::prepare(&model, &hash, &dqs_req).unwrap();
+        let expected = motion::Path::new(
+            &motion,
+            dqs_body.body().collision,
+            vec![end.collision.vertices],
+        )
+        .unwrap();
+        assert_eq!(path.sha256(), expected.sha256());
     }
 
     #[test]

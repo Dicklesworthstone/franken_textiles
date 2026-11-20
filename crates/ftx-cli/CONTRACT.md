@@ -271,7 +271,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   simulation directory (`fold.pc2`, `mesh_map.json`, `body.obj`, `sim_report.json`) without re-running
   the cloth solver.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N] [--model PATH]
-  [--arm-deg DEG] [--skinning lbs|dqs] [--self-contact-mm MM] [--self-mu MU] [--compression F] [--two-start] [--pose-end POSE] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
+  [--arm-deg DEG] [--skinning lbs|dqs] [--self-contact-mm MM] [--self-mu MU] [--compression F] [--two-start-sew N] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does).
   `--elastic-hold-steps N` reports casing displacement during the last N accepted gravity steps;
   it adds no steps and changes no physics. Zero requests no window; N above `--drape` refuses.

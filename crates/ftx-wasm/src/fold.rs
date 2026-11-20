@@ -465,7 +465,7 @@ fn fold_on_source(
         &body,
         &material,
         description,
-        skin.contact_proxy_basis_with_rest(&rest_skin),
+        skin.contact_proxy_basis_with_rest_and_skinning(&rest_skin, skinning),
     )
 }
 

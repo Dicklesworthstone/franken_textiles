@@ -1419,7 +1419,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
   for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignAfterSeams','guidedDesignMaterials'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
-  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.maxSettleSteps.value='0';
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.guidedScenarioSubdivisionHalvings.value='8';e.guidedScenarioSubdivisionTrials.value='4096';
@@ -5670,7 +5670,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
 function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyToken=null,initialize=true,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
-  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.maxSettleSteps.value='0';
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   for(const el of Object.values(e)) {
@@ -22753,8 +22753,194 @@ test('opt-in DQS skinning routes through fold_up_configured, invalidates stale d
     drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, skinning: 'bogus', max_settle_steps: 0 } } });
   assert.match(bad.e.roundImportText.textContent, /refused/);
 
-  // 3. Pattern workbench (index.html): DQS fold message + summary + invalidation + material handoff.
+  // 3. Preview-mode body study / scenario forwards opt-in skinning:'dqs', invalidates on change, and preserves supplemental measurementPose.
+  const { p: st } = await guidedDesignSetup(workbenchSavedPattern);
+  const primary = '{"schema":"fabric-measurements/1","records":[]}';
+  const extra = '{"schema":"fabric-measurements/1","records":[]}';
+  st.select('measurements', primary); st.e.measurements.handlers.change();
+  st.e.studyBodySource.value = 'preview'; st.e.studyBodySource.handlers.change();
+  st.e.drapeLegs.value = 'seated'; st.e.drapeLegFraction.value = '0.5'; st.e.drapeSkinning.value = 'dqs';
+  st.e.supplementalFiles.files = [new Blob([extra])]; st.e.supplementalFiles.handlers.change();
+  st.e.supplementalConsent.checked = true; st.e.supplementalConsent.handlers.change();
+  const { bundle } = await savedStudyDownload(st);
+  assert.deepEqual(bundle.request.measurementPose, { arm_abduction_deg: 35, legs: 'seated', leg_fraction: 0.5, skinning: 'dqs' });
+  assert.equal(JSON.parse(bundle.request.measurements).skinning, 'dqs');
+  await st.e.study.onclick();
+  const studyMsg = st.current().messages.at(-1);
+  assert.equal(studyMsg.measurementPose.skinning, 'dqs');
+  assert.equal(JSON.parse(studyMsg.measurements).skinning, 'dqs');
+  const studySec = section(st, 'Fixed-pattern manufacturing alternatives');
+  st.emit({ schema: 'ftx-design-study-report/1', alternatives: [], frontier: [] }, []);
+  assert.equal(studySec.hidden, false);
+  st.e.drapeSkinning.value = 'lbs'; st.e.drapeSkinning.handlers.change();
+  assert.equal(studySec.hidden, true, 'changing skinning in preview mode must invalidate stale body-dependent studies');
+
+  // 4. Pattern workbench (index.html): DQS fold message + summary + invalidation + material handoff.
   const idx = draftingPage();
   idx.e.drapeSkinning.value = 'dqs';
   assert.equal(idx.e.drapeSkinning.value, 'dqs');
+});
+
+test('opt-in Newton strategy, Generalized-alpha integrator, microclimate and lowerVisco wire through both workbenches and workers', async () => {
+  // 1. Material workbench page: adaptive_ilu + generalized_alpha fold message, summary, invalidation, fail-closed refusal, handoff.
+  const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  p.e.body.files = [new Blob([new Uint8Array([1])])];
+  p.e.drapeNewtonStrategy.value = 'adaptive_ilu';
+  p.e.drapeIntegrator.value = 'generalized_alpha';
+  p.e.drapeRhoInf.value = '0.5';
+  await p.e.fold.onclick();
+  const foldMsg = p.current().messages.at(-1);
+  assert.deepEqual(plain(foldMsg.newtonStrategy), { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 });
+  assert.deepEqual(plain(foldMsg.integrator), { kind: 'generalized_alpha', rho_inf: 0.5 });
+  const report = {
+    settled: true,
+    body: { legs: 'standing', leg_fraction: 1 },
+    numerical: {
+      newton_strategy: { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 },
+      integrator: { kind: 'generalized_alpha', rho_inf: 0.5 }
+    }
+  };
+  p.emit(report, [{ name: 'sim_report.json', text: JSON.stringify(report), mime: 'application/json' }]);
+  const s = section(p, 'fold'), summary = JSON.parse(s.children[1].textContent);
+  assert.deepEqual(summary.newton_strategy, { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 });
+  assert.deepEqual(summary.integrator, { kind: 'generalized_alpha', rho_inf: 0.5 });
+  p.e.drapeRhoInf.value = '0.25'; p.e.drapeRhoInf.handlers.input();
+  assert.equal(s.hidden, true, 'changing Generalized-alpha rho_inf must invalidate prior fold results');
+  // Out-of-range rho_inf refuses fail-closed before posting to worker.
+  p.e.drapeRhoInf.value = '1.5';
+  const beforeBad = p.current().messages.length;
+  await p.e.fold.onclick();
+  assert.match(p.e.error.textContent, /rho_inf/);
+  assert.equal(p.current().messages.length, beforeBad);
+  // Trust-region Steihaug preset wires cleanly.
+  p.e.drapeNewtonStrategy.value = 'trust_region';
+  p.e.drapeIntegrator.value = 'implicit_euler';
+  await p.e.fold.onclick();
+  const trMsg = p.current().messages.at(-1);
+  assert.deepEqual(plain(trMsg.newtonStrategy), { kind: 'trust_region_steihaug', initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 });
+  assert.equal(trMsg.integrator, undefined);
+
+  // 2. Round handoff -> Material workbench preserves explicit newton_strategy + integrator and refuses malformed.
+  const token = 'a'.repeat(32);
+  const q = await pageModule({ roundToken: token });
+  const files = { pattern: new Blob(['{"pieces":[{"id":"front"}]}']), measurements: new Blob(['{}']), fit: new Blob(['{}']) };
+  await q.windowEvents.message({ origin: 'https://unit.invalid', source: q.opener, data: { type: 'ftx-round-sources', token, files,
+    bodySource: { model: new Blob([new Uint8Array([1])]) },
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+      newton_strategy: { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 },
+      integrator: { kind: 'generalized_alpha', rho_inf: 0.4 } } } });
+  assert.equal(q.e.drapeNewtonStrategy.value, 'adaptive_ilu');
+  assert.equal(q.e.drapeIntegrator.value, 'generalized_alpha');
+  assert.equal(q.e.drapeRhoInf.value, '0.4');
+  assert.equal(q.e.drapeRhoInf.disabled, false);
+  const badToken = 'b'.repeat(32), bad = await pageModule({ roundToken: badToken });
+  await bad.windowEvents.message({ origin: 'https://unit.invalid', source: bad.opener, data: { type: 'ftx-round-sources', token: badToken, files,
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+      integrator: { kind: 'generalized_alpha', rho_inf: 1.5 } } } });
+  assert.match(bad.e.roundImportText.textContent, /refused/);
+
+  // 3. materials-worker.js routes opt-in newtonStrategy/integrator to fold_up_configured, keeps defaults on legacy fold_up,
+  //    refuses bogus inputs fail-closed, and handles microclimate + lowerVisco directly.
+  const workerCalls = [];
+  const mw = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    WebBody: class { constructor() {} free() {} },
+    fold_up: () => { workerCalls.push({ path: 'legacy' }); return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      workerCalls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} };
+    },
+    thermal_microclimate: req => { workerCalls.push({ path: 'microclimate', req }); return '{"schema":"ftx-microclimate-report/1"}'; },
+    material_lower_visco: req => { workerCalls.push({ path: 'lowerVisco', req }); return '{"schema":"ftx-fractional-zener-lowering-report/1"}'; }
+  } });
+  const baseFold = { type: 'fold', request: 1, bytes: new Uint8Array([1]).buffer, pattern: '{}', measurements: '{}', fit: '{}', selfContactMm: 2, twoStart: false, armDeg: 35 };
+  assert.equal((await mw.send(baseFold)).type, 'result');
+  assert.equal(workerCalls.at(-1).path, 'legacy');
+  const cfgFold = await mw.send({ ...baseFold, request: 2, bytes: new Uint8Array([1]).buffer,
+    newtonStrategy: { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 },
+    integrator: { kind: 'generalized_alpha', rho_inf: 0.25 } });
+  assert.equal(cfgFold.type, 'result');
+  assert.equal(workerCalls.at(-1).path, 'configured');
+  assert.deepEqual(plain(workerCalls.at(-1).settings.newton_strategy), { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 });
+  assert.deepEqual(plain(workerCalls.at(-1).settings.integrator), { kind: 'generalized_alpha', rho_inf: 0.25 });
+  const badWorker = await mw.send({ ...baseFold, request: 3, bytes: new Uint8Array([1]).buffer, newtonStrategy: { kind: 'adaptive_ilu', pcg_iters: 999, max_shifts: 4 } });
+  assert.equal(badWorker.type, 'error');
+  const microRes = await mw.send({ type: 'microclimate', request: 4, microclimateRequest: '{"schema":"ftx-microclimate/1"}' });
+  assert.equal(microRes.type, 'result');
+  assert.equal(microRes.request, 4);
+  assert.equal(microRes.result.schema, 'ftx-microclimate-report/1');
+  assert.deepEqual(plain(microRes.files.map(f => f.name)), ['microclimate-report.json', 'microclimate-request.json']);
+  const viscoRes = await mw.send({ type: 'lowerVisco', request: 5, viscoRequest: '{"schema":"ftx-fractional-zener-lowering/1"}' });
+  assert.equal(viscoRes.type, 'result');
+  assert.equal(viscoRes.request, 5);
+  assert.equal(viscoRes.result.schema, 'ftx-fractional-zener-lowering-report/1');
+  assert.deepEqual(plain(viscoRes.files.map(f => f.name)), ['viscoelastic-lowering-report.json', 'viscoelastic-lowering-request.json']);
+
+  // 4. Pattern workbench worker (web/worker.js) routes opt-in solver/integrator through fold_up_configured and keeps defaults on legacy fold_up.
+  const dwSent = [], dwCalls = [];
+  const dwValues = {
+    default: async () => {}, program_info: () => '{}', calibration_dictionaries: () => '["DICT_4X4_50"]',
+    run: () => ({ page: () => '{"status":"CONVERGED","zip":"round.zip"}', zip: () => new Uint8Array([1]),
+      file: n => new TextEncoder().encode(n === 'pattern.json' ? '{"pieces":[{"placement":{"part":"torso"}}]}' : '{}'), free() {} }),
+    WebBody: class { free() {} },
+    fold_up: () => { dwCalls.push({ path: 'legacy' }); return { report: () => '{"gating":[]}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      dwCalls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"gating":[],"settled":true}', viewer: () => '<html/>', free() {} };
+    }
+  };
+  const dwCtx = vm.createContext({ JSON, Date, TextDecoder, Uint8Array, WebAssembly, Error, self: {}, onmessage: null, postMessage: m => dwSent.push(m) });
+  const dwImports = new vm.SyntheticModule(Object.keys(dwValues), function () { for (const [n, v] of Object.entries(dwValues)) this.setExport(n, v); }, { context: dwCtx });
+  await dwImports.link(() => {}); await dwImports.evaluate();
+  const dwMod = new vm.SourceTextModule(read('worker.js'), { context: dwCtx, importModuleDynamically: () => dwImports });
+  await dwMod.link(() => {}); await dwMod.evaluate();
+  const dwSend = async data => { await dwCtx.onmessage({ data }); return dwSent.at(-1); };
+  assert.equal((await dwSend({ type: 'init', pkg: './pkg/' })).type, 'ready');
+  await dwSend({ type: 'body', request: 2, bytes: new Uint8Array([1]).buffer });
+  await dwSend({ type: 'run', request: 3, req: {} });
+  assert.equal((await dwSend({ type: 'fold', request: 4, round: 3, body: 2 })).type, 'folded');
+  assert.equal(dwCalls.at(-1).path, 'legacy');
+  const dwCfg = await dwSend({ type: 'fold', request: 5, round: 3, body: 2,
+    newtonStrategy: { kind: 'trust_region_steihaug', initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 },
+    integrator: { kind: 'generalized_alpha', rho_inf: 0.0 } });
+  assert.equal(dwCfg.type, 'folded');
+  assert.equal(dwCalls.at(-1).path, 'configured');
+  assert.equal(dwCalls.at(-1).settings.newton_strategy.kind, 'trust_region_steihaug');
+  assert.deepEqual(plain(dwCalls.at(-1).settings.integrator), { kind: 'generalized_alpha', rho_inf: 0.0 });
+  const dwBad = await dwSend({ type: 'fold', request: 6, round: 3, body: 2, integrator: { kind: 'generalized_alpha', rho_inf: -0.1 } });
+  assert.equal(dwBad.type, 'error');
+
+  // 5. Pattern workbench page (web/index.html): foldGo wiring, summary display, invalidation, fail-closed refusal.
+  const idx = draftingPage();
+  idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  idx.e.bodyFile.files = [new Blob([new Uint8Array([1])])];
+  await idx.e.bodyFile.handlers.change();
+  const bodyReq = idx.messages.findLast(m => m.type === 'body').request;
+  idx.worker.onmessage({ data: { type: 'bodyReady', request: bodyReq } });
+  await idx.e.go.handlers.click();
+  const runReq = idx.messages.findLast(m => m.type === 'run').request;
+  idx.worker.onmessage({ data: { type: 'result', request: runReq, res: { title: 'Bolero', status: 'CONVERGED', basis: {}, zip: 'r.zip' }, blobs: {}, foldable: true, bodyCheckable: true,
+    roundSources: { pattern: '{}', measurements: '{}', fit: '{}' } } });
+  idx.e.drapeNewtonStrategy.value = 'adaptive_ilu';
+  idx.e.drapeIntegrator.value = 'generalized_alpha';
+  idx.e.drapeIntegrator.handlers.change();
+  assert.equal(idx.e.drapeRhoInf.disabled, false);
+  idx.e.drapeRhoInf.value = '0.5';
+  idx.e.foldGo.handlers.click();
+  const idxFold = idx.messages.findLast(m => m.type === 'fold');
+  assert.deepEqual(plain(idxFold.newtonStrategy), { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 });
+  assert.deepEqual(plain(idxFold.integrator), { kind: 'generalized_alpha', rho_inf: 0.5 });
+  const idxRep = { settled: true, gating: [], body: { legs: 'standing', leg_fraction: 1 },
+    numerical: { newton_strategy: { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 }, integrator: { kind: 'generalized_alpha', rho_inf: 0.5 } } };
+  idx.worker.onmessage({ data: { type: 'folded', request: idxFold.request, report: idxRep, reportText: JSON.stringify(idxRep), viewer: '<html/>' } });
+  assert.match(idx.e.foldSummary.innerHTML, /Newton solver: adaptive_ilu/);
+  assert.match(idx.e.foldSummary.innerHTML, /Integrator: generalized_alpha \(ρ∞ = 0\.5\)/);
+  idx.e.drapeRhoInf.value = '0.25'; idx.e.drapeRhoInf.handlers.input();
+  assert.equal(idx.e.foldSummary.textContent, '', 'changing rho_inf on index.html must invalidate prior fold summary');
+  // Out-of-range rho_inf refuses fail-closed before posting fold message.
+  idx.e.drapeRhoInf.value = '2.0';
+  const beforeIdxBad = idx.messages.length;
+  idx.e.foldGo.handlers.click();
+  assert.equal(idx.messages.length, beforeIdxBad);
+  assert.match(idx.e.errorText.textContent, /rho_inf/);
 });

@@ -557,7 +557,23 @@ impl SkinMesh {
     /// (`rest_volume_m3`, `posed_volume_m3`, `volume_change_fraction`, `lbs_volume_loss_advisory`).
     #[must_use]
     pub fn contact_proxy_basis_with_rest(&self, rest_skin: &Self) -> serde_json::Value {
+        self.contact_proxy_basis_with_rest_and_skinning(rest_skin, crate::SkinningMode::LinearBlend)
+    }
+
+    /// As [`Self::contact_proxy_basis_with_rest`], additionally recording `"skinning": "dqs"` when
+    /// posed with [`crate::SkinningMode::DualQuaternion`] (default LBS output stays bit-identical).
+    #[must_use]
+    pub fn contact_proxy_basis_with_rest_and_skinning(
+        &self,
+        rest_skin: &Self,
+        skinning: crate::SkinningMode,
+    ) -> serde_json::Value {
         let mut basis = self.contact_proxy_basis();
+        if !skinning.is_lbs()
+            && let Some(obj) = basis.as_object_mut()
+        {
+            obj.insert("skinning".into(), serde_json::json!(skinning.as_str()));
+        }
         let rest_v = rest_skin.report.volume;
         let posed_v = self.report.volume;
         if rest_v.is_finite() && rest_v > 0.0 && posed_v.is_finite() {
@@ -1376,6 +1392,16 @@ mod tests {
         assert_eq!(
             rest.audit_self_intersections(2).unwrap_err().code,
             RefusalCode::BudgetExceeded
+        );
+
+        let lbs_basis = mild.contact_proxy_basis_with_rest(&rest);
+        assert!(lbs_basis.get("skinning").is_none());
+        let dqs_basis = mild
+            .contact_proxy_basis_with_rest_and_skinning(&rest, crate::SkinningMode::DualQuaternion);
+        assert_eq!(dqs_basis["skinning"], "dqs");
+        assert_eq!(
+            dqs_basis["volume_change_fraction"],
+            lbs_basis["volume_change_fraction"]
         );
     }
 }

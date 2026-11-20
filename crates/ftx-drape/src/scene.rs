@@ -1278,7 +1278,18 @@ fn ramp_thickness(c: &mut Contact, x: &[Vec3], target: f64) {
         let remaining = target - old;
         let mut increment = THICKNESS_RAMP.min(remaining);
         // A blocked maximum increment must not trap a safe smaller continuation step.
-        for _ in 0..8 {
+        for trial in 0..=8 {
+            if trial == 8 {
+                // A loaded panel can clear the current offset by less than the smallest
+                // ordinary trial. Use the measured gap for one final, bounded proposal.
+                c.params.thickness = old;
+                if let Some(gap) = c.min_gap(x, c.params.dhat.max(2.0 * increment)) {
+                    if gap <= 0.0 {
+                        break;
+                    }
+                    increment = increment.min(0.5 * gap);
+                }
+            }
             let next = if increment == remaining {
                 target
             } else {
@@ -1891,11 +1902,23 @@ mod grain_tests {
         // A full increment intersects the body; backtracking must preserve a positive gap.
         assert!((contact.params.thickness - (old + THICKNESS_RAMP / 8.)).abs() < 1e-15);
         assert!(contact.min_gap(&close, 1e-3).unwrap() > 0.1 * old_gap);
+        contact.params.thickness = x[0].z;
+        ramp_thickness(&mut contact, &x, 1.5e-3);
+        assert_eq!(contact.params.thickness, x[0].z);
     }
 
     #[test]
     fn body_offset_ramp_finishes_only_with_relative_clearance() {
         for (name, old, target, distance, dhat, expected, finishes) in [
+            (
+                "one micron of clearance at the loaded offset",
+                0.8e-3,
+                1.5e-3,
+                0.801e-3,
+                1e-3,
+                0.8005e-3,
+                false,
+            ),
             (
                 "safe final step",
                 1.413734e-3,

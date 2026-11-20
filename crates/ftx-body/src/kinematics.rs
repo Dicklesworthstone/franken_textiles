@@ -223,13 +223,29 @@ impl SkinningMode {
     }
 }
 
-/// Converts a right-handed orthonormal rotation matrix into a unit quaternion `[w, x, y, z]`
-/// via Shepperd's branch-stable method. Non-finite or degenerate zero matrices return NaNs rather
-/// than silently fabricating an identity rotation.
+/// Converts a right-handed orthonormal rotation matrix (`SO(3)`) into a unit quaternion
+/// `[w, x, y, z]` via Shepperd's branch-stable method. Non-finite, zero, singular, reflected
+/// (`det <= 0`), or non-rigid scaled/sheared matrices return NaNs rather than silently fabricating
+/// a bogus rotation.
 fn rotmat_to_unit_quaternion(m: &Mat3) -> [f64; 4] {
     let r = &m.rows;
     if r.iter().flatten().any(|v| !v.is_finite()) {
         return [f64::NAN; 4];
+    }
+    let det = r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1])
+        - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0])
+        + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
+    if !(det.is_finite() && det > 0.5) {
+        return [f64::NAN; 4];
+    }
+    for i in 0..3 {
+        for j in i..3 {
+            let dot = r[0][i] * r[0][j] + r[1][i] * r[1][j] + r[2][i] * r[2][j];
+            let target = if i == j { 1.0 } else { 0.0 };
+            if !dot.is_finite() || (dot - target).abs() > 1e-3 {
+                return [f64::NAN; 4];
+            }
+        }
     }
     let trace = r[0][0] + r[1][1] + r[2][2];
     let q = if trace > 0.0 {
@@ -574,13 +590,32 @@ mod tests {
             dual_quaternion_skinning(&pts, &[0, 0], &[0.0, 0.0], 2, &[bad]),
             pts
         );
-        // Active non-finite transform propagates NaN instead of fabricating identity.
-        let out = dual_quaternion_skinning(&pts, &[0], &[1.0], 1, &[bad]);
-        assert!(
-            !out[0].is_finite(),
-            "non-finite transform must not yield finite output: {:?}",
-            out[0]
-        );
+        // Active non-finite, zero, reflected, scaled, or sheared transforms propagate NaN
+        // instead of fabricating a rotation.
+        for (label, m) in [
+            ("nan", Mat3::from_rows([[f64::NAN; 3]; 3])),
+            ("zero", Mat3::from_rows([[0.0; 3]; 3])),
+            (
+                "reflection",
+                Mat3::from_rows([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            ),
+            (
+                "scaled",
+                Mat3::from_rows([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]]),
+            ),
+            (
+                "sheared",
+                Mat3::from_rows([[1.0, 0.5, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            ),
+        ] {
+            let aff = Affine { m, t: Vec3::ZERO };
+            let out = dual_quaternion_skinning(&pts, &[0], &[1.0], 1, &[aff]);
+            assert!(
+                !out[0].is_finite(),
+                "{label} transform must fail closed with NaN, got {:?}",
+                out[0]
+            );
+        }
         // Non-finite weight propagates NaN.
         let out_w = dual_quaternion_skinning(&pts, &[0], &[f64::NAN], 1, &[Affine::IDENTITY]);
         assert!(!out_w[0].is_finite());

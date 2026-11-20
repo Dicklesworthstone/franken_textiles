@@ -3650,8 +3650,9 @@ test('saved study supplemental fusion, preview pose, accepted fit and outfit pro
   const request={...workbenchRequest(),onBody:true,measurements:workbenchBody,measurementSources:JSON.stringify([extra]),
     measurementConsent:true,measurementPrimary:workbenchBody,outfit};
   const pose={arm_abduction_deg:35,legs:'squat',leg_fraction:0.25};
+  const dqsPose={arm_abduction_deg:35,legs:'seated',leg_fraction:0.5,skinning:'dqs'};
   const accepted=' {"schema":"ftx-body-fit/1","source":{"seed":18446744073709551615,"scale":1.0}}\n';
-  for(const metadata of [{},{measurementPose:pose},{measurementAcceptedFit:accepted,measurementArmDeg:35}]) {
+  for(const metadata of [{},{measurementPose:pose},{measurementPose:dqsPose},{measurementAcceptedFit:accepted,measurementArmDeg:35}]) {
     const input={...request,...metadata},saved=parse(build(input,workbenchModel()));
     assert.deepEqual(JSON.parse(JSON.stringify(saved.request)),input);
     assert.equal(saved.request.measurementSources,JSON.stringify([extra]));
@@ -3690,7 +3691,8 @@ test('saved supplemental replay requires consent and keeps preview and accepted-
     {measurementSources:JSON.stringify(Array(9).fill('{}'))},{measurementSources:'[{}]'},
     {measurementSources:'["null"]'},{measurementSources:'[broken'},
     {measurementPose:{...pose,legs:'unknown'}},{measurementPose:{...pose,arm_abduction_deg:181}},
-    {measurementPose:{...pose,leg_fraction:-1}},{measurementPose:{...pose,unexpected:true}},
+    {measurementPose:{...pose,leg_fraction:-1}},{measurementPose:{...pose,skinning:'bogus'}},
+    {measurementPose:{...pose,skinning:null}},{measurementPose:{...pose,unexpected:true}},
     {measurementPose:pose,measurementAcceptedFit:fit,measurementArmDeg:35},
     {measurementAcceptedFit:fit},{measurementAcceptedFit:'{}',measurementArmDeg:35},
     {measurementArmDeg:35}])assert.throws(()=>build({...request,...extension},workbenchModel()));

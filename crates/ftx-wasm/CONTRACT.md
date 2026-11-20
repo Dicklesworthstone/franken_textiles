@@ -10,7 +10,13 @@ while preserving legacy wire JSON when default. `thermal::microclimate` / wasm32
 `materials::lower_visco` / wasm32 `material_lower_visco` delegates to
 `ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json`
 (`ftx-fractional-zener-lowering/1`, 16 MiB cap, ≤ 65,536 replay steps). Byte-for-byte parity with
-the native evaluators is checked by `fold::tests::portable_microclimate_and_lower_visco_match_native_bytes`.
+the native evaluators is checked by `fold::tests::portable_microclimate_and_lower_visco_match_native_bytes`
+and against the compiled `web/pkg/ftx_wasm_bg.wasm` bundle + native `ftx-materials` binary in
+`tools/check_materials_wasm.cjs`. Both browser workbenches (`web/index.html` + `web/worker.js` and
+`web/materials.html` + `web/materials-page.js` + `web/materials-worker.js`) expose opt-in
+`drapeNewtonStrategy` / `drapeIntegrator` / `drapeRhoInf` controls with fail-closed validation,
+round-handoff preservation, stale-fold invalidation, and `microclimate` / `lowerVisco` worker
+operations while keeping legacy `fold_up` untouched when default.
 These establish numerical solver/recurrence behavior only, not benchmarked speedups, empirical
 textile characterization, or physical garment fit.
 

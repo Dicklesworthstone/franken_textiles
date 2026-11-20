@@ -446,9 +446,6 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "body",
         &["measurements", "out", "pose", "skinning", "model"],
     )?;
-    let (meas, meas_bytes) = read_json(required(args, "measurements")?)?;
-    let meas = current_measurements(meas)?;
-    let out = PathBuf::from(required(args, "out")?);
     let pose_name = args.options.get("pose").map_or("drape", String::as_str);
     let pose = match pose_name {
         "drape" => Pose::drape(),
@@ -462,6 +459,9 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
     };
     let skinning = parse_skinning(args)?;
+    let (meas, meas_bytes) = read_json(required(args, "measurements")?)?;
+    let meas = current_measurements(meas)?;
+    let out = PathBuf::from(required(args, "out")?);
     reserve_output(&out, "body")?;
     let model = load_model(args)?;
     let (w, fit) = fitted_body(&model, &meas)?;
@@ -1143,7 +1143,8 @@ fn cmd_drape_bound(
         ),
         None => refusal,
     })?;
-    run.report["body_contact_proxy"] = skin.contact_proxy_basis_with_rest(&rest_skin);
+    run.report["body_contact_proxy"] =
+        skin.contact_proxy_basis_with_rest_and_skinning(&rest_skin, skinning);
     let mut report = run.report.clone();
     report["qualification_basis"] = ftx_drape::qualify::qualification_basis(&body, &material)?;
     if outfit.is_some() {
@@ -2007,15 +2008,14 @@ mod tests {
         assert_eq!(err.code, RefusalCode::InvalidDocument);
         assert!(err.message.contains("--skinning bogus"), "{}", err.message);
 
-        // Both `ftx body` and `ftx drape` must refuse invalid `--skinning` before creating outputs.
+        // Both `ftx body` and `ftx drape` must refuse invalid `--skinning` before file I/O or creating outputs.
         let dir = drape_scratch();
         let out = dir.join("body-out");
-        let meas = dir.join("measurements.json");
-        std::fs::write(&meas, b"{}").unwrap();
+        let absent_meas = dir.join("absent-measurements.json");
         let body_args = parse(&[
             "body".into(),
             "--measurements".into(),
-            meas.to_string_lossy().into_owned(),
+            absent_meas.to_string_lossy().into_owned(),
             "--out".into(),
             out.to_string_lossy().into_owned(),
             "--skinning".into(),
@@ -2026,7 +2026,11 @@ mod tests {
         .unwrap();
         let body_err = cmd_body(&body_args).unwrap_err();
         assert_eq!(body_err.code, RefusalCode::InvalidDocument);
+        assert!(body_err.message.contains("--skinning bogus"));
         assert!(!out.exists());
+
+        let meas = dir.join("measurements.json");
+        std::fs::write(&meas, b"{}").unwrap();
 
         let pat = dir.join("pattern.json");
         std::fs::write(&pat, b"{}").unwrap();
