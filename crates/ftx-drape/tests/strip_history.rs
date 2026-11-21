@@ -613,3 +613,61 @@ fn damaged_membrane_plasticity_strip_records_damage_dissipation_and_degrades_rel
         assert!(st.momentum_balance_residual_n <= 1e-5);
     }
 }
+
+#[test]
+fn exact_exponential_relaxation_strip_reports_integration_scheme_and_scope() {
+    let mut base_req = request(false);
+    base_req.loading = [(0.0, 0.0), (0.04, 0.02), (0.08, 0.02)]
+        .into_iter()
+        .map(|(time_s, extension_fraction)| Loading {
+            time_s,
+            extension_fraction,
+        })
+        .collect();
+    base_req.controls.max_step_s = 0.02;
+
+    let be = evaluate(&base_req).unwrap();
+    assert!(
+        be.states
+            .last()
+            .unwrap()
+            .relaxation
+            .as_ref()
+            .unwrap()
+            .get("integration")
+            .is_none()
+    );
+    assert!(
+        !be.model_scope
+            .contains("exact piecewise-linear exponential")
+    );
+
+    let mut exact_req = base_req;
+    exact_req
+        .material
+        .record
+        .as_mut()
+        .unwrap()
+        .membrane_relaxation
+        .as_mut()
+        .unwrap()
+        .integration = ftx_pattern::material_relaxation::IntegrationScheme::ExactExponential;
+
+    let exact = evaluate(&exact_req).unwrap();
+    assert!(
+        exact
+            .model_scope
+            .contains("exact piecewise-linear exponential Prony integration")
+    );
+    let last = exact.states.last().unwrap();
+    assert_eq!(
+        last.relaxation.as_ref().unwrap()["integration"],
+        "exact_exponential"
+    );
+    assert!(last.maxwell_dissipation_j > 0.0);
+    let replay: Request = serde_json::from_str(&exact.replay_request_json).unwrap();
+    assert_eq!(
+        serde_json::to_value(&exact).unwrap(),
+        serde_json::to_value(evaluate(&replay).unwrap()).unwrap()
+    );
+}

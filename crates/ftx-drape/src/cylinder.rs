@@ -468,6 +468,7 @@ pub struct Report {
 
 const MODEL_SCOPE: &str = "3D cylindrical-holder shell forward experiment on an isometric chord-radius welded mesh: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit tare subtraction, grain-rotated orthotropic/nonlinear membrane, interior panel-bending tensor (or scalar hinges; longitudinal weld seam uses scalar bending_rigidity), optional Maxwell/membrane-plastic/bending-plastic histories, optional unloaded-thickness cloth self-contact, and explicit clamp-slip offset/limit auditing. Zero gravity. Excludes inside-clamp frictional pull-out mechanics, clamped-overlap double-layer stiffness, moisture/thermal coupling, parameter identification, automatic garment readiness promotion and physical garment fit.";
 const DAMAGE_MODEL_SCOPE: &str = "3D cylindrical-holder shell forward experiment on an isometric chord-radius welded mesh: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit tare subtraction, grain-rotated orthotropic/nonlinear membrane, interior panel-bending tensor (or scalar hinges; longitudinal weld seam uses scalar bending_rigidity), permanent membrane plasticity with opt-in accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1; plastic and damage dissipation kept separate), optional bending-plastic history, optional unloaded-thickness cloth self-contact, and explicit clamp-slip offset/limit auditing. Zero gravity. Excludes rupture, monolithic softening/localization, inside-clamp frictional pull-out mechanics, clamped-overlap double-layer stiffness, moisture/thermal coupling, parameter identification, automatic garment readiness promotion and physical garment fit.";
+const EXACT_EXP_MODEL_SCOPE: &str = "3D cylindrical-holder shell forward experiment on an isometric chord-radius welded mesh: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit tare subtraction, grain-rotated orthotropic/nonlinear membrane with exact piecewise-linear exponential Prony Maxwell branches, interior panel-bending tensor (or scalar hinges; longitudinal weld seam uses scalar bending_rigidity), optional membrane-plastic/bending-plastic histories, optional unloaded-thickness cloth self-contact, and explicit clamp-slip offset/limit auditing. Zero gravity. Excludes inside-clamp frictional pull-out mechanics, clamped-overlap double-layer stiffness, moisture/thermal coupling, parameter identification, automatic garment readiness promotion and physical garment fit.";
 
 struct CylinderMesh {
     n_verts: usize,
@@ -1290,6 +1291,9 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
     membrane.validate()?;
 
     let relaxation = resolved.membrane_relaxation()?;
+    let has_exact_exp = relaxation.as_ref().is_some_and(|law| {
+        law.integration() == ftx_pattern::material_relaxation::IntegrationScheme::ExactExponential
+    });
     let membrane_plasticity = resolved.membrane_plasticity()?;
     let has_membrane_damage = membrane_plasticity
         .as_ref()
@@ -1478,6 +1482,8 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         newton_iterations,
         model_scope: if has_membrane_damage {
             DAMAGE_MODEL_SCOPE
+        } else if has_exact_exp {
+            EXACT_EXP_MODEL_SCOPE
         } else {
             MODEL_SCOPE
         }

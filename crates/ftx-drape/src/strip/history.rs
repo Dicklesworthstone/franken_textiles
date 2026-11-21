@@ -6,8 +6,8 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, receipt::sha256_hex};
 use ftx_pattern::{
-    material_calibration::fitted_domain, material_catalog::Selection, materials::Form,
-    textile_import,
+    material_calibration::fitted_domain, material_catalog::Selection,
+    material_relaxation::IntegrationScheme, materials::Form, textile_import,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -146,7 +146,9 @@ pub struct Report {
 }
 
 const SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation; backward-Euler integration preserves the selected Maxwell or permanent-strain history. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, joint Maxwell/plastic laws, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
+const EXACT_EXP_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation; backward-Euler sheet dynamics advance Maxwell branches with exact piecewise-linear exponential Prony integration (step-size-invariant on constant holds and constant-rate ramps). Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, joint Maxwell/plastic laws, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 const PARALLEL_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation. The explicitly qualified parallel network drives plastic flow with only equilibrium-branch stress; every Maxwell branch sees total physical Green strain and retains its own viscous strain. Stored energies and plastic/viscous dissipation remain separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, same-branch viscoplasticity, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
+const EXACT_EXP_PARALLEL_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation. The explicitly qualified parallel network drives plastic flow with only equilibrium-branch stress; every Maxwell branch sees total physical Green strain and advances with exact piecewise-linear exponential Prony integration. Stored energies and plastic/viscous dissipation remain separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, same-branch viscoplasticity, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 const DAMAGE_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation; backward-Euler integration preserves permanent-strain history and explicit accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1), keeping plastic and damage dissipation separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, rupture, monolithic softening/localization, thermal feedback, joint Maxwell/plastic laws, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 
 fn vector(v: Vec3) -> [f64; 3] {
@@ -376,6 +378,9 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
     let has_damage = plasticity
         .as_ref()
         .is_some_and(|law| law.damage().is_some());
+    let exact_exp = relaxation
+        .as_ref()
+        .is_some_and(|law| law.integration() == IntegrationScheme::ExactExponential);
     let parallel = relaxation
         .as_ref()
         .is_some_and(|law| law.parallel_material_sha256().is_some());
@@ -505,12 +510,12 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         retained_liquid: material.retained_liquid_mass(resolved.allows_estimates())?,
         states,
         newton_iterations: iterations,
-        model_scope: if parallel {
-            PARALLEL_SCOPE
-        } else if has_damage {
-            DAMAGE_SCOPE
-        } else {
-            SCOPE
+        model_scope: match (parallel, exact_exp, has_damage) {
+            (true, true, _) => EXACT_EXP_PARALLEL_SCOPE,
+            (true, false, _) => PARALLEL_SCOPE,
+            (false, _, true) => DAMAGE_SCOPE,
+            (false, true, false) => EXACT_EXP_SCOPE,
+            (false, false, false) => SCOPE,
         }
         .into(),
     })
