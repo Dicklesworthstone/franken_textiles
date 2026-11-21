@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CutPlacement, bad, bbox, cut_shape,
-    geometry::{Work, clear, enclosed, simple},
+    geometry::{EdgeBvh, Work, clear, clear_bvh, enclosed, enclosed_bvh, simple},
     grain_reversal, half_turn, piece_scope, place, positive,
     procurement::finite,
     relocate, scope_names,
@@ -750,6 +750,54 @@ fn locate_next(
     }
     let nx = axis_steps(lo.x, hi.x, o.step_mm, work.limit)?;
     let ny = axis_steps(lo.y, hi.y, o.step_mm, work.limit)?;
+    let defect_boxes = stock
+        .defects_mm
+        .iter()
+        .map(|d| bbox(d))
+        .collect::<Result<Vec<_>, _>>()?;
+    let occupied_boxes = stock
+        .occupied_mm
+        .iter()
+        .map(|occ| bbox(occ))
+        .collect::<Result<Vec<_>, _>>()?;
+    let use_bvh = shape.cut_mm.len() > 16
+        || stock.outline_mm.len() > 16
+        || zone.is_some_and(|z| z.outline_mm.len() > 16)
+        || stock.defects_mm.iter().any(|d| d.len() > 16)
+        || stock.occupied_mm.iter().any(|occ| occ.len() > 16)
+        || stock.placements.iter().any(|p| p.cut_mm.len() > 16);
+    let bvh_cache = if use_bvh {
+        let shape_bvh = checked(EdgeBvh::build(&shape.cut_mm, work))?;
+        let outline_bvh = checked(EdgeBvh::build(&stock.outline_mm, work))?;
+        let zone_bvh = zone
+            .map(|z| checked(EdgeBvh::build(&z.outline_mm, work)))
+            .transpose()?;
+        let defect_bvhs = stock
+            .defects_mm
+            .iter()
+            .map(|d| checked(EdgeBvh::build(d, work)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let occupied_bvhs = stock
+            .occupied_mm
+            .iter()
+            .map(|occ| checked(EdgeBvh::build(occ, work)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let placed_bvhs = stock
+            .placements
+            .iter()
+            .map(|p| checked(EdgeBvh::build(&p.cut_mm, work)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Some((
+            shape_bvh,
+            outline_bvh,
+            zone_bvh,
+            defect_bvhs,
+            occupied_bvhs,
+            placed_bvhs,
+        ))
+    } else {
+        None
+    };
     let start = *cursor;
     for iy in start.y..=ny {
         let y = if iy == ny {
@@ -774,67 +822,164 @@ fn locate_next(
             let offset = Vec2::new(x - shape.bounds_mm[0], y - shape.bounds_mm[1]);
             let ring: Vec<_> = shape.cut_mm.iter().map(|p| *p + offset).collect();
             let rb = bbox(&ring)?;
-            if !checked(enclosed(
-                &ring,
-                &stock.outline_mm,
-                o.boundary_margin_mm,
-                work,
-            ))? {
-                continue;
-            }
-            if let Some(zone) = zone
-                && !checked(enclosed(&ring, &zone.outline_mm, o.zone_margin_mm, work))?
+            if let Some((
+                shape_bvh,
+                outline_bvh,
+                zone_bvh,
+                defect_bvhs,
+                occupied_bvhs,
+                placed_bvhs,
+            )) = &bvh_cache
             {
-                continue;
-            }
-            let mut free = true;
-            for defect in &stock.defects_mm {
-                if !checked(clear(
+                if !checked(enclosed_bvh(
                     &ring,
-                    rb,
-                    defect,
-                    bbox(defect)?,
+                    shape_bvh,
+                    offset,
+                    &stock.outline_mm,
+                    outline_bvh,
                     o.boundary_margin_mm,
                     work,
                 ))? {
-                    free = false;
-                    break;
+                    continue;
                 }
-            }
-            if !free {
-                continue;
-            }
-            for occupied in &stock.occupied_mm {
-                if !checked(clear(&ring, rb, occupied, bbox(occupied)?, o.gap_mm, work))? {
-                    free = false;
-                    break;
-                }
-            }
-            if !free {
-                continue;
-            }
-            for p in &stock.placements {
-                if !checked(clear(&ring, rb, &p.cut_mm, p.bounds_mm, o.gap_mm, work))? {
-                    free = false;
-                    break;
-                }
-            }
-            if free {
-                let placed = relocate(shape, false, offset, ring, rb)
-                    .ok_or_else(|| bad("finite-stock placement overflows"))?;
-                let d = placed.grain_mm[1] - placed.grain_mm[0];
-                if !d.is_finite()
-                    || d.norm2() == 0.0
-                    || !d.norm2().is_finite()
-                    || (area_m2(&placed.cut_mm) - area).abs() > area * 1e-8
-                    || !checked(simple(&placed.cut_mm, work))?
+                if let (Some(zone), Some(zbvh)) = (zone, zone_bvh.as_ref())
+                    && !checked(enclosed_bvh(
+                        &ring,
+                        shape_bvh,
+                        offset,
+                        &zone.outline_mm,
+                        zbvh,
+                        o.zone_margin_mm,
+                        work,
+                    ))?
                 {
-                    return Err(bad(
-                        "finite-stock translation lost representable cutter geometry",
-                    ));
+                    continue;
                 }
-                return Ok(Some(placed));
+                let mut free = true;
+                for ((defect, &db), dbvh) in stock
+                    .defects_mm
+                    .iter()
+                    .zip(&defect_boxes)
+                    .zip(defect_bvhs)
+                {
+                    if !checked(clear_bvh(
+                        &ring,
+                        shape_bvh,
+                        offset,
+                        rb,
+                        defect,
+                        dbvh,
+                        db,
+                        o.boundary_margin_mm,
+                        work,
+                    ))? {
+                        free = false;
+                        break;
+                    }
+                }
+                if !free {
+                    continue;
+                }
+                for ((occupied, &ob), obvh) in stock
+                    .occupied_mm
+                    .iter()
+                    .zip(&occupied_boxes)
+                    .zip(occupied_bvhs)
+                {
+                    if !checked(clear_bvh(
+                        &ring,
+                        shape_bvh,
+                        offset,
+                        rb,
+                        occupied,
+                        obvh,
+                        ob,
+                        o.gap_mm,
+                        work,
+                    ))? {
+                        free = false;
+                        break;
+                    }
+                }
+                if !free {
+                    continue;
+                }
+                for (p, pbvh) in stock.placements.iter().zip(placed_bvhs) {
+                    if !checked(clear_bvh(
+                        &ring,
+                        shape_bvh,
+                        offset,
+                        rb,
+                        &p.cut_mm,
+                        pbvh,
+                        p.bounds_mm,
+                        o.gap_mm,
+                        work,
+                    ))? {
+                        free = false;
+                        break;
+                    }
+                }
+                if !free {
+                    continue;
+                }
+            } else {
+                if !checked(enclosed(
+                    &ring,
+                    &stock.outline_mm,
+                    o.boundary_margin_mm,
+                    work,
+                ))? {
+                    continue;
+                }
+                if let Some(zone) = zone
+                    && !checked(enclosed(&ring, &zone.outline_mm, o.zone_margin_mm, work))?
+                {
+                    continue;
+                }
+                let mut free = true;
+                for (defect, &db) in stock.defects_mm.iter().zip(&defect_boxes) {
+                    if !checked(clear(&ring, rb, defect, db, o.boundary_margin_mm, work))? {
+                        free = false;
+                        break;
+                    }
+                }
+                if !free {
+                    continue;
+                }
+                for (occupied, &ob) in stock.occupied_mm.iter().zip(&occupied_boxes) {
+                    if !checked(clear(&ring, rb, occupied, ob, o.gap_mm, work))? {
+                        free = false;
+                        break;
+                    }
+                }
+                if !free {
+                    continue;
+                }
+                for p in &stock.placements {
+                    if !checked(clear(&ring, rb, &p.cut_mm, p.bounds_mm, o.gap_mm, work))? {
+                        free = false;
+                        break;
+                    }
+                }
+                if !free {
+                    continue;
+                }
             }
+            let placed = relocate(shape, false, offset, ring, rb)
+                .ok_or_else(|| bad("finite-stock placement overflows"))?;
+            let d = placed.grain_mm[1] - placed.grain_mm[0];
+            if !d.is_finite()
+                || d.norm2() == 0.0
+                || !d.norm2().is_finite()
+                || (area_m2(&placed.cut_mm) - area).abs() > area * 1e-8
+                || !checked(simple(&placed.cut_mm, work))?
+            {
+                return Err(bad(
+                    "finite-stock translation lost representable cutter geometry",
+                ));
+            }
+            return Ok(Some(placed));
         }
     }
     Ok(None)

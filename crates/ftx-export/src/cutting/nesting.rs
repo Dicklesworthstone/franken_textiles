@@ -5,7 +5,7 @@
 //! may relocate a complete donor inside an unchanged earlier marker. Full exterior paths determine
 //! clearance and holes remain occupied. Work exhaustion retains the last COMPLETE feasible inventory.
 
-use super::geometry::{Work, clear};
+use super::geometry::{EdgeBvh, Work, clear, clear_bvh};
 use super::{CutOptions, CutPlacement, RollMarker, bad, bbox, half_turn, positive, relocate};
 use ftx_core::{Refusal, Vec2};
 use serde::{Deserialize, Serialize};
@@ -207,8 +207,33 @@ pub(super) fn compact(
                 None
             };
             let [old_x, old_y, _, old_top] = placements[index].bounds_mm;
+            let use_bvh = placements.iter().any(|p| p.cut_mm.len() > 16);
+            let other_bvhs = if use_bvh {
+                let mut built = Vec::with_capacity(placements.len());
+                for (j, p) in placements.iter().enumerate() {
+                    if j == index {
+                        built.push(None);
+                    } else {
+                        let Some(bvh) = EdgeBvh::build(&p.cut_mm, &mut work) else {
+                            break 'search;
+                        };
+                        built.push(Some(bvh));
+                    }
+                }
+                Some(built)
+            } else {
+                None
+            };
             let mut best: Option<CutPlacement> = None;
             for moving in std::iter::once(&placements[index]).chain(turned.as_ref()) {
+                let moving_bvh = if use_bvh {
+                    let Some(bvh) = EdgeBvh::build(&moving.cut_mm, &mut work) else {
+                        break 'search;
+                    };
+                    Some(bvh)
+                } else {
+                    None
+                };
                 let Some((xs, ys)) = anchors(
                     Some(index),
                     moving,
@@ -256,9 +281,23 @@ pub(super) fn compact(
                             if j == index {
                                 continue;
                             }
-                            let Some(ok) =
+                            let Some(ok) = (if let (Some(mbvh), Some(obvhs)) =
+                                (moving_bvh.as_ref(), other_bvhs.as_ref())
+                            {
+                                clear_bvh(
+                                    &ring,
+                                    mbvh,
+                                    delta,
+                                    b,
+                                    &p.cut_mm,
+                                    obvhs[j].as_ref().expect("other placement BVH"),
+                                    p.bounds_mm,
+                                    opts.gap_mm,
+                                    &mut work,
+                                )
+                            } else {
                                 clear(&ring, b, &p.cut_mm, p.bounds_mm, opts.gap_mm, &mut work)
-                            else {
+                            }) else {
                                 break 'search;
                             };
                             if !ok {
@@ -339,6 +378,17 @@ fn absorb(
         .map_or(target.width_m, |layout| layout.width_m)
         * 1000.0;
     let top = target.length_m * 1000.0 - options.end_margin_mm;
+    let use_bvh = placements.iter().any(|p| p.cut_mm.len() > 16)
+        || source.placements.iter().any(|p| p.cut_mm.len() > 16);
+    let mut placed_bvhs = if use_bvh {
+        let mut built = Vec::with_capacity(placements.len() + source.placements.len());
+        for p in &placements {
+            built.push(EdgeBvh::build(&p.cut_mm, work)?);
+        }
+        Some(built)
+    } else {
+        None
+    };
     for original in &source.placements {
         let mut accepted = None;
         'orientations: for reverse in
@@ -353,6 +403,11 @@ fn absorb(
                 &turned
             } else {
                 original
+            };
+            let moving_bvh = if use_bvh {
+                Some(EdgeBvh::build(&moving.cut_mm, work)?)
+            } else {
+                None
             };
             let maximum_y = top - (moving.bounds_mm[3] - moving.bounds_mm[1]);
             let (xs, ys) = anchors(None, moving, &placements, width, options, maximum_y, work)?;
@@ -372,17 +427,36 @@ fn absorb(
                         continue;
                     }
                     let mut allowed = true;
-                    for other in &placements {
-                        if !clear(
-                            &ring,
-                            bounds,
-                            &other.cut_mm,
-                            other.bounds_mm,
-                            options.gap_mm,
-                            work,
-                        )? {
-                            allowed = false;
-                            break;
+                    if let (Some(mbvh), Some(pbvhs)) = (moving_bvh.as_ref(), placed_bvhs.as_ref()) {
+                        for (other, obvh) in placements.iter().zip(pbvhs) {
+                            if !clear_bvh(
+                                &ring,
+                                mbvh,
+                                delta,
+                                bounds,
+                                &other.cut_mm,
+                                obvh,
+                                other.bounds_mm,
+                                options.gap_mm,
+                                work,
+                            )? {
+                                allowed = false;
+                                break;
+                            }
+                        }
+                    } else {
+                        for other in &placements {
+                            if !clear(
+                                &ring,
+                                bounds,
+                                &other.cut_mm,
+                                other.bounds_mm,
+                                options.gap_mm,
+                                work,
+                            )? {
+                                allowed = false;
+                                break;
+                            }
                         }
                     }
                     if allowed {
@@ -395,7 +469,11 @@ fn absorb(
                 }
             }
         }
-        placements.push(accepted?);
+        let placed = accepted?;
+        if let Some(pbvhs) = placed_bvhs.as_mut() {
+            pbvhs.push(EdgeBvh::build(&placed.cut_mm, work)?);
+        }
+        placements.push(placed);
     }
     placements.sort_by(|a, b| a.instance.cmp(&b.instance).then(a.copy.cmp(&b.copy)));
     Some(placements)
