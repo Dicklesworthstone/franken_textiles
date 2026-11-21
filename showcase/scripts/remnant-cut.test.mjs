@@ -7,9 +7,8 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { after, before, test } from "node:test";
+import { test } from "node:test";
 import { chromium } from "playwright-core";
-import { REMNANT_PRESETS, buildSheetRequest, initialRemnant, planRemnant } from "../public/labs/remnant-worker.mjs";
 
 const site = process.env.FTX_STUDIO_URL || "http://127.0.0.1:3000";
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -32,21 +31,10 @@ function runJson(bin, args) {
   return { status: proc.status, stdout: proc.stdout, stderr: proc.stderr };
 }
 
-let browser, wasm;
-before(async () => {
-  wasm = await import(pathToFileURL(path.join(wasmPkg, "ftx_wasm.js")));
+test("remnant planner matches native ftx-materials stock-plan/stock-residual and blocks overlaps", async () => {
+  const { REMNANT_PRESETS, buildSheetRequest, initialRemnant, planRemnant } = await import("../public/labs/remnant-worker.mjs");
+  const wasm = await import(pathToFileURL(path.join(wasmPkg, "ftx_wasm.js")));
   await wasm.default({ module_or_path: await readFile(path.join(wasmPkg, "ftx_wasm_bg.wasm")) });
-  browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(),
-    args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--disable-dev-shm-usage"],
-  });
-});
-
-after(async () => {
-  await browser?.close();
-});
-
-test("remnant planner matches native ftx-materials stock-plan/stock-residual and blocks overlaps", () => {
   const res = planRemnant(wasm, initialRemnant);
   assert.equal(res.stock.id, "muslin-sheet-01");
   assert.equal(res.job1.occupiedCount, 5);
@@ -120,8 +108,8 @@ test("remnant planner matches native ftx-materials stock-plan/stock-residual and
       assert.equal(plan.job2, null);
       assert.match(plan.job2Refusal, /no checked finite-stock placement/i);
       const native = runJson(ftxMaterialsBin, ["stock-plan", job2Pattern, req2Path]);
-      assert.notEqual(native.status, 0);
-      assert.match(JSON.parse(native.stdout).refusal.message, /no checked finite-stock placement/i);
+      assert.equal(native.status, 2);
+      assert.match(JSON.parse(native.stderr).refusal.message, /no checked finite-stock placement/i);
       continue;
     }
     assert.equal(plan.job2Refusal, null);
@@ -142,12 +130,16 @@ test("remnant planner matches native ftx-materials stock-plan/stock-residual and
 });
 
 test("CutLab remnant mode renders real occupied polygons, handles refusal, and fits desktop and mobile", async () => {
-  const page = await browser.newPage({
-    viewport: { width: 1120, height: 820 },
-    reducedMotion: "reduce",
-    userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(),
+    args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--disable-dev-shm-usage"],
   });
   try {
+    const page = await browser.newPage({
+      viewport: { width: 1120, height: 820 },
+      reducedMotion: "reduce",
+      userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
+    });
     await page.goto(new URL("/sections/cut/?mode=remnant", site).href, { waitUntil: "domcontentloaded" });
     await page.locator(".remnant-lab").waitFor();
     await page.locator(".remnant-new").first().waitFor({ timeout: 20000 });
@@ -207,6 +199,6 @@ test("CutLab remnant mode renders real occupied polygons, handles refusal, and f
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   } finally {
-    await page.close();
+    await browser.close();
   }
 });
