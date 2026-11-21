@@ -552,6 +552,15 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             "strip identification currently fits separable membrane laws and cannot identify or discard an existing area response; use an area-capable characterization model",
         ));
     }
+    if input.policy.sensitivity == SensitivityMode::Adjoint
+        && (input.response_family.is_some()
+            || input.nonlinear.is_some()
+            || input.area_response.is_some())
+    {
+        return Err(invalid(
+            "adjoint strip sensitivity supports homogeneous scalar orthotropic identification only; nonlinear, response_family and area_response models require finite_difference sensitivity",
+        ));
+    }
     if input.response_family.is_some() && input.nonlinear.is_some() {
         return Err(invalid(
             "response_family and independent nonlinear intervals are mutually exclusive",
@@ -635,15 +644,6 @@ fn validate(input: &Input) -> Result<(), Refusal> {
     {
         return Err(invalid(
             "invalid strip residual, refinement, sensitivity or bounded-work policy",
-        ));
-    }
-    if policy.sensitivity == SensitivityMode::Adjoint
-        && (input.response_family.is_some()
-            || input.nonlinear.is_some()
-            || input.area_response.is_some())
-    {
-        return Err(invalid(
-            "adjoint strip sensitivity supports homogeneous scalar orthotropic identification only; nonlinear, response_family and area_response models require finite_difference sensitivity",
         ));
     }
     if let Some(model) = &input.nonlinear {
