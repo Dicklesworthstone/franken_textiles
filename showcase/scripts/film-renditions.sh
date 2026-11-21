@@ -13,6 +13,12 @@ video_format() {
   ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,avg_frame_rate,nb_frames \
     -of default=nw=1:nk=1 "$1"
 }
+decoded_frames() {
+  # A fast-start MP4 can keep its entire sample table and source comment after truncation.
+  progress=$(ffmpeg -nostdin -hide_banner -loglevel error -xerror -threads 2 -i "$1" \
+    -map 0:v:0 -an -fps_mode passthrough -nostats -progress pipe:1 -f null -) || return
+  printf '%s\n' "$progress" | awk -F= '$1 == "frame" { frames = $2 + 0 } $0 == "progress=end" { print frames }'
+}
 for film in ./*.mp4; do
   case $film in *-1080.mp4) continue ;; esac
   [ -f "$film" ] || continue
@@ -27,7 +33,8 @@ for film in ./*.mp4; do
   digest=$(sha256sum "$film" | cut -d' ' -f1)
   source="FrankenTextiles 1080p copy of sha256 $digest"
   if [ -e "$copy" ] && [ "$(video_format "$copy")" = "$expected" ] &&
-    [ "$(ffprobe -v error -show_entries format_tags=comment -of csv=p=0 "$copy")" = "$source" ]; then
+    [ "$(ffprobe -v error -show_entries format_tags=comment -of csv=p=0 "$copy")" = "$source" ] &&
+    [ "$(decoded_frames "$copy")" = "$frames" ]; then
     continue
   fi
   pending=$(mktemp "./.${copy##*/}.XXXXXX")

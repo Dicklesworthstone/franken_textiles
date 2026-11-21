@@ -67,6 +67,35 @@ test("a truncated master cannot replace the previous 1080p rendition", () => {
   assert.deepEqual(readFileSync(copy), previous);
 });
 
+test("a truncated cached 1080p rendition is rebuilt and a healthy cache is reused", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ftx-truncated-rendition-"));
+  const master = join(dir, "sample.mp4");
+  const copy = join(dir, "sample-1080.mp4");
+  const complete = readFileSync(media + "construction-fez-1080.mp4");
+  const truncated = complete.subarray(0, Math.floor(complete.length / 2));
+  writeFileSync(master, readFileSync(media + "construction-fez.mp4"), { flag: "wx" });
+  writeFileSync(copy, truncated, { flag: "wx" });
+  const cached = probe(copy);
+  assert.equal(cached.nb_frames, probe(master).nb_frames);
+  assert.equal(cached.comment, probe(media + "construction-fez-1080.mp4").comment);
+
+  const generator = fileURLToPath(new URL("./film-renditions.sh", import.meta.url));
+  const rebuilt = spawnSync("sh", [generator, dir], { encoding: "utf8" });
+  assert.equal(rebuilt.status, 0, rebuilt.stderr);
+  assert.equal(rebuilt.stdout.trim(), "./sample-1080.mp4");
+  const decoded = spawnSync("ffmpeg", ["-nostdin", "-v", "error", "-xerror", "-i", copy, "-f", "null", "-"], { encoding: "utf8" });
+  assert.equal(decoded.status, 0, decoded.stderr);
+  assert.equal(probe(copy).nb_frames, probe(master).nb_frames);
+
+  const repaired = readFileSync(copy);
+  const inode = statSync(copy).ino;
+  const rerun = spawnSync("sh", [generator, dir], { encoding: "utf8" });
+  assert.equal(rerun.status, 0, rerun.stderr);
+  assert.equal(rerun.stdout, "");
+  assert.equal(statSync(copy).ino, inode);
+  assert.deepEqual(readFileSync(copy), repaired);
+});
+
 for (const film of films) {
   test(`${film} is ${WIDTH}×${HEIGHT} at ${FPS} fps and fits the deploy limit`, () => {
     const s = probe(media + film);
