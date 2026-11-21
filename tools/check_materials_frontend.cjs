@@ -24463,6 +24463,7 @@ test('scenario steady surface and coverage views render opt-in microclimate_conv
   p.emit(scenarioReport(), []);
   const sDef = section(p, 'Fresh drape and heat alternatives');
   assert.doesNotMatch(visibleText(sDef), /validity-gated microclimate convection/);
+  assert.doesNotMatch(visibleText(sDef), /qualified exterior convection and radiation/);
 
   const mcForced = {
     correlation: 'churchill_bernstein_cylinder', name: 'Churchill-Bernstein cylinder in crossflow',
@@ -24478,11 +24479,13 @@ test('scenario steady surface and coverage views render opt-in microclimate_conv
   const rep = scenarioReport();
   rep.simulations[1].evaluation.result.surface = outcome({
     steady: { power_w: 8.1 },
+    exterior_exchange: { convective_power_w: 5.4, radiative_power_w: 2.7, balance_residual_w: 0 },
     microclimate_convection: [mcForced],
     exterior_model: 'validity-gated moist-air Nusselt correlation convection (Estimate)'
   });
   rep.simulations[1].evaluation.result.coverage = outcome({
     steady: { power_w: 7.4 },
+    exterior_exchange: { convective_power_w: 4.9, radiative_power_w: 2.5, balance_residual_w: 0, bare_policy: 'separate explicitly prescribed films' },
     microclimate_convection: [mcForced, mcNatural],
     exterior_model: 'validity-gated moist-air Nusselt correlation convection (Estimate)'
   });
@@ -24492,11 +24495,13 @@ test('scenario steady surface and coverage views render opt-in microclimate_conv
       time_s: 1.0, arm_abduction_deg: 60,
       surface: outcome({
         steady: { power_w: 8.5 },
+        exterior_exchange: { convective_power_w: 5.8, radiative_power_w: 2.7, balance_residual_w: 0 },
         microclimate_convection: [mcNatural],
         exterior_model: 'endpoint microclimate correlation (Estimate)'
       }),
       coverage: outcome({
         steady: { power_w: 7.9 },
+        exterior_exchange: { convective_power_w: 5.1, radiative_power_w: 2.8, balance_residual_w: 0 },
         microclimate_convection: [mcForced],
         exterior_model: 'endpoint coverage correlation (Estimate)'
       })
@@ -24506,10 +24511,99 @@ test('scenario steady surface and coverage views render opt-in microclimate_conv
   p.emit(rep, []);
   const sMc = section(p, 'Fresh drape and heat alternatives');
   const txt = visibleText(sMc);
+  assert.match(txt, /A: initial independent sheets: qualified exterior convection and radiation/);
+  assert.match(txt, /A: initial body coverage: qualified exterior convection and radiation/);
+  assert.match(txt, /A: endpoint 1 s independent sheets: qualified exterior convection and radiation/);
+  assert.match(txt, /A: endpoint 1 s body coverage: qualified exterior convection and radiation/);
   assert.match(txt, /A: initial independent sheets: validity-gated microclimate convection \(Estimate\)/);
   assert.match(txt, /A: initial body coverage: validity-gated microclimate convection per region \(Estimate\)/);
   assert.match(txt, /A: endpoint 1 s independent sheets: validity-gated microclimate convection \(Estimate\)/);
   assert.match(txt, /A: endpoint 1 s body coverage: validity-gated microclimate convection \(Estimate\)/);
   assert.match(txt, /Churchill-Bernstein cylinder in crossflow/);
   assert.match(txt, /Churchill-Chu vertical plate natural convection/);
+});
+
+test('scenario moving transient heat renders opt-in microclimate_convection and sparse exposed_microclimate_convection with 1-based intervals without altering defaults', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const mcForced = {
+    correlation: 'churchill_bernstein_cylinder', name: 'Churchill-Bernstein cylinder in crossflow',
+    citation: 'Churchill & Bernstein (1977)', characteristic_length_m: 0.25,
+    nu: 142.5, h_w_m2_k: 14.8, discrepancy_rel: 0.2, evidence: 'estimate'
+  };
+  const mcNatural = {
+    correlation: 'churchill_chu_vertical_plate', name: 'Churchill-Chu vertical plate natural convection',
+    citation: 'Churchill & Chu (1975)', characteristic_length_m: 0.4,
+    nu: 48.2, h_w_m2_k: 3.1, discrepancy_rel: 0.15, evidence: 'estimate'
+  };
+  const baseMotion = (surfaceExtra = {}, coverageExtra = {}) => outcome({
+    duration_s: 3.0, samples: [{}, {}, {}], trials: 3, metrics: { max_absolute_edge_strain_pct: 1.0 },
+    keyframes: [],
+    transient_surface: outcome({
+      duration_s: 3.0, thermal_steps: 6, trace: [{ temperature_range_c: [20, 28] }],
+      net_boundary_energy_j: 12.0, stored_change_j: 12.0, balance_error_j: 0,
+      ...surfaceExtra
+    }),
+    transient_coverage: outcome({
+      duration_s: 3.0, thermal_steps: 6, trace: [{ temperature_range_c: [21, 29] }],
+      net_boundary_energy_j: 11.0, physical_stored_change_j: 11.0, balance_error_j: 0, signed_remap_residual_j: 0,
+      ...coverageExtra
+    })
+  });
+
+  // 1. Default prescribed films and all-null sparse arrays omit microclimate tables completely.
+  const defRep = scenarioReport();
+  defRep.scenario.scenario = { motion: { transient_surface: {}, transient_coverage: {} } };
+  defRep.simulations[1].evaluation.result.motion = baseMotion(
+    { microclimate_convection: [null, null] },
+    { microclimate_convection: [null, null], exposed_microclimate_convection: [null, null] }
+  );
+  await p.e.scenario.onclick();
+  p.emit(defRep, []);
+  const sDef = section(p, 'Fresh drape and heat alternatives');
+  assert.doesNotMatch(visibleText(sDef), /validity-gated microclimate convection/);
+
+  // 2. Dense transient_surface + sparse covered & exposed transient_coverage preserve exact 1-based interval indices.
+  const mixedModel = 'mixed prescribed and validity-gated moist-air Nusselt correlation convection (microclimate entries are Evidence::Estimate with model-form discrepancy allowance retained); not a measured garment film';
+  const mcRep = scenarioReport();
+  mcRep.scenario.scenario = { motion: { transient_surface: {}, transient_coverage: {} } };
+  mcRep.simulations[1].evaluation.result.motion = baseMotion(
+    {
+      exterior_exchange: { convective_energy_j: 8.5, radiative_energy_j: 3.5 },
+      microclimate_convection: [mcForced, mcNatural],
+      exterior_model: 'validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); not a measured garment film'
+    },
+    {
+      microclimate_convection: [mcForced, null, mcNatural],
+      exposed_microclimate_convection: [null, mcNatural],
+      exterior_model: mixedModel
+    }
+  );
+  await p.e.scenario.onclick();
+  p.emit(mcRep, []);
+  const sMc = section(p, 'Fresh drape and heat alternatives');
+  const txt = visibleText(sMc);
+  assert.match(txt, /A: independent-sheet exterior: validity-gated microclimate convection by interval \(Estimate\)/);
+  assert.match(txt, /A: covered cloth exterior: validity-gated microclimate convection by interval \(Estimate\)/);
+  assert.match(txt, /A: exposed cloth exterior: validity-gated microclimate convection by interval \(Estimate\)/);
+  assert.match(txt, /mixed prescribed and validity-gated moist-air Nusselt correlation convection/);
+
+  const tableRows = caption => {
+    const tbl = descendants(sMc).find(n => n.tag === 'table' && n.children[0]?.textContent === caption);
+    assert.ok(tbl, `missing table ${caption}`);
+    return tbl.children.slice(2).map(tr => tr.children.map(td => td.textContent));
+  };
+  const sheetRows = tableRows('A: independent-sheet exterior: validity-gated microclimate convection by interval (Estimate)');
+  assert.deepEqual(sheetRows.map(r => [r[0], r[1]]), [
+    ['1', 'Churchill-Bernstein cylinder in crossflow'],
+    ['2', 'Churchill-Chu vertical plate natural convection']
+  ]);
+  const coveredRows = tableRows('A: covered cloth exterior: validity-gated microclimate convection by interval (Estimate)');
+  assert.deepEqual(coveredRows.map(r => [r[0], r[1]]), [
+    ['1', 'Churchill-Bernstein cylinder in crossflow'],
+    ['3', 'Churchill-Chu vertical plate natural convection']
+  ]);
+  const exposedRows = tableRows('A: exposed cloth exterior: validity-gated microclimate convection by interval (Estimate)');
+  assert.deepEqual(exposedRows.map(r => [r[0], r[1]]), [
+    ['2', 'Churchill-Chu vertical plate natural convection']
+  ]);
 });

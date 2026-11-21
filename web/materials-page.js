@@ -1455,6 +1455,15 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         "Bare-body films remain separate from cloth exchange, and compression work is reported separately from all thermal paths.";
       parent.append(scope);
     }
+    if (h?.microclimate_convection) {
+      microclimateConvectionDetails(parent,
+        `${key}: ${name === "transient_coverage" ? "covered cloth exterior" : "independent-sheet exterior"}`,
+        h, { rowLabel: "Interval", allowSparse: true });
+    }
+    if (name === "transient_coverage" && h?.exposed_microclimate_convection) {
+      microclimateConvectionDetails(parent, `${key}: exposed cloth exterior`, h,
+        { field: "exposed_microclimate_convection", rowLabel: "Interval", allowSparse: true });
+    }
     if (h?.thermal_bridges) {
       const bridges = h.thermal_bridges;
       const energy = table(parent, `${key}: seam and closure heat during motion`,
@@ -1894,13 +1903,16 @@ function steadyExteriorDetails(parent, label, result) {
   }
   detail(parent, `${label}: exterior observations and per-region exchange`, ex);
 }
-function microclimateConvectionDetails(parent, label, result) {
-  const mc = result?.microclimate_convection;
+function microclimateConvectionDetails(parent, label, result, { field = "microclimate_convection", rowLabel = "Entry", allowSparse = false } = {}) {
+  const mc = result?.[field];
   if (!mc || typeof mc !== "object") return;
-  const entries = Array.isArray(mc) ? mc : [mc];
-  if (!entries.length || entries.some(e => !e || typeof e !== "object")) return;
-  if (entries.length === 1) {
-    const entry = entries[0];
+  const rawEntries = Array.isArray(mc) ? mc : [mc];
+  if (!rawEntries.length) return;
+  if (rawEntries.some(e => e === null ? !allowSparse : (!e || typeof e !== "object" || Array.isArray(e)))) return;
+  const active = rawEntries.map((entry, index) => ({ entry, index })).filter(x => x.entry !== null);
+  if (!active.length) return;
+  if (!allowSparse && active.length === 1) {
+    const entry = active[0].entry;
     const t = table(parent, `${label}: validity-gated microclimate convection (Estimate)`, ["Quantity", "Value"]);
     cells(t, ["Correlation", entry.name || entry.correlation || "Unknown"]);
     if (entry.citation) cells(t, ["Reference", entry.citation]);
@@ -1911,10 +1923,10 @@ function microclimateConvectionDetails(parent, label, result) {
     for (const [key, value] of Object.entries(entry.groups || {})) cells(t, [key, metric(value)]);
     cells(t, ["Evidence status", entry.evidence || "estimate"]);
   } else {
-    const t = table(parent, `${label}: validity-gated microclimate convection per region (Estimate)`,
-      ["Entry", "Correlation", "Characteristic length (m)", "Nusselt number", "h (W/m² K)", "Discrepancy allowance", "Evidence"]);
-    for (const [i, entry] of entries.entries()) {
-      cells(t, [String(i + 1), entry.name || entry.correlation || "Unknown", metric(entry.characteristic_length_m),
+    const t = table(parent, `${label}: validity-gated microclimate convection ${rowLabel === "Interval" ? "by interval" : "per region"} (Estimate)`,
+      [rowLabel, "Correlation", "Characteristic length (m)", "Nusselt number", "h (W/m² K)", "Discrepancy allowance", "Evidence"]);
+    for (const { entry, index } of active) {
+      cells(t, [String(index + 1), entry.name || entry.correlation || "Unknown", metric(entry.characteristic_length_m),
         metric(entry.nu), metric(entry.h_w_m2_k), metric(entry.discrepancy_rel), entry.evidence || "estimate"]);
     }
   }
@@ -1924,7 +1936,7 @@ function microclimateConvectionDetails(parent, label, result) {
     "Validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); not a measured garment film.";
   parent.append(note);
   detail(parent, `${label}: microclimate air state, dimensionless groups and correlation receipt`, {
-    exterior_model: result.exterior_model, microclimate_convection: mc });
+    exterior_model: result.exterior_model, [field]: mc });
 }
 function coverageResult(parent, result) {
   steadyHeatBounds(parent, "Steady heat", result);
@@ -1985,8 +1997,10 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
         ...(rotated ? (endpoint.root_rotation_rad ?? [0, 0, 0]).map(value => metric(value)) : []), state(endpoint.surface),
         metric(available(endpoint.surface)?.steady?.power_w), state(endpoint.coverage), metric(available(endpoint.coverage)?.steady?.power_w)]);
       steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s independent sheets`, available(endpoint.surface));
+      steadyExteriorDetails(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s independent sheets`, available(endpoint.surface));
       microclimateConvectionDetails(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s independent sheets`, available(endpoint.surface));
       steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s body coverage`, available(endpoint.coverage));
+      steadyExteriorDetails(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s body coverage`, available(endpoint.coverage));
       microclimateConvectionDetails(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s body coverage`, available(endpoint.coverage));
       thermalBridges(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s`, available(endpoint.coverage));
     }
@@ -2081,8 +2095,10 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
       steadyHeatBounds(parent, `${row.key}: initial independent sheets`, available(result?.surface));
+      steadyExteriorDetails(parent, `${row.key}: initial independent sheets`, available(result?.surface));
       microclimateConvectionDetails(parent, `${row.key}: initial independent sheets`, available(result?.surface));
       steadyHeatBounds(parent, `${row.key}: initial body coverage`, available(result?.coverage));
+      steadyExteriorDetails(parent, `${row.key}: initial body coverage`, available(result?.coverage));
       microclimateConvectionDetails(parent, `${row.key}: initial body coverage`, available(result?.coverage));
       thermalBridges(parent, `${row.key}: initial coverage`, available(result?.coverage));
       materialStrainComparison(parent, row.key, result?.material_strain, outcome, r.scenario?.scenario?.material_strain);
