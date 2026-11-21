@@ -4669,6 +4669,14 @@ function stripHistoryResult(parent, r) {
     detail(parent, "Declared permanent-set and recovery network", {
       declaration: parallel, material_sha256: r.input.material.expected_sha256, model_scope: r.model_scope });
   }
+  const relaxationIntegration = r.states.find((s) => s.relaxation?.integration)?.relaxation?.integration
+    || r.input?.material?.record?.membrane_relaxation?.integration;
+  if (relaxationIntegration && relaxationIntegration !== "backward_euler") {
+    const scheme = document.createElement("p");
+    scheme.textContent = `Maxwell relaxation integration: ${relaxationIntegration}` +
+      (relaxationIntegration === "exact_exponential" ? " (step-size-invariant exact piecewise-linear Prony branches)." : ".");
+    parent.append(scheme);
+  }
   const hasDamage = r.states.some((s) => typeof s.damage_dissipation_j === "number")
     || r.input?.material?.record?.structure?.membrane_damage_model === "isotropic_accumulated_damage/1";
   if (hasDamage) {
@@ -4691,6 +4699,7 @@ function stripHistoryResult(parent, r) {
   }
   detail(parent, "Frozen material, fixture and complete loading program", r.input);
   return { schema: r.schema, input_sha256: r.input_sha256, steps: r.states.length,
+    ...(relaxationIntegration && relaxationIntegration !== "backward_euler" ? { relaxation_integration: relaxationIntegration } : {}),
     model_scope: r.model_scope,
     next: "Download the original request, complete report and exact frozen replay below." };
 }
@@ -4704,6 +4713,14 @@ function cylinderExperimentResult(parent, r) {
     const warn = document.createElement("p");
     warn.textContent = `Protocol discrepancies (${r.protocol_audit.discrepancies.length}): ${r.protocol_audit.discrepancies.join("; ")}`;
     parent.append(warn);
+  }
+  const relaxationIntegration = r.states.find((s) => s.relaxation?.integration)?.relaxation?.integration
+    || r.input?.material?.record?.membrane_relaxation?.integration;
+  if (relaxationIntegration && relaxationIntegration !== "backward_euler") {
+    const scheme = document.createElement("p");
+    scheme.textContent = `Maxwell relaxation integration: ${relaxationIntegration}` +
+      (relaxationIntegration === "exact_exponential" ? " (step-size-invariant exact piecewise-linear Prony branches)." : ".");
+    parent.append(scheme);
   }
   const hasDamage = r.states.some((s) => typeof s.membrane_damage_dissipation_j === "number")
     || r.input?.material?.record?.structure?.membrane_damage_model === "isotropic_accumulated_damage/1";
@@ -4728,6 +4745,7 @@ function cylinderExperimentResult(parent, r) {
   detail(parent, "Protocol audit, pretension and timestamp rates", r.protocol_audit);
   detail(parent, "Frozen material, cylindrical holder and loading program", r.input);
   return { schema: r.schema, input_sha256: r.input_sha256, steps: r.states.length,
+    ...(relaxationIntegration && relaxationIntegration !== "backward_euler" ? { relaxation_integration: relaxationIntegration } : {}),
     active_gauge_mass_kg: r.active_gauge_mass_kg, newton_iterations: r.newton_iterations,
     discrepancy_count: r.protocol_audit?.discrepancies?.length ?? 0,
     mechanics_readiness_promoted: r.mechanics_readiness_promoted, model_scope: r.model_scope,
@@ -4953,6 +4971,8 @@ function show(op, msg, request) {
           model: r.membrane_plasticity_history.damage_model,
           damage_dissipation_j: r.membrane_plasticity_history.damage_dissipation_j,
         } } : {}),
+        ...(r.membrane_history?.integration && r.membrane_history.integration !== "backward_euler"
+          ? { relaxation_integration: r.membrane_history.integration } : {}),
         body_source: r.body?.shape_source || "Tape-fitted MODEL_FIT shape", body_fit: r.body?.fit,
         measurement_comparison: r.body?.measurement_comparison } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,

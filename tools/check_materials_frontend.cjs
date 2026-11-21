@@ -24108,3 +24108,112 @@ test('study body source forwards opt-in hand_collider in preview and accepted mo
   assert.equal(okAcc.type, 'result', okAcc.message);
   assert.equal(JSON.parse(calls.at(-1)).hand_collider, 'palm');
 });
+
+test('strip history, cylinder experiment and fold summaries surface opt-in exact_exponential relaxation without altering defaults', async () => {
+  const p = await pageModule(); await p.load();
+  p.select('stripHistoryRequest', '{"schema":"ftx-strip-history/1"}');
+  p.e.stripHistoryRequest.handlers.change();
+  await p.e.stripHistory.onclick();
+  p.emit({
+    schema: 'ftx-strip-history-report/1',
+    input: { material: { id: 'default-maxwell' } },
+    states: [{
+      time_s: 0.08, extension_fraction: 0.02, force_n: 1.1, mid_width_m: 0.06,
+      free_dynamic_residual_n: 1e-10, stored_membrane_energy_j: 0.005, free_kinetic_energy_j: 0,
+      maxwell_dissipation_j: 0.0004, plastic_dissipation_j: 0,
+      relaxation: { integration: 'backward_euler' },
+    }],
+  });
+  const sStripDef = section(p, 'Strip loading and recovery');
+  assert.doesNotMatch(visibleText(sStripDef), /Maxwell relaxation integration:/);
+  assert.equal(Object.hasOwn(JSON.parse(sStripDef.children[1].textContent), 'relaxation_integration'), false);
+
+  await p.e.stripHistory.onclick();
+  p.emit({
+    schema: 'ftx-strip-history-report/1',
+    input: { material: { id: 'exact-maxwell' } },
+    states: [{
+      time_s: 0.08, extension_fraction: 0.02, force_n: 1.1, mid_width_m: 0.06,
+      free_dynamic_residual_n: 1e-10, stored_membrane_energy_j: 0.005, free_kinetic_energy_j: 0,
+      maxwell_dissipation_j: 0.0004, plastic_dissipation_j: 0,
+      relaxation: { integration: 'exact_exponential' },
+    }],
+  });
+  const sStrip = section(p, 'Strip loading and recovery');
+  assert.match(visibleText(sStrip), /Maxwell relaxation integration: exact_exponential/);
+  assert.equal(JSON.parse(sStrip.children[1].textContent).relaxation_integration, 'exact_exponential');
+
+  p.select('cylinderExperimentRequest', '{"schema":"ftx-cylinder-experiment/1"}');
+  p.e.cylinderExperimentRequest.handlers.change();
+  await p.e.cylinderExperiment.onclick();
+  p.emit({
+    schema: 'ftx-cylinder-experiment-report/1',
+    input_sha256: 'cyl-be-sha', active_gauge_mass_kg: 0.002, newton_iterations: 6,
+    mechanics_readiness_promoted: false, model_scope: 'default cylinder scope',
+    protocol_audit: { discrepancies: [] },
+    input: { material: { id: 'default-maxwell' } },
+    states: [{
+      time_s: 0.4, axial_displacement_m: 0.001, true_axial_extension_fraction: 0.018, rotation_deg: 0,
+      tare_adjusted_force_n: 0.72, tare_adjusted_torque_nm: 0, mid_radius_range_m: [0.039, 0.041, 0.04],
+      momentum_balance_residual_n: 1e-10, stored_membrane_energy_j: 0.003, stored_bending_energy_j: 0.0001,
+    }],
+  });
+  const sCylDef = section(p, 'Cylindrical-holder forward experiment');
+  assert.doesNotMatch(visibleText(sCylDef), /Maxwell relaxation integration:/);
+  assert.equal(Object.hasOwn(JSON.parse(sCylDef.children[1].textContent), 'relaxation_integration'), false);
+
+  await p.e.cylinderExperiment.onclick();
+  p.emit({
+    schema: 'ftx-cylinder-experiment-report/1',
+    input_sha256: 'cyl-ee-sha', active_gauge_mass_kg: 0.002, newton_iterations: 6,
+    mechanics_readiness_promoted: false, model_scope: 'exact-exp cylinder scope',
+    protocol_audit: { discrepancies: [] },
+    input: { material: { id: 'exact-maxwell' } },
+    states: [{
+      time_s: 0.4, axial_displacement_m: 0.001, true_axial_extension_fraction: 0.018, rotation_deg: 0,
+      tare_adjusted_force_n: 0.72, tare_adjusted_torque_nm: 0, mid_radius_range_m: [0.039, 0.041, 0.04],
+      momentum_balance_residual_n: 1e-10, stored_membrane_energy_j: 0.003, stored_bending_energy_j: 0.0001,
+      relaxation: { integration: 'exact_exponential' },
+    }],
+  });
+  const sCyl = section(p, 'Cylindrical-holder forward experiment');
+  assert.match(visibleText(sCyl), /Maxwell relaxation integration: exact_exponential/);
+  assert.equal(JSON.parse(sCyl.children[1].textContent).relaxation_integration, 'exact_exponential');
+
+  // Materials workbench fold summary surfaces opt-in membrane_history.integration and omits default.
+  const fp = await pageModule(); await fp.load(); await fp.bind(); fp.select('measurements'); fp.select('fit');
+  fp.e.body.files = [new Blob([new Uint8Array([1])])];
+  await fp.e.fold.onclick();
+  fp.emit({ settled: true, flags: [], material: { basis: 'bound' }, body: { legs: 'standing' }, numerical: {},
+    membrane_history: { integration: 'backward_euler' } },
+    [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.equal(Object.hasOwn(JSON.parse(section(fp, 'fold').children[1].textContent), 'relaxation_integration'), false);
+  await fp.e.fold.onclick();
+  fp.emit({ settled: true, flags: [], material: { basis: 'bound' }, body: { legs: 'standing' }, numerical: {},
+    membrane_history: { integration: 'exact_exponential' } },
+    [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.equal(JSON.parse(section(fp, 'fold').children[1].textContent).relaxation_integration, 'exact_exponential');
+
+  // Pattern workbench fold summary surfaces opt-in membrane_history.integration and omits default.
+  const idx = draftingPage();
+  idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  idx.e.bodyFile.files = [new Blob([new Uint8Array([1])])];
+  await idx.e.bodyFile.handlers.change();
+  idx.worker.onmessage({ data: { type: 'bodyReady', request: idx.messages.findLast(m => m.type === 'body').request } });
+  await idx.e.go.handlers.click();
+  idx.worker.onmessage({ data: { type: 'result', request: idx.messages.findLast(m => m.type === 'run').request,
+    res: { title: 'Bolero', status: 'CONVERGED', basis: {}, zip: 'r.zip' }, blobs: {}, foldable: true, bodyCheckable: true,
+    roundSources: { pattern: '{}', measurements: '{}', fit: '{}' } } });
+
+  idx.e.foldGo.handlers.click();
+  const defReq = idx.messages.findLast(m => m.type === 'fold').request;
+  const defRep = { settled: true, flags: [], membrane_history: { integration: 'backward_euler' } };
+  idx.worker.onmessage({ data: { type: 'folded', request: defReq, report: defRep, reportText: JSON.stringify(defRep), viewer: '<html/>' } });
+  assert.doesNotMatch(idx.e.foldSummary.innerHTML, /Maxwell relaxation integration/);
+
+  idx.e.foldGo.handlers.click();
+  const eeReq = idx.messages.findLast(m => m.type === 'fold').request;
+  const eeRep = { settled: true, flags: [], membrane_history: { integration: 'exact_exponential' } };
+  idx.worker.onmessage({ data: { type: 'folded', request: eeReq, report: eeRep, reportText: JSON.stringify(eeRep), viewer: '<html/>' } });
+  assert.match(idx.e.foldSummary.innerHTML, /Maxwell relaxation integration: exact_exponential\./);
+});
