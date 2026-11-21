@@ -196,7 +196,7 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
 export default function Exhibition({section}: {section?: string}) {
   const show = (id: string) => !section || section === id;
   const Heading = section ? "h1" : "h2";
-  const studio = section === "draft" || section === "cut" || section === "stitch" ? section : undefined;
+  const studio = section === "draft" || section === "cut" || section === "stitch" || section === "repair" ? section : undefined;
   const [filter, setFilter] = useState("All studies");
   const [filmGroup, setFilmGroup] = useState<FilmGroup>("All");
   const [screening, setScreening] = useState(films[0]);
@@ -267,6 +267,14 @@ export default function Exhibition({section}: {section?: string}) {
             <a className="card-open" aria-label={"Explore "+experiments[kind].title} href={`/experiments/${kind}/`}><span className="launch"><Arrow diagonal/></span></a></div>
           <a className="material-caption" href={`/experiments/${kind}/`}><h3>{experiments[kind].title}</h3><span>{experiments[kind].action} <Arrow/></span></a>
         </article>)}</div>
+        <a className="thermal-callout" href="/experiments/thermal/" data-reveal>
+          <div>
+            <span className="mono">Live WASM · Measured neoprene &amp; leather</span>
+            <h3>Thermal sandwich</h3>
+            <p>Stack measured catalog sheets at an explicit contact resistance, adjust reservoir temperatures, inspect layer-by-layer °C drops, and test live solver refusals.</p>
+          </div>
+          <span className="thermal-callout-cta">Build a layer stack <Arrow diagonal/></span>
+        </a>
       </div></section>}
       {show("studies") && <section id="studies" className="paper"><div className="wrap collection">
         <div className="section-top"><div><p className="kicker">Cloth in three dimensions</p><Heading className="section-title"><a href="/sections/studies/">The drape gallery<span>.</span></a></Heading></div>
@@ -291,9 +299,15 @@ export default function Exhibition({section}: {section?: string}) {
         <div className="film-rail">
           <div className="film-filters" role="group" aria-label="Filter films">
             {filmGroups.map(group => {
-              const count = group === "All" ? films.length : films.filter(f => groupOf(f.id) === group).length;
-              return <button key={group} type="button" aria-pressed={filmGroup === group} onClick={() => setFilmGroup(group)}>
-                {group} <small>{count}</small>
+              const matching = group === "All" ? films : films.filter(f => groupOf(f.id) === group);
+              return <button key={group} type="button" aria-pressed={filmGroup === group} onClick={() => {
+                setFilmGroup(group);
+                if (!matching.some(f => f.id === screening.id) && matching[0]) {
+                  setFilmChosen(false);
+                  setScreening(matching[0]);
+                }
+              }}>
+                {group} <small>{matching.length}</small>
               </button>;
             })}
           </div>
@@ -306,7 +320,7 @@ export default function Exhibition({section}: {section?: string}) {
       </div></section>}
       {!section && <Deliverables/>}
       {show("tools") && <section id="workbenches" className="paper workbench-band"><div className="wrap workbench-library"><div className="section-top"><div><p className="kicker">Run FrankenTextiles in your browser</p><Heading className="section-title"><a href="/sections/tools/">The workbenches<span>.</span></a></Heading></div>
-        <p>Four local WebAssembly tools (4.3 MiB gzipped). Each opens with a working example and runs bit-identically to the native CLI with zero uploads.</p></div>
+        <p>Four local WebAssembly tools (4.4 MiB gzipped). Each opens with a working example and runs bit-identically to the native CLI with zero uploads.</p></div>
         <div className="workbench-shelves">{[
           ["index","Pattern drafting","Draft to measurements, run all five alterations, fold in 3D, and print every export.","drafting.webp"],
           ["trace","Pattern tracing","Trace PNG, JPEG or WebP sheets in pure Rust, annotate seams, and run round-0 audits.","trace-review.webp"],

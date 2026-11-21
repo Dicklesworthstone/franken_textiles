@@ -9,13 +9,18 @@ export function Mark() {
   return <span className="mark" aria-hidden="true"><i/><i/><i/><i/></span>;
 }
 
-function current(pathname: string, href: string) {
+function current(pathname: string, href: string, inSheet = false) {
   if (href.startsWith("/#")) {
     const anchor = href.slice(2);
-    if (anchor === "drape-room") return pathname.startsWith("/studies/") || pathname === "/sections/studies/";
+    // In the full menu sheet, Skirt atelier, Trouser study and Drape gallery each have their own exact entries.
+    if (anchor === "drape-room") return !inSheet && (pathname.startsWith("/studies/") || pathname === "/sections/studies/");
     if (anchor === "wardrobe") return pathname.startsWith("/wardrobe/") || pathname === "/sections/wardrobe/";
-    if (anchor === "materials") return pathname.startsWith("/experiments/") || pathname === "/sections/materials/";
-    if (anchor === "studio") return ["studio", "draft", "cut", "stitch"].some(id => pathname === `/sections/${id}/`);
+    if (anchor === "materials") {
+      return inSheet
+        ? pathname === "/sections/materials/" || pathname === "/experiments/strip/" || pathname === "/experiments/cylinder/"
+        : pathname.startsWith("/experiments/") || pathname === "/sections/materials/";
+    }
+    if (anchor === "studio") return ["studio", "draft", "cut", "stitch", "repair"].some(id => pathname === `/sections/${id}/`);
     return pathname === `/sections/${anchor}/`;
   }
   return pathname === href;
@@ -49,7 +54,7 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
     return () => wide.removeEventListener("change", close);
   }, []);
 
-  const mark = (href: string) => current(pathname, href) ? "page" as const : undefined;
+  const mark = (href: string, inSheet = false) => current(pathname, href, inSheet) ? "page" as const : undefined;
   return <>
     <a className="skip" href={skipTo}>Skip to content</a>
     <header className="ft-head" data-stuck={stuck || undefined}>
@@ -79,13 +84,13 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
       </div>
       <div className="wrap ft-sheet-body">
         <section aria-labelledby="sheet-exhibits"><h2 id="sheet-exhibits" className="mono">The exhibition</h2>
-          <ul>{exhibits.map(item => <li key={item.href}><a href={item.href} aria-current={mark(item.href)}><strong>{item.label}</strong><small>{item.note}</small></a></li>)}</ul>
+          <ul>{exhibits.map(item => <li key={item.href}><a href={item.href} aria-current={mark(item.href, true)}><strong>{item.label}</strong><small>{item.note}</small></a></li>)}</ul>
         </section>
         <section aria-labelledby="sheet-tools"><h2 id="sheet-tools" className="mono">Workbenches · run on your device</h2>
           <ul>{workbenches.map(item => <li key={item.href}><a href={item.href}><strong>{item.label}</strong><small>{item.note}</small></a></li>)}</ul>
         </section>
         <section aria-labelledby="sheet-project"><h2 id="sheet-project" className="mono">The project</h2>
-          <ul>{project.map(item => <li key={item.href}><a href={item.href} aria-current={mark(item.href)}><strong>{item.label}</strong><small>{item.note}</small></a></li>)}
+          <ul>{project.map(item => <li key={item.href}><a href={item.href} aria-current={mark(item.href, true)}><strong>{item.label}</strong><small>{item.note}</small></a></li>)}
             <li><a href={repo}><strong>Source on GitHub</strong><small>Rust, MIT licence with rider</small></a></li></ul>
         </section>
       </div>

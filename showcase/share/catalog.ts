@@ -1,4 +1,4 @@
-export const sections = ["wardrobe","studio","draft","cut","stitch","materials","studies","tracing","films","tools"] as const;
+export const sections = ["wardrobe","studio","draft","cut","stitch","repair","materials","studies","tracing","films","tools"] as const;
 export type Section = (typeof sections)[number];
 export const isSection = (value: string): value is Section => sections.some(section => section === value);
 
@@ -26,9 +26,11 @@ export const plates = {
   draft: {title:["Draft the","pattern."],caption:"Change the size and ease of a measured draft, then compare the cut outlines.",category:"Pattern drafting",specimen:"Zouave bolero · full-scale draft",colors:paper,images:["draft"]},
   cut: {title:["On the","cutting table."],caption:"Arrange real pattern pieces on a roll and download the full-scale cutting marker.",category:"Cutting studio",specimen:"Roll layout · grain alignment",colors:["#dce4cc","#293d35","#82502f"],images:["cut"]},
   stitch: {title:["Follow the","needle."],caption:"Replay a Tajima stitch path through the stop where the maker lays the braid.",category:"Machine embroidery",specimen:"Tajima DST · cord placement",colors:["#202b47","#fff0d7","#ffc17b"],images:["stitch"]},
+  repair: {title:["Repair a","seam."],caption:"Walk paired front and back sewing lines, catch a flat mismatch, and true the seam in local Rust WebAssembly.",category:"Pattern alteration",specimen:"Zouave bolero · true-seam repair",colors:paper,images:["draft"]},
   materials: {title:["Cloth under","load."],caption:"Explore how a woven specimen responds when the grips pull, twist and compress it.",category:"Material experiments",specimen:"Tensile grips & torsion rig",colors:midnight,images:["strip","cylinder"],layout:"pair"},
   cylinder: {title:["The torsion","rig."],caption:"Twist and compress a cloth cylinder while inspecting the native force and torque readings.",category:"Material experiment",specimen:"Cloth cylinder · prescribed load cycle",colors:["#3c322d","#f8efdf","#f3b986"],images:["cylinder"]},
   strip: {title:["Cut on","the bias."],caption:"Pull warp, weft and bias specimens of the same cloth and compare the measured grip reactions in the simulation.",category:"Material experiment",specimen:"Warp · weft · bias",colors:["#dce5dc","#203c3f","#93552e"],images:["strip"]},
+  thermal: {title:["Thermal","sandwich."],caption:"Stack measured neoprene and leather sheets at explicit interface resistance and compute steady 1D heat flux in Rust WebAssembly.",category:"Material experiment",specimen:"Measured sheets · Fourier conduction",colors:midnight,images:["material-detail"]},
   studies: {title:["The drape","gallery."],caption:"Follow five flat panels onto a fitted body and compare the forces as its arms rise.",category:"Cloth in three dimensions",specimen:"Zouave bolero · body contact and edge strain",colors:["#213d38","#f6e9cf","#e2b988"],images:["pose","load"],layout:"pair"},
   tracing: {title:["Read","the lines."],caption:"Reveal the piece outlines, grain lines and corners recovered from a practice pattern sheet.",category:"Raster tracing",specimen:"Bolero sheet · native contour review",colors:paper,images:["trace"]},
   films: {title:["The screening","room."],caption:"Watch the pieces become garments, then explore the material rigs and workshops.",category:"Exhibition films",specimen:"Frames from the exhibition",colors:["#191d1d","#f2e8da","#e4a578"],images:["hussar","pose","trouser-form"],layout:"contact"},

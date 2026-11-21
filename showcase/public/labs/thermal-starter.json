@@ -1,0 +1,223 @@
+{
+  "bounds_unavailable": [
+    "layer 0: thermal_resistance needs complete positive source-reported endpoints"
+  ],
+  "comfort_claim": false,
+  "empirical_validation_claim": false,
+  "model": "integrated steady 1D Fourier conduction; fixed geometry and conditioning; equal area",
+  "not_simulated": [
+    "time-dependent heat storage",
+    "moisture transport",
+    "evaporation",
+    "human thermoregulation",
+    "wind-dependent films",
+    "compression-dependent loft",
+    "inferred air gaps",
+    "radiative exchange",
+    "thermal bridges"
+  ],
+  "power_w": 35.714285714285715,
+  "reported_bounds": null,
+  "request": {
+    "area_m2": 0.6,
+    "inside_c": 35,
+    "inside_resistance_m2_k_w": 0.03,
+    "interface_resistance_m2_k_w": [],
+    "layers": [
+      {
+        "allow_estimates": false,
+        "expected_sha256": "75577c3662aceb392cf84d4b072d5a6d8ff6c27d7fa19fc8aacd0e156d2d211c",
+        "id": "zagreb/neoprene-2025/m3nob5",
+        "overrides": {},
+        "record": {
+          "composition": [],
+          "composition_complete": false,
+          "form": "sheet",
+          "id": "zagreb/neoprene-2025/m3nob5",
+          "name": "PotocicMatkovic2025 M3NOb5: No lining neoprene",
+          "properties": {
+            "areal_density": {
+              "bounds": null,
+              "conditions": {
+                "ambient_conditions": "Weighing temperature and humidity not reported",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported",
+                "measurement_count": "Not reported",
+                "specimen_group": "PotocicMatkovic2025:M3NOb5",
+                "state_scope": "Reference specimen-group areal mass; no pressure-invariance characterization",
+                "uncertainty": "Numerical uncertainty and individual coupon identifiers not reported"
+              },
+              "evidence": "measured",
+              "method": "Table 1 mass per unit area; ISO 3801; Kern ALJ 220-4 analytical scale",
+              "source": "paper",
+              "unit": "g/m2",
+              "value": 1288.65
+            },
+            "compression_displacement_100kpa": {
+              "bounds": null,
+              "conditions": {
+                "ambient_conditions": "Compression-test temperature and humidity not reported",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported",
+                "displacement_reference": "Instron preload and displacement zero not specified; the separate Table 1 thickness measurement uses 1 kPa. Figure 1 relates initial thickness and displacement, but cross-instrument reference compatibility is not established.",
+                "loading_history": "Loading rate, dwell, unloading and recovery not reported",
+                "measurement_count": "5",
+                "pressure_pa": "100000",
+                "pressure_scope": "Applied compressive stress; not a direct submerged thermal-resistance measurement",
+                "specimen_group": "PotocicMatkovic2025:M3NOb5",
+                "state_scope": "Measured displacement, not final thickness; no pressure-conditioned material law inferred",
+                "uncertainty": "Numerical uncertainty and individual coupon identifiers not reported"
+              },
+              "evidence": "measured",
+              "method": "Table 2 compressive displacement; Instron 5567; mean of five measurements",
+              "source": "paper",
+              "unit": "mm",
+              "value": 3.0483
+            },
+            "compression_displacement_150kpa": {
+              "bounds": null,
+              "conditions": {
+                "ambient_conditions": "Compression-test temperature and humidity not reported",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported",
+                "displacement_reference": "Instron preload and displacement zero not specified; the separate Table 1 thickness measurement uses 1 kPa. Figure 1 relates initial thickness and displacement, but cross-instrument reference compatibility is not established.",
+                "loading_history": "Loading rate, dwell, unloading and recovery not reported",
+                "measurement_count": "5",
+                "pressure_pa": "150000",
+                "pressure_scope": "Applied compressive stress; not a direct submerged thermal-resistance measurement",
+                "specimen_group": "PotocicMatkovic2025:M3NOb5",
+                "state_scope": "Measured displacement, not final thickness; no pressure-conditioned material law inferred",
+                "uncertainty": "Numerical uncertainty and individual coupon identifiers not reported"
+              },
+              "evidence": "measured",
+              "method": "Table 2 compressive displacement; Instron 5567; mean of five measurements",
+              "source": "paper",
+              "unit": "mm",
+              "value": 3.5628
+            },
+            "compression_displacement_200kpa": {
+              "bounds": null,
+              "conditions": {
+                "ambient_conditions": "Compression-test temperature and humidity not reported",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported",
+                "displacement_reference": "Instron preload and displacement zero not specified; the separate Table 1 thickness measurement uses 1 kPa. Figure 1 relates initial thickness and displacement, but cross-instrument reference compatibility is not established.",
+                "loading_history": "Loading rate, dwell, unloading and recovery not reported",
+                "measurement_count": "5",
+                "pressure_pa": "200000",
+                "pressure_scope": "Applied compressive stress; not a direct submerged thermal-resistance measurement",
+                "specimen_group": "PotocicMatkovic2025:M3NOb5",
+                "state_scope": "Measured displacement, not final thickness; no pressure-conditioned material law inferred",
+                "uncertainty": "Numerical uncertainty and individual coupon identifiers not reported"
+              },
+              "evidence": "measured",
+              "method": "Table 2 compressive displacement; Instron 5567; mean of five measurements",
+              "source": "paper",
+              "unit": "mm",
+              "value": 3.7701
+            },
+            "compression_displacement_50kpa": {
+              "bounds": null,
+              "conditions": {
+                "ambient_conditions": "Compression-test temperature and humidity not reported",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported",
+                "displacement_reference": "Instron preload and displacement zero not specified; the separate Table 1 thickness measurement uses 1 kPa. Figure 1 relates initial thickness and displacement, but cross-instrument reference compatibility is not established.",
+                "loading_history": "Loading rate, dwell, unloading and recovery not reported",
+                "measurement_count": "5",
+                "pressure_pa": "50000",
+                "pressure_scope": "Applied compressive stress; not a direct submerged thermal-resistance measurement",
+                "specimen_group": "PotocicMatkovic2025:M3NOb5",
+                "state_scope": "Measured displacement, not final thickness; no pressure-conditioned material law inferred",
+                "uncertainty": "Numerical uncertainty and individual coupon identifiers not reported"
+              },
+              "evidence": "measured",
+              "method": "Table 2 compressive displacement; Instron 5567; mean of five measurements",
+              "source": "paper",
+              "unit": "mm",
+              "value": 2.1198
+            },
+            "thermal_resistance": {
+              "bounds": null,
+              "conditions": {
+                "air_speed_m_s": "1",
+                "ambient_temperature_c": "20",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported",
+                "measurement_count": "Not reported for thermal resistance",
+                "measurement_pressure": "Not reported for the hotplate test",
+                "plate_temperature_c": "Not reported",
+                "relative_humidity_percent": "65 +/- 1",
+                "specimen_group": "PotocicMatkovic2025:M3NOb5",
+                "state_scope": "Dry resistance of sample only; separately measured reference protocol, not resistance at any Table 2 compression pressure",
+                "temperature_model_scope": "Single scalar observation; no measured temperature interval or temperature-dependent law",
+                "uncertainty": "Numerical uncertainty and individual coupon identifiers not reported"
+              },
+              "evidence": "measured",
+              "method": "Table 1 Rct; Thermetrics sweating-guarded hotplate; Equation (1) subtracts the bare-plate dry resistance",
+              "source": "paper",
+              "unit": "m2*K/W",
+              "value": 0.172
+            },
+            "thickness": {
+              "bounds": null,
+              "conditions": {
+                "ambient_conditions": "Thickness-test temperature and humidity not reported",
+                "averaging": "Mean of measurements at ten locations on the specimen",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported",
+                "measurement_count": "10",
+                "pressure_pa": "1000",
+                "sample_area_cm2": "20",
+                "specimen_group": "PotocicMatkovic2025:M3NOb5",
+                "state_scope": "Protocol thickness under 1 kPa; not unloaded loft or the nominal thickness label",
+                "uncertainty": "Numerical uncertainty and individual coupon identifiers not reported"
+              },
+              "evidence": "measured",
+              "method": "Table 1 thickness at 1 kPa; ISO 5084; DM-2000 thickness gauge",
+              "source": "paper",
+              "unit": "mm",
+              "value": 5.5167
+            }
+          },
+          "sources": {
+            "paper": {
+              "accessed_on": "2026-10-19",
+              "note": "Vesna Marija Potočić Matković, Ivana Salopek Čubrić and Alenka Pavko Čuden (2025), Dependence of Thermal Comfort of Diving Suit on Neoprene Properties and Diving Depth, Polymers 17(21):2820, DOI 10.3390/polym17212820. Tables 1 and 2 with section 2 protocols; 33 study sample groups. CC BY 4.0, copyright 2025 the authors. Attributed numerical facts only; no article text or images redistributed. Table 1 is the numerical authority: M3NOa3 Rct is 0.0535, whereas the narrative gives 0.052. Thermal and thickness/compression test conditions are separately retained; no measured loaded resistance is asserted.",
+              "reference": "https://www.mdpi.com/2073-4360/17/21/2820"
+            }
+          },
+          "structure": {
+            "composition_scope": "Neoprene identity is reported; whole-assembly polymer, lining, adhesive and additive mass fractions are not reported",
+            "construction": "Closed-cell neoprene foam sheet",
+            "identity_scope": "Study specimen group from one of four anonymized manufacturers M1-M4; supplier, product, lot and individual coupon identifiers not reported",
+            "lining": "No lining",
+            "loading_data_scope": "Four measured pressure-specific displacements retained as observations; no loaded thickness, interpolation, unloading, recovery or pressure-invariant Rct inferred",
+            "sample_code_scope": "NO: no lining; OS: one-sided lining; BS: both-sided linings; final 3, 5 or 7 denotes nominal millimetres. Letter variants remain distinct source groups.",
+            "source_sample_mark": "M3NOb5",
+            "thermal_model_scope": "Measured reference dry Rct only. Figures 2 and 4 estimate loaded resistance from cross-sample regression; those estimates are not imported."
+          }
+        },
+        "sources": {}
+      }
+    ],
+    "outside_c": 20,
+    "outside_resistance_m2_k_w": 0.05,
+    "schema": "ftx-thermal-steady/1"
+  },
+  "request_sha256": "de1d834fc75d0eb4029466b4d14beb94d5c6a915d1353aff7f489321fa016dcf",
+  "schema": "ftx-thermal-steady-result/1",
+  "state": {
+    "bounds_unavailable": [
+      "layer 0: thermal_resistance needs complete positive source-reported endpoints"
+    ],
+    "flux_w_m2": 59.523809523809526,
+    "layer_faces_c": [
+      [
+        33.214285714285715,
+        22.976190476190474
+      ]
+    ],
+    "max_flux_residual_w_m2": 2.1316282072803006e-14,
+    "max_temperature_residual_c": 1.7763568394002505e-15,
+    "reported_bounds": null
+  },
+  "storage_required": false,
+  "temperature_domains_c": [
+    null
+  ],
+  "uncertainty_propagated": false
+}

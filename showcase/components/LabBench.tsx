@@ -7,14 +7,16 @@ import type { CutDraft } from "./DraftLab";
 const DraftLab = dynamic(() => import("./DraftLab"));
 const CutLab = dynamic(() => import("./CutLab"));
 const StitchLab = dynamic(() => import("./StitchLab"));
+const RepairLab = dynamic(() => import("./RepairLab"));
 
 const stations = [
-  { id: "draft", name: "Pattern drafting", short: "Draft", action: "Change the silhouette" },
-  { id: "cut", name: "Roll layout", short: "Cut", action: "Arrange the cut pieces" },
-  { id: "stitch", name: "Machine embroidery", short: "Stitch", action: "Follow the needle" },
+  { id: "draft", name: "Pattern drafting", short: "Draft", action: "Change the silhouette", thumb: "/media/lab-draft.webp" },
+  { id: "cut", name: "Roll layout", short: "Cut", action: "Arrange the cut pieces", thumb: "/media/lab-cut.webp" },
+  { id: "stitch", name: "Machine embroidery", short: "Stitch", action: "Follow the needle", thumb: "/media/lab-stitch.webp" },
+  { id: "repair", name: "Seam repair", short: "Repair", action: "Fix a mismatched seam", thumb: "/media/construction-bolero-cut.jpg" },
 ] as const;
 
-export default function LabBench({initialStation,heading:Heading="h2"}: {initialStation?: "draft" | "cut" | "stitch";heading?:"h1"|"h2"}) {
+export default function LabBench({initialStation,heading:Heading="h2"}: {initialStation?: "draft" | "cut" | "stitch" | "repair";heading?:"h1"|"h2"}) {
   const initial = Math.max(0, stations.findIndex(s => s.id === initialStation));
   const [current, setCurrent] = useState(initial);
   const [draft, setDraft] = useState<CutDraft>();
@@ -62,7 +64,7 @@ export default function LabBench({initialStation,heading:Heading="h2"}: {initial
             e.key === "Home" ? 0 : e.key === "End" ? stations.length - 1 : undefined;
           if (next !== undefined) { e.preventDefault(); select(next); tabs.current[next]?.focus(); }
         }}>
-        <img src={`/media/lab-${s.id}.webp`} alt="" width="112" height="86" loading="lazy"/>
+        <img src={s.thumb} alt="" width="112" height="86" loading="lazy"/>
         <span><small>{s.action}</small><strong className="station-long">{s.name}</strong><strong className="station-short">{s.short}</strong></span>
         <b aria-hidden="true">{current === i ? "↓" : "↗"}</b>
       </button>)}
@@ -81,6 +83,9 @@ export default function LabBench({initialStation,heading:Heading="h2"}: {initial
     </div>
     <div id="studio-stitch" className="station-body" role="tabpanel" aria-labelledby="tab-stitch" hidden={id !== "stitch"}>
       {visited.includes(2) && <StitchLab active={id === "stitch"}/>}
+    </div>
+    <div id="studio-repair" className="station-body" role="tabpanel" aria-labelledby="tab-repair" hidden={id !== "repair"}>
+      {visited.includes(3) && <RepairLab/>}
     </div>
     <a className="station-permalink" href={`/sections/${id}/`}>Link to this studio ↗</a>
   </div></section>;

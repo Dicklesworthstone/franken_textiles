@@ -67,8 +67,8 @@ const facts = [
   ["1e-14 m", "Anny 0.6.1 forward model vs upstream PyTorch (newborn to elderly, ~0.3–0.4 ms/body)"],
   ["21", "tape measurements read as convex-hull slices, with MODEL_FIT provenance on estimates"],
   ["0 mm inset", "IPC barrier cloth contact on real thickness, with Coulomb friction & 2 mm self-contact"],
-  ["51", "acceptance checks across PDF, SVG, DXF, HPGL, cutter, GarmentCode & Tajima DST"],
-  ["4.3 MiB gz", "pure Rust WebAssembly (#![forbid(unsafe_code)]), bit-identical to the native CLI"],
+  ["51 rules", "distinct export checks (183 passing on the 92 cm bolero across PDF, SVG, DXF, HPGL, cutter, GarmentCode & DST)"],
+  ["4.4 MiB gz", "pure Rust WebAssembly (#![forbid(unsafe_code)]), bit-identical to the native CLI"],
   ["449", "source-bearing textile records whose missing measurements stay absent, never guessed"],
 ] as const;
 
@@ -76,7 +76,7 @@ const contrasts = [
   ["Body geometry", "Stacked-ellipse dress forms whose armpit sat 45 mm too high and whose crotch needed a special case", "Parametric Anny 0.6.1 body (newborn → adult, Apache-2.0 / CC0) fitted by Levenberg–Marquardt to tape hulls, with opt-in Dual-Quaternion Skinning"],
   ["Cloth contact", "Blender cloth needing a collider inset (+4.4 cm girth inflation), start-state jitter, and no elastic-grip answer", "Incremental Potential Contact on real cloth thickness, exact welded seams, Coulomb friction, transactional Newton refusal & opt-in --time-subdivision"],
   ["Pattern geometry", "AI-drawn sheets with 8% side-seam mismatches, short sleeve caps, and 57% contradictory printed dimensions", "Pure-Rust raster tracer, round-0 auditor, flat seam walker, and five deterministic pattern alterations checked before anyone cuts cloth"],
-  ["Runtime & privacy", "Python, OpenCV, Blender, and a 19 MB Pyodide runtime — or cloud upload workflows", "One native Rust binary and a 4.3 MiB gzipped WASM module running locally on your device with zero network uploads"],
+  ["Runtime & privacy", "Python, OpenCV, Blender, and a 19 MB Pyodide runtime — or cloud upload workflows", "One native Rust binary and a 4.4 MiB gzipped WASM module running locally on your device with zero network uploads"],
 ] as const;
 
 export function Manifesto() {
@@ -119,9 +119,9 @@ const pillars = [
   {
     tag: "Thermal · moisture · viscoelastic",
     title: "Heat, vapor & constitutive solvers",
-    body: "Run 1D transient exterior convection and gray-diffuse radiation on layer stacks or saved drapes, inspect vapor resistance and compression thermal histories, lower Fractional-Zener curves via exact-exponential Prony recursion, and calibrate strip or cylinder fixtures with exact adjoint gradients.",
-    href: "/get-started/#materials-cli",
-    cta: "Try the thermal CLI",
+    body: "Run steady 1D Fourier conduction on measured sheets, transient exterior convection and gray-diffuse radiation on layer stacks or saved drapes, inspect vapor resistance and compression thermal histories, lower Fractional-Zener curves via Prony recursion, and calibrate strip or cylinder fixtures with exact adjoint gradients.",
+    href: "/experiments/thermal/",
+    cta: "Build a thermal sandwich",
   },
   {
     tag: "27 ChArUco families · local only",
