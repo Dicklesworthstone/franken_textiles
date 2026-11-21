@@ -1934,10 +1934,7 @@ mod tests {
     fn the_hand_collider_is_the_reference_wrist_cap_unless_palm_is_asked_for() {
         let none = parse(&["drape".into()]).unwrap();
         assert_eq!(parse_hands(&none).unwrap(), HandCollider::Wrist);
-        for (word, expected) in [
-            ("wrist", HandCollider::Wrist),
-            ("palm", HandCollider::Palm),
-        ] {
+        for (word, expected) in [("wrist", HandCollider::Wrist), ("palm", HandCollider::Palm)] {
             let args = parse(&["drape", "--hands", word].map(String::from)).unwrap();
             assert_eq!(parse_hands(&args).unwrap(), expected);
             assert_eq!(expected.as_str(), word);
@@ -1959,8 +1956,8 @@ mod tests {
             );
             assert_eq!(refusal.repairs, ["--hands wrist or palm"]);
         }
-        let round =
-            parse(&["round", "no-such-ws", "--sim", "--hands", "mitten"].map(String::from)).unwrap();
+        let round = parse(&["round", "no-such-ws", "--sim", "--hands", "mitten"].map(String::from))
+            .unwrap();
         assert!(
             round::cmd_round(&round)
                 .unwrap_err()
