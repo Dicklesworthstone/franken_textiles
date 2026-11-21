@@ -219,6 +219,14 @@ python3 scripts/render-native-film.py bolero /path/to/new-media/construction-bol
 node --test scripts/films.test.mjs
 ```
 
+The trouser films can also be rendered directly from the published native surfaces. Choose `posture`,
+`elastic` or `section`. The skirt comparison takes the finished column and flare construction films.
+
+```sh
+python3 scripts/render-native-trouser-films.py posture /path/to/new-media/trouser-posture.mp4
+sh scripts/render-skirt-comparison.sh /path/to/new-skirt-comparison
+```
+
 The workshop uses H.264 with 8-bit 4:2:0 colour for browser playback. Verify the finished files
 before replacing `public/media/` assets. Cloudflare accepts files up to 25 MiB per static asset.
 Set `FTX_FILM_SOURCE_DIR` when assembling the studio tour or wardrobe reel from a fresh output folder.

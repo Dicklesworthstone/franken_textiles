@@ -111,7 +111,7 @@ async function encode(page, study) {
     for (let index = startFrame; index < frames; index++) {
       const time = index / (frames - 1);
       const progress = ease(unit((time - 0.06) / 0.66));
-      const orbit = 1.14 * ease(unit((time - 0.64) / 0.36));
+      const orbit = 0.40 * ease(unit((time - 0.05) / 0.58)) + 0.74 * ease(unit((time - 0.64) / 0.36));
       await draw(page, progress, study.angle + orbit);
       await page.evaluate(progress => window.ftxFilmLabel(progress), progress);
       const bytes = await screenshot();
