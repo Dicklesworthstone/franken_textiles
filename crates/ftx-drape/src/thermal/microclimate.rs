@@ -1558,13 +1558,23 @@ pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
         let h_w_m2_k = nu_res
             .heat_transfer_coefficient(air.thermal_conductivity, conv.characteristic_length_m)?;
         let exterior = match conv.surface_temperature_range_c {
-            Some(range) => Some(nu_res.to_exterior(
-                &air,
-                conv.characteristic_length_m,
-                range,
-                conv.allow_estimates,
-                None,
-            )?),
+            Some(range) => {
+                let mut ext = nu_res.to_exterior(
+                    &air,
+                    conv.characteristic_length_m,
+                    range,
+                    conv.allow_estimates,
+                    None,
+                )?;
+                // Preserve the caller's exact Celsius temperature without `(t + 273.15) - 273.15`
+                // ULP drift so downstream `solve_exterior`'s `outside_c == exterior.air_c` gate
+                // matches deterministically.
+                ext.air_c = req.air.temperature_c;
+                if conv.allow_estimates {
+                    ext.validate_convection()?;
+                }
+                Some(ext)
+            }
             None => None,
         };
         Some(json!({
@@ -1888,5 +1898,32 @@ mod tests {
         let mut unknown = req;
         unknown["air"]["guessed"] = serde_json::json!(true);
         assert!(evaluate_json(&unknown.to_string()).is_err());
+    }
+
+    #[test]
+    fn evaluate_json_preserves_exact_celsius_air_temperature_without_kelvin_roundtrip_drift() {
+        let t_c = 23.4_f64;
+        assert_ne!(
+            (t_c + 273.15) - 273.15,
+            t_c,
+            "test temperature must exercise Kelvin-Celsius round-trip drift"
+        );
+        let req = serde_json::json!({
+            "schema": MICROCLIMATE_REQUEST_SCHEMA,
+            "air": { "temperature_c": t_c, "pressure_pa": 101325.0, "relative_humidity": 0.5 },
+            "convection": {
+                "correlation": "churchill_bernstein_cylinder",
+                "characteristic_length_m": 0.2,
+                "wind_speed_m_s": 2.0,
+                "surface_temperature_range_c": [10.0, 45.0],
+                "allow_estimates": true
+            }
+        });
+        let raw = evaluate_json(&req.to_string()).unwrap();
+        let rep: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let air_c = rep["convection"]["exterior"]["air_c"].as_f64().unwrap();
+        assert_eq!(air_c.to_bits(), t_c.to_bits());
+        let ext: Exterior = serde_json::from_value(rep["convection"]["exterior"].clone()).unwrap();
+        ext.validate_convection().unwrap();
     }
 }
