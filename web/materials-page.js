@@ -1536,6 +1536,24 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
             ["Incoming ambient enthalpy (J)", "Outgoing reservoir enthalpy (J)", "Net ambient enthalpy received (J)"]);
           cells(exchangeHeat, [metric(ambient.incoming_vapor_enthalpy_j), metric(ambient.outgoing_vapor_enthalpy_j),
             metric(ambient.net_vapor_enthalpy_received_j)]);
+          if (ambient.schema === "ftx-textile-vapor-exchange-result/2" && Array.isArray(ambient.intervals)) {
+            const boundaries = table(parent, `${key}: ambient vapor boundaries by motion interval`,
+              ["Interval", "Accepted duration (s)", "Ambient pressure (Pa)", "Incoming temperature (°C)",
+                "Conductance (kg/(Pa·s))", "Source"]);
+            const transfers = table(parent, `${key}: ambient vapor exchange by motion interval`,
+              ["Interval", "Incoming vapor (kg)", "Outgoing vapor (kg)", "Net vapor received (kg)",
+                "Incoming enthalpy (J)", "Outgoing enthalpy (J)", "Net enthalpy received (J)"]);
+            for (const interval of ambient.intervals) {
+              const index = Number.isSafeInteger(interval?.interval) && interval.interval >= 0 ? interval.interval : null;
+              const boundary = index === null ? null : water.request?.vapor_reservoir?.ambient_exchange_by_interval?.[index];
+              const label = index === null ? "Unknown" : index + 1;
+              cells(boundaries, [label, metric(interval?.elapsed_seconds), metric(boundary?.ambient_vapor_pressure_pa),
+                metric(boundary?.ambient_temperature_c), metric(boundary?.conductance_kg_pa_s), boundary?.source?.reference ?? "Unknown"]);
+              cells(transfers, [label, metric(interval?.incoming_vapor_mass_kg), metric(interval?.outgoing_vapor_mass_kg),
+                metric(interval?.net_vapor_received_kg), metric(interval?.incoming_vapor_enthalpy_j),
+                metric(interval?.outgoing_vapor_enthalpy_j), metric(interval?.net_vapor_enthalpy_received_j)]);
+            }
+          }
         }
       }
       const scope = document.createElement("p");
@@ -1548,6 +1566,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         (condensing ? "Independently qualified reverse vapor transfer can condense on dry or wet cloth and later re-evaporate. Condensation latent release and incoming vapor sensible enthalpy are separate energy inputs; the effective enthalpy convention remains explicit in the source policy. " : "") +
         (finiteVapor ? "All textile patches share one finite vapor inventory: evaporation raises its pressure and condensation consumes available vapor. The source explicitly fixes vapor capacitance and temperature. Isothermal heat removed is the signed heat exchange needed to hold that temperature; it is separate from textile boundary heat. No gas volume, heat capacity or body moisture source is inferred. " : "") +
         (water.vapor_reservoir?.ambient_exchange ? "The separately qualified ambient boundary exchanges vapor at the accepted reservoir pressure. Incoming vapor carries its ambient-temperature enthalpy; outgoing vapor carries the reservoir's enthalpy. Ambient and textile transfers remain separate, and both enter the fixed-temperature heat balance. " : "") +
+        (water.vapor_reservoir?.ambient_exchange?.schema === "ftx-textile-vapor-exchange-result/2" ? "Each declared motion interval retains its own ambient pressure, incoming temperature, conductance and source. Vapor inventory and textile temperatures continue across boundary changes; unvisited intervals retain zero accepted duration and transfer. " : "") +
         (draining ? "Independently sourced drainage demand uses reference material area and is limited by available liquid. Drained liquid exports sensible enthalpy at the old inner-cell temperature with no latent energy; empty cloth shares available inflow proportionally between evaporation and drainage demands. No overflow or runoff law is inferred. " : "") +
         (h.mechanical_coupling?.exchange ? `Qualified supplied liquid, condensed vapor, evaporation${draining ? " and drainage" : ""} update cloth inertia and gravity after every accepted interval. ` :
           h.mechanical_coupling ? "Qualified evaporation updates cloth inertia and gravity after every accepted interval; co-moving vapor removes its own momentum without accelerating the remaining cloth. " :

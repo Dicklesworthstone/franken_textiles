@@ -6115,6 +6115,25 @@ Native, portable and named-case studies retain the same policy and receipts; the
 the two exchange owners separately. This advances `ftx-vc2` without inferring an airflow model,
 changing ambient schedule, absorbed moisture, thermoregulation or empirical garment qualification.
 
+### 25.219 Carry changing ambient vapor boundaries through garment motion
+
+A finite isothermal textile microclimate can select a complete, independently qualified ambient
+exchange record for every mechanical keyframe interval. The surrounding vapor pressure, incoming
+temperature and conductance may change while the original reservoir, textile liquid and thermal
+state continue unchanged. The existing implicit pressure and earliest-dryout solve remains the
+single transfer authority; every owner uses the same accepted duration and failed work rolls back.
+
+Per-interval accepted pressure, mass and enthalpy integrals retain each boundary's source. Incoming
+energy is weighted by the temperature that applied when water entered, never the final boundary
+temperature. Complete aggregate receipts support the ordinary native/portable material decisions
+and browser inspection. Independent admission reconstructs interval durations from motion and
+rejects missing, reordered, future-active or source-inconsistent transfers.
+
+This advances `ftx-vc2` without inventing an airflow law, changing the reservoir's isothermal
+storage model or closing its empirical qualification. Existing constant-boundary requests keep
+their original arithmetic and output; the scheduled contract is explicitly reservoir version 2.
+See `docs/textile-surface-water.md` for request and receipt semantics.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

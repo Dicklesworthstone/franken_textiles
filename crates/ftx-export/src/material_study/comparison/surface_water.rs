@@ -117,6 +117,36 @@ fn source(value: &Value) -> Result<(), Refusal> {
 // The producer selects a complete original qualification, never a rewritten material hash.
 // Independently check every allowed difference before treating its collection as one case.
 fn alternative_case_inputs(policy: &Value) -> Result<Value, Refusal> {
+    fn remove_evidence(item: &mut Value, supply: bool) -> Result<(), Refusal> {
+        source(item)?;
+        // Removed metadata still needs its complete native shape, even for an unselected
+        // qualification. An estimate consent cannot hide behind a non-boolean value.
+        if item["source"]
+            .as_object()
+            .is_none_or(|source| source.len() != 3)
+            || item
+                .get("allow_estimates")
+                .is_some_and(|value| !value.is_boolean())
+            || (supply && item.get("qualification").is_some())
+            || (!supply
+                && !item["qualification"]
+                    .as_str()
+                    .is_some_and(|text| !text.trim().is_empty() && text.len() <= 4096))
+        {
+            return Err(fail());
+        }
+        let object = item.as_object_mut().ok_or_else(fail)?;
+        for key in [
+            "source",
+            "evidence",
+            "allow_estimates",
+            "method",
+            "qualification",
+        ] {
+            object.remove(key);
+        }
+        Ok(())
+    }
     let mut value = policy.clone();
     for name in [
         "",
@@ -130,36 +160,11 @@ fn alternative_case_inputs(policy: &Value) -> Result<Value, Refusal> {
             None | Some(Value::Null) => continue,
             Some(item) => item,
         };
-        source(item)?;
-        // These fields are removed from the common-case comparison, so their complete native
-        // metadata shape must be checked even on an unselected qualification. Source has three
-        // required fields; a non-estimated record still cannot carry a non-boolean consent.
-        if item["source"]
-            .as_object()
-            .is_none_or(|source| source.len() != 3)
-            || item
-                .get("allow_estimates")
-                .is_some_and(|value| !value.is_boolean())
-            || (name == "/supply" && item.get("qualification").is_some())
-        {
-            return Err(fail());
-        }
-        if name != "/supply"
-            && !item["qualification"]
-                .as_str()
-                .is_some_and(|text| !text.trim().is_empty() && text.len() <= 4096)
-        {
-            return Err(fail());
-        }
-        let object = item.as_object_mut().ok_or_else(fail)?;
-        for key in [
-            "source",
-            "evidence",
-            "allow_estimates",
-            "method",
-            "qualification",
-        ] {
-            object.remove(key);
+        remove_evidence(item, name == "/supply")?;
+    }
+    if let Some(schedule) = value.pointer_mut("/vapor_reservoir/ambient_exchange_by_interval") {
+        for exchange in schedule.as_array_mut().ok_or_else(fail)? {
+            remove_evidence(exchange, false)?;
         }
     }
     let maximum = number(policy, "maximum_liquid_loading_kg_m2")?;
@@ -1187,6 +1192,112 @@ impl AmbientExchange {
     }
 }
 
+// Each boundary is constant only within its authored mechanical interval. Keeping its own
+// accepted integrals makes changes of conductance and incoming enthalpy independently checkable.
+struct AmbientSchedule {
+    ends: Vec<f64>,
+    exchanges: Vec<AmbientExchange>,
+}
+
+impl AmbientSchedule {
+    fn new(
+        request: &Value,
+        motion: &Value,
+        domain: [f64; 2],
+        cp: f64,
+        latent: f64,
+        reference: f64,
+        outgoing_enthalpy: f64,
+    ) -> Result<Self, Refusal> {
+        let ends = array(motion, "keyframes")?
+            .iter()
+            .map(|frame| number(frame, "time_s"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let inputs = request.as_array().ok_or_else(fail)?;
+        if ends.is_empty()
+            || inputs.len() != ends.len()
+            || ends[0] <= 0.
+            || ends.windows(2).any(|pair| pair[1] <= pair[0])
+            || ends.last().copied() != Some(number(motion, "duration_s")?)
+        {
+            return Err(fail());
+        }
+        let exchanges = inputs
+            .iter()
+            .map(|input| {
+                AmbientExchange::new(input, domain, cp, latent, reference, outgoing_enthalpy)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { ends, exchanges })
+    }
+
+    fn admit(&mut self, report: &Value, time: f64, steps: u64) -> Result<[f64; 3], Refusal> {
+        const FIELDS: [&str; 9] = [
+            "incoming_vapor_mass_kg",
+            "outgoing_vapor_mass_kg",
+            "net_vapor_received_kg",
+            "incoming_vapor_enthalpy_j",
+            "outgoing_vapor_enthalpy_j",
+            "net_vapor_enthalpy_received_j",
+            "reservoir_pressure_time_pa_s",
+            "inward_pressure_time_pa_s",
+            "outward_pressure_time_pa_s",
+        ];
+        let rows = array(report, "intervals")?;
+        if report["schema"] != "ftx-textile-vapor-exchange-result/2"
+            || rows.len() != self.exchanges.len()
+            || !time.is_finite()
+            || time < 0.
+            || time > *self.ends.last().ok_or_else(fail)?
+        {
+            return Err(fail());
+        }
+        let mut totals = [0.; 9];
+        let mut scales = [0.; 9];
+        let mut start = 0.;
+        for (index, ((exchange, &end), row)) in self
+            .exchanges
+            .iter_mut()
+            .zip(&self.ends)
+            .zip(rows)
+            .enumerate()
+        {
+            let elapsed = (time.min(end) - start).max(0.);
+            if row["interval"].as_u64() != Some(index as u64)
+                || !accumulated_near(
+                    nonnegative(row, "elapsed_seconds")?,
+                    elapsed,
+                    elapsed,
+                    steps,
+                )
+            {
+                return Err(fail());
+            }
+            // Use the independently reconstructed duration, including zero for future rows.
+            // Thermal subdivisions and dryout events never advance the next boundary early.
+            exchange.admit(row, elapsed, steps)?;
+            for (i, field) in FIELDS.iter().enumerate() {
+                let value = number(row, field)?;
+                totals[i] += value;
+                scales[i] += value.abs();
+            }
+            start = end;
+        }
+        for (i, field) in FIELDS.iter().enumerate() {
+            if !accumulated_near(number(report, field)?, totals[i], scales[i], steps) {
+                return Err(fail());
+            }
+        }
+        // The producer retains a compensated aggregate. Reusing that independently checked
+        // grouping avoids introducing a new cancellation error into the reservoir heat balance.
+        Ok([
+            number(report, "incoming_vapor_mass_kg")?,
+            number(report, "outgoing_vapor_mass_kg")?,
+            number(report, "net_vapor_enthalpy_received_j")?,
+        ])
+    }
+}
+
 // Independent accounting for the shared vapor owner. The pressure/transport root is never
 // solved here: each retained liquid ledger must explain this inventory and its thermostat.
 struct Reservoir {
@@ -1201,18 +1312,28 @@ struct Reservoir {
     previous_trials: u64,
     previous_maximum_residual: f64,
     ambient_exchange: Option<AmbientExchange>,
+    ambient_exchange_by_interval: Option<AmbientSchedule>,
 }
 
 impl Reservoir {
-    fn new(request: &Value, cp: f64, latent: f64, reference: f64) -> Result<Self, Refusal> {
+    fn new(
+        request: &Value,
+        motion: &Value,
+        cp: f64,
+        latent: f64,
+        reference: f64,
+    ) -> Result<Self, Refusal> {
         source(request)?;
+        let scheduled = request["schema"] == "ftx-textile-vapor-reservoir/2";
         let capacity = number(request, "vapor_capacitance_kg_pa")?;
         let initial_mass = nonnegative(request, "initial_vapor_mass_kg")?;
         let temperature = number(request, "temperature_c")?;
         let bounds = array(request, "pressure_domain_pa")?;
         let maximum_iterations = request["max_iterations"].as_u64().ok_or_else(fail)?;
         let mass_tolerance = number(request, "mass_tolerance_kg")?;
-        if request["schema"] != "ftx-textile-vapor-reservoir/1"
+        if (!scheduled && request["schema"] != "ftx-textile-vapor-reservoir/1")
+            || (scheduled && request.get("ambient_exchange").is_some())
+            || (!scheduled && request.get("ambient_exchange_by_interval").is_some())
             || request["model"] != "isothermal_constant_vapor_capacitance/1"
             || capacity <= 0.
             || temperature <= -273.15
@@ -1235,6 +1356,7 @@ impl Reservoir {
                         | "temperature_c"
                         | "pressure_domain_pa"
                         | "ambient_exchange"
+                        | "ambient_exchange_by_interval"
                         | "max_iterations"
                         | "mass_tolerance_kg"
                         | "source"
@@ -1268,8 +1390,20 @@ impl Reservoir {
         }
         let ambient_exchange = request
             .get("ambient_exchange")
-            .filter(|v| !v.is_null())
             .map(|v| AmbientExchange::new(v, domain, cp, latent, reference, effective_enthalpy))
+            .transpose()?;
+        let ambient_exchange_by_interval = scheduled
+            .then(|| {
+                AmbientSchedule::new(
+                    &request["ambient_exchange_by_interval"],
+                    motion,
+                    domain,
+                    cp,
+                    latent,
+                    reference,
+                    effective_enthalpy,
+                )
+            })
             .transpose()?;
         Ok(Self {
             capacity,
@@ -1283,6 +1417,7 @@ impl Reservoir {
             previous_trials: 0,
             previous_maximum_residual: 0.,
             ambient_exchange,
+            ambient_exchange_by_interval,
         })
     }
 
@@ -1297,6 +1432,8 @@ impl Reservoir {
         let [ambient_in, ambient_out, ambient_j] =
             if let Some(exchange) = &mut self.ambient_exchange {
                 exchange.admit(&report["ambient_exchange"], time, steps)?
+            } else if let Some(schedule) = &mut self.ambient_exchange_by_interval {
+                schedule.admit(&report["ambient_exchange"], time, steps)?
             } else {
                 if report.get("ambient_exchange").is_some() {
                     return Err(fail());
@@ -1318,7 +1455,12 @@ impl Reservoir {
         // This bounds the maximum without pretending that trace samples expose every probe.
         let step_mass_scale =
             2. * available + evaporated + condensed + ambient_in + ambient_out + maximum_residual;
-        if report["schema"] != "ftx-textile-vapor-reservoir-result/1"
+        let expected_schema = if self.ambient_exchange_by_interval.is_some() {
+            "ftx-textile-vapor-reservoir-result/2"
+        } else {
+            "ftx-textile-vapor-reservoir-result/1"
+        };
+        if report["schema"] != expected_schema
             || nonnegative(report, "initial_vapor_mass_kg")? != self.initial_mass
             || !near(
                 nonnegative(report, "initial_vapor_pressure_pa")?,
@@ -1453,7 +1595,7 @@ pub(super) fn admit(
         return Err(fail());
     }
     let mut reservoir = finite_reservoir
-        .then(|| Reservoir::new(&policy["vapor_reservoir"], cp, latent, reference))
+        .then(|| Reservoir::new(&policy["vapor_reservoir"], motion, cp, latent, reference))
         .transpose()?;
     let table = array(policy, "wet_vapor_pressure_pa")?;
     if !(2..=128).contains(&table.len()) {
@@ -1532,6 +1674,15 @@ pub(super) fn admit(
                 .as_ref()
                 .and_then(|r| r.ambient_exchange.as_ref())
                 .is_some_and(|e| e.temperature < domain[0] || e.temperature > domain[1])
+            || reservoir
+                .as_ref()
+                .and_then(|r| r.ambient_exchange_by_interval.as_ref())
+                .is_some_and(|schedule| {
+                    schedule
+                        .exchanges
+                        .iter()
+                        .any(|e| e.temperature < domain[0] || e.temperature > domain[1])
+                })
         {
             return Err(fail());
         }

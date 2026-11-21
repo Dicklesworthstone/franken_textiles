@@ -2424,6 +2424,169 @@ fn ambient_reservoir_case() -> (Alternative, Value, Value, Value) {
     (a, d, s, m)
 }
 
+fn scheduled_ambient_reservoir_case() -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = ambient_reservoir_case();
+    let h = &mut m["transient_surface"]["result"];
+    let policy = &mut h["request"]["surface_water"]["vapor_reservoir"];
+    let exchange = policy
+        .as_object_mut()
+        .unwrap()
+        .remove("ambient_exchange")
+        .unwrap();
+    policy["schema"] = json!("ftx-textile-vapor-reservoir/2");
+    policy["ambient_exchange_by_interval"] = json!([exchange]);
+    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+    for path in [
+        "/surface_water/vapor_reservoir",
+        "/trace/0/surface_water/vapor_reservoir",
+    ] {
+        let gas = h.pointer_mut(path).unwrap();
+        gas["schema"] = json!("ftx-textile-vapor-reservoir-result/2");
+        let exchange = &mut gas["ambient_exchange"];
+        let mut interval = exchange.clone();
+        interval["interval"] = json!(0);
+        interval["elapsed_seconds"] = json!(1.);
+        exchange["schema"] = json!("ftx-textile-vapor-exchange-result/2");
+        exchange["intervals"] = json!([interval]);
+    }
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    (a, d, s, m)
+}
+
+#[test]
+fn finite_vapor_scheduled_ambient_admission_preserves_complete_source_and_interval_identity() {
+    let (a, d, s, m) = scheduled_ambient_reservoir_case();
+    admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+    for case in 0..9 {
+        let (a, mut d, s, mut m) = scheduled_ambient_reservoir_case();
+        let h = &mut m["transient_surface"]["result"];
+        let reservoir = &mut h["request"]["surface_water"]["vapor_reservoir"];
+        match case {
+            0 => reservoir["schema"] = json!("ftx-textile-vapor-reservoir/1"),
+            1 => reservoir["ambient_exchange"] = Value::Null,
+            2 => reservoir["ambient_exchange_by_interval"] = json!([]),
+            3 => reservoir["ambient_exchange_by_interval"] = Value::Null,
+            4 => {
+                let extra = reservoir["ambient_exchange_by_interval"][0].clone();
+                reservoir["ambient_exchange_by_interval"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(extra);
+            }
+            5 => reservoir["ambient_exchange_by_interval"][0]["source"]["note"] = json!(""),
+            6 => reservoir["ambient_exchange_by_interval"][0]["allow_estimates"] = json!(false),
+            7 => reservoir["ambient_exchange_by_interval"][0]["ambient_temperature_c"] = json!(61.),
+            _ => reservoir["ambient_exchange_by_interval"][0]["conductance_kg_pa_s"] = json!(2e-11),
+        }
+        h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+        d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "scheduled source {case}"
+        );
+    }
+    for case in 0..7 {
+        let (a, d, s, mut m) = scheduled_ambient_reservoir_case();
+        let h = &mut m["transient_surface"]["result"];
+        for path in [
+            "/surface_water/vapor_reservoir",
+            "/trace/0/surface_water/vapor_reservoir",
+        ] {
+            let gas = h.pointer_mut(path).unwrap();
+            match case {
+                0 => gas["schema"] = json!("ftx-textile-vapor-reservoir-result/1"),
+                1 => gas["ambient_exchange"]["intervals"] = json!([]),
+                2 => gas["ambient_exchange"]["intervals"][0]["interval"] = json!(1),
+                3 => gas["ambient_exchange"]["intervals"][0]["elapsed_seconds"] = json!(0.5),
+                4 => {
+                    gas["ambient_exchange"]["intervals"][0]["incoming_vapor_enthalpy_j"] = json!(0.)
+                }
+                5 => {
+                    gas["ambient_exchange"]["intervals"][0]["inward_pressure_time_pa_s"] = json!(0.)
+                }
+                _ => gas["ambient_exchange"]["incoming_vapor_mass_kg"] = json!(0.),
+            }
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_err(),
+            "scheduled receipt {case}"
+        );
+    }
+}
+
+#[test]
+fn finite_vapor_scheduled_ambient_checks_each_boundary_before_summing_enthalpy() {
+    let (_, _, _, m) = scheduled_ambient_reservoir_case();
+    let mut inputs = m["transient_surface"]["result"]["request"]["surface_water"]
+        ["vapor_reservoir"]["ambient_exchange_by_interval"].clone();
+    let mut second = inputs[0].clone();
+    second["ambient_vapor_pressure_pa"] = json!(500.);
+    second["ambient_temperature_c"] = json!(10.);
+    second["conductance_kg_pa_s"] = json!(2e-11);
+    inputs.as_array_mut().unwrap().push(second);
+    let motion = json!({"keyframes":[{"time_s":0.25},{"time_s":1.}],"duration_s":1.});
+    let new = || {
+        AmbientSchedule::new(&inputs, &motion, [0., 5000.], 4200., 2500000., 0., 2668000.).unwrap()
+    };
+    let receipt = |elapsed: [f64; 2]| {
+        let mut rows = Vec::new();
+        let mut total = serde_json::Map::new();
+        for (index, ((seconds, pressure), input)) in elapsed
+            .into_iter()
+            .zip([1000., 1500.])
+            .zip(inputs.as_array().unwrap())
+            .enumerate()
+        {
+            let ambient = input["ambient_vapor_pressure_pa"].as_f64().unwrap();
+            let conductance = input["conductance_kg_pa_s"].as_f64().unwrap();
+            let inward = (ambient - pressure).max(0.) * seconds;
+            let outward = (pressure - ambient).max(0.) * seconds;
+            let incoming = conductance * inward;
+            let outgoing = conductance * outward;
+            let incoming_j =
+                incoming * (2500000. + 4200. * input["ambient_temperature_c"].as_f64().unwrap());
+            let outgoing_j = outgoing * 2668000.;
+            let mut row = json!({"incoming_vapor_mass_kg":incoming,"outgoing_vapor_mass_kg":outgoing,
+                "net_vapor_received_kg":incoming-outgoing,"incoming_vapor_enthalpy_j":incoming_j,
+                "outgoing_vapor_enthalpy_j":outgoing_j,"net_vapor_enthalpy_received_j":incoming_j-outgoing_j,
+                "reservoir_pressure_time_pa_s":pressure*seconds,"inward_pressure_time_pa_s":inward,
+                "outward_pressure_time_pa_s":outward});
+            for (key, value) in row.as_object().unwrap() {
+                let before = total.get(key).and_then(Value::as_f64).unwrap_or(0.);
+                total.insert(key.clone(), json!(before + value.as_f64().unwrap()));
+            }
+            row["schema"] = json!("ftx-textile-vapor-exchange-result/1");
+            row["interval"] = json!(index);
+            row["elapsed_seconds"] = json!(seconds);
+            rows.push(row);
+        }
+        total.insert(
+            "schema".into(),
+            json!("ftx-textile-vapor-exchange-result/2"),
+        );
+        total.insert("intervals".into(), json!(rows));
+        Value::Object(total)
+    };
+    let mut schedule = new();
+    schedule.admit(&receipt([0.25, 0.]), 0.25, 1).unwrap();
+    let final_receipt = receipt([0.25, 0.75]);
+    let [incoming, outgoing, net_j] = schedule.admit(&final_receipt, 1., 2).unwrap();
+    assert!(incoming > 0. && outgoing > 0.);
+    assert!(near(net_j, incoming * 2752000. - outgoing * 2668000., 1.));
+    // The final ambient temperature cannot revalue earlier inflow.
+    let mut forged = final_receipt.clone();
+    forged["incoming_vapor_enthalpy_j"] = json!(incoming * 2542000.);
+    assert!(new().admit(&forged, 1., 2).is_err());
+    // Balanced aggregates cannot conceal work performed before its interval starts.
+    assert!(new().admit(&final_receipt, 0.25, 2).is_err());
+    // Exchanging interval identities preserves every aggregate but changes the source law.
+    let mut swapped = final_receipt;
+    swapped["intervals"].as_array_mut().unwrap().swap(0, 1);
+    swapped["intervals"][0]["interval"] = json!(0);
+    swapped["intervals"][1]["interval"] = json!(1);
+    assert!(new().admit(&swapped, 1., 2).is_err());
+}
+
 #[test]
 fn finite_vapor_ambient_exchange_admission_checks_sources_integrals_and_enthalpy() {
     let (a, d, s, m) = ambient_reservoir_case();
@@ -3942,4 +4105,106 @@ fn wrong_incomplete_or_unqualified_delivery_never_enters_a_comparison() {
             "fault {fault}"
         );
     }
+}
+
+#[test]
+fn scheduled_ambient_cancellation_preserves_the_checked_aggregate_enthalpy() {
+    let (_, _, _, material) = scheduled_ambient_reservoir_case();
+    let exchange = &material["transient_surface"]["result"]["request"]["surface_water"]["vapor_reservoir"]
+        ["ambient_exchange_by_interval"][0];
+    let fields = [
+        "incoming_vapor_mass_kg",
+        "outgoing_vapor_mass_kg",
+        "net_vapor_received_kg",
+        "incoming_vapor_enthalpy_j",
+        "outgoing_vapor_enthalpy_j",
+        "net_vapor_enthalpy_received_j",
+        "reservoir_pressure_time_pa_s",
+        "inward_pressure_time_pa_s",
+        "outward_pressure_time_pa_s",
+    ];
+    let capacity = 1e-5_f64;
+    let conductance = 1e-5_f64;
+    let enthalpy = 30000.;
+    let initial_mass = capacity * 1000.;
+    let mut mass = initial_mass;
+    let mut totals = [0.; 9];
+    let mut boundaries = Vec::new();
+    let mut rows = Vec::new();
+    // Four independent one-second backward-Euler steps return this dry chamber to its
+    // initial stock. Positive and negative enthalpy transfers nearly cancel.
+    for (interval, ambient) in [1500., 650., 2450., 300.].into_iter().enumerate() {
+        let mut boundary = exchange.clone();
+        boundary["conductance_kg_pa_s"] = json!(conductance);
+        boundary["ambient_vapor_pressure_pa"] = json!(ambient);
+        boundary["ambient_temperature_c"] = json!(20.);
+        boundary["reservoir_pressure_domain_pa"] = json!([0., 10000.]);
+        boundaries.push(boundary);
+        let pressure = (mass + conductance * ambient) / (capacity + conductance);
+        let inward = (ambient - pressure).max(0.);
+        let outward = (pressure - ambient).max(0.);
+        let incoming = conductance * inward;
+        let outgoing = conductance * outward;
+        mass += incoming - outgoing;
+        let values = [
+            incoming,
+            outgoing,
+            incoming - outgoing,
+            incoming * enthalpy,
+            outgoing * enthalpy,
+            incoming * enthalpy - outgoing * enthalpy,
+            pressure,
+            inward,
+            outward,
+        ];
+        let mut row = json!({
+            "schema": "ftx-textile-vapor-exchange-result/1",
+            "interval": interval,
+            "elapsed_seconds": 1.
+        });
+        for (index, (field, value)) in fields.iter().zip(values).enumerate() {
+            row[*field] = json!(value);
+            totals[index] += value;
+        }
+        rows.push(row);
+    }
+    let regrouped_net_enthalpy = totals[5];
+    totals[2] = totals[0] - totals[1];
+    totals[4] = totals[1] * enthalpy;
+    totals[5] = totals[3] - totals[4];
+    assert!(near(mass, initial_mass, initial_mass));
+    assert_eq!(totals[5], 0.);
+    assert_ne!(regrouped_net_enthalpy, totals[5]);
+    let mut report = json!({
+        "schema": "ftx-textile-vapor-exchange-result/2",
+        "intervals": rows
+    });
+    for (field, value) in fields.iter().zip(totals) {
+        report[*field] = json!(value);
+    }
+    let motion = json!({
+        "keyframes": [
+            {"time_s": 1.},
+            {"time_s": 2.},
+            {"time_s": 3.},
+            {"time_s": 4.}
+        ],
+        "duration_s": 4.
+    });
+    let mut schedule = AmbientSchedule::new(
+        &json!(boundaries),
+        &motion,
+        [0., 10000.],
+        1000.,
+        10000.,
+        0.,
+        enthalpy,
+    )
+    .unwrap();
+    // Admission must preserve its checked aggregate for the gas/thermostat balance;
+    // summing signed child receipts again introduces a spurious net heat transfer.
+    assert_eq!(
+        schedule.admit(&report, 4., 4).unwrap(),
+        [totals[0], totals[1], totals[5]]
+    );
 }

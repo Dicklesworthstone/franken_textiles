@@ -14738,6 +14738,72 @@ test('finite shared vapor displays ambient exchange separately and withdraws ref
   p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
 });
 
+test('finite shared vapor scheduled ambient preserves source requests and displays interval boundaries and accepted transfers', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const boundaries=[[1000,40,1e-11,'<humid source>'],[0,10,2e-11,'<dry source>'],[1000,30,3e-11,'<later source>']]
+    .map(([pressure,temperature,conductance,reference])=>({schema:'ftx-textile-vapor-exchange/1',
+      ambient_vapor_pressure_pa:pressure,ambient_temperature_c:temperature,conductance_kg_pa_s:conductance,
+      source:{reference}}));
+  const policy={schema:'ftx-textile-surface-water/5',vapor_reservoir:{schema:'ftx-textile-vapor-reservoir/2',
+    ambient_exchange_by_interval:boundaries}};
+  const scenario={motion:{transient_surface:{surface_water:policy}}};
+  const input=' \n'+JSON.stringify(scenario)+'\r\n';
+  p.select('scenarioRequest',input);p.e.scenarioRequest.handlers.change();
+  // These receipts exercise transport and display, not a second vapor or energy calculation.
+  const intervals=[[0.5,0.0006,0,1600.8,0],[0.25,0,0.0001,0,258.4],[0,0,0,0,0]]
+    .map(([elapsed,incoming,outgoing,inJ,outJ],interval)=>({schema:'ftx-textile-vapor-exchange-result/1',interval,
+      elapsed_seconds:elapsed,incoming_vapor_mass_kg:incoming,outgoing_vapor_mass_kg:outgoing,
+      net_vapor_received_kg:incoming-outgoing,incoming_vapor_enthalpy_j:inJ,outgoing_vapor_enthalpy_j:outJ,
+      net_vapor_enthalpy_received_j:inJ-outJ}));
+  const report=scenarioReport();report.scenario.scenario=scenario;
+  const water={schema:'ftx-textile-surface-water-result/5',request:policy,
+    initial_liquid_kg:0,supplied_liquid_kg:0,condensed_liquid_kg:0.001,evaporated_liquid_kg:0,
+    remaining_liquid_kg:0.001,mass_balance_error_kg:0,dryout_events:0,
+    vapor_reservoir:{schema:'ftx-textile-vapor-reservoir-result/2',
+      initial_vapor_mass_kg:0.002,remaining_vapor_mass_kg:0.0015,net_vapor_received_kg:-0.001,
+      mass_balance_error_kg:0,initial_vapor_pressure_pa:800,vapor_pressure_pa:600,
+      vapor_enthalpy_change_j:-1292,net_vapor_enthalpy_received_j:-2584,
+      isothermal_heat_removed_j:50.4,enthalpy_balance_error_j:0,
+      ambient_exchange:{schema:'ftx-textile-vapor-exchange-result/2',intervals,
+        incoming_vapor_mass_kg:0.0006,outgoing_vapor_mass_kg:0.0001,net_vapor_received_kg:0.0005,
+        incoming_vapor_enthalpy_j:1600.8,outgoing_vapor_enthalpy_j:258.4,net_vapor_enthalpy_received_j:1342.4}}};
+  const evaluation=report.simulations.find(row=>row.key==='A').evaluation.result;
+  evaluation.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome({
+    duration_s:0.75,thermal_steps:3,trace:[{temperature_range_c:[20,21]}],surface_water:water})});
+  const raw=' '+JSON.stringify(report)+'\n';
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,input);
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),WebBody:class {free(){}},
+    material_scenario_study:(_body,_pattern,_study,request)=>{assert.equal(request,input);return raw;}}});
+  const response=await w.send(p.current().messages.at(-1));assert.equal(response.type,'result',response.message);
+  p.current().emit(response);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+  const rows=ending=>plain(table(ending).children.slice(2).map(row=>row.children.map(cell=>String(cell.textContent))));
+  assert.deepEqual(rows('ambient vapor boundaries by motion interval'),[
+    ['1','0.5','1000','40','1e-11','<humid source>'],
+    ['2','0.25','0','10','2e-11','<dry source>'],
+    ['3','0','1000','30','3e-11','<later source>']]);
+  assert.deepEqual(rows('ambient vapor exchange by motion interval'),[
+    ['1','0.0006','0','0.0006','1600.8','0','1600.8'],
+    ['2','0','0.0001','-0.0001','0','258.4','-258.4'],
+    ['3','0','0','0','0','0','0']]);
+  assert.match(visibleText(s),/Vapor inventory and textile temperatures continue across boundary changes/);
+  assert.match(visibleText(s),/unvisited intervals retain zero accepted duration and transfer/);
+  const download=descendants(s).find(n=>n.download==='material-scenario-study.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  const original=descendants(s).find(n=>n.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(original.href).text(),input);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  await p.e.scenario.onclick();const obsolete=p.current(),request=obsolete.messages.at(-1).request;
+  p.e.scenarioRequest.handlers.change();assert.equal(obsolete.dead,true);assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  obsolete.emit({type:'result',request,result:report,files:[{name:'stale.json',text:raw}]});
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  p.ready();await p.e.scenario.onclick();evaluation.motion=refused('scheduled ambient interval lost its source qualification');p.emit(report);
+  assert.equal(table('ambient vapor boundaries by motion interval'),undefined);
+  assert.equal(table('ambient vapor exchange by motion interval'),undefined);
+  assert.match(visibleText(s),/scheduled ambient interval lost its source qualification/);
+});
+
 test('finite shared vapor displays humidity feedback and fixed-temperature heat with optional drainage', async () => {
   const p=await pageModule();await p.load();scenarioInputs(p);
   const report=scenarioReport();
@@ -17209,6 +17275,37 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
         message.type==='progress'&&message.text==='qualified: motion endpoint 2/2'),'A completed first interval cannot publish a partial coupled trajectory');
     }
     t.diagnostic('Actual captured single/matrix and guided single/frozen named paired-source reports match native. Ret-only alternatives change cooling, evaporation, recoil and actual motion; same-ID stale sources refuse the whole motion while cutting and steady heat survive. Synthetic software evidence only. Replay: '+work);
+  });
+
+test('compiled WASM scheduled ambient vapor replays native and named scenario decisions',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_SCHEDULED_AMBIENT_VAPOR_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx}),dir=path.resolve(process.env.FTX_SCHEDULED_AMBIENT_VAPOR_REPLAY);
+    const read=name=>fs.readFileSync(path.join(dir,name),'utf8'),bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
+    const previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
+    try {
+      for(const name of ['single','matrix']) {
+        const scenarioRequest=read(`${name}-scenario.json`);
+        const response=await w.send({type:'scenario',request:231,pattern:read('pattern.json'),
+          studyRequest:read('study.json'),scenarioRequest,measurements:read('body-input.json'),
+          bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(response.type,'result',response.message);
+        assert.deepEqual(response.result,JSON.parse(read(`${name}-report.json`)));
+        assert.equal(response.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+        for(const report of name==='single'?[response.result]:response.result.cases) {
+          assert.deepEqual(report.comparison.frontier,['qualified']);
+          const heat=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result.transient_surface.result;
+          const gas=heat.surface_water.vapor_reservoir;
+          assert.equal(gas.schema,'ftx-textile-vapor-reservoir-result/2');
+          assert.equal(gas.ambient_exchange.schema,'ftx-textile-vapor-exchange-result/2');
+          assert.deepEqual(gas.ambient_exchange.intervals.map(interval=>interval.interval),[0,1,2]);
+          assert.ok(gas.ambient_exchange.intervals[1].outgoing_vapor_mass_kg>0);
+          assert.ok(gas.ambient_exchange.intervals[2].incoming_vapor_mass_kg>0);
+        }
+      }
+    } finally {globalThis.ftxProgress=previousProgress;}
   });
 
 test('compiled WASM textile-water objectives, moving mass, scheduled phase momentum and outgoing recoil replay native commands and named scenarios',

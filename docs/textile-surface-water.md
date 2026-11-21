@@ -850,8 +850,8 @@ Add this object inside `vapor_reservoir`. Its values are synthetic software exam
 Conductance `k` has units kg/(Pa·s) and must be nonnegative. Ambient pressure is nonnegative,
 ambient temperature is above absolute zero, and the qualified reservoir-pressure interval must
 cover the complete reservoir domain. Estimated exchange needs its own `allow_estimates` consent.
-These conditions remain constant across the history; changing ambient schedules and airflow models
-are outside this closure.
+These conditions remain constant across the history in reservoir version 1. Version 2 below
+selects a separately qualified boundary per motion interval. Neither version infers an airflow model.
 
 At each trial pressure `p`, the ambient transfer is `k * (p_ambient - p) * accepted_seconds`.
 It enters the same implicit pressure and earliest-dryout solve as textile evaporation and
@@ -883,6 +883,58 @@ include both owners. Comparison admission independently checks the source, condu
 integrals, every retained interval's pressure-domain bounds, both phase enthalpies and the complete
 conservation balances. Balanced but unsourced extra water is refused. The workbench displays textile
 and ambient exchange separately and retains the original source policy and complete replay report.
+
+### Changing ambient conditions during motion
+
+Use `vapor_reservoir.schema: "ftx-textile-vapor-reservoir/2"` and replace its
+`ambient_exchange` field with `ambient_exchange_by_interval`. The latter is an ordered array of
+complete `ftx-textile-vapor-exchange/1` records, each with the fields and independent evidence shown
+above. Its length must equal the number of mechanical keyframes. Entry zero applies from time zero
+to the first keyframe; each following entry applies from the preceding keyframe to its own endpoint.
+There is no interpolation, implicit repeat, missing-interval default or separate ambient clock.
+The enclosing `surface_water` schema remains version 5.
+
+For example, three intervals may declare a warm humid boundary, a cooler dry boundary, then a
+closed boundary. Supply each interval's actual qualified pressure, temperature and conductance;
+the last interval explicitly uses zero conductance. All three records still need their own valid
+source, pressure-domain qualification and estimate consent. Version 2 requires the array and
+forbids the constant `ambient_exchange` field. Version 1 does not accept a schedule. Null, empty,
+short, extra or mixed schedules refuse before advancing any physical state.
+
+The reservoir's temperature, capacitance, pressure domain and accumulated inventory remain those
+of the single original storage owner. Only the outside boundary changes. Every pressure trial
+uses the enclosing motion interval's boundary and the same accepted dryout duration as the textile.
+Cloth heat, retained liquid and vapor are carried across interval boundaries; changing the ambient
+conditions does not restart the garment or replenish the reservoir. Failed probes and failed heat
+steps commit no boundary transfer. Existing whole-motion rollback also restores the scheduled ledgers.
+
+Each reservoir trace sample and final receipt uses `ftx-textile-vapor-reservoir-result/2`. Its
+`ambient_exchange` object uses `ftx-textile-vapor-exchange-result/2`, retaining the nine aggregate
+fields above and adding `intervals`. Every interval entry has the version-1 exchange receipt fields,
+a zero-based `interval` index and `elapsed_seconds` for its accepted physical duration. Future
+intervals are retained with zero duration and zero transfers. Completed intervals retain their own
+totals while later boundaries act on the same reservoir.
+
+Incoming enthalpy is computed separately for each interval before summation:
+
+`sum_i incoming_mass_i * (L + cp_liquid * (ambient_temperature_i - reference_temperature))`.
+
+Using the last temperature to value all prior inflow would change the energy already delivered.
+Outgoing vapor always carries the fixed reservoir temperature's effective enthalpy. Signed inflow,
+outflow and thermostat heat remain separate from the textile's latent and sensible heat ledgers.
+
+Material/design comparison admission checks each original boundary, reconstructs each elapsed
+interval from the motion timeline, verifies its conductance against accepted pressure integrals,
+and reconciles every aggregate with the interval receipts before using the reservoir outcomes.
+Changing the boundary schedule changes the comparison protocol. Independently qualified material
+alternatives may retain different evidence for the same operating conditions, but cannot change
+those conditions while claiming they are the same case. Native and portable scenario requests
+share this path; the workbench displays interval conditions and transfer receipts alongside totals.
+
+This is a piecewise-constant, source-qualified boundary extension of the existing isothermal
+inventory model. It does not infer ventilation, sorption, varying gas heat capacity or an ambient
+weather history from a garment, and numerical conservation does not establish measured textile
+behavior or physical garment fit.
 
 ### Finite-reservoir comparison metrics
 
