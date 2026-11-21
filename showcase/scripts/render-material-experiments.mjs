@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
 
 const base = process.argv[2] || "http://localhost:3000";
 const dest = path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/", import.meta.url)));
@@ -44,6 +44,7 @@ try {
     });
     const encoder=spawn("ffmpeg",filmArgs(path.join(dest,`rig-${kind}.mp4`)),{stdio:["pipe","ignore","inherit"]});
     const done=once(encoder,"close");encoder.stdin.on("error",()=>{});
+    const screenshot=await frameCapture(page);
     try {
       for(let k=0;k<frames;k++){
         const t=k/(frames-1),cut=Math.min(2,Math.floor(t*3));
@@ -59,7 +60,7 @@ try {
           const value=kind==="cylinder"?document.querySelector(".rig-values dd").textContent:[...document.querySelectorAll(".rig-values tbody tr")].find(row=>row.querySelector("th").textContent===cut).querySelector("td").textContent;
           document.querySelector("#film-reading span").textContent=kind==="cylinder"?time+"   /   UPPER GRIP  "+value:time+" EXTENSION   /   "+cut.toUpperCase()+"  "+value;
         },kind);
-        const frame=await page.screenshot({type:"jpeg",quality:89});
+        const frame=await screenshot(93);
         await new Promise((resolve,reject)=>encoder.stdin.write(frame,error=>error?reject(error):resolve()));
       }
     } finally {

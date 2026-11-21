@@ -12,6 +12,18 @@ export async function enableFilmResolution(page) {
   await page.addInitScript(() => { window.__ftxFilmCapture = true; });
 }
 
+// Camera controls already synchronize the scene before each exposure. Capture its
+// backing surface directly, without waiting for Playwright's element stability checks.
+export async function frameCapture(page) {
+  const session = await page.context().newCDPSession(page);
+  return async (quality = 94) => {
+    const { data } = await session.send("Page.captureScreenshot", {
+      format: "jpeg", quality, fromSurface: true, captureBeyondViewport: false, optimizeForSpeed: true,
+    });
+    return Buffer.from(data, "base64");
+  };
+}
+
 export const fitUhd = `scale=${filmWidth}:${filmHeight}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${filmWidth}:${filmHeight}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
 
 export const encodeUhd = [

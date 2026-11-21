@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
 
 const base=new URL(process.argv[2] || "http://localhost:3000");
 const dest=path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/",import.meta.url)));
@@ -59,6 +59,7 @@ try{
     console.log("Rendered the film poster and clean portrait in "+dest);
   } else {
   await page.setViewportSize({width:960,height:540});
+  const screenshot = await frameCapture(page);
   await page.evaluate(()=>{
     const plate=document.createElement("aside");plate.id="hussar-film-plate";
     plate.style.cssText="position:fixed;inset:auto 3.6% 3.8%;z-index:100;pointer-events:none;color:#f5efd9;display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid #d8c89d80;padding:8px 0 0;text-shadow:0 1px 4px #23332b;font:500 12px ui-monospace,monospace;letter-spacing:1.4px";
@@ -85,7 +86,7 @@ try{
       for(let i=first;i<last;i++){
         const t=ease(i/(shotLength-1));const [a,y,span]=shot.start.map((v,k)=>v+(shot.end[k]-v)*t);
         await pose(a,y,span);
-        const bytes=await page.screenshot({type:"jpeg",quality:92});
+        const bytes=await screenshot(94);
         await new Promise((resolve,reject)=>encoder.stdin.write(bytes,error=>error?reject(error):resolve()));
       }
     }

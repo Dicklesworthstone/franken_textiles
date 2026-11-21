@@ -4,7 +4,7 @@ import {once} from "node:events";
 import {mkdir,writeFile} from "node:fs/promises";
 import {resolve} from "node:path";
 import {chromium} from "playwright-core";
-import {captureOptions,enableFilmResolution,filmArgs,fps} from "./film-capture.mjs";
+import {captureOptions,enableFilmResolution,filmArgs,fps,frameCapture} from "./film-capture.mjs";
 
 const out=resolve(process.argv[2]);
 await mkdir(out);
@@ -41,6 +41,7 @@ try {
     slate.innerHTML="<small>FrankenTextiles / Studies</small><h2></h2><p></p><label></label><div class='ts-inset'></div>";
     document.querySelector(".ts-stage").append(slate);
   });
+  const screenshot=await frameCapture(page);
   for(const {id,tab,title,cuts} of selected){
     await page.getByRole("button",{name:tab,exact:true}).evaluate(b=>b.click());
     const isSlice=tab==="Cross-section";
@@ -75,7 +76,7 @@ try {
           }
           window.ftxTrouserCamera(tab==="Posture"?1.25+.25*progress:.42+.56*Math.sin(progress*Math.PI));
         },{tab,title,button,progress,height});
-        const frame=await page.screenshot({type:"jpeg",quality:92});
+        const frame=await screenshot();
         if(i===Math.round(1.75*fps))await writeFile(resolve(out,id+".jpg"),frame,{flag:"wx"});
         if(!encoder.stdin.write(frame))await once(encoder.stdin,"drain");
       }

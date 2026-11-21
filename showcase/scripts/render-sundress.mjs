@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
-import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
 
 const [base="http://localhost:3000",output="public/media",art]=process.argv.slice(2);
 await mkdir(output,{recursive:true});
@@ -39,6 +39,7 @@ try {
     document.querySelector(".sd-stage").appendChild(text);
   });
   await page.evaluate(()=>document.fonts.ready);
+  const screenshot=await frameCapture(page);
   async function expose(t){
     await page.evaluate(t=>{
       const phase=Math.sin(Math.PI*t)**2, reach=Math.sin(Math.PI*t*1.5)**2*Math.sin(Math.PI*t)**2;
@@ -46,7 +47,7 @@ try {
       const v=window.ftxDressFrame(form,.42*Math.cos(2*Math.PI*t)-.12,1.03+.33*phase,89+21*phase);
       const values=[v.height,v.weight,94-v.bust,78-v.waist];document.querySelectorAll(".sd-film dd").forEach((d,i)=>{d.textContent=(i>=2&&values[i]>0?"+":"")+values[i].toFixed(1)+(i===1?" kg":" cm");});
     },t);
-    return page.screenshot({type:"jpeg",quality:94,animations:"disabled"});
+    return screenshot();
   }
   const poster=await expose(.13);
   await writeFile(path.join(output,"wardrobe-sundress.jpg"),poster,{flag:"wx"});

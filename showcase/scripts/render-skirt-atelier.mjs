@@ -5,7 +5,7 @@ import {mkdir,writeFile} from "node:fs/promises";
 import {resolve} from "node:path";
 import {chromium} from "playwright-core";
 import sharp from "sharp";
-import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
 
 const out=resolve(process.argv[2]);await mkdir(out);
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||chromium.executablePath(),
@@ -50,6 +50,7 @@ try{
   await page.locator(".sa-intro").evaluate(el=>{el.style.visibility="";});
   const encoder=spawn("ffmpeg",filmArgs(resolve(out,"skirt-atelier.mp4")),{stdio:["pipe","ignore","inherit"]});
   const finished=once(encoder,"close");
+  const screenshot=await frameCapture(page);
   try{for(const cut of ["column","flare"]){
     await page.getByRole("button",{name:cut==="flare"?"Flared":"Column",exact:true,includeHidden:true}).evaluate(b=>b.click());
     await page.locator('canvas[data-run="'+cut+'-680"]').waitFor();
@@ -66,7 +67,7 @@ try{
       },pct);
       await page.waitForFunction(p=>document.querySelector(".sa-canvas canvas").dataset.step===String(p),pct);
       await page.evaluate(a=>window.ftxSkirtCamera(a),.20+.94*i/(shotFrames-1));
-      const frame=await room.screenshot({type:"jpeg",quality:91});
+      const frame=await screenshot();
       if(cut==="flare"&&i===Math.round(45/16*fps))await writeFile(resolve(out,"skirt-atelier.jpg"),frame,{flag:"wx"});
       if(!encoder.stdin.write(frame))await once(encoder.stdin,"drain");
     }

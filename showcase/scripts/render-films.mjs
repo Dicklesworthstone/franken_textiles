@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
 
 const base = new URL(process.argv[2] || "http://localhost:3000");
 const target = path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/", import.meta.url)));
@@ -73,6 +73,7 @@ async function hero(page) {
 
 // Hold the laid-out pattern briefly, retain the native frame order, then orbit the sewn result.
 async function encode(page, study) {
+  const screenshot = await frameCapture(page);
   await page.evaluate(async ({ id, title }) => {
     const garment = id === "trousers" ? id : "bolero";
     const response = await fetch("/exhibits/" + garment + ".json");
@@ -109,7 +110,7 @@ async function encode(page, study) {
       const orbit = 1.14 * ease(unit((time - 0.64) / 0.36));
       await draw(page, progress, study.angle + orbit);
       await page.evaluate(progress => window.ftxFilmLabel(progress), progress);
-      const bytes = await page.screenshot({ type: "jpeg", quality: 94 });
+      const bytes = await screenshot();
       await new Promise((resolve, reject) => {
         ffmpeg.stdin.write(bytes, error => error ? reject(error) : resolve());
       });

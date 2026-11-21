@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright-core";
 import sharp from "sharp";
-import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
 
 const destination=resolve(process.argv[2]);
 await mkdir(destination);
@@ -37,6 +37,7 @@ try {
   const encoder=spawn("ffmpeg",filmArgs(resolve(destination,"drape-room.mp4")),
     {stdio:["pipe","ignore","inherit"]});
   const finished=once(encoder,"close");
+  const screenshot=await frameCapture(page);
   try {
     const frames=8*fps, poseChange=3*fps, contactChange=Math.round(5.6*fps);
     for(let f=0;f<frames;f++){
@@ -50,7 +51,7 @@ try {
         document.querySelector(".film-slate span").textContent=contact?"Peak contact force "+readings[2].textContent:"Mean chest gap "+readings[1].textContent;
         window.ftxPoseCamera(.24+.49*Math.sin(progress*Math.PI),.17,.36,.067);
       },{angle,contact,progress:f/(frames-1)});
-      const image=await stage.screenshot({type:"jpeg",quality:92});
+      const image=await screenshot();
       if(f===Math.round(1.6*fps))await writeFile(resolve(destination,"drape-room.jpg"),image,{flag:"wx"});
       if(!encoder.stdin.write(image))await once(encoder.stdin,"drain");
     }
