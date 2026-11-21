@@ -79,7 +79,7 @@ const USAGE: &str = "usage:
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
-              [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--json]
+              [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
@@ -1190,13 +1190,19 @@ fn cmd_drape_bound(
             json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
         );
         let mut b = description;
-        b.insert(
-            "pose".into(),
-            json!(format!(
+        let pose_text = if hands.is_wrist() {
+            format!(
                 "drape: arms at {}° and straight, hands and feet left out of contact",
                 body.arm_deg
-            )),
-        );
+            )
+        } else {
+            format!(
+                "drape: arms at {}° and straight, hand collider {} (outer fingers and feet left out of contact)",
+                body.arm_deg,
+                hands.as_str()
+            )
+        };
+        b.insert("pose".into(), json!(pose_text));
         if !pose.legs.is_standing() {
             b.insert("legs".into(), json!(pose.legs));
         }
@@ -1284,6 +1290,9 @@ fn cmd_drape_bound(
     } else {
         "self-contact: not simulated\n"
     });
+    if !hands.is_wrist() {
+        text.push_str(&format!("hand collider: {}\n", hands.as_str()));
+    }
     if let Some(equilibrium) = report.get("static_equilibrium") {
         if equilibrium["status"] == "available" {
             text.push_str(&format!(
@@ -1322,6 +1331,9 @@ fn cmd_drape_bound(
     }
     if let Some(equilibrium) = report.get("static_equilibrium") {
         result["static_equilibrium"] = equilibrium.clone();
+    }
+    if let Some(hand_collider) = report.get("hand_collider") {
+        result["hand_collider"] = hand_collider.clone();
     }
     if let Some(composition) = report.get("outfit") {
         result["outfit"] = composition.clone();
@@ -1952,13 +1964,13 @@ mod tests {
             assert_eq!(expected.as_str(), word);
         }
         // Any other word refuses before a pattern or a body is read, on each command that takes it.
-        for command in ["drape", "place"] {
+        for command in ["drape", "place", "qualify"] {
             let args = parse(&[command, "no-pattern.json", "--hands", "mitten"].map(String::from))
                 .unwrap();
-            let refusal = if command == "drape" {
-                cmd_drape(&args).unwrap_err()
-            } else {
-                place::run(&args).unwrap_err()
+            let refusal = match command {
+                "drape" => cmd_drape(&args).unwrap_err(),
+                "place" => place::run(&args).unwrap_err(),
+                _ => round::cmd_qualify(&args).unwrap_err(),
             };
             assert_ne!(refusal.code, RefusalCode::Io, "{command}");
             assert!(
@@ -2064,18 +2076,6 @@ mod tests {
     }
 
     #[test]
-    fn skinning_option_parses_default_explicit_and_refuses_unknown() {
-        let default_args = parse(&["body"].map(String::from)).unwrap();
-        assert_eq!(
-            parse_skinning(&default_args).unwrap(),
-            SkinningMode::LinearBlend
-        );
-        let lbs_args = parse(&["body", "--skinning", "lbs"].map(String::from)).unwrap();
-        assert_eq!(
-            parse_skinning(&lbs_args).unwrap(),
-            SkinningMode::LinearBlend
-        );
-    #[test]
     fn a_drape_checks_the_size_of_its_refusal_pictures_before_reading_anything() {
         // The pattern file does not exist, so a refusal about the size shows it was checked first.
         for (res, code) in [
@@ -2095,6 +2095,18 @@ mod tests {
         assert!(!refusal.message.contains("--res"), "{}", refusal.message);
     }
 
+    #[test]
+    fn skinning_option_parses_default_explicit_and_refuses_unknown() {
+        let default_args = parse(&["body"].map(String::from)).unwrap();
+        assert_eq!(
+            parse_skinning(&default_args).unwrap(),
+            SkinningMode::LinearBlend
+        );
+        let lbs_args = parse(&["body", "--skinning", "lbs"].map(String::from)).unwrap();
+        assert_eq!(
+            parse_skinning(&lbs_args).unwrap(),
+            SkinningMode::LinearBlend
+        );
         let dqs_args = parse(&["body", "--skinning", "dqs"].map(String::from)).unwrap();
         assert_eq!(
             parse_skinning(&dqs_args).unwrap(),

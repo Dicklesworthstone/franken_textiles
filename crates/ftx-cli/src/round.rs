@@ -867,7 +867,7 @@ fn reserve_ws_qualification(ws: &Path) -> Result<PathBuf, Refusal> {
 /// `ftx qualify`: run the three known-answer chest bands (`-20`, `0`, `+20` mm ease) at zero
 /// gravity (`--sew 70 --drape 0`) and write `qualify.json` (`fabric-qualify/1`, spec 04 §7.1).
 pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    use ftx_body::{BodyFrames, Pose, clothing_skin, pose_deltas, skin_mesh};
+    use ftx_body::{BodyFrames, Pose, clothing_skin_with_hands, pose_deltas, skin_mesh};
     use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
     use ftx_drape::qualify::{
         DEFAULT_BAND_HEIGHT_MM, QUALIFY_DRAPE_STEPS, QUALIFY_EASES, QUALIFY_SEW_STEPS,
@@ -890,6 +890,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             "legs",
             "leg-fraction",
             "skinning",
+            "hands",
         ],
     )?;
     if args.positional.len() > 2 || (args.options.contains_key("ws") && args.positional.len() > 1) {
@@ -904,6 +905,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         .map(PathBuf::from);
     let pose = super::drape_pose(args)?;
     let skinning = super::parse_skinning(args)?;
+    let hands = super::parse_hands(args)?;
     let fabric_override = super::fabric::load(args)?;
 
     let (data, meas_bytes, mut pat, out, _ws_lock) = if let Some(ws) = ws_arg {
@@ -960,10 +962,10 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         ..
     } = super::body_source::prepare(args, Some(&data))?;
     let rest = model.rest(&params)?;
-    let rest_skin = clothing_skin(&model, &rest.vertices)?;
+    let rest_skin = clothing_skin_with_hands(&model, &rest.vertices, hands)?;
     let posed =
         model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
-    let skin = clothing_skin(&model, &posed.vertices)?;
+    let skin = clothing_skin_with_hands(&model, &posed.vertices, hands)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
     let torso = frames.torso.origin / 1000.0;
@@ -1029,6 +1031,9 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             run.report["body_contact_proxy"] =
                 skin.contact_proxy_basis_with_rest_and_skinning(&rest_skin, skinning);
             let mut report = run.report.clone();
+            if !hands.is_wrist() {
+                report["hand_collider"] = json!(hands.as_str());
+            }
             if let Some(selected) = &fabric_override {
                 report["fabric_override"] = selected.receipt().clone();
             }
@@ -1040,13 +1045,19 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
                     json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
                 );
                 let mut b = description.clone();
-                b.insert(
-                    "pose".into(),
-                    json!(format!(
+                let pose_text = if hands.is_wrist() {
+                    format!(
                         "drape: arms at {}° and straight, hands and feet left out of contact",
                         body.arm_deg
-                    )),
-                );
+                    )
+                } else {
+                    format!(
+                        "drape: arms at {}° and straight, hand collider {} (outer fingers and feet left out of contact)",
+                        body.arm_deg,
+                        hands.as_str()
+                    )
+                };
+                b.insert("pose".into(), json!(pose_text));
                 if !pose.legs.is_standing() {
                     b.insert("legs".into(), json!(pose.legs));
                 }
@@ -1179,6 +1190,9 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     });
     if let Some(pm) = piece_materials {
         rec["piece_materials"] = json!(pm);
+    }
+    if !hands.is_wrist() {
+        rec["hand_collider"] = json!(hands.as_str());
     }
     write_json(&out.join("qualify.json"), &rec)?;
     // spec 04 §7.1's printout: a line per band, then the verdict
