@@ -1118,7 +1118,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cloth_crossings, deepest_mm, mean_strain, piece_slots, slot_colour};
+    use super::{
+        cloth_crossings, deepest_mm, mean_strain, piece_slots, slot_colour, start_condition,
+    };
     use ftx_core::Vec3;
 
     /// Width and height from a PNG's header.
