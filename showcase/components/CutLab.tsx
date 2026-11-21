@@ -72,6 +72,15 @@ function MarkerDrawing({ preview, selected, select }: { preview: Preview; select
 
 export default function CutLab({ draft }: { draft?: Draft }) {
   const [mode, setMode] = useState<"roll" | "remnant">("roll");
+  const [draftDownload, setDraftDownload] = useState<{ draft: Draft; url: string }>();
+  const draftPdf = draftDownload?.draft === draft ? draftDownload?.url : undefined;
+  useEffect(() => {
+    if (!draft) return;
+    const url = URL.createObjectURL(draft.pdf);
+    setDraftDownload({ draft, url });
+    return () => URL.revokeObjectURL(url);
+  }, [draft]);
+
   useEffect(() => {
     if (draft) {
       setMode("roll");
@@ -92,25 +101,18 @@ export default function CutLab({ draft }: { draft?: Draft }) {
         </button>
       </div>
       {mode === "remnant" ? (
-        <RemnantBoard />
+        <RemnantBoard draft={draft} draftPdf={draftPdf} />
       ) : (
-        <CuttingBoard key={draft?.pattern ?? "chart"} draft={draft} />
+        <CuttingBoard key={draft?.pattern ?? "chart"} draft={draft} draftPdf={draftPdf} />
       )}
     </div>
   );
 }
 
-function CuttingBoard({ draft }: { draft?: Draft }) {
+function CuttingBoard({ draft, draftPdf }: { draft?: Draft; draftPdf?: string }) {
   const [garment, setGarment] = useState(draft ? "custom" : garments[0][0]);
   const custom = garment === "custom" ? draft : undefined;
   const program = custom?.program ?? garment;
-  const [customPdf, setCustomPdf] = useState("");
-  useEffect(() => {
-    if (!draft) return;
-    const url = URL.createObjectURL(draft.pdf);
-    setCustomPdf(url);
-    return () => URL.revokeObjectURL(url);
-  }, [draft]);
   const [material, setMaterial] = useState(materials[1][0]);
   const [copies, setCopies] = useState(2);
   const [selected, select] = useState(0);
@@ -186,7 +188,7 @@ function CuttingBoard({ draft }: { draft?: Draft }) {
         <div><dt>Cloth used by pieces</dt><dd>{ready ? (current.yield*100).toFixed(1)+"%" : "—"}</dd></div>
       </dl>
       {ready && preview && <a className="cut-save" href={preview.download} download={`${custom ? "custom-" : ""}${program}-${Math.round(current.width)}mm-${copies}x-marker.svg`}>Download marker SVG <span aria-hidden="true">↓</span></a>}
-      {ready && (!custom || customPdf) && <a className="cut-save" href={custom ? customPdf : `/patterns/chart-${program}.pdf`}
+      {ready && (!custom || draftPdf) && <a className="cut-save" href={custom ? draftPdf : `/patterns/chart-${program}.pdf`}
         download={`${program}-A4.pdf`}>Full-size pattern PDF ↓</a>}
       <p className="cut-source">{ready && <a href={current.source} target="_blank" rel="noreferrer">Supplier width ↗</a>} Single-ply plan with a 4 mm cutting gap and 10 mm margins. SVG dimensions are full scale.</p>
     </div>

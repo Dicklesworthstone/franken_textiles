@@ -64,7 +64,7 @@ const draftedCache = new Map();
 
 function boundPattern(ftx, garment, material, suppliedPattern) {
   let pattern = suppliedPattern;
-  if (!pattern) {
+  if (pattern === undefined) {
     pattern = draftedCache.get(garment);
     if (!pattern) {
       const request = { body: { mode: "chart", stature_cm: 92 }, program: garment, style: {} };
@@ -78,6 +78,7 @@ function boundPattern(ftx, garment, material, suppliedPattern) {
       }
     }
   }
+  if (typeof pattern !== "string" || !pattern.trim()) throw new Error("The supplied pattern is empty or invalid.");
   const changes = { schema: "ftx-material-bindings/1", default: { id: material }, pieces: {} };
   const bound = JSON.parse(ftx.material_bind(pattern, JSON.stringify(changes)));
   if (!bound?.pattern_json) throw new Error("Material binding returned no pattern.");

@@ -58,29 +58,26 @@ test("remnant planner matches native ftx-materials stock-plan/stock-residual and
 
   // Verify native CLI parity against `ftx-materials stock-plan` & `stock-residual`.
   const dir = mkdtempSync(path.join(tmpdir(), "ftx-remnant-test-"));
-  const draftAndBind = (program) => {
+  const draftPattern = (program, stature_cm = 92, style = {}) => {
     const round = wasm.run(
-      JSON.stringify({ body: { mode: "chart", stature_cm: 92 }, program, style: {} }),
+      JSON.stringify({ body: { mode: "chart", stature_cm }, program, style }),
       "2026-10-12",
       "2026-10-12T00:00:00Z",
     );
-    let pat;
     try {
-      pat = new TextDecoder().decode(round.file("pattern.json"));
+      return new TextDecoder().decode(round.file("pattern.json"));
     } finally {
       round.free();
     }
-    return JSON.parse(
-      wasm.material_bind(
-        pat,
-        JSON.stringify({ schema: "ftx-material-bindings/1", default: { id: "dharma/cotton-muslin-3.5oz" }, pieces: {} }),
-      ),
-    ).pattern_json;
   };
+  const bindPattern = pattern => JSON.parse(wasm.material_bind(
+    pattern,
+    JSON.stringify({ schema: "ftx-material-bindings/1", default: { id: "dharma/cotton-muslin-3.5oz" }, pieces: {} }),
+  )).pattern_json;
   const boleroPath = path.join(dir, "bolero.json");
   const fezPath = path.join(dir, "fez.json");
-  writeFileSync(boleroPath, draftAndBind("zouave_bolero"), { flag: "wx" });
-  writeFileSync(fezPath, draftAndBind("fez"), { flag: "wx" });
+  writeFileSync(boleroPath, bindPattern(draftPattern("zouave_bolero")), { flag: "wx" });
+  writeFileSync(fezPath, bindPattern(draftPattern("fez")), { flag: "wx" });
   const runNative = (op, pattern, request) => {
     const result = runJson(ftxMaterialsBin, [op, pattern, request]);
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -124,9 +121,101 @@ test("remnant planner matches native ftx-materials stock-plan/stock-residual and
     assert.equal(residual2.stocks[0].occupied_mm.length, 5 + count);
   }
 
+  const suppliedJob1Pattern = draftPattern("fez", 104, { height_frac: 0.62 });
+  const supplied = planRemnant(wasm, { job1Garment: "fez", suppliedJob1Pattern });
+  assert.equal(supplied.job1.occupiedCount, 2);
+  assert.equal(supplied.job2?.placements.length, 2);
+  const customPath = path.join(dir, "custom-fez.json");
+  const sheetPath = path.join(dir, "supplied-job1.json");
+  writeFileSync(customPath, bindPattern(suppliedJob1Pattern), { flag: "wx" });
+  writeFileSync(sheetPath, JSON.stringify(buildSheetRequest(initialRemnant)), { flag: "wx" });
+  const nativeCustom = runNative("stock-plan", customPath, sheetPath);
+  assert.equal(nativeCustom.request_sha256, supplied.job1.requestSha256);
+  assert.deepEqual(nativeCustom.markers[0].placements.map(piece => piece.cut_mm), supplied.job1.placements.map(piece => piece.cut_mm));
+  assert.deepEqual(runNative("stock-residual", customPath, sheetPath), JSON.parse(supplied.job2RequestJson));
+  assert.throws(() => planRemnant(wasm, { suppliedJob1Pattern: "" }), /supplied pattern is empty/);
+
   // Starter JSON matches live WASM output.
   const starter = JSON.parse(readFileSync(new URL("../public/labs/remnant-starter.json", import.meta.url), "utf8"));
   assert.deepEqual(starter, res);
+});
+
+test("the drafting studio keeps the exact layout and A4 PDF when changing cutting modes", async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(),
+    args: ["--disable-dev-shm-usage"],
+  });
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      reducedMotion: "reduce",
+      userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
+    });
+    const pdfDigest = async link => {
+      await link.waitFor();
+      return link.evaluate(async a => {
+        const pdf = await (await fetch(a.href)).arrayBuffer();
+        if (new TextDecoder().decode(pdf.slice(0, 5)) !== "%PDF-") throw Error("The link did not serve an A4 PDF.");
+        return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", pdf)));
+      });
+    };
+    const starterRequests = [];
+    page.on("request", request => {
+      if (new URL(request.url()).pathname === "/labs/remnant-starter.json") starterRequests.push(request.url());
+    });
+
+    await page.goto(new URL("/sections/draft/", site).href, { waitUntil: "domcontentloaded" });
+    const drafting = page.locator("#studio-draft");
+    const remnant = page.locator(".remnant-lab");
+    await drafting.getByRole("button", { name: "Fez", exact: true }).click();
+
+    let previousCuts;
+    for (const height of [104, 120]) {
+      await drafting.getByRole("slider", { name: "Chart stature in centimetres" }).fill(String(height));
+      const expectedPdf = await pdfDigest(drafting.getByRole("link", { name: "A4 pattern PDF" }));
+      await drafting.getByRole("button", { name: "Plan this cut" }).click();
+      const selected = page.getByRole("combobox", { name: "Cutting pattern" }).locator("option:checked");
+      assert.match(await selected.innerText(), new RegExp(`Your draft.*Fez.*${height} cm`));
+      assert.deepEqual(await pdfDigest(page.getByRole("link", { name: "Full-size pattern PDF" })), expectedPdf);
+
+      await page.getByRole("button", { name: /Cut from remnant/ }).click();
+      const replay = remnant.getByRole("link", { name: "Download Job 2 request" });
+      await replay.waitFor({ timeout: 20000 });
+      assert.match(await remnant.innerText(), new RegExp(`Job 1 uses your draft.*Fez.*${height} cm`));
+      assert.equal(await remnant.locator(".remnant-occupied").count(), 2);
+      assert.equal(await remnant.locator(".remnant-new").count(), 2);
+      assert.deepEqual(await pdfDigest(remnant.getByRole("link", { name: "Your draft", exact: true })), expectedPdf);
+      const cuts = await replay.evaluate(async a => (await (await fetch(a.href)).json()).stocks[0].occupied_mm);
+      assert.equal(cuts.length, 2);
+      if (previousCuts) assert.notDeepEqual(cuts, previousCuts);
+      previousCuts = cuts;
+      await page.locator("#tab-draft").click();
+    }
+
+    await drafting.getByRole("button", { name: "Trousers", exact: true }).click();
+    await drafting.getByRole("slider", { name: "Chart stature in centimetres" }).fill("128");
+    await drafting.getByRole("slider", { name: "Leg fullness" }).fill("100");
+    const trouserPdf = await pdfDigest(drafting.getByRole("link", { name: "A4 pattern PDF" }));
+    await drafting.getByRole("button", { name: "Plan this cut" }).click();
+    await page.getByRole("button", { name: /Cut from remnant/ }).click();
+    await remnant.locator(".cut-progress").filter({ hasText: /no checked finite-stock placement/ }).waitFor();
+    assert.equal(await remnant.getByRole("link", { name: "Download Job 2 request" }).count(), 0);
+    assert.deepEqual(await pdfDigest(remnant.getByRole("link", { name: "Your draft", exact: true })), trouserPdf);
+
+    await remnant.getByRole("combobox", { name: "Sheet length" }).selectOption("muslin-sheet-03");
+    const trousersReplay = remnant.getByRole("link", { name: "Download Job 2 request" });
+    await trousersReplay.waitFor({ timeout: 20000 });
+    const stock = await trousersReplay.evaluate(async a => (await (await fetch(a.href)).json()).stocks[0]);
+    assert.equal(stock.id, "muslin-sheet-03");
+    assert.equal(Math.max(...stock.outline_mm.map(point => point[1])), 1400);
+    assert.equal(stock.occupied_mm.length, 7);
+    assert.equal(await remnant.locator(".remnant-new").count(), 2);
+    assert.deepEqual(await pdfDigest(remnant.getByRole("link", { name: "Your draft", exact: true })), trouserPdf);
+    assert.deepEqual(starterRequests, []);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  } finally {
+    await browser.close();
+  }
 });
 
 test("CutLab remnant mode renders real occupied polygons, handles refusal, and fits desktop and mobile", async () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { CutDraft } from "./DraftLab";
 
 type Vec2 = [number, number];
 type Placement = {
@@ -77,6 +78,12 @@ export type RemnantPlan = {
 
 type PresetId = "bolero_fez" | "bolero_fez_2x" | "bolero_bolero_refusal" | "bolero_bolero_large";
 
+const DRAFT_SHEETS = [
+  { sheetId: "muslin-sheet-01", sheetLengthMm: 720 },
+  { sheetId: "muslin-sheet-02", sheetLengthMm: 1100 },
+  { sheetId: "muslin-sheet-03", sheetLengthMm: 1400 },
+];
+
 const PRESETS: {
   id: PresetId;
   label: string;
@@ -93,8 +100,7 @@ const PRESETS: {
     job1Garment: "zouave_bolero",
     job2Garment: "fez",
     job2Copies: 1,
-    sheetId: "muslin-sheet-01",
-    sheetLengthMm: 720,
+    ...DRAFT_SHEETS[0],
   },
   {
     id: "bolero_fez_2x",
@@ -102,8 +108,7 @@ const PRESETS: {
     job1Garment: "zouave_bolero",
     job2Garment: "fez",
     job2Copies: 2,
-    sheetId: "muslin-sheet-01",
-    sheetLengthMm: 720,
+    ...DRAFT_SHEETS[0],
   },
   {
     id: "bolero_bolero_refusal",
@@ -111,8 +116,7 @@ const PRESETS: {
     job1Garment: "zouave_bolero",
     job2Garment: "zouave_bolero",
     job2Copies: 1,
-    sheetId: "muslin-sheet-01",
-    sheetLengthMm: 720,
+    ...DRAFT_SHEETS[0],
     isRefusal: true,
   },
   {
@@ -121,8 +125,7 @@ const PRESETS: {
     job1Garment: "zouave_bolero",
     job2Garment: "zouave_bolero",
     job2Copies: 1,
-    sheetId: "muslin-sheet-02",
-    sheetLengthMm: 1100,
+    ...DRAFT_SHEETS[1],
   },
 ];
 
@@ -283,10 +286,14 @@ function RemnantSvg({
   );
 }
 
-export default function RemnantBoard() {
+export default function RemnantBoard({ draft, draftPdf }: { draft?: CutDraft; draftPdf?: string }) {
   const [presetId, setPresetId] = useState<PresetId>("bolero_fez");
-  const preset = PRESETS.find(p => p.id === presetId) ?? PRESETS[0];
-  const [plan, setPlan] = useState<RemnantPlan | null>(null);
+  const [sheetId, setSheetId] = useState(DRAFT_SHEETS[0].sheetId);
+  const presets = draft ? PRESETS.filter(p => p.sheetId === DRAFT_SHEETS[0].sheetId) : PRESETS;
+  const preset = presets.find(p => p.id === presetId) ?? PRESETS[0];
+  const sheet = draft ? DRAFT_SHEETS.find(s => s.sheetId === sheetId) ?? DRAFT_SHEETS[0] : preset;
+  const [completed, setCompleted] = useState<{ plan: RemnantPlan; draft?: CutDraft }>();
+  const plan = completed && completed.draft === draft ? completed.plan : null;
   const [selected, setSelected] = useState("job2-0");
   const [loadError, setLoadError] = useState("");
   const [solverError, setSolverError] = useState("");
@@ -314,19 +321,19 @@ export default function RemnantBoard() {
 
     const accept = (result: RemnantPlan) => {
       if (controller.signal.aborted) return;
-      setPlan(result);
+      setCompleted({ plan: result, draft });
       setSelected(result.job2?.placements.length ? "job2-0" : "job1-0");
       setLoadError("");
       setSolverError("");
     };
 
-    if (!retry && presetId === "bolero_fez") {
+    if (!draft && !retry && presetId === "bolero_fez") {
       fetch("/labs/remnant-starter.json", { signal: controller.signal })
         .then(async res => {
           if (!res.ok) throw new Error("starter-missing");
           accept(await res.json());
         })
-        .catch(err => {
+        .catch(() => {
           if (controller.signal.aborted) return;
           // Fall back cleanly to live WASM worker if starter snapshot is absent.
           runWorker(id, controller.signal, preset, accept);
@@ -336,7 +343,7 @@ export default function RemnantBoard() {
     }
 
     return () => controller.abort();
-  }, [presetId, preset, retry]);
+  }, [draft, presetId, preset, sheet, retry]);
 
   function runWorker(
     id: number,
@@ -365,11 +372,12 @@ export default function RemnantBoard() {
       workerRef.current.postMessage({
         id,
         params: {
-          job1Garment: activePreset.job1Garment,
+          job1Garment: draft?.program ?? activePreset.job1Garment,
+          suppliedJob1Pattern: draft?.pattern,
           job2Garment: activePreset.job2Garment,
           job2Copies: activePreset.job2Copies,
-          sheetId: activePreset.sheetId,
-          sheetLengthMm: activePreset.sheetLengthMm,
+          sheetId: sheet.sheetId,
+          sheetLengthMm: sheet.sheetLengthMm,
         },
       });
     } catch (reason) {
@@ -380,12 +388,12 @@ export default function RemnantBoard() {
   }
 
   const ready =
-    Boolean(plan) &&
-    plan!.config.job1Garment === preset.job1Garment &&
-    plan!.config.job2Garment === preset.job2Garment &&
-    plan!.config.job2Copies === preset.job2Copies &&
-    plan!.config.sheetId === preset.sheetId &&
-    plan!.config.sheetLengthMm === preset.sheetLengthMm &&
+    plan !== null &&
+    plan.config.job1Garment === (draft?.program ?? preset.job1Garment) &&
+    plan.config.job2Garment === preset.job2Garment &&
+    plan.config.job2Copies === preset.job2Copies &&
+    plan.config.sheetId === sheet.sheetId &&
+    plan.config.sheetLengthMm === sheet.sheetLengthMm &&
     !loadError &&
     !solverError;
 
@@ -492,25 +500,33 @@ export default function RemnantBoard() {
 
       <div className="cut-controls remnant-controls">
         <h3>Cut a second garment from the real remnant</h3>
-        <p>
+        {draft ? <p>Job 1 uses your draft. <strong>{draft.label}</strong></p> : <p>
           Job 1 cuts a garment on an individually identified finite sheet and emits a frozen{" "}
           <code>residual_json</code> receipt carrying the exact stock ID and exterior cut polygons as{" "}
           <code>occupied_mm</code>. Job 2 plans strictly inside the surviving cloth — never cutting
           inside Job 1 or silently pulling a fresh roll.
-        </p>
+        </p>}
+
+        {draft && <label>Sheet length
+          <select value={sheet.sheetId} onChange={event => setSheetId(event.target.value)}>
+            {DRAFT_SHEETS.map(size => <option key={size.sheetId} value={size.sheetId}>{size.sheetLengthMm} mm</option>)}
+          </select>
+        </label>}
 
         <fieldset>
-          <legend>Two-job finite-stock scenario</legend>
+          <legend>{draft ? "Second garment" : "Two-job finite-stock scenario"}</legend>
           <div className="remnant-presets" role="group" aria-label="Remnant cutting scenarios">
-            {PRESETS.map(p => (
+            {presets.map(p => (
               <button
                 key={p.id}
                 type="button"
-                aria-pressed={presetId === p.id}
-                data-refusal={p.isRefusal ? "true" : undefined}
+                aria-pressed={preset.id === p.id}
+                data-refusal={!draft && p.isRefusal ? "true" : undefined}
                 onClick={() => setPresetId(p.id)}
               >
-                {p.label}
+                {draft
+                  ? `${p.job2Copies > 1 ? `${p.job2Copies}× ` : ""}${GARMENT_NAMES[p.job2Garment]}`
+                  : p.label}
               </button>
             ))}
           </div>
@@ -569,7 +585,7 @@ export default function RemnantBoard() {
         {ready && plan && (
           <div className="remnant-receipt">
             <div>
-              <strong>Job 1</strong> ({GARMENT_NAMES[plan.job1.garment] ?? plan.job1.garment}):{" "}
+              <strong>Job 1</strong> ({draft ? "Your draft" : GARMENT_NAMES[plan.job1.garment] ?? plan.job1.garment}):{" "}
               {plan.job1.occupiedCount} pieces locked ({plan.job1.externalCutAreaM2.toFixed(3)} m²)
             </div>
             <div>
@@ -627,8 +643,13 @@ export default function RemnantBoard() {
           10 mm boundary margin.{ready && plan && <> Search grid {plan.config.stepMm} mm.</>}
           <br />
           Full-size A4 patterns{" "}
-          <a href="/patterns/chart-zouave_bolero.pdf" download>Bolero</a>
-          {preset.job2Garment === "fez" && <>{" · "}<a href="/patterns/chart-fez.pdf" download>Fez</a></>}
+          {draft && draftPdf && (
+            <><a href={draftPdf} download={`${draft.program}-draft-A4.pdf`}>Your draft</a>{" · "}</>
+          )}
+          {(!draft || preset.job2Garment === "zouave_bolero") && (
+            <><a href="/patterns/chart-zouave_bolero.pdf" download>Bolero</a>{preset.job2Garment === "fez" && " · "}</>
+          )}
+          {preset.job2Garment === "fez" && <a href="/patterns/chart-fez.pdf" download>Fez</a>}
           {ready && plan && downloads?.plan === plan && (
             <>
               <br />
