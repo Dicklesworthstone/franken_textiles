@@ -43,9 +43,26 @@ pub fn exact_exp_weights(tau: f64, dt: f64) -> Result<(f64, f64), Refusal> {
         return Ok((1.0, 1.0));
     }
     let ratio = dt / tau;
+    if ratio == 0.0 {
+        return Ok((1.0, 1.0));
+    }
+    if !ratio.is_finite() {
+        return Ok((0.0, 0.0));
+    }
     let a = det::exp(-ratio);
     let b = -det::expm1(-ratio) / ratio;
     Ok((a, b))
+}
+
+#[inline]
+fn prony_basis(wt: f64) -> (f64, f64) {
+    if wt.abs() > 1e150 {
+        (1.0, 1.0 / wt)
+    } else {
+        let wt2 = wt * wt;
+        let den = 1.0 + wt2;
+        (wt2 / den, wt / den)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,10 +189,9 @@ impl ExactPronyModel {
         let mut ep = self.e_eq;
         let mut epp = 0.0;
         for &(e, tau) in &self.terms {
-            let wt = omega * tau;
-            let den = 1.0 + wt * wt;
-            ep += e * (wt * wt) / den;
-            epp += e * wt / den;
+            let (storage, loss) = prony_basis(omega * tau);
+            ep += e * storage;
+            epp += e * loss;
         }
         (ep, epp)
     }
@@ -422,10 +438,9 @@ pub fn lower_to_prony(
         rhs[i] = (fe - fz.e0) * weight;
         rhs[m_samples + i] = fi * weight;
         for (j, &tau) in taus.iter().enumerate() {
-            let wt = w * tau;
-            let den = 1.0 + wt * wt;
-            a[i * n_terms + j] = (wt * wt / den) * weight;
-            a[(m_samples + i) * n_terms + j] = (wt / den) * weight;
+            let (storage, loss) = prony_basis(w * tau);
+            a[i * n_terms + j] = storage * weight;
+            a[(m_samples + i) * n_terms + j] = loss * weight;
         }
     }
     let coeffs = nnls(&a, &rhs, rows, n_terms);
@@ -814,5 +829,15 @@ mod tests {
         let mut extra = req;
         extra["bogus"] = serde_json::json!(1);
         assert!(evaluate_lowering_json(&extra.to_string()).is_err());
+    }
+
+    #[test]
+    fn exact_exp_weights_and_prony_modulus_stay_finite_on_extreme_ratios() {
+        assert_eq!(exact_exp_weights(1e200, 1e-200).unwrap(), (1.0, 1.0));
+        assert_eq!(exact_exp_weights(1e-200, 1e200).unwrap(), (0.0, 0.0));
+        let model = ExactPronyModel::new(100.0, vec![(40.0, 1.0)]).unwrap();
+        let (ep, epp) = model.modulus(1e200);
+        assert!(ep.is_finite() && (ep - 140.0).abs() < 1e-12);
+        assert!(epp.is_finite() && epp >= 0.0 && epp < 1e-190);
     }
 }
