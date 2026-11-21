@@ -380,6 +380,7 @@ fn start_strain(mesh: &GarmentMesh, x: &[Vec3]) -> (Vec<[f64; 3]>, Vec<Value>) {
 }
 
 fn instance_report(
+    pattern: &Pattern,
     mesh: &GarmentMesh,
     places: &[WrapPlacement],
     slots: &[(usize, bool)],
@@ -393,6 +394,17 @@ fn instance_report(
         .map(|(k, id)| {
             let (lo, hi) = mesh.inst_range[k];
             let p = &places[k];
+            let source = pattern
+                .instance(id)
+                .map(|instance| &pattern.raw()["pieces"][instance.piece_index]["placement"]);
+            // The final mirror is part of wrap_points, not PartFrame. Report the actual world
+            // frame so its origin and basis reconstruct the displayed wrap on either side.
+            let world_vector = |mut v: Vec3| {
+                if p.mirrored {
+                    v.x = -v.x;
+                }
+                json!([v.x, v.y, v.z])
+            };
             // Angles are reported in the part frame of the right-hand copy: a mirrored instance is
             // wrapped as that copy and then reflected in x (spec 04 §3.4).
             let drafted_x = |x: f64| if p.mirrored { -x } else { x };
@@ -412,7 +424,7 @@ fn instance_report(
             }
             let inside = |depth: &[f64]| depth[lo..hi].iter().filter(|d| **d < 0.0).count();
             let deepest = |depth: &[f64]| deepest_mm(&depth[lo..hi]);
-            json!({
+            let mut report = json!({
                 "instance": id,
                 "colour": PIECE_COLOUR_NAMES[slots[k].0 % PIECE_COLOUR_NAMES.len()],
                 "lighter_tint": slots[k].1,
@@ -422,6 +434,20 @@ fn instance_report(
                 "anchor": {"theta_deg": p.theta_deg, "x0_mm": p.x0, "y0_height_mm": round1(p.h0)},
                 "theta_deg": [round1(t0), round1(t1)],
                 "height_mm": [round1(h0), round1(h1)],
+                "world_frame": {
+                    "origin_mm": world_vector(p.frame.origin),
+                    "up": world_vector(p.frame.up),
+                    "theta_0": world_vector(p.frame.front),
+                    "theta_90": world_vector(p.frame.lat),
+                    "h0_mm": p.h0,
+                    "radius_mm": p.radius,
+                    "x0_mm": p.x0,
+                    "theta_deg": p.theta_deg,
+                    "drafted_x_sign": if p.mirrored { -1 } else { 1 },
+                    "own_side_clamp": if p.own_side {
+                        Some(if p.own_side_left ^ p.mirrored { "x >= 1 mm" } else { "x <= -1 mm" })
+                    } else { None },
+                },
                 "inside_body": {
                     "wrap_vertices": inside(wrap_depth),
                     "wrap_deepest_mm": deepest(wrap_depth),
@@ -429,7 +455,15 @@ fn instance_report(
                     "start_deepest_mm": deepest(start_depth),
                 },
                 "start_edge_strain": strain[k],
-            })
+            });
+            if let Some(source) = source {
+                for key in ["frame_offset_mm", "frame_rotation"] {
+                    if let Some(value) = source.get(key) {
+                        report[key] = value.clone();
+                    }
+                }
+            }
+            report
         })
         .collect()
 }
@@ -508,6 +542,32 @@ fn body_report(frames: &dyn PartFrames) -> Value {
         );
     }
     Value::Object(parts)
+}
+
+/// Report the same displayed-coordinate crossing check used by the drape without admitting a
+/// kinematic preview to dynamics. A malformed surface stays unavailable, never crossing-free.
+fn display_contact_report(
+    full: (&[Vec3], &[[usize; 3]]),
+    faces: &[[usize; 3]],
+    wrapped: &[Vec3],
+    relaxed: &[Vec3],
+) -> Value {
+    let mut contact = match ftx_drape::animation::ReplayContact::new(full.0, full.1) {
+        Ok(contact) => contact,
+        Err(refusal) => return json!({"unavailable": refusal}),
+    };
+    let mut check = |points: &[Vec3], frame| match contact.check(points, faces, frame) {
+        Ok(()) => json!({"crossing_free": true}),
+        Err(refusal) if refusal.code == RefusalCode::IntersectingTrajectory => {
+            json!({"crossing_free": false, "refusal": refusal})
+        }
+        Err(refusal) => json!({"unavailable": refusal}),
+    };
+    json!({
+        "wrap": check(wrapped, ftx_drape::animation::FOLD_FRAMES - 1),
+        "start": check(relaxed, ftx_drape::animation::FOLD_FRAMES + ftx_drape::animation::ZIP_FRAMES - 1),
+        "basis": "proper cloth/body and cloth/cloth crossings at displayed f32 precision in these preview stages; includes the full displayed body, not only the collision proxy; touching is allowed; no thickness clearance, dynamic admission or later trajectory check",
+    })
 }
 
 fn write_stage(
@@ -940,6 +1000,7 @@ fn stages(
         "vertices": mesh.verts2d.len(),
         "simulation_scope": scope,
         "instances": instance_report(
+            pattern,
             &mesh,
             &places,
             &slots,
@@ -958,6 +1019,7 @@ fn stages(
         "wrap": {"vertices_inside_body": inside(&wrap_depth)},
         "body_surface": body_surface,
         "cloth_contact": cloth_contact,
+        "display_contact": display_contact_report(full, &mesh.faces, &wrapped, &start.relaxed),
         "body": body_report(frames),
         "views": {
             "wrap": "pieces on their cylinders; still_front/side/back/three_quarter coloured by piece, still_strain_* by the distance each seam vertex travels to its partner (green 0 mm to red 150 mm, grey unsewn)",
@@ -1084,6 +1146,19 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         text.push('\n');
     }
+    for stage in ["wrap", "start"] {
+        let check = &report["display_contact"][stage];
+        if let Some(message) = check["refusal"]["message"].as_str() {
+            text.push_str(&format!("  FULL DISPLAY CROSSING in {stage}: {message}\n"));
+        } else if let Some(message) = check["unavailable"]["message"].as_str() {
+            text.push_str(&format!(
+                "  full display check unavailable in {stage}: {message}\n"
+            ));
+        }
+    }
+    if let Some(message) = report["display_contact"]["unavailable"]["message"].as_str() {
+        text.push_str(&format!("  full display check unavailable: {message}\n"));
+    }
     for i in report["instances"].as_array().into_iter().flatten() {
         text.push_str(&format!(
             "  {:<24} {:<7} R {:>6} mm  θ {:>7}..{:<7}  h {:>7}..{:<7} mm  inside wrap/start {}/{}  start strain x {} % y {} % (p95 {} %)\n",
@@ -1168,6 +1243,132 @@ mod tests {
         );
         let field = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
         (field(16), field(20))
+    }
+
+    #[test]
+    fn placement_preview_reports_display_only_obstacles_and_unavailable_checks() {
+        use serde_json::json;
+
+        // An independently specified upright panel and a finger triangle that crosses its
+        // interior. The collision proxy omits the finger entirely.
+        let panel = [
+            Vec3::new(-0.02, 0., 0.),
+            Vec3::new(0.02, 0., 0.),
+            Vec3::new(0., 0., 0.04),
+        ];
+        let finger = [
+            Vec3::new(-0.01, -0.01, 0.01),
+            Vec3::new(0.01, 0.01, 0.01),
+            Vec3::new(0., 0.01, 0.03),
+        ];
+        let triangles = [[0, 1, 2]];
+        let clear = super::display_contact_report((&[], &[]), &triangles, &panel, &panel);
+        assert_eq!(clear["wrap"], json!({"crossing_free": true}));
+        assert_eq!(clear["start"], json!({"crossing_free": true}));
+        let moved: Vec<_> = panel.iter().map(|p| *p + Vec3::new(0., 0.03, 0.)).collect();
+        let checked =
+            super::display_contact_report((&finger, &triangles), &triangles, &panel, &moved);
+        assert_eq!(checked["wrap"]["crossing_free"], false);
+        assert!(
+            checked["wrap"]["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("displayed body")
+        );
+        assert_eq!(checked["start"]["crossing_free"], true);
+        let malformed =
+            super::display_contact_report((&finger, &[[0, 1, 3]]), &triangles, &panel, &panel);
+        assert!(malformed.get("unavailable").is_some());
+        assert!(malformed.get("start").is_none());
+        let malformed_cloth =
+            super::display_contact_report((&finger, &triangles), &[[0, 1, 3]], &panel, &panel);
+        assert!(malformed_cloth["start"].get("unavailable").is_some());
+        assert!(malformed_cloth["start"].get("crossing_free").is_none());
+    }
+
+    #[test]
+    fn placement_report_reconstructs_transformed_wrap_on_both_sides() {
+        use ftx_drape::scene::{PartFrames, placements, wrapped_positions};
+        use ftx_drape::{PartFrame, build_garment};
+        use serde_json::{Value, json};
+
+        struct Form;
+        impl PartFrames for Form {
+            fn frame(&self, _: &str) -> Option<PartFrame> {
+                Some(PartFrame {
+                    origin: Vec3::new(-100., 12., 400.),
+                    up: Vec3::new(0.6, 0., 0.8),
+                    front: Vec3::new(0., -1., 0.),
+                    lat: Vec3::new(0.8, 0., -0.6),
+                })
+            }
+            fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+                Some(20.)
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                30.
+            }
+        }
+        let pattern = ftx_pattern::Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm", "seams": [],
+            "pieces": [{
+                "id": "sleeve", "cut": {"qty": 2},
+                "vertices": {"a": [0, 0], "b": [20, 0], "c": [20, 20], "d": [0, 20]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"}, {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"}, {"id": "left", "from": "d", "to": "a"}
+                ],
+                "placement": {"part": "arm", "radius_mm": 40., "x0": 10., "y0": 7.,
+                    "frame_offset_mm": [8., -3., 2.],
+                    "frame_rotation": {"axis": [1., 0., 0.], "angle_deg": 12.}}
+            }]
+        }));
+        let mesh = build_garment(&pattern, 10.).unwrap();
+        let places = placements(&pattern, &mesh, &Form).unwrap();
+        let positions = wrapped_positions(&mesh, &places);
+        let depth = vec![0.; mesh.verts2d.len()];
+        let report = super::instance_report(
+            &pattern,
+            &mesh,
+            &places,
+            &piece_slots(&mesh.instances),
+            &depth,
+            &depth,
+            &vec![Value::Null; mesh.instances.len()],
+        );
+        assert_eq!(mesh.instances, ["sleeve.R", "sleeve.L"]);
+        let vector = |v: &Value| {
+            Vec3::new(
+                v[0].as_f64().unwrap(),
+                v[1].as_f64().unwrap(),
+                v[2].as_f64().unwrap(),
+            )
+        };
+        for (k, item) in report.iter().enumerate() {
+            assert_eq!(item["frame_offset_mm"], json!([8., -3., 2.]));
+            assert_eq!(item["frame_rotation"]["angle_deg"], 12.);
+            let frame = &item["world_frame"];
+            assert!(frame["own_side_clamp"].is_null());
+            let (lo, hi) = mesh.inst_range[k];
+            for (i, actual) in positions.iter().enumerate().take(hi).skip(lo) {
+                let q = mesh.verts2d[i];
+                let x = frame["drafted_x_sign"].as_f64().unwrap() * q.x;
+                let radius = frame["radius_mm"].as_f64().unwrap();
+                let angle = frame["theta_deg"].as_f64().unwrap().to_radians()
+                    + (x - frame["x0_mm"].as_f64().unwrap()) / radius;
+                let (sin, cos) = ftx_core::det::sin_cos(angle);
+                let recovered = vector(&frame["origin_mm"])
+                    + vector(&frame["up"]) * (frame["h0_mm"].as_f64().unwrap() + q.y)
+                    + (vector(&frame["theta_90"]) * sin + vector(&frame["theta_0"]) * cos) * radius;
+                assert!((recovered * 0.001 - *actual).norm() < 1e-15);
+            }
+        }
+        assert_eq!(
+            report[0]["world_frame"]["origin_mm"][0].as_f64(),
+            report[1]["world_frame"]["origin_mm"][0]
+                .as_f64()
+                .map(|x| -x)
+        );
     }
 
     #[test]

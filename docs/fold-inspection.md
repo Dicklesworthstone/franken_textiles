@@ -1,5 +1,49 @@
 # Inspect a completed native fold-up
 
+## Adjust a sleeve's starting position without changing its cut
+
+When a sleeve's initial tube intersects a hand, the piece's `placement` record can now
+shift and tilt the wrap axis explicitly. Keep the existing anchors and radius, and add
+fields such as this illustrative adjustment:
+
+```json
+{
+  "frame_offset_mm": [8, 0, 0],
+  "frame_rotation": {"axis": [0, 1, 0], "angle_deg": 6}
+}
+```
+
+Both vectors use the selected body's original local axes in the order **front, lateral,
+up**. Here the translation is 8 mm toward the local front, and the rotation is 6 degrees
+about the local lateral axis. Rotation pivots at the wrap centerline's `y0_landmark`, then
+translation applies in the original axes. Angles must be between −180 and 180 degrees;
+an axis must be finite and nonzero. Omit either field when it is not needed.
+
+These are authored positioning controls, not dimensions inferred from the hand. They
+retain the pattern's flat vertices, cut length, seams and grain. A generated mirror pair
+uses the adjusted right frame and its reflection; a quantity-one panel with `placement.side`
+uses its independently selected physical side. The existing leg midline clamp still applies.
+
+Save the revised pattern under a new filename and inspect its actual placement:
+
+```sh
+ftx place revised-pattern.json --measurements measurements.json --model /path/to/anny-model \
+  --hands knuckle --out new-placement-directory --json
+```
+
+Review `wrap/` and `start/` separately: sewing and relaxation can move cloth away from its
+authored cylinder. `placement.json` retains the authored controls and each instance's exact
+`world_frame`, including generated mirroring; the `body` section retains the original body
+frames. Its `display_contact` section checks both stages against the full displayed body,
+including fingers omitted from a trimmed collision proxy, and against the cloth itself.
+`FULL DISPLAY CROSSING` identifies an intersecting stage in the human-readable output.
+A clear preview means only that these two drawn stages have no proper triangle crossings;
+it does not establish thickness clearance or validate intervening motion. A drape may choose
+an earlier contact-admitted relaxation checkpoint than the fully relaxed start drawn here.
+Run the revised pattern through the ordinary drape, with the same body and collider options,
+to test its actual contact and convergence.
+No particular adjustment here qualifies the 385 mm sleeve or establishes physical fit.
+
 ## Optional static-equilibrium comparison
 
 An ordinary garment run can request a separate conservative equilibrium solve after its dynamic

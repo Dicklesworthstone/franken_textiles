@@ -466,6 +466,17 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   **No-claim boundary:** nothing here is a drape, a fit or an admission, and start-state strain is a
   property of the kinematic start, not of the garment at rest. Unit tests cover the strain fit and the
   piece colouring; the command itself has been exercised on the 1761 dolman, not against an oracle.
+  Explicit `placement.frame_offset_mm` and `frame_rotation` (spec 04 §3.4) reach the same
+  native/portable wrap and roll used by ordinary draping. Each instance report retains these
+  authored values and an unrounded `world_frame`: `origin_mm`, unit `up`, `theta_0` and
+  `theta_90` vectors after the final generated-instance reflection; exact `h0_mm`, `radius_mm`,
+  `x0_mm` and `theta_deg`; `drafted_x_sign`; and any `own_side_clamp`. These values reconstruct
+  the actual wrap, including tilted mirror pairs. The separately reported body frames remain
+  the original anatomical reference, not the adjusted cloth frame. `display_contact` checks
+  the wrap and fully relaxed start against the full displayed body and the cloth itself with
+  the replay audit's f32 rounding and proper-crossing rule. A malformed mesh yields an
+  `unavailable` result, never a clear verdict. This preview does not check thickness or later
+  dynamics, and does not replace the contact-admitted checkpoint selected by a drape.
 - `ftx alter OP PATTERN --out OUT [...]` with OP `slash-spread` (`--piece --axis x|y --at --add`), `move`
   (`--piece --vertex [--dx] [--dy]`), `true-seam` (`--seam [--end start|end]`), `cap-ease` (`--piece
   --seams S1,S2 --target`) or `transfer-curve` (`--from SRC.json:INSTANCE/EDGE`, split at the last `:`,
