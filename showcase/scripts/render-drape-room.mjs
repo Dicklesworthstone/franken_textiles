@@ -14,6 +14,7 @@ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTA
 try {
   const page=await browser.newPage(captureOptions({width:960,height:540}));
   await enableFilmResolution(page);
+  page.setDefaultTimeout(120000);
   const origin=process.env.FTX_STUDIO_URL||"http://127.0.0.1:3000";
   await page.goto(new URL("/?capture=pose-room",origin).href);
   await page.locator('canvas[data-run="520-35"]').waitFor();

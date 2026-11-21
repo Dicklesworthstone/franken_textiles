@@ -21,12 +21,10 @@ if(!selected.length)throw Error("Choose trouser-posture, trouser-elastic or trou
 try {
   const page=await browser.newPage(captureOptions({width:960,height:540}));
   await enableFilmResolution(page);
+  page.setDefaultTimeout(120000);
   await page.goto(new URL("/studies/trousers/?capture=film",origin).href);
   await page.locator('canvas[data-run="standing"]').waitFor();
   await page.evaluate(()=>document.fonts.ready);
-  const clean=await page.addStyleTag({content:".ts-stage{width:680px!important;height:620px!important}.ts-stage .ts-mark,.ts-cameras{visibility:hidden}"});
-  await page.locator(".ts-stage").screenshot({path:resolve(out,"trouser-form.jpg"),type:"jpeg",quality:94});
-  await clean.evaluate(node=>{node.textContent="";});
   await page.addStyleTag({content:`
     .ts-stage{position:fixed!important;inset:0!important;width:960px!important;height:540px!important;z-index:100;border-radius:0}
     .ts-canvas{left:34%;width:66%}.ts-mark,.ts-cameras,nextjs-portal{display:none!important}
@@ -83,4 +81,8 @@ try {
     } finally {encoder.stdin.end();}
     const [status]=await finished;if(status!==0)throw Error("FFmpeg failed for "+id);
   }
+  await page.goto(new URL("/studies/trousers/?capture=film",origin).href);
+  await page.locator('canvas[data-run="standing"]').waitFor();
+  await page.addStyleTag({content:".ts-stage{width:680px!important;height:620px!important}.ts-stage .ts-mark,.ts-cameras{visibility:hidden}"});
+  await page.locator(".ts-stage").screenshot({path:resolve(out,"trouser-form.jpg"),type:"jpeg",quality:94});
 } finally {await browser.close();}

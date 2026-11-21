@@ -13,8 +13,10 @@ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTA
 try {
   const page=await browser.newPage(captureOptions({width:1120,height:630}));
   await enableFilmResolution(page);
+  page.setDefaultTimeout(120000);
   await page.goto(new URL("/wardrobe/sundress/?capture=1",base).href);
-  await page.waitForFunction(()=>!!window.ftxDressFrame);
+  await page.evaluate(()=>document.querySelector(".sd-stage").scrollIntoView());
+  await page.waitForFunction(()=>typeof window.ftxDressFrame==="function" && document.querySelector(".sd-scene canvas[data-ready]"));
   if(art){
     await mkdir(art,{recursive:true});await page.setViewportSize({width:1200,height:1200});
     const style=await page.addStyleTag({content:`

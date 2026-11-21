@@ -117,6 +117,6 @@ run(["-f","concat","-safe","1","-i",path.join(scratch,"chapters.txt"),"-c","copy
 // The film poster uses the same three UI exposures, plus the existing garment-film poster.
 for (const i of [0,1,3]) await writeFile(path.join(scratch,`panel-${i}.jpg`),stills[i]);
 const images = [path.join(scratch,"panel-0.jpg"),path.join(scratch,"panel-1.jpg"),path.join(media,"bolero.jpg"),path.join(scratch,"panel-3.jpg")];
-const panels = images.map((_,i)=>`[${i}:v]scale=626:344:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2:color=0x202830,setsar=1[p${i}]`).join(";");
-run([...images.flatMap(file=>["-i",file]),"-filter_complex",panels+";[p0][p1][p2][p3]xstack=inputs=4:layout=0_0|640_0|0_360|640_360","-frames:v","1","-q:v","2",path.join(output,"studio-tour.jpg")]);
+const panels = images.map((_,i)=>`[${i}:v]scale=1878:1032:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=0x202830,setsar=1[p${i}]`).join(";");
+run([...images.flatMap(file=>["-i",file]),"-filter_complex",panels+";[p0][p1][p2][p3]xstack=inputs=4:layout=0_0|1920_0|0_1080|1920_1080","-frames:v","1","-q:v","2",path.join(output,"studio-tour.jpg")]);
 console.log(`Rendered the 20-second studio tour to ${output}.`);

@@ -18,6 +18,11 @@ if (studies.length === 0) throw new Error("Choose bolero, trousers or constructi
 
 const duration = 8;
 const movie = { width: 1280, height: 720 };
+const frames = fps * duration;
+const startFrame = Number(process.env.FTX_FILM_START_FRAME ?? 0);
+if (!Number.isInteger(startFrame) || startFrame < 0 || startFrame >= frames) {
+  throw new Error(`FTX_FILM_START_FRAME must be an integer from 0 through ${frames - 1}.`);
+}
 const ease = t => t * t * (3 - 2 * t);
 const unit = t => Math.max(0, Math.min(1, t));
 
@@ -103,8 +108,7 @@ async function encode(page, study) {
   const finished = once(ffmpeg, "close");
   ffmpeg.stdin.on("error", () => {}); // The exit status reports a rejected input or output.
   try {
-    const frames = fps * duration;
-    for (let index = 0; index < frames; index++) {
+    for (let index = startFrame; index < frames; index++) {
       const time = index / (frames - 1);
       const progress = ease(unit((time - 0.06) / 0.66));
       const orbit = 1.14 * ease(unit((time - 0.64) / 0.36));
@@ -131,6 +135,7 @@ try {
   const context = await browser.newContext(captureOptions(movie));
   await enableFilmResolution(context);
   const page = await context.newPage();
+  page.setDefaultTimeout(120000);
   async function openStudy(study) {
     const url = new URL(base);
     url.searchParams.set("capture", study.id);
@@ -138,7 +143,7 @@ try {
     await page.waitForFunction(() => typeof window.ftxFrame === "function", undefined, { timeout: 90000 });
     await page.addStyleTag({ content: "nextjs-portal {display:none!important}" });
   }
-  for (const study of studies) {
+  for (const study of startFrame === 0 ? studies : []) {
     await openStudy(study);
     if (study.id === "bolero") {
       await hero(page);
@@ -149,7 +154,7 @@ try {
   for (const study of studies) {
     await openStudy(study);
     await encode(page, study);
-    console.log(study.title + " rendered (" + duration + " s at " + fps + " fps).");
+    console.log(`${study.title}: rendered frames ${startFrame}–${frames - 1} at ${fps} fps.`);
   }
 } finally {
   await browser.close();

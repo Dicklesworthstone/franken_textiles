@@ -28,6 +28,7 @@ try{
   page.setDefaultTimeout(120000);
   await page.routeWebSocket(/\/_next\/webpack-hmr/,()=>{});
   await page.goto(new URL("/wardrobe/hussar/?costumeCapture=1",base).href);
+  await page.locator("#dress-study").scrollIntoViewIfNeeded();
   await page.waitForFunction(()=>typeof window.ftxCostumeFrame==="function" && document.querySelector(".costume-stage canvas[data-ready]"),undefined,{timeout:120000});
   await page.evaluate(()=>document.fonts.ready);
   async function select(reg,layer){
