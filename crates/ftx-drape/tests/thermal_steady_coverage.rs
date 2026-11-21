@@ -1506,12 +1506,59 @@ fn steady_coverage_request_accepts_microclimate_exterior_and_replays_identically
             .is_err()
     );
     // Denied estimate consent refuses fail-closed.
-    let mut no_est = input;
+    let mut no_est = input.clone();
     no_est["conditions"]["microclimate_exterior"][0]["allow_estimates"] = json!(false);
     assert!(
         serde_json::from_value::<Request>(no_est)
             .unwrap()
             .evaluate()
             .is_err()
+    );
+
+    // Mixed forced + natural per-triangle microclimate must NOT drop "wind-dependent films"
+    // from not_simulated (partial never rounds up); all-forced drops it.
+    let forced_entry = json!({
+        "air": { "temperature_c": 18.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5 },
+        "correlation": "churchill_bernstein_cylinder",
+        "characteristic_length_m": 0.25,
+        "wind_speed_m_s": 2.0,
+        "surface_temperature_range_c": [-50.0, 100.0],
+        "allow_estimates": true
+    });
+    let natural_entry = input["conditions"]["microclimate_exterior"][0].clone();
+    let n_tri = input["map"]["body_triangles"].as_array().unwrap().len();
+    assert!(n_tri >= 2);
+    let mut mixed = input.clone();
+    mixed["conditions"]["body_mesh_sha256"] = out["body_mesh_sha256"].clone();
+    let mut per_tri = vec![forced_entry.clone(); n_tri];
+    per_tri[n_tri - 1] = natural_entry;
+    mixed["conditions"]["microclimate_exterior"] = json!(per_tri);
+    let mixed_out = serde_json::from_value::<Request>(mixed)
+        .unwrap()
+        .evaluate()
+        .unwrap();
+    assert!(
+        mixed_out["not_simulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "wind-dependent films"),
+        "mixed forced/natural microclimate must retain wind-dependent films in not_simulated"
+    );
+
+    let mut all_forced = input;
+    all_forced["conditions"]["body_mesh_sha256"] = out["body_mesh_sha256"].clone();
+    all_forced["conditions"]["microclimate_exterior"] = json!(vec![forced_entry; n_tri]);
+    let all_forced_out = serde_json::from_value::<Request>(all_forced)
+        .unwrap()
+        .evaluate()
+        .unwrap();
+    assert!(
+        !all_forced_out["not_simulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "wind-dependent films"),
+        "all-forced microclimate should omit wind-dependent films from not_simulated"
     );
 }

@@ -218,7 +218,8 @@ impl Request {
                 .collect::<Result<Vec<_>, _>>()?;
             let raw_exteriors: Vec<_> = resolved.iter().map(|r| r.exterior.clone()).collect();
             let receipts: Vec<_> = resolved.iter().map(|r| r.receipt.clone()).collect();
-            let forced = resolved.iter().any(|r| r.forced_convection);
+            // Partial never rounds up: only omit "wind-dependent films" when every body triangle uses forced convection.
+            let forced = resolved.iter().all(|r| r.forced_convection);
             Some((
                 broadcast(&raw_exteriors, boundaries.len())?,
                 Some((json!(receipts), forced)),

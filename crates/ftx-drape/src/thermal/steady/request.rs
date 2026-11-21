@@ -133,7 +133,8 @@ impl SurfaceConditions {
                 resolved.iter().map(|r| r.exterior.clone()).collect()
             };
             let receipts: Vec<_> = resolved.iter().map(|r| r.receipt.clone()).collect();
-            let forced = resolved.iter().any(|r| r.forced_convection);
+            // Partial never rounds up: only omit "wind-dependent films" when every column uses forced convection.
+            let forced = resolved.iter().all(|r| r.forced_convection);
             let solved = surface.solve_exterior(&positions, &boundaries, &e)?;
             let details = json!({"columns":solved.columns,
                 "convective_power_w":solved.convective_power_w,
