@@ -3301,6 +3301,13 @@ mod tests {
         // 2. Self-contact FIT fixture
         let mut sc_input = fixed_law_input(false);
         sc_input.material = synthetic_base_material(true);
+        sc_input
+            .material
+            .properties
+            .get_mut("thickness")
+            .unwrap()
+            .conditions
+            .clear();
         for (key, value, unit) in [
             ("weft_stiffness", 620.0, "N/m"),
             ("shear_stiffness", 180.0, "N/m"),
