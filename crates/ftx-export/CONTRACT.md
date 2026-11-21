@@ -921,6 +921,13 @@ effective enthalpy against reservoir storage and thermostat heat. Existing net-r
 fields retain their textile meaning; ambient phase receipts remain separate. Missing, changed or
 balanced-but-unsourced exchange cannot enter a comparison. Direct forgery controls and complete
 native/portable/named-case replay use the existing surface-water test seams.
+Reservoir `/2` requires one complete qualified ambient boundary per mechanical interval. Its
+version-2 exchange receipt retains all interval ledgers, including future zeros. Admission
+reconstructs durations from the actual motion endpoints, checks each source law and incoming
+enthalpy separately, and reconciles all nine aggregate fields. Constant reservoir `/1` keeps
+its original path; mixed, incomplete, reordered or prematurely active schedules refuse.
+Material-specific qualification metadata may differ without changing the shared operating case;
+the original pressure, temperature and conductance schedule remains part of that case identity.
 No wet-property characterization, propagated thermal/water intervals or continuous-time extrema
 are inferred. Version 1 preserves initial-only ownership. Version 2 independently qualifies incoming
 liquid evidence and integrates each instance's reference-area delivery and incoming sensible enthalpy

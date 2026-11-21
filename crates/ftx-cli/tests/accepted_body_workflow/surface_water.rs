@@ -2945,6 +2945,15 @@ fn finite_vapor_inventory_replays_humidity_feedback_and_coupled_ledgers_in_nativ
 
 #[test]
 fn finite_vapor_ambient_exchange_replays_in_native_and_portable_decisions() {
+    ambient_vapor_exchange_workflow(false);
+}
+
+#[test]
+fn finite_vapor_scheduled_ambient_replays_in_native_portable_and_named_case_decisions() {
+    ambient_vapor_exchange_workflow(true);
+}
+
+fn ambient_vapor_exchange_workflow(scheduled: bool) {
     let (pattern, mut study, mut single) = inputs();
     let initial_vapor = 1e-12;
     let ambient = json!({"schema":"ftx-textile-vapor-exchange/1",
@@ -2955,6 +2964,23 @@ fn finite_vapor_ambient_exchange_replays_in_native_and_portable_decisions() {
             "note":"Synthetic conductance and incoming temperature; no empirical ventilation claim"},
         "evidence":"estimate","allow_estimates":true,"method":"Explicit pressure-driven mass transfer",
         "qualification":"Artificial constant conductance over the complete pressure domain and motion history"});
+    let mut ambient_schedule = vec![ambient.clone(); 3];
+    ambient_schedule[1]["conductance_kg_pa_s"] = json!(2e-11);
+    ambient_schedule[1]["ambient_vapor_pressure_pa"] = json!(0.);
+    ambient_schedule[1]["ambient_temperature_c"] = json!(10.);
+    ambient_schedule[1]["source"]["reference"] = json!("test:selected-body-dry-ambient");
+    ambient_schedule[2]["conductance_kg_pa_s"] = json!(3e-11);
+    ambient_schedule[2]["ambient_temperature_c"] = json!(30.);
+    ambient_schedule[2]["source"]["reference"] = json!("test:selected-body-renewed-ambient");
+    if scheduled {
+        single["motion"]["keyframes"] = json!([
+            {"time_s":0.001,"arm_abduction_deg":35.},
+            {"time_s":0.002,"arm_abduction_deg":35.},
+            {"time_s":0.003,"arm_abduction_deg":35.}
+        ]);
+        let boundary = single["motion"]["transient_surface"]["boundaries"][0].clone();
+        single["motion"]["transient_surface"]["boundaries"] = json!(vec![boundary; 3]);
+    }
     let water = &mut single["motion"]["transient_surface"]["surface_water"];
     water["schema"] = json!("ftx-textile-surface-water/5");
     water
@@ -2988,6 +3014,18 @@ fn finite_vapor_ambient_exchange_replays_in_native_and_portable_decisions() {
             "note":"Synthetic finite isothermal storage; no gas equation inferred"},
         "evidence":"estimate","allow_estimates":true,"method":"Explicit mass per pressure",
         "qualification":"Artificial constant capacitance at 20 C over the complete pressure domain"});
+    if scheduled {
+        water["supply"]["bindings"]["band"]["rate_kg_m2_s"] = json!([0., 0., 0.]);
+        water["supply"]["bindings"]["band"]["temperature_c"] = json!([20., 20., 20.]);
+        water["condensation"]["vapor_temperature_c"] = json!([20., 20., 20.]);
+        let reservoir = &mut water["vapor_reservoir"];
+        reservoir["schema"] = json!("ftx-textile-vapor-reservoir/2");
+        reservoir
+            .as_object_mut()
+            .unwrap()
+            .remove("ambient_exchange");
+        reservoir["ambient_exchange_by_interval"] = json!(ambient_schedule);
+    }
     study["comparison"]["objectives"] = json!([
         {"metric":"textile_water_final_vapor_pressure_pa","direction":"minimize"},
         {"metric":"textile_water_condensed_mass_kg","direction":"minimize"}]);
@@ -2998,7 +3036,11 @@ fn finite_vapor_ambient_exchange_replays_in_native_and_portable_decisions() {
         &pattern,
         &study,
         single,
-        "FTX_AMBIENT_VAPOR_EXCHANGE_REPLAY",
+        if scheduled {
+            "FTX_SCHEDULED_AMBIENT_VAPOR_REPLAY"
+        } else {
+            "FTX_AMBIENT_VAPOR_EXCHANGE_REPLAY"
+        },
         |report| {
             let result = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
             let motion = &result["motion"]["result"];
@@ -3006,10 +3048,23 @@ fn finite_vapor_ambient_exchange_replays_in_native_and_portable_decisions() {
             let water = &heat["surface_water"];
             let gas = &water["vapor_reservoir"];
             let mechanics = &motion["liquid_mechanics"];
-            assert_eq!(
-                water["request"]["vapor_reservoir"]["ambient_exchange"],
-                ambient
-            );
+            if scheduled {
+                assert_eq!(gas["schema"], "ftx-textile-vapor-reservoir-result/2");
+                assert_eq!(
+                    water["request"]["vapor_reservoir"]["ambient_exchange_by_interval"],
+                    json!(ambient_schedule)
+                );
+                assert!(
+                    water["request"]["vapor_reservoir"]
+                        .get("ambient_exchange")
+                        .is_none()
+                );
+            } else {
+                assert_eq!(
+                    water["request"]["vapor_reservoir"]["ambient_exchange"],
+                    ambient
+                );
+            }
             assert!(water["condensed_liquid_kg"].as_f64().unwrap() > initial_vapor);
             assert_eq!(water["supplied_liquid_kg"], 0.);
             assert_eq!(water["evaporated_liquid_kg"], 0.);
@@ -3030,22 +3085,100 @@ fn finite_vapor_ambient_exchange_replays_in_native_and_portable_decisions() {
                 let gas = &w["vapor_reservoir"];
                 let exchange = &gas["ambient_exchange"];
                 let incoming = exchange["incoming_vapor_mass_kg"].as_f64().unwrap();
+                let outgoing = exchange["outgoing_vapor_mass_kg"].as_f64().unwrap();
                 let ambient_j = exchange["net_vapor_enthalpy_received_j"].as_f64().unwrap();
                 let storage = gas["vapor_enthalpy_change_j"].as_f64().unwrap();
                 let thermostat = gas["isothermal_heat_removed_j"].as_f64().unwrap();
                 let textile_j = gas["net_vapor_enthalpy_received_j"].as_f64().unwrap();
                 assert!(incoming > 0.);
-                assert_eq!(exchange["outgoing_vapor_mass_kg"], 0.);
-                assert!(
-                    (incoming - 1e-11 * exchange["inward_pressure_time_pa_s"].as_f64().unwrap())
+                if scheduled {
+                    assert_eq!(exchange["schema"], "ftx-textile-vapor-exchange-result/2");
+                    let intervals = exchange["intervals"].as_array().unwrap();
+                    assert_eq!(intervals.len(), 3);
+                    let elapsed = gas["elapsed_seconds"].as_f64().unwrap();
+                    for (index, row) in intervals.iter().enumerate() {
+                        assert_eq!(row["schema"], "ftx-textile-vapor-exchange-result/1");
+                        assert_eq!(row["interval"], index);
+                        let seconds = (elapsed - index as f64 * 0.001).clamp(0., 0.001);
+                        assert!((row["elapsed_seconds"].as_f64().unwrap() - seconds).abs() < 1e-17);
+                        let source = &ambient_schedule[index];
+                        let conductance = source["conductance_kg_pa_s"].as_f64().unwrap();
+                        let incoming_temperature =
+                            source["ambient_temperature_c"].as_f64().unwrap();
+                        let in_mass = row["incoming_vapor_mass_kg"].as_f64().unwrap();
+                        let out_mass = row["outgoing_vapor_mass_kg"].as_f64().unwrap();
+                        assert!(
+                            (in_mass
+                                - conductance * row["inward_pressure_time_pa_s"].as_f64().unwrap())
+                            .abs()
+                                < 1e-23
+                        );
+                        assert!(
+                            (out_mass
+                                - conductance
+                                    * row["outward_pressure_time_pa_s"].as_f64().unwrap())
+                            .abs()
+                                < 1e-23
+                        );
+                        assert!(
+                            (row["incoming_vapor_enthalpy_j"].as_f64().unwrap()
+                                - in_mass * (2500000. + 4200. * incoming_temperature))
+                                .abs()
+                                < 1e-15
+                        );
+                        assert!(
+                            (row["outgoing_vapor_enthalpy_j"].as_f64().unwrap()
+                                - out_mass * (2500000. + 4200. * 20.))
+                                .abs()
+                                < 1e-15
+                        );
+                        if seconds == 0. {
+                            assert_eq!(in_mass, 0.);
+                            assert_eq!(out_mass, 0.);
+                        } else if index == 1 {
+                            assert_eq!(in_mass, 0.);
+                            assert!(out_mass > 0.);
+                        } else {
+                            assert!(in_mass > 0.);
+                            assert_eq!(out_mass, 0.);
+                        }
+                    }
+                    for field in [
+                        "incoming_vapor_mass_kg",
+                        "outgoing_vapor_mass_kg",
+                        "net_vapor_received_kg",
+                        "incoming_vapor_enthalpy_j",
+                        "outgoing_vapor_enthalpy_j",
+                        "net_vapor_enthalpy_received_j",
+                        "reservoir_pressure_time_pa_s",
+                        "inward_pressure_time_pa_s",
+                        "outward_pressure_time_pa_s",
+                    ] {
+                        let sum: f64 = intervals
+                            .iter()
+                            .map(|row| row[field].as_f64().unwrap())
+                            .sum();
+                        let actual = exchange[field].as_f64().unwrap();
+                        assert!(
+                            (actual - sum).abs() <= 1e-13 * actual.abs().max(sum.abs()),
+                            "{field}: {actual} != {sum}"
+                        );
+                    }
+                } else {
+                    assert_eq!(outgoing, 0.);
+                    assert!(
+                        (incoming
+                            - 1e-11 * exchange["inward_pressure_time_pa_s"].as_f64().unwrap())
                         .abs()
-                        < 1e-23
-                );
+                            < 1e-23
+                    );
+                }
                 assert!(
                     (gas["remaining_vapor_mass_kg"].as_f64().unwrap()
                         + w["remaining_liquid_kg"].as_f64().unwrap()
                         - initial_vapor
-                        - incoming)
+                        - incoming
+                        + outgoing)
                         .abs()
                         < 1e-23
                 );
