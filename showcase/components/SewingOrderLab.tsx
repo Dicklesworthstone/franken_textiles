@@ -289,6 +289,9 @@ function FlatPatternBoard({
             onClick={() => onSelectOp(op.index)}
             style={{ cursor: "pointer" }}
           >
+            <title>{`${op.title} (Step ${op.index + 1})`}</title>
+            <path d={polylinePath(panA, op.sideA.stations)} fill="none" stroke="transparent" strokeWidth="10" />
+            <path d={polylinePath(panB, op.sideB.stations)} fill="none" stroke="transparent" strokeWidth="10" />
             <path
               d={polylinePath(panA, op.sideA.stations)}
               fill="none"
@@ -395,10 +398,11 @@ export default function SewingOrderLab() {
     return () => window.clearInterval(id);
   }, [playing, total]);
 
-  // Keyboard ArrowLeft / ArrowRight step navigation (never steals arrows from inputs or the 3D orbit canvas)
+  // Keyboard ArrowLeft / ArrowRight step navigation (never steals arrows from inputs, modals, or the 3D orbit canvas)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (document.querySelector("dialog[open]")) return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA" || target.tagName === "CANVAS")) {
         return;
@@ -419,9 +423,10 @@ export default function SewingOrderLab() {
   const onError = useCallback(() => setWebglFailed(true), []);
 
   const cliCommand = [
-    "# Replay this exact 10-operation sewing plan and directed stitch program natively",
+    "# Replay this exact 10-operation sewing plan, directed stitch program, and operation SVG natively",
     "ftx-materials sew-plan bolero-duck.json bolero-sew-options.json",
     "ftx-materials sew-stitches bolero-duck.json bolero-sew-options.json",
+    `ftx-materials sew-svg bolero-duck.json bolero-sew-options.json ${active.id} ${active.id}.svg`,
   ].join("\n");
 
   const copyCli = () => {
@@ -439,7 +444,7 @@ export default function SewingOrderLab() {
     <>
       <SiteHeader />
       <main id="main" className="so-page">
-        <Crumbs trail={[["Exhibition", "/"], ["Drape gallery", "/#studies"], ["Jacket sewing order"]]} />
+        <Crumbs trail={[["Exhibition", "/"], ["Studios", "/sections/studio/"], ["Jacket sewing order"]]} />
         <div className="wrap so-wrap">
           <div className="so-heading">
             <div>
@@ -772,6 +777,16 @@ export default function SewingOrderLab() {
                   </div>
                   <pre>{cliCommand}</pre>
                 </div>
+                <p className="so-replay-links">
+                  Download exact CLI inputs:{" "}
+                  <a href="/labs/bolero-duck.json" download="bolero-duck.json">
+                    bolero-duck.json
+                  </a>{" "}
+                  ·{" "}
+                  <a href="/labs/bolero-sew-options.json" download="bolero-sew-options.json">
+                    bolero-sew-options.json
+                  </a>
+                </p>
               </div>
             </section>
           </div>

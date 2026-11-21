@@ -369,6 +369,17 @@
   gap: 18px;
 }
 
+.so-deps,
+.so-block,
+.so-downloads-block,
+.so-scope {
+  min-width: 0;
+}
+
+.so-replay-links {
+  font: 500 12px/1.5 var(--mono, monospace);
+}
+
 .so-inspector-head {
   display: flex;
   flex-wrap: wrap;

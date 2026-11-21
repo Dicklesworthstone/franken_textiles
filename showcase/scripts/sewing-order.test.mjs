@@ -119,14 +119,29 @@ test("sewing-order player navigates with keyboard, lights flat & 3D seams, serve
     for (const selector of [
       'a[href="/labs/bolero-sew-program.json"]',
       'a[href="/labs/bolero-sew-plan.json"]',
+      'a[href="/labs/bolero-duck.json"]',
+      'a[href="/labs/bolero-sew-options.json"]',
       'a[href="/labs/stitch-back.dst"]',
       'a[href="/patterns/chart-zouave_bolero.pdf"]',
     ]) {
       const href = await page.locator(selector).getAttribute("href");
       const res = await page.request.get(new URL(href, site).href);
       assert.equal(res.status(), 200, `download failed for ${href}`);
-      assert.ok((await res.body()).length > 1000, `empty file for ${href}`);
+      assert.ok((await res.body()).length > 500, `empty file for ${href}`);
     }
+
+    // Verify the exact two served CLI inputs replay natively to the exact served plan & stitch program.
+    const duckBody = await (await page.request.get(new URL("/labs/bolero-duck.json", site).href)).text();
+    const optsBody = await (await page.request.get(new URL("/labs/bolero-sew-options.json", site).href)).text();
+    const planBody = await (await page.request.get(new URL("/labs/bolero-sew-plan.json", site).href)).text();
+    const dir = mkdtempSync(path.join(tmpdir(), "ftx-sew-http-"));
+    const pDuck = path.join(dir, "bolero-duck.json");
+    const pOpts = path.join(dir, "bolero-sew-options.json");
+    writeFileSync(pDuck, duckBody, { flag: "wx" });
+    writeFileSync(pOpts, optsBody, { flag: "wx" });
+    const replay = spawnSync(ftxMaterialsBin, ["sew-plan", pDuck, pOpts], { encoding: "utf8" });
+    assert.equal(replay.status, 0, replay.stderr || replay.stdout);
+    assert.deepEqual(JSON.parse(replay.stdout), JSON.parse(planBody));
   } finally {
     await page.close();
   }

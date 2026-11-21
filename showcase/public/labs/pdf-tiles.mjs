@@ -1,7 +1,7 @@
 // Parse real exported FrankenTextiles tiled A4 PDFs directly from their PDF bytes.
-// Works in both modern browsers (DecompressionStream) and Node (node:zlib).
-// Derives page count, MediaBox dimensions, insets, overlap, scale bar, tile map, and join codes
-// solely from the actual PDF bytes — never from hardcoded tables.
+// Uses standard Web Streams `DecompressionStream("deflate")` in both browsers and Node.
+// Derives page count, MediaBox dimensions, insets, overlap, scale bar, tile map, /FPTile metadata,
+// and join codes solely from the actual PDF bytes — fails closed rather than falling back to defaults.
 
 async function inflateStream(bytes) {
   const ds = new DecompressionStream("deflate");
@@ -37,10 +37,32 @@ export async function parseTiledPdf(input) {
   }
 
   const totalPages = (raw.match(/\/Type\s*\/Page\b(?!s)/g) || []).length;
+  if (totalPages < 2) {
+    throw new Error(`Expected tiled PDF with cover + tile pages, found ${totalPages} page(s).`);
+  }
+
   const mediaMatch = raw.match(/\/MediaBox\s*\[\s*([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s*\]/);
+  if (!mediaMatch) {
+    throw new Error("Exported PDF is missing a /MediaBox declaration.");
+  }
   const ptToMm = 25.4 / 72;
-  const pageWidthMm = mediaMatch ? Number(((Number(mediaMatch[3]) - Number(mediaMatch[1])) * ptToMm).toFixed(2)) : 210;
-  const pageHeightMm = mediaMatch ? Number(((Number(mediaMatch[4]) - Number(mediaMatch[2])) * ptToMm).toFixed(2)) : 297;
+  const pageWidthMm = Number(((Number(mediaMatch[3]) - Number(mediaMatch[1])) * ptToMm).toFixed(2));
+  const pageHeightMm = Number(((Number(mediaMatch[4]) - Number(mediaMatch[2])) * ptToMm).toFixed(2));
+
+  // Cross-check structured /FPTile page dictionaries written by ftx-export.
+  const fpTiles = new Map();
+  for (const m of raw.matchAll(
+    /\/FPTile\s*<<\s*\/Name\s*\(([A-Z]+\d+)\)\s*\/Col\s+(\d+)\s*\/Row\s+(\d+)\s*\/Frame\s*\[\s*([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s*\]\s*\/Origin\s*\[\s*([\d.-]+)\s+([\d.-]+)\s*\]\s*\/Blank\s+(true|false)\s*>>/g,
+  )) {
+    fpTiles.set(m[1], {
+      name: m[1],
+      col: Number(m[2]),
+      row: Number(m[3]),
+      frame: [Number(m[4]), Number(m[5]), Number(m[6]), Number(m[7])],
+      origin: [Number(m[8]), Number(m[9])],
+      blank: m[10] === "true",
+    });
+  }
 
   // Inflate every FlateDecode stream inside the PDF.
   const streams = [];
@@ -68,14 +90,17 @@ export async function parseTiledPdf(input) {
     /edge insets\s+([\d.]+)\s*mm\s+left\/right,\s*([\d.]+)\s*mm\s+top,\s*([\d.]+)\s*mm\s+bottom/,
   );
   const scaleMatch = coverText.match(/10 cm = ([\d.]+) mm/);
+  if (!overlapMatch || !insetMatch || !scaleMatch) {
+    throw new Error("Exported PDF cover stream is missing inset, overlap, or 100 mm scale metadata.");
+  }
 
-  const insetLeftMm = insetMatch ? Number(insetMatch[1]) : 10;
-  const insetTopMm = insetMatch ? Number(insetMatch[2]) : 10;
-  const insetBottomMm = insetMatch ? Number(insetMatch[3]) : 10;
+  const insetLeftMm = Number(insetMatch[1]);
+  const insetTopMm = Number(insetMatch[2]);
+  const insetBottomMm = Number(insetMatch[3]);
   const frameWidthMm = Number((pageWidthMm - 2 * insetLeftMm).toFixed(2));
   const frameHeightMm = Number((pageHeightMm - insetTopMm - insetBottomMm).toFixed(2));
-  const overlapMm = overlapMatch ? Number(overlapMatch[1]) : 5;
-  const scaleBarMm = scaleMatch ? Number(scaleMatch[1]) : 100;
+  const overlapMm = Number(overlapMatch[1]);
+  const scaleBarMm = Number(scaleMatch[1]);
 
   // Extract tile map entries from cover page (e.g. `A1  p2`, `C2  blank`).
   const tileMap = new Map();
@@ -83,14 +108,24 @@ export async function parseTiledPdf(input) {
     const colLetters = m[1];
     const rowNum = Number(m[2]);
     const name = `${colLetters}${rowNum}`;
+    const col = colIndex(colLetters);
+    const row = rowNum - 1;
+    const blank = m[3] === "blank";
+    const meta = fpTiles.get(name);
+    if (meta && (meta.col !== col || meta.row !== row || meta.blank !== blank)) {
+      throw new Error(`Tile ${name} disagrees between cover map and /FPTile page dictionary.`);
+    }
     tileMap.set(name, {
       name,
-      col: colIndex(colLetters),
-      row: rowNum - 1,
-      blank: m[3] === "blank",
+      col,
+      row,
+      blank,
       page: m[4] ? Number(m[4]) : null,
       joins: [],
     });
+  }
+  if (!tileMap.size) {
+    throw new Error("Exported PDF cover page contains no tile map entries.");
   }
 
   // Extract exact neighbor join codes (e.g. `A1|B1`, `A1|A2`) directly from each printed tile page stream.
@@ -104,10 +139,13 @@ export async function parseTiledPdf(input) {
   }
 
   const tiles = [...tileMap.values()].sort((a, b) => a.row - b.row || a.col - b.col);
-  const cols = tiles.length ? Math.max(...tiles.map(t => t.col)) + 1 : 1;
-  const rows = tiles.length ? Math.max(...tiles.map(t => t.row)) + 1 : 1;
+  const cols = Math.max(...tiles.map(t => t.col)) + 1;
+  const rows = Math.max(...tiles.map(t => t.row)) + 1;
   const printedTiles = tiles.filter(t => !t.blank);
   const blankTiles = tiles.filter(t => t.blank);
+  if (fpTiles.size && fpTiles.size !== printedTiles.length) {
+    throw new Error(`PDF has ${fpTiles.size} /FPTile pages but cover lists ${printedTiles.length} printed tiles.`);
+  }
 
   return {
     totalPages,

@@ -94,6 +94,15 @@
 .tf-tile-blank {
   cursor: pointer;
 }
+.tf-tile:focus-visible,
+.tf-tile-blank:focus-visible {
+  outline: none;
+}
+.tf-tile:focus-visible > rect:first-child,
+.tf-tile-blank:focus-visible > rect:first-child {
+  stroke: #c44b24;
+  stroke-width: 3;
+}
 .tf-status {
   color: #dce4e1;
   font: 500 14px var(--sans, sans-serif);

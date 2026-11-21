@@ -45,6 +45,10 @@ test("PDF stream parser derives exact page counts, frame insets, 5 mm overlap, 1
   assert.equal(fez.totalPages, 5);
   assert.equal(fez.printedTileCount, 4);
   assert.equal(fez.blankTileCount, 2);
+
+  // Fail closed on non-PDF or truncated PDF bytes (never fall back to hardcoded defaults).
+  await assert.rejects(() => parseTiledPdf(new TextEncoder().encode("not a pdf")), /not a valid PDF/i);
+  await assert.rejects(() => parseTiledPdf(new TextEncoder().encode("%PDF-1.4\n/Type /Page\n")), /cover \+ tile pages/i);
 });
 
 test("A4 tile assembly floor toggles alignment crosses, compares master & scale bar, serves exact PDF, and fits mobile", async () => {
@@ -85,6 +89,16 @@ test("A4 tile assembly floor toggles alignment crosses, compares master & scale 
     assert.equal(await page.locator('[data-master-overlay="true"]').count(), 0);
     await masterCheck.check();
     assert.equal(await page.locator('[data-master-overlay="true"]').count(), 1);
+
+    // Selecting an omitted blank tile and then hiding blank tiles cleanly falls back to a printed tile.
+    await page.locator('.tf-tile-blank[data-tile="C2"]').click();
+    assert.match(await page.locator(".tf-tile-card").innerText(), /Tile C2/);
+    const blanksCheck = page.getByRole("checkbox", { name: /omitted blank tiles/i });
+    await blanksCheck.uncheck();
+    assert.equal(await page.locator(".tf-tile-blank").count(), 0);
+    assert.match(await page.locator(".tf-tile-card").innerText(), /Tile A1/);
+    await blanksCheck.check();
+    assert.equal(await page.locator(".tf-tile-blank").count(), 3);
 
     // Inspect tile B1 and verify join codes derived from its PDF stream.
     await page.locator('.tf-tile[data-tile="B1"]').click();

@@ -380,6 +380,7 @@ function FloorCanvas({
           className="tf-master-overlay"
           data-master-overlay="true"
           transform={`translate(${originX} ${padTop})`}
+          opacity={assembled >= 0.98 ? 1 : 0.72}
           style={{ pointerEvents: "none" }}
         >
           <rect
@@ -392,16 +393,18 @@ function FloorCanvas({
             strokeWidth="2.4"
             strokeDasharray="10 5"
           />
-          <rect x="6" y={master.heightMm - 22} width="186" height="17" rx="2.5" fill="#1a7664" />
+          <rect x="6" y={master.heightMm - 22} width={assembled >= 0.98 ? "236" : "276"} height="17" rx="2.5" fill="#1a7664" />
           <text
             x="13"
             y={master.heightMm - 10}
             fill="#fffef7"
-            fontSize="9.8"
+            fontSize="9.5"
             fontWeight="700"
             fontFamily="var(--mono)"
           >
-            MASTER {master.widthMm.toFixed(1)} × {master.heightMm.toFixed(1)} mm
+            {assembled >= 0.98
+              ? `MASTER ${master.widthMm.toFixed(1)} × ${master.heightMm.toFixed(1)} mm · 1:1 MATCH`
+              : `TARGET MASTER ${master.widthMm.toFixed(1)} × ${master.heightMm.toFixed(1)} mm (TAPE TO MATCH)`}
           </text>
         </g>
       )}
@@ -466,7 +469,11 @@ export default function TileFloorLab() {
     return () => controller.abort();
   }, [garment]);
 
-  const activeTile = pdf?.tiles.find(t => t.name === selectedTile) ?? pdf?.tiles[0];
+  const visibleTiles = useMemo(
+    () => (pdf ? pdf.tiles.filter(t => showBlanks || !t.blank) : []),
+    [pdf, showBlanks],
+  );
+  const activeTile = visibleTiles.find(t => t.name === selectedTile) ?? visibleTiles[0];
 
   return (
     <>
@@ -597,7 +604,16 @@ export default function TileFloorLab() {
                   <input
                     type="checkbox"
                     checked={showBlanks}
-                    onChange={e => setShowBlanks(e.target.checked)}
+                    onChange={e => {
+                      const next = e.target.checked;
+                      setShowBlanks(next);
+                      if (!next && pdf) {
+                        const sel = pdf.tiles.find(t => t.name === selectedTile);
+                        if (sel?.blank) {
+                          setSelectedTile(pdf.tiles.find(t => !t.blank)?.name ?? "A1");
+                        }
+                      }
+                    }}
                   />
                   Show omitted blank tiles
                 </label>
