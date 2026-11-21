@@ -117,7 +117,9 @@ void main() {
     vec3 dark = vec3(0.163, 0.147, 0.127);
     vec3 warm = vec3(0.370, 0.329, 0.268);
     // One 8-bit level of this gradient is 60 to 120 px wide at 3840, which shows as rings. Half a level of
-    // interleaved-gradient noise before quantisation breaks the rings up and survives the x264 settings below.
+    // interleaved-gradient noise before quantisation breaks the rings up. The x264 settings below flatten
+    // some blocks again (flat runs of 32 px or more fell from 98 % of a row to 45 %), but no ring is left.
+    // components/construction/construction.css draws this same vignette round the film: change both.
     float grain = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     pixel = vec4(mix(dark,warm,light) + (grain - 0.5) / 255.0, 1.0);
 }
