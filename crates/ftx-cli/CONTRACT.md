@@ -231,7 +231,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
   reference's text table, exit 0 CONVERGED, 2 NOT_CONVERGED, 3 BLOCKED.
 - `ftx round WS [--pattern P] [--measurements M] [--sim|--stills] [--arm-deg DEG] [--skinning lbs|dqs]
-  [--elastic-hold-steps N] [--res WxH] [--export] [--json]`: a new immutable round with separate construction, physics,
+  [--compression F] [--elastic-hold-steps N] [--res WxH] [--export] [--json]`: a new immutable round with separate construction, physics,
   manufacturing and measurement bases. `--stills` implies simulation and adds six native PNG
   views to the portable review (default 960x540), without Blender. No video is produced; this
   deliberately does not claim the reference's `--render` movie behavior. `--res` needs `--stills`.

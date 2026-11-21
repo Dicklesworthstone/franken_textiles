@@ -1274,4 +1274,27 @@ mod tests {
             assert_eq!(status(flat, scale, s, e, ready), expected);
         }
     }
+
+    #[test]
+    fn round_compression_requires_sim_and_validates_before_workspace_io() {
+        let missing_sim =
+            super::super::parse(&["round", "no-such-ws", "--compression", "0.2"].map(String::from))
+                .unwrap();
+        let err = cmd_round(&missing_sim).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("--compression requires --sim"));
+
+        for bad in ["0", "-0.1", "1.5", "NaN", "soft"] {
+            let args = super::super::parse(
+                &["round", "no-such-ws", "--sim", "--compression", bad].map(String::from),
+            )
+            .unwrap();
+            let err = cmd_round(&args).unwrap_err();
+            assert_ne!(
+                err.code,
+                RefusalCode::Io,
+                "invalid --compression {bad} must refuse before reading workspace"
+            );
+        }
+    }
 }
