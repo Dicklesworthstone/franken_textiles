@@ -122,7 +122,12 @@ converged with no gating flags and six stills, the cuffs at the wrists. `--hands
 (the crossing triangle is on the thumb base, `finger1-1`, which that variant cuts). With 65 mm of
 extra sleeve the cuff starts through the kept hand and the first sewing step does not converge, with or
 without `--time-subdivision`: a sleeve that covers the hand is still refused, now with a picture of
-where.
+where. Measured cause (2026-11-21, `ftx-udlj`): that cuff is 169.8 mm round and ends over the open hand,
+whose convex-hull girth is 174 to 180 mm at the thumb and knuckles; with cloth contact on, the fully
+relaxed start (600 iterations) is not admitted, the drape falls back to its 400-iteration checkpoint, and
+that checkpoint is stretched 15 % or more at both cuffs. The refusal states the checkpoint and the
+stretched pieces with their nearest pattern edges (`f94cc79e`). No cuff wider than the hand, closed-thumb
+hand pose or layer-separating start exists yet, so the long sleeve remains undrapable.
 
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
