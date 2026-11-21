@@ -1861,11 +1861,47 @@ function thermalBridges(parent, label, result) {
     surface_model_sha256: bridges.surface_model_sha256, bridges,
     qualifications: result.request?.thermal_bridges });
 }
+function microclimateConvectionDetails(parent, label, result) {
+  const mc = result?.microclimate_convection;
+  if (!mc || typeof mc !== "object") return;
+  const entries = Array.isArray(mc) ? mc : [mc];
+  if (!entries.length) return;
+  if (entries.length === 1) {
+    const entry = entries[0];
+    const t = table(parent, `${label}: validity-gated microclimate convection (Estimate)`, ["Quantity", "Value"]);
+    cells(t, ["Correlation", entry.name || entry.correlation || "Unknown"]);
+    if (entry.citation) cells(t, ["Reference", entry.citation]);
+    cells(t, ["Characteristic length (m)", metric(entry.characteristic_length_m)]);
+    cells(t, ["Nusselt number", metric(entry.nu)]);
+    cells(t, ["Convection coefficient (W/m² K)", metric(entry.h_w_m2_k)]);
+    cells(t, ["Model discrepancy allowance (fraction; not a confidence interval)", metric(entry.discrepancy_rel)]);
+    cells(t, ["Evidence status", entry.evidence || "estimate"]);
+  } else {
+    const t = table(parent, `${label}: validity-gated microclimate convection per region (Estimate)`,
+      ["Entry", "Correlation", "Characteristic length (m)", "Nusselt number", "h (W/m² K)", "Discrepancy allowance", "Evidence"]);
+    for (const [i, entry] of entries.entries()) {
+      cells(t, [String(i + 1), entry.name || entry.correlation || "Unknown", metric(entry.characteristic_length_m),
+        metric(entry.nu), metric(entry.h_w_m2_k), metric(entry.discrepancy_rel), entry.evidence || "estimate"]);
+    }
+  }
+  const note = document.createElement("p");
+  note.textContent = typeof result.exterior_model === "string" && result.exterior_model.trim() ?
+    result.exterior_model :
+    "Validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); not a measured garment film.";
+  parent.append(note);
+  detail(parent, `${label}: microclimate air state, dimensionless groups and correlation receipt`, {
+    exterior_model: result.exterior_model, microclimate_convection: mc });
+}
 function coverageResult(parent, result) {
   steadyHeatBounds(parent, "Steady heat", result);
+  microclimateConvectionDetails(parent, "Steady exterior", result);
   thermalBridges(parent, "Coverage", result);
   return { steady: result.steady,
     ...(Object.hasOwn(result, "thermal_bridges") ? { thermal_bridges: result.thermal_bridges } : {}),
+    ...(Object.hasOwn(result, "microclimate_convection") ? {
+      microclimate_convection: result.microclimate_convection,
+      ...(typeof result.exterior_model === "string" ? { exterior_model: result.exterior_model } : {})
+    } : {}),
     comfort_claim: result.comfort_claim, empirical_validation_claim: result.empirical_validation_claim };
 }
 function motionComparison(op, parent, rows, simulations, requested, filePrefix = "") {
@@ -3147,6 +3183,7 @@ function thermalHistoryResult(parent, r) {
       ["Steady radiative heat", "steady_radiative_heat_w", "W"]]) cells(exterior, [label, metric(r.exterior_exchange[key]), unit]);
     detail(parent, "Exterior observations and boundary conditions", r.exterior_exchange);
   }
+  microclimateConvectionDetails(parent, "Transient exterior", r);
   const note = document.createElement("p");
   note.textContent = "Boundary heat keeps its native sign; cooling can produce negative stored energy and reversed heat flow. " +
     "The initial sample has no reported boundary power or accumulated energy. A small energy residual checks numerical balance, not measured material accuracy. " +
@@ -3201,6 +3238,10 @@ function thermalHistoryResult(parent, r) {
     cells_per_layer: r.model?.cells_per_layer, temperature_domain_c: r.model?.temperature_domain_c,
     step_seconds: r.step_seconds, steps: r.steps, record_every: r.record_every,
     final_time_seconds: trace.at(-1)?.time_seconds, retained_samples: trace.length,
+    ...(Object.hasOwn(r, "microclimate_convection") ? {
+      microclimate_convection: r.microclimate_convection,
+      ...(typeof r.exterior_model === "string" ? { exterior_model: r.exterior_model } : {})
+    } : {}),
     comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim,
     scope: "Dry one-dimensional layers with prescribed boundaries; no garment comfort, moisture or transient seam storage." };
 }
@@ -4775,6 +4816,8 @@ function cylinderCalibrationResult(parent, r) {
     ["Stationary / attempted starts", `${c.starts.filter(s => s.converged).length} / ${c.starts.length}`],
     ["Normalized excitation pivot", metric(c.excitation_pivot)],
     ["Forward solves / limit", `${metric(c.forward_solves)} / ${metric(c.input.policy.max_forward_solves)}`],
+    ...(c.input?.policy?.sensitivity === "adjoint" ? [["Sensitivity method", "Adjoint (implicit function theorem)"]] : []),
+    ...(c.adjoint_solves > 0 ? [["Adjoint linear solves", metric(c.adjoint_solves)]] : []),
     ["Doubled-mesh change / limit", `${metric(c.mesh_change_peak_scaled)} / ${metric(c.input.policy.max_mesh_scaled)}`],
     ["Enforced-domain replay", c.domain_replay_verified ? "Verified" : "Not verified"],
     ["Garment mechanics ready", r.simulation_ready === true ? "Yes" : "No"]
@@ -4807,6 +4850,8 @@ function cylinderCalibrationResult(parent, r) {
     held_out: c.check ? "Evaluated; inspect independent residuals and acceptance reasons" : "Not supplied",
     input_sha256: c.input_sha256, material_id: r.selection?.id,
     allow_estimates: r.selection?.allow_estimates,
+    ...(c.input?.policy?.sensitivity === "adjoint" ? { sensitivity: "adjoint" } : {}),
+    ...(c.adjoint_solves > 0 ? { adjoint_solves: c.adjoint_solves } : {}),
     simulation_ready: r.simulation_ready === true,
     mechanical_coefficients_available: r.material?.capabilities.mechanical_coefficients?.ready === true,
     mechanics_refusal: r.mechanics_refusal || r.material?.capabilities.mechanical_coefficients?.refusal,

@@ -24217,3 +24217,102 @@ test('strip history, cylinder experiment and fold summaries surface opt-in exact
   idx.worker.onmessage({ data: { type: 'folded', request: eeReq, report: eeRep, reportText: JSON.stringify(eeRep), viewer: '<html/>' } });
   assert.match(idx.e.foldSummary.innerHTML, /Maxwell relaxation integration: exact_exponential\./);
 });
+
+test('cylinder calibration surfaces opt-in adjoint sensitivity and thermal views surface microclimate_convection without altering defaults', async () => {
+  const p = await pageModule();
+
+  // 1. Cylinder calibration: default finite_difference omits adjoint rows/summary; opt-in adjoint surfaces both.
+  p.select('cylinderFitRequest', '{"schema":"ftx-cylinder-calibration/1"}');
+  p.e.cylinderFitRequest.handlers.change();
+  await p.e.cylinderFit.onclick();
+  const baseCyl = {
+    accepted: true, input_sha256: 'b'.repeat(64), excitation_pivot: 0.51, forward_solves: 14,
+    mesh_change_peak_scaled: 0.02, domain_replay_verified: true, starts: [{ converged: true }],
+    parameters: [1000, 900, 0.2, 300, 1e-5], parameter_descriptors: [], predictions: [], reasons: [],
+    fitted_green_strain_range: [[0, 0.02], [0, 0.01], [-0.01, 0.01]],
+    fit: { components: 6, rms_scaled: 0.01, peak_scaled: 0.02 },
+    input: { policy: { max_forward_solves: 500, max_mesh_scaled: 0.25 } }
+  };
+  p.emit({ calibration: baseCyl, simulation_ready: true, material: { capabilities: { mechanical_coefficients: { ready: true } } } }, []);
+  const cylSecDef = section(p, 'Cylindrical-holder identification');
+  assert.doesNotMatch(visibleText(cylSecDef), /Adjoint linear solves/);
+  assert.equal(Object.hasOwn(JSON.parse(cylSecDef.children[1].textContent), 'sensitivity'), false);
+  assert.equal(Object.hasOwn(JSON.parse(cylSecDef.children[1].textContent), 'adjoint_solves'), false);
+
+  await p.e.cylinderFit.onclick();
+  p.emit({
+    calibration: { ...baseCyl, adjoint_solves: 24,
+      input: { policy: { ...baseCyl.input.policy, sensitivity: 'adjoint' } } },
+    simulation_ready: true, material: { capabilities: { mechanical_coefficients: { ready: true } } }
+  }, []);
+  const cylSecAdj = section(p, 'Cylindrical-holder identification');
+  assert.match(visibleText(cylSecAdj), /Adjoint \(implicit function theorem\)/);
+  assert.match(visibleText(cylSecAdj), /Adjoint linear solves/);
+  const cylSummary = JSON.parse(cylSecAdj.children[1].textContent);
+  assert.equal(cylSummary.sensitivity, 'adjoint');
+  assert.equal(cylSummary.adjoint_solves, 24);
+
+  // 2. Transient thermal history: default omits microclimate table/summary; microclimate_convection surfaces receipt + exterior_model.
+  p.select('thermalRequest', thermalHistoryInput);
+  p.e.thermalRequest.handlers.change();
+  await p.e.thermalHistory.onclick();
+  const baseHist = thermalHistoryReport();
+  p.emit(baseHist, []);
+  const histDef = section(p, 'Dry heating and cooling history');
+  assert.doesNotMatch(visibleText(histDef), /validity-gated microclimate convection/);
+  assert.equal(Object.hasOwn(JSON.parse(histDef.children[1].textContent), 'microclimate_convection'), false);
+
+  await p.e.thermalHistory.onclick();
+  const mcReceipt = {
+    correlation: 'churchill_bernstein_cylinder', name: 'Churchill-Bernstein cylinder in crossflow',
+    citation: 'Churchill & Bernstein (1977)', characteristic_length_m: 0.25,
+    nu: 142.5, h_w_m2_k: 14.8, discrepancy_rel: 0.2, evidence: 'estimate',
+    air: { temperature_c: 15, pressure_pa: 101325, relative_humidity: 0.55 }, groups: { Re: 40000, Pr: 0.71 }
+  };
+  p.emit({
+    ...baseHist,
+    exterior_exchange: { convective_energy_j: 10, radiative_energy_j: 2, steady_convective_heat_w: 5, steady_radiative_heat_w: 1 },
+    microclimate_convection: mcReceipt,
+    exterior_model: 'validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); not a measured garment film'
+  }, []);
+  const histMc = section(p, 'Dry heating and cooling history');
+  assert.match(visibleText(histMc), /Transient exterior: validity-gated microclimate convection \(Estimate\)/);
+  assert.match(visibleText(histMc), /Churchill-Bernstein cylinder in crossflow/);
+  assert.match(visibleText(histMc), /14\.8/);
+  const histSummary = JSON.parse(histMc.children[1].textContent);
+  assert.equal(histSummary.microclimate_convection.correlation, 'churchill_bernstein_cylinder');
+  assert.match(histSummary.exterior_model, /Nusselt correlation/);
+
+  // 3. Steady heat & coverage (coverageResult): default/prescribed exterior untouched; multi-entry microclimate_convection renders per-region table.
+  await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  p.e.body.files = [new Blob([new Uint8Array([1])])];
+  await p.e.fold.onclick();
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  p.select('heatConditions', '{"schema":"ftx-steady-surface-conditions/1","boundaries":[]}');
+  p.e.heatConditions.handlers.change();
+  await p.e.heat.onclick();
+  p.emit({ steady: { power_w: 12.5 }, comfort_claim: false, empirical_validation_claim: false }, []);
+  const heatDef = section(p, 'heat');
+  assert.doesNotMatch(visibleText(heatDef), /validity-gated microclimate convection/);
+  assert.equal(Object.hasOwn(JSON.parse(heatDef.children[1].textContent), 'microclimate_convection'), false);
+
+  await p.e.heat.onclick();
+  const mcNatural = {
+    correlation: 'churchill_chu_vertical_plate', name: 'Churchill-Chu vertical plate natural convection',
+    citation: 'Churchill & Chu (1975)', characteristic_length_m: 0.4,
+    nu: 48.2, h_w_m2_k: 3.1, discrepancy_rel: 0.15, evidence: 'estimate'
+  };
+  p.emit({
+    steady: { power_w: 9.4 },
+    microclimate_convection: [mcReceipt, mcNatural],
+    exterior_model: 'validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); not a measured garment film',
+    comfort_claim: false, empirical_validation_claim: false
+  }, []);
+  const heatMc = section(p, 'heat');
+  assert.match(visibleText(heatMc), /Steady exterior: validity-gated microclimate convection per region \(Estimate\)/);
+  assert.match(visibleText(heatMc), /Churchill-Bernstein cylinder in crossflow/);
+  assert.match(visibleText(heatMc), /Churchill-Chu vertical plate natural convection/);
+  const heatSummary = JSON.parse(heatMc.children[1].textContent);
+  assert.equal(heatSummary.microclimate_convection.length, 2);
+  assert.match(heatSummary.exterior_model, /Nusselt correlation/);
+});
