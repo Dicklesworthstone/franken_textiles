@@ -2,6 +2,7 @@
 use ftx_core::{Refusal, Vec3, receipt::sha256_hex};
 use ftx_drape::thermal::{
     Boundary,
+    microclimate::MicroclimateExterior,
     steady::exterior::Exterior,
     surface::{
         Surface,
@@ -58,6 +59,10 @@ struct Conditions {
     boundaries: Vec<Film>,
     #[serde(default)]
     exterior_exchange: Option<Vec<Exterior>>,
+    /// Optional validity-gated moist-air Nusselt correlation convection (`Evidence::Estimate`;
+    /// mutually exclusive with `exterior_exchange`). One entry broadcasts; otherwise body-triangle order.
+    #[serde(default)]
+    microclimate_exterior: Option<Vec<MicroclimateExterior>>,
     /// Explicit skin films when exterior exchange is enabled; one broadcasts in body order.
     #[serde(default)]
     bare_boundaries: Vec<Film>,
@@ -153,23 +158,57 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
             "provide one uniform boundary or one per coverage body triangle",
         ));
     };
-    let environments = input
-        .exterior_exchange
+    if input.exterior_exchange.is_some() && input.microclimate_exterior.is_some() {
+        return Err(invalid(
+            "supply either exterior_exchange or microclimate_exterior, not both",
+        ));
+    }
+    if input
+        .microclimate_exterior
         .as_ref()
-        .map(|values| {
-            if values.len() == 1 {
-                Ok(vec![values[0].clone(); count])
-            } else if values.len() == count {
-                Ok(values.clone())
-            } else {
-                Err(invalid(
-                    "provide one exterior environment or one per coverage body triangle",
-                ))
-            }
-        })
-        .transpose()?;
+        .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+    {
+        return Err(invalid(
+            "provide one exterior environment or one per coverage body triangle",
+        ));
+    }
+    let (environments, microclimate) = if let Some(values) = &input.exterior_exchange {
+        let expanded = if values.len() == 1 {
+            vec![values[0].clone(); count]
+        } else if values.len() == count {
+            values.clone()
+        } else {
+            return Err(invalid(
+                "provide one exterior environment or one per coverage body triangle",
+            ));
+        };
+        (Some(expanded), None)
+    } else if let Some(mc) = &input.microclimate_exterior {
+        if mc.len() != 1 && mc.len() != count {
+            return Err(invalid(
+                "provide one exterior environment or one per coverage body triangle",
+            ));
+        }
+        let resolved = mc
+            .iter()
+            .map(MicroclimateExterior::resolve)
+            .collect::<Result<Vec<_>, _>>()?;
+        let expanded = if resolved.len() == 1 {
+            vec![resolved[0].exterior.clone(); count]
+        } else {
+            resolved.iter().map(|r| r.exterior.clone()).collect()
+        };
+        let receipts: Vec<_> = resolved.iter().map(|r| r.receipt.clone()).collect();
+        // Partial never rounds up: only omit "wind-dependent films" when every body triangle is forced.
+        let forced = resolved.iter().all(|r| r.forced_convection);
+        (Some(expanded), Some((json!(receipts), forced)))
+    } else {
+        (None, None)
+    };
     if environments.is_none() && !input.bare_boundaries.is_empty() {
-        return Err(invalid("bare_boundaries requires exterior_exchange"));
+        return Err(invalid(
+            "bare_boundaries requires exterior_exchange or microclimate_exterior",
+        ));
     }
     let bare_boundaries = if input.bare_boundaries.is_empty() {
         Vec::new()
@@ -258,13 +297,35 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
         out["exterior_exchange"] = json!({
             "conditions":environments,"bare_boundaries":input.bare_boundaries,
             "area_basis":"current allocated outer cloth area for exterior flux; reference mass for storage",
-            "scope":"prescribed convection and optional qualified outer-material radiation; separate explicit bare-body films",
+            "scope": if microclimate.is_some() {
+                "validity-gated moist-air Nusselt correlation convection (Evidence::Estimate) and optional qualified outer-material radiation; separate explicit bare-body films"
+            } else {
+                "prescribed convection and optional qualified outer-material radiation; separate explicit bare-body films"
+            },
             "positive_heat_direction":"outward from textile",
             "inner_layer_radiation":false
         });
+        // Partial never rounds up: only omit "radiative exchange" when every body triangle enables radiation.
         out["not_simulated"].as_array_mut().unwrap().retain(|v| {
-            v != "radiative exchange" || !environments.iter().any(|e| e.radiation.is_some())
+            v != "radiative exchange"
+                || environments.is_empty()
+                || !environments.iter().all(|e| e.radiation.is_some())
         });
+        if let Some((receipts, forced)) = microclimate {
+            let limits = out["not_simulated"].as_array_mut().unwrap();
+            if forced {
+                limits.retain(|v| v != "wind-dependent films");
+            }
+            limits.extend([
+                json!("empirical garment-film / wind-tunnel validation"),
+                json!("interlayer or finite-view-factor radiation"),
+                json!("solar/spectral irradiation"),
+            ]);
+            out["microclimate_convection"] = receipts;
+            out["exterior_model"] = json!(
+                "validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film"
+            );
+        }
     }
     if let Some(t) = input.transient {
         let mut state = assembly.initial(t.initial_temperature_c)?;
@@ -362,4 +423,212 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
 
 pub(super) fn run(report: &str, mapping: &str, conditions: &str) -> Result<Value, Refusal> {
     evaluate(&read(report)?, &read(mapping)?, &read(conditions)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftx_drape::thermal::{DryThermalModel, surface::Patch};
+    use ftx_pattern::{material_catalog::Selection, materials::Catalog};
+
+    fn two_triangle_report_and_mapping() -> (Value, Value) {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/materials/synthetic-thermal.json"
+        ))
+        .unwrap();
+        let catalog = Catalog::builtin().unwrap();
+        let layers = fixture["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                let selection: Selection = serde_json::from_value(v.clone()).unwrap();
+                catalog.resolve(&selection).unwrap()
+            })
+            .collect();
+        let column = DryThermalModel::new(
+            layers,
+            serde_json::from_value(fixture["interface_resistance_m2_k_w"].clone()).unwrap(),
+            2,
+        )
+        .unwrap();
+        let patches = vec![
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [1, 3, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+        ];
+        let positions = vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.]];
+        let surface = Surface::new(vec![column], positions.len(), patches).unwrap();
+        let material = json!({"basis": "synthetic CLI test", "layers": fixture["layers"]});
+        let mut frame = json!({
+            "schema": "ftx-drape-thermal-surface/1",
+            "available": true,
+            "model": surface.snapshot(),
+            "material_report_sha256": sha256_hex(&serde_json::to_vec(&material).unwrap()),
+            "positions_m": positions,
+            "triangle_instance": [0, 0],
+            "instances": ["synthetic"]
+        });
+        frame["sha256"] = json!(sha256_hex(&serde_json::to_vec(&frame).unwrap()));
+        let report = json!({
+            "thermal_surface": frame,
+            "material": material
+        });
+        let mapping = json!({
+            "schema": "ftx-drape-thermal-coverage/1",
+            "drape_thermal_frame_sha256": report["thermal_surface"]["sha256"],
+            "body_positions_m": [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.]],
+            "layout": {
+                "schema": "ftx-thermal-coverage-layout/1",
+                "mapping_basis": "Synthetic two-triangle unit test allocation",
+                "body_vertex_count": 4,
+                "body_triangles": [[0, 1, 2], [1, 3, 2]],
+                "cells_per_layer": 2,
+                "regions": [
+                    {
+                        "id": "tri-0",
+                        "body_triangle": 0,
+                        "body_fraction": 0.5,
+                        "layers": [{"layer": "shell", "cloth_triangle": 0, "fraction": 0.5}],
+                        "interface_resistance_m2_k_w": []
+                    },
+                    {
+                        "id": "tri-1",
+                        "body_triangle": 1,
+                        "body_fraction": 0.5,
+                        "layers": [{"layer": "shell", "cloth_triangle": 1, "fraction": 0.5}],
+                        "interface_resistance_m2_k_w": []
+                    }
+                ]
+            }
+        });
+        (report, mapping)
+    }
+
+    #[test]
+    fn microclimate_exterior_drives_steady_and_transient_coverage_and_keeps_wind_exclusion_on_mixed_triangles()
+     {
+        let (report, mapping) = two_triangle_report_and_mapping();
+        let forced = json!({
+            "air": {"temperature_c": 18.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+            "correlation": "churchill_bernstein_cylinder",
+            "characteristic_length_m": 0.25,
+            "wind_speed_m_s": 2.0,
+            "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true
+        });
+        let natural = json!({
+            "air": {"temperature_c": 18.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+            "correlation": "churchill_chu_vertical_plate",
+            "characteristic_length_m": 0.4,
+            "delta_t_k": 12.0,
+            "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true
+        });
+        let bare = json!({
+            "inside_c": 34.0,
+            "outside_c": 18.0,
+            "inside_resistance_m2_k_w": 0.08,
+            "outside_resistance_m2_k_w": 0.12
+        });
+
+        // Uniform forced convection omits "wind-dependent films", keeps "radiative exchange",
+        // works with bare_boundaries, and balances transient energy.
+        let uniform = json!({
+            "schema": "ftx-thermal-coverage-conditions/1",
+            "boundaries": [{
+                "inside_c": 34.0,
+                "outside_c": 18.0,
+                "inside_resistance_m2_k_w": 0.08,
+                "outside_resistance_m2_k_w": 0.0
+            }],
+            "microclimate_exterior": [forced],
+            "bare_boundaries": [bare],
+            "transient": {"initial_temperature_c": 22.0, "step_seconds": 0.5, "steps": 4, "record_every": 2}
+        });
+        let out = evaluate(&report, &mapping, &uniform).unwrap();
+        assert_eq!(out["microclimate_convection"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            out["microclimate_convection"][0]["correlation"],
+            "churchill_bernstein_cylinder"
+        );
+        assert_eq!(out["microclimate_convection"][0]["evidence"], "estimate");
+        assert!(
+            out["exterior_model"]
+                .as_str()
+                .unwrap()
+                .contains("Nusselt correlation")
+        );
+        let limits = out["not_simulated"].as_array().unwrap();
+        assert!(!limits.iter().any(|v| v == "wind-dependent films"));
+        assert!(limits.iter().any(|v| v == "radiative exchange"));
+        assert!(
+            limits
+                .iter()
+                .any(|v| v == "empirical garment-film / wind-tunnel validation")
+        );
+        assert!(out["transient"]["balance_error_j"].as_f64().unwrap().abs() < 1e-6);
+        assert!(
+            out["transient"]["exterior_exchange"]["outside_energy_balance_error_j"]
+                .as_f64()
+                .unwrap()
+                .abs()
+                < 1e-6
+        );
+
+        // Mixed per-triangle forced + natural must retain "wind-dependent films".
+        let mut mixed = uniform.clone();
+        mixed["microclimate_exterior"] = json!([forced, natural]);
+        let mixed_out = evaluate(&report, &mapping, &mixed).unwrap();
+        assert_eq!(
+            mixed_out["microclimate_convection"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            mixed_out["not_simulated"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "wind-dependent films")
+        );
+
+        // Fail-closed refusals: missing estimate consent, mutual exclusion, mismatched count,
+        // non-matching outside film, and bare_boundaries without exterior mode.
+        let mut denied = uniform.clone();
+        denied["microclimate_exterior"][0]["allow_estimates"] = json!(false);
+        assert!(evaluate(&report, &mapping, &denied).is_err());
+
+        let mut both = uniform.clone();
+        both["exterior_exchange"] = json!([{
+            "air_c": 18.0, "convection_w_m2_k": 10.0, "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true, "evidence": "estimate", "source": "synthetic",
+            "method": "synthetic", "conditions": {}
+        }]);
+        assert!(evaluate(&report, &mapping, &both).is_err());
+
+        let mut wrong_count = uniform.clone();
+        wrong_count["microclimate_exterior"] = json!([forced, forced, forced]);
+        assert!(evaluate(&report, &mapping, &wrong_count).is_err());
+
+        let mut bad_film = uniform.clone();
+        bad_film["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.1);
+        assert!(evaluate(&report, &mapping, &bad_film).is_err());
+
+        let mut bare_only = uniform;
+        bare_only
+            .as_object_mut()
+            .unwrap()
+            .remove("microclimate_exterior");
+        assert!(evaluate(&report, &mapping, &bare_only).is_err());
+    }
 }
