@@ -863,13 +863,14 @@ triangles, passing the solver's surface audit (143769 to 145077 overlapping pair
 public-prior toddler at 20°, 45° and 75° of arm abduction and for two fitted adults. A sleeve that ends at
 the wrist drapes with it (the 92 cm bolero's 335 mm sleeve: converged, no gating flags). The fingers of
 the drape pose are open, and a sleeve whose end lies across them has not been made to start. On that
-wearer, a 385 mm sleeve with a 207.7 mm cuff on its drafted 34.7 mm cylinder at 12 mm spacing was refused
-(`intersecting_start`, crossings left after 50 untangling rounds). `ftx place` on the same cut showed
-cloth vertices inside the hand at 34.7 mm with 8 mm spacing (2), at 45 mm with 12, 8 and 6 mm spacing
-(2, 4 and 3) and at 55 mm with 12 mm spacing (1, with 5 cloth-on-cloth crossing pairs); at 65 mm no
-vertex was inside but the sleeve crossed itself in 213 pairs. Those five were looked at, not draped. Why
-the start procedure does not clear the fingers has not been established. The fingers are the model's
-shape, not a measured hand, and grant no fit claim.
+wearer (arms at 35°), a 385 mm sleeve with a 207.7 mm cuff, whose end lies 66 mm beyond the wrist
+landmark, was refused on its drafted 34.7 mm cylinder at 12 mm spacing (`intersecting_start`: crossings
+left after 50 untangling rounds). `ftx place` on the same cut showed sleeve vertices inside the hand,
+every one at the sleeve's end and 62 to 68 mm beyond the wrist landmark: 2 at 34.7 mm with 8 mm spacing;
+2, 4 and 3 at 45 mm with 12, 8 and 6 mm spacing; 1 at 55 mm with 12 mm spacing, with 5 cloth-on-cloth
+crossing pairs. At 65 mm no vertex was inside but the sleeve crossed itself in 213 pairs. Those six
+placements were looked at, not draped. Why the start procedure does not clear the fingers has not been
+established. The fingers are the model's shape, not a measured hand, and grant no fit claim.
 
 ## Appendix A. Local-change labels (index j; blend-shape rows 624 + 2j and 625 + 2j)
 
