@@ -10,6 +10,7 @@ import eased from "../../public/exhibits/sundress/light-summary.json";
 import easedSection from "../../public/exhibits/sundress/light-section.json";
 import easedPattern from "../../public/exhibits/sundress/light-pattern.json";
 import TorsoSlice from "../construction/TorsoSlice";
+import { ConstructionMotion } from "../construction/ConstructionStudy";
 import MuslinTrial from "./MuslinTrial";
 import CodeBlock from "../site/CodeBlock";
 import { repo } from "../site/links";
@@ -51,6 +52,7 @@ type WaistSeam = { ratio?: number; gather_relief_mm?: number; gather_compression
 export type DressCut = (typeof cutIds)[number];
 export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:DressCut)=>void}) {
   const [view, setView] = useState<{ preset: (typeof cameras)[number] }>({ preset: "Full length" });
+  const [failedCut, setFailedCut] = useState<DressCut | null>(null);
   const {report: drape, section, pdf} = cuts[cut];
   const source = "/exhibits/sundress/" + cut;
   const waistSeam: WaistSeam = cuts[cut].pattern.seams.find(seam => seam.id === "gather_front")!;
@@ -73,13 +75,15 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
       })}</div>
     </div>
     <div className="sd-sewn-board">
-      <Making key={cut} source={source} recording={drape.sourcePc2Sha256} looks={looks} look="cotton" views={views} view={view} className="sd-making"
+      {failedCut === cut ? <ConstructionMotion key={cut} garment={cut === "light" ? "eased" : "sundress"}/> :
+      <Making key={cut} source={source} recording={drape} looks={looks} look="cotton" views={views} view={view} className="sd-making" onFailure={()=>setFailedCut(cut)}
         captureHook="ftxDressFrameDrape" pieceName={panel => pieces[panel] ?? panel}
         label="The garden sundress from flat pattern to sewn dress, made by the cloth solver on the reference form. Drag or use arrow keys to turn, and plus or minus to zoom.">
-        <div className="sd-stage-caption"><i /> Fitted Anny body <span>·</span> solver drape</div></Making>
-      <div className="sd-viewbar"><div>{cameras.map(preset =>
+        <div className="sd-stage-caption"><i /> Fitted Anny body <span>·</span> solver drape</div></Making>}
+      <div className="sd-viewbar">{failedCut === cut ? <><p role="status">Recorded construction · 3D unavailable</p>
+        <button type="button" onClick={()=>setFailedCut(null)}>Retry 3D</button></> : <><div>{cameras.map(preset =>
         <button key={preset} aria-pressed={view.preset === preset} onClick={() => setView({ preset })}>{preset}</button>)}</div>
-        <p>Drag to turn · scroll to zoom</p></div>
+        <p>Drag to turn · scroll to zoom</p></>}</div>
     </div>
     <div className="sd-sewn-text"><p className="kicker">From flat pattern to sewn dress</p><h3>{cuts[cut].name}</h3>
       <p>Follow the shoulders, side seams and waist as the solver joins the four pieces. Use <b>Waist profile</b> to inspect the folds from the side.</p>
@@ -102,7 +106,8 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
     </div>
     <details className="sd-sewn-method" open><summary>What the solver did, and what is drawn</summary>
       <div>
-        <p>The reference form has a 90 cm bust and a 72 cm waist, with arms {drape.armDeg}° from the side. The solver took {drape.phases.sew} sewing steps and {drape.phases.drape} gravity steps. {drape.settled && !gating.length ? "The run settled with no gating flags." : "The run carries the flags listed beside the replay."} Each skirt waist is {ratio} times the length of the bodice edge it joins.</p>
+        <p>The reference form has a 90 cm bust and a 72 cm waist, with arms {drape.armDeg}° from the side. The solver took {drape.phases.sew} sewing steps and {drape.phases.drape} gravity steps. Each skirt waist is {ratio} times the length of the bodice edge it joins.</p>
+        <p>{drape.settled ? "The cloth met the solver’s motion threshold for settling." : "The cloth was still moving at the end of the run."} The body offset reached {drape.bodyOffsetMm.achieved} mm of the requested {drape.bodyOffsetMm.target} mm. The largest remaining force component on a free vertex was {drape.finalResidualN.toLocaleString("en", { maximumSignificantDigits: 3 })} N.</p>
         <p>The front panel starts {skirtRadius("front")} mm from the body axis and the back starts {skirtRadius("back")} mm away. The 1 mm cloth-contact barrier stays active through sewing and settling. {band
           ? <>For {band.depth} mm below the waist seam the solver lets the cloth shorten at {band.percent} % of its tensile stiffness. This models pleats finer than the {drape.spacingMm} mm mesh. The narrow pleats drawn below the waist illustrate that shortening. The side view shows the broader folds resolved by the mesh.</>
           : <>Look at the waist in profile. Its broad folds stand away from the form on the {drape.spacingMm} mm mesh.</>} Finer gathers and real-world fit still need comparison with a sewn sample.</p>
@@ -112,7 +117,7 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
     </details>
     <details className="sd-sewn-method sd-replay" id="sundress-replay"><summary>Replay the {cuts[cut].name.toLowerCase()} cut</summary>
       <div>
-        <p>Save the <a href={source+"-pattern.json"} download>starting pattern</a>, <a href={source+"-measures.json"} download>synthetic body measurements</a> and <a href={source+"-fit.json"} download>fit targets</a> in one directory. Use the <a href={repo+"/tree/44b960d1b1d541ac1120f570459d4438f481f29e"}>native solver at 44b960d1</a> and the converted Anny 0.6.1 model. Run these commands there to sew the cut and check every recorded cloth surface.</p>
+        <p>Save the <a href={source+"-pattern.json"} download>starting pattern</a>, <a href={source+"-measures.json"} download>synthetic body measurements</a> and <a href={source+"-fit.json"} download>fit targets</a> in one directory. Use the <a href={repo+"/tree/"+drape.solverRevision}>native solver at {drape.solverRevision.slice(0,8)}</a> and the converted Anny 0.6.1 model. Run these commands there to sew the cut and check every recorded cloth surface.</p>
         <CodeBlock key={cut} title={cuts[cut].name+" · native replay"} code={`ftx drape ${cut}-pattern.json --measurements ${cut}-measures.json --fit ${cut}-fit.json ${drape.solverArguments.join(" ")} --out ${cut}-drape\nftx viewer ${cut}-drape --check-contact`}/>
         <p>Recorded <code>fold.pc2</code> SHA-256<code className="sd-replay-hash">{drape.sourcePc2Sha256}</code></p>
       </div>

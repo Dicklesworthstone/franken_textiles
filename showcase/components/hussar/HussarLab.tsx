@@ -7,7 +7,7 @@ import CodeBlock from "../site/CodeBlock";
 import { repo } from "../site/links";
 import HussarReferences from "./HussarReferences";
 import HussarWardrobe from "./HussarWardrobe";
-import ConstructionStudy from "../construction/ConstructionStudy";
+import ConstructionStudy, { ConstructionMotion } from "../construction/ConstructionStudy";
 import SiteHeader from "../site/SiteHeader";
 import SiteFooter from "../site/SiteFooter";
 import Crumbs from "../site/Crumbs";
@@ -28,8 +28,8 @@ function choice<T extends string>(name: string, choices: readonly T[], value: T,
   return <fieldset><legend>{name}</legend><div className="hu-choice">{choices.map(item =>
     <button type="button" key={item} aria-pressed={value === item} onClick={() => set(item)}>{item}</button>)}</div></fieldset>;
 }
-function WardrobeFilm({ compact = false }: { compact?: boolean }) {
-  return <div className={compact ? "hu-fallback" : "hu-film"}>
+function WardrobeFilm() {
+  return <div className="hu-film">
     <InlineFilm id="wardrobe-hussar" title="Regimental dress and the embroidered jacket fronts" controls />
   </div>;
 }
@@ -44,11 +44,12 @@ export default function HussarLab() {
       <p>Turn two Swedish hussars in regimental dress, inspect the jacket cuts, then replay the dolman sewn on its fitted form. <a className="hu-compare-link" href="#regimental-plates">Read the museum plate ↓</a></p></div>
     <ConstructionStudy choices={["blue","yellow"]}/>
     <div className="hu-desk" id="native-dolman"><div className="hu-figure">
-      {failed ? <div className="hu-stage"><WardrobeFilm compact /></div> :
+      {failed ? <div className="hu-fallback"><ConstructionMotion key={regiment} garment={blue ? "blue" : "yellow"}/></div> :
         <Scene regiment={regiment} framing={framing} onFailure={onFailure}>
           <span className="hu-tag">{blue ? "Putbus’s Blue Hussars · 1761" : "Wrangel’s Yellow Hussars · 1765"}</span></Scene>}
-      <div className="hu-cam"><span>{failed ? "Recorded turn of the jacket" : "Drag to turn · Scroll to zoom"}</span>
-        {!failed && choice("Camera", cameras, framing.preset, preset => setFraming({ preset }))}
+      <div className="hu-cam">{failed ? <><span role="status">Recorded construction · 3D unavailable</span>
+        <button type="button" onClick={()=>setFailed(false)}>Retry 3D</button></> : <><span>Drag to turn · Scroll to zoom</span>
+        {choice("Camera", cameras, framing.preset, preset => setFraming({ preset }))}</>}
       </div>
     </div><aside className="hu-controls"><p className="kicker">Regimental dress</p><h2>{failed ? "Garment notes." : "Inspect the cut."}</h2>
       {choice("Regiment", ["Blue", "Yellow"] as const, regiment, setRegiment)}
@@ -90,7 +91,7 @@ export default function HussarLab() {
     </details>
     <HussarWardrobe/>
     <HussarReferences />
-    <section className="hu-reel"><div><p className="kicker">Wardrobe film</p><h2>Around the figure.</h2><p>See the two regimental uniforms and follow the braid across the dolman and pelisse fronts from the cutting patterns.</p><a href={filmFile("wardrobe-hussar")} download>Download the film ↓</a></div>{!failed && <WardrobeFilm />}</section>
+    <section className="hu-reel"><div><p className="kicker">Wardrobe film</p><h2>Around the figure.</h2><p>See the two regimental uniforms and follow the braid across the dolman and pelisse fronts from the cutting patterns.</p><a href={filmFile("wardrobe-hussar")} download>Download the film ↓</a></div><WardrobeFilm /></section>
     <section className="hu-sample"><div className="hu-braid"><svg viewBox="0 0 100 36" role="img" aria-label="The jacket’s looped chest cord laid flat"><path d={svgPath} fill="none" stroke="#81612f" strokeWidth="2.5" strokeLinejoin="round" /><path d={svgPath} fill="none" stroke="#ebca7e" strokeWidth="1.25" strokeLinejoin="round" /></svg><span>100 × 36 mm sampler board</span></div>
       <div><p className="kicker">From cord to machine</p><h2>Take a braid sample.</h2><p>Every row of cord on the jacket repeats this flat loop. The FrankenTextiles exporter wrote the two-pass Tajima file for it, including the stop to lay the cord.</p>
         <div className="hu-files"><a href="/wardrobe/hussar/braid-sampler.dst" download>Download DST ↓</a><a href="/wardrobe/hussar/braid-sampler.json" download>Pattern JSON ↓</a></div></div></section>

@@ -25,7 +25,7 @@ const chapters = [
   {name:"Sewn article", image:"sewn", frame:90},
 ] as const;
 
-function Motion({garment, hero}:{garment:Garment;hero:boolean}) {
+export function ConstructionMotion({garment, hero=false}:{garment:Garment;hero?:boolean}) {
   const data=studies[garment], base="construction-"+garment;
   const imageFile=(index:number)=>filmFile(index===2?base:base+"-"+chapters[index].image,"jpg");
   const video=useRef<HTMLVideoElement>(null);
@@ -96,6 +96,6 @@ export default function ConstructionStudy({choices=all,hero=false,value,onSelect
         <a href={study.pdf} download>{selected==="ensemble"?"Jacket pattern":"Full-size pattern"} ↓</a>
         {selected==="ensemble"&&<a href="/patterns/trousers.pdf" download>Trouser pattern ↓</a>}</div>
     </div>
-    <Motion key={selected} garment={selected} hero={hero}/>
+    <ConstructionMotion key={selected} garment={selected} hero={hero}/>
   </section>;
 }
