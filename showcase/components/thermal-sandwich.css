@@ -21,7 +21,7 @@
 .th-kpis>div{padding:13px 15px;border-right:1px solid #2c3e48}
 .th-kpis>div:last-child{border-right:0}
 .th-kpis dt{font:500 10px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:#aab8b8;margin-bottom:4px}
-.th-kpis dd{margin:0;font:400 clamp(22px,2vw,30px)/1.12 var(--serif);font-variant-numeric:tabular-nums;color:#fff7ea}
+.th-kpis dd{margin:0;font:400 clamp(17px,1.42vw,23px)/1.14 var(--serif);font-variant-numeric:tabular-nums;white-space:nowrap;color:#fff7ea}
 .th-kpis dd small{display:block;margin-top:3px;font:500 11px/1.35 var(--mono);color:#ffbd95}
 .th-refusal-banner{padding:20px 22px;background:#3a1e1a;border-top:2px solid #e67e56;color:#fdece4;display:grid;gap:8px}
 .th-refusal-banner .mono{color:#ffbd95;letter-spacing:.12em}

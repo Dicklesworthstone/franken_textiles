@@ -110,10 +110,10 @@ function IsometricStack({
 }) {
   const lo = Math.min(insideC, outsideC);
   const hi = Math.max(insideC, outsideC);
-  const gap = 14 + explode * 34;
-  const cx = 190;
-  const rx = 112;
-  const ry = 34;
+  const gap = 20 + explode * 34;
+  const cx = 204;
+  const rx = 92;
+  const ry = 26;
 
   const isoDiamond = (y: number) =>
     `M ${cx} ${y - ry} L ${cx + rx} ${y} L ${cx} ${y + ry} L ${cx - rx} ${y} Z`;
@@ -138,41 +138,41 @@ function IsometricStack({
 
   // Visual top-to-bottom order puts outer layer at top, inner layer at bottom.
   const ordered = [...layers].reverse();
-  const baseTop = ordered.length === 2 ? 78 - explode * 18 : 122 - explode * 10;
-  const topSlabH = ordered[0] ? Math.max(12, Math.min(34, ordered[0].meta.thicknessMm * 4.2)) : 20;
-  const botSlabH = ordered[1] ? Math.max(12, Math.min(34, ordered[1].meta.thicknessMm * 4.2)) : 0;
+  const baseTop = ordered.length === 2 ? 62 - explode * 14 : 114 - explode * 10;
+  const topSlabH = ordered[0] ? Math.max(12, Math.min(30, ordered[0].meta.thicknessMm * 3.8)) : 18;
+  const botSlabH = ordered[1] ? Math.max(12, Math.min(30, ordered[1].meta.thicknessMm * 3.8)) : 0;
 
   const yOuterFilm = baseTop;
-  const yTopLayer = yOuterFilm + 18 + gap * 0.65;
-  const yInterface = yTopLayer + topSlabH + gap * 0.9;
-  const yBotLayer = ordered.length === 2 ? yInterface + gap * 0.9 : yTopLayer;
-  const yInnerFilm = (ordered.length === 2 ? yBotLayer + botSlabH : yTopLayer + topSlabH) + 18 + gap * 0.65;
+  const yTopLayer = yOuterFilm + 16 + gap * 0.6;
+  const yInterface = yTopLayer + topSlabH + gap * 0.85;
+  const yBotLayer = ordered.length === 2 ? yInterface + gap * 0.85 : yTopLayer;
+  const yInnerFilm = (ordered.length === 2 ? yBotLayer + botSlabH : yTopLayer + topSlabH) + 16 + gap * 0.6;
 
   return (
     <svg
       className="th-iso-svg"
-      viewBox="0 0 430 370"
+      viewBox="0 0 436 376"
       role="img"
       aria-label={`Explodable thermal stack with ${layerIds.length} measured sheet${layerIds.length > 1 ? "s" : ""}`}
     >
       {/* Outside air / boundary film plane */}
       <g opacity="0.88">
         <path d={isoDiamond(yOuterFilm)} fill={tempColor(outsideC, lo, hi)} fillOpacity="0.22" stroke={tempColor(outsideC, lo, hi)} strokeDasharray="5 4" strokeWidth="1.4" />
-        <text x={cx + rx + 10} y={yOuterFilm + 4} fill="#d7e0dc" fontSize="10.5" fontFamily="var(--mono)">
+        <text x={cx + rx + 10} y={yOuterFilm + 3} fill="#d7e0dc" fontSize="10" fontFamily="var(--mono)">
           OUTSIDE {fmt(outsideC, 1)} °C
         </text>
-        <text x={cx + rx + 10} y={yOuterFilm + 17} fill="#94a8a8" fontSize="9.5" fontFamily="var(--mono)">
+        <text x={cx + rx + 10} y={yOuterFilm + 15} fill="#94a8a8" fontSize="9" fontFamily="var(--mono)">
           film {R_OUT} m²·K/W
         </text>
       </g>
 
-      {/* Bottom (Inside) reservoir film plane drawn behind lower slab when collapsed, or clearly beneath */}
+      {/* Bottom (Inside) reservoir film plane */}
       <g opacity="0.9">
         <path d={isoDiamond(yInnerFilm)} fill={tempColor(insideC, lo, hi)} fillOpacity="0.22" stroke={tempColor(insideC, lo, hi)} strokeDasharray="5 4" strokeWidth="1.4" />
-        <text x={cx + rx + 10} y={yInnerFilm + 4} fill="#ffd4b3" fontSize="10.5" fontFamily="var(--mono)">
+        <text x={cx + rx + 10} y={yInnerFilm + 3} fill="#ffd4b3" fontSize="10" fontFamily="var(--mono)">
           INSIDE {fmt(insideC, 1)} °C
         </text>
-        <text x={cx + rx + 10} y={yInnerFilm + 17} fill="#94a8a8" fontSize="9.5" fontFamily="var(--mono)">
+        <text x={cx + rx + 10} y={yInnerFilm + 15} fill="#94a8a8" fontSize="9" fontFamily="var(--mono)">
           film {R_IN} m²·K/W
         </text>
       </g>
@@ -187,45 +187,43 @@ function IsometricStack({
         return (
           <g>
             {slab(yBotLayer, botSlabH, topCol, sideCol, "#25343d")}
-            <text x={cx} y={yBotLayer + 4} textAnchor="middle" fill="#fffdf6" fontSize="11" fontWeight="600" fontFamily="var(--sans)">
+            <text x={cx} y={yBotLayer + 4} textAnchor="middle" fill="#fffdf6" fontSize="10.5" fontWeight="600" fontFamily="var(--sans)">
               Layer 1 · {l1.meta.id.split("/").pop()?.toUpperCase()}
             </text>
-            <text x={cx + rx + 10} y={yBotLayer + 6} fill="#fff7ea" fontSize="10.5" fontFamily="var(--mono)">
+            <text x={cx + rx + 10} y={yBotLayer + 4} fill="#fff7ea" fontSize="10" fontFamily="var(--mono)">
               {tOut !== undefined ? `${fmt(tOut, 2)} °C` : "—"}
             </text>
-            <text x={cx + rx + 10} y={yBotLayer + botSlabH + 10} fill="#ffbd95" fontSize="10.5" fontFamily="var(--mono)">
+            <text x={cx + rx + 10} y={yBotLayer + botSlabH + 8} fill="#ffbd95" fontSize="10" fontFamily="var(--mono)">
               {tIn !== undefined ? `${fmt(tIn, 2)} °C` : "—"}
             </text>
-            <text x={12} y={yBotLayer + botSlabH * 0.6} fill="#c8d2d0" fontSize="10" fontFamily="var(--mono)">
+            <text x={cx - rx - 8} y={yBotLayer + botSlabH * 0.55} textAnchor="end" fill="#c8d2d0" fontSize="9.5" fontFamily="var(--mono)">
               {l1.meta.thicknessMm.toFixed(2)} mm
             </text>
           </g>
         );
       })()}
 
-      {/* Interface gap marker between Layer 1 and Layer 2 */}
+      {/* Interface gap marker between Layer 1 and Layer 2 — label in right margin so top slab never occludes it */}
       {ordered.length === 2 && (
         <g>
           <path
             d={isoDiamond(yInterface)}
             fill={hasInterface ? "#ffba8c" : "#d94e34"}
-            fillOpacity={hasInterface ? "0.14" : "0.28"}
+            fillOpacity={hasInterface ? "0.14" : "0.26"}
             stroke={hasInterface ? "#ffba8c" : "#ff8d75"}
-            strokeWidth="1.5"
+            strokeWidth="1.4"
             strokeDasharray={hasInterface ? "3 3" : "none"}
           />
+          <line x1={cx + rx} y1={yInterface} x2={cx + rx + 8} y2={yInterface} stroke={hasInterface ? "#ffba8c" : "#ff8d75"} strokeWidth="1.2" />
           <text
-            x={cx}
-            y={yInterface + 4}
-            textAnchor="middle"
-            fill={hasInterface ? "#ffe1c4" : "#ffd6cc"}
-            fontSize="10.5"
+            x={cx + rx + 10}
+            y={yInterface + 3}
+            fill={hasInterface ? "#ffcf9f" : "#ff9b85"}
+            fontSize="9.5"
             fontWeight="600"
             fontFamily="var(--mono)"
           >
-            {hasInterface
-              ? `INTERFACE R = ${interfaceR.toFixed(3)} m²·K/W`
-              : "INTERFACE OMITTED · BLOCKED"}
+            {hasInterface ? `R_if ${interfaceR.toFixed(3)} m²·K/W` : "INTERFACE OMITTED"}
           </text>
         </g>
       )}
@@ -240,42 +238,42 @@ function IsometricStack({
         return (
           <g>
             {slab(yTopLayer, topSlabH, topCol, sideCol, "#25343d")}
-            <text x={cx} y={yTopLayer + 4} textAnchor="middle" fill="#fffdf6" fontSize="11" fontWeight="600" fontFamily="var(--sans)">
+            <text x={cx} y={yTopLayer + 4} textAnchor="middle" fill="#fffdf6" fontSize="10.5" fontWeight="600" fontFamily="var(--sans)">
               Layer {top.idx + 1} · {top.meta.id.split("/").pop()?.toUpperCase()}
             </text>
-            <text x={cx + rx + 10} y={yTopLayer + 6} fill="#d7e6ec" fontSize="10.5" fontFamily="var(--mono)">
+            <text x={cx + rx + 10} y={yTopLayer + 4} fill="#d7e6ec" fontSize="10" fontFamily="var(--mono)">
               {tOut !== undefined ? `${fmt(tOut, 2)} °C` : "—"}
             </text>
-            <text x={cx + rx + 10} y={yTopLayer + topSlabH + 10} fill="#ffbd95" fontSize="10.5" fontFamily="var(--mono)">
+            <text x={cx + rx + 10} y={yTopLayer + topSlabH + 8} fill="#ffbd95" fontSize="10" fontFamily="var(--mono)">
               {tIn !== undefined ? `${fmt(tIn, 2)} °C` : "—"}
             </text>
-            <text x={12} y={yTopLayer + topSlabH * 0.6} fill="#c8d2d0" fontSize="10" fontFamily="var(--mono)">
+            <text x={cx - rx - 8} y={yTopLayer + topSlabH * 0.55} textAnchor="end" fill="#c8d2d0" fontSize="9.5" fontFamily="var(--mono)">
               {top.meta.thicknessMm.toFixed(2)} mm
             </text>
           </g>
         );
       })()}
 
-      {/* Heat flux direction arrow */}
+      {/* Heat flux direction arrow at far left, clear of thickness labels */}
       {result && Math.abs(result.state.flux_w_m2) > 1e-6 && (
         <g>
           <line
-            x1="44"
-            y1={result.state.flux_w_m2 > 0 ? yInnerFilm - 10 : yOuterFilm + 10}
-            x2="44"
-            y2={result.state.flux_w_m2 > 0 ? yOuterFilm + 10 : yInnerFilm - 10}
+            x1="22"
+            y1={result.state.flux_w_m2 > 0 ? yInnerFilm - 8 : yOuterFilm + 16}
+            x2="22"
+            y2={result.state.flux_w_m2 > 0 ? yOuterFilm + 16 : yInnerFilm - 8}
             stroke="#ffba8c"
             strokeWidth="2"
           />
           <polygon
             points={
               result.state.flux_w_m2 > 0
-                ? `44,${yOuterFilm + 4} 38,${yOuterFilm + 15} 50,${yOuterFilm + 15}`
-                : `44,${yInnerFilm - 4} 38,${yInnerFilm - 15} 50,${yInnerFilm - 15}`
+                ? `22,${yOuterFilm + 10} 16,${yOuterFilm + 21} 28,${yOuterFilm + 21}`
+                : `22,${yInnerFilm - 2} 16,${yInnerFilm - 13} 28,${yInnerFilm - 13}`
             }
             fill="#ffba8c"
           />
-          <text x="12" y={yOuterFilm + 3} fill="#ffba8c" fontSize="9.5" fontFamily="var(--mono)">
+          <text x="10" y={yOuterFilm + 2} fill="#ffba8c" fontSize="9.5" fontFamily="var(--mono)">
             q = {fmt(result.state.flux_w_m2, 1)} W/m²
           </text>
         </g>
@@ -312,8 +310,8 @@ function TemperatureProfile({
     pts.push({ x: 0.82, t: faces[0][1], label: "L1 out" });
   } else {
     pts.push({ x: 0.14, t: faces[0][0], label: "L1 in" });
-    pts.push({ x: 0.44, t: faces[0][1], label: "L1 out" });
-    pts.push({ x: 0.56, t: faces[1][0], label: "L2 in" });
+    pts.push({ x: 0.39, t: faces[0][1], label: "L1 out" });
+    pts.push({ x: 0.61, t: faces[1][0], label: "L2 in" });
     pts.push({ x: 0.86, t: faces[1][1], label: "L2 out" });
   }
   pts.push({ x: 1, t: outsideC, label: "Out" });
@@ -321,7 +319,7 @@ function TemperatureProfile({
   const lo = Math.min(...pts.map(p => p.t)) - 2;
   const hi = Math.max(...pts.map(p => p.t)) + 2;
   const span = Math.max(1, hi - lo);
-  const px = (x: number) => 34 + x * 244;
+  const px = (x: number) => 28 + x * 244;
   const py = (t: number) => 178 - ((t - lo) / span) * 144;
   const poly = pts.map(p => `${px(p.x).toFixed(1)},${py(p.t).toFixed(1)}`).join(" ");
 
@@ -339,13 +337,13 @@ function TemperatureProfile({
           <rect x={px(0.18)} y="24" width={px(0.82) - px(0.18)} height="158" fill="#2c4452" fillOpacity="0.45" />
         ) : (
           <>
-            <rect x={px(0.14)} y="24" width={px(0.44) - px(0.14)} height="158" fill="#2c4452" fillOpacity="0.45" />
-            <rect x={px(0.44)} y="24" width={px(0.56) - px(0.44)} height="158" fill="#a85532" fillOpacity="0.24" />
-            <rect x={px(0.56)} y="24" width={px(0.86) - px(0.56)} height="158" fill="#3a5248" fillOpacity="0.45" />
+            <rect x={px(0.14)} y="24" width={px(0.39) - px(0.14)} height="158" fill="#2c4452" fillOpacity="0.45" />
+            <rect x={px(0.39)} y="24" width={px(0.61) - px(0.39)} height="158" fill="#a85532" fillOpacity="0.24" />
+            <rect x={px(0.61)} y="24" width={px(0.86) - px(0.61)} height="158" fill="#3a5248" fillOpacity="0.45" />
           </>
         )}
-        <line x1="34" y1="182" x2="278" y2="182" stroke="#425560" strokeWidth="1" />
-        <line x1="34" y1="24" x2="34" y2="182" stroke="#425560" strokeWidth="1" />
+        <line x1="28" y1="182" x2="272" y2="182" stroke="#425560" strokeWidth="1" />
+        <line x1="28" y1="24" x2="28" y2="182" stroke="#425560" strokeWidth="1" />
         <polyline points={poly} fill="none" stroke="#ffba8c" strokeWidth="2.4" strokeLinejoin="round" />
         {pts.map((p, idx) => (
           <g key={p.label}>
@@ -380,7 +378,7 @@ export default function ThermalSandwich() {
   const [interfaceR, setInterfaceR] = useState(0.02);
   const [insideC, setInsideC] = useState(35);
   const [outsideC, setOutsideC] = useState(20);
-  const [explode, setExplode] = useState(0.45);
+  const [explode, setExplode] = useState(0.65);
   const request = useMemo(() => {
     const layers =
       layer2 === "none"
