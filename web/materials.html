@@ -2488,7 +2488,10 @@ kilogram-priced thread offers. Supplier minimums, increments, tiers and stock st
 Missing density leaves length-only quantities and offers usable. Consumed mass includes thread allowances;
 it is separate from retained garment mass. Mass and nominal package length do not establish splice-free continuity.</p>
 <p class="note">Use <code>ftx-textile-surface-water/2</code> for continuous liquid delivery. Omit
-<code>replenishment_kg_m2_s</code> and add <code>supply</code> with schema <code>ftx-textile-liquid-supply/1</code>,
+<code>replenishment_kg_m2_s</code> and add <code>supply</code> with schema <code>ftx-textile-liquid-supply/1</code>
+(unlimited delivery) or <code>ftx-textile-liquid-supply/2</code> (shared finite liquid donor via <code>finite_reservoir</code>
+with schema <code>ftx-textile-liquid-reservoir/1</code>, where all selected pieces draw at their prescribed rates until one exact
+depletion event and separate donor mass/enthalpy ledgers are retained),
 its own <code>source</code>, <code>evidence</code>, <code>allow_estimates</code> and <code>method</code>.
 Each exact instance binding supplies <code>rate_kg_m2_s</code> and <code>temperature_c</code> arrays, one entry
 per mechanical keyframe interval, including explicit zero delivery. Rates use reference material area;
