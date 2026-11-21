@@ -504,9 +504,22 @@ pub fn drape_observed(
              crossing or closer than their contact thickness)"
         ))
     ));
+    let initial_positions = scene.positions();
+    let first_sewn = FOLD_FRAMES + ZIP_FRAMES;
+    let mut display_contact = if opts.self_contact.is_some() {
+        let mut display = crate::animation::ReplayContact::new(body.display.0, body.display.1)?;
+        // The collider may omit fingers or feet retained by the displayed wearer. Check the exact
+        // welded start before spending any work on a trajectory that must already be refused.
+        if let Err(refusal) = display.check(&initial_positions, &scene.mesh.faces, first_sewn - 1) {
+            *refused = refused_run(&scene, std::slice::from_ref(&initial_positions), "sew", 1);
+            return Err(refusal);
+        }
+        Some(display)
+    } else {
+        None
+    };
     let board = board_layout(&scene.mesh);
     let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);
-    let initial_positions = scene.positions();
     if opts.self_contact.is_some() {
         for frame in &mut frames {
             crate::animation::separate_panels(frame, &scene.mesh.inst_range);
@@ -588,10 +601,10 @@ pub fn drape_observed(
             drape.max_speed
         ));
     }
-    if opts.self_contact.is_some() {
-        let mut display = crate::animation::ReplayContact::new(body.display.0, body.display.1)?;
-        let first_sewn = FOLD_FRAMES + ZIP_FRAMES;
-        for (index, frame) in frames.iter().enumerate().skip(first_sewn - 1) {
+    if let Some(display) = &mut display_contact {
+        // The start was checked before the physical schedule; every accepted endpoint still needs
+        // the same full-display and cloth crossing audit, without repeating the initial frame.
+        for (index, frame) in frames.iter().enumerate().skip(first_sewn) {
             if let Err(refusal) = display.check(frame, &scene.mesh.faces, index) {
                 // The frame that crosses the wearer is the one to look at: hand it back as the state after
                 // that many accepted steps of its phase (settling steps count as draping).

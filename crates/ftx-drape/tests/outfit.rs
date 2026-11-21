@@ -1296,20 +1296,22 @@ fn a_refused_phase_leaves_the_last_accepted_state_to_look_at() {
     assert!(nothing.is_none());
 }
 
-/// When the recorded cloth crosses a part of the displayed wearer that the collision body leaves out (a
-/// hand, a foot), the refusal hands back the frame that crosses, so that it can be drawn.
+/// A crossing in the accepted proxy start must be found before the sewing/draping schedule runs.
+/// The full display body can retain fingers and feet omitted from that proxy.
 #[test]
-fn a_crossing_of_the_displayed_wearer_hands_back_the_frame_that_crosses() {
+fn an_initial_display_crossing_refuses_before_sewing_and_returns_the_exact_start() {
     use ftx_core::RefusalCode;
+    use ftx_drape::animation::{FOLD_FRAMES, ZIP_FRAMES};
     use ftx_drape::run::{drape, drape_observed};
 
     let skin = skin();
     let pattern = ftx_pattern::Pattern::new(panel(40.0));
     let opts = options();
-    // Where the panel ends up when nothing is in its way.
+    // The ordinary run establishes the actual welded, relaxed start, without a second placement model.
     let clear = drape(&pattern, &json!({}), &body(&skin), &opts, |_| {}).unwrap();
-    let settled = clear.fold.frames.last().unwrap();
-    let middle = settled.iter().fold(Vec3::ZERO, |sum, p| sum + *p) * (1.0 / settled.len() as f64);
+    let first_physical = FOLD_FRAMES + ZIP_FRAMES - 1;
+    let initial = &clear.fold.frames[first_physical];
+    let middle = initial.iter().fold(Vec3::ZERO, |sum, p| sum + *p) * (1.0 / initial.len() as f64);
     let outward = Vec3::new(middle.x, middle.y, 0.0) * (1.0 / middle.x.hypot(middle.y));
     // The same wearer with a thin "finger" through that spot, drawn but not collided with.
     let mut vertices = skin.vertices.clone();
@@ -1328,13 +1330,14 @@ fn a_crossing_of_the_displayed_wearer_hands_back_the_frame_that_crosses() {
         arm_deg: 35.,
     };
 
+    let mut progress = Vec::new();
     let mut refused = None;
     let refusal = drape_observed(
         &pattern,
         &json!({}),
         &with_finger,
         &opts,
-        |_| {},
+        |line| progress.push(line.to_string()),
         &mut refused,
     )
     .err()
@@ -1345,23 +1348,109 @@ fn a_crossing_of_the_displayed_wearer_hands_back_the_frame_that_crosses() {
         "{}",
         refusal.message
     );
+    assert!(
+        !progress.iter().any(|line| {
+            line.starts_with("sew:") || line.starts_with("drape:") || line.starts_with("settling:")
+        }),
+        "a known invalid start must not run the physical schedule: {progress:?}"
+    );
     let state = refused.expect("the crossing frame is handed back");
-    assert!(["sew", "drape"].contains(&state.phase));
-    assert!(state.accepted_steps <= 3);
+    assert_eq!(state.phase, "sew");
+    assert_eq!(state.accepted_steps, 0);
     assert_eq!(state.positions.len(), state.mesh.verts2d.len());
-    // It is one of the frames the clear run recorded too (the finger takes no part in the dynamics), and it
-    // is the frame the refusal names.
-    let index = clear
-        .fold
-        .frames
-        .iter()
-        .position(|frame| *frame == state.positions)
-        .expect("the handed-back state is a recorded frame");
+    assert_eq!(state.positions, *initial);
+    assert_eq!(state.mesh.faces, clear.scene.mesh.faces);
+    assert_eq!(state.mesh.instances, clear.scene.mesh.instances);
+    assert_eq!(state.start_fallback, None);
+    assert_eq!(state.start_unrelaxed_p95, None);
     assert!(
         refusal
             .message
-            .contains(&format!("physical frame {index}:")),
+            .contains(&format!("physical frame {first_physical}:")),
         "{}",
         refusal.message
     );
+    let plain = drape(&pattern, &json!({}), &with_finger, &opts, |_| {})
+        .err()
+        .expect("the start also refuses without an observer");
+    assert_eq!((plain.code, plain.message), (refusal.code, refusal.message));
+}
+
+#[test]
+fn a_later_display_crossing_still_returns_the_recorded_frame() {
+    use ftx_core::RefusalCode;
+    use ftx_drape::animation::{FOLD_FRAMES, ReplayContact, ZIP_FRAMES};
+    use ftx_drape::run::{drape, drape_observed};
+
+    let skin = skin();
+    let pattern = ftx_pattern::Pattern::new(panel(40.0));
+    let opts = options();
+    let clear = drape(&pattern, &json!({}), &body(&skin), &opts, |_| {}).unwrap();
+    let first_sewn = FOLD_FRAMES + ZIP_FRAMES;
+    let initial = &clear.fold.frames[first_sewn - 1];
+    let final_frame = clear.fold.frames.last().unwrap();
+    let floor = |points: &[Vec3]| points.iter().map(|p| p.z).fold(f64::INFINITY, f64::min);
+    let (initial_floor, final_floor) = (floor(initial), floor(final_frame));
+    assert!(initial_floor - final_floor > 1e-6);
+    // A thin displayed surface lies wholly below the initial cloth, but its lower edge falls through
+    // that surface during gravity. Checking only the start would incorrectly accept this run.
+    let mut middle =
+        initial.iter().fold(Vec3::ZERO, |sum, p| sum + *p) * (1.0 / initial.len() as f64);
+    middle.z = (initial_floor + final_floor) / 2.0;
+    let half_height = (initial_floor - final_floor) / 8.0;
+    let outward = Vec3::new(middle.x, middle.y, 0.0) * (1.0 / middle.x.hypot(middle.y));
+    let mut vertices = skin.vertices.clone();
+    let mut triangles = skin.triangles.clone();
+    let n = vertices.len();
+    vertices.extend([
+        middle - outward * 0.012,
+        middle + outward * 0.012 + Vec3::new(0.0, 0.0, half_height),
+        middle + outward * 0.012 - Vec3::new(0.0, 0.0, half_height),
+    ]);
+    triangles.push([n, n + 1, n + 2]);
+    let mut check = ReplayContact::new(&vertices, &triangles).unwrap();
+    check
+        .check(initial, &clear.scene.mesh.faces, first_sewn - 1)
+        .expect("the unchanged start is clear of the later obstruction");
+    let expected = clear
+        .fold
+        .frames
+        .iter()
+        .enumerate()
+        .skip(first_sewn)
+        .find_map(|(index, positions)| {
+            check
+                .check(positions, &clear.scene.mesh.faces, index)
+                .err()
+                .map(|refusal| (index, positions, refusal))
+        })
+        .expect("a later physical frame crosses the displayed obstruction");
+    let with_obstruction = DrapeBody {
+        frames: &Form,
+        collision: (&skin.vertices, &skin.triangles),
+        display: (&vertices, &triangles),
+        arm_deg: 35.,
+    };
+    let mut progress = Vec::new();
+    let mut refused = None;
+    let refusal = drape_observed(
+        &pattern,
+        &json!({}),
+        &with_obstruction,
+        &opts,
+        |line| progress.push(line.to_string()),
+        &mut refused,
+    )
+    .err()
+    .expect("the complete physical trajectory remains audited");
+    assert_eq!(refusal.code, RefusalCode::IntersectingTrajectory);
+    assert_eq!(refusal.message, expected.2.message);
+    assert!(progress.iter().any(|line| line.starts_with("drape:")));
+    let state = refused.expect("the later crossing frame is retained");
+    assert_eq!(state.phase, "drape");
+    assert_eq!(
+        state.accepted_steps,
+        expected.0 + 1 - first_sewn - opts.sew_steps
+    );
+    assert_eq!(state.positions, *expected.1);
 }
