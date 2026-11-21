@@ -817,17 +817,23 @@ mod tests {
         // Active Coulomb friction (mu > 0) violates homogeneous-elastic conservative adjoint scope.
         let mut with_friction = make_contact(0.25);
         with_friction.static_solve().unwrap();
-        let err = with_friction.constitutive_gradient(&dl_dx).unwrap_err();
+        let err = with_friction
+            .constitutive_gradient(&dl_dx, [0.0; 4], 0.0)
+            .unwrap_err();
         assert_eq!(err.code, ftx_core::RefusalCode::OutOfRange);
         assert!(err.message.contains("friction"), "{err}");
 
         // Frictionless barrier contact (mu == 0) remains conservative and admitted.
         let mut frictionless = make_contact(0.0);
         frictionless.static_solve().unwrap();
-        assert!(frictionless.constitutive_gradient(&dl_dx).is_ok());
+        assert!(
+            frictionless
+                .constitutive_gradient(&dl_dx, [0.0; 4], 0.0)
+                .is_ok()
+        );
 
         // Mismatched compression table length must refuse cleanly rather than panic.
-        frictionless.model.compression.push(1.0);
+        frictionless.model.compression.push([1.0, 1.0]);
         let err = frictionless.equilibrium_adjoint(&dl_dx).unwrap_err();
         assert_eq!(err.code, ftx_core::RefusalCode::OutOfRange);
     }
