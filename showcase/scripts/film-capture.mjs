@@ -6,6 +6,14 @@ export const filmWidth = 3840;
 export const filmHeight = 2160;
 export const filmUserAgent = "OpenAI File Downloader, XaiImageApiFetch/1.0";
 
+export function filmBrowserOptions(executablePath) {
+  const openGl = process.env.FTX_FILM_OPENGL === "1";
+  const driver = openGl
+    ? ["--use-gl=angle", "--use-angle=gl", "--ignore-gpu-blocklist"]
+    : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
+  return { executablePath, headless: !openGl, args: ["--disable-dev-shm-usage", ...driver] };
+}
+
 export function captureOptions(viewport, deviceScaleFactor = filmWidth / viewport.width) {
   return { viewport, deviceScaleFactor, reducedMotion: "reduce", userAgent: filmUserAgent };
 }

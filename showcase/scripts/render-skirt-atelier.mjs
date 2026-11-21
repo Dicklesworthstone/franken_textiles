@@ -5,11 +5,10 @@ import {mkdir,writeFile} from "node:fs/promises";
 import {resolve} from "node:path";
 import {chromium} from "playwright-core";
 import sharp from "sharp";
-import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, filmBrowserOptions, fps, frameCapture } from "./film-capture.mjs";
 
 const out=resolve(process.argv[2]);await mkdir(out);
-const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||chromium.executablePath(),
-  args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
+const browser=await chromium.launch(filmBrowserOptions(process.env.CHROMIUM_EXECUTABLE || chromium.executablePath()));
 try{
   const page=await browser.newPage(captureOptions({width:1104,height:621}));
   await enableFilmResolution(page);

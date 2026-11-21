@@ -5,15 +5,14 @@ import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, filmBrowserOptions, fps, frameCapture } from "./film-capture.mjs";
 
 const base = process.argv[2] || "http://localhost:3000";
 const dest = path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/", import.meta.url)));
 const kinds = process.argv[4] ? [process.argv[4]] : ["cylinder","strip"];
 const frames = fps * 7;
 await mkdir(dest,{recursive:true});
-const browser = await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(),
-  args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
+const browser = await chromium.launch(filmBrowserOptions(process.env.CHROMIUM_EXECUTABLE || chromium.executablePath()));
 try {
   for(const kind of kinds) {
     if(!["cylinder","strip"].includes(kind)) throw Error("Choose cylinder or strip.");

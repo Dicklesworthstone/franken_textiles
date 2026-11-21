@@ -206,6 +206,9 @@ The 60 fps camera is sampled independently of the retained solver states.
 CHROMIUM_EXECUTABLE=/path/to/chrome bun run films http://localhost:3000 /path/to/new-media
 ```
 
+On Linux, `FTX_FILM_OPENGL=1` uses ANGLE's OpenGL backend in a window. For Mesa software rendering
+without a desktop, run the same command under `xvfb-run -a` with `LIBGL_ALWAYS_SOFTWARE=1`.
+
 For the construction films, use Blender or the EGL recorder with NumPy, ModernGL 5.13 and
 glcontext 3.1. Both use the same source frames and chapter timings. The EGL renderer uses the
 actual pattern boundaries, seam pairs and garment meshes with direct lighting.

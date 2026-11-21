@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, filmBrowserOptions, fps, frameCapture } from "./film-capture.mjs";
 
 const base = new URL(process.argv[2] || "http://localhost:3000");
 const target = path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/", import.meta.url)));
@@ -127,10 +127,9 @@ async function encode(page, study) {
 }
 
 await mkdir(target, { recursive: true });
-const browser = await chromium.launch({
-  executablePath: process.env.CHROMIUM_EXECUTABLE || process.env.FTX_CHROMIUM_EXECUTABLE || chromium.executablePath(),
-  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--disable-dev-shm-usage"],
-});
+const browser = await chromium.launch(filmBrowserOptions(
+  process.env.CHROMIUM_EXECUTABLE || process.env.FTX_CHROMIUM_EXECUTABLE || chromium.executablePath(),
+));
 try {
   const context = await browser.newContext(captureOptions(movie));
   await enableFilmResolution(context);

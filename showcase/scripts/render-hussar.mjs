@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { captureOptions, enableFilmResolution, filmArgs, fps, frameCapture } from "./film-capture.mjs";
+import { captureOptions, enableFilmResolution, filmArgs, filmBrowserOptions, fps, frameCapture } from "./film-capture.mjs";
 
 const base=new URL(process.argv[2] || "http://localhost:3000");
 const dest=path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/",import.meta.url)));
@@ -20,8 +20,7 @@ if (!Number.isInteger(endFrame) || endFrame <= startFrame || endFrame > frames) 
 }
 const ease=t=>t*t*(3-2*t);
 await mkdir(dest,{recursive:true});
-const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(),
-  args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
+const browser=await chromium.launch(filmBrowserOptions(process.env.CHROMIUM_EXECUTABLE || chromium.executablePath()));
 try{
   const page=await browser.newPage(captureOptions({width:960,height:540}));
   await enableFilmResolution(page);

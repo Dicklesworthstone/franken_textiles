@@ -4,13 +4,12 @@ import {once} from "node:events";
 import {mkdir,writeFile} from "node:fs/promises";
 import {resolve} from "node:path";
 import {chromium} from "playwright-core";
-import {captureOptions,enableFilmResolution,filmArgs,fps,frameCapture} from "./film-capture.mjs";
+import {captureOptions,enableFilmResolution,filmArgs,filmBrowserOptions,fps,frameCapture} from "./film-capture.mjs";
 
 const out=resolve(process.argv[2]);
 await mkdir(out);
 const origin=process.env.FTX_STUDIO_URL||"http://127.0.0.1:3000";
-const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||chromium.executablePath(),
-  args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
+const browser=await chromium.launch(filmBrowserOptions(process.env.CHROMIUM_EXECUTABLE || chromium.executablePath()));
 const productions=[
   {id:"trouser-posture",tab:"Posture",title:"Bending the knee",cuts:[["Standing","standing"],["Shallow squat","squat-12"],["Quarter squat","squat-25"]]},
   {id:"trouser-elastic",tab:"Elastic",title:"Holding the waist",cuts:[["5 N","elastic-5"],["15 N","standing"],["60 N","elastic-60"]]},
