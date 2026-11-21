@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { CutDraft as Draft } from "./DraftLab";
+import RemnantBoard from "./RemnantBoard";
 import "./cut-lab.css";
 
 const garments = [["zouave_bolero", "Zouave bolero"], ["zouave_trousers", "Gathered trousers"], ["fez", "Fez cap"]];
@@ -70,7 +71,33 @@ function MarkerDrawing({ preview, selected, select }: { preview: Preview; select
 }
 
 export default function CutLab({ draft }: { draft?: Draft }) {
-  return <CuttingBoard key={draft?.pattern ?? "chart"} draft={draft}/>;
+  const [mode, setMode] = useState<"roll" | "remnant">("roll");
+  useEffect(() => {
+    if (draft) {
+      setMode("roll");
+      return;
+    }
+    const requested = new URLSearchParams(location.search).get("mode");
+    if (requested === "remnant") setMode("remnant");
+  }, [draft]);
+
+  return (
+    <div className="cut-shell">
+      <div className="cut-mode-bar" role="group" aria-label="Cutting planner mode">
+        <button type="button" aria-pressed={mode === "roll"} onClick={() => setMode("roll")}>
+          Roll marker <span>Continuous bolt</span>
+        </button>
+        <button type="button" aria-pressed={mode === "remnant"} onClick={() => setMode("remnant")}>
+          Cut from remnant <span>Two-job finite sheet</span>
+        </button>
+      </div>
+      {mode === "remnant" ? (
+        <RemnantBoard />
+      ) : (
+        <CuttingBoard key={draft?.pattern ?? "chart"} draft={draft} />
+      )}
+    </div>
+  );
 }
 
 function CuttingBoard({ draft }: { draft?: Draft }) {
