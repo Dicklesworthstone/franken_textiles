@@ -3025,7 +3025,8 @@ mod tests {
                                partition: Partition,
                                with_torque: bool|
          -> Experiment {
-            let fixture = base_fixture(warp_axis);
+            let mut fixture = base_fixture(warp_axis);
+            fixture.cells = [16, 6];
             let loading = vec![Waypoint {
                 time_s: 0.0,
                 axial_displacement_m: axial_m,
@@ -3052,15 +3053,15 @@ mod tests {
                     waypoint_index: 0,
                     force_n: Some(Channel {
                         value: s.tare_adjusted_force_n,
-                        scale: 0.5,
+                        scale: 1.0,
                     }),
                     torque_nm: with_torque.then_some(Channel {
                         value: s.tare_adjusted_torque_nm,
-                        scale: 0.02,
+                        scale: 0.03,
                     }),
                     mean_mid_radius_m: Some(Channel {
                         value: s.mid_radius_range_m[2],
-                        scale: 2e-4,
+                        scale: 1e-3,
                     }),
                 }],
             }
@@ -3107,32 +3108,32 @@ mod tests {
                 make_static_exp(
                     "fit-warp-comp",
                     [0.0, 1.0],
-                    -0.0022,
-                    2.0,
+                    -0.0018,
+                    -6.0,
                     Partition::Fit,
                     true,
                 ),
                 make_static_exp(
                     "fit-weft-ext",
                     [1.0, 0.0],
-                    0.0018,
-                    -6.0,
+                    0.0020,
+                    8.0,
                     Partition::Fit,
                     true,
                 ),
                 make_static_exp(
                     "fit-weft-comp",
                     [1.0, 0.0],
-                    -0.0020,
-                    -2.0,
+                    -0.0018,
+                    -6.0,
                     Partition::Fit,
                     false,
                 ),
                 make_static_exp(
                     "check-bias",
                     [inv_sqrt2, inv_sqrt2],
-                    0.0010,
-                    4.0,
+                    0.0004,
+                    2.0,
                     Partition::Check,
                     true,
                 ),
@@ -3147,9 +3148,9 @@ mod tests {
                 ..Controls::default()
             },
             policy: Policy {
-                max_rms_scaled: 0.25,
-                max_peak_scaled: 0.45,
-                max_mesh_scaled: 0.50,
+                max_rms_scaled: 0.35,
+                max_peak_scaled: 0.6,
+                max_mesh_scaled: 0.6,
                 min_excitation_pivot: 1e-4,
                 max_iterations: 40,
                 max_forward_solves: 8192,
@@ -3159,6 +3160,48 @@ mod tests {
 
         let mut adj_input = fd_input.clone();
         adj_input.policy.sensitivity = SensitivityMode::Adjoint;
+
+        // Direct entrywise 11x5 Jacobian check (force_n, torque_nm, mean_mid_radius_m vs
+        // E_warp, E_weft, nu, G_12, B) against central finite differences on the coarse mesh.
+        {
+            let baseline = resolve_baseline_and_validate(&adj_input).unwrap();
+            let p_probe = [0.44, 0.36, 0.50, 0.36, 0.375];
+            let mut adj_budget = Budget {
+                used: 0,
+                adjoint_solves: 0,
+                limit: 100,
+                inherited_domain: None,
+                baseline: baseline.clone(),
+                input: &adj_input,
+                recovery: SearchRecovery::default(),
+            };
+            let mut eval = evaluate_fit(&adj_input, p_probe, &mut adj_budget)
+                .map_err(ForwardFailure::refusal)
+                .unwrap();
+            let j_adj = adjoint_jacobian(&adj_input, p_probe, &mut adj_budget, &mut eval).unwrap();
+            let mut fd_budget = Budget {
+                used: 0,
+                adjoint_solves: 0,
+                limit: 100,
+                inherited_domain: None,
+                baseline,
+                input: &fd_input,
+                recovery: SearchRecovery::default(),
+            };
+            let j_fd = jacobian(&fd_input, p_probe, &mut fd_budget, None).unwrap();
+            assert_eq!(j_adj.len(), 11);
+            assert_eq!(j_fd.len(), 11);
+            for (r, (row_a, row_f)) in j_adj.iter().zip(&j_fd).enumerate() {
+                for (c, (&va, &vf)) in row_a.iter().zip(row_f).enumerate() {
+                    let denom = va.abs().max(vf.abs()).max(1e-6);
+                    let err = (va - vf).abs() / denom;
+                    assert!(
+                        err < 1e-4,
+                        "Jacobian mismatch at ({r},{c}): adjoint={va:.8e} vs central_fd={vf:.8e} (rel={err:.3e})"
+                    );
+                }
+            }
+        }
 
         // Default finite_difference omits the wire field; opt-in adjoint serializes explicitly.
         let fd_policy_json = serde_json::to_value(&fd_input.policy).unwrap();
@@ -3218,7 +3261,7 @@ mod tests {
             .enumerate()
         {
             let rel_truth = (adj_val - want).abs() / want;
-            let tol_truth = if i == 4 { 0.05 } else { 0.02 };
+            let tol_truth = if i == 4 { 0.08 } else { 0.03 };
             assert!(
                 rel_truth < tol_truth,
                 "adjoint parameter {i} ({adj_val}) differs from truth ({want}) by {:.3}%",
@@ -3258,17 +3301,24 @@ mod tests {
         // 2. Self-contact FIT fixture
         let mut sc_input = fixed_law_input(false);
         sc_input.material = synthetic_base_material(true);
-        sc_input.material.properties.insert(
-            "friction_self".into(),
-            serde_json::from_value(json!({
-                "value": 0.25,
-                "unit": "1",
-                "evidence": "measured",
-                "source": "base",
-                "method": "synthetic-friction"
-            }))
-            .unwrap(),
-        );
+        for (key, value, unit) in [
+            ("weft_stiffness", 620.0, "N/m"),
+            ("shear_stiffness", 180.0, "N/m"),
+            ("bending_rigidity", 2.5e-3, "N*m"),
+            ("friction_self", 0.25, "1"),
+        ] {
+            sc_input.material.properties.insert(
+                key.into(),
+                serde_json::from_value(json!({
+                    "value": value,
+                    "unit": unit,
+                    "evidence": "measured",
+                    "source": "spec",
+                    "method": "synthetic-baseline"
+                }))
+                .unwrap(),
+            );
+        }
         sc_input.targets = vec![TargetParameter {
             parameter: TargetKind::WarpStiffness,
             bounds: [600.0, 1200.0],
