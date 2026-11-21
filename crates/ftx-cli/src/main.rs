@@ -1293,6 +1293,7 @@ fn cmd_drape_bound(
     if !hands.is_wrist() {
         text.push_str(&format!("hand collider: {}\n", hands.as_str()));
     }
+    append_drape_constitutive_summary(&report, Some(&mut text), None);
     if let Some(equilibrium) = report.get("static_equilibrium") {
         if equilibrium["status"] == "available" {
             text.push_str(&format!(
@@ -1335,6 +1336,7 @@ fn cmd_drape_bound(
     if let Some(hand_collider) = report.get("hand_collider") {
         result["hand_collider"] = hand_collider.clone();
     }
+    append_drape_constitutive_summary(&report, None, Some(&mut result));
     if let Some(composition) = report.get("outfit") {
         result["outfit"] = composition.clone();
         result["files"] = json!(
@@ -1346,6 +1348,43 @@ fn cmd_drape_bound(
         );
     }
     Ok((result, code, text))
+}
+
+fn append_drape_constitutive_summary(
+    report: &Value,
+    text: Option<&mut String>,
+    result: Option<&mut Value>,
+) {
+    let scheme = report["membrane_history"]["integration"]
+        .as_str()
+        .filter(|s| *s != "backward_euler");
+    let damage_model = report["membrane_plasticity_history"]["damage_model"].as_str();
+    let damage_j = report["membrane_plasticity_history"]["damage_dissipation_j"]
+        .as_f64()
+        .filter(|v| v.is_finite());
+    if let Some(text) = text {
+        if let Some(scheme) = scheme {
+            text.push_str(&format!("relaxation integration: {scheme}\n"));
+        }
+        if let Some(model) = damage_model {
+            match damage_j {
+                Some(j) => text.push_str(&format!("membrane damage: {model} ({j:.3e} J)\n")),
+                None => text.push_str(&format!("membrane damage: {model}\n")),
+            }
+        }
+    }
+    if let Some(out) = result {
+        if let Some(scheme) = scheme {
+            out["relaxation_integration"] = json!(scheme);
+        }
+        if let Some(model) = damage_model {
+            let mut dmg = json!({"damage_model": model});
+            if let Some(j) = damage_j {
+                dmg["damage_dissipation_j"] = json!(j);
+            }
+            out["membrane_damage"] = dmg;
+        }
+    }
 }
 
 fn emit(command: &str, json_out: bool, outcome: Result<(Value, i32, String), Refusal>) -> ExitCode {
@@ -1996,6 +2035,44 @@ mod tests {
                 .message
                 .contains("--hands requires --sim or --stills")
         );
+    }
+
+    #[test]
+    fn drape_constitutive_summary_surfaces_opt_in_exact_exponential_and_damage_without_altering_defaults()
+     {
+        let mut default_text = String::new();
+        let mut default_json = json!({});
+        append_drape_constitutive_summary(
+            &json!({"membrane_history": {"integration": "backward_euler"}}),
+            Some(&mut default_text),
+            Some(&mut default_json),
+        );
+        assert!(default_text.is_empty());
+        assert_eq!(default_json, json!({}));
+
+        let mut opt_text = String::new();
+        let mut opt_json = json!({});
+        append_drape_constitutive_summary(
+            &json!({
+                "membrane_history": {"integration": "exact_exponential"},
+                "membrane_plasticity_history": {
+                    "damage_model": "isotropic_accumulated_damage/1",
+                    "damage_dissipation_j": 0.00125
+                }
+            }),
+            Some(&mut opt_text),
+            Some(&mut opt_json),
+        );
+        assert!(opt_text.contains("relaxation integration: exact_exponential\n"));
+        assert!(
+            opt_text.contains("membrane damage: isotropic_accumulated_damage/1 (1.250e-3 J)\n")
+        );
+        assert_eq!(opt_json["relaxation_integration"], "exact_exponential");
+        assert_eq!(
+            opt_json["membrane_damage"]["damage_model"],
+            "isotropic_accumulated_damage/1"
+        );
+        assert_eq!(opt_json["membrane_damage"]["damage_dissipation_j"], 0.00125);
     }
 
     #[test]
