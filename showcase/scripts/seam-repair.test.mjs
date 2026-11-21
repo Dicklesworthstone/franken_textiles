@@ -111,11 +111,11 @@ test("seam repair studio matches native CLI for original, broken, and repaired s
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
 
     await page.setViewportSize({ width: 1120, height: 820 });
-    await page.goto(site, { waitUntil: "domcontentloaded" });
+    await page.goto(site);
     const firstTab = page.locator("#fit-tab-sleeve");
     await firstTab.focus();
     await page.keyboard.press("ArrowRight");
-    assert.equal(await page.locator("#fit-tab-raised").getAttribute("aria-selected"), "true");
+    await page.locator('#fit-tab-raised[aria-selected="true"]:focus').waitFor();
     assert.ok((await page.locator("#fit-case-panel").innerText()).includes("532,219"));
     assert.deepEqual(errors, []);
   } finally {
