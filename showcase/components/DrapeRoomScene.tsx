@@ -158,7 +158,7 @@ export default function DrapeRoomScene(props: Props) {
       camera.zoom=1;controls.target.set(0,y,z);
       camera.position.set(Math.sin(yaw)*1.8,y,z+Math.cos(yaw)*1.8);
       camera.top=half;camera.bottom=-half;camera.left=-half*w/h;camera.right=-camera.left;
-      camera.updateProjectionMatrix();controls.update();render();
+      camera.updateProjectionMatrix();if(!controls.update())render();
     };
     if(new URLSearchParams(location.search).get("capture")==="pose-room")window.ftxPoseCamera=capture;
     function zoom(value:number){camera.zoom=T.MathUtils.clamp(value,.7,2.8);camera.updateProjectionMatrix();render();}

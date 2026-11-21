@@ -73,7 +73,7 @@ export default function HussarScene({regiment,layer,framing,section,layout,onFai
     function orient(yaw:number,y:number,span:number,elevation=.075) {
       height=span;project();orbit.target.set(0,y,0);
       camera.position.set(360*Math.sin(yaw)*Math.cos(elevation),y+360*Math.sin(elevation),360*Math.cos(yaw)*Math.cos(elevation));
-      orbit.update();draw();
+      if(!orbit.update())draw();
     }
     const resize=()=>{const w=surface.clientWidth,h=surface.clientHeight;if(!w||!h)return;aspect=w/h;renderer.setSize(w,h,false);project();draw();};
     function change(next:Settings){

@@ -1,3 +1,5 @@
+import sharp from "sharp";
+
 // Keep the existing CSS camera and typography at their design size. Chromium rasterizes it in UHD.
 export const fps = 60;
 export const filmWidth = 3840;
@@ -17,10 +19,18 @@ export async function enableFilmResolution(page) {
 export async function frameCapture(page) {
   const session = await page.context().newCDPSession(page);
   return async (quality = 94) => {
+    const { cssVisualViewport: view } = await session.send("Page.getLayoutMetrics");
+    const { width, height } = page.viewportSize();
     const { data } = await session.send("Page.captureScreenshot", {
       format: "jpeg", quality, fromSurface: true, captureBeyondViewport: false, optimizeForSpeed: true,
+      clip: { x: view.pageX, y: view.pageY, width: width / view.scale, height: height / view.scale, scale: view.scale },
     });
-    return Buffer.from(data, "base64");
+    const bytes = Buffer.from(data, "base64");
+    const image = await sharp(bytes).metadata();
+    if (image.width !== filmWidth || image.height !== filmHeight) {
+      throw new Error(`Chromium captured ${image.width}×${image.height}; expected ${filmWidth}×${filmHeight}.`);
+    }
+    return bytes;
   };
 }
 
@@ -34,5 +44,6 @@ export const encodeUhd = [
 
 export function filmArgs(output) {
   return ["-hide_banner", "-loglevel", "error", "-n", "-filter_threads", "2",
-    "-f", "image2pipe", "-framerate", String(fps), "-i", "pipe:0", "-vf", fitUhd, ...encodeUhd, output];
+    "-f", "image2pipe", "-c:v", "mjpeg", "-probesize", "64k", "-analyzeduration", "0",
+    "-framerate", String(fps), "-i", "pipe:0", "-vf", fitUhd, ...encodeUhd, output];
 }

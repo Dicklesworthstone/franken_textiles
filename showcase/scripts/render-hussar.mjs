@@ -39,22 +39,22 @@ try{
   }
   await select("Compare","Dressed");
   await page.addStyleTag({content:".costume-stage{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:99}.hu-tag,.hu-plate,nextjs-portal{display:none!important}"});
-  async function pose(yaw,y,span){
-    await page.evaluate(async ([angle,y,span])=>{
-      await new Promise(r=>requestAnimationFrame(r));
+  async function pose(yaw,y,span,check=false){
+    await page.evaluate(([angle,y,span,check])=>{
       const canvas=document.querySelector(".costume-stage canvas[data-ready]");
       if(!canvas||!window.ftxCostumeFrame)throw Error("The wardrobe camera is unavailable");
       window.ftxCostumeFrame(angle,y,span);
+      if(!check)return;
       const gl=canvas.getContext("webgl2"),width=gl.drawingBufferWidth, pixels=new Uint8Array(width*4);
       gl.readPixels(0,Math.floor(gl.drawingBufferHeight*.5),width,1,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
       if(!pixels.some((value,index)=>index%4===3&&value>64))throw Error("Empty wardrobe render at "+angle);
-    },[yaw,y,span]);
+    },[yaw,y,span,check]);
   }
-  await pose(.045,137,77);
+  await pose(.045,137,77,true);
   await writeFile(poster,await page.screenshot({type:"jpeg",quality:94}),{flag:"wx"});
   await select("Blue","Dressed");
   await page.setViewportSize({width:1000,height:850});
-  await pose(.04,150,61);
+  await pose(.04,150,61,true);
   await writeFile(path.join(dest,"hussar.jpg"),await page.screenshot({type:"jpeg",quality:95}),{flag:"wx"});
   if(process.env.HUSSAR_STILLS_ONLY==="1") {
     console.log("Rendered the film poster and clean portrait in "+dest);
@@ -86,7 +86,7 @@ try{
       await page.evaluate(text=>document.querySelector("#hussar-film-plate span").textContent=text,shot.label);
       for(let i=first;i<last;i++){
         const t=ease(i/(shotLength-1));const [a,y,span]=shot.start.map((v,k)=>v+(shot.end[k]-v)*t);
-        await pose(a,y,span);
+        await pose(a,y,span,i===first);
         const bytes=await screenshot(94);
         await new Promise((resolve,reject)=>encoder.stdin.write(bytes,error=>error?reject(error):resolve()));
       }

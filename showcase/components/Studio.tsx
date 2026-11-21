@@ -59,6 +59,7 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     // The garment is scaled to fill a stage about two units across.
     const studio = lightStudio(renderer, scene, "warm");
     studio.frame(new THREE.Vector3(0, 0, 0), 1.5);
+    studio.key.shadow.autoUpdate = false;
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 40);
     const orbit = new OrbitControls(camera, canvas);
     orbit.minZoom = 0.4;
@@ -74,12 +75,13 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     let width = 0;
     let height = 0;
     let lastYaw: number | undefined;
+    let lastShadow: { frame: number; spread: number; mode: StudioMode; aspect: number } | undefined;
     let lastReset = state.current.resetKey;
     const radius = 5;
     function orient(azimuth: number, elevation: number) {
       camera.position.set(radius * Math.cos(elevation) * Math.sin(azimuth), radius * Math.sin(elevation),
         radius * Math.cos(elevation) * Math.cos(azimuth));
-      orbit.update();
+      return orbit.update();
     }
     function reset() {
       camera.zoom = 1;
@@ -102,7 +104,13 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     function update() {
       if (!garmentMesh || !width || !height) return;
       const view = state.current;
-      garmentMesh.pose(view.mode, view.frame, view.wire, width / height, view.seam, view.spread, view.panel);
+      const aspect = width / height;
+      garmentMesh.pose(view.mode, view.frame, view.wire, aspect, view.seam, view.spread, view.panel);
+      const frame = garmentMesh.sampledFrame;
+      if (!lastShadow || lastShadow.frame !== frame || lastShadow.spread !== view.spread || lastShadow.mode !== view.mode || lastShadow.aspect !== aspect) {
+        studio.key.shadow.needsUpdate = true;
+        lastShadow = { frame, spread: view.spread, mode: view.mode, aspect };
+      }
       // `resetKey` is a counter the parent bumps to ask for the home view.
       const resets = view.resetKey;
       if (lastReset !== resets) {
@@ -111,7 +119,7 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
       }
       if (lastYaw !== view.yaw) {
         lastYaw = view.yaw;
-        if (view.yaw !== undefined) orient(view.yaw, homeElevation);
+        if (view.yaw !== undefined && orient(view.yaw, homeElevation)) return;
       }
       paint();
     }

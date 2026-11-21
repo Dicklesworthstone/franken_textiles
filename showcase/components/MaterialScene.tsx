@@ -155,13 +155,14 @@ export default function MaterialScene({ data, step, mesh, focus, camera, onFailu
     const draw = () => { renderer.render(scene,cam); };
     function orient(yaw: number, elevation: number) {
       cam.position.set(450*Math.sin(yaw)*Math.cos(elevation), targetY+450*Math.sin(elevation), 450*Math.cos(yaw)*Math.cos(elevation));
-      orbit.update(); draw();
+      if(!orbit.update()) draw();
     }
     const home = tubular ? .52 : .15;
     orient(home,.24);
     scene.add(new T.HemisphereLight(0xffe9cd,0x737e81,.85));
     const key = new T.DirectionalLight(0xffead3,2.35);
     key.position.set(-190,140,75); key.castShadow=true; key.shadow.mapSize.set(1024,1024);
+    key.shadow.autoUpdate=false;
     Object.assign(key.shadow.camera,{left:-185,right:185,top:170,bottom:-180,far:650}); key.shadow.camera.updateProjectionMatrix(); key.shadow.bias=-.001;
     scene.add(key);
     const rim = new T.DirectionalLight(0xd8edf3,2); rim.position.set(70,90,-110);scene.add(rim);
@@ -191,6 +192,7 @@ export default function MaterialScene({ data, step, mesh, focus, camera, onFailu
     update.current = (step,mesh,focus,view) => {
       if(selected!==focus){selected=focus;resize();}
       poses.forEach(apply=>apply(step,mesh,data.readings[step].angle,focus,tubular&&view.name==="Top"));
+      key.shadow.needsUpdate=true;
       if (view.revision !== last) {
         last=view.revision; cam.zoom=view.name==="Fabric detail"?(tubular?1.7:1.5):1; cam.updateProjectionMatrix();
         const yaw=view.name==="Perspective"?home:view.name==="Fabric detail"?-.19:view.name==="Top"&&!tubular?Math.PI:0;

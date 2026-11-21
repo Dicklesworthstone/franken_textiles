@@ -99,7 +99,7 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
       paint();el.dataset.ready="true";
     };
     const mode=(yaw:number,elevation:number)=>{
-      const r=330;camera.position.set(r*Math.sin(yaw)*Math.cos(elevation),controls.target.y+r*Math.sin(elevation),r*Math.cos(yaw)*Math.cos(elevation));controls.update();paint();
+      const r=330;camera.position.set(r*Math.sin(yaw)*Math.cos(elevation),controls.target.y+r*Math.sin(elevation),r*Math.cos(yaw)*Math.cos(elevation));if(!controls.update())paint();
     };
     const capture=(params:Form,yaw:number,zoom=1,targetY=89,portrait=false)=>{
       const readings=fit({...initial,...params});ruler.visible=!portrait;controls.target.y=targetY;camera.zoom=zoom;camera.updateProjectionMatrix();mode(yaw,portrait?.10:.055);return readings;

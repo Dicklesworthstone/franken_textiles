@@ -200,10 +200,10 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
   function pose(mode: StudioMode, time: number, showWire: boolean, aspect: number, seam?: string, spread = 0, panel = "") {
     const endpointView = mode === "strain" || mode === "contact";
     const sourceFrame = (endpointView ? 1 : THREE.MathUtils.clamp(time, 0, 1)) * (data.sourceFrames - 1);
+    const index = sampleIndex(data.frames, data.phases, sourceFrame);
     const separation = mode === "construction" ? THREE.MathUtils.clamp(spread, 0, 1) : 0;
-    const moved = lastFrame !== sourceFrame || lastSpread !== separation;
+    const moved = lastFrame !== index || lastSpread !== separation;
     if (moved) {
-      const index=sampleIndex(data.frames,data.phases,sourceFrame);
       sampledFrame=data.frames[index];
       const a=index*stride;
       for (let j = 0; j < stride; j += 3) {
@@ -216,7 +216,7 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
       geometry.computeBoundingBox();
       geometry.boundingBox!.getSize(size);
       geometry.boundingBox!.getCenter(center);
-      lastFrame = sourceFrame;
+      lastFrame = index;
       lastSpread = separation;
     }
     if (moved) shell.update(position.array);
