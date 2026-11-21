@@ -479,7 +479,7 @@ fn adjoint_sensitivity_refuses_nonlinear_family_and_area_models_fail_closed() {
             },
         );
     }
-    let exp_req = ftx_drape::strip::experiment::Request {
+    let exp_req = ftx_drape::strip::Request {
         schema: "ftx-strip-experiment/1".into(),
         material: ftx_pattern::material_catalog::Selection {
             id: exp_material.id.clone(),
@@ -492,9 +492,7 @@ fn adjoint_sensitivity_refuses_nonlinear_family_and_area_models_fail_closed() {
         controls: controls(),
     };
     assert_eq!(
-        ftx_drape::strip::experiment::evaluate(&exp_req)
-            .unwrap_err()
-            .code,
+        ftx_drape::strip::evaluate(&exp_req).unwrap_err().code,
         RefusalCode::InvalidDocument
     );
 }
