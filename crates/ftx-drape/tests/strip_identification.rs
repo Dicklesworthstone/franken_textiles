@@ -429,9 +429,9 @@ fn adjoint_sensitivity_refuses_nonlinear_family_and_area_models_fail_closed() {
     let mut with_area = input();
     with_area.policy.sensitivity = SensitivityMode::Adjoint;
     with_area.area_response = Some(ftx_drape::strip::fit::area::Area::Identify {
-        strain_range: [[-0.2, 0.25], [-0.2, 0.25], [-0.3, 0.3]],
-        area_ratio_knots: vec![0.7, 1.0, 1.3],
-        slope_bounds: vec![[10.0, 200.0], [10.0, 200.0]],
+        parameter_bounds: [[10.0, 200.0], [10.0, 200.0]],
+        area_ratio_range: Some([0.7, 1.3]),
+        scalar_green_strain_range: Some([[-0.2, 0.25], [-0.2, 0.25], [-0.3, 0.3]]),
     });
     let err = calibrate(&with_area).unwrap_err();
     assert_eq!(err.code, RefusalCode::InvalidDocument);
