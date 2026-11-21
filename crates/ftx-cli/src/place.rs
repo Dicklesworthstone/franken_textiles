@@ -12,6 +12,7 @@
 //! authority on whether a start is accepted. Lengths in the report are millimetres; OBJ files are
 //! metres, z up, wearer facing −y.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ftx_body::{
@@ -57,6 +58,12 @@ const BODY_AUDIT_PAIRS: usize = 1_000_000;
 /// Edge strain that saturates the `start/` strain view. A kinematic start is far outside the ±3 %
 /// ramp used for a finished drape.
 const START_STRAIN_RAMP: f64 = 0.15;
+/// Share of an instance's vertices at or past [`START_STRAIN_RAMP`], in percent, from which a start is
+/// called tight there. Measured on the 92 cm bolero of the fitting skill: a 170 mm cuff that has to sit
+/// over the open hand (hull girth 174 to 180 mm) leaves 3.0 and 3.3 % of the two sleeves at the ramp and
+/// the first sewing step never converges; the shortened sleeve that drapes leaves 0.0 %, and ordinary
+/// seam pull at the shoulders leaves 0.3 to 1.3 % of the back.
+const TIGHT_START_PCT: f64 = 2.0;
 const TORSO_LANDMARKS: [&str; 14] = [
     "floor",
     "ankle",
@@ -260,6 +267,10 @@ fn mean_strain(edges: &[(f64, f64, f64)]) -> Option<[f64; 3]> {
 /// Edge strain of the relaxed start: per-vertex colours on a ±[`START_STRAIN_RAMP`] ramp (blue
 /// compressed, white unstrained, red stretched) and one summary per instance. This is the strain of
 /// a kinematic start, not of a draped garment.
+///
+/// Each summary also gives `stretched_past_ramp_pct`, the share of the instance's vertices drawn fully
+/// red, and `stretched_nearest_edge`, the pattern edge most of those vertices lie nearest in the flat
+/// pattern (null when none is red).
 fn start_strain(mesh: &GarmentMesh, x: &[Vec3]) -> (Vec<[f64; 3]>, Vec<Value>) {
     let edges = face_edges(&mesh.faces);
     let strain = edge_strain(x, &mesh.verts2d, &edges);
@@ -287,9 +298,62 @@ fn start_strain(mesh: &GarmentMesh, x: &[Vec3]) -> (Vec<[f64; 3]>, Vec<Value>) {
         })
         .collect();
     let pct = |v: f64| round1(100.0 * v);
+    // The vertices drawn fully red: mean edge strain at or past the ramp. Their share of an instance and
+    // the pattern edge most of them lie nearest say, in the pattern's own terms, where a start is too
+    // small for what it surrounds.
+    let red = |v: usize| count[v] > 0 && sum[v] / count[v] as f64 >= START_STRAIN_RAMP;
+    let nearest_edge = |k: usize, v: usize| {
+        let at = mesh.verts2d[v];
+        mesh.index
+            .iter()
+            .filter(|((instance, _), _)| *instance == mesh.instances[k])
+            .filter_map(|((_, edge), along)| {
+                // Squared distances order the same and need no platform square root.
+                along
+                    .iter()
+                    .map(|&w| {
+                        let (dx, dy) = (mesh.verts2d[w].x - at.x, mesh.verts2d[w].y - at.y);
+                        dx * dx + dy * dy
+                    })
+                    .min_by(f64::total_cmp)
+                    .map(|distance| (distance, edge))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, edge)| edge)
+    };
+    let stretched: Vec<(f64, Option<&String>)> = mesh
+        .inst_range
+        .iter()
+        .enumerate()
+        .map(|(k, &(lo, hi))| {
+            let mut votes: BTreeMap<&String, usize> = BTreeMap::new();
+            let mut reds = 0_usize;
+            for v in (lo..hi).filter(|&v| red(v)) {
+                reds += 1;
+                if let Some(edge) = nearest_edge(k, v) {
+                    *votes.entry(edge).or_default() += 1;
+                }
+            }
+            // The first of equally voted edges in the map's order, so the answer does not depend on a hash.
+            let most = votes
+                .iter()
+                .fold(None, |best: Option<(&String, usize)>, (&edge, &n)| {
+                    if best.is_some_and(|b| b.1 >= n) {
+                        best
+                    } else {
+                        Some((edge, n))
+                    }
+                });
+            (
+                reds as f64 / hi.saturating_sub(lo).max(1) as f64,
+                most.map(|m| m.0),
+            )
+        })
+        .collect();
     let summaries = by_instance
         .iter()
-        .map(|edges| {
+        .zip(&stretched)
+        .map(|(edges, &(red_share, red_edge))| {
             let mut sorted: Vec<f64> = edges.iter().map(|e| e.2).collect();
             sorted.sort_by(f64::total_cmp);
             let at = |q: f64| {
@@ -307,6 +371,8 @@ fn start_strain(mesh: &GarmentMesh, x: &[Vec3]) -> (Vec<[f64; 3]>, Vec<Value>) {
                 "mean_along_pattern_x_pct": fit.map(|f| pct(f[0])),
                 "mean_along_pattern_y_pct": fit.map(|f| pct(f[1])),
                 "mean_shear_pct": fit.map(|f| pct(f[2])),
+                "stretched_past_ramp_pct": pct(red_share),
+                "stretched_nearest_edge": red_edge,
             })
         })
         .collect();
@@ -513,7 +579,7 @@ pub(super) fn refused_stills(
     let slots = piece_slots(&state.mesh.instances);
     let n = state.positions.len();
     let pieces = piece_colours(&state.mesh, &slots, &vec![0.0; n], &vec![false; n]);
-    let (strain, _) = start_strain(&state.mesh, &state.positions);
+    let (strain, summaries) = start_strain(&state.mesh, &state.positions);
     if write_stage(
         &dir,
         body_obj,
@@ -544,8 +610,68 @@ pub(super) fn refused_stills(
                 state.phase
             ),
         );
+        // Only the start the first sewing step began from. Later states are stretched by seams that are
+        // still closing, which says nothing about the size of a piece.
+        if state.phase == "sew" && state.accepted_steps == 0 {
+            let tight = tight_instances(
+                state
+                    .mesh
+                    .instances
+                    .iter()
+                    .map(String::as_str)
+                    .zip(&summaries),
+            );
+            if let Some(text) = start_condition(state.start_fallback, &tight) {
+                refusal.repairs.insert(1, text);
+            }
+        }
     }
     refusal
+}
+
+/// What is wrong with the start a refused drape began from, when the run can tell: it is an earlier and
+/// more strained relaxation checkpoint (`fallback`: its iterations, then those of the start that was not
+/// admitted for cloth contact), it is stretched past the strain ramp in the `tight` instances, or both.
+/// `None` when neither holds. It names what to change in the pattern, because no solver budget does.
+fn start_condition(fallback: Option<(usize, usize)>, tight: &[String]) -> Option<String> {
+    if fallback.is_none() && tight.is_empty() {
+        return None;
+    }
+    let mut text = match fallback {
+        Some((used, rejected)) => format!(
+            "This start is the relaxation checkpoint at {used} iterations, not the fully relaxed start at \
+             {rejected}: in that one, cloth layers crossed or lay closer than their contact thickness, so \
+             the drape began from an earlier and more strained state. ftx place draws the fully relaxed \
+             start: look there for layers lying on each other."
+        ),
+        None => "Before any sewing step this start was already strained.".to_string(),
+    };
+    if !tight.is_empty() {
+        text.push_str(&format!(
+            " It is stretched 15 % or more (red in still_strain_*) in {}. If that cloth has to pass round \
+             a wider part of the body there (a cuff over the hand, a hem over the hip), end the piece \
+             short of that part or widen it at that edge.",
+            tight.join("; ")
+        ));
+    }
+    text.push_str(" No solver budget changes the start.");
+    Some(text)
+}
+
+/// The instances of a start that are tight, as its reader needs them named: the instance, the share of
+/// it drawn fully red and the pattern edge that red lies nearest. Takes each instance with its
+/// [`start_strain`] summary. Empty when none reaches [`TIGHT_START_PCT`].
+fn tight_instances<'a>(rows: impl Iterator<Item = (&'a str, &'a Value)>) -> Vec<String> {
+    rows.filter_map(|(id, summary)| {
+        let share = summary["stretched_past_ramp_pct"]
+            .as_f64()
+            .filter(|&share| share >= TIGHT_START_PCT)?;
+        Some(match summary["stretched_nearest_edge"].as_str() {
+            Some(edge) => format!("{id} ({share} % of it, nearest its edge {edge})"),
+            None => format!("{id} ({share} % of it)"),
+        })
+    })
+    .collect()
 }
 
 /// What a start refusal tells its reader to open, with the counts behind the two warning colours taken
@@ -880,8 +1006,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         format!("; skinning {}", skinning.as_str())
     };
+    let hands_note = if hands.is_wrist() {
+        String::new()
+    } else {
+        format!("; hand collider {}", hands.as_str())
+    };
     let mut text = format!(
-        "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}{skinning_note}\n",
+        "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}{skinning_note}{hands_note}\n",
         report["vertices"],
         report["start"]["plain_edge_strain_p95"]
             .as_f64()
@@ -931,6 +1062,21 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             i["start_edge_strain"]["p95_pct"],
         ));
     }
+    let tight = tight_instances(
+        report["instances"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|i| Some((i["instance"].as_str()?, &i["start_edge_strain"]))),
+    );
+    if !tight.is_empty() {
+        text.push_str(&format!(
+            "  TIGHT START: stretched 15 % or more (red in start/still_strain_*) in {}. Where that cloth \
+             passes round a wider part of the body a drape cannot begin: end the piece short of that part \
+             or widen it at that edge.\n",
+            tight.join("; ")
+        ));
+    }
     let mut seams: Vec<&Value> = report["seams"].as_array().into_iter().flatten().collect();
     seams.sort_by(|a, b| {
         b["wrap_travel_mm"]["max"]
@@ -962,11 +1108,6 @@ mod tests {
     use super::{cloth_crossings, deepest_mm, mean_strain, piece_slots, slot_colour};
     use ftx_core::Vec3;
 
-    #[test]
-    fn a_refused_drape_leaves_stills_of_its_last_accepted_state_and_says_where() {
-        use ftx_core::{Refusal, RefusalCode};
-        use serde_json::json;
-
     /// Width and height from a PNG's header.
     fn png_size(path: &std::path::Path) -> (usize, usize) {
         let bytes = std::fs::read(path).unwrap();
@@ -978,6 +1119,11 @@ mod tests {
         let field = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
         (field(16), field(20))
     }
+
+    #[test]
+    fn a_refused_drape_leaves_stills_of_its_last_accepted_state_and_says_where() {
+        use ftx_core::{Refusal, RefusalCode};
+        use serde_json::json;
 
         let pattern = ftx_pattern::Pattern::new(json!({
             "schema": "fabric-pattern/1", "units": "mm",
@@ -1004,6 +1150,7 @@ mod tests {
             positions,
             phase: "sew",
             accepted_steps: 2,
+            start_fallback: None,
         };
         let body = b"v -0.2 0 0.8\nv 0.3 0 0.8\nv 0.05 0 1.3\nf 1 2 3\n";
         let refusal = || {
@@ -1036,12 +1183,12 @@ mod tests {
             map["refused_pose"],
             json!({"phase":"sew","accepted_steps":2,"width":420,"height":300})
         );
+        assert_eq!(png_size(&out.join("refused/still_front.png")), size);
         assert!(map.get("frames").is_none());
         for name in [
             "body.obj",
             "garment.obj",
             "garment_strain.obj",
-        assert_eq!(png_size(&out.join("refused/still_front.png")), size);
             "still_front.png",
             "still_strain_back.png",
         ] {
@@ -1068,6 +1215,115 @@ mod tests {
         ] {
             assert_eq!(unchanged.repairs, ["try --time-subdivision"]);
         }
+    }
+
+    #[test]
+    fn a_start_stretched_along_one_edge_is_named_by_piece_and_pattern_edge() {
+        use ftx_core::{Refusal, RefusalCode};
+        use serde_json::json;
+
+        let pattern = ftx_pattern::Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm",
+            "pieces": [{
+                "id": "panel", "cut": {"qty": 1}, "grain": [[10, 10], [10, 40]],
+                "vertices": {"a": [0, 0], "b": [200, 0], "c": [200, 160], "d": [0, 160]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"}, {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"}, {"id": "left", "from": "d", "to": "a"}
+                ],
+                "placement": {"part": "torso"}
+            }],
+            "seams": []
+        }));
+        let mesh = ftx_drape::build_garment(&pattern, 10.0).unwrap();
+        // Upright in front of a one-triangle "body", in metres. `widen` draws the lowest 20 mm that much
+        // wider than it was cut: a hem forced round something larger than itself.
+        let standing = |widen: f64| -> Vec<Vec3> {
+            mesh.verts2d
+                .iter()
+                .map(|p| {
+                    let scale = if p.y < 20.0 { widen } else { 1.0 };
+                    Vec3::new((p.x - 100.0) * scale * 0.001, -0.2, 1.0 + p.y * 0.001)
+                })
+                .collect()
+        };
+
+        // The summary a placement report carries: nothing red when the cloth is as it was cut.
+        let (_, loose) = super::start_strain(&mesh, &standing(1.0));
+        assert_eq!(loose[0]["stretched_past_ramp_pct"], 0.0);
+        assert!(loose[0]["stretched_nearest_edge"].is_null());
+        let (_, tight) = super::start_strain(&mesh, &standing(1.5));
+        assert!(
+            tight[0]["stretched_past_ramp_pct"].as_f64().unwrap() >= super::TIGHT_START_PCT,
+            "{}",
+            tight[0]
+        );
+        assert_eq!(tight[0]["stretched_nearest_edge"], "bottom");
+
+        let body = b"v -0.2 0 0.8\nv 0.3 0 0.8\nv 0.05 0 1.3\nf 1 2 3\n";
+        let refusal = || {
+            Refusal::new(RefusalCode::NotConverged, "Newton did not converge")
+                .repair("increase the Newton iteration budget")
+        };
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let out = std::env::temp_dir().join(format!("ftx-tight-{}-{time}", std::process::id()));
+        let shown = |name: &str, widen: f64, accepted_steps: usize, start_fallback| {
+            let dir = out.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let state = ftx_drape::run::RefusedRun {
+                mesh: mesh.clone(),
+                positions: standing(widen),
+                phase: "sew",
+                accepted_steps,
+                start_fallback,
+            };
+            super::refused_stills(refusal(), Some(&state), &dir, body, (320, 200))
+        };
+
+        // Refused before any sewing step, with the hem stretched: the piece and its edge come right after
+        // where to look, ahead of the solver's own advice.
+        let tight = shown("tight", 1.5, 0, None);
+        assert_eq!(tight.repairs.len(), 3, "{:?}", tight.repairs);
+        assert!(tight.repairs[0].contains("still_*.png"));
+        assert!(
+            tight.repairs[1].starts_with(
+                "Before any sewing step this start was already strained. It is stretched 15 % or more"
+            ) && tight.repairs[1].contains(" in panel (")
+                && tight.repairs[1].contains(" % of it, nearest its edge bottom). If that cloth")
+                && tight.repairs[1].ends_with("No solver budget changes the start."),
+            "{}",
+            tight.repairs[1]
+        );
+        assert_eq!(tight.repairs[2], "increase the Newton iteration budget");
+
+        // A start that is an earlier checkpoint says so, with both iteration counts and where the fully
+        // relaxed one can be seen, whether or not anything is red.
+        let fallback = shown("fallback", 1.0, 0, Some((400, 600)));
+        assert_eq!(fallback.repairs.len(), 3, "{:?}", fallback.repairs);
+        assert!(
+            fallback.repairs[1].starts_with(
+                "This start is the relaxation checkpoint at 400 iterations, not the fully relaxed start \
+                 at 600:"
+            ) && fallback.repairs[1].contains("ftx place draws the fully relaxed start")
+                && !fallback.repairs[1].contains("stretched 15 %"),
+            "{}",
+            fallback.repairs[1]
+        );
+        let both = shown("both", 1.5, 0, Some((400, 600)));
+        assert!(
+            both.repairs[1].contains("checkpoint at 400 iterations")
+                && both.repairs[1].contains("nearest its edge bottom)"),
+            "{}",
+            both.repairs[1]
+        );
+
+        // Cloth as it was cut says nothing about size, and neither does a state reached after a step:
+        // seams that are still closing stretch cloth too.
+        assert_eq!(shown("loose", 1.0, 0, None).repairs.len(), 2);
+        assert_eq!(shown("later", 1.5, 1, Some((400, 600))).repairs.len(), 2);
     }
 
     #[test]
@@ -1188,16 +1444,16 @@ mod tests {
         assert_eq!(map["vertices"], placement["vertices"]);
         assert_eq!(map["refused_pose"]["phase"], "placement");
         assert_eq!(map["refused_pose"]["accepted_steps"], 0);
-        assert!(
-            map["edges"]
-                .as_object()
-                .unwrap()
-                .keys()
         // Both stages are drawn at the asked size, and the map a pixel is looked up in says the same.
         assert_eq!(map["refused_pose"]["width"], 420);
         assert_eq!(map["refused_pose"]["height"], 300);
         assert_eq!(png_size(&dir.join("start/still_front.png")), size);
         assert_eq!(png_size(&dir.join("wrap/still_front.png")), size);
+        assert!(
+            map["edges"]
+                .as_object()
+                .unwrap()
+                .keys()
                 .any(|edge| edge.starts_with("panel/"))
         );
         assert_eq!(placement["body_surface"]["admitted"], true);

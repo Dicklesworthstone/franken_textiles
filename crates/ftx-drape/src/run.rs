@@ -382,6 +382,10 @@ pub struct RefusedRun {
     pub phase: &'static str,
     /// Nominal steps of that phase accepted when the state was reached.
     pub accepted_steps: usize,
+    /// Set when the run began from an earlier relaxation checkpoint because its fully relaxed start had
+    /// cloth layers crossing or closer than their contact thickness: the relaxation iterations of the
+    /// checkpoint used, then of the start that was not admitted. The checkpoint is the more strained.
+    pub start_fallback: Option<(usize, usize)>,
 }
 
 fn refused_run(
@@ -395,6 +399,9 @@ fn refused_run(
         positions: positions.clone(),
         phase,
         accepted_steps: frames.len() - frames_before_phase,
+        start_fallback: scene
+            .start_backtracked_from
+            .map(|rejected| (scene.start.relax_iterations, rejected)),
     })
 }
 
@@ -473,11 +480,16 @@ pub fn drape_observed(
         scene.solver.check_settling_history()?;
     }
     progress(&format!(
-        "start: {} vertices ({} after welding), relaxed {} iterations to p95 strain {:.3}",
+        "start: {} vertices ({} after welding), relaxed {} iterations to p95 strain {:.3}{}",
         scene.mesh.verts2d.len(),
         scene.solver.x.len(),
         scene.start.relax_iterations,
-        scene.start.block_p95.last().copied().unwrap_or(f64::NAN)
+        scene.start.block_p95.last().copied().unwrap_or(f64::NAN),
+        // Said here because a run that refuses never reaches the report that records it.
+        scene.start_backtracked_from.map_or(String::new(), |rejected| format!(
+            " (an earlier checkpoint: the start relaxed for {rejected} iterations had cloth layers \
+             crossing or closer than their contact thickness)"
+        ))
     ));
     let board = board_layout(&scene.mesh);
     let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);

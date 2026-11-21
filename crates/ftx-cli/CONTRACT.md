@@ -319,7 +319,15 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   refusal leaves `DIR` empty. Every refusal picture is `--res WxH` pixels (default 960x540, the limits of
   `ftx render`); `ftx round --stills --res` hands the drape its own size, so a pixel names the same place
   in a refused round's pictures as in a completed round's stills, and `refused_pose.width`/`height` in the
-  map beside them say that size.
+  map beside them say that size. When the refused state is the start itself (no sewing step accepted),
+  the second repair says what the run knows about that start, because no solver budget changes it: that
+  it is an earlier relaxation checkpoint, with both iteration counts, when the fully relaxed start was not
+  admitted for cloth contact (the progress line says the same); and each instance at least 2 % of whose
+  vertices are stretched 15 % or more, with the pattern edge nearest that stretch. The threshold is
+  measured on one garment (the comment on `TIGHT_START_PCT` gives the numbers), not a validated limit.
+  `ftx place` prints the same instances as `TIGHT START` and records `stretched_past_ramp_pct` and
+  `stretched_nearest_edge` in each instance's `start_edge_strain`; it draws the fully relaxed start, which
+  is not the start a cloth-contact drape uses when that one is not admitted.
   Numerical options are
   validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
   with a repair message. Both `sim_report.json` and the CLI result contain a
