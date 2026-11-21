@@ -1137,11 +1137,13 @@ fn excitation<const N: usize>(j: &[[f64; N]]) -> f64 {
     pivot
 }
 
+type SearchOutcome<const N: usize> = (Start, [f64; N], Evaluation, Option<Vec<[f64; N]>>);
+
 fn search<const N: usize>(
     input: &Input,
     initial: f64,
     budget: &mut Budget<'_>,
-) -> Result<(Start, [f64; N], Evaluation, Option<Vec<[f64; N]>>), Refusal> {
+) -> Result<SearchOutcome<N>, Refusal> {
     let mut p = [initial; N];
     let mut e = evaluate(input, p, budget).map_err(ForwardFailure::refusal)?;
     let mut lambda = 1e-3_f64;
