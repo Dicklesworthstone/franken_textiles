@@ -928,6 +928,16 @@ enthalpy separately, and reconciles all nine aggregate fields. Constant reservoi
 its original path; mixed, incomplete, reordered or prematurely active schedules refuse.
 Material-specific qualification metadata may differ without changing the shared operating case;
 the original pressure, temperature and conductance schedule remains part of that case identity.
+
+Liquid supply `/2` admits one independently qualified finite constant-temperature source shared by
+all retained garment pieces. Comparison reconstructs its exhaustion time from original reference
+areas and prescribed interval rates, checks actual delivery separately for every patch, and limits
+each cumulative trace integral to the same source. The donor's stock, elapsed time, exhaustion event,
+sensible storage change and exported enthalpy must reconcile with textile supply. Missing, forged,
+overdrawn or unrequested donor ledgers refuse the dependent comparison. Material-specific source
+metadata may differ, but initial liquid stock and temperature remain part of the operating case.
+Supply `/1` retains its prescribed unlimited-boundary semantics. A finite donor supplies no inferred
+body, rain, absorption or empirical garment model; see `docs/textile-surface-water.md`.
 No wet-property characterization, propagated thermal/water intervals or continuous-time extrema
 are inferred. Version 1 preserves initial-only ownership. Version 2 independently qualifies incoming
 liquid evidence and integrates each instance's reference-area delivery and incoming sensible enthalpy

@@ -14856,6 +14856,68 @@ test('finite shared vapor displays humidity feedback and fixed-temperature heat 
   p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
 });
 
+test('finite shared liquid supply preserves one donor ledger, source requests and exhausted delivery through page and worker', async () => {
+  const p=await pageModule();await p.load();scenarioInputs(p);
+  const supply={schema:'ftx-textile-liquid-supply/2',bindings:{
+    front:{rate_kg_m2_s:[0.01,0.02],temperature_c:[40,40]},
+    back:{rate_kg_m2_s:[0.03,0.04],temperature_c:[40,40]}},
+    source:{reference:'<two-piece delivery demands>'},finite_reservoir:{schema:'ftx-textile-liquid-reservoir/1',
+      model:'well_mixed_constant_temperature_liquid_inventory/1',initial_liquid_mass_kg:0.005,temperature_c:40,
+      source:{reference:'<one finite donor>'},evidence:'estimate',allow_estimates:true,
+      method:'Explicit shared stock at constant temperature',qualification:'Synthetic donor and enthalpy evidence'}};
+  const policy={schema:'ftx-textile-surface-water/2',supply};
+  const scenario={motion:{transient_surface:{surface_water:policy}}};
+  const input=' \n'+JSON.stringify(scenario)+'\r\n';
+  p.select('scenarioRequest',input);p.e.scenarioRequest.handlers.change();
+  const donor={schema:'ftx-textile-liquid-reservoir-result/1',initial_liquid_mass_kg:0.005,
+    remaining_liquid_mass_kg:0,supplied_liquid_mass_kg:0.005,temperature_c:40,elapsed_seconds:2,
+    exhaustion_events:1,mass_balance_error_kg:0,liquid_enthalpy_change_j:-840,
+    exported_liquid_enthalpy_j:840,enthalpy_balance_error_j:0};
+  const water={schema:'ftx-textile-surface-water-result/2',request:policy,
+    initial_liquid_kg:0,supplied_liquid_kg:0.005,evaporated_liquid_kg:0.003,
+    remaining_liquid_kg:0.002,mass_balance_error_kg:0,dryout_events:0,
+    latent_energy_j:7500,exported_vapor_sensible_energy_j:252,liquid_stored_change_j:168,
+    supplied_liquid_sensible_energy_j:840,balance_error_j:0,supply_reservoir:donor};
+  const report=scenarioReport();report.scenario.scenario=scenario;
+  const evaluation=report.simulations.find(row=>row.key==='A').evaluation.result;
+  evaluation.motion=outcome({samples:[{}],keyframes:[],transient_surface:outcome({
+    duration_s:2,thermal_steps:8,trace:[{temperature_range_c:[20,21]}],surface_water:water})});
+  const raw=' '+JSON.stringify(report)+'\n';
+  await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,input);
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),WebBody:class {free(){}},
+    material_scenario_study:(_body,_pattern,_study,request)=>{assert.equal(request,input);return raw;}}});
+  const response=await w.send(p.current().messages.at(-1));assert.equal(response.type,'result',response.message);
+  p.current().emit(response);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+  const rows=ending=>plain(table(ending).children.slice(2).map(row=>row.children.map(cell=>String(cell.textContent))));
+  assert.deepEqual(rows('finite shared liquid supply'),[['0.005','0','0.005','0','40','2','1']]);
+  assert.deepEqual(rows('finite liquid donor sensible energy'),[['-840','840','0']]);
+  assert.deepEqual(rows('finite liquid donor source'),[['<one finite donor>','estimate','Explicit shared stock at constant temperature']]);
+  assert.equal(table('textile evaporation and sensible energy').children[2].children[3].textContent,'840');
+  assert.match(visibleText(s),/All selected textile pieces draw from one finite liquid donor/);
+  assert.match(visibleText(s),/supply stops for every piece when that shared stock is exhausted/);
+  assert.match(visibleText(s),/while evaporation and the thermal history continue/);
+  const download=descendants(s).find(n=>n.download==='material-scenario-study.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  const original=descendants(s).find(n=>n.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(original.href).text(),input);
+  const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===
+    'A: textile liquid source, exact patches and canonical vapor paths (display only)');
+  source.open=true;source.handlers.toggle();assert.match(visibleText(source),/<two-piece delivery demands>/);
+  assert.match(visibleText(source),/<one finite donor>/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  await p.e.scenario.onclick();const obsolete=p.current(),request=obsolete.messages.at(-1).request;
+  p.e.scenarioRequest.handlers.change();assert.equal(obsolete.dead,true);assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  obsolete.emit({type:'result',request,result:report,files:[{name:'stale.json',text:raw}]});
+  assert.equal(s.hidden,true);assert.equal(p.live.size,0);
+  p.ready();await p.e.scenario.onclick();
+  evaluation.motion=refused('finite donor source does not qualify the supplied liquid temperature');p.emit(report);
+  assert.equal(table('finite shared liquid supply'),undefined);
+  assert.equal(table('finite liquid donor sensible energy'),undefined);
+  assert.match(visibleText(s),/finite donor source does not qualify the supplied liquid temperature/);
+});
+
 test('supplied textile water displays delivery and incoming enthalpy separately through rewetting and refusals', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const report=scenarioReport(); report.scenario.scenario={motion:{transient_surface:{surface_water:{schema:'ftx-textile-surface-water/2'}}}};
@@ -17275,6 +17337,39 @@ test('compiled WASM paired wet qualifications preserve native selection, changed
         message.type==='progress'&&message.text==='qualified: motion endpoint 2/2'),'A completed first interval cannot publish a partial coupled trajectory');
     }
     t.diagnostic('Actual captured single/matrix and guided single/frozen named paired-source reports match native. Ret-only alternatives change cooling, evaporation, recoil and actual motion; same-ID stale sources refuse the whole motion while cutting and steady heat survive. Synthetic software evidence only. Replay: '+work);
+  });
+
+test('compiled WASM finite shared liquid supply replays native coupled motion and named scenario decisions',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_FINITE_LIQUID_SUPPLY_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx}),dir=path.resolve(process.env.FTX_FINITE_LIQUID_SUPPLY_REPLAY);
+    const read=name=>fs.readFileSync(path.join(dir,name),'utf8'),bytes=fs.readFileSync(path.join(dir,'model.ftxbody'));
+    const previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
+    try {
+      for(const name of ['single','matrix']) {
+        const scenarioRequest=read(`${name}-scenario.json`);
+        const response=await w.send({type:'scenario',request:232,pattern:read('pattern.json'),
+          studyRequest:read('study.json'),scenarioRequest,measurements:read('body-input.json'),
+          bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(response.type,'result',response.message);
+        assert.deepEqual(response.result,JSON.parse(read(`${name}-report.json`)));
+        assert.equal(response.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+        for(const report of name==='single'?[response.result]:response.result.cases) {
+          assert.deepEqual(report.comparison.frontier,['qualified']);
+          const motion=report.simulations.find(row=>row.key==='qualified').evaluation.result.motion.result;
+          const heat=motion.transient_surface.result,water=heat.surface_water,donor=water.supply_reservoir;
+          assert.equal(donor.schema,'ftx-textile-liquid-reservoir-result/1');
+          assert.equal(donor.remaining_liquid_mass_kg,0);assert.equal(donor.exhaustion_events,1);
+          assert.deepEqual([...new Set(water.patches.map(patch=>patch.instance))].sort(),['band','outer']);
+          assert.ok(water.patches.every(patch=>patch.supplied_liquid_kg>0));
+          assert.ok(Math.abs(water.supplied_liquid_kg-donor.initial_liquid_mass_kg)<1e-18);
+          assert.deepEqual(heat.mechanical_coupling,motion.liquid_mechanics);
+          assert.equal(report.simulations.find(row=>row.key==='missing-ret').evaluation.result.motion.status,'refused');
+        }
+      }
+    } finally {globalThis.ftxProgress=previousProgress;}
   });
 
 test('compiled WASM scheduled ambient vapor replays native and named scenario decisions',

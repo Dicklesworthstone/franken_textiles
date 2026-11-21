@@ -1496,6 +1496,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       const condensing = finiteVapor || water.schema === "ftx-textile-surface-water-result/3" ||
         draining && typeof water.condensed_liquid_kg === "number";
       const supplied = draining || condensing || water.schema === "ftx-textile-surface-water-result/2";
+      const finiteSupply = water.supply_reservoir?.schema === "ftx-textile-liquid-reservoir-result/1";
       const mass = table(parent, `${key}: textile surface liquid — conserved ${condensing ? "initial, supplied and condensed" : supplied ? "initial and supplied" : "initial"} inventory`,
         ["Initial liquid (kg)", ...(supplied ? ["Supplied liquid (kg)"] : []),
           ...(condensing ? ["Condensed liquid (kg)"] : []), "Evaporated liquid (kg)",
@@ -1513,6 +1514,22 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         ...(draining ? [metric(water.exported_liquid_sensible_energy_j)] : []),
         metric(water.liquid_stored_change_j), ...(supplied ? [metric(water.supplied_liquid_sensible_energy_j)] : []),
         ...(condensing ? [metric(water.condensation_latent_energy_j), metric(water.incoming_vapor_sensible_energy_j)] : []), metric(water.balance_error_j)]);
+      if (finiteSupply) {
+        const donor = water.supply_reservoir, source = water.request?.supply?.finite_reservoir;
+        const inventory = table(parent, `${key}: finite shared liquid supply`,
+          ["Initial donor liquid (kg)", "Remaining donor liquid (kg)", "Delivered to textile (kg)",
+            "Mass residual (kg)", "Donor temperature (°C)", "Elapsed time (s)", "Exhaustion events"]);
+        cells(inventory, [metric(donor.initial_liquid_mass_kg), metric(donor.remaining_liquid_mass_kg),
+          metric(donor.supplied_liquid_mass_kg), metric(donor.mass_balance_error_kg),
+          metric(donor.temperature_c), metric(donor.elapsed_seconds), metric(donor.exhaustion_events)]);
+        const donorEnergy = table(parent, `${key}: finite liquid donor sensible energy`,
+          ["Donor enthalpy change (J)", "Exported liquid enthalpy (J)", "Enthalpy residual (J)"]);
+        cells(donorEnergy, [metric(donor.liquid_enthalpy_change_j), metric(donor.exported_liquid_enthalpy_j),
+          metric(donor.enthalpy_balance_error_j)]);
+        const qualification = table(parent, `${key}: finite liquid donor source`, ["Source", "Evidence", "Method"]);
+        cells(qualification, [source?.source?.reference ?? "Unknown", source?.evidence ?? "Unknown",
+          source?.method ?? "Unknown"]);
+      }
       if (finiteVapor) {
         const vapor = water.vapor_reservoir;
         const inventory = table(parent, `${key}: finite shared vapor inventory and pressure`,
@@ -1561,6 +1578,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         "and the temperature feeds the declared vapor-pressure table. " +
         (supplied ? "Each mechanical interval has independently sourced delivery rates and incoming temperatures per instance. Supply uses reference material area, can support evaporation on a dry patch and can rewet it. " :
           "Dryout ends evaporation; the remaining interval uses the dry heat model. ") +
+        (finiteSupply ? "All selected textile pieces draw from one finite liquid donor at its declared temperature. The prescribed rates are delivery demands: supply stops for every piece when that shared stock is exhausted, while evaporation and the thermal history continue. Donor liquid and enthalpy remain separate from liquid already on the textile. " : "") +
         "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
         "against boundary energy plus qualified material heat" + (supplied ? " and incoming liquid sensible energy. Loading beyond the qualified cap refuses the interval. " : ". The initial-only model has zero replenishment. ") +
         (condensing ? "Independently qualified reverse vapor transfer can condense on dry or wet cloth and later re-evaporate. Condensation latent release and incoming vapor sensible enthalpy are separate energy inputs; the effective enthalpy convention remains explicit in the source policy. " : "") +

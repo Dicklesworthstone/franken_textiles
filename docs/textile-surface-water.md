@@ -508,7 +508,8 @@ consumers without changing the water request schemas or inventing a wet constitu
 
 ### Prescribed liquid supply
 
-Versions 2 and 3 require a `supply` object with schema `ftx-textile-liquid-supply/1`. Its `bindings` map
+Water versions 2–5 require a `supply` object. Schema `ftx-textile-liquid-supply/1` prescribes delivery
+without a finite upstream inventory; version 2 adds the shared finite source described below. The `bindings` map
 contains exactly the same instance names as the top-level water bindings, including dry/zero-feed
 instances. Each entry has `rate_kg_m2_s` and `temperature_c` arrays, one value per mechanical keyframe
 interval. Rates are nonnegative kilograms per **reference material square metre per second**;
@@ -542,6 +543,75 @@ For example, the supply portion of an explicitly synthetic two-interval request 
   "method": "Artificial piecewise-constant reference-area delivery"
 }
 ```
+
+### One finite liquid source shared by the garment
+
+Use `supply.schema: "ftx-textile-liquid-supply/2"` with a required `finite_reservoir` to draw the
+prescribed piece rates from one finite, homogeneous liquid inventory. This owner is shared by every
+retained triangle and piece, including pieces with different reference areas or material assignments.
+The original rates are delivery demands; once the source is empty, subsequent demand delivers no
+water. There is no refill or implicit transfer from the separate body wet-film model.
+
+The nested source qualification has this shape. All values below are synthetic examples:
+
+```json
+"finite_reservoir": {
+  "schema": "ftx-textile-liquid-reservoir/1",
+  "model": "well_mixed_constant_temperature_liquid_inventory/1",
+  "initial_liquid_mass_kg": 0.001,
+  "temperature_c": 30.0,
+  "source": {
+    "reference": "test:finite-liquid-source",
+    "accessed_on": "2026-11-20",
+    "note": "Synthetic shared liquid inventory, not a measured wearer or textile"
+  },
+  "evidence": "estimate",
+  "allow_estimates": true,
+  "method": "Homogeneous withdrawal from a finite constant-temperature liquid source",
+  "qualification": "Declared initial inventory and temperature shared by every recipient"
+}
+```
+
+Initial mass must be finite and nonnegative. Every supply binding's temperature must equal the
+source temperature in every interval, including intervals with zero delivery demand. That temperature
+must lie inside the water model's qualified domain. Source evidence and estimate consent are
+independent of delivery, textile, and vapor qualifications. Supply `/1` forbids `finite_reservoir`;
+`/2` requires the complete object, and explicit null is invalid.
+
+At each accepted state the source sums `reference_area × rate` over all recipient triangles. Its
+remaining mass divided by that total rate supplies an exact exhaustion event. The same event bounds
+all recipients and any finite-vapor pressure trials, alongside textile dryout and the thermal step
+limit. All recipients receive their prescribed rates until that event; the remaining physical time
+continues with zero liquid feed. Neither a changing current cloth area nor a finer thermal timestep
+duplicates stock or extends delivery. Rounding at exhaustion is assigned deterministically while
+retaining a visible conservation residual. Unrepresentable positive transfers refuse.
+
+The source joins the existing accepted-step transaction. Discarded pressure probes consume no liquid,
+and a later thermal or mechanical failure restores donor inventory together with textile water,
+temperature, and mechanical histories. The source composes with condensation, drainage, qualified
+liquid mechanics, and the finite vapor reservoir. Condensation and drainage keep their own owners;
+neither silently refills the source.
+
+Every thermal trace and final water result includes `supply_reservoir`, with schema
+`ftx-textile-liquid-reservoir-result/1`:
+
+| Field | Meaning |
+| --- | --- |
+| `initial_liquid_mass_kg`, `remaining_liquid_mass_kg`, `supplied_liquid_mass_kg` | One shared source inventory and cumulative actual withdrawal |
+| `temperature_c`, `elapsed_seconds` | Fixed qualified source temperature and accepted physical duration, including time after exhaustion |
+| `exhaustion_events` | Zero until positive stock is exhausted, then one; an initially empty source has zero events |
+| `liquid_enthalpy_change_j`, `exported_liquid_enthalpy_j` | Source sensible-storage change and energy delivered to the textile, using the water model's explicit heat capacity and enthalpy reference |
+| `mass_balance_error_kg`, `enthalpy_balance_error_j` | Source conservation residuals, separate from the textile and vapor ledgers |
+
+Homogeneous withdrawal leaves source temperature unchanged: its storage change is the negative
+of delivered sensible enthalpy. The existing textile mixing equation receives that same delivered
+mass and energy. Material comparisons independently reconstruct shared exhaustion from original
+reference areas and keyframe schedules, then check each patch, every trace, and the donor ledger.
+Changing the source inventory or temperature changes the operating case. The browser retains the
+original qualification and displays the remaining stock and energy account.
+
+This supplies a finite delivery boundary, without a physiological sweat model, body-to-cloth contact
+transfer, absorbed moisture, automatic rain interception, or empirical wet-garment qualification.
 
 ## Discrete physical model
 

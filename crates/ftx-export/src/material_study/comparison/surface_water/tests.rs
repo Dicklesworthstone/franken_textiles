@@ -2145,6 +2145,390 @@ fn supplied_case() -> (Alternative, Value, Value, Value) {
     (a, d, s, m)
 }
 
+fn finite_supplied_case() -> (Alternative, Value, Value, Value) {
+    let (a, mut d, s, mut m) = supplied_case();
+    let h = &mut m["transient_surface"]["result"];
+    let mass = h["surface_water"]["supplied_liquid_kg"].as_f64().unwrap();
+    let energy = h["surface_water"]["supplied_liquid_sensible_energy_j"]
+        .as_f64()
+        .unwrap();
+    let supply = &mut h["request"]["surface_water"]["supply"];
+    supply["schema"] = json!("ftx-textile-liquid-supply/2");
+    // Twice the original delivery demand exhausts this shared stock halfway through the interval.
+    supply["bindings"]["front"]["rate_kg_m2_s"] = json!([4e-5]);
+    supply["bindings"]["back"]["temperature_c"] = json!([30.]);
+    supply["finite_reservoir"] = json!({
+        "schema":"ftx-textile-liquid-reservoir/1",
+        "model":"well_mixed_constant_temperature_liquid_inventory/1",
+        "initial_liquid_mass_kg":mass,"temperature_c":30.,
+        "source":{"reference":"test:finite-liquid-donor","accessed_on":"2026-11-20",
+            "note":"Synthetic shared inventory; no body or measured textile claim"},
+        "evidence":"estimate","allow_estimates":true,
+        "method":"Homogeneous withdrawal of a finite synthetic liquid inventory",
+        "qualification":"Constant source temperature and conservation across all recipient pieces"
+    });
+    let receipt = json!({"schema":"ftx-textile-liquid-reservoir-result/1",
+        "initial_liquid_mass_kg":mass,"remaining_liquid_mass_kg":0.,
+        "supplied_liquid_mass_kg":mass,"temperature_c":30.,"elapsed_seconds":1.,
+        "exhaustion_events":1,"liquid_enthalpy_change_j":-energy,
+        "exported_liquid_enthalpy_j":energy,"mass_balance_error_kg":0.,
+        "enthalpy_balance_error_j":0.});
+    h["surface_water"]["supply_reservoir"] = receipt.clone();
+    h["trace"][0]["surface_water"]["supply_reservoir"] = receipt;
+    h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    (a, d, s, m)
+}
+
+#[test]
+fn finite_liquid_supply_admits_exhaustion_and_rejects_forged_owner_ledgers() {
+    let (a, d, s, m) = finite_supplied_case();
+    admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+    let mut subdivided = m.clone();
+    let heat = &mut subdivided["transient_surface"]["result"];
+    // The donor adds accepted substep durations; the motion endpoint retains authored time.
+    // Ordinary roundoff in that sum is admissible, while the forged half-duration below is not.
+    for receipt in ["surface_water", "trace"] {
+        let water = if receipt == "trace" {
+            &mut heat[receipt][0]["surface_water"]
+        } else {
+            &mut heat[receipt]
+        };
+        water["supply_reservoir"]["elapsed_seconds"] = json!(1.0000000000000007);
+    }
+    admit_heat(&a, &d, &s, &subdivided, Consumer::TransientSurface).unwrap();
+    for (field, forged) in [
+        ("initial_liquid_mass_kg", json!(1.)),
+        ("remaining_liquid_mass_kg", json!(1e-8)),
+        ("supplied_liquid_mass_kg", json!(0.)),
+        ("temperature_c", json!(31.)),
+        ("elapsed_seconds", json!(0.5)),
+        ("exhaustion_events", json!(0)),
+        ("liquid_enthalpy_change_j", json!(0.)),
+        ("exported_liquid_enthalpy_j", json!(0.)),
+        ("mass_balance_error_kg", json!(1e-8)),
+        ("enthalpy_balance_error_j", json!(1.)),
+    ] {
+        let mut changed = m.clone();
+        let h = &mut changed["transient_surface"]["result"];
+        h["surface_water"]["supply_reservoir"][field] = forged.clone();
+        h["trace"][0]["surface_water"]["supply_reservoir"][field] = forged;
+        assert!(
+            admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err(),
+            "{field}"
+        );
+    }
+    for missing in [true, false] {
+        let mut changed = m.clone();
+        let h = &mut changed["transient_surface"]["result"];
+        if missing {
+            h["surface_water"]
+                .as_object_mut()
+                .unwrap()
+                .remove("supply_reservoir");
+            h["trace"][0]["surface_water"]
+                .as_object_mut()
+                .unwrap()
+                .remove("supply_reservoir");
+        } else {
+            h["trace"][0]["surface_water"]["supply_reservoir"]["exhaustion_events"] = json!(2);
+        }
+        assert!(admit_heat(&a, &d, &s, &changed, Consumer::TransientSurface).is_err());
+    }
+}
+
+#[test]
+fn finite_liquid_supply_reconciles_only_the_largest_exhausted_patch_and_its_enthalpy() {
+    let (a, mut d, mut s, mut m) = finite_supplied_case();
+    let count = 321;
+    let h = &mut m["transient_surface"]["result"];
+    // This subdivision concerns the liquid source only; the original two-triangle Maxwell
+    // work fixture does not qualify conversion on the newly subdivided reference patches.
+    for path in ["", "/request", "/trace/0"] {
+        h.pointer_mut(path)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("relaxation_dissipation_heat");
+    }
+    let front = h["model"]["patches"][0].clone();
+    let back = h["model"]["patches"][1].clone();
+    let liquid = h["surface_water"]["patches"][0].clone();
+    let mut back_liquid = h["surface_water"]["patches"][1].clone();
+    let area = front["reference_area_m2"].as_f64().unwrap() / count as f64;
+    let loading = h["request"]["surface_water"]["bindings"]["front"]["initial_liquid_kg_m2"]
+        .as_f64()
+        .unwrap();
+    let supplied = liquid["supplied_liquid_kg"].as_f64().unwrap() / count as f64;
+    // The entire donor's final subtraction can leave a correction larger than one small
+    // recipient's accumulation error. Distribute the other rounding errors below each
+    // recipient's original tolerance, keeping total mass and incoming enthalpy unchanged.
+    let correction = supplied * 1e-11;
+    let mut patches = Vec::new();
+    let mut liquid_patches = Vec::new();
+    for index in 0..count {
+        let mut patch = front.clone();
+        patch["reference_area_m2"] = json!(area);
+        patches.push(patch);
+        let mut row = liquid.clone();
+        let mass = supplied
+            + if index == 0 {
+                correction
+            } else {
+                -correction / (count - 1) as f64
+            };
+        row["source_triangle"] = json!(index);
+        row["initial_liquid_kg"] = json!(loading * area);
+        row["evaporated_liquid_kg"] = row["initial_liquid_kg"].clone();
+        row["remaining_liquid_kg"] = json!(mass);
+        row["supplied_liquid_kg"] = json!(mass);
+        row["supplied_liquid_sensible_energy_j"] = json!(mass * 4200. * 30.);
+        liquid_patches.push(row);
+    }
+    patches.push(back);
+    back_liquid["source_triangle"] = json!(count);
+    liquid_patches.push(back_liquid);
+    let sum = |field: &str| {
+        liquid_patches
+            .iter()
+            .map(|row| row[field].as_f64().unwrap())
+            .sum::<f64>()
+    };
+    let initial = sum("initial_liquid_kg");
+    let remaining = sum("remaining_liquid_kg");
+    let evaporated = sum("evaporated_liquid_kg");
+    let delivered = sum("supplied_liquid_kg");
+    let incoming = sum("supplied_liquid_sensible_energy_j");
+    let stored = 4200. * (remaining * 21. - initial * 20.);
+    let exported = evaporated * 4200. * 20.;
+    let latent = evaporated * 2500000.;
+    let net = h["stored_change_j"].as_f64().unwrap() + stored + exported + latent - incoming;
+    let stock = h["surface_water"]["supply_reservoir"]["initial_liquid_mass_kg"]
+        .as_f64()
+        .unwrap();
+    for path in ["/surface_water", "/trace/0/surface_water"] {
+        let water = h.pointer_mut(path).unwrap();
+        for (field, value) in [
+            ("initial_liquid_kg", initial),
+            ("remaining_liquid_kg", remaining),
+            ("evaporated_liquid_kg", evaporated),
+            ("supplied_liquid_kg", delivered),
+            ("supplied_liquid_sensible_energy_j", incoming),
+            ("liquid_stored_change_j", stored),
+            ("exported_vapor_sensible_energy_j", exported),
+            ("latent_energy_j", latent),
+            (
+                "mass_balance_error_kg",
+                remaining + evaporated - initial - delivered,
+            ),
+        ] {
+            water[field] = json!(value);
+        }
+        let donor = &mut water["supply_reservoir"];
+        donor["supplied_liquid_mass_kg"] = json!(delivered);
+        donor["exported_liquid_enthalpy_j"] = json!(incoming);
+        donor["mass_balance_error_kg"] = json!(delivered - stock);
+        donor["enthalpy_balance_error_j"] = json!(incoming - stock * 4200. * 30.);
+    }
+    for path in ["", "/trace/0"] {
+        let row = h.pointer_mut(path).unwrap();
+        row["net_boundary_energy_j"] = json!(net);
+        row["outside_energy_j"] = json!(-net);
+    }
+    let triangles: Vec<_> = patches
+        .iter()
+        .map(|patch| patch["vertices"].clone())
+        .collect();
+    h["model"]["patches"] = json!(patches);
+    h["model"].as_object_mut().unwrap().remove("sha256");
+    h["model"]["sha256"] = json!(hash(&h["model"]).unwrap());
+    h["final"]["temperature_c"] = json!(vec![vec![21., 21.]; count + 1]);
+    h["surface_water"]["patches"] = json!(liquid_patches);
+    h["cell_steps"] = json!((count + 1) * 2 * 2);
+    h["request"]["max_cell_steps"] = json!(1000000);
+    d["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+    let frame = &mut s["drape"]["thermal_surface"];
+    frame["model"] = h["model"].clone();
+    let mut owners = vec![0; count];
+    owners.push(1);
+    frame["triangle_instance"] = json!(owners);
+    frame.as_object_mut().unwrap().remove("sha256");
+    frame["sha256"] = json!(hash(frame).unwrap());
+    s["triangles"] = json!(triangles);
+    m["triangles"] = json!(triangles);
+    admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+
+    // Equal source rates select the first patch. Moving the same correction to another
+    // recipient preserves every aggregate ledger but must not borrow the shared allowance.
+    let mut moved = m.clone();
+    let rows = moved["transient_surface"]["result"]["surface_water"]["patches"]
+        .as_array_mut()
+        .unwrap();
+    for field in [
+        "remaining_liquid_kg",
+        "supplied_liquid_kg",
+        "supplied_liquid_sensible_energy_j",
+    ] {
+        let first = rows[0][field].clone();
+        rows[0][field] = rows[1][field].clone();
+        rows[1][field] = first;
+    }
+    assert!(admit_heat(&a, &d, &s, &moved, Consumer::TransientSurface).is_err());
+
+    // The mass correction carries exactly the donor's specific enthalpy. Opposite energy
+    // changes preserve the total source receipt and still fail individual stream admission.
+    let mut energy_only = m.clone();
+    let rows = energy_only["transient_surface"]["result"]["surface_water"]["patches"]
+        .as_array_mut()
+        .unwrap();
+    let change = correction * 4200. * 30.;
+    for (index, sign) in [(0, -1.), (1, 1.)] {
+        rows[index]["supplied_liquid_sensible_energy_j"] = json!(
+            rows[index]["supplied_liquid_sensible_energy_j"]
+                .as_f64()
+                .unwrap()
+                + sign * change
+        );
+    }
+    assert!(admit_heat(&a, &d, &s, &energy_only, Consumer::TransientSurface).is_err());
+
+    let mut excessive = m.clone();
+    let row = &mut excessive["transient_surface"]["result"]["surface_water"]["patches"][0];
+    let mass = supplied * (1. + 1e-7);
+    row["supplied_liquid_kg"] = json!(mass);
+    row["remaining_liquid_kg"] = json!(mass);
+    row["supplied_liquid_sensible_energy_j"] = json!(mass * 4200. * 30.);
+    assert!(admit_heat(&a, &d, &s, &excessive, Consumer::TransientSurface).is_err());
+}
+
+#[test]
+fn finite_liquid_supply_reconstructs_shared_multi_piece_depletion_from_reference_area() {
+    let (_, _, _, m) = finite_supplied_case();
+    let policy = &m["transient_surface"]["result"]["request"]["surface_water"];
+    let mut request = policy["supply"].clone();
+    request["finite_reservoir"]["initial_liquid_mass_kg"] = json!(0.875);
+    request["bindings"]["front"]["rate_kg_m2_s"] = json!([0.25, 1., 4.]);
+    request["bindings"]["back"]["rate_kg_m2_s"] = json!([0.25, 0.5, 2.]);
+    for binding in request["bindings"].as_object_mut().unwrap().values_mut() {
+        binding["temperature_c"] = json!([30., 30., 30.]);
+    }
+    let motion = json!({"keyframes":[{"time_s":0.5},{"time_s":1.5},{"time_s":2.5}],
+        "duration_s":2.5});
+    let mut supply = Supply::new(
+        &request,
+        policy["bindings"].as_object().unwrap(),
+        &motion,
+        4.,
+        5.,
+        [-20., 80.],
+    )
+    .unwrap();
+    let areas = BTreeMap::from([("front", 1.), ("back", 2.)]);
+    supply.limit_inventory(&areas).unwrap();
+    // The first half-second consumes .375 kg. The remaining .5 kg lasts .25 s at 2 kg/s.
+    assert_eq!(supply.active_seconds, vec![0.5, 0.25, 0.]);
+    assert_eq!(supply.deliveries["front"].total, [0.375, 37.5]);
+    assert_eq!(supply.deliveries["back"].total, [0.25, 25.]);
+    assert_eq!(
+        supply.deliveries["front"].total[0] + 2. * supply.deliveries["back"].total[0],
+        0.875
+    );
+
+    request["finite_reservoir"]["initial_liquid_mass_kg"] = json!(0.);
+    let mut empty = Supply::new(
+        &request,
+        policy["bindings"].as_object().unwrap(),
+        &motion,
+        4.,
+        5.,
+        [-20., 80.],
+    )
+    .unwrap();
+    empty.limit_inventory(&areas).unwrap();
+    assert_eq!(empty.active_seconds, vec![0.; 3]);
+    assert!(
+        empty
+            .deliveries
+            .values()
+            .all(|delivery| delivery.total == [0.; 2])
+    );
+
+    let patches = json!([{"reference_area_m2":1.}, {"reference_area_m2":2.}]);
+    let owners = json!([0, 1]);
+    let instances = json!(["front", "back"]);
+    for (mass, interval, recipient) in [
+        (0.375_f64.next_up(), Some(0), Some(1)),
+        (0.375 + 1e-8, Some(1), Some(0)),
+        (20., None, None),
+    ] {
+        request["finite_reservoir"]["initial_liquid_mass_kg"] = json!(mass);
+        let mut source = Supply::new(
+            &request,
+            policy["bindings"].as_object().unwrap(),
+            &motion,
+            4.,
+            5.,
+            [-20., 80.],
+        )
+        .unwrap();
+        source.limit_inventory(&areas).unwrap();
+        assert_eq!(source.depletion.map(|(index, _)| index), interval);
+        assert_eq!(
+            source
+                .depletion_roundoff(
+                    patches.as_array().unwrap(),
+                    owners.as_array().unwrap(),
+                    instances.as_array().unwrap(),
+                )
+                .unwrap()
+                .map(|(index, _)| index),
+            recipient
+        );
+        if interval == Some(0) {
+            assert_eq!(source.active_seconds, vec![0.5, 0., 0.]);
+        }
+    }
+}
+
+#[test]
+fn finite_liquid_supply_requires_its_own_source_temperature_and_case_inventory() {
+    let (a, d, s, m) = finite_supplied_case();
+    for fault in 0..8 {
+        let mut changed = m.clone();
+        let h = &mut changed["transient_surface"]["result"];
+        let supply = &mut h["request"]["surface_water"]["supply"];
+        match fault {
+            0 => supply["schema"] = json!("ftx-textile-liquid-supply/1"),
+            1 => supply["finite_reservoir"] = Value::Null,
+            2 => supply["finite_reservoir"]["allow_estimates"] = json!(false),
+            3 => supply["finite_reservoir"]["qualification"] = json!(""),
+            4 => supply["finite_reservoir"]["initial_liquid_mass_kg"] = json!(1e-9),
+            5 => supply["finite_reservoir"]["initial_liquid_mass_kg"] = json!(-1.),
+            6 => supply["bindings"]["back"]["temperature_c"] = json!([20.]),
+            _ => supply["finite_reservoir"]["model"] = json!("inferred_sweating/1"),
+        }
+        h["surface_water"]["request"] = h["request"]["surface_water"].clone();
+        let mut descriptor = d.clone();
+        descriptor["scenario"]["motion"]["transient_surface"] = h["request"].clone();
+        assert!(
+            admit_heat(&a, &descriptor, &s, &changed, Consumer::TransientSurface).is_err(),
+            "fault {fault}"
+        );
+    }
+    let policy = &m["transient_surface"]["result"]["request"]["surface_water"];
+    let original = alternative_case_inputs(policy).unwrap();
+    let mut changed = policy.clone();
+    changed["supply"]["finite_reservoir"]["source"]["reference"] =
+        json!("test:independent-donor-source");
+    assert_eq!(original, alternative_case_inputs(&changed).unwrap());
+    changed["supply"]["finite_reservoir"]["initial_liquid_mass_kg"] = json!(1.);
+    assert_ne!(original, alternative_case_inputs(&changed).unwrap());
+
+    let (a, d, s, mut unlimited) = supplied_case();
+    unlimited["transient_surface"]["result"]["surface_water"]["supply_reservoir"] = Value::Null;
+    assert!(admit_heat(&a, &d, &s, &unlimited, Consumer::TransientSurface).is_err());
+}
+
 fn condensing_case() -> (Alternative, Value, Value, Value) {
     let (a, mut d, s, mut m) = supplied_case();
     let h = &mut m["transient_surface"]["result"];
