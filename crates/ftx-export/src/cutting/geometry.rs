@@ -117,6 +117,10 @@ fn union_box(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
         a[3].max(b[3]),
     ]
 }
+fn box_extent(b: [f64; 4]) -> f64 {
+    let ext = (b[2] - b[0]) + (b[3] - b[1]);
+    if ext.is_finite() { ext } else { f64::INFINITY }
+}
 fn shift_box(b: [f64; 4], offset: Vec2) -> [f64; 4] {
     if offset == Vec2::ZERO {
         return b;
@@ -365,7 +369,12 @@ fn boundaries_clear_bvh(
                 stack.push((ia, node_b.left));
             }
             (false, false) => {
-                if node_a.count() >= node_b.count() {
+                // Split the larger bounding box first (e.g. a 4-edge stock sheet enclosing an
+                // 800-edge curved piece splits into its 4 walls immediately instead of descending
+                // all 800 edges against the sheet's full bounding box).
+                let ea = box_extent(node_a.bounds);
+                let eb = box_extent(node_b.bounds);
+                if ea > eb || (ea == eb && node_a.count() >= node_b.count()) {
                     stack.push((node_a.right, ib));
                     stack.push((node_a.left, ib));
                 } else {
@@ -665,7 +674,12 @@ pub(crate) fn simple(ring: &[Vec2], work: &mut Work) -> Option<bool> {
                 stack.push((ia, node_b.left));
             }
             (false, false) => {
-                if node_a.count() >= node_b.count() {
+                // Split the larger bounding box first (e.g. a 4-edge stock sheet enclosing an
+                // 800-edge curved piece splits into its 4 walls immediately instead of descending
+                // all 800 edges against the sheet's full bounding box).
+                let ea = box_extent(node_a.bounds);
+                let eb = box_extent(node_b.bounds);
+                if ea > eb || (ea == eb && node_a.count() >= node_b.count()) {
                     stack.push((node_a.right, ib));
                     stack.push((node_a.left, ib));
                 } else {
