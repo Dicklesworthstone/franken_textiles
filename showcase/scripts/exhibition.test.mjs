@@ -320,7 +320,7 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
   const page = await browser.newPage({...opts, reducedMotion:"reduce", viewport:{width:390,height:844}});
   try {
     await page.goto(new URL("/wardrobe/sundress/?garment=eased#muslin", site).href);
-    const trial = page.locator("#muslin"), notes = page.getByLabel("Form, cloth, repeat readings and discrepancies");
+    const trial = page.locator("#muslin"), notes = page.getByLabel("Form, cloth, measuring uncertainty and discrepancies");
     const slice = trial.getByRole("img", {name:/Both waist cuts/});
     assert.equal(await slice.locator("path").count(), 3);
     assert.equal(await slice.locator("line").count(), 1);
@@ -341,7 +341,17 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
     assert.match(sheet, /predicted -59.6 mm, observed \+7.5 mm, residual \+67.1 mm/);
     assert.match(sheet, /Synthetic browser check only/);
     assert.match(sheet, /Native trajectory SHA-256 [a-f0-9]{64}/);
-    await eased.fill("-1"); assert.equal(await save.isDisabled(), true);
+    await gathered.fill("0\n12\n6");
+    await eased.fill("7,5\n8,5");
+    assert.match(await front.innerText(), /3 readings · 0–12 mm · mean 6.0 mm/);
+    assert.match(await front.locator("output").innerText(), /observed \+2.0 mm · residual \+61.6 mm/);
+    const repeats = await download();
+    assert.match(repeats, /Readings \(mm\): 7,5 \/ 8,5\. Count 2\. Range 7.5–8.5 mm/);
+    assert.match(repeats, /predicted 90.7 mm, observed 6 mm, residual -84.7 mm/);
+    assert.match(repeats, /Centre back\n[^\n]*observed ____ mm/);
+    await eased.fill("7,5\n-1"); assert.equal(await save.isDisabled(), true);
+    assert.equal(await eased.getAttribute("aria-invalid"), "true");
+    assert.doesNotMatch(await front.locator("output").innerText(), /observed/);
     await eased.fill(""); assert.equal(await save.isEnabled(), true);
     assert.doesNotMatch(await front.locator("output").innerText(), /observed/);
     const instructions = page.locator("details").filter({has:page.getByText("Cut and sew the dress", {exact:true})});
@@ -358,6 +368,10 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
       assert.match(await drawing.text(), /fp:schema="fabric-pattern\/1"/);
       const summary = await (await page.request.get(new URL(`/exhibits/sundress/${id}-summary.json`,site).href)).json();
       const recipe = await replay.innerText();
+      const revision = replay.getByRole("link", {name:"native solver at " + summary.solverRevision.slice(0,8)});
+      assert.ok((await revision.getAttribute("href")).endsWith("/tree/"+summary.solverRevision));
+      assert.ok((await page.locator("details").filter({has:page.getByText("What the solver did, and what is drawn",{exact:true})}).innerText())
+        .includes(summary.finalResidualN.toLocaleString("en", {maximumSignificantDigits:3})+" N"));
       assert.ok(recipe.includes(`ftx drape ${id}-pattern.json --measurements ${id}-measures.json --fit ${id}-fit.json ${summary.solverArguments.join(" ")} --out ${id}-drape`));
       assert.ok(recipe.includes(`ftx viewer ${id}-drape --check-contact`) && recipe.includes(summary.sourcePc2Sha256));
       for (const [label, suffix] of [["starting pattern","pattern"],["synthetic body measurements","measures"],["fit targets","fit"]]) {
@@ -370,6 +384,53 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
     }
     await page.reload();
     assert.equal(await notes.inputValue(), ""); assert.equal(await gathered.inputValue(), "");
+  } finally { await page.close(); }
+});
+
+test("a swapped bolero body is refused and a matching pose can still be opened", async () => {
+  const page = await browser.newPage({...opts, reducedMotion:"reduce"});
+  try {
+    const other = await readFile(new URL("../public/exhibits/poses/480-35.bin.gz", import.meta.url));
+    await page.route("**/520-35.bin.gz*", route => route.fulfill({body:other, contentType:"application/octet-stream"}));
+    await page.goto(new URL("/sections/studies/#drape-room",site).href);
+    const room = page.locator("#drape-room");
+    await room.getByRole("status").filter({hasText:"3D unavailable"}).waitFor();
+    assert.equal(await room.locator("canvas[data-run]").count(),0);
+    await room.getByRole("button",{name:"48 centimetre chest"}).click();
+    await room.locator('canvas[data-run="480-35"]').waitFor();
+  } finally { await page.close(); }
+});
+
+test("a failed 3D package plays the selected cut's chapters and can retry the live replay", async () => {
+  const page = await browser.newPage({...opts,reducedMotion:"reduce",viewport:{width:390,height:844}});
+  try {
+    // Keep the recording ID and dimensions, but change a triangle in the eased cut.
+    const meta = JSON.parse(await readFile(new URL("../public/exhibits/sundress/light.json",import.meta.url),"utf8"));
+    [meta.triangles[0], meta.triangles[1]] = [meta.triangles[1], meta.triangles[0]];
+    await page.route("**/sundress/light.json*", route => route.fulfill({json:meta}));
+    await page.goto(new URL("/wardrobe/sundress/?garment=eased#sewn",site).href);
+    const dress = page.locator(".sd-sewn-board"), eased = dress.locator('[data-garment="eased"]');
+    await eased.getByRole("button",{name:"Match the edges"}).click();
+    assert.match(await eased.locator(".construction-still").getAttribute("src"),/construction-eased-join\.jpg/);
+    await eased.getByRole("button",{name:"Play construction film"}).click();
+    await page.waitForFunction(()=>document.querySelector(".sd-sewn-board video")?.currentTime>0.1);
+    assert.match(await eased.locator("video").getAttribute("src"),/construction-eased\.mp4/);
+    assert.equal(await dress.getByRole("button",{name:"Waist profile"}).count(),0);
+    await page.unroute("**/sundress/light.json*");
+    await dress.getByRole("button",{name:"Retry 3D"}).click();
+    await dress.locator("canvas[data-ready]").waitFor();
+    await page.route("**/hussar/dolman.gz*", route=>route.abort());
+    await page.goto(new URL("/wardrobe/hussar/#native-dolman",site).href);
+    const jacket=page.locator("#native-dolman");
+    await jacket.locator('[data-garment="blue"]').waitFor();
+    await jacket.getByRole("button",{name:"Yellow",exact:true}).click();
+    const yellow=jacket.locator('[data-garment="yellow"]');
+    await yellow.getByRole("button",{name:"Sewn article"}).click();
+    assert.match(await yellow.locator(".construction-still").getAttribute("src"),/construction-yellow\.jpg/);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await page.unroute("**/hussar/dolman.gz*");
+    await jacket.getByRole("button",{name:"Retry 3D"}).click();
+    await jacket.locator('canvas[data-ready="Yellow"]').waitFor();
   } finally { await page.close(); }
 });
 
@@ -419,8 +480,8 @@ test("the hussar wardrobe connects the dressed figure, pattern front and native 
     await replay.getByRole("slider",{name:"Sewing replay frame"}).press("Home");
     await replay.locator("canvas[data-ready='Yellow'][data-frame='0']").waitFor();
     const loaded = await p.evaluate(() => performance.getEntriesByType("resource").map(entry => entry.name));
-    for (const ext of ["json", "gz"]) {
-      assert.ok(loaded.includes(new URL(`/exhibits/hussar/dolman.${ext}?v=${summary.sourcePc2Sha256}`, site).href));
+    for (const [ext, integrity] of [["json", summary.layoutIntegrity], ["gz", summary.geometryIntegrity]]) {
+      assert.ok(loaded.includes(new URL(`/exhibits/hussar/dolman.${ext}?v=${encodeURIComponent(integrity)}`, site).href));
     }
     for (const width of [1120,375]) {
       await p.setViewportSize({width,height:820});
