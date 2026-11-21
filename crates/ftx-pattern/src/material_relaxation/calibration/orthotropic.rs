@@ -405,7 +405,7 @@ fn law(input: &Input, candidates: &[Candidate], source: &str) -> Relaxation {
             .plastic_equilibrium
             .as_ref()
             .map(|p| p.network.clone()),
-        integration: Default::default(),
+        integration: input.integration,
         branches: Vec::new(),
         orthotropic_branches: candidates
             .iter()

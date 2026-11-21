@@ -34,8 +34,10 @@ pub enum IntegrationScheme {
 }
 
 impl IntegrationScheme {
+    /// Whether this is the default backward-Euler integration scheme.
     #[allow(clippy::trivially_copy_pass_by_ref)]
-    const fn is_default(&self) -> bool {
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
         matches!(self, Self::BackwardEuler)
     }
 }

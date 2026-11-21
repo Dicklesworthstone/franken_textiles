@@ -36,6 +36,7 @@ fn input(modes: &[(f64, f64)], ramp: bool) -> Input {
         domain_source: "test".into(),
         strain_range: [[-0.2, 0.3], [-0.2, 0.3], [-0.3, 0.3]],
         initialization: Initialization::StressFreeReference,
+        integration: Default::default(),
         fitted_on: "2026-10-14".into(),
         time_bounds_seconds: modes.iter().map(|&(_, t)| [t / 3., t * 3.]).collect(),
         orthotropic: None,
@@ -823,4 +824,72 @@ fn known_plastic_equilibrium_model_choice_is_fit_only_when_check_history_fails()
         serde_json::to_value(&inadmissible_check.fit_decision).unwrap(),
         serde_json::to_value(&accepted.fit_decision).unwrap()
     );
+}
+
+#[test]
+fn opt_in_exact_exponential_integration_propagates_to_calibrated_proportional_and_orthotropic_laws()
+{
+    use ftx_pattern::material_relaxation::IntegrationScheme;
+
+    // Default calibration omits `integration` on both Input and published Relaxation.
+    let base = input(&[(1.4, 0.7)], true);
+    assert!(serde_json::to_value(&base).unwrap().get("integration").is_none());
+    let base_report = calibrate(&base).unwrap();
+    let base_law = base_report.material.membrane_relaxation.as_ref().unwrap();
+    assert_eq!(base_law.integration, IntegrationScheme::BackwardEuler);
+    assert!(serde_json::to_value(base_law).unwrap().get("integration").is_none());
+
+    // Opt-in ExactExponential propagates on proportional calibration and yields step-size-invariant holds.
+    let mut exact = base.clone();
+    exact.integration = IntegrationScheme::ExactExponential;
+    let exact_report = calibrate(&exact).unwrap();
+    let exact_law = exact_report.material.membrane_relaxation.as_ref().unwrap();
+    assert_eq!(exact_law.integration, IntegrationScheme::ExactExponential);
+    assert_eq!(
+        serde_json::to_value(exact_law).unwrap()["integration"],
+        serde_json::json!("exact_exponential")
+    );
+    let q = ftx_pattern::material_catalog::normalize(&exact_report.material)
+        .unwrap()
+        .mechanics(true)
+        .unwrap()
+        .origin_tangent();
+    let compiled = exact_law
+        .compile(q, &exact_report.material.sources, true)
+        .unwrap();
+    assert_eq!(compiled.integration(), IntegrationScheme::ExactExponential);
+    let hold_strain = [0.04, -0.01, 0.02];
+    let mut coarse = compiled.memory(hold_strain).unwrap();
+    let upd_coarse = coarse.advance(hold_strain, 0.4).unwrap();
+    coarse = upd_coarse.memory;
+    let mut fine = compiled.memory(hold_strain).unwrap();
+    let mut fine_diss = 0.0;
+    for _ in 0..20 {
+        let upd = fine.advance(hold_strain, 0.02).unwrap();
+        fine = upd.memory;
+        fine_diss += upd.dissipated_j_m2;
+    }
+    assert!(
+        (upd_coarse.dissipated_j_m2 - fine_diss).abs() < 1e-12,
+        "proportional ExactExponential dissipation mismatch: {} vs {fine_diss}",
+        upd_coarse.dissipated_j_m2
+    );
+    let s_coarse = coarse.response(hold_strain, None).unwrap().stress;
+    let s_fine = fine.response(hold_strain, None).unwrap().stress;
+    for k in 0..3 {
+        assert!((s_coarse[k] - s_fine[k]).abs() < 1e-12);
+    }
+
+    // Opt-in ExactExponential also propagates on orthotropic calibration.
+    let mut ortho = base;
+    ortho.time_bounds_seconds.clear();
+    ortho.orthotropic = Some(ftx_pattern::material_relaxation::calibration::OrthotropicInput {
+        times_seconds: vec![0.7],
+        time_bounds_seconds: Vec::new(),
+        zero_threshold_n_m: 0.0,
+    });
+    ortho.integration = IntegrationScheme::ExactExponential;
+    let ortho_report = calibrate(&ortho).unwrap();
+    let ortho_law = ortho_report.material.membrane_relaxation.as_ref().unwrap();
+    assert_eq!(ortho_law.integration, IntegrationScheme::ExactExponential);
 }

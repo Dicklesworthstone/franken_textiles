@@ -10,7 +10,8 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CompiledRelaxation, Initialization, MaxwellBranch, Relaxation, parallel::ParallelPlasticity,
+    CompiledRelaxation, Initialization, IntegrationScheme, MaxwellBranch, Relaxation,
+    parallel::ParallelPlasticity,
 };
 use crate::material_calibration::{Partition, Quality, fitted_domain};
 use crate::material_catalog::normalize;
@@ -112,6 +113,10 @@ pub struct Input {
     pub strain_range: [[f64; 2]; 3],
     /// Initialization declaration for future simulations, NOT a reset of acquisition histories.
     pub initialization: Initialization,
+    /// Optional time-discretization scheme emitted onto the calibrated `Relaxation` law;
+    /// omitted when default `backward_euler`.
+    #[serde(default, skip_serializing_if = "IntegrationScheme::is_default")]
+    pub integration: IntegrationScheme,
     /// Analysis date; caller supplied to keep replay deterministic.
     pub fitted_on: String,
     /// One to three ordered, non-overlapping search intervals in seconds. They are NOT error bars.
@@ -272,7 +277,7 @@ fn law(input: &Input, ratios: &[f64], times: &[f64], source: &str) -> Relaxation
             .plastic_equilibrium
             .as_ref()
             .map(|p| p.network.clone()),
-        integration: Default::default(),
+        integration: input.integration,
         branches: ratios
             .iter()
             .zip(times)
