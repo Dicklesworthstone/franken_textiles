@@ -641,18 +641,28 @@ fn start_condition(fallback: Option<(usize, usize)>, tight: &[String]) -> Option
         Some((used, rejected)) => format!(
             "This start is the relaxation checkpoint at {used} iterations, not the fully relaxed start at \
              {rejected}: in that one, cloth layers crossed or lay closer than their contact thickness, so \
-             the drape began from an earlier and more strained state. ftx place draws the fully relaxed \
-             start: look there for layers lying on each other."
+             the drape began from an earlier and more strained state."
         ),
         None => "Before any sewing step this start was already strained.".to_string(),
     };
     if !tight.is_empty() {
+        // Name the subject: after the sentence above, "it" could be read as the start that was not used.
+        let subject = if fallback.is_some() {
+            "The checkpoint"
+        } else {
+            "It"
+        };
         text.push_str(&format!(
-            " It is stretched 15 % or more (red in still_strain_*) in {}. If that cloth has to pass round \
-             a wider part of the body there (a cuff over the hand, a hem over the hip), end the piece \
-             short of that part or widen it at that edge.",
+            " {subject} is stretched 15 % or more (red in still_strain_*) in {}. If that cloth has to pass \
+             round a wider part of the body there (a cuff over the hand, a hem over the hip), end the \
+             piece short of that part or widen it at that edge.",
             tight.join("; ")
         ));
+    }
+    if fallback.is_some() {
+        text.push_str(
+            " ftx place draws the fully relaxed start: look there for layers lying on each other.",
+        );
     }
     text.push_str(" No solver budget changes the start.");
     Some(text)
