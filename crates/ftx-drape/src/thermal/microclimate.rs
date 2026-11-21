@@ -680,6 +680,31 @@ impl NusseltResult {
         allow_estimates: bool,
         radiation: Option<AmbientRadiation>,
     ) -> Result<Exterior, Refusal> {
+        self.to_exterior_at_celsius(
+            air,
+            air.temperature_k - 273.15,
+            characteristic_length_m,
+            surface_temperature_range_c,
+            allow_estimates,
+            radiation,
+        )
+    }
+
+    fn to_exterior_at_celsius(
+        &self,
+        air: &MoistAirState,
+        air_c: f64,
+        characteristic_length_m: f64,
+        surface_temperature_range_c: [f64; 2],
+        allow_estimates: bool,
+        radiation: Option<AmbientRadiation>,
+    ) -> Result<Exterior, Refusal> {
+        if !air_c.is_finite() || air_c <= -273.15 {
+            return Err(refusal(
+                RefusalCode::OutOfRange,
+                "exterior air temperature must be finite and > -273.15 C",
+            ));
+        }
         let [t_lo, t_hi] = surface_temperature_range_c;
         if !(t_lo.is_finite()
             && t_hi.is_finite()
@@ -694,7 +719,6 @@ impl NusseltResult {
         }
         let h =
             self.heat_transfer_coefficient(air.thermal_conductivity, characteristic_length_m)?;
-        let air_c = air.temperature_k - 273.15;
         let groups_summary: Vec<String> = self
             .groups
             .iter()
@@ -1321,6 +1345,65 @@ fn air_receipt(input: MoistAirInput, air: &MoistAirState) -> serde_json::Value {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn evaluate_moist_air_convection(
+    air: &MoistAirState,
+    correlation: CorrelationId,
+    characteristic_length_m: f64,
+    wind_speed_m_s: Option<f64>,
+    delta_t_k: Option<f64>,
+    gravity_m_s2: Option<f64>,
+    reynolds: Option<f64>,
+    rayleigh: Option<f64>,
+    length_over_hydraulic_diameter: Option<f64>,
+    aspect_ratio: Option<f64>,
+    direction: ThermalDirection,
+) -> Result<(NusseltResult, f64), Refusal> {
+    if wind_speed_m_s.is_some() && reynolds.is_some() {
+        return Err(refusal(
+            RefusalCode::InvalidDocument,
+            "supply either wind_speed_m_s or reynolds, not both",
+        ));
+    }
+    if delta_t_k.is_some() && rayleigh.is_some() {
+        return Err(refusal(
+            RefusalCode::InvalidDocument,
+            "supply either delta_t_k or rayleigh, not both",
+        ));
+    }
+    if gravity_m_s2.is_some() && delta_t_k.is_none() {
+        return Err(refusal(
+            RefusalCode::InvalidDocument,
+            "gravity_m_s2 requires delta_t_k",
+        ));
+    }
+    let reynolds = match (wind_speed_m_s, reynolds) {
+        (Some(u), None) => Some(air.reynolds(u, characteristic_length_m)?),
+        (None, r) => r,
+        (Some(_), Some(_)) => unreachable!(),
+    };
+    let rayleigh = match (delta_t_k, rayleigh) {
+        (Some(dt), None) => {
+            let g = gravity_m_s2.unwrap_or(9.81);
+            Some(air.rayleigh(dt, characteristic_length_m, g)?)
+        }
+        (None, r) => r,
+        (Some(_), Some(_)) => unreachable!(),
+    };
+    let inputs = CorrelationInputs {
+        reynolds,
+        prandtl: Some(air.prandtl),
+        length_over_hydraulic_diameter,
+        aspect_ratio,
+        rayleigh,
+        direction,
+    };
+    let nu_res = evaluate_convection(correlation, inputs)?;
+    let h_w_m2_k =
+        nu_res.heat_transfer_coefficient(air.thermal_conductivity, characteristic_length_m)?;
+    Ok((nu_res, h_w_m2_k))
+}
+
 impl MicroclimateExterior {
     /// Evaluate moist-air thermophysics and the requested validity-gated Nusselt correlation,
     /// lowering to a checked [`Exterior`] boundary and complete provenance receipt.
@@ -1347,59 +1430,27 @@ impl MicroclimateExterior {
             self.air.pressure_pa,
             self.air.relative_humidity,
         )?;
-        if self.wind_speed_m_s.is_some() && self.reynolds.is_some() {
-            return Err(refusal(
-                RefusalCode::InvalidDocument,
-                "supply either wind_speed_m_s or reynolds, not both",
-            ));
-        }
-        if self.delta_t_k.is_some() && self.rayleigh.is_some() {
-            return Err(refusal(
-                RefusalCode::InvalidDocument,
-                "supply either delta_t_k or rayleigh, not both",
-            ));
-        }
-        if self.gravity_m_s2.is_some() && self.delta_t_k.is_none() {
-            return Err(refusal(
-                RefusalCode::InvalidDocument,
-                "gravity_m_s2 requires delta_t_k",
-            ));
-        }
-        let reynolds = match (self.wind_speed_m_s, self.reynolds) {
-            (Some(u), None) => Some(air.reynolds(u, self.characteristic_length_m)?),
-            (None, r) => r,
-            (Some(_), Some(_)) => unreachable!(),
-        };
-        let rayleigh = match (self.delta_t_k, self.rayleigh) {
-            (Some(dt), None) => {
-                let g = self.gravity_m_s2.unwrap_or(9.81);
-                Some(air.rayleigh(dt, self.characteristic_length_m, g)?)
-            }
-            (None, r) => r,
-            (Some(_), Some(_)) => unreachable!(),
-        };
-        let inputs = CorrelationInputs {
-            reynolds,
-            prandtl: Some(air.prandtl),
-            length_over_hydraulic_diameter: self.length_over_hydraulic_diameter,
-            aspect_ratio: self.aspect_ratio,
-            rayleigh,
-            direction: self.direction,
-        };
-        let nu_res = evaluate_convection(self.correlation, inputs)?;
-        let h_w_m2_k = nu_res
-            .heat_transfer_coefficient(air.thermal_conductivity, self.characteristic_length_m)?;
-        let mut exterior = nu_res.to_exterior(
+        let (nu_res, h_w_m2_k) = evaluate_moist_air_convection(
             &air,
+            self.correlation,
+            self.characteristic_length_m,
+            self.wind_speed_m_s,
+            self.delta_t_k,
+            self.gravity_m_s2,
+            self.reynolds,
+            self.rayleigh,
+            self.length_over_hydraulic_diameter,
+            self.aspect_ratio,
+            self.direction,
+        )?;
+        let exterior = nu_res.to_exterior_at_celsius(
+            &air,
+            self.air.temperature_c,
             self.characteristic_length_m,
             self.surface_temperature_range_c,
             self.allow_estimates,
             self.radiation.clone(),
         )?;
-        // Preserve the caller's exact Celsius temperature without `(t + 273.15) - 273.15` ULP drift
-        // so `solve_exterior`'s exact `outside_c == exterior.air_c` gate matches deterministically.
-        exterior.air_c = self.air.temperature_c;
-        exterior.validate_convection()?;
         let forced_convection = self
             .correlation
             .validity_bounds()
@@ -1515,66 +1566,28 @@ pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
     )?;
 
     let convection = if let Some(conv) = req.convection {
-        if conv.wind_speed_m_s.is_some() && conv.reynolds.is_some() {
-            return Err(refusal(
-                RefusalCode::InvalidDocument,
-                "supply either wind_speed_m_s or reynolds, not both",
-            ));
-        }
-        if conv.delta_t_k.is_some() && conv.rayleigh.is_some() {
-            return Err(refusal(
-                RefusalCode::InvalidDocument,
-                "supply either delta_t_k or rayleigh, not both",
-            ));
-        }
-        if conv.gravity_m_s2.is_some() && conv.delta_t_k.is_none() {
-            return Err(refusal(
-                RefusalCode::InvalidDocument,
-                "gravity_m_s2 requires delta_t_k",
-            ));
-        }
-        let reynolds = match (conv.wind_speed_m_s, conv.reynolds) {
-            (Some(u), None) => Some(air.reynolds(u, conv.characteristic_length_m)?),
-            (None, r) => r,
-            (Some(_), Some(_)) => unreachable!(),
-        };
-        let rayleigh = match (conv.delta_t_k, conv.rayleigh) {
-            (Some(dt), None) => {
-                let g = conv.gravity_m_s2.unwrap_or(9.81);
-                Some(air.rayleigh(dt, conv.characteristic_length_m, g)?)
-            }
-            (None, r) => r,
-            (Some(_), Some(_)) => unreachable!(),
-        };
-        let inputs = CorrelationInputs {
-            reynolds,
-            prandtl: Some(air.prandtl),
-            length_over_hydraulic_diameter: conv.length_over_hydraulic_diameter,
-            aspect_ratio: conv.aspect_ratio,
-            rayleigh,
-            direction: conv.direction,
-        };
-        let nu_res = evaluate_convection(conv.correlation, inputs)?;
-        let h_w_m2_k = nu_res
-            .heat_transfer_coefficient(air.thermal_conductivity, conv.characteristic_length_m)?;
+        let (nu_res, h_w_m2_k) = evaluate_moist_air_convection(
+            &air,
+            conv.correlation,
+            conv.characteristic_length_m,
+            conv.wind_speed_m_s,
+            conv.delta_t_k,
+            conv.gravity_m_s2,
+            conv.reynolds,
+            conv.rayleigh,
+            conv.length_over_hydraulic_diameter,
+            conv.aspect_ratio,
+            conv.direction,
+        )?;
         let exterior = match conv.surface_temperature_range_c {
-            Some(range) => {
-                let mut ext = nu_res.to_exterior(
-                    &air,
-                    conv.characteristic_length_m,
-                    range,
-                    conv.allow_estimates,
-                    None,
-                )?;
-                // Preserve the caller's exact Celsius temperature without `(t + 273.15) - 273.15`
-                // ULP drift so downstream `solve_exterior`'s `outside_c == exterior.air_c` gate
-                // matches deterministically.
-                ext.air_c = req.air.temperature_c;
-                if conv.allow_estimates {
-                    ext.validate_convection()?;
-                }
-                Some(ext)
-            }
+            Some(range) => Some(nu_res.to_exterior_at_celsius(
+                &air,
+                req.air.temperature_c,
+                conv.characteristic_length_m,
+                range,
+                conv.allow_estimates,
+                None,
+            )?),
             None => None,
         };
         Some(json!({
