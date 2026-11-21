@@ -260,6 +260,11 @@ fn admit_exterior(
     trace: &[Value],
     intervals: usize,
 ) -> Result<(), Refusal> {
+    if !request["microclimate_exterior"].is_null() || !heat["microclimate_convection"].is_null() {
+        return Err(invalid(
+            "compressed motion comparison requires explicit prescribed exterior_exchange rather than correlation microclimate_exterior",
+        ));
+    }
     let Some(environments) = request
         .get("exterior_exchange")
         .filter(|value| !value.is_null())
@@ -600,6 +605,15 @@ fn admit_coverage_exterior(
     trace: &[Value],
     intervals: usize,
 ) -> Result<(), Refusal> {
+    if !request["microclimate_exterior"].is_null()
+        || !request["exposed_microclimate_exterior"].is_null()
+        || !heat["microclimate_convection"].is_null()
+        || !heat["exposed_microclimate_convection"].is_null()
+    {
+        return Err(invalid(
+            "compressed motion comparison requires explicit prescribed exterior_exchange rather than correlation microclimate_exterior",
+        ));
+    }
     let covered = interval_options(request, "exterior_exchange", intervals)?;
     let exposed = interval_options(request, "exposed_exterior_exchange", intervals)?;
     let bare = interval_options(request, "bare_boundaries", intervals)?;
@@ -923,7 +937,9 @@ pub(super) fn admit(
         ]
         .iter()
         .any(|key| !request[key].is_null())
-        || (!coverage && !request["exposed_exterior_exchange"].is_null())
+        || (!coverage
+            && (!request["exposed_exterior_exchange"].is_null()
+                || !request["exposed_microclimate_exterior"].is_null()))
     {
         return Err(fail());
     }
@@ -1728,5 +1744,30 @@ mod tests {
             };
             assert!(check(&requested, &source).is_err());
         }
+    }
+
+    #[test]
+    fn compressed_motion_exterior_admission_refuses_correlation_microclimate() {
+        let surface_req = json!({"microclimate_exterior": [{}]});
+        assert!(
+            admit_exterior(&json!({}), &surface_req, &[], 1)
+                .unwrap_err()
+                .message
+                .contains("correlation microclimate_exterior")
+        );
+        let cov_req = json!({"microclimate_exterior": [{}]});
+        assert!(
+            admit_coverage_exterior(&json!({}), &cov_req, &[], 1)
+                .unwrap_err()
+                .message
+                .contains("correlation microclimate_exterior")
+        );
+        let exp_req = json!({"exposed_microclimate_exterior": [{}]});
+        assert!(
+            admit_coverage_exterior(&json!({}), &exp_req, &[], 1)
+                .unwrap_err()
+                .message
+                .contains("correlation microclimate_exterior")
+        );
     }
 }

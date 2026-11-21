@@ -1998,6 +1998,12 @@ impl Policy {
                 "thermal_surface",
                 true,
             ),
+            (
+                coupled_motion || consumers.contains(&Consumer::TransientSurface),
+                &heat["microclimate_exterior"],
+                "thermal_surface",
+                true,
+            ),
         ] {
             let Some(environments) = environments.as_array().filter(|_| active) else {
                 continue;
@@ -2048,6 +2054,7 @@ impl Policy {
                 "exterior_exchange",
                 "microclimate_exterior",
                 "exposed_exterior_exchange",
+                "exposed_microclimate_exterior",
             ] {
                 let Some(environments) = policy[field].as_array() else {
                     continue;
