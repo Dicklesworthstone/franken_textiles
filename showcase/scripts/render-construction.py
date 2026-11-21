@@ -222,7 +222,7 @@ def render(args):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene=bpy.context.scene;scene.render.engine=args.engine;scene.cycles.samples=args.samples
     scene.cycles.use_denoising=True;scene.cycles.max_bounces=3;scene.cycles.transparent_max_bounces=2
-    if args.engine == "BLENDER_EEVEE":
+    if args.engine == "BLENDER_EEVEE_NEXT":
         scene.eevee.taa_render_samples=args.samples
     scene.render.use_persistent_data=True
     scene.render.resolution_x=FRAME_WIDTH;scene.render.resolution_y=FRAME_HEIGHT;scene.render.resolution_percentage=100
@@ -380,7 +380,7 @@ if __name__=="__main__":
     p.add_argument("garment",choices=["sundress","eased","blue","yellow","bolero","trousers","column","flare","ensemble","fez"])
     p.add_argument("out",type=Path);p.add_argument("native",type=Path,nargs="?");p.add_argument("--proof",action="store_true")
     p.add_argument("--samples",type=int,default=5)
-    p.add_argument("--engine",choices=["CYCLES","BLENDER_EEVEE"],default="CYCLES")
+    p.add_argument("--engine",choices=["CYCLES","BLENDER_EEVEE_NEXT"],default="CYCLES")
     p.add_argument("--start-frame",type=int,default=0)
     p.add_argument("--end-frame",type=int,default=COUNT)
     args=p.parse_args(sys.argv[sys.argv.index("--")+1:])

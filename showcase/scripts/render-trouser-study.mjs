@@ -4,6 +4,7 @@ import {once} from "node:events";
 import {mkdir,writeFile} from "node:fs/promises";
 import {resolve} from "node:path";
 import {chromium} from "playwright-core";
+import {captureOptions,enableFilmResolution,filmArgs,fps} from "./film-capture.mjs";
 
 const out=resolve(process.argv[2]);
 await mkdir(out);
@@ -18,7 +19,8 @@ const productions=[
 const selected=process.argv[3]?productions.filter(f=>f.id===process.argv[3]):productions;
 if(!selected.length)throw Error("Choose trouser-posture, trouser-elastic or trouser-section.");
 try {
-  const page=await browser.newPage({viewport:{width:960,height:540},reducedMotion:"reduce",userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
+  const page=await browser.newPage(captureOptions({width:960,height:540}));
+  await enableFilmResolution(page);
   await page.goto(new URL("/studies/trousers/?capture=film",origin).href);
   await page.locator('canvas[data-run="standing"]').waitFor();
   await page.evaluate(()=>document.fonts.ready);
@@ -42,17 +44,17 @@ try {
   for(const {id,tab,title,cuts} of selected){
     await page.getByRole("button",{name:tab,exact:true}).evaluate(b=>b.click());
     const isSlice=tab==="Cross-section";
-    const encoder=spawn("ffmpeg",["-v","error","-f","image2pipe","-framerate","16","-i","pipe:0","-an","-c:v","libx264",
-      "-crf","19","-pix_fmt","yuv420p","-movflags","+faststart",resolve(out,id+".mp4")],{stdio:["pipe","ignore","inherit"]});
+    const encoder=spawn("ffmpeg",filmArgs(resolve(out,id+".mp4")),{stdio:["pipe","ignore","inherit"]});
     const finished=once(encoder,"close");
     try {
-      for(let i=0;i<96;i++){
-        const index=isSlice?0:Math.floor(i/32),[button,key]=cuts[index];
-        if(i%32===0){
+      const frames=6*fps, shotFrames=2*fps;
+      for(let i=0;i<frames;i++){
+        const progress=i/(frames-1), index=isSlice?0:Math.floor(i/shotFrames), [button,key]=cuts[index];
+        if(i%shotFrames===0){
           await page.getByRole("button",{name:button,exact:true}).evaluate(b=>b.click());
           await page.locator('canvas[data-run="'+key+'"]').waitFor();
         }
-        const height=Math.round(150+312*(.5-.5*Math.cos(i/95*Math.PI)));
+        const height=Math.round(150+312*(.5-.5*Math.cos(progress*Math.PI)));
         if(isSlice){
           await page.locator('input[type=range]').evaluate((slider,h)=>{
             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(slider,String(h));
@@ -60,7 +62,7 @@ try {
           },height);
           await page.locator('canvas[data-slice="'+height+'"]').waitFor();
         }
-        await page.evaluate(({tab,title,key,button,i,height})=>{
+        await page.evaluate(({tab,title,button,progress,height})=>{
           const desk=document.querySelector(".ts-film-type"),words=title.split(" ");
           desk.querySelector("h2").innerHTML=words.slice(0,-1).join(" ")+"<br><em>"+words.at(-1)+".</em>";
           desk.querySelector("p").textContent=tab==="Cross-section"?height+" mm above sole":tab==="Elastic"?button+" elastic stiffness":button+" posture";
@@ -71,10 +73,10 @@ try {
             const chart=document.querySelector(".ts-panel .ts-diagram").cloneNode(true);
             chart.querySelector("pattern").id="film-grid";chart.querySelector("rect").setAttribute("fill","url(#film-grid)");inset.append(chart);
           }
-          window.ftxTrouserCamera(tab==="Posture"?1.25+.25*i/95:.42+.56*Math.sin(i/95*Math.PI));
-        },{tab,title,key,button,i,height});
+          window.ftxTrouserCamera(tab==="Posture"?1.25+.25*progress:.42+.56*Math.sin(progress*Math.PI));
+        },{tab,title,button,progress,height});
         const frame=await page.screenshot({type:"jpeg",quality:92});
-        if(i===28)await writeFile(resolve(out,id+".jpg"),frame,{flag:"wx"});
+        if(i===Math.round(1.75*fps))await writeFile(resolve(out,id+".jpg"),frame,{flag:"wx"});
         if(!encoder.stdin.write(frame))await once(encoder.stdin,"drain");
       }
     } finally {encoder.stdin.end();}

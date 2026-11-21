@@ -5,12 +5,14 @@ import {mkdir,writeFile} from "node:fs/promises";
 import {resolve} from "node:path";
 import {chromium} from "playwright-core";
 import sharp from "sharp";
+import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
 
 const out=resolve(process.argv[2]);await mkdir(out);
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||chromium.executablePath(),
   args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
 try{
-  const page=await browser.newPage({viewport:{width:1104,height:620},reducedMotion:"reduce",userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
+  const page=await browser.newPage(captureOptions({width:1104,height:621}));
+  await enableFilmResolution(page);
   page.setDefaultTimeout(120000);
   await page.goto(new URL("/studies/skirt/?capture=film",process.env.FTX_STUDIO_URL||"http://127.0.0.1:3000").href);
   const room=page.locator(".sa-room"),shot=page.locator(".sa-canvas canvas");
@@ -46,8 +48,7 @@ try{
   });
   await room.screenshot({path:resolve(out,"cover.jpg"),type:"jpeg",quality:94});
   await page.locator(".sa-intro").evaluate(el=>{el.style.visibility="";});
-  const encoder=spawn("ffmpeg",["-v","error","-f","image2pipe","-framerate","16","-i","pipe:0","-an","-c:v","libx264",
-    "-crf","18","-pix_fmt","yuv420p","-movflags","+faststart",resolve(out,"skirt-atelier.mp4")],{stdio:["pipe","ignore","inherit"]});
+  const encoder=spawn("ffmpeg",filmArgs(resolve(out,"skirt-atelier.mp4")),{stdio:["pipe","ignore","inherit"]});
   const finished=once(encoder,"close");
   try{for(const cut of ["column","flare"]){
     await page.getByRole("button",{name:cut==="flare"?"Flared":"Column",exact:true,includeHidden:true}).evaluate(b=>b.click());
@@ -56,16 +57,17 @@ try{
       document.querySelector(".sa-intro h1").innerHTML=c==="flare"?"The<br><em>flare.</em>":"The<br><em>column.</em>";
       document.querySelector(".film-reading").textContent=(c==="flare"?"168":"126")+" cm hem · 68 cm form";
     },cut);
-    for(let i=0;i<64;i++){
-      const pct=Math.min(100,Math.round(i*100/44));
+    const shotFrames=4*fps;
+    for(let i=0;i<shotFrames;i++){
+      const pct=Math.min(100,Math.round(i*100/(2.75*fps)));
       await page.locator(".sa-scrub input").evaluate((slider,p)=>{
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(slider,String(p));
         slider.dispatchEvent(new Event("input",{bubbles:true}));
       },pct);
       await page.waitForFunction(p=>document.querySelector(".sa-canvas canvas").dataset.step===String(p),pct);
-      await page.evaluate(a=>window.ftxSkirtCamera(a),.20+.94*i/63);
+      await page.evaluate(a=>window.ftxSkirtCamera(a),.20+.94*i/(shotFrames-1));
       const frame=await room.screenshot({type:"jpeg",quality:91});
-      if(cut==="flare"&&i===45)await writeFile(resolve(out,"skirt-atelier.jpg"),frame,{flag:"wx"});
+      if(cut==="flare"&&i===Math.round(45/16*fps))await writeFile(resolve(out,"skirt-atelier.jpg"),frame,{flag:"wx"});
       if(!encoder.stdin.write(frame))await once(encoder.stdin,"drain");
     }
   }}finally{encoder.stdin.end();}
