@@ -21,8 +21,10 @@ use crate::{
 
 mod mechanics;
 mod reservoir;
+mod supply;
 
 pub use reservoir::{AmbientExchange, Request as VaporReservoir};
+pub use supply::Request as LiquidReservoir;
 
 /// Source-locked initial loading on every retained instance, including explicitly dry instances.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,11 +46,11 @@ pub struct SupplyBinding {
     pub temperature_c: Vec<f64>,
 }
 
-/// Independently qualified liquid supply; no body reservoir or unreported transfer is implied.
+/// Independently qualified delivery; version 2 withdraws from one explicit finite liquid owner.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Supply {
-    /// Must be `ftx-textile-liquid-supply/1`.
+    /// Version 1 prescribes unlimited delivery; version 2 requires one shared finite reservoir.
     pub schema: String,
     /// Every water-bound instance, including explicitly zero rates.
     pub bindings: BTreeMap<String, SupplyBinding>,
@@ -61,6 +63,13 @@ pub struct Supply {
     pub allow_estimates: bool,
     /// Source method for the imposed delivery histories.
     pub method: String,
+    /// Required only by version 2. Every stream has this same qualified liquid temperature.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "supply::non_null"
+    )]
+    pub finite_reservoir: Option<LiquidReservoir>,
 }
 
 /// Prescribed drainage demand on one instance, constant within each mechanical interval.
@@ -271,8 +280,10 @@ impl Request {
             ));
         }
         if let Some(supply) = &self.supply
-            && (supply.schema != "ftx-textile-liquid-supply/1"
-                || supply.bindings.keys().ne(self.bindings.keys())
+            && (!matches!(
+                (supply.schema.as_str(), supply.finite_reservoir.is_some()),
+                ("ftx-textile-liquid-supply/1", false) | ("ftx-textile-liquid-supply/2", true)
+            ) || supply.bindings.keys().ne(self.bindings.keys())
                 || !text(&supply.source.reference)
                 || !text(&supply.source.note)
                 || supply.source.accessed_on.len() != 10
@@ -294,6 +305,32 @@ impl Request {
             return Err(invalid(
                 "textile liquid supply needs complete instance/interval rates and qualified incoming temperatures, source metadata and its own estimate consent",
             ));
+        }
+        if let Some(supply) = &self.supply
+            && let Some(reservoir) = &supply.finite_reservoir
+        {
+            reservoir.validate()?;
+            self.pressure(reservoir.temperature_c)?;
+            let capacity = reservoir.initial_liquid_mass_kg * self.liquid_specific_heat_j_kg_k;
+            let initial_enthalpy = capacity * (reservoir.temperature_c - self.enthalpy_reference_c);
+            if !capacity.is_finite()
+                || !initial_enthalpy.is_finite()
+                || (reservoir.initial_liquid_mass_kg > 0. && capacity <= 0.)
+            {
+                return Err(invalid(
+                    "finite liquid-source heat capacity or initial sensible enthalpy is unrepresentable",
+                ));
+            }
+            if supply.bindings.values().any(|binding| {
+                binding
+                    .temperature_c
+                    .iter()
+                    .any(|&temperature| temperature != reservoir.temperature_c)
+            }) {
+                return Err(invalid(
+                    "finite liquid delivery must use the source-qualified homogeneous reservoir temperature in every interval and instance",
+                ));
+            }
         }
         if let Some(drainage) = &self.drainage
             && (drainage.schema != "ftx-textile-liquid-drainage/1"
@@ -401,6 +438,9 @@ fn case_inputs(request: &Request) -> Result<Value, Refusal> {
         if let Some(phase) = value.get_mut(key) {
             remove_evidence(phase);
         }
+    }
+    if let Some(reservoir) = value.pointer_mut("/supply/finite_reservoir") {
+        remove_evidence(reservoir);
     }
     if let Some(exchange) = value.pointer_mut("/vapor_reservoir/ambient_exchange") {
         remove_evidence(exchange);
@@ -519,6 +559,7 @@ pub(super) struct Water {
     dryout_events: usize,
     mechanical_flow: Option<mechanics::IntervalFlow>,
     vapor_reservoir: Option<reservoir::State>,
+    supply_reservoir: Option<supply::State>,
 }
 
 pub(super) struct Plan {
@@ -543,6 +584,7 @@ pub(super) struct Plan {
     exported_sensible_j: f64,
     dryout_events: usize,
     vapor_reservoir: Option<reservoir::State>,
+    supply_reservoir: Option<supply::State>,
 }
 
 fn add_positive(total: &mut f64, increment: f64) -> Result<(), Refusal> {
@@ -788,6 +830,11 @@ impl Water {
             .as_ref()
             .map(|reservoir| reservoir::State::new(reservoir, intervals))
             .transpose()?;
+        let supply_reservoir = request
+            .supply
+            .as_ref()
+            .and_then(|supply| supply.finite_reservoir.as_ref())
+            .map(supply::State::new);
         Ok(Self {
             request,
             networks,
@@ -809,6 +856,7 @@ impl Water {
             dryout_events: 0,
             mechanical_flow: None,
             vapor_reservoir,
+            supply_reservoir,
         })
     }
 
@@ -841,6 +889,34 @@ impl Water {
         maximum_seconds: f64,
         charge_trial: &mut impl FnMut() -> Result<(), Refusal>,
     ) -> Result<Plan, Refusal> {
+        let supply_step = self
+            .supply_reservoir
+            .as_ref()
+            .map(|reservoir| {
+                let supply = self.request.supply.as_ref().ok_or_else(|| {
+                    invalid("finite liquid source has no qualified delivery policy")
+                })?;
+                let rates = model
+                    .patches()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, patch)| {
+                        let loading_rate = supply.bindings[&self.instances[i]].rate_kg_m2_s[interval];
+                        let rate = loading_rate * patch.reference_area_m2;
+                        if !rate.is_finite() || (loading_rate > 0. && rate <= 0.) {
+                            return Err(invalid(
+                                "finite liquid-source reference-area delivery rate is unrepresentable",
+                            ));
+                        }
+                        Ok(rate)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                reservoir.plan(rates, maximum_seconds)
+            })
+            .transpose()?;
+        let maximum_seconds = supply_step
+            .as_ref()
+            .map_or(maximum_seconds, supply::Step::maximum_seconds);
         if let Some(reservoir) = &self.vapor_reservoir {
             let policy =
                 self.request.vapor_reservoir.as_ref().ok_or_else(|| {
@@ -858,6 +934,7 @@ impl Water {
                         maximum_seconds,
                         outside,
                         false,
+                        supply_step.as_ref(),
                     )
                 },
                 charge_trial,
@@ -889,6 +966,7 @@ impl Water {
             maximum_seconds,
             outside,
             true,
+            supply_step.as_ref(),
         )
     }
 
@@ -902,6 +980,7 @@ impl Water {
         maximum_seconds: f64,
         outside: f64,
         qualify_loading: bool,
+        supply_step: Option<&supply::Step>,
     ) -> Result<Plan, Refusal> {
         let mut seconds = maximum_seconds;
         let mut dryout_time_slope_factor = 0.0_f64;
@@ -914,8 +993,15 @@ impl Water {
             let (supply_rate, supply_temperature) = match &self.request.supply {
                 Some(supply) => {
                     let binding = &supply.bindings[&self.instances[i]];
-                    let rate = binding.rate_kg_m2_s[interval] * patch.reference_area_m2;
-                    if !rate.is_finite() || (binding.rate_kg_m2_s[interval] > 0. && rate <= 0.) {
+                    let rate = supply_step.map_or_else(
+                        || binding.rate_kg_m2_s[interval] * patch.reference_area_m2,
+                        |step| step.rate(i),
+                    );
+                    if !rate.is_finite()
+                        || (supply_step.is_none()
+                            && binding.rate_kg_m2_s[interval] > 0.
+                            && rate <= 0.)
+                    {
                         return Err(invalid(
                             "reference-area liquid supply rate is unrepresentable",
                         ));
@@ -1026,6 +1112,11 @@ impl Water {
         if !seconds.is_finite() || seconds <= 0. {
             return Err(invalid("surface-water dryout time is not representable"));
         }
+        let finite_supply = supply_step.map(|step| step.amounts(seconds)).transpose()?;
+        let (supplied_masses, supply_reservoir) = match finite_supply {
+            Some((amounts, state)) => (Some(amounts), Some(state)),
+            None => (None, None),
+        };
         let mut plan = Plan {
             seconds,
             dryout_time_slope_factor,
@@ -1046,6 +1137,7 @@ impl Water {
             exported_sensible_j: 0.,
             dryout_events: 0,
             vapor_reservoir: None,
+            supply_reservoir,
         };
         for (
             i,
@@ -1059,14 +1151,16 @@ impl Water {
             ),
         ) in rates.into_iter().enumerate()
         {
-            let supplied = supply_rate * seconds;
+            let supplied = supplied_masses
+                .as_ref()
+                .map_or(supply_rate * seconds, |masses| masses[i]);
             let condensed = condensation_rate * seconds;
             // Repeated inventory updates can place the same dryout a few ulps after a regular
-            // step boundary. Reconcile that event using the complete available inventory below;
-            // do not leave a spurious positive capacity or relax the positive-capacity guard.
-            // A genuinely later event retains its inventory. Zero drainage keeps legacy arithmetic.
+            // or finite-source boundary. Reconcile only that event using complete inventory;
+            // a genuinely later event retains its liquid. Existing unlimited, undrained
+            // supply keeps its original arithmetic.
             let at_dryout = dry_times[i] == seconds
-                || (drainage_rate > 0.
+                || ((drainage_rate > 0. || supply_step.is_some())
                     && dry_times[i].is_finite()
                     && dry_times[i] - seconds <= 64. * f64::EPSILON * dry_times[i].max(seconds));
             let (evaporated, drained) = if drainage_rate > 0. {
@@ -1305,6 +1399,7 @@ impl Water {
         }
         self.remaining = plan.remaining;
         self.vapor_reservoir = plan.vapor_reservoir;
+        self.supply_reservoir = plan.supply_reservoir;
         next.balance_error_j = error;
         self.snapshot(next.state.temperature_c(), false, 0.)?;
         Ok(())
@@ -1389,6 +1484,21 @@ impl Water {
             result["schema"] = json!("ftx-textile-surface-water-result/2");
             result["supplied_liquid_kg"] = json!(supplied);
             result["supplied_liquid_sensible_energy_j"] = json!(supplied_sensible);
+        }
+        if let Some(reservoir) = &self.supply_reservoir {
+            let policy = self
+                .request
+                .supply
+                .as_ref()
+                .and_then(|supply| supply.finite_reservoir.as_ref())
+                .ok_or_else(|| invalid("finite liquid-source state has no qualification"))?;
+            result["supply_reservoir"] = reservoir.snapshot(
+                policy,
+                supplied,
+                supplied_sensible,
+                self.request.liquid_specific_heat_j_kg_k,
+                self.request.enthalpy_reference_c,
+            )?;
         }
         if self.request.condensation.is_some() {
             result["schema"] = json!("ftx-textile-surface-water-result/3");
@@ -1495,6 +1605,12 @@ impl Water {
                     "{scope} Each mechanical interval has its own independently qualified constant ambient pressure, conductance and incoming temperature. The exact interval boundary changes without interpolating or resetting any inventory or temperature. Accepted pressure integrals, mass and temperature-weighted incoming enthalpy remain attributed to that interval, including shared dryout substeps. Outgoing vapor retains the finite reservoir effective enthalpy. No airflow, ventilation rate, gas law or ambient coefficient is inferred."
                 ));
             }
+        }
+        if full && self.supply_reservoir.is_some() {
+            let scope = result["scope"].as_str().expect("surface-water scope");
+            result["scope"] = json!(format!(
+                "{scope} All prescribed liquid-delivery streams withdraw from one independently qualified finite homogeneous source at its declared temperature. Delivery retains each source rate until their shared earliest depletion event and is zero afterward; unused time advances the original heat and phase-transfer model. Source liquid, textile liquid, vapor and heat commit together, with source mass and exported sensible enthalpy separately reconciled. No refill, physiology or body-to-textile transfer is inferred."
+            ));
         }
         Ok(result)
     }

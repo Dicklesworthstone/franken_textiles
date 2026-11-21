@@ -1755,8 +1755,10 @@ fn finite_vapor_ambient_schedule_refuses_incomplete_mixed_and_unqualified_inputs
 
 #[test]
 fn finite_vapor_ambient_schedule_rolls_back_late_heat_failure_after_an_accepted_interval() {
+    // Binary-exact capacitance keeps the first interval at exactly 4000 Pa. A rounded
+    // initial pressure would instead demand a tiny, unrepresentable phase transfer.
     let base = variable_fixture(
-        finite_fixture(0.1, 0.1, 1e-5, 4000.),
+        finite_fixture(0.1, 0.1, 1. / 65536., 4000.),
         1,
         [0.0025; 2],
         [19.95, 60.],
@@ -1769,14 +1771,22 @@ fn finite_vapor_ambient_schedule_rolls_back_late_heat_failure_after_an_accepted_
         ],
     );
     constant_wet_pressure(&mut history, 4000.);
+    assert_eq!(
+        finite_snapshot(&history)["vapor_reservoir"]["vapor_pressure_pa"],
+        4000.
+    );
     advance(&mut history, 0.5, 1.).unwrap();
     let before = finite_snapshot(&history);
     let temperatures = history.state.temperature_c().to_vec();
     let steps = history.thermal_steps;
+    let refusal = history
+        .advance(&geometry(0.5), 2., 1, 1, None, None, None)
+        .expect_err("the second interval must cool outside the qualified thermal domain");
     assert!(
-        history
-            .advance(&geometry(0.5), 2., 1, 1, None, None, None)
-            .is_err()
+        refusal
+            .message
+            .contains("adiabatic enthalpy available inside the characterized temperature domain"),
+        "{refusal:?}"
     );
     assert_eq!(history.state.temperature_c(), temperatures);
     assert_eq!(history.thermal_steps, steps);
@@ -2196,7 +2206,7 @@ fn finite_vapor_selects_early_cold_patch_dryout_before_a_later_rewetting_root() 
     let expected_pressure = 1000. * (1.02_f64 - (1.02_f64 * 1.02 - 0.44).sqrt()) / 2.;
     let expected_time = 0.01 / (1. - expected_pressure / 1000.);
     let later = water
-        .plan_at_pressure(&model, &old, &positions, 0, 10., 110000. / 21., false)
+        .plan_at_pressure(&model, &old, &positions, 0, 10., 110000. / 21., false, None)
         .unwrap();
     near(later.seconds, 10.);
     assert!(later.condensed[1] > 0.);
@@ -3253,4 +3263,373 @@ fn nonbinary_regular_steps_have_no_phantom_event_or_extra_budget_charge() {
         assert_eq!(history.time_s, 1.);
         near(history.balance_error_j(), 0.);
     }
+}
+
+fn with_finite_supply(mut history: SurfaceHistory, mass: f64, temperature: f64) -> SurfaceHistory {
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    let supply = request.supply.as_mut().unwrap();
+    supply.schema = "ftx-textile-liquid-supply/2".into();
+    supply.finite_reservoir = Some(serde_json::from_value(json!({
+        "schema":"ftx-textile-liquid-reservoir/1",
+        "model":"well_mixed_constant_temperature_liquid_inventory/1",
+        "initial_liquid_mass_kg":mass,"temperature_c":temperature,
+        "source":{"reference":"test:finite-liquid-donor","accessed_on":"2026-11-20",
+            "note":"Synthetic finite homogeneous liquid stock; no body or measured textile claim"},
+        "evidence":"estimate","allow_estimates":true,
+        "method":"Known initial inventory with prescribed constant-temperature withdrawal",
+        "qualification":"Synthetic homogeneous source of the declared liquid, with no refill or unreported heat exchange"
+    })).unwrap());
+    request.validate(history.request.boundaries.len()).unwrap();
+    let water = history.water.as_mut().unwrap();
+    water.supply_reservoir = Some(supply::State::new(
+        request
+            .supply
+            .as_ref()
+            .unwrap()
+            .finite_reservoir
+            .as_ref()
+            .unwrap(),
+    ));
+    water.request = request.clone();
+    history.request.surface_water = Some(request);
+    history
+}
+
+#[test]
+fn finite_supply_shares_stock_across_unequal_pieces_and_solves_the_actual_depletion_time() {
+    let mut base = with_finite_supply(supplied_fixture(0., 1., vec![0.02], vec![40.]), 0.03, 40.);
+    constant_wet_pressure(&mut base, 1000.);
+    let (mut history, mut positions) = conditioned_fixture(base);
+    positions[4] = Vec3::new(6., 0., 0.); // Stretch current area; source ownership stays 1 m².
+    let water = history.water.as_mut().unwrap();
+    water
+        .request
+        .supply
+        .as_mut()
+        .unwrap()
+        .bindings
+        .get_mut("warm:0")
+        .unwrap()
+        .rate_kg_m2_s[0] = 0.03;
+    history.request.surface_water = Some(water.request.clone());
+    let before = finite_snapshot(&history);
+    let proposal = history
+        .water
+        .as_ref()
+        .unwrap()
+        .plan(&history.model, &history.state, &positions, 0, 1.)
+        .unwrap();
+    // Reference demands are .5*.02 + 1*.03 = .04 kg/s, so .03 kg lasts .75 s.
+    near(proposal.seconds, 0.75);
+    near(proposal.supplied[0], 0.0075);
+    near(proposal.supplied[1], 0.0225);
+    assert_eq!(before, finite_snapshot(&history)); // A proposal cannot consume the donor.
+    history
+        .advance(&positions, 1., 0, 0, None, None, None)
+        .unwrap();
+    assert_eq!(history.thermal_steps, 2);
+    let report = finite_snapshot(&history);
+    let source = &report["supply_reservoir"];
+    near(source["supplied_liquid_mass_kg"].as_f64().unwrap(), 0.03);
+    assert_eq!(source["remaining_liquid_mass_kg"], 0.);
+    assert_eq!(source["exhaustion_events"], 1);
+    near(source["elapsed_seconds"].as_f64().unwrap(), 1.);
+    near(
+        source["exported_liquid_enthalpy_j"].as_f64().unwrap(),
+        1200.,
+    );
+    near(source["liquid_enthalpy_change_j"].as_f64().unwrap(), -1200.);
+    // Independent two-stage RC solution: full requested feed until .75 s, then dry source.
+    for (patch, (area, current_area, old, supplied)) in
+        [(0.5, 0.5, 10., 0.0075), (1., 2., 35., 0.0225)]
+            .into_iter()
+            .enumerate()
+    {
+        let dry_capacity = area * 0.2 * 1000.;
+        let capacity = dry_capacity + supplied * 1000.;
+        let conductance = 2. * current_area / 1.2;
+        let first = (dry_capacity * old + supplied * 1000. * 40. + 0.75 * conductance * 20.)
+            / (capacity + 0.75 * conductance);
+        let final_temperature =
+            (capacity * first + 0.25 * conductance * 20.) / (capacity + 0.25 * conductance);
+        near(history.state.temperature_c()[patch][0], final_temperature);
+        near(
+            report["patches"][patch]["supplied_liquid_kg"]
+                .as_f64()
+                .unwrap(),
+            supplied,
+        );
+    }
+    near(history.balance_error_j(), 0.);
+    near(report["mass_balance_error_kg"].as_f64().unwrap(), 0.);
+    near(source["mass_balance_error_kg"].as_f64().unwrap(), 0.);
+    history
+        .advance(&positions, 2., 0, 1, None, None, None)
+        .unwrap();
+    let after = finite_snapshot(&history);
+    assert_eq!(after["supplied_liquid_kg"], report["supplied_liquid_kg"]);
+    assert_eq!(after["supply_reservoir"]["exhaustion_events"], 1);
+    near(
+        after["supply_reservoir"]["elapsed_seconds"]
+            .as_f64()
+            .unwrap(),
+        2.,
+    );
+}
+
+#[test]
+fn finite_supply_depletion_and_textile_dryout_are_distinct_conservative_events() {
+    for (loading, steps) in [(0.005, 2), (0.015, 3)] {
+        let mut history = with_finite_supply(
+            supplied_fixture(loading, 1., vec![0.01], vec![20.]),
+            0.00125,
+            20.,
+        );
+        constant_wet_pressure(&mut history, 4000.);
+        history.water.as_mut().unwrap().begin_mechanical_interval();
+        advance(&mut history, 0.5, 1.).unwrap();
+        let water = history.water.as_ref().unwrap();
+        assert_eq!(history.thermal_steps, steps);
+        assert_eq!(water.remaining, vec![0.]);
+        assert_eq!(water.dryout_events, 1);
+        near(water.supplied[0], 0.00125);
+        near(water.evaporated[0], 0.5 * loading + 0.00125);
+        let flow = water.mechanical_flow.as_ref().unwrap();
+        near(flow.supplied[0], 0.00125);
+        near(flow.outgoing[0], 0.5 * loading + 0.00125);
+        let report = finite_snapshot(&history);
+        assert_eq!(report["supply_reservoir"]["remaining_liquid_mass_kg"], 0.);
+        assert_eq!(report["supply_reservoir"]["exhaustion_events"], 1);
+        near(history.balance_error_j(), 0.);
+        near(
+            report["supply_reservoir"]["enthalpy_balance_error_j"]
+                .as_f64()
+                .unwrap(),
+            0.,
+        );
+    }
+}
+
+#[test]
+fn finite_supply_and_finite_vapor_close_one_combined_inventory_and_energy_account() {
+    let mut base = finite_fixture(0., 0.5, 1. / 65536., 1000.);
+    base.water
+        .as_mut()
+        .unwrap()
+        .request
+        .supply
+        .as_mut()
+        .unwrap()
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .rate_kg_m2_s[0] = 1. / 32.;
+    let mut history = with_finite_supply(base, 1. / 512., 20.);
+    constant_wet_pressure(&mut history, 4000.);
+    let before = finite_snapshot(&history);
+    let mut probes = 0;
+    assert!(
+        history
+            .water
+            .as_ref()
+            .unwrap()
+            .plan_with_pressure_work(
+                &history.model,
+                &history.state,
+                &geometry(0.5),
+                0,
+                0.5,
+                &mut || {
+                    probes += 1;
+                    if probes == 3 {
+                        Err(invalid("synthetic pressure budget"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(probes, 3);
+    assert_eq!(before, finite_snapshot(&history));
+    advance(&mut history, 0.5, 0.5).unwrap();
+    let report = finite_snapshot(&history);
+    let liquid = &report["supply_reservoir"];
+    let vapor = &report["vapor_reservoir"];
+    assert_eq!(liquid["remaining_liquid_mass_kg"], 0.);
+    near(report["supplied_liquid_kg"].as_f64().unwrap(), 1. / 512.);
+    near(
+        report["remaining_liquid_kg"].as_f64().unwrap()
+            + vapor["remaining_vapor_mass_kg"].as_f64().unwrap(),
+        before["vapor_reservoir"]["initial_vapor_mass_kg"]
+            .as_f64()
+            .unwrap()
+            + 1. / 512.,
+    );
+    finite_energy_balance(&history);
+    near(
+        history.stored_j
+            + report["liquid_stored_change_j"].as_f64().unwrap()
+            + vapor["vapor_enthalpy_change_j"].as_f64().unwrap()
+            + vapor["isothermal_heat_removed_j"].as_f64().unwrap()
+            + liquid["liquid_enthalpy_change_j"].as_f64().unwrap(),
+        history.inside_j - history.outside_j,
+    );
+}
+
+#[test]
+fn finite_supply_preserves_unexhausted_and_empty_physics_and_enthalpy_reference() {
+    let base = supplied_fixture(0.01, 0.05, vec![0.001], vec![40.]);
+    let mut finite = with_finite_supply(base.clone(), 0.125, 40.);
+    let mut unlimited = base.clone();
+    let mut shifted = finite.clone();
+    shifted.water.as_mut().unwrap().request.enthalpy_reference_c = 15.;
+    for history in [&mut finite, &mut unlimited, &mut shifted] {
+        advance(history, 0.5, 0.2).unwrap();
+        near(history.balance_error_j(), 0.);
+    }
+    assert_eq!(
+        finite.state.temperature_c(),
+        unlimited.state.temperature_c()
+    );
+    assert_eq!(finite.state.temperature_c(), shifted.state.temperature_c());
+    assert_eq!(
+        finite.water.as_ref().unwrap().remaining,
+        unlimited.water.as_ref().unwrap().remaining
+    );
+    assert_eq!(
+        finite.water.as_ref().unwrap().supplied,
+        unlimited.water.as_ref().unwrap().supplied
+    );
+    let a = finite_snapshot(&finite);
+    let b = finite_snapshot(&shifted);
+    assert_eq!(a["supply_reservoir"]["exhaustion_events"], 0);
+    near(
+        a["supply_reservoir"]["remaining_liquid_mass_kg"]
+            .as_f64()
+            .unwrap(),
+        0.1249,
+    );
+    near(
+        b["supply_reservoir"]["enthalpy_balance_error_j"]
+            .as_f64()
+            .unwrap(),
+        0.,
+    );
+    let mut empty = with_finite_supply(base, 0., 40.);
+    let mut closed = supplied_fixture(0.01, 0.05, vec![0.], vec![40.]);
+    for history in [&mut empty, &mut closed] {
+        advance(history, 0.5, 0.2).unwrap();
+    }
+    assert_eq!(empty.state.temperature_c(), closed.state.temperature_c());
+    assert_eq!(
+        empty.water.as_ref().unwrap().remaining,
+        closed.water.as_ref().unwrap().remaining
+    );
+    let empty_report = finite_snapshot(&empty);
+    assert_eq!(empty_report["supply_reservoir"]["exhaustion_events"], 0);
+    assert_eq!(empty_report["supplied_liquid_kg"], 0.);
+    near(
+        empty_report["supply_reservoir"]["elapsed_seconds"]
+            .as_f64()
+            .unwrap(),
+        0.2,
+    );
+}
+
+#[test]
+fn finite_supply_refuses_unsupported_sources_and_preserves_physical_case_identity() {
+    let history = with_finite_supply(supplied_fixture(0., 1., vec![0.01], vec![20.]), 0.02, 20.);
+    let request = history.water.as_ref().unwrap().request.clone();
+    let value = serde_json::to_value(&request).unwrap();
+    let refused = |value| {
+        if let Ok(request) = serde_json::from_value::<Request>(value) {
+            assert!(request.validate(1).is_err());
+        }
+    };
+    for (path, replacement) in [
+        ("/supply/schema", json!("ftx-textile-liquid-supply/1")),
+        ("/supply/finite_reservoir", Value::Null),
+        (
+            "/supply/finite_reservoir/initial_liquid_mass_kg",
+            json!(-1.),
+        ),
+        ("/supply/finite_reservoir/temperature_c", json!(19.)),
+        ("/supply/finite_reservoir/allow_estimates", json!(false)),
+        ("/supply/finite_reservoir/qualification", json!("")),
+        (
+            "/supply/finite_reservoir/model",
+            json!("inferred_body_sweat"),
+        ),
+        ("/supply/bindings/sheet/temperature_c", json!([21.])),
+    ] {
+        let mut invalid = value.clone();
+        *invalid.pointer_mut(path).unwrap() = replacement;
+        refused(invalid);
+    }
+    let mut missing = value.clone();
+    missing["supply"]
+        .as_object_mut()
+        .unwrap()
+        .remove("finite_reservoir");
+    refused(missing);
+    let mut old_null = value.clone();
+    old_null["supply"]["schema"] = json!("ftx-textile-liquid-supply/1");
+    old_null["supply"]["finite_reservoir"] = Value::Null;
+    assert!(serde_json::from_value::<Request>(old_null).is_err());
+    let mut alternative = request.clone();
+    alternative
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .material_sha256 = "b".repeat(64);
+    alternative
+        .supply
+        .as_mut()
+        .unwrap()
+        .finite_reservoir
+        .as_mut()
+        .unwrap()
+        .source
+        .reference = "test:independent-same-liquid-donor".into();
+    validate_alternatives([&request, &alternative], 1).unwrap();
+    alternative
+        .supply
+        .as_mut()
+        .unwrap()
+        .finite_reservoir
+        .as_mut()
+        .unwrap()
+        .initial_liquid_mass_kg = 0.03;
+    assert!(validate_alternatives([&request, &alternative], 1).is_err());
+}
+
+#[test]
+fn finite_supply_late_loading_failure_rolls_back_donor_and_every_accepted_owner() {
+    let mut history = with_finite_supply(
+        supplied_fixture(0., 0.5, vec![0.02, 0.15], vec![20., 20.]),
+        0.075,
+        20.,
+    );
+    constant_wet_pressure(&mut history, 1000.);
+    history
+        .advance(&geometry(0.5), 0.5, 0, 0, None, None, None)
+        .unwrap();
+    let before = finite_snapshot(&history);
+    let temperatures = history.state.temperature_c().to_vec();
+    let steps = history.thermal_steps;
+    let error = history
+        .advance(&geometry(0.5), 1.5, 1, 1, None, None, None)
+        .unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("qualified reference-area loading domain"),
+        "{error:?}"
+    );
+    assert_eq!(before, finite_snapshot(&history));
+    assert_eq!(history.state.temperature_c(), temperatures);
+    assert_eq!(history.thermal_steps, steps);
+    assert_eq!(history.time_s, 0.5);
+    assert_eq!(history.trace.len(), 1);
 }
