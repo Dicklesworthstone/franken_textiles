@@ -119,7 +119,7 @@ function PairedSeamBoard({
 }) {
   const { back, front, sideR } = stage;
   const fail = sideR.status !== "PASS";
-  const gap = 36;
+  const gap = 64;
   const maxH = Math.max(back.height, front.height, ghostBack?.height ?? 0);
   const totalW = back.width + gap + front.width;
   const pad = 26;
@@ -167,10 +167,10 @@ function PairedSeamBoard({
       </g>
 
       {/* Piece & seam callout labels */}
-      <text x={back.width / 2} y={maxH + 14} textAnchor="middle" fill="#1f2c33" fontSize="11" fontWeight="600" fontFamily="var(--mono)">
+      <text x={back.width / 2} y={maxH + 14} textAnchor="middle" fill="#1f2c33" fontSize="9.5" fontWeight="600" fontFamily="var(--mono)">
         BACK · back/side.R ({sideR.len_b_mm.toFixed(1)} mm)
       </text>
-      <text x={back.width + gap + front.width / 2} y={maxH + 14} textAnchor="middle" fill="#1f2c33" fontSize="11" fontWeight="600" fontFamily="var(--mono)">
+      <text x={back.width + gap + front.width / 2} y={maxH + 14} textAnchor="middle" fill="#1f2c33" fontSize="9.5" fontWeight="600" fontFamily="var(--mono)">
         FRONT · front.R/side ({sideR.len_a_mm.toFixed(1)} mm)
       </text>
 
