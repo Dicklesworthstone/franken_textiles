@@ -860,11 +860,11 @@ synthetic geometry and grant no anatomical or fit claim about the hand.
 `Full` cuts nothing of the hand, so the collider and the display skin are the same surface there and
 have no hand cap. Measured on 2026-11-21 on the admitted model: 11026 collider vertices and 22048
 triangles, passing the solver's surface audit (143769 to 145077 overlapping pairs tested) for the 92 cm
-public-prior toddler at 20°, 45° and 75° of arm abduction and for two fitted adults. A sleeve that ends at
-the wrist drapes with it (the 92 cm bolero's 335 mm sleeve: converged, no gating flags). The fingers of
-the drape pose are open, and a sleeve whose end lies across them has not been made to start. On that
-wearer (arms at 35°), a 385 mm sleeve with a 207.7 mm cuff, whose end lies 66 mm beyond the wrist
-landmark, was refused on its drafted 34.7 mm cylinder at 12 mm spacing (`intersecting_start`: crossings
+public-prior toddler at 20°, 45° and 75° of arm abduction and for two fitted adults. A sleeve that ends
+16 mm beyond the wrist landmark drapes with it (the 92 cm bolero's 335 mm sleeve, arms at 35°: converged,
+no gating flags). The fingers of the drape pose are open, and a sleeve whose end lies across them has not
+been made to start. On the same wearer and pose, a 385 mm sleeve with a 207.7 mm cuff, whose end lies
+66 mm beyond the wrist landmark, was refused on its drafted 34.7 mm cylinder at 12 mm spacing (`intersecting_start`: crossings
 left after 50 untangling rounds). `ftx place` on the same cut showed sleeve vertices inside the hand,
 every one at the sleeve's end and 62 to 68 mm beyond the wrist landmark: 2 at 34.7 mm with 8 mm spacing;
 2, 4 and 3 at 45 mm with 12, 8 and 6 mm spacing; 1 at 55 mm with 12 mm spacing, with 5 cloth-on-cloth

@@ -635,10 +635,10 @@ pub(super) fn refused_stills(
 }
 
 /// How to tell unfinished relaxation from a small piece, said wherever a start that stopped above its
-/// relaxation target is reported as tight. A procedure, not a law: on the one garment measured, the
-/// coarser mesh reached the target and the stretch by the seams was gone.
+/// relaxation target is reported as tight. It claims no cause for what remains: on the one garment
+/// measured, the coarser mesh reached the target and the stretch by the seams was gone.
 const UNRELAXED_CHECK: &str = " To tell them apart, look at ftx place with a coarser --spacing-mm: if the \
-     relaxation reaches its target there, stretch that remains is the piece's.";
+     relaxation reaches its target there, stretch that remains is not unfinished relaxation.";
 
 /// What is wrong with the start a refused drape began from, when the run can tell: it is an earlier and
 /// more strained relaxation checkpoint (`fallback`: its iterations, then those of the start that was not
@@ -682,9 +682,9 @@ fn start_condition(
         // A checkpoint is above the target by construction and the sentence above already says so.
         if let (None, Some(p95)) = (fallback, unrelaxed) {
             text.push_str(&format!(
-                " The start's relaxation ran its full {RELAX_MAX_ITERS} iterations and stopped at p95 \
-                 strain {p95:.3}, above its {RELAX_TARGET_P95} target, so stretch next to a seam can be \
-                 unfinished relaxation and not a piece that is too small.{UNRELAXED_CHECK}"
+                " The start's relaxation ran its full {RELAX_MAX_ITERS} iterations and the start is at \
+                 p95 strain {p95:.3}, above the {RELAX_TARGET_P95} target, so stretch next to a seam can \
+                 be unfinished relaxation and not a piece that is too small.{UNRELAXED_CHECK}"
             ));
         }
     }
@@ -1674,11 +1674,11 @@ mod tests {
         let capped = start_condition(None, &tight, Some(0.194)).unwrap();
         assert!(
             capped.contains(
-                "The start's relaxation ran its full 1600 iterations and stopped at p95 strain 0.194, \
-                 above its 0.12 target, so stretch next to a seam can be unfinished relaxation and not a \
-                 piece that is too small. To tell them apart, look at ftx place with a coarser \
-                 --spacing-mm: if the relaxation reaches its target there, stretch that remains is the \
-                 piece's. No solver budget changes the start."
+                "The start's relaxation ran its full 1600 iterations and the start is at p95 strain \
+                 0.194, above the 0.12 target, so stretch next to a seam can be unfinished relaxation and \
+                 not a piece that is too small. To tell them apart, look at ftx place with a coarser \
+                 --spacing-mm: if the relaxation reaches its target there, stretch that remains is not \
+                 unfinished relaxation. No solver budget changes the start."
             ),
             "{capped}"
         );

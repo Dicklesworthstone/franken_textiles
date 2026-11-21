@@ -1002,8 +1002,9 @@ pub fn clothing_skin(model: &AnnyModel, vertices: &[Vec3]) -> Result<SkinMesh, R
 /// them in the displayed body.
 ///
 /// `Full` keeps the whole hand, so the collider and the displayed body are the same surface there. The
-/// fingers of the drape pose are open. A sleeve that ends at the wrist drapes with it. A sleeve whose end
-/// lies across the open fingers has not been made to start: the one drape tried was refused at its start,
+/// fingers of the drape pose are open. A sleeve that ends 16 mm beyond the wrist landmark drapes with it. A
+/// sleeve whose end lies across the open fingers, 66 mm beyond that landmark, has not been made to start:
+/// the one drape tried was refused at its start,
 /// and each of six other placements looked at with `ftx place` left sleeve vertices inside the hand or the
 /// sleeve crossing itself (spec 05 has the cases). No finger is a measured shape; they are the model's.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

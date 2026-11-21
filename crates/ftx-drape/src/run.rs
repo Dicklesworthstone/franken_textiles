@@ -390,7 +390,9 @@ pub struct RefusedRun {
     /// start's plain edges are still above [`crate::start::RELAX_TARGET_P95`]: their p95 absolute strain,
     /// the value the run's `start:` line prints. `None` for a start that reached the target, for an earlier
     /// checkpoint (`start_fallback`, above the target for its own reason) and for a start that reached the
-    /// target and was then stretched past it by the leg-separation repair.
+    /// target before the cap and was then stretched past it by the leg-separation repair. That repair
+    /// replaces the last recorded value, so after a relaxation that ran to the cap this is the repaired
+    /// start's strain, not the relaxation's own last one.
     pub start_unrelaxed_p95: Option<f64>,
 }
 
