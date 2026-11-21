@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { publishedGeometry } from "./replayAsset";
 import { dressCloth } from "./atelier3d/garment";
 import { fabrics } from "./atelier3d/weave";
 import {cuttingTable,sampleIndex} from "./construction/replay";
@@ -43,17 +44,11 @@ export function weaveTexture() {
   return map;
 }
 
-async function fetchAsset(path: string, signal: AbortSignal) {
-  const response = await fetch(path, { signal });
-  if (!response.ok) throw new Error(`Could not load ${path} (${response.status})`);
-  return response;
-}
-
 export async function loadGarment(garment: Garment, signal: AbortSignal) {
   const root = `/exhibits/${garment}`;
   const [data, buffer]: [Exhibit, ArrayBuffer] = await Promise.all([
-    fetchAsset(root + ".json", signal).then((r) => r.json()),
-    fetchAsset(root + ".bin", signal).then((r) => r.arrayBuffer()),
+    publishedGeometry(root + ".json", signal).then((r) => r.json()),
+    publishedGeometry(root + ".bin", signal).then((r) => r.arrayBuffer()),
   ]);
   return createGarmentMesh(data, new Float32Array(buffer));
 }

@@ -1,3 +1,5 @@
+import { publishedGeometry } from "../replayAsset";
+
 const base = "/exhibits/trouser-study/";
 export type Surface = { positions: Float32Array; indices: Uint16Array };
 export type Cut = { path: string; left: number; right: number; front: number; back: number };
@@ -5,9 +7,8 @@ export type Layout = {bodyVertices: number; bodyIndices: number; clothVertices: 
 type GarmentLayout = {triangles: number[]; seams: Record<string, {side_a:number[]; side_b:number[]}>; panels?: Record<string,[number,number]>};
 
 async function packed(name: string, signal: AbortSignal) {
-  const response = await fetch(base+name, {signal});
-  if (!response.ok || !response.body) throw Error("Missing study surface");
-  return new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  const response = await publishedGeometry(base+name, signal);
+  return new Response(response.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
 
 export async function loadSewing(id:string,vertices:number,frames:number,signal:AbortSignal){
@@ -17,10 +18,8 @@ export async function loadSewing(id:string,vertices:number,frames:number,signal:
 }
 
 export async function loadTopology(layout:Layout, signal:AbortSignal, key?:string) {
-  const [buffer, garment] = await Promise.all([packed(key?"mesh-"+key+".gz":"mesh.gz", signal), fetch(key?base+key+"-topology.json":"/exhibits/trousers.json",{signal}).then(async r=>{
-    if(!r.ok) throw Error("Missing trouser pattern");
-    return await r.json() as GarmentLayout;
-  })]);
+  const [buffer, garment] = await Promise.all([packed(key?"mesh-"+key+".gz":"mesh.gz", signal),
+    publishedGeometry(key?base+key+"-topology.json":"/exhibits/trousers.json",signal).then(r=>r.json() as Promise<GarmentLayout>)]);
   const body = new Uint16Array(buffer,0,layout.bodyIndices);
   // Each cloth vertex's place on its flat cut piece, in metres. The weave and the seam finish are laid out in these.
   const flat = Float32Array.from(new Int16Array(buffer,body.byteLength),n=>n/10000);

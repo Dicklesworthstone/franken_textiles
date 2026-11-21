@@ -1,4 +1,6 @@
 "use client";
+
+import { publishedGeometry } from "../replayAsset";
 import {useEffect,useRef} from "react";
 import * as T from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
@@ -13,8 +15,7 @@ type Props={cut:string;waist:number;patternStem:string;surface:Surface;step:numb
 declare global {interface Window {ftxSkirtCamera?:(angle:number)=>void}}
 
 async function asset(path:string,signal:AbortSignal){
-  const response=await fetch("/atelier/"+path,{signal});
-  if(!response.ok||!response.body)throw Error("Missing atelier asset "+path);
+  const response=await publishedGeometry("/atelier/"+path,signal);
   if(path.endsWith(".gz")){
     const bytes=new Uint8Array(await response.arrayBuffer());
     if(bytes[0]===31&&bytes[1]===139)return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")));

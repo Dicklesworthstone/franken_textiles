@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { publishedGeometry } from "./replayAsset";
 
 type Girths = {height:number; bust:number; waist:number; weight:number};
 type Axis = keyof Girths;
@@ -25,11 +26,7 @@ async function unpack(file:Response) {
 function loadAsset(name:string) {
   let request = cache.get(name);
   if (!request) {
-    request = Promise.all([".json",".bin.gz",".surface.gz"].map(async (suffix) => {
-      const response = await fetch("/fitted-bodies/"+name+suffix);
-      if (!response.ok) throw new Error("Could not load fitted "+name+" body ("+response.status+").");
-      return response;
-    })).then(async ([description,file,skin]) => {
+    request = Promise.all([".json",".bin.gz",".surface.gz"].map(suffix => publishedGeometry("/fitted-bodies/"+name+suffix))).then(async ([description,file,skin]) => {
       const [metadata,bytes,regions] = await Promise.all([description.json(),unpack(file),unpack(skin)]);
       return {metadata,bytes,masks:new Uint8Array(regions)};
     }).catch(error => { cache.delete(name); throw error; });
