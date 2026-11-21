@@ -33,20 +33,28 @@ export async function filmSource(id: string) {
 export function watchFilm(el: HTMLVideoElement, id: string) {
   if (!revisions[`${id}-1080.mp4`]) return () => {};
   const small = filmFile(id+"-1080");
+  let pending: number | undefined;
   function stepDown() {
-    if (el.getAttribute("src") === small || !el.getAttribute("src")) return;
-    uhd = Promise.resolve(false);
-    try { sessionStorage.setItem(REMEMBERED, "1"); } catch {}
+    const source = el.getAttribute("src");
+    if (!source || source === small || pending !== undefined) return;
     const at = el.currentTime, playing = !el.paused;
-    el.src = small; el.currentTime = at; // Before metadata arrives this sets where playback starts.
-    if (playing) void el.play().catch(()=>{});
+    // Finish the failed media load before starting another. Chromium otherwise aborts the new play request.
+    pending = window.setTimeout(() => {
+      pending = undefined;
+      if (el.getAttribute("src") !== source) return;
+      uhd = Promise.resolve(false);
+      try { sessionStorage.setItem(REMEMBERED, "1"); } catch {}
+      el.src = small;
+      if (at > 0) el.currentTime = at;
+      if (playing) void el.play().catch(()=>{});
+    });
   }
   const onProgress = () => {
     const quality = el.getVideoPlaybackQuality?.();
     if (quality && quality.totalVideoFrames >= 120 && quality.droppedVideoFrames > quality.totalVideoFrames/3) stepDown();
   };
   el.addEventListener("error", stepDown); el.addEventListener("timeupdate", onProgress);
-  return () => { el.removeEventListener("error", stepDown); el.removeEventListener("timeupdate", onProgress); };
+  return () => { window.clearTimeout(pending); el.removeEventListener("error", stepDown); el.removeEventListener("timeupdate", onProgress); };
 }
 
 export function PlaybackMark({playing=false}: {playing?:boolean}) {

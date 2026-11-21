@@ -25,6 +25,8 @@ export async function enableFilmResolution(page) {
 // Camera controls already synchronize the scene before each exposure. Capture its
 // backing surface directly, without waiting for Playwright's element stability checks.
 export async function frameCapture(page) {
+  // A windowed Linux browser otherwise burns its document scrollbar into the right edge.
+  await page.addStyleTag({ content: "html { scrollbar-width: none !important; }" });
   const session = await page.context().newCDPSession(page);
   const { width, height } = page.viewportSize();
   const deviceScaleFactor = await page.evaluate(() => window.devicePixelRatio);

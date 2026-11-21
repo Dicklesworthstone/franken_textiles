@@ -49,7 +49,7 @@ try {
         const readings=document.querySelectorAll(".dr-readings strong");
         document.querySelector(".film-slate p").textContent=angle+"° arm pose · 52 cm chest";
         document.querySelector(".film-slate span").textContent=contact?"Peak contact force "+readings[2].textContent:"Mean chest gap "+readings[1].textContent;
-        window.ftxPoseCamera(.24+.49*Math.sin(progress*Math.PI),.17,.36,.067);
+        window.ftxPoseCamera(.24+.49*Math.sin(progress*Math.PI),.17,angle===75?.39:.36,.067);
       },{angle,contact,progress:f/(frames-1)});
       const image=await screenshot();
       if(f===Math.round(1.6*fps))await writeFile(resolve(destination,"drape-room.jpg"),image,{flag:"wx"});
