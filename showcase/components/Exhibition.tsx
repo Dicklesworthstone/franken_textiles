@@ -267,14 +267,24 @@ export default function Exhibition({section}: {section?: string}) {
             <a className="card-open" aria-label={"Explore "+experiments[kind].title} href={`/experiments/${kind}/`}><span className="launch"><Arrow diagonal/></span></a></div>
           <a className="material-caption" href={`/experiments/${kind}/`}><h3>{experiments[kind].title}</h3><span>{experiments[kind].action} <Arrow/></span></a>
         </article>)}</div>
-        <a className="thermal-callout" href="/experiments/thermal/" data-reveal>
-          <div>
-            <span className="mono">Live WASM · Measured neoprene &amp; leather</span>
-            <h3>Thermal sandwich</h3>
-            <p>Stack measured catalog sheets at an explicit contact resistance, adjust reservoir temperatures, inspect layer-by-layer °C drops, and test live solver refusals.</p>
-          </div>
-          <span className="thermal-callout-cta">Build a layer stack <Arrow diagonal/></span>
-        </a>
+        <div className="material-callouts" data-reveal>
+          <a className="thermal-callout" href="/experiments/thermal/">
+            <div>
+              <span className="mono">Live WASM · Measured neoprene &amp; leather</span>
+              <h3>Thermal sandwich</h3>
+              <p>Stack measured catalog sheets at an explicit contact resistance, adjust reservoir temperatures, inspect layer-by-layer °C drops, and test live solver refusals.</p>
+            </div>
+            <span className="thermal-callout-cta">Build a layer stack <Arrow diagonal/></span>
+          </a>
+          <a className="thermal-callout" href="/experiments/wash/">
+            <div>
+              <span className="mono">Live WASM · Kanat &amp; Ozdil 2026 denim</span>
+              <h3>Wash, shrink &amp; recut</h3>
+              <p>Apply measured ISO 6330 warp/weft wash shrinkage along the grainline, compare shrunk vs pre-wash compensated outlines, and test unsupported-material refusals.</p>
+            </div>
+            <span className="thermal-callout-cta">Compare wash shrinkage <Arrow diagonal/></span>
+          </a>
+        </div>
       </div></section>}
       {show("studies") && <section id="studies" className="paper"><div className="wrap collection">
         <div className="section-top"><div><p className="kicker">Cloth in three dimensions</p><Heading className="section-title"><a href="/sections/studies/">The drape gallery<span>.</span></a></Heading></div>

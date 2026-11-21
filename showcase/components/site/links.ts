@@ -14,6 +14,7 @@ export const exhibits: SiteLink[] = [
   { href: "/#studio", label: "Studios", note: "Draft a pattern, lay it on the roll, follow the needle, or repair a seam" },
   { href: "/#materials", label: "Materials", note: "Pull and twist cloth between two grips" },
   { href: "/experiments/thermal/", label: "Thermal sandwich", note: "Stack measured neoprene & leather sheets with live steady conduction" },
+  { href: "/experiments/wash/", label: "Wash & shrink", note: "Apply measured warp/weft denim shrinkage or compute a pre-wash recut" },
   { href: "/#studies", label: "Drape gallery", note: "Follow panels from the board to the sewn garment" },
   { href: "/#tracing", label: "Tracing", note: "Recover cut lines from a drawn pattern sheet" },
   { href: "/#films", label: "Films", note: "Watch the garments, material rigs and workshops" },
