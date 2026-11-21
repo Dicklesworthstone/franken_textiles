@@ -993,17 +993,21 @@ pub fn clothing_skin(model: &AnnyModel, vertices: &[Vec3]) -> Result<SkinMesh, R
 /// How much of each hand the clothing collider keeps.
 ///
 /// The reference caps the body at the wrists, so no hand takes part in contact and a sleeve that reaches
-/// the hand passes through it. `Palm` is a native extension with no reference counterpart: the wrist and
-/// the metacarpal region stay in the collider and each of the five fingers is capped at its base. The
-/// fingers are still left out (a coarse garment mesh cannot clear them), so cloth over the fingers is not
-/// resolved by contact either way.
+/// the hand passes through it. `Palm` and `Knuckle` are native extensions with no reference counterpart.
+/// `Palm` keeps the wrist and the four metacarpals and caps each finger at its base, the thumb included
+/// (the rig hangs the whole thumb, its metacarpal too, on `finger1-1`). `Knuckle` cuts one joint further
+/// out: it also keeps the thumb's first bone and the first phalanx of each finger, where a cuff that
+/// passes the wrist first meets the hand. The outer finger joints are left out in every case (a coarse
+/// garment mesh cannot clear them), so cloth beyond the kept part is not resolved by contact.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HandCollider {
     /// Capped at the wrists (the reference collider).
     #[default]
     Wrist,
-    /// Wrists and palms kept; fingers capped at their bases.
+    /// Wrists and the four metacarpals kept; every finger, the whole thumb included, capped at its base.
     Palm,
+    /// As `Palm`, plus the thumb's first bone and each finger's first phalanx; capped at the second joint.
+    Knuckle,
 }
 
 impl HandCollider {
@@ -1013,21 +1017,23 @@ impl HandCollider {
         matches!(self, Self::Wrist)
     }
 
-    /// Stable CLI/report identifier (`"wrist"` or `"palm"`).
+    /// Stable CLI/report identifier (`"wrist"`, `"palm"` or `"knuckle"`).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Wrist => "wrist",
             Self::Palm => "palm",
+            Self::Knuckle => "knuckle",
         }
     }
 
-    /// Parses `"wrist"` or `"palm"`.
+    /// Parses `"wrist"`, `"palm"` or `"knuckle"`.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "wrist" => Some(Self::Wrist),
             "palm" => Some(Self::Palm),
+            "knuckle" => Some(Self::Knuckle),
             _ => None,
         }
     }
@@ -1048,6 +1054,18 @@ impl HandCollider {
                 "finger4-1.L",
                 "finger5-1.L",
             ],
+            Self::Knuckle => &[
+                "finger1-2.R",
+                "finger2-2.R",
+                "finger3-2.R",
+                "finger4-2.R",
+                "finger5-2.R",
+                "finger1-2.L",
+                "finger2-2.L",
+                "finger3-2.L",
+                "finger4-2.L",
+                "finger5-2.L",
+            ],
         }
     }
 }
@@ -1055,7 +1073,7 @@ impl HandCollider {
 /// [`clothing_skin`] with a choice of hand collider. [`HandCollider::Wrist`] is exactly `clothing_skin`.
 ///
 /// The feet and the paired levator05 regions are capped as before. Source vertices are never moved; the
-/// cap centres (one per wrist, or one per finger base) are synthetic. Not an anatomical claim about the
+/// cap centres (one per wrist, or one per finger) are synthetic. Not an anatomical claim about the
 /// hand, and the consumer must still admit the result through its ordinary intersection audit.
 ///
 /// # Errors
@@ -1483,5 +1501,31 @@ mod tests {
             dqs_basis["volume_change_fraction"],
             lbs_basis["volume_change_fraction"]
         );
+    }
+
+    #[test]
+    fn the_hand_collider_names_are_stable_and_the_native_ones_cut_only_fingers() {
+        assert_eq!(HandCollider::default(), HandCollider::Wrist);
+        for hands in [
+            HandCollider::Wrist,
+            HandCollider::Palm,
+            HandCollider::Knuckle,
+        ] {
+            assert_eq!(HandCollider::parse(hands.as_str()), Some(hands));
+            assert_eq!(hands.is_wrist(), hands == HandCollider::Wrist);
+        }
+        assert_eq!(HandCollider::parse("mitten"), None);
+        // The reference collider cuts at the two wrists, in the order `clothing_skin` always used.
+        assert_eq!(HandCollider::Wrist.roots(), ["wrist.R", "wrist.L"]);
+        // The native ones cut one bone of each of the five fingers on each side and nothing nearer
+        // the arm: the first bone for the palm, the second for the knuckle.
+        for (hands, joint) in [(HandCollider::Palm, 1), (HandCollider::Knuckle, 2)] {
+            let roots = hands.roots();
+            assert_eq!(roots.len(), 10);
+            for (index, root) in roots.iter().enumerate() {
+                let side = if index < 5 { "R" } else { "L" };
+                assert_eq!(*root, format!("finger{}-{joint}.{side}", index % 5 + 1));
+            }
+        }
     }
 }
