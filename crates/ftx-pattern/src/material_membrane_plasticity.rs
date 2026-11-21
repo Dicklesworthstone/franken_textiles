@@ -393,10 +393,10 @@ impl Memory {
         if self.damage > 0.0 {
             let integrity = 1.0 - self.damage;
             response.energy *= integrity;
-            for i in 0..3 {
-                response.stress[i] *= integrity;
-                for j in 0..3 {
-                    response.tangent[i][j] *= integrity;
+            for (stress, row) in response.stress.iter_mut().zip(&mut response.tangent) {
+                *stress *= integrity;
+                for entry in row {
+                    *entry *= integrity;
                 }
             }
             if !response.energy.is_finite()
