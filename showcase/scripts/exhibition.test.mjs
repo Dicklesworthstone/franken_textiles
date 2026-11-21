@@ -231,6 +231,14 @@ test("native Play on the skirt film survives scrolling away under reduced motion
       const video=document.querySelector("#skirt-film video");
       return video && !video.paused && video.currentTime>time+.1;
     },at,{timeout:5000});
+    await film.evaluate(video=>new Promise(resolve=>{
+      video.addEventListener("pause",resolve,{once:true});
+      video.pause();
+    }));
+    await page.evaluate(()=>window.scrollTo({top:0,behavior:"instant"}));
+    await film.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(250);
+    assert.ok(await film.evaluate(video=>video.paused));
   } finally {await page.close();}
 });
 
@@ -253,6 +261,36 @@ test("a failed 4K film request resumes in 1080p", async () => {
     assert.ok(attempted);
     const source=await page.locator("dialog[open] video").evaluate(video=>video.currentSrc);
     assert.equal(new URL(source).pathname,"/media/bolero-1080.mp4");
+  } finally {await page.close();}
+});
+
+test("a stuttering 4K film keeps its playhead in 1080p", async () => {
+  const page=await browser.newPage({...opts,reducedMotion:"reduce"});
+  try {
+    await page.addInitScript(() => {
+      navigator.mediaCapabilities.decodingInfo=async()=>({supported:true,smooth:true,powerEfficient:true});
+      HTMLVideoElement.prototype.getVideoPlaybackQuality=()=>({totalVideoFrames:0,droppedVideoFrames:0});
+    });
+    await page.goto(new URL("/?film=bolero",site).href,{waitUntil:"domcontentloaded"});
+    await page.waitForFunction(()=>{
+      const video=document.querySelector("dialog[open] video");
+      return video?.videoWidth===3840 && video.currentTime>1;
+    });
+    const film=page.locator("dialog[open] video");
+    const at=await film.evaluate(video=>{
+      video.addEventListener("playing",()=>{
+        if (video.videoWidth===1920 && video.dataset.resumedAt===undefined) video.dataset.resumedAt=String(video.currentTime);
+      });
+      video.getVideoPlaybackQuality=()=>({totalVideoFrames:180,droppedVideoFrames:70});
+      video.dispatchEvent(new Event("timeupdate"));
+      return video.currentTime;
+    });
+    await page.waitForFunction(time=>{
+      const video=document.querySelector("dialog[open] video");
+      return video?.videoWidth===1920 && !video.paused && video.dataset.resumedAt && video.currentTime>time+.1;
+    },at,{timeout:10000});
+    const resumedAt=Number(await film.getAttribute("data-resumed-at"));
+    assert.ok(Math.abs(resumedAt-at)<.3, `Expected to resume near ${at}s, began at ${resumedAt}s`);
   } finally {await page.close();}
 });
 
