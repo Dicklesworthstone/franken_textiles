@@ -612,3 +612,97 @@ fn finish_only_changes_follow_an_actual_sewn_drape_into_exterior_exchange() {
         .unwrap();
     assert!((covered_second["steady"]["power_w"].as_f64().unwrap() - area * flux).abs() < 1e-12);
 }
+
+#[test]
+fn surface_conditions_admits_microclimate_exterior_and_keeps_wind_exclusion_on_mixed_columns() {
+    use ftx_drape::thermal::steady::request::SurfaceConditions;
+
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = thermal_sheet(0.4, 1000.);
+    // Give the second piece a distinct material so the drape has two distinct columns.
+    raw["pieces"][1]["fabric"] = json!({"material": thermal_sheet(0.6, 1000.)});
+    let draped = run(&Pattern::new(raw), options());
+    let model_sha = draped.report["steady_thermal_surface"]["model"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let forced_entry = json!({
+        "air": { "temperature_c": 18.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5 },
+        "correlation": "churchill_bernstein_cylinder",
+        "characteristic_length_m": 0.25,
+        "wind_speed_m_s": 2.0,
+        "surface_temperature_range_c": [-50.0, 100.0],
+        "allow_estimates": true
+    });
+    let natural_entry = json!({
+        "air": { "temperature_c": 18.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5 },
+        "correlation": "churchill_chu_vertical_plate",
+        "characteristic_length_m": 0.4,
+        "delta_t_k": 12.0,
+        "surface_temperature_range_c": [-50.0, 100.0],
+        "allow_estimates": true
+    });
+
+    // Uniform forced convection omits "wind-dependent films" and replays byte-identically.
+    let uniform: SurfaceConditions = serde_json::from_value(json!({
+        "schema": "ftx-steady-surface-conditions/1",
+        "boundaries": [{
+            "inside_c": 34.0, "outside_c": 18.0,
+            "inside_resistance_m2_k_w": 0.08, "outside_resistance_m2_k_w": 0.0
+        }],
+        "microclimate_exterior": [forced_entry]
+    }))
+    .unwrap();
+    let uniform_out = uniform.evaluate(&draped.report).unwrap();
+    assert!(
+        !uniform_out["not_simulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "wind-dependent films")
+    );
+    assert_eq!(
+        uniform_out["microclimate_convection"][0]["correlation"],
+        "churchill_bernstein_cylinder"
+    );
+    let frozen: SurfaceConditions =
+        serde_json::from_value(uniform_out["request"]["conditions"].clone()).unwrap();
+    assert_eq!(
+        uniform_out,
+        frozen.evaluate(&uniform_out["request"]["report"]).unwrap()
+    );
+
+    // Mixed per-column forced + natural microclimate must retain "wind-dependent films".
+    let mixed: SurfaceConditions = serde_json::from_value(json!({
+        "schema": "ftx-steady-surface-conditions/1",
+        "model_sha256": model_sha,
+        "boundaries": [{
+            "inside_c": 34.0, "outside_c": 18.0,
+            "inside_resistance_m2_k_w": 0.08, "outside_resistance_m2_k_w": 0.0
+        }],
+        "microclimate_exterior": [forced_entry, natural_entry]
+    }))
+    .unwrap();
+    let mixed_out = mixed.evaluate(&draped.report).unwrap();
+    assert_eq!(
+        mixed_out["microclimate_convection"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        mixed_out["not_simulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "wind-dependent films"),
+        "mixed forced/natural columns must keep wind-dependent films in not_simulated"
+    );
+
+    // Denied estimate consent refuses fail-closed.
+    let mut denied = uniform;
+    denied.microclimate_exterior.as_mut().unwrap()[0].allow_estimates = false;
+    assert!(denied.evaluate(&draped.report).is_err());
+}
