@@ -852,8 +852,9 @@ The outer finger joints are left out of every variant: cloth beyond the kept par
 by contact, and the full-body check still refuses it. On the admitted model, in the drape pose, both
 variants trim to simple loops and pass the solver's surface audit for the fitted 92 cm public-prior
 toddler and a 178 cm adult (7824 collider vertices at the wrist caps, 8278 for `Palm`, 9052 for
-`Knuckle`). Capped finger stubs are synthetic geometry and grant no anatomical or fit claim about the
-hand.
+`Knuckle`). Adjacent finger cuts in `Palm` share boundary loops on this mesh. The wrist, palm and
+knuckle variants produce two, four and ten hand cap centres, respectively. Capped finger stubs are
+synthetic geometry and grant no anatomical or fit claim about the hand.
 
 ## Appendix A. Local-change labels (index j; blend-shape rows 624 + 2j and 625 + 2j)
 

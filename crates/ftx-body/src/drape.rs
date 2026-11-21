@@ -994,8 +994,8 @@ pub fn clothing_skin(model: &AnnyModel, vertices: &[Vec3]) -> Result<SkinMesh, R
 ///
 /// The reference caps the body at the wrists, so no hand takes part in contact and a sleeve that reaches
 /// the hand passes through it. `Palm` and `Knuckle` are native extensions with no reference counterpart.
-/// `Palm` keeps the wrist and the four metacarpals and caps each finger at its base, the thumb included
-/// (the rig hangs the whole thumb, its metacarpal too, on `finger1-1`). `Knuckle` cuts one joint further
+/// `Palm` keeps the wrist and the four metacarpals and trims the fingers at their bases, the thumb
+/// included (the rig hangs the whole thumb, its metacarpal too, on `finger1-1`). `Knuckle` cuts one joint further
 /// out: it also keeps the thumb's first bone and the first phalanx of each finger, where a cuff that
 /// passes the wrist first meets the hand. The outer finger joints are left out in every case (a coarse
 /// garment mesh cannot clear them), so cloth beyond the kept part is not resolved by contact.
@@ -1005,7 +1005,7 @@ pub enum HandCollider {
     /// Capped at the wrists (the reference collider).
     #[default]
     Wrist,
-    /// Wrists and the four metacarpals kept; every finger, the whole thumb included, capped at its base.
+    /// Wrists and the four metacarpals kept. The fingers and entire thumb are trimmed at their bases.
     Palm,
     /// As `Palm`, plus the thumb's first bone and each finger's first phalanx; capped at the second joint.
     Knuckle,
@@ -1073,9 +1073,9 @@ impl HandCollider {
 
 /// [`clothing_skin`] with a choice of hand collider. [`HandCollider::Wrist`] is exactly `clothing_skin`.
 ///
-/// The feet and the paired levator05 regions are capped as before. Source vertices are never moved; the
-/// cap centres (one per wrist, or one per finger) are synthetic. Not an anatomical claim about the
-/// hand, and the consumer must still admit the result through its ordinary intersection audit.
+/// The feet and the paired levator05 regions are capped as before. All retained source vertices stay
+/// at their original positions. Each boundary loop gets one synthetic cap centre. Adjacent finger cuts
+/// can share a loop. Consumers still admit the result through their ordinary intersection audit.
 ///
 /// # Errors
 /// As [`trimmed_skin`]: an unknown finger bone in a rig without one, or an opening that is not a simple

@@ -290,7 +290,7 @@ fn dqs_reduces_volume_collapse_on_deep_seated_and_squat_poses() {
 
 #[test]
 #[ignore = "needs the converted Anny model (tools/body-model/convert_anny.py)"]
-fn the_palm_collider_keeps_the_palms_and_caps_each_finger_at_its_base() {
+fn the_hand_colliders_keep_source_vertices_and_close_trim_openings() {
     use ftx_body::{
         DEFAULT_POSE_AUDIT_PAIR_BUDGET, HandCollider, age_parameter_for_years, clothing_skin,
         clothing_skin_with_hands,
@@ -321,18 +321,28 @@ fn the_palm_collider_keeps_the_palms_and_caps_each_finger_at_its_base() {
         assert_eq!(wrist.triangles, same.triangles, "{label}");
         assert_eq!(wrist.trim_roots, same.trim_roots, "{label}");
 
-        // Each native collider keeps more of the hand than the one before it, with ten finger caps
-        // in place of the two wrist caps.
+        // Palm's adjacent finger cuts share openings on this mesh. Knuckle's cuts have distinct
+        // openings at each finger. Both retain more of the hand than the preceding variant.
         let mut kept = wrist.vertices.len();
-        for (hands, first_root) in [
-            (HandCollider::Palm, "finger1-1.R"),
-            (HandCollider::Knuckle, "finger1-2.R"),
-        ] {
+        for (hands, joint, additional_caps) in
+            [(HandCollider::Palm, 1, 2), (HandCollider::Knuckle, 2, 8)]
+        {
             let name = hands.as_str();
             let skin = clothing_skin_with_hands(&m, &posed.vertices, hands).unwrap();
             assert!(skin.vertices.len() > kept, "{label} {name}");
-            assert_eq!(caps(&skin), caps(&wrist) + 8, "{label} {name}");
-            assert_eq!(skin.trim_roots[0], first_root, "{label} {name}");
+            assert_eq!(
+                caps(&skin),
+                caps(&wrist) + additional_caps,
+                "{label} {name}"
+            );
+            let expected_roots = ['R', 'L']
+                .into_iter()
+                .flat_map(|side| {
+                    (1..=5).map(move |finger| format!("finger{finger}-{joint}.{side}"))
+                })
+                .chain(wrist.trim_roots[2..].iter().cloned())
+                .collect::<Vec<_>>();
+            assert_eq!(skin.trim_roots, expected_roots, "{label} {name}");
             // Every kept vertex is where the model put it.
             for (vertex, &source) in skin.vertices.iter().zip(&skin.source_vertex) {
                 if source != usize::MAX {

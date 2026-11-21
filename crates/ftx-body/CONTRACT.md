@@ -171,7 +171,7 @@ regions. `clothing_skin_with_hands` takes a `HandCollider`: `Wrist` is exactly `
 reference collider); the native, opt-in `Palm` cuts at the five finger bases instead (wrist and
 metacarpals kept, the whole thumb cut) and `Knuckle` at the second joint of each finger (thumb's first
 bone and the first phalanges kept too). Spec 05 "Clothing collider" has the roots and the measured
-vertex counts; `tests/drape_poses.rs::the_palm_collider_keeps_the_palms_and_caps_each_finger_at_its_base`
+vertex counts; `tests/drape_poses.rs::the_hand_colliders_keep_source_vertices_and_close_trim_openings`
 checks both against the admitted model. The pinned detailed face has intersections even with correct upstream coordinates. This
 clothing proxy preserves retained source vertices exactly and identifies synthetic cap centres;
 consumers still require the strict full-surface intersection audit. `SkinMesh::audit_self_intersections`
