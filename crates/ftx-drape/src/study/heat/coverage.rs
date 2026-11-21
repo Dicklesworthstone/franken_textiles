@@ -14,6 +14,7 @@ use crate::{
     motion::DissipationCapture,
     run::DrapeRun,
     thermal::{
+        microclimate::MicroclimateExterior,
         steady::{exterior::Exterior, request::Film},
         surface::{
             Surface,
@@ -29,6 +30,75 @@ use crate::{
 pub mod bridges;
 
 type InitialState = (State, Option<Value>, Option<Vec<f64>>);
+type MicroclimateSchedule = (Vec<Option<Exterior>>, Vec<Option<Value>>);
+type ResolvedSchedule = (Option<Vec<Option<Exterior>>>, Option<Vec<Option<Value>>>);
+
+struct ResolvedSchedules {
+    covered_exteriors: Option<Vec<Option<Exterior>>>,
+    exposed_exteriors: Option<Vec<Option<Exterior>>>,
+    covered_microclimate: Option<MicroclimateSchedule>,
+    exposed_microclimate: Option<MicroclimateSchedule>,
+}
+
+fn resolve_optional_exteriors(
+    prescribed: &Option<Vec<Option<Exterior>>>,
+    microclimate: &Option<Vec<Option<MicroclimateExterior>>>,
+    prescribed_field: &str,
+    microclimate_field: &str,
+) -> Result<ResolvedSchedule, Refusal> {
+    if prescribed.is_some() && microclimate.is_some() {
+        return Err(invalid(format!(
+            "supply either {prescribed_field} or {microclimate_field}, not both"
+        )));
+    }
+    if let Some(v) = prescribed {
+        return Ok((Some(v.clone()), None));
+    }
+    if let Some(v) = microclimate {
+        let mut exteriors = Vec::with_capacity(v.len());
+        let mut receipts = Vec::with_capacity(v.len());
+        for item in v {
+            match item {
+                Some(mc) => {
+                    let resolved = mc.resolve()?;
+                    exteriors.push(Some(resolved.exterior));
+                    receipts.push(Some(resolved.receipt));
+                }
+                None => {
+                    exteriors.push(None);
+                    receipts.push(None);
+                }
+            }
+        }
+        return Ok((Some(exteriors), Some(receipts)));
+    }
+    Ok((None, None))
+}
+
+fn validate_compression_sources_for(
+    source: &Surface,
+    covered: Option<&[Option<Exterior>]>,
+    exposed: Option<&[Option<Exterior>]>,
+) -> Result<(), Refusal> {
+    for exterior in covered.into_iter().chain(exposed).flatten().flatten() {
+        source.validate_exterior_sources(exterior)?;
+    }
+    // Covered material can expose either source side as its body-relative orientation changes.
+    // Independent/exposed sheet boundaries retain their declared positive outside face.
+    for exterior in covered.into_iter().flatten().flatten() {
+        if exterior
+            .radiation
+            .as_ref()
+            .is_some_and(|radiation| radiation.automatic_material_face)
+        {
+            source.validate_exterior_sources_on_side(
+                exterior,
+                ftx_pattern::material_optics::Side::Negative,
+            )?;
+        }
+    }
+    Ok(())
+}
 
 /// One explicit, source-locked body domain followed through every accepted mechanical sample.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,6 +136,10 @@ pub struct Request {
     /// environment replaces the outside film on the outermost covered material face only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exterior_exchange: Option<Vec<Option<Exterior>>>,
+    /// Optional validity-gated moist-air Nusselt correlation replacement of each interval's
+    /// covered outside film (`Evidence::Estimate`; mutually exclusive with `exterior_exchange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microclimate_exterior: Option<Vec<Option<MicroclimateExterior>>>,
     /// Explicit bare-body films for each exterior interval, independently of the covered shell.
     /// Null is required in film-only intervals; skin emissivity is never inferred from cloth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,6 +151,11 @@ pub struct Request {
     /// exterior exchange. Every active entry also requires that interval's exposed boundaries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exposed_exterior_exchange: Option<Vec<Option<Exterior>>>,
+    /// Optional validity-gated moist-air Nusselt correlation replacement of each interval's
+    /// exposed-cloth outside film (`Evidence::Estimate`; mutually exclusive with
+    /// `exposed_exterior_exchange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposed_microclimate_exterior: Option<Vec<Option<MicroclimateExterior>>>,
     /// Convert qualified accepted irreversible membrane work through the same source-material
     /// fractions as independent sheets. Deposition follows covered AND exposed reference material;
     /// initial drape work is excluded and bare body receives no internal energy.
@@ -104,13 +183,7 @@ pub struct Request {
 }
 
 impl Request {
-    pub(in crate::study) fn start(
-        &self,
-        run: &DrapeRun,
-        body: (&[Vec3], &[[usize; 3]]),
-        intervals: usize,
-        work: &mut Budget,
-    ) -> Result<History, Refusal> {
+    fn validate_and_resolve(&self, intervals: usize) -> Result<ResolvedSchedules, Refusal> {
         self.validate_compression(intervals)?;
         if let Some(bridges) = &self.thermal_bridges {
             bridges.validate()?;
@@ -118,6 +191,10 @@ impl Request {
                 .exterior_exchange
                 .as_ref()
                 .is_some_and(|v| v.iter().any(Option::is_some))
+                || self
+                    .microclimate_exterior
+                    .as_ref()
+                    .is_some_and(|v| v.iter().any(Option::is_some))
             {
                 return Err(invalid(
                     "moving zero-storage bridges require their characterized covered reservoir films; covered convection/radiation is outside this law",
@@ -133,11 +210,19 @@ impl Request {
                 .as_ref()
                 .is_some_and(|v| v.len() != intervals)
             || self
+                .microclimate_exterior
+                .as_ref()
+                .is_some_and(|v| v.len() != intervals)
+            || self
                 .bare_boundaries
                 .as_ref()
                 .is_some_and(|v| v.len() != intervals)
             || self
                 .exposed_exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.len() != intervals)
+            || self
+                .exposed_microclimate_exterior
                 .as_ref()
                 .is_some_and(|v| v.len() != intervals)
             || !self.initial_temperature_c.is_finite()
@@ -161,8 +246,20 @@ impl Request {
         {
             boundary(film)?;
         }
+        let (covered_exteriors, covered_receipts) = resolve_optional_exteriors(
+            &self.exterior_exchange,
+            &self.microclimate_exterior,
+            "exterior_exchange",
+            "microclimate_exterior",
+        )?;
+        let (exposed_exteriors, exposed_receipts) = resolve_optional_exteriors(
+            &self.exposed_exterior_exchange,
+            &self.exposed_microclimate_exterior,
+            "exposed_exterior_exchange",
+            "exposed_microclimate_exterior",
+        )?;
         for i in 0..intervals {
-            let exterior = self.exterior_exchange.as_ref().and_then(|v| v[i].as_ref());
+            let exterior = covered_exteriors.as_ref().and_then(|v| v[i].as_ref());
             let bare = self.bare_boundaries.as_ref().and_then(|v| v[i]);
             if exterior.is_some() != bare.is_some() {
                 return Err(invalid(
@@ -172,17 +269,45 @@ impl Request {
             if let Some(e) = exterior {
                 exterior_boundary(self.boundaries[i], e)?;
             }
-            if let Some(e) = self
-                .exposed_exterior_exchange
-                .as_ref()
-                .and_then(|v| v[i].as_ref())
-            {
+            if let Some(e) = exposed_exteriors.as_ref().and_then(|v| v[i].as_ref()) {
                 let film = self.exposed_boundaries[i].ok_or_else(|| {
                     invalid("exposed exterior exchange requires explicit exposed boundaries")
                 })?;
                 exterior_boundary(film, e)?;
             }
         }
+        let covered_microclimate = covered_receipts.map(|r| {
+            (
+                covered_exteriors
+                    .clone()
+                    .expect("resolved covered microclimate exteriors"),
+                r,
+            )
+        });
+        let exposed_microclimate = exposed_receipts.map(|r| {
+            (
+                exposed_exteriors
+                    .clone()
+                    .expect("resolved exposed microclimate exteriors"),
+                r,
+            )
+        });
+        Ok(ResolvedSchedules {
+            covered_exteriors,
+            exposed_exteriors,
+            covered_microclimate,
+            exposed_microclimate,
+        })
+    }
+
+    pub(in crate::study) fn start(
+        &self,
+        run: &DrapeRun,
+        body: (&[Vec3], &[[usize; 3]]),
+        intervals: usize,
+        work: &mut Budget,
+    ) -> Result<History, Refusal> {
+        let schedules = self.validate_and_resolve(intervals)?;
         let mut seen = BTreeSet::new();
         if self.body_triangle_ids.is_empty()
             || self.body_triangle_ids.len() > 4096
@@ -217,7 +342,11 @@ impl Request {
             (run.thermal_surface(self.settings.cells_per_layer)?, None)
         };
         if compression.is_some() {
-            self.validate_compression_sources(&source)?;
+            validate_compression_sources_for(
+                &source,
+                schedules.covered_exteriors.as_deref(),
+                schedules.exposed_exteriors.as_deref(),
+            )?;
         }
         let triangles: Vec<_> = self.body_triangle_ids.iter().map(|&i| body.1[i]).collect();
         let projection = projection::Request {
@@ -328,6 +457,8 @@ impl Request {
             bending,
             bridge_authority,
             bridge_j: 0.,
+            covered_microclimate: schedules.covered_microclimate,
+            exposed_microclimate: schedules.exposed_microclimate,
         })
     }
 
@@ -343,16 +474,22 @@ impl Request {
                     "coverage compression requires independent dry films or qualified exterior exchange and constant storage; dissipation and bridge combinations need joint qualification",
                 ));
             }
-            for exterior in self
-                .exterior_exchange
-                .iter()
-                .chain(self.exposed_exterior_exchange.iter())
-                .flatten()
-                .flatten()
-            {
+            let (covered, _) = resolve_optional_exteriors(
+                &self.exterior_exchange,
+                &self.microclimate_exterior,
+                "exterior_exchange",
+                "microclimate_exterior",
+            )?;
+            let (exposed, _) = resolve_optional_exteriors(
+                &self.exposed_exterior_exchange,
+                &self.exposed_microclimate_exterior,
+                "exposed_exterior_exchange",
+                "exposed_microclimate_exterior",
+            )?;
+            for exterior in covered.iter().chain(exposed.iter()).flatten().flatten() {
                 compression::validate_exterior(exterior)?;
             }
-            for (interval, exterior) in self.exterior_exchange.iter().flatten().enumerate() {
+            for (interval, exterior) in covered.iter().flatten().enumerate() {
                 if exterior.is_some() {
                     let film = self.boundaries.get(interval).ok_or_else(|| {
                         invalid("compression exterior interval is missing its covered boundary")
@@ -378,52 +515,55 @@ impl Request {
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_compression_sources(&self, source: &Surface) -> Result<(), Refusal> {
-        for exterior in self
-            .exterior_exchange
-            .iter()
-            .chain(self.exposed_exterior_exchange.iter())
-            .flatten()
-            .flatten()
-        {
-            source.validate_exterior_sources(exterior)?;
-        }
-        // Covered material can expose either source side as its body-relative orientation changes.
-        // Independent/exposed sheet boundaries retain their declared positive outside face.
-        for exterior in self.exterior_exchange.iter().flatten().flatten() {
-            if exterior
-                .radiation
-                .as_ref()
-                .is_some_and(|radiation| radiation.automatic_material_face)
-            {
-                source.validate_exterior_sources_on_side(
-                    exterior,
-                    ftx_pattern::material_optics::Side::Negative,
-                )?;
-            }
-        }
-        Ok(())
+        let (covered, _) = resolve_optional_exteriors(
+            &self.exterior_exchange,
+            &self.microclimate_exterior,
+            "exterior_exchange",
+            "microclimate_exterior",
+        )?;
+        let (exposed, _) = resolve_optional_exteriors(
+            &self.exposed_exterior_exchange,
+            &self.exposed_microclimate_exterior,
+            "exposed_exterior_exchange",
+            "exposed_microclimate_exterior",
+        )?;
+        validate_compression_sources_for(source, covered.as_deref(), exposed.as_deref())
     }
 
     fn compression_radiation(&self) -> bool {
         self.prescribed_compression.is_some()
-            && self
+            && (self
                 .exterior_exchange
                 .iter()
                 .chain(self.exposed_exterior_exchange.iter())
                 .flatten()
                 .flatten()
                 .any(|exterior| exterior.radiation.is_some())
+                || self
+                    .microclimate_exterior
+                    .iter()
+                    .chain(self.exposed_microclimate_exterior.iter())
+                    .flatten()
+                    .flatten()
+                    .any(|mc| mc.radiation.is_some()))
     }
 
     fn compression_exterior(&self) -> bool {
         self.prescribed_compression.is_some()
-            && self
+            && (self
                 .exterior_exchange
                 .iter()
                 .chain(self.exposed_exterior_exchange.iter())
                 .flatten()
                 .any(Option::is_some)
+                || self
+                    .microclimate_exterior
+                    .iter()
+                    .chain(self.exposed_microclimate_exterior.iter())
+                    .flatten()
+                    .any(Option::is_some))
     }
 
     fn validate_initial_temperatures(&self) -> Result<(), Refusal> {
@@ -597,9 +737,29 @@ pub(in crate::study) struct History {
     bending: Option<plastic::Heating>,
     bridge_authority: Option<bridges::Authority>,
     bridge_j: f64,
+    covered_microclimate: Option<MicroclimateSchedule>,
+    exposed_microclimate: Option<MicroclimateSchedule>,
 }
 
 impl History {
+    fn active_covered_exteriors(&self) -> Option<&[Option<Exterior>]> {
+        self.request.exterior_exchange.as_deref().or_else(|| {
+            self.covered_microclimate
+                .as_ref()
+                .map(|(e, _)| e.as_slice())
+        })
+    }
+
+    fn active_exposed_exteriors(&self) -> Option<&[Option<Exterior>]> {
+        self.request
+            .exposed_exterior_exchange
+            .as_deref()
+            .or_else(|| {
+                self.exposed_microclimate
+                    .as_ref()
+                    .map(|(e, _)| e.as_slice())
+            })
+    }
     pub(in crate::study) fn dissipation_capture(&self) -> DissipationCapture {
         DissipationCapture {
             plastic: self.plastic.is_some(),
@@ -701,35 +861,58 @@ impl History {
             .exposed_boundaries
             .get(interval)
             .ok_or_else(|| invalid("missing exposed-cloth interval"))?;
-        let exterior = self
-            .request
-            .exterior_exchange
-            .as_ref()
-            .and_then(|v| v[interval].clone());
+        if self.request.exterior_exchange.is_some() && self.request.microclimate_exterior.is_some()
+        {
+            return Err(invalid(
+                "supply either exterior_exchange or microclimate_exterior, not both",
+            ));
+        }
+        if self.request.exposed_exterior_exchange.is_some()
+            && self.request.exposed_microclimate_exterior.is_some()
+        {
+            return Err(invalid(
+                "supply either exposed_exterior_exchange or exposed_microclimate_exterior, not both",
+            ));
+        }
+        let (exterior, covered_receipt) = if let Some(v) = &self.request.exterior_exchange {
+            (v[interval].clone(), None)
+        } else if let Some((e, r)) = &self.covered_microclimate {
+            (e[interval].clone(), r[interval].clone())
+        } else {
+            (None, None)
+        };
         let bare = self
             .request
             .bare_boundaries
             .as_ref()
             .and_then(|v| v[interval]);
-        let exposed_exterior = self
-            .request
-            .exposed_exterior_exchange
-            .as_ref()
-            .and_then(|v| v[interval].clone());
-        let reconditioned = if let Some(compression) = &mut self.compression {
-            if let Some(source) = compression.condition_source(
+        let (exposed_exterior, exposed_receipt) =
+            if let Some(v) = &self.request.exposed_exterior_exchange {
+                (v[interval].clone(), None)
+            } else if let Some((e, r)) = &self.exposed_microclimate {
+                (e[interval].clone(), r[interval].clone())
+            } else {
+                (None, None)
+            };
+        let conditioned = if let Some(compression) = &mut self.compression {
+            compression.condition_source(
                 &self.source,
                 cloth,
                 interval,
                 sample_index,
                 self.time_s,
-            )? {
-                self.request.validate_compression_sources(&source)?;
-                self.source = source;
-                true
-            } else {
-                false
-            }
+            )?
+        } else {
+            None
+        };
+        let reconditioned = if let Some(source) = conditioned {
+            validate_compression_sources_for(
+                &source,
+                self.active_covered_exteriors(),
+                self.active_exposed_exteriors(),
+            )?;
+            self.source = source;
+            true
         } else {
             false
         };
@@ -1077,14 +1260,18 @@ impl History {
         if let Some(heating) = &self.bending {
             sample["bending_plastic_dissipation_heat"] = heating.snapshot(false);
         }
-        for (field, convective, radiative) in [
+        for (field, receipt_field, receipt, convective, radiative) in [
             (
                 "exterior_exchange",
+                "microclimate_convection",
+                covered_receipt,
                 self.covered_convective_j,
                 self.covered_radiative_j,
             ),
             (
                 "exposed_exterior_exchange",
+                "exposed_microclimate_convection",
+                exposed_receipt,
                 self.exposed_convective_j,
                 self.exposed_radiative_j,
             ),
@@ -1093,6 +1280,9 @@ impl History {
                 sample[field] = json!({"convective_heat_w":e["convective_heat_w"],
                     "radiative_heat_w":e["radiative_heat_w"],"balance_residual_w":e["balance_residual_w"],
                     "convective_energy_j":convective,"radiative_energy_j":radiative});
+                if let Some(receipt) = receipt {
+                    sample[receipt_field] = receipt;
+                }
             }
         }
         self.trace.push(sample);
@@ -1205,24 +1395,54 @@ impl History {
         for (field, schedule, convective, radiative) in [
             (
                 "exterior_exchange",
-                &self.request.exterior_exchange,
+                self.active_covered_exteriors(),
                 self.covered_convective_j,
                 self.covered_radiative_j,
             ),
             (
                 "exposed_exterior_exchange",
-                &self.request.exposed_exterior_exchange,
+                self.active_exposed_exteriors(),
                 self.exposed_convective_j,
                 self.exposed_radiative_j,
             ),
         ] {
-            if schedule
-                .as_ref()
-                .is_some_and(|v| v.iter().any(Option::is_some))
-            {
+            if schedule.is_some_and(|v| v.iter().any(Option::is_some)) {
                 result[field] =
                     json!({"convective_energy_j":convective,"radiative_energy_j":radiative});
             }
+        }
+        let has_covered_mc = self.request.exterior_exchange.is_none()
+            && self
+                .covered_microclimate
+                .as_ref()
+                .is_some_and(|(_, r)| r.iter().any(Option::is_some));
+        let has_exposed_mc = self.request.exposed_exterior_exchange.is_none()
+            && self
+                .exposed_microclimate
+                .as_ref()
+                .is_some_and(|(_, r)| r.iter().any(Option::is_some));
+        if has_covered_mc && let Some((_, receipts)) = &self.covered_microclimate {
+            result["microclimate_convection"] = json!(receipts);
+        }
+        if has_exposed_mc && let Some((_, receipts)) = &self.exposed_microclimate {
+            result["exposed_microclimate_convection"] = json!(receipts);
+        }
+        if has_covered_mc || has_exposed_mc {
+            let any_prescribed = self
+                .request
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.iter().any(Option::is_some))
+                || self
+                    .request
+                    .exposed_exterior_exchange
+                    .as_ref()
+                    .is_some_and(|v| v.iter().any(Option::is_some));
+            result["exterior_model"] = json!(if any_prescribed {
+                "mixed prescribed and validity-gated moist-air Nusselt correlation convection (microclimate entries are Evidence::Estimate with model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film"
+            } else {
+                "validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film"
+            });
         }
         Ok(result)
     }
