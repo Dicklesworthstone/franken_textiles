@@ -33,8 +33,10 @@ onmessage = async (ev) => {
   try {
     if (msg.type === "init") {
       postMessage({ type: "progress", text: "Loading FrankenTextiles…" });
-      ftx = await import(msg.pkg + "ftx_wasm.js");
-      await ftx.default({ module_or_path: msg.pkg + "ftx_wasm_bg.wasm" });
+      // Bypass the former unversioned cache when loading the whole-hand solver.
+      const revision = "?v=2026-11-21";
+      ftx = await import(msg.pkg + "ftx_wasm.js" + revision);
+      await ftx.default({ module_or_path: msg.pkg + "ftx_wasm_bg.wasm" + revision });
       if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
           (typeof ftx.wasm_interface_stamp !== "function" || ftx.wasm_interface_stamp() !== "ftx-wasm-interface/2026-11-18.1")) {
         throw new Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");

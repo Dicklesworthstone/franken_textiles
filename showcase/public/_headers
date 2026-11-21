@@ -4,7 +4,7 @@
 /_next/static/*
   Cache-Control: public, max-age=31536000, immutable
 
-# Films, geometry, patterns and the wasm module keep their names between releases.
+# Films, geometry and patterns keep their names between releases.
 # Serve the cached copy for an hour, then refresh it in the background.
 /media/*
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
@@ -15,7 +15,7 @@
 /patterns/*
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 /workbench/pkg/*
-  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Cache-Control: public, no-cache, no-transform
 /icons/*
   Cache-Control: public, max-age=86400
 
