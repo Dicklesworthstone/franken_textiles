@@ -279,6 +279,7 @@ export function planRemnant(ftx, params = {}) {
       utilization: roll2.utilization,
     },
     job2: job2Result,
+    job2PatternJson: pat2,
     job2RequestJson: req2Json,
     job2Refusal,
   };

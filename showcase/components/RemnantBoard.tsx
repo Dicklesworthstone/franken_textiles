@@ -70,6 +70,7 @@ export type RemnantPlan = {
     svg: string | null;
     residualJson: string;
   } | null;
+  job2PatternJson: string;
   job2RequestJson: string;
   job2Refusal: string | null;
 };
@@ -294,6 +295,7 @@ export default function RemnantBoard() {
     plan: RemnantPlan;
     svgUrl: string | null;
     residualUrl: string;
+    patternUrl: string;
     replayUrl: string;
   }>();
   const workerRef = useRef<Worker | null>(null);
@@ -389,17 +391,19 @@ export default function RemnantBoard() {
 
   useEffect(() => {
     if (!ready || !plan) return;
-    const svgText = plan.job2?.svg ?? plan.job1.svg;
+    const svgText = plan.job2 ? plan.job2.svg : plan.job1.svg;
     const urls = {
       plan,
       svgUrl: svgText ? URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml" })) : null,
       residualUrl: URL.createObjectURL(new Blob([plan.job2?.residualJson ?? plan.job1.residualJson], { type: "application/json" })),
+      patternUrl: URL.createObjectURL(new Blob([plan.job2PatternJson], { type: "application/json" })),
       replayUrl: URL.createObjectURL(new Blob([plan.job2RequestJson], { type: "application/json" })),
     };
     setDownloads(urls);
     return () => {
       if (urls.svgUrl) URL.revokeObjectURL(urls.svgUrl);
       URL.revokeObjectURL(urls.residualUrl);
+      URL.revokeObjectURL(urls.patternUrl);
       URL.revokeObjectURL(urls.replayUrl);
     };
   }, [ready, plan]);
@@ -551,7 +555,7 @@ export default function RemnantBoard() {
             </dd>
           </div>
           <div>
-            <dt>Remnant area saved</dt>
+            <dt>Fresh roll area avoided</dt>
             <dd>
               {ready && plan
                 ? plan.job2
@@ -619,9 +623,21 @@ export default function RemnantBoard() {
               </a>{" "}
             </>
           )}
-          Single-ply finite stock ({plan?.stock.materialName ?? "45 in Cotton muslin"}), 4 mm cut gap,
-          10 mm boundary margin, 15 mm lattice step. Replay natively with{" "}
-          <code>ftx-materials stock-plan job2.json residual-request.json</code>.
+          Single-ply {ready && plan ? plan.stock.materialName : "cotton muslin"}, 4 mm cut gap and
+          10 mm boundary margin.{ready && plan && <> Search grid {plan.config.stepMm} mm.</>}
+          <br />
+          Full-size A4 patterns{" "}
+          <a href="/patterns/chart-zouave_bolero.pdf" download>Bolero</a>
+          {preset.job2Garment === "fez" && <>{" · "}<a href="/patterns/chart-fez.pdf" download>Fez</a></>}
+          {ready && plan && downloads?.plan === plan && (
+            <>
+              <br />
+              <a href={downloads.patternUrl} download={`${plan.config.job2Garment}-pattern.json`}>
+                Job 2 pattern JSON
+              </a>{" and the Job 2 request replay with "}
+              <code>ftx-materials stock-plan PATTERN REQUEST</code>.
+            </>
+          )}
         </p>
       </div>
     </div>

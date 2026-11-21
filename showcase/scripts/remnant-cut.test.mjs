@@ -115,6 +115,7 @@ test("remnant planner matches native ftx-materials stock-plan/stock-residual and
     writeFileSync(req2Path, plan.job2RequestJson, { flag: "wx" });
 
     const job2Pattern = preset.job2Garment === "fez" ? fezPath : boleroPath;
+    assert.equal(plan.job2PatternJson, readFileSync(job2Pattern, "utf8"));
     if (!count) {
       assert.equal(plan.job2, null);
       assert.match(plan.job2Refusal, /no checked finite-stock placement/i);
@@ -165,6 +166,14 @@ test("CutLab remnant mode renders real occupied polygons, handles refusal, and f
     assert.equal(afterFez.schema, "ftx-finite-stock-request/1");
     assert.equal(afterFez.stocks[0].id, "muslin-sheet-01");
     assert.equal(afterFez.stocks[0].occupied_mm.length, 7);
+    assert.match(bodyText, /Search grid 30 mm/);
+    assert.equal((await requestFrom("fez-pattern.json")).schema, "fabric-pattern/1");
+    for (const garment of ["Bolero", "Fez"]) {
+      const href = await page.getByRole("link", { name: garment, exact: true }).getAttribute("href");
+      const pdf = await page.request.get(new URL(href, site).href);
+      assert.equal(pdf.status(), 200);
+      assert.equal((await pdf.body()).subarray(0, 5).toString(), "%PDF-");
+    }
 
     // Switch to refusal scenario: Job 2 must show 0 new pieces and an explicit refusal alert.
     await page.getByRole("button", { name: "Bolero → 2nd Bolero (refusal)" }).click();
