@@ -873,7 +873,13 @@ ftx materials thermal-steady stack-request.json --json`;
                   </table>
                 </div>
               ) : (
-                <p>Table unavailable while the stack request is refused. Supply an explicit interface resistance to solve.</p>
+                <p>
+                  {sourceTag === "loading"
+                    ? "Solving the selected stack in local Rust WebAssembly…"
+                    : sourceTag === "unavailable"
+                      ? "Table unavailable while the local Rust WebAssembly solver could not load."
+                      : "Table unavailable while the stack request is refused. Supply an explicit interface resistance to solve."}
+                </p>
               )}
               <div style={{ marginTop: 18 }}>
                 <CodeBlock title="Reproduce identically on the CLI" code={cliSnippet} />
