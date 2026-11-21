@@ -13,6 +13,13 @@ use super::{Args, bad_input, known_options, required, workspace};
 
 fn read_bounded(path: &str) -> Result<String, Refusal> {
     let file = File::open(path).map_err(|e| workspace::io_error(Path::new(path), e))?;
+    if !file
+        .metadata()
+        .map_err(|e| workspace::io_error(Path::new(path), e))?
+        .is_file()
+    {
+        return Err(bad_input(format!("{path}: expected a regular input file")));
+    }
     let mut bytes = Vec::new();
     file.take(MAX_JSON_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
@@ -82,4 +89,17 @@ pub(super) fn cmd_import(args: &Args) -> Result<(Value, i32, String), Refusal> {
             out.display()
         ),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_bounded;
+    use ftx_core::RefusalCode;
+
+    #[test]
+    fn read_bounded_refuses_directories_before_reading() {
+        let err = read_bounded(".").unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular input file"));
+    }
 }
