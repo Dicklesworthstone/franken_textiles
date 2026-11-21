@@ -851,6 +851,45 @@ test('guided drape newton_strategy and integrator are opt-in, preserved in matri
   }
 });
 
+test('guided drape static_equilibrium is opt-in, preserved in matrices, and refuses invalid bounds', async () => {
+  const {buildMaterialScenarioRequest:build,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const ordinary=scenarioState(), original=build(ordinary);
+  assert.equal(Object.hasOwn(JSON.parse(original).options,'static_equilibrium'),false);
+  const eq={correction_tolerance_m:1e-6,max_newton_iterations:300};
+  const rawEq=build({...ordinary,maxVertexFrames:32000000,options:{...ordinary.options,static_equilibrium:eq}});
+  assert.deepEqual(JSON.parse(rawEq).options.static_equilibrium,eq);
+  assert.equal(JSON.parse(build({...ordinary,options:{...ordinary.options,static_equilibrium:null}})).options.static_equilibrium,null);
+  const rawMat=matrix({maxEvaluations:4,cases:[{key:'dyn',scenario:build({...ordinary,maxVertexFrames:32000000})},{key:'stat',scenario:rawEq}]});
+  assert.equal(Object.hasOwn(JSON.parse(rawMat).cases[0].scenario.options,'static_equilibrium'),false);
+  assert.deepEqual(JSON.parse(rawMat).cases[1].scenario.options.static_equilibrium,eq);
+  assert.equal(build(ordinary),original);
+  for(const bad of [[],{},{correction_tolerance_m:0,max_newton_iterations:300},
+    {correction_tolerance_m:-1e-6,max_newton_iterations:300},{correction_tolerance_m:NaN,max_newton_iterations:300},
+    {correction_tolerance_m:1e-6,max_newton_iterations:0},{correction_tolerance_m:1e-6,max_newton_iterations:1001},
+    {correction_tolerance_m:1e-6,max_newton_iterations:10.5},{correction_tolerance_m:1e-6,max_newton_iterations:300,time_s:1}]) {
+    const input=scenarioState();input.options.static_equilibrium=bad;
+    assert.throws(()=>build(input),/Static equilibrium/);
+  }
+});
+
+test('guided fractional-Zener lowering builds exact requests with optional replay and refuses out-of-domain inputs', async () => {
+  const {buildViscoLoweringRequest:build}=await modulePromise;
+  const base={e0:200,e_inf:500,alpha:0.35,tau_s:1,f_lo_hz:0.01,f_hi_hz:100,n_terms:14,rel_tol:0.02};
+  const before=JSON.stringify(base), raw=build(base), parsed=JSON.parse(raw);
+  assert.equal(JSON.stringify(base),before);
+  assert.deepEqual(parsed,{schema:'ftx-fractional-zener-lowering/1',...base});
+  assert.equal(Object.hasOwn(parsed,'replay_steps'),false);
+  const withReplay=JSON.parse(build({...base,replay_steps:[{dt_s:0.05,strain:0.02},{dt_s:0.05,strain:0.04}]}));
+  assert.deepEqual(withReplay.replay_steps,[{dt_s:0.05,strain:0.02},{dt_s:0.05,strain:0.04}]);
+  for(const bad of [
+    {...base,e0:0},{...base,e_inf:200},{...base,alpha:0},{...base,alpha:1},{...base,tau_s:-1},
+    {...base,f_lo_hz:100,f_hi_hz:100},{...base,n_terms:0},{...base,n_terms:65},{...base,n_terms:4.5},
+    {...base,rel_tol:0},{...base,rel_tol:1},{...base,extra:1},
+    {...base,replay_steps:[]},{...base,replay_steps:[{dt_s:0,strain:0.01}]},
+    {...base,replay_steps:[{dt_s:0.05,strain:Infinity}]},{...base,replay_steps:[{dt_s:0.05,strain:0.01,extra:1}]}
+  ]) assert.throws(()=>build(bad));
+});
+
 test('guided motion preserves ordered absolute endpoints and original scenario sources', async () => {
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:build}=await modulePromise;
   const request={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:25,leg_pose:{posture:'seated',fraction:0.5}},

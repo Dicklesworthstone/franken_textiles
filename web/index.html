@@ -268,6 +268,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <label>Sewing steps <input id="drapeSewSteps" type="number" min="0" max="512" step="1" value="12" disabled></label>
         <label>Gravity steps <input id="drapeDrapeSteps" type="number" min="0" max="512" step="1" value="36" disabled></label>
         <label>Newton tol (m/s) <input id="drapeNewtonTol" type="number" min="0" step="any" value="0.001" disabled></label></p>
+      <p class="row"><label><input type="checkbox" id="staticEquilibrium"> Run independent frictionless static-equilibrium comparison</label>
+        <label>Correction tolerance (mm) <input id="staticTolMm" type="number" min="0" step="any" value="0.001" disabled></label>
+        <label>Max static Newton iterations <input id="staticMaxNewton" type="number" min="1" max="1000" step="1" value="300" disabled></label></p>
+      <p class="mut">Static equilibrium runs a separate frictionless conservative solve from the finished dynamic state without altering dynamic frames, flags, or simulated time. History-dependent materials refuse the static comparison while retaining the dynamic drape.</p>
       <p class="mut">Projected Newton with Implicit Euler is the default solver. Opt-in Generalized-α (ρ<sub>∞</sub> ∈ [0, 1]; 0 strongest high-frequency damping, 1 zero numerical dissipation) refuses history-dependent materials and may require smaller steps on stiff contact transitions. Custom schedule overrides stay within the 512-step browser budget per sewing path (sew + gravity + settling).</p>
       <p class="mut">Retries a stalled step as smaller steps without extending simulated time. The trial limit covers sewing, draping and settling, separately for each start. Exhausting the limits refuses the run.</p>
       <p class="mut">Arm angle applies to tape-fitted or accepted shapes; the default is 35°.
@@ -588,6 +592,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("draftFromBody").disabled = !ready || dead;
     for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
     for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = !$("customDrapeSchedule").checked;
+    for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = !$("staticEquilibrium").checked;
     $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
     const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
       && (bodyFitText === null || $("bodyFitConsent").checked);
@@ -766,6 +771,32 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("drapeNewtonTol").value = String(schedule?.newton_tol_m_s ?? 0.001);
     for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = schedule === undefined;
   }
+  function checkedStaticEquilibrium(value) {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+        Object.keys(value).length !== 2 ||
+        Object.keys(value).some(key => !["correction_tolerance_m", "max_newton_iterations"].includes(key)) ||
+        typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) || value.correction_tolerance_m <= 0 ||
+        !Number.isSafeInteger(value.max_newton_iterations) || value.max_newton_iterations < 1 || value.max_newton_iterations > 1000) {
+      throw Error("Static equilibrium needs finite positive correction_tolerance_m and max_newton_iterations (whole 1–1000).");
+    }
+    return { correction_tolerance_m: value.correction_tolerance_m, max_newton_iterations: value.max_newton_iterations };
+  }
+  function drapeStaticEquilibrium() {
+    if (!$("staticEquilibrium").checked) return undefined;
+    const tolRaw = $("staticTolMm").value.trim(), iterRaw = $("staticMaxNewton").value.trim();
+    if (!tolRaw || !iterRaw) throw Error("Supply finite static correction tolerance (mm) and max Newton iterations.");
+    const tolMm = Number(tolRaw);
+    if (!Number.isFinite(tolMm) || tolMm <= 0) throw Error("Static correction tolerance (mm) must be finite and positive.");
+    return checkedStaticEquilibrium({ correction_tolerance_m: tolMm * 1e-3, max_newton_iterations: Number(iterRaw) });
+  }
+  function setStaticEquilibrium(value) {
+    const eq = checkedStaticEquilibrium(value);
+    $("staticEquilibrium").checked = eq !== undefined;
+    $("staticTolMm").value = String(eq !== undefined ? eq.correction_tolerance_m * 1e3 : 0.001);
+    $("staticMaxNewton").value = String(eq?.max_newton_iterations ?? 300);
+    for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = eq === undefined;
+  }
   let foldUrls = [];
   let materialSources = null, materialTransfer = null;
   const materialOrigin = new URL(location.href).origin;
@@ -806,6 +837,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (integrator !== undefined) drapeSettings.integrator = integrator;
       const schedule = drapeSchedule(drapeSettings.two_start, drapeSettings.max_settle_steps);
       if (schedule !== undefined) Object.assign(drapeSettings, schedule);
+      const staticEq = drapeStaticEquilibrium();
+      if (staticEq !== undefined) drapeSettings.static_equilibrium = staticEq;
     } catch (error) { status(error.message); return; }
     const bodySource = model || imported ? { model: model || null,
       fit: imported ? new Blob([bodyFitText], { type: "application/json" }) : null,
@@ -1108,6 +1141,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         const tail = r.numerical.settling;
         $("foldSummary").innerHTML += `<br>Extra settling: ${esc(tail.steps)} / ${esc(tail.max_steps)} steps, ${esc(tail.duration_s)} s; ${esc(tail.stop_reason)}. Total gravity duration: ${esc(tail.gravity_duration_s)} s.`;
       }
+      if (r.static_equilibrium) {
+        const eq = r.static_equilibrium;
+        if (eq.status === "available" && eq.result) {
+          const maxMm = Number.isFinite(eq.result.max_displacement_m) ? (eq.result.max_displacement_m * 1e3).toFixed(3) : "—";
+          const rmsMm = Number.isFinite(eq.result.rms_displacement_m) ? (eq.result.rms_displacement_m * 1e3).toFixed(3) : "—";
+          $("foldSummary").innerHTML += `<br>Static equilibrium (frictionless comparison): available — max Δ ${esc(maxMm)} mm, RMS ${esc(rmsMm)} mm (${esc(eq.result.solve?.iterations ?? "—")} Newton iters).`;
+        } else {
+          $("foldSummary").innerHTML += `<br>Static equilibrium (frictionless comparison): ${esc(eq.status || "refused")}${eq.refusal?.message ? ` — ${esc(eq.refusal.message)}` : ""}.`;
+        }
+      }
       const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" }));
       const ru = URL.createObjectURL(new Blob([msg.reportText], { type: "application/json" }));
       foldUrls.push(u, ru);
@@ -1185,7 +1228,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("resetStyle").addEventListener("click", () => {
@@ -1332,12 +1375,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (!["lbs", "dqs"].includes(skinning)) {
       showError("Choose lbs or dqs skinning."); return;
     }
-    let timeSubdivision, newtonStrategy, integrator, schedule;
+    let timeSubdivision, newtonStrategy, integrator, schedule, staticEquilibrium;
     try {
       timeSubdivision = drapeTimeSubdivision();
       newtonStrategy = drapeNewtonStrategy();
       integrator = drapeIntegrator();
       schedule = drapeSchedule($("twoStart").checked, Number($("maxSettleSteps").value));
+      staticEquilibrium = drapeStaticEquilibrium();
     }
     catch (error) { showError(error.message); return; }
     foldRequest = ++nextRequest;
@@ -1352,7 +1396,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       ...(timeSubdivision !== undefined ? { timeSubdivision } : {}),
       ...(newtonStrategy !== undefined ? { newtonStrategy } : {}),
       ...(integrator !== undefined ? { integrator } : {}),
-      ...(schedule !== undefined ? { schedule } : {}) });
+      ...(schedule !== undefined ? { schedule } : {}),
+      ...(staticEquilibrium !== undefined ? { staticEquilibrium } : {}) });
   });
   const traceOrigin=new URL(location.href).origin;
   if(bodyFitToken && !traceToken && !photoToken && /^[0-9a-f]{32}$/.test(bodyFitToken) && traceOrigin!=="null" && window.opener) {
@@ -1436,6 +1481,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             checkedNewtonStrategy(settings.newton_strategy);
             checkedIntegrator(settings.integrator);
             checkedDrapeSchedule(settings);
+            checkedStaticEquilibrium(settings.static_equilibrium);
             if(context.bodyFit !== null && context.bodyFit !== undefined) {
               if(!(context.bodyFit instanceof Blob) || !context.bodyFit.size || context.bodyFit.size>16*1024*1024)throw Error("Accepted body report exceeds 16 MiB.");
               bodyFit=await readJson({files:[context.bodyFit]},"body-fit-report.json");
@@ -1459,6 +1505,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             setNewtonStrategy(settings.newton_strategy);
             setIntegrator(settings.integrator);
             setDrapeSchedule(settings);
+            setStaticEquilibrium(settings.static_equilibrium);
             showBodyImport();worker.postMessage({type:"clearBody"});worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
           }
           materialImportBusy=false;showMaterialInputs();renderPrograms();onProgram(true);

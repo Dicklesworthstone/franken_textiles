@@ -193,7 +193,25 @@ source, applicability, temperature limits and estimate consent; does not infer o
 Saved motion endpoints and named cases remain unchanged: save or replace them explicitly after reviewing the copied draft.
 Editing microclimate inputs invalidates the current result, not an environment you already copied.</p>
 </fieldset>
+<label>Fractional-Zener lowering input <select id="viscoMode"><option value="file">Original JSON request</option><option value="form">Author fractional-Zener parameters</option></select></label>
 <label>Fractional-Zener lowering request JSON (<code>ftx-fractional-zener-lowering/1</code>) <input id="viscoRequest" type="file" accept=".json,application/json"></label>
+<fieldset id="viscoForm" hidden><legend>Fractional-Zener viscoelastic model and frequency band</legend>
+<div class="study-fields">
+<label>Equilibrium modulus E<sub>0</sub> <input id="viscoE0" type="number" min="0" step="any" value="200" disabled></label>
+<label>Instantaneous modulus E<sub>∞</sub> <input id="viscoEInf" type="number" min="0" step="any" value="500" disabled></label>
+<label>Fractional order α (0–1) <input id="viscoAlpha" type="number" min="0" max="1" step="0.05" value="0.35" disabled></label>
+<label>Relaxation time τ (s) <input id="viscoTauS" type="number" min="0" step="any" value="1" disabled></label>
+<label>Lower frequency f<sub>lo</sub> (Hz) <input id="viscoFLoHz" type="number" min="0" step="any" value="0.01" disabled></label>
+<label>Upper frequency f<sub>hi</sub> (Hz) <input id="viscoFHiHz" type="number" min="0" step="any" value="100" disabled></label>
+<label>Prony terms (1–64) <input id="viscoNTerms" type="number" min="1" max="64" step="1" value="14" disabled></label>
+<label>Relative tolerance (0–1) <input id="viscoRelTol" type="number" min="0" max="1" step="any" value="0.02" disabled></label>
+</div>
+<label><input id="viscoReplayEnabled" type="checkbox" disabled> Replay piecewise-linear strain steps through exact exponential recursion</label>
+<div id="viscoReplayFields" hidden>
+<label>Replay step duration Δt (s) <input id="viscoReplayDt" type="number" min="0" step="any" value="0.05" disabled></label>
+<label>Strain sequence (comma or whitespace separated) <input id="viscoReplayStrains" type="text" value="0.02, 0.04, 0.04, 0.0" disabled></label>
+</div>
+</fieldset>
 <button id="lowerVisco" data-command="lowerVisco" disabled>Lower fractional viscoelastic model to Prony branches</button>
 <p class="note">Fits nonnegative log-spaced Prony branches to a fractional-Zener viscoelastic law and optionally replays an exact
 unconditional exponential stress/dissipation history. Numerical model lowering only; never replaces measured textile relaxation data.</p>
@@ -468,6 +486,10 @@ studies below use their separately selected body source.</p>
 <label>Gravity steps <input id="drapeDrapeSteps" type="number" min="0" max="512" step="1" value="36" disabled></label>
 <label>Newton tolerance (m/s) <input id="drapeNewtonTol" type="number" min="0" step="any" value="0.001" disabled></label>
 <p class="note">Defaults match <code>DrapeOptions::default()</code> (1/24 s, 12 sewing steps, 36 gravity steps, 1e-3 m/s). Custom overrides stay within the 512-step browser budget per sewing path (including the 18-step comparison when enabled) and allow smaller steps for stiff Generalized-α contact runs.</p>
+<label><input id="staticEquilibrium" type="checkbox"> Run independent frictionless static-equilibrium comparison</label>
+<label>Static correction tolerance (mm) <input id="staticTolMm" type="number" min="0" step="any" value="0.001" disabled></label>
+<label>Maximum static Newton iterations <input id="staticMaxNewton" type="number" min="1" max="1000" step="1" value="300" disabled></label>
+<p class="note">Runs a separate conservative frictionless solve from the finished dynamic state without modifying dynamic frames, flags, or simulated time. History-dependent materials refuse the static comparison while retaining the dynamic drape.</p>
 <label><input id="twoStart" type="checkbox"> Compare a second sewing path (18 versus 12 sewing steps; runs a second full solve)</label>
 <p class="note">Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
 Extra settling continues the sewn garment until its quiet window or the step limit; 0 keeps the fixed schedule.
@@ -1252,6 +1274,12 @@ section-3 contract for their separate design-fit screening even when this scenar
 </div>
 <p class="note">Projected Newton with Implicit Euler is the default scenario solver and is omitted from the serialized request when selected.
 Opt-in Generalized-α (ρ<sub>∞</sub> ∈ [0, 1]; 0 strongest high-frequency damping, 1 zero numerical dissipation) refuses history-dependent materials and may require smaller time steps or bounded subdivision on stiff contact transitions.</p>
+<label><input id="guidedScenarioStaticEquilibrium" type="checkbox"> Run independent frictionless static-equilibrium comparison on each alternative</label>
+<div class="study-fields">
+<label>Static correction tolerance (mm) <input id="guidedScenarioStaticTolMm" type="number" min="0" step="any" value="0.001" disabled></label>
+<label>Maximum static Newton iterations <input id="guidedScenarioStaticMaxNewton" type="number" min="1" max="1000" step="1" value="300" disabled></label>
+</div>
+<p class="note">Reserves conservative static-solve work inside the case's vertex-frame budget without changing dynamic frames, flags, or elapsed time.</p>
 <p class="note">The attempt allowance includes failed retries and is shared across sewing, gravity and extra settling.
 The engine reserves the full allowance within the case's vertex-frame budget for every alternative and adaptive probe;
 larger allowances can leave fewer alternatives evaluable. Nominal frame times and convergence tolerances stay unchanged.

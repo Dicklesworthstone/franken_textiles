@@ -616,12 +616,27 @@ self.onmessage = async ({ data: msg }) => {
             throw Error("Configured fold exceeds the 512-step browser work budget per sewing path (sew + drape + settle).");
           }
         }
+        if (msg.staticEquilibrium !== undefined) {
+          const value = msg.staticEquilibrium;
+          if (!value || typeof value !== "object" || Array.isArray(value) ||
+              Object.keys(value).length !== 2 ||
+              Object.keys(value).some(key => !["correction_tolerance_m", "max_newton_iterations"].includes(key)) ||
+              typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) || value.correction_tolerance_m <= 0 ||
+              !Number.isSafeInteger(value.max_newton_iterations) || value.max_newton_iterations < 1 || value.max_newton_iterations > 1000) {
+            throw Error("Static equilibrium needs finite positive correction_tolerance_m and max_newton_iterations (whole 1–1000).");
+          }
+          settings.static_equilibrium = {
+            correction_tolerance_m: value.correction_tolerance_m,
+            max_newton_iterations: value.max_newton_iterations,
+          };
+        }
         const configured = (!imported && settings.arm_abduction_deg !== 35) ||
           settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
           settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
           settings.newton_strategy !== undefined || settings.integrator !== undefined ||
           settings.step_s !== undefined || settings.sew_steps !== undefined ||
-          settings.drape_steps !== undefined || settings.newton_tol_m_s !== undefined;
+          settings.drape_steps !== undefined || settings.newton_tol_m_s !== undefined ||
+          settings.static_equilibrium !== undefined;
         if (configured && typeof ftx.fold_up_configured !== "function") {
           throw Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
         }

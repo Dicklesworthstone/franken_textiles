@@ -134,6 +134,52 @@ export function buildMicroclimateRequest(input) {
   }
   return JSON.stringify(request);
 }
+
+/** Author a bounded fractional-Zener Prony lowering request; Rust owns NNLS fitting and band certification. */
+export function buildViscoLoweringRequest(state) {
+  const positive = (value, label) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      throw Error(`${label} must be finite and positive.`);
+    }
+  };
+  const required = ["e0", "e_inf", "alpha", "tau_s", "f_lo_hz", "f_hi_hz", "n_terms", "rel_tol"];
+  object(state, [...required, "replay_steps"], required, "Fractional-Zener lowering");
+  positive(state.e0, "Equilibrium modulus E0");
+  positive(state.e_inf, "Instantaneous modulus E_inf");
+  if (state.e_inf <= state.e0) throw Error("Instantaneous modulus E_inf must exceed equilibrium modulus E0.");
+  if (typeof state.alpha !== "number" || !Number.isFinite(state.alpha) || state.alpha <= 0 || state.alpha >= 1) {
+    throw Error("Fractional order alpha must be strictly between 0 and 1.");
+  }
+  positive(state.tau_s, "Relaxation time tau_s");
+  positive(state.f_lo_hz, "Lower frequency f_lo_hz");
+  positive(state.f_hi_hz, "Upper frequency f_hi_hz");
+  if (state.f_hi_hz <= state.f_lo_hz) throw Error("Upper frequency f_hi_hz must exceed lower frequency f_lo_hz.");
+  if (!Number.isSafeInteger(state.n_terms) || state.n_terms < 1 || state.n_terms > 64) {
+    throw Error("Prony term count n_terms must be an integer from 1 to 64.");
+  }
+  if (typeof state.rel_tol !== "number" || !Number.isFinite(state.rel_tol) || state.rel_tol <= 0 || state.rel_tol >= 1) {
+    throw Error("Relative tolerance rel_tol must be strictly between 0 and 1.");
+  }
+  const request = {
+    schema: "ftx-fractional-zener-lowering/1",
+    e0: state.e0, e_inf: state.e_inf, alpha: state.alpha, tau_s: state.tau_s,
+    f_lo_hz: state.f_lo_hz, f_hi_hz: state.f_hi_hz, n_terms: state.n_terms, rel_tol: state.rel_tol,
+  };
+  if (own(state, "replay_steps")) {
+    if (!Array.isArray(state.replay_steps) || !state.replay_steps.length || state.replay_steps.length > 65536) {
+      throw Error("Viscoelastic replay_steps must contain 1–65536 steps.");
+    }
+    request.replay_steps = state.replay_steps.map(step => {
+      object(step, ["dt_s", "strain"], ["dt_s", "strain"], "Viscoelastic replay step");
+      positive(step.dt_s, "Replay step dt_s");
+      if (typeof step.strain !== "number" || !Number.isFinite(step.strain)) {
+        throw Error("Replay step strain must be finite.");
+      }
+      return { dt_s: step.dt_s, strain: step.strain };
+    });
+  }
+  return JSON.stringify(request);
+}
 function allowance(value, label) {
   if (own(value, "seam_allowance_mm") && value.seam_allowance_mm !== null) nonnegative(value.seam_allowance_mm, label);
   return own(value, "seam_allowance_mm") ? value.seam_allowance_mm : null;
@@ -986,7 +1032,7 @@ export function buildMaterialScenarioRequest(state) {
     sourceObject(state.fitSpec, "Fit contract"); fitSpec = state.fitSpec;
   } else if (!state.allowNoFit) throw Error("Choose a fit contract or explicitly allow a numerical-only study without one.");
   const fields = ["spacing", "sew_steps", "drape_steps", "step", "max_settle_steps"];
-  const options = object(state.options, [...fields, "self_contact", "time_subdivision", "newton_strategy", "integrator"], fields, "Drape options");
+  const options = object(state.options, [...fields, "self_contact", "time_subdivision", "newton_strategy", "integrator", "static_equilibrium"], fields, "Drape options");
   for (const key of ["spacing", "step"]) {
     if (typeof options[key] !== "number" || !Number.isFinite(options[key]) || options[key] <= 0) {
       throw Error("Drape " + key + " must be finite and positive.");
@@ -1056,6 +1102,14 @@ export function buildMaterialScenarioRequest(state) {
       // Admitted Generalized-alpha integrator.
     } else {
       throw Error("Time integrator must be implicit_euler or generalized_alpha with finite rho_inf in [0, 1].");
+    }
+  }
+  if (own(options, "static_equilibrium") && options.static_equilibrium !== null) {
+    const keys = ["correction_tolerance_m", "max_newton_iterations"];
+    const eq = object(options.static_equilibrium, keys, keys, "Static equilibrium");
+    if (typeof eq.correction_tolerance_m !== "number" || !Number.isFinite(eq.correction_tolerance_m) || eq.correction_tolerance_m <= 0 ||
+        !Number.isSafeInteger(eq.max_newton_iterations) || eq.max_newton_iterations < 1 || eq.max_newton_iterations > 1000) {
+      throw Error("Static equilibrium needs finite positive correction_tolerance_m and max_newton_iterations (whole 1–1000).");
     }
   }
   if (own(options, "self_contact") && options.self_contact !== null) {

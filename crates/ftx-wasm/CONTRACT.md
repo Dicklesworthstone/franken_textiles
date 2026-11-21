@@ -343,7 +343,10 @@ Configured settings also accept optional `static_equilibrium` with explicit
 `correction_tolerance_m` and `max_newton_iterations`. The same native independent conservative
 solve adds an available/refused report and exact static geometry, without changing the dynamic
 fold, elapsed time, flags or subsequent motion. Friction and material-history evolution are not
-part of this static comparison. Omission preserves the existing settings serialization.
+part of this static comparison. Omission preserves the existing settings serialization. Both browser
+fold forms and guided material scenarios expose opt-in static-equilibrium controls (default 0.001 mm
+tolerance and 300 iterations when enabled; omitted when disabled), validated by both workers and
+preserved across pattern/material handoffs.
 
 Configured settings also accept optional `time_subdivision: { max_halvings, max_trials }`.
 The integer limits are 0..=16 halvings and 1..=65535 attempted steps; the allowance must cover the

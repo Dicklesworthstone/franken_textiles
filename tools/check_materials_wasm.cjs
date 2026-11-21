@@ -160,6 +160,22 @@ const parse = JSON.parse;
     twoStart:true,maxSettleSteps:0,schedule:{step_s:0.01,sew_steps:12,drape_steps:500,newton_tol_m_s:0.001}}});
   assert.equal(sent.at(-1).type,'error');
   assert.match(sent.at(-1).message,/512-step/);
+  await context.self.onmessage({data:{type:'fold',request:sent.length+1,bytes:new ArrayBuffer(8),pattern:JSON.stringify(original),measurements:'{}',fit:'{}',
+    staticEquilibrium:{correction_tolerance_m:1e-6,max_newton_iterations:1001}}});
+  assert.equal(sent.at(-1).type,'error');
+  assert.match(sent.at(-1).message,/Static equilibrium/);
+  // Verify guided buildViscoLoweringRequest with replay_steps matches native ftx-materials lower-visco byte-for-byte.
+  const builderMod = new vm.SourceTextModule(fs.readFileSync(path.join(root,'web/materials-study-builder.js'),'utf8'),{context});
+  await builderMod.link(()=>{throw Error('no imports');}); await builderMod.evaluate();
+  const guidedViscoRaw = builderMod.namespace.buildViscoLoweringRequest({
+    e0: 200, e_inf: 500, alpha: 0.35, tau_s: 1.0, f_lo_hz: 0.01, f_hi_hz: 100, n_terms: 14, rel_tol: 0.02,
+    replay_steps: [{ dt_s: 0.05, strain: 0.02 }, { dt_s: 0.05, strain: 0.04 }, { dt_s: 0.05, strain: 0.04 }, { dt_s: 0.05, strain: 0.0 }]
+  });
+  const guidedViscoPath = path.join(work, 'guided-visco.json');
+  fs.writeFileSync(guidedViscoPath, guidedViscoRaw);
+  const guidedViscoWasm = await send('lowerVisco', { viscoRequest: guidedViscoRaw });
+  assert.deepEqual(guidedViscoWasm.result, parse(invoke('lower-visco', guidedViscoPath)));
+  assert.equal(guidedViscoWasm.result.replay.steps.length, 4);
   assert.equal(typeof ftx.fold_up_configured,'function');
   console.log('PASS: compiled WASM + actual worker/native equality for binding, permanent membrane law selection, stock, SVG, sewing, purchasing, frozen thermal surface/coverage, microclimate and viscoelastic lowering; automatic asymmetric optical faces, material-driven changes and malformed/out-of-domain refusals.');
   console.log('Browser navigation and successful model-backed drape NOT asserted. Test outputs:',work);

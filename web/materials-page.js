@@ -5,6 +5,7 @@ import { buildMaterialStudyRequest, buildMaterialMotionRequest, buildMaterialSce
   hasTextileWaterPolicy, hasTextileWaterMechanicsPolicy, buildMaterialSurfaceConditions,
   buildMaterialVaporSurfaceConditions, buildMaterialCoverageRequest, buildMaterialCoverageTopology,
   buildMaterialExteriorExchange, buildMicroclimateRequest, buildMicroclimateExteriorExchange,
+  buildViscoLoweringRequest,
   buildWorkbenchStudyBundle, parseWorkbenchStudyBundle,
   MAX_WORKBENCH_STUDY_BYTES } from "./materials-study-builder.js";
 import { buildMaterialScreenRequest } from "./materials-screen-builder.js";
@@ -91,6 +92,8 @@ const exteriorSuffixes = ["Enabled", "Air", "Coefficient", "Min", "Max", "Refere
 const motionExteriorPrefixes = ["guidedMotionHeatExterior", "guidedMotionCoverageExterior", "guidedMotionExposedExterior"];
 const microclimateFields = ["Temperature", "Pressure", "Humidity", "Correlation", "Length", "Wind", "Delta", "Gravity",
   "Exterior", "Min", "Max", "AllowEstimates"];
+const viscoFields = ["E0", "EInf", "Alpha", "TauS", "FLoHz", "FHiHz", "NTerms", "RelTol",
+  "ReplayEnabled", "ReplayDt", "ReplayStrains"];
 const microclimateTargets = { heatExterior: "steady sheet heat", guidedCoverageExterior: "steady body/layer heat",
   guidedMotionHeatExterior: "moving sheet heat", guidedMotionCoverageExterior: "moving covered-cloth heat",
   guidedMotionExposedExterior: "moving exposed-cloth heat" };
@@ -283,6 +286,7 @@ function controls() {
   $("loadMaterialExample").disabled = !ready || !!pending;
   for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
   for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = !$("customDrapeSchedule").checked;
+  for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = !$("staticEquilibrium").checked;
   $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
   const guided = guidedStudyMode();
   const authoredFit = fitMode() === "guided", fitKind = $("guidedFitKind").value || "vertical";
@@ -331,6 +335,9 @@ function controls() {
     $(id).disabled = !guidedScenarioMode() || !$("guidedScenarioSubdivision").checked;
   }
   $("guidedScenarioRhoInf").disabled = !guidedScenarioMode() || $("guidedScenarioIntegrator").value !== "generalized_alpha";
+  for (const id of ["guidedScenarioStaticTolMm", "guidedScenarioStaticMaxNewton"]) {
+    $(id).disabled = !guidedScenarioMode() || !$("guidedScenarioStaticEquilibrium").checked;
+  }
   $("guidedScenarioMatrix").hidden = !guidedMatrixMode();
   $("guidedScenarioCasePolicy").hidden = !guidedMatrixMode();
   $("guidedScenarioComparison").disabled = !guidedMatrixMode() || $("guidedScenarioPolicySource").value !== "file";
@@ -554,7 +561,8 @@ function controls() {
   $("thermalHistory").disabled ||= !has("thermalRequest");
   microclimateControls();
   $("microclimate").disabled ||= microclimateMode() !== "form" && !has("microclimateRequest");
-  $("lowerVisco").disabled ||= !has("viscoRequest");
+  viscoControls();
+  $("lowerVisco").disabled ||= viscoMode() !== "form" && !has("viscoRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
   $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
@@ -4868,6 +4876,15 @@ function show(op, msg, request) {
         ...(r.body?.skinning ? { skinning: r.body.skinning } : {}),
         ...(r.numerical?.newton_strategy ? { newton_strategy: r.numerical.newton_strategy } : {}),
         ...(r.numerical?.integrator ? { integrator: r.numerical.integrator } : {}), settling: r.numerical?.settling,
+        ...(r.static_equilibrium ? { static_equilibrium: {
+          status: r.static_equilibrium.status,
+          ...(r.static_equilibrium.result ? {
+            max_displacement_m: r.static_equilibrium.result.max_displacement_m,
+            rms_displacement_m: r.static_equilibrium.result.rms_displacement_m,
+            iterations: r.static_equilibrium.result.solve?.iterations,
+          } : {}),
+          ...(r.static_equilibrium.refusal ? { refusal: r.static_equilibrium.refusal } : {}),
+        } } : {}),
         body_source: r.body?.shape_source || "Tape-fitted MODEL_FIT shape", body_fit: r.body?.fit,
         measurement_comparison: r.body?.measurement_comparison } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,
@@ -5181,6 +5198,42 @@ function microclimateResult(parent, report) {
   const note = document.createElement("p"); note.textContent = report.no_claim || "Model estimates only; no measured garment film, comfort or fit claim.";
   parent.append(note);
 }
+function viscoMode() { return $("viscoMode").value || "file"; }
+function viscoControls() {
+  const authored = viscoMode() === "form", replay = authored && $("viscoReplayEnabled").checked;
+  $("viscoForm").hidden = !authored; $("viscoRequest").disabled = authored;
+  $("viscoReplayFields").hidden = !replay;
+  for (const suffix of viscoFields) $("visco" + suffix).disabled = !authored;
+  for (const suffix of ["ReplayDt", "ReplayStrains"]) $("visco" + suffix).disabled ||= !replay;
+}
+function guidedViscoRequest() {
+  const number = (suffix, label) => {
+    const raw = $("visco" + suffix).value;
+    if (!raw.trim() || !Number.isFinite(Number(raw))) throw Error(`Enter a finite ${label}.`);
+    return Number(raw);
+  };
+  const input = {
+    e0: number("E0", "equilibrium modulus E0"),
+    e_inf: number("EInf", "instantaneous modulus E_inf"),
+    alpha: number("Alpha", "fractional order alpha"),
+    tau_s: number("TauS", "relaxation time tau_s"),
+    f_lo_hz: number("FLoHz", "lower frequency f_lo_hz"),
+    f_hi_hz: number("FHiHz", "upper frequency f_hi_hz"),
+    n_terms: number("NTerms", "Prony term count n_terms"),
+    rel_tol: number("RelTol", "relative tolerance rel_tol"),
+  };
+  if ($("viscoReplayEnabled").checked) {
+    const dt_s = number("ReplayDt", "replay step duration dt_s");
+    const tokens = $("viscoReplayStrains").value.trim().split(/[\s,]+/).filter(Boolean);
+    if (!tokens.length) throw Error("Enter at least one finite strain value for replay.");
+    input.replay_steps = tokens.map(token => {
+      const strain = Number(token);
+      if (!Number.isFinite(strain)) throw Error("Every replay strain must be a finite number.");
+      return { dt_s, strain };
+    });
+  }
+  return buildViscoLoweringRequest(input);
+}
 function lowerViscoResult(parent, report) {
   const terms = Array.isArray(report.terms) ? report.terms : [];
   const summary = table(parent, "Certified fractional-Zener Prony lowering", ["Quantity", "Value"]);
@@ -5401,6 +5454,32 @@ function setDrapeSchedule(settings) {
   $("drapeDrapeSteps").value = String(schedule?.drape_steps ?? 36);
   $("drapeNewtonTol").value = String(schedule?.newton_tol_m_s ?? 0.001);
   for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = schedule === undefined;
+}
+function checkedStaticEquilibrium(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).length !== 2 ||
+      Object.keys(value).some(key => !["correction_tolerance_m", "max_newton_iterations"].includes(key)) ||
+      typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) || value.correction_tolerance_m <= 0 ||
+      !Number.isSafeInteger(value.max_newton_iterations) || value.max_newton_iterations < 1 || value.max_newton_iterations > 1000) {
+    throw Error("Static equilibrium needs finite positive correction_tolerance_m and max_newton_iterations (whole 1–1000).");
+  }
+  return { correction_tolerance_m: value.correction_tolerance_m, max_newton_iterations: value.max_newton_iterations };
+}
+function drapeStaticEquilibrium() {
+  if (!$("staticEquilibrium").checked) return undefined;
+  const tolRaw = $("staticTolMm").value.trim(), iterRaw = $("staticMaxNewton").value.trim();
+  if (!tolRaw || !iterRaw) throw Error("Supply finite static correction tolerance (mm) and max Newton iterations.");
+  const tolMm = Number(tolRaw);
+  if (!Number.isFinite(tolMm) || tolMm <= 0) throw Error("Static correction tolerance (mm) must be finite and positive.");
+  return checkedStaticEquilibrium({ correction_tolerance_m: tolMm * 1e-3, max_newton_iterations: Number(iterRaw) });
+}
+function setStaticEquilibrium(value) {
+  const eq = checkedStaticEquilibrium(value);
+  $("staticEquilibrium").checked = eq !== undefined;
+  $("staticTolMm").value = String(eq !== undefined ? eq.correction_tolerance_m * 1e3 : 0.001);
+  $("staticMaxNewton").value = String(eq?.max_newton_iterations ?? 300);
+  for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = eq === undefined;
 }
 function drapeArmAngle() {
   const angle = $("bodyArmDeg").value.trim();
@@ -6452,6 +6531,14 @@ async function guidedScenarioInput(includeCasePolicy = false) {
   } else if (scenarioIntegrator !== "implicit_euler") {
     throw Error("Choose Implicit Euler or Generalized-α time integration for the scenario.");
   }
+  if ($("guidedScenarioStaticEquilibrium").checked) {
+    const tolMm = number("guidedScenarioStaticTolMm", "static correction tolerance in millimetres");
+    if (tolMm <= 0) throw Error("Static correction tolerance in millimetres must be positive.");
+    input.options.static_equilibrium = {
+      correction_tolerance_m: tolMm * 1e-3,
+      max_newton_iterations: number("guidedScenarioStaticMaxNewton", "maximum static Newton iterations"),
+    };
+  }
   if (motionMode === "form") Object.assign(input, guidedMotionInput());
   if (compression) input.motionCompressionTarget = $("guidedMotionCompressionTarget").value || "transient_surface";
   if (motionMode === "file") input.maxMotionTrials = number("guidedScenarioMotionTrials", "case motion-attempt allowance");
@@ -6524,6 +6611,7 @@ function showGuidedScenarioDrafts() {
         `up to ${value.options.time_subdivision.max_halvings} halvings; ` : "") +
       (value.options.newton_strategy ? `Newton solver ${value.options.newton_strategy.kind}; ` : "") +
       (value.options.integrator ? `integrator ${value.options.integrator.kind}${value.options.integrator.rho_inf !== undefined ? ` (ρ∞=${value.options.integrator.rho_inf})` : ""}; ` : "") +
+      (value.options.static_equilibrium ? `static equilibrium (${value.options.static_equilibrium.correction_tolerance_m * 1e3} mm, ${value.options.static_equilibrium.max_newton_iterations} iters); ` : "") +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
       (value.motion?.source_pose_sampling ? `source body poses at most ${value.motion.source_pose_sampling.max_step_s} s apart, ` +
@@ -6851,7 +6939,7 @@ async function execute(op, studio = null) {
     }
     else if (op === "vapor") msg.vaporRequest = await read("vaporRequest");
     else if (op === "microclimate") msg.microclimateRequest = microclimateMode() === "form" ? guidedMicroclimateRequest() : await read("microclimateRequest");
-    else if (op === "lowerVisco") msg.viscoRequest = await read("viscoRequest");
+    else if (op === "lowerVisco") msg.viscoRequest = viscoMode() === "form" ? guidedViscoRequest() : await read("viscoRequest");
     else if (op === "calibrate") {
       msg.calibrationMode = $("calibrationMode").value;
       msg.allowEstimates = $("calibrationEstimates").checked;
@@ -6886,6 +6974,8 @@ async function execute(op, studio = null) {
         msg.twoStart = $("twoStart").checked;
         const schedule = drapeSchedule(msg.twoStart, msg.maxSettleSteps);
         if (schedule !== undefined) msg.schedule = schedule;
+        const staticEq = drapeStaticEquilibrium();
+        if (staticEq !== undefined) msg.staticEquilibrium = staticEq;
         msg.armDeg = drapeArmAngle();
         if (has("bodyFitFile")) {
           if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
@@ -6937,7 +7027,8 @@ async function execute(op, studio = null) {
           ...(msg.timeSubdivision !== undefined ? { time_subdivision: msg.timeSubdivision } : {}),
           ...(msg.newtonStrategy !== undefined ? { newton_strategy: msg.newtonStrategy } : {}),
           ...(msg.integrator !== undefined ? { integrator: msg.integrator } : {}),
-          ...(msg.schedule !== undefined ? msg.schedule : {}) } } : {}) };
+          ...(msg.schedule !== undefined ? msg.schedule : {}),
+          ...(msg.staticEquilibrium !== undefined ? { static_equilibrium: msg.staticEquilibrium } : {}) } } : {}) };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
     if (pending?.id !== id) return;
@@ -7239,6 +7330,14 @@ for (const id of ["guidedScenarioNewtonStrategy", "guidedScenarioIntegrator", "g
   };
   $(id).addEventListener("change", changed);
   if (id === "guidedScenarioRhoInf") $(id).addEventListener("input", changed);
+}
+for (const id of ["guidedScenarioStaticEquilibrium", "guidedScenarioStaticTolMm", "guidedScenarioStaticMaxNewton"]) {
+  const changed = () => {
+    if (id === "guidedScenarioStaticEquilibrium" || $("guidedScenarioStaticEquilibrium").checked) changedGuidedScenarioDraft();
+    else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (id !== "guidedScenarioStaticEquilibrium") $(id).addEventListener("input", changed);
 }
 $("addScenarioCase").onclick = () => freezeGuidedScenarioCase();
 $("clearScenarioCases").onclick = () => { guidedScenarioDrafts.length = 0; changedGuidedScenarioDrafts(); };
@@ -8011,12 +8110,19 @@ for (const suffix of microclimateFields) for (const event of ["input", "change"]
     if (microclimateMode() === "form") invalidate(["microclimate"], true); else controls();
   });
 }
+$("viscoMode").addEventListener("change", () => invalidate(["lowerVisco"], true));
+for (const suffix of viscoFields) for (const event of ["input", "change"]) {
+  $("visco" + suffix).addEventListener(event, () => {
+    if (viscoMode() === "form") invalidate(["lowerVisco"], true); else controls();
+  });
+}
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], twoStart:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"],
   drapeNewtonStrategy:["fold","heat","vaporSurface","coverage"], drapeIntegrator:["fold","heat","vaporSurface","coverage"], drapeRhoInf:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
   customDrapeSchedule:["fold","heat","vaporSurface","coverage"], drapeStepS:["fold","heat","vaporSurface","coverage"], drapeSewSteps:["fold","heat","vaporSurface","coverage"], drapeDrapeSteps:["fold","heat","vaporSurface","coverage"], drapeNewtonTol:["fold","heat","vaporSurface","coverage"],
+  staticEquilibrium:["fold","heat","vaporSurface","coverage"], staticTolMm:["fold","heat","vaporSurface","coverage"], staticMaxNewton:["fold","heat","vaporSurface","coverage"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"], microclimateRequest:["microclimate"], viscoRequest:["lowerVisco"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], cylinderExperimentRequest:["cylinderExperiment"], vaporSurfaceConditions:["vaporSurface"],
@@ -8031,6 +8137,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     }
     if (id === "studyRequest") $("studyMode").value = "file";
     if (id === "microclimateRequest") $("microclimateMode").value = "file";
+    if (id === "viscoRequest") $("viscoMode").value = "file";
     if (id === "screenRequest") $("screenMode").value = "file";
     if (id === "scenarioRequest") {
       $("scenarioMode").value = "file";
@@ -8041,7 +8148,8 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
     if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps",
-      "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"].includes(id)) {
+      "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol",
+      "staticEquilibrium", "staticTolMm", "staticMaxNewton"].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
     }
@@ -8055,7 +8163,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     return scenarioCasesLoading;
   });
 }
-for (const id of ["drapeLegFraction", "drapeRhoInf", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) {
+for (const id of ["drapeLegFraction", "drapeRhoInf", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticTolMm", "staticMaxNewton"]) {
   $(id).addEventListener("input", () => {
     ++roundRead; roundToken = null; window.opener = null;
     invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
@@ -8190,6 +8298,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       checkedNewtonStrategy(settings?.newton_strategy);
       checkedIntegrator(settings?.integrator);
       checkedDrapeSchedule(settings);
+      checkedStaticEquilibrium(settings?.static_equilibrium);
       const hasArm = settings !== undefined && Object.hasOwn(settings, "arm_abduction_deg");
       if (hasArm && (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180)) {
         throw Error("Received drape arm angle must be from 0 to 180 degrees.");
@@ -8240,6 +8349,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         setNewtonStrategy(settings.newton_strategy);
         setIntegrator(settings.integrator);
         setDrapeSchedule(settings);
+        setStaticEquilibrium(settings.static_equilibrium);
       }
       $("supplementalConsent").checked = false;
       $("bodyFitConsent").checked = false; showReceivedBody();

@@ -1423,8 +1423,13 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
+  e.staticTolMm.value='0.001';e.staticMaxNewton.value='300';
   e.guidedScenarioSubdivisionHalvings.value='8';e.guidedScenarioSubdivisionTrials.value='4096';
   e.guidedScenarioNewtonStrategy.value='projected';e.guidedScenarioIntegrator.value='implicit_euler';e.guidedScenarioRhoInf.value='0';
+  e.guidedScenarioStaticTolMm.value='0.001';e.guidedScenarioStaticMaxNewton.value='300';
+  e.viscoMode.value='file';e.viscoE0.value='200';e.viscoEInf.value='500';e.viscoAlpha.value='0.35';e.viscoTauS.value='1';
+  e.viscoFLoHz.value='0.01';e.viscoFHiHz.value='100';e.viscoNTerms.value='14';e.viscoRelTol.value='0.02';
+  e.viscoReplayDt.value='0.05';e.viscoReplayStrains.value='0.02, 0.04, 0.04, 0.0';
   for(const axis of ['X','Y','Z'])e['guidedMotionRoot'+axis].value='0';
   e.screenMode.value='guided';e.guidedScreenProperty.value='areal_density';
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
@@ -5676,6 +5681,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
+  e.staticTolMm.value='0.001';e.staticMaxNewton.value='300';
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
       const a=previous?.(...args),b=fn(...args);return Promise.all([a,b]);};};
@@ -23502,4 +23508,163 @@ test('microclimate renders prepared exterior and radiosity enclosure tables, and
   const adjDump = JSON.stringify(section(p, 'Clamped-strip identification'));
   assert.match(adjDump, /Adjoint \(implicit function theorem\)/);
   assert.match(adjDump, /Adjoint linear solves/);
+});
+
+test('opt-in static_equilibrium comparison and guided fractional-Zener form wire fail-closed across workbenches and workers', async () => {
+  // 1. Material workbench fold staticEquilibrium: omitted by default, opt-in sends meters + iters, renders available/refused, invalidates, refuses bad input.
+  const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  p.e.body.files = [new Blob([new Uint8Array([1])])];
+  assert.equal(p.e.staticTolMm.disabled, true);
+  assert.equal(p.e.staticMaxNewton.disabled, true);
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.at(-1).staticEquilibrium, undefined);
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  p.e.staticEquilibrium.checked = true; p.e.staticEquilibrium.handlers.change();
+  assert.equal(p.e.staticTolMm.disabled, false);
+  p.e.staticTolMm.value = '0.002'; p.e.staticMaxNewton.value = '150';
+  await p.e.fold.onclick();
+  assert.deepEqual(plain(p.current().messages.at(-1).staticEquilibrium), { correction_tolerance_m: 2e-6, max_newton_iterations: 150 });
+  const eqRep = {
+    settled: true, body: { legs: 'standing', leg_fraction: 1 },
+    static_equilibrium: { status: 'available', result: { max_displacement_m: 0.00125, rms_displacement_m: 0.0004, solve: { iterations: 12 } } }
+  };
+  p.emit(eqRep, [{ name: 'sim_report.json', text: JSON.stringify(eqRep), mime: 'application/json' }]);
+  const fSec = section(p, 'fold'), fSummary = JSON.parse(fSec.children[1].textContent);
+  assert.equal(fSummary.static_equilibrium.status, 'available');
+  assert.equal(fSummary.static_equilibrium.iterations, 12);
+  p.e.staticMaxNewton.value = '200'; p.e.staticMaxNewton.handlers.input();
+  assert.equal(fSec.hidden, true, 'editing staticMaxNewton must invalidate prior fold');
+  p.e.staticMaxNewton.value = '1001';
+  const beforeBad = p.current().messages.length;
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.length, beforeBad);
+  assert.match(p.e.error.textContent, /Static equilibrium/);
+
+  // 2. Both workers route staticEquilibrium through fold_up_configured and refuse malformed settings.
+  const mCalls = [];
+  const mw = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    WebBody: class { free() {} },
+    fold_up: () => { mCalls.push({ path: 'legacy' }); return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      mCalls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} };
+    }
+  } });
+  const baseFold = { type: 'fold', request: 1, bytes: new Uint8Array([1]).buffer, pattern: '{}', measurements: '{}', fit: '{}', selfContactMm: 2, twoStart: false, armDeg: 35 };
+  assert.equal((await mw.send({ ...baseFold, staticEquilibrium: { correction_tolerance_m: 1e-6, max_newton_iterations: 250 } })).type, 'result');
+  assert.equal(mCalls.at(-1).path, 'configured');
+  assert.deepEqual(plain(mCalls.at(-1).settings.static_equilibrium), { correction_tolerance_m: 1e-6, max_newton_iterations: 250 });
+  assert.equal((await mw.send({ ...baseFold, request: 2, bytes: new Uint8Array([1]).buffer, staticEquilibrium: { correction_tolerance_m: 0, max_newton_iterations: 250 } })).type, 'error');
+
+  // 3. Pattern workbench (index.html): staticEquilibrium dispatch, available/refused summary display, invalidation, bidirectional handoffs.
+  const idx = draftingPage();
+  idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  idx.e.bodyFile.files = [new Blob([new Uint8Array([1])])];
+  await idx.e.bodyFile.handlers.change();
+  idx.worker.onmessage({ data: { type: 'bodyReady', request: idx.messages.findLast(m => m.type === 'body').request } });
+  await idx.e.go.handlers.click();
+  idx.worker.onmessage({ data: { type: 'result', request: idx.messages.findLast(m => m.type === 'run').request,
+    res: { title: 'Bolero', status: 'CONVERGED', basis: {}, zip: 'r.zip' }, blobs: {}, foldable: true, bodyCheckable: true,
+    roundSources: { pattern: '{}', measurements: '{}', fit: '{}' } } });
+  idx.e.staticEquilibrium.checked = true; idx.e.staticEquilibrium.handlers.change();
+  assert.equal(idx.e.staticTolMm.disabled, false);
+  idx.e.staticTolMm.value = '0.002'; idx.e.staticMaxNewton.value = '180';
+  idx.e.foldGo.handlers.click();
+  const idxFold = idx.messages.findLast(m => m.type === 'fold');
+  assert.deepEqual(plain(idxFold.staticEquilibrium), { correction_tolerance_m: 2e-6, max_newton_iterations: 180 });
+  const idxRep = { settled: true, gating: [], body: { legs: 'standing', leg_fraction: 1 },
+    static_equilibrium: { status: 'available', result: { max_displacement_m: 0.0015, rms_displacement_m: 0.0005, solve: { iterations: 9 } } } };
+  idx.worker.onmessage({ data: { type: 'folded', request: idxFold.request, report: idxRep, reportText: JSON.stringify(idxRep), viewer: '<html/>' } });
+  assert.match(idx.e.foldSummary.innerHTML, /Static equilibrium \(frictionless comparison\): available — max Δ 1\.500 mm, RMS 0\.500 mm \(9 Newton iters\)/);
+  idx.e.staticTolMm.value = '0.005'; idx.e.staticTolMm.handlers.input();
+  assert.equal(idx.e.foldSummary.textContent, '', 'editing staticTolMm on index.html must invalidate prior fold summary');
+
+  // Round handoff -> materials.html preserves static_equilibrium and refuses invalid bounds.
+  const eqToken = '7'.repeat(32);
+  const hq = await pageModule({ roundToken: eqToken });
+  const hFiles = { pattern: new Blob(['{"pieces":[{"id":"front"}]}']), measurements: new Blob(['{}']), fit: new Blob(['{}']) };
+  await hq.windowEvents.message({ origin: 'https://unit.invalid', source: hq.opener, data: { type: 'ftx-round-sources', token: eqToken, files: hFiles,
+    bodySource: { model: new Blob([new Uint8Array([1])]) },
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+      static_equilibrium: { correction_tolerance_m: 2e-6, max_newton_iterations: 180 } } } });
+  assert.equal(hq.e.staticEquilibrium.checked, true);
+  assert.equal(hq.e.staticTolMm.value, '0.002');
+  assert.equal(hq.e.staticMaxNewton.value, '180');
+  assert.equal(hq.e.staticTolMm.disabled, false);
+
+  const revEqToken = '8'.repeat(32);
+  const revEq = draftingPage({ materialToken: revEqToken });
+  revEq.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await revEq.windowEvents.message({ origin: 'https://unit.invalid', source: revEq.opener, data: {
+    type: 'ftx-material-pattern', token: revEqToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '3'.repeat(64),
+    evaluatedInputs: {
+      fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        static_equilibrium: { correction_tolerance_m: 1e-6, max_newton_iterations: 220 } }
+    }
+  } });
+  assert.equal(revEq.e.staticEquilibrium.checked, true);
+  assert.equal(revEq.e.staticTolMm.value, '0.001');
+  assert.equal(revEq.e.staticMaxNewton.value, '220');
+
+  // 4. Guided material scenario static_equilibrium: omitted by default, inactive draft safe, opt-in dispatched & summarized.
+  const { p: gs } = await guidedScenarioSetup(true);
+  assert.equal(gs.e.guidedScenarioStaticTolMm.disabled, true);
+  await gs.e.scenario.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(gs.current().messages.at(-1).scenarioRequest).options, 'static_equilibrium'), false);
+  gs.emit(scenarioReport());
+  const out = section(gs, 'Fresh drape and heat alternatives');
+  gs.e.guidedScenarioStaticMaxNewton.value = '9999'; gs.e.guidedScenarioStaticMaxNewton.handlers.input();
+  assert.equal(out.hidden, false, 'inactive static_equilibrium edits must not invalidate prior scenario');
+  gs.e.guidedScenarioStaticEquilibrium.checked = true; gs.e.guidedScenarioStaticEquilibrium.handlers.change();
+  assert.equal(out.hidden, true);
+  assert.equal(gs.e.guidedScenarioStaticTolMm.disabled, false);
+  const beforeBadScen = gs.current().messages.length;
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeBadScen);
+  gs.e.guidedScenarioStaticTolMm.value = '0.002'; gs.e.guidedScenarioStaticMaxNewton.value = '200';
+  await gs.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(gs.current().messages.at(-1).scenarioRequest).options.static_equilibrium,
+    { correction_tolerance_m: 2e-6, max_newton_iterations: 200 });
+  gs.emit(scenarioReport());
+  const { p: gm } = await guidedScenarioSetup(); guidedNamedCases(gm);
+  gm.e.guidedScenarioStaticEquilibrium.checked = true; gm.e.guidedScenarioStaticEquilibrium.handlers.change();
+  gm.e.guidedScenarioStaticTolMm.value = '0.002'; gm.e.guidedScenarioStaticMaxNewton.value = '200';
+  await saveGuidedCase(gm, 'static_cmp');
+  assert.match(descendants(gm.e.guidedScenarioCases).map(n => n.textContent).join(' '), /static equilibrium \(0\.002 mm, 200 iters\)/);
+
+  // 5. Guided fractional-Zener lowering form: file mode default unchanged; form mode authors valid JSON with/without replay, invalidates, refuses invalid.
+  const vp = await pageModule();
+  assert.equal(vp.e.viscoForm.hidden, true);
+  assert.equal(vp.e.lowerVisco.disabled, true);
+  vp.e.viscoMode.value = 'form'; vp.e.viscoMode.handlers.change();
+  assert.equal(vp.e.viscoForm.hidden, false);
+  assert.equal(vp.e.lowerVisco.disabled, false);
+  await vp.e.lowerVisco.onclick();
+  let vReq = JSON.parse(vp.current().messages.at(-1).viscoRequest);
+  assert.equal(vReq.schema, 'ftx-fractional-zener-lowering/1');
+  assert.equal(vReq.e0, 200); assert.equal(vReq.e_inf, 500); assert.equal(vReq.alpha, 0.35);
+  assert.equal(Object.hasOwn(vReq, 'replay_steps'), false);
+  vp.emit({ schema: 'ftx-fractional-zener-lowering-report/1', terms: [] }, [{ name: 'viscoelastic-lowering-report.json', text: '{}', mime: 'application/json' }]);
+  const vSec = section(vp, 'Fractional viscoelastic Prony lowering');
+  assert.equal(vSec.hidden, false);
+  vp.e.viscoReplayEnabled.checked = true; vp.e.viscoReplayEnabled.handlers.change();
+  assert.equal(vSec.hidden, true);
+  assert.equal(vp.e.viscoReplayFields.hidden, false);
+  await vp.e.lowerVisco.onclick();
+  vReq = JSON.parse(vp.current().messages.at(-1).viscoRequest);
+  assert.equal(vReq.replay_steps.length, 4);
+  assert.deepEqual(vReq.replay_steps[0], { dt_s: 0.05, strain: 0.02 });
+  vp.emit({ schema: 'ftx-fractional-zener-lowering-report/1', terms: [] }, [{ name: 'viscoelastic-lowering-report.json', text: '{}', mime: 'application/json' }]);
+  vp.e.viscoAlpha.value = '1.2';
+  const beforeBadVisco = vp.current().messages.length;
+  await vp.e.lowerVisco.onclick();
+  assert.equal(vp.current().messages.length, beforeBadVisco);
+  assert.match(vp.e.error.textContent, /alpha/);
+  // Selecting a JSON file switches back to file mode cleanly.
+  vp.select('viscoRequest', '{"schema":"ftx-fractional-zener-lowering/1"}');
+  vp.e.viscoRequest.handlers.change();
+  assert.equal(vp.e.viscoMode.value, 'file');
+  assert.equal(vp.e.viscoForm.hidden, true);
 });
