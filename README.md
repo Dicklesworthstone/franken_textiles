@@ -23,11 +23,12 @@ the evidence of fit on the wearer.
 It is the mechanical core of the `fabric-pattern-creation-and-alteration` agent skill, rebuilt in Rust so it
 is deterministic, testable against known answers, and runs in a browser with nothing to install.
 
-In this synthetic bolero fitting, the simulated cuffs covered most of the hands. Shortening the
-sleeve draft by 50 mm brought the cuffs back towards the wrists. Both rounds used the same body,
-pose, material and fit contract. [Run the visual fitting skill](.agents/skills/visual-pattern-fitting/SKILL.md).
+In this archived synthetic bolero study, shortening the sleeve draft by 50 mm brought the cuffs
+towards the wrists. The flat-pattern check passed on the shorter cut. The current full-body
+replay audit detects a crossing in both recordings at frame 87. Open the shared-camera review to
+see the cuff edit and its unresolved contact problem. [Run the visual fitting skill](.agents/skills/visual-pattern-fitting/SKILL.md).
 
-![Front views of the same bolero before and after shortening its sleeves, with the flat sleeve outlines for comparison](showcase/public/fittings/sleeve-revision.png)
+![Detail of the two bolero cuffs from the same camera beside their flat sleeve outlines. Both archived trajectories failed the full-body contact audit.](showcase/public/fittings/sleeve-contact-review.png)
 
 **[The Pattern Room](showcase/README.md)** lets you pose an adult dress form inside a fixed sundress,
 compare two Swedish hussar uniforms from 1761, or follow a single flat sleeve into a sewn bolero.

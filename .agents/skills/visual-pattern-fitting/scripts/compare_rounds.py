@@ -111,6 +111,24 @@ def common_view(rows, view, out, ftx):
     return aligned, f"Shared baseline camera · {body}"
 
 
+def contact_status(row, ftx):
+    if row.title != "Drape":
+        return "Diagnostic state"
+    command = [ftx, "viewer", str(row.scene), "--check-contact", "--json"]
+    process = subprocess.run(command, stdout=subprocess.PIPE, check=False)
+    try:
+        reply = json.loads(process.stdout)
+    except ValueError:
+        return "Full-body contact check unavailable"
+    if process.returncode == 0 and reply.get("ok") is True:
+        count = reply["result"]["checked_frames"]
+        if type(count) is int and count > 0:
+            return f"Full-body contact clear · {count} recorded frames"
+    if (reply.get("refusal") or {}).get("code") == "intersecting_trajectory":
+        return "Full-body contact · crossing detected"
+    return "Full-body contact check unavailable"
+
+
 def compare(before, after, view, instance, crop, views_dir=None, ftx="ftx"):
     rows = [load_panel(rd, view, instance) for rd in (before, after)]
     sizes = [rows[0].size] if views_dir is not None else [row.size for row in rows]
@@ -127,7 +145,7 @@ def compare(before, after, view, instance, crop, views_dir=None, ftx="ftx"):
     framing = None
     if views_dir is not None:
         rows, framing = common_view(rows, view, views_dir, ftx)
-    canvas_height = 442 if framing else 410
+    canvas_height = 466 if framing else 410
     parts = ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
              f'width="1200" height="{canvas_height}" viewBox="0 0 1200 {canvas_height}">',
              f'<rect width="1200" height="{canvas_height}" fill="#f5f1e7"/>']
@@ -149,7 +167,11 @@ def compare(before, after, view, instance, crop, views_dir=None, ftx="ftx"):
                      f'xlink:href="data:image/png;base64,{base64.b64encode(png).decode()}"/></svg>')
         label(x, 367, f'Flat · {entry["basis"]["flat"]}', 15)
         state = entry["sim"]["refusal"]["code"] if refused else entry["basis"]["sim"]
-        label(x, 391, f'{title} · {state}', 15)
+        report_title = "Saved solver report" if framing and not refused else title
+        label(x, 391, f'{report_title} · {state}', 15)
+        if framing:
+            contact = contact_status(rows[i], ftx)
+            label(x, 415, contact, 15, "#9a3229" if "crossing" in contact else "#293934")
         coords = " ".join(f"{1053+x*scale:.2f},{56+y*scale:.2f}" for x,y in outline)
         dash = ' stroke-dasharray="6 4"' if i == 0 else ''
         outlines.append(f'<polygon points="{coords}" fill="none" stroke="{ink}" stroke-width="2.5"{dash}/>')
@@ -158,7 +180,7 @@ def compare(before, after, view, instance, crop, views_dir=None, ftx="ftx"):
     parts.extend(reversed(outlines))
     label(930, 29, f'{instance} · flat overlay', 18)
     if framing:
-        label(15, 420, framing, 15)
+        label(15, 444, framing, 15)
     parts.append("</svg>")
     return "\n".join(parts)
 

@@ -94,6 +94,10 @@ The view uses the baseline field of view, so look at the original views as well 
 extends beyond the frame. Leave off `--shared-camera` to read an archive that only has original
 stills. Use the original PNGs for `inspect-pixel` on each round.
 
+Shared-camera comparisons check the recorded frames of completed drapes against the displayed
+body and cloth. Treat a crossing as a failed contact check even if the archived solver report
+shows no gating flags. Missing or unsupported recordings show the check as unavailable.
+
 Each side is labelled with the evidence it shows. “Refused start”
 shows the pre-sewn placement before dynamics. “Refused pose” shows the state recorded by a failed
 solve. Both retain the original refusal code.
@@ -125,6 +129,7 @@ ftx round "$work" --pattern "$work/shorter/pattern.json" --as-of 2026-10-13 \
   --stills --res 840x620 --self-contact-mm 2 --note "Check cuff clearance after shortening the sleeve by 50 mm"
 ```
 
-The baseline exits 2 for excess sleeve length. In the revised front view the hands are exposed.
-The finished sleeve measures 335 mm against the 320 mm reference arm. The measurements are chart
-estimates, and the cloth response is simulated.
+The original archive failed the flat sleeve-length check at 385 mm. The 335 mm revision restores
+the intended view of the hands in the saved stills. Current full-body replay checks find crossings
+in both archived runs at physical frame 87. A current round can refuse there and leave a
+diagnostic still. Both cuts need a new contact-clear drape before they can support a cuff assessment.

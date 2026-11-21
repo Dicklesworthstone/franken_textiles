@@ -57,13 +57,13 @@ export default function HowItWorks() {
       <div className="ft-block-head"><p className="kicker">A visual fitting</p><h2>Let the hands show.</h2>
         <p>Two bolero cuts, one reference body and one change to the flat pattern.</p></div>
       <div className="ft-prose">
-        <a href="/fittings/sleeve-revision.png"><img src="/fittings/sleeve-revision.png" width="2000" height="683"
-          style={{width:"100%",height:"auto"}} alt="The original cuffs cover the hands. The revised cuffs end near the wrists. The flat sleeve outlines share the same cap and differ at the hem."/></a>
-        <p>Both drapes settled. In the first front view, most of each hand was still inside a sleeve.
-          A pixel at the left cuff traced back to the <code>hem</code> edge of the <code>sleeve</code> pattern piece.
-          Shortening the draft from 385 to 335 mm exposed the hands while keeping the sleeve cap and body cut.</p>
-        <p>The revised sleeve is 15 mm longer than the reference arm. Both runs used the same pose, material and
-          body measurements. A wearing trial would establish how the cuff sits on a person.</p>
+        <a href="/fittings/sleeve-contact-review.png"><img src="/fittings/sleeve-contact-review.png" width="2000" height="777"
+          style={{width:"100%",height:"auto"}} alt="The two bolero cuffs from the same camera beside their flat sleeve outlines. Both archived trajectories failed the full-body contact audit."/></a>
+        <p>A pixel at the left cuff traces back to the <code>hem</code> edge of the <code>sleeve</code> pattern.
+          Shortening the draft from 385 to 335 mm moves the cuff towards the wrist and passes the flat-pattern check.
+          Both views use the same body and camera.</p>
+        <p>The current contact audit finds the cloth crossing the displayed body at frame 87 in both archived
+          drapes. The raised-arm example below shows a revised placement that passed its contact checks.</p>
         <div className="ft-hero-actions"><a className="ft-text-link" href="/fittings/bolero-revision-A4.pdf" download>
           Print the revised A4 pattern <span aria-hidden="true" className="arrow"/></a>
           <a className="ft-text-link" href={repo+"/blob/main/.agents/skills/visual-pattern-fitting/SKILL.md"}>
