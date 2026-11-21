@@ -8,6 +8,8 @@ export interface SiteLink { href: string; label: string; note: string }
 export const exhibits: SiteLink[] = [
   { href: "/studies/skirt/", label: "Skirt atelier", note: "Compare two hems on fitted adult forms" },
   { href: "/#drape-room", label: "Drape room", note: "Sew five flat pieces onto a fitted body" },
+  { href: "/studies/trousers/", label: "Trouser study", note: "Bend knees, test elastic grip, and slice through sewn folds" },
+  { href: "/#visual-fitting", label: "Visual fitting", note: "Trace rendered pixels back to flat pattern edges" },
   { href: "/#wardrobe", label: "Wardrobe", note: "A sundress and Swedish hussars of 1761 and 1765" },
   { href: "/#studio", label: "Studios", note: "Draft a pattern, lay it on the roll, follow the needle" },
   { href: "/#materials", label: "Materials", note: "Pull and twist cloth between two grips" },
@@ -34,5 +36,5 @@ export const project: SiteLink[] = [
   { href: "/get-started/", label: "Get started", note: "Open a workbench or build the command-line tool" },
 ];
 
-// Header shows the first four exhibits; the rest live in the menu and the footer.
-export const primary = exhibits.filter(item => ["Wardrobe", "Studios", "Materials", "Films"].includes(item.label));
+// Header shows the five core destinations; the full exhibition index lives in the menu and the footer.
+export const primary = exhibits.filter(item => ["Drape room", "Wardrobe", "Studios", "Materials", "Films"].includes(item.label));

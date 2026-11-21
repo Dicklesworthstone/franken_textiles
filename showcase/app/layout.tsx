@@ -7,7 +7,7 @@ import "@fontsource/instrument-serif/latin-400-italic.css";
 import "./style.css";
 import { repo, siteOrigin } from "../components/site/links";
 
-const description = "Change the cut of a six-panel skirt on a fitted adult form. Explore native cloth physics, pose a tailored bolero and print the full-size sewing patterns.";
+const description = "Deterministic sewing patterns, parametric Anny bodies, and contact-correct cloth draping in Rust and WebAssembly. Inspect pixel-to-pattern fits, test fabrics, and print full-size patterns locally.";
 
 export const metadata: Metadata = {
   title: "FrankenTextiles — The Pattern Room",

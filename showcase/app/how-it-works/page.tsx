@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import CodeBlock from "../../components/site/CodeBlock";
 import SitePage from "../../components/site/SitePage";
 import { Claims, Pipeline } from "../../components/site/Story";
 import { repo } from "../../components/site/links";
@@ -9,14 +10,29 @@ export const metadata: Metadata = {
   alternates: { canonical: "/how-it-works/" },
 };
 
-// Figures and statuses below are taken from the repository README (2026-11-18). Update them together.
+// Figures and statuses below are taken from the repository README (2026-11-19) and FEATURE_PARITY.md. Update them together.
 const gates = [
-  ["G1 · Body", "The Rust body model stays within 0.05 mm of the model it was ported from, and fitting recovers synthetic tape targets within 3 mm.", "Passed 12 October 2026", "passed"],
-  ["G2 · Drape", "The known-answer tests pass, and real garments settle on fitted bodies within budget.", "Passed historically · qualification open", "open"],
-  ["G3 · Port", "Patterns, validation, drafting and exports pass their fixtures, and a full round runs through the command-line tool.", "Passed 13 October 2026", "passed"],
-  ["G4 · Browser", "The browser build matches the reference on its 25 cases and drapes garments bit-identically to the command line.", "Passed historically · qualification open", "open"],
-  ["G5 · Gauntlet", "A multi-round audit of parity, physics and the whole surface.", "Required before version 1.0", "open"],
+  ["G1 · Body", "The Rust Anny 0.6.1 forward model stays within 0.05 mm of upstream PyTorch (matching to 1e-14 m), and tape fitting recovers synthetic targets within 3 mm.", "Passed 12 October 2026 · 7/7 strict chart fit passing", "passed"],
+  ["G2 · Drape", "Closed-form known-answer tests pass, and drafted garments settle on fitted toddler bodies within budget with body and 2 mm cloth self-contact.", "Historical pass · 6/6 fitted KATs passing · full-body replay & physical fit open", "open"],
+  ["G3 · Port", "Patterns, validation, drafting and exports pass their oracle fixtures, and a complete numbered round runs through the ftx CLI.", "Passed 13 October 2026", "passed"],
+  ["G4 · Browser", "The WebAssembly build matches the reference on all 25 oracle cases and drapes garments bit-identically to the command line.", "Historical pass · 4.3 MiB gz bundle · broader browser qualification open", "open"],
+  ["G5 · Gauntlet", "A convergent multi-round audit of parity, physics, benchmarks and surface completeness before version 1.0.", "Required before version 1.0", "open"],
 ] as const;
+
+const dagLayers = [
+  ["Layer 0 · Core", ["ftx-core"]],
+  ["Layer 1 · Domain", ["ftx-pattern", "ftx-body", "ftx-measure"]],
+  ["Layer 2 · Solvers & I/O", ["ftx-drape", "ftx-export", "ftx-trace"]],
+  ["Layer 3 · Surfaces", ["ftx-cli", "ftx-wasm", "ftx-conformance"]],
+] as const;
+
+const inspectCmd = `# trace a pixel on the rendered front still back to pattern.json
+ftx inspect-pixel work/rounds/000 --view front --pixel 597,415 --json
+> hit.instance = "sleeve.L"  hit.nearest_edge = "hem"
+
+# re-run the 335 mm cut with opt-in knuckle contact and audit every frame
+ftx round work --pattern shorter/pattern.json --stills --self-contact-mm 2 --hands knuckle
+ftx viewer work/rounds/001/sim --check-contact --json`;
 
 const crates = [
   ["ftx-core", "Units, deterministic maths, curves, polygons, schemas and structured refusals."],
@@ -57,21 +73,21 @@ export default function HowItWorks() {
       <div className="ft-block-head"><p className="kicker">A visual fitting</p><h2>Let the hands show.</h2>
         <p>Two bolero cuts, one reference body and one change to the flat pattern.</p></div>
       <div className="ft-prose">
-        <a href="/fittings/sleeve-contact-review.png"><img src="/fittings/sleeve-contact-review.png" width="2000" height="777"
-          style={{width:"100%",height:"auto"}} alt="The two bolero cuffs from the same camera beside their flat sleeve outlines. Both archived trajectories failed the full-body contact audit."/></a>
+        <a className="ft-visual-frame" href="/fittings/sleeve-contact-review.png"><img src="/fittings/sleeve-contact-review.png" width="2000" height="777"
+          alt="The two bolero cuffs from the same camera beside their flat sleeve outlines. Both archived trajectories failed the full-body contact audit."/></a>
         <p>A pixel at the left cuff traces back to the <code>hem</code> edge of the <code>sleeve</code> pattern.
           Shortening the draft from 385 to 335 mm moves the cuff towards the wrist and passes the flat-pattern check.
           Both views use the same body and camera.</p>
-        <p>The current contact audit finds the cloth crossing the displayed body at frame 87 in both archived
-          drapes.</p>
-        <figure style={{display:"flex",alignItems:"center",gap:"1rem",margin:"1.25rem 0"}}>
+        <p>The current full-body contact audit finds the cloth crossing the displayed body at frame 87 in both archived
+          wrist-collider drapes — neither the contact audit nor the oracle-frozen bolero draft is weakened to hide it.</p>
+        <figure className="ft-knuckle-card">
           <img src="/fittings/sleeve-knuckle-review.png" width="166" height="268" loading="lazy"
-            style={{width:"min(36vw, 166px)",height:"auto",flexShrink:0}}
             alt="The revised 335 mm sleeve ends just above the hand in the new knuckle-collider run."/>
-          <figcaption>A fresh run of the 335 mm cut with <code>--hands knuckle</code> passed the flat check
-            and the full-body contact audit across all 49 recorded physical frames. The 385 mm cut still
-            needs a contact-clear run.</figcaption>
+          <figcaption>A fresh run of the 335 mm cut with opt-in <code>--hands knuckle</code> passed the flat check
+            and the full-body contact audit across all 49 recorded physical frames. The 385 mm cut over the hand still
+            refuses honestly — now with a picture of where it starts through the hand.</figcaption>
         </figure>
+        <CodeBlock title="Pixel-to-pattern inspection and knuckle contact audit" code={inspectCmd}/>
         <div className="ft-hero-actions"><a className="ft-text-link" href="/fittings/bolero-revision-A4.pdf" download>
           Print the revised A4 pattern <span aria-hidden="true" className="arrow"/></a>
           <a className="ft-text-link" href={repo+"/blob/main/.agents/skills/visual-pattern-fitting/SKILL.md"}>
@@ -83,8 +99,8 @@ export default function HowItWorks() {
       <div className="ft-block-head"><p className="kicker">A refused start</p><h2>When the sleeves cross.</h2>
         <p>One bolero cut on the same synthetic 54 cm chest, with both arms raised to 90°.</p></div>
       <div className="ft-prose">
-        <a href="/fittings/bolero-raised-start.png"><img src="/fittings/bolero-raised-start.png" width="2000" height="683"
-          loading="lazy" style={{width:"100%",height:"auto"}} alt="Two back views of the bolero, with a yellow contact mark at the right shoulder of the refused start. The flat back-panel outlines coincide."/></a>
+        <a className="ft-visual-frame" href="/fittings/bolero-raised-start.png"><img src="/fittings/bolero-raised-start.png" width="2000" height="683"
+          loading="lazy" alt="Two back views of the bolero, with a yellow contact mark at the right shoulder of the refused start. The flat back-panel outlines coincide."/></a>
         <p>Six pairs of cloth triangles crossed before sewing began. Picking a marked pixel on the back led to the right armhole in the flat pattern. Moving the five cut pieces 30 mm along their starting axes let the sleeves clear the jacket. Their cutting lines stayed in the same place.</p>
         <p>The revised drape passed its contact checks. With the arms raised, the bolero still rode up 28 mm and the chest fabric stretched by 1.6% on average. The separate flat-pattern check remained open in both rounds.</p>
         <div className="ft-hero-actions"><a className="ft-text-link" href="/patterns/bolero.pdf" download>Print this bolero at actual size</a>
@@ -161,24 +177,31 @@ export default function HowItWorks() {
 
     <section className="ft-block" id="status"><div className="wrap ft-block-grid">
       <div className="ft-block-head"><p className="kicker">Honest status</p><h2>Where it stands.</h2>
-        <p>In development. The plan names gates that can stop the body port or the cloth solver early. As of 18 November 2026:</p></div>
+        <p>In development. The plan names falsifiable kill gates that can stop the body port or cloth solver early. Verified as of 19 November 2026:</p></div>
       <div>
         <dl className="ft-rows">{gates.map(([name, text, status, state]) => <div key={name}>
           <dt>{name}</dt><dd>{text}<br/><span className="ft-status" data-state={state}>{status}</span></dd></div>)}</dl>
         <div className="ft-prose" style={{marginTop:24}}>
-          <p>Two checks still fail: the strict fit check against chart sizes, and one fitted drape that no longer matches its recorded result
-            bit for bit. Full qualification, including physical fit and performance, remains open.</p>
-          <p>One timing has been measured properly. In a browser on an Apple M5 Ultra, over 20 runs each, the bolero drape took 16.7 s at the
-            median and the trousers 46.0 s. That is one machine and one workload, and is not a comparison with other software.</p>
-          <p><a href={`${repo}/blob/main/FEATURE_PARITY.md`}>Read the full parity status</a> for what is present, partial and missing.</p>
+          <p><strong>Current verification (19 November 2026):</strong> the strict 92 cm chart tape-fit suite (<code>fit_tape</code>, 7/7, all 21 targets within G1b tolerances), independent tape qualification (7/7), Anny forward/pose parity (4/4 + 2/2, including opt-in Dual-Quaternion Skinning volume-collapse checks cutting deep-bend volume loss 4.0×–7.3×), and all six fitted-garment KATs (<code>kat_fitted</code>, 6/6) now pass. All three nominal boleros (80, 92 and 116 cm) settle at the full 1.5 mm body offset with zero gating or advisory flags; the 92 cm chart trousers recover a fully audited complete-block start; and <code>kat9_fitted_pipeline_digest</code> matches bit-for-bit between native debug and release (<code>91e3738f…</code>, 2073 vertices).</p>
+          <p><strong>Browser build &amp; open items:</strong> the <code>wasm-release</code> bundle is 15 MiB raw / 4.3 MiB gzipped (down from 27.95 MiB) and passes all WASM-vs-native parity suites, 967/967 pure-Node frontend tests, and all three Chromium E2E suites. On the default 92 cm bolero draft, the strict full-body <code>ReplayContact::check</code> detects a cuff-to-displayed-hand crossing at frame 87 (opt-in <code>--hands knuckle</code> passes on the 335 mm cut while honestly refusing the 385 mm cut). Full candidate, physical-fit and performance qualification remain open.</p>
+          <p><strong>Bounded browser benchmark:</strong> on an Apple M5 Ultra over 20 retained runs each after three warmups, warm browser folds with 2 mm self-contact took <strong>16.66 s</strong> median / <strong>17.43 s</strong> p95 for the bolero and <strong>45.96 s</strong> / <strong>46.80 s</strong> for the trousers. That is one desktop browser workload, not a general speed comparison.</p>
+          <p><a href={`${repo}/blob/main/FEATURE_PARITY.md`}>Read the full parity status</a> for every present, partial, missing and excluded item.</p>
         </div>
       </div>
     </div></section>
 
     <section className="ft-block"><div className="wrap ft-block-grid">
       <div className="ft-block-head"><p className="kicker">Inside</p><h2>Ten Rust crates.</h2>
-        <p>No unsafe code, and no Python, C or C++ at run time. The browser workbenches run the same crates.</p></div>
-      <dl className="ft-rows">{crates.map(([name, text]) => <div key={name}><dt><code>{name}</code></dt><dd>{text}</dd></div>)}</dl>
+        <p>Strict acyclic dependency graph, <code>#![forbid(unsafe_code)]</code> everywhere, and zero Python, PyTorch, BLAS, or C/C++ FFI at runtime. The browser workbenches run the exact same crates.</p></div>
+      <div>
+        <div className="ft-dag" aria-label="Workspace crate dependency layers">
+          {dagLayers.map(([layer, items]) => <div key={layer} className="ft-dag-row">
+            <span className="mono">{layer}</span>
+            <div className="ft-dag-chips">{items.map(name => <code key={name}>{name}</code>)}</div>
+          </div>)}
+        </div>
+        <dl className="ft-rows">{crates.map(([name, text]) => <div key={name}><dt><code>{name}</code></dt><dd>{text}</dd></div>)}</dl>
+      </div>
     </div></section>
 
     <section className="ft-block"><div className="wrap ft-block-grid">

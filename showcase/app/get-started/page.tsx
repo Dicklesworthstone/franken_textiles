@@ -37,17 +37,30 @@ const own = `
 ftx measure init --label demo --stature 92cm --age-months 30 --out mine.json
 ftx measure add mine.json --name chest --value 52cm
 `;
+const materialsDemo = `
+# browse the 449 built-in source-bearing textile records
+ftx materials list --json
+
+# run the self-contained synthetic transient exterior heat example
+cargo run -p ftx-cli --bin ftx-materials -- thermal-transient \\
+  tests/fixtures/materials/synthetic-transient-exterior.json
+`;
 const commands = [
-  ["ftx draft", "Draft a bolero, trousers or a fez to a measurements file."],
+  ["ftx draft", "Draft a bolero, trousers or a fez to measurements or a fitted Anny body."],
   ["ftx validate", "Walk every seam and check every fit point on the flat pattern."],
-  ["ftx alter", "Slash and spread, move a point, true a seam, ease a sleeve cap, or transfer a curve."],
-  ["ftx trace", "Trace a PNG, JPEG or WebP pattern sheet into pieces for review."],
-  ["ftx body", "Fit the body model to tape measurements and write the body on its own."],
-  ["ftx drape", "Sew a pattern around the fitted body and report the fit flags."],
-  ["ftx export", "Write the PDFs, SVG, DXF, HPGL, cutter and embroidery files, with their checks."],
-  ["ftx round", "Run the measurement gate, the flat check, the drape and the exports as one numbered round."],
-  ["ftx measure", "Start and extend a measurements file, or recover scale from a photograph."],
-  ["ftx materials", "Inspect sourced cloth records and bind them to a pattern."],
+  ["ftx alter", "Slash and spread, move a vertex, true a seam, ease a sleeve cap, or transfer a curve."],
+  ["ftx import garmentcode", "Convert evaluated GarmentCode panels (with explicit circular-arc tolerances) to native pattern.json."],
+  ["ftx trace", "Trace a PNG, JPEG or WebP pattern sheet in pure Rust; pair with ftx annotate, scale-fit and audit."],
+  ["ftx body", "Fit the Anny 0.6.1 body model to tape measurements or multi-frame reports (supports --skinning lbs|dqs)."],
+  ["ftx place", "Preview wrapped and pre-sewn starting placements as stills in seconds, without running the solver."],
+  ["ftx drape", "Sew a pattern or multi-garment outfit with IPC contact, friction, --time-subdivision and --hands knuckle."],
+  ["ftx inspect-pixel", "Map any rendered PNG pixel deterministically back to its physical panel and nearest flat pattern edge."],
+  ["ftx viewer", "Build an offline 3D fold-up HTML page or audit every recorded frame with --check-contact."],
+  ["ftx qualify", "Run three chest qualification bands (−20 / 0 / +20 mm) around a fitted torso collider."],
+  ["ftx export", "Write tiled PDFs, copy-shop & projector PDFs, SVG, DXF, HPGL, cutter, GarmentCode and DST + 51 checks."],
+  ["ftx round", "Run the measurement gate, flat checks, drape/stills and exports in one immutable numbered directory."],
+  ["ftx measure", "Manage measurements, generate ChArUco sheets, calibrate lenses, scale photos and fit bodies from frames."],
+  ["ftx materials / ftx-materials", "Inspect 449 sourced fabrics, apply wash shrinkage, run thermal/strip/cylinder physics and plan production."],
 ] as const;
 
 export default function GetStarted() {
@@ -108,9 +121,18 @@ export default function GetStarted() {
       </div>
     </div></section>
 
+    <section className="ft-block" id="materials-cli"><div className="wrap ft-block-grid">
+      <div className="ft-block-head"><p className="kicker">Materials &amp; heat</p><h2>Inspect fabrics and run thermal studies.</h2>
+        <p>Every record retains its original observations and names its mechanical or thermal gaps instead of inventing numbers.</p></div>
+      <div className="ft-stack">
+        <div className="ft-prose"><p>Browse the 449 built-in records (linen, muslin, habotai silk, 33 Sperl 2022 knits, 10 Wang 2011 specimens, bovine leather groups and laundered denim pairs), or run the self-contained synthetic transient exterior heat example (its numbers demonstrate the solver, not a real fabric).</p></div>
+        <CodeBlock title="Sourced textile catalog & transient heat" code={materialsDemo}/>
+      </div>
+    </div></section>
+
     <section className="ft-block"><div className="wrap ft-block-grid">
       <div className="ft-block-head"><p className="kicker">Reference</p><h2>The commands.</h2>
-        <p>Each prints plain text, or a stable JSON envelope with <code>--json</code>. Run <code>ftx --help</code> for every option.</p></div>
+        <p>Each prints plain text, or a stable JSON envelope with <code>--json</code>. Run <code>ftx --help</code> or <code>ftx-materials --help</code> for every option.</p></div>
       <dl className="ft-rows">{commands.map(([name, text]) => <div key={name}><dt><code>{name}</code></dt><dd>{text}</dd></div>)}</dl>
     </div></section>
 

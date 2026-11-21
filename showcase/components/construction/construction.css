@@ -1,23 +1,36 @@
-.construction-study{display:grid;grid-template-columns:minmax(240px,.64fr) minmax(0,1.36fr);background:#eee7d9;color:#302b24;margin:0 auto 34px;isolation:isolate;text-align:left;overflow:hidden}
-.construction-study .construction-copy{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding:clamp(25px,4vw,69px);min-width:0}
-.construction-study .construction-eyebrow,.construction-study .construction-spec,.construction-select{font:500 10px/1.4 var(--mono);letter-spacing:.075em;text-transform:uppercase}
-.construction-study .construction-eyebrow{margin:0 0 22px;color:#69553e}
-.construction-study h1,.construction-study h2{font:400 clamp(42px,5.3vw,88px)/.91 var(--serif);letter-spacing:-.043em;margin:0 0 23px;color:#292b25}
-.construction-study h1 em,.construction-study h2 em{font-weight:400;color:#87402f}
-.construction-study h3,.construction-study .construction-select select{font:400 clamp(23px,2vw,33px)/1.16 var(--serif);letter-spacing:-.02em;color:#2b3029}
-.construction-study h3{margin:0}.construction-select{display:grid;gap:5px;color:#665a48;width:100%;max-width:310px}
-.construction-select select{width:100%;padding:5px 20px 8px 0;background:transparent;border:0;border-radius:0;border-bottom:1px solid #9c9181;cursor:pointer}
-.construction-study .construction-spec{color:#655443;margin:13px 0 9px}
-.construction-study .construction-description{font:400 clamp(14px,1.2vw,17px)/1.55 var(--sans);max-width:36ch;margin:0;color:#49463b}
-.construction-links{display:flex;gap:10px 17px;flex-wrap:wrap;margin-top:23px}.construction-links a{font:500 12px var(--sans);text-decoration:underline;text-underline-offset:4px}
-.construction-motion{min-width:0;background:#292d28;align-self:stretch;display:flex;flex-direction:column}
-.construction-image{position:relative;aspect-ratio:800/540;flex:1;min-height:0;overflow:hidden;background:#756c61}
-.construction-image video,.construction-image .construction-still{width:100%;height:100%;position:absolute;inset:0;object-fit:contain;background:#756c61}
-.construction-motion .construction-transport{position:absolute;bottom:12px;left:14px;border:1px solid #fff5;border-radius:30px;display:inline-flex;gap:9px;align-items:center;background:#232620e8;color:#fff8e8;padding:9px 14px;min-height:36px;font:500 12px var(--sans);cursor:pointer}
-.construction-chapters{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#51554c}
-.construction-motion .construction-chapters button{display:flex;align-items:center;gap:9px;padding:9px 11px;background:#2b302b;color:#e8e4d9;font:500 12px var(--sans);border:0;border-bottom:3px solid transparent;cursor:pointer;text-align:left;min-width:0}
-.construction-chapters img{width:clamp(44px,5vw,75px);border-radius:1px;aspect-ratio:1.48;object-fit:cover}.construction-motion .construction-chapters button[aria-pressed=true]{border-color:#e4b887;background:#43453a;color:#fff9eb}
-.construction-study :focus-visible{outline:2px solid #c7753d;outline-offset:-2px}.construction-hero{margin-bottom:0;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr)}
-.construction-hero h1{font-size:clamp(78px,9vw,155px)}.construction-hero .construction-copy{padding:clamp(35px,5vw,90px)}
-@media(max-width:720px){.construction-study,.construction-hero{grid-template-columns:1fr}.construction-study .construction-copy{padding:24px 20px 18px}.construction-study .construction-eyebrow{margin-bottom:11px}.construction-study h1,.construction-study h2{margin-bottom:15px}.construction-hero h1 br{display:none}.construction-study h1{font-size:clamp(61px,12vw,84px)}.construction-study .construction-description{max-width:55ch}.construction-links{margin-top:13px}.construction-select{max-width:100%}.construction-image{flex:none}.construction-motion .construction-chapters button{font-size:11px;padding:6px 4px;justify-content:center;gap:4px;flex-direction:column}.construction-chapters img{width:64px}.construction-hero h1 em::before{content:" "}}
+.construction-study{display:grid;grid-template-columns:minmax(260px,.68fr) minmax(0,1.32fr);background:#eee7d9;color:#302b24;margin:0 auto 34px;isolation:isolate;text-align:left;overflow:hidden;border-bottom:1px solid #d8d0bf}
+.construction-study .construction-copy{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding:clamp(24px,3.6vw,58px);min-width:0}
+.construction-study .construction-eyebrow,.construction-study .construction-spec,.construction-select{font:500 10px/1.4 var(--mono);letter-spacing:.11em;text-transform:uppercase}
+.construction-study .construction-eyebrow{display:flex;align-items:center;gap:10px;margin:0 0 18px;color:#87402f}
+.construction-study .construction-eyebrow::before{content:"";width:22px;height:1.5px;background:currentColor}
+.construction-study h1,.construction-study h2{font:400 clamp(42px,5.1vw,84px)/.9 var(--serif);letter-spacing:-.043em;margin:0 0 18px;color:#202c33}
+.construction-study h1 em,.construction-study h2 em{font-weight:400;color:#933e2a}
+.construction-pitch{font:400 clamp(15px,1.15vw,17px)/1.58 var(--sans);color:#3b4649;max-width:44ch;margin:0 0 22px}
+.construction-cta{display:flex;flex-wrap:wrap;align-items:center;gap:12px 22px;margin:0 0 26px}
+.construction-primary{display:inline-flex;align-items:center;gap:11px;min-height:42px;padding:0 18px;border-radius:3px;background:#202c33;color:#f7f4ed;font:600 13.5px/1 var(--sans);transition:background-color .2s,transform .2s}
+.construction-primary:hover{background:#87402f;transform:translateY(-1px)}
+.construction-secondary{display:inline-flex;align-items:center;gap:7px;font:600 13.5px/1.3 var(--sans);color:#202c33;text-decoration:underline;text-decoration-color:#b8ae9b;text-underline-offset:4px;transition:color .15s,text-decoration-color .15s}
+.construction-secondary:hover{color:#87402f;text-decoration-color:currentColor}
+.construction-specimen{width:100%;max-width:440px;padding:16px 18px;background:#f7f4ed;border:1px solid #d5ccb9;border-left:3px solid #933e2a;border-radius:3px}
+.construction-study h3,.construction-study .construction-select select{font:400 clamp(22px,1.85vw,30px)/1.16 var(--serif);letter-spacing:-.02em;color:#202c33}
+.construction-study h3{margin:0}.construction-select{display:grid;gap:4px;color:#665a48;width:100%}
+.construction-select select{width:100%;padding:4px 20px 7px 0;background:transparent;border:0;border-radius:0;border-bottom:1px solid #aba08e;cursor:pointer}
+.construction-study .construction-spec{color:#78533d;margin:11px 0 7px}
+.construction-study .construction-description{font:400 14px/1.54 var(--sans);max-width:44ch;margin:0;color:#454c48}
+.construction-links{display:flex;gap:8px 18px;flex-wrap:wrap;margin-top:14px}.construction-links a{font:600 12.5px var(--sans);color:#202c33;text-decoration:underline;text-decoration-color:#b6aa94;text-underline-offset:4px;transition:color .15s,text-decoration-color .15s}
+.construction-links a:hover{color:#87402f;text-decoration-color:currentColor}
+.construction-motion{min-width:0;background:#2b2b23;align-self:stretch;display:flex;flex-direction:column;justify-content:center}
+.construction-image{position:relative;aspect-ratio:16/9;flex:1;min-height:0;overflow:hidden;background:radial-gradient(ellipse at 50% 48%,#474133 0%,#373429 66%,#2a2a23 100%)}
+.construction-image video,.construction-image .construction-still{width:100%;height:100%;position:absolute;inset:0;object-fit:contain;background:transparent}
+.construction-motion .construction-transport{position:absolute;bottom:14px;right:14px;left:auto;border:1px solid #f2e5cb55;border-radius:30px;display:inline-flex;gap:9px;align-items:center;background:#1a221ee6;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:#fff8e8;padding:9px 15px;min-height:38px;font:600 12px var(--sans);cursor:pointer;transition:background-color .2s,border-color .2s}
+.construction-motion .construction-transport:hover{background:#87402f;border-color:#ffba8c}
+.construction-chapters{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#3e453e;border-top:1px solid #3e453e}
+.construction-motion .construction-chapters button{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#242925;color:#dedad0;font:500 12px var(--sans);border:0;border-bottom:3px solid transparent;cursor:pointer;text-align:left;min-width:0;transition:background-color .18s,color .18s,border-color .18s}
+.construction-motion .construction-chapters button:hover{background:#313731;color:#fff8ea}
+.construction-chapters img{width:clamp(46px,5.2vw,78px);border-radius:2px;aspect-ratio:16/10;object-fit:cover;flex-shrink:0}.construction-motion .construction-chapters button[aria-pressed=true]{border-color:#ffba8c;background:#353b34;color:#fff9eb;font-weight:600}
+.construction-study :focus-visible{outline:2px solid #eb7848;outline-offset:-2px}.construction-hero{margin-bottom:0;grid-template-columns:minmax(340px,.82fr) minmax(0,1.18fr)}
+.construction-hero h1{font-size:clamp(66px,7.2vw,122px);line-height:.86;margin-bottom:16px}.construction-hero .construction-copy{padding:clamp(28px,4vw,64px) clamp(24px,4.5vw,72px)}
+@media(max-width:960px){.construction-study,.construction-hero{grid-template-columns:1fr}.construction-hero .construction-copy{padding:28px clamp(20px,5vw,44px) 24px}.construction-specimen{max-width:none}.construction-image{flex:none}}
+@media(max-width:720px){.construction-study .construction-copy{padding:24px 20px 20px}.construction-study .construction-eyebrow{margin-bottom:11px}.construction-study h1,.construction-study h2{margin-bottom:12px}.construction-hero h1 br{display:none}.construction-hero h1{font-size:clamp(54px,13vw,78px)}.construction-hero h1 em::before{content:" "}.construction-pitch{font-size:14.5px;margin-bottom:16px}.construction-cta{margin-bottom:18px;gap:10px 16px}.construction-specimen{padding:13px 14px}.construction-study .construction-description{max-width:none;font-size:13.5px}.construction-links{margin-top:12px}.construction-motion .construction-transport{bottom:10px;right:10px;padding:7px 12px;min-height:34px;font-size:11px}.construction-motion .construction-chapters button{font-size:11px;padding:7px 4px;justify-content:center;gap:5px;flex-direction:column}.construction-chapters img{width:64px}}
 @media(min-width:1500px){.construction-hero .construction-image{max-height:760px}}
+@media(prefers-reduced-motion:reduce){.construction-primary,.construction-motion .construction-transport,.construction-motion .construction-chapters button{transition:none;transform:none}}

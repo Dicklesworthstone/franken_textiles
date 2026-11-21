@@ -22,7 +22,7 @@
 .dr-patterns{display:flex;align-items:baseline;flex-wrap:wrap;gap:5px 17px}
 .dr-patterns>span{flex-basis:100%;color:#dbccc5;font:500 10px var(--mono)}
 .dr-patterns a{font-size:13px;gap:7px}
-.dr-next-study{display:inline-block;margin-top:15px;color:#f2dfbd;font-size:13px;text-decoration:underline;text-underline-offset:4px}.dr-next-study span{margin-left:5px}
+.dr-next-study{display:inline-block;margin:12px 0 18px;color:#f2dfbd;font-size:13px;text-decoration:underline;text-underline-offset:4px}.dr-next-study:hover{color:#fff7e8}.dr-next-study span{margin-left:5px}
 .dr-display{margin:0;min-width:0;align-self:stretch;background:#fbf6ed;color:#342e29;border-radius:6px;overflow:hidden;box-shadow:0 12px 36px #21131b54;display:flex;flex-direction:column}
 .dr-stage{position:relative;isolation:isolate;overflow:hidden;flex:1;min-height:clamp(325px,31vw,502px);background:radial-gradient(ellipse at 36% 25%,#f0e7d5 0%,#dfd2b9 57%,#bfb199 100%)}
 .dr-stage-head,.dr-stage-foot{position:absolute;z-index:2;left:20px;right:20px;display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -63,7 +63,7 @@
 .dr-index>.wrap{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding-block:18px}
 .dr-index>.wrap>a,.dr-reel{display:flex;align-items:center;gap:13px;min-width:0;padding-inline:clamp(9px,1.9vw,27px);border-left:1px solid #d8cbb8}
 .dr-index>.wrap>a:first-child{padding-left:0;border:0}.dr-index>.wrap>div:last-child{padding-right:0}
-.dr-index a>img,.dr-reel .hero-screen{width:clamp(61px,6.6vw,100px);aspect-ratio:1.48;border-radius:2px;flex:none;object-fit:cover}
+.dr-index a>img,.dr-reel .hero-screen{width:clamp(64px,6.8vw,104px);aspect-ratio:1.52;border-radius:3px;flex:none;object-fit:cover;object-position:72% 50%;border:1px solid #d5cab8}
 .dr-index small{display:block;font-size:9px;letter-spacing:.08em;color:#735548;margin-bottom:3px}
 .dr-index strong{display:block;font:400 clamp(19px,1.8vw,29px)/1.07 var(--serif)}
 .dr-index a>.arrow,.dr-reel button>.arrow{margin-left:auto;flex-shrink:0;width:12px;color:#5b5148}

@@ -94,15 +94,24 @@ export default function ConstructionStudy({choices=all,hero=false,value,onSelect
   },[choices,value]);
   return <section id={hero?"construction":undefined} className={"construction-study"+(hero?" construction-hero":"")} aria-labelledby={id}>
     <div className="construction-copy">
-      <p className="construction-eyebrow">{hero?"FrankenTextiles / Construction studies":"Construction study"}</p>
+      <p className="construction-eyebrow">{hero?"FrankenTextiles · Rust & WebAssembly":"Construction study"}</p>
       {hero?<h1 id={id}>From cut<br/><em>to cloth.</em></h1>:<h2 id={id}>From cut <em>to cloth.</em></h2>}
-      {choices.length>1?<label className="construction-select">Choose a garment<select value={selected} onChange={e=>(onSelect??select)(e.target.value as Garment)}>
-        {choices.map(k=><option key={k} value={k}>{studies[k].name}</option>)}</select></label>:<h3>{study.name}</h3>}
-      <p className="construction-spec">{study.cut}</p><p className="construction-description">{study.text}
-        {selected!=="fez"&&" Lines on the board mark matching edges. The film cuts to the checked seam placement, then follows the cloth under gravity."}</p>
-      <div className="construction-links">{hero&&<a href={study.href}>Open the study ↗</a>}
-        <a href={study.pdf} download>{selected==="ensemble"?"Jacket pattern":"Full-size pattern"} ↓</a>
-        {selected==="ensemble"&&<a href="/patterns/trousers.pdf" download>Trouser pattern ↓</a>}</div>
+      {hero&&<>
+        <p className="construction-pitch">Deterministic sewing patterns, parametric Anny bodies, and contact-correct cloth draping — built in Rust to run identically on your CLI and in your browser, with nothing uploaded.</p>
+        <div className="construction-cta">
+          <a className="construction-primary" href="/#workbenches">Open a workbench <span aria-hidden="true" className="arrow arrow-diagonal"/></a>
+          <a className="construction-secondary" href="/how-it-works/">How it works <span aria-hidden="true" className="arrow"/></a>
+        </div>
+      </>}
+      <div className={hero?"construction-specimen":undefined}>
+        {choices.length>1?<label className="construction-select">Choose a garment<select value={selected} onChange={e=>(onSelect??select)(e.target.value as Garment)}>
+          {choices.map(k=><option key={k} value={k}>{studies[k].name}</option>)}</select></label>:<h3>{study.name}</h3>}
+        <p className="construction-spec">{study.cut}</p><p className="construction-description">{study.text}
+          {selected!=="fez"&&" Lines on the board mark matching edges. The film cuts to the checked seam placement, then follows the cloth under gravity."}</p>
+        <div className="construction-links">{hero&&<a href={study.href}>Open the study ↗</a>}
+          <a href={study.pdf} download>{selected==="ensemble"?"Jacket pattern":"Full-size pattern"} ↓</a>
+          {selected==="ensemble"&&<a href="/patterns/trousers.pdf" download>Trouser pattern ↓</a>}</div>
+      </div>
     </div>
     <ConstructionMotion key={selected} garment={selected} hero={hero}/>
   </section>;

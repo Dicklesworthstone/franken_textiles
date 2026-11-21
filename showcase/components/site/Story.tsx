@@ -1,4 +1,5 @@
 import type { ElementType } from "react";
+import CodeBlock from "./CodeBlock";
 import { repo, workbench } from "./links";
 import "./site.css";
 
@@ -63,10 +64,19 @@ export function Pipeline({ heading: Heading = "h2", more = true }: { heading?: E
 }
 
 const facts = [
-  ["21", "tape measurements the body model can be fitted to"],
-  ["51", "acceptance checks on the exported files"],
-  ["Bit-identical", "results on the command line and in the browser"],
-  ["Nothing", "is uploaded: every calculation runs on your device"],
+  ["1e-14 m", "Anny 0.6.1 forward model vs upstream PyTorch (newborn to elderly, ~0.3–0.4 ms/body)"],
+  ["21", "tape measurements read as convex-hull slices, with MODEL_FIT provenance on estimates"],
+  ["0 mm inset", "IPC barrier cloth contact on real thickness, with Coulomb friction & 2 mm self-contact"],
+  ["51", "acceptance checks across PDF, SVG, DXF, HPGL, cutter, GarmentCode & Tajima DST"],
+  ["4.3 MiB gz", "pure Rust WebAssembly (#![forbid(unsafe_code)]), bit-identical to the native CLI"],
+  ["449", "source-bearing textile records whose missing measurements stay absent, never guessed"],
+] as const;
+
+const contrasts = [
+  ["Body geometry", "Stacked-ellipse dress forms whose armpit sat 45 mm too high and whose crotch needed a special case", "Parametric Anny 0.6.1 body (newborn → adult, Apache-2.0 / CC0) fitted by Levenberg–Marquardt to tape hulls, with opt-in Dual-Quaternion Skinning"],
+  ["Cloth contact", "Blender cloth needing a collider inset (+4.4 cm girth inflation), start-state jitter, and no elastic-grip answer", "Incremental Potential Contact on real cloth thickness, exact welded seams, Coulomb friction, transactional Newton refusal & opt-in --time-subdivision"],
+  ["Pattern geometry", "AI-drawn sheets with 8% side-seam mismatches, short sleeve caps, and 57% contradictory printed dimensions", "Pure-Rust raster tracer, round-0 auditor, flat seam walker, and five deterministic pattern alterations checked before anyone cuts cloth"],
+  ["Runtime & privacy", "Python, OpenCV, Blender, and a 19 MB Pyodide runtime — or cloud upload workflows", "One native Rust binary and a 4.3 MiB gzipped WASM module running locally on your device with zero network uploads"],
 ] as const;
 
 export function Manifesto() {
@@ -75,10 +85,74 @@ export function Manifesto() {
     <p className="ft-statement" data-reveal>Sewing patterns that <em>demonstrably sew together</em> and fit a specific body,
       with the files people and machines need to make them.</p>
     <div className="ft-manifesto-body">
-      <p data-reveal>An image model will happily draw a convincing pattern sheet. One that was audited had side seams 8% apart
-        and a sleeve cap too short to set into its armhole. A pattern has to be checked as geometry, and then on a body,
-        before anyone cuts cloth. FrankenTextiles does both, in Rust, on your own device.</p>
+      <div className="ft-manifesto-copy" data-reveal>
+        <p>FrankenTextiles is the mechanical core of a fitting room for a sewist and a vision-capable AI agent. Start with a
+          garment brief, a measured draft, a scanned pattern sheet, or evaluated GarmentCode panels.</p>
+        <p>Every seam is walked on the flat pattern, then sewn around a real fitted body in Rust — reporting residuals,
+          refusing unconverged steps instead of clamping silently, and writing every print and machine file with automated checks.</p>
+      </div>
       <dl className="ft-facts">{facts.map(([value, label]) => <div key={value} data-reveal><dt>{value}</dt><dd>{label}</dd></div>)}</dl>
+    </div>
+    <div className="ft-contrast" data-reveal>
+      <div className="ft-contrast-head">
+        <span className="mono">Why rebuild the mechanical core</span>
+        <span className="mono">Legacy pipeline</span>
+        <span className="mono">FrankenTextiles (Rust &amp; WASM)</span>
+      </div>
+      {contrasts.map(([area, legacy, ftx]) => <div key={area} className="ft-contrast-row">
+        <strong>{area}</strong>
+        <p className="ft-contrast-old">{legacy}</p>
+        <p className="ft-contrast-new">{ftx}</p>
+      </div>)}
+    </div>
+  </div></section>;
+}
+
+const pillars = [
+  {
+    tag: "449 records · zero invented numbers",
+    title: "Source-bearing textiles & shrinkage",
+    body: "Browse measured linen, muslin, habotai silk, 33 Sperl 2022 production knits, 10 Wang 2011 specimens, 10 bovine leather groups, and 5 laundered denim pairs. Missing properties stay explicitly absent. Apply measured warp/weft wash shrinkage to compensate cutting patterns in the grain frame.",
+    href: workbench("materials"),
+    cta: "Open Material Workbench",
+  },
+  {
+    tag: "Thermal · moisture · viscoelastic",
+    title: "Heat, vapor & constitutive solvers",
+    body: "Run 1D transient exterior convection and gray-diffuse radiation on layer stacks or saved drapes, inspect vapor resistance and compression thermal histories, lower Fractional-Zener curves via exact-exponential Prony recursion, and calibrate strip or cylinder fixtures with exact adjoint gradients.",
+    href: "/get-started/#materials-cli",
+    cta: "Try the thermal CLI",
+  },
+  {
+    tag: "27 ChArUco families · local only",
+    title: "Camera calibration & photogrammetry",
+    body: "Print calibrated Letter or A4 ChArUco sheets, detect corners in pure Rust without OpenCV, recover plain-sheet photo scale with EXIF orientation and bootstrap σ, propagate Brown lens covariance, and run multi-frame articulated body fits with held-out CHECK gates.",
+    href: workbench("photo"),
+    cta: "Open Photo Workbench",
+  },
+  {
+    tag: "GarmentCode · nesting · stitch cells",
+    title: "Import, cut-room & sewing planners",
+    body: "Import evaluated GarmentCode panels with explicit bounded circular-arc tolerances and REVIEW_REQUIRED reports. Plan finite-stock roll markers with planar knife/fixture clearance and drill cycles, allocate split supplier thread orders, and emit ordered multi-cell sewing schedules.",
+    href: "/get-started/#command-line",
+    cta: "Explore CLI workflows",
+  },
+] as const;
+
+export function PlatformCapabilities({ heading: Heading = "h2" }: { heading?: ElementType }) {
+  return <section className="ft-platform" id="capabilities" aria-labelledby="capabilities-title"><div className="wrap">
+    <div className="ft-section-top">
+      <div><p className="kicker">Beyond the fitting room</p>
+        <Heading id="capabilities-title" className="section-title">Textiles, cameras &amp; production<span>.</span></Heading></div>
+      <p>The same deterministic Rust engine extends from a single garment round into sourced fabric physics, calibrated photogrammetry, and cutting-room planning — without inventing missing evidence.</p>
+    </div>
+    <div className="ft-pillar-grid">
+      {pillars.map(p => <article key={p.title} className="ft-pillar" data-reveal>
+        <span className="mono ft-pillar-tag">{p.tag}</span>
+        <h3>{p.title}</h3>
+        <p>{p.body}</p>
+        <a className="ft-step-link" href={p.href}>{p.cta} <span aria-hidden="true" className="arrow"/></a>
+      </article>)}
     </div>
   </div></section>;
 }
@@ -92,7 +166,7 @@ const files = [
   ["PLT", "HPGL plot", "Pen-plotter instructions for the cut and stitch lines.", "Plotter"],
   ["SVG", "One file per piece", "Sized for a desktop cutting machine, with a report of what fits.", "Cutting machine"],
   ["DST", "Tajima embroidery", "The braid path, with a stop where you lay the cord.", "Embroidery machine"],
-  ["JSON", "GarmentCode", "Panels and stitches for exchange with GarmentCode tools.", "Other software"],
+  ["JSON", "GarmentCode", "Export panels and stitches, or import evaluated GarmentCode JSON with circular-arc bounds.", "Bidirectional exchange"],
 ] as const;
 
 export function Deliverables({ heading: Heading = "h2" }: { heading?: ElementType }) {
@@ -130,24 +204,27 @@ export function Claims({ heading: Heading = "h2" }: { heading?: ElementType }) {
   </div></section>;
 }
 
+const quickstartCode = `# reference measurements for a synthetic 92 cm wearer
+ftx measure reference --stature-mm 920 --age-months 30 --out m.json
+
+# draft the bolero, validate flat seams, then write every file
+ftx draft zouave_bolero --measurements m.json --out bolero
+ftx validate bolero/pattern.json \\
+  --measurements m.json --fit bolero/fit_spec.json
+> STATUS: CONVERGED
+ftx export all bolero/pattern.json --out bolero/files
+> PASS: 183/183 checks`;
+
 export function StartHere({ heading: Heading = "h2" }: { heading?: ElementType }) {
   return <section className="ft-start" aria-labelledby="start-title"><div className="wrap ft-start-grid">
     <div><p className="kicker">Start here</p>
       <Heading id="start-title" className="section-title">Open a workbench, or build the tool<span>.</span></Heading>
-      <p>The workbenches need nothing installed and open with a working example. The command-line tool runs the same Rust code and writes every file.</p>
+      <p>The workbenches run compiled Rust in your browser with nothing installed and open with a working example. The command-line tools (<code>ftx</code> and <code>ftx-materials</code>) run the exact same crates locally and write every manufacturing file.</p>
       <div className="ft-start-actions">
         <a className="primary" href="/#workbenches">Open a workbench <span aria-hidden="true" className="arrow arrow-diagonal"/></a>
         <a className="ft-text-link" href="/get-started/">Build the command-line tool <span aria-hidden="true" className="arrow"/></a>
+        <a className="ft-text-link" href={repo}>Source on GitHub <span aria-hidden="true" className="arrow arrow-diagonal"/></a>
       </div></div>
-    <figure className="ft-code" aria-label="Example commands">
-      <figcaption className="mono">A first pattern, for a synthetic 92 cm wearer</figcaption>
-      <pre><code><span className="c"># reference measurements from population data</span>{"\n"}
-ftx measure reference --stature-mm 920 --age-months 30 --out m.json{"\n\n"}
-<span className="c"># draft the bolero, then write every file</span>{"\n"}
-ftx draft zouave_bolero --measurements m.json --out bolero{"\n"}
-ftx export all bolero/pattern.json --out bolero/files{"\n"}
-<span className="o">PASS: 183/183 checks</span></code></pre>
-      <a className="ft-code-more" href={repo}>Source on GitHub <span aria-hidden="true" className="arrow arrow-diagonal"/></a>
-    </figure>
+    <CodeBlock title="A first pattern, for a synthetic 92 cm wearer" code={quickstartCode}/>
   </div></section>;
 }

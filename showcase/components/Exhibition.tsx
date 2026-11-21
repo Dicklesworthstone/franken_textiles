@@ -14,7 +14,8 @@ import {ExhibitionCover,ExhibitionFeatures} from "./site/ExhibitionCover";
 import SiteHeader from "./site/SiteHeader";
 import SiteFooter from "./site/SiteFooter";
 import Reveal from "./site/Reveal";
-import { Claims, Deliverables, Manifesto, Pipeline, StartHere } from "./site/Story";
+import { Claims, Deliverables, Manifesto, Pipeline, PlatformCapabilities, StartHere } from "./site/Story";
+import VisualFitting from "./site/VisualFitting";
 import { workbench } from "./site/links";
 import type { PanelOutline } from "../components/garmentMesh";
 
@@ -41,6 +42,15 @@ const films = [
   ...(Object.keys(experiments) as Rig[]).map(rig=>({ id:"rig-"+rig, title:experiments[rig].title, detail:"Material study" })),
   ...studies.map(s=>({ id:s.id, title:s.title, detail:"Drape study" })),
 ];
+
+const filmGroups = ["All", "Construction", "Studies", "Wardrobe", "Materials"] as const;
+type FilmGroup = (typeof filmGroups)[number];
+function groupOf(id: string): Exclude<FilmGroup, "All"> {
+  if (id.startsWith("construction-")) return "Construction";
+  if (id.startsWith("wardrobe-")) return "Wardrobe";
+  if (id.startsWith("rig-")) return "Materials";
+  return "Studies";
+}
 
 function Arrow({ diagonal = false }: { diagonal?: boolean }) {
   return <span aria-hidden="true" className={diagonal ? "arrow arrow-diagonal" : "arrow"}/>;
@@ -188,6 +198,7 @@ export default function Exhibition({section}: {section?: string}) {
   const Heading = section ? "h1" : "h2";
   const studio = section === "draft" || section === "cut" || section === "stitch" ? section : undefined;
   const [filter, setFilter] = useState("All studies");
+  const [filmGroup, setFilmGroup] = useState<FilmGroup>("All");
   const [screening, setScreening] = useState(films[0]);
   const [filmChosen, setFilmChosen] = useState(false);
   const projection = useRef<HTMLDivElement>(null);
@@ -236,7 +247,7 @@ export default function Exhibition({section}: {section?: string}) {
         <div className="dr-reel"><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/></div></figure>
           <button onClick={()=>setItem({reel:true})}><span><small>Studio film</small><strong>Inside the wardrobe</strong></span><Arrow diagonal/></button></div>
       </div></section>}
-      {!section && <><Manifesto/><Pipeline/></>}
+      {!section && <><Manifesto/><VisualFitting/><Pipeline/></>}
       {show("wardrobe") && <section id="wardrobe" className="paper wardrobe-gallery"><div className="wrap collection">
         <div className="section-top"><div><p className="kicker">Interactive garments</p><Heading className="section-title"><a href="/sections/wardrobe/">The wardrobe<span>.</span></a></Heading></div>
           <p>Take a garment off the rail. Turn it around, change the figure, or look beneath a layer.</p></div>
@@ -270,25 +281,37 @@ export default function Exhibition({section}: {section?: string}) {
           </article>)}</div>
       </div></section>}
       {show("tracing") && <TraceReveal heading={Heading}/>}
+      {!section && <PlatformCapabilities/>}
       {show("films") && <section id="films" className="films"><div className="wrap film-grid">
-        <div className="screening" ref={projection}><p className="kicker">Films</p><Heading className="section-title"><a href="/sections/films/">Screening room<span>.</span></a></Heading>
+        <div className="screening" ref={projection}><p className="kicker">Films · 4K 60 fps</p><Heading className="section-title"><a href="/sections/films/">Screening room<span>.</span></a></Heading>
+          <p className="screening-lead">Source-rendered captures from the native cloth solver, historical wardrobe studies, and live WASM workbenches.</p>
           <InlineFilm key={screening.id} id={screening.id} title={screening.title} controls requested={filmChosen}/>
           <div className="screening-caption"><strong>{screening.title}</strong><a href={filmFile(screening.id)} download>Download MP4 ↓</a></div>
           <GarmentPatterns exhibit={screening.id}/></div>
-        <div className="film-list">{films.map(f=><button key={f.id} aria-pressed={f.id===screening.id} onClick={()=>{
-          setFilmChosen(true);setScreening(f);
-          if(projection.current && projection.current.getBoundingClientRect().bottom<120) projection.current.scrollIntoView({block:"start"});
-        }}>
-          <img src={`/media/${f.id}.jpg`} alt="" loading="lazy"/><span><small className="mono">{f.detail}</small><strong>{f.title}</strong></span><span className="play-ring"><PlaybackMark/></span></button>)}</div>
+        <div className="film-rail">
+          <div className="film-filters" role="group" aria-label="Filter films">
+            {filmGroups.map(group => {
+              const count = group === "All" ? films.length : films.filter(f => groupOf(f.id) === group).length;
+              return <button key={group} type="button" aria-pressed={filmGroup === group} onClick={() => setFilmGroup(group)}>
+                {group} <small>{count}</small>
+              </button>;
+            })}
+          </div>
+          <div className="film-list">{films.filter(f => filmGroup === "All" || groupOf(f.id) === filmGroup).map(f=><button key={f.id} aria-pressed={f.id===screening.id} onClick={()=>{
+            setFilmChosen(true);setScreening(f);
+            if(projection.current && projection.current.getBoundingClientRect().bottom<120) projection.current.scrollIntoView({block:"start"});
+          }}>
+            <img src={`/media/${f.id}.jpg`} alt="" loading="lazy"/><span><small className="mono">{f.detail}</small><strong>{f.title}</strong></span><span className="play-ring"><PlaybackMark/></span></button>)}</div>
+        </div>
       </div></section>}
       {!section && <Deliverables/>}
       {show("tools") && <section id="workbenches" className="paper workbench-band"><div className="wrap workbench-library"><div className="section-top"><div><p className="kicker">Run FrankenTextiles in your browser</p><Heading className="section-title"><a href="/sections/tools/">The workbenches<span>.</span></a></Heading></div>
-        <p>Each opens with a working example. Load your own files when you’re ready. Everything runs on your device.</p></div>
+        <p>Four local WebAssembly tools (4.3 MiB gzipped). Each opens with a working example and runs bit-identically to the native CLI with zero uploads.</p></div>
         <div className="workbench-shelves">{[
-          ["index","Pattern drafting","Change the bolero’s cut and print its pieces.","drafting.webp"],
-          ["trace","Pattern tracing","Recover three cut pieces from a scanned sheet.","trace-review.webp"],
-          ["materials","Material studies","Inspect the cloth and its material properties.","material-rig.webp"],
-          ["photo","Photo measurements","Measure the chalk marks on a sleeve using an A4 reference.","photo-example-sleeve.jpg"],
+          ["index","Pattern drafting","Draft to measurements, run all five alterations, fold in 3D, and print every export.","drafting.webp"],
+          ["trace","Pattern tracing","Trace PNG, JPEG or WebP sheets in pure Rust, annotate seams, and run round-0 audits.","trace-review.webp"],
+          ["materials","Material studies","Inspect 449 sourced fabrics, import GarmentCode, test heat/strips, and plan cutting rolls.","material-rig.webp"],
+          ["photo","Photo measurements","Calibrate lenses with ChArUco, measure EXIF photos with bootstrap σ, and fit bodies.","photo-example-sleeve.jpg"],
         ].map(([page,title,description,image])=><a key={page} data-reveal href={workbench(page as "index"|"trace"|"materials"|"photo")}>
           <img src={`/workbench/atelier-assets/${image}`} alt="" loading="lazy"/>
           <div><h3>{title}</h3><p>{description}</p></div><Arrow diagonal/>

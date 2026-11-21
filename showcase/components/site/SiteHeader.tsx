@@ -12,6 +12,7 @@ export function Mark() {
 function current(pathname: string, href: string) {
   if (href.startsWith("/#")) {
     const anchor = href.slice(2);
+    if (anchor === "drape-room") return pathname.startsWith("/studies/") || pathname === "/sections/studies/";
     if (anchor === "wardrobe") return pathname.startsWith("/wardrobe/") || pathname === "/sections/wardrobe/";
     if (anchor === "materials") return pathname.startsWith("/experiments/") || pathname === "/sections/materials/";
     if (anchor === "studio") return ["studio", "draft", "cut", "stitch"].some(id => pathname === `/sections/${id}/`);
@@ -42,7 +43,7 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
 
   // A wide window has the full navigation in the bar, so the sheet has no reason to stay open.
   useEffect(() => {
-    const wide = matchMedia("(min-width: 981px)");
+    const wide = matchMedia("(min-width: 1081px)");
     const close = () => { if (wide.matches) setOpen(false); };
     wide.addEventListener("change", close);
     return () => wide.removeEventListener("change", close);
