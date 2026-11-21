@@ -34,10 +34,13 @@ export function watchFilm(el: HTMLVideoElement, id: string) {
   if (!revisions[`${id}-1080.mp4`]) return () => {};
   const small = filmFile(id+"-1080");
   let pending: number | undefined;
+  let wasPlaying = !el.paused;
+  function onPlay() { wasPlaying = true; }
+  function onPause() { if (!el.error) wasPlaying = false; }
   function stepDown() {
     const source = el.getAttribute("src");
     if (!source || source === small || pending !== undefined) return;
-    const at = el.currentTime, playing = !el.paused;
+    const at = el.currentTime;
     // Finish the failed media load before starting another. Chromium otherwise aborts the new play request.
     pending = window.setTimeout(() => {
       pending = undefined;
@@ -46,15 +49,20 @@ export function watchFilm(el: HTMLVideoElement, id: string) {
       try { sessionStorage.setItem(REMEMBERED, "1"); } catch {}
       el.src = small;
       if (at > 0) el.currentTime = at;
-      if (playing) void el.play().catch(()=>{});
+      if (wasPlaying) void el.play().catch(()=>{});
     });
   }
   const onProgress = () => {
     const quality = el.getVideoPlaybackQuality?.();
     if (quality && quality.totalVideoFrames >= 120 && quality.droppedVideoFrames > quality.totalVideoFrames/3) stepDown();
   };
+  el.addEventListener("play", onPlay); el.addEventListener("pause", onPause);
   el.addEventListener("error", stepDown); el.addEventListener("timeupdate", onProgress);
-  return () => { window.clearTimeout(pending); el.removeEventListener("error", stepDown); el.removeEventListener("timeupdate", onProgress); };
+  return () => {
+    window.clearTimeout(pending);
+    el.removeEventListener("play", onPlay); el.removeEventListener("pause", onPause);
+    el.removeEventListener("error", stepDown); el.removeEventListener("timeupdate", onProgress);
+  };
 }
 
 export function PlaybackMark({playing=false}: {playing?:boolean}) {
@@ -98,7 +106,7 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
       else play();
     }
     const onPlay = () => {setPlaying(true);};
-    const onPause = () => {setPlaying(false);if(!automaticPause && visible) manual=false;automaticPause=false;};
+    const onPause = () => {setPlaying(false);if(!automaticPause && visible && !el.error) manual=false;automaticPause=false;};
     toggle.current = () => {manual = el.paused; if(manual) play(); else pause();};
     const observer=new IntersectionObserver(([entry])=>{
       visible=entry.isIntersecting && entry.intersectionRatio>=.2;

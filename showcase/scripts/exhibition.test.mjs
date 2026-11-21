@@ -213,6 +213,28 @@ test("reduced motion leaves the film paused until requested", async () => {
   } finally {await p.close();}
 });
 
+test("a failed 4K film request resumes in 1080p", async () => {
+  const page=await browser.newPage({...opts,reducedMotion:"reduce"});
+  try {
+    await page.addInitScript(() => {
+      navigator.mediaCapabilities.decodingInfo=async()=>({supported:true,smooth:true,powerEfficient:true});
+    });
+    let attempted=false;
+    await page.route(url=>url.pathname==="/media/bolero.mp4", route=>{
+      attempted=true;
+      return route.abort();
+    });
+    await page.goto(new URL("/?film=bolero",site).href,{waitUntil:"domcontentloaded"});
+    await page.waitForFunction(()=>{
+      const video=document.querySelector("dialog[open] video");
+      return video?.videoWidth===1920 && video.currentTime>.1 && !video.paused;
+    },null,{timeout:30000});
+    assert.ok(attempted);
+    const source=await page.locator("dialog[open] video").evaluate(video=>video.currentSrc);
+    assert.equal(new URL(source).pathname,"/media/bolero-1080.mp4");
+  } finally {await page.close();}
+});
+
 test("strip controls and readouts agree with the exported Rust states", async () => {
   const p=await browser.newPage({...opts,reducedMotion:"reduce"});
   try {
