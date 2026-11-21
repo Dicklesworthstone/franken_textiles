@@ -591,4 +591,25 @@ fn damaged_membrane_plasticity_strip_records_damage_dissipation_and_degrades_rel
         serde_json::to_value(&damaged).unwrap(),
         serde_json::to_value(evaluate(&replay).unwrap()).unwrap()
     );
+
+    // Realistic areal density and nonzero Poisson coupling must also satisfy exact step-time
+    // momentum balance when accepted-step damage updates d_n -> d_{n+1}.
+    let mut realistic = damaged_req;
+    let mat = realistic.material.record.as_mut().unwrap();
+    mat.properties.get_mut("areal_density").unwrap().value = 0.2;
+    mat.properties.get_mut("poisson_warp_weft").unwrap().value = 0.2;
+    let realistic_report = evaluate(&realistic).unwrap();
+    assert!(
+        realistic_report
+            .states
+            .last()
+            .unwrap()
+            .damage_dissipation_j
+            .unwrap()
+            > 0.0
+    );
+    for st in realistic_report.states.iter().skip(1) {
+        assert!(st.free_dynamic_residual_n <= 1e-6);
+        assert!(st.momentum_balance_residual_n <= 1e-5);
+    }
 }

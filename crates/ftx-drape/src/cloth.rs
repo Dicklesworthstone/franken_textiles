@@ -2678,62 +2678,100 @@ impl Solver {
     /// # Errors
     /// Stale material/reference ownership, invalid geometry or a non-finite stored response.
     pub fn checked_elastic_forces(&self) -> Result<Vec<Vec3>, Refusal> {
+        self.checked_forces_with(&self.x, None)
+    }
+
+    /// Internal elastic forces at `self.x` evaluated with the incremental constitutive state
+    /// active during the step from `before_step` over duration `h` (s).
+    ///
+    /// For undamaged laws, this agrees with [`Self::checked_elastic_forces`] after step
+    /// acceptance. For explicit accepted-step stiffness degradation
+    /// (`isotropic_accumulated_damage/1`), Newton balances `m * a` against the step-active
+    /// stiffness factor `(1 - d_n)` before `d_n -> d_{n+1}` updates on acceptance; this method
+    /// reconstructs that exact step-time internal force vector without mutating either solver.
+    ///
+    /// # Errors
+    /// Non-finite or non-positive step `h`, mismatched topology/material/domain, or non-finite forces.
+    pub fn checked_step_forces_from(
+        &self,
+        before_step: &Self,
+        h: f64,
+    ) -> Result<Vec<Vec3>, Refusal> {
+        if !h.is_finite() || h <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "step-time material reactions require a finite positive time step",
+            ));
+        }
         if self.x.len() != self.model.rest.len()
+            || self.model.rest.len() != before_step.model.rest.len()
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "step-time material reactions require matching cloth topology",
+            ));
+        }
+        before_step.checked_forces_with(&self.x, Some(h))
+    }
+
+    fn checked_forces_with(&self, x: &[Vec3], step_dt: Option<f64>) -> Result<Vec<Vec3>, Refusal> {
+        let incremental = step_dt.is_some();
+        if x.len() != self.model.rest.len()
             || self.model.compression.len() != self.model.membranes.len()
-            || self.x.iter().any(|p| !p.is_finite())
+            || x.iter().any(|p| !p.is_finite())
             || self
                 .model
                 .membranes
                 .iter()
-                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+                .any(|e| e.v.iter().any(|i| *i >= x.len()))
             || self
                 .model
                 .hinges
                 .iter()
-                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+                .any(|e| e.v.iter().any(|i| *i >= x.len()))
             || self
                 .model
                 .panel_bending_patches()
                 .iter()
-                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+                .any(|e| e.v.iter().any(|i| *i >= x.len()))
             || self
                 .model
                 .elastics
                 .iter()
-                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+                .any(|e| e.v.iter().any(|i| *i >= x.len()))
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "material reactions require matching finite cloth geometry",
             ));
         }
-        self.model.check_membrane_domains(&self.x)?;
-        self.model.check_panel_bending_domains(&self.x)?;
+        self.model.check_membrane_domains(x)?;
+        self.model.check_panel_bending_domains(x)?;
         if let Some(field) = &self.membrane_plasticity {
-            field.check(&self.model, &self.x)?;
+            field.check(&self.model, x)?;
         }
         if let Some(field) = &self.relaxation {
-            field.check(&self.model, &self.x)?;
+            field.check(&self.model, x)?;
         }
         if let Some(field) = &self.plasticity {
-            field.check(&self.model, &self.x)?;
+            field.check(&self.model, x)?;
         }
-        let mut f = vec![Vec3::ZERO; self.x.len()];
+        let mut f = vec![Vec3::ZERO; x.len()];
         for (i, e) in self.model.membranes.iter().enumerate() {
             let mut l = self
                 .membrane_plasticity
                 .as_ref()
-                .and_then(|field| field.local(i, &self.x, false))
+                .and_then(|field| field.local(i, x, incremental))
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
-                        || e.local(&self.x, &self.model.material(i)),
-                        |law| e.response_local(&self.x, law, &self.model.material(i)),
+                        || e.local(x, &self.model.material(i)),
+                        |law| e.response_local(x, law, &self.model.material(i)),
                     )
                 });
             if let Some(extra) = self
                 .relaxation
                 .as_ref()
-                .and_then(|field| field.local(i, &self.x, None))
+                .and_then(|field| field.local(i, x, step_dt))
             {
                 for (a, b) in l.grad.iter_mut().zip(extra.grad) {
                     *a += b;
@@ -2744,7 +2782,7 @@ impl Solver {
             }
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
-            let l = h.local(&self.x, self.model.hinge_rigidity(i));
+            let l = h.local(x, self.model.hinge_rigidity(i));
             for (a, &vi) in h.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
@@ -2753,14 +2791,14 @@ impl Solver {
             let l = self
                 .plasticity
                 .as_ref()
-                .and_then(|field| field.local(i, &self.x, false))
-                .unwrap_or_else(|| p.local(&self.x));
+                .and_then(|field| field.local(i, x, incremental))
+                .unwrap_or_else(|| p.local(x));
             for (a, &vi) in p.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
         }
         for e in &self.model.elastics {
-            let l = e.local(&self.x);
+            let l = e.local(x);
             for (a, &vi) in e.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }

@@ -838,9 +838,35 @@ fn record_state(
     old_velocity: &[Vec3],
     solve: Option<SolveReport>,
 ) -> Result<State, Refusal> {
+    record_state_with_step(
+        fixture,
+        controls,
+        solver,
+        None,
+        waypoint,
+        h,
+        old_velocity,
+        solve,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_state_with_step(
+    fixture: &Fixture,
+    controls: &Controls,
+    solver: &Solver,
+    before_step: Option<&Solver>,
+    waypoint: &Waypoint,
+    h: f64,
+    old_velocity: &[Vec3],
+    solve: Option<SolveReport>,
+) -> Result<State, Refusal> {
     let [n_theta, n_z] = fixture.cells;
     let sep_m = holder_separation_m(fixture, waypoint)?;
-    let elastic_forces = solver.checked_elastic_forces()?;
+    let elastic_forces = match before_step {
+        Some(prev) if h > 0.0 => solver.checked_step_forces_from(prev, h)?,
+        _ => solver.checked_elastic_forces()?,
+    };
     let mut total_forces = elastic_forces.clone();
     if let Some(contact) = &solver.contact {
         let terms = contact.terms(&solver.x, true, h > 0.0);
@@ -1399,6 +1425,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
                 curr_sep,
                 waypoint.rotation_deg,
             );
+            let before_step = has_membrane_damage.then(|| solver.clone());
             let numerical = solver.step_with_guess(h, guess.as_deref())?;
             for i in 0..n_theta {
                 let idx = n_z * n_theta + i;
@@ -1406,10 +1433,11 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
                 solver.v[idx] = Vec3::new(-omega_rad_s * p.y, omega_rad_s * p.x, vz_m_s);
             }
             newton_iterations += numerical.iterations;
-            let st = record_state(
+            let st = record_state_with_step(
                 &input.fixture,
                 &input.controls,
                 &solver,
+                before_step.as_ref(),
                 &waypoint,
                 h,
                 &old_velocity,

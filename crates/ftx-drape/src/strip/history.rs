@@ -225,13 +225,17 @@ impl Recorder<'_> {
     fn state(
         &self,
         solver: &Solver,
+        before_step: Option<&Solver>,
         node: &Loading,
         h: f64,
         old_velocity: &[Vec3],
         solve: Option<SolveReport>,
     ) -> Result<State, Refusal> {
         let [nx, ny] = self.fixture.cells;
-        let forces = solver.checked_elastic_forces()?;
+        let forces = match before_step {
+            Some(prev) if h > 0.0 => solver.checked_step_forces_from(prev, h)?,
+            _ => solver.checked_elastic_forces()?,
+        };
         let mut grips = [Vec3::ZERO; 2];
         let mut inertia = Vec3::ZERO;
         let mut residual = 0.0_f64;
@@ -434,7 +438,8 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         fixture: &input.fixture,
         controls: &input.controls,
     };
-    let mut states = vec![recorder.state(&solver, &input.loading[0], 0.0, &solver.v, None)?];
+    let mut states =
+        vec![recorder.state(&solver, None, &input.loading[0], 0.0, &solver.v, None)?];
     let mut iterations = 0usize;
     let mut current_time = 0.0;
     for (pair, count) in input.loading.windows(2).zip(counts) {
@@ -466,6 +471,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
             for position in &mut solver.x[ny * (nx + 1)..] {
                 position.y = input.fixture.gauge_length_m * (1.0 + node.extension_fraction);
             }
+            let before_step = has_damage.then(|| solver.clone());
             let numerical = solver.step(h)?;
             // Fixed-coordinate velocities do not enter the solve. Retain the actual imposed
             // velocity for inspection, rather than the solver's fixed-coordinate zero increment.
@@ -473,7 +479,14 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
                 velocity.y = grip_velocity;
             }
             iterations += numerical.iterations;
-            states.push(recorder.state(&solver, &node, h, &old_velocity, Some(numerical))?);
+            states.push(recorder.state(
+                &solver,
+                before_step.as_ref(),
+                &node,
+                h,
+                &old_velocity,
+                Some(numerical),
+            )?);
             current_time = node.time_s;
         }
     }

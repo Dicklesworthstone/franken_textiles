@@ -1392,6 +1392,8 @@ per-triangle `damage_dissipated_j` alongside `plastic_dissipation_j` (rolling ba
 steps), expose `Solver::membrane_damage_dissipation_j()`, emit `damage_model`,
 `damage_dissipation_j`, and per-element `damage` / `stiffness_factor` / `damage_dissipation_j` in
 `Solver::membrane_plasticity_report()`, and record opt-in `strip::history::State::damage_dissipation_j`
-and `cylinder::State::membrane_damage_dissipation_j` with matching degradation scope text. Undamaged
-laws omit these fields and keep identical wire output.
+and `cylinder::State::membrane_damage_dissipation_j` with matching degradation scope text. Because
+damage updates explicitly on step acceptance (`d_n -> d_{n+1}` after Newton), `Solver::checked_step_forces_from`
+verifies step-time momentum balance against the exact step-active `(1 - d_n)` reactions in `strip::history`
+and `cylinder` while keeping undamaged laws byte-identical.
 Tests: `tests/membrane_plasticity.rs`, `tests/strip_history.rs`, `cylinder::tests`.
