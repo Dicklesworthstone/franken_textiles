@@ -434,16 +434,7 @@ fn fold_on_source(
     } else {
         measurements.clone()
     };
-    let pose_line = |deg: f64| {
-        if hand_collider.is_wrist() {
-            format!("drape: arms at {deg}° and straight, hands and feet left out of contact")
-        } else {
-            format!(
-                "drape: arms at {deg}° and straight, hand collider {} (outer fingers and feet left out of contact)",
-                hand_collider.as_str()
-            )
-        }
-    };
+    let pose_line = |deg: f64| hand_collider.drape_pose_line(deg);
     let (params, mut description) = if let Some(source) = source {
         let (shape, mut description) = ftx_body::accepted_shape::prepare(
             model,

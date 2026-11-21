@@ -169,10 +169,15 @@ not a characterized nappy garment, added body mass or an inferred thermal/fricti
 Production `clothing_skin` selects wrists, feet and, where present, paired `levator05` facial-detail
 regions. `clothing_skin_with_hands` takes a `HandCollider`: `Wrist` is exactly `clothing_skin` (the
 reference collider); the native, opt-in `Palm` cuts at the five finger bases instead (wrist and
-metacarpals kept, the whole thumb cut) and `Knuckle` at the second joint of each finger (thumb's first
-bone and the first phalanges kept too). Spec 05 "Clothing collider" has the roots and the measured
+metacarpals kept, the whole thumb cut), `Knuckle` at the second joint of each finger (thumb's first
+bone and the first phalanges kept too), and `Full` cuts nothing of the hand, so the collider is the
+display skin there. Spec 05 "Clothing collider" has the roots and the measured
 vertex counts; `tests/drape_poses.rs::the_hand_colliders_keep_source_vertices_and_close_trim_openings`
-checks both against the admitted model. The pinned detailed face has intersections even with correct upstream coordinates. This
+checks all three against the admitted model (it is ignored where the model is absent; its `Full`
+assertions were replayed on the model on 2026-11-21: 11026 vertices, four caps against the wrist
+collider's six, no kept vertex moved, no self-intersecting pair in 143780 and 144062 tested).
+`HandCollider::drape_pose_line` is the one sentence reports carry about the pose and what the collider
+leaves out of contact. The pinned detailed face has intersections even with correct upstream coordinates. This
 clothing proxy preserves retained source vertices exactly and identifies synthetic cap centres;
 consumers still require the strict full-surface intersection audit. `SkinMesh::audit_self_intersections`
 evaluates exact `ftx_core::intersection::indexed_triangle_pair` crossings/contacts over a deterministic

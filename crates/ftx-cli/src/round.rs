@@ -1045,19 +1045,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
                     json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
                 );
                 let mut b = description.clone();
-                let pose_text = if hands.is_wrist() {
-                    format!(
-                        "drape: arms at {}° and straight, hands and feet left out of contact",
-                        body.arm_deg
-                    )
-                } else {
-                    format!(
-                        "drape: arms at {}° and straight, hand collider {} (outer fingers and feet left out of contact)",
-                        body.arm_deg,
-                        hands.as_str()
-                    )
-                };
-                b.insert("pose".into(), json!(pose_text));
+                b.insert("pose".into(), json!(hands.drape_pose_line(body.arm_deg)));
                 if !pose.legs.is_standing() {
                     b.insert("legs".into(), json!(pose.legs));
                 }

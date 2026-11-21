@@ -993,12 +993,18 @@ pub fn clothing_skin(model: &AnnyModel, vertices: &[Vec3]) -> Result<SkinMesh, R
 /// How much of each hand the clothing collider keeps.
 ///
 /// The reference caps the body at the wrists, so no hand takes part in contact and a sleeve that reaches
-/// the hand passes through it. `Palm` and `Knuckle` are native extensions with no reference counterpart.
-/// `Palm` keeps the wrist and the four metacarpals and trims the fingers at their bases, the thumb
-/// included (the rig hangs the whole thumb, its metacarpal too, on `finger1-1`). `Knuckle` cuts one joint further
-/// out: it also keeps the thumb's first bone and the first phalanx of each finger, where a cuff that
-/// passes the wrist first meets the hand. The outer finger joints are left out in every case (a coarse
-/// garment mesh cannot clear them), so cloth beyond the kept part is not resolved by contact.
+/// the hand passes through it. `Palm`, `Knuckle` and `Full` are native extensions with no reference
+/// counterpart. `Palm` keeps the wrist and the four metacarpals and trims the fingers at their bases, the
+/// thumb included (the rig hangs the whole thumb, its metacarpal too, on `finger1-1`). `Knuckle` cuts one
+/// joint further out: it also keeps the thumb's first bone and the first phalanx of each finger, where a
+/// cuff that passes the wrist first meets the hand. Both leave the outer finger joints out, so cloth
+/// beyond the kept part is not resolved by contact and a sleeve that covers the fingers still crosses
+/// them in the displayed body.
+///
+/// `Full` keeps the whole hand, so the collider and the displayed body are the same surface there. It is
+/// for a sleeve that covers the hand from outside. The fingers of the drape pose are open, and each is
+/// narrower than the spacing of an ordinary garment mesh, so cloth cannot pass between them: a start that
+/// leaves cloth there is refused or does not converge. No finger is a measured shape; they are the model's.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandCollider {
@@ -1009,6 +1015,8 @@ pub enum HandCollider {
     Palm,
     /// As `Palm`, plus the thumb's first bone and each finger's first phalanx; capped at the second joint.
     Knuckle,
+    /// The whole hand, every finger joint included; nothing of the hand is cut.
+    Full,
 }
 
 impl HandCollider {
@@ -1018,30 +1026,53 @@ impl HandCollider {
         matches!(self, Self::Wrist)
     }
 
-    /// Stable CLI/report identifier (`"wrist"`, `"palm"` or `"knuckle"`).
+    /// Stable CLI/report identifier (`"wrist"`, `"palm"`, `"knuckle"` or `"full"`).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Wrist => "wrist",
             Self::Palm => "palm",
             Self::Knuckle => "knuckle",
+            Self::Full => "full",
         }
     }
 
-    /// Parses `"wrist"`, `"palm"` or `"knuckle"`.
+    /// Parses `"wrist"`, `"palm"`, `"knuckle"` or `"full"`.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "wrist" => Some(Self::Wrist),
             "palm" => Some(Self::Palm),
             "knuckle" => Some(Self::Knuckle),
+            "full" => Some(Self::Full),
             _ => None,
         }
     }
 
-    /// The bones whose regions are cut away from each hand, right then left.
+    /// The pose line a drape report carries: the arm angle and what this collider leaves out of contact.
+    /// The wrist cap keeps the reference's wording.
+    #[must_use]
+    pub fn drape_pose_line(self, arm_deg: f64) -> String {
+        match self {
+            Self::Wrist => {
+                format!(
+                    "drape: arms at {arm_deg}° and straight, hands and feet left out of contact"
+                )
+            }
+            Self::Palm | Self::Knuckle => format!(
+                "drape: arms at {arm_deg}° and straight, hand collider {} (outer fingers and feet left out of contact)",
+                self.as_str()
+            ),
+            Self::Full => format!(
+                "drape: arms at {arm_deg}° and straight, hand collider full (feet left out of contact)"
+            ),
+        }
+    }
+
+    /// The bones whose regions are cut away from each hand, right then left. None for the whole hand.
     const fn roots(self) -> &'static [&'static str] {
         match self {
+            Self::Full => &[],
             Self::Wrist => &["wrist.R", "wrist.L"],
             Self::Palm => &[
                 "finger1-1.R",
@@ -1511,11 +1542,28 @@ mod tests {
             HandCollider::Wrist,
             HandCollider::Palm,
             HandCollider::Knuckle,
+            HandCollider::Full,
         ] {
             assert_eq!(HandCollider::parse(hands.as_str()), Some(hands));
             assert_eq!(hands.is_wrist(), hands == HandCollider::Wrist);
         }
         assert_eq!(HandCollider::parse("mitten"), None);
+        // The whole hand cuts nothing: only the feet (and the levator regions) are still capped.
+        assert_eq!(HandCollider::Full.as_str(), "full");
+        assert!(HandCollider::Full.roots().is_empty());
+        // A report says what each collider leaves out of contact; only the whole hand leaves no finger out.
+        assert_eq!(
+            HandCollider::Wrist.drape_pose_line(45.0),
+            "drape: arms at 45° and straight, hands and feet left out of contact"
+        );
+        assert_eq!(
+            HandCollider::Knuckle.drape_pose_line(45.0),
+            "drape: arms at 45° and straight, hand collider knuckle (outer fingers and feet left out of contact)"
+        );
+        assert_eq!(
+            HandCollider::Full.drape_pose_line(37.5),
+            "drape: arms at 37.5° and straight, hand collider full (feet left out of contact)"
+        );
         // The reference collider cuts at the two wrists, in the order `clothing_skin` always used.
         assert_eq!(HandCollider::Wrist.roots(), ["wrist.R", "wrist.L"]);
         // The native ones cut one bone of each of the five fingers on each side and nothing nearer

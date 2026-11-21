@@ -835,11 +835,11 @@ cut. The bundled viewer carries the physical frames at PC2 precision in an optio
 contact offset by default. An explicit zero offset retains the crossing barrier.
 Before publication, native and browser contact runs check each recorded physical frame
 at PC2 precision for cloth crossing cloth and for cloth crossing the complete display
-skin, including hands and feet outside the capped collider. `--hands palm|knuckle` on
-`drape`, `place` and `round` (native, opt-in; default `wrist`, the reference collider)
-keeps part of each hand in the collider (05 "Clothing collider"), so a cuff that reaches
-the hand is held off it by contact instead of crossing it; the report records
-`hand_collider` when it is not `wrist`. Reopening a protected PC2
+skin, including hands and feet outside the capped collider. `--hands palm|knuckle|full` on
+`drape`, `place`, `round` and `qualify` (native, opt-in; default `wrist`, the reference collider)
+keeps part of each hand in the collider, or with `full` the whole hand (05 "Clothing
+collider"), so a cuff that reaches the hand is held off it by contact instead of crossing
+it; the report records `hand_collider` when it is not `wrist`. Reopening a protected PC2
 requires its phase counts and applies both checks before thinning the frames. A proper
 crossing refuses with `intersecting_trajectory`, the source-frame number and both
 triangle IDs. Touching is permitted. `ftx viewer SIMDIR --check-contact` performs this

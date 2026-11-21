@@ -157,7 +157,7 @@ Optional cloth self-contact adds moving cloth–cloth barriers and independent f
 
 **Anny clothing collider.** CLI, portable fold and fitted studies share `ftx_body::clothing_skin_with_hands`
 (defaulting to `HandCollider::Wrist`, which is `ftx_body::clothing_skin`):
-dominant-bone wrist/foot regions (or finger bases/first phalanges under opt-in `palm`/`knuckle`) and paired `levator05` facial details are replaced by centroid caps.
+dominant-bone wrist/foot regions (or finger bases/first phalanges under opt-in `palm`/`knuckle`; under opt-in `full` no hand region is capped) and paired `levator05` facial details are replaced by centroid caps.
 The complete detailed source can self-intersect; that negative must still fail `audit_surface`.
 No audit exclusion or tolerance relaxation is applied to the proxy. Retained source coordinates
 are unchanged, and measurement/display geometry remains complete. Reports retain the selected
@@ -177,7 +177,7 @@ priors to measurements or adding nappy material, friction, mass, thermal or vapo
 
 **Selected-body posture.** Scenario bodies can select initial `legs`
 (`standing`, `seated`, `squat`), finite `leg_fraction` in 0..1, `skinning` (`lbs` or `dqs`), and
-`hand_collider` (`wrist`, `palm`, `knuckle`) independently of straight-arm
+`hand_collider` (`wrist`, `palm`, `knuckle`, `full`) independently of straight-arm
 abduction. Defaults (`standing`, `1`, `lbs`, `wrist`) remain omitted from serialization, preserving the original
 standing workflows and identities, and motion endpoints reuse the same skinning and hand collider. The source shape, reference measurements and calibrated nappy
 occupancy stay fixed while the initial garment placement uses the requested posture. The existing

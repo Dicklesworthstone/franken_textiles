@@ -363,5 +363,26 @@ fn the_hand_colliders_keep_source_vertices_and_close_trim_openings() {
             );
             kept = skin.vertices.len();
         }
+
+        // The whole hand: nothing of it is cut, so the two wrist caps are gone, only the roots that
+        // follow the hands remain, and it keeps more of the model than any capped variant.
+        let full = clothing_skin_with_hands(&m, &posed.vertices, HandCollider::Full).unwrap();
+        assert!(full.vertices.len() > kept, "{label} full");
+        assert_eq!(caps(&full), caps(&wrist) - 2, "{label} full");
+        assert_eq!(full.trim_roots, wrist.trim_roots[2..], "{label} full");
+        for (vertex, &source) in full.vertices.iter().zip(&full.source_vertex) {
+            if source != usize::MAX {
+                assert_eq!(*vertex, posed.vertices[source], "{label} full");
+            }
+        }
+        let audit = full
+            .audit_self_intersections(DEFAULT_POSE_AUDIT_PAIR_BUDGET)
+            .unwrap();
+        assert_eq!(audit.intersecting_pairs, 0, "{label} full: {audit:?}");
+        println!(
+            "{label:12} full     {} vertices, {} pairs tested",
+            full.vertices.len(),
+            audit.pairs_tested
+        );
     }
 }

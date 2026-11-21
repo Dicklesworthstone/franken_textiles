@@ -63,7 +63,7 @@ const USAGE: &str = "usage:
             [--model PATH] [--body-fit REPORT] (draft from a tape-fitted or accepted body; MODEL_FIT, not new measurements)
   ftx validate PATTERN --measurements M [--fit F] [--model PATH] [--body-fit REPORT] [--flat-body] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
-            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--compression F] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle] [--max-settle-steps N] [--res WIDTHxHEIGHT]
+            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--compression F] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N] [--res WIDTHxHEIGHT]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
@@ -72,18 +72,18 @@ const USAGE: &str = "usage:
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--compression F] [--self-contact-mm MM] [--self-mu MU] [--json]
-            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle] [--max-settle-steps N]
+            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
-              [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle] [--json]
+              [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
-            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle] [--res 960x540] [--json] (start-state stills and numbers; no drape)
+            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--res 960x540] [--json] (start-state stills and numbers; no drape)
   ftx render DRAPE_DIR [--res 960x540] [--json]
   ftx render DRAPE_DIR --compare REVISED_DIR --view VIEW --out NEW_DIR [--res 960x540] [--json]
   ftx inspect-pixel ROUND_DIR --view front|side|back|three_quarter|strain_front|strain_back --pixel X,Y [--json]
@@ -438,15 +438,16 @@ pub(crate) fn parse_skinning(args: &Args) -> Result<SkinningMode, Refusal> {
     }
 }
 
-/// `--hands wrist|palm|knuckle`: how much of each hand the clothing collider keeps. The default is the
-/// reference's collider, capped at the wrists; `palm` and `knuckle` are native and keep the palms, and
-/// with `knuckle` the first finger joints too.
+/// `--hands wrist|palm|knuckle|full`: how much of each hand the clothing collider keeps. The default is
+/// the reference's collider, capped at the wrists; the others are native. `palm` and `knuckle` keep the
+/// palms, and with `knuckle` the first finger joints too; `full` keeps the whole hand, for a sleeve that
+/// covers the fingers.
 pub(crate) fn parse_hands(args: &Args) -> Result<HandCollider, Refusal> {
     match args.options.get("hands").map(String::as_str) {
         None => Ok(HandCollider::Wrist),
         Some(value) => HandCollider::parse(value).ok_or_else(|| {
             bad_input(format!("--hands {value}: no such hand collider"))
-                .repair("--hands wrist, palm or knuckle")
+                .repair("--hands wrist, palm, knuckle or full")
         }),
     }
 }
@@ -1190,19 +1191,7 @@ fn cmd_drape_bound(
             json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
         );
         let mut b = description;
-        let pose_text = if hands.is_wrist() {
-            format!(
-                "drape: arms at {}° and straight, hands and feet left out of contact",
-                body.arm_deg
-            )
-        } else {
-            format!(
-                "drape: arms at {}° and straight, hand collider {} (outer fingers and feet left out of contact)",
-                body.arm_deg,
-                hands.as_str()
-            )
-        };
-        b.insert("pose".into(), json!(pose_text));
+        b.insert("pose".into(), json!(hands.drape_pose_line(body.arm_deg)));
         if !pose.legs.is_standing() {
             b.insert("legs".into(), json!(pose.legs));
         }
@@ -1997,6 +1986,7 @@ mod tests {
             ("wrist", HandCollider::Wrist),
             ("palm", HandCollider::Palm),
             ("knuckle", HandCollider::Knuckle),
+            ("full", HandCollider::Full),
         ] {
             let args = parse(&["drape", "--hands", word].map(String::from)).unwrap();
             assert_eq!(parse_hands(&args).unwrap(), expected);
@@ -2017,7 +2007,7 @@ mod tests {
                 "{command}: {}",
                 refusal.message
             );
-            assert_eq!(refusal.repairs, ["--hands wrist, palm or knuckle"]);
+            assert_eq!(refusal.repairs, ["--hands wrist, palm, knuckle or full"]);
         }
         let round = parse(&["round", "no-such-ws", "--sim", "--hands", "mitten"].map(String::from))
             .unwrap();

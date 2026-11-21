@@ -838,23 +838,32 @@ selected roots and synthetic cap count; a failed cap remains a refusal.
 
 **Hand colliders (native, opt-in).** The default collider is capped at `wrist.R/L`, so no hand takes
 part in contact, while the full-body trajectory check (04 §9.1) tests cloth against the complete display
-skin. A sleeve cuff that reaches the hand therefore passes through it and is refused. Two opt-in
-variants keep part of each hand, by the same dominant-bone trim and centroid caps and with every kept
-source vertex unmoved:
+skin. A sleeve cuff that reaches the hand therefore passes through it and is refused. Three opt-in
+variants keep part or all of each hand, by the same dominant-bone trim and centroid caps and with every
+kept source vertex unmoved:
 
 | `HandCollider` | Trim roots (each side) | Kept beyond the wrist |
 |---|---|---|
 | `Wrist` (default, reference) | `wrist` | nothing |
 | `Palm` | `finger1-1` … `finger5-1` | the wrist and the four metacarpals; the whole thumb is cut, because the rig hangs its metacarpal on `finger1-1` |
 | `Knuckle` | `finger1-2` … `finger5-2` | as `Palm`, plus the thumb's first bone and each finger's first phalanx |
+| `Full` | none | the whole hand, every finger joint included |
 
-The outer finger joints are left out of every variant: cloth beyond the kept part is still not resolved
+`Palm` and `Knuckle` leave the outer finger joints out: cloth beyond the kept part is still not resolved
 by contact, and the full-body check still refuses it. On the admitted model, in the drape pose, both
-variants trim to simple loops and pass the solver's surface audit for the fitted 92 cm public-prior
+trim to simple loops and pass the solver's surface audit for the fitted 92 cm public-prior
 toddler and a 178 cm adult (7824 collider vertices at the wrist caps, 8278 for `Palm`, 9052 for
 `Knuckle`). Adjacent finger cuts in `Palm` share boundary loops on this mesh. The wrist, palm and
 knuckle variants produce two, four and ten hand cap centres, respectively. Capped finger stubs are
 synthetic geometry and grant no anatomical or fit claim about the hand.
+
+`Full` cuts nothing of the hand, so the collider and the display skin are the same surface there and
+have no hand cap. Measured on 2026-11-21 on the admitted model: 11026 collider vertices and 22048
+triangles, passing the solver's surface audit (143769 to 145077 overlapping pairs tested) for the 92 cm
+public-prior toddler at 20°, 45° and 75° of arm abduction and for two fitted adults. The fingers of the
+drape pose are open and thinner than an ordinary garment mesh is fine, so cloth cannot pass between them:
+a start that leaves cloth there is refused or does not converge. The fingers are the model's shape, not a
+measured hand, and grant no fit claim.
 
 ## Appendix A. Local-change labels (index j; blend-shape rows 624 + 2j and 625 + 2j)
 

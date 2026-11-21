@@ -137,6 +137,18 @@ frame (87). The first failure was cloth triangle 1988 against body triangle 4244
 checks retained the 30 mm sleeve-length excess. The 230.1 mm cut also exceeded the cuff-ease band by
 27.4 mm. Wider cuffs alone have yet to clear the displayed hand in this pose.
 
+`--hands full` (05 "Clothing collider"; native, opt-in) keeps the whole hand, so the collider and the
+displayed body are one surface there. Measured on 2026-11-21 with a build of that change, same wearer,
+`ftx round --stills --res 840x620 --self-contact-mm 2`:
+the 335 mm sleeve converged with no gating flags and six stills in 37 s, as it does with `knuckle`. A
+385 mm sleeve redrafted with a 207.7 mm cuff (`cuff_ease` 65) was refused at its start: with the sleeve on
+its drafted 34.7 mm cylinder the cuff ends across the open fingers and the start still crosses the body
+after 50 untangling rounds. `ftx place --hands full` on the same cut left one to four cloth vertices
+inside the hand at 45 and 55 mm cylinders and at 8 and 6 mm mesh spacing, and 213 cloth-on-cloth crossing
+pairs at 65 mm. So the whole-hand collider removes the blind spot beyond the knuckle cap but does not by
+itself give a sleeve that covers an open hand a clear start. What is still missing is a placement that
+puts the sleeve end outside the fingers, or a hand pose with the fingers together.
+
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
 digests passed, and Chromium/native ordinary and paired 92 cm bolero viewers agreed byte for
