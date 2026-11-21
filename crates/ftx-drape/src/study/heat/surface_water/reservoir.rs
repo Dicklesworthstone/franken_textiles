@@ -13,14 +13,15 @@
 //! accepted-start samples of the original film scheme; only ambient pressure is implicit.
 
 use super::{Evidence, Plan, Refusal, Source, Water, add_positive, invalid, positive_sum};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 /// Independently sourced fixed-temperature vapor storage; no gas or textile law is inferred.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Must be `ftx-textile-vapor-reservoir/1`.
+    /// `ftx-textile-vapor-reservoir/1` keeps an optional constant ambient boundary;
+    /// version 2 requires one independently qualified boundary per mechanical interval.
     pub schema: String,
     /// Must be `isothermal_constant_vapor_capacitance/1`.
     pub model: String,
@@ -34,8 +35,20 @@ pub struct Request {
     pub pressure_domain_pa: [f64; 2],
     /// Optional independently qualified exchange with one constant ambient vapor reservoir.
     /// Its pressure law participates in the same implicit finite-inventory/dryout solve.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null"
+    )]
     pub ambient_exchange: Option<AmbientExchange>,
+    /// Version 2 only: complete interval-aligned boundaries, including explicit zero conductance.
+    /// Changes preserve the shared vapor, textile liquid and thermal state; no interpolation occurs.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null"
+    )]
+    pub ambient_exchange_by_interval: Option<Vec<AmbientExchange>>,
     /// Bisection budget in 1..=128, in addition to initial and bracket-endpoint probes.
     pub max_iterations: usize,
     /// Absolute per-step and cumulative water-balance ceiling in kg. Inventory-scaled roundoff
@@ -83,6 +96,15 @@ pub struct AmbientExchange {
     pub method: String,
     /// Qualifies the full pressure domain and incoming/outgoing effective vapor enthalpy.
     pub qualification: String,
+}
+
+// A supplied null cannot masquerade as an absent policy under an older schema.
+fn non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 impl AmbientExchange {
@@ -138,12 +160,24 @@ impl AmbientExchange {
 }
 
 impl Request {
-    pub(super) fn validate(&self) -> Result<(), Refusal> {
+    pub(super) fn validate(&self, intervals: usize) -> Result<(), Refusal> {
         let text = |s: &str| !s.trim().is_empty() && s.len() <= 4096;
         let [lo, hi] = self.pressure_domain_pa;
         let pressure = self.initial_vapor_mass_kg / self.vapor_capacitance_kg_pa;
         let capacity_mass = hi * self.vapor_capacitance_kg_pa;
-        if self.schema != "ftx-textile-vapor-reservoir/1"
+        let version_valid = match self.schema.as_str() {
+            "ftx-textile-vapor-reservoir/1" => self.ambient_exchange_by_interval.is_none(),
+            "ftx-textile-vapor-reservoir/2" => {
+                self.ambient_exchange.is_none()
+                    && self
+                        .ambient_exchange_by_interval
+                        .as_ref()
+                        .is_some_and(|schedule| !schedule.is_empty() && schedule.len() == intervals)
+            }
+            _ => false,
+        };
+        if !version_valid
+            || intervals == 0
             || self.model != "isothermal_constant_vapor_capacitance/1"
             || !self.vapor_capacitance_kg_pa.is_finite()
             || self.vapor_capacitance_kg_pa <= 0.
@@ -178,7 +212,20 @@ impl Request {
         if let Some(exchange) = &self.ambient_exchange {
             exchange.validate(self.pressure_domain_pa)?;
         }
+        for exchange in self.ambient_exchange_by_interval.iter().flatten() {
+            exchange.validate(self.pressure_domain_pa)?;
+        }
         Ok(())
+    }
+
+    fn exchange(&self, interval: usize) -> Result<Option<&AmbientExchange>, Refusal> {
+        if let Some(schedule) = &self.ambient_exchange_by_interval {
+            schedule.get(interval).map(Some).ok_or_else(|| {
+                invalid("finite vapor ambient schedule has no boundary for this interval")
+            })
+        } else {
+            Ok(self.ambient_exchange.as_ref())
+        }
     }
 }
 
@@ -197,6 +244,42 @@ fn water_sum(values: impl IntoIterator<Item = f64>) -> f64 {
     sum + correction
 }
 
+fn exchange_snapshot(
+    integrals: [f64; 5],
+    incoming_enthalpy_j: f64,
+    outgoing_enthalpy_j: f64,
+) -> Result<Value, Refusal> {
+    let [incoming, outgoing, pressure_time, inward, outward] = integrals;
+    let net = water_sum([incoming, -outgoing]);
+    let net_enthalpy_j = water_sum([incoming_enthalpy_j, -outgoing_enthalpy_j]);
+    if integrals
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.)
+        || [
+            net,
+            incoming_enthalpy_j,
+            outgoing_enthalpy_j,
+            net_enthalpy_j,
+        ]
+        .iter()
+        .any(|value| !value.is_finite())
+    {
+        return Err(invalid("ambient vapor exchange receipt is unrepresentable"));
+    }
+    Ok(json!({
+        "schema":"ftx-textile-vapor-exchange-result/1",
+        "incoming_vapor_mass_kg":incoming,
+        "outgoing_vapor_mass_kg":outgoing,
+        "net_vapor_received_kg":net,
+        "incoming_vapor_enthalpy_j":incoming_enthalpy_j,
+        "outgoing_vapor_enthalpy_j":outgoing_enthalpy_j,
+        "net_vapor_enthalpy_received_j":net_enthalpy_j,
+        "reservoir_pressure_time_pa_s":pressure_time,
+        "inward_pressure_time_pa_s":inward,
+        "outward_pressure_time_pa_s":outward,
+    }))
+}
+
 #[derive(Clone)]
 pub(super) struct State {
     mass_kg: f64,
@@ -206,6 +289,15 @@ pub(super) struct State {
     // Actual accepted ambient mass and implicit endpoint-pressure integrals. Every failed
     // pressure probe is discarded; these counters share the accepted water/heat transaction.
     ambient_integrals: [f64; 5],
+    // Version 2 retains each independently qualified temperature and pressure interval's share,
+    // including zero future entries. Global accumulation keeps the constant-path arithmetic.
+    ambient_by_interval: Vec<AmbientInterval>,
+}
+
+#[derive(Clone, Default)]
+struct AmbientInterval {
+    elapsed_seconds: f64,
+    integrals: [f64; 5],
 }
 
 struct Candidate {
@@ -334,14 +426,20 @@ fn first_evaporation_root(
 }
 
 impl State {
-    pub(super) fn new(request: &Request) -> Result<Self, Refusal> {
-        request.validate()?;
+    pub(super) fn new(request: &Request, intervals: usize) -> Result<Self, Refusal> {
+        request.validate(intervals)?;
         Ok(Self {
             mass_kg: request.initial_vapor_mass_kg,
             elapsed_seconds: 0.,
             pressure_trials: 0,
             maximum_step_mass_residual_kg: 0.,
             ambient_integrals: [0.; 5],
+            ambient_by_interval: request
+                .ambient_exchange_by_interval
+                .as_ref()
+                .map_or_else(Vec::new, |schedule| {
+                    vec![AmbientInterval::default(); schedule.len()]
+                }),
         })
     }
 
@@ -358,11 +456,13 @@ impl State {
     pub(super) fn propose(
         &self,
         request: &Request,
+        interval: usize,
         mut plan_at_pressure: impl FnMut(f64) -> Result<Plan, Refusal>,
         charge_trial: &mut impl FnMut() -> Result<(), Refusal>,
     ) -> Result<(Plan, Self), Refusal> {
         let initial_pressure = self.mass_kg / request.vapor_capacitance_kg_pa;
         let [mut lower, mut upper] = request.pressure_domain_pa;
+        let exchange = request.exchange(interval)?;
         let mut trials = 0usize;
         let mut evaluate = |pressure: f64| -> Result<Candidate, Refusal> {
             charge_trial()?;
@@ -376,9 +476,7 @@ impl State {
                     .zip(&plan.condensed)
                     .flat_map(|(&e, &c)| [e, -c]),
             );
-            let ambient_integrals = request
-                .ambient_exchange
-                .as_ref()
+            let ambient_integrals = exchange
                 .map(|exchange| exchange.increments(pressure, plan.seconds))
                 .transpose()?
                 .unwrap_or([0.; 5]);
@@ -522,6 +620,16 @@ impl State {
         for (total, increment) in ambient_integrals.iter_mut().zip(accepted.ambient_integrals) {
             add_positive(total, increment)?;
         }
+        let mut ambient_by_interval = self.ambient_by_interval.clone();
+        if request.ambient_exchange_by_interval.is_some() {
+            let active = ambient_by_interval
+                .get_mut(interval)
+                .ok_or_else(|| invalid("finite vapor ambient state has no matching interval"))?;
+            add_positive(&mut active.elapsed_seconds, accepted.plan.seconds)?;
+            for (total, increment) in active.integrals.iter_mut().zip(accepted.ambient_integrals) {
+                add_positive(total, increment)?;
+            }
+        }
         Ok((
             accepted.plan,
             Self {
@@ -533,6 +641,7 @@ impl State {
                     .max(accepted.residual_kg.abs())
                     .max(accepted.stored_pressure_residual_kg.abs()),
                 ambient_integrals,
+                ambient_by_interval,
             },
         ))
     }
@@ -547,7 +656,7 @@ impl State {
                 .zip(&water.condensed)
                 .flat_map(|(&e, &c)| [e, -c]),
         );
-        let [ambient_in, ambient_out, pressure_time, inward, outward] = self.ambient_integrals;
+        let [ambient_in, ambient_out, ..] = self.ambient_integrals;
         let ambient_net = water_sum([ambient_in, -ambient_out]);
         let mass_error = water_sum([
             self.mass_kg,
@@ -575,12 +684,37 @@ impl State {
             -water.condensation_latent_j,
             -incoming_sensible,
         ]);
-        let ambient_in_j = request.ambient_exchange.as_ref().map_or(0., |exchange| {
-            ambient_in
-                * (water.request.latent_heat_j_kg
-                    + water.request.liquid_specific_heat_j_kg_k
-                        * (exchange.ambient_temperature_c - water.request.enthalpy_reference_c))
-        });
+        let incoming_enthalpy = |mass: f64, exchange: &AmbientExchange| {
+            mass * (water.request.latent_heat_j_kg
+                + water.request.liquid_specific_heat_j_kg_k
+                    * (exchange.ambient_temperature_c - water.request.enthalpy_reference_c))
+        };
+        let mut interval_receipts = Vec::new();
+        let ambient_in_j = if let Some(schedule) = &request.ambient_exchange_by_interval {
+            if self.ambient_by_interval.len() != schedule.len() {
+                return Err(invalid(
+                    "finite vapor ambient state lost its source interval mapping",
+                ));
+            }
+            let mut incoming_energies = Vec::with_capacity(schedule.len());
+            for (interval, (exchange, accepted)) in
+                schedule.iter().zip(&self.ambient_by_interval).enumerate()
+            {
+                let incoming_j = incoming_enthalpy(accepted.integrals[0], exchange);
+                let outgoing_j = accepted.integrals[1] * effective_enthalpy;
+                let mut receipt = exchange_snapshot(accepted.integrals, incoming_j, outgoing_j)?;
+                receipt["interval"] = json!(interval);
+                receipt["elapsed_seconds"] = json!(accepted.elapsed_seconds);
+                interval_receipts.push(receipt);
+                incoming_energies.push(incoming_j);
+            }
+            water_sum(incoming_energies)
+        } else {
+            request
+                .ambient_exchange
+                .as_ref()
+                .map_or(0., |exchange| incoming_enthalpy(ambient_in, exchange))
+        };
         let ambient_out_j = ambient_out * effective_enthalpy;
         let ambient_received_j = water_sum([ambient_in_j, -ambient_out_j]);
         // Positive heat is removed by the explicitly isothermal reservoir's thermostat. This
@@ -626,7 +760,11 @@ impl State {
             ));
         }
         let mut result = json!({
-            "schema":"ftx-textile-vapor-reservoir-result/1",
+            "schema":if request.ambient_exchange_by_interval.is_some() {
+                "ftx-textile-vapor-reservoir-result/2"
+            } else {
+                "ftx-textile-vapor-reservoir-result/1"
+            },
             "initial_vapor_mass_kg":request.initial_vapor_mass_kg,
             "remaining_vapor_mass_kg":self.mass_kg,
             "initial_vapor_pressure_pa":request.initial_vapor_mass_kg/request.vapor_capacitance_kg_pa,
@@ -641,19 +779,14 @@ impl State {
             "pressure_trials":self.pressure_trials,
             "maximum_step_mass_residual_kg":self.maximum_step_mass_residual_kg
         });
-        if request.ambient_exchange.is_some() {
-            result["ambient_exchange"] = json!({
-                "schema":"ftx-textile-vapor-exchange-result/1",
-                "incoming_vapor_mass_kg":ambient_in,
-                "outgoing_vapor_mass_kg":ambient_out,
-                "net_vapor_received_kg":ambient_net,
-                "incoming_vapor_enthalpy_j":ambient_in_j,
-                "outgoing_vapor_enthalpy_j":ambient_out_j,
-                "net_vapor_enthalpy_received_j":ambient_received_j,
-                "reservoir_pressure_time_pa_s":pressure_time,
-                "inward_pressure_time_pa_s":inward,
-                "outward_pressure_time_pa_s":outward,
-            });
+        if request.ambient_exchange.is_some() || request.ambient_exchange_by_interval.is_some() {
+            let mut exchange =
+                exchange_snapshot(self.ambient_integrals, ambient_in_j, ambient_out_j)?;
+            if request.ambient_exchange_by_interval.is_some() {
+                exchange["schema"] = json!("ftx-textile-vapor-exchange-result/2");
+                exchange["intervals"] = json!(interval_receipts);
+            }
+            result["ambient_exchange"] = exchange;
         }
         Ok(result)
     }

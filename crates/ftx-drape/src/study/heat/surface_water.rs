@@ -335,9 +335,13 @@ impl Request {
             ));
         }
         if let Some(reservoir) = &self.vapor_reservoir {
-            reservoir.validate()?;
+            reservoir.validate(intervals)?;
             self.pressure(reservoir.temperature_c)?;
-            if let Some(exchange) = &reservoir.ambient_exchange {
+            for exchange in reservoir
+                .ambient_exchange
+                .iter()
+                .chain(reservoir.ambient_exchange_by_interval.iter().flatten())
+            {
                 self.pressure(exchange.ambient_temperature_c)?;
             }
             if self.condensation.as_ref().is_none_or(|condensation| {
@@ -400,6 +404,14 @@ fn case_inputs(request: &Request) -> Result<Value, Refusal> {
     }
     if let Some(exchange) = value.pointer_mut("/vapor_reservoir/ambient_exchange") {
         remove_evidence(exchange);
+    }
+    if let Some(schedule) = value
+        .pointer_mut("/vapor_reservoir/ambient_exchange_by_interval")
+        .and_then(Value::as_array_mut)
+    {
+        for exchange in schedule {
+            remove_evidence(exchange);
+        }
     }
     value
         .as_object_mut()
@@ -774,7 +786,7 @@ impl Water {
         let vapor_reservoir = request
             .vapor_reservoir
             .as_ref()
-            .map(reservoir::State::new)
+            .map(|reservoir| reservoir::State::new(reservoir, intervals))
             .transpose()?;
         Ok(Self {
             request,
@@ -836,6 +848,7 @@ impl Water {
                 })?;
             let (mut plan, next_reservoir) = reservoir.propose(
                 policy,
+                interval,
                 |outside| {
                     self.plan_at_pressure(
                         model,
@@ -1469,6 +1482,17 @@ impl Water {
                 let scope = result["scope"].as_str().expect("finite vapor scope");
                 result["scope"] = json!(format!(
                     "{scope} A separately qualified constant ambient boundary exchanges vapor through its explicit pressure conductance at that same implicit endpoint and dryout duration. Incoming vapor carries the ambient effective enthalpy; outgoing vapor carries the finite reservoir effective enthalpy. Both signed boundary transfer and fixed-temperature heat removal remain separate from textile latent heat. No airflow, ventilation rate, gas law or ambient coefficient is inferred."
+                ));
+            }
+            if self
+                .request
+                .vapor_reservoir
+                .as_ref()
+                .is_some_and(|reservoir| reservoir.ambient_exchange_by_interval.is_some())
+            {
+                let scope = result["scope"].as_str().expect("finite vapor scope");
+                result["scope"] = json!(format!(
+                    "{scope} Each mechanical interval has its own independently qualified constant ambient pressure, conductance and incoming temperature. The exact interval boundary changes without interpolating or resetting any inventory or temperature. Accepted pressure integrals, mass and temperature-weighted incoming enthalpy remain attributed to that interval, including shared dryout substeps. Outgoing vapor retains the finite reservoir effective enthalpy. No airflow, ventilation rate, gas law or ambient coefficient is inferred."
                 ));
             }
         }

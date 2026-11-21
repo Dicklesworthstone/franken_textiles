@@ -1135,7 +1135,7 @@ fn finite_fixture(loading: f64, step: f64, capacitance: f64, pressure: f64) -> S
     request.validate(1).unwrap();
     let water = history.water.as_mut().unwrap();
     water.vapor_reservoir =
-        Some(reservoir::State::new(request.vapor_reservoir.as_ref().unwrap()).unwrap());
+        Some(reservoir::State::new(request.vapor_reservoir.as_ref().unwrap(), 1).unwrap());
     water.request = request.clone();
     history.request.surface_water = Some(request);
     history
@@ -1165,16 +1165,42 @@ fn ambient_fixture(
     request.validate(1).unwrap();
     let water = history.water.as_mut().unwrap();
     water.vapor_reservoir =
-        Some(reservoir::State::new(request.vapor_reservoir.as_ref().unwrap()).unwrap());
+        Some(reservoir::State::new(request.vapor_reservoir.as_ref().unwrap(), 1).unwrap());
     water.request = request.clone();
     history.request.surface_water = Some(request);
+    history
+}
+
+fn ambient_schedule_fixture(
+    mut history: SurfaceHistory,
+    exchanges: Vec<AmbientExchange>,
+) -> SurfaceHistory {
+    let intervals = exchanges.len();
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    let reservoir = request.vapor_reservoir.as_mut().unwrap();
+    reservoir.schema = "ftx-textile-vapor-reservoir/2".into();
+    reservoir.ambient_exchange = None;
+    reservoir.ambient_exchange_by_interval = Some(exchanges);
+    for supply in request.supply.as_mut().unwrap().bindings.values_mut() {
+        supply.rate_kg_m2_s = vec![supply.rate_kg_m2_s[0]; intervals];
+        supply.temperature_c = vec![supply.temperature_c[0]; intervals];
+    }
+    request.condensation.as_mut().unwrap().vapor_temperature_c =
+        vec![request.vapor_reservoir.as_ref().unwrap().temperature_c; intervals];
+    request.validate(intervals).unwrap();
+    let water = history.water.as_mut().unwrap();
+    water.vapor_reservoir =
+        Some(reservoir::State::new(request.vapor_reservoir.as_ref().unwrap(), intervals).unwrap());
+    water.request = request.clone();
+    history.request.surface_water = Some(request);
+    history.request.boundaries = vec![history.request.boundaries[0]; intervals];
     history
 }
 
 fn constant_wet_pressure(history: &mut SurfaceHistory, pressure: f64) {
     let mut request = history.water.as_ref().unwrap().request.clone();
     request.wet_vapor_pressure_pa = vec![[-20., pressure], [80., pressure]];
-    request.validate(1).unwrap();
+    request.validate(history.request.boundaries.len()).unwrap();
     history.water.as_mut().unwrap().request = request.clone();
     history.request.surface_water = Some(request);
 }
@@ -1376,6 +1402,438 @@ fn finite_vapor_ambient_sources_domains_and_failed_heat_are_transactional() {
     after["vapor_reservoir"]["pressure_trials"] =
         before["vapor_reservoir"]["pressure_trials"].clone();
     assert_eq!(before, after);
+}
+
+#[test]
+fn finite_vapor_ambient_schedule_matches_independent_pressure_and_enthalpy_histories() {
+    // A dry textile and a wet-vapor pressure above the entire gas domain isolate the
+    // finite chamber. Each interval has the independent backward-Euler solution below.
+    let boundaries = [
+        (2e-6, 3000., 50., 0.5),
+        (4e-6, 0., 10., 0.75),
+        (0., 7777., 60., 0.25),
+        (3e-6, 5000., 5., 0.5),
+    ];
+    let mut thermostat = Vec::new();
+    for reference in [0., 100.] {
+        let mut history = ambient_schedule_fixture(
+            finite_fixture(0., 1., 1e-5, 1000.),
+            boundaries
+                .iter()
+                .map(|&(k, p, t, _)| ambient_request(k, p, t))
+                .collect(),
+        );
+        for request in [
+            history.request.surface_water.as_mut().unwrap(),
+            &mut history.water.as_mut().unwrap().request,
+        ] {
+            request.enthalpy_reference_c = reference;
+        }
+        constant_wet_pressure(&mut history, 10000.);
+        let initial = finite_snapshot(&history);
+        assert_eq!(
+            initial["vapor_reservoir"]["schema"],
+            "ftx-textile-vapor-reservoir-result/2"
+        );
+        let initial_intervals = initial["vapor_reservoir"]["ambient_exchange"]["intervals"]
+            .as_array()
+            .unwrap();
+        assert_eq!(initial_intervals.len(), boundaries.len());
+        assert!(
+            initial_intervals
+                .iter()
+                .all(|entry| entry["elapsed_seconds"] == 0.)
+        );
+        let (mut pressure, mut time, mut incoming_j, mut outgoing_j, mut removed_j) =
+            (1000., 0., 0., 0., 0.);
+        for (interval, &(conductance, ambient, temperature, duration)) in
+            boundaries.iter().enumerate()
+        {
+            pressure = (1e-5 * pressure + duration * conductance * ambient)
+                / (1e-5 + duration * conductance);
+            let incoming = duration * conductance * (ambient - pressure).max(0.);
+            let outgoing = duration * conductance * (pressure - ambient).max(0.);
+            let interval_in_j = incoming * (10000. + 1000. * (temperature - reference));
+            let interval_out_j = outgoing * (10000. + 1000. * (20. - reference));
+            incoming_j += interval_in_j;
+            outgoing_j += interval_out_j;
+            removed_j += incoming * 1000. * (temperature - 20.);
+            time += duration;
+            history
+                .advance(&geometry(0.5), time, interval, interval, None, None, None)
+                .unwrap();
+            let snapshot = finite_snapshot(&history);
+            let gas = &snapshot["vapor_reservoir"];
+            let exchange = &gas["ambient_exchange"];
+            assert_eq!(exchange["schema"], "ftx-textile-vapor-exchange-result/2");
+            near(gas["vapor_pressure_pa"].as_f64().unwrap(), pressure);
+            near(
+                gas["remaining_vapor_mass_kg"].as_f64().unwrap(),
+                pressure * 1e-5,
+            );
+            near(gas["elapsed_seconds"].as_f64().unwrap(), time);
+            near(
+                exchange["incoming_vapor_enthalpy_j"].as_f64().unwrap(),
+                incoming_j,
+            );
+            near(
+                exchange["outgoing_vapor_enthalpy_j"].as_f64().unwrap(),
+                outgoing_j,
+            );
+            near(
+                gas["isothermal_heat_removed_j"].as_f64().unwrap(),
+                removed_j,
+            );
+            let entries = exchange["intervals"].as_array().unwrap();
+            let receipt = &entries[interval];
+            assert_eq!(receipt["interval"], interval);
+            assert_eq!(receipt["schema"], "ftx-textile-vapor-exchange-result/1");
+            near(receipt["elapsed_seconds"].as_f64().unwrap(), duration);
+            near(
+                receipt["incoming_vapor_mass_kg"].as_f64().unwrap(),
+                incoming,
+            );
+            near(
+                receipt["outgoing_vapor_mass_kg"].as_f64().unwrap(),
+                outgoing,
+            );
+            near(
+                receipt["incoming_vapor_enthalpy_j"].as_f64().unwrap(),
+                interval_in_j,
+            );
+            near(
+                receipt["outgoing_vapor_enthalpy_j"].as_f64().unwrap(),
+                interval_out_j,
+            );
+            near(
+                receipt["reservoir_pressure_time_pa_s"].as_f64().unwrap(),
+                pressure * duration,
+            );
+            near(
+                receipt["inward_pressure_time_pa_s"].as_f64().unwrap(),
+                (ambient - pressure).max(0.) * duration,
+            );
+            near(
+                receipt["outward_pressure_time_pa_s"].as_f64().unwrap(),
+                (pressure - ambient).max(0.) * duration,
+            );
+            assert!(entries[interval + 1..].iter().all(|entry| {
+                entry["elapsed_seconds"] == 0.
+                    && entry["incoming_vapor_mass_kg"] == 0.
+                    && entry["outgoing_vapor_mass_kg"] == 0.
+                    && entry["reservoir_pressure_time_pa_s"] == 0.
+            }));
+            assert_eq!(snapshot["evaporated_liquid_kg"], 0.);
+            assert_eq!(snapshot["condensed_liquid_kg"], 0.);
+            assert_eq!(history.state.temperature_c(), &[vec![20.]]);
+            finite_energy_balance(&history);
+        }
+        let result = finite_snapshot(&history);
+        let exchange = &result["vapor_reservoir"]["ambient_exchange"];
+        assert!(
+            (exchange["incoming_vapor_mass_kg"].as_f64().unwrap()
+                * (10000. + 1000. * (5. - reference))
+                - incoming_j)
+                .abs()
+                > 1.,
+            "the last temperature must not reprice earlier incoming enthalpy"
+        );
+        thermostat.push(
+            result["vapor_reservoir"]["isothermal_heat_removed_j"]
+                .as_f64()
+                .unwrap(),
+        );
+    }
+    near(thermostat[0], thermostat[1]);
+}
+
+#[test]
+fn finite_vapor_constant_ambient_schedule_keeps_the_original_physical_trajectory() {
+    let exchange = ambient_request(2e-6, 6000., 50.);
+    let mut scheduled = ambient_schedule_fixture(
+        finite_fixture(0.1, 0.125, 1e-5, 1000.),
+        vec![exchange.clone(); 3],
+    );
+    let mut constant = scheduled.clone();
+    for request in [
+        constant.request.surface_water.as_mut().unwrap(),
+        &mut constant.water.as_mut().unwrap().request,
+    ] {
+        let reservoir = request.vapor_reservoir.as_mut().unwrap();
+        reservoir.schema = "ftx-textile-vapor-reservoir/1".into();
+        reservoir.ambient_exchange_by_interval = None;
+        reservoir.ambient_exchange = Some(exchange.clone());
+        request.validate(3).unwrap();
+    }
+    constant.water.as_mut().unwrap().vapor_reservoir = Some(
+        reservoir::State::new(
+            constant
+                .request
+                .surface_water
+                .as_ref()
+                .unwrap()
+                .vapor_reservoir
+                .as_ref()
+                .unwrap(),
+            3,
+        )
+        .unwrap(),
+    );
+    for interval in 0..3 {
+        let time = (interval + 1) as f64 * 0.25;
+        for history in [&mut constant, &mut scheduled] {
+            history
+                .advance(&geometry(0.5), time, interval, interval, None, None, None)
+                .unwrap();
+        }
+        assert_eq!(
+            constant.state.temperature_c(),
+            scheduled.state.temperature_c()
+        );
+        assert_eq!(
+            constant.water.as_ref().unwrap().remaining,
+            scheduled.water.as_ref().unwrap().remaining
+        );
+        assert_eq!(
+            constant.water.as_ref().unwrap().evaporated,
+            scheduled.water.as_ref().unwrap().evaporated
+        );
+        assert_eq!(
+            constant.water.as_ref().unwrap().condensed,
+            scheduled.water.as_ref().unwrap().condensed
+        );
+        let a = finite_snapshot(&constant);
+        let b = finite_snapshot(&scheduled);
+        for key in [
+            "remaining_vapor_mass_kg",
+            "vapor_pressure_pa",
+            "pressure_trials",
+            "maximum_step_mass_residual_kg",
+        ] {
+            assert_eq!(
+                a["vapor_reservoir"][key], b["vapor_reservoir"][key],
+                "{key}"
+            );
+        }
+        for key in [
+            "incoming_vapor_mass_kg",
+            "outgoing_vapor_mass_kg",
+            "reservoir_pressure_time_pa_s",
+            "inward_pressure_time_pa_s",
+            "outward_pressure_time_pa_s",
+        ] {
+            assert_eq!(
+                a["vapor_reservoir"]["ambient_exchange"][key],
+                b["vapor_reservoir"]["ambient_exchange"][key],
+                "{key}"
+            );
+        }
+        near(
+            a["vapor_reservoir"]["ambient_exchange"]["incoming_vapor_enthalpy_j"]
+                .as_f64()
+                .unwrap(),
+            b["vapor_reservoir"]["ambient_exchange"]["incoming_vapor_enthalpy_j"]
+                .as_f64()
+                .unwrap(),
+        );
+        finite_energy_balance(&constant);
+        finite_energy_balance(&scheduled);
+    }
+}
+
+#[test]
+fn finite_vapor_ambient_schedule_keeps_the_analytic_dryout_and_closed_interval() {
+    let mut history = ambient_schedule_fixture(
+        finite_fixture(0.001, 1., 1e-5, 1000.),
+        vec![
+            ambient_request(2e-6, 0., 20.),
+            ambient_request(0., 9000., 40.),
+        ],
+    );
+    constant_wet_pressure(&mut history, 4000.);
+    let b = 1e-5 * (1000. + 4000.) + 0.0005 * (1. + 2e-6 / 5e-6);
+    let c = 1e-5 * 1000. * 4000. + 0.0005 * 4000.;
+    let pressure = (b - (b * b - 4.0_f64 * 1e-5 * c).sqrt()) / (2. * 1e-5);
+    let seconds = 0.0005 / (5e-6 * (4000. - pressure));
+    let plan = history
+        .water
+        .as_ref()
+        .unwrap()
+        .plan(&history.model, &history.state, &geometry(0.5), 0, 1.)
+        .unwrap();
+    near(plan.seconds, seconds);
+    near(plan.evaporated[0], 0.0005);
+    assert_eq!(plan.remaining[0], 0.);
+    advance(&mut history, 0.5, 1.).unwrap();
+    let before = finite_snapshot(&history);
+    assert_eq!(history.water.as_ref().unwrap().dryout_events, 1);
+    near(
+        before["vapor_reservoir"]["ambient_exchange"]["intervals"][0]["elapsed_seconds"]
+            .as_f64()
+            .unwrap(),
+        1.,
+    );
+    history
+        .advance(&geometry(0.5), 2., 1, 1, None, None, None)
+        .unwrap();
+    let after = finite_snapshot(&history);
+    assert_eq!(
+        before["vapor_reservoir"]["remaining_vapor_mass_kg"],
+        after["vapor_reservoir"]["remaining_vapor_mass_kg"]
+    );
+    let second = &after["vapor_reservoir"]["ambient_exchange"]["intervals"][1];
+    assert_eq!(second["elapsed_seconds"], 1.);
+    assert_eq!(second["incoming_vapor_mass_kg"], 0.);
+    assert_eq!(second["outgoing_vapor_mass_kg"], 0.);
+    finite_energy_balance(&history);
+}
+
+#[test]
+fn finite_vapor_ambient_schedule_refuses_incomplete_mixed_and_unqualified_inputs() {
+    let history = ambient_schedule_fixture(
+        finite_fixture(0.1, 1., 1e-5, 1000.),
+        vec![ambient_request(2e-6, 3000., 30.); 2],
+    );
+    let original = serde_json::to_value(history.request.surface_water.as_ref().unwrap()).unwrap();
+    for case in 0..14 {
+        let mut value = original.clone();
+        let gas = &mut value["vapor_reservoir"];
+        match case {
+            0 => gas["schema"] = json!("ftx-textile-vapor-reservoir/1"),
+            1 => {
+                gas.as_object_mut()
+                    .unwrap()
+                    .remove("ambient_exchange_by_interval");
+            }
+            2 => {
+                gas["ambient_exchange"] =
+                    serde_json::to_value(ambient_request(2e-6, 3000., 30.)).unwrap()
+            }
+            3 => gas["ambient_exchange_by_interval"] = json!([]),
+            4 => {
+                gas["ambient_exchange_by_interval"]
+                    .as_array_mut()
+                    .unwrap()
+                    .pop();
+            }
+            5 => gas["ambient_exchange_by_interval"] = Value::Null,
+            6 => gas["ambient_exchange"] = Value::Null,
+            7 => gas["ambient_exchange_by_interval"][1]["source"]["note"] = json!(""),
+            8 => gas["ambient_exchange_by_interval"][1]["allow_estimates"] = json!(false),
+            9 => {
+                gas["ambient_exchange_by_interval"][1]["reservoir_pressure_domain_pa"] =
+                    json!([0., 9999.])
+            }
+            10 => gas["ambient_exchange_by_interval"][1]["ambient_temperature_c"] = json!(90.),
+            11 => gas["ambient_exchange_by_interval"][1]["conductance_kg_pa_s"] = json!(-1.),
+            12 => {
+                gas["ambient_exchange_by_interval"][1]["schema"] =
+                    json!("ftx-textile-vapor-exchange/2")
+            }
+            _ => {
+                gas["schema"] = json!("ftx-textile-vapor-reservoir/1");
+                gas["ambient_exchange_by_interval"] = Value::Null;
+            }
+        }
+        let refused = match serde_json::from_value::<Request>(value) {
+            Err(_) => true,
+            Ok(request) => request.validate(2).is_err(),
+        };
+        assert!(refused, "schedule refusal {case}");
+    }
+    let before = finite_snapshot(&history);
+    assert!(
+        history
+            .water
+            .as_ref()
+            .unwrap()
+            .plan(&history.model, &history.state, &geometry(0.5), 2, 1.)
+            .is_err()
+    );
+    assert_eq!(before, finite_snapshot(&history));
+}
+
+#[test]
+fn finite_vapor_ambient_schedule_rolls_back_late_heat_failure_after_an_accepted_interval() {
+    let base = variable_fixture(
+        finite_fixture(0.1, 0.1, 1e-5, 4000.),
+        1,
+        [0.0025; 2],
+        [19.95, 60.],
+    );
+    let mut history = ambient_schedule_fixture(
+        base,
+        vec![
+            ambient_request(2e-6, 4000., 20.),
+            ambient_request(2e-6, 0., 10.),
+        ],
+    );
+    constant_wet_pressure(&mut history, 4000.);
+    advance(&mut history, 0.5, 1.).unwrap();
+    let before = finite_snapshot(&history);
+    let temperatures = history.state.temperature_c().to_vec();
+    let steps = history.thermal_steps;
+    assert!(
+        history
+            .advance(&geometry(0.5), 2., 1, 1, None, None, None)
+            .is_err()
+    );
+    assert_eq!(history.state.temperature_c(), temperatures);
+    assert_eq!(history.thermal_steps, steps);
+    assert_eq!(history.time_s, 1.);
+    assert_eq!(history.trace.len(), 1);
+    let mut after = finite_snapshot(&history);
+    assert!(
+        after["vapor_reservoir"]["pressure_trials"]
+            .as_u64()
+            .unwrap()
+            > before["vapor_reservoir"]["pressure_trials"]
+                .as_u64()
+                .unwrap()
+    );
+    after["vapor_reservoir"]["pressure_trials"] =
+        before["vapor_reservoir"]["pressure_trials"].clone();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn finite_vapor_ambient_schedule_source_alternatives_preserve_every_boundary() {
+    let history = ambient_schedule_fixture(
+        finite_fixture(0.1, 1., 1e-5, 1000.),
+        vec![ambient_request(2e-6, 3000., 30.); 2],
+    );
+    let original = history.request.surface_water.unwrap();
+    let mut alternate = original.clone();
+    alternate.bindings.get_mut("sheet").unwrap().material_sha256 = "a".repeat(64);
+    for exchange in alternate
+        .vapor_reservoir
+        .as_mut()
+        .unwrap()
+        .ambient_exchange_by_interval
+        .as_mut()
+        .unwrap()
+    {
+        exchange.source.reference = "test:independent-schedule-evidence".into();
+        exchange.qualification =
+            "Separate artificial qualification of the same imposed boundaries".into();
+    }
+    validate_alternatives(&[original.clone(), alternate.clone()], 2).unwrap();
+    for field in 0..3 {
+        let mut changed = alternate.clone();
+        let later = &mut changed
+            .vapor_reservoir
+            .as_mut()
+            .unwrap()
+            .ambient_exchange_by_interval
+            .as_mut()
+            .unwrap()[1];
+        match field {
+            0 => later.ambient_vapor_pressure_pa += 1.,
+            1 => later.ambient_temperature_c += 1.,
+            _ => later.conductance_kg_pa_s *= 2.,
+        }
+        assert!(validate_alternatives(&[original.clone(), changed], 2).is_err());
+    }
 }
 
 #[test]
