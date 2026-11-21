@@ -67,6 +67,14 @@ impl SurfaceConditions {
         if self.schema != "ftx-steady-surface-conditions/1"
             || self.boundaries.is_empty()
             || self.boundaries.len() > 65_536
+            || self
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|e| e.is_empty() || e.len() > 65_536)
+            || self
+                .microclimate_exterior
+                .as_ref()
+                .is_some_and(|e| e.is_empty() || e.len() > 65_536)
         {
             return Err(invalid("invalid steady surface schema or boundary count"));
         }
@@ -135,7 +143,15 @@ impl SurfaceConditions {
             let receipts: Vec<_> = resolved.iter().map(|r| r.receipt.clone()).collect();
             // Partial never rounds up: only omit "wind-dependent films" when every column uses forced convection.
             let forced = resolved.iter().all(|r| r.forced_convection);
-            let solved = surface.solve_exterior(&positions, &boundaries, &e)?;
+            let mut solved = surface.solve_exterior(&positions, &boundaries, &e)?;
+            solved
+                .steady
+                .exclude_reported_bounds(MICROCLIMATE_BOUNDS_EXCLUSION);
+            for column in &mut solved.columns {
+                column
+                    .conduction
+                    .exclude_reported_bounds(MICROCLIMATE_BOUNDS_EXCLUSION);
+            }
             let details = json!({"columns":solved.columns,
                 "convective_power_w":solved.convective_power_w,
                 "radiative_power_w":solved.radiative_power_w});
@@ -250,8 +266,12 @@ impl Request {
             (Some(model.solve_exterior(boundary, e)?), None)
         } else if let Some(mc) = &self.microclimate_exterior {
             let resolved = mc.resolve()?;
+            let mut solved = model.solve_exterior(boundary, &resolved.exterior)?;
+            solved
+                .conduction
+                .exclude_reported_bounds(MICROCLIMATE_BOUNDS_EXCLUSION);
             (
-                Some(model.solve_exterior(boundary, &resolved.exterior)?),
+                Some(solved),
                 Some((resolved.receipt, resolved.forced_convection)),
             )
         } else {
@@ -294,6 +314,8 @@ impl Request {
         Ok(result)
     }
 }
+
+pub(super) const MICROCLIMATE_BOUNDS_EXCLUSION: &str = "source-reported conduction ranges do not cover correlation-derived microclimate convection or its model-form discrepancy; nominal heat remains available";
 
 pub(super) fn describe_exterior(
     result: &mut Value,

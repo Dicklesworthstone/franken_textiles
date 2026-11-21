@@ -1470,6 +1470,17 @@ fn steady_coverage_request_accepts_microclimate_exterior_and_replays_identically
             .unwrap()
             .contains("Nusselt correlation")
     );
+    assert!(out["steady"]["reported_bounds"].is_null());
+    assert!(out["steady"]["body"][0]["reported_bounds"].is_null());
+    assert!(out["steady"]["regions"][0]["reported_bounds"].is_null());
+    assert!(out["exterior_exchange"]["regions"][0]["conduction"]["reported_bounds"].is_null());
+    assert!(
+        out["steady"]["bounds_unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap_or("").contains("microclimate convection"))
+    );
     // Natural convection does NOT remove "wind-dependent films" from not_simulated, even if an
     // extraneous wind_speed_m_s is supplied alongside the free-convection inputs.
     assert!(

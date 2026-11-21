@@ -72,6 +72,13 @@ impl PowerRange {
         }
     }
 
+    pub(super) fn unavailable_with(reasons: &[&str]) -> Self {
+        Self {
+            reported_bounds: None,
+            bounds_unavailable: reasons.iter().map(|r| (*r).into()).collect(),
+        }
+    }
+
     pub(super) fn add(&mut self, other: &Self) {
         let Some(current) = &mut self.reported_bounds else {
             return;
@@ -109,6 +116,11 @@ impl SteadyState {
     pub(super) fn exclude_reported_bounds(&mut self, reason: &str) {
         self.reported_bounds = None;
         self.bounds_unavailable = vec![reason.into()];
+    }
+
+    pub(super) fn exclude_reported_bounds_with(&mut self, reasons: &[&str]) {
+        self.reported_bounds = None;
+        self.bounds_unavailable = reasons.iter().map(|r| (*r).into()).collect();
     }
 }
 

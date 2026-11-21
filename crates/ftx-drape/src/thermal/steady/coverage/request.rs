@@ -77,6 +77,21 @@ impl Request {
         if self.schema != "ftx-steady-coverage-request/1"
             || self.conditions.boundaries.is_empty()
             || self.conditions.boundaries.len() > 65_536
+            || self
+                .conditions
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+            || self
+                .conditions
+                .microclimate_exterior
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+            || self
+                .conditions
+                .bare_boundaries
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 65_536)
             || self.map.instance_layers.len() > 65_536
             || self.map.body_positions_m.is_empty()
             || self.map.body_positions_m.len() > 196_608
@@ -256,10 +271,17 @@ impl Request {
                 None,
             )
         };
+        let mut bounds_reasons = Vec::new();
         if !projection.gap_interfaces.is_empty() {
-            solution.exclude_reported_bounds(
+            bounds_reasons.push(
                 "source-reported conduction ranges do not cover thickness-dependent stagnant-gap interfaces",
             );
+        }
+        if microclimate.is_some() {
+            bounds_reasons.push(crate::thermal::steady::request::MICROCLIMATE_BOUNDS_EXCLUSION);
+        }
+        if !bounds_reasons.is_empty() {
+            solution.exclude_reported_bounds(&bounds_reasons);
             if let Some(details) = &mut exterior {
                 for (exchange, region) in details["regions"]
                     .as_array_mut()

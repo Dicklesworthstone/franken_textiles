@@ -883,7 +883,10 @@ fn microclimate_exterior_drives_steady_stack_with_exact_parity_replay_and_fail_c
     use ftx_drape::thermal::steady::request::Request;
 
     let catalog = Catalog::builtin().unwrap();
-    let layer = record(0.35, 0.85);
+    let mut layer = record(0.35, 0.85);
+    let props = &mut layer.record.as_mut().unwrap().properties;
+    props.get_mut("thermal_resistance").unwrap().bounds = Some([0.30, 0.40]);
+    props.get_mut("emissivity").unwrap().bounds = Some([0.80, 0.90]);
     let air_c = 15.0_f64;
     let wind_m_s = 2.5_f64;
     let length_m = 0.25_f64;
@@ -973,6 +976,19 @@ fn microclimate_exterior_drives_steady_stack_with_exact_parity_replay_and_fail_c
         manual_out["exterior_exchange"]["radiative_flux_w_m2"]
             .as_f64()
             .unwrap(),
+    );
+    // Prescribed exterior retains complete source-reported conduction bounds, whereas correlation
+    // microclimate excludes reported_bounds so model-form discrepancy is never hidden inside them.
+    assert!(manual_out["reported_bounds"]["power_w"].is_array());
+    assert!(out["reported_bounds"].is_null());
+    assert!(out["state"]["reported_bounds"].is_null());
+    assert!(out["exterior_exchange"]["conduction"]["reported_bounds"].is_null());
+    assert!(
+        out["bounds_unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap_or("").contains("microclimate convection"))
     );
 
     // Check correlation provenance, honest model scope, and deterministic frozen replay.

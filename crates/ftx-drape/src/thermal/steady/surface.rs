@@ -56,6 +56,18 @@ pub struct SurfaceSolution {
     pub ranges: PowerRange,
 }
 
+impl SurfaceSolution {
+    pub(super) fn exclude_reported_bounds(&mut self, reason: &str) {
+        self.ranges = PowerRange::unavailable(reason);
+        for patch in &mut self.patches {
+            patch.ranges = PowerRange::unavailable(reason);
+        }
+        for column in &mut self.columns {
+            column.exclude_reported_bounds(reason);
+        }
+    }
+}
+
 /// Exposed-face exchange over the same retained cloth areas; not a body-coverage calculation.
 #[derive(Clone, Debug, Serialize)]
 pub struct ExteriorSolution {

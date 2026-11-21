@@ -666,6 +666,19 @@ fn surface_conditions_admits_microclimate_exterior_and_keeps_wind_exclusion_on_m
         uniform_out["microclimate_convection"][0]["correlation"],
         "churchill_bernstein_cylinder"
     );
+    assert!(uniform_out["steady"]["reported_bounds"].is_null());
+    assert!(uniform_out["steady"]["columns"][0]["reported_bounds"].is_null());
+    assert!(uniform_out["steady"]["patches"][0]["reported_bounds"].is_null());
+    assert!(
+        uniform_out["exterior_exchange"]["columns"][0]["conduction"]["reported_bounds"].is_null()
+    );
+    assert!(
+        uniform_out["steady"]["bounds_unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap_or("").contains("microclimate convection"))
+    );
     let frozen: SurfaceConditions =
         serde_json::from_value(uniform_out["request"]["conditions"].clone()).unwrap();
     assert_eq!(

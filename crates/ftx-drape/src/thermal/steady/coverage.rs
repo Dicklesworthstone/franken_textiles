@@ -107,11 +107,14 @@ impl CoverageSolution {
         }
     }
 
-    pub(super) fn exclude_reported_bounds(&mut self, reason: &str) {
-        self.exclude_total_reported_bounds(reason);
+    pub(super) fn exclude_reported_bounds(&mut self, reasons: &[&str]) {
+        self.ranges = PowerRange::unavailable_with(reasons);
+        for field in &mut self.body {
+            field.ranges = PowerRange::unavailable_with(reasons);
+        }
         for region in &mut self.regions {
-            region.ranges = PowerRange::unavailable(reason);
-            region.conduction.exclude_reported_bounds(reason);
+            region.ranges = PowerRange::unavailable_with(reasons);
+            region.conduction.exclude_reported_bounds_with(reasons);
         }
     }
 }
