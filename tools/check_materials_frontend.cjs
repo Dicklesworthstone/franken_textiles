@@ -23478,4 +23478,28 @@ test('microclimate renders prepared exterior and radiosity enclosure tables, and
   assert.match(viscoDump, /Exact-exponential strain replay ledger/);
   assert.match(viscoDump, /Viscous dissipation/);
   assert.match(viscoDump, /Certified in-band NNLS Prony approximation only/);
+
+  // Strip calibration displays opt-in adjoint sensitivity method and solve count without altering finite-difference reports.
+  p.select('stripFitRequest', '{"schema":"ftx-strip-calibration/1"}');
+  p.e.stripFitRequest.handlers.change();
+  await p.e.stripFit.onclick();
+  const baseCal = {
+    accepted: true, input_sha256: 'a'.repeat(64), excitation_pivot: 0.42, forward_solves: 12,
+    mesh_change_peak_scaled: 0.01, domain_replay_verified: true, starts: [{ converged: true }],
+    parameters: [1000, 900, 300, 0.2], parameter_descriptors: [], predictions: [], reasons: [],
+    fit: { components: 4, rms_scaled: 0.01, peak_scaled: 0.02 },
+    input: { method: 'Synthetic strip check.', experiments: [], policy: { max_forward_solves: 500, max_mesh_scaled: 0.25 } }
+  };
+  p.emit({ calibration: baseCal, material: { capabilities: { mechanical_coefficients: { ready: true } } } }, []);
+  const stripSec = section(p, 'Clamped-strip identification');
+  assert.doesNotMatch(JSON.stringify(stripSec), /Adjoint linear solves/);
+  p.select('stripFitRequest', '{"schema":"ftx-strip-calibration/1","policy":{"sensitivity":"adjoint"}}');
+  p.e.stripFitRequest.handlers.change();
+  await p.e.stripFit.onclick();
+  p.emit({ calibration: { ...baseCal, adjoint_solves: 16,
+    input: { ...baseCal.input, policy: { ...baseCal.input.policy, sensitivity: 'adjoint' } } },
+    material: { capabilities: { mechanical_coefficients: { ready: true } } } }, []);
+  const adjDump = JSON.stringify(section(p, 'Clamped-strip identification'));
+  assert.match(adjDump, /Adjoint \(implicit function theorem\)/);
+  assert.match(adjDump, /Adjoint linear solves/);
 });

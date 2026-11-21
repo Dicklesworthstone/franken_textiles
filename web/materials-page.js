@@ -4368,6 +4368,8 @@ function stripCalibrationResult(parent, r) {
     ["Stationary / attempted starts", `${c.starts.filter(s => s.converged).length} / ${c.starts.length}`],
     ["Normalized excitation pivot", metric(c.excitation_pivot)],
     ["Forward solves / limit", `${metric(c.forward_solves)} / ${metric(c.input.policy.max_forward_solves)}`],
+    ...(c.input?.policy?.sensitivity === "adjoint" ? [["Sensitivity method", "Adjoint (implicit function theorem)"]] : []),
+    ...(c.adjoint_solves > 0 ? [["Adjoint linear solves", metric(c.adjoint_solves)]] : []),
     ["Doubled-mesh change / limit", `${metric(c.mesh_change_peak_scaled)} / ${metric(c.input.policy.max_mesh_scaled)}`],
     ["Enforced-domain replay", c.domain_replay_verified ? "Verified" : "Not verified"]
   ]) cells(work, row);
