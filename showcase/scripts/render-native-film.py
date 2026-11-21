@@ -169,10 +169,14 @@ class Surface:
         self.vertices[:, 8:] = colours
 
 
-def view(points, i, resting=False):
+def view(points, i, resting=False, crown=False):
     ease = SOURCE["ease"]
     yaw = .34 * ease((i-13)/57) + .32 * ease((i-78)/17)
-    facing = np.array([np.sin(yaw), -np.cos(yaw), .065+.07*ease((i-20)/50)])
+    lift = .065 + .07*ease((i-20)/50)
+    if resting and crown:
+        # Lift above the brim to show how the separately cut tip meets the rolled crown.
+        lift += .85*ease((i-61)/34)
+    facing = np.array([np.sin(yaw), -np.cos(yaw), lift])
     facing /= np.linalg.norm(facing)
     right = np.cross([0, 0, 1], facing)
     right /= np.linalg.norm(right)
@@ -441,7 +445,7 @@ def render(args):
                 pixels = initial
             else:
                 points, staging = SOURCE["film_pose"](i,args.garment,recorded,ids,phases,panels,gap,initial_centre)
-                axes, centre, extent = view(points if staging else bounds, i, not staging)
+                axes, centre, extent = view(points if staging else bounds, i, not staging, crown=args.garment == "fez")
                 cloth.colour(pattern_colours if i <= 12 else cloth_colours)
                 cloth.update(points)
                 if not staging:
