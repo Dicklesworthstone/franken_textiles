@@ -1,6 +1,3 @@
-import { imageFile } from "../../../share/image";
-export const dynamic = "force-static";
-export const alt = "Play the actual sewing order on a jacket · FrankenTextiles";
-export const size = { width: 1200, height: 600 };
-export const contentType = "image/png";
+import { imageFile, imageMetadata } from "../../../share/image";
+export const generateImageMetadata = () => imageMetadata("sewingOrder", 600);
 export default function Image() { return imageFile("sewingOrder", 600); }

@@ -13,7 +13,8 @@ code() { curl -s -o /dev/null -A "$agent" -m 30 -w '%{http_code}' "$@"; }
 header() { curl -s -D - -o /dev/null -A "$agent" -m 30 "$2" | tr -d '\r' | awk -F': ' -v h="$1" 'tolower($1)==h{print $2; exit}'; }
 
 for path in / /how-it-works/ /get-started/ /wardrobe/sundress/ /wardrobe/hussar/ /studies/trousers/ /experiments/strip/ \
-  /experiments/thermal/ /sections/repair/ /workbench/ /workbench/trace /robots.txt /sitemap.xml /manifest.webmanifest /favicon.ico; do
+  /wardrobe/hussar/embroidery/ /studies/tiling/ /studies/sewing/ /experiments/wash/ /experiments/thermal/ \
+  /sections/repair/ /workbench/ /workbench/trace /robots.txt /sitemap.xml /manifest.webmanifest /favicon.ico; do
   check "200 $path" 200 "$(code "$site$path")"
 done
 check "404 for a missing page" 404 "$(code "$site/no-such-page/")"
