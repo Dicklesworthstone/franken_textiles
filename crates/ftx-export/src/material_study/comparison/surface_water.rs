@@ -151,6 +151,7 @@ fn alternative_case_inputs(policy: &Value) -> Result<Value, Refusal> {
     for name in [
         "",
         "/supply",
+        "/supply/finite_reservoir",
         "/condensation",
         "/drainage",
         "/vapor_reservoir",
@@ -857,7 +858,106 @@ struct Delivery {
 
 struct Supply {
     ends: Vec<f64>,
+    active_seconds: Vec<f64>,
     deliveries: BTreeMap<String, Delivery>,
+    reservoir: Option<SupplyReservoir>,
+    depletion: Option<(usize, f64)>,
+}
+
+struct SupplyReservoir {
+    initial_mass: f64,
+    temperature: f64,
+    specific_enthalpy: f64,
+}
+
+impl SupplyReservoir {
+    fn new(request: &Value, cp: f64, reference: f64, domain: [f64; 2]) -> Result<Self, Refusal> {
+        source(request)?;
+        let initial_mass = nonnegative(request, "initial_liquid_mass_kg")?;
+        let temperature = number(request, "temperature_c")?;
+        let specific_enthalpy = cp * (temperature - reference);
+        if request["schema"] != "ftx-textile-liquid-reservoir/1"
+            || request["model"] != "well_mixed_constant_temperature_liquid_inventory/1"
+            || temperature < domain[0]
+            || temperature > domain[1]
+            || !specific_enthalpy.is_finite()
+            || !(initial_mass * specific_enthalpy).is_finite()
+            || !request["qualification"]
+                .as_str()
+                .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
+        {
+            return Err(fail());
+        }
+        Ok(Self {
+            initial_mass,
+            temperature,
+            specific_enthalpy,
+        })
+    }
+
+    fn admit(&self, water: &Value, time: f64, steps: u64) -> Result<(), Refusal> {
+        let receipt = &water["supply_reservoir"];
+        let remaining = nonnegative(receipt, "remaining_liquid_mass_kg")?;
+        let supplied = nonnegative(receipt, "supplied_liquid_mass_kg")?;
+        let exported = number(receipt, "exported_liquid_enthalpy_j")?;
+        let stored = number(receipt, "liquid_enthalpy_change_j")?;
+        let mass_error = remaining + supplied - self.initial_mass;
+        let energy_scale = (self.initial_mass * self.specific_enthalpy).abs();
+        if receipt["schema"] != "ftx-textile-liquid-reservoir-result/1"
+            || number(receipt, "initial_liquid_mass_kg")? != self.initial_mass
+            || number(receipt, "temperature_c")? != self.temperature
+            || !accumulated_near(number(receipt, "elapsed_seconds")?, time, time, steps)
+            || remaining > self.initial_mass
+            || supplied > self.initial_mass
+                && !accumulated_near(supplied, self.initial_mass, self.initial_mass, steps)
+            || receipt["exhaustion_events"].as_u64()
+                != Some(u64::from(self.initial_mass > 0. && remaining == 0.))
+            || !accumulated_near(
+                supplied,
+                nonnegative(water, "supplied_liquid_kg")?,
+                self.initial_mass,
+                steps,
+            )
+            || !accumulated_near(
+                remaining + supplied,
+                self.initial_mass,
+                self.initial_mass,
+                steps,
+            )
+            || !near(
+                number(receipt, "mass_balance_error_kg")?,
+                mass_error,
+                self.initial_mass,
+            )
+            || !accumulated_near(
+                exported,
+                number(water, "supplied_liquid_sensible_energy_j")?,
+                energy_scale,
+                steps,
+            )
+            || !accumulated_near(
+                exported,
+                supplied * self.specific_enthalpy,
+                energy_scale,
+                steps,
+            )
+            || !accumulated_near(
+                stored,
+                -supplied * self.specific_enthalpy,
+                energy_scale,
+                steps,
+            )
+            || !near(
+                number(receipt, "enthalpy_balance_error_j")?,
+                stored + exported,
+                energy_scale,
+            )
+            || !accumulated_near(stored + exported, 0., energy_scale, steps)
+        {
+            return Err(fail());
+        }
+        Ok(())
+    }
 }
 
 impl Supply {
@@ -871,7 +971,19 @@ impl Supply {
     ) -> Result<Self, Refusal> {
         source(request)?;
         let bindings = request["bindings"].as_object().ok_or_else(fail)?;
-        if request["schema"] != "ftx-textile-liquid-supply/1" || bindings.keys().ne(owners.keys()) {
+        let reservoir = match request["schema"].as_str() {
+            Some("ftx-textile-liquid-supply/1") if request.get("finite_reservoir").is_none() => {
+                None
+            }
+            Some("ftx-textile-liquid-supply/2") => Some(SupplyReservoir::new(
+                &request["finite_reservoir"],
+                cp,
+                reference,
+                domain,
+            )?),
+            _ => return Err(fail()),
+        };
+        if bindings.keys().ne(owners.keys()) {
             return Err(fail());
         }
         let ends = array(motion, "keyframes")?
@@ -900,6 +1012,9 @@ impl Supply {
                 let t = finite(t)
                     .filter(|v| *v >= domain[0] && *v <= domain[1])
                     .ok_or_else(fail)?;
+                if reservoir.as_ref().is_some_and(|r| r.temperature != t) {
+                    return Err(fail());
+                }
                 let pair = [rate, rate * cp * (t - reference)];
                 let old_mass = total[0];
                 for (sum, rate) in total.iter_mut().zip(pair) {
@@ -915,7 +1030,18 @@ impl Supply {
             }
             deliveries.insert(instance.clone(), Delivery { rates, total });
         }
-        Ok(Self { ends, deliveries })
+        let active_seconds = ends
+            .iter()
+            .enumerate()
+            .map(|(i, end)| end - if i == 0 { 0. } else { ends[i - 1] })
+            .collect();
+        Ok(Self {
+            ends,
+            active_seconds,
+            deliveries,
+            reservoir,
+            depletion: None,
+        })
     }
 
     fn rates(&self, areas: &BTreeMap<&str, f64>) -> Result<Vec<[f64; 2]>, Refusal> {
@@ -932,6 +1058,108 @@ impl Supply {
             }
         }
         Ok(rates)
+    }
+
+    // Reconstruct when the one donor stops from original reference areas and scheduled demands.
+    // This is a boundary integral, independent of the producer's thermal substeps and receipts.
+    fn limit_inventory(&mut self, areas: &BTreeMap<&str, f64>) -> Result<(), Refusal> {
+        let Some(reservoir) = &self.reservoir else {
+            return Ok(());
+        };
+        let mut remaining = reservoir.initial_mass;
+        let rates = self.rates(areas)?;
+        for (interval, (seconds, rate)) in self.active_seconds.iter_mut().zip(rates).enumerate() {
+            let demand = rate[0] * *seconds;
+            let depletion_seconds = remaining / rate[0];
+            let rounded_endpoint = depletion_seconds.is_finite()
+                && depletion_seconds > *seconds
+                && depletion_seconds - *seconds
+                    <= 64. * f64::EPSILON * depletion_seconds.max(*seconds);
+            if !demand.is_finite() || (rate[0] > 0. && demand <= 0.) {
+                return Err(fail());
+            }
+            if remaining == 0. {
+                *seconds = 0.;
+            } else if rate[0] > 0. && (demand >= remaining || rounded_endpoint) {
+                self.depletion = Some((interval, remaining));
+                // The producer reconciles the same event up to 64 eps after an endpoint;
+                // this interval still delivers only over its original authored duration.
+                *seconds = depletion_seconds.min(*seconds);
+                if !seconds.is_finite() || *seconds <= 0. {
+                    return Err(fail());
+                }
+                remaining = 0.;
+            } else {
+                let next = remaining - demand;
+                if demand > 0. && next >= remaining {
+                    return Err(fail());
+                }
+                remaining = next;
+            }
+        }
+        for delivery in self.deliveries.values_mut() {
+            delivery.total = [0.; 2];
+            for (rate, seconds) in delivery.rates.iter().zip(&self.active_seconds) {
+                for (total, rate) in delivery.total.iter_mut().zip(rate) {
+                    let increment = rate * seconds;
+                    let next = *total + increment;
+                    if !next.is_finite() || (*rate > 0. && *seconds > 0. && increment <= 0.) {
+                        return Err(fail());
+                    }
+                    *total = next;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // The producer reconciles one exhausted stock on its largest delivery stream, rather than
+    // erasing a small stream. Only that independently identified patch may carry roundoff at
+    // the shared-inventory scale. Other patches retain their own mass-sized tolerances.
+    fn depletion_roundoff(
+        &self,
+        patches: &[Value],
+        owners: &[Value],
+        instances: &[Value],
+    ) -> Result<Option<(usize, f64)>, Refusal> {
+        let Some((interval, remaining)) = self.depletion else {
+            return Ok(None);
+        };
+        let mut largest = None;
+        for (index, (patch, owner)) in patches.iter().zip(owners).enumerate() {
+            let instance = instances
+                .get(vapor_index(owner)?)
+                .and_then(Value::as_str)
+                .ok_or_else(fail)?;
+            let delivery = self.deliveries.get(instance).ok_or_else(fail)?;
+            let rate = number(patch, "reference_area_m2")?
+                * delivery.rates.get(interval).ok_or_else(fail)?[0];
+            if !rate.is_finite() || rate < 0. {
+                return Err(fail());
+            }
+            // Strict comparison preserves the producer's earliest-index tie break.
+            if largest.is_none_or(|(_, previous)| rate > previous) {
+                largest = Some((index, rate));
+            }
+        }
+        let (index, rate) = largest.filter(|(_, rate)| *rate > 0.).ok_or_else(fail)?;
+        // The source's unreported final substep begins with no more than this interval's
+        // remaining inventory and delivers no more than this patch's interval integral.
+        let scale = remaining + rate * self.active_seconds[interval];
+        if !scale.is_finite() {
+            return Err(fail());
+        }
+        Ok(Some((index, 1024. * f64::EPSILON * scale)))
+    }
+
+    fn initially_active(&self) -> bool {
+        self.reservoir.as_ref().is_none_or(|r| r.initial_mass > 0.)
+    }
+
+    fn finally_active(&self, water: &Value) -> bool {
+        self.reservoir.is_none()
+            || finite(&water["supply_reservoir"]["remaining_liquid_mass_kg"])
+                .is_some_and(|mass| mass > 0.)
     }
 }
 
@@ -1704,7 +1932,7 @@ pub(super) fn admit(
     let liquid_patches = array(water, "patches")?;
     let temperatures = array(&heat["final"], "temperature_c")?;
     let bindings = policy["bindings"].as_object().ok_or_else(fail)?;
-    let supply = supplied
+    let mut supply = supplied
         .then(|| Supply::new(&policy["supply"], bindings, motion, cp, reference, domain))
         .transpose()?;
     let drainage = draining
@@ -1741,6 +1969,29 @@ pub(super) fn admit(
     }
     hashed(frame)?;
     hashed(model)?;
+    let mut areas = BTreeMap::new();
+    for (patch, owner) in patches.iter().zip(owners) {
+        let instance = instances
+            .get(vapor_index(owner)?)
+            .and_then(Value::as_str)
+            .ok_or_else(fail)?;
+        let area = number(patch, "reference_area_m2")?;
+        let total = areas.entry(instance).or_insert(0.);
+        let next = *total + area;
+        if area <= 0. || !next.is_finite() || next <= *total {
+            return Err(fail());
+        }
+        *total = next;
+    }
+    if let Some(supply) = &mut supply {
+        supply.limit_inventory(&areas)?;
+    }
+    let depletion_roundoff = supply
+        .as_ref()
+        .filter(|supply| !supply.finally_active(water))
+        .map(|supply| supply.depletion_roundoff(patches, owners, instances))
+        .transpose()?
+        .flatten();
     let cells = vapor_index(&heat_request["cells_per_layer"])?;
     let initial_profiles = initial_heat_profiles(heat_request, instances, cells)?;
     let mut anchors = vec![None; columns.len()];
@@ -1855,7 +2106,6 @@ pub(super) fn admit(
     let mut totals = [0.; 9];
     let mut dryouts = 0_u64;
     let mut used = BTreeSet::new();
-    let mut areas = BTreeMap::new();
     let mut initial_liquid_sensible_j = 0.;
     let mut liquid_storage = 0.;
     let mut dry_storage = 0.;
@@ -1935,14 +2185,19 @@ pub(super) fn admit(
         let (supplied_mass, supplied_j) = if let Some(delivery) = delivery {
             let mass = nonnegative(row, "supplied_liquid_kg")?;
             let energy = number(row, "supplied_liquid_sensible_energy_j")?;
+            let expected_mass = area * delivery.total[0];
+            let reconciled = depletion_roundoff.is_some_and(|(index, allowance)| {
+                index == i && expected_mass > 0. && (mass - expected_mass).abs() <= allowance
+            });
+            let expected_energy = supply
+                .as_ref()
+                .and_then(|supply| supply.reservoir.as_ref())
+                .map_or(area * delivery.total[1], |source| {
+                    mass * source.specific_enthalpy
+                });
             if (delivery.total[0] > 0. && (mass <= 0. || area * delivery.total[0] <= 0.))
-                || !accumulated_near(mass, area * delivery.total[0], mass, total_steps)
-                || !accumulated_near(
-                    energy,
-                    area * delivery.total[1],
-                    enthalpy_scale(mass),
-                    total_steps,
-                )
+                || !accumulated_near(mass, expected_mass, mass, total_steps) && !reconciled
+                || !accumulated_near(energy, expected_energy, enthalpy_scale(mass), total_steps)
             {
                 return Err(fail());
             }
@@ -1975,7 +2230,6 @@ pub(super) fn admit(
             return Err(fail());
         }
         used.insert(instance);
-        *areas.entry(instance).or_insert(0.) += area;
         let dry_column = &mut dry_initial[column];
         dry_column.area_m2 += area;
         if initial_profile.iter().all(|&t| t == initial_temperature) {
@@ -2010,11 +2264,14 @@ pub(super) fn admit(
             .ok_or_else(fail)?;
         let inner = finite(&ts[0]).ok_or_else(fail)?;
         if !condensing
-            && (((initial > 0. || delivery.is_some_and(|d| d.rates[0][0] > 0.))
+            && (((initial > 0.
+                || supply.as_ref().is_some_and(Supply::initially_active)
+                    && delivery.is_some_and(|d| d.rates[0][0] > 0.))
                 && pressure(initial_temperature)?
                     < finite(ambient.first().ok_or_else(fail)?).ok_or_else(fail)?)
                 || ((remaining > 0.
-                    || delivery.is_some_and(|d| d.rates.last().is_some_and(|r| r[0] > 0.)))
+                    || supply.as_ref().is_some_and(|s| s.finally_active(water))
+                        && delivery.is_some_and(|d| d.rates.last().is_some_and(|r| r[0] > 0.)))
                     && pressure(inner)?
                         < finite(ambient.last().ok_or_else(fail)?).ok_or_else(fail)?))
         {
@@ -2103,14 +2360,10 @@ pub(super) fn admit(
     let maximum_total_liquid: f64 = areas.values().map(|area| area * maximum).sum();
     let mut supply_before_interval = vec![[0.; 2]];
     if let (Some(s), Some(rates)) = (&supply, &supply_rates) {
-        let mut previous = 0.;
-        for (end, rate) in s.ends.iter().zip(rates) {
+        for (seconds, rate) in s.active_seconds.iter().zip(rates) {
             let before = supply_before_interval.last().ok_or_else(fail)?;
-            supply_before_interval.push([
-                before[0] + rate[0] * (end - previous),
-                before[1] + rate[1] * (end - previous),
-            ]);
-            previous = *end;
+            supply_before_interval
+                .push([before[0] + rate[0] * seconds, before[1] + rate[1] * seconds]);
         }
     }
 
@@ -2215,24 +2468,25 @@ pub(super) fn admit(
             } else {
                 number(row, "time_s")?
             };
+            let active_seconds = (time - start).min(s.active_seconds[ambient_index]);
             if time < start
                 || time > *s.ends.get(ambient_index).ok_or_else(fail)?
                 || !accumulated_near(
                     supplied_mass,
-                    before[0] + rate[0] * (time - start),
+                    before[0] + rate[0] * active_seconds,
                     supplied_mass,
                     steps,
                 )
                 || !accumulated_near(
                     supplied_j,
-                    before[1] + rate[1] * (time - start),
+                    before[1] + rate[1] * active_seconds,
                     enthalpy_scale(supplied_mass),
                     steps,
                 )
             {
                 return Err(fail());
             }
-            rate[0] > 0.
+            rate[0] > 0. && s.finally_active(w)
         } else {
             false
         };
@@ -2360,6 +2614,16 @@ pub(super) fn admit(
         } else if w.get("vapor_reservoir").is_some() {
             return Err(fail());
         }
+        if let Some(reservoir) = supply.as_ref().and_then(|s| s.reservoir.as_ref()) {
+            let time = if std::ptr::eq(row, heat) {
+                number(heat, "duration_s")?
+            } else {
+                number(row, "time_s")?
+            };
+            reservoir.admit(w, time, steps)?;
+        } else if w.get("supply_reservoir").is_some() {
+            return Err(fail());
+        }
         previous = [remaining, evaporated, supplied_mass, condensed];
         previous_incoming_j = incoming_j;
         previous_drained = drained;
@@ -2390,6 +2654,7 @@ pub(super) fn admit(
         "drained_liquid_kg",
         "exported_liquid_sensible_energy_j",
         "vapor_reservoir",
+        "supply_reservoir",
     ] {
         if water[field] != trace.last().ok_or_else(fail)?["surface_water"][field] {
             return Err(fail());

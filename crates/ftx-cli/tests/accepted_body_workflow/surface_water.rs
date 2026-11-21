@@ -3209,6 +3209,183 @@ fn ambient_vapor_exchange_workflow(scheduled: bool) {
 }
 
 #[test]
+fn finite_liquid_supply_replays_shared_depletion_native_portable_and_named_cases() {
+    let (pattern, mut study, mut single) = inputs();
+    let mut source: Value = serde_json::from_str(&pattern).unwrap();
+    let mut outer = source["pieces"][0].clone();
+    let outer_width = std::f64::consts::TAU * 210.0;
+    outer["id"] = json!("outer");
+    outer["vertices"]["b"][0] = json!(outer_width);
+    outer["vertices"]["c"][0] = json!(outer_width);
+    outer["placement"]["radius_mm"] = json!(210.0);
+    outer["placement"]["x0"] = json!(outer_width / 2.0);
+    source["pieces"].as_array_mut().unwrap().push(outer);
+    source["seams"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"outer-join","a":"outer/right","b":"outer/left"}));
+    let pattern = source.to_string();
+    let band_area = std::f64::consts::TAU * 180.0 * 20.0 * 1e-6;
+    let outer_area = outer_width * 20.0 * 1e-6;
+    let depletion_time = 0.00075;
+    let first_demand_rate = band_area * 0.001 + outer_area * 0.003;
+    let initial_donor = depletion_time * first_demand_rate;
+    single["motion"]["keyframes"] = json!([
+        {"time_s":0.001,"arm_abduction_deg":35.0},
+        {"time_s":0.002,"arm_abduction_deg":35.0}
+    ]);
+    let heat = &mut single["motion"]["transient_surface"];
+    let boundary = heat["boundaries"][0].clone();
+    heat["boundaries"] = json!([boundary, boundary]);
+    let water = &mut heat["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/2");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("replenishment_kg_m2_s");
+    water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.0);
+    water["bindings"]["outer"] = water["bindings"]["band"].clone();
+    water["outside_vapor_pressure_pa"] = json!([1000.0, 1000.0]);
+    let supply = json!({"schema":"ftx-textile-liquid-supply/2",
+        "bindings":{
+            "band":{"rate_kg_m2_s":[0.001,0.005],"temperature_c":[40.0,40.0]},
+            "outer":{"rate_kg_m2_s":[0.003,0.007],"temperature_c":[40.0,40.0]}},
+        "source":{"reference":"test:two-piece-delivery-demand","accessed_on":"2026-11-20",
+            "note":"Different synthetic reference-area demands, no measured pump or wearer claim"},
+        "evidence":"estimate","allow_estimates":true,"method":"Prescribed reference-area delivery demand",
+        "finite_reservoir":{"schema":"ftx-textile-liquid-reservoir/1",
+            "model":"well_mixed_constant_temperature_liquid_inventory/1",
+            "initial_liquid_mass_kg":initial_donor,"temperature_c":40.0,
+            "source":{"reference":"test:one-shared-liquid-donor","accessed_on":"2026-11-20",
+                "note":"One artificial stock shared by both pieces, not a stock per patch"},
+            "evidence":"estimate","allow_estimates":true,"method":"Synthetic fixed-temperature liquid inventory",
+            "qualification":"Artificial well-mixed liquid at 40 C with the declared constant specific heat and enthalpy reference throughout the 0.002 s history"}});
+    water["supply"] = supply.clone();
+    study["comparison"]["objectives"] = json!([
+        {"metric":"textile_water_supplied_mass_kg","direction":"minimize"},
+        {"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]);
+    study["comparison"]["constraints"][0] =
+        json!({"metric":"textile_water_remaining_mass_kg","minimum":0.0});
+    qualify_mechanics(&pattern, &study, &mut single, true);
+    let mechanics = &mut single["motion"]["transient_surface"]["mechanical_coupling"];
+    mechanics["bindings"]["outer"] = mechanics["bindings"]["band"].clone();
+    replay(
+        &pattern,
+        &study,
+        single,
+        "FTX_FINITE_LIQUID_SUPPLY_REPLAY",
+        |report| {
+            let result = &keyed(&report["simulations"], "qualified")["evaluation"]["result"];
+            let motion = &result["motion"]["result"];
+            let heat = &motion["transient_surface"]["result"];
+            let water = &heat["surface_water"];
+            let donor = &water["supply_reservoir"];
+            let near = |actual: f64, expected: f64| {
+                assert!(
+                    (actual - expected).abs() <= 1e-11 * actual.abs().max(expected.abs()),
+                    "{actual} != {expected}"
+                );
+            };
+            assert_eq!(water["request"]["supply"], supply);
+            assert_eq!(donor["schema"], "ftx-textile-liquid-reservoir-result/1");
+            assert_eq!(donor["remaining_liquid_mass_kg"], 0.0);
+            assert_eq!(donor["exhaustion_events"], 1);
+            near(water["supplied_liquid_kg"].as_f64().unwrap(), initial_donor);
+            let mut areas = std::collections::BTreeMap::<String, f64>::new();
+            for (i, patch) in water["patches"].as_array().unwrap().iter().enumerate() {
+                let instance = patch["instance"].as_str().unwrap();
+                let rate = match instance {
+                    "band" => 0.001,
+                    "outer" => 0.003,
+                    other => panic!("unexpected liquid owner {other}"),
+                };
+                let area = heat["model"]["patches"][i]["reference_area_m2"]
+                    .as_f64()
+                    .unwrap();
+                *areas.entry(instance.into()).or_default() += area;
+                // The common stop time is determined by both panels' original flat areas,
+                // not their deformed area, traversal order or separate copies of the stock.
+                let delivered = area * rate * depletion_time;
+                near(patch["supplied_liquid_kg"].as_f64().unwrap(), delivered);
+                near(
+                    patch["supplied_liquid_sensible_energy_j"].as_f64().unwrap(),
+                    delivered * 4200.0 * 40.0,
+                );
+            }
+            assert_eq!(areas.len(), 2);
+            near(areas["band"], band_area);
+            near(areas["outer"], outer_area);
+            for sample in heat["trace"].as_array().unwrap() {
+                let time = sample["time_s"].as_f64().unwrap();
+                let water = &sample["surface_water"];
+                let donor = &water["supply_reservoir"];
+                let delivered = first_demand_rate * time.min(depletion_time);
+                near(water["supplied_liquid_kg"].as_f64().unwrap(), delivered);
+                near(
+                    donor["supplied_liquid_mass_kg"].as_f64().unwrap(),
+                    delivered,
+                );
+                near(donor["elapsed_seconds"].as_f64().unwrap(), time);
+                assert!(
+                    (donor["remaining_liquid_mass_kg"].as_f64().unwrap() + delivered
+                        - initial_donor)
+                        .abs()
+                        < 1e-18
+                );
+                let enthalpy = delivered * 4200.0 * 40.0;
+                near(
+                    donor["exported_liquid_enthalpy_j"].as_f64().unwrap(),
+                    enthalpy,
+                );
+                near(
+                    donor["liquid_enthalpy_change_j"].as_f64().unwrap(),
+                    -enthalpy,
+                );
+                near(
+                    water["supplied_liquid_sensible_energy_j"].as_f64().unwrap(),
+                    enthalpy,
+                );
+                let total_water = donor["remaining_liquid_mass_kg"].as_f64().unwrap()
+                    + water["remaining_liquid_kg"].as_f64().unwrap()
+                    + water["evaporated_liquid_kg"].as_f64().unwrap();
+                assert!((total_water - initial_donor).abs() < 1e-18);
+                let energy = sample["stored_change_j"].as_f64().unwrap()
+                    + water["liquid_stored_change_j"].as_f64().unwrap()
+                    + water["exported_vapor_sensible_energy_j"].as_f64().unwrap()
+                    + water["latent_energy_j"].as_f64().unwrap()
+                    + donor["liquid_enthalpy_change_j"].as_f64().unwrap()
+                    - sample["net_boundary_energy_j"].as_f64().unwrap();
+                assert!(energy.abs() < 1e-8, "closed donor/textile energy {energy}");
+                if time >= 0.001 {
+                    assert_eq!(donor["remaining_liquid_mass_kg"], 0.0);
+                    assert_eq!(donor["exhaustion_events"], 1);
+                }
+            }
+            let mechanics = &motion["liquid_mechanics"];
+            assert_eq!(heat["mechanical_coupling"], *mechanics);
+            near(
+                mechanics["exchange"]["incoming_mass_kg"].as_f64().unwrap(),
+                initial_donor,
+            );
+            near(
+                mechanics["remaining_liquid_mass_kg"].as_f64().unwrap(),
+                water["remaining_liquid_kg"].as_f64().unwrap(),
+            );
+            assert_eq!(
+                keyed(&report["comparison"]["alternatives"], "qualified")["readings"]["textile_water_supplied_mass_kg"]
+                    ["value"],
+                water["supplied_liquid_kg"]
+            );
+            assert_eq!(
+                keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["status"],
+                "refused"
+            );
+            assert_eq!(heat["physical_validation_claim"], false);
+        },
+    );
+}
+
+#[test]
 fn supplied_textile_water_replays_in_native_commands_and_portable_scenario_matrices() {
     let (pattern, mut study, mut single) = inputs();
     single["material_strain"] = json!({"schema":"ftx-material-strain/1",

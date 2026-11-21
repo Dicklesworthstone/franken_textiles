@@ -6134,6 +6134,25 @@ storage model or closing its empirical qualification. Existing constant-boundary
 their original arithmetic and output; the scheduled contract is explicitly reservoir version 2.
 See `docs/textile-surface-water.md` for request and receipt semantics.
 
+### 25.220 Deliver liquid from one finite source across garment pieces
+
+Prescribed textile liquid delivery can draw from one independently qualified finite homogeneous
+source. All retained triangles share its stock, with demand proportional to their original reference
+areas. Exact source exhaustion subdivides the same accepted physical interval as textile dryout and
+finite-vapor exchange. Remaining time advances without feed, while temperature, water, mechanical
+mass and source enthalpy continue through their existing authorities.
+
+The source commits only with the complete accepted thermal/mechanical transaction. Pressure probes
+cannot spend stock, and failed intervals cannot publish partial withdrawal. Its separate mass and
+sensible-energy ledgers reconcile with actual textile delivery. Native and portable decisions
+independently reconstruct depletion from the original schedule and geometry; browser review retains
+source qualification, remaining inventory and exact replay inputs.
+
+This advances `ftx-vc2` without inferring sweating, rain interception, absorbed moisture or transfer
+from the independent body wet-film owner. Initial inventory and constant source temperature remain
+explicit operating conditions. Physical wet-material and garment qualification remain separate.
+The versioned supply contract and numerical model are in `docs/textile-surface-water.md`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
