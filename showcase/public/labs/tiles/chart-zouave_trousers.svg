@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:fp="urn:fabric-pattern:export:1" width="650mm" height="644.861mm" viewBox="0 0 650 644.861" fp:schema="fabric-pattern/1" data-style="ZOUAVE_TROUSER" data-size="920 mm stature" data-units="mm" data-fold-mode="half">
+<title>ZOUAVE_TROUSER master pattern, size 920 mm stature (1 unit = 1 mm)</title>
+<rect x="0" y="0" width="650" height="644.861" fill="#fff"/>
+<g id="piece-tr_front_R" data-piece="tr_front" data-instance="tr_front.R" data-name="TROUSER FRONT" data-qty="2" data-mirror="true" data-material="wool flannel" data-on-fold="" data-fold-mode="none" data-size="920 mm stature" data-sa-mm="10" data-grain-default="false">
+<g id="piece-tr_front_R-cut" class="cut">
+<path d="M574.803,424.4 L606.87,197.745 L595.319,197.496 L595.246,197.491 L595.169,197.483 L595.085,197.471 L594.993,197.453 L594.891,197.429 L594.779,197.398 L594.654,197.358 L594.517,197.308 L594.366,197.247 L594.203,197.174 L594.025,197.087 L593.834,196.986 L593.63,196.87 L593.414,196.736 L593.184,196.586 L592.944,196.418 L592.692,196.232 L592.43,196.027 L592.158,195.803 L591.876,195.56 L591.587,195.297 L591.289,195.015 L590.985,194.713 L590.674,194.391 L590.357,194.05 L590.035,193.69 L589.708,193.31 L589.377,192.912 L589.042,192.494 L588.704,192.058 L588.363,191.603 L588.02,191.13 L587.674,190.64 L587.327,190.131 L586.978,189.606 L586.629,189.063 L586.279,188.503 L585.928,187.927 L585.577,187.335 L585.227,186.727 L584.876,186.103 L584.527,185.464 L584.177,184.81 L583.829,184.141 L583.482,183.458 L583.137,182.76 L582.792,182.049 L582.45,181.324 L582.109,180.585 L581.77,179.834 L581.433,179.07 L581.099,178.293 L580.766,177.504 L580.436,176.703 L580.109,175.891 L579.784,175.067 L579.462,174.232 L579.143,173.385 L578.827,172.529 L578.514,171.662 L578.204,170.785 L577.897,169.898 L577.594,169.001 L577.294,168.095 L576.997,167.18 L576.704,166.256 L576.414,165.323 L576.128,164.382 L575.846,163.433 L575.568,162.476 L575.293,161.511 L575.023,160.539 L574.756,159.56 L574.494,158.573 L574.236,157.581 L573.982,156.581 L573.732,155.576 L573.486,154.564 L573.245,153.547 L573.008,152.524 L572.776,151.496 L572.548,150.463 L572.325,149.425 L572.106,148.383 L571.893,147.336 L571.683,146.285 L571.479,145.231 L571.28,144.172 L571.085,143.11 L570.895,142.045 L570.711,140.977 L570.531,139.907 L570.356,138.834 L570.187,137.758 L570.023,136.681 L569.863,135.602 L569.71,134.521 L569.561,133.439 L569.418,132.355 L569.28,131.271 L569.148,130.186 L569.021,129.101 L568.899,128.016 L568.784,126.93 L568.673,125.845 L568.569,124.761 L568.47,123.677 L568.377,122.594 L568.289,121.512 L568.208,120.432 L568.132,119.353 L568.062,118.277 L567.998,117.202 L567.94,116.13 L567.888,115.06 L567.842,113.993 L567.802,112.93 L567.768,111.869 L567.74,110.812 L567.718,109.759 L567.703,108.71 L567.693,107.665 L567.69,106.61 L567.69,10 L331.92,10 L362.676,424.4 Z" fill="none" stroke="#000" stroke-width="0.25"/>
+</g>
+<g id="piece-tr_front_R-sew" class="sew">
+<path d="M371.961,414.4 L566.118,414.4 L595.39,207.5 L594.889,207.489 L594.39,207.457 L593.892,207.403 L593.396,207.329 L592.901,207.234 L592.408,207.118 L591.917,206.981 L591.427,206.825 L590.94,206.648 L590.454,206.452 L589.97,206.236 L589.488,206.001 L589.008,205.746 L588.53,205.473 L588.054,205.18 L587.58,204.87 L587.108,204.54 L586.639,204.193 L586.172,203.828 L585.707,203.445 L585.244,203.045 L584.783,202.627 L584.325,202.192 L583.87,201.74 L583.417,201.272 L582.966,200.787 L582.518,200.285 L582.072,199.768 L581.629,199.235 L581.189,198.686 L580.752,198.122 L580.317,197.542 L579.885,196.947 L579.456,196.338 L579.03,195.714 L578.607,195.075 L578.186,194.423 L577.769,193.756 L577.355,193.075 L576.944,192.381 L576.536,191.673 L576.131,190.953 L575.729,190.219 L575.331,189.472 L574.936,188.713 L574.544,187.942 L574.156,187.158 L573.771,186.363 L573.389,185.555 L573.011,184.736 L572.637,183.906 L572.266,183.065 L571.899,182.213 L571.535,181.35 L571.175,180.476 L570.819,179.592 L570.467,178.699 L570.119,177.795 L569.774,176.881 L569.434,175.958 L569.097,175.026 L568.764,174.085 L568.436,173.135 L568.111,172.176 L567.791,171.209 L567.475,170.234 L567.163,169.25 L566.855,168.259 L566.551,167.26 L566.252,166.254 L565.957,165.24 L565.667,164.22 L565.381,163.192 L565.1,162.158 L564.823,161.118 L564.551,160.072 L564.283,159.019 L564.02,157.961 L563.762,156.897 L563.509,155.828 L563.26,154.754 L563.016,153.675 L562.777,152.591 L562.543,151.503 L562.314,150.41 L562.09,149.313 L561.871,148.212 L561.657,147.108 L561.448,146 L561.244,144.889 L561.046,143.774 L560.853,142.657 L560.665,141.537 L560.482,140.415 L560.305,139.29 L560.133,138.164 L559.967,137.035 L559.806,135.905 L559.651,134.774 L559.501,133.641 L559.357,132.507 L559.218,131.373 L559.086,130.237 L558.959,129.102 L558.837,127.966 L558.722,126.83 L558.613,125.695 L558.509,124.56 L558.411,123.425 L558.32,122.292 L558.234,121.159 L558.155,120.028 L558.081,118.898 L558.014,117.77 L557.953,116.643 L557.898,115.519 L557.85,114.397 L557.808,113.278 L557.772,112.161 L557.743,111.047 L557.72,109.937 L557.703,108.829 L557.693,107.725 L557.69,106.625 L557.69,20 L342.69,20 Z" fill="none" stroke="#000" stroke-width="0.175" stroke-dasharray="3 1.5"/>
+</g>
+<g id="piece-tr_front_R-notches" class="notches">
+</g>
+<g id="piece-tr_front_R-grain" class="grain">
+<path d="M469.04,354.4 L469.04,227.5" fill="none" stroke="#000" stroke-width="0.25"/>
+<path d="M471.44,233.5 L469.04,227.5 L466.64,233.5" fill="none" stroke="#000" stroke-width="0.25"/>
+<path d="M471.44,348.4 L469.04,354.4 L466.64,348.4" fill="none" stroke="#000" stroke-width="0.25"/>
+</g>
+<g id="piece-tr_front_R-fold" class="fold">
+</g>
+<g id="piece-tr_front_R-internal-draw" class="internal-draw">
+</g>
+<g id="piece-tr_front_R-internal-cut" class="internal-cut">
+</g>
+<g id="piece-tr_front_R-drills" class="drills">
+</g>
+<g id="piece-tr_front_R-labels" class="labels">
+<text x="453.634" y="110.314" font-size="6" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-weight="bold" paint-order="stroke" stroke="#fff" stroke-width="0.72" fill="#000" data-kind="label">TROUSER FRONT</text>
+<text x="453.634" y="116.291" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">ZOUAVE_TROUSER  size 920 mm stature</text>
+<text x="453.634" y="121.361" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">Cut 2 (mirror pair)</text>
+<text x="453.634" y="126.431" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">Fabric: wool flannel</text>
+<text x="453.634" y="131.501" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">SA included: 10 mm</text>
+<text x="453.634" y="136.571" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">Round 0</text>
+</g>
+<g id="piece-tr_front_R-decor-soutache" class="decor-soutache">
+</g>
+</g>
+<g id="piece-tr_back_R" data-piece="tr_back" data-instance="tr_back.R" data-name="TROUSER BACK" data-qty="2" data-mirror="true" data-material="wool flannel" data-on-fold="" data-fold-mode="none" data-size="920 mm stature" data-sa-mm="10" data-grain-default="false">
+<g id="piece-tr_back_R-cut" class="cut">
+<path d="M281.485,444.861 L316.92,31.763 L77.53,10 L61.205,126.045 L61.043,127.183 L60.879,128.313 L60.711,129.443 L60.539,130.573 L60.363,131.702 L60.184,132.832 L60.001,133.96 L59.814,135.088 L59.624,136.215 L59.43,137.341 L59.232,138.465 L59.031,139.589 L58.826,140.71 L58.618,141.83 L58.406,142.948 L58.19,144.065 L57.971,145.179 L57.749,146.29 L57.523,147.399 L57.293,148.506 L57.06,149.61 L56.824,150.711 L56.584,151.808 L56.341,152.903 L56.094,153.994 L55.844,155.081 L55.591,156.165 L55.334,157.245 L55.074,158.321 L54.81,159.392 L54.544,160.459 L54.273,161.522 L54,162.58 L53.724,163.633 L53.444,164.681 L53.161,165.724 L52.875,166.761 L52.585,167.794 L52.293,168.82 L51.998,169.84 L51.699,170.855 L51.397,171.864 L51.092,172.866 L50.785,173.861 L50.474,174.85 L50.16,175.832 L49.844,176.808 L49.524,177.776 L49.202,178.736 L48.877,179.69 L48.549,180.635 L48.218,181.573 L47.884,182.503 L47.548,183.424 L47.209,184.338 L46.868,185.243 L46.523,186.139 L46.177,187.026 L45.828,187.904 L45.476,188.773 L45.122,189.633 L44.766,190.483 L44.407,191.323 L44.046,192.154 L43.683,192.974 L43.318,193.784 L42.95,194.584 L42.581,195.373 L42.21,196.151 L41.836,196.918 L41.461,197.674 L41.085,198.419 L40.706,199.152 L40.326,199.874 L39.945,200.583 L39.562,201.28 L39.178,201.965 L38.793,202.638 L38.407,203.298 L38.02,203.945 L37.632,204.579 L37.244,205.2 L36.854,205.807 L36.465,206.401 L36.075,206.981 L35.685,207.548 L35.295,208.1 L34.906,208.638 L34.517,209.161 L34.128,209.67 L33.741,210.164 L33.354,210.644 L32.968,211.108 L32.585,211.557 L32.202,211.991 L31.822,212.41 L31.444,212.813 L31.069,213.201 L30.696,213.573 L30.326,213.93 L29.96,214.271 L29.597,214.596 L29.238,214.906 L28.883,215.201 L28.532,215.48 L28.187,215.744 L27.846,215.992 L27.51,216.226 L27.18,216.445 L26.855,216.65 L26.536,216.841 L26.223,217.018 L25.916,217.181 L25.615,217.332 L25.319,217.47 L25.03,217.595 L24.746,217.709 L24.468,217.812 L24.195,217.904 L23.927,217.986 L23.663,218.058 L23.403,218.12 L23.146,218.174 L22.891,218.219 L22.638,218.255 L22.386,218.283 L22.134,218.303 L21.881,218.316 L10,218.505 L44.782,444.861 Z" fill="none" stroke="#000" stroke-width="0.25"/>
+</g>
+<g id="piece-tr_back_R-sew" class="sew">
+<path d="M53.363,434.861 L272.306,434.861 L306.107,40.821 L86.107,20.821 L71.107,127.446 L70.941,128.608 L70.772,129.769 L70.599,130.931 L70.422,132.093 L70.242,133.255 L70.057,134.416 L69.869,135.577 L69.677,136.737 L69.481,137.896 L69.282,139.055 L69.078,140.212 L68.871,141.368 L68.661,142.523 L68.446,143.676 L68.228,144.827 L68.006,145.977 L67.78,147.124 L67.551,148.27 L67.318,149.413 L67.082,150.554 L66.841,151.692 L66.597,152.828 L66.35,153.961 L66.099,155.09 L65.844,156.217 L65.586,157.341 L65.324,158.46 L65.058,159.577 L64.789,160.69 L64.516,161.798 L64.24,162.903 L63.961,164.004 L63.677,165.1 L63.391,166.192 L63.1,167.28 L62.807,168.363 L62.509,169.44 L62.209,170.513 L61.904,171.581 L61.597,172.643 L61.286,173.7 L60.971,174.751 L60.653,175.797 L60.332,176.837 L60.007,177.87 L59.679,178.898 L59.347,179.919 L59.013,180.933 L58.674,181.942 L58.333,182.943 L57.988,183.937 L57.639,184.925 L57.288,185.905 L56.933,186.878 L56.575,187.843 L56.213,188.801 L55.848,189.751 L55.48,190.693 L55.109,191.627 L54.734,192.553 L54.357,193.47 L53.976,194.379 L53.591,195.279 L53.204,196.171 L52.813,197.053 L52.419,197.927 L52.022,198.791 L51.622,199.646 L51.219,200.491 L50.812,201.327 L50.402,202.153 L49.99,202.969 L49.574,203.775 L49.155,204.571 L48.733,205.356 L48.308,206.131 L47.879,206.895 L47.448,207.648 L47.014,208.39 L46.576,209.121 L46.136,209.841 L45.692,210.55 L45.246,211.247 L44.796,211.932 L44.344,212.606 L43.888,213.267 L43.43,213.917 L42.968,214.554 L42.504,215.178 L42.037,215.791 L41.567,216.39 L41.093,216.977 L40.617,217.55 L40.138,218.111 L39.656,218.658 L39.172,219.191 L38.684,219.712 L38.194,220.218 L37.7,220.711 L37.204,221.189 L36.705,221.654 L36.203,222.104 L35.699,222.539 L35.191,222.96 L34.681,223.367 L34.168,223.758 L33.652,224.135 L33.134,224.496 L32.612,224.842 L32.088,225.172 L31.562,225.487 L31.032,225.786 L30.5,226.07 L29.965,226.337 L29.428,226.588 L28.887,226.822 L28.345,227.041 L27.799,227.242 L27.251,227.427 L26.7,227.595 L26.147,227.746 L25.59,227.879 L25.032,227.996 L24.471,228.094 L23.907,228.176 L23.34,228.239 L22.771,228.284 L22.2,228.312 L21.626,228.321 Z" fill="none" stroke="#000" stroke-width="0.175" stroke-dasharray="3 1.5"/>
+</g>
+<g id="piece-tr_back_R-notches" class="notches">
+</g>
+<g id="piece-tr_back_R-grain" class="grain">
+<path d="M162.834,375.221 L162.834,248.321" fill="none" stroke="#000" stroke-width="0.25"/>
+<path d="M165.234,254.321 L162.834,248.321 L160.434,254.321" fill="none" stroke="#000" stroke-width="0.25"/>
+<path d="M165.234,369.221 L162.834,375.221 L160.434,369.221" fill="none" stroke="#000" stroke-width="0.25"/>
+</g>
+<g id="piece-tr_back_R-fold" class="fold">
+</g>
+<g id="piece-tr_back_R-internal-draw" class="internal-draw">
+</g>
+<g id="piece-tr_back_R-internal-cut" class="internal-cut">
+</g>
+<g id="piece-tr_back_R-drills" class="drills">
+</g>
+<g id="piece-tr_back_R-labels" class="labels">
+<text x="187.722" y="127.116" font-size="6" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-weight="bold" paint-order="stroke" stroke="#fff" stroke-width="0.72" fill="#000" data-kind="label">TROUSER BACK</text>
+<text x="187.722" y="133.093" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">ZOUAVE_TROUSER  size 920 mm stature</text>
+<text x="187.722" y="138.163" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">Cut 2 (mirror pair)</text>
+<text x="187.722" y="143.233" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">Fabric: wool flannel</text>
+<text x="187.722" y="148.303" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">SA included: 10 mm</text>
+<text x="187.722" y="153.373" font-size="3.9" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.47" fill="#000" data-kind="label">Round 0</text>
+</g>
+<g id="piece-tr_back_R-decor-soutache" class="decor-soutache">
+</g>
+</g>
+<g id="piece-waistband" data-piece="waistband" data-instance="waistband" data-name="WAIST CASING" data-qty="1" data-mirror="false" data-material="wool flannel" data-on-fold="" data-fold-mode="none" data-size="920 mm stature" data-sa-mm="10" data-grain-default="false">
+<g id="piece-waistband-cut" class="cut">
+<path d="M640,634.861 L640,554.861 L10,554.861 L10,634.861 Z" fill="none" stroke="#000" stroke-width="0.25"/>
+</g>
+<g id="piece-waistband-sew" class="sew">
+<path d="M20,624.861 L174.567,624.861 L325,624.861 L475.433,624.861 L630,624.861 L630,564.861 L20,564.861 Z" fill="none" stroke="#000" stroke-width="0.175" stroke-dasharray="3 1.5"/>
+</g>
+<g id="piece-waistband-notches" class="notches">
+</g>
+<g id="piece-waistband-grain" class="grain">
+<path d="M60,604.861 L590,604.861" fill="none" stroke="#000" stroke-width="0.25"/>
+<path d="M584,607.261 L590,604.861 L584,602.461" fill="none" stroke="#000" stroke-width="0.25"/>
+<path d="M66,607.261 L60,604.861 L66,602.461" fill="none" stroke="#000" stroke-width="0.25"/>
+</g>
+<g id="piece-waistband-fold" class="fold">
+</g>
+<g id="piece-waistband-internal-draw" class="internal-draw">
+<path d="M20,594.861 L630,594.861" fill="none" stroke="#000" stroke-width="0.2" stroke-dasharray="2 1"/>
+</g>
+<g id="piece-waistband-internal-cut" class="internal-cut">
+</g>
+<g id="piece-waistband-drills" class="drills">
+</g>
+<g id="piece-waistband-labels" class="labels">
+<text x="220.752" y="570.599" font-size="3.53" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-weight="bold" paint-order="stroke" stroke="#fff" stroke-width="0.42" fill="#000" data-kind="label">WAIST CASING</text>
+<text x="220.752" y="574.115" font-size="2.29" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.28" fill="#000" data-kind="label">ZOUAVE_TROUSER  size 920 mm stature</text>
+<text x="220.752" y="577.098" font-size="2.29" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.28" fill="#000" data-kind="label">Cut 1</text>
+<text x="220.752" y="580.08" font-size="2.29" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.28" fill="#000" data-kind="label">Fabric: wool flannel</text>
+<text x="220.752" y="583.062" font-size="2.29" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.28" fill="#000" data-kind="label">SA included: 10 mm</text>
+<text x="220.752" y="586.045" font-size="2.29" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.28" fill="#000" data-kind="label">Round 0</text>
+<text x="220.752" y="589.027" font-size="2.29" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.28" fill="#000" data-kind="label">Elastic 25 mm wide: cut 524 mm (includes 20 mm overlap)</text>
+<text x="646.419" y="595.515" font-size="3" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.36" fill="#000" data-kind="internal">FOLD (elastic casing)</text>
+</g>
+<g id="piece-waistband-decor-soutache" class="decor-soutache">
+</g>
+</g>
+<g id="piece-cuff_R" data-piece="cuff" data-instance="cuff.R" data-name="LEG CUFF" data-qty="2" data-mirror="true" data-material="wool flannel" data-on-fold="" data-fold-mode="none" data-size="920 mm stature" data-sa-mm="10" data-grain-default="false">
+<g id="piece-cuff_R-cut" class="cut">
+<path d="M259.5,539.861 L259.5,459.861 L10,459.861 L10,539.861 Z" fill="none" stroke="#000" stroke-width="0.25"/>
+</g>
+<g id="piece-cuff_R-sew" class="sew">
+<path d="M20,529.861 L249.5,529.861 L249.5,469.861 L127.865,469.861 L20,469.861 Z" fill="none" stroke="#000" stroke-width="0.175" stroke-dasharray="3 1.5"/>
+</g>
+<g id="piece-cuff_R-notches" class="notches">
+</g>
+<g id="piece-cuff_R-grain" class="grain">
+<path d="M40,514.861 L229.5,514.861" fill="none" stroke="#000" stroke-width="0.25"/>
+<path d="M223.5,517.261 L229.5,514.861 L223.5,512.461" fill="none" stroke="#000" stroke-width="0.25"/>
+<path d="M46,517.261 L40,514.861 L46,512.461" fill="none" stroke="#000" stroke-width="0.25"/>
+</g>
+<g id="piece-cuff_R-fold" class="fold">
+</g>
+<g id="piece-cuff_R-internal-draw" class="internal-draw">
+<path d="M20,499.861 L249.5,499.861" fill="none" stroke="#000" stroke-width="0.2" stroke-dasharray="2 1"/>
+</g>
+<g id="piece-cuff_R-internal-cut" class="internal-cut">
+</g>
+<g id="piece-cuff_R-drills" class="drills">
+</g>
+<g id="piece-cuff_R-labels" class="labels">
+<text x="82.754" y="476.049" font-size="4.05" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-weight="bold" paint-order="stroke" stroke="#fff" stroke-width="0.49" fill="#000" data-kind="label">LEG CUFF</text>
+<text x="82.754" y="480.085" font-size="2.63" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.32" fill="#000" data-kind="label">ZOUAVE_TROUSER  size 920 mm stature</text>
+<text x="82.754" y="483.508" font-size="2.63" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.32" fill="#000" data-kind="label">Cut 2 (mirror pair)</text>
+<text x="82.754" y="486.932" font-size="2.63" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.32" fill="#000" data-kind="label">Fabric: wool flannel</text>
+<text x="82.754" y="490.355" font-size="2.63" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.32" fill="#000" data-kind="label">SA included: 10 mm</text>
+<text x="82.754" y="493.778" font-size="2.63" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.32" fill="#000" data-kind="label">Round 0</text>
+<text x="255.5" y="500.515" font-size="3" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="0.36" fill="#000" data-kind="internal">FOLD</text>
+</g>
+<g id="piece-cuff_R-decor-soutache" class="decor-soutache">
+</g>
+</g>
+</svg>

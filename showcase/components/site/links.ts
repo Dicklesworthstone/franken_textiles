@@ -12,6 +12,8 @@ export const exhibits: SiteLink[] = [
   { href: "/#visual-fitting", label: "Visual fitting", note: "Trace rendered pixels back to flat pattern edges" },
   { href: "/#wardrobe", label: "Wardrobe", note: "A sundress and Swedish hussars of 1761 and 1765" },
   { href: "/#studio", label: "Studios", note: "Draft a pattern, lay it on the roll, follow the needle, or repair a seam" },
+  { href: "/studies/tiling/", label: "A4 tile assembly", note: "Assemble a real tiled A4 PDF on a virtual floor with alignment diamonds" },
+  { href: "/studies/sewing/", label: "Jacket sewing order", note: "Play all ten native sewing operations across the flat cut and 3D bolero" },
   { href: "/#materials", label: "Materials", note: "Pull and twist cloth between two grips" },
   { href: "/experiments/thermal/", label: "Thermal sandwich", note: "Stack measured neoprene & leather sheets with live steady conduction" },
   { href: "/experiments/wash/", label: "Wash & shrink", note: "Apply measured warp/weft denim shrinkage or compute a pre-wash recut" },

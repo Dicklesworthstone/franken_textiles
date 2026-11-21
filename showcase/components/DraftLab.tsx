@@ -185,6 +185,7 @@ export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onP
         {f.type === "pdf" ? "A4 pattern PDF" : "Master SVG"} <span aria-hidden="true">↓</span>
       </a>)}</div>
       <a className="dl-watch-link" href={"/?garment="+({zouave_bolero:"bolero",zouave_trousers:"trousers",fez:"fez"}[program])+"#construction"}>Watch the reference {preset.name.toLowerCase()} take shape <span aria-hidden="true">↗</span></a>
+      <a className="dl-watch-link" href="/studies/tiling/">See how the A4 tiles tape together <span aria-hidden="true">→</span></a>
       {onPlanCut && fresh?.flat === "CONVERGED" && fresh.pattern && fresh.files.some(f => f.type === "pdf") &&
         <button className="dl-plan-cut" type="button" onClick={() => onPlanCut({program,
           label:`${preset.name} · ${height} cm · ${preset.label.toLowerCase()} ${value}${preset.unit}`, pattern:fresh.pattern,

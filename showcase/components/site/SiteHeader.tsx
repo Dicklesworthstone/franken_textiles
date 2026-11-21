@@ -12,15 +12,18 @@ export function Mark() {
 function current(pathname: string, href: string, inSheet = false) {
   if (href.startsWith("/#")) {
     const anchor = href.slice(2);
-    // In the full menu sheet, Skirt atelier, Trouser study and Drape gallery each have their own exact entries.
-    if (anchor === "drape-room") return !inSheet && (pathname.startsWith("/studies/") || pathname === "/sections/studies/");
+    // In the full menu sheet, Skirt atelier, Trouser study, A4 tile assembly, Jacket sewing order and Drape gallery each have their own exact entries.
+    if (anchor === "drape-room") return !inSheet && pathname !== "/studies/tiling/" && pathname !== "/studies/sewing/" && (pathname.startsWith("/studies/") || pathname === "/sections/studies/");
     if (anchor === "wardrobe") return pathname.startsWith("/wardrobe/") || pathname === "/sections/wardrobe/";
     if (anchor === "materials") {
       return inSheet
         ? pathname === "/sections/materials/" || pathname === "/experiments/strip/" || pathname === "/experiments/cylinder/"
         : pathname.startsWith("/experiments/") || pathname === "/sections/materials/";
     }
-    if (anchor === "studio") return ["studio", "draft", "cut", "stitch", "repair"].some(id => pathname === `/sections/${id}/`);
+    if (anchor === "studio") {
+      return ["studio", "draft", "cut", "stitch", "repair"].some(id => pathname === `/sections/${id}/`) ||
+        (!inSheet && (pathname === "/studies/tiling/" || pathname === "/studies/sewing/"));
+    }
     return pathname === `/sections/${anchor}/`;
   }
   return pathname === href;

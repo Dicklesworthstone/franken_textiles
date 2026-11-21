@@ -15,6 +15,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     page("/wardrobe/hussar/", .8),
     page("/studies/trousers/", .8),
     page("/studies/skirt/", .9),
+    page("/studies/tiling/", .7),
+    page("/studies/sewing/", .7),
     ...Object.keys(experiments).map(kind => page(`/experiments/${kind}/`, .7)),
     page("/experiments/thermal/", .7),
     page("/experiments/wash/", .7),
