@@ -156,10 +156,15 @@ onmessage = async (ev) => {
       if (!["lbs", "dqs"].includes(skinning)) {
         throw new Error("Choose lbs or dqs skinning.");
       }
+      const handCollider = msg.handCollider ?? "wrist";
+      if (!["wrist", "palm", "knuckle"].includes(handCollider)) {
+        throw new Error("Choose wrist, palm or knuckle hand collider.");
+      }
       const settings = { self_contact_mm: msg.selfContactMm ?? 2, two_start: !!msg.twoStart,
         arm_abduction_deg: armDeg, legs: msg.legs ?? "standing",
         leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0,
-        ...(skinning !== "lbs" ? { skinning } : {}) };
+        ...(skinning !== "lbs" ? { skinning } : {}),
+        ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}) };
       if (!["standing", "seated", "squat"].includes(settings.legs) ||
           !Number.isFinite(settings.leg_fraction) || settings.leg_fraction < 0 || settings.leg_fraction > 1) {
         throw new Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
@@ -275,6 +280,7 @@ onmessage = async (ev) => {
       }
       const configured = (!imported && armDeg !== 35) ||
         settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
+        handCollider !== "wrist" ||
         settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
         settings.newton_strategy !== undefined || settings.integrator !== undefined ||
         settings.step_s !== undefined || settings.sew_steps !== undefined ||

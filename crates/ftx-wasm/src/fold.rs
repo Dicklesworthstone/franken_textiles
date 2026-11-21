@@ -3,8 +3,8 @@
 //! fit report), with the body model read from bytes the page was given and the fold-up viewer page as text.
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyFrames, Legs, Pose, SkinningMode, TAPE_FIELDS, TapeFit, Wearer,
-    clothing_skin, fit_tape, pose_deltas, skin_mesh, tape_targets,
+    AnnyData, AnnyModel, BodyFrames, HandCollider, Legs, Pose, SkinningMode, TAPE_FIELDS, TapeFit,
+    Wearer, clothing_skin_with_hands, fit_tape, pose_deltas, skin_mesh, tape_targets,
 };
 use ftx_drape::{
     run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape, viewer},
@@ -203,6 +203,11 @@ fn skinning_is_lbs(mode: &SkinningMode) -> bool {
     mode.is_lbs()
 }
 
+/// serde predicate for the default wrist-capped hand collider (borrowed form).
+fn hand_collider_is_wrist(hands: &HandCollider) -> bool {
+    hands.is_wrist()
+}
+
 /// Explicit garment pose and bounded continuation, shared by native and browser adapters.
 /// Defaults preserve the ordinary standing drape with no extra settling steps.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -221,6 +226,9 @@ pub struct FoldSettings {
     /// Skinning operator (`"lbs"` default; `"dqs"` opt-in dual-quaternion linear blending).
     #[serde(default, skip_serializing_if = "skinning_is_lbs")]
     pub skinning: SkinningMode,
+    /// Hand collider cut (`"wrist"` default reference cap; `"palm"` or `"knuckle"` opt-in sleeve colliders).
+    #[serde(default, skip_serializing_if = "hand_collider_is_wrist")]
+    pub hand_collider: HandCollider,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
     pub max_settle_steps: usize,
     /// Optional nominal step duration in seconds (omitted when using the default `1/24 s`).
@@ -258,6 +266,7 @@ impl Default for FoldSettings {
             legs: Legs::Standing,
             leg_fraction: 1.0,
             skinning: SkinningMode::LinearBlend,
+            hand_collider: HandCollider::Wrist,
             max_settle_steps: 0,
             step_s: None,
             sew_steps: None,
@@ -367,6 +376,7 @@ fn fold_on_source(
         legs,
         leg_fraction,
         skinning,
+        hand_collider,
         max_settle_steps,
         step_s,
         sew_steps,
@@ -424,6 +434,16 @@ fn fold_on_source(
     } else {
         measurements.clone()
     };
+    let pose_line = |deg: f64| {
+        if hand_collider.is_wrist() {
+            format!("drape: arms at {deg}° and straight, hands and feet left out of contact")
+        } else {
+            format!(
+                "drape: arms at {deg}° and straight, hand collider {} (outer fingers and feet left out of contact)",
+                hand_collider.as_str()
+            )
+        }
+    };
     let (params, mut description) = if let Some(source) = source {
         let (shape, mut description) = ftx_body::accepted_shape::prepare(
             model,
@@ -432,13 +452,7 @@ fn fold_on_source(
             Some(&data),
         )
         .map_err(m)?;
-        description.insert(
-            "pose".into(),
-            json!(format!(
-                "drape: arms at {}° and straight, hands and feet left out of contact",
-                arm_abduction_deg
-            )),
-        );
+        description.insert("pose".into(), json!(pose_line(arm_abduction_deg)));
         progress("body: reusing accepted image-fit shape without tape refitting");
         (shape.params, Value::Object(description))
     } else {
@@ -462,10 +476,8 @@ fn fold_on_source(
     if !skinning.is_lbs() {
         description["skinning"] = json!(skinning);
     }
-    if source.is_none() && arm_abduction_deg != Pose::A_POSE_DEG {
-        description["pose"] = json!(format!(
-            "drape: arms at {arm_abduction_deg}° and straight, hands and feet left out of contact"
-        ));
+    if source.is_none() && (arm_abduction_deg != Pose::A_POSE_DEG || !hand_collider.is_wrist()) {
+        description["pose"] = json!(pose_line(arm_abduction_deg));
     }
     let occupancy = ftx_body::nappy_occupancy(model, &params, &data).map_err(m)?;
     let occupied_params = occupancy
@@ -476,7 +488,7 @@ fn fold_on_source(
         description["readings_mm"]["seat_over_nappy"] = json!(occupied.seat_over_nappy_mm);
         description["nappy_occupancy"] = occupied.description;
     }
-    let rest_skin = clothing_skin(model, &rest.vertices).map_err(m)?;
+    let rest_skin = clothing_skin_with_hands(model, &rest.vertices, hand_collider).map_err(m)?;
     let posed = model
         .pose_with_skinning(
             &rest,
@@ -484,7 +496,7 @@ fn fold_on_source(
             skinning,
         )
         .map_err(m)?;
-    let skin = clothing_skin(model, &posed.vertices).map_err(m)?;
+    let skin = clothing_skin_with_hands(model, &posed.vertices, hand_collider).map_err(m)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces).map_err(m)?;
     let frames = BodyFrames::new(model, &posed).map_err(m)?;
     let body = DrapeBody {
@@ -493,12 +505,15 @@ fn fold_on_source(
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
-    let run = if let Some(policy) = comparison {
+    let mut run = if let Some(policy) = comparison {
         ftx_drape::two_start::drape(&pat, fit_spec, &body, &opts, &policy, &mut progress)
     } else {
         drape(&pat, fit_spec, &body, &opts, &mut progress)
     }
     .map_err(m)?;
+    if !hand_collider.is_wrist() {
+        run.report["hand_collider"] = json!(hand_collider.as_str());
+    }
     finalize_browser_fold(
         run,
         &pat,
@@ -631,6 +646,35 @@ mod tests {
 
         let mut invalid = default;
         invalid["skinning"] = json!("bogus");
+        assert!(serde_json::from_value::<FoldSettings>(invalid).is_err());
+    }
+
+    #[test]
+    fn configured_fold_retains_opt_in_hand_collider_and_omits_default_wrist() {
+        let default = serde_json::to_value(FoldSettings::default()).unwrap();
+        assert!(default.get("hand_collider").is_none());
+        let parsed_default: FoldSettings = serde_json::from_value(default.clone()).unwrap();
+        assert_eq!(parsed_default.hand_collider, HandCollider::Wrist);
+
+        let mut explicit_wrist = default.clone();
+        explicit_wrist["hand_collider"] = json!("wrist");
+        let parsed_wrist: FoldSettings = serde_json::from_value(explicit_wrist).unwrap();
+        assert_eq!(parsed_wrist.hand_collider, HandCollider::Wrist);
+        assert_eq!(serde_json::to_value(parsed_wrist).unwrap(), default);
+
+        for (label, expected) in [
+            ("palm", HandCollider::Palm),
+            ("knuckle", HandCollider::Knuckle),
+        ] {
+            let mut configured = default.clone();
+            configured["hand_collider"] = json!(label);
+            let parsed: FoldSettings = serde_json::from_value(configured.clone()).unwrap();
+            assert_eq!(parsed.hand_collider, expected);
+            assert_eq!(serde_json::to_value(parsed).unwrap(), configured);
+        }
+
+        let mut invalid = default;
+        invalid["hand_collider"] = json!("mitten");
         assert!(serde_json::from_value::<FoldSettings>(invalid).is_err());
     }
 

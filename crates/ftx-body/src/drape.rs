@@ -999,7 +999,8 @@ pub fn clothing_skin(model: &AnnyModel, vertices: &[Vec3]) -> Result<SkinMesh, R
 /// out: it also keeps the thumb's first bone and the first phalanx of each finger, where a cuff that
 /// passes the wrist first meets the hand. The outer finger joints are left out in every case (a coarse
 /// garment mesh cannot clear them), so cloth beyond the kept part is not resolved by contact.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HandCollider {
     /// Capped at the wrists (the reference collider).
     #[default]

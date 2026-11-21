@@ -1,7 +1,10 @@
 # ftx-wasm
 
-**Opt-in drape solver strategies, Generalized-α, microclimate, and viscoelastic lowering.**
-`fold::FoldSettings` carries opt-in `newton_strategy` (`ProjectedNewton` default omitted from JSON;
+**Opt-in drape solver strategies, Generalized-α, hand colliders, microclimate, and viscoelastic lowering.**
+`fold::FoldSettings` carries opt-in `hand_collider` (`"wrist"` default reference cap omitted from
+JSON; `"palm"` and `"knuckle"` native sleeve colliders forwarding into `clothing_skin_with_hands`
+and recorded on `sim_report.json["hand_collider"]` only when non-default), `newton_strategy`
+(`ProjectedNewton` default omitted from JSON;
 `AdaptiveIlu` and `TrustRegionSteihaug`), `integrator` (`ImplicitEuler` default omitted from
 JSON; `GeneralizedAlpha { rho_inf }`), and schedule/tolerance overrides (`step_s`, `sew_steps`,
 `drape_steps`, `newton_tol_m_s`, capped at `sew + drape + settle <= 512`), forwarding them directly

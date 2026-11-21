@@ -1419,7 +1419,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
   for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignAfterSeams','guidedDesignMaterials'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
-  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
@@ -5677,7 +5677,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
 function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyToken=null,initialize=true,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
-  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
@@ -23942,4 +23942,98 @@ test('static_equilibrium rejects mm-overflow tolerances, joint plasticity surfac
     membrane_plasticity_history: { damage_model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.0025 } };
   idx.worker.onmessage({ data: { type: 'folded', request: idxFold.request, report: idxRep, reportText: JSON.stringify(idxRep), viewer: '<html/>' } });
   assert.match(idx.e.foldSummary.innerHTML, /Membrane stiffness degradation \(isotropic_accumulated_damage\/1\): damage dissipation 2\.500e-3 J/);
+});
+
+test('opt-in hand_collider (wrist/palm/knuckle) wires fail-closed across both workbenches, workers and handoffs', async () => {
+  // 1. Material workbench: wrist omits handCollider & hand_collider; palm/knuckle dispatch, render, invalidate, refuse invalid.
+  const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  p.e.body.files = [new Blob([new Uint8Array([1])])];
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.at(-1).handCollider, undefined);
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  const fSec = section(p, 'fold');
+  assert.equal(Object.hasOwn(JSON.parse(fSec.children[1].textContent), 'hand_collider'), false);
+
+  p.e.drapeHands.value = 'knuckle'; p.e.drapeHands.handlers.change();
+  assert.equal(fSec.hidden, true, 'changing drapeHands must invalidate prior fold');
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.at(-1).handCollider, 'knuckle');
+  p.emit({ settled: true, hand_collider: 'knuckle', body: { legs: 'standing', leg_fraction: 1 } },
+    [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.equal(JSON.parse(fSec.children[1].textContent).hand_collider, 'knuckle');
+
+  p.e.drapeHands.value = 'mitten';
+  const beforeBad = p.current().messages.length;
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.length, beforeBad);
+  assert.match(p.e.error.textContent, /hand collider/i);
+
+  // 2. Materials worker routes wrist -> legacy fold_up, palm/knuckle -> fold_up_configured, refuses invalid.
+  const calls = [];
+  const mw = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    WebBody: class { free() {} },
+    fold_up: () => { calls.push({ path: 'legacy' }); return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      calls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"settled":true,"hand_collider":"palm"}', viewer: () => '<html/>', free() {} };
+    },
+  } });
+  const baseFold = { type: 'fold', request: 1, bytes: new Uint8Array([1]).buffer, pattern: '{}', measurements: '{}', fit: '{}', selfContactMm: 2, twoStart: false, armDeg: 35 };
+  assert.equal((await mw.send(baseFold)).type, 'result');
+  assert.equal(calls.at(-1).path, 'legacy');
+  assert.equal((await mw.send({ ...baseFold, request: 2, bytes: new Uint8Array([1]).buffer, handCollider: 'palm' })).type, 'result');
+  assert.equal(calls.at(-1).path, 'configured');
+  assert.equal(calls.at(-1).settings.hand_collider, 'palm');
+  const badRes = await mw.send({ ...baseFold, request: 3, bytes: new Uint8Array([1]).buffer, handCollider: 'mitten' });
+  assert.equal(badRes.type, 'error');
+  assert.match(badRes.message, /hand collider/i);
+
+  // 3. Pattern workbench (index.html): dispatches palm/knuckle, renders Hand collider line, invalidates, preserves bidirectional handoffs.
+  const idx = draftingPage();
+  idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  idx.e.bodyFile.files = [new Blob([new Uint8Array([1])])];
+  await idx.e.bodyFile.handlers.change();
+  idx.worker.onmessage({ data: { type: 'bodyReady', request: idx.messages.findLast(m => m.type === 'body').request } });
+  await idx.e.go.handlers.click();
+  idx.worker.onmessage({ data: { type: 'result', request: idx.messages.findLast(m => m.type === 'run').request,
+    res: { title: 'Bolero', status: 'CONVERGED', basis: {}, zip: 'r.zip' }, blobs: {}, foldable: true, bodyCheckable: true,
+    roundSources: { pattern: '{}', measurements: '{}', fit: '{}' } } });
+  idx.e.drapeHands.value = 'palm'; idx.e.drapeHands.handlers.change();
+  idx.e.foldGo.handlers.click();
+  const foldMsg = idx.messages.findLast(m => m.type === 'fold');
+  assert.equal(foldMsg.handCollider, 'palm');
+  const palmRep = { settled: true, flags: [], hand_collider: 'palm' };
+  idx.worker.onmessage({ data: { type: 'folded', request: foldMsg.request, report: palmRep, reportText: JSON.stringify(palmRep), viewer: '<html/>' } });
+  assert.match(idx.e.foldSummary.innerHTML, /Hand collider: palm/);
+  idx.e.drapeHands.value = 'wrist'; idx.e.drapeHands.handlers.change();
+  assert.equal(idx.e.foldSummary.textContent, '', 'changing drapeHands on index.html must invalidate prior fold');
+
+  // Bidirectional handoffs preserve palm/knuckle and refuse invalid values.
+  const hToken = 'b'.repeat(32);
+  const hq = await pageModule({ roundToken: hToken });
+  const hFiles = { pattern: new Blob(['{"pieces":[{"id":"front"}]}']), measurements: new Blob(['{}']), fit: new Blob(['{}']) };
+  await hq.windowEvents.message({ origin: 'https://unit.invalid', source: hq.opener, data: {
+    type: 'ftx-round-sources', token: hToken, files: hFiles, bodySource: { model: new Blob([new Uint8Array([1])]) },
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, hand_collider: 'knuckle' } } });
+  assert.equal(hq.e.drapeHands.value, 'knuckle');
+
+  const revToken = 'c'.repeat(32);
+  const rev = draftingPage({ materialToken: revToken });
+  rev.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await rev.windowEvents.message({ origin: 'https://unit.invalid', source: rev.opener, data: {
+    type: 'ftx-material-pattern', token: revToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '5'.repeat(64),
+    evaluatedInputs: { fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, hand_collider: 'palm' } } } });
+  assert.equal(rev.e.drapeHands.value, 'palm');
+
+  const badRevToken = 'd'.repeat(32);
+  const badRev = draftingPage({ materialToken: badRevToken });
+  badRev.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await badRev.windowEvents.message({ origin: 'https://unit.invalid', source: badRev.opener, data: {
+    type: 'ftx-material-pattern', token: badRevToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '6'.repeat(64),
+    evaluatedInputs: { fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, hand_collider: 'mitten' } } } });
+  assert.equal(badRev.e.drapeHands.value, 'wrist');
+  assert.match(badRev.e.traceImportText.textContent, /incomplete/i);
 });

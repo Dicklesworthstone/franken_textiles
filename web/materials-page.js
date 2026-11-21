@@ -4937,6 +4937,7 @@ function show(op, msg, request) {
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis,
         legs: r.body?.legs || "standing", leg_fraction: r.body?.leg_fraction ?? 1,
         ...(r.body?.skinning ? { skinning: r.body.skinning } : {}),
+        ...(r.hand_collider ? { hand_collider: r.hand_collider } : {}),
         ...(r.numerical?.newton_strategy ? { newton_strategy: r.numerical.newton_strategy } : {}),
         ...(r.numerical?.integrator ? { integrator: r.numerical.integrator } : {}), settling: r.numerical?.settling,
         ...(r.static_equilibrium ? { static_equilibrium: {
@@ -7029,9 +7030,12 @@ async function execute(op, studio = null) {
         }
         const skinning = $("drapeSkinning").value;
         if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
+        const handCollider = $("drapeHands").value;
+        if (!["wrist", "palm", "knuckle"].includes(handCollider)) throw Error("Choose wrist, palm or knuckle hand collider.");
         msg.legs = $("drapeLegs").value;
         msg.legFraction = Number($("drapeLegFraction").value);
         msg.skinning = skinning;
+        if (handCollider !== "wrist") msg.handCollider = handCollider;
         msg.maxSettleSteps = Number($("maxSettleSteps").value);
         const subdivision = drapeTimeSubdivision();
         if (subdivision !== undefined) msg.timeSubdivision = subdivision;
@@ -7092,6 +7096,7 @@ async function execute(op, studio = null) {
         drapeSettings: { self_contact_mm: msg.selfContactMm, two_start: msg.twoStart,
           arm_abduction_deg: msg.armDeg, legs: msg.legs, leg_fraction: msg.legFraction, max_settle_steps: msg.maxSettleSteps,
           ...(msg.skinning !== "lbs" ? { skinning: msg.skinning } : {}),
+          ...(msg.handCollider !== undefined ? { hand_collider: msg.handCollider } : {}),
           ...(msg.timeSubdivision !== undefined ? { time_subdivision: msg.timeSubdivision } : {}),
           ...(msg.newtonStrategy !== undefined ? { newton_strategy: msg.newtonStrategy } : {}),
           ...(msg.integrator !== undefined ? { integrator: msg.integrator } : {}),
@@ -8186,7 +8191,7 @@ for (const suffix of viscoFields) for (const event of ["input", "change"]) {
 }
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], twoStart:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
-  drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"],
+  drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"], drapeHands:["fold","heat","vaporSurface","coverage"],
   drapeNewtonStrategy:["fold","heat","vaporSurface","coverage"], drapeIntegrator:["fold","heat","vaporSurface","coverage"], drapeRhoInf:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
   customDrapeSchedule:["fold","heat","vaporSurface","coverage"], drapeStepS:["fold","heat","vaporSurface","coverage"], drapeSewSteps:["fold","heat","vaporSurface","coverage"], drapeDrapeSteps:["fold","heat","vaporSurface","coverage"], drapeNewtonTol:["fold","heat","vaporSurface","coverage"],
@@ -8215,7 +8220,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "fit") { clearImportFit(); $("fitSource").value = "file"; }
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
-    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps",
+    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps",
       "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol",
       "staticEquilibrium", "staticTolMm", "staticMaxNewton"].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
@@ -8360,6 +8365,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
           !["standing", "seated", "squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
           settings.leg_fraction < 0 || settings.leg_fraction > 1 ||
           (settings.skinning !== undefined && !["lbs", "dqs"].includes(settings.skinning)) ||
+          (settings.hand_collider !== undefined && !["wrist", "palm", "knuckle"].includes(settings.hand_collider)) ||
           !Number.isSafeInteger(settings.max_settle_steps) ||
           settings.max_settle_steps < 0 || settings.max_settle_steps > 256)) throw Error("Received drape settings are incomplete or outside the supported controls.");
       checkedTimeSubdivision(settings?.time_subdivision);
@@ -8412,6 +8418,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         $("selfContact").checked = settings.self_contact_mm === 2; $("twoStart").checked = settings.two_start;
         $("drapeLegs").value = settings.legs; $("drapeLegFraction").value = String(settings.leg_fraction);
         $("drapeSkinning").value = settings.skinning ?? "lbs";
+        $("drapeHands").value = settings.hand_collider ?? "wrist";
         $("maxSettleSteps").value = String(settings.max_settle_steps);
         setTimeSubdivision(settings.time_subdivision);
         setNewtonStrategy(settings.newton_strategy);

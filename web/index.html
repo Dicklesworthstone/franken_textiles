@@ -256,6 +256,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
         <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
         <label>Skinning <select id="drapeSkinning"><option value="lbs">LBS (Anny default)</option><option value="dqs">DQS (dual-quaternion)</option></select></label>
+        <label>Hand collider <select id="drapeHands"><option value="wrist">Wrist cap (reference default)</option><option value="palm">Palm (wrist + metacarpals)</option><option value="knuckle">Knuckle (+ first finger bone)</option></select></label>
         <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label></p>
       <p class="row"><label>Newton solver <select id="drapeNewtonStrategy"><option value="projected">Projected Newton (default)</option><option value="adaptive_ilu">Adaptive ILU-PCG</option><option value="trust_region">Trust-region Steihaug</option></select></label>
         <label>Integrator <select id="drapeIntegrator"><option value="implicit_euler">Implicit Euler (default)</option><option value="generalized_alpha">Generalized-α</option></select></label>
@@ -820,14 +821,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (model && model.size > 256 * 1024 * 1024) {
       status("The material workbench supports body models up to 256 MiB. This selected model cannot be transferred."); return;
     }
-    const fraction = $("drapeLegFraction").value.trim(), settling = $("maxSettleSteps").value.trim(), skinning = $("drapeSkinning").value;
+    const fraction = $("drapeLegFraction").value.trim(), settling = $("maxSettleSteps").value.trim(), skinning = $("drapeSkinning").value, handCollider = $("drapeHands").value;
     const drapeSettings = { self_contact_mm: $("selfContact").checked ? 2 : 0, two_start: $("twoStart").checked,
       arm_abduction_deg: Number(angle), legs: $("drapeLegs").value, leg_fraction: Number(fraction), max_settle_steps: Number(settling),
-      ...(skinning !== "lbs" ? { skinning } : {}) };
+      ...(skinning !== "lbs" ? { skinning } : {}),
+      ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}) };
     if (!fraction || !["standing", "seated", "squat"].includes(drapeSettings.legs) || !["lbs", "dqs"].includes(skinning) ||
+        !["wrist", "palm", "knuckle"].includes(handCollider) ||
         !Number.isFinite(drapeSettings.leg_fraction) || drapeSettings.leg_fraction < 0 || drapeSettings.leg_fraction > 1 ||
         !settling || !Number.isSafeInteger(drapeSettings.max_settle_steps) || drapeSettings.max_settle_steps < 0 || drapeSettings.max_settle_steps > 256) {
-      status("Choose a valid drape leg posture, fraction from 0 to 1, skinning mode and whole settling limit from 0 to 256 before opening materials."); return;
+      status("Choose a valid drape leg posture, fraction from 0 to 1, skinning mode, hand collider and whole settling limit from 0 to 256 before opening materials."); return;
     }
     try {
       const subdivision = drapeTimeSubdivision();
@@ -1131,6 +1134,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (r.body?.skinning) {
         $("foldSummary").innerHTML += `<br>Skinning: ${esc(r.body.skinning)}`;
       }
+      if (r.hand_collider) {
+        $("foldSummary").innerHTML += `<br>Hand collider: ${esc(r.hand_collider)}`;
+      }
       if (r.numerical?.newton_strategy) {
         $("foldSummary").innerHTML += `<br>Newton solver: ${esc(r.numerical.newton_strategy.kind)}`;
       }
@@ -1234,7 +1240,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("resetStyle").addEventListener("click", () => {
@@ -1381,6 +1387,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (!["lbs", "dqs"].includes(skinning)) {
       showError("Choose lbs or dqs skinning."); return;
     }
+    const handCollider = $("drapeHands").value;
+    if (!["wrist", "palm", "knuckle"].includes(handCollider)) {
+      showError("Choose wrist, palm or knuckle hand collider."); return;
+    }
     let timeSubdivision, newtonStrategy, integrator, schedule, staticEquilibrium;
     try {
       timeSubdivision = drapeTimeSubdivision();
@@ -1398,7 +1408,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       selfContactMm: $("selfContact").checked ? 2 : 0, twoStart: $("twoStart").checked,
       bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
       armDeg: Number(angle), legs: $("drapeLegs").value,
-      legFraction: Number($("drapeLegFraction").value), skinning, maxSettleSteps: Number($("maxSettleSteps").value),
+      legFraction: Number($("drapeLegFraction").value), skinning,
+      ...(handCollider !== "wrist" ? { handCollider } : {}), maxSettleSteps: Number($("maxSettleSteps").value),
       ...(timeSubdivision !== undefined ? { timeSubdivision } : {}),
       ...(newtonStrategy !== undefined ? { newtonStrategy } : {}),
       ...(integrator !== undefined ? { integrator } : {}),
@@ -1481,6 +1492,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
                 !["standing","seated","squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
                 settings.leg_fraction<0 || settings.leg_fraction>1 ||
                 (settings.skinning !== undefined && !["lbs","dqs"].includes(settings.skinning)) ||
+                (settings.hand_collider !== undefined && !["wrist","palm","knuckle"].includes(settings.hand_collider)) ||
                 !Number.isSafeInteger(settings.max_settle_steps) ||
                 settings.max_settle_steps<0 || settings.max_settle_steps>256)throw Error("Checked drape model or settings are incomplete.");
             checkedTimeSubdivision(settings.time_subdivision);
@@ -1506,7 +1518,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             bodyImportProblem=null;materialBodySources=true;++bodyFitRead;const request=bodyRequest=++nextRequest;
             $("bodyArmDeg").value=String(settings.arm_abduction_deg);$("selfContact").checked=settings.self_contact_mm===2;
             $("twoStart").checked=settings.two_start;$("drapeLegs").value=settings.legs;
-            $("drapeLegFraction").value=String(settings.leg_fraction);$("drapeSkinning").value=settings.skinning ?? "lbs";$("maxSettleSteps").value=String(settings.max_settle_steps);
+            $("drapeLegFraction").value=String(settings.leg_fraction);$("drapeSkinning").value=settings.skinning ?? "lbs";$("drapeHands").value=settings.hand_collider ?? "wrist";$("maxSettleSteps").value=String(settings.max_settle_steps);
             setTimeSubdivision(settings.time_subdivision);
             setNewtonStrategy(settings.newton_strategy);
             setIntegrator(settings.integrator);

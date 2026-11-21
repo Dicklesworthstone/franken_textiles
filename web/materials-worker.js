@@ -510,10 +510,13 @@ self.onmessage = async ({ data: msg }) => {
         }
         const skinning = msg.skinning ?? "lbs";
         if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
+        const handCollider = msg.handCollider ?? "wrist";
+        if (!["wrist", "palm", "knuckle"].includes(handCollider)) throw Error("Choose wrist, palm or knuckle hand collider.");
         const settings = { self_contact_mm: msg.selfContactMm ?? 0, two_start: msg.twoStart ?? false,
           arm_abduction_deg: !imported && msg.armDeg === undefined ? 35 : msg.armDeg, legs: msg.legs ?? "standing",
           leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0,
-          ...(skinning !== "lbs" ? { skinning } : {}) };
+          ...(skinning !== "lbs" ? { skinning } : {}),
+          ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}) };
         if (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180) {
           throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
         }
@@ -633,6 +636,7 @@ self.onmessage = async ({ data: msg }) => {
         }
         const configured = (!imported && settings.arm_abduction_deg !== 35) ||
           settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
+          handCollider !== "wrist" ||
           settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
           settings.newton_strategy !== undefined || settings.integrator !== undefined ||
           settings.step_s !== undefined || settings.sew_steps !== undefined ||
