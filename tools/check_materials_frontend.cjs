@@ -23791,3 +23791,154 @@ test('relaxation calibration surfaces opt-in exact_exponential integration witho
   assert.match(dump, /exact piecewise-linear exponential integration/);
   assert.equal(JSON.parse(secExact.children[1].textContent).integration, 'exact_exponential');
 });
+
+test('strip history and cylinder experiment render opt-in membrane damage dissipation without altering undamaged tables', async () => {
+  const p = await pageModule(); await p.load();
+  p.select('stripHistoryRequest', '{"schema":"ftx-strip-history/1"}');
+  p.e.stripHistoryRequest.handlers.change();
+  await p.e.stripHistory.onclick();
+  p.emit({
+    schema: 'ftx-strip-history-report/1',
+    input: { material: { id: 'damaged', record: { structure: { membrane_damage_model: 'isotropic_accumulated_damage/1' } } } },
+    states: [{
+      time_s: 0.12, extension_fraction: 0.02, force_n: 0.95, mid_width_m: 0.06,
+      free_dynamic_residual_n: 1e-10, stored_membrane_energy_j: 0.004, free_kinetic_energy_j: 0,
+      maxwell_dissipation_j: 0, plastic_dissipation_j: 0.0012, damage_dissipation_j: 0.00035,
+    }],
+  });
+  const sStrip = section(p, 'Strip loading and recovery');
+  assert.match(visibleText(sStrip), /isotropic_accumulated_damage\/1/);
+  assert.match(visibleText(sStrip), /Damage dissipation \(J\)/);
+  const tStrip = descendants(sStrip).find(n => n.tag === 'table');
+  assert.deepEqual(plain(tStrip.children[2].children.map(n => n.textContent)),
+    ['0.12', '0.02', '0.95', '0.06', '1e-10', '0.004', '0', '0', '0.0012', '0.00035']);
+
+  p.select('cylinderExperimentRequest', '{"schema":"ftx-cylinder-experiment/1"}');
+  p.e.cylinderExperimentRequest.handlers.change();
+  await p.e.cylinderExperiment.onclick();
+  p.emit({
+    schema: 'ftx-cylinder-experiment-report/1',
+    input_sha256: 'cyl-dmg-sha', active_gauge_mass_kg: 0.002, newton_iterations: 8,
+    mechanics_readiness_promoted: false, model_scope: 'damaged cylinder scope',
+    protocol_audit: { discrepancies: [] },
+    input: { material: { id: 'damaged', record: { structure: { membrane_damage_model: 'isotropic_accumulated_damage/1' } } } },
+    states: [{
+      time_s: 0.6, axial_displacement_m: 0.002, true_axial_extension_fraction: 0.036, rotation_deg: 0,
+      tare_adjusted_force_n: 0.88, tare_adjusted_torque_nm: 0, mid_radius_range_m: [0.039, 0.041, 0.04],
+      momentum_balance_residual_n: 1e-10, stored_membrane_energy_j: 0.005, stored_bending_energy_j: 0.0001,
+      membrane_plastic_dissipation_j: 0.0021, membrane_damage_dissipation_j: 0.00045,
+    }],
+  });
+  const sCyl = section(p, 'Cylindrical-holder forward experiment');
+  assert.match(visibleText(sCyl), /isotropic_accumulated_damage\/1/);
+  assert.match(visibleText(sCyl), /Membrane damage \(J\)/);
+  const tCyl = descendants(sCyl).find(n => n.tag === 'table');
+  assert.deepEqual(plain(tCyl.children[2].children.map(n => n.textContent)),
+    ['0.6', '0.002', '0.036', '0', '0.88', '0', '0.04', '1e-10', '0.005', '0.0001', '0.0021', '0.00045']);
+  p.e.cylinderExperimentRequest.handlers.change();
+  assert.equal(sCyl.hidden, true);
+});
+
+test('static_equilibrium rejects mm-overflow tolerances, joint plasticity surfaces exact_exponential, and fold reports opt-in damage', async () => {
+  // 1. Overly huge correction_tolerance_m (finite in m, Infinity in mm) is refused everywhere.
+  const badEq = { correction_tolerance_m: 1e306, max_newton_iterations: 180 };
+  const hqToken = '9'.repeat(32);
+  const hq = await pageModule({ roundToken: hqToken });
+  const hFiles = { pattern: new Blob(['{"pieces":[{"id":"front"}]}']), measurements: new Blob(['{}']), fit: new Blob(['{}']) };
+  await hq.windowEvents.message({ origin: 'https://unit.invalid', source: hq.opener, data: {
+    type: 'ftx-round-sources', token: hqToken, files: hFiles, bodySource: { model: new Blob([new Uint8Array([1])]) },
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+      static_equilibrium: badEq } } });
+  assert.equal(hq.e.staticEquilibrium.checked, false);
+  assert.notEqual(hq.e.staticTolMm.value, 'Infinity');
+  assert.match(hq.e.error.textContent, /Static equilibrium/);
+
+  const revToken = 'a'.repeat(32);
+  const rev = draftingPage({ materialToken: revToken });
+  rev.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await rev.windowEvents.message({ origin: 'https://unit.invalid', source: rev.opener, data: {
+    type: 'ftx-material-pattern', token: revToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '4'.repeat(64),
+    evaluatedInputs: { fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        static_equilibrium: badEq } } } });
+  assert.equal(rev.e.staticEquilibrium.checked, false);
+  assert.notEqual(rev.e.staticTolMm.value, 'Infinity');
+  assert.match(rev.e.status.textContent, /Static equilibrium/);
+
+  const mw = await loadMaterialsWorker({ fold_up_configured() { throw Error('should not invoke fold'); } });
+  const mwErr = await mw.send({ type: 'fold', request: 901, bytes: new Uint8Array([1]).buffer, pattern: '{}', measurements: '{}', fit: '{}',
+    selfContactMm: 2, twoStart: false, armDeg: 35, legs: 'standing', legFraction: 1, skinning: 'lbs', maxSettleSteps: 0,
+    staticEquilibrium: badEq });
+  assert.equal(mwErr.type, 'error');
+  assert.match(mwErr.message, /Static equilibrium/);
+
+  const dw = await loadDraftingWorker({ fold_up_configured() { throw Error('should not invoke fold'); } });
+  await dw.send({ type: 'init' });
+  await dw.send({ type: 'load_body', bytes: new Uint8Array([1]).buffer });
+  const dwErr = await dw.send({ type: 'fold', request: 902, selfContactMm: 2, twoStart: false, armDeg: 35, legs: 'standing', legFraction: 1,
+    skinning: 'lbs', maxSettleSteps: 0, staticEquilibrium: badEq });
+  assert.equal(dwErr.type, 'error');
+  assert.match(dwErr.message, /Static equilibrium/);
+
+  // 2. permanentStretchResult surfaces opt-in exact_exponential integration without altering default reports.
+  const p = await pageModule();
+  p.e.calibrationMode.value = 'membrane_plasticity'; p.e.calibrationMode.handlers.change();
+  p.select('calibrationRequest', '{"schema":"ftx-membrane-plasticity-calibration/1"}');
+  p.e.calibrationRequest.handlers.change();
+  const makePlasticRep = (integration) => ({
+    selection: { id: 'fitted-mat', allow_estimates: true },
+    material: { capabilities: { mechanical_coefficients: { ready: true } } },
+    calibration: {
+      schema: 'ftx-membrane-plasticity-calibration-report/1',
+      status: 'ACCEPTED', check_status: 'ACCEPTED', decision_reasons: ['OK.'],
+      input_sha256: '5'.repeat(64),
+      fit: { components: 10, rms_scaled: 0.01, peak_scaled: 0.02 },
+      check: { components: 4, rms_scaled: 0.01, peak_scaled: 0.02 },
+      parameters: { yield_n_m: [10, 8, 5], hardening_n_m: [100, 50, 25], relaxation: { stiffness_ratio: 0.5, relaxation_time_seconds: 0.5 } },
+      diagnostics: { starts_completed: 4, starts_attempted: 4, evaluations: 20, evaluation_limit: 4096, history_steps: 200,
+        history_step_limit: 2000000, trials_refused: 0, sensitivity_evaluated: true, excitation_pivot: 0.1,
+        joint_relaxation: { parameter_sensitivity: [1, 1], at_bounds: [false, false], branch_steps: 100 } },
+      predictions: [],
+      input: {
+        yield_bounds_n_m: [[1, 50], [1, 50], [1, 50]], hardening_bounds_n_m: [[0, 500], [0, 500], [0, 500]],
+        joint_relaxation: { branch_id: 'arm', stiffness_ratio_bounds: [0.1, 0.9], relaxation_time_bounds_seconds: [0.1, 1.2],
+          ...(integration ? { integration } : {}) },
+        material: { properties: {}, sources: {} },
+      },
+      material: { membrane_relaxation: { ...(integration ? { integration } : {}) } },
+    },
+  });
+  await p.e.calibrate.onclick();
+  p.emit(makePlasticRep(undefined), [{ name: 'plastic-report.json', text: '{}', mime: 'application/json' }]);
+  const secBase = section(p, 'Identified material behavior');
+  assert.doesNotMatch(visibleText(secBase), /Time integration scheme:/);
+  assert.equal(Object.hasOwn(JSON.parse(secBase.children[1].textContent), 'integration'), false);
+
+  await p.e.calibrate.onclick();
+  p.emit(makePlasticRep('exact_exponential'), [{ name: 'plastic-report.json', text: '{}', mime: 'application/json' }]);
+  const secExp = section(p, 'Identified material behavior');
+  assert.match(visibleText(secExp), /Time integration scheme: exact_exponential\./);
+  assert.equal(JSON.parse(secExp.children[1].textContent).integration, 'exact_exponential');
+
+  // 3. Fold summary surfaces opt-in membrane_plasticity_history.damage_model on both pages; omitted when undamaged.
+  const fp = await pageModule();
+  fp.select('pattern', '{"pieces":[{"id":"front"}]}'); fp.select('measurements', '{}'); fp.select('fit', '{}');
+  fp.select('model', new Uint8Array([1]));
+  await fp.e.fold.onclick();
+  fp.emit({ settled: true, flags: [], material: { basis: 'bound' }, body: { legs: 'standing' }, numerical: {},
+    membrane_plasticity_history: { damage_model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.00125 } },
+    [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  const foldSec = section(fp, 'Fold simulation');
+  assert.deepEqual(JSON.parse(foldSec.children[1].textContent).membrane_damage,
+    { model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.00125 });
+
+  const idx = draftingPage();
+  idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  idx.worker.onmessage({ data: { type: 'body_loaded', info: { vertices: 100 } } });
+  idx.e.fold.onclick();
+  const idxFold = idx.worker.messages.findLast(m => m.type === 'fold');
+  const idxRep = { settled: true, flags: [],
+    membrane_plasticity_history: { damage_model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.0025 } };
+  idx.worker.onmessage({ data: { type: 'folded', request: idxFold.request, report: idxRep, reportText: JSON.stringify(idxRep), viewer: '<html/>' } });
+  assert.match(idx.e.foldSummary.innerHTML, /Membrane stiffness degradation \(isotropic_accumulated_damage\/1\): damage dissipation 2\.500e-3 J/);
+});

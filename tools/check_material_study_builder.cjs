@@ -865,6 +865,7 @@ test('guided drape static_equilibrium is opt-in, preserved in matrices, and refu
   assert.equal(build(ordinary),original);
   for(const bad of [[],{},{correction_tolerance_m:0,max_newton_iterations:300},
     {correction_tolerance_m:-1e-6,max_newton_iterations:300},{correction_tolerance_m:NaN,max_newton_iterations:300},
+    {correction_tolerance_m:1e306,max_newton_iterations:300},
     {correction_tolerance_m:1e-6,max_newton_iterations:0},{correction_tolerance_m:1e-6,max_newton_iterations:1001},
     {correction_tolerance_m:1e-6,max_newton_iterations:10.5},{correction_tolerance_m:1e-6,max_newton_iterations:300,time_s:1}]) {
     const input=scenarioState();input.options.static_equilibrium=bad;

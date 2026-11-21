@@ -1107,7 +1107,8 @@ export function buildMaterialScenarioRequest(state) {
   if (own(options, "static_equilibrium") && options.static_equilibrium !== null) {
     const keys = ["correction_tolerance_m", "max_newton_iterations"];
     const eq = object(options.static_equilibrium, keys, keys, "Static equilibrium");
-    if (typeof eq.correction_tolerance_m !== "number" || !Number.isFinite(eq.correction_tolerance_m) || eq.correction_tolerance_m <= 0 ||
+    if (typeof eq.correction_tolerance_m !== "number" || !Number.isFinite(eq.correction_tolerance_m) ||
+        eq.correction_tolerance_m <= 0 || !Number.isFinite(eq.correction_tolerance_m * 1e3) ||
         !Number.isSafeInteger(eq.max_newton_iterations) || eq.max_newton_iterations < 1 || eq.max_newton_iterations > 1000) {
       throw Error("Static equilibrium needs finite positive correction_tolerance_m and max_newton_iterations (whole 1–1000).");
     }

@@ -4212,6 +4212,13 @@ function permanentStretchResult(parent, r) {
   ]) cells(work, row);
   if (identifiedRecovery) cells(work, ["Joint Maxwell branch-node advances (included above)", metric(d.joint_relaxation?.branch_steps)]);
   else if (joint) cells(work, ["Fixed Maxwell branch-node advances (included above)", metric(d.fixed_maxwell_branch_steps)]);
+  const integration = c.material?.membrane_relaxation?.integration ?? identifiedRecovery?.integration ?? recovery?.integration;
+  if (integration && integration !== "backward_euler") {
+    const scheme = document.createElement("p");
+    scheme.textContent = `Time integration scheme: ${integration}.` +
+      (integration === "exact_exponential" ? " Fitted and replayed Maxwell recovery uses step-size-invariant exact piecewise-linear Prony integration." : "");
+    parent.append(scheme);
+  }
   const note = document.createElement("p");
   note.textContent = (identifiedRecovery ?
     "Six permanent-stretch and hardening coefficients and one Maxwell stiffness ratio and recovery time are identified together. " +
@@ -4230,6 +4237,7 @@ function permanentStretchResult(parent, r) {
   return { response: identifiedRecovery ? "Joint permanent stretch and delayed-recovery identification" :
     joint ? "Permanent stretch with independently characterized delayed recovery" :
     "Permanent stretch and directional hardening", status: c.status,
+    ...(integration && integration !== "backward_euler" ? { integration } : {}),
     held_out: c.check_status, input_sha256: c.input_sha256, material_id: r.selection?.id,
     allow_estimates: r.selection?.allow_estimates,
     mechanical_coefficients_available: r.material?.capabilities.mechanical_coefficients?.ready === true,
@@ -4661,12 +4669,26 @@ function stripHistoryResult(parent, r) {
     detail(parent, "Declared permanent-set and recovery network", {
       declaration: parallel, material_sha256: r.input.material.expected_sha256, model_scope: r.model_scope });
   }
-  const states = table(parent, "Loading and recovery history", ["Time (s)", "Grip extension fraction",
+  const hasDamage = r.states.some((s) => typeof s.damage_dissipation_j === "number")
+    || r.input?.material?.record?.structure?.membrane_damage_model === "isotropic_accumulated_damage/1";
+  if (hasDamage) {
+    const damageNote = document.createElement("p");
+    damageNote.textContent = "Opt-in isotropic membrane stiffness degradation (isotropic_accumulated_damage/1): " +
+      "accepted-step scalar degradation keeps plastic and damage dissipation separate and excludes rupture, localization or garment fit.";
+    parent.append(damageNote);
+  }
+  const columns = ["Time (s)", "Grip extension fraction",
     "Moving-grip force (N)", "Mid-gauge width (m)", "Dynamic residual (N)", "Stored energy (J)",
-    "Free kinetic energy (J)", "Maxwell dissipation (J)", "Plastic dissipation (J)"]);
-  for (const state of r.states) cells(states, [state.time_s, state.extension_fraction, state.force_n,
-    state.mid_width_m, state.free_dynamic_residual_n, state.stored_membrane_energy_j,
-    state.free_kinetic_energy_j, state.maxwell_dissipation_j, state.plastic_dissipation_j].map(metric));
+    "Free kinetic energy (J)", "Maxwell dissipation (J)", "Plastic dissipation (J)"];
+  if (hasDamage) columns.push("Damage dissipation (J)");
+  const states = table(parent, "Loading and recovery history", columns);
+  for (const state of r.states) {
+    const row = [state.time_s, state.extension_fraction, state.force_n,
+      state.mid_width_m, state.free_dynamic_residual_n, state.stored_membrane_energy_j,
+      state.free_kinetic_energy_j, state.maxwell_dissipation_j, state.plastic_dissipation_j];
+    if (hasDamage) row.push(state.damage_dissipation_j);
+    cells(states, row.map(metric));
+  }
   detail(parent, "Frozen material, fixture and complete loading program", r.input);
   return { schema: r.schema, input_sha256: r.input_sha256, steps: r.states.length,
     model_scope: r.model_scope,
@@ -4683,12 +4705,26 @@ function cylinderExperimentResult(parent, r) {
     warn.textContent = `Protocol discrepancies (${r.protocol_audit.discrepancies.length}): ${r.protocol_audit.discrepancies.join("; ")}`;
     parent.append(warn);
   }
-  const states = table(parent, "Cylindrical-holder reactions and energy history", ["Time (s)", "Axial travel (m)",
+  const hasDamage = r.states.some((s) => typeof s.membrane_damage_dissipation_j === "number")
+    || r.input?.material?.record?.structure?.membrane_damage_model === "isotropic_accumulated_damage/1";
+  if (hasDamage) {
+    const damageNote = document.createElement("p");
+    damageNote.textContent = "Opt-in isotropic membrane stiffness degradation (isotropic_accumulated_damage/1): " +
+      "accepted-step scalar degradation keeps membrane plastic and damage dissipation separate and excludes rupture, localization or garment fit.";
+    parent.append(damageNote);
+  }
+  const columns = ["Time (s)", "Axial travel (m)",
     "True axial ext.", "Twist (deg)", "Tare force (N)", "Tare torque (N·m)", "Mean mid-radius (m)",
-    "Momentum residual (N)", "Stored membrane (J)", "Stored bending (J)"]);
-  for (const state of r.states) cells(states, [state.time_s, state.axial_displacement_m, state.true_axial_extension_fraction,
-    state.rotation_deg, state.tare_adjusted_force_n, state.tare_adjusted_torque_nm, state.mid_radius_range_m?.[2],
-    state.momentum_balance_residual_n, state.stored_membrane_energy_j, state.stored_bending_energy_j].map(metric));
+    "Momentum residual (N)", "Stored membrane (J)", "Stored bending (J)"];
+  if (hasDamage) columns.push("Membrane plastic (J)", "Membrane damage (J)");
+  const states = table(parent, "Cylindrical-holder reactions and energy history", columns);
+  for (const state of r.states) {
+    const row = [state.time_s, state.axial_displacement_m, state.true_axial_extension_fraction,
+      state.rotation_deg, state.tare_adjusted_force_n, state.tare_adjusted_torque_nm, state.mid_radius_range_m?.[2],
+      state.momentum_balance_residual_n, state.stored_membrane_energy_j, state.stored_bending_energy_j];
+    if (hasDamage) row.push(state.membrane_plastic_dissipation_j, state.membrane_damage_dissipation_j);
+    cells(states, row.map(metric));
+  }
   detail(parent, "Protocol audit, pretension and timestamp rates", r.protocol_audit);
   detail(parent, "Frozen material, cylindrical holder and loading program", r.input);
   return { schema: r.schema, input_sha256: r.input_sha256, steps: r.states.length,
@@ -4911,6 +4947,10 @@ function show(op, msg, request) {
             iterations: r.static_equilibrium.result.solve?.iterations,
           } : {}),
           ...(r.static_equilibrium.refusal ? { refusal: r.static_equilibrium.refusal } : {}),
+        } } : {}),
+        ...(r.membrane_plasticity_history?.damage_model ? { membrane_damage: {
+          model: r.membrane_plasticity_history.damage_model,
+          damage_dissipation_j: r.membrane_plasticity_history.damage_dissipation_j,
         } } : {}),
         body_source: r.body?.shape_source || "Tape-fitted MODEL_FIT shape", body_fit: r.body?.fit,
         measurement_comparison: r.body?.measurement_comparison } :
@@ -5487,7 +5527,8 @@ function checkedStaticEquilibrium(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
       Object.keys(value).length !== 2 ||
       Object.keys(value).some(key => !["correction_tolerance_m", "max_newton_iterations"].includes(key)) ||
-      typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) || value.correction_tolerance_m <= 0 ||
+      typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) ||
+      value.correction_tolerance_m <= 0 || !Number.isFinite(value.correction_tolerance_m * 1e3) ||
       !Number.isSafeInteger(value.max_newton_iterations) || value.max_newton_iterations < 1 || value.max_newton_iterations > 1000) {
     throw Error("Static equilibrium needs finite positive correction_tolerance_m and max_newton_iterations (whole 1–1000).");
   }

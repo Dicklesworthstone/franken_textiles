@@ -776,7 +776,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (!value || typeof value !== "object" || Array.isArray(value) ||
         Object.keys(value).length !== 2 ||
         Object.keys(value).some(key => !["correction_tolerance_m", "max_newton_iterations"].includes(key)) ||
-        typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) || value.correction_tolerance_m <= 0 ||
+        typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) ||
+        value.correction_tolerance_m <= 0 || !Number.isFinite(value.correction_tolerance_m * 1e3) ||
         !Number.isSafeInteger(value.max_newton_iterations) || value.max_newton_iterations < 1 || value.max_newton_iterations > 1000) {
       throw Error("Static equilibrium needs finite positive correction_tolerance_m and max_newton_iterations (whole 1–1000).");
     }
@@ -1150,6 +1151,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         } else {
           $("foldSummary").innerHTML += `<br>Static equilibrium (frictionless comparison): ${esc(eq.status || "refused")}${eq.refusal?.message ? ` — ${esc(eq.refusal.message)}` : ""}.`;
         }
+      }
+      if (r.membrane_plasticity_history?.damage_model) {
+        const dmg = r.membrane_plasticity_history;
+        const dmgJ = Number.isFinite(dmg.damage_dissipation_j) ? dmg.damage_dissipation_j.toExponential(3) : "—";
+        $("foldSummary").innerHTML += `<br>Membrane stiffness degradation (${esc(dmg.damage_model)}): damage dissipation ${esc(dmgJ)} J (reported separately from plastic yield work).`;
       }
       const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" }));
       const ru = URL.createObjectURL(new Blob([msg.reportText], { type: "application/json" }));

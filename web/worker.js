@@ -263,7 +263,8 @@ onmessage = async (ev) => {
         if (!value || typeof value !== "object" || Array.isArray(value) ||
             Object.keys(value).length !== 2 ||
             Object.keys(value).some(key => !["correction_tolerance_m", "max_newton_iterations"].includes(key)) ||
-            typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) || value.correction_tolerance_m <= 0 ||
+            typeof value.correction_tolerance_m !== "number" || !Number.isFinite(value.correction_tolerance_m) ||
+            value.correction_tolerance_m <= 0 || !Number.isFinite(value.correction_tolerance_m * 1e3) ||
             !Number.isSafeInteger(value.max_newton_iterations) || value.max_newton_iterations < 1 || value.max_newton_iterations > 1000) {
           throw Error("Static equilibrium needs finite positive correction_tolerance_m and max_newton_iterations (whole 1–1000).");
         }
