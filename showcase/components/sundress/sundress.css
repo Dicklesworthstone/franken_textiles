@@ -79,3 +79,5 @@
 .sd-toile-sheet{padding:clamp(15px,2vw,24px);background:#fffdf7;border-top:2px solid #426758}.sd-toile fieldset{border:0;border-top:1px solid #c7c9bd;padding:7px 0 12px;margin:12px 0}.sd-toile legend{padding:0 8px 0 0;font:600 14px var(--sans)}
 .sd-toile-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.sd-toile label,.sd-toile output{display:grid;gap:5px;font:500 13px/1.5 var(--sans)}.sd-toile input,.sd-toile textarea{font:400 16px/1.4 var(--sans);background:white;color:#1a3c32;border:1px solid #929d90;border-radius:3px;width:100%;box-sizing:border-box;padding:8px}.sd-toile textarea{resize:vertical}.sd-toile [aria-invalid=true]{border-color:#9f3931}.sd-toile output{margin-top:8px;color:#374e44}.sd-toile-sheet button{margin-top:12px}
 @media(max-width:760px){.sd-toile{grid-template-columns:1fr}}
+.sd-toile-section select{max-width:100%;padding:7px 9px;border:1px solid #929d90;border-radius:3px;background:#fffdf7;color:#243e34;font:500 16px var(--sans)}
+.sd-toile-section svg{height:clamp(205px,22vw,265px);margin-block:8px}

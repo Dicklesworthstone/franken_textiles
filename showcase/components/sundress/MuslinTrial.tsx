@@ -6,7 +6,8 @@ import TorsoSlice from "../construction/TorsoSlice";
 type Sample = {
   name: string;
   pdf: string;
-  section: { frontGapMm: number; backGapMm: number; heightMm: number; body:number[][]; cloth:number[][] };
+  section: { frontGapMm: number; backGapMm: number; heightMm: number; body:number[][]; cloth:number[][];
+    rulerMm: { x:number; front:{bodyY:number;clothY:number}; back:{bodyY:number;clothY:number} } };
   report: {
     armDeg: number; sourcePc2Sha256: string; spacingMm: number;
     bodyFit: Record<string, { body_mm: number; residual_mm: number }>;
@@ -39,17 +40,22 @@ function signed(mm: number) {
 export default function MuslinTrial({ cuts }: { cuts: Record<typeof variants[number], Sample> }) {
   const [readings, setReadings] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
+  const [position, setPosition] = useState("dress-front");
   const { section, report } = cuts.dress;
   const rows = sides.map(side => {
     const key = side === "front" ? "frontGapMm" : "backGapMm";
     const pair = variants.map(id => {
       const field = `${id}-${side}`, raw = readings[field] ?? "", sample = gapReadings(raw);
-      return { field, raw, sample, invalid: !!raw.trim() && !sample, predicted: cuts[id].section[key], name: cuts[id].name };
+      const ruler = cuts[id].section.rulerMm;
+      return { field, raw, sample, side, ruler: {x:ruler.x,...ruler[side]}, invalid: !!raw.trim() && !sample, predicted: cuts[id].section[key], name: cuts[id].name };
     });
     const [a, b] = pair;
     return { side, pair, predictedChange: b.predicted - a.predicted,
       observedChange: a.sample && b.sample ? b.sample.mean - a.sample.mean : null };
   });
+  const cells = rows.flatMap(row=>row.pair);
+  const active = cells.find(cell=>cell.field===position)!;
+  const description = `${active.name}, centre ${active.side}. The marked gap is ${active.predicted} mm.`;
   const steps = [
     "Print each pattern at 100%. Check the 100 mm and 4 inch squares across and down. Cut both skirts on the marked grain from the same conditioned cloth. Use one bodice and the same reversible side closure. Mark centre front and back before sewing.",
     "Baste each skirt to the same bodice in turn. Match centres and side seams, distribute the fullness evenly, and keep seam allowance, hem finish and pressing the same. Close the side opening on the stitching line. Check the finished waist seam measures 780 mm around before dressing the form.",
@@ -78,21 +84,23 @@ export default function MuslinTrial({ cuts }: { cuts: Record<typeof variants[num
   return <section className="sd-toile" id="muslin" aria-labelledby="muslin-title">
     <div><p className="kicker">At the sewing table</p><h2 id="muslin-title">Try both skirts on one bodice.</h2>
       <p>Changing from gathered to eased gives a predicted waist-gap change of {signed(rows[0].predictedChange)} mm at centre front and {signed(rows[1].predictedChange)} mm at centre back. A negative change brings the skirt closer to the form.</p>
-      <figure className="sd-toile-section"><TorsoSlice body={section.body} cloth={section.cloth} otherCut={cuts.light.section.cloth} compare/>
-        <p>Waist section, {section.heightMm} mm above the soles. Read from the form to the first fold along the dotted line.</p>
-        <figcaption><span>Form</span><span>Gathered</span><span>Eased</span></figcaption></figure>
+      <figure className="sd-toile-section"><label>Measure on the section
+        <select value={position} onChange={e=>setPosition(e.target.value)}>{cells.map(cell=><option key={cell.field} value={cell.field}>{cell.name} · centre {cell.side}</option>)}</select></label>
+        <TorsoSlice body={section.body} cloth={section.cloth} otherCut={cuts.light.section.cloth} compare ruler={{...active.ruler,description}}/>
+        <figcaption><span>Form</span><span>Gathered</span><span>Eased</span></figcaption>
+        <p><strong>{active.predicted} mm</strong> from the form to the first fold at centre {active.side}, {section.heightMm} mm above the soles.</p></figure>
       <nav aria-label="Muslin trial patterns">{variants.map(id => <a key={id} href={cuts[id].pdf} download>{cuts[id].name} · A4 PDF ↓</a>)}</nav>
       <details><summary>Set up the physical comparison</summary><ol>{steps.map(step => <li key={step}>{step}</li>)}</ol><p>{model}</p></details>
     </div>
     <div className="sd-toile-sheet"><h3>Waist gap worksheet</h3><p id="waist-gap-help">Enter one reading per line, in millimetres. Dress the form again for each repeat. The comparison uses the mean for each cut. Values stay in this tab until you save a copy.</p>
       {rows.map(row => <fieldset key={row.side}><legend>Centre {row.side}</legend><div className="sd-toile-pair">{row.pair.map(cell => <label key={cell.field}>{cell.name}
         <textarea aria-label={`${cell.name} centre ${row.side} in millimetres`} aria-describedby={`waist-gap-help ${cell.field}-summary`} rows={2} autoComplete="off" spellCheck={false} value={cell.raw} placeholder="mm" aria-invalid={cell.invalid}
-          onChange={e => setReadings({ ...readings, [cell.field]: e.target.value })}/>
+          onFocus={()=>setPosition(cell.field)} onChange={e => { const value=e.target.value; setReadings(current=>({...current,[cell.field]:value})); }}/>
         <small id={`${cell.field}-summary`}>{cell.invalid ? "Enter one distance per line. Use zero for contact." : `Predicted ${cell.predicted} mm`}
           {cell.sample && cell.sample.lines.length > 1 && ` · ${cell.sample.lines.length} readings · ${cell.sample.min}–${cell.sample.max} mm · mean ${cell.sample.mean.toFixed(1)} mm`}</small></label>)}</div>
         <output aria-live="polite">Eased minus gathered · predicted {signed(row.predictedChange)} mm{row.observedChange === null ? "" : ` · observed ${signed(row.observedChange)} mm · residual ${signed(row.observedChange - row.predictedChange)} mm`}</output>
       </fieldset>)}
-      <label>Form, cloth, measuring uncertainty and discrepancies<textarea value={notes} rows={2} onChange={e => setNotes(e.target.value)}/></label>
+      <label>Form, cloth, measuring uncertainty and discrepancies<textarea value={notes} rows={2} autoComplete="off" spellCheck={false} onChange={e => setNotes(e.target.value)}/></label>
       <button type="button" onClick={saveSheet} disabled={rows.some(row => row.pair.some(cell => cell.invalid))}>Save worksheet (.txt) ↓</button>
     </div>
   </section>;

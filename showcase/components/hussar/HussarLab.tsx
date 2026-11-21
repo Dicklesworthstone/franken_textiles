@@ -48,7 +48,7 @@ export default function HussarLab() {
         <Scene regiment={regiment} framing={framing} onFailure={onFailure}>
           <span className="hu-tag">{blue ? "Putbus’s Blue Hussars · 1761" : "Wrangel’s Yellow Hussars · 1765"}</span></Scene>}
       <div className="hu-cam">{failed ? <><span role="status">Recorded construction · 3D unavailable</span>
-        <button type="button" onClick={()=>setFailed(false)}>Retry 3D</button></> : <><span>Drag to turn · Scroll to zoom</span>
+        <div className="hu-choice"><button type="button" onClick={()=>setFailed(false)}>Retry 3D</button></div></> : <><span>Drag to turn · Scroll to zoom</span>
         {choice("Camera", cameras, framing.preset, preset => setFraming({ preset }))}</>}
       </div>
     </div><aside className="hu-controls"><p className="kicker">Regimental dress</p><h2>{failed ? "Garment notes." : "Inspect the cut."}</h2>

@@ -1,6 +1,7 @@
 // Test the served static export, including real media and native specimen reports.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { after, before, test } from "node:test";
 import { chromium } from "playwright-core";
 
@@ -323,7 +324,19 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
     const trial = page.locator("#muslin"), notes = page.getByLabel("Form, cloth, measuring uncertainty and discrepancies");
     const slice = trial.getByRole("img", {name:/Both waist cuts/});
     assert.equal(await slice.locator("path").count(), 3);
-    assert.equal(await slice.locator("line").count(), 1);
+    const position=trial.getByRole("combobox",{name:"Measure on the section"});
+    for (const cut of ["dress","light"]) {
+      const section=await (await page.request.get(new URL(`/exhibits/sundress/${cut}-section.json`,site).href)).json();
+      for(const side of ["front","back"]){
+        await position.selectOption(cut+"-"+side);
+        const span=await slice.locator("[data-ruler]").evaluate(line=>[line.x1.baseVal.value,line.y1.baseVal.value,line.y2.baseVal.value]);
+        assert.ok(Math.abs(span[0]-section.rulerMm.x)<0.001);
+        assert.ok(Math.abs(span[1]-section.rulerMm[side].bodyY)<0.001);
+        assert.ok(Math.abs(span[2]-section.rulerMm[side].clothY)<0.001);
+        const gap=(span[2]-span[1])*(side==="front"?-1:1);
+        assert.ok(Math.abs(gap-section[side+"GapMm"])<0.051);
+      }
+    }
     const save = trial.getByRole("button", {name:"Save worksheet"});
     const download = async () => {
       const pending = page.waitForEvent("download");
@@ -334,6 +347,7 @@ test("a sewist can compare two muslins privately and retrieve the instructions f
     const front = trial.getByRole("group", {name:"Centre front"});
     const [gathered, eased] = await front.getByRole("textbox").all();
     await gathered.fill("0"); await eased.fill("7,5");
+    assert.equal(await position.inputValue(),"light-front");
     assert.match(await front.locator("output").innerText(), /predicted -59.6 mm · observed \+7.5 mm · residual \+67.1 mm/);
     await notes.fill("Synthetic browser check only.");
     const sheet = await download();
@@ -398,6 +412,28 @@ test("a swapped bolero body is refused and a matching pose can still be opened",
     assert.equal(await room.locator("canvas[data-run]").count(),0);
     await room.getByRole("button",{name:"48 centimetre chest"}).click();
     await room.locator('canvas[data-run="480-35"]').waitFor();
+  } finally { await page.close(); }
+});
+
+test("the skirt and trouser geometry must match the cut and pose selected in the study", async () => {
+  const page = await browser.newPage({...opts,reducedMotion:"reduce"});
+  try {
+    const bust = JSON.parse(gunzipSync(await readFile(new URL("../public/atelier/bust-680.json.gz",import.meta.url))));
+    // Preserve every index and array length, but move the form 2 cm.
+    for (let i=0;i<bust.xyz.length;i+=3) bust.xyz[i]+=200;
+    await page.route("**/atelier/bust-680.json.gz*", route=>route.fulfill({body:gzipSync(JSON.stringify(bust)),contentType:"application/gzip"}));
+    await page.goto(new URL("/studies/skirt/?cut=column&waist=680",site).href);
+    await page.getByRole("link",{name:"Watch the 68 cm study film"}).waitFor();
+    assert.equal(await page.locator('canvas[data-run="column-680"]').count(),0);
+    await page.getByRole("button",{name:"80 centimetre form waist"}).click();
+    await page.locator('canvas[data-run="column-800"]').waitFor();
+    const seated = await readFile(new URL("../public/exhibits/trouser-study/sit-12.gz",import.meta.url));
+    await page.route("**/trouser-study/standing.gz*",route=>route.fulfill({body:seated,contentType:"application/gzip"}));
+    await page.goto(new URL("/studies/trousers/",site).href);
+    await page.getByRole("status").filter({hasText:"surface could not be loaded"}).waitFor();
+    assert.equal(await page.locator('canvas[data-run="standing"]').count(),0);
+    await page.getByRole("button",{name:"Shallow seat",exact:true}).click();
+    await page.locator('canvas[data-run="sit-12"][data-cloth="true"]').waitFor();
   } finally { await page.close(); }
 });
 

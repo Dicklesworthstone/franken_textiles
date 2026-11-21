@@ -240,10 +240,16 @@ def waist_section(body, body_faces, cloth, cloth_faces, waist_edges, waist_heigh
         a,b=cross[:,0],cross[:,1]
         intercept=sign*(a[:,1]-a[:,0]*(b[:,1]-a[:,1])/(b[:,0]-a[:,0]))
         return intercept[intercept>0].min()
-    return {"body":pack(skin),"cloth":pack(sewn),"heightMm":round(height*1000-floor,1),
-            "frontGapMm":round(float(depth(sewn,-1)-depth(skin,-1)),1),
-            "backGapMm":round(float(depth(sewn,1)-depth(skin,1)),1),
-            "edgeAboveWaistMm":round(float(np.median(rim[:,2]))*1000-floor-waist_height,1)}
+    section={"body":pack(skin),"cloth":pack(sewn),"heightMm":round(height*1000-floor,1),
+             "edgeAboveWaistMm":round(float(np.median(rim[:,2]))*1000-floor-waist_height,1)}
+    ruler={"x":round(float(centre[0]),3)}
+    for side,sign in (("front",-1),("back",1)):
+        skin_depth,cloth_depth=depth(skin,sign),depth(sewn,sign)
+        section[side+"GapMm"]=round(float(cloth_depth-skin_depth),1)
+        ruler[side]={"bodyY":round(float(centre[1]+sign*skin_depth),3),
+                     "clothY":round(float(centre[1]+sign*cloth_depth),3)}
+    section["rulerMm"]=ruler
+    return section
 
 
 def package(folder,output):
