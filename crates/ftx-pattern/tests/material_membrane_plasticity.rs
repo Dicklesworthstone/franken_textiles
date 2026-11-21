@@ -785,11 +785,13 @@ fn isotropic_damage_source_compilation_refuses_missing_mismatched_and_unsupporte
     // Coupled damage refuses undamaged heat-conversion qualification fail-closed.
     assert!(resolved.membrane_plastic_heat_fraction().is_err());
 
-    // Missing any damage property refuses.
+    // Missing any damage property refuses both plasticity compilation and mechanics readiness.
     for (key, _) in DAMAGE_PROPERTIES {
         let mut missing = base.clone();
         missing.record.as_mut().unwrap().properties.remove(key);
-        assert!(catalog.resolve(&missing).is_err(), "missing {key}");
+        let resolved = catalog.resolve(&missing).unwrap();
+        assert!(resolved.membrane_plasticity().is_err(), "missing {key}");
+        assert!(resolved.mechanics().is_err(), "missing {key} mechanics");
     }
     // Mismatched specimen_id or conditioning on a damage property refuses.
     for identity in ["specimen_id", "conditioning"] {
@@ -803,7 +805,15 @@ fn isotropic_damage_source_compilation_refuses_missing_mismatched_and_unsupporte
             .unwrap()
             .conditions
             .insert(identity.into(), "other-lot".into());
-        assert!(catalog.resolve(&mismatch).is_err(), "mismatch {identity}");
+        let resolved = catalog.resolve(&mismatch).unwrap();
+        assert!(
+            resolved.membrane_plasticity().is_err(),
+            "mismatch {identity}"
+        );
+        assert!(
+            resolved.mechanics().is_err(),
+            "mismatch {identity} mechanics"
+        );
     }
     // Unknown damage selector refuses.
     let mut unknown = base.clone();
@@ -813,7 +823,9 @@ fn isotropic_damage_source_compilation_refuses_missing_mismatched_and_unsupporte
         .unwrap()
         .structure
         .insert("membrane_damage_model".into(), "unknown_damage/1".into());
-    assert!(catalog.resolve(&unknown).is_err());
+    let resolved = catalog.resolve(&unknown).unwrap();
+    assert!(resolved.membrane_plasticity().is_err());
+    assert!(resolved.mechanics().is_err());
     // Damage selector without plasticity selector refuses.
     let mut no_plastic = base.clone();
     no_plastic
@@ -822,7 +834,9 @@ fn isotropic_damage_source_compilation_refuses_missing_mismatched_and_unsupporte
         .unwrap()
         .structure
         .remove("membrane_plasticity_model");
-    assert!(catalog.resolve(&no_plastic).is_err());
+    let resolved = catalog.resolve(&no_plastic).unwrap();
+    assert!(resolved.membrane_plasticity().is_err());
+    assert!(resolved.mechanics().is_err());
     // Unapproved estimated damage refuses when allow_estimates = false.
     let mut denied = base.clone();
     for (key, q) in &mut denied.record.as_mut().unwrap().properties {
@@ -831,5 +845,7 @@ fn isotropic_damage_source_compilation_refuses_missing_mismatched_and_unsupporte
         }
     }
     denied.allow_estimates = false;
-    assert!(catalog.resolve(&denied).is_err());
+    let resolved = catalog.resolve(&denied).unwrap();
+    assert!(resolved.membrane_plasticity().is_err());
+    assert!(resolved.mechanics().is_err());
 }
