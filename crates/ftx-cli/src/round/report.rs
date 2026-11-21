@@ -51,6 +51,50 @@ fn table(out: &mut String, title: &str, rows: &Value, columns: &[(&str, &str)]) 
     out.push_str("</tbody></table></div>");
 }
 
+fn static_equilibrium(out: &mut String, eq: &Value) {
+    if !eq.is_object() {
+        return;
+    }
+    let status = eq["status"].as_str().unwrap_or("unknown");
+    let _ = write!(
+        out,
+        "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: {}",
+        xml_escape(status)
+    );
+    if status == "available"
+        && let Some(res) = eq["result"].as_object()
+    {
+        if let Some(iters) = res.get("solve").and_then(|s| s["iterations"].as_u64()) {
+            let _ = write!(out, ". Newton iterations: {iters}");
+        }
+        if let Some(max_m) = res
+            .get("max_displacement_m")
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite())
+        {
+            let _ = write!(out, ". Max displacement: {} mm", fnum(max_m * 1000.0, 2));
+        }
+        if let Some(rms_m) = res
+            .get("rms_displacement_m")
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite())
+        {
+            let _ = write!(out, ". RMS displacement: {} mm", fnum(rms_m * 1000.0, 2));
+        }
+        out.push_str(".</p>");
+        if let Some(no_claim) = eq["no_claim"].as_str() {
+            let _ = write!(out, "<p class=\"muted\">{}</p>", xml_escape(no_claim));
+        }
+    } else if status == "refused" {
+        if let Some(msg) = eq["refusal"]["message"].as_str() {
+            let _ = write!(out, " — {}", xml_escape(msg));
+        }
+        out.push_str(". Dynamic trajectory and flags remain authoritative.</p>");
+    } else {
+        out.push_str(".</p>");
+    }
+}
+
 fn imported_body(out: &mut String, body: &Value) {
     if body["shape_source"]["kind"] != "accepted_multi_frame_fit" {
         return;
@@ -416,7 +460,34 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                 }
                 out.push('.');
             }
+            if let Some(settle) = sim["numerical"]["settling"].as_object()
+                && let (Some(steps), Some(max_steps)) = (
+                    settle.get("steps").and_then(Value::as_u64),
+                    settle.get("max_steps").and_then(Value::as_u64),
+                )
+            {
+                let _ = write!(out, " Extra settling: {steps}/{max_steps} steps");
+                if let Some(reason) = settle.get("stop_reason").and_then(Value::as_str) {
+                    let _ = write!(out, " ({})", xml_escape(reason));
+                }
+                out.push('.');
+            }
+            if let Some(sub) = sim["numerical"]["time_subdivision"].as_object()
+                && let (Some(subdivided), Some(nominal), Some(accepted), Some(trials)) = (
+                    sub.get("subdivided_nominal_intervals")
+                        .and_then(Value::as_u64),
+                    sub.get("nominal_intervals").and_then(Value::as_u64),
+                    sub.get("accepted_substeps").and_then(Value::as_u64),
+                    sub.get("trials").and_then(Value::as_u64),
+                )
+            {
+                let _ = write!(
+                    out,
+                    " Time subdivision: {subdivided}/{nominal} intervals subdivided ({accepted} substeps, {trials} trials)."
+                );
+            }
             out.push_str("</p>");
+            static_equilibrium(&mut out, &sim["static_equilibrium"]);
             out.push_str("<strong>Gating flags</strong>");
             list(&mut out, &sim["gating"]);
             out.push_str("<strong>Advisory flags</strong>");
@@ -677,6 +748,65 @@ mod tests {
         let opt_in_html = render(Path::new("."), &[opt_in_entry]).unwrap();
         assert!(opt_in_html.contains(
             "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true. Skinning: dqs. Newton solver: adaptive_ilu. Integrator: generalized_alpha (ρ∞ = 0.75).</p>"
+        ));
+        assert!(!default_html.contains("Extra settling:"));
+        assert!(!default_html.contains("Time subdivision:"));
+        assert!(!default_html.contains("Static equilibrium comparison"));
+
+        let extended = json!({
+            "round": 2,
+            "sim": {
+                "settled": true,
+                "self_contact": {"enabled": true},
+                "numerical": {
+                    "settling": {"steps": 4, "max_steps": 12, "stop_reason": "quiet_window"},
+                    "time_subdivision": {
+                        "subdivided_nominal_intervals": 2,
+                        "nominal_intervals": 48,
+                        "accepted_substeps": 52,
+                        "trials": 56
+                    }
+                },
+                "static_equilibrium": {
+                    "status": "available",
+                    "result": {
+                        "solve": {"iterations": 9},
+                        "max_displacement_m": 0.00425,
+                        "rms_displacement_m": 0.0015
+                    },
+                    "no_claim": "Frictionless comparison only; <not> fit."
+                },
+                "gating": [],
+                "advisory": []
+            }
+        });
+        let ext_html = render(Path::new("."), &[extended]).unwrap();
+        assert!(ext_html.contains("Extra settling: 4/12 steps (quiet_window)."));
+        assert!(
+            ext_html
+                .contains("Time subdivision: 2/48 intervals subdivided (52 substeps, 56 trials).")
+        );
+        assert!(ext_html.contains(
+            "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: available. Newton iterations: 9. Max displacement: 4.25 mm. RMS displacement: 1.5 mm.</p>"
+        ));
+        assert!(ext_html.contains("Frictionless comparison only; &lt;not&gt; fit."));
+
+        let refused_eq = json!({
+            "round": 3,
+            "sim": {
+                "settled": true,
+                "self_contact": {"enabled": true},
+                "static_equilibrium": {
+                    "status": "refused",
+                    "refusal": {"message": "history <law> refused"}
+                },
+                "gating": [],
+                "advisory": []
+            }
+        });
+        let ref_html = render(Path::new("."), &[refused_eq]).unwrap();
+        assert!(ref_html.contains(
+            "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: refused — history &lt;law&gt; refused. Dynamic trajectory and flags remain authoritative.</p>"
         ));
     }
 }
