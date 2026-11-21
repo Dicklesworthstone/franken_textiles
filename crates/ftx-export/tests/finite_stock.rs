@@ -470,3 +470,115 @@ fn invalid_sources_polygons_policies_and_internal_cuts_refuse_without_changing_i
     raw["pieces"][0]["grain"] = json!(null);
     assert!(r.build(&Pattern::new(raw)).is_err());
 }
+
+#[test]
+fn drafted_curved_garments_plan_two_job_remnant_and_complete_roll_compaction_within_budget() {
+    let programs: Value = serde_json::from_slice(
+        &std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/oracle/draft/programs.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let bind = |case_id: &str| -> Pattern {
+        let case = programs["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == case_id)
+            .unwrap();
+        let base = Pattern::new(case["output"]["pattern"].clone());
+        let changes: Changes = serde_json::from_value(json!({
+            "schema": "ftx-material-bindings/1",
+            "default": { "id": "dharma/cotton-muslin-3.5oz" }
+        }))
+        .unwrap();
+        Pattern::new(changes.apply(&base).unwrap()["pattern"].clone())
+    };
+    let bolero = bind("zouave_bolero-920");
+    let fez = bind("fez-920");
+
+    // Job 1: cut drafted curved bolero (5 pieces, ~450-516 vertices each) on a 1143 x 720 mm sheet.
+    let req1: Request = serde_json::from_value(json!({
+        "schema": "ftx-finite-stock-request/1",
+        "stocks": [{
+            "id": "muslin-sheet-01",
+            "material": { "id": "dharma/cotton-muslin-3.5oz" },
+            "outline_mm": [[0, 0], [1143, 0], [1143, 720], [0, 720]],
+            "defects_mm": [],
+            "occupied_mm": [],
+            "grain_mm": [[0, 0], [0, 100]],
+            "geometry_source": {
+                "reference": "test:curved-remnant-sheet",
+                "accessed_on": "2026-10-12",
+                "note": "Declared 45 in x 720 mm single-ply muslin cut sheet"
+            }
+        }],
+        "options": {
+            "copies": 1,
+            "gap_mm": 4.0,
+            "boundary_margin_mm": 10.0,
+            "step_mm": 15.0,
+            "work_limit": 5_000_000
+        }
+    }))
+    .unwrap();
+    let job1 = req1.build(&bolero).unwrap();
+    assert_eq!(job1.markers()[0].id, "muslin-sheet-01");
+    assert_eq!(job1.markers()[0].placements.len(), 5);
+    assert!(v(&job1)["work_used"].as_u64().unwrap() < 5_000_000);
+
+    // Job 2: feed exact returned residual into a second garment (`fez`).
+    let residual = job1.residual_request().unwrap();
+    assert_eq!(residual.stocks[0].id, "muslin-sheet-01");
+    assert_eq!(residual.stocks[0].occupied_mm.len(), 5);
+    let basis1 = residual.stocks[0].occupied_basis.as_deref().unwrap();
+    assert!(basis1.starts_with("ftx-finite-stock-plan/1:"));
+
+    let job2 = residual.build(&fez).unwrap();
+    assert_eq!(job2.markers()[0].id, "muslin-sheet-01");
+    assert_eq!(job2.markers()[0].occupied_mm.len(), 5);
+    assert_eq!(job2.markers()[0].placements.len(), 2);
+    assert!(job2.markers()[0].available_area_m2 < job1.markers()[0].gross_area_m2);
+    let residual2 = job2.residual_request().unwrap();
+    assert_eq!(residual2.stocks[0].occupied_mm.len(), 7);
+    assert!(
+        residual2.stocks[0]
+            .occupied_basis
+            .as_deref()
+            .unwrap()
+            .contains(" -> ftx-finite-stock-plan/1:")
+    );
+
+    // A second bolero does not fit on the same 720 mm remnant and must refuse rather than overlap.
+    assert!(residual.build(&bolero).is_err());
+
+    // Roll compaction on curved 2x bolero also completes well inside the studio 2.5M work budget.
+    let roll = CutPlan::build(
+        &bolero,
+        &CutOptions {
+            copies: 2,
+            gap_mm: 4.0,
+            edge_margin_mm: 10.0,
+            width_basis: Default::default(),
+            end_margin_mm: 10.0,
+            seam_allowance_mm: None,
+            maximum_marker_length_m: None,
+            nesting: Some(ftx_export::cutting::nesting::NestingOptions {
+                passes: 2,
+                work_limit: 2_500_000,
+                grain_reversal_materials: Vec::new(),
+                consolidate_markers: None,
+            }),
+            program: None,
+        },
+    )
+    .unwrap();
+    let report = roll.rolls[0].nesting.as_ref().unwrap();
+    assert!(
+        !report.budget_exhausted,
+        "nesting exhausted budget: {report:?}"
+    );
+    assert!(report.work_used < 2_500_000);
+}
