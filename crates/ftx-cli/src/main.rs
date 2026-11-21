@@ -76,6 +76,7 @@ const USAGE: &str = "usage:
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
+            [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--json]
@@ -1046,6 +1047,7 @@ fn cmd_drape_bound(
             "spread-hem-mm",
             "spread-clearance-mm",
             "spread-seam-pp",
+            "res",
         ],
     )?;
     let opts = drape_options(args)?;
@@ -1053,6 +1055,9 @@ fn cmd_drape_bound(
     let pose = drape_pose(args)?;
     let skinning = parse_skinning(args)?;
     let hands = parse_hands(args)?;
+    // A drape writes no stills of its own. This is the size of the pictures a refusal leaves, which a
+    // round sets to the size of its stills so a pixel means the same place in both.
+    let refusal_size = render::resolution(args.options.get("res").map(String::as_str))?;
     let pattern_path = args
         .positional
         .get(1)
@@ -1142,6 +1147,7 @@ fn cmd_drape_bound(
             Some(state),
             &out,
             obj(&full.vertices, &full.triangles, None).as_bytes(),
+            refusal_size,
         ),
         // No solver state: the start itself was refused. Draw it from what the solver was given.
         None if refusal.code == RefusalCode::IntersectingStart => place::start_stills(
@@ -1158,6 +1164,7 @@ fn cmd_drape_bound(
                 hands,
             },
             &out,
+            refusal_size,
         ),
         None => refusal,
     })?;
@@ -2068,6 +2075,26 @@ mod tests {
             parse_skinning(&lbs_args).unwrap(),
             SkinningMode::LinearBlend
         );
+    #[test]
+    fn a_drape_checks_the_size_of_its_refusal_pictures_before_reading_anything() {
+        // The pattern file does not exist, so a refusal about the size shows it was checked first.
+        for (res, code) in [
+            ("0x32", RefusalCode::OutOfRange),
+            ("840X620", RefusalCode::OutOfRange),
+            ("8192x8192", RefusalCode::BudgetExceeded),
+        ] {
+            let args =
+                parse(&["drape", "no-pattern.json", "--res", res].map(String::from)).unwrap();
+            let refusal = cmd_drape(&args).unwrap_err();
+            assert_eq!(refusal.code, code, "{res}: {}", refusal.message);
+        }
+        // An allowed size gets past that check and stops at the missing pattern instead.
+        let args =
+            parse(&["drape", "no-pattern.json", "--res", "840x620"].map(String::from)).unwrap();
+        let refusal = cmd_drape(&args).unwrap_err();
+        assert!(!refusal.message.contains("--res"), "{}", refusal.message);
+    }
+
         let dqs_args = parse(&["body", "--skinning", "dqs"].map(String::from)).unwrap();
         assert_eq!(
             parse_skinning(&dqs_args).unwrap(),

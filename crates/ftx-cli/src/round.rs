@@ -732,6 +732,11 @@ fn simulate(
     ] {
         options.insert(key.into(), path.to_string_lossy().into_owned());
     }
+    // A refused drape draws its own pictures. They are the size of this round's stills, so a pixel picked
+    // in a round that completed names the same place in one that was refused.
+    if let Some(res) = args.options.get("res") {
+        options.insert("res".into(), res.clone());
+    }
     let drape_args = Args {
         positional: vec![
             "drape".into(),

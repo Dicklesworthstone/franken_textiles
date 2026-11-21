@@ -316,7 +316,10 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   and of crossing triangle pairs (yellow), largest piece pair first. Those marks test penetration and
   crossing only: layers that merely touch (refused when cloth contact is on), or cloth inside the body's
   offset surface with no vertex inside the body, are refused with both counts at zero. Any other early
-  refusal leaves `DIR` empty.
+  refusal leaves `DIR` empty. Every refusal picture is `--res WxH` pixels (default 960x540, the limits of
+  `ftx render`); `ftx round --stills --res` hands the drape its own size, so a pixel names the same place
+  in a refused round's pictures as in a completed round's stills, and `refused_pose.width`/`height` in the
+  map beside them say that size.
   Numerical options are
   validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
   with a repair message. Both `sim_report.json` and the CLI result contain a

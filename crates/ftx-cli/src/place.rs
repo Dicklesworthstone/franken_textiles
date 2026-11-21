@@ -495,6 +495,9 @@ fn write_refused_map(
 /// start-state ramp) and puts where to look first among the refusal's repairs. That state is the last
 /// accepted one when a step refuses, or the recorded frame that crosses the displayed wearer.
 ///
+/// `size` is the width and height in pixels the run's own stills were asked for, so a pixel read off one
+/// of these pictures names the same place as in the stills of a round that completes.
+///
 /// No claim: it is not a drape or a fit. Inside-body marking needs the collision body and is not drawn. If
 /// the pictures cannot be written the refusal is returned unchanged: its pictures never replace or delay a
 /// refusal.
@@ -503,11 +506,9 @@ pub(super) fn refused_stills(
     state: Option<&ftx_drape::run::RefusedRun>,
     out: &Path,
     body_obj: &[u8],
+    size: (usize, usize),
 ) -> Refusal {
     let Some(state) = state else { return refusal };
-    let Ok(size) = render::resolution(None) else {
-        return refusal;
-    };
     let dir = out.join("refused");
     let slots = piece_slots(&state.mesh.instances);
     let n = state.positions.len();
@@ -609,11 +610,13 @@ fn start_repair(dir: &Path, placement: &Value) -> String {
 /// layers crossing or touching. The refused geometry is what `ftx place` draws, so the two
 /// placement stages of the drape's own pattern and body are written under `OUT/refused` and named first
 /// among the repairs. If they cannot be produced the refusal is returned unchanged.
-pub(super) fn start_stills(mut refusal: Refusal, staging: &Staging, out: &Path) -> Refusal {
+pub(super) fn start_stills(
+    mut refusal: Refusal,
+    staging: &Staging,
+    out: &Path,
+    size: (usize, usize),
+) -> Refusal {
     let dir = out.join("refused");
-    let Ok(size) = render::resolution(None) else {
-        return refusal;
-    };
     if std::fs::create_dir(&dir).is_ok()
         && let Ok((placement, mesh)) = stages(staging, size, &dir)
     {
@@ -964,6 +967,18 @@ mod tests {
         use ftx_core::{Refusal, RefusalCode};
         use serde_json::json;
 
+    /// Width and height from a PNG's header.
+    fn png_size(path: &std::path::Path) -> (usize, usize) {
+        let bytes = std::fs::read(path).unwrap();
+        assert!(
+            bytes.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"),
+            "{}",
+            path.display()
+        );
+        let field = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+        (field(16), field(20))
+    }
+
         let pattern = ftx_pattern::Pattern::new(json!({
             "schema": "fabric-pattern/1", "units": "mm",
             "pieces": [{
@@ -1002,7 +1017,9 @@ mod tests {
         let out = std::env::temp_dir().join(format!("ftx-refused-{}-{time}", std::process::id()));
         std::fs::create_dir_all(&out).unwrap();
 
-        let shown = super::refused_stills(refusal(), Some(&state), &out, body);
+        // Not the default 960 by 540: the pictures are drawn at the size the caller asked for.
+        let size = (420, 300);
+        let shown = super::refused_stills(refusal(), Some(&state), &out, body, size);
         assert_eq!(shown.code, RefusalCode::NotConverged);
         assert_eq!(shown.message, "sewing step 3 did not converge");
         assert_eq!(shown.repairs.len(), 2);
@@ -1017,13 +1034,14 @@ mod tests {
         let (map, _) = crate::fold::document(&out.join("refused/mesh_map.json")).unwrap();
         assert_eq!(
             map["refused_pose"],
-            json!({"phase":"sew","accepted_steps":2,"width":960,"height":540})
+            json!({"phase":"sew","accepted_steps":2,"width":420,"height":300})
         );
         assert!(map.get("frames").is_none());
         for name in [
             "body.obj",
             "garment.obj",
             "garment_strain.obj",
+        assert_eq!(png_size(&out.join("refused/still_front.png")), size);
             "still_front.png",
             "still_strain_back.png",
         ] {
@@ -1037,10 +1055,16 @@ mod tests {
 
         // Nothing to show, or nowhere to write it: the refusal comes back exactly as it was.
         for unchanged in [
-            super::refused_stills(refusal(), None, &out, body),
-            super::refused_stills(refusal(), Some(&state), &out.join("missing/parent"), body),
+            super::refused_stills(refusal(), None, &out, body, size),
+            super::refused_stills(
+                refusal(),
+                Some(&state),
+                &out.join("missing/parent"),
+                body,
+                size,
+            ),
             // `refused/` already exists here, and a run's files are never overwritten.
-            super::refused_stills(refusal(), Some(&state), &out, body),
+            super::refused_stills(refusal(), Some(&state), &out, body, size),
         ] {
             assert_eq!(unchanged.repairs, ["try --time-subdivision"]);
         }
@@ -1134,7 +1158,8 @@ mod tests {
         let out = std::env::temp_dir().join(format!("ftx-start-{}-{time}", std::process::id()));
         std::fs::create_dir_all(&out).unwrap();
 
-        let shown = super::start_stills(refusal(), &staging, &out);
+        let size = (420, 300);
+        let shown = super::start_stills(refusal(), &staging, &out, size);
         assert_eq!(shown.code, RefusalCode::IntersectingStart);
         assert_eq!(shown.message, "cloth triangles 3 and 9 intersect");
         assert_eq!(shown.repairs.len(), 2, "{:?}", shown.repairs);
@@ -1168,6 +1193,11 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .keys()
+        // Both stages are drawn at the asked size, and the map a pixel is looked up in says the same.
+        assert_eq!(map["refused_pose"]["width"], 420);
+        assert_eq!(map["refused_pose"]["height"], 300);
+        assert_eq!(png_size(&dir.join("start/still_front.png")), size);
+        assert_eq!(png_size(&dir.join("wrap/still_front.png")), size);
                 .any(|edge| edge.starts_with("panel/"))
         );
         assert_eq!(placement["body_surface"]["admitted"], true);
@@ -1190,8 +1220,8 @@ mod tests {
 
         // Already drawn, or nowhere to draw it: the refusal comes back exactly as it was.
         for unchanged in [
-            super::start_stills(refusal(), &staging, &out),
-            super::start_stills(refusal(), &staging, &out.join("missing/parent")),
+            super::start_stills(refusal(), &staging, &out, size),
+            super::start_stills(refusal(), &staging, &out.join("missing/parent"), size),
         ] {
             assert_eq!(unchanged.repairs, ["separate the layers"]);
         }
