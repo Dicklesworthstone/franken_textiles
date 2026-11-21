@@ -117,7 +117,10 @@ test("DST placement and couching stitches register onto dolman_front R & L withi
     const raw = execFileSync(NATIVE_FTX, ["export", "embroidery", patPath, "--out", outDir, "--json"], {
       encoding: "utf8",
     });
-    const manifest = JSON.parse(raw);
+    const { ok, result } = JSON.parse(raw);
+    assert.equal(ok, true);
+    assert.equal(typeof result?.manifest, "string");
+    const manifest = JSON.parse(readFileSync(result.manifest, "utf8"));
     const rFile = manifest.files["dst_dolman_front.R"].file;
     const lFile = manifest.files["dst_dolman_front.L"].file;
     assert.deepEqual(
