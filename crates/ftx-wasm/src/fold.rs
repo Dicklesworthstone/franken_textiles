@@ -352,6 +352,17 @@ fn validate_browser_schedule(
     {
         return Err("configured fold exceeds the 512-step browser work budget per sewing path (sew + drape + settle)".into());
     }
+    let strategy_within_budget = match options.newton_strategy {
+        ftx_drape::NewtonStrategy::ProjectedNewton => true,
+        ftx_drape::NewtonStrategy::AdaptiveIlu {
+            pcg_iters,
+            max_shifts,
+        } => pcg_iters <= 256 && max_shifts <= 16,
+        ftx_drape::NewtonStrategy::TrustRegionSteihaug { cg_iters, .. } => cg_iters <= 4096,
+    };
+    if !strategy_within_budget {
+        return Err("configured newton_strategy exceeds the browser solver work budget".into());
+    }
     match comparison {
         Some(policy) => policy.validate(options),
         None => options.validate(),
@@ -1103,6 +1114,37 @@ mod tests {
             crate::materials::lower_visco(&visco_req).unwrap(),
             ftx_pattern::material_relaxation::exact_exp::evaluate_lowering_json(&visco_req)
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn browser_schedule_caps_newton_strategy_iteration_budgets() {
+        let mut opts = ftx_drape::run::DrapeOptions {
+            newton_strategy: ftx_drape::NewtonStrategy::adaptive_ilu_default(),
+            ..ftx_drape::run::DrapeOptions::default()
+        };
+        assert!(validate_browser_schedule(&opts, None).is_ok());
+
+        opts.newton_strategy = ftx_drape::NewtonStrategy::AdaptiveIlu {
+            pcg_iters: 100_000,
+            max_shifts: 4,
+        };
+        assert!(
+            validate_browser_schedule(&opts, None)
+                .unwrap_err()
+                .contains("browser solver work budget")
+        );
+
+        opts.newton_strategy = ftx_drape::NewtonStrategy::TrustRegionSteihaug {
+            initial_radius: 0.05,
+            max_radius: 0.5,
+            min_radius: 1e-12,
+            cg_iters: 100_000,
+        };
+        assert!(
+            validate_browser_schedule(&opts, None)
+                .unwrap_err()
+                .contains("browser solver work budget")
         );
     }
 }
