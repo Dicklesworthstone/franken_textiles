@@ -4,11 +4,13 @@
 //   node --test scripts/films.test.mjs                 the files in public/media
 //   FTX_FILM_MOTION=0 node --test scripts/films.test.mjs   skip the slower distinct-frame count
 //
-// Needs ffprobe and ffmpeg on PATH. It reads the files; it renders nothing.
+// Needs ffprobe and ffmpeg on PATH. The failed-encode check works on private copies.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
@@ -44,6 +46,25 @@ function probe(file) {
 test("the site has films and each has its stills", () => {
   assert.ok(films.length >= 24, `${films.length} films`);
   for (const film of films) assert.ok(existsSync(media + film.replace(/\.mp4$/, ".jpg")), film + " has no poster");
+});
+
+test("a truncated master cannot replace the previous 1080p rendition", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ftx-truncated-film-"));
+  const master = readFileSync(media + "construction-fez.mp4");
+  const previous = readFileSync(media + "construction-fez-1080.mp4");
+  const truncated = join(dir, "sample.mp4");
+  const copy = join(dir, "sample-1080.mp4");
+  writeFileSync(truncated, master.subarray(0, Math.floor(master.length / 2)), { flag: "wx" });
+  writeFileSync(copy, previous, { flag: "wx" });
+  const header = probe(truncated);
+  // Fast-start MP4 retains the full sample table even when part of the payload is missing.
+  assert.equal(header.r_frame_rate, `${FPS}/1`);
+  assert.equal(header.nb_frames, probe(media + "construction-fez.mp4").nb_frames);
+  const generator = fileURLToPath(new URL("./film-renditions.sh", import.meta.url));
+  const run = spawnSync("sh", [generator, dir], { encoding: "utf8" });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /Failed to encode|Unexpected format or frame count/);
+  assert.deepEqual(readFileSync(copy), previous);
 });
 
 for (const film of films) {
