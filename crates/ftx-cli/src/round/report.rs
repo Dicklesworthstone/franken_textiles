@@ -444,11 +444,42 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                 cell(&sim["settled"]),
                 cell(&sim["self_contact"]["enabled"])
             );
+            let legs = sim["body"]["legs"].as_str().filter(|v| *v != "standing");
+            let leg_frac = sim["body"]
+                .get("leg_fraction")
+                .and_then(Value::as_f64)
+                .filter(|v| v.is_finite() && *v != 1.0);
+            if let Some(frac) = leg_frac {
+                let _ = write!(
+                    out,
+                    " Leg posture: {} (fraction {frac}).",
+                    xml_escape(legs.unwrap_or("standing"))
+                );
+            } else if let Some(legs) = legs {
+                let _ = write!(out, " Leg posture: {}.", xml_escape(legs));
+            }
             if let Some(skinning) = sim["body"]["skinning"].as_str() {
                 let _ = write!(out, " Skinning: {}.", xml_escape(skinning));
             }
             if let Some(hands) = sim["hand_collider"].as_str() {
                 let _ = write!(out, " Hand collider: {}.", xml_escape(hands));
+            }
+            if let Some(scheme) = sim["membrane_history"]["integration"]
+                .as_str()
+                .filter(|s| *s != "backward_euler")
+            {
+                let _ = write!(out, " Relaxation integration: {}.", xml_escape(scheme));
+            }
+            if let Some(damage_model) = sim["membrane_plasticity_history"]["damage_model"].as_str()
+            {
+                let _ = write!(out, " Membrane damage: {}", xml_escape(damage_model));
+                if let Some(dmg_j) = sim["membrane_plasticity_history"]["damage_dissipation_j"]
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                {
+                    let _ = write!(out, " ({dmg_j:.3e} J)");
+                }
+                out.push('.');
             }
             if let Some(kind) = sim["numerical"]["newton_strategy"]["kind"].as_str() {
                 let _ = write!(out, " Newton solver: {}.", xml_escape(kind));
@@ -732,8 +763,11 @@ mod tests {
         assert!(default_html.contains(
             "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true.</p>"
         ));
+        assert!(!default_html.contains("Leg posture:"));
         assert!(!default_html.contains("Skinning:"));
         assert!(!default_html.contains("Hand collider:"));
+        assert!(!default_html.contains("Relaxation integration:"));
+        assert!(!default_html.contains("Membrane damage:"));
         assert!(!default_html.contains("Newton solver:"));
         assert!(!default_html.contains("Integrator:"));
 
@@ -742,8 +776,13 @@ mod tests {
             "sim": {
                 "settled": true,
                 "self_contact": {"enabled": true},
-                "body": {"skinning": "dqs"},
+                "body": {"legs": "seated", "leg_fraction": 0.5, "skinning": "dqs"},
                 "hand_collider": "palm",
+                "membrane_history": {"integration": "exact_exponential"},
+                "membrane_plasticity_history": {
+                    "damage_model": "isotropic_accumulated_damage/1",
+                    "damage_dissipation_j": 0.00125
+                },
                 "numerical": {
                     "newton_strategy": {"kind": "adaptive_ilu"},
                     "integrator": {"kind": "generalized_alpha", "rho_inf": 0.75}
@@ -754,7 +793,7 @@ mod tests {
         });
         let opt_in_html = render(Path::new("."), &[opt_in_entry]).unwrap();
         assert!(opt_in_html.contains(
-            "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true. Skinning: dqs. Hand collider: palm. Newton solver: adaptive_ilu. Integrator: generalized_alpha (ρ∞ = 0.75).</p>"
+            "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true. Leg posture: seated (fraction 0.5). Skinning: dqs. Hand collider: palm. Relaxation integration: exact_exponential. Membrane damage: isotropic_accumulated_damage/1 (1.250e-3 J). Newton solver: adaptive_ilu. Integrator: generalized_alpha (ρ∞ = 0.75).</p>"
         ));
         assert!(!default_html.contains("Extra settling:"));
         assert!(!default_html.contains("Time subdivision:"));
