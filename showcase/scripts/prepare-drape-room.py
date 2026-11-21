@@ -5,6 +5,7 @@ Without it, use those same saved runs. The body and cloth retain native float32
 coordinates. The coupled outfit has its own solver archive.
 """
 import argparse
+import base64
 import gzip
 import hashlib
 import json
@@ -24,6 +25,10 @@ GRID = [(chest, angle) for chest in (480, 520, 540) for angle in (35, 75, 90)]
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def integrity(data):
+    return "sha256-" + base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
 
 
 def synthetic_tapes(chest):
@@ -117,7 +122,8 @@ def export_run(directory, key, template, output):
     samples = archive["replay_frames"](mesh["frames"])
     payload = b"".join([struct.pack("<II", len(indices), faces.size), body[indices].astype("<f4").tobytes(),
                         remap.astype("<u4").tobytes(), xyz[samples].tobytes(), force, colors])
-    (output/(key+".bin.gz")).write_bytes(gzip.compress(payload, compresslevel=9, mtime=0))
+    geometry = gzip.compress(payload, compresslevel=9, mtime=0)
+    (output/(key+".bin.gz")).write_bytes(geometry)
     tape = report["body"]["fit"]["tape"]
     return {"arm": report["arm_deg"], "chest": tape["chest"], "stature": tape["stature"],
             "chestClearance": report["landmarks"]["chest"]["clearance_mean_mm"],
@@ -125,7 +131,7 @@ def export_run(directory, key, template, output):
             "edgeStrainPercent": report["global_strain_pct"], "settled": report["numerical"]["settled"],
             "flags": report["gating"], "selfContact": report["self_contact"]["audit"],
             "peakBodyForceN": float(loads.max()),
-            "sourcePc2Sha256": digest(cache), "tapeResiduals": tape,
+            "sourcePc2Sha256": digest(cache), "geometryIntegrity": integrity(geometry), "tapeResiduals": tape,
             "frames": samples, "sourceFrames": frames, "phases": mesh["frames"]}
 
 
@@ -161,7 +167,8 @@ def main():
                 command.extend(["--model", args.model])
             run = subprocess.run(command, stdout=subprocess.PIPE, check=False)
             (args.scratch/f"result-{key}.json").write_bytes(run.stdout)
-    template = json.loads((PUBLIC/"exhibits/bolero.json").read_text())
+    layout = (PUBLIC/"exhibits/bolero.json").read_bytes()
+    template = json.loads(layout)
     args.output.mkdir(parents=True, exist_ok=False)
     reports = {}
     for chest in sorted({chest for chest, _ in GRID}):
@@ -172,7 +179,7 @@ def main():
         if "refusal" in run:
             raise ValueError(f"{key}: {run['refusal']['message']}")
         reports[key] = export_run(args.scratch/("chest-"+key), key, template, args.output)
-    result = {"patternSha256": digest(PATTERN.read_bytes()), "cases": reports}
+    result = {"patternSha256": digest(PATTERN.read_bytes()), "layoutIntegrity": integrity(layout), "cases": reports}
     (args.output/"bolero-start.json").write_text(json.dumps(starting_pattern(), indent=2)+"\n")
     (args.output/"runs.json").write_text(json.dumps(result, separators=(",", ":"))+"\n")
 

@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PlaybackMark } from "../InlineFilm";
+import { replayAsset } from "../replayAsset";
 import {cuttingTable,sampleIndex} from "../construction/replay";
 import { dressCloth } from "./garment";
 import type { Fabric } from "./weave";
@@ -28,7 +29,7 @@ declare global { interface Window { ftxHussarFrame?: Pose; ftxDressFrameDrape?: 
 export interface SolverDrapeProps {
   /** The packaged drape without its extension: `<source>.json` and `<source>.gz`. */
   source: string;
-  recording: string;
+  recording: { sourcePc2Sha256: string; layoutIntegrity: string; geometryIntegrity: string };
   looks: Record<string, DrapeLook>; look: string;
   views: Record<string, DrapeView>; view: { preset: string };
   /** Show the form as a jacket mount, ending it this far above the floor (metres) with a plate and a pole. */
@@ -206,12 +207,11 @@ export default function SolverDrape(props: SolverDrapeProps) {
     const pose: Pose = (yaw, targetCm, spanCm) => { steered = true; orient(yaw, targetCm / 100, spanCm / 100); };
     if (captureHook && new URLSearchParams(location.search).has("capture")) window[captureHook] = pose;
 
-    const get = async (path: string) => { const r = await fetch(path, { signal }); if (!r.ok || !r.body) throw Error("Missing packaged drape"); return r; };
     Promise.all([
-      get(`${source}.json?v=${recording}`).then(r => r.json() as Promise<Package>),
-      get(`${source}.gz?v=${recording}`).then(r => new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()),
+      replayAsset(source + ".json", recording.layoutIntegrity, signal).then(r => r.json() as Promise<Package>),
+      replayAsset(source + ".gz", recording.geometryIntegrity, signal).then(r => new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()),
     ]).then(([pack, data]) => {
-      if (pack.sourcePc2Sha256 !== recording) throw Error("The garment recording differs from its displayed report");
+      if (pack.sourcePc2Sha256 !== recording.sourcePc2Sha256) throw Error("The garment recording differs from its displayed report");
       if (signal.aborted) return;
       const head = new DataView(data), bodyCount = head.getUint32(0, true), indexCount = head.getUint32(4, true);
       const n = head.getUint32(8, true), frameCount = head.getUint32(12, true);
@@ -401,11 +401,11 @@ export default function SolverDrape(props: SolverDrapeProps) {
   const name = pieceName ?? ((panel: string) => panel.replace(/_/g, " "));
   return <div className={"mk" + (className ? " " + className : "")} ref={root}>
     <div className="mk-stage">
-      {failed ? <p className="mk-failed">This view needs WebGL. The flat pattern and the solver summary are still below.</p> : <div className="mk-canvas" ref={host} />}
+      {failed ? <p className="mk-failed" role="status">The 3D replay is unavailable. The solver readings and full-size sewing pattern are below.</p> : <div className="mk-canvas" ref={host} />}
       {!failed && <ol className="mk-steps" aria-label="From flat pattern to sewn article">{STAGES.map((title, k) =>
         <li key={title} className={k === stage ? "is-now" : k < stage ? "is-done" : ""}>
           <button type="button" disabled={!info} aria-current={k === stage ? "step" : undefined} onClick={() => jump(k)}><b>{k + 1}</b>{title}</button></li>)}</ol>}
-      {children}
+      {!failed && children}
     </div>
     {!failed && <div className="mk-bar">
       <button type="button" className="mk-play" onClick={replay} disabled={!info} aria-label={playing ? "Pause the making" : "Play the making from the flat pattern"}><PlaybackMark playing={playing} /></button>

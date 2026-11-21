@@ -13,6 +13,7 @@ and button stations are the pattern's own `decor` and `internal` lines, located 
 so the page can carry them on the draped surface. Never use a real wearer's workspace.
 """
 import argparse
+import base64
 import gzip
 import hashlib
 import json
@@ -237,15 +238,20 @@ def package(source, pattern_path, destination, name, drape_args=(), section=None
         metadata["summary"]["finalResidualN"] = last_phase["samples"][-1]["solve"]["residual"]
     if solver_revision:
         metadata["summary"]["solverRevision"] = solver_revision
-    # The numbers the page states in words, small enough to import without the mesh.
+    layout = (json.dumps(metadata, separators=(",", ":")) + "\n").encode()
+    geometry = gzip.compress(payload, mtime=0)
+    def integrity(data):
+        return "sha256-" + base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
+    # The small report identifies both the native trajectory and the two browser assets made from it.
     digest = {"vertices": n, "triangles": len(triangles), "frames": len(frames), "phases": phases,
               "cords": len(cords), "buttons": len(buttons), "instances": names,
-              "sourcePc2Sha256": metadata["sourcePc2Sha256"], **metadata["summary"]}
+              "sourcePc2Sha256": metadata["sourcePc2Sha256"],
+              "layoutIntegrity": integrity(layout), "geometryIntegrity": integrity(geometry), **metadata["summary"]}
     destination.mkdir(parents=True, exist_ok=True)
-    outputs = {destination / f"{name}.json": (json.dumps(metadata, separators=(",", ":")) + "\n").encode(),
+    outputs = {destination / f"{name}.json": layout,
                destination / f"{name}-pattern.json": pattern_path.read_bytes(),
                destination / f"{name}-summary.json": (json.dumps(digest, indent=1) + "\n").encode(),
-               destination / f"{name}.gz": gzip.compress(payload, mtime=0)}
+               destination / f"{name}.gz": geometry}
     for filename, data in inputs.items():
         outputs[destination / f"{name}-{filename}"] = data
     if section:

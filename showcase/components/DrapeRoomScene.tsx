@@ -5,30 +5,25 @@ import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createGarmentMesh, type Exhibit, type StudioMode } from "./garmentMesh";
 import { formMaterial, lightStudio, prepareRenderer } from "./atelier3d/studio";
+import { replayAsset } from "./replayAsset";
 
 type Props = {
   run: string; strain: {min: number; max: number; p95: number};
-  timeline: Pick<Exhibit,"frames"|"sourceFrames"|"phases"> & {sourcePc2Sha256:string};
+  layoutIntegrity: string;
+  timeline: Pick<Exhibit,"frames"|"sourceFrames"|"phases"> & {geometryIntegrity:string};
   frame: number; mode: StudioMode; reset: number;
   onReady: (run: string) => void; onError: (run: string) => void;
 };
 declare global {interface Window {ftxPoseCamera?: (yaw:number, y:number, half?:number, z?:number)=>void}}
 
-async function response(path: string, signal: AbortSignal) {
-  const result = await fetch(path, {signal});
-  if (!result.ok) throw Error("Could not load native drape data.");
-  return result;
-}
-
-async function readRun(run: string, strain: Props["strain"], timeline: Props["timeline"], signal: AbortSignal) {
+async function readRun({run, strain, timeline, layoutIntegrity}: Props, signal: AbortSignal) {
   const unpack = async (r: Response) => {
     if (!r.body) throw Error("Empty garment replay.");
     return new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
   };
-  const revision="?pc2="+timeline.sourcePc2Sha256;
   const [topology, packed]: [Exhibit, ArrayBuffer] = await Promise.all([
-    response("/exhibits/bolero.json"+revision, signal).then(r => r.json()),
-    response("/exhibits/poses/"+run+".bin.gz"+revision, signal).then(unpack),
+    replayAsset("/exhibits/bolero.json", layoutIntegrity, signal).then(r => r.json()),
+    replayAsset("/exhibits/poses/"+run+".bin.gz", timeline.geometryIntegrity, signal).then(unpack),
   ]);
   const layout = {...topology, frames:timeline.frames, sourceFrames:timeline.sourceFrames, phases:timeline.phases};
   const header = new DataView(packed);
@@ -145,10 +140,10 @@ export default function DrapeRoomScene(props: Props) {
     }
     draw.current=update;
     change.current=()=>{
-      const {run,strain,timeline}=latest.current;
+      const {run}=latest.current;
       request?.abort();const controller=new AbortController();request=controller;
       delete canvas.dataset.run;
-      readRun(run,strain,timeline,controller.signal).then(result=>{
+      readRun(latest.current,controller.signal).then(result=>{
         if(controller.signal.aborted){result.dispose();return;}
         if(current){scene.remove(current.garment.group);current.dispose();}
         current=result;loaded=run;form.geometry=result.body;

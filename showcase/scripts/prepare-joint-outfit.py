@@ -42,7 +42,8 @@ def package(folder,output):
     xyz=np.frombuffer(cache,dtype="<f4",offset=32).reshape(frames,n,3)
     endpoint,tri=shared["read_obj"](folder/"garment.obj")
     assert np.array_equal(endpoint[:,:3].astype("<f4"),xyz[-1])
-    layouts=[json.loads((public/f"exhibits/{name}.json").read_text()) for name in cuts]
+    layout_bytes={name:(public/f"exhibits/{name}.json").read_bytes() for name in cuts}
+    layouts=[json.loads(layout_bytes[name]) for name in cuts]
     assert sum(x["vertices"] for x in layouts)==n
     assert np.array_equal(tri.flatten(),np.concatenate([layouts[0]["triangles"],np.array(layouts[1]["triangles"])+layouts[0]["vertices"]]))
     phases=json.loads((folder/"mesh_map.json").read_text())["frames"]
@@ -51,12 +52,15 @@ def package(folder,output):
     payload=b"".join([struct.pack("<II",len(used),faces.size),body[used].astype("<f4").tobytes(),
                      remap.astype("<u4").tobytes(),xyz.tobytes()])
     output.mkdir(parents=True,exist_ok=True)
-    (output/"ensemble.gz").write_bytes(gzip.compress(payload,mtime=0))
+    geometry=gzip.compress(payload,mtime=0)
+    (output/"ensemble.gz").write_bytes(geometry)
     meta={"case":"520-35","frames":frames,"phases":phases,"counts":[x["vertices"] for x in layouts],
           "chestMm":report["body"]["fit"]["tape"]["chest"]["body_mm"],
           "waistbandShift":report["bands"]["trousers::waistband"]["shift_mm"],"strain":report["global_strain_pct"],
           "settled":report["numerical"]["settled"],"gating":report["gating"],"advisories":report["flags"],
           "selfContact":report["self_contact"]["enabled"],"pc2Sha256":hashlib.sha256(cache).hexdigest(),
+          "geometryIntegrity":shared["integrity"](geometry),
+          "layoutIntegrity":{name:shared["integrity"](layout_bytes[name]) for name in cuts},
           "contactBasis":report["outfit"]["contact_basis"],"patternSha256":report["outfit"]["composed_pattern_sha256"]}
     (output/"ensemble.json").write_text(json.dumps(meta,indent=2)+"\n")
     (output/"ensemble-request.json").write_bytes((folder/"outfit_request.json").read_bytes())

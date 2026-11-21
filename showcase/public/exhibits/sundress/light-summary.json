@@ -17,6 +17,8 @@
   "skirt_front"
  ],
  "sourcePc2Sha256": "52ec0606fa64145957241c951032c30ea6eb4c50a62ccdee8b760b9233d58b3b",
+ "layoutIntegrity": "sha256-6fPGMAnm9WJAKvHLIuzyZmgNhUyWbtAB4EmKZPGdBRs=",
+ "geometryIntegrity": "sha256-qe1krEFmElrCvG+Ylkvimy2SbrMee1sE446lSNabRgA=",
  "style": "GARDEN_SUNDRESS",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -196,5 +198,11 @@
    "target_mm": 1010.0
   }
  },
- "wallSeconds": 599.0
+ "wallSeconds": 599.0,
+ "bodyOffsetMm": {
+  "target": 1.5,
+  "achieved": 1.5
+ },
+ "finalResidualN": 1.0893844818317602,
+ "solverRevision": "44b960d1b1d541ac1120f570459d4438f481f29e"
 }

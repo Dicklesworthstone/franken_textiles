@@ -1,4 +1,6 @@
 "use client";
+
+import { replayAsset } from "./replayAsset";
 import {useEffect,useRef} from "react";
 import * as T from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
@@ -34,9 +36,8 @@ export default function CoupledScene({frame,onReady,onError}:{frame:number;onRea
     const studio=lightStudio(renderer,scene,"warm");
     const body=new T.BufferGeometry(),form=formMaterial(undefined,{inset:.0025});
     const disposables:{dispose():void}[]=[];
-    async function get(path:string){const r=await fetch(path,{signal});if(!r.ok||!r.body)throw Error("Missing coupled drape");return r;}
-    Promise.all([get("/exhibits/poses/ensemble.gz").then(r=>new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()),
-      ...["bolero","trousers"].map(name=>get("/exhibits/"+name+".json").then(r=>r.json()))]).then(([data,upper,lower])=>{
+    Promise.all([replayAsset("/exhibits/poses/ensemble.gz",joint.geometryIntegrity,signal).then(r=>new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()),
+      ...(["bolero","trousers"] as const).map(name=>replayAsset("/exhibits/"+name+".json",joint.layoutIntegrity[name],signal).then(r=>r.json()))]).then(([data,upper,lower])=>{
       if(signal.aborted)return;
       const head=new DataView(data),bn=head.getUint32(0,true),bi=head.getUint32(4,true),n=upper.vertices+lower.vertices;
       const bodyXYZ=new Float32Array(data,8,bn*3),bodyIndex=new Uint32Array(data,8+bn*12,bi);

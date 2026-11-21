@@ -25,6 +25,11 @@
   ],
   "selfContact": true,
   "pc2Sha256": "01421f4bbc4eef0af3920f5552f8ca88ad74df7334e13c56df1dd9994395e2c5",
+  "geometryIntegrity": "sha256-LXu3lNGgcUM939RZUXhn69U3hkOiajp9Z78UhlBvKX4=",
+  "layoutIntegrity": {
+    "bolero": "sha256-XEfkxLSVQoQ5etzQVutwsxU/lhz1Y9DX5hIxen+W1NU=",
+    "trousers": "sha256-6Fh894xiqwoAzhnWP1ZTnmhIl8Z3OpGO2xZAjCxnhbo="
+  },
   "contactBasis": "All garments in one cloth solver with full cross-garment self-contact; not frozen overlay or sequential dressing.",
   "patternSha256": "50c17e2fad5a21cfb1dfeb3cef59b4c2aec5cdc59952e9182299cbfe8167a979"
 }

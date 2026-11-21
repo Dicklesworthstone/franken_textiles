@@ -24,6 +24,8 @@
   "dolman_undersleeve.R"
  ],
  "sourcePc2Sha256": "bac35f900dc2cea6feb29cd3792a5ece4192a393151ba056ef0be65bb482b1d3",
+ "layoutIntegrity": "sha256-2ErfztlyJX1sy/BDiy7LF30nnMeg5vhzQHmwfvwHaoc=",
+ "geometryIntegrity": "sha256-Btyp8NKn1fdQTIhQn1Nr+6fTqV6UilbQdV6IblbGcVc=",
  "style": "HUSSAR_BLUE",
  "spacingMm": 20.0,
  "solverArguments": [
