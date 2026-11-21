@@ -127,10 +127,11 @@ ftx inspect-pixel "$work/rounds/000" --view front --pixel 597,415 --json
 printf '%s\n' '{"sleeve_extra":15}' > "$work/shorter.json"
 ftx draft zouave_bolero --measurements "$work/measurements.json" --style "$work/shorter.json" --out "$work/shorter"
 ftx round "$work" --pattern "$work/shorter/pattern.json" --as-of 2026-10-13 \
-  --stills --res 840x620 --self-contact-mm 2 --note "Check cuff clearance after shortening the sleeve by 50 mm"
+  --stills --res 840x620 --self-contact-mm 2 --hands knuckle --note "Check cuff clearance after shortening the sleeve by 50 mm"
+ftx viewer "$work/rounds/001/sim" --check-contact --view front --json
 ```
 
-The original archive failed the flat sleeve-length check at 385 mm. The 335 mm revision restores
-the intended view of the hands in the saved stills. Current full-body replay checks find crossings
-in both archived runs at physical frame 87. A current round can refuse there and leave a
-diagnostic still. Both cuts need a new contact-clear drape before they can support a cuff assessment.
+The original archive failed the flat sleeve-length check at 385 mm. Full-body replay checks find
+crossings in both archived wrist-collider runs at frame 87. A fresh 335 mm run with
+`--hands knuckle` passed the flat check and all 49 recorded physical frames. It has its own
+posed body file. Use its still to assess the simulated cuff. The 385 mm cut remains unresolved.

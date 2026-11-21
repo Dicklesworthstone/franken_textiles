@@ -63,7 +63,15 @@ export default function HowItWorks() {
           Shortening the draft from 385 to 335 mm moves the cuff towards the wrist and passes the flat-pattern check.
           Both views use the same body and camera.</p>
         <p>The current contact audit finds the cloth crossing the displayed body at frame 87 in both archived
-          drapes. The raised-arm example below shows a revised placement that passed its contact checks.</p>
+          drapes.</p>
+        <figure style={{display:"flex",alignItems:"center",gap:"1rem",margin:"1.25rem 0"}}>
+          <img src="/fittings/sleeve-knuckle-review.png" width="166" height="268" loading="lazy"
+            style={{width:"min(36vw, 166px)",height:"auto",flexShrink:0}}
+            alt="The revised 335 mm sleeve ends just above the hand in the new knuckle-collider run."/>
+          <figcaption>A fresh run of the 335 mm cut with <code>--hands knuckle</code> passed the flat check
+            and the full-body contact audit across all 49 recorded physical frames. The 385 mm cut still
+            needs a contact-clear run.</figcaption>
+        </figure>
         <div className="ft-hero-actions"><a className="ft-text-link" href="/fittings/bolero-revision-A4.pdf" download>
           Print the revised A4 pattern <span aria-hidden="true" className="arrow"/></a>
           <a className="ft-text-link" href={repo+"/blob/main/.agents/skills/visual-pattern-fitting/SKILL.md"}>
