@@ -17,7 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::{Refusal, RefusalCode, Vec3, linalg::lstsq, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, Vec3, det, linalg::lstsq, receipt::sha256_hex};
 use ftx_pattern::{
     material_bending::BendingTensor,
     material_calibration::{Partition, fitted_domain},
@@ -33,7 +33,7 @@ use super::{
     audit_protocol, budget, build_cylinder_mesh, holder_separation_m, invalid, out_of_range,
     record_state, set_upper_ring,
 };
-use crate::Membrane;
+use crate::{Membrane, Solver};
 
 /// Schema identifier of [`Input`].
 pub const INPUT_SCHEMA: &str = "ftx-cylinder-calibration/1";
@@ -167,6 +167,33 @@ pub struct Experiment {
     pub observations: Vec<Observation>,
 }
 
+/// Differentiation mode used during FIT search and excitation certification.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SensitivityMode {
+    /// Finite differences via additional forward cylinder solves (default).
+    #[default]
+    FiniteDifference,
+    /// Exact implicit-function-theorem (IFT) adjoint pullback reusing the converged static LDLᵀ
+    /// factor (`Solver::reaction_gradient` for holder axial force/torque and
+    /// `Solver::constitutive_gradient` for mid-height radius). Supported for static
+    /// single-waypoint homogeneous scalar orthotropic membrane + hinge bending identification
+    /// without self-contact; refuses multi-waypoint dynamic trajectories, nonlinear membrane laws,
+    /// directional panel bending, or self-contact fail-closed.
+    Adjoint,
+}
+
+impl SensitivityMode {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    const fn is_default(&self) -> bool {
+        matches!(self, Self::FiniteDifference)
+    }
+}
+
+const fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
 /// Numerical residual, mesh-stability, identifiability and bounded-work gates.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -183,6 +210,9 @@ pub struct Policy {
     pub max_iterations: usize,
     /// Aggregate static + dynamic Newton equilibrium solve cap (`1..=32768`).
     pub max_forward_solves: usize,
+    /// Sensitivity differentiation mode; omitted on the wire when default `finite_difference`.
+    #[serde(default, skip_serializing_if = "SensitivityMode::is_default")]
+    pub sensitivity: SensitivityMode,
 }
 
 /// Reproducible cylindrical-holder constitutive identification request.
@@ -313,6 +343,9 @@ pub struct Report {
     pub excitation_pivot: f64,
     /// Total static and dynamic Newton equilibrium solves attempted across the entire run.
     pub forward_solves: usize,
+    /// Total static IFT adjoint linear solves executed (omitted on the wire when zero).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub adjoint_solves: usize,
     /// Present only when at least one exploratory `FIT` solve was refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_recovery: Option<SearchRecovery>,
@@ -384,10 +417,12 @@ struct ExperimentRun {
     waypoint_states: Vec<State>,
     path_strain_range: [[f64; 2]; 3],
     protocol_audit: ProtocolAudit,
+    static_solver: Option<Solver>,
 }
 
 struct Budget<'a> {
     used: usize,
+    adjoint_solves: usize,
     limit: usize,
     inherited_domain: Option<StrainDomain>,
     baseline: Baseline,
@@ -486,6 +521,7 @@ impl Budget<'_> {
         fixture: &Fixture,
         parameters: &[f64],
         domain: Option<StrainDomain>,
+        keep_static_solver: bool,
     ) -> Result<ExperimentRun, ForwardFailure> {
         let coeffs = self.baseline.apply(&self.input.targets, parameters);
         let membrane = Membrane::orthotropic(
@@ -651,6 +687,7 @@ impl Budget<'_> {
             waypoint_states,
             path_strain_range,
             protocol_audit,
+            static_solver: (keep_static_solver && experiment.loading.len() == 1).then_some(solver),
         })
     }
 
@@ -660,8 +697,14 @@ impl Budget<'_> {
         fixture: &Fixture,
         parameters: &[f64],
     ) -> Result<ExperimentRun, Refusal> {
-        self.execute(experiment, fixture, parameters, self.inherited_domain)
-            .map_err(ForwardFailure::refusal)
+        self.execute(
+            experiment,
+            fixture,
+            parameters,
+            self.inherited_domain,
+            false,
+        )
+        .map_err(ForwardFailure::refusal)
     }
 
     fn replay(
@@ -672,7 +715,7 @@ impl Budget<'_> {
         domain: StrainDomain,
     ) -> Result<ExperimentRun, Refusal> {
         let enforced = self.within_inherited_domain(domain)?;
-        self.execute(experiment, fixture, parameters, Some(enforced))
+        self.execute(experiment, fixture, parameters, Some(enforced), false)
             .map_err(ForwardFailure::refusal)
     }
 }
@@ -1024,6 +1067,24 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         }
     }
 
+    if input.policy.sensitivity == SensitivityMode::Adjoint {
+        if membrane_response.is_some() || panel_bending.is_some() {
+            return Err(invalid(
+                "adjoint cylinder sensitivity supports homogeneous scalar orthotropic membrane and hinge bending only; nonlinear membrane or directional panel-bending laws require finite_difference sensitivity",
+            ));
+        }
+        if input
+            .experiments
+            .iter()
+            .filter(|e| e.partition == Partition::Fit)
+            .any(|e| e.loading.len() != 1 || e.fixture.self_contact)
+        {
+            return Err(invalid(
+                "adjoint cylinder sensitivity requires static single-waypoint FIT experiments without self-contact; multi-waypoint dynamic trajectories or self-contact require finite_difference sensitivity",
+            ));
+        }
+    }
+
     Ok(Baseline {
         mass_kg_m2,
         warp_n_m: 0.5 * (warp_bounds[0] + warp_bounds[1]),
@@ -1047,6 +1108,7 @@ fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
 struct Evaluation {
     residuals: Vec<f64>,
     sse: f64,
+    adjoint_solvers: Vec<Solver>,
 }
 
 fn append_observation_residuals(obs: &Observation, state: &State, residuals: &mut Vec<f64>) {
@@ -1067,7 +1129,9 @@ fn evaluate_fit<const N: usize>(
     budget: &mut Budget<'_>,
 ) -> Result<Evaluation, ForwardFailure> {
     let parameters = physical(input, p);
+    let keep_solvers = input.policy.sensitivity == SensitivityMode::Adjoint;
     let mut residuals = Vec::new();
+    let mut adjoint_solvers = Vec::new();
     for experiment in input
         .experiments
         .iter()
@@ -1078,6 +1142,7 @@ fn evaluate_fit<const N: usize>(
             &experiment.fixture,
             &parameters,
             budget.inherited_domain,
+            keep_solvers,
         ) {
             Ok(run) => run,
             Err(failure @ ForwardFailure::Trial(_)) => {
@@ -1093,12 +1158,136 @@ fn evaluate_fit<const N: usize>(
                 &mut residuals,
             );
         }
+        if let Some(solver) = run.static_solver {
+            adjoint_solvers.push(solver);
+        }
     }
     let sse = residuals.iter().map(|v| v * v).sum::<f64>();
     if !sse.is_finite() {
         return Err(invalid("cylinder calibration objective overflow").into());
     }
-    Ok(Evaluation { residuals, sse })
+    Ok(Evaluation {
+        residuals,
+        sse,
+        adjoint_solvers,
+    })
+}
+
+fn adjoint_jacobian<const N: usize>(
+    input: &Input,
+    p: [f64; N],
+    budget: &mut Budget<'_>,
+    eval: &mut Evaluation,
+) -> Result<Vec<[f64; N]>, Refusal> {
+    if budget.baseline.membrane_response.is_some() || budget.baseline.panel_bending.is_some() {
+        return Err(invalid(
+            "adjoint cylinder Jacobian requires homogeneous scalar orthotropic membrane and hinge bending",
+        ));
+    }
+    let phys = physical(input, p);
+    let coeffs = budget.baseline.apply(&input.targets, &phys);
+    let target_row =
+        |grad: crate::adjoint::ConstitutiveGradient, scale: f64| -> Result<[f64; N], Refusal> {
+            let d_ortho = crate::adjoint::orthotropic_chain_rule(
+                coeffs.warp_n_m,
+                coeffs.weft_n_m,
+                coeffs.poisson,
+                coeffs.shear_n_m,
+                grad.dq,
+            )?;
+            let row = std::array::from_fn(|k| {
+                let deriv = match input.targets[k].parameter {
+                    TargetKind::WarpStiffness => d_ortho[0],
+                    TargetKind::WeftStiffness => d_ortho[1],
+                    TargetKind::PoissonWarpWeft => d_ortho[2],
+                    TargetKind::ShearStiffness => d_ortho[3],
+                    TargetKind::BendingRigidity => grad.d_bending,
+                };
+                let [lo, hi] = input.targets[k].bounds;
+                deriv * (hi - lo) / scale
+            });
+            if row.iter().any(|v| !v.is_finite()) {
+                return Err(invalid("cylinder adjoint sensitivity overflow"));
+            }
+            Ok(row)
+        };
+    let mut rows = Vec::with_capacity(eval.residuals.len());
+    let mut solvers = eval.adjoint_solvers.iter_mut();
+    for experiment in input
+        .experiments
+        .iter()
+        .filter(|e| e.partition == Partition::Fit)
+    {
+        if experiment.loading.len() != 1 || experiment.fixture.self_contact {
+            return Err(invalid(
+                "adjoint cylinder Jacobian requires static single-waypoint FIT experiments without self-contact",
+            ));
+        }
+        let solver = solvers.next().ok_or_else(|| {
+            invalid("missing converged static cylinder solver state for adjoint sensitivity")
+        })?;
+        let [n_theta, n_z] = experiment.fixture.cells;
+        let n_verts = n_theta * (n_z + 1);
+        if solver.x.len() != n_verts {
+            return Err(invalid(
+                "cylinder adjoint solver topology mismatch against experiment fixture",
+            ));
+        }
+        let upper_start = n_z * n_theta;
+        let mid_start = (n_z / 2) * n_theta;
+        let mut force_weights = None;
+        let mut torque_weights = None;
+        for obs in &experiment.observations {
+            if let Some(ch) = &obs.force_n {
+                let weights = force_weights.get_or_insert_with(|| {
+                    let mut w = vec![Vec3::ZERO; n_verts];
+                    for slot in &mut w[upper_start..upper_start + n_theta] {
+                        *slot = Vec3::new(0.0, 0.0, 1.0);
+                    }
+                    w
+                });
+                let grad = solver.reaction_gradient(weights)?;
+                budget.adjoint_solves += 1;
+                rows.push(target_row(grad, ch.scale)?);
+            }
+            if let Some(ch) = &obs.torque_nm {
+                let weights = torque_weights.get_or_insert_with(|| {
+                    let mut w = vec![Vec3::ZERO; n_verts];
+                    for i in 0..n_theta {
+                        let pos = solver.x[upper_start + i];
+                        w[upper_start + i] = Vec3::new(-pos.y, pos.x, 0.0);
+                    }
+                    w
+                });
+                let grad = solver.reaction_gradient(weights)?;
+                budget.adjoint_solves += 1;
+                rows.push(target_row(grad, ch.scale)?);
+            }
+            if let Some(ch) = &obs.mean_mid_radius_m {
+                let mut dj_dx = vec![Vec3::ZERO; n_verts];
+                let inv_n = 1.0 / (n_theta as f64);
+                for i in 0..n_theta {
+                    let pos = solver.x[mid_start + i];
+                    let r = det::hypot(pos.x, pos.y);
+                    if !r.is_finite() || r <= 0.0 {
+                        return Err(invalid(
+                            "degenerate cylinder mid-height radius in adjoint sensitivity",
+                        ));
+                    }
+                    dj_dx[mid_start + i] = Vec3::new(pos.x / r, pos.y / r, 0.0) * inv_n;
+                }
+                let grad = solver.constitutive_gradient(&dj_dx, [0.0; 4], 0.0)?;
+                budget.adjoint_solves += 1;
+                rows.push(target_row(grad, ch.scale)?);
+            }
+        }
+    }
+    if solvers.next().is_some() || rows.len() != eval.residuals.len() {
+        return Err(invalid(
+            "cylinder adjoint Jacobian row count does not match FIT residual count",
+        ));
+    }
+    Ok(rows)
 }
 
 fn jacobian<const N: usize>(
@@ -1298,26 +1487,38 @@ fn excitation<const N: usize>(j: &[[f64; N]]) -> f64 {
     pivot
 }
 
+type SearchOutcome<const N: usize> = (Start, [f64; N], Evaluation, Option<Vec<[f64; N]>>);
+
 fn search<const N: usize>(
     input: &Input,
     initial: f64,
     mut p: [f64; N],
     max_iterations: usize,
     budget: &mut Budget<'_>,
-) -> Result<(Start, [f64; N]), Refusal> {
+) -> Result<SearchOutcome<N>, Refusal> {
     let mut e = evaluate_fit(input, p, budget).map_err(ForwardFailure::refusal)?;
     let mut lambda = 1e-3_f64;
     let mut converged = false;
     let mut iterations = 0;
+    let mut cached_adjoint_j = None;
     for _ in 0..max_iterations {
         iterations += 1;
-        let j = jacobian(input, p, budget, Some(&e))?;
+        let j = match input.policy.sensitivity {
+            SensitivityMode::FiniteDifference => jacobian(input, p, budget, Some(&e))?,
+            SensitivityMode::Adjoint => adjoint_jacobian(input, p, budget, &mut e)?,
+        };
         if gradient(p, &j, &e) < 1e-6 {
             converged = true;
+            if input.policy.sensitivity == SensitivityMode::Adjoint {
+                cached_adjoint_j = Some(j);
+            }
             break;
         }
         let scales = norms(&j);
         if scales.iter().any(|s| *s <= 1e-10) {
+            if input.policy.sensitivity == SensitivityMode::Adjoint {
+                cached_adjoint_j = Some(j);
+            }
             break;
         }
         let active: [bool; N] = std::array::from_fn(|k| {
@@ -1384,6 +1585,9 @@ fn search<const N: usize>(
             lambda *= 10.0;
         }
         if !accepted {
+            if input.policy.sensitivity == SensitivityMode::Adjoint {
+                cached_adjoint_j = Some(j);
+            }
             break;
         }
     }
@@ -1396,6 +1600,8 @@ fn search<const N: usize>(
             iterations,
         },
         p,
+        e,
+        cached_adjoint_j,
     ))
 }
 
@@ -1442,6 +1648,7 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
 
     let mut budget = Budget {
         used: 0,
+        adjoint_solves: 0,
         limit: input.policy.max_forward_solves,
         inherited_domain,
         baseline,
@@ -1459,15 +1666,17 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
 
     let mut starts = Vec::with_capacity(3);
     let mut coordinates = Vec::with_capacity(3);
+    let mut evaluations = Vec::with_capacity(3);
+    let mut cached_jacobians = Vec::with_capacity(3);
     for initial in [0.25, 0.5, 0.75] {
-        let (coarse, p) = search::<N>(
+        let (coarse, p, _, _) = search::<N>(
             input,
             initial,
             [initial; N],
             input.policy.max_iterations,
             &mut budget,
         )?;
-        let (mut start, p) = search::<N>(
+        let (mut start, p, eval, cached_j) = search::<N>(
             &refined_input,
             initial,
             p,
@@ -1477,13 +1686,21 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
         start.iterations += coarse.iterations;
         starts.push(start);
         coordinates.push(p);
+        evaluations.push(eval);
+        cached_jacobians.push(cached_j);
     }
     let best = (0..starts.len())
         .min_by(|&a, &b| starts[a].fit_sse.total_cmp(&starts[b].fit_sse))
         .unwrap_or(0);
     let p = coordinates[best];
     let parameters = starts[best].parameters.clone();
-    let j = jacobian(&refined_input, p, &mut budget, None)?;
+    let j = match input.policy.sensitivity {
+        SensitivityMode::FiniteDifference => jacobian(&refined_input, p, &mut budget, None)?,
+        SensitivityMode::Adjoint => match cached_jacobians[best].take() {
+            Some(j) => j,
+            None => adjoint_jacobian(&refined_input, p, &mut budget, &mut evaluations[best])?,
+        },
+    };
     let pivot = excitation(&j);
 
     let mut reasons = Vec::new();
@@ -1706,6 +1923,7 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
         starts,
         excitation_pivot: pivot,
         forward_solves: budget.used,
+        adjoint_solves: budget.adjoint_solves,
         search_recovery: (budget.recovery.refused_forward_solves > 0)
             .then(|| budget.recovery.clone()),
         fit,
@@ -2019,6 +2237,7 @@ mod tests {
                 min_excitation_pivot: 1e-4,
                 max_iterations: 40,
                 max_forward_solves: 2048,
+                sensitivity: SensitivityMode::FiniteDifference,
             },
         }
     }
@@ -2056,6 +2275,7 @@ mod tests {
             }
             let mut budget = Budget {
                 used: 0,
+                adjoint_solves: 0,
                 limit: 100,
                 inherited_domain: None,
                 baseline,
@@ -2150,6 +2370,7 @@ mod tests {
         let baseline = resolve_baseline_and_validate(&narrow).unwrap();
         let mut budget = Budget {
             used: 0,
+            adjoint_solves: 0,
             limit: 100,
             inherited_domain: None,
             baseline,
@@ -2523,6 +2744,7 @@ mod tests {
                 min_excitation_pivot: 1e-4,
                 max_iterations: 40,
                 max_forward_solves: 8192,
+                sensitivity: SensitivityMode::FiniteDifference,
             },
         };
         (
@@ -2538,6 +2760,7 @@ mod tests {
         let first_start_force = {
             let mut budget = Budget {
                 used: 0,
+                adjoint_solves: 0,
                 limit: 2,
                 inherited_domain: None,
                 baseline: baseline.clone(),
@@ -2560,13 +2783,14 @@ mod tests {
 
         let mut budget = Budget {
             used: 0,
+            adjoint_solves: 0,
             limit: input.policy.max_forward_solves,
             inherited_domain: None,
             baseline,
             input: &input,
             recovery: SearchRecovery::default(),
         };
-        let (coarse, _) = search(&input, 0.25, [0.25], 1, &mut budget).unwrap();
+        let (coarse, _, _, _) = search(&input, 0.25, [0.25], 1, &mut budget).unwrap();
         assert!(coarse.converged);
         assert_eq!(coarse.fit_sse, 0.0);
         assert_eq!(budget.used, 2);
@@ -2585,6 +2809,7 @@ mod tests {
         let baseline = resolve_baseline_and_validate(&input).unwrap();
         let mut budget = Budget {
             used: 0,
+            adjoint_solves: 0,
             limit: input.policy.max_forward_solves,
             inherited_domain: None,
             baseline,
@@ -2779,5 +3004,305 @@ mod tests {
         tiny_budget.policy.max_forward_solves = 3;
         let err = calibrate(&tiny_budget).unwrap_err();
         assert_eq!(err.code, RefusalCode::BudgetExceeded);
+    }
+
+    #[test]
+    fn adjoint_static_calibration_matches_finite_difference_across_all_five_targets_and_channels() {
+        let truth_mem = [900.0, 620.0, 0.25, 180.0];
+        let truth_bend = 2.5e-3;
+        let expected = [
+            truth_mem[0],
+            truth_mem[1],
+            truth_mem[2],
+            truth_mem[3],
+            truth_bend,
+        ];
+
+        let make_static_exp = |id: &str,
+                               warp_axis: [f64; 2],
+                               axial_m: f64,
+                               rot_deg: f64,
+                               partition: Partition,
+                               with_torque: bool|
+         -> Experiment {
+            let fixture = base_fixture(warp_axis);
+            let loading = vec![Waypoint {
+                time_s: 0.0,
+                axial_displacement_m: axial_m,
+                rotation_deg: rot_deg,
+                clamp_slip_m: 0.0,
+            }];
+            let states = generate_truth_state(&fixture, &loading, truth_mem, truth_bend);
+            let s = &states[0];
+            Experiment {
+                id: id.into(),
+                fixture,
+                loading,
+                nominal_protocol: None,
+                source: if partition == Partition::Fit {
+                    "fit_acq"
+                } else {
+                    "check_acq"
+                }
+                .into(),
+                evidence: Evidence::Measured,
+                partition,
+                observations: vec![Observation {
+                    id: format!("{id}-obs"),
+                    waypoint_index: 0,
+                    force_n: Some(Channel {
+                        value: s.tare_adjusted_force_n,
+                        scale: 0.5,
+                    }),
+                    torque_nm: with_torque.then_some(Channel {
+                        value: s.tare_adjusted_torque_nm,
+                        scale: 0.02,
+                    }),
+                    mean_mid_radius_m: Some(Channel {
+                        value: s.mid_radius_range_m[2],
+                        scale: 2e-4,
+                    }),
+                }],
+            }
+        };
+
+        let inv_sqrt2 = std::f64::consts::FRAC_1_SQRT_2;
+        let fd_input = Input {
+            schema: INPUT_SCHEMA.into(),
+            material: synthetic_base_material(false),
+            method: "Synthetic static 5-target cylindrical-holder FD vs IFT adjoint parity".into(),
+            conditions: BTreeMap::from([("temperature_c".into(), "21".into())]),
+            fitted_on: "2026-11-20".into(),
+            targets: vec![
+                TargetParameter {
+                    parameter: TargetKind::WarpStiffness,
+                    bounds: [500.0, 1400.0],
+                },
+                TargetParameter {
+                    parameter: TargetKind::WeftStiffness,
+                    bounds: [350.0, 1100.0],
+                },
+                TargetParameter {
+                    parameter: TargetKind::PoissonWarpWeft,
+                    bounds: [0.05, 0.45],
+                },
+                TargetParameter {
+                    parameter: TargetKind::ShearStiffness,
+                    bounds: [80.0, 360.0],
+                },
+                TargetParameter {
+                    parameter: TargetKind::BendingRigidity,
+                    bounds: [1.0e-3, 5.0e-3],
+                },
+            ],
+            experiments: vec![
+                make_static_exp(
+                    "fit-warp-ext",
+                    [0.0, 1.0],
+                    0.0020,
+                    8.0,
+                    Partition::Fit,
+                    true,
+                ),
+                make_static_exp(
+                    "fit-warp-comp",
+                    [0.0, 1.0],
+                    -0.0022,
+                    2.0,
+                    Partition::Fit,
+                    true,
+                ),
+                make_static_exp(
+                    "fit-weft-ext",
+                    [1.0, 0.0],
+                    0.0018,
+                    -6.0,
+                    Partition::Fit,
+                    true,
+                ),
+                make_static_exp(
+                    "fit-weft-comp",
+                    [1.0, 0.0],
+                    -0.0020,
+                    -2.0,
+                    Partition::Fit,
+                    false,
+                ),
+                make_static_exp(
+                    "check-bias",
+                    [inv_sqrt2, inv_sqrt2],
+                    0.0010,
+                    4.0,
+                    Partition::Check,
+                    true,
+                ),
+            ],
+            admit_cylindrical_shell_model: true,
+            allow_estimated_observations: false,
+            replace_existing: true,
+            allow_estimates: true,
+            controls: Controls {
+                static_tolerance_m: 1e-10,
+                velocity_tolerance_m_s: 1e-9,
+                ..Controls::default()
+            },
+            policy: Policy {
+                max_rms_scaled: 0.25,
+                max_peak_scaled: 0.45,
+                max_mesh_scaled: 0.50,
+                min_excitation_pivot: 1e-4,
+                max_iterations: 40,
+                max_forward_solves: 8192,
+                sensitivity: SensitivityMode::FiniteDifference,
+            },
+        };
+
+        let mut adj_input = fd_input.clone();
+        adj_input.policy.sensitivity = SensitivityMode::Adjoint;
+
+        // Default finite_difference omits the wire field; opt-in adjoint serializes explicitly.
+        let fd_policy_json = serde_json::to_value(&fd_input.policy).unwrap();
+        assert!(fd_policy_json.get("sensitivity").is_none());
+        let adj_policy_json = serde_json::to_value(&adj_input.policy).unwrap();
+        assert_eq!(adj_policy_json["sensitivity"], "adjoint");
+
+        let fd_report = calibrate(&fd_input).expect("FD static cylinder calibration succeeds");
+        let adj_report =
+            calibrate(&adj_input).expect("Adjoint static cylinder calibration succeeds");
+
+        assert!(fd_report.accepted, "FD rejected: {:?}", fd_report.reasons);
+        assert!(
+            adj_report.accepted,
+            "Adjoint rejected: {:?}",
+            adj_report.reasons
+        );
+        assert!(fd_report.domain_replay_verified);
+        assert!(adj_report.domain_replay_verified);
+
+        assert_eq!(fd_report.adjoint_solves, 0);
+        let fd_report_json = serde_json::to_value(&fd_report).unwrap();
+        assert!(fd_report_json.get("adjoint_solves").is_none());
+
+        let fit_channels: usize = adj_input
+            .experiments
+            .iter()
+            .filter(|e| e.partition == Partition::Fit)
+            .flat_map(|e| &e.observations)
+            .map(Observation::channel_count)
+            .sum();
+        let total_iters: usize = adj_report.starts.iter().map(|s| s.iterations).sum();
+        assert_eq!(fit_channels, 11);
+        assert!(adj_report.adjoint_solves > 0);
+        assert_eq!(
+            adj_report.adjoint_solves,
+            total_iters * fit_channels,
+            "final refined excitation must reuse the cached adjoint Jacobian with zero extra solves"
+        );
+        assert!(
+            adj_report.forward_solves < fd_report.forward_solves,
+            "adjoint should use strictly fewer forward solves than 5-target FD ({} vs {})",
+            adj_report.forward_solves,
+            fd_report.forward_solves
+        );
+        let adj_report_json = serde_json::to_value(&adj_report).unwrap();
+        assert_eq!(
+            adj_report_json["adjoint_solves"].as_u64(),
+            Some(adj_report.adjoint_solves as u64)
+        );
+
+        for (i, ((&fd_val, &adj_val), &want)) in fd_report
+            .parameters
+            .iter()
+            .zip(&adj_report.parameters)
+            .zip(&expected)
+            .enumerate()
+        {
+            let rel_truth = (adj_val - want).abs() / want;
+            let tol_truth = if i == 4 { 0.05 } else { 0.02 };
+            assert!(
+                rel_truth < tol_truth,
+                "adjoint parameter {i} ({adj_val}) differs from truth ({want}) by {:.3}%",
+                rel_truth * 100.0
+            );
+            let rel_fd = (adj_val - fd_val).abs() / want;
+            assert!(
+                rel_fd < 1e-4,
+                "adjoint parameter {i} ({adj_val}) differs from FD ({fd_val}) by {:.3e}",
+                rel_fd
+            );
+        }
+
+        let pivot_rel = (adj_report.excitation_pivot - fd_report.excitation_pivot).abs()
+            / fd_report.excitation_pivot.max(1e-12);
+        assert!(
+            pivot_rel < 1e-3,
+            "excitation pivot mismatch: adjoint={} vs fd={}",
+            adj_report.excitation_pivot,
+            fd_report.excitation_pivot
+        );
+    }
+
+    #[test]
+    fn adjoint_mode_refuses_dynamic_self_contact_and_fixed_non_scalar_laws() {
+        // 1. Multi-waypoint dynamic FIT trajectory
+        let (mut dynamic, _) = build_synthetic_calibration(false);
+        dynamic.policy.sensitivity = SensitivityMode::Adjoint;
+        let err = calibrate(&dynamic).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(
+            err.message.contains("static single-waypoint"),
+            "unexpected message: {}",
+            err.message
+        );
+
+        // 2. Self-contact FIT fixture
+        let mut sc_input = fixed_law_input(false);
+        sc_input.material = synthetic_base_material(true);
+        sc_input.material.properties.insert(
+            "friction_self".into(),
+            serde_json::from_value(json!({
+                "value": 0.25,
+                "unit": "1",
+                "evidence": "measured",
+                "source": "base",
+                "method": "synthetic-friction"
+            }))
+            .unwrap(),
+        );
+        sc_input.targets = vec![TargetParameter {
+            parameter: TargetKind::WarpStiffness,
+            bounds: [600.0, 1200.0],
+        }];
+        sc_input.experiments[0].fixture.self_contact = true;
+        sc_input.policy.sensitivity = SensitivityMode::Adjoint;
+        let err = calibrate(&sc_input).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(
+            err.message.contains("self-contact"),
+            "unexpected message: {}",
+            err.message
+        );
+
+        // 3. Fixed nonlinear membrane_response
+        let mut nonlinear = fixed_law_input(true);
+        nonlinear.policy.sensitivity = SensitivityMode::Adjoint;
+        let err = calibrate(&nonlinear).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(
+            err.message.contains("homogeneous scalar orthotropic"),
+            "unexpected message: {}",
+            err.message
+        );
+
+        // 4. Fixed directional panel_bending
+        let mut directional = fixed_law_input(false);
+        directional.policy.sensitivity = SensitivityMode::Adjoint;
+        let err = calibrate(&directional).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(
+            err.message.contains("homogeneous scalar orthotropic"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 }
