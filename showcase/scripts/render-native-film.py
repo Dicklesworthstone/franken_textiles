@@ -24,36 +24,76 @@ in vec3 colour;
 uniform mat3 axes;
 uniform vec3 centre;
 uniform vec2 half_extent;
+uniform mat3 light_axes;
+uniform vec3 light_centre;
+uniform float light_extent;
 out vec3 n;
 out vec2 surface_uv;
 out vec3 base;
+out vec3 shadow_uv;
 void main() {
     vec3 local = axes * (position - centre);
     gl_Position = vec4(local.xy / half_extent, -local.z / (8.0 * half_extent.x), 1.0);
-    n = axes * normal;
+    n = normal;
     surface_uv = uv;
     base = colour;
+    vec3 lit = light_axes * (position - light_centre) / light_extent;
+    shadow_uv = vec3(lit.xy, -lit.z) * 0.5 + 0.5;
 }
 """
 
 FRAGMENT = """
 #version 330
-uniform float weave;
+uniform sampler2D cloth_image;
+uniform sampler2DShadow shadow_image;
+uniform float fabric_pitch;
+uniform float fabric_mix;
+uniform bool shadows;
+uniform bool shadow_only;
 in vec3 n;
 in vec2 surface_uv;
 in vec3 base;
+in vec3 shadow_uv;
 out vec4 pixel;
 void main() {
     vec3 normal = normalize(n);
     if (!gl_FrontFacing) normal = -normal;
-    vec3 key = normalize(vec3(-0.50, 0.72, 0.65));
-    vec3 rim = normalize(vec3(0.45, 0.25, -0.70));
-    float light = 0.43 + 0.77 * max(dot(normal, key), 0.0)
-                      + 0.28 * max(dot(normal, rim), 0.0);
-    vec2 yarn = sin(surface_uv * 2960.0);
-    float texture = 1.0 + weave * (0.055 * yarn.x + 0.055 * yarn.y);
-    vec3 lit = base * light * texture + vec3(0.013, 0.010, 0.007);
+    vec3 key = normalize(vec3(-0.47, -0.61, 0.74));
+    vec3 rim = normalize(vec3(0.45, 0.70, 0.25));
+    float visibility = 1.0;
+    if (shadows) {
+        vec2 pixel_step = 1.0 / vec2(textureSize(shadow_image, 0));
+        float z = shadow_uv.z - 0.0014;
+        visibility = (texture(shadow_image, vec3(shadow_uv.xy + pixel_step * vec2(-1.4,-1.4), z))
+                    + texture(shadow_image, vec3(shadow_uv.xy + pixel_step * vec2( 1.4,-1.4), z))
+                    + texture(shadow_image, vec3(shadow_uv.xy + pixel_step * vec2(-1.4, 1.4), z))
+                    + texture(shadow_image, vec3(shadow_uv.xy + pixel_step * vec2( 1.4, 1.4), z))) * 0.25;
+    }
+    if (shadow_only) {
+        pixel = vec4(0.11, 0.085, 0.066, 0.48 * (1.0 - visibility));
+        return;
+    }
+    float light = mix(0.29, 0.51, normal.z * 0.5 + 0.5)
+                + 0.71 * visibility * max(dot(normal, key), 0.0) + 0.26 * max(dot(normal, rim), 0.0);
+    vec3 colour = base;
+    if (fabric_mix > 0.0) {
+        vec3 swatch = pow(texture(cloth_image, surface_uv / fabric_pitch).rgb, vec3(2.2));
+        colour = fabric_mix >= 1.0 ? swatch : mix(base, base * swatch, fabric_mix);
+    }
+    vec3 lit = colour * light + vec3(0.013, 0.010, 0.007);
     pixel = vec4(pow(clamp(lit, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+}
+"""
+
+DEPTH_VERTEX = """
+#version 330
+in vec3 position;
+uniform mat3 light_axes;
+uniform vec3 light_centre;
+uniform float light_extent;
+void main() {
+    vec3 p = light_axes * (position - light_centre) / light_extent;
+    gl_Position = vec4(p.xy, -p.z, 1.0);
 }
 """
 
@@ -104,13 +144,15 @@ void main() {
 """
 
 class Surface:
-    def __init__(self, ctx, program, positions, faces, uv, colours):
+    def __init__(self, ctx, program, positions, faces, uv, colours, depth_shader=None):
         self.faces = faces.astype(np.int32)
         self.vertices = np.column_stack((positions, np.zeros_like(positions), uv, colours)).astype("f")
         self.buffer = ctx.buffer(reserve=self.vertices.nbytes, dynamic=True)
         self.indices = ctx.buffer(self.faces.tobytes())
         self.vao = ctx.vertex_array(program, [(self.buffer, "3f 3f 2f 3f", "position", "normal", "uv", "colour")],
                                     self.indices)
+        self.depth = (ctx.vertex_array(depth_shader, [(self.buffer, "3f 32x", "position")], self.indices)
+                      if depth_shader is not None else None)
         self.update(positions)
 
     def update(self, positions):
@@ -127,7 +169,7 @@ class Surface:
         self.vertices[:, 8:] = colours
 
 
-def view(points, i):
+def view(points, i, resting=False):
     ease = SOURCE["ease"]
     yaw = .34 * ease((i-13)/57) + .32 * ease((i-78)/17)
     facing = np.array([np.sin(yaw), -np.cos(yaw), .065+.07*ease((i-20)/50)])
@@ -139,8 +181,81 @@ def view(points, i):
     lower, upper = projected.min(axis=0), projected.max(axis=0)
     centre = (lower + upper) / 2 @ axes
     size = upper - lower
-    width = max(size[0]*1.19, size[1]*WIDTH/HEIGHT*1.34)
+    width = max(size[0]*1.19, size[1]*WIDTH/HEIGHT*(1.17 if resting else 1.34))
     return axes, centre, (width/2, width/2*HEIGHT/WIDTH)
+
+
+def orthogonal_light(points):
+    toward = np.array([-.47, -.61, .74])
+    toward /= np.linalg.norm(toward)
+    right = np.cross([0, 0, 1], toward)
+    right /= np.linalg.norm(right)
+    basis = np.stack((right, np.cross(toward, right), toward))
+    low, high = points.min(axis=0), points.max(axis=0)
+    return basis, (low + high) / 2, max(0.4, np.linalg.norm(high - low) * .75)
+
+
+def fabric_texture(ctx, garment):
+    maps = {"sundress": ("madder", .30), "eased": ("madder", .30),
+            "flare": ("madder", .30), "column": ("glen-check", .16)}
+    name, pitch = maps.get(garment, (None, .19))
+    image = f"atelier/{name}.webp" if name else "materials/linen.webp"
+    rgb = subprocess.check_output(["ffmpeg", "-nostdin", "-v", "error", "-threads", "1", "-filter_threads", "1",
+        "-i", str(SOURCE["PUBLIC"] / image), "-vf", "scale=1024:1024,vflip", "-frames:v", "1",
+        "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])
+    tex = ctx.texture((1024, 1024), 3, rgb)
+    tex.build_mipmaps()
+    return tex, pitch, (1.0 if name else .60)
+
+
+def turned_stand(center, floor, hip, radius):
+    ring = np.linspace(0, 2*np.pi, 65)[:-1]
+    profile = [(floor, radius), (floor+.012, radius), (floor+.020, radius*.76),
+        (floor+.026, radius*.24), (hip-.023, radius*.24), (hip-.018, radius*.97), (hip, radius)]
+    xyz = np.concatenate([np.column_stack((center[0]+r*np.cos(ring), center[1]+r*np.sin(ring),
+        np.full(len(ring), z))) for z, r in profile])
+    n = len(ring)
+    faces = []
+    for row in range(len(profile)-1):
+        for col in range(n):
+            a, b = row*n+col, row*n+(col+1)%n
+            faces.extend(((a,b,a+n), (b,b+n,a+n)))
+    return xyz, np.array(faces)
+
+
+def trim_top(points, faces, height):
+    """Cut the presentation form at a horizontal plane and cover its exposed opening."""
+    below = points[:, 2] < height
+    kept = below[faces]
+    triangles = faces[kept.all(axis=1)].tolist()
+    vertices, edge_points = [], {}
+    for face in faces[kept.any(axis=1) & ~kept.all(axis=1)]:
+        polygon = []
+        for a, b in zip(face, np.roll(face, -1)):
+            if below[a]:
+                polygon.append(a)
+            if below[a] != below[b]:
+                key = (min(a,b), max(a,b))
+                if key not in edge_points:
+                    t = (height-points[a, 2])/(points[b, 2]-points[a, 2])
+                    edge_points[key] = len(points) + len(vertices)
+                    vertices.append(points[a] + (points[b]-points[a])*t)
+                polygon.append(edge_points[key])
+        triangles.extend((polygon[0], polygon[i], polygon[i+1]) for i in range(1,len(polygon)-1))
+    if not vertices:
+        return points, np.array(triangles)
+    # Cap the central torso loop. This leaves any arms crossing the display plane separate.
+    ring = np.asarray(vertices)
+    width = max(0.04, np.ptp(points[:,0])*.21)
+    centre_ring = np.flatnonzero(np.abs(ring[:,0]) < width)
+    if len(centre_ring) >= 3:
+        centre = ring[centre_ring].mean(axis=0)
+        offsets = ring[centre_ring] - centre
+        order = centre_ring[np.argsort(np.arctan2(offsets[:,1], offsets[:,0]))] + len(points)
+        cap_id = len(points) + len(vertices)
+        vertices.append(centre)
+        triangles.extend((cap_id,a,b) for a,b in zip(order,np.roll(order,-1)))
+    return np.vstack((points, vertices)), np.array(triangles)
 
 
 def attached_points(points, triangles, anchors, offset):
@@ -168,7 +283,6 @@ def native_source(args, layout):
 
 def render(args):
     recorded, ids, faces, panels, body, body_faces, layout, phases = SOURCE["load"](args.garment, args.native)
-    form_colours = np.tile((.46, .34, .235), (len(body), 1)) if body is not None else None
     cloth_colours = np.tile(SOURCE["FABRIC_COLORS"][args.garment], (len(recorded[0]), 1))
     if args.garment == "ensemble":
         for name, (start, end) in panels.items():
@@ -184,7 +298,19 @@ def render(args):
     background = ctx.program(vertex_shader=BACKGROUND_VERTEX, fragment_shader=BACKGROUND_FRAGMENT)
     backdrop = ctx.vertex_array(background, [])
     shading = ctx.program(vertex_shader=VERTEX, fragment_shader=FRAGMENT)
-    cloth = Surface(ctx, shading, recorded[0], faces, recorded[0][:, [0, 2]], pattern_colours)
+    depth = ctx.program(vertex_shader=DEPTH_VERTEX, fragment_shader="#version 330\nvoid main() {}")
+    shadow_texture = ctx.depth_texture((1536, 1536))
+    shadow_texture.repeat_x = shadow_texture.repeat_y = False
+    shadow_texture.compare_func = "<="
+    shadow_texture.filter = moderngl.LINEAR, moderngl.LINEAR
+    shadow_map = ctx.framebuffer(depth_attachment=shadow_texture)
+    swatch, pitch, cloth_mix = fabric_texture(ctx, args.garment)
+    swatch.use(location=0)
+    shadow_texture.use(location=1)
+    shading["cloth_image"].value = 0
+    shading["shadow_image"].value = 1
+    shading["fabric_pitch"].value = pitch
+    cloth = Surface(ctx, shading, recorded[0], faces, recorded[0][:, [0, 2]], pattern_colours, depth)
     marks = ctx.program(vertex_shader=MARK_VERTEX, fragment_shader=MARK_FRAGMENT)
     mark_buffer = ctx.buffer(reserve=max(1, len(faces))*6*12, dynamic=True)
     marks_vao = ctx.vertex_array(marks, [(mark_buffer, "3f", "position")])
@@ -215,15 +341,40 @@ def render(args):
             ctx.line_width = width
         marks_vao.render(mode=mode, vertices=len(points))
 
-    form = None
+    models, bounds = [], [recorded[-1]]
+    floor = recorded[-1, :, 2].min() - .012
     if body is not None:
-        # The raised-sleeve films frame the clothed upper body. Keep the full mesh in
-        # the underlying native evidence while omitting the bare lower form from the shot.
+        floor = body[:, 2].min() - .009
+        head = body[:, 2].max() - np.ptp(body[:, 2])*.114
+        if args.garment in ("column", "flare", "trousers"):
+            head = min(head, recorded[-1, :, 2].max() + .14)
+        visible = np.ones(len(body), dtype=bool)
         if args.garment in ("blue", "yellow", "bolero"):
             hem = min(recorded[-1][start:end, 2].min() for piece, (start, end) in panels.items() if "back" in piece)
-            lower = (body[:, 2] < hem - .023) & (np.abs(body[:, 0]) < (.27 if args.garment != "bolero" else .125))
-            body_faces = body_faces[~lower[body_faces].any(axis=1)]
-        form = Surface(ctx, shading, body, body_faces, body[:, [0, 2]], form_colours)
+            hip = hem-.021
+            half_width = .27 if args.garment != "bolero" else .125
+            trunk = np.abs(body[:, 0]) < half_width
+            drop = np.ptp(recorded[-1, :, 2]) * .28
+            floor = min(hip-drop, recorded[-1, :, 2].min()-.022, body[~trunk, 2].min()-.025)
+            visible &= (body[:, 2] >= hip) | (~trunk & (body[:, 2] >= floor))
+            ring = body[trunk & (np.abs(body[:, 2]-hip)<.016)]
+            low, high = ring.min(axis=0), ring.max(axis=0)
+            stand, triangles = turned_stand((low+high)/2, floor, hip, (high[0]-low[0])*.48)
+            models.append(Surface(ctx, shading, stand, triangles, stand[:, [0, 2]], np.tile((.093, .052, .030), (len(stand), 1)), depth))
+            bounds.append(stand)
+        body_faces = body_faces[visible[body_faces].all(axis=1)]
+        body, body_faces = trim_top(body, body_faces, head)
+        bounds.append(body[np.unique(body_faces)])
+        models.append(Surface(ctx, shading, body, body_faces, body[:, [0, 2]], np.tile((.46,.34,.235), (len(body),1)), depth))
+    bounds = np.concatenate(bounds)
+    ground = np.asarray([(-20,-20,floor), (20,-20,floor), (20,20,floor), (-20,20,floor)])
+    platform = Surface(ctx, shading, ground, np.array([(0,1,2),(0,2,3)]), ground[:, :2],
+                       np.tile((.15,.124,.092), (4,1)))
+    light_axes, light_centre, light_extent = orthogonal_light(bounds)
+    for program in (shading, depth):
+        program["light_axes"].write(light_axes.T.astype("f").tobytes())
+        program["light_centre"].value = tuple(light_centre)
+        program["light_extent"].value = light_extent
 
     initial_centre = (recorded[-1, :, 2].min() + recorded[-1, :, 2].max()) / 2
     gap = .045*np.ptp(recorded[-1],axis=0).max()
@@ -260,19 +411,35 @@ def render(args):
                 pixels = initial
             else:
                 points, staging = SOURCE["film_pose"](i,args.garment,recorded,ids,phases,panels,gap,initial_centre)
-                axes, centre, extent = view(points, i)
+                axes, centre, extent = view(points if staging else bounds, i, not staging)
+                cloth.colour(pattern_colours if i <= 12 else cloth_colours)
+                cloth.update(points)
+                if not staging:
+                    shadow_map.use()
+                    ctx.enable(moderngl.DEPTH_TEST)
+                    shadow_map.clear(depth=1)
+                    for model in models:
+                        model.depth.render()
+                    cloth.depth.render()
+                target.use()
                 target.clear(depth=1)
                 ctx.disable(moderngl.DEPTH_TEST)
                 backdrop.render(vertices=3)
                 ctx.enable(moderngl.DEPTH_TEST)
                 projection(shading, axes, centre, extent)
                 projection(marks, axes, centre, extent)
-                if form is not None and not staging:
-                    shading["weave"].value = 0
-                    form.vao.render()
-                cloth.colour(pattern_colours if i <= 12 else cloth_colours)
-                cloth.update(points)
-                shading["weave"].value = .32 if i <= 12 else 1
+                shading["shadows"].value = not staging
+                shading["fabric_mix"].value = 0
+                if not staging:
+                    shading["shadow_only"].value = True
+                    ctx.enable(moderngl.BLEND)
+                    ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+                    platform.vao.render()
+                    ctx.disable(moderngl.BLEND)
+                    shading["shadow_only"].value = False
+                    for model in models:
+                        model.vao.render()
+                shading["fabric_mix"].value = 0 if i <= 12 else cloth_mix
                 cloth.vao.render()
                 if i <= 12:
                     mark(points[boundary], (.24, .18, .12), width=2)

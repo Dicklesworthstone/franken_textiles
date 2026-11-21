@@ -26,10 +26,12 @@ function playsUhd() {
 }
 /** The film to play here: the 4K one where the device decodes it smoothly, otherwise the 1080p copy. */
 export async function filmSource(id: string) {
-  return filmFile(await playsUhd() ? id : id+"-1080");
+  const smaller = id+"-1080";
+  return filmFile(revisions[`${smaller}.mp4`] && !await playsUhd() ? smaller : id);
 }
 /** Step a playing 4K film down to its 1080p copy if it cannot be decoded, or if a third of its frames are dropped. */
 export function watchFilm(el: HTMLVideoElement, id: string) {
+  if (!revisions[`${id}-1080.mp4`]) return () => {};
   const small = filmFile(id+"-1080");
   function stepDown() {
     if (el.getAttribute("src") === small || !el.getAttribute("src")) return;

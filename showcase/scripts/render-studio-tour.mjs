@@ -29,7 +29,7 @@ function plate(index) {
   const [title, detail] = chapters[index];
   const line = (text, font, size, x, y, color) =>
     `drawtext=font='${font}':text='${text}':fontsize=${size*3}:fontcolor=${color}:x=${x*3}:y=${y*3}`;
-  return ["scale=3552:1572:force_original_aspect_ratio=decrease:force_divisible_by=2",
+  return ["scale=3552:1572:force_original_aspect_ratio=decrease:force_divisible_by=2:out_range=tv",
     "pad=3840:2160:(ow-iw)/2:144+(1572-ih)/2:color=0x202830", "setsar=1",
     line("FRANKENTEXTILES   /   STUDIO TOUR","monospace",14,48,17,"0xe9d8aa"),
     line(`0${index+1}   /   04`,"monospace",14,1110,17,"0xe9d8aa"),

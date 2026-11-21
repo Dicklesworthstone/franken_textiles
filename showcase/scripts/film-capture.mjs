@@ -37,12 +37,12 @@ export async function frameCapture(page) {
   };
 }
 
-export const fitUhd = `scale=${filmWidth}:${filmHeight}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${filmWidth}:${filmHeight}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+export const fitUhd = `scale=${filmWidth}:${filmHeight}:force_original_aspect_ratio=decrease:force_divisible_by=2:out_range=tv,pad=${filmWidth}:${filmHeight}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
 
 export const encodeUhd = [
   "-an", "-c:v", "libx264", "-threads", "4", "-preset", "veryfast", "-crf", "17",
   "-maxrate", "9M", "-bufsize", "9M", "-profile:v", "high", "-level:v", "5.2",
-  "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+  "-pix_fmt", "yuv420p", "-color_range", "tv", "-movflags", "+faststart",
 ];
 
 export function filmArgs(output) {
