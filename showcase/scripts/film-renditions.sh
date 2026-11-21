@@ -16,13 +16,24 @@ for film in ./*.mp4; do
   [ "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,avg_frame_rate \
     -of default=nw=1:nk=1 "$film")" = "$uhd" ] || continue
   copy=${film%.mp4}-1080.mp4
-  source="FrankenTextiles 1080p copy of sha256 $(sha256sum "$film" | cut -d' ' -f1)"
+  digest=$(sha256sum "$film" | cut -d' ' -f1)
+  source="FrankenTextiles 1080p copy of sha256 $digest"
   if [ -e "$copy" ] && [ "$(ffprobe -v error -show_entries format_tags=comment -of csv=p=0 "$copy")" = "$source" ]; then
     continue
   fi
+  pending=$(mktemp "./.${copy##*/}.XXXXXX")
   # Level 4.2 is the lowest that carries 1920x1080 at 60 fps, and what nearly every phone decodes in hardware.
-  ffmpeg -hide_banner -loglevel error -y -i "$film" -an -vf scale=1920:1080:flags=lanczos:out_range=tv \
+  if ! ffmpeg -hide_banner -loglevel error -y -i "$film" -an -vf scale=1920:1080:flags=lanczos:out_range=tv \
     -c:v libx264 -preset slow -crf 20 -maxrate 4500k -bufsize 9M -profile:v high -level:v 4.2 \
-    -pix_fmt yuv420p -color_range tv -metadata comment="$source" -movflags +faststart "$copy"
+    -pix_fmt yuv420p -color_range tv -metadata comment="$source" -movflags +faststart -f mp4 "$pending"; then
+    printf 'Failed to encode %s. Unpublished output is in %s.\n' "$copy" "$pending" >&2
+    exit 1
+  fi
+  if [ "$(sha256sum "$film" | cut -d' ' -f1)" != "$digest" ]; then
+    printf 'The source changed during encoding. Unpublished output is in %s.\n' "$pending" >&2
+    exit 1
+  fi
+  chmod 644 "$pending"
+  mv -fT "$pending" "$copy"
   echo "$copy"
 done
