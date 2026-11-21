@@ -9,6 +9,7 @@ use std::{
 use ftx_core::{Refusal, receipt::sha256_hex};
 use ftx_drape::thermal::{
     Boundary,
+    microclimate::MicroclimateExterior,
     steady::exterior::Exterior,
     surface::coverage::{
         ExteriorConditions,
@@ -52,6 +53,11 @@ struct Interval {
     /// One environment broadcasts; the covered outside film must be zero and match its air state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exterior_exchange: Option<Vec<Exterior>>,
+    /// Optional validity-gated moist-air Nusselt correlation replacement on outermost covered faces
+    /// (`Evidence::Estimate`; mutually exclusive with `exterior_exchange`). One entry broadcasts;
+    /// otherwise destination body-triangle order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    microclimate_exterior: Option<Vec<MicroclimateExterior>>,
     /// Bare-body films are explicit whenever covered exterior exchange is selected. Cloth optics
     /// cannot supply skin emissivity, and an unused bare film must not be silently ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,6 +70,11 @@ struct Interval {
     /// broadcasts; otherwise keep source-triangle order, including inactive covered triangles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exposed_exterior_exchange: Option<Vec<Exterior>>,
+    /// Independent validity-gated moist-air Nusselt correlation replacement for uncovered cloth
+    /// (`Evidence::Estimate`; mutually exclusive with `exposed_exterior_exchange`). One entry
+    /// broadcasts; otherwise keep source-triangle order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exposed_microclimate_exterior: Option<Vec<MicroclimateExterior>>,
     steps: usize,
 }
 #[derive(Deserialize, Serialize)]
@@ -103,16 +114,20 @@ impl Inputs {
         let value = serde_json::from_slice(&bytes).map_err(|e| invalid(format!("{name}: {e}")))?;
         Ok((value, hash))
     }
+}
 
-    fn frame(&mut self, report: &str, map: &str) -> Result<(Frame, usize, Value), Refusal> {
-        let (report, report_hash) = self.load(report)?;
-        let (map, map_hash) = self.load(map)?;
-        let (frame, source_work) = thermal_coverage::motion_frame(&report, &map)?;
-        let receipt = json!({"drape_report_sha256":report_hash,"mapping_file_sha256":map_hash,
-            "drape_thermal_frame_sha256":report["thermal_surface"]["sha256"],
-            "frame_sha256":frame.sha256()});
-        Ok((frame, source_work, receipt))
-    }
+fn load_frame(
+    load: &mut dyn FnMut(&str) -> Result<(Value, String), Refusal>,
+    report: &str,
+    map: &str,
+) -> Result<(Frame, usize, Value), Refusal> {
+    let (report, report_hash) = load(report)?;
+    let (map, map_hash) = load(map)?;
+    let (frame, source_work) = thermal_coverage::motion_frame(&report, &map)?;
+    let receipt = json!({"drape_report_sha256":report_hash,"mapping_file_sha256":map_hash,
+        "drape_thermal_frame_sha256":report["thermal_surface"]["sha256"],
+        "frame_sha256":frame.sha256()});
+    Ok((frame, source_work, receipt))
 }
 
 fn seal(mut value: Value) -> Result<Value, Refusal> {
@@ -188,6 +203,25 @@ fn exterior_environments(
     Ok(environments)
 }
 
+fn resolve_microclimate_environments(
+    input: &[MicroclimateExterior],
+    boundaries: &[Boundary],
+) -> Result<(Vec<Exterior>, Value), Refusal> {
+    if input.len() != 1 && input.len() != boundaries.len() {
+        return Err(invalid(
+            "motion needs one exterior environment or one per matching body/source triangle",
+        ));
+    }
+    let resolved = input
+        .iter()
+        .map(MicroclimateExterior::resolve)
+        .collect::<Result<Vec<_>, _>>()?;
+    let raw: Vec<Exterior> = resolved.iter().map(|r| r.exterior.clone()).collect();
+    let receipts: Vec<Value> = resolved.iter().map(|r| r.receipt.clone()).collect();
+    let environments = exterior_environments(&raw, boundaries)?;
+    Ok((environments, json!(receipts)))
+}
+
 #[derive(Default, Serialize)]
 struct ExteriorEnergy {
     convective_energy_j: f64,
@@ -252,6 +286,17 @@ impl Totals {
 
 pub(super) fn run(path: &str) -> Result<Value, Refusal> {
     let input: Input = read(path)?;
+    let mut inputs = Inputs {
+        base: Path::new(path).parent().unwrap_or(Path::new(".")).into(),
+        bytes: 0,
+    };
+    evaluate_with_loader(input, &mut |name| inputs.load(name))
+}
+
+fn evaluate_with_loader(
+    input: Input,
+    load: &mut dyn FnMut(&str) -> Result<(Value, String), Refusal>,
+) -> Result<Value, Refusal> {
     if input.schema != "ftx-thermal-motion/1" || !(1..=128).contains(&input.frames.len()) {
         return Err(invalid(
             "thermal motion needs its schema and 1..128 timed destination frames",
@@ -280,10 +325,16 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
             || f.exterior_exchange
                 .as_ref()
                 .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+            || f.microclimate_exterior
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 65_536)
             || f.bare_boundaries
                 .as_ref()
                 .is_some_and(|v| v.is_empty() || v.len() > 65_536)
             || f.exposed_exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+            || f.exposed_microclimate_exterior
                 .as_ref()
                 .is_some_and(|v| v.is_empty() || v.len() > 65_536)
             || last_time.is_some_and(|t| f.time_seconds <= t)
@@ -292,22 +343,32 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 "motion times must increase, with positive steps and at most 100000 total steps",
             ));
         }
-        if f.exterior_exchange.is_some() != f.bare_boundaries.is_some() {
+        if f.exterior_exchange.is_some() && f.microclimate_exterior.is_some() {
+            return Err(invalid(
+                "supply either exterior_exchange or microclimate_exterior, not both",
+            ));
+        }
+        if f.exposed_exterior_exchange.is_some() && f.exposed_microclimate_exterior.is_some() {
+            return Err(invalid(
+                "supply either exposed_exterior_exchange or exposed_microclimate_exterior, not both",
+            ));
+        }
+        let has_covered_exterior =
+            f.exterior_exchange.is_some() || f.microclimate_exterior.is_some();
+        if has_covered_exterior != f.bare_boundaries.is_some() {
             return Err(invalid(
                 "covered exterior exchange requires explicit bare_boundaries; omit both for film-only intervals",
             ));
         }
-        if f.exposed_exterior_exchange.is_some() && f.exposed_boundaries.is_empty() {
+        let has_exposed_exterior =
+            f.exposed_exterior_exchange.is_some() || f.exposed_microclimate_exterior.is_some();
+        if has_exposed_exterior && f.exposed_boundaries.is_empty() {
             return Err(invalid(
                 "exposed exterior exchange requires explicit exposed_boundaries",
             ));
         }
         last_time = Some(f.time_seconds);
     }
-    let mut inputs = Inputs {
-        base: Path::new(path).parent().unwrap_or(Path::new(".")).into(),
-        bytes: 0,
-    };
     let (mut frame, mut state, start, initial_receipt) = match &input.initial {
         Initial::Uniform {
             time_seconds,
@@ -315,12 +376,12 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
             coverage,
             temperature_c,
         } => {
-            let (f, _, receipt) = inputs.frame(drape_report, coverage)?;
+            let (f, _, receipt) = load_frame(load, drape_report, coverage)?;
             let state = f.initial(*temperature_c)?;
             (f, state, *time_seconds, receipt)
         }
         Initial::Resume { checkpoint } => {
-            let (value, hash) = inputs.load(checkpoint)?;
+            let (value, hash) = load(checkpoint)?;
             let (f, s, t) = restore(&value)?;
             (f, s, t, json!({"checkpoint_file_sha256":hash}))
         }
@@ -332,6 +393,7 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
     let mut trace = Vec::new();
     let mut trace_bytes = 0usize;
     let mut final_field = Value::Null;
+    let mut any_microclimate = false;
     for (i, f) in input.frames.iter().enumerate() {
         let dt = (f.time_seconds - previous) / f.steps as f64;
         if f.time_seconds <= previous || !dt.is_finite() || dt <= 0. {
@@ -339,7 +401,7 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 "motion interval or thermal substep is not finite and positive",
             ));
         }
-        let (next, source_work, receipt) = inputs.frame(&f.drape_report, &f.coverage)?;
+        let (next, source_work, receipt) = load_frame(load, &f.drape_report, &f.coverage)?;
         let unit = next
             .cells()
             .checked_add(next.body_triangle_count())
@@ -377,20 +439,26 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 }
             })
             .transpose()?;
-        let environments = f
-            .exterior_exchange
-            .as_deref()
-            .map(|e| exterior_environments(e, &boundaries))
-            .transpose()?;
+        let (environments, covered_microclimate) = if let Some(e) = f.exterior_exchange.as_deref() {
+            (Some(exterior_environments(e, &boundaries)?), None)
+        } else if let Some(mc) = f.microclimate_exterior.as_deref() {
+            let (env, receipts) = resolve_microclimate_environments(mc, &boundaries)?;
+            any_microclimate = true;
+            (Some(env), Some(receipts))
+        } else {
+            (None, None)
+        };
         let covered_exterior = environments.as_deref().map(|e| ExteriorConditions {
             environments: e,
             bare_boundaries: bare_boundaries
                 .as_deref()
                 .expect("validated bare conditions"),
         });
+        let has_exposed_exterior =
+            f.exposed_exterior_exchange.is_some() || f.exposed_microclimate_exterior.is_some();
         let exposed_boundaries: Option<Vec<Boundary>> = if f.exposed_boundaries.is_empty() {
             None
-        } else if !next.has_exposed_cloth() && f.exposed_exterior_exchange.is_none() {
+        } else if !next.has_exposed_cloth() && !has_exposed_exterior {
             return Err(invalid(
                 "exposed boundaries were supplied but the destination frame has no uncovered cloth",
             ));
@@ -406,18 +474,29 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 "motion needs one exposed boundary or one per source cloth triangle",
             ));
         };
-        let exposed_environments = f
-            .exposed_exterior_exchange
-            .as_deref()
-            .map(|e| {
-                exterior_environments(
-                    e,
+        let (exposed_environments, exposed_microclimate) =
+            if let Some(e) = f.exposed_exterior_exchange.as_deref() {
+                (
+                    Some(exterior_environments(
+                        e,
+                        exposed_boundaries
+                            .as_deref()
+                            .expect("validated exposed conditions"),
+                    )?),
+                    None,
+                )
+            } else if let Some(mc) = f.exposed_microclimate_exterior.as_deref() {
+                let (env, receipts) = resolve_microclimate_environments(
+                    mc,
                     exposed_boundaries
                         .as_deref()
                         .expect("validated exposed conditions"),
-                )
-            })
-            .transpose()?;
+                )?;
+                any_microclimate = true;
+                (Some(env), Some(receipts))
+            } else {
+                (None, None)
+            };
         let exposed_conditions = exposed_boundaries.as_deref().map(|b| ExposedConditions {
             boundaries: b,
             environments: exposed_environments.as_deref(),
@@ -515,6 +594,12 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                         "convective_energy_j":exposed_energy.convective_energy_j,
                         "radiative_energy_j":exposed_energy.radiative_energy_j});
                 }
+                if let Some(receipts) = &covered_microclimate {
+                    entry["microclimate_convection"] = receipts.clone();
+                }
+                if let Some(receipts) = &exposed_microclimate {
+                    entry["exposed_microclimate_convection"] = receipts.clone();
+                }
                 trace_bytes = trace_bytes
                     .checked_add(
                         serde_json::to_vec(&entry)
@@ -547,8 +632,7 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
     totals.check()?;
     let checkpoint = seal(json!({"schema":"ftx-thermal-motion-checkpoint/1",
         "time_seconds":previous,"state":frame.checkpoint(&state)?}))?;
-    let out = seal(
-        json!({"schema":"ftx-thermal-motion-report/1","input":input,"initial_inputs":initial_receipt,
+    let mut body = json!({"schema":"ftx-thermal-motion-report/1","input":input,"initial_inputs":initial_receipt,
         "from_time_seconds":start,"time_seconds":previous,"trace":trace,"final":final_field,
         "energy":totals,"heat_balance_error_j":totals.physical_stored_change_j-totals.net_boundary_energy_j,
         "material_energy_change_including_remap_j":totals.physical_stored_change_j+totals.signed_remap_residual_j,
@@ -558,8 +642,18 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
         "exposed_boundary_policy":"uncovered cloth is adiabatic unless exposed_boundaries are explicitly supplied for an interval",
         "not_simulated":["interpolated mechanical motion","in-plane gradients within one exposed source-triangle fraction",
             "cloth remeshing","moisture","compression","air-gap transport","human thermoregulation"],
-        "comfort_claim":false,"empirical_validation_claim":false}),
-    )?;
+        "comfort_claim":false,"empirical_validation_claim":false});
+    if any_microclimate {
+        body["not_simulated"].as_array_mut().unwrap().extend([
+            json!("empirical garment-film / wind-tunnel validation"),
+            json!("interlayer or finite-view-factor radiation"),
+            json!("solar/spectral irradiation"),
+        ]);
+        body["exterior_model"] = json!(
+            "validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film"
+        );
+    }
+    let out = seal(body)?;
     if serde_json::to_vec_pretty(&out)
         .map_err(|e| invalid(e.to_string()))?
         .len()
@@ -570,4 +664,341 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
         ));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftx_core::Vec3;
+    use ftx_drape::thermal::{
+        DryThermalModel,
+        surface::{
+            Patch, Surface,
+            projection::{self, Request as ProjectionRequest, Settings},
+        },
+    };
+    use ftx_pattern::{material_catalog::Selection, materials::Catalog};
+
+    fn two_triangle_report_and_mapping() -> (Value, Value) {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/materials/synthetic-thermal.json"
+        ))
+        .unwrap();
+        let catalog = Catalog::builtin().unwrap();
+        let layers = fixture["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                let selection: Selection = serde_json::from_value(v.clone()).unwrap();
+                catalog.resolve(&selection).unwrap()
+            })
+            .collect();
+        let column = DryThermalModel::new(
+            layers,
+            serde_json::from_value(fixture["interface_resistance_m2_k_w"].clone()).unwrap(),
+            2,
+        )
+        .unwrap();
+        let patches = vec![
+            Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+            Patch {
+                vertices: [1, 3, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            },
+        ];
+        // Cloth covers x in [0, 1] at z = 0.005; body covers x in [0, 0.5] at z = 0.0,
+        // leaving an exact exposed cloth overhang for exposed_microclimate_exterior tests.
+        let cloth_positions = vec![
+            Vec3::new(0., 0., 0.005),
+            Vec3::new(1., 0., 0.005),
+            Vec3::new(0., 1., 0.005),
+            Vec3::new(1., 1., 0.005),
+        ];
+        let body_positions = vec![
+            Vec3::new(0., 0., 0.),
+            Vec3::new(0.5, 0., 0.),
+            Vec3::new(0., 1., 0.),
+            Vec3::new(0.5, 1., 0.),
+        ];
+        let body_triangles = [[0, 1, 2], [1, 3, 2]];
+        let surface = Surface::new(vec![column], cloth_positions.len(), patches).unwrap();
+        let material = json!({"basis": "synthetic CLI motion test", "layers": fixture["layers"]});
+        let mut frame = json!({
+            "schema": "ftx-drape-thermal-surface/1",
+            "available": true,
+            "model": surface.snapshot(),
+            "material_report_sha256": sha256_hex(&serde_json::to_vec(&material).unwrap()),
+            "positions_m": cloth_positions,
+            "triangle_instance": [0, 0],
+            "instances": ["synthetic"]
+        });
+        frame["sha256"] = json!(sha256_hex(&serde_json::to_vec(&frame).unwrap()));
+        let report = json!({
+            "thermal_surface": frame,
+            "material": material
+        });
+        let settings = Settings {
+            max_distance_m: 0.05,
+            min_normal_cosine: 0.5,
+            separation_tolerance_m: 1e-4,
+            cells_per_layer: 2,
+            interfaces: Vec::new(),
+        };
+        let proj = projection::project(
+            &surface,
+            &cloth_positions,
+            &body_positions,
+            &body_triangles,
+            &ProjectionRequest {
+                schema: "ftx-thermal-projection/1".into(),
+                cloth_layers: vec!["shell".into(), "shell".into()],
+                settings: settings.clone(),
+            },
+        )
+        .unwrap();
+        let mapping = json!({
+            "schema": "ftx-drape-thermal-coverage/1",
+            "drape_thermal_frame_sha256": report["thermal_surface"]["sha256"],
+            "body_positions_m": body_positions,
+            "layout": proj.layout,
+            "projection": {
+                "request": {
+                    "schema": "ftx-drape-thermal-projection/1",
+                    "instance_layers": {"synthetic": "shell"},
+                    "settings": settings
+                },
+                "body_obj_sha256": sha256_hex(b"synthetic-motion-body-obj"),
+                "result": proj
+            }
+        });
+        (report, mapping)
+    }
+
+    #[test]
+    fn microclimate_exterior_drives_covered_and_exposed_motion_with_exact_parity_and_guards() {
+        let (report, mapping) = two_triangle_report_and_mapping();
+        let report_hash = sha256_hex(&serde_json::to_vec(&report).unwrap());
+        let map_hash = sha256_hex(&serde_json::to_vec(&mapping).unwrap());
+        let run_in_memory = |raw: Value| -> Result<Value, Refusal> {
+            let input: Input = serde_json::from_value(raw).map_err(|e| invalid(e.to_string()))?;
+            evaluate_with_loader(input, &mut |name| match name {
+                "drape.json" => Ok((report.clone(), report_hash.clone())),
+                "map.json" => Ok((mapping.clone(), map_hash.clone())),
+                other => Err(invalid(format!("unexpected fixture path {other}"))),
+            })
+        };
+
+        let forced_mc = json!({
+            "air": {"temperature_c": 18.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+            "correlation": "churchill_bernstein_cylinder",
+            "characteristic_length_m": 0.25,
+            "wind_speed_m_s": 2.0,
+            "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true
+        });
+        let natural_mc = json!({
+            "air": {"temperature_c": 18.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+            "correlation": "churchill_chu_vertical_plate",
+            "characteristic_length_m": 0.30,
+            "delta_t_k": 10.0,
+            "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true
+        });
+        let resolved_forced = serde_json::from_value::<MicroclimateExterior>(forced_mc.clone())
+            .unwrap()
+            .resolve()
+            .unwrap();
+        let resolved_natural = serde_json::from_value::<MicroclimateExterior>(natural_mc.clone())
+            .unwrap()
+            .resolve()
+            .unwrap();
+
+        let mc_req = json!({
+            "schema": "ftx-thermal-motion/1",
+            "initial": {
+                "kind": "uniform",
+                "time_seconds": 0.0,
+                "drape_report": "drape.json",
+                "coverage": "map.json",
+                "temperature_c": 26.0
+            },
+            "frames": [{
+                "time_seconds": 10.0,
+                "drape_report": "drape.json",
+                "coverage": "map.json",
+                "boundaries": [{
+                    "inside_c": 34.0,
+                    "outside_c": 18.0,
+                    "inside_resistance_m2_k_w": 0.05,
+                    "outside_resistance_m2_k_w": 0.0
+                }],
+                "microclimate_exterior": [forced_mc.clone()],
+                "bare_boundaries": [{
+                    "inside_c": 34.0,
+                    "outside_c": 18.0,
+                    "inside_resistance_m2_k_w": 0.05,
+                    "outside_resistance_m2_k_w": 0.10
+                }],
+                "exposed_boundaries": [{
+                    "inside_c": 18.0,
+                    "outside_c": 18.0,
+                    "inside_resistance_m2_k_w": 0.10,
+                    "outside_resistance_m2_k_w": 0.0
+                }],
+                "exposed_microclimate_exterior": [forced_mc.clone(), natural_mc.clone()],
+                "steps": 4
+            }]
+        });
+
+        let mc_out = run_in_memory(mc_req.clone()).unwrap();
+        verify_seal(&mc_out).unwrap();
+        assert_eq!(
+            mc_out["trace"][0]["microclimate_convection"][0]["correlation"],
+            "churchill_bernstein_cylinder"
+        );
+        assert_eq!(
+            mc_out["trace"][0]["exposed_microclimate_convection"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            mc_out["trace"][0]["exposed_microclimate_convection"][1]["correlation"],
+            "churchill_chu_vertical_plate"
+        );
+        assert!(
+            mc_out["exterior_model"]
+                .as_str()
+                .unwrap()
+                .contains("Nusselt")
+        );
+        assert!(
+            mc_out["not_simulated"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "empirical garment-film / wind-tunnel validation")
+        );
+        assert!(mc_out["heat_balance_error_j"].as_f64().unwrap().abs() < 1e-11);
+
+        // Exact numerical parity against manually pre-resolved Exterior environments.
+        let mut ext_req = mc_req.clone();
+        let f0 = ext_req["frames"][0].as_object_mut().unwrap();
+        f0.remove("microclimate_exterior");
+        f0.remove("exposed_microclimate_exterior");
+        f0.insert(
+            "exterior_exchange".into(),
+            json!([resolved_forced.exterior]),
+        );
+        f0.insert(
+            "exposed_exterior_exchange".into(),
+            json!([resolved_forced.exterior, resolved_natural.exterior]),
+        );
+        let ext_out = run_in_memory(ext_req).unwrap();
+        assert!(ext_out.get("exterior_model").is_none());
+        assert!(ext_out["trace"][0].get("microclimate_convection").is_none());
+        assert!(
+            ext_out["trace"][0]
+                .get("exposed_microclimate_convection")
+                .is_none()
+        );
+        assert_eq!(mc_out["energy"], ext_out["energy"]);
+        assert_eq!(mc_out["final"], ext_out["final"]);
+
+        // Resuming from a microclimate report checkpoint verifies its seal and advances cleanly.
+        let mut resume_req = json!({
+            "schema": "ftx-thermal-motion/1",
+            "initial": {
+                "kind": "resume",
+                "checkpoint": "prev.json"
+            },
+            "frames": [mc_req["frames"][0].clone()]
+        });
+        resume_req["frames"][0]["time_seconds"] = json!(20.0);
+        let resume_input: Input = serde_json::from_value(resume_req).unwrap();
+        let prev_hash = sha256_hex(&serde_json::to_vec(&mc_out).unwrap());
+        let resumed = evaluate_with_loader(resume_input, &mut |name| match name {
+            "prev.json" => Ok((mc_out.clone(), prev_hash.clone())),
+            "drape.json" => Ok((report.clone(), report_hash.clone())),
+            "map.json" => Ok((mapping.clone(), map_hash.clone())),
+            other => Err(invalid(format!("unexpected fixture path {other}"))),
+        })
+        .unwrap();
+        verify_seal(&resumed).unwrap();
+        assert_eq!(resumed["from_time_seconds"], 10.0);
+        assert_eq!(resumed["time_seconds"], 20.0);
+        assert!(resumed["heat_balance_error_j"].as_f64().unwrap().abs() < 1e-11);
+
+        // Fail-closed guards:
+        // 1. Denied estimate consent refuses.
+        let mut denied = mc_req.clone();
+        denied["frames"][0]["microclimate_exterior"][0]["allow_estimates"] = json!(false);
+        assert!(run_in_memory(denied).is_err());
+
+        // 2. Combining exterior_exchange and microclimate_exterior refuses.
+        let mut both_cov = mc_req.clone();
+        both_cov["frames"][0]["exterior_exchange"] = json!([resolved_forced.exterior]);
+        assert!(
+            run_in_memory(both_cov)
+                .unwrap_err()
+                .message
+                .contains("not both")
+        );
+
+        // 3. Combining exposed_exterior_exchange and exposed_microclimate_exterior refuses.
+        let mut both_exp = mc_req.clone();
+        both_exp["frames"][0]["exposed_exterior_exchange"] = json!([resolved_natural.exterior]);
+        assert!(
+            run_in_memory(both_exp)
+                .unwrap_err()
+                .message
+                .contains("not both")
+        );
+
+        // 4. Missing bare_boundaries with microclimate_exterior refuses.
+        let mut no_bare = mc_req.clone();
+        no_bare["frames"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("bare_boundaries");
+        assert!(
+            run_in_memory(no_bare)
+                .unwrap_err()
+                .message
+                .contains("bare_boundaries")
+        );
+
+        // 5. Missing exposed_boundaries with exposed_microclimate_exterior refuses.
+        let mut no_exp_b = mc_req.clone();
+        no_exp_b["frames"][0]["exposed_boundaries"] = json!([]);
+        assert!(
+            run_in_memory(no_exp_b)
+                .unwrap_err()
+                .message
+                .contains("exposed_boundaries")
+        );
+
+        // 6. Wrong per-triangle count refuses.
+        let mut wrong_count = mc_req.clone();
+        wrong_count["frames"][0]["microclimate_exterior"] =
+            json!([forced_mc.clone(), forced_mc.clone(), forced_mc]);
+        assert!(run_in_memory(wrong_count).is_err());
+
+        // 7. Mismatched air temperature vs boundary outside_c refuses.
+        let mut bad_air = mc_req;
+        bad_air["frames"][0]["microclimate_exterior"][0]["air"]["temperature_c"] = json!(22.0);
+        assert!(
+            run_in_memory(bad_air)
+                .unwrap_err()
+                .message
+                .contains("outside_c equal to air_c")
+        );
+    }
 }
