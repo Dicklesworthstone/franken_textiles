@@ -24,6 +24,8 @@ pub mod coverage;
 mod plastic;
 pub mod surface_water;
 
+type ResolvedExteriors = (Option<Vec<Exterior>>, Option<Vec<Value>>);
+
 /// Explicit closure for converting qualified material dissipation into sheet heat.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum DissipationHeatDistribution {
@@ -297,7 +299,7 @@ impl SurfaceRequest {
         Ok(history)
     }
 
-    fn resolve_exteriors(&self) -> Result<(Option<Vec<Exterior>>, Option<Vec<Value>>), Refusal> {
+    fn resolve_exteriors(&self) -> Result<ResolvedExteriors, Refusal> {
         if self.exterior_exchange.is_some() && self.microclimate_exterior.is_some() {
             return Err(invalid(
                 "supply either exterior_exchange or microclimate_exterior, not both",
@@ -737,10 +739,11 @@ impl SurfaceHistory {
     }
 
     fn active_exteriors(&self) -> Option<&[Exterior]> {
-        self.request
-            .exterior_exchange
-            .as_deref()
-            .or_else(|| self.microclimate_resolved.as_ref().map(|(e, _)| e.as_slice()))
+        self.request.exterior_exchange.as_deref().or_else(|| {
+            self.microclimate_resolved
+                .as_ref()
+                .map(|(e, _)| e.as_slice())
+        })
     }
 
     pub(super) fn dissipation_capture(&self) -> crate::motion::DissipationCapture {
@@ -954,7 +957,8 @@ impl SurfaceHistory {
                 "motion heat needs increasing accepted sample times and at most 512 samples",
             ));
         }
-        if self.request.exterior_exchange.is_some() && self.request.microclimate_exterior.is_some() {
+        if self.request.exterior_exchange.is_some() && self.request.microclimate_exterior.is_some()
+        {
             return Err(invalid(
                 "supply either exterior_exchange or microclimate_exterior, not both",
             ));
@@ -2019,10 +2023,26 @@ mod tests {
                 Vec3::new(0.0, 1.0, 0.0),
             ];
             mc_history
-                .advance(&x, (interval + 1) as f64, interval, interval, None, None, None)
+                .advance(
+                    &x,
+                    (interval + 1) as f64,
+                    interval,
+                    interval,
+                    None,
+                    None,
+                    None,
+                )
                 .unwrap();
             ext_history
-                .advance(&x, (interval + 1) as f64, interval, interval, None, None, None)
+                .advance(
+                    &x,
+                    (interval + 1) as f64,
+                    interval,
+                    interval,
+                    None,
+                    None,
+                    None,
+                )
                 .unwrap();
         }
         let mc_out = mc_history.finish("path", "initial", 2.0).unwrap();
