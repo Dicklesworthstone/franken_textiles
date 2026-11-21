@@ -116,8 +116,10 @@ impl Inputs {
     }
 }
 
+type DocumentLoader<'a> = &'a mut dyn FnMut(&str) -> Result<(Value, String), Refusal>;
+
 fn load_frame(
-    load: &mut dyn FnMut(&str) -> Result<(Value, String), Refusal>,
+    load: DocumentLoader<'_>,
     report: &str,
     map: &str,
 ) -> Result<(Frame, usize, Value), Refusal> {
@@ -293,10 +295,7 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
     evaluate_with_loader(input, &mut |name| inputs.load(name))
 }
 
-fn evaluate_with_loader(
-    input: Input,
-    load: &mut dyn FnMut(&str) -> Result<(Value, String), Refusal>,
-) -> Result<Value, Refusal> {
+fn evaluate_with_loader(input: Input, load: DocumentLoader<'_>) -> Result<Value, Refusal> {
     if input.schema != "ftx-thermal-motion/1" || !(1..=128).contains(&input.frames.len()) {
         return Err(invalid(
             "thermal motion needs its schema and 1..128 timed destination frames",
