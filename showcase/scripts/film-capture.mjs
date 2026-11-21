@@ -18,9 +18,12 @@ export async function enableFilmResolution(page) {
 // backing surface directly, without waiting for Playwright's element stability checks.
 export async function frameCapture(page) {
   const session = await page.context().newCDPSession(page);
+  const { width, height } = page.viewportSize();
+  const deviceScaleFactor = await page.evaluate(() => window.devicePixelRatio);
+  // Emulation belongs to the DevTools session. Without it this session reads CSS-sized pixels.
+  await session.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor, mobile: false });
   return async (quality = 94) => {
     const { cssVisualViewport: view } = await session.send("Page.getLayoutMetrics");
-    const { width, height } = page.viewportSize();
     const { data } = await session.send("Page.captureScreenshot", {
       format: "jpeg", quality, fromSurface: true, captureBeyondViewport: false, optimizeForSpeed: true,
       clip: { x: view.pageX, y: view.pageY, width: width / view.scale, height: height / view.scale, scale: view.scale },
