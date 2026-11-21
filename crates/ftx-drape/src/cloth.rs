@@ -2705,6 +2705,11 @@ impl Solver {
         }
         if self.x.len() != self.model.rest.len()
             || self.model.rest.len() != before_step.model.rest.len()
+            || self.model.membranes != before_step.model.membranes
+            || self.model.hinges != before_step.model.hinges
+            || self.model.elastics.len() != before_step.model.elastics.len()
+            || self.model.panel_bending_patches().len()
+                != before_step.model.panel_bending_patches().len()
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,

@@ -849,3 +849,82 @@ fn mixed_parallel_and_damaged_panels_report_honest_noncontradictory_scope() {
     assert!(scope.contains("isotropic scalar stiffness degradation"));
     assert!(!scope.contains("Excludes same-branch viscoplasticity, damage,"));
 }
+
+#[test]
+fn checked_step_forces_from_validates_inputs_matches_undamaged_and_balances_damaged_step() {
+    let dmg = IsotropicDamage::new(0.01, 20.0, 0.45).unwrap();
+    let undamaged_law = law(membrane());
+    let damaged_law = law(membrane()).with_damage(dmg).unwrap();
+
+    let mut undamaged = bare(true, LOAD, membrane())
+        .with_membrane_plasticity(&[Some(undamaged_law)])
+        .unwrap();
+    let before_undamaged = undamaged.clone();
+    undamaged.step(0.005).unwrap();
+
+    // Invalid time steps and mismatched topology refuse fail-closed.
+    for bad_h in [0.0, -0.005, f64::NAN, f64::INFINITY] {
+        assert_eq!(
+            undamaged
+                .checked_step_forces_from(&before_undamaged, bad_h)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+    }
+    let other_model = ClothModel::new(
+        vec![
+            Vec2::ZERO,
+            Vec2::new(2.0 * LENGTH, 0.0),
+            Vec2::new(0.0, LENGTH),
+        ],
+        &[[0, 1, 2]],
+        membrane(),
+        0.0,
+        0.2,
+    )
+    .unwrap();
+    let other_solver = Solver::new(
+        other_model,
+        undamaged.x.clone(),
+        &[[true; 3]; 3],
+        Vec3::ZERO,
+    );
+    assert_eq!(
+        undamaged
+            .checked_step_forces_from(&other_solver, 0.005)
+            .unwrap_err()
+            .code,
+        RefusalCode::OutOfRange
+    );
+
+    // Undamaged step-time forces agree identically with post-commit checked_elastic_forces.
+    let step_u = undamaged
+        .checked_step_forces_from(&before_undamaged, 0.005)
+        .unwrap();
+    let post_u = undamaged.checked_elastic_forces().unwrap();
+    for (a, b) in step_u.iter().zip(&post_u) {
+        near(
+            (a.x - b.x).abs() + (a.y - b.y).abs() + (a.z - b.z).abs(),
+            0.0,
+            1e-12,
+        );
+    }
+
+    // On a damaged step where d jumps from 0 -> d1 > 0 on commit, checked_step_forces_from
+    // reproduces the exact step-active (1 - d_0) reaction balanced during Newton, while
+    // post-commit checked_elastic_forces reflects the updated (1 - d_1) stiffness factor.
+    let mut damaged = bare(true, LOAD, membrane())
+        .with_membrane_plasticity(&[Some(damaged_law)])
+        .unwrap();
+    let before_damaged = damaged.clone();
+    damaged.step(0.005).unwrap();
+    let step_d = damaged
+        .checked_step_forces_from(&before_damaged, 0.005)
+        .unwrap();
+    let post_d = damaged.checked_elastic_forces().unwrap();
+    let d1 = history(&damaged)["elements"][0]["damage"].as_f64().unwrap();
+    assert!(d1 > 0.2);
+    near(step_d[1].x, step_u[1].x, 1e-12);
+    near(post_d[1].x, (1.0 - d1) * step_d[1].x, 1e-12);
+}
