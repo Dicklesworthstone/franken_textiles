@@ -185,7 +185,22 @@ pub(super) fn measurements(raw: &Value) -> Result<Value, Refusal> {
         return Err(bad_input("measurements must be an object"));
     }
     if raw.get("records").is_some() || raw.get("schema").is_some() {
-        fuse(raw, true)
+        fuse(raw, true).map_err(|refusal| {
+            // The commonest way here: a document that carries only a `fused` block, which `ftx drape`
+            // and `ftx place` take as explicit targets. Say how to get from one to the other.
+            if raw.get("records").is_some_and(Value::is_array) {
+                refusal
+            } else {
+                refusal.repair(
+                    "This command recomputes every fused value from the original readings and never \
+                     trusts a saved `fused` block, so the file needs a `records` list. `ftx measure init \
+                     --label NAME --out M.json` starts one and `ftx measure add M.json --name chest \
+                     --value 52cm` appends a reading; `ftx measure reference --stature-mm MM --out \
+                     M.json` writes a chart-reference wearer. `ftx drape` and `ftx place` accept explicit \
+                     targets without records.",
+                )
+            }
+        })
     } else {
         Ok(raw.clone()) // legacy flat measurements: provenance is explicitly NOT_CHECKED
     }
@@ -1208,6 +1223,49 @@ pub(super) fn cmd_report(args: &Args) -> Result<(Value, i32, String), Refusal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_measurement_file_without_readings_is_refused_with_the_way_to_make_one() {
+        // What `ftx drape` accepts as explicit targets: a schema label and a fused block, no readings.
+        let fused_only = json!({"schema": "fabric-measurements/1",
+            "wearer": {"label": "Synthetic", "stature_mm": 1780},
+            "fused": {"chest": {"value_mm": 1000}}});
+        let refusal = measurements(&fused_only).unwrap_err();
+        assert!(
+            refusal.message.contains("records must be a list"),
+            "{}",
+            refusal.message
+        );
+        assert_eq!(refusal.repairs.len(), 1, "{:?}", refusal.repairs);
+        for needed in [
+            "needs a `records` list",
+            "ftx measure init",
+            "ftx measure add",
+            "ftx measure reference",
+            "`ftx drape` and `ftx place` accept explicit targets without records",
+        ] {
+            assert!(
+                refusal.repairs[0].contains(needed),
+                "{needed}: {}",
+                refusal.repairs[0]
+            );
+        }
+        // The same for a `records` key that is present but not a list.
+        let mut null_records = fused_only.clone();
+        null_records["records"] = Value::Null;
+        assert_eq!(measurements(&null_records).unwrap_err().repairs.len(), 1);
+
+        // A file that has readings and fails for another reason is told only what is wrong with it.
+        let bad_reading = json!({"schema": "fabric-measurements/1", "wearer": {"label": "Synthetic"},
+            "records": [{"name": "chest", "value_mm": 1000, "sigma_mm": 5, "provenance": "guesswork"}]});
+        let other = measurements(&bad_reading).unwrap_err();
+        assert!(other.message.contains("provenance"), "{}", other.message);
+        assert!(other.repairs.is_empty(), "{:?}", other.repairs);
+
+        // Legacy flat measurements, with neither key, still pass through untouched.
+        let flat = json!({"chest": 1000, "waist": 860});
+        assert_eq!(measurements(&flat).unwrap(), flat);
+    }
 
     #[test]
     fn verdict_precedence_keeps_every_basis_separate() {
