@@ -8,7 +8,9 @@ use ftx_drape::scene::PartFrames;
 use ftx_drape::{Body, ClothModel, ContactParams, PartFrame, Solver};
 use ftx_pattern::Pattern;
 use ftx_pattern::material_catalog::Selection;
-use ftx_pattern::material_relaxation::{OrthotropicBranch, OrthotropicStiffness};
+use ftx_pattern::material_relaxation::{
+    IntegrationScheme, OrthotropicBranch, OrthotropicStiffness,
+};
 use ftx_pattern::materials::Catalog;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -728,5 +730,61 @@ fn relaxation_work_capture_preserves_motion_and_charges_every_retained_scalar() 
             .samples
             .iter()
             .all(|p| p.membrane_relaxation_dissipation_j.is_none())
+    );
+}
+
+#[test]
+fn exact_exponential_clamped_triangle_is_step_size_invariant_and_matches_analytic_decay() {
+    let mut select = selection();
+    let tau = select
+        .record
+        .as_ref()
+        .unwrap()
+        .membrane_relaxation
+        .as_ref()
+        .unwrap()
+        .branches[0]
+        .relaxation_time
+        .value;
+    select
+        .record
+        .as_mut()
+        .unwrap()
+        .membrane_relaxation
+        .as_mut()
+        .unwrap()
+        .integration = IntegrationScheme::ExactExponential;
+
+    let eq = solver(true, false).elastic_forces();
+    let mut coarse = selected_solver(select.clone(), true);
+    let mut fine = selected_solver(select, true);
+    let initial = coarse.elastic_forces();
+
+    let total_t = 0.2;
+    assert!(coarse.step(total_t).unwrap().converged);
+    for _ in 0..20 {
+        assert!(fine.step(total_t / 20.0).unwrap().converged);
+    }
+
+    let exact_decay = (-total_t / tau).exp();
+    let f_coarse = coarse.elastic_forces();
+    let f_fine = fine.elastic_forces();
+    for j in 0..3 {
+        let expected_transient = (initial[j].x - eq[j].x) * exact_decay;
+        near(f_coarse[j].x - eq[j].x, expected_transient, 1e-10);
+        near(f_fine[j].x - eq[j].x, expected_transient, 1e-10);
+    }
+
+    let r_coarse = coarse.relaxation_report().unwrap().unwrap();
+    let r_fine = fine.relaxation_report().unwrap().unwrap();
+    near(
+        r_coarse["stored_branch_energy_j"].as_f64().unwrap(),
+        r_fine["stored_branch_energy_j"].as_f64().unwrap(),
+        1e-12,
+    );
+    near(
+        r_coarse["viscous_step_work_j"].as_f64().unwrap(),
+        r_fine["viscous_step_work_j"].as_f64().unwrap(),
+        1e-12,
     );
 }

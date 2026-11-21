@@ -1,6 +1,8 @@
 //! Synthetic standard-linear-solid and generalized-Maxwell answers; no empirical textile claims.
 
-use ftx_pattern::material_relaxation::{Initialization, OrthotropicBranch, Relaxation};
+use ftx_pattern::material_relaxation::{
+    Initialization, IntegrationScheme, OrthotropicBranch, Relaxation,
+};
 use ftx_pattern::materials::Source;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -382,4 +384,141 @@ fn directional_and_legacy_source_identities_replay_without_implicit_coefficients
     );
     l.orthotropic_branches[1].id.clone_from(&l.branches[0].id);
     assert!(l.compile(&source(), true, Q).is_err());
+}
+
+#[test]
+fn exact_exponential_is_step_size_invariant_on_holds_and_linear_ramps() {
+    let mut l = orthotropic_law();
+    l.integration = IntegrationScheme::ExactExponential;
+    let compiled = l.compile(&source(), true, Q).unwrap();
+    assert_eq!(compiled.integration(), IntegrationScheme::ExactExponential);
+
+    // 1. Constant-strain hold: 1 step of 0.5 s equals 50 steps of 0.01 s and closed-form exp(-T/tau).
+    let e_hold = [0.1, -0.05, 0.2];
+    let stiffness = [2000., 1000., 400.];
+    let tau = [0.05, 0.2, 0.7];
+    let m0 = compiled.initialize(e_hold).unwrap();
+    let psi0 = m0.response(e_hold, None).unwrap().energy;
+    let single = m0.advance(e_hold, 0.5).unwrap();
+
+    let mut fine = m0.clone();
+    let mut fine_diss = 0.0;
+    for _ in 0..50 {
+        let up = fine.advance(e_hold, 0.01).unwrap();
+        fine_diss += up.dissipated_j_m2;
+        fine = up.memory;
+    }
+    let s_single = single.memory.response(e_hold, None).unwrap();
+    let s_fine = fine.response(e_hold, None).unwrap();
+    for j in 0..3 {
+        let exact_stress = stiffness[j] * e_hold[j] * (-0.5_f64 / tau[j]).exp();
+        near(s_single.stress[j], exact_stress, 1e-11);
+        near(s_fine.stress[j], exact_stress, 1e-11);
+        near(s_single.stress[j], s_fine.stress[j], 1e-11);
+    }
+    near(single.stored_j_m2, s_fine.energy, 1e-12);
+    near(single.dissipated_j_m2, fine_diss, 1e-12);
+    // Zero external work during a hold => exact dissipation equals lost stored energy.
+    near(single.dissipated_j_m2, psi0 - single.stored_j_m2, 1e-12);
+
+    // 2. Constant-rate linear ramp from 0 to e_end over T = 0.4 s: 1 step equals 40 substeps.
+    let e_end = [0.12, -0.06, 0.15];
+    let r0 = compiled.initialize([0.; 3]).unwrap();
+    let ramp_one = r0.advance(e_end, 0.4).unwrap();
+    let mut ramp_fine = r0.clone();
+    let mut ramp_fine_diss = 0.0;
+    for k in 1..=40 {
+        let frac = k as f64 / 40.0;
+        let ek = e_end.map(|v| v * frac);
+        let up = ramp_fine.advance(ek, 0.01).unwrap();
+        ramp_fine_diss += up.dissipated_j_m2;
+        ramp_fine = up.memory;
+    }
+    let rf_resp = ramp_fine.response(e_end, None).unwrap();
+    let ro_resp = ramp_one.memory.response(e_end, None).unwrap();
+    for j in 0..3 {
+        let r = 0.4 / tau[j];
+        let b = -(-r).exp_m1() / r;
+        let exact_stress = stiffness[j] * b * e_end[j];
+        near(ro_resp.stress[j], exact_stress, 1e-11);
+        near(rf_resp.stress[j], exact_stress, 1e-11);
+    }
+    near(ramp_one.stored_j_m2, rf_resp.energy, 1e-12);
+    near(ramp_one.dissipated_j_m2, ramp_fine_diss, 1e-12);
+    // Exact continuous ramp external work W = Σ_j Q_j e_j^2 (1 - b_j) / r_j = stored + dissipated.
+    let exact_work: f64 = (0..3)
+        .map(|j| {
+            let r = 0.4 / tau[j];
+            let b = -(-r).exp_m1() / r;
+            stiffness[j] * e_end[j] * e_end[j] * (1.0 - b) / r
+        })
+        .sum();
+    near(
+        ramp_one.stored_j_m2 + ramp_one.dissipated_j_m2,
+        exact_work,
+        1e-12,
+    );
+}
+
+#[test]
+fn exact_exponential_potential_gradient_tangent_and_extreme_ratios_are_exact() {
+    let legacy = law();
+    assert!(
+        !serde_json::to_value(&legacy)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("integration")
+    );
+    let legacy_compiled = legacy.compile(&source(), true, Q).unwrap();
+    assert_eq!(
+        legacy_compiled.integration(),
+        IntegrationScheme::BackwardEuler
+    );
+
+    let mut exact = legacy.clone();
+    exact.integration = IntegrationScheme::ExactExponential;
+    let mut extra = exact.branches[0].clone();
+    extra.id = "fast".into();
+    extra.relaxation_time.value = 0.05;
+    extra.stiffness_ratio.value = 0.3;
+    exact.branches.push(extra);
+    let compiled = exact.compile(&source(), true, Q).unwrap();
+    assert_ne!(compiled.fingerprint(), legacy_compiled.fingerprint());
+    let replay: Relaxation = serde_json::from_str(&serde_json::to_string(&exact).unwrap()).unwrap();
+    assert_eq!(compiled, replay.compile(&source(), true, Q).unwrap());
+
+    let m = compiled
+        .initialize([0.03, -0.01, 0.02])
+        .unwrap()
+        .advance([0.05, 0.01, 0.04], 0.07)
+        .unwrap()
+        .memory;
+    let e = [0.1, -0.02, 0.06];
+    for dt in [1e-5, 0.005, 0.13, 2.5] {
+        let r = m.response(e, Some(dt)).unwrap();
+        for j in 0..3 {
+            let (mut p, mut n) = (e, e);
+            p[j] += 1e-6;
+            n[j] -= 1e-6;
+            let a = m.response(p, Some(dt)).unwrap();
+            let b = m.response(n, Some(dt)).unwrap();
+            near((a.energy - b.energy) / 2e-6, r.stress[j], 1e-6);
+            for i in 0..3 {
+                near((a.stress[i] - b.stress[i]) / 2e-6, r.tangent[i][j], 1e-6);
+            }
+        }
+        let up = m.advance(e, dt).unwrap();
+        assert!(up.dissipated_j_m2 >= 0.0 && up.stored_j_m2 >= 0.0);
+        let post = up.memory.response(e, None).unwrap();
+        for j in 0..3 {
+            near(post.stress[j], r.stress[j], 1e-11);
+        }
+    }
+
+    for h in [f64::MIN_POSITIVE, 1e-12, 1e-4, 1e-2, 1.0, 1e10, f64::MAX] {
+        let up = m.advance([0.1, -0.02, 0.06], h).unwrap();
+        assert!(up.stored_j_m2.is_finite() && up.stored_j_m2 >= 0.0);
+        assert!(up.dissipated_j_m2.is_finite() && up.dissipated_j_m2 >= 0.0);
+    }
 }

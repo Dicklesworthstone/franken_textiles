@@ -468,6 +468,7 @@ fn joint_template(input: &Input, material: &Material) -> Result<Option<Material>
         method: joint.network.method.clone(),
         conditions: joint.network.conditions.clone(),
         parallel_plasticity: Some(joint.network.clone()),
+        integration: Default::default(),
     });
     Ok(Some(template))
 }

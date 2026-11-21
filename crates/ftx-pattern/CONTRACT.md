@@ -12,8 +12,13 @@ Lawson–Hanson active-set NNLS, verified on a 512-point log sweep and refusing 
 `max_rel_err` exceeds tolerance. `evaluate_lowering_json` exposes the strict bounded JSON contract
 (`ftx-fractional-zener-lowering/1` → `ftx-fractional-zener-lowering-report/1`, 16 MiB input cap,
 ≤ 65,536 replay steps) shared by `ftx materials lower-visco`, `ftx-materials lower-visco`, and
-`ftx-wasm::materials::lower_visco`. This establishes numerical recurrence and spectral approximation
-within the declared band only, not empirical textile characterization or physical garment fit.
+`ftx-wasm::materials::lower_visco`. The same exact piecewise-linear exponential scheme is also
+available on 3-component Green-strain `Relaxation` via opt-in
+`integration = IntegrationScheme::ExactExponential` (omitted when default `BackwardEuler`,
+preserving legacy fingerprints and reports), giving step-size-invariant holds/ramps and exact
+continuous viscous dissipation in `CompiledRelaxation`/`Memory`. This establishes numerical
+recurrence and spectral approximation within the declared band only, not empirical textile
+characterization or physical garment fit.
 
 **Shared material inspection.** `ResolvedMaterial::inspection` retains the existing browser report
 and frozen source-bearing selection for both native inspection commands. Mechanical coefficients,

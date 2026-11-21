@@ -272,6 +272,7 @@ fn law(input: &Input, ratios: &[f64], times: &[f64], source: &str) -> Relaxation
             .plastic_equilibrium
             .as_ref()
             .map(|p| p.network.clone()),
+        integration: Default::default(),
         branches: ratios
             .iter()
             .zip(times)

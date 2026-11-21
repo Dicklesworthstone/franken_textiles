@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, det, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 
 use crate::material_response::Response;
@@ -17,6 +17,28 @@ pub mod calibration;
 pub mod exact_exp;
 pub mod heating;
 pub mod parallel;
+
+/// Time-discretization scheme for Maxwell internal-variable evolution.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationScheme {
+    /// First-order backward Euler internal-strain elimination (default; preserves legacy
+    /// fingerprints and reports byte-for-byte).
+    #[default]
+    BackwardEuler,
+    /// Exact piecewise-linear exponential Prony integration using deterministic
+    /// `ftx_core::det::{exp, expm1}` with exact variational incremental potential and exact
+    /// continuous viscous dissipation. Step-size invariant on constant-strain holds and
+    /// constant-rate ramps.
+    ExactExponential,
+}
+
+impl IntegrationScheme {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    const fn is_default(&self) -> bool {
+        matches!(self, Self::BackwardEuler)
+    }
+}
 
 /// Stress-free reference strain or a pre-relaxed start; neither is inferred from a garment pose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +117,9 @@ pub struct Relaxation {
     /// declaration preserves the refusal to combine Maxwell recovery with permanent strain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_plasticity: Option<parallel::ParallelPlasticity>,
+    /// Optional time-integration scheme; omitted when default `backward_euler`.
+    #[serde(default, skip_serializing_if = "IntegrationScheme::is_default")]
+    pub integration: IntegrationScheme,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +138,7 @@ pub struct CompiledRelaxation {
     origin_tangent: [[f64; 3]; 3],
     range: [[f64; 2]; 3],
     initialization: Initialization,
+    integration: IntegrationScheme,
     fingerprint: String,
     orthotropic_branches: bool,
     parallel: Option<parallel::Lock>,
@@ -123,6 +149,7 @@ pub struct CompiledRelaxation {
 pub struct Memory {
     law: CompiledRelaxation,
     viscous: Vec<[f64; 3]>,
+    last_strain: [f64; 3],
 }
 
 /// A proposed history update, committed by a solver only after a successful physical step.
@@ -436,6 +463,7 @@ impl Relaxation {
             origin_tangent: q,
             range: self.strain_range,
             initialization: self.initialization,
+            integration: self.integration,
             fingerprint: sha256_hex(&bytes),
             orthotropic_branches: !self.orthotropic_branches.is_empty(),
             parallel: None,
@@ -444,6 +472,11 @@ impl Relaxation {
 }
 
 impl CompiledRelaxation {
+    /// Active time-discretization scheme (`BackwardEuler` or `ExactExponential`).
+    #[must_use]
+    pub const fn integration(&self) -> IntegrationScheme {
+        self.integration
+    }
     /// Exact material identity of an admitted joint network. A joint law must be installed with
     /// its matching permanent-strain branch through the solver's atomic history binder.
     #[must_use]
@@ -499,6 +532,7 @@ impl CompiledRelaxation {
         Ok(Memory {
             law: self.clone(),
             viscous: vec![z; self.branches.len()],
+            last_strain: strain,
         })
     }
 }
@@ -511,6 +545,74 @@ fn weights(tau: f64, h: f64) -> (f64, f64) {
     } else {
         let r = tau / h;
         (r / (1.0 + r), 1.0 / (1.0 + r))
+    }
+}
+
+/// Exact piecewise-linear exponential coefficients `(a, b, sqrt_b, a_over_sqrt_b)` for ratio `h/tau`.
+/// Finite and overflow-free across the entire positive `f64` domain.
+fn exact_exp_step_coeffs(tau: f64, h: f64) -> (f64, f64, f64, f64) {
+    let r = h / tau;
+    if r == 0.0 {
+        return (1.0, 1.0, 1.0, 1.0);
+    }
+    if !r.is_finite() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let a = det::exp(-r);
+    let b = if r < 1e-7 {
+        1.0 - 0.5 * r + (r * r) / 6.0
+    } else {
+        -det::expm1(-r) / r
+    };
+    let sqrt_b = b.sqrt();
+    let alpha = if a == 0.0 || sqrt_b == 0.0 {
+        0.0
+    } else {
+        a / sqrt_b
+    };
+    (a, b, sqrt_b, alpha)
+}
+
+/// Exact continuous ramp dissipation coefficients `(a, b, c_qq, c_qe, c_ee)` such that
+/// `D = c_qq q_n^T Q q_n + 2 c_qe q_n^T Q de + c_ee de^T Q de = ∫_0^h (1/tau) q(t)^T Q q(t) dt`.
+fn exact_exp_dissipation_coeffs(tau: f64, h: f64) -> (f64, f64, f64, f64, f64) {
+    let r = h / tau;
+    if r == 0.0 {
+        return (1.0, 1.0, 0.0, 0.0, 0.0);
+    }
+    if !r.is_finite() {
+        return (0.0, 0.0, 0.5, 0.0, 0.0);
+    }
+    let a = det::exp(-r);
+    let one_minus_a = -det::expm1(-r);
+    let b = if r < 1e-7 {
+        1.0 - 0.5 * r + (r * r) / 6.0
+    } else {
+        one_minus_a / r
+    };
+    let c_qq = 0.5 * (-det::expm1(-2.0 * r));
+    let c_qe = 0.5 * one_minus_a * b;
+    let c_ee = if r < 1e-2 {
+        // Exact Maclaurin expansion of (r - 2(1 - e^-r) + 0.5(1 - e^-2r)) / r^2,
+        // avoiding catastrophic cancellation for small step/tau ratios.
+        r * (1.0 / 3.0
+            + r * (-1.0 / 4.0
+                + r * (7.0 / 60.0
+                    + r * (-1.0 / 24.0
+                        + r * (31.0 / 2520.0 + r * (-1.0 / 320.0 + r * (127.0 / 181_440.0)))))))
+    } else {
+        // Divide sequentially by `r` so `r * r` never overflows for huge `h / tau`.
+        ((1.0 / r) - (2.0 * one_minus_a - c_qq) / r / r).max(0.0)
+    };
+    (a, b, c_qq, c_qe, c_ee)
+}
+
+fn quad(branch: &Branch, v: [f64; 3]) -> f64 {
+    if let Some(l) = branch.energy_factor {
+        factored_work(l, v)
+    } else {
+        let s = mul(&branch.q, v);
+        v.into_iter().zip(s).map(|(x, y)| x * y).sum()
     }
 }
 
@@ -561,19 +663,38 @@ impl Memory {
             tangent: [[0.0; 3]; 3],
         };
         for (branch, z) in self.law.branches.iter().zip(&self.viscous) {
-            let a = step.map_or(1.0, |h| weights(branch.tau, h).0);
-            let d = std::array::from_fn(|j| e[j] - z[j]);
-            let stress = mul(&branch.q, d).map(|v| a * v);
-            r.energy += 0.5
-                * if let Some(l) = branch.energy_factor {
-                    a * factored_work(l, d)
-                } else {
-                    d.into_iter().zip(stress).map(|(x, y)| x * y).sum::<f64>()
-                };
-            for i in 0..3 {
-                r.stress[i] += stress[i];
-                for j in 0..3 {
-                    r.tangent[i][j] += a * branch.q[i][j];
+            match (self.law.integration, step) {
+                (IntegrationScheme::ExactExponential, Some(h)) => {
+                    let (a, b, sqrt_b, alpha) = exact_exp_step_coeffs(branch.tau, h);
+                    let q_n: [f64; 3] = std::array::from_fn(|j| self.last_strain[j] - z[j]);
+                    let de: [f64; 3] = std::array::from_fn(|j| e[j] - self.last_strain[j]);
+                    let q_next: [f64; 3] = std::array::from_fn(|j| a * q_n[j] + b * de[j]);
+                    let s_1: [f64; 3] = std::array::from_fn(|j| sqrt_b * de[j] + alpha * q_n[j]);
+                    let stress = mul(&branch.q, q_next);
+                    r.energy += 0.5 * quad(branch, s_1);
+                    for i in 0..3 {
+                        r.stress[i] += stress[i];
+                        for j in 0..3 {
+                            r.tangent[i][j] += b * branch.q[i][j];
+                        }
+                    }
+                }
+                _ => {
+                    let a = step.map_or(1.0, |h| weights(branch.tau, h).0);
+                    let d = std::array::from_fn(|j| e[j] - z[j]);
+                    let stress = mul(&branch.q, d).map(|v| a * v);
+                    r.energy += 0.5
+                        * if let Some(l) = branch.energy_factor {
+                            a * factored_work(l, d)
+                        } else {
+                            d.into_iter().zip(stress).map(|(x, y)| x * y).sum::<f64>()
+                        };
+                    for i in 0..3 {
+                        r.stress[i] += stress[i];
+                        for j in 0..3 {
+                            r.tangent[i][j] += a * branch.q[i][j];
+                        }
+                    }
                 }
             }
         }
@@ -589,7 +710,9 @@ impl Memory {
         Ok(r)
     }
 
-    /// Propose a backward-Euler history update at the ACCEPTED endpoint, without mutating self.
+    /// Propose a history update at the ACCEPTED endpoint, without mutating self.
+    /// Uses backward Euler by default, or exact piecewise-linear exponential integration when
+    /// configured with [`IntegrationScheme::ExactExponential`].
     ///
     /// # Errors
     /// Invalid step/domain, non-finite energy or dissipation. Failed updates leave history intact.
@@ -604,17 +727,35 @@ impl Memory {
             .zip(&self.viscous)
             .zip(&mut memory.viscous)
         {
-            let (a, b) = weights(branch.tau, h);
-            let d = std::array::from_fn(|j| e[j] - old[j]);
-            let stress = mul(&branch.q, d);
-            let work: f64 = if let Some(l) = branch.energy_factor {
-                factored_work(l, d)
-            } else {
-                d.into_iter().zip(stress).map(|(x, y)| x * y).sum()
-            };
-            dissipated += (a * b) * work;
-            *new = std::array::from_fn(|j| a * old[j] + b * e[j]);
+            match self.law.integration {
+                IntegrationScheme::BackwardEuler => {
+                    let (a, b) = weights(branch.tau, h);
+                    let d = std::array::from_fn(|j| e[j] - old[j]);
+                    let stress = mul(&branch.q, d);
+                    let work: f64 = if let Some(l) = branch.energy_factor {
+                        factored_work(l, d)
+                    } else {
+                        d.into_iter().zip(stress).map(|(x, y)| x * y).sum()
+                    };
+                    dissipated += (a * b) * work;
+                    *new = std::array::from_fn(|j| a * old[j] + b * e[j]);
+                }
+                IntegrationScheme::ExactExponential => {
+                    let (a, b, c_qq, c_qe, c_ee) = exact_exp_dissipation_coeffs(branch.tau, h);
+                    let q_n: [f64; 3] = std::array::from_fn(|j| self.last_strain[j] - old[j]);
+                    let de: [f64; 3] = std::array::from_fn(|j| e[j] - self.last_strain[j]);
+                    let l11 = c_qq.sqrt();
+                    let l21 = if l11 > 0.0 { c_qe / l11 } else { 0.0 };
+                    let l22 = (c_ee - l21 * l21).max(0.0).sqrt();
+                    let v1: [f64; 3] = std::array::from_fn(|j| l11 * q_n[j] + l21 * de[j]);
+                    let v2: [f64; 3] = std::array::from_fn(|j| l22 * de[j]);
+                    dissipated += quad(branch, v1) + quad(branch, v2);
+                    let q_next: [f64; 3] = std::array::from_fn(|j| a * q_n[j] + b * de[j]);
+                    *new = std::array::from_fn(|j| e[j] - q_next[j]);
+                }
+            }
         }
+        memory.last_strain = e;
         let stored = memory.response(e, None)?.energy;
         if !dissipated.is_finite() || dissipated < 0.0 {
             return Err(bad("Maxwell dissipation overflow"));

@@ -405,6 +405,7 @@ fn law(input: &Input, candidates: &[Candidate], source: &str) -> Relaxation {
             .plastic_equilibrium
             .as_ref()
             .map(|p| p.network.clone()),
+        integration: Default::default(),
         branches: Vec::new(),
         orthotropic_branches: candidates
             .iter()
@@ -460,6 +461,7 @@ fn replay(
     let mut memory = Memory {
         law: compiled.clone(),
         viscous: vec![z; compiled.branches.len()],
+        last_strain: initial,
     };
     let mut forces = Vec::new();
     for (i, point) in history.points.iter().enumerate() {
