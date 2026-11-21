@@ -386,10 +386,12 @@ pub struct RefusedRun {
     /// cloth layers crossing or closer than their contact thickness: the relaxation iterations of the
     /// checkpoint used, then of the start that was not admitted. The checkpoint is the more strained.
     pub start_fallback: Option<(usize, usize)>,
-    /// The p95 absolute strain of the start's plain edges when its relaxation stopped, the value the
-    /// run's `start:` line prints (NaN if no block was recorded). Above
-    /// [`crate::start::RELAX_TARGET_P95`] the relaxation ended at its iteration cap, not at its target.
-    pub start_p95: f64,
+    /// Set when the start's relaxation ran its full [`crate::start::RELAX_MAX_ITERS`] iterations and the
+    /// start's plain edges are still above [`crate::start::RELAX_TARGET_P95`]: their p95 absolute strain,
+    /// the value the run's `start:` line prints. `None` for a start that reached the target, for an earlier
+    /// checkpoint (`start_fallback`, above the target for its own reason) and for a start that reached the
+    /// target and was then stretched past it by the leg-separation repair.
+    pub start_unrelaxed_p95: Option<f64>,
 }
 
 fn refused_run(
@@ -406,7 +408,11 @@ fn refused_run(
         start_fallback: scene
             .start_backtracked_from
             .map(|rejected| (scene.start.relax_iterations, rejected)),
-        start_p95: scene.start.block_p95.last().copied().unwrap_or(f64::NAN),
+        start_unrelaxed_p95: scene.start.block_p95.last().copied().filter(|&p95| {
+            scene.start_backtracked_from.is_none()
+                && scene.start.relax_iterations >= crate::start::RELAX_MAX_ITERS
+                && p95 > crate::start::RELAX_TARGET_P95
+        }),
     })
 }
 

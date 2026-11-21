@@ -23,7 +23,7 @@ use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_drape::scene::{
     PartFrames, casings_at_cut_length, elastic_casings, placements, wrapped_positions,
 };
-use ftx_drape::start::RELAX_TARGET_P95;
+use ftx_drape::start::{RELAX_MAX_ITERS, RELAX_TARGET_P95};
 use ftx_drape::start::{edge_strain, face_edges};
 use ftx_drape::{GarmentMesh, NearestTree, WrapPlacement, build_garment, start_state};
 use ftx_pattern::Pattern;
@@ -624,9 +624,9 @@ pub(super) fn refused_stills(
                     .map(String::as_str)
                     .zip(&summaries),
             );
-            // NaN (no block recorded) compares false and leaves the caveat out.
-            let unrelaxed = (state.start_p95 > RELAX_TARGET_P95).then_some(state.start_p95);
-            if let Some(text) = start_condition(state.start_fallback, &tight, unrelaxed) {
+            if let Some(text) =
+                start_condition(state.start_fallback, &tight, state.start_unrelaxed_p95)
+            {
                 refusal.repairs.insert(1, text);
             }
         }
@@ -634,15 +634,22 @@ pub(super) fn refused_stills(
     refusal
 }
 
+/// How to tell unfinished relaxation from a small piece, said wherever a start that stopped above its
+/// relaxation target is reported as tight. A procedure, not a law: on the one garment measured, the
+/// coarser mesh reached the target and the stretch by the seams was gone.
+const UNRELAXED_CHECK: &str = " To tell them apart, look at ftx place with a coarser --spacing-mm: if the \
+     relaxation reaches its target there, stretch that remains is the piece's.";
+
 /// What is wrong with the start a refused drape began from, when the run can tell: it is an earlier and
 /// more strained relaxation checkpoint (`fallback`: its iterations, then those of the start that was not
 /// admitted for cloth contact), it is stretched past the strain ramp in the `tight` instances, or both.
 /// `None` when neither holds. It names what to change in the pattern, because no solver budget does.
 ///
-/// `unrelaxed` is the start's p95 strain when its relaxation stopped above [`RELAX_TARGET_P95`], at the
-/// iteration cap. Stretch next to a seam is then not evidence of a small piece, and the text says so
-/// (measured: the 92 cm bolero at 6 mm spacing stops at 0.194 and shows 4 to 6 % of its back and fronts
-/// at the ramp by the shoulder and neck seams, where at 12 mm it reaches the target and shows 0.3 %).
+/// `unrelaxed` is the start's p95 strain when its relaxation ran its full [`RELAX_MAX_ITERS`] and the
+/// start is still above [`RELAX_TARGET_P95`]. Stretch next to a seam is then not evidence of a small
+/// piece, and the text says so and how to tell (measured: the 92 cm bolero at 6 mm spacing stops at 0.194
+/// and shows 4 to 6 % of its back and fronts at the ramp by the shoulder and neck seams, where at 12 mm it
+/// reaches the target in 600 iterations and shows 0.3 %).
 fn start_condition(
     fallback: Option<(usize, usize)>,
     tight: &[String],
@@ -675,9 +682,9 @@ fn start_condition(
         // A checkpoint is above the target by construction and the sentence above already says so.
         if let (None, Some(p95)) = (fallback, unrelaxed) {
             text.push_str(&format!(
-                " The start's relaxation stopped at p95 strain {p95:.3}, above its {RELAX_TARGET_P95} \
-                 target, so stretch next to a seam can be unfinished relaxation and not a piece that is \
-                 too small."
+                " The start's relaxation ran its full {RELAX_MAX_ITERS} iterations and stopped at p95 \
+                 strain {p95:.3}, above its {RELAX_TARGET_P95} target, so stretch next to a seam can be \
+                 unfinished relaxation and not a piece that is too small.{UNRELAXED_CHECK}"
             ));
         }
     }
@@ -1104,10 +1111,12 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if !tight.is_empty() {
         // The first line above gives the p95 and the target; repeat the consequence here, where it applies.
         let unrelaxed = if report["start"]["reached_target"] == false {
-            " The relaxation stopped above its target, so stretch next to a seam can be unfinished \
-             relaxation and not a piece that is too small."
+            format!(
+                " The relaxation stopped above its target, so stretch next to a seam can be unfinished \
+                 relaxation and not a piece that is too small.{UNRELAXED_CHECK}"
+            )
         } else {
-            ""
+            String::new()
         };
         text.push_str(&format!(
             "  TIGHT START: stretched 15 % or more (red in start/still_strain_*) in {}. If that cloth has to \
@@ -1192,7 +1201,7 @@ mod tests {
             phase: "sew",
             accepted_steps: 2,
             start_fallback: None,
-            start_p95: 0.1,
+            start_unrelaxed_p95: None,
         };
         let body = b"v -0.2 0 0.8\nv 0.3 0 0.8\nv 0.05 0 1.3\nf 1 2 3\n";
         let refusal = || {
@@ -1321,8 +1330,8 @@ mod tests {
                 phase: "sew",
                 accepted_steps,
                 start_fallback,
-                // Below the relaxation target, so the diagnosis carries no caveat about relaxation.
-                start_p95: 0.1,
+                // The relaxation reached its target, so the diagnosis carries no caveat about it.
+                start_unrelaxed_p95: None,
             };
             super::refused_stills(refusal(), Some(&state), &dir, body, (320, 200))
         };
@@ -1657,23 +1666,29 @@ mod tests {
         assert!(no_fb.contains("It is stretched 15 % or more"));
         assert!(!no_fb.contains("The checkpoint is stretched"));
         assert!(!no_fb.contains("ftx place draws the fully relaxed start"));
-        assert!(!no_fb.contains("relaxation stopped"));
+        assert!(!no_fb.contains("unfinished relaxation"));
+        assert!(!no_fb.contains("--spacing-mm"));
 
-        // With the relaxation stopped at its cap, stretch by a seam is not evidence of a small piece.
+        // With the relaxation stopped at its cap, stretch by a seam is not evidence of a small piece,
+        // and the text says how to find out which it is.
         let capped = start_condition(None, &tight, Some(0.194)).unwrap();
         assert!(
             capped.contains(
-                "The start's relaxation stopped at p95 strain 0.194, above its 0.12 target, so stretch \
-                 next to a seam can be unfinished relaxation and not a piece that is too small."
+                "The start's relaxation ran its full 1600 iterations and stopped at p95 strain 0.194, \
+                 above its 0.12 target, so stretch next to a seam can be unfinished relaxation and not a \
+                 piece that is too small. To tell them apart, look at ftx place with a coarser \
+                 --spacing-mm: if the relaxation reaches its target there, stretch that remains is the \
+                 piece's. No solver budget changes the start."
             ),
             "{capped}"
         );
         assert!(capped.ends_with("No solver budget changes the start."));
-        // A checkpoint is above the target by construction; its own sentence covers that.
+        // A checkpoint is above the target by construction; its own sentence covers that. (The run never
+        // passes both; the function must still not say both.)
         assert!(
             !start_condition(Some((200, 800)), &tight, Some(0.136))
                 .unwrap()
-                .contains("relaxation stopped")
+                .contains("unfinished relaxation")
         );
 
         let fb_only = start_condition(Some((200, 800)), &[], None).unwrap();

@@ -330,9 +330,12 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   admitted for cloth contact (the progress line says the same); and each instance at least 2 % of whose
   vertices have a mean edge strain of 15 % or more, with the pattern edge nearest that stretch. The
   threshold is measured on one garment (the comment on `TIGHT_START_PCT` gives the numbers), not a
-  validated limit. When the start's relaxation stopped above its target without being a checkpoint (seen
-  at 6 mm spacing, p95 0.194 against 0.12), the repair and the `TIGHT START` line add that stretch next
-  to a seam can then be unfinished relaxation and not a piece that is too small. `ftx place` applies the same measure to the start it draws, prints such instances as
+  validated limit. When the start's relaxation ran its full 1600 iterations and stopped above its target
+  (seen at 6 mm spacing, p95 0.194 against 0.12; a checkpoint does not count, nor does a start that
+  reached the target and was stretched past it by the leg-separation repair), the repair and the
+  `TIGHT START` line add that stretch next to a seam can then be unfinished relaxation and not a piece
+  that is too small, and that `ftx place` at a coarser `--spacing-mm` tells the two apart where its
+  relaxation reaches the target. `ftx place` applies the same measure to the start it draws, prints such instances as
   `TIGHT START` and records `stretched_past_ramp_pct` and `stretched_nearest_edge` in each instance's
   `start_edge_strain`. It draws the fully relaxed start, so it does not flag a garment whose fully relaxed
   start is loose but is not admitted for cloth contact: there only the drape's refusal names the stretched
