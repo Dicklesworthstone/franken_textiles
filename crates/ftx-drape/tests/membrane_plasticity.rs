@@ -787,7 +787,7 @@ fn damaged_plastic_triangle_degrades_unloading_stiffness_matches_fd_and_rolls_ba
     // An out-of-domain step refuses and leaves accepted damage and dissipation intact.
     let snapshot = history(&solver);
     let mut bad_step = solver.clone();
-    bad_step.x[1].x = LENGTH * (1.0 + 2.0 * 0.45).sqrt(); // exceeds strain_limit 0.4
+    bad_step.x[1].x = LENGTH * (1.0_f64 + 2.0 * 0.45).sqrt(); // exceeds strain_limit 0.4
     assert!(bad_step.step(0.005).is_err());
     bad_step.x[1].x = solver.x[1].x;
     assert_eq!(history(&bad_step), snapshot);
