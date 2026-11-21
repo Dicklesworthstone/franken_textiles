@@ -140,14 +140,17 @@ checks retained the 30 mm sleeve-length excess. The 230.1 mm cut also exceeded t
 `--hands full` (05 "Clothing collider"; native, opt-in) keeps the whole hand, so the collider and the
 displayed body are one surface there. Measured on 2026-11-21 with a build of that change, same wearer,
 `ftx round --stills --res 840x620 --self-contact-mm 2`:
-the 335 mm sleeve converged with no gating flags and six stills in 37 s, as it does with `knuckle`. A
+the 335 mm sleeve converged with no gating flags and six stills, as it does with `knuckle` (one run each;
+the whole command took 37 s here, which is no performance claim). A
 385 mm sleeve redrafted with a 207.7 mm cuff (`cuff_ease` 65) was refused at its start: with the sleeve on
-its drafted 34.7 mm cylinder the cuff ends across the open fingers and the start still crosses the body
-after 50 untangling rounds. `ftx place --hands full` on the same cut left one to four cloth vertices
-inside the hand at 45 and 55 mm cylinders and at 8 and 6 mm mesh spacing, and 213 cloth-on-cloth crossing
-pairs at 65 mm. So the whole-hand collider removes the blind spot beyond the knuckle cap but does not by
-itself give a sleeve that covers an open hand a clear start. What is still missing is a placement that
-puts the sleeve end outside the fingers, or a hand pose with the fingers together.
+its drafted 34.7 mm cylinder the cuff ends across the open fingers, 66 mm beyond the wrist landmark, and
+the start still crosses the body after 50 untangling rounds. `ftx place --hands full` on the same cut
+left one to four sleeve vertices inside the hand, all at the sleeve's end, on the drafted cylinder at
+8 mm spacing, on a 45 mm cylinder at 12, 8 and 6 mm and on a 55 mm cylinder at 12 mm; a 65 mm cylinder
+left none inside but 213 cloth-on-cloth crossing pairs (05 "Clothing collider" lists each). So the
+whole-hand collider removes the blind spot beyond the knuckle cap but does not by itself give a sleeve
+that covers an open hand a clear start. Neither a placement that puts the sleeve end outside the fingers
+nor a hand pose with the fingers together exists; neither has been tried, so neither is known to work.
 
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
