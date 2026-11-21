@@ -128,6 +128,7 @@ fn compile_inner(
         .ok_or_else(|| bad("parallel network requires an explicit joint qualification"))?;
     declaration.validate(&material.sources, allow)?;
     if material.membrane_response.is_some()
+        || material.structure.contains_key("membrane_damage_model")
         || match material.structure.get("membrane_plasticity_model") {
             Some(model) => model != PLASTIC_MODEL,
             None => !calibration,

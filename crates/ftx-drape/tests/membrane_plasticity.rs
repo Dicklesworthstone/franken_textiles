@@ -4,7 +4,7 @@ use ftx_core::{RefusalCode, Vec2, Vec3};
 use ftx_drape::motion::{MotionOptions, advance_body, advance_body_with_dissipation};
 use ftx_drape::{Body, ClothModel, ContactParams, Membrane, Solver};
 use ftx_pattern::material_catalog::Selection;
-use ftx_pattern::material_membrane_plasticity::PlasticMembrane;
+use ftx_pattern::material_membrane_plasticity::{DAMAGE_MODEL, IsotropicDamage, PlasticMembrane};
 use ftx_pattern::materials::{Catalog, Material};
 use serde_json::Value;
 
@@ -690,4 +690,105 @@ fn captured_motion_work_is_local_accepted_and_budgeted_without_changing_ordinary
         original.membrane_plastic_dissipation_j().unwrap(),
         Some(vec![0.])
     );
+}
+
+#[test]
+fn damaged_plastic_triangle_degrades_unloading_stiffness_matches_fd_and_rolls_back_failed_steps() {
+    let dmg = IsotropicDamage::new(0.01, 20.0, 0.45).unwrap();
+    let undamaged_law = law(membrane());
+    let damaged_law = law(membrane()).with_damage(dmg).unwrap();
+
+    // Undamaged control omits damage fields and reports zero damage dissipation.
+    let undamaged_solver = bare(true, LOAD, membrane())
+        .with_membrane_plasticity(&[Some(undamaged_law)])
+        .unwrap();
+    let undamaged_report = history(&undamaged_solver);
+    assert!(undamaged_report.get("damage_model").is_none());
+    assert!(undamaged_report.get("damage_dissipation_j").is_none());
+    assert!(undamaged_report["elements"][0].get("damage").is_none());
+    assert_eq!(
+        undamaged_solver.membrane_damage_dissipation_j().unwrap(),
+        Some(vec![0.0])
+    );
+
+    // Load damaged triangle beyond yield + damage threshold.
+    let mut solver = bare(true, LOAD, membrane())
+        .with_membrane_plasticity(&[Some(damaged_law)])
+        .unwrap();
+    let mut control = undamaged_solver;
+    solver.step(0.005).unwrap();
+    control.step(0.005).unwrap();
+
+    let permanent = permanent_set();
+    let expected_d = dmg.evaluate([permanent, 0.0, 0.0]).unwrap();
+    assert!(expected_d > 0.2 && expected_d < 0.45);
+    let report = history(&solver);
+    assert_eq!(report["damage_model"], DAMAGE_MODEL);
+    near(
+        report["elements"][0]["damage"].as_f64().unwrap(),
+        expected_d,
+        1e-12,
+    );
+    near(
+        report["elements"][0]["stiffness_factor"].as_f64().unwrap(),
+        1.0 - expected_d,
+        1e-12,
+    );
+    let dmg_diss = report["damage_dissipation_j"].as_f64().unwrap();
+    assert!(dmg_diss > 0.0);
+    assert_eq!(
+        solver.membrane_damage_dissipation_j().unwrap().unwrap(),
+        vec![dmg_diss]
+    );
+
+    // Unload to permanent set, then elastically reload: degraded reaction equals (1 - d) * undamaged.
+    let reload_strain = permanent + 0.008;
+    for s in [&mut solver, &mut control] {
+        s.x[1].x = LENGTH * (1.0 + 2.0 * permanent).sqrt();
+        s.step(0.005).unwrap();
+        s.x[1].x = LENGTH * (1.0 + 2.0 * reload_strain).sqrt();
+        s.step(0.005).unwrap();
+    }
+    let f_damaged = solver.checked_elastic_forces().unwrap()[1].x;
+    let f_control = control.checked_elastic_forces().unwrap()[1].x;
+    near(f_damaged, (1.0 - expected_d) * f_control, 1e-11);
+    // Elastic unload + reload did not increase damage or damage dissipation.
+    near(
+        history(&solver)["damage_dissipation_j"].as_f64().unwrap(),
+        dmg_diss,
+        1e-14,
+    );
+
+    // Verify exact FD gradient and energy on the damaged triangle in 3D.
+    let energy_before = solver.membrane_energy().unwrap();
+    let forces = solver.checked_elastic_forces().unwrap();
+    let eps = 2e-6;
+    for j in 0..9 {
+        let mut plus = solver.clone();
+        let mut minus = solver.clone();
+        let delta = Vec3::new(
+            f64::from(j % 3 == 0),
+            f64::from(j % 3 == 1),
+            f64::from(j % 3 == 2),
+        ) * eps;
+        plus.x[j / 3] += delta;
+        minus.x[j / 3] -= delta;
+        let numeric =
+            (plus.membrane_energy().unwrap() - minus.membrane_energy().unwrap()) / (2.0 * eps);
+        let analytic = -match j % 3 {
+            0 => forces[j / 3].x,
+            1 => forces[j / 3].y,
+            _ => forces[j / 3].z,
+        };
+        near(numeric, analytic, 2e-6);
+    }
+    near(solver.membrane_energy().unwrap(), energy_before, 1e-14);
+
+    // An out-of-domain step refuses and leaves accepted damage and dissipation intact.
+    let snapshot = history(&solver);
+    let mut bad_step = solver.clone();
+    bad_step.x[1].x = LENGTH * (1.0 + 2.0 * 0.45).sqrt(); // exceeds strain_limit 0.4
+    assert!(bad_step.step(0.005).is_err());
+    bad_step.x[1].x = solver.x[1].x;
+    assert_eq!(history(&bad_step), snapshot);
 }

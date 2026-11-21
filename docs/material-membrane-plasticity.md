@@ -499,7 +499,14 @@ it is not browser navigation or an empirical garment experiment. Synthetic value
 a textile's conversion fraction or establish temperature agreement with a real specimen.
 
 `ftx-ps1` and `ftx-tm4` remain open for matched cyclic warp/weft/shear acquisitions and independent
-loading, unloading and reloading checks, plus stiffness degradation, damage and rupture. Same-branch
+loading, unloading and reloading checks, plus empirical damaged-coupon validation and rupture. An
+opt-in software model `structure.membrane_damage_model = "isotropic_accumulated_damage/1"` (requiring
+matched `membrane_damage_threshold >= 0`, `membrane_damage_rate > 0`, and `0 < membrane_damage_limit
+<= 1 - 1e-6` on the same specimen/conditioning) provides accepted-step Simo-Ju strain-equivalence
+isotropic scalar stiffness degradation `d(a_tot) = limit * (1 - exp(-rate * max(0, a_tot - threshold)))`
+with separate plastic and damage dissipation ledgers (`Solver::membrane_damage_dissipation_j()` and
+`membrane_plasticity_report()`). It excludes fracture/rupture, monolithic softening/localization,
+parallel Maxwell coupling, undamaged calibration, and thermal feedback. Same-branch
 viscoplasticity, nonlinear plastic response, gathered compression, conditioning effects, serialized restart,
 remeshing transfer and temperature feedback to mechanics remain separate missing capabilities. Existing
 elastic or relaxation calibration commands retain their own models; permanent yield/hardening uses

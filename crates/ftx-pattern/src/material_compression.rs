@@ -164,6 +164,7 @@ fn scalar_record(material: &Material, properties: BTreeMap<String, Quantity>) ->
     result.properties = properties;
     // Scalar pressure rows cannot carry an uncharacterized in-plane loading history.
     result.structure.remove("membrane_plasticity_model");
+    result.structure.remove("membrane_damage_model");
     result.membrane_response = None;
     result.membrane_relaxation = None;
     result.thermal_response = None;

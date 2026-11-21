@@ -1385,3 +1385,11 @@ share the existing session limits across cases, including refusals. Only work co
 boundaries. Case environments and motion paths are explicit sensitivity inputs, not a probability
 distribution or a claim about untested operating conditions. The native/file-free adapters retain
 identical descriptors and independent consumer refusals; existing single-case behavior is preserved.
+
+**Opt-in membrane stiffness degradation** (`cloth::membrane_plasticity`, `ftx-ps1`). When any bound
+`PlasticMembrane` opts into `isotropic_accumulated_damage/1`, accepted steps transactionally accumulate
+per-triangle `damage_dissipated_j` alongside `plastic_dissipation_j` (rolling back atomically on failed
+steps), expose `Solver::membrane_damage_dissipation_j()`, and emit `damage_model`,
+`damage_dissipation_j`, and per-element `damage` / `stiffness_factor` / `damage_dissipation_j` in
+`Solver::membrane_plasticity_report()`. Undamaged laws omit these fields and keep identical wire output.
+Tests: `tests/membrane_plasticity.rs`.

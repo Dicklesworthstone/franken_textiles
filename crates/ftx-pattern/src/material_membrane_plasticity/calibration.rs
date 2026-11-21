@@ -497,6 +497,15 @@ fn prepare<const N: usize>(input: &Input) -> Result<Prepared<N>, Refusal> {
             "permanent membrane identification needs its schema, characterized sheet, scalar elasticity, matched conditions and finite positive residual/work policy",
         ));
     }
+    if input
+        .material
+        .structure
+        .contains_key("membrane_damage_model")
+    {
+        return Err(bad(
+            "permanent membrane identification currently fits undamaged yield and hardening only; membrane_damage_model cannot be identified or discarded here",
+        ));
+    }
     let existing = input
         .material
         .structure

@@ -20,6 +20,8 @@ pub mod calibration;
 
 /// Explicit opt-in at `structure.membrane_plasticity_model`.
 pub const MODEL: &str = "orthotropic_green_return_map/1";
+/// Explicit opt-in at `structure.membrane_damage_model` (requires [`MODEL`]).
+pub const DAMAGE_MODEL: &str = "isotropic_accumulated_damage/1";
 /// Fixed reference material coordinates; engineering shear is twice E12.
 pub const AXES: [&str; 3] = ["warp", "weft", "shear"];
 /// All directions require yield, hardening (including explicit zero) and validity bounds.
@@ -29,6 +31,85 @@ pub const PROPERTY_FAMILIES: [(&str, &str); 4] = [
     ("membrane_strain_limit", "1"),
     ("membrane_accumulation_limit", "1"),
 ];
+/// Matched scalar observations required when [`DAMAGE_MODEL`] is opted in.
+pub const DAMAGE_PROPERTIES: [(&str, &str); 3] = [
+    ("membrane_damage_threshold", "1"),
+    ("membrane_damage_rate", "1"),
+    ("membrane_damage_limit", "1"),
+];
+
+/// Source-qualified isotropic scalar stiffness degradation driven by total accumulated
+/// plastic Green strain `a_tot = a_warp + a_weft + a_shear`.
+///
+/// `d(a_tot) = limit * (1 - exp(-rate * max(0, a_tot - threshold)))`, bounded strictly below 1.
+/// Uses Simo-Ju strain-equivalence with explicit accepted-step damage updates: during a trial
+/// step the effective-stress return map and incremental potential scale by `(1 - d_n)`, keeping
+/// stress and symmetric PSD consistent tangent exact derivatives of the step potential; on step
+/// acceptance `d_{n+1} = max(d_n, d(a_tot_{n+1}))` updates monotonically with nonnegative
+/// damage dissipation `(d_{n+1} - d_n) * (psi_el + psi_hard)`. Excludes rupture (`limit < 1`),
+/// snap-back localization, and monolithic softening.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct IsotropicDamage {
+    /// Nonnegative total accumulated plastic Green strain before stiffness begins degrading.
+    pub threshold: f64,
+    /// Positive dimensionless exponential saturation rate.
+    pub rate: f64,
+    /// Asymptotic scalar stiffness-loss ceiling strictly inside `(0, 1 - 1e-6]`.
+    pub limit: f64,
+}
+
+impl IsotropicDamage {
+    /// Validate finite, physical scalar degradation parameters; no defaults exist.
+    ///
+    /// # Errors
+    /// Nonfinite values, negative threshold, nonpositive rate, or damage limit outside `(0, 1 - 1e-6]`.
+    pub fn new(threshold: f64, rate: f64, limit: f64) -> Result<Self, Refusal> {
+        if ![threshold, rate, limit].iter().all(|v| v.is_finite())
+            || threshold < 0.0
+            || rate <= 0.0
+            || limit <= 0.0
+            || limit > 1.0 - 1e-6
+        {
+            return Err(bad(
+                "membrane stiffness degradation requires finite threshold >= 0, rate > 0, and damage limit in (0, 1 - 1e-6]",
+            ));
+        }
+        Ok(Self {
+            threshold,
+            rate,
+            limit,
+        })
+    }
+
+    /// Evaluate monotonic scalar damage `d` in `[0, limit]` using deterministic `det::expm1`.
+    ///
+    /// # Errors
+    /// Nonfinite or negative accumulated plastic strain, or overflow in `rate * excess`.
+    pub fn evaluate(&self, accumulated: [f64; 3]) -> Result<f64, Refusal> {
+        if accumulated.iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return Err(domain(
+                "membrane damage requires finite nonnegative accumulated plastic strain",
+            ));
+        }
+        let total = accumulated[0] + accumulated[1] + accumulated[2];
+        if !total.is_finite() {
+            return Err(domain("accumulated plastic strain sum overflows"));
+        }
+        if total <= self.threshold {
+            return Ok(0.0);
+        }
+        let excess = total - self.threshold;
+        let arg = self.rate * excess;
+        if !arg.is_finite() || arg < 0.0 {
+            return Err(domain("membrane damage exponent overflows"));
+        }
+        let damage = -self.limit * ftx_core::det::expm1(-arg);
+        if !damage.is_finite() || damage < 0.0 || damage > self.limit {
+            return Err(domain("membrane damage evaluation out of bounds"));
+        }
+        Ok(damage)
+    }
+}
 
 const ELASTIC: [(&str, &str); 4] = [
     ("warp_stiffness", "N/m"),
@@ -80,14 +161,17 @@ pub struct PlasticMembrane {
     source_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parallel: Option<parallel::Lock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    damage: Option<IsotropicDamage>,
 }
 
-/// Accepted signed permanent Green strain and accumulated absolute increments.
+/// Accepted signed permanent Green strain, accumulated absolute increments, and scalar damage.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Memory {
     law: PlasticMembrane,
     plastic: [f64; 3],
     accumulated: [f64; 3],
+    damage: f64,
 }
 
 /// Complete proposed material state; the physical solver commits it only after acceptance.
@@ -95,8 +179,11 @@ pub struct Memory {
 pub struct Update {
     /// Proposed state, separate from the accepted input history.
     pub memory: Memory,
-    /// Nonnegative sum(Y_i*abs(delta_plastic_i)), J/m2 of reference area; no thermal feedback.
+    /// Nonnegative `(1 - d_n) * sum(Y_i*abs(delta_plastic_i))`, J/m2 of reference area; no thermal feedback.
     pub dissipated_j_m2: f64,
+    /// Nonnegative `(d_{n+1} - d_n) * (psi_el + psi_hard)` stiffness-degradation dissipation, J/m2;
+    /// zero when undamaged or when accepted damage does not advance.
+    pub damage_dissipated_j_m2: f64,
 }
 
 impl PlasticMembrane {
@@ -147,7 +234,28 @@ impl PlasticMembrane {
             accumulation_limit,
             source_sha256: None,
             parallel: None,
+            damage: None,
         })
+    }
+
+    /// Attach an explicit source-qualified isotropic scalar stiffness-degradation law.
+    ///
+    /// # Errors
+    /// Refuses combination with a parallel Maxwell network.
+    pub fn with_damage(mut self, damage: IsotropicDamage) -> Result<Self, Refusal> {
+        if self.parallel.is_some() {
+            return Err(bad(
+                "membrane stiffness degradation cannot combine with parallel Maxwell branches without a qualified coupled law",
+            ));
+        }
+        self.damage = Some(damage);
+        Ok(self)
+    }
+
+    /// Optional isotropic scalar stiffness-degradation parameters (`None` when undamaged).
+    #[must_use]
+    pub fn damage(&self) -> Option<IsotropicDamage> {
+        self.damage
     }
 
     /// Exact reference elastic tensor to replace, never an additional parallel elastic law.
@@ -196,14 +304,16 @@ impl PlasticMembrane {
             && positive_metric(strain)
     }
 
-    /// Initialize once with zero permanent/accumulated strain in the unchanged reference metric.
-    /// This does not reinterpret current placement as a stress-free or annealed configuration.
+    /// Initialize once with zero permanent/accumulated strain and zero damage in the unchanged
+    /// reference metric. This does not reinterpret current placement as a stress-free or annealed
+    /// configuration.
     #[must_use]
     pub fn pristine(&self) -> Memory {
         Memory {
             law: self.clone(),
             plastic: [0.0; 3],
             accumulated: [0.0; 3],
+            damage: 0.0,
         }
     }
 }
@@ -221,17 +331,34 @@ impl Memory {
         self.accumulated
     }
 
+    /// Accepted scalar stiffness-degradation state `d` in `[0, limit]` (`0.0` when undamaged).
+    #[must_use]
+    pub fn damage(&self) -> f64 {
+        self.damage
+    }
+
+    /// Remaining elastic/yield integrity factor `1 - d` in `(0, 1]`.
+    #[must_use]
+    pub fn stiffness_factor(&self) -> f64 {
+        1.0 - self.damage
+    }
+
     fn evaluate(
         &self,
         strain: [f64; 3],
         incremental: bool,
     ) -> Result<(Response, [f64; 3]), Refusal> {
-        if !self.law.contains(strain) || !positive_metric(self.plastic) {
+        if !self.law.contains(strain)
+            || !positive_metric(self.plastic)
+            || !self.damage.is_finite()
+            || self.damage < 0.0
+            || self.damage >= 1.0
+        {
             return Err(domain(
-                "membrane Green strain exceeds characterization or has a nonpositive current/permanent metric",
+                "membrane Green strain exceeds characterization or has an invalid metric or damage state",
             ));
         }
-        let (response, delta) = material_return_map::evaluate(
+        let (mut response, delta) = material_return_map::evaluate(
             Parameters {
                 tensor: self.law.tensor_n_m,
                 yield_value: self.law.yield_n_m,
@@ -263,6 +390,25 @@ impl Memory {
                 "proposed permanent Green strain has a nonpositive stress-free metric",
             ));
         }
+        if self.damage > 0.0 {
+            let integrity = 1.0 - self.damage;
+            response.energy *= integrity;
+            for i in 0..3 {
+                response.stress[i] *= integrity;
+                for j in 0..3 {
+                    response.tangent[i][j] *= integrity;
+                }
+            }
+            if !response.energy.is_finite()
+                || response
+                    .stress
+                    .iter()
+                    .chain(response.tangent.iter().flatten())
+                    .any(|v| !v.is_finite())
+            {
+                return Err(domain("damaged plastic membrane response overflows"));
+            }
+        }
         Ok((response, delta))
     }
 
@@ -277,7 +423,7 @@ impl Memory {
             .map(|(response, _)| response)
     }
 
-    /// Propose a complete return-map update without modifying this accepted memory.
+    /// Propose a complete return-map and optional damage update without modifying accepted memory.
     ///
     /// # Errors
     /// Any response refusal or unrepresentable accepted storage/history/dissipation.
@@ -288,15 +434,35 @@ impl Memory {
             memory.plastic[i] += delta[i];
             memory.accumulated[i] += delta[i].abs();
         }
-        let dissipated = (0..3)
+        let raw_dissipated = (0..3)
             .map(|i| self.law.yield_n_m[i] * delta[i].abs())
             .sum::<f64>();
+        let dissipated = if self.damage > 0.0 {
+            (1.0 - self.damage) * raw_dissipated
+        } else {
+            raw_dissipated
+        };
+        let damage_dissipated = if let Some(damage_law) = self.law.damage {
+            let next_damage = damage_law.evaluate(memory.accumulated)?.max(self.damage);
+            let delta_damage = next_damage - self.damage;
+            let mut undamaged = memory.clone();
+            undamaged.damage = 0.0;
+            let undamaged_stored = undamaged.response(strain, false)?.energy;
+            memory.damage = next_damage;
+            delta_damage * undamaged_stored
+        } else {
+            0.0
+        };
         if memory
             .plastic
             .iter()
             .chain(&memory.accumulated)
             .any(|v| !v.is_finite())
+            || !memory.damage.is_finite()
             || !dissipated.is_finite()
+            || dissipated < 0.0
+            || !damage_dissipated.is_finite()
+            || damage_dissipated < 0.0
         {
             return Err(domain("plastic membrane accepted update overflows"));
         }
@@ -304,6 +470,7 @@ impl Memory {
         Ok(Update {
             memory,
             dissipated_j_m2: dissipated,
+            damage_dissipated_j_m2: damage_dissipated,
         })
     }
 }
@@ -321,6 +488,11 @@ impl Material {
         allow_estimates: bool,
     ) -> Result<Option<PlasticMembrane>, Refusal> {
         let Some(model) = self.structure.get("membrane_plasticity_model") else {
+            if self.structure.contains_key("membrane_damage_model") {
+                return Err(bad(
+                    "membrane stiffness degradation requires orthotropic_green_return_map/1 permanent membrane plasticity",
+                ));
+            }
             if self
                 .membrane_relaxation
                 .as_ref()
@@ -335,6 +507,16 @@ impl Material {
         self.validate()?;
         if model != MODEL {
             return Err(bad("unsupported permanent membrane model"));
+        }
+        let damage_opted_in = match self.structure.get("membrane_damage_model") {
+            None => false,
+            Some(name) if name == DAMAGE_MODEL => true,
+            Some(_) => return Err(bad("unsupported membrane damage model")),
+        };
+        if damage_opted_in && self.membrane_relaxation.is_some() {
+            return Err(bad(
+                "membrane stiffness degradation cannot combine with parallel Maxwell branches without a qualified coupled law",
+            ));
         }
         if self.membrane_response.is_some()
             || self
@@ -365,6 +547,16 @@ impl Material {
                 keys.push(key);
             }
         }
+        let damage_values = if damage_opted_in {
+            let mut dmg = [0.0; 3];
+            for (i, (key, unit)) in DAMAGE_PROPERTIES.iter().enumerate() {
+                dmg[i] = self.require(key, unit, allow_estimates)?;
+                keys.push((*key).to_owned());
+            }
+            Some(dmg)
+        } else {
+            None
+        };
         for identity in ["specimen_id", "conditioning"] {
             let expected = self.properties[&keys[0]]
                 .conditions
@@ -399,6 +591,9 @@ impl Material {
             [0.0, 0.0, shear],
         ];
         let mut law = PlasticMembrane::new(q, values[0], values[1], values[2], values[3])?;
+        if let Some(dmg) = damage_values {
+            law = law.with_damage(IsotropicDamage::new(dmg[0], dmg[1], dmg[2])?)?;
+        }
         if self.membrane_relaxation.is_some() {
             let digest =
                 sha256_hex(&serde_json::to_vec(self).map_err(|error| bad(error.to_string()))?);
@@ -442,8 +637,13 @@ impl ResolvedMaterial {
     /// Invalid permanent law, missing/unapproved conversion evidence, mismatched specimen or
     /// conditioning, wrong work basis, fraction/bounds outside [0,1], or invalid temperature range.
     pub fn membrane_plastic_heat_fraction(&self) -> Result<Option<PlasticHeatFraction>, Refusal> {
-        if self.membrane_plasticity()?.is_none() {
+        let Some(law) = self.membrane_plasticity()? else {
             return Ok(None);
+        };
+        if law.damage().is_some() {
+            return Err(bad(
+                "membrane plastic heat fraction currently qualifies undamaged permanent plasticity only; coupled damage dissipation heat requires separate qualification",
+            ));
         }
         let material = self.material();
         let key = "membrane_plastic_heat_fraction";

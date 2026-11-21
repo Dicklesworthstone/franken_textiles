@@ -1,7 +1,10 @@
 //! Synthetic known answers for bounded raw-Green plasticity; no textile measurements are implied.
 use ftx_pattern::{
     material_catalog::Selection,
-    material_membrane_plasticity::{AXES, MODEL, PROPERTY_FAMILIES, PlasticMembrane},
+    material_membrane_plasticity::{
+        AXES, DAMAGE_MODEL, DAMAGE_PROPERTIES, IsotropicDamage, MODEL, PROPERTY_FAMILIES,
+        PlasticMembrane,
+    },
     materials::{Catalog, Evidence, Material},
 };
 use serde_json::json;
@@ -611,4 +614,222 @@ fn heat_conversion_requires_its_own_qualified_evidence_without_changing_mechanic
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn isotropic_damage_degrades_stiffness_preserves_exact_energy_balance_and_fd_derivatives() {
+    let damage = IsotropicDamage::new(0.01, 20.0, 0.45).unwrap();
+    let undamaged = coupled();
+    let damaged = coupled().with_damage(damage).unwrap();
+    assert_ne!(undamaged.fingerprint(), damaged.fingerprint());
+    assert_eq!(undamaged.damage(), None);
+    assert_eq!(damaged.damage(), Some(damage));
+
+    // Step 1: pristine load beyond yield and damage threshold.
+    let pristine = damaged.pristine();
+    assert_eq!(pristine.damage(), 0.0);
+    assert_eq!(pristine.stiffness_factor(), 1.0);
+    let load = [0.05, 0.03, 0.02];
+    let inc1 = pristine.response(load, true).unwrap();
+    let step1 = pristine.advance(load).unwrap();
+    let a1 = step1.memory.accumulated_strain();
+    let expected_d1 = 0.45 * (1.0 - (-20.0 * (a1[0] + a1[1] + a1[2] - 0.01)).exp());
+    near(step1.memory.damage(), expected_d1, 1e-14);
+    near(step1.memory.stiffness_factor(), 1.0 - expected_d1, 1e-14);
+    assert!(step1.dissipated_j_m2 > 0.0);
+    assert!(step1.damage_dissipated_j_m2 > 0.0);
+    near(
+        inc1.energy,
+        step1.memory.response(load, false).unwrap().energy
+            + step1.dissipated_j_m2
+            + step1.damage_dissipated_j_m2,
+        1e-12,
+    );
+
+    // Step 2: unloading to permanent set is stress-free, keeps damage fixed, dissipates zero.
+    let z1 = step1.memory.plastic_strain();
+    let unload = step1.memory.advance(z1).unwrap();
+    assert_eq!(unload.memory, step1.memory);
+    assert_eq!(unload.dissipated_j_m2, 0.0);
+    assert_eq!(unload.damage_dissipated_j_m2, 0.0);
+    assert_eq!(unload.memory.response(z1, false).unwrap().stress, [0.0; 3]);
+
+    // Elastic reload slope is degraded by exact (1 - d1).
+    let probe = [z1[0] + 0.002, z1[1] + 0.001, z1[2]];
+    let resp_damaged = unload.memory.response(probe, true).unwrap();
+    let u_step1 = undamaged.pristine().advance(load).unwrap().memory;
+    let resp_undamaged = u_step1.response(probe, true).unwrap();
+    let factor = 1.0 - expected_d1;
+    for i in 0..3 {
+        near(
+            resp_damaged.stress[i],
+            factor * resp_undamaged.stress[i],
+            1e-13,
+        );
+        for j in 0..3 {
+            near(
+                resp_damaged.tangent[i][j],
+                factor * resp_undamaged.tangent[i][j],
+                1e-13,
+            );
+        }
+    }
+
+    // Step 3: further yielding and reversal from nonzero damage match exact FD derivatives and
+    // Clausius-Duhem energy balance (separate plastic and damage dissipation).
+    let old_hardening = step1.memory.response(z1, false).unwrap().energy;
+    for strain in [
+        [0.08, 0.04, 0.03],
+        [-0.04, -0.02, -0.025],
+        [0.01, 0.06, -0.03],
+    ] {
+        let resp = step1.memory.response(strain, true).unwrap();
+        let eps = 1e-7;
+        for j in 0..3 {
+            let mut plus = strain;
+            let mut minus = strain;
+            plus[j] += eps;
+            minus[j] -= eps;
+            let p = step1.memory.response(plus, true).unwrap();
+            let m = step1.memory.response(minus, true).unwrap();
+            near(resp.stress[j], (p.energy - m.energy) / (2.0 * eps), 1e-7);
+            for i in 0..3 {
+                near(
+                    resp.tangent[i][j],
+                    (p.stress[i] - m.stress[i]) / (2.0 * eps),
+                    1e-7,
+                );
+                assert_eq!(resp.tangent[i][j], resp.tangent[j][i]);
+            }
+        }
+        let next = step1.memory.advance(strain).unwrap();
+        assert!(next.memory.damage() >= step1.memory.damage());
+        assert!(next.memory.damage() <= damage.limit);
+        assert!(next.dissipated_j_m2 >= 0.0);
+        assert!(next.damage_dissipated_j_m2 >= 0.0);
+        near(
+            resp.energy + old_hardening,
+            next.memory.response(strain, false).unwrap().energy
+                + next.dissipated_j_m2
+                + next.damage_dissipated_j_m2,
+            1e-12,
+        );
+    }
+}
+
+#[test]
+fn isotropic_damage_source_compilation_refuses_missing_mismatched_and_unsupported_combinations() {
+    for (t, r, l) in [
+        (-0.01, 10.0, 0.5),
+        (0.0, 0.0, 0.5),
+        (0.0, -5.0, 0.5),
+        (0.0, 10.0, 0.0),
+        (0.0, 10.0, 1.0),
+        (0.0, 10.0, 1.0 - 1e-7),
+        (f64::NAN, 10.0, 0.5),
+        (0.0, f64::INFINITY, 0.5),
+    ] {
+        assert!(IsotropicDamage::new(t, r, l).is_err(), "{t}, {r}, {l}");
+    }
+    // Below threshold returns exact zero; large rate*excess saturates cleanly at limit.
+    let dmg = IsotropicDamage::new(0.02, 50.0, 0.6).unwrap();
+    assert_eq!(dmg.evaluate([0.005, 0.005, 0.01]).unwrap(), 0.0);
+    near(dmg.evaluate([1.0, 1.0, 1.0]).unwrap(), 0.6, 1e-15);
+
+    let catalog = Catalog {
+        schema: ftx_pattern::materials::CATALOG_SCHEMA.into(),
+        materials: Vec::new(),
+    };
+    let mut base: Selection = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-membrane-plasticity.json"
+    ))
+    .unwrap();
+    let undamaged_fp = catalog
+        .resolve(&base)
+        .unwrap()
+        .membrane_plasticity()
+        .unwrap()
+        .unwrap()
+        .fingerprint();
+
+    // Add valid opt-in isotropic damage matching the fixture's specimen/conditioning.
+    let record = base.record.as_mut().unwrap();
+    record
+        .structure
+        .insert("membrane_damage_model".into(), DAMAGE_MODEL.into());
+    let sample_conditions = record.properties["warp_stiffness"].conditions.clone();
+    let sample_source = record.properties["warp_stiffness"].source.clone();
+    for ((key, unit), value) in DAMAGE_PROPERTIES.iter().zip([0.01, 15.0, 0.4]) {
+        record.properties.insert(
+            (*key).into(),
+            ftx_pattern::materials::Quantity {
+                value,
+                unit: (*unit).into(),
+                source: sample_source.clone(),
+                evidence: Evidence::Estimate,
+                method: "Synthetic stiffness degradation parameter; not measured textile data"
+                    .into(),
+                conditions: sample_conditions.clone(),
+                bounds: None,
+            },
+        );
+    }
+
+    let resolved = catalog.resolve(&base).unwrap();
+    let law = resolved.membrane_plasticity().unwrap().unwrap();
+    assert_eq!(
+        law.damage(),
+        Some(IsotropicDamage::new(0.01, 15.0, 0.4).unwrap())
+    );
+    assert_ne!(law.fingerprint(), undamaged_fp);
+    // Coupled damage refuses undamaged heat-conversion qualification fail-closed.
+    assert!(resolved.membrane_plastic_heat_fraction().is_err());
+
+    // Missing any damage property refuses.
+    for (key, _) in DAMAGE_PROPERTIES {
+        let mut missing = base.clone();
+        missing.record.as_mut().unwrap().properties.remove(key);
+        assert!(catalog.resolve(&missing).is_err(), "missing {key}");
+    }
+    // Mismatched specimen_id or conditioning on a damage property refuses.
+    for identity in ["specimen_id", "conditioning"] {
+        let mut mismatch = base.clone();
+        mismatch
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("membrane_damage_rate")
+            .unwrap()
+            .conditions
+            .insert(identity.into(), "other-lot".into());
+        assert!(catalog.resolve(&mismatch).is_err(), "mismatch {identity}");
+    }
+    // Unknown damage selector refuses.
+    let mut unknown = base.clone();
+    unknown
+        .record
+        .as_mut()
+        .unwrap()
+        .structure
+        .insert("membrane_damage_model".into(), "unknown_damage/1".into());
+    assert!(catalog.resolve(&unknown).is_err());
+    // Damage selector without plasticity selector refuses.
+    let mut no_plastic = base.clone();
+    no_plastic
+        .record
+        .as_mut()
+        .unwrap()
+        .structure
+        .remove("membrane_plasticity_model");
+    assert!(catalog.resolve(&no_plastic).is_err());
+    // Unapproved estimated damage refuses when allow_estimates = false.
+    let mut denied = base.clone();
+    for (key, q) in &mut denied.record.as_mut().unwrap().properties {
+        if !DAMAGE_PROPERTIES.iter().any(|(k, _)| k == key) {
+            q.evidence = Evidence::Published;
+        }
+    }
+    denied.allow_estimates = false;
+    assert!(catalog.resolve(&denied).is_err());
 }

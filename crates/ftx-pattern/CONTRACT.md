@@ -13,10 +13,10 @@ Lawson–Hanson active-set NNLS, verified on a 512-point log sweep and refusing 
 (`ftx-fractional-zener-lowering/1` → `ftx-fractional-zener-lowering-report/1`, 16 MiB input cap,
 ≤ 65,536 replay steps) shared by `ftx materials lower-visco`, `ftx-materials lower-visco`, and
 `ftx-wasm::materials::lower_visco`. The same exact piecewise-linear exponential scheme is also
-available on 3-component Green-strain `Relaxation` via opt-in
-`integration = IntegrationScheme::ExactExponential` (omitted when default `BackwardEuler`,
-preserving legacy fingerprints and reports), giving step-size-invariant holds/ramps and exact
-continuous viscous dissipation in `CompiledRelaxation`/`Memory`. This establishes numerical
+available on 3-component Green-strain `Relaxation` (and opt-in `ftx-relaxation-calibration/1`
+inputs via `integration`) via `integration = IntegrationScheme::ExactExponential` (omitted when
+default `BackwardEuler`, preserving legacy fingerprints and reports), giving step-size-invariant
+holds/ramps and exact continuous viscous dissipation in `CompiledRelaxation`/`Memory`. This establishes numerical
 recurrence and spectral approximation within the declared band only, not empirical textile
 characterization or physical garment fit.
 
@@ -470,3 +470,17 @@ The elastoplastic branch sees its own stress; each Maxwell branch sees total Gre
 own viscous strain. Separate numerical laws without that declaration remain incompatible. No joint
 parameter identification, same-branch viscoplasticity or empirical textile qualification is inferred.
 See `docs/material-parallel-memory.md` and `tests/material_parallel.rs`.
+
+**Opt-in isotropic scalar membrane stiffness degradation** (`material_membrane_plasticity`, `ftx-ps1`).
+`structure.membrane_damage_model = "isotropic_accumulated_damage/1"` (paired with
+`orthotropic_green_return_map/1`) requires three matched source-bearing properties
+(`membrane_damage_threshold >= 0`, `membrane_damage_rate > 0`, `0 < membrane_damage_limit <= 1 - 1e-6`)
+sharing exact `specimen_id` and `conditioning` with the elastic and plastic observations. Uses
+deterministic `ftx_core::det::expm1` for `d(a_tot) = limit * (1 - exp(-rate * max(0, a_tot - threshold)))`
+in Simo-Ju strain-equivalence with explicit accepted-step damage updates: trial potentials, stresses,
+and symmetric PSD tangents scale by `(1 - d_n)`, while step acceptance advances `d` monotonically and
+reports nonnegative `damage_dissipated_j_m2 = (d_{n+1} - d_n) * (psi_el + psi_hard)` separately from
+`dissipated_j_m2 = (1 - d_n) * sum_i(Y_i * |dz_i|)`. Omitting `membrane_damage_model` preserves
+bit-identical behavior and fingerprints. Refuses combination with parallel Maxwell, undamaged plastic
+calibration, and undamaged plastic-heat conversion; excludes fracture/rupture, monolithic softening,
+and empirical textile claims. Tests: `tests/material_membrane_plasticity.rs`.

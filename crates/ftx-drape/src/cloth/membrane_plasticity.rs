@@ -2,7 +2,7 @@
 //! Plastic response replaces the selected elastic membrane; trials never advance memory.
 
 use ftx_core::{Refusal, RefusalCode, Vec3};
-use ftx_pattern::material_membrane_plasticity::{MODEL, Memory, PlasticMembrane};
+use ftx_pattern::material_membrane_plasticity::{DAMAGE_MODEL, MODEL, Memory, PlasticMembrane};
 use ftx_pattern::material_relaxation::CompiledRelaxation;
 use ftx_pattern::material_response::StrainDomain;
 use serde_json::{Value, json};
@@ -22,6 +22,7 @@ struct Bound {
     law: PlasticMembrane,
     memory: Memory,
     dissipated_j: f64,
+    damage_dissipated_j: f64,
 }
 
 impl Bound {
@@ -43,6 +44,7 @@ impl Bound {
 pub(super) struct Field {
     entries: Vec<Option<Bound>>,
     dissipated_j: f64,
+    damage_dissipated_j: f64,
     steps: usize,
 }
 
@@ -64,6 +66,8 @@ impl Field {
             || x.len() != model.rest.len()
             || !self.dissipated_j.is_finite()
             || self.dissipated_j < 0.
+            || !self.damage_dissipated_j.is_finite()
+            || self.damage_dissipated_j < 0.
         {
             return Err(bad(
                 "plastic membrane history no longer matches the cloth topology",
@@ -77,6 +81,8 @@ impl Field {
                     || model.membrane_domain(i) != b.domain
                     || !b.dissipated_j.is_finite()
                     || b.dissipated_j < 0.
+                    || !b.damage_dissipated_j.is_finite()
+                    || b.damage_dissipated_j < 0.
                 {
                     return Err(bad(
                         "changed material, grain or rest triangle cannot reuse plastic membrane history",
@@ -125,36 +131,50 @@ impl Field {
     pub(super) fn advance(&mut self, x: &[Vec3]) -> Result<(), Refusal> {
         let mut updates = Vec::new();
         let mut dissipated = self.dissipated_j;
+        let mut damage_dissipated = self.damage_dissipated_j;
         for (i, b) in self.entries.iter().enumerate() {
             if let Some(b) = b {
                 let update = b.memory.advance(b.strain(x)?)?;
                 let increment = b.element.area * update.dissipated_j_m2;
                 let local = b.dissipated_j + increment;
+                let damage_increment = b.element.area * update.damage_dissipated_j_m2;
+                let local_damage = b.damage_dissipated_j + damage_increment;
                 if !increment.is_finite()
                     || increment < 0.
                     || !local.is_finite()
                     || local < b.dissipated_j
+                    || !damage_increment.is_finite()
+                    || damage_increment < 0.
+                    || !local_damage.is_finite()
+                    || local_damage < b.damage_dissipated_j
                 {
                     return Err(bad("plastic membrane triangle dissipation overflows"));
                 }
                 dissipated += increment;
-                updates.push((i, update.memory, local));
+                damage_dissipated += damage_increment;
+                updates.push((i, update.memory, local, local_damage));
             }
         }
         let steps = self
             .steps
             .checked_add(1)
             .ok_or_else(|| bad("plastic membrane step count overflows"))?;
-        if !dissipated.is_finite() || dissipated < self.dissipated_j {
+        if !dissipated.is_finite()
+            || dissipated < self.dissipated_j
+            || !damage_dissipated.is_finite()
+            || damage_dissipated < self.damage_dissipated_j
+        {
             return Err(bad("plastic membrane dissipation overflows"));
         }
-        for (i, memory, dissipated_j) in updates {
+        for (i, memory, dissipated_j, damage_dissipated_j) in updates {
             let bound = self.entries[i].as_mut().expect("bound material update");
             bound.memory = memory;
             bound.dissipated_j = dissipated_j;
+            bound.damage_dissipated_j = damage_dissipated_j;
         }
         self.steps = steps;
         self.dissipated_j = dissipated;
+        self.damage_dissipated_j = damage_dissipated;
         Ok(())
     }
 }
@@ -258,11 +278,12 @@ impl Solver {
             {
                 return Err(bad("invalid permanent-stretch reference triangle"));
             }
-            Ok(Some(Bound { element, material, domain: self.model.membrane_domain(i), law: law.clone(), memory: law.pristine(), dissipated_j: 0. }))
+            Ok(Some(Bound { element, material, domain: self.model.membrane_domain(i), law: law.clone(), memory: law.pristine(), dissipated_j: 0., damage_dissipated_j: 0. }))
         }).collect::<Result<Vec<_>, Refusal>>()?;
         let field = Field {
             entries,
             dissipated_j: 0.,
+            damage_dissipated_j: 0.,
             steps: 0,
         };
         field.check(&self.model, &self.x)?;
@@ -327,6 +348,26 @@ impl Solver {
         ))
     }
 
+    /// Cumulative accepted stiffness-degradation dissipation in joules, in retained triangle order.
+    /// Unselected and undamaged triangles contribute zero; absence means no permanent membrane law
+    /// is bound. This read never advances memory or changes the caller's state.
+    ///
+    /// # Errors
+    /// Stale material/topology, invalid current strain, or non-finite accepted dissipation.
+    pub fn membrane_damage_dissipation_j(&self) -> Result<Option<Vec<f64>>, Refusal> {
+        let Some(field) = &self.membrane_plasticity else {
+            return Ok(None);
+        };
+        field.check(&self.model, &self.x)?;
+        Ok(Some(
+            field
+                .entries
+                .iter()
+                .map(|bound| bound.as_ref().map_or(0., |b| b.damage_dissipated_j))
+                .collect(),
+        ))
+    }
+
     /// Report accepted permanent Green strain, directional accumulation and plastic dissipation
     /// for selected triangles. This does not import a restart state or supply a thermal heat source.
     ///
@@ -339,6 +380,11 @@ impl Solver {
         field.check(&self.model, &self.x)?;
         let mut elements = Vec::new();
         let mut stored = 0.;
+        let has_damage = field
+            .entries
+            .iter()
+            .flatten()
+            .any(|b| b.law.damage().is_some());
         for (i, b) in field.entries.iter().enumerate() {
             if let Some(b) = b {
                 let strain = b.strain(&self.x)?;
@@ -352,6 +398,11 @@ impl Solver {
                     "current_green_strain":strain,"elastic_stress_n_m":response.stress,
                     "plastic_dissipation_j":b.dissipated_j,
                     "stored_elastic_and_hardening_energy_j":energy});
+                if b.law.damage().is_some() {
+                    element["damage"] = json!(b.memory.damage());
+                    element["stiffness_factor"] = json!(b.memory.stiffness_factor());
+                    element["damage_dissipation_j"] = json!(b.damage_dissipated_j);
+                }
                 if let Some(identity) = b.law.parallel_material_sha256() {
                     element["parallel_network"] = json!({"model":ftx_pattern::material_relaxation::parallel::MODEL,
                         "material_sha256":identity,"stress_basis":"elastoplastic_equilibrium_branch_only"});
@@ -369,17 +420,22 @@ impl Solver {
             .any(|b| b.law.parallel_material_sha256().is_some())
         {
             "Rate-independent orthotropic equilibrium-branch yield and hardening in physical Green strain, with source-qualified Maxwell branches in parallel where marked. Yield excludes Maxwell stress. Excludes same-branch viscoplasticity, damage, rupture, nonlinear equilibrium curves, gather softening, remeshing and thermal feedback"
+        } else if has_damage {
+            "Rate-independent orthotropic yield and directional isotropic hardening in physical Green strain with opt-in accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1); plastic and damage dissipation are reported separately. Excludes rupture, monolithic softening/localization, simultaneous Maxwell/nonlinear membrane response, gather softening, remeshing and thermal feedback"
         } else {
             "Rate-independent orthotropic yield and directional isotropic hardening in physical Green strain; excludes damage, rupture, simultaneous Maxwell/nonlinear membrane response, gather softening, remeshing and thermal feedback"
         };
-        Ok(Some(
-            json!({"schema":"ftx-membrane-plasticity-history/1","model":MODEL,
+        let mut report = json!({"schema":"ftx-membrane-plasticity-history/1","model":MODEL,
             "initialization":"pristine_relative_to_authored_reference_metric",
             "accepted_steps":field.steps,"stored_elastic_and_hardening_energy_j":stored,
             "plastic_dissipation_j":field.dissipated_j,"elements":elements,
             "scope":scope,
-            "empirical_validation_claim":false,"restart_import":false}),
-        ))
+            "empirical_validation_claim":false,"restart_import":false});
+        if has_damage {
+            report["damage_model"] = json!(DAMAGE_MODEL);
+            report["damage_dissipation_j"] = json!(field.damage_dissipated_j);
+        }
+        Ok(Some(report))
     }
 }
 
