@@ -37,7 +37,7 @@ const stills = names.filter(name => name.endsWith(".jpg") &&
 
 function probe(file) {
   const out = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries",
-    "stream=codec_name,pix_fmt,width,height,r_frame_rate,avg_frame_rate,nb_frames:format=duration:format_tags=comment",
+    "stream=codec_name,profile,level,pix_fmt,width,height,r_frame_rate,avg_frame_rate,nb_frames:format=duration:format_tags=comment",
     "-of", "json", file], { encoding: "utf8" });
   const { streams: [stream], format } = JSON.parse(out);
   return { ...stream, duration: Number(format.duration), comment: format.tags?.comment ?? "" };
@@ -102,6 +102,27 @@ test("a truncated cached 1080p rendition is rebuilt and a healthy cache is reuse
   assert.deepEqual(readFileSync(copy), repaired);
 });
 
+test("a decodable cached rendition outside the browser fallback profile is rebuilt", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ftx-incompatible-rendition-"));
+  const master = join(dir, "sample.mp4");
+  const copy = join(dir, "sample-1080.mp4");
+  const original = media + "construction-fez-1080.mp4";
+  writeFileSync(master, readFileSync(media + "construction-fez.mp4"), { flag: "wx" });
+  execFileSync("ffmpeg", ["-nostdin", "-v", "error", "-n", "-i", original, "-c:v", "libx264", "-threads", "3",
+    "-preset", "ultrafast", "-pix_fmt", "yuv444p", "-profile:v", "high444", "-level:v", "4.2", "-movflags", "+faststart", copy]);
+  const incompatible = probe(copy);
+  assert.equal(incompatible.pix_fmt, "yuv444p");
+  assert.equal(incompatible.nb_frames, probe(master).nb_frames);
+  assert.equal(incompatible.comment, probe(original).comment);
+
+  const generator = fileURLToPath(new URL("./film-renditions.sh", import.meta.url));
+  const rebuilt = spawnSync("sh", [generator, dir], { encoding: "utf8" });
+  assert.equal(rebuilt.status, 0, rebuilt.stderr);
+  const restored = probe(copy);
+  assert.deepEqual([restored.codec_name, restored.profile, restored.pix_fmt, restored.level], ["h264", "High", "yuv420p", 42]);
+  assert.equal(restored.nb_frames, incompatible.nb_frames);
+});
+
 for (const film of films) {
   test(`${film} is ${WIDTH}×${HEIGHT} at ${FPS} fps and fits the deploy limit`, () => {
     const s = probe(media + film);
@@ -120,9 +141,12 @@ for (const film of films) {
     assert.ok(existsSync(copy), "no 1080p copy: run sh scripts/film-renditions.sh");
     const s = probe(copy);
     assert.equal(s.codec_name, "h264");
+    assert.equal(s.profile, "High");
     assert.equal(s.pix_fmt, "yuv420p");
+    assert.equal(s.level, 42);
     assert.deepEqual([s.width, s.height], [1920, 1080]);
     assert.equal(s.r_frame_rate, `${FPS}/1`);
+    assert.equal(s.avg_frame_rate, `${FPS}/1`);
     assert.equal(Number(s.nb_frames), Number(probe(media + film).nb_frames), "frame count against the film");
     // A re-rendered film with an old copy would show phones a different cut.
     const sha = createHash("sha256").update(readFileSync(media + film)).digest("hex");

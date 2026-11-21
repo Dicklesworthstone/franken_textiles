@@ -10,7 +10,7 @@ set -eu
 cd "${1:-$(dirname "$0")/../public/media}"
 video_format() {
   # The CSV writer adds an empty column for browser captures with an ICC profile.
-  ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,avg_frame_rate,nb_frames \
+  ffprobe -v error -select_streams v:0 -show_entries "stream=width,height,r_frame_rate,avg_frame_rate,nb_frames${2:-}" \
     -of default=nw=1:nk=1 "$1"
 }
 decoded_frames() {
@@ -28,11 +28,13 @@ for film in ./*.mp4; do
   case $frames in
     ''|0|*[!0-9]*) printf 'Missing a valid frame count in %s.\n' "$film" >&2; exit 1 ;;
   esac
-  expected=$(printf '%s\n' 1920 1080 60/1 60/1 "$frames")
+  # A cached file must match the format the player uses on devices with limited decoding support.
+  rendition_fields=,codec_name,profile,pix_fmt,level
+  expected=$(printf '%s\n' h264 High 1920 1080 yuv420p 42 60/1 60/1 "$frames")
   copy=${film%.mp4}-1080.mp4
   digest=$(sha256sum "$film" | cut -d' ' -f1)
   source="FrankenTextiles 1080p copy of sha256 $digest"
-  if [ -e "$copy" ] && [ "$(video_format "$copy")" = "$expected" ] &&
+  if [ -e "$copy" ] && [ "$(video_format "$copy" "$rendition_fields")" = "$expected" ] &&
     [ "$(ffprobe -v error -show_entries format_tags=comment -of csv=p=0 "$copy")" = "$source" ] &&
     [ "$(decoded_frames "$copy")" = "$frames" ]; then
     continue
@@ -46,7 +48,7 @@ for film in ./*.mp4; do
     printf 'Failed to encode %s. Unpublished output is in %s.\n' "$copy" "$pending" >&2
     exit 1
   fi
-  if [ "$(video_format "$pending")" != "$expected" ]; then
+  if [ "$(video_format "$pending" "$rendition_fields")" != "$expected" ]; then
     printf 'Unexpected format or frame count in %s. Unpublished output is in %s.\n' "$copy" "$pending" >&2
     exit 1
   fi
