@@ -78,15 +78,23 @@ ftx round "$work" --pattern revised/pattern.json --stills --res 840x620 --self-c
 ```
 
 Keep body, pose, fabric, solver options and workspace fit contract fixed when judging a cut
-change. The renderer centres each round on its garment, so use body landmarks to compare lengths.
-To see two native views alongside one flat panel at a common scale, run:
+change. Use a shared camera so an edited hem or sleeve cannot shift the wearer in the frame.
+To see two native views alongside the same flat panel at a common scale, run:
 
 ```sh
 python3 .agents/skills/visual-pattern-fitting/scripts/compare_rounds.py \
-  "$work/rounds/000" "$work/rounds/001" --instance sleeve.L --out "$work/sleeve-comparison.svg"
+  "$work/rounds/000" "$work/rounds/001" --instance sleeve.L --shared-camera \
+  --out "$work/sleeve-comparison.svg"
 ```
 
-Open the self-contained SVG. Each side is labelled with the evidence it shows. “Refused start”
+Open the self-contained SVG. The two renders use the baseline camera and raster size. A crop
+is in baseline PNG pixels and applies to both renders. The comparison labels whether the posed
+body geometry matches and keeps the new PNGs beside the SVG in a directory ending in `.views`.
+The view uses the baseline field of view, so look at the original views as well if a change
+extends beyond the frame. Leave off `--shared-camera` to read an archive that only has original
+stills. Use the original PNGs for `inspect-pixel` on each round.
+
+Each side is labelled with the evidence it shows. “Refused start”
 shows the pre-sewn placement before dynamics. “Refused pose” shows the state recorded by a failed
 solve. Both retain the original refusal code.
 For a vision tool that accepts raster images, use a new `.png`

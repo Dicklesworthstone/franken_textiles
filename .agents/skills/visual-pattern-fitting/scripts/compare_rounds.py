@@ -8,7 +8,17 @@ import struct
 import subprocess
 from html import escape
 from pathlib import Path, PureWindowsPath
+from typing import NamedTuple
 from xml.etree import ElementTree
+
+
+class Panel(NamedTuple):
+    entry: dict
+    title: str
+    scene: Path
+    png: bytes
+    size: tuple[int, int]
+    outline: list[tuple[float, float]]
 
 
 def load_panel(directory, view, instance):
@@ -85,37 +95,58 @@ def load_panel(directory, view, instance):
         raise ValueError(f"unrecognised flat outline for {instance}")
     x_mid = (min(x for x, _ in pts) + max(x for x, _ in pts)) / 2
     y_top = min(y for _, y in pts)
-    return entry, title, base64.b64encode(png).decode(), size, [(x-x_mid, y-y_top) for x, y in pts]
+    return Panel(entry, title, scene, png, size, [(x-x_mid, y-y_top) for x, y in pts])
 
 
-def compare(before, after, view, instance, crop):
+def common_view(rows, view, out, ftx):
+    width, height = rows[0].size
+    command = [
+        ftx, "render", str(rows[0].scene), "--compare", str(rows[1].scene),
+        "--view", view, "--res", f"{width}x{height}", "--out", str(out), "--json",
+    ]
+    result = json.loads(subprocess.run(command, stdout=subprocess.PIPE, check=True).stdout)["result"]
+    aligned = [row._replace(png=(out / name).read_bytes(), size=(width, height))
+               for row, name in zip(rows, ("before.png", "after.png"), strict=True)]
+    body = "Same posed body" if result["same_body_geometry"] else "Posed bodies differ"
+    return aligned, f"Shared baseline camera · {body}"
+
+
+def compare(before, after, view, instance, crop, views_dir=None, ftx="ftx"):
     rows = [load_panel(rd, view, instance) for rd in (before, after)]
-    points = [p for _, _, _, _, outline in rows for p in outline]
+    sizes = [rows[0].size] if views_dir is not None else [row.size for row in rows]
+    if crop:
+        left, top, cw, ch = crop
+        for w, h in sizes:
+            if min(left, top) < 0 or min(cw, ch) <= 0 or left+cw > w or top+ch > h:
+                raise ValueError(f'crop outside the {w} × {h} image')
+    points = [p for row in rows for p in row.outline]
     half_width, height = max(abs(x) for x, _ in points), max(y for _, y in points)
     if not half_width or not height:
         raise ValueError("flat outline has no drawable area")
     scale = min(114 / half_width, 278 / height)
+    framing = None
+    if views_dir is not None:
+        rows, framing = common_view(rows, view, views_dir, ftx)
+    canvas_height = 442 if framing else 410
     parts = ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
-             'width="1200" height="410" viewBox="0 0 1200 410">',
-             '<rect width="1200" height="410" fill="#f5f1e7"/>']
+             f'width="1200" height="{canvas_height}" viewBox="0 0 1200 {canvas_height}">',
+             f'<rect width="1200" height="{canvas_height}" fill="#f5f1e7"/>']
     def label(x, y, content, size=17, colour="#293934"):
         parts.append(f'<text x="{x}" y="{y}" font-family="DejaVu Sans,sans-serif" '
                      f'font-size="{size}" fill="{colour}">{escape(str(content))}</text>')
     outlines = []
-    for i, (entry, title, png, (w, h), outline) in enumerate(rows):
+    for i, (entry, title, _, png, (w, h), outline) in enumerate(rows):
         x = 15 + 446*i
         ink = ["#8a5327", "#126552"][i]
         refused = "refusal" in entry["sim"]
         label(x, 29, f'{title} · round {entry["round"]:03d} · {view.replace("_"," ")}', 19, ink)
         left, top, cw, ch = crop or (0, 0, w, h)
-        if min(left, top) < 0 or min(cw, ch) <= 0 or left+cw > w or top+ch > h:
-            raise ValueError(f'crop outside the {w} × {h} native image')
         # Fit the entire requested rectangle, including fingertips at wide aspect ratios.
         factor = min(436 / cw, 300 / ch)
         dw, dh = cw * factor, ch * factor
         parts.append(f'<svg x="{x + (436-dw)/2}" y="{42 + (300-dh)/2}" width="{dw}" height="{dh}" '
                      f'viewBox="{left} {top} {cw} {ch}" overflow="hidden"><image width="{w}" height="{h}" '
-                     f'xlink:href="data:image/png;base64,{png}"/></svg>')
+                     f'xlink:href="data:image/png;base64,{base64.b64encode(png).decode()}"/></svg>')
         label(x, 367, f'Flat · {entry["basis"]["flat"]}', 15)
         state = entry["sim"]["refusal"]["code"] if refused else entry["basis"]["sim"]
         label(x, 391, f'{title} · {state}', 15)
@@ -126,6 +157,8 @@ def compare(before, after, view, instance, crop):
     # Where the two cuts coincide, both colours should remain visible.
     parts.extend(reversed(outlines))
     label(930, 29, f'{instance} · flat overlay', 18)
+    if framing:
+        label(15, 420, framing, 15)
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -137,19 +170,26 @@ if __name__ == "__main__":
     parser.add_argument("--instance", required=True, help="Physical panel ID, e.g. sleeve.L")
     parser.add_argument("--view", default="front", choices=["front","side","back","three_quarter","strain_front","strain_back"])
     parser.add_argument("--crop", type=int, nargs=4, metavar=("LEFT","TOP","WIDTH","HEIGHT"),
-                        help="Show the same region in both original PNGs, in pixels")
+                        help="Crop both images in pixels (baseline image coordinates with --shared-camera)")
     parser.add_argument("--out", type=Path, required=True, help="New SVG, or PNG using the showcase's installed sharp package")
+    parser.add_argument("--shared-camera", action="store_true",
+                        help="Render both scenes through the baseline camera with ftx")
+    parser.add_argument("--ftx", default="ftx", help="Native ftx executable for --shared-camera")
     args = parser.parse_args()
     try:
-        svg = compare(args.before, args.after, args.view, args.instance, args.crop)
+        suffix = args.out.suffix.lower()
+        if suffix not in (".svg", ".png"):
+            raise ValueError("choose an output filename ending in .svg or .png")
+        if args.out.exists() or args.out.is_symlink():
+            raise FileExistsError(f"{args.out} already exists")
+        views_dir = args.out.with_name(args.out.name + ".views") if args.shared_camera else None
+        svg = compare(args.before, args.after, args.view, args.instance, args.crop, views_dir, args.ftx)
         data = svg.encode()
-        if args.out.suffix.lower() == ".png":
+        if suffix == ".png":
             convert = ('import sharp from "sharp"; const chunks=[]; for await (const c of process.stdin) chunks.push(c); '
                        'const png=await sharp(Buffer.concat(chunks),{density:120}).png().toBuffer(); process.stdout.write(png);')
             data = subprocess.run(["node", "--input-type=module", "-e", convert], input=data,
                                   stdout=subprocess.PIPE, check=True, cwd=Path(__file__).resolve().parents[4]/"showcase").stdout
-        elif args.out.suffix.lower() != ".svg":
-            raise ValueError("choose an output filename ending in .svg or .png")
         with args.out.open("xb") as file:
             file.write(data)
     except (KeyError, OSError, ValueError, ElementTree.ParseError, struct.error, subprocess.CalledProcessError) as error:

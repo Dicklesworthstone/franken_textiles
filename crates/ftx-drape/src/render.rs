@@ -501,7 +501,10 @@ pub fn png(width: usize, height: usize, rgb: &[u8]) -> Vec<u8> {
     out
 }
 
-fn still_camera(body: &ColouredMesh, garment: &ColouredMesh, view: &str) -> Option<Camera> {
+/// Camera for a native still. Reuse it with identical raster dimensions to compare another mesh
+/// in the same world frame. Unknown views have no camera.
+#[must_use]
+pub fn still_camera(body: &ColouredMesh, garment: &ColouredMesh, view: &str) -> Option<Camera> {
     let az: f64 = match view {
         "front" | "strain_front" => 0.0,
         "side" => 90.0,

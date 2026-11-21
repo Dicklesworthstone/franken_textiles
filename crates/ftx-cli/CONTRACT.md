@@ -408,6 +408,11 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   into DRAPE_DIR as `still_{front,side,back,three_quarter,strain_front,strain_back}.png`, printing
   `{"stills": {view: path}}` as the reference's `blender_sew.py --stills-from` does; no Blender. A missing
   or unreadable OBJ, empty mesh or non-finite geometry is refused (`io`, `invalid_document`).
+- `ftx render BASELINE_DIR --compare REVISED_DIR --view VIEW --out NEW_DIR [--res WxH] [--json]`
+  renders one native view of each scene at the baseline camera with the same raster dimensions.
+  It keeps the original scene files and writes `before.png` and `after.png` in the new directory.
+  The report indicates whether the posed bodies have equal vertices and faces. Use the
+  original view for pixel inspection and to check any geometry outside the baseline framing.
 - `ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM]
   [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--res WxH] [--json]`: where a pattern
   starts on the body, for a person or an agent authoring placements and judging a cut by eye. It runs the
