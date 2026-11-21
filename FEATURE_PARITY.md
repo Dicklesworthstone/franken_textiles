@@ -126,8 +126,16 @@ where. Measured cause (2026-11-21, `ftx-udlj`): that cuff is 169.8 mm round and 
 whose convex-hull girth is 174 to 180 mm at the thumb and knuckles; with cloth contact on, the fully
 relaxed start (600 iterations) is not admitted, the drape falls back to its 400-iteration checkpoint, and
 that checkpoint is stretched 15 % or more at both cuffs. The refusal states the checkpoint and the
-stretched pieces with their nearest pattern edges (`f94cc79e`). No cuff wider than the hand, closed-thumb
-hand pose or layer-separating start exists yet, so the long sleeve remains undrapable.
+stretched pieces with their nearest pattern edges (`f94cc79e`).
+
+Follow-up `ftx-jnqs` held the 385 mm sleeve length, public-prior wearer and solver settings fixed, with
+`--hands knuckle --self-contact-mm 2`. Redrafting with `cuff_ease` of 59 mm and 87.3 mm produced 201.7 mm
+and 230.1 mm cuffs. Both reached the fully relaxed start and converged numerically for 12 sewing and
+36 drape steps on the contact proxy. The full displayed-body audit rejected both at its first physical
+frame (87). The first failure was cloth triangle 1988 against body triangle 4244, and the second was
+1982 against 4365. The front and side diagnostics show the cuff crossing near the thumb. Both flat
+checks retained the 30 mm sleeve-length excess. The 230.1 mm cut also exceeded the cuff-ease band by
+27.4 mm. Wider cuffs alone have yet to clear the displayed hand in this pose.
 
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
