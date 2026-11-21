@@ -166,14 +166,15 @@ impl SurfaceConditions {
                 "inferred air gaps","compression-dependent loft","moisture transport","evaporation",
                 "wind-dependent films","radiative exchange","thermal bridges","human thermoregulation"]});
         if let Some(details) = exterior {
+            // Partial never rounds up: only omit "radiative exchange" when every column enables radiation.
             let enabled = self
                 .exterior_exchange
                 .as_ref()
-                .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()))
+                .is_some_and(|v| !v.is_empty() && v.iter().all(|e| e.radiation.is_some()))
                 || self
                     .microclimate_exterior
                     .as_ref()
-                    .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()));
+                    .is_some_and(|v| !v.is_empty() && v.iter().all(|e| e.radiation.is_some()));
             describe_exterior(&mut result, details, enabled, microclimate);
         }
         Ok(result)

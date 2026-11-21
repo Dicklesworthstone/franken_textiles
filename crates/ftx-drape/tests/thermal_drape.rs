@@ -705,4 +705,70 @@ fn surface_conditions_admits_microclimate_exterior_and_keeps_wind_exclusion_on_m
     let mut denied = uniform;
     denied.microclimate_exterior.as_mut().unwrap()[0].allow_estimates = false;
     assert!(denied.evaluate(&draped.report).is_err());
+
+    // Mixed per-column radiating + non-radiating exterior must retain "radiative exchange" in
+    // not_simulated (partial never rounds up); all-radiating omits it.
+    let example: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    ))
+    .unwrap();
+    let mut mat_a = thermal_sheet(0.4, 1000.);
+    mat_a["record"]["properties"]["emissivity"] =
+        example["layers"][0]["record"]["properties"]["emissivity"].clone();
+    mat_a["record"]["properties"]["emissivity"]["source"] = json!("test");
+    let mut mat_b = thermal_sheet(0.6, 1000.);
+    mat_b["record"]["properties"]["emissivity"] =
+        example["layers"][0]["record"]["properties"]["emissivity"].clone();
+    mat_b["record"]["properties"]["emissivity"]["source"] = json!("test");
+    let mut rad_raw = band().raw().clone();
+    rad_raw["fabric"]["material"] = mat_a;
+    rad_raw["pieces"][1]["fabric"] = json!({"material": mat_b});
+    let rad_draped = run(&Pattern::new(rad_raw), options());
+    let rad_sha = rad_draped.report["steady_thermal_surface"]["model"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let with_rad = example["exterior_exchange"].clone();
+    let mut without_rad = with_rad.clone();
+    without_rad.as_object_mut().unwrap().remove("radiation");
+
+    let mixed_rad: SurfaceConditions = serde_json::from_value(json!({
+        "schema": "ftx-steady-surface-conditions/1",
+        "model_sha256": rad_sha,
+        "boundaries": [{
+            "inside_c": 35.0, "outside_c": 5.0,
+            "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.0
+        }],
+        "exterior_exchange": [with_rad, without_rad]
+    }))
+    .unwrap();
+    let mixed_rad_out = mixed_rad.evaluate(&rad_draped.report).unwrap();
+    assert!(
+        mixed_rad_out["not_simulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "radiative exchange"),
+        "mixed radiating/non-radiating columns must keep radiative exchange in not_simulated"
+    );
+
+    let all_rad: SurfaceConditions = serde_json::from_value(json!({
+        "schema": "ftx-steady-surface-conditions/1",
+        "model_sha256": rad_sha,
+        "boundaries": [{
+            "inside_c": 35.0, "outside_c": 5.0,
+            "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.0
+        }],
+        "exterior_exchange": [with_rad.clone(), with_rad]
+    }))
+    .unwrap();
+    let all_rad_out = all_rad.evaluate(&rad_draped.report).unwrap();
+    assert!(
+        !all_rad_out["not_simulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "radiative exchange"),
+        "all-radiating columns should omit radiative exchange from not_simulated"
+    );
 }

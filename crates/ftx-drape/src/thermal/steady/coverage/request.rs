@@ -359,16 +359,17 @@ impl Request {
                 ]);
         }
         if let Some(details) = exterior {
+            // Partial never rounds up: only omit "radiative exchange" when every body triangle enables radiation.
             let enabled = self
                 .conditions
                 .exterior_exchange
                 .as_ref()
-                .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()))
+                .is_some_and(|v| !v.is_empty() && v.iter().all(|e| e.radiation.is_some()))
                 || self
                     .conditions
                     .microclimate_exterior
                     .as_ref()
-                    .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()));
+                    .is_some_and(|v| !v.is_empty() && v.iter().all(|e| e.radiation.is_some()));
             crate::thermal::steady::request::describe_exterior(
                 &mut result,
                 details,
