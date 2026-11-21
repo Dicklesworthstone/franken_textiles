@@ -156,6 +156,8 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-coverage` couples mapped layers and bare body areas; generated geometry receipts are replayed.
 `thermal-map` derives coverage polygons from actual cloth and body geometry under a local-normal closure.
 `thermal-motion` evolves a timed sequence of verified maps, conservatively remaps heat, and can resume saved states.
+`microclimate` evaluates validity-gated moist-air Nusselt convection correlations (`Evidence::Estimate`) with explicit discrepancy bounds; not a measured garment film.
+`lower-visco` lowers a source-qualified Prony/exact-exponential relaxation model to discrete branch weights without extrapolating beyond its characterized range.
 `cut-plan` derives material-specific roll requirements from real cut instances and sourced width.
 `cut-job` routes every source piece to roll or finite inventory and produces one complete allocation with independent purchasing outcomes.
 `stock-plan` allocates every cutter to finite hide/remnant polygons, with defect exclusions and exact material matching.
