@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import SiteHeader from "./site/SiteHeader";
 import SiteFooter from "./site/SiteFooter";
 import Crumbs from "./site/Crumbs";
@@ -381,25 +381,7 @@ export default function ThermalSandwich() {
   const [insideC, setInsideC] = useState(35);
   const [outsideC, setOutsideC] = useState(20);
   const [explode, setExplode] = useState(0.45);
-  const [result, setResult] = useState<SteadyResult | undefined>(undefined);
-  const [refusal, setRefusal] = useState<string>("");
-  const [sourceTag, setSourceTag] = useState<"starter" | "wasm" | "loading">("loading");
-  const [downloads, setDownloads] = useState<{ requestUrl: string; reportUrl: string }>();
-
-  const worker = useRef<Worker | null>(null);
-  const serial = useRef(0);
-
-  const isFixtureDefault =
-    layer1 === sheets[0].id &&
-    layer2 === "none" &&
-    insideC === 35 &&
-    outsideC === 20;
-
-  useEffect(() => () => { worker.current?.terminate(); worker.current = null; }, []);
-
-  useEffect(() => {
-    const id = ++serial.current;
-    const controller = new AbortController();
+  const request = useMemo(() => {
     const layers =
       layer2 === "none"
         ? [{ id: layer1, allow_estimates: false }]
@@ -407,7 +389,7 @@ export default function ThermalSandwich() {
             { id: layer1, allow_estimates: false },
             { id: layer2, allow_estimates: false },
           ];
-    const request = {
+    return {
       schema: "ftx-thermal-steady/1",
       layers,
       interface_resistance_m2_k_w:
@@ -418,60 +400,71 @@ export default function ThermalSandwich() {
       inside_resistance_m2_k_w: R_IN,
       outside_resistance_m2_k_w: R_OUT,
     };
+  }, [layer1, layer2, hasInterface, interfaceR, insideC, outsideC]);
+  const [reply, setReply] = useState<{
+    request: typeof request;
+    source: "starter" | "wasm";
+    result?: SteadyResult;
+    refusal?: string;
+  }>();
+  const active = reply?.request === request ? reply : undefined;
+  const result = active?.result;
+  const refusal = active?.refusal ?? "";
+  const sourceTag = active?.source ?? "loading";
+  const [downloads, setDownloads] = useState<{ result: SteadyResult; requestUrl: string; reportUrl: string }>();
+
+  const worker = useRef<Worker | null>(null);
+  const serial = useRef(0);
+  const isFixtureDefault = layer1 === sheets[0].id && layer2 === "none" && insideC === 35 && outsideC === 20;
+
+  useEffect(() => () => { worker.current?.terminate(); worker.current = null; }, []);
+
+  useEffect(() => {
+    const id = ++serial.current;
+    const controller = new AbortController();
 
     if (isFixtureDefault) {
       fetch("/labs/thermal-starter.json", { signal: controller.signal })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error("Starter fixture unavailable"))))
         .then((data: SteadyResult) => {
           if (controller.signal.aborted || id !== serial.current) return;
-          setResult(data);
-          setRefusal("");
-          setSourceTag("starter");
+          setReply({ request, result: data, source: "starter" });
         })
         .catch(() => {
-          if (!controller.signal.aborted && id === serial.current) dispatchWasm(id, request);
+          if (!controller.signal.aborted && id === serial.current) dispatchWasm();
         });
     } else {
-      dispatchWasm(id, request);
+      dispatchWasm();
     }
 
-    function dispatchWasm(reqId: number, payload: typeof request) {
-      setSourceTag("loading");
+    function dispatchWasm() {
       try {
         worker.current ??= new Worker("/labs/thermal-worker.mjs", { type: "module" });
         worker.current.onmessage = ({ data }: MessageEvent<{ id: number; result?: SteadyResult; error?: string }>) => {
           if (data.id !== serial.current) return;
           if (data.error) {
-            setResult(undefined);
-            setRefusal(data.error);
-            setSourceTag("wasm");
+            setReply({ request, refusal: data.error, source: "wasm" });
           } else if (data.result) {
-            setResult(data.result);
-            setRefusal("");
-            setSourceTag("wasm");
+            setReply({ request, result: data.result, source: "wasm" });
           }
         };
         worker.current.onerror = () => {
           worker.current?.terminate();
           worker.current = null;
-          if (reqId === serial.current) {
-            setResult(undefined);
-            setRefusal("The local thermal WASM engine could not load.");
-            setSourceTag("wasm");
+          if (id === serial.current) {
+            setReply({ request, refusal: "The local thermal WASM engine could not load.", source: "wasm" });
           }
         };
-        worker.current.postMessage({ id: reqId, request: payload });
+        worker.current.postMessage({ id, request });
       } catch (err) {
-        if (reqId === serial.current) {
-          setResult(undefined);
-          setRefusal(err instanceof Error ? err.message : String(err));
-          setSourceTag("wasm");
+        if (id === serial.current) {
+          setReply({ request, refusal: err instanceof Error ? err.message : String(err), source: "wasm" });
         }
       }
     }
 
     return () => controller.abort();
-  }, [layer1, layer2, hasInterface, interfaceR, insideC, outsideC, isFixtureDefault]);
+  }, [request, isFixtureDefault]);
 
   useEffect(() => {
     if (!result) {
@@ -484,7 +477,7 @@ export default function ThermalSandwich() {
     const reportUrl = URL.createObjectURL(
       new Blob([JSON.stringify(result, null, 2) + "\n"], { type: "application/json" }),
     );
-    setDownloads({ requestUrl, reportUrl });
+    setDownloads({ result, requestUrl, reportUrl });
     return () => {
       URL.revokeObjectURL(requestUrl);
       URL.revokeObjectURL(reportUrl);
@@ -782,7 +775,7 @@ ftx materials thermal-steady stack-request.json --json`;
                 <code>allow_estimates: false</code>
               </p>
 
-              {downloads && (
+              {downloads && downloads.result === result && (
                 <div className="th-downloads">
                   <a href={downloads.requestUrl} download="thermal-sandwich-request.json">
                     Download frozen request JSON ↓
