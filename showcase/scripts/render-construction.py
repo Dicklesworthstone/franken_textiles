@@ -15,15 +15,27 @@ import subprocess
 import sys
 from pathlib import Path
 
-import bpy
 import numpy as np
-from mathutils import Vector
+
+try:
+    import bpy
+    from mathutils import Vector
+except ModuleNotFoundError:
+    # The archived geometry and edit are also shared with the headless raster recorder.
+    bpy = None
 
 PUBLIC = Path(__file__).resolve().parents[1] / "public"
 FPS = 60
 COUNT = 6 * FPS
 FRAME_WIDTH, FRAME_HEIGHT = 3840, 2160
 LANDMARKS = (0, 53, 90)
+FABRIC_COLORS = {
+    "sundress": (.16, .38, .29), "eased": (.16, .38, .29),
+    "blue": (.013, .022, .049), "yellow": (.019, .019, .022),
+    "trousers": (.052, .103, .137), "bolero": (.27, .042, .028),
+    "ensemble": (.03, .14, .105), "fez": (.26, .017, .021),
+    "column": (.28, .16, .09), "flare": (.32, .15, .07),
+}
 
 
 def document(path):
@@ -231,11 +243,8 @@ def render(args):
     scene.world.node_tree.nodes["Background"].inputs[0].default_value=(.72,.77,.85,1)
     scene.world.node_tree.nodes["Background"].inputs[1].default_value=.20
     scene.view_settings.look="AgX - Medium High Contrast"
-    colors={"sundress":(.16,.38,.29),"eased":(.16,.38,.29),"blue":(.013,.022,.049),"yellow":(.019,.019,.022),
-        "trousers":(.052,.103,.137),"bolero":(.27,.042,.028),"ensemble":(.03,.14,.105),
-        "fez":(.26,.017,.021),"column":(.28,.16,.09),"flare":(.32,.15,.07)}
     textile={"sundress":"atelier/madder.webp","eased":"atelier/madder.webp","flare":"atelier/madder.webp","column":"atelier/glen-check.webp"}.get(name)
-    fabric=material("Woven face",colors[name],True,textile,.16 if name=="column" else .30)
+    fabric=material("Woven face",FABRIC_COLORS[name],True,textile,.16 if name=="column" else .30)
     cloth=surface("Cut pieces",initial,tri,fabric)
     paper=material("Pattern tissue",(.68,.46,.245))
     cloth.data.materials.append(paper)
