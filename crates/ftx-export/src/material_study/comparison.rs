@@ -1987,6 +1987,12 @@ impl Policy {
                 false,
             ),
             (
+                consumers.contains(&Consumer::Surface),
+                &scenario["surface"]["microclimate_exterior"],
+                "steady_thermal_surface",
+                false,
+            ),
+            (
                 coupled_motion || consumers.contains(&Consumer::TransientSurface),
                 &heat["exterior_exchange"],
                 "thermal_surface",
@@ -2038,7 +2044,11 @@ impl Policy {
             if !active {
                 continue;
             }
-            for field in ["exterior_exchange", "exposed_exterior_exchange"] {
+            for field in [
+                "exterior_exchange",
+                "microclimate_exterior",
+                "exposed_exterior_exchange",
+            ] {
                 let Some(environments) = policy[field].as_array() else {
                     continue;
                 };

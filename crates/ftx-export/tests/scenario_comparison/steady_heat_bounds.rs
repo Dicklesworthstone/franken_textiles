@@ -1093,3 +1093,58 @@ fn heat_ranges_bind_final_material_assignments_and_explicit_bounded_guards() {
             .contains("final material assignments")
     );
 }
+
+#[test]
+fn steady_heat_bounds_explicitly_refuse_microclimate_exterior_while_keeping_nominal_visible() {
+    for coverage in [false, true] {
+        let (mut request, mut descriptor) = inputs(coverage, false);
+        let metric = if coverage {
+            "body_coverage_power_w"
+        } else {
+            "independent_surface_power_w"
+        };
+        let mc = json!([{
+            "air": {"temperature_c": 10., "pressure_pa": 101325., "relative_humidity": 0.5},
+            "correlation": "churchill_bernstein_cylinder",
+            "characteristic_length_m": 0.2,
+            "wind_speed_m_s": 2.0,
+            "surface_temperature_range_c": [-20., 80.],
+            "allow_estimates": true
+        }]);
+        if coverage {
+            descriptor["scenario"]["coverage"]["conditions"]["microclimate_exterior"] = mc;
+        } else {
+            descriptor["scenario"]["surface"]["microclimate_exterior"] = mc;
+        }
+        let bounded = evaluate(&request, &descriptor, |_, _| {});
+        assert!(
+            bounded["comparison"]["frontier"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "coverage={coverage}: {}",
+            bounded["comparison"]
+        );
+        for candidate in bounded["comparison"]["alternatives"].as_array().unwrap() {
+            assert_eq!(candidate["eligible"], false);
+            assert!(candidate["readings"][metric]["value"].is_number());
+            assert!(candidate["readings"][metric]["reported_bounds"].is_null());
+            assert!(
+                candidate["exclusions"]
+                    .to_string()
+                    .contains("microclimate convection"),
+                "coverage={coverage}: {}",
+                candidate["exclusions"]
+            );
+        }
+        request.comparison.as_mut().unwrap().basis =
+            ftx_export::material_study::comparison::Basis::Nominal;
+        let nominal = evaluate(&request, &descriptor, |_, _| {});
+        assert_eq!(
+            nominal["comparison"]["frontier"],
+            json!(["b"]),
+            "coverage={coverage}: {}",
+            nominal["comparison"]
+        );
+    }
+}

@@ -1630,6 +1630,76 @@ fn radiative_coverage_conservatively_retains_both_mapped_side_protocols() {
 }
 
 #[test]
+fn microclimate_exterior_optical_protocols_follow_surface_columns_and_coverage_sides() {
+    let (mut a, mut d, mut s, m) = case();
+    let raw = optical_sources(&mut a);
+    a.frozen_changes
+        .as_mut()
+        .unwrap()
+        .pieces
+        .insert("back".into(), serde_json::from_value(raw.clone()).unwrap());
+    s["drape"]["steady_thermal_surface"] = s["drape"]["thermal_surface"].clone();
+    s["drape"]["steady_thermal_surface"]["model"]["patches"][1]["column"] = json!(1);
+    d["scenario"]["surface"] = json!({"microclimate_exterior":[
+        {"radiation":{"emissivity_property":"emissivity_public"}},
+        {"radiation":{"emissivity_property":"emissivity_reverse"}}]});
+    let surface_metric = "independent_surface_power_w";
+    let original = optical_protocol(&a, &d, &s, &m, surface_metric);
+    for (piece, used) in [
+        ("front", "emissivity_public"),
+        ("back", "emissivity_reverse"),
+    ] {
+        for property in ["emissivity_public", "emissivity_reverse"] {
+            let mut changed = raw.clone();
+            changed["record"]["properties"][property]["method"] = json!("Different optical method");
+            a.frozen_changes
+                .as_mut()
+                .unwrap()
+                .pieces
+                .insert(piece.into(), serde_json::from_value(changed).unwrap());
+            assert_eq!(
+                original != optical_protocol(&a, &d, &s, &m, surface_metric),
+                property == used,
+                "microclimate surface {piece}: {property}"
+            );
+            a.frozen_changes
+                .as_mut()
+                .unwrap()
+                .pieces
+                .insert(piece.into(), serde_json::from_value(raw.clone()).unwrap());
+        }
+    }
+    // Convection-only microclimate_exterior consumes no emissivity protocol.
+    d["scenario"]["surface"] = json!({"microclimate_exterior":[{}]});
+    let conv_only = optical_protocol(&a, &d, &s, &m, surface_metric);
+    let mut changed = raw.clone();
+    changed["record"]["properties"]["emissivity_public"]["method"] = json!("Unused face method");
+    a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(changed).unwrap());
+    assert_eq!(conv_only, optical_protocol(&a, &d, &s, &m, surface_metric));
+    a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(raw.clone()).unwrap());
+
+    // Coverage radiative microclimate_exterior conservatively retains both mapped side protocols.
+    d["scenario"]["coverage"] = json!({"conditions":{
+        "microclimate_exterior":[{"radiation":{"automatic_material_face":true}}]
+    }});
+    let cov_metric = "body_coverage_power_w";
+    let cov_original = optical_protocol(&a, &d, &s, &m, cov_metric);
+    for property in ["emissivity_public", "emissivity_reverse"] {
+        let mut changed = raw.clone();
+        changed["record"]["properties"][property]["method"] =
+            json!("Different exposed-side method");
+        a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(changed).unwrap());
+        assert_ne!(
+            cov_original,
+            optical_protocol(&a, &d, &s, &m, cov_metric),
+            "microclimate coverage: {property}"
+        );
+        a.frozen_changes.as_mut().unwrap().default =
+            Some(serde_json::from_value(raw.clone()).unwrap());
+    }
+}
+
+#[test]
 fn coupled_mass_admission_preserves_the_independent_thermal_energy_objective() {
     let (a, d, s, m) = coupled_case();
     assert!(admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).is_ok());

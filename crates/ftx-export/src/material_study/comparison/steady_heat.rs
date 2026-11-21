@@ -443,6 +443,24 @@ pub(super) fn bounds(
             "steady heat source ranges do not cover thermal-bridge qualification domains; nominal heat remains available",
         ));
     }
+    let has_microclimate = match consumer {
+        Consumer::Surface => {
+            !policy["microclimate_exterior"].is_null()
+                || !result["microclimate_convection"].is_null()
+                || !result["request"]["conditions"]["microclimate_exterior"].is_null()
+        }
+        Consumer::Coverage => {
+            !policy["conditions"]["microclimate_exterior"].is_null()
+                || !result["microclimate_convection"].is_null()
+                || !result["request"]["conditions"]["microclimate_exterior"].is_null()
+        }
+        _ => false,
+    };
+    if has_microclimate {
+        return Err(invalid(
+            "steady heat source ranges do not cover correlation-derived microclimate convection or its model-form discrepancy; nominal heat remains available",
+        ));
+    }
     let source = source(alternative, simulation)?;
     if result["request"]["report"]
         != json!({"material":simulation["drape"]["material"], "steady_thermal_surface":source.frame})
