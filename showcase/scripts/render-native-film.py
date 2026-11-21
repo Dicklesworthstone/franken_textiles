@@ -258,6 +258,22 @@ def trim_top(points, faces, height):
     return np.vstack((points, vertices)), np.array(triangles)
 
 
+def main_component(faces, point_count):
+    """After cropping below the shoulders, keep the body and omit disconnected hands and arms."""
+    parents = list(range(point_count))
+    def root(point):
+        while point != parents[point]:
+            parents[point] = parents[parents[point]]
+            point = parents[point]
+        return point
+    for a, b, c in faces:
+        first = root(a)
+        parents[root(b)] = first
+        parents[root(c)] = first
+    labels = np.fromiter((root(face[0]) for face in faces), dtype=np.int32, count=len(faces))
+    return faces[labels == np.bincount(labels).argmax()]
+
+
 def attached_points(points, triangles, anchors, offset):
     faces = points[triangles[anchors[:, 0].astype(int)]]
     normal = np.cross(faces[:, 1] - faces[:, 0], faces[:, 2] - faces[:, 0])
@@ -342,11 +358,14 @@ def render(args):
         marks_vao.render(mode=mode, vertices=len(points))
 
     models, bounds = [], [recorded[-1]]
-    floor = recorded[-1, :, 2].min() - .012
+    floor = recorded[-1, :, 2].min() - .001
+    mount = None
     if body is not None:
         floor = body[:, 2].min() - .009
-        head = body[:, 2].max() - np.ptp(body[:, 2])*.114
-        if args.garment in ("column", "flare", "trousers"):
+        head_fraction = .18 if args.garment in ("bolero", "ensemble") else .114
+        head = body[:, 2].max() - np.ptp(body[:, 2])*head_fraction
+        lower_body = args.garment in ("column", "flare", "trousers")
+        if lower_body:
             head = min(head, recorded[-1, :, 2].max() + .14)
         visible = np.ones(len(body), dtype=bool)
         if args.garment in ("blue", "yellow", "bolero"):
@@ -355,17 +374,28 @@ def render(args):
             half_width = .27 if args.garment != "bolero" else .125
             trunk = np.abs(body[:, 0]) < half_width
             drop = np.ptp(recorded[-1, :, 2]) * .28
-            floor = min(hip-drop, recorded[-1, :, 2].min()-.022, body[~trunk, 2].min()-.025)
-            visible &= (body[:, 2] >= hip) | (~trunk & (body[:, 2] >= floor))
+            if args.garment == "bolero":
+                visible &= (body[:, 2] >= hip) | ~trunk
+            else:
+                floor = min(hip-drop, recorded[-1, :, 2].min()-.022, body[~trunk, 2].min()-.025)
+                visible &= (body[:, 2] >= hip) | (~trunk & (body[:, 2] >= floor))
             ring = body[trunk & (np.abs(body[:, 2]-hip)<.016)]
             low, high = ring.min(axis=0), ring.max(axis=0)
-            stand, triangles = turned_stand((low+high)/2, floor, hip, (high[0]-low[0])*.48)
-            models.append(Surface(ctx, shading, stand, triangles, stand[:, [0, 2]], np.tile((.093, .052, .030), (len(stand), 1)), depth))
-            bounds.append(stand)
+            mount = (hip, drop, (low+high)/2, (high[0]-low[0])*.48)
         body_faces = body_faces[visible[body_faces].all(axis=1)]
         body, body_faces = trim_top(body, body_faces, head)
-        bounds.append(body[np.unique(body_faces)])
+        if lower_body or args.garment == "bolero":
+            body_faces = main_component(body_faces, len(body))
+        dressed_form = body[np.unique(body_faces)]
+        bounds.append(dressed_form)
         models.append(Surface(ctx, shading, body, body_faces, body[:, [0, 2]], np.tile((.46,.34,.235), (len(body),1)), depth))
+        if mount:
+            hip, drop, center, radius = mount
+            if args.garment == "bolero":
+                floor = min(hip-drop, dressed_form[:, 2].min()-.027)
+            stand, triangles = turned_stand(center, floor, hip, radius)
+            models.append(Surface(ctx, shading, stand, triangles, stand[:, [0, 2]], np.tile((.093, .052, .030), (len(stand), 1)), depth))
+            bounds.append(stand)
     bounds = np.concatenate(bounds)
     ground = np.asarray([(-20,-20,floor), (20,-20,floor), (20,20,floor), (-20,20,floor)])
     platform = Surface(ctx, shading, ground, np.array([(0,1,2),(0,2,3)]), ground[:, :2],
