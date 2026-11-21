@@ -20,11 +20,12 @@
 .construction-links{display:flex;gap:8px 18px;flex-wrap:wrap;margin-top:14px}.construction-links a{font:600 12.5px var(--sans);color:#202c33;text-decoration:underline;text-decoration-color:#b6aa94;text-underline-offset:4px;transition:color .15s,text-decoration-color .15s}
 .construction-links a:hover{color:#87402f;text-decoration-color:currentColor}
 .construction-motion{min-width:0;background:#2b2b23;align-self:stretch;display:flex;flex-direction:column;justify-content:center}
-.construction-image{position:relative;aspect-ratio:16/9;flex:1;min-height:0;overflow:hidden;background:#2b2721}
-/* The box is often taller than its 16:9 film. This continues the film's own backdrop above and below it, so no bar shows:
-   the same vignette as BACKGROUND_FRAGMENT in scripts/render-native-film.py (centre 36 % across, 32 % down the frame),
-   drawn on a box three film-heights tall and sampled every 0.3 of its radius. */
-.construction-image::before{content:"";position:absolute;left:0;right:0;top:50%;aspect-ratio:16/27;transform:translateY(-50%);background:radial-gradient(ellipse 120% 40% at 36% 44%,#5e5444 0%,#5b5142 12.5%,#534a3d 25%,#494136 37.5%,#3e382f 50%,#363029 62.5%,#302b25 75%,#2d2822 87.5%,#2b2721 100%)}
+/* The box takes its height from the text beside it, so it is taller than its 16:9 film on most screens and wider on
+   very wide ones. Its background continues the film's own backdrop round the film, so no bar shows on either side:
+   an SVG whose 16 by 9 view box is fitted to the box exactly as the film is (xMidYMid meet) and whose gradient is
+   the vignette of BACKGROUND_FRAGMENT in scripts/render-native-film.py (centre 36 % across and 32 % down the frame,
+   sampled every 0.3 of the frame's half-width), painted far beyond the view box. Change the two together. */
+.construction-image{position:relative;aspect-ratio:16/9;flex:1;min-height:0;overflow:hidden;background:#2b2721 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9' preserveAspectRatio='xMidYMid meet'%3E%3CradialGradient id='g' gradientUnits='userSpaceOnUse' cx='0' cy='0' r='1' gradientTransform='translate(5.76 2.88) scale(19.2 10.8)'%3E%3Cstop offset='0' stop-color='%235e5444'/%3E%3Cstop offset='.125' stop-color='%235b5142'/%3E%3Cstop offset='.25' stop-color='%23534a3d'/%3E%3Cstop offset='.375' stop-color='%23494136'/%3E%3Cstop offset='.5' stop-color='%233e382f'/%3E%3Cstop offset='.625' stop-color='%23363029'/%3E%3Cstop offset='.75' stop-color='%23302b25'/%3E%3Cstop offset='.875' stop-color='%232d2822'/%3E%3Cstop offset='1' stop-color='%232b2721'/%3E%3C/radialGradient%3E%3Crect x='-160' y='-90' width='336' height='189' fill='url(%23g)'/%3E%3C/svg%3E") center/100% 100% no-repeat}
 .construction-image video,.construction-image .construction-still{width:100%;height:100%;position:absolute;inset:0;object-fit:contain;background:transparent}
 .construction-motion .construction-transport{position:absolute;bottom:14px;right:14px;left:auto;border:1px solid #f2e5cb55;border-radius:30px;display:inline-flex;gap:9px;align-items:center;background:#1a221ee6;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:#fff8e8;padding:9px 15px;min-height:38px;font:600 12px var(--sans);cursor:pointer;transition:background-color .2s,border-color .2s}
 .construction-motion .construction-transport:hover{background:#87402f;border-color:#ffba8c}
