@@ -198,10 +198,10 @@ function OverlayStage({
 
   const maxW = Math.max(orig.width, rev.width);
   const maxH = Math.max(orig.height, rev.height);
-  const padX = Math.max(36, maxW * 0.16);
-  const padY = Math.max(34, maxH * 0.16);
-  const vbW = maxW + padX * 2;
+  const padY = Math.max(30, maxH * 0.13);
   const vbH = maxH + padY * 2;
+  const padX = Math.max(44, maxW * 0.18);
+  const vbW = Math.max(maxW + padX * 2, vbH * 1.48);
 
   // Center both outlines on the same mm origin so anisotropic warp (vertical) vs weft (horizontal)
   // shrinkage or compensation is directly legible around the entire perimeter.
@@ -211,9 +211,6 @@ function OverlayStage({
   const origTy = cy - (orig.minY + orig.height / 2);
   const revTx = cx - (rev.minX + rev.width / 2);
   const revTy = cy - (rev.minY + rev.height / 2);
-
-  const dw = rev.width - orig.width;
-  const dh = rev.height - orig.height;
   const accent = mode === "compensate" ? "#1e6e60" : "#b24322";
 
   return (
@@ -309,19 +306,6 @@ function OverlayStage({
           />
         ))}
       </g>
-
-      {/* Dimensional callouts (1:1 mm) */}
-      <text
-        x={cx}
-        y={vbH - 10}
-        textAnchor="middle"
-        fill="#1e2d33"
-        fontSize="10.5"
-        fontWeight="600"
-        fontFamily="var(--mono)"
-      >
-        {orig.name} · WEFT {orig.width.toFixed(1)} → {rev.width.toFixed(1)} mm ({dw >= 0 ? `+${dw.toFixed(1)}` : dw.toFixed(1)} mm) · WARP {orig.height.toFixed(1)} → {rev.height.toFixed(1)} mm ({dh >= 0 ? `+${dh.toFixed(1)}` : dh.toFixed(1)} mm)
-      </text>
     </svg>
   );
 }
@@ -561,6 +545,24 @@ export default function WashShrinkLab() {
                   </p>
                 )}
               </div>
+
+              {result && origPieces.length > 0 && (() => {
+                const origP = origPieces.find(p => p.id === selectedPiece) ?? origPieces[0];
+                const revP = revPieces.find(p => p.id === selectedPiece) ?? revPieces[0];
+                const dw = revP.width - origP.width;
+                const dh = revP.height - origP.height;
+                return (
+                  <div className="ws-dim-bar">
+                    <span><strong>{origP.name}</strong></span>
+                    <span>
+                      Weft {origP.width.toFixed(1)} → {revP.width.toFixed(1)} mm ({dw >= 0 ? `+${dw.toFixed(1)}` : dw.toFixed(1)} mm)
+                    </span>
+                    <span>
+                      Warp {origP.height.toFixed(1)} → {revP.height.toFixed(1)} mm ({dh >= 0 ? `+${dh.toFixed(1)}` : dh.toFixed(1)} mm)
+                    </span>
+                  </div>
+                );
+              })()}
 
               {result && (
                 <div className="ws-legend">
