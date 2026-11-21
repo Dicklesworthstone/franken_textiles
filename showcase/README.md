@@ -229,6 +229,8 @@ sh scripts/render-skirt-comparison.sh /path/to/new-skirt-comparison
 
 The workshop uses H.264 with 8-bit 4:2:0 colour for browser playback. Verify the finished files
 before replacing `public/media/` assets. Cloudflare accepts files up to 25 MiB per static asset.
+Run `sh scripts/film-renditions.sh /path/to/new-media` to create matching 1080p60 copies. The script
+defaults to `public/media/` when called without a directory.
 Set `FTX_FILM_SOURCE_DIR` when assembling the studio tour or wardrobe reel from a fresh output folder.
 
 The 20-second studio tour records the drafting and cutting handoff, a native garment replay,
