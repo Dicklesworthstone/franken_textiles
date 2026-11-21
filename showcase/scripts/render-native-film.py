@@ -116,7 +116,10 @@ void main() {
     float light = exp(-dot(p,p) * 0.65);
     vec3 dark = vec3(0.163, 0.147, 0.127);
     vec3 warm = vec3(0.370, 0.329, 0.268);
-    pixel = vec4(mix(dark,warm,light),1.0);
+    // One 8-bit level of this gradient is 60 to 120 px wide at 3840, which shows as rings. Half a level of
+    // interleaved-gradient noise before quantisation breaks the rings up and survives the x264 settings below.
+    float grain = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    pixel = vec4(mix(dark,warm,light) + (grain - 0.5) / 255.0, 1.0);
 }
 """
 
