@@ -1418,3 +1418,100 @@ fn only_exposed_finish_affects_layered_radiation_and_frozen_material_replay() {
     near(refined.convective_power_w, values[0].convective_power_w);
     near(refined.radiative_power_w, values[0].radiative_power_w);
 }
+
+#[test]
+fn steady_coverage_request_accepts_microclimate_exterior_and_replays_identically() {
+    use ftx_drape::thermal::steady::coverage::request::Request;
+
+    let mut input = bridge_input(0.25);
+    input["conditions"]["boundaries"][0]["outside_c"] = json!(18.0);
+    input["conditions"]["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.0);
+    input["conditions"]["microclimate_exterior"] = json!([{
+        "air": {
+            "temperature_c": 18.0,
+            "pressure_pa": 101_325.0,
+            "relative_humidity": 0.5
+        },
+        "correlation": "churchill_chu_vertical_plate",
+        "characteristic_length_m": 0.4,
+        "delta_t_k": 12.0,
+        "surface_temperature_range_c": [-50.0, 100.0],
+        "allow_estimates": true
+    }]);
+    input["conditions"]["bare_boundaries"] = json!([{
+        "inside_c": 30.0,
+        "outside_c": 18.0,
+        "inside_resistance_m2_k_w": 0.1,
+        "outside_resistance_m2_k_w": 0.2
+    }]);
+
+    let req: Request = serde_json::from_value(input.clone()).unwrap();
+    let out = req.evaluate().unwrap();
+    assert_eq!(
+        out["microclimate_convection"][0]["correlation"],
+        "churchill_chu_vertical_plate"
+    );
+    assert_eq!(out["microclimate_convection"][0]["evidence"], "estimate");
+    assert!(
+        out["microclimate_convection"][0]["h_w_m2_k"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        out["exterior_exchange"]["convective_power_w"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        out["exterior_model"]
+            .as_str()
+            .unwrap()
+            .contains("Nusselt correlation")
+    );
+    // Natural convection does NOT remove "wind-dependent films" from not_simulated, even if an
+    // extraneous wind_speed_m_s is supplied alongside the free-convection inputs.
+    assert!(
+        out["not_simulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "wind-dependent films")
+    );
+    let mut with_extra_wind = input.clone();
+    with_extra_wind["conditions"]["microclimate_exterior"][0]["wind_speed_m_s"] = json!(1.5);
+    let out_extra_wind = serde_json::from_value::<Request>(with_extra_wind)
+        .unwrap()
+        .evaluate()
+        .unwrap();
+    assert!(
+        out_extra_wind["not_simulated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "wind-dependent films")
+    );
+    // Frozen request replays byte-identically.
+    let replay: Request = serde_json::from_value(out["request"].clone()).unwrap();
+    assert_eq!(replay.evaluate().unwrap(), out);
+
+    // Combining thermal_bridges with microclimate_exterior refuses fail-closed.
+    let mut with_bridges = with_bridge(bridge_input(0.25), &[0, 1], 0.2);
+    with_bridges["conditions"] = input["conditions"].clone();
+    assert!(
+        serde_json::from_value::<Request>(with_bridges)
+            .unwrap()
+            .evaluate()
+            .is_err()
+    );
+    // Denied estimate consent refuses fail-closed.
+    let mut no_est = input;
+    no_est["conditions"]["microclimate_exterior"][0]["allow_estimates"] = json!(false);
+    assert!(
+        serde_json::from_value::<Request>(no_est)
+            .unwrap()
+            .evaluate()
+            .is_err()
+    );
+}

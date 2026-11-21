@@ -223,3 +223,62 @@ fn vapor_surface_entry_preserves_canonical_source_replay_and_geometry_refusal() 
     stale["vapor_surface"]["positions_m"][1][0] = json!(2.0);
     assert!(thermal::vapor_surface(&stale.to_string(), VAPOR_SURFACE_CONDITIONS).is_err());
 }
+
+#[test]
+fn browser_steady_and_surface_entries_match_native_microclimate_exterior_byte_for_byte() {
+    use ftx_drape::thermal::steady::request::SurfaceConditions;
+
+    let text = include_str!("../../../tests/fixtures/materials/synthetic-exterior-exchange.json");
+    let mut input: Value = serde_json::from_str(text).unwrap();
+    let radiation = input["exterior_exchange"]["radiation"].clone();
+    let air_c = input["outside_c"].as_f64().unwrap();
+    input.as_object_mut().unwrap().remove("exterior_exchange");
+    input["microclimate_exterior"] = json!({
+        "air": {
+            "temperature_c": air_c,
+            "pressure_pa": 101_325.0,
+            "relative_humidity": 0.4
+        },
+        "correlation": "flat_plate_laminar_average",
+        "characteristic_length_m": 0.3,
+        "wind_speed_m_s": 1.2,
+        "surface_temperature_range_c": [-50.0, 100.0],
+        "allow_estimates": true,
+        "radiation": radiation
+    });
+    let req: Request = serde_json::from_value(input.clone()).unwrap();
+    let native = req.evaluate(&Catalog::builtin().unwrap()).unwrap();
+    let wasm_str = thermal::steady(&input.to_string()).unwrap();
+    let wasm_val: Value = serde_json::from_str(&wasm_str).unwrap();
+    assert_eq!(wasm_val, native);
+    assert_eq!(
+        wasm_str,
+        thermal::steady(&wasm_val["request"].to_string()).unwrap()
+    );
+    assert_eq!(
+        wasm_val["microclimate_convection"]["correlation"],
+        "flat_plate_laminar_average"
+    );
+
+    let mut conditions: Value = serde_json::from_str(SURFACE_CONDITIONS).unwrap();
+    conditions["boundaries"][0]["outside_c"] = json!(air_c);
+    conditions["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.0);
+    let mut mc_no_rad = input["microclimate_exterior"].clone();
+    mc_no_rad.as_object_mut().unwrap().remove("radiation");
+    conditions["microclimate_exterior"] = json!([mc_no_rad]);
+    let surf_req: SurfaceConditions = serde_json::from_value(conditions.clone()).unwrap();
+    let native_surf = surf_req
+        .evaluate(&serde_json::from_str(SURFACE_REPORT).unwrap())
+        .unwrap();
+    let wasm_surf_str = thermal::steady_surface(SURFACE_REPORT, &conditions.to_string()).unwrap();
+    let wasm_surf: Value = serde_json::from_str(&wasm_surf_str).unwrap();
+    assert_eq!(wasm_surf, native_surf);
+    assert_eq!(
+        wasm_surf_str,
+        thermal::steady_surface(
+            &wasm_surf["request"]["report"].to_string(),
+            &wasm_surf["request"]["conditions"].to_string(),
+        )
+        .unwrap()
+    );
+}

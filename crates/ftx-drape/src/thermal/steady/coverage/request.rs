@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Boundary, Refusal, SteadyCoverage, SteadySurface, Vec3, digest, invalid};
 use crate::thermal::{
+    microclimate::MicroclimateExterior,
     steady::{exterior::Exterior, request::Film},
     surface::projection::{self, Settings},
 };
@@ -36,6 +37,11 @@ pub struct Conditions {
     /// coverage path's outermost selected material is exposed to its ambient radiation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exterior_exchange: Option<Vec<Exterior>>,
+    /// Optional validity-gated moist-air Nusselt correlation exterior environment per body
+    /// triangle or one uniform environment (`Evidence::Estimate`; mutually exclusive with
+    /// `exterior_exchange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microclimate_exterior: Option<Vec<MicroclimateExterior>>,
     /// Separate bare-body film conditions in exterior mode. Required for any uncovered fraction;
     /// one uniform entry or one per body triangle. Never inherit textile emissivity for bare skin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,15 +87,23 @@ impl Request {
                 "invalid steady coverage request schema or input budget",
             ));
         }
-        if self.conditions.bare_boundaries.is_some() && self.conditions.exterior_exchange.is_none()
+        if self.conditions.exterior_exchange.is_some()
+            && self.conditions.microclimate_exterior.is_some()
         {
+            return Err(invalid(
+                "supply either exterior_exchange or microclimate_exterior, not both",
+            ));
+        }
+        let has_exterior = self.conditions.exterior_exchange.is_some()
+            || self.conditions.microclimate_exterior.is_some();
+        if self.conditions.bare_boundaries.is_some() && !has_exterior {
             return Err(invalid(
                 "separate bare boundaries require explicit exterior exchange mode",
             ));
         }
         if let Some(bridges) = &self.thermal_bridges {
             bridges.validate()?;
-            if self.conditions.exterior_exchange.is_some() {
+            if has_exterior {
                 return Err(invalid(
                     "qualified centerline excess requires the characterized reservoir films; exterior convection/radiation is not supported by this bridge model",
                 ));
@@ -152,6 +166,11 @@ impl Request {
                     .is_some_and(|v| v.len() != 1)
                 || self
                     .conditions
+                    .microclimate_exterior
+                    .as_ref()
+                    .is_some_and(|v| v.len() != 1)
+                || self
+                    .conditions
                     .bare_boundaries
                     .as_ref()
                     .is_some_and(|v| v.len() != 1))
@@ -185,8 +204,29 @@ impl Request {
             },
         )?;
         let assembly = SteadyCoverage::new(source, projection.layout.clone())?;
-        let (mut solution, mut exterior) = if let Some(e) = &self.conditions.exterior_exchange {
-            let e = broadcast(e, boundaries.len())?;
+        let exterior_inputs = if let Some(e) = &self.conditions.exterior_exchange {
+            Some((broadcast(e, boundaries.len())?, None))
+        } else if let Some(mc) = &self.conditions.microclimate_exterior {
+            if mc.len() != 1 && mc.len() != boundaries.len() {
+                return Err(invalid(
+                    "coverage needs one uniform value or one per body triangle",
+                ));
+            }
+            let resolved = mc
+                .iter()
+                .map(MicroclimateExterior::resolve)
+                .collect::<Result<Vec<_>, _>>()?;
+            let raw_exteriors: Vec<_> = resolved.iter().map(|r| r.exterior.clone()).collect();
+            let receipts: Vec<_> = resolved.iter().map(|r| r.receipt.clone()).collect();
+            let forced = resolved.iter().any(|r| r.forced_convection);
+            Some((
+                broadcast(&raw_exteriors, boundaries.len())?,
+                Some((json!(receipts), forced)),
+            ))
+        } else {
+            None
+        };
+        let (mut solution, mut exterior, microclimate) = if let Some((e, mc)) = exterior_inputs {
             let bare = self
                 .conditions
                 .bare_boundaries
@@ -207,10 +247,11 @@ impl Request {
                 "radiative_power_w":result.radiative_power_w,
                 "balance_residual_w":result.balance_residual_w,
                 "bare_policy":"separate explicitly prescribed films; no inferred skin emissivity"});
-            (result.steady, Some(details))
+            (result.steady, Some(details), mc)
         } else {
             (
                 assembly.solve(&cloth, &self.map.body_positions_m, &boundaries)?,
+                None,
                 None,
             )
         };
@@ -321,8 +362,18 @@ impl Request {
                 .conditions
                 .exterior_exchange
                 .as_ref()
-                .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()));
-            crate::thermal::steady::request::describe_exterior(&mut result, details, enabled);
+                .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()))
+                || self
+                    .conditions
+                    .microclimate_exterior
+                    .as_ref()
+                    .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()));
+            crate::thermal::steady::request::describe_exterior(
+                &mut result,
+                details,
+                enabled,
+                microclimate,
+            );
         }
         bounded(&result)?;
         Ok(result)

@@ -333,3 +333,74 @@ fn impossible_stack_shape_refuses_before_expanding_any_material_selection() {
         same_refusal(&input);
     }
 }
+
+#[test]
+fn transient_microclimate_exterior_matches_native_replays_and_refuses_conflicts() {
+    let db = catalog().unwrap();
+    let empty = Catalog::from_json(r#"{"schema":"ftx-textile-catalog/1","materials":[]}"#).unwrap();
+    let mut input = fixture();
+    input["outside_c"] = json!(25.0);
+    input["outside_resistance_m2_k_w"] = json!(0.0);
+    input["microclimate_exterior"] = json!({
+        "air": {
+            "temperature_c": 25.0,
+            "pressure_pa": 101_325.0,
+            "relative_humidity": 0.5
+        },
+        "correlation": "churchill_bernstein_cylinder",
+        "characteristic_length_m": 0.2,
+        "wind_speed_m_s": 2.0,
+        "surface_temperature_range_c": [20.0, 70.0],
+        "allow_estimates": true
+    });
+
+    let expected = typed(&input).evaluate(&db).unwrap();
+    let actual = portable(&input);
+    assert_eq!(actual, expected);
+    assert_eq!(
+        actual["microclimate_convection"]["correlation"],
+        "churchill_bernstein_cylinder"
+    );
+    assert_eq!(actual["microclimate_convection"]["evidence"], "estimate");
+    assert!(
+        actual["exterior_model"]
+            .as_str()
+            .unwrap()
+            .contains("Nusselt correlation")
+    );
+    assert!(
+        actual["exterior_exchange"]["convective_energy_j"]
+            .as_f64()
+            .unwrap()
+            .is_finite()
+    );
+    let replay_text = actual["replay_request_json"].as_str().unwrap();
+    let replay: Request = serde_json::from_str(replay_text).unwrap();
+    assert_eq!(replay.evaluate(&empty).unwrap(), actual);
+    assert_eq!(
+        thermal::transient(replay_text).unwrap(),
+        serde_json::to_string(&actual).unwrap()
+    );
+
+    // Denied estimate consent refuses identically on native and portable entry points.
+    let mut no_est = input.clone();
+    no_est["microclimate_exterior"]["allow_estimates"] = json!(false);
+    same_refusal(&no_est);
+
+    // Combining exterior_exchange and microclimate_exterior refuses fail-closed.
+    let mut both = input;
+    both["exterior_exchange"] = json!({
+        "air_c": 25.0,
+        "convection_w_m2_k": 10.0,
+        "surface_temperature_range_c": [20.0, 70.0],
+        "convection_source": {
+            "reference": "test:conflict",
+            "accessed_on": "2026-11-20",
+            "note": "Synthetic conflict test"
+        },
+        "convection_evidence": "estimate",
+        "convection_conditions": "test",
+        "allow_estimates": true
+    });
+    same_refusal(&both);
+}

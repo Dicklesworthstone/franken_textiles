@@ -1,6 +1,9 @@
 //! File-free material point and dry transient requests shared by native and browser consumers.
 
-use super::{Boundary, DryThermalModel, invalid, steady::exterior::Exterior};
+use super::{
+    Boundary, DryThermalModel, invalid, microclimate::MicroclimateExterior,
+    steady::exterior::Exterior,
+};
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::{material_catalog::Selection, materials::Catalog};
 use serde::{Deserialize, Serialize};
@@ -59,6 +62,10 @@ pub struct Request {
     /// Optional qualified exterior convection/radiation, replacing the outside film.
     #[serde(default)]
     pub exterior_exchange: Option<Exterior>,
+    /// Optional validity-gated moist-air Nusselt correlation replacement of the outside film
+    /// (`Evidence::Estimate`; mutually exclusive with `exterior_exchange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microclimate_exterior: Option<MicroclimateExterior>,
     /// Uniform initial material temperature in degrees Celsius.
     pub initial_temperature_c: f64,
     /// Positive time step in seconds; temporal convergence remains the caller's responsibility.
@@ -120,6 +127,11 @@ impl Request {
                 "thermal stack needs layers, 1..4096 cells and exactly one resistance per interface",
             ));
         }
+        if input.exterior_exchange.is_some() && input.microclimate_exterior.is_some() {
+            return Err(invalid(
+                "supply either exterior_exchange or microclimate_exterior, not both",
+            ));
+        }
         let layers = input
             .layers
             .iter()
@@ -148,7 +160,15 @@ impl Request {
             inside_resistance: input.inside_resistance_m2_k_w,
             outside_resistance: input.outside_resistance_m2_k_w,
         };
-        let (steady, steady_exchange) = match &input.exterior_exchange {
+        let (active_exterior, microclimate_receipt) = if let Some(e) = input.exterior_exchange {
+            (Some(e), None)
+        } else if let Some(mc) = &input.microclimate_exterior {
+            let resolved = mc.resolve()?;
+            (Some(resolved.exterior), Some(resolved.receipt))
+        } else {
+            (None, None)
+        };
+        let (steady, steady_exchange) = match &active_exterior {
             Some(e) => {
                 let solved = model.steady_exterior(b, e)?;
                 (solved.state, Some(solved.exchange))
@@ -164,7 +184,7 @@ impl Request {
         let mut radiative = 0.0;
         let mut max_balance_error = 0.0_f64;
         for i in 1..=input.steps {
-            let (state, exchange) = match &input.exterior_exchange {
+            let (state, exchange) = match &active_exterior {
                 Some(e) => {
                     let next = model.advance_exterior(&temperatures, input.step_seconds, b, e)?;
                     (next.state, Some(next.exchange))
@@ -239,7 +259,7 @@ impl Request {
             "largest_step_energy_balance_error_j":max_balance_error,
             "comfort_claim":false,"empirical_validation_claim":false,
             "accuracy_note":accuracy_note});
-        if let Some(e) = input.exterior_exchange {
+        if let Some(e) = active_exterior {
             let steady_exchange = steady_exchange.expect("exterior branch solved");
             let convective_w = input.area_m2 * steady_exchange.convective_flux_w_m2;
             let radiative_w = input.area_m2 * steady_exchange.radiative_flux_w_m2;
@@ -249,9 +269,16 @@ impl Request {
             result["exterior_exchange"] = json!({"conditions":e,"steady":steady_exchange,
                 "steady_convective_heat_w":convective_w,"steady_radiative_heat_w":radiative_w,
                 "convective_energy_j":convective,"radiative_energy_j":radiative});
-            result["exterior_model"] = json!(
-                "prescribed convection; optional source-qualified opaque-gray large-isothermal-enclosure radiation; no wind correlation or interlayer radiation"
-            );
+            if let Some(receipt) = microclimate_receipt {
+                result["microclimate_convection"] = receipt;
+                result["exterior_model"] = json!(
+                    "validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film; no interlayer radiation"
+                );
+            } else {
+                result["exterior_model"] = json!(
+                    "prescribed convection; optional source-qualified opaque-gray large-isothermal-enclosure radiation; no wind correlation or interlayer radiation"
+                );
+            }
         }
         Ok(result)
     }

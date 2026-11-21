@@ -2,6 +2,7 @@
 
 use super::exterior::Exterior;
 use super::{Boundary, MAX_LAYERS, SteadyConductionModel, invalid, positive};
+use crate::thermal::microclimate::MicroclimateExterior;
 use ftx_core::{Refusal, receipt::sha256_hex};
 use ftx_pattern::{material_catalog::Selection, materials::Catalog};
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,11 @@ pub struct SurfaceConditions {
     /// with a bound model identity. Emissivity is read from each column's own outermost material.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exterior_exchange: Option<Vec<Exterior>>,
+    /// Optional validity-gated moist-air Nusselt correlation replacement of the outside film
+    /// (`Evidence::Estimate`; mutually exclusive with `exterior_exchange`). One entry broadcasts,
+    /// otherwise one per column with a bound model identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microclimate_exterior: Option<Vec<MicroclimateExterior>>,
 }
 
 impl SurfaceConditions {
@@ -64,6 +70,11 @@ impl SurfaceConditions {
         {
             return Err(invalid("invalid steady surface schema or boundary count"));
         }
+        if self.exterior_exchange.is_some() && self.microclimate_exterior.is_some() {
+            return Err(invalid(
+                "supply either exterior_exchange or microclimate_exterior, not both",
+            ));
+        }
         let (surface, positions) = super::surface::SteadySurface::from_drape_report(report)?;
         let frame = &report["steady_thermal_surface"];
         let model_sha256 = frame["model"]["sha256"]
@@ -76,6 +87,10 @@ impl SurfaceConditions {
             || ((self.boundaries.len() != 1
                 || self
                     .exterior_exchange
+                    .as_ref()
+                    .is_some_and(|e| e.len() != 1)
+                || self
+                    .microclimate_exterior
                     .as_ref()
                     .is_some_and(|e| e.len() != 1))
                 && self.model_sha256.is_none())
@@ -91,7 +106,7 @@ impl SurfaceConditions {
         } else {
             return Err(invalid("one steady boundary per column is required"));
         };
-        let (solution, exterior) = if let Some(e) = &self.exterior_exchange {
+        let (solution, exterior, microclimate) = if let Some(e) = &self.exterior_exchange {
             let e = if e.len() == 1 {
                 vec![e[0].clone(); surface.column_count()]
             } else if e.len() == surface.column_count() {
@@ -103,9 +118,33 @@ impl SurfaceConditions {
             let details = json!({"columns":solved.columns,
                 "convective_power_w":solved.convective_power_w,
                 "radiative_power_w":solved.radiative_power_w});
-            (solved.steady, Some(details))
+            (solved.steady, Some(details), None)
+        } else if let Some(mc) = &self.microclimate_exterior {
+            if mc.len() != 1 && mc.len() != surface.column_count() {
+                return Err(invalid("one exterior environment per column is required"));
+            }
+            let resolved = mc
+                .iter()
+                .map(MicroclimateExterior::resolve)
+                .collect::<Result<Vec<_>, _>>()?;
+            let e = if resolved.len() == 1 {
+                vec![resolved[0].exterior.clone(); surface.column_count()]
+            } else {
+                resolved.iter().map(|r| r.exterior.clone()).collect()
+            };
+            let receipts: Vec<_> = resolved.iter().map(|r| r.receipt.clone()).collect();
+            let forced = resolved.iter().any(|r| r.forced_convection);
+            let solved = surface.solve_exterior(&positions, &boundaries, &e)?;
+            let details = json!({"columns":solved.columns,
+                "convective_power_w":solved.convective_power_w,
+                "radiative_power_w":solved.radiative_power_w});
+            (
+                solved.steady,
+                Some(details),
+                Some((json!(receipts), forced)),
+            )
         } else {
-            (surface.solve(&positions, &boundaries)?, None)
+            (surface.solve(&positions, &boundaries)?, None, None)
         };
         let mut conditions = self.clone();
         conditions.model_sha256 = Some(model_sha256.into());
@@ -129,8 +168,12 @@ impl SurfaceConditions {
             let enabled = self
                 .exterior_exchange
                 .as_ref()
-                .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()));
-            describe_exterior(&mut result, details, enabled);
+                .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()))
+                || self
+                    .microclimate_exterior
+                    .as_ref()
+                    .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()));
+            describe_exterior(&mut result, details, enabled, microclimate);
         }
         Ok(result)
     }
@@ -159,6 +202,10 @@ pub struct Request {
     /// Optional qualified convection/radiation replacement of the outside film.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exterior_exchange: Option<Exterior>,
+    /// Optional validity-gated moist-air Nusselt correlation replacement of the outside film
+    /// (`Evidence::Estimate`; mutually exclusive with `exterior_exchange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microclimate_exterior: Option<MicroclimateExterior>,
 }
 
 impl Request {
@@ -179,6 +226,11 @@ impl Request {
                 "invalid steady schema, layer budget or interface count",
             ));
         }
+        if self.exterior_exchange.is_some() && self.microclimate_exterior.is_some() {
+            return Err(invalid(
+                "supply either exterior_exchange or microclimate_exterior, not both",
+            ));
+        }
         positive("steady conducting area", self.area_m2)?;
         let layers = self
             .layers
@@ -192,11 +244,17 @@ impl Request {
             inside_resistance: self.inside_resistance_m2_k_w,
             outside_resistance: self.outside_resistance_m2_k_w,
         };
-        let exterior = self
-            .exterior_exchange
-            .as_ref()
-            .map(|e| model.solve_exterior(boundary, e))
-            .transpose()?;
+        let (exterior, microclimate) = if let Some(e) = &self.exterior_exchange {
+            (Some(model.solve_exterior(boundary, e)?), None)
+        } else if let Some(mc) = &self.microclimate_exterior {
+            let resolved = mc.resolve()?;
+            (
+                Some(model.solve_exterior(boundary, &resolved.exterior)?),
+                Some((resolved.receipt, resolved.forced_convection)),
+            )
+        } else {
+            (None, None)
+        };
         let state = match &exterior {
             Some(e) => e.conduction.clone(),
             None => model.solve(boundary)?,
@@ -228,13 +286,19 @@ impl Request {
                 &mut result,
                 serde_json::to_value(e).map_err(|e| invalid(e.to_string()))?,
                 enabled,
+                microclimate,
             );
         }
         Ok(result)
     }
 }
 
-pub(super) fn describe_exterior(result: &mut Value, details: Value, radiation_enabled: bool) {
+pub(super) fn describe_exterior(
+    result: &mut Value,
+    details: Value,
+    radiation_enabled: bool,
+    microclimate: Option<(Value, bool)>,
+) {
     result["exterior_exchange"] = details;
     let limits = result["not_simulated"]
         .as_array_mut()
@@ -242,11 +306,26 @@ pub(super) fn describe_exterior(result: &mut Value, details: Value, radiation_en
     if radiation_enabled {
         limits.retain(|v| v != "radiative exchange");
     }
-    limits.extend([
-        json!("interlayer or finite-view-factor radiation"),
-        json!("solar/spectral irradiation"),
-    ]);
-    result["exterior_model"] = json!(
-        "prescribed convection; optional source-qualified opaque-gray large-isothermal-enclosure radiation; no wind correlation"
-    );
+    if let Some((receipt, forced_convection)) = microclimate {
+        if forced_convection {
+            limits.retain(|v| v != "wind-dependent films");
+        }
+        limits.extend([
+            json!("empirical garment-film / wind-tunnel validation"),
+            json!("interlayer or finite-view-factor radiation"),
+            json!("solar/spectral irradiation"),
+        ]);
+        result["microclimate_convection"] = receipt;
+        result["exterior_model"] = json!(
+            "validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film"
+        );
+    } else {
+        limits.extend([
+            json!("interlayer or finite-view-factor radiation"),
+            json!("solar/spectral irradiation"),
+        ]);
+        result["exterior_model"] = json!(
+            "prescribed convection; optional source-qualified opaque-gray large-isothermal-enclosure radiation; no wind correlation"
+        );
+    }
 }

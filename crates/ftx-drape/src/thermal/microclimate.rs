@@ -1227,23 +1227,213 @@ pub const MICROCLIMATE_REPORT_SCHEMA: &str = "ftx-microclimate-report/1";
 
 const MAX_MICROCLIMATE_INPUT_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Debug, Deserialize)]
+/// Moist-air ambient state input for validity-gated microclimate calculations.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct MicroclimateRequest {
-    schema: String,
-    air: AirInput,
+pub struct MoistAirInput {
+    /// Ambient air dry-bulb temperature in degrees Celsius (`[-20, 50]` for Buck 1996 saturation).
+    pub temperature_c: f64,
+    /// Ambient total pressure in pascals (`> 0`).
+    pub pressure_pa: f64,
+    /// Relative humidity fraction in `[0, 1]`.
+    pub relative_humidity: f64,
+}
+
+fn is_default_direction(direction: &ThermalDirection) -> bool {
+    *direction == ThermalDirection::HeatingFluid
+}
+
+/// Correlation-derived exterior exchange input for steady conduction, surface, and coverage solves.
+///
+/// Computes USSA-1976 / NIST moist-air properties and evaluates one of the 12 validity-gated
+/// Nusselt correlations to derive `h = Nu · k / L`, lowering to a qualified [`Exterior`] marked
+/// [`Evidence::Estimate`]. Requires explicit `allow_estimates = true`; never infers wind speed,
+/// geometry, or empirical garment-film accuracy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MicroclimateExterior {
+    /// Ambient moist-air state; `temperature_c` must match the boundary's `outside_c`.
+    pub air: MoistAirInput,
+    /// Validity-gated Nusselt correlation identifier.
+    pub correlation: CorrelationId,
+    /// Characteristic length `L` (or diameter `D` / `D_h`) in metres (`> 0`).
+    pub characteristic_length_m: f64,
+    /// Optional freestream wind speed in m/s (mutually exclusive with `reynolds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wind_speed_m_s: Option<f64>,
+    /// Optional surface-to-air driving temperature difference in K (mutually exclusive with `rayleigh`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_t_k: Option<f64>,
+    /// Optional gravitational acceleration in m/s² (requires `delta_t_k`; defaults to `9.81`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gravity_m_s2: Option<f64>,
+    /// Optional explicit Reynolds number `Re` (mutually exclusive with `wind_speed_m_s`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reynolds: Option<f64>,
+    /// Optional explicit Rayleigh number `Ra` (mutually exclusive with `delta_t_k`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rayleigh: Option<f64>,
+    /// Optional duct `L / D_h` ratio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_over_hydraulic_diameter: Option<f64>,
+    /// Optional rectangular-duct aspect ratio `a ∈ (0, 1]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<f64>,
+    /// Heat-flow direction for Dittus–Boelter.
+    #[serde(default, skip_serializing_if = "is_default_direction")]
+    pub direction: ThermalDirection,
+    /// Admitted surface temperature range `[min_c, max_c]` in degrees Celsius.
+    pub surface_temperature_range_c: [f64; 2],
+    /// Explicit consent to admit correlation-derived `Evidence::Estimate` convection.
     #[serde(default)]
-    convection: Option<ConvectionInput>,
-    #[serde(default)]
-    enclosure: Option<EnclosureInput>,
+    pub allow_estimates: bool,
+    /// Optional source-qualified opaque-gray ambient radiation on the exposed outer face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radiation: Option<AmbientRadiation>,
+}
+
+/// Checked lowering of [`MicroclimateExterior`] into an [`Exterior`] boundary plus provenance receipt.
+#[derive(Clone, Debug)]
+pub struct ResolvedMicroclimateExterior {
+    /// Checked exterior boundary fed into [`crate::thermal::steady::SteadyConductionModel::solve_exterior`].
+    pub exterior: Exterior,
+    /// Complete moist-air, correlation, dimensionless-group, and discrepancy provenance receipt.
+    pub receipt: serde_json::Value,
+    /// Whether the evaluated correlation used forced flow (`Re` / `wind_speed_m_s`).
+    pub forced_convection: bool,
+}
+
+fn air_receipt(input: MoistAirInput, air: &MoistAirState) -> serde_json::Value {
+    json!({
+        "temperature_c": input.temperature_c,
+        "temperature_k": air.temperature_k,
+        "pressure_pa": air.pressure_pa,
+        "relative_humidity": input.relative_humidity,
+        "water_mole_fraction": air.water_mole_fraction,
+        "density_kg_m3": air.density,
+        "sound_speed_m_s": air.sound_speed,
+        "dynamic_viscosity_pa_s": air.dynamic_viscosity,
+        "kinematic_viscosity_m2_s": air.kinematic_viscosity,
+        "thermal_conductivity_w_m_k": air.thermal_conductivity,
+        "thermal_diffusivity_m2_s": air.thermal_diffusivity,
+        "specific_heat_cp_j_kg_k": air.specific_heat_cp,
+        "prandtl": air.prandtl,
+    })
+}
+
+impl MicroclimateExterior {
+    /// Evaluate moist-air thermophysics and the requested validity-gated Nusselt correlation,
+    /// lowering to a checked [`Exterior`] boundary and complete provenance receipt.
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] if `allow_estimates` is `false` or mutually exclusive
+    /// dimensionless/physical inputs are combined; [`RefusalCode::OutOfRange`] or
+    /// [`RefusalCode::NonFinite`] on out-of-domain air state, correlation bounds, or length.
+    pub fn resolve(&self) -> Result<ResolvedMicroclimateExterior, Refusal> {
+        if !self.allow_estimates {
+            return Err(refusal(
+                RefusalCode::InvalidDocument,
+                "microclimate correlation convection is an empirical model estimate; explicit allow_estimates = true is required",
+            ));
+        }
+        if !self.air.temperature_c.is_finite() {
+            return Err(refusal(
+                RefusalCode::OutOfRange,
+                "air temperature_c must be finite",
+            ));
+        }
+        let air = MoistAirState::moist_air(
+            self.air.temperature_c + 273.15,
+            self.air.pressure_pa,
+            self.air.relative_humidity,
+        )?;
+        if self.wind_speed_m_s.is_some() && self.reynolds.is_some() {
+            return Err(refusal(
+                RefusalCode::InvalidDocument,
+                "supply either wind_speed_m_s or reynolds, not both",
+            ));
+        }
+        if self.delta_t_k.is_some() && self.rayleigh.is_some() {
+            return Err(refusal(
+                RefusalCode::InvalidDocument,
+                "supply either delta_t_k or rayleigh, not both",
+            ));
+        }
+        if self.gravity_m_s2.is_some() && self.delta_t_k.is_none() {
+            return Err(refusal(
+                RefusalCode::InvalidDocument,
+                "gravity_m_s2 requires delta_t_k",
+            ));
+        }
+        let reynolds = match (self.wind_speed_m_s, self.reynolds) {
+            (Some(u), None) => Some(air.reynolds(u, self.characteristic_length_m)?),
+            (None, r) => r,
+            (Some(_), Some(_)) => unreachable!(),
+        };
+        let rayleigh = match (self.delta_t_k, self.rayleigh) {
+            (Some(dt), None) => {
+                let g = self.gravity_m_s2.unwrap_or(9.81);
+                Some(air.rayleigh(dt, self.characteristic_length_m, g)?)
+            }
+            (None, r) => r,
+            (Some(_), Some(_)) => unreachable!(),
+        };
+        let inputs = CorrelationInputs {
+            reynolds,
+            prandtl: Some(air.prandtl),
+            length_over_hydraulic_diameter: self.length_over_hydraulic_diameter,
+            aspect_ratio: self.aspect_ratio,
+            rayleigh,
+            direction: self.direction,
+        };
+        let nu_res = evaluate_convection(self.correlation, inputs)?;
+        let h_w_m2_k = nu_res
+            .heat_transfer_coefficient(air.thermal_conductivity, self.characteristic_length_m)?;
+        let mut exterior = nu_res.to_exterior(
+            &air,
+            self.characteristic_length_m,
+            self.surface_temperature_range_c,
+            self.allow_estimates,
+            self.radiation.clone(),
+        )?;
+        // Preserve the caller's exact Celsius temperature without `(t + 273.15) - 273.15` ULP drift
+        // so `solve_exterior`'s exact `outside_c == exterior.air_c` gate matches deterministically.
+        exterior.air_c = self.air.temperature_c;
+        exterior.validate_convection()?;
+        let forced_convection = self
+            .correlation
+            .validity_bounds()
+            .iter()
+            .any(|(axis, _, _)| *axis == "Re");
+        let receipt = json!({
+            "air": air_receipt(self.air, &air),
+            "correlation": self.correlation,
+            "name": nu_res.id.name(),
+            "citation": nu_res.id.citation(),
+            "characteristic_length_m": self.characteristic_length_m,
+            "nu": nu_res.nusselt,
+            "h_w_m2_k": h_w_m2_k,
+            "discrepancy_rel": nu_res.discrepancy_rel,
+            "groups": nu_res.groups,
+            "evidence": Evidence::Estimate,
+        });
+        Ok(ResolvedMicroclimateExterior {
+            exterior,
+            receipt,
+            forced_convection,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AirInput {
-    temperature_c: f64,
-    pressure_pa: f64,
-    relative_humidity: f64,
+struct MicroclimateRequest {
+    schema: String,
+    air: MoistAirInput,
+    #[serde(default)]
+    convection: Option<ConvectionInput>,
+    #[serde(default)]
+    enclosure: Option<EnclosureInput>,
 }
 
 #[derive(Debug, Deserialize)]

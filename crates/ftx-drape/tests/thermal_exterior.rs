@@ -874,3 +874,175 @@ fn transient_surface_radiation_uses_reference_mass_current_area_and_new_material
         .unwrap();
     assert_eq!(step.state.temperature_c(), replay.state.temperature_c());
 }
+
+#[test]
+fn microclimate_exterior_drives_steady_stack_with_exact_parity_replay_and_fail_closed_guards() {
+    use ftx_drape::thermal::microclimate::{
+        CorrelationId, CorrelationInputs, MoistAirState, evaluate_convection,
+    };
+    use ftx_drape::thermal::steady::request::Request;
+
+    let catalog = Catalog::builtin().unwrap();
+    let layer = record(0.35, 0.85);
+    let air_c = 15.0_f64;
+    let wind_m_s = 2.5_f64;
+    let length_m = 0.25_f64;
+
+    let mc_input = json!({
+        "schema": "ftx-thermal-steady/1",
+        "layers": [layer],
+        "interface_resistance_m2_k_w": [],
+        "area_m2": 0.5,
+        "inside_c": 34.0,
+        "outside_c": air_c,
+        "inside_resistance_m2_k_w": 0.08,
+        "outside_resistance_m2_k_w": 0.0,
+        "microclimate_exterior": {
+            "air": {
+                "temperature_c": air_c,
+                "pressure_pa": 101_325.0,
+                "relative_humidity": 0.55
+            },
+            "correlation": "churchill_bernstein_cylinder",
+            "characteristic_length_m": length_m,
+            "wind_speed_m_s": wind_m_s,
+            "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true,
+            "radiation": {
+                "ambient_c": 10.0,
+                "emissivity_property": "emissivity",
+                "exposed_face": "public",
+                "allow_opaque_gray_approximation": true
+            }
+        }
+    });
+    let req: Request = serde_json::from_value(mc_input.clone()).unwrap();
+    let out = req.evaluate(&catalog).unwrap();
+
+    // Independent manual lowering via MoistAirState + evaluate_convection + to_exterior must
+    // match the steady solve to machine precision.
+    let air = MoistAirState::moist_air(air_c + 273.15, 101_325.0, 0.55).unwrap();
+    let re = air.reynolds(wind_m_s, length_m).unwrap();
+    let nu = evaluate_convection(
+        CorrelationId::ChurchillBernsteinCylinder,
+        CorrelationInputs::forced(re, air.prandtl),
+    )
+    .unwrap();
+    let mut manual_ext = nu
+        .to_exterior(
+            &air,
+            length_m,
+            [-50.0, 100.0],
+            true,
+            req.microclimate_exterior
+                .as_ref()
+                .unwrap()
+                .radiation
+                .clone(),
+        )
+        .unwrap();
+    manual_ext.air_c = air_c;
+    let manual_req = Request {
+        exterior_exchange: Some(manual_ext),
+        microclimate_exterior: None,
+        ..req.clone()
+    };
+    let manual_out = manual_req.evaluate(&catalog).unwrap();
+    near(
+        out["power_w"].as_f64().unwrap(),
+        manual_out["power_w"].as_f64().unwrap(),
+    );
+    near(
+        out["exterior_exchange"]["surface_c"].as_f64().unwrap(),
+        manual_out["exterior_exchange"]["surface_c"]
+            .as_f64()
+            .unwrap(),
+    );
+    near(
+        out["exterior_exchange"]["convective_flux_w_m2"]
+            .as_f64()
+            .unwrap(),
+        manual_out["exterior_exchange"]["convective_flux_w_m2"]
+            .as_f64()
+            .unwrap(),
+    );
+    near(
+        out["exterior_exchange"]["radiative_flux_w_m2"]
+            .as_f64()
+            .unwrap(),
+        manual_out["exterior_exchange"]["radiative_flux_w_m2"]
+            .as_f64()
+            .unwrap(),
+    );
+
+    // Check correlation provenance, honest model scope, and deterministic frozen replay.
+    assert_eq!(
+        out["microclimate_convection"]["correlation"],
+        "churchill_bernstein_cylinder"
+    );
+    assert_eq!(out["microclimate_convection"]["evidence"], "estimate");
+    near(
+        out["microclimate_convection"]["nu"].as_f64().unwrap(),
+        nu.nusselt,
+    );
+    near(
+        out["microclimate_convection"]["discrepancy_rel"]
+            .as_f64()
+            .unwrap(),
+        0.20,
+    );
+    assert!(
+        out["exterior_model"]
+            .as_str()
+            .unwrap()
+            .contains("Nusselt correlation")
+    );
+    let not_sim = out["not_simulated"].as_array().unwrap();
+    assert!(!not_sim.iter().any(|v| v == "radiative exchange"));
+    assert!(!not_sim.iter().any(|v| v == "wind-dependent films"));
+    assert!(
+        not_sim
+            .iter()
+            .any(|v| v == "empirical garment-film / wind-tunnel validation")
+    );
+    let replay: Request = serde_json::from_value(out["request"].clone()).unwrap();
+    assert_eq!(replay.evaluate(&catalog).unwrap(), out);
+
+    // Fail-closed guards:
+    // 1. Denied estimate consent refuses.
+    let mut no_est = mc_input.clone();
+    no_est["microclimate_exterior"]["allow_estimates"] = json!(false);
+    assert!(
+        serde_json::from_value::<Request>(no_est)
+            .unwrap()
+            .evaluate(&catalog)
+            .is_err()
+    );
+    // 2. Combining exterior_exchange and microclimate_exterior refuses.
+    let mut both = mc_input.clone();
+    both["exterior_exchange"] = serde_json::to_value(environment(10.0, air_c, None)).unwrap();
+    assert!(
+        serde_json::from_value::<Request>(both)
+            .unwrap()
+            .evaluate(&catalog)
+            .is_err()
+    );
+    // 3. Mismatched air.temperature_c != outside_c refuses.
+    let mut mismatch_t = mc_input.clone();
+    mismatch_t["microclimate_exterior"]["air"]["temperature_c"] = json!(air_c + 1.0);
+    assert!(
+        serde_json::from_value::<Request>(mismatch_t)
+            .unwrap()
+            .evaluate(&catalog)
+            .is_err()
+    );
+    // 4. Out-of-domain Reynolds (e.g. near-zero wind below Re = 1) refuses.
+    let mut ood = mc_input;
+    ood["microclimate_exterior"]["wind_speed_m_s"] = json!(1e-8);
+    assert!(
+        serde_json::from_value::<Request>(ood)
+            .unwrap()
+            .evaluate(&catalog)
+            .is_err()
+    );
+}
