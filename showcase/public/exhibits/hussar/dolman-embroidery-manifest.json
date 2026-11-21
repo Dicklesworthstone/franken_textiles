@@ -1,0 +1,147 @@
+{
+ "schema": "fabric-pattern-export/1",
+ "style": "HUSSAR_BLUE",
+ "size": "178 cm / C100 W86 H58",
+ "created": "2026-11-21T23:00",
+ "source_schema": "fabric-pattern/1",
+ "files": {
+  "dst_dolman_front.R": {
+   "file": "HUSSAR_BLUE_dolman_front_R_178_cm_C100_W86_H58_soutache.dst",
+   "kind": "soutache couching",
+   "instance": "dolman_front.R",
+   "centre_mm": [
+    -148.0,
+    231.0
+   ],
+   "placement_mm": 1354.63,
+   "couch_mm": 4627.76,
+   "braid_mm": 4603.1,
+   "braid_lines": 12,
+   "size_mm": [
+    296.0,
+    461.4
+   ],
+   "hoop": "over 240x360 mm: a commercial frame",
+   "stitch_mm": 2.5,
+   "records": 2248,
+   "stops": 1,
+   "sewn_mm": [
+    1354.63,
+    388.62,
+    381.16,
+    372.41,
+    364.12,
+    355.26,
+    346.94,
+    338.16,
+    400.05,
+    407.55,
+    415.56,
+    423.36,
+    434.57
+   ],
+   "extent_mm": [
+    296.0,
+    461.4
+   ]
+  },
+  "dst_dolman_front.L": {
+   "file": "HUSSAR_BLUE_dolman_front_L_178_cm_C100_W86_H58_soutache.dst",
+   "kind": "soutache couching",
+   "instance": "dolman_front.L",
+   "centre_mm": [
+    148.0,
+    231.0
+   ],
+   "placement_mm": 1354.63,
+   "couch_mm": 4627.76,
+   "braid_mm": 4603.1,
+   "braid_lines": 12,
+   "size_mm": [
+    296.0,
+    461.4
+   ],
+   "hoop": "over 240x360 mm: a commercial frame",
+   "stitch_mm": 2.5,
+   "records": 2248,
+   "stops": 1,
+   "sewn_mm": [
+    1354.63,
+    388.62,
+    381.16,
+    372.41,
+    364.12,
+    355.26,
+    346.94,
+    338.16,
+    400.05,
+    407.55,
+    415.56,
+    423.36,
+    434.57
+   ],
+   "extent_mm": [
+    296.0,
+    461.4
+   ]
+  }
+ },
+ "pieces": {
+  "dolman_back": {
+   "piece": "dolman_back",
+   "instance": "dolman_back.R",
+   "sew_perimeter": 1265.543,
+   "sew_area": 76625.39,
+   "cut_perimeter": 1344.067,
+   "cut_area": 89673.39
+  },
+  "dolman_front": {
+   "piece": "dolman_front",
+   "instance": "dolman_front.R",
+   "sew_perimeter": 1356.95,
+   "sew_area": 107935.08,
+   "cut_perimeter": 1448.436,
+   "cut_area": 121962.14
+  },
+  "dolman_side": {
+   "piece": "dolman_side",
+   "instance": "dolman_side.R",
+   "sew_perimeter": 699.308,
+   "sew_area": 20077.3,
+   "cut_perimeter": 794.004,
+   "cut_area": 27543.87
+  },
+  "dolman_topsleeve": {
+   "piece": "dolman_topsleeve",
+   "instance": "dolman_topsleeve.R",
+   "sew_perimeter": 1497.469,
+   "sew_area": 127124.51,
+   "cut_perimeter": 1570.835,
+   "cut_area": 142466.26
+  },
+  "dolman_undersleeve": {
+   "piece": "dolman_undersleeve",
+   "instance": "dolman_undersleeve.R",
+   "sew_perimeter": 1168.548,
+   "sew_area": 45015.09,
+   "cut_perimeter": 1268.048,
+   "cut_area": 57198.13
+  },
+  "dolman_cuff": {
+   "piece": "dolman_cuff",
+   "instance": "dolman_cuff.R",
+   "sew_perimeter": 576.677,
+   "sew_area": 14592.1,
+   "cut_perimeter": 657.444,
+   "cut_area": 20762.74
+  },
+  "dolman_collar": {
+   "piece": "dolman_collar",
+   "instance": "dolman_collar",
+   "sew_perimeter": 926.0,
+   "sew_area": 21012.0,
+   "cut_perimeter": 1006.0,
+   "cut_area": 30672.0
+  }
+ }
+}
