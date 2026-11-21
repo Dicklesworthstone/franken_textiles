@@ -198,13 +198,27 @@ python3 scripts/prepare-exhibits.py trousers /path/to/synthetic-trousers /path/t
 ```
 
 To render the films, start the site, install FFmpeg with libx264, and supply a Chromium executable
-or run `bunx --no-install playwright-core install chromium`. The renderer drives the same WebGL
-studio at fixed frame positions and passes its images to FFmpeg. The output directory receives
-three 720p films, three gallery posters and the hero still.
+or run `bunx --no-install playwright-core install chromium`. The browser records the same
+WebGL scenes with a UHD drawing buffer. Each film is encoded at 3840 × 2160 and 60 fps.
+The 60 fps camera is sampled independently of the retained solver states.
 
 ```sh
 CHROMIUM_EXECUTABLE=/path/to/chrome bun run films http://localhost:3000 /path/to/new-media
 ```
+
+For the construction films, use Blender or the EGL recorder with NumPy, ModernGL 5.13 and
+glcontext 3.1. Both use the same source frames and chapter timings. The EGL renderer uses the
+actual pattern boundaries, seam pairs and garment meshes with direct lighting.
+
+```sh
+python3 scripts/render-native-film.py sundress /path/to/new-media/construction-sundress.mp4
+python3 scripts/render-native-film.py bolero /path/to/new-media/construction-bolero.mp4 /path/to/native-solve
+node --test scripts/films.test.mjs
+```
+
+The workshop uses H.264 with 8-bit 4:2:0 colour for browser playback. Verify the finished files
+before replacing `public/media/` assets. Cloudflare accepts files up to 25 MiB per static asset.
+Set `FTX_FILM_SOURCE_DIR` when assembling the studio tour or wardrobe reel from a fresh output folder.
 
 The 20-second studio tour records the drafting and cutting handoff, a native garment replay,
 and the embroidery timeline. Stage the workbench before recording, then run:
