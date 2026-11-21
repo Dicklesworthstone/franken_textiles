@@ -34,13 +34,13 @@ export type DolmanMeshData = {
 
 const TRUNK_HALF_WIDTH = 0.27;
 const MOUNT_AT = 0.78;
-const SURFACE_LIFT_M = 0.0018; // 1.8 mm outward along triangle normal so thread sits cleanly on outer wool face
+const SURFACE_LIFT_M = 0.0022; // 2.2 mm outward along triangle normal so thread sits cleanly on outer wool face
 
 const CAMERA_PRESETS: Record<CameraPreset, { yaw: number; targetY: number; span: number }> = {
-  "right-chest": { yaw: -0.34, targetY: 1.29, span: 0.24 },
-  "left-chest": { yaw: 0.34, targetY: 1.29, span: 0.24 },
-  "chest-front": { yaw: 0.0, targetY: 1.28, span: 0.28 },
-  full: { yaw: -0.22, targetY: 1.18, span: 0.56 },
+  "right-chest": { yaw: -0.34, targetY: 1.21, span: 0.285 },
+  "left-chest": { yaw: 0.34, targetY: 1.21, span: 0.285 },
+  "chest-front": { yaw: 0.0, targetY: 1.21, span: 0.31 },
+  full: { yaw: -0.22, targetY: 1.15, span: 0.56 },
 };
 
 export default function DolmanStitchScene({
@@ -50,7 +50,7 @@ export default function DolmanStitchScene({
   activePanel,
   regiment,
   cameraPreset,
-  resetKey,
+  resetCount,
   onReady,
   onError,
 }: {
@@ -60,18 +60,18 @@ export default function DolmanStitchScene({
   activePanel: string | null;
   regiment: RegimentLook;
   cameraPreset: CameraPreset;
-  resetKey: number;
+  resetCount: number;
   onReady?: () => void;
   onError?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const stateRef = useRef({ points, cursor, activePanel, regiment, cameraPreset, resetKey, onReady, onError });
+  const stateRef = useRef({ points, cursor, activePanel, regiment, cameraPreset, resetCount, onReady, onError });
   const redrawRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    stateRef.current = { points, cursor, activePanel, regiment, cameraPreset, resetKey, onReady, onError };
+    stateRef.current = { points, cursor, activePanel, regiment, cameraPreset, resetCount, onReady, onError };
     redrawRef.current?.();
-  }, [points, cursor, activePanel, regiment, cameraPreset, resetKey, onReady, onError]);
+  }, [points, cursor, activePanel, regiment, cameraPreset, resetCount, onReady, onError]);
 
   useEffect(() => {
     const surface = host.current;
@@ -135,6 +135,9 @@ export default function DolmanStitchScene({
     bodyGeo.computeBoundingSphere();
     studio.frame(bodyGeo.boundingSphere!.center, bodyGeo.boundingSphere!.radius);
     const formMat = formMaterial();
+    formMat.polygonOffset = true;
+    formMat.polygonOffsetFactor = 1.5;
+    formMat.polygonOffsetUnits = 1.5;
     const bodyMesh = new T.Mesh(bodyGeo, formMat);
     bodyMesh.castShadow = true;
     bodyMesh.receiveShadow = true;
@@ -156,9 +159,6 @@ export default function DolmanStitchScene({
       roughness: 0.9,
       metalness: 0.02,
       side: T.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
     });
     const clothMesh = new T.Mesh(clothGeo, clothMat);
     clothMesh.castShadow = true;
@@ -175,8 +175,8 @@ export default function DolmanStitchScene({
       metalness: 0.03,
       side: T.DoubleSide,
       polygonOffset: true,
-      polygonOffsetFactor: -0.4,
-      polygonOffsetUnits: -0.4,
+      polygonOffsetFactor: -0.6,
+      polygonOffsetUnits: -0.6,
     });
     const activePanelMesh = new T.Mesh(activePanelGeo, activePanelMat);
     scene.add(activePanelMesh);
@@ -337,9 +337,9 @@ export default function DolmanStitchScene({
         }
       }
 
-      if (st.cameraPreset !== lastPreset || st.resetKey !== lastReset) {
+      if (st.cameraPreset !== lastPreset || st.resetCount !== lastReset) {
         lastPreset = st.cameraPreset;
-        lastReset = st.resetKey;
+        lastReset = st.resetCount;
         if (width && height) applyCamera(st.cameraPreset);
       }
 

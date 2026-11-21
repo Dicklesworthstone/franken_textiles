@@ -279,7 +279,7 @@ export default function HussarStitchLab() {
   const source = SOURCES.find(s => s.key === sourceKey) ?? SOURCES[0];
   const [regiment, setRegiment] = useState<RegimentLook>("Blue");
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>("right-chest");
-  const [resetKey, setResetKey] = useState(0);
+  const [resetCount, setResetCount] = useState(0);
   const [showJumps, setShowJumps] = useState(true);
   const [dolman, setDolman] = useState<LoadedDolman | null>(null);
   const [dst, setDst] = useState<{ label: string; records: RegisteredStitchPoint[]; stopIndex: number } | null>(null);
@@ -357,28 +357,30 @@ export default function HussarStitchLab() {
     return () => controller.abort();
   }, [dolman, source]);
 
-  // Smooth stitch playback that automatically pauses at the exact braid stop!
+  // Smooth stitch playback that automatically pauses at the exact braid stop without side effects inside state updaters.
   useEffect(() => {
     if (!playing || !dst || !reg) return;
     const total = reg.points.length;
+    if (cursor >= total - 1) {
+      setPlaying(false);
+      return;
+    }
     const stopIdx = dst.stopIndex;
-    const id = window.setInterval(() => {
-      setCursor(c => {
-        const stride = total > 500 ? 12 : 2;
-        const next = Math.min(total - 1, c + stride);
-        if (stopIdx > 0 && c < stopIdx && next >= stopIdx) {
-          setPlaying(false);
-          return stopIdx;
-        }
-        if (next >= total - 1) {
-          setPlaying(false);
-          return total - 1;
-        }
-        return next;
-      });
+    const stride = total > 500 ? 12 : 2;
+    const next = Math.min(total - 1, cursor + stride);
+    const id = window.setTimeout(() => {
+      if (stopIdx > 0 && cursor < stopIdx && next >= stopIdx) {
+        setCursor(stopIdx);
+        setPlaying(false);
+      } else if (next >= total - 1) {
+        setCursor(total - 1);
+        setPlaying(false);
+      } else {
+        setCursor(next);
+      }
     }, 35);
-    return () => window.clearInterval(id);
-  }, [playing, dst, reg]);
+    return () => window.clearTimeout(id);
+  }, [playing, cursor, dst, reg]);
 
   const panelLoops = useMemo(() => {
     if (!dolman || !source.panelName) return [];
@@ -398,7 +400,9 @@ export default function HussarStitchLab() {
       : active.pass === "placement"
         ? "Colour 1 · Placement run"
         : cursor >= total - 1
-          ? "Complete · 12 chest cords tacked"
+          ? reg?.registered
+            ? "Complete · 12 chest cords tacked"
+            : "Complete · flat sampler loop finished"
           : "Colour 2 · Couching tack run";
 
   const pdfHref = regiment === "Blue" ? "/patterns/hussar-blue.pdf" : "/patterns/hussar-yellow.pdf";
@@ -462,22 +466,24 @@ export default function HussarStitchLab() {
               >
                 Pause at braid stop
               </button>
-              <button
-                type="button"
-                disabled={!reg || cursor <= 0}
-                aria-label="Previous DST record"
-                onClick={() => { setPlaying(false); setCursor(c => Math.max(0, c - 1)); }}
-              >
-                ←
-              </button>
-              <button
-                type="button"
-                disabled={!reg || cursor >= total - 1}
-                aria-label="Next DST record"
-                onClick={() => { setPlaying(false); setCursor(c => Math.min(total - 1, c + 1)); }}
-              >
-                →
-              </button>
+              <span className="hs-step-pair">
+                <button
+                  type="button"
+                  disabled={!reg || cursor <= 0}
+                  aria-label="Previous DST record"
+                  onClick={() => { setPlaying(false); setCursor(c => Math.max(0, c - 1)); }}
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  disabled={!reg || cursor >= total - 1}
+                  aria-label="Next DST record"
+                  onClick={() => { setPlaying(false); setCursor(c => Math.min(total - 1, c + 1)); }}
+                >
+                  →
+                </button>
+              </span>
               <button
                 type="button"
                 disabled={!reg}
@@ -549,7 +555,7 @@ export default function HussarStitchLab() {
                       {r}
                     </button>
                   ))}
-                  <button type="button" onClick={() => setResetKey(k => k + 1)}>
+                  <button type="button" onClick={() => setResetCount(k => k + 1)}>
                     Reset
                   </button>
                 </div>
@@ -569,7 +575,7 @@ export default function HussarStitchLab() {
                       activePanel={source.panelName}
                       regiment={regiment}
                       cameraPreset={cameraPreset}
-                      resetKey={resetKey}
+                      resetCount={resetCount}
                       onReady={onReady}
                       onError={onError}
                     />
@@ -597,7 +603,7 @@ export default function HussarStitchLab() {
                     key={id}
                     type="button"
                     aria-pressed={cameraPreset === id}
-                    onClick={() => { setCameraPreset(id); setResetKey(k => k + 1); }}
+                    onClick={() => { setCameraPreset(id); setResetCount(k => k + 1); }}
                   >
                     {label}
                   </button>
@@ -693,7 +699,7 @@ export default function HussarStitchLab() {
                   Download {regiment} regiment pattern PDF ↓
                 </a>
                 <a className="hs-dl-secondary" href="/exhibits/hussar/dolman-embroidery-manifest.json" download>
-                  Export manifest (JSON · 2,248 records) ↓
+                  Dolman embroidery manifest (JSON · 2 fronts) ↓
                 </a>
                 <a className="hs-dl-secondary" href="/exhibits/hussar/dolman-pattern.json" download>
                   Dolman pattern JSON (12 soutache lines) ↓

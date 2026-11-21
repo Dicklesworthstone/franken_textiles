@@ -1,7 +1,12 @@
 // Verify Tajima DST panel-to-surface registration onto the 1761 hussar dolman (ftx-f9t).
 // Run with: FTX_STUDIO_URL=http://127.0.0.1:3000 node --test scripts/hussar-stitch.test.mjs
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { after, before, test } from "node:test";
 import { chromium } from "playwright-core";
@@ -13,6 +18,8 @@ import {
 } from "../public/labs/dolman-stitch.mjs";
 
 const site = process.env.FTX_STUDIO_URL || "http://127.0.0.1:3000";
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const NATIVE_FTX = path.join(REPO_ROOT, "target/release/ftx");
 
 let browser;
 before(async () => {
@@ -98,6 +105,32 @@ test("DST placement and couching stitches register onto dolman_front R & L withi
   assert.equal(samplerReg.registered, false);
   assert.equal(samplerReg.registeredStitches, 0);
   assert.equal(samplerReg.unmatchedStitches, 147);
+
+  // Fail closed on invalid or truncated DST bytes.
+  assert.throws(() => decodeDst(new Uint8Array(100)), /truncated/i);
+  assert.throws(() => decodeDst(new TextEncoder().encode("<html>Not a DST file</html>".padEnd(600, " "))), /valid Tajima DST/i);
+
+  // Byte-exact parity against native `ftx export embroidery` when the release binary is built.
+  if (existsSync(NATIVE_FTX)) {
+    const outDir = mkdtempSync(path.join(tmpdir(), "ftx-hussar-dst-"));
+    const patPath = path.join(REPO_ROOT, "showcase/public/exhibits/hussar/dolman-pattern.json");
+    const raw = execFileSync(NATIVE_FTX, ["export", "embroidery", patPath, "--out", outDir, "--json"], {
+      encoding: "utf8",
+    });
+    const manifest = JSON.parse(raw);
+    const rFile = manifest.files["dst_dolman_front.R"].file;
+    const lFile = manifest.files["dst_dolman_front.L"].file;
+    assert.deepEqual(
+      readFileSync(path.join(outDir, rFile)),
+      readFileSync(path.join(REPO_ROOT, "showcase/public/exhibits/hussar/dolman-front-R.dst")),
+      "dolman-front-R.dst must be byte-identical to native ftx export embroidery",
+    );
+    assert.deepEqual(
+      readFileSync(path.join(outDir, lFile)),
+      readFileSync(path.join(REPO_ROOT, "showcase/public/exhibits/hussar/dolman-front-L.dst")),
+      "dolman-front-L.dst must be byte-identical to native ftx export embroidery",
+    );
+  }
 });
 
 test("Hussar embroidery trace page pauses at braid stop, registers 3D chest stitches, refuses unregistered sampler, serves DST/PDF, and fits phone", async () => {
@@ -126,15 +159,29 @@ test("Hussar embroidery trace page pauses at braid stop, registers 3D chest stit
     await page.getByRole("button", { name: "Pause at braid stop" }).click();
     assert.match(await page.locator(".hs-scrub-meta").innerText(), /Stop · lay the soutache braid/i);
 
-    // Switch to unregistered standalone flat sampler: 0 registered 3D stitches and explicit banner.
+    // Switch to left chest panel and confirm mirrored registration.
+    await page.locator('button[data-source="dolman_front.L"]').click();
+    await page.waitForFunction(() => document.querySelector('canvas[data-panel="dolman_front.L"]'));
+    assert.equal(await page.locator('[data-metric="registered"]').innerText(), "2172");
+
+    // Switch to unregistered standalone flat sampler: 0 registered 3D stitches, explicit banner, honest completion label.
     await page.locator('button[data-source="braid-sampler"]').click();
     await page.locator(".hs-unregistered-banner").waitFor({ timeout: 10000 });
     assert.equal(await page.locator('[data-metric="registered"]').innerText(), "0");
     assert.match(await page.locator(".hs-unregistered-banner").innerText(), /No panel-to-surface correspondence/i);
+    await page.getByRole("button", { name: "All stitches" }).click();
+    assert.match(await page.locator(".hs-scrub-meta").innerText(), /flat sampler loop finished/i);
 
-    // Switch back to dolman_front.R and verify original DST & pattern PDF downloads return HTTP 200.
+    // Switch back to dolman_front.R, replay from record 0, verify automatic pause at braid stop (#296), and verify DST/PDF downloads.
     await page.locator('button[data-source="dolman_front.R"]').click();
     await page.waitForFunction(() => document.querySelector('[data-metric="registered"]')?.textContent === "2172");
+    await page.getByRole("button", { name: "All stitches" }).click();
+    await page.getByRole("button", { name: "Replay DST" }).click();
+    await page.waitForFunction(
+      () => document.querySelector(".hs-phase-badge")?.getAttribute("data-stop") === "true",
+      { timeout: 10000 },
+    );
+    assert.match(await page.locator(".hs-scrub-meta").innerText(), /Record 296 \/ 2248/);
     const dstHref = await page.locator("a.hs-dl-primary").getAttribute("href");
     const dstRes = await page.request.get(new URL(dstHref, site).href);
     assert.equal(dstRes.status(), 200);

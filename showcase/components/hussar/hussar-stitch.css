@@ -62,6 +62,12 @@
   gap: 7px;
 }
 
+.hs-step-pair {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
 .hs-source-group button,
 .hs-transport button {
   padding: 7px 12px;

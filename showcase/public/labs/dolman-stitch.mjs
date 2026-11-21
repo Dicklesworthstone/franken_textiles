@@ -15,6 +15,9 @@ export function decodeDst(input) {
     throw new Error("DST file is truncated (expected 512-byte header plus stitch records).");
   }
   const header = new TextDecoder("latin1").decode(bytes.subarray(0, 512));
+  if (!header.includes("LA:") || !header.includes("ST:")) {
+    throw new Error("Input does not have a valid Tajima DST 512-byte header (missing LA:/ST: fields).");
+  }
   const label = header.match(/LA:([^\r\n]+)/)?.[1]?.trim() || "DST";
 
   const records = [];
@@ -148,6 +151,34 @@ export function extractPanelOutlineMm(pack, flat, panelName) {
   return loops;
 }
 
+function closestPointOnTriangle2d(px, py, ax, ay, bx, by, cx, cy) {
+  // Exact Euclidean closest point on triangle ABC in 2D, returning [u, v, dist] where p = (1-u-v)A + uB + vC.
+  const edges = [
+    [ax, ay, bx, by, 0, 0, 1, 0],
+    [bx, by, cx, cy, 1, 0, 0, 1],
+    [cx, cy, ax, ay, 0, 1, 0, 0],
+  ];
+  let bestDist = Infinity;
+  let bestU = 0;
+  let bestV = 0;
+  for (let i = 0; i < 3; i++) {
+    const [x0, y0, x1, y1, u0, v0, u1, v1] = edges[i];
+    const ex = x1 - x0;
+    const ey = y1 - y0;
+    const len2 = ex * ex + ey * ey;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - x0) * ex + (py - y0) * ey) / len2)) : 0;
+    const qx = x0 + t * ex;
+    const qy = y0 + t * ey;
+    const d = Math.hypot(px - qx, py - qy);
+    if (d < bestDist) {
+      bestDist = d;
+      bestU = u0 + t * (u1 - u0);
+      bestV = v0 + t * (v1 - v0);
+    }
+  }
+  return [bestU, bestV, bestDist];
+}
+
 function triangleNormal(xyz, a, b, c) {
   const ax = xyz[a * 3], ay = xyz[a * 3 + 1], az = xyz[a * 3 + 2];
   const bx = xyz[b * 3] - ax, by = xyz[b * 3 + 1] - ay, bz = xyz[b * 3 + 2] - az;
@@ -223,7 +254,7 @@ export function registerDstOnDolmanPanel(dst, pack, unpacked, panelName, toleran
     tris.push({
       ti: t / 3,
       a, b, c,
-      ax, ay, v0x, v0y, v1x, v1y, denom,
+      ax, ay, bx, by, cx0, cy0, v0x, v0y, v1x, v1y, denom,
       minX: Math.min(ax, bx, cx0),
       maxX: Math.max(ax, bx, cx0),
       minY: Math.min(ay, by, cy0),
@@ -276,11 +307,7 @@ export function registerDstOnDolmanPanel(dst, pack, unpacked, panelName, toleran
         bestV = Math.max(0, Math.min(1 - bestU, v));
         break;
       }
-      const cu = Math.max(0, Math.min(1, u));
-      const cv = Math.max(0, Math.min(1 - cu, v));
-      const rx = tr.ax + cu * tr.v0x + cv * tr.v1x;
-      const ry = tr.ay + cu * tr.v0y + cv * tr.v1y;
-      const d = Math.hypot(fx - rx, fy - ry);
+      const [cu, cv, d] = closestPointOnTriangle2d(fx, fy, tr.ax, tr.ay, tr.bx, tr.by, tr.cx0, tr.cy0);
       if (d < bestDist) {
         bestDist = d;
         best = tr;
