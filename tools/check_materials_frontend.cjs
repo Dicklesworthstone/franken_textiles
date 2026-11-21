@@ -24374,11 +24374,35 @@ test('cylinder calibration surfaces opt-in adjoint sensitivity and thermal views
   assert.match(visibleText(histMc), /Transient exterior: validity-gated microclimate convection \(Estimate\)/);
   assert.match(visibleText(histMc), /Churchill-Bernstein cylinder in crossflow/);
   assert.match(visibleText(histMc), /14\.8/);
+  assert.match(visibleText(histMc), /40000/);
   const histSummary = JSON.parse(histMc.children[1].textContent);
   assert.equal(histSummary.microclimate_convection.correlation, 'churchill_bernstein_cylinder');
   assert.match(histSummary.exterior_model, /Nusselt correlation/);
 
-  // 3. Steady heat & coverage (coverageResult): default/prescribed exterior untouched; multi-entry microclimate_convection renders per-region table.
+  // 2b. Strip calibration summary also exposes opt-in sensitivity/adjoint_solves while omitting defaults.
+  p.select('stripFitRequest', '{"schema":"ftx-strip-calibration/1"}');
+  p.e.stripFitRequest.handlers.change();
+  await p.e.stripFit.onclick();
+  const baseStrip = {
+    accepted: true, input_sha256: 'c'.repeat(64), excitation_pivot: 0.44, forward_solves: 10,
+    mesh_change_peak_scaled: 0.01, domain_replay_verified: true, starts: [{ converged: true }],
+    parameters: [1000, 900, 300, 0.2], parameter_descriptors: [], predictions: [], reasons: [],
+    fit: { components: 4, rms_scaled: 0.01, peak_scaled: 0.02 },
+    input: { method: 'Strip check.', experiments: [], policy: { max_forward_solves: 500, max_mesh_scaled: 0.25 } }
+  };
+  p.emit({ calibration: baseStrip, material: { capabilities: { mechanical_coefficients: { ready: true } } } }, []);
+  const stripDefSum = JSON.parse(section(p, 'Clamped-strip identification').children[1].textContent);
+  assert.equal(Object.hasOwn(stripDefSum, 'sensitivity'), false);
+  assert.equal(Object.hasOwn(stripDefSum, 'adjoint_solves'), false);
+  await p.e.stripFit.onclick();
+  p.emit({ calibration: { ...baseStrip, adjoint_solves: 12,
+    input: { ...baseStrip.input, policy: { ...baseStrip.input.policy, sensitivity: 'adjoint' } } },
+    material: { capabilities: { mechanical_coefficients: { ready: true } } } }, []);
+  const stripAdjSum = JSON.parse(section(p, 'Clamped-strip identification').children[1].textContent);
+  assert.equal(stripAdjSum.sensitivity, 'adjoint');
+  assert.equal(stripAdjSum.adjoint_solves, 12);
+
+  // 3. Steady heat & coverage (coverageResult): default/prescribed exterior untouched; exterior_exchange power split and multi-entry microclimate_convection render cleanly.
   await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
   p.e.body.files = [new Blob([new Uint8Array([1])])];
   await p.e.fold.onclick();
@@ -24388,6 +24412,7 @@ test('cylinder calibration surfaces opt-in adjoint sensitivity and thermal views
   await p.e.heat.onclick();
   p.emit({ steady: { power_w: 12.5 }, comfort_claim: false, empirical_validation_claim: false }, []);
   const heatDef = section(p, 'heat');
+  assert.doesNotMatch(visibleText(heatDef), /qualified exterior convection and radiation/);
   assert.doesNotMatch(visibleText(heatDef), /validity-gated microclimate convection/);
   assert.equal(Object.hasOwn(JSON.parse(heatDef.children[1].textContent), 'microclimate_convection'), false);
 
@@ -24399,15 +24424,77 @@ test('cylinder calibration surfaces opt-in adjoint sensitivity and thermal views
   };
   p.emit({
     steady: { power_w: 9.4 },
+    exterior_exchange: { convective_power_w: 6.2, radiative_power_w: 3.2, balance_residual_w: 1e-12, bare_policy: 'separate explicitly prescribed films' },
     microclimate_convection: [mcReceipt, mcNatural],
     exterior_model: 'validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); not a measured garment film',
     comfort_claim: false, empirical_validation_claim: false
   }, []);
   const heatMc = section(p, 'heat');
+  assert.match(visibleText(heatMc), /Steady exterior: qualified exterior convection and radiation/);
+  assert.match(visibleText(heatMc), /6\.2/);
+  assert.match(visibleText(heatMc), /3\.2/);
+  assert.match(visibleText(heatMc), /separate explicitly prescribed films/);
   assert.match(visibleText(heatMc), /Steady exterior: validity-gated microclimate convection per region \(Estimate\)/);
   assert.match(visibleText(heatMc), /Churchill-Bernstein cylinder in crossflow/);
   assert.match(visibleText(heatMc), /Churchill-Chu vertical plate natural convection/);
   const heatSummary = JSON.parse(heatMc.children[1].textContent);
   assert.equal(heatSummary.microclimate_convection.length, 2);
   assert.match(heatSummary.exterior_model, /Nusselt correlation/);
+});
+
+test('scenario steady surface and coverage views render opt-in microclimate_convection on initial and endpoint poses without altering defaults', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  await p.e.scenario.onclick();
+  p.emit(scenarioReport(), []);
+  const sDef = section(p, 'Fresh drape and heat alternatives');
+  assert.doesNotMatch(visibleText(sDef), /validity-gated microclimate convection/);
+
+  const mcForced = {
+    correlation: 'churchill_bernstein_cylinder', name: 'Churchill-Bernstein cylinder in crossflow',
+    citation: 'Churchill & Bernstein (1977)', characteristic_length_m: 0.25,
+    nu: 142.5, h_w_m2_k: 14.8, discrepancy_rel: 0.2, evidence: 'estimate',
+    groups: { Re: 40000, Pr: 0.71 }
+  };
+  const mcNatural = {
+    correlation: 'churchill_chu_vertical_plate', name: 'Churchill-Chu vertical plate natural convection',
+    citation: 'Churchill & Chu (1975)', characteristic_length_m: 0.4,
+    nu: 48.2, h_w_m2_k: 3.1, discrepancy_rel: 0.15, evidence: 'estimate'
+  };
+  const rep = scenarioReport();
+  rep.simulations[1].evaluation.result.surface = outcome({
+    steady: { power_w: 8.1 },
+    microclimate_convection: [mcForced],
+    exterior_model: 'validity-gated moist-air Nusselt correlation convection (Estimate)'
+  });
+  rep.simulations[1].evaluation.result.coverage = outcome({
+    steady: { power_w: 7.4 },
+    microclimate_convection: [mcForced, mcNatural],
+    exterior_model: 'validity-gated moist-air Nusselt correlation convection (Estimate)'
+  });
+  rep.simulations[1].evaluation.result.motion = outcome({
+    duration_s: 1.0, samples: [{}], trials: 2, metrics: { max_absolute_edge_strain_pct: 1.2 },
+    keyframes: [{
+      time_s: 1.0, arm_abduction_deg: 60,
+      surface: outcome({
+        steady: { power_w: 8.5 },
+        microclimate_convection: [mcNatural],
+        exterior_model: 'endpoint microclimate correlation (Estimate)'
+      }),
+      coverage: outcome({
+        steady: { power_w: 7.9 },
+        microclimate_convection: [mcForced],
+        exterior_model: 'endpoint coverage correlation (Estimate)'
+      })
+    }]
+  });
+  await p.e.scenario.onclick();
+  p.emit(rep, []);
+  const sMc = section(p, 'Fresh drape and heat alternatives');
+  const txt = visibleText(sMc);
+  assert.match(txt, /A: initial independent sheets: validity-gated microclimate convection \(Estimate\)/);
+  assert.match(txt, /A: initial body coverage: validity-gated microclimate convection per region \(Estimate\)/);
+  assert.match(txt, /A: endpoint 1 s independent sheets: validity-gated microclimate convection \(Estimate\)/);
+  assert.match(txt, /A: endpoint 1 s body coverage: validity-gated microclimate convection \(Estimate\)/);
+  assert.match(txt, /Churchill-Bernstein cylinder in crossflow/);
+  assert.match(txt, /Churchill-Chu vertical plate natural convection/);
 });
