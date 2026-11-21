@@ -147,13 +147,28 @@ self.onmessage = async ({ data: msg }) => {
           msg.measurementAcceptedFit !== undefined)) {
         throw Error("Supplemental tape-fit preview pose must contain valid arm, leg and skinning settings without an accepted-fit source.");
       }
+      if (msg.measurementAcceptedFit !== undefined &&
+          (!Number.isFinite(msg.measurementArmDeg) || msg.measurementArmDeg < 0 || msg.measurementArmDeg > 180)) {
+        throw Error("Supplemental accepted-fit replay requires a finite arm angle from 0 to 180 degrees.");
+      }
+      const acceptedPose = msg.measurementAcceptedPose;
+      if (acceptedPose !== undefined) {
+        const keys = acceptedPose && typeof acceptedPose === "object" && !Array.isArray(acceptedPose) ? Object.keys(acceptedPose) : null;
+        if (!keys || !keys.length || keys.some(key => !["legs", "leg_fraction", "skinning"].includes(key)) ||
+            msg.measurementAcceptedFit === undefined || pose !== undefined ||
+            (Object.hasOwn(acceptedPose, "legs") && !["standing", "seated", "squat"].includes(acceptedPose.legs)) ||
+            (Object.hasOwn(acceptedPose, "leg_fraction") && (!Number.isFinite(acceptedPose.leg_fraction) || acceptedPose.leg_fraction < 0 || acceptedPose.leg_fraction > 1)) ||
+            (Object.hasOwn(acceptedPose, "skinning") && !["lbs", "dqs"].includes(acceptedPose.skinning))) {
+          throw Error("Supplemental accepted-fit pose requires an accepted body-fit source and valid leg/skinning settings.");
+        }
+      }
       const primary = msg.measurementPrimary ?? msg.measurements;
       json(primary); // Validate without reserializing full-width input numbers.
       const merged = ftx.measurement_file(`{"mode":"file","measurements":${primary},"supplemental_measurements":${msg.measurementSources},"supplemental_same_wearer":true}`, msg.today || "1970-01-01");
       // Separate body requests never enter fusion. Keep pose outside the merged evidence document.
       msg.measurements = pose !== undefined ? `{"schema":"ftx-scenario-body/1","measurements":${merged},${JSON.stringify(pose).slice(1)}` :
         msg.measurementAcceptedFit === undefined ? merged :
-        `{"schema":"ftx-scenario-body/1","measurements":${merged},"accepted_body_fit":${msg.measurementAcceptedFit},"arm_abduction_deg":${msg.measurementArmDeg}}`;
+        `{"schema":"ftx-scenario-body/1","measurements":${merged},"accepted_body_fit":${msg.measurementAcceptedFit},"arm_abduction_deg":${msg.measurementArmDeg}${acceptedPose !== undefined ? "," + JSON.stringify(acceptedPose).slice(1) : "}"}`;
     }
     if (msg.outfit) {
       if (typeof msg.outfit.request_json !== "string" || typeof msg.outfit.composition_json !== "string") throw Error("The original outfit request and composition receipt are required.");
@@ -560,10 +575,53 @@ self.onmessage = async ({ data: msg }) => {
             throw Error("Time integrator must be implicit_euler or generalized_alpha with finite rho_inf in [0, 1].");
           }
         }
+        if (msg.schedule !== undefined) {
+          const value = msg.schedule;
+          const allowed = ["step_s", "sew_steps", "drape_steps", "newton_tol_m_s"];
+          if (!value || typeof value !== "object" || Array.isArray(value) ||
+              !Object.keys(value).length || Object.keys(value).some(key => !allowed.includes(key) || value[key] === undefined)) {
+            throw Error("Custom integration schedule must specify only step_s, sew_steps, drape_steps, or newton_tol_m_s.");
+          }
+          if (value.step_s !== undefined) {
+            if (typeof value.step_s !== "number" || !Number.isFinite(value.step_s) || value.step_s <= 0) {
+              throw Error("Custom time step step_s must be finite and positive.");
+            }
+            settings.step_s = value.step_s;
+          }
+          if (value.sew_steps !== undefined) {
+            if (!Number.isSafeInteger(value.sew_steps) || value.sew_steps < 0 || value.sew_steps > 512) {
+              throw Error("Custom sewing step count must be a whole number from 0 to 512.");
+            }
+            settings.sew_steps = value.sew_steps;
+          }
+          if (value.drape_steps !== undefined) {
+            if (!Number.isSafeInteger(value.drape_steps) || value.drape_steps < 0 || value.drape_steps > 512) {
+              throw Error("Custom gravity step count must be a whole number from 0 to 512.");
+            }
+            settings.drape_steps = value.drape_steps;
+          }
+          if (value.newton_tol_m_s !== undefined) {
+            if (typeof value.newton_tol_m_s !== "number" || !Number.isFinite(value.newton_tol_m_s) || value.newton_tol_m_s <= 0) {
+              throw Error("Custom Newton tolerance newton_tol_m_s must be finite and positive.");
+            }
+            settings.newton_tol_m_s = value.newton_tol_m_s;
+          }
+          const effSew = settings.sew_steps ?? 12;
+          const effDrape = settings.drape_steps ?? 36;
+          if (effSew + effDrape < 6) {
+            throw Error("Custom schedule needs at least 6 combined sewing and gravity steps.");
+          }
+          const longestSew = settings.two_start ? Math.max(effSew, 18) : effSew;
+          if (longestSew + effDrape + settings.max_settle_steps > 512) {
+            throw Error("Configured fold exceeds the 512-step browser work budget per sewing path (sew + drape + settle).");
+          }
+        }
         const configured = (!imported && settings.arm_abduction_deg !== 35) ||
           settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
           settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
-          settings.newton_strategy !== undefined || settings.integrator !== undefined;
+          settings.newton_strategy !== undefined || settings.integrator !== undefined ||
+          settings.step_s !== undefined || settings.sew_steps !== undefined ||
+          settings.drape_steps !== undefined || settings.newton_tol_m_s !== undefined;
         if (configured && typeof ftx.fold_up_configured !== "function") {
           throw Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
         }

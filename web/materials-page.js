@@ -261,7 +261,7 @@ function bodyDependentStudies(id) {
   const used = id === "body" || (id === "scenarioBody" && mode === "request") ||
     (id === "measurements" && ["measurements", "accepted", "preview"].includes(mode)) ||
     (["bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id) && mode === "preview") ||
-    (["bodyFitFile", "bodyFitConsent", "bodyArmDeg"].includes(id) && mode === "accepted");
+    (["bodyFitFile", "bodyFitConsent", "bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id) && mode === "accepted");
   return used ? ["scenario", ...(studyUsesBody() || (id === "body" && savedStudy?.request.onBody) ? ["study"] : [])] : [];
 }
 function guidedSourceStudies(id) {
@@ -282,6 +282,7 @@ function guidedSourceStudies(id) {
 function controls() {
   $("loadMaterialExample").disabled = !ready || !!pending;
   for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
+  for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = !$("customDrapeSchedule").checked;
   $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
   const guided = guidedStudyMode();
   const authoredFit = fitMode() === "guided", fitKind = $("guidedFitKind").value || "vertical";
@@ -329,6 +330,7 @@ function controls() {
   for (const id of ["guidedScenarioSubdivisionHalvings", "guidedScenarioSubdivisionTrials"]) {
     $(id).disabled = !guidedScenarioMode() || !$("guidedScenarioSubdivision").checked;
   }
+  $("guidedScenarioRhoInf").disabled = !guidedScenarioMode() || $("guidedScenarioIntegrator").value !== "generalized_alpha";
   $("guidedScenarioMatrix").hidden = !guidedMatrixMode();
   $("guidedScenarioCasePolicy").hidden = !guidedMatrixMode();
   $("guidedScenarioComparison").disabled = !guidedMatrixMode() || $("guidedScenarioPolicySource").value !== "file";
@@ -4848,6 +4850,7 @@ function show(op, msg, request) {
     }
     if (op === "fold") nappyOccupancyResult(s.comparison, r.body?.nappy_occupancy);
     if (op === "microclimate") microclimateResult(s.comparison, r);
+    if (op === "lowerVisco") lowerViscoResult(s.comparison, r);
     if (op === "cutJob") cuttingJobComparison(op, s.comparison,
       [{ key: "Current bound pattern", cutting_job: { status: "available", result: r } }], false);
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
@@ -5145,8 +5148,65 @@ function microclimateResult(parent, report) {
     cells(values, ["Nusselt number", metric(convection.nu)]); cells(values, ["Coefficient (W/m² K)", metric(convection.h_w_m2_k)]);
     cells(values, ["Model discrepancy allowance (fraction; not a confidence interval)", metric(convection.discrepancy_rel)]);
     for (const [key, value] of Object.entries(convection.groups || {})) cells(values, [key, metric(value)]);
+    if (convection.exterior && typeof convection.exterior === "object") {
+      const ext = convection.exterior;
+      const extTable = table(parent, "Prepared constant exterior boundary record (Estimate)", ["Field", "Value"]);
+      cells(extTable, ["Outside air temperature (°C)", metric(ext.air_c)]);
+      cells(extTable, ["Convection coefficient (W/m² K)", metric(ext.convection_w_m2_k)]);
+      cells(extTable, ["Qualified surface-temperature range (°C)",
+        Array.isArray(ext.surface_temperature_range_c) && ext.surface_temperature_range_c.length === 2
+          ? `${metric(ext.surface_temperature_range_c[0])} to ${metric(ext.surface_temperature_range_c[1])}` : "—"]);
+      cells(extTable, ["Evidence status", ext.convection_evidence || "—"]);
+      cells(extTable, ["Estimate consent", ext.allow_estimates === true ? "Yes" : "No"]);
+      if (ext.convection_source?.reference) cells(extTable, ["Source reference", ext.convection_source.reference]);
+    }
+  }
+  if (report.enclosure && typeof report.enclosure === "object") {
+    const enc = report.enclosure;
+    const closure = table(parent, "Gray-diffuse radiative enclosure closure", ["Quantity", "Value"]);
+    cells(closure, ["Enclosure energy closure Σ Q_i (W)", metric(enc.enclosure_energy_closure_w)]);
+    cells(closure, ["Max linear residual (W/m²)", metric(enc.linear_residual_max_w_m2)]);
+    cells(closure, ["Max reciprocity residual", metric(enc.max_reciprocity_residual)]);
+    if (Array.isArray(enc.radiosity_w_m2) && enc.radiosity_w_m2.length) {
+      const surfaces = table(parent, "Enclosure surface radiosity exchange",
+        ["Surface", "Radiosity J (W/m²)", "Irradiation G (W/m²)", "Net outward flux q (W/m²)", "Net outward heat Q (W)"]);
+      for (let i = 0; i < enc.radiosity_w_m2.length; i += 1) {
+        cells(surfaces, [String(i), metric(enc.radiosity_w_m2[i]), metric(enc.irradiation_w_m2?.[i]),
+          metric(enc.net_outward_flux_w_m2?.[i]), metric(enc.net_outward_heat_w?.[i])]);
+      }
+    }
   }
   const note = document.createElement("p"); note.textContent = report.no_claim || "Model estimates only; no measured garment film, comfort or fit claim.";
+  parent.append(note);
+}
+function lowerViscoResult(parent, report) {
+  const terms = Array.isArray(report.terms) ? report.terms : [];
+  const summary = table(parent, "Certified fractional-Zener Prony lowering", ["Quantity", "Value"]);
+  cells(summary, ["Equilibrium modulus E_eq", metric(report.e_eq)]);
+  cells(summary, ["Certified frequency band (Hz)", Array.isArray(report.band_hz) && report.band_hz.length === 2
+    ? `${metric(report.band_hz[0])} to ${metric(report.band_hz[1])}` : "—"]);
+  cells(summary, ["Supremum relative complex-modulus error", metric(report.sup_rel_err)]);
+  cells(summary, ["Verification points", metric(report.verification_points)]);
+  cells(summary, ["Active Prony branches", String(terms.length)]);
+  if (terms.length) {
+    const branches = table(parent, "Lowered Maxwell–Prony branches", ["Branch", "Modulus E_j", "Relaxation time τ_j (s)"]);
+    for (let i = 0; i < terms.length; i += 1) {
+      cells(branches, [String(i + 1), metric(terms[i]?.modulus), metric(terms[i]?.tau_s)]);
+    }
+  }
+  if (report.replay && typeof report.replay === "object") {
+    const rep = report.replay;
+    const ledger = table(parent, "Exact-exponential strain replay ledger", ["Quantity", "Value"]);
+    cells(ledger, ["Replay steps", String(Array.isArray(rep.steps) ? rep.steps.length : 0)]);
+    cells(ledger, ["Final time (s)", metric(rep.final_time_s)]);
+    cells(ledger, ["Final strain", metric(rep.final_strain)]);
+    cells(ledger, ["Final stress", metric(rep.final_stress)]);
+    cells(ledger, ["External work", metric(rep.work)]);
+    cells(ledger, ["Stored elastic energy", metric(rep.stored)]);
+    cells(ledger, ["Viscous dissipation", metric(rep.dissipated)]);
+  }
+  const note = document.createElement("p");
+  note.textContent = report.no_claim || "Certified in-band Prony approximation only; not empirical textile characterization or physical fit.";
   parent.append(note);
 }
 function microclimateAdoptionControls() {
@@ -5288,6 +5348,58 @@ function setIntegrator(value) {
   $("drapeRhoInf").value = String(integrator?.rho_inf ?? 0);
   $("drapeRhoInf").disabled = integrator === undefined;
 }
+function checkedDrapeSchedule(settings) {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return undefined;
+  const keys = ["step_s", "sew_steps", "drape_steps", "newton_tol_m_s"];
+  if (!keys.some(key => settings[key] !== undefined)) return undefined;
+  if (settings.step_s !== undefined && (typeof settings.step_s !== "number" || !Number.isFinite(settings.step_s) || settings.step_s <= 0)) {
+    throw Error("Custom time step step_s must be finite and positive.");
+  }
+  if (settings.sew_steps !== undefined && (!Number.isSafeInteger(settings.sew_steps) || settings.sew_steps < 0 || settings.sew_steps > 512)) {
+    throw Error("Custom sewing step count must be a whole number from 0 to 512.");
+  }
+  if (settings.drape_steps !== undefined && (!Number.isSafeInteger(settings.drape_steps) || settings.drape_steps < 0 || settings.drape_steps > 512)) {
+    throw Error("Custom gravity step count must be a whole number from 0 to 512.");
+  }
+  if (settings.newton_tol_m_s !== undefined && (typeof settings.newton_tol_m_s !== "number" || !Number.isFinite(settings.newton_tol_m_s) || settings.newton_tol_m_s <= 0)) {
+    throw Error("Custom Newton tolerance newton_tol_m_s must be finite and positive.");
+  }
+  const schedule = {
+    step_s: settings.step_s ?? (1 / 24),
+    sew_steps: settings.sew_steps ?? 12,
+    drape_steps: settings.drape_steps ?? 36,
+    newton_tol_m_s: settings.newton_tol_m_s ?? 1e-3,
+  };
+  if (schedule.sew_steps + schedule.drape_steps < 6) {
+    throw Error("Custom schedule needs at least 6 combined sewing and gravity steps.");
+  }
+  const longestSew = settings.two_start ? Math.max(schedule.sew_steps, 18) : schedule.sew_steps;
+  if (longestSew + schedule.drape_steps + (settings.max_settle_steps ?? 0) > 512) {
+    throw Error("Configured fold exceeds the 512-step browser work budget per sewing path (sew + drape + settle).");
+  }
+  return schedule;
+}
+function drapeSchedule(twoStart, maxSettle) {
+  if (!$("customDrapeSchedule").checked) return undefined;
+  const stepRaw = $("drapeStepS").value.trim(), sewRaw = $("drapeSewSteps").value.trim(),
+    drapeRaw = $("drapeDrapeSteps").value.trim(), tolRaw = $("drapeNewtonTol").value.trim();
+  if (!stepRaw || !sewRaw || !drapeRaw || !tolRaw) {
+    throw Error("Supply finite step size, sewing steps, gravity steps and Newton tolerance.");
+  }
+  return checkedDrapeSchedule({
+    step_s: Number(stepRaw), sew_steps: Number(sewRaw), drape_steps: Number(drapeRaw),
+    newton_tol_m_s: Number(tolRaw), two_start: twoStart, max_settle_steps: maxSettle
+  });
+}
+function setDrapeSchedule(settings) {
+  const schedule = checkedDrapeSchedule(settings);
+  $("customDrapeSchedule").checked = schedule !== undefined;
+  $("drapeStepS").value = String(schedule?.step_s ?? (1 / 24));
+  $("drapeSewSteps").value = String(schedule?.sew_steps ?? 12);
+  $("drapeDrapeSteps").value = String(schedule?.drape_steps ?? 36);
+  $("drapeNewtonTol").value = String(schedule?.newton_tol_m_s ?? 0.001);
+  for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = schedule === undefined;
+}
 function drapeArmAngle() {
   const angle = $("bodyArmDeg").value.trim();
   if (!angle || !Number.isFinite(Number(angle)) || Number(angle) < 0 || Number(angle) > 180) {
@@ -5317,18 +5429,23 @@ async function measurementInput(msg) {
   }
   return primary;
 }
+function section3Pose() {
+  const angle = drapeArmAngle();
+  const fraction = $("drapeLegFraction").value.trim(), skinning = $("drapeSkinning").value;
+  if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
+  const pose = { arm_abduction_deg: angle, legs: $("drapeLegs").value, leg_fraction: Number(fraction),
+    ...(skinning !== "lbs" ? { skinning } : {}) };
+  if (!fraction || !["standing", "seated", "squat"].includes(pose.legs) ||
+      !Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1) {
+    throw Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
+  }
+  return pose;
+}
 async function studyBodyInput(msg) {
   const mode = studyBodyMode();
   if (mode === "measurements") return measurementInput(msg);
   if (mode === "preview") {
-    const fraction = $("drapeLegFraction").value.trim(), skinning = $("drapeSkinning").value;
-    if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
-    const pose = { arm_abduction_deg: drapeArmAngle(), legs: $("drapeLegs").value, leg_fraction: Number(fraction),
-      ...(skinning !== "lbs" ? { skinning } : {}) };
-    if (!fraction || !["standing", "seated", "squat"].includes(pose.legs) ||
-        !Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1) {
-      throw Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
-    }
+    const pose = section3Pose();
     const measurements = await measurementInput(msg);
     if (msg.measurementSources !== undefined) { msg.measurementPrimary = measurements; msg.measurementPose = pose; }
     return '{"schema":"ftx-scenario-body/1","measurements":' + measurements + ',' + JSON.stringify(pose).slice(1);
@@ -5337,15 +5454,23 @@ async function studyBodyInput(msg) {
   if (mode !== "accepted") throw Error("Choose a supported study body source.");
   if (!has("bodyFitFile")) throw Error("Choose an accepted body-fit report for the selected study body source.");
   if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before running body-dependent studies.");
-  const angle = drapeArmAngle(), fit = await read("bodyFitFile");
+  const pose = section3Pose(), angle = pose.arm_abduction_deg, fit = await read("bodyFitFile");
+  const extra = {
+    ...(pose.legs !== "standing" ? { legs: pose.legs } : {}),
+    ...(pose.leg_fraction !== 1 ? { leg_fraction: pose.leg_fraction } : {}),
+    ...(pose.skinning ? { skinning: pose.skinning } : {}),
+  };
+  const hasExtra = Object.keys(extra).length > 0;
   const measurements = has("measurements") ? await measurementInput(msg) : "{}";
   if (!has("measurements") && (photoEvidence || photoTransfer || photoProblem || $("supplementalFiles").files.length)) throw Error("Choose primary measurements before adding evidence.");
   if (msg.measurementSources !== undefined) {
     msg.measurementPrimary = measurements; msg.measurementAcceptedFit = fit; msg.measurementArmDeg = angle;
+    if (hasExtra) msg.measurementAcceptedPose = extra;
   }
   // The existing Rust request is the authority. Embed validated source text without rounding its numbers.
   return '{"schema":"ftx-scenario-body/1","measurements":' + measurements +
-    ',"accepted_body_fit":' + fit + ',"arm_abduction_deg":' + angle + '}';
+    ',"accepted_body_fit":' + fit + ',"arm_abduction_deg":' + angle +
+    (hasExtra ? ',' + JSON.stringify(extra).slice(1) : '}');
 }
 async function readGarmentcode(id) {
   const f = $(id).files[0]; if (!f) throw Error(`Choose ${id} first.`);
@@ -6308,6 +6433,23 @@ async function guidedScenarioInput(includeCasePolicy = false) {
       max_trials: number("guidedScenarioSubdivisionTrials", "total drape-attempt allowance per alternative"),
     };
   }
+  const scenarioStrategy = $("guidedScenarioNewtonStrategy").value;
+  if (scenarioStrategy === "adaptive_ilu") {
+    input.options.newton_strategy = { kind: "adaptive_ilu", pcg_iters: 64, max_shifts: 4 };
+  } else if (scenarioStrategy === "trust_region") {
+    input.options.newton_strategy = { kind: "trust_region_steihaug", initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 };
+  } else if (scenarioStrategy !== "projected") {
+    throw Error("Choose Projected Newton, Adaptive ILU-PCG, or Trust-region Steihaug for the scenario.");
+  }
+  const scenarioIntegrator = $("guidedScenarioIntegrator").value;
+  if (scenarioIntegrator === "generalized_alpha") {
+    input.options.integrator = {
+      kind: "generalized_alpha",
+      rho_inf: number("guidedScenarioRhoInf", "Generalized-α spectral radius rho_inf"),
+    };
+  } else if (scenarioIntegrator !== "implicit_euler") {
+    throw Error("Choose Implicit Euler or Generalized-α time integration for the scenario.");
+  }
   if (motionMode === "form") Object.assign(input, guidedMotionInput());
   if (compression) input.motionCompressionTarget = $("guidedMotionCompressionTarget").value || "transient_surface";
   if (motionMode === "file") input.maxMotionTrials = number("guidedScenarioMotionTrials", "case motion-attempt allowance");
@@ -6378,6 +6520,8 @@ function showGuidedScenarioDrafts() {
     label.textContent = `${item.key}: ${value.options.sew_steps} sewing + ${value.options.drape_steps} gravity steps, ` +
       (value.options.time_subdivision ? `${value.options.time_subdivision.max_trials} drape attempts per alternative, ` +
         `up to ${value.options.time_subdivision.max_halvings} halvings; ` : "") +
+      (value.options.newton_strategy ? `Newton solver ${value.options.newton_strategy.kind}; ` : "") +
+      (value.options.integrator ? `integrator ${value.options.integrator.kind}${value.options.integrator.rho_inf !== undefined ? ` (ρ∞=${value.options.integrator.rho_inf})` : ""}; ` : "") +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
       (value.motion?.source_pose_sampling ? `source body poses at most ${value.motion.source_pose_sampling.max_step_s} s apart, ` +
@@ -6738,6 +6882,8 @@ async function execute(op, studio = null) {
         const integrator = drapeIntegrator();
         if (integrator !== undefined) msg.integrator = integrator;
         msg.twoStart = $("twoStart").checked;
+        const schedule = drapeSchedule(msg.twoStart, msg.maxSettleSteps);
+        if (schedule !== undefined) msg.schedule = schedule;
         msg.armDeg = drapeArmAngle();
         if (has("bodyFitFile")) {
           if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
@@ -6788,7 +6934,8 @@ async function execute(op, studio = null) {
           ...(msg.skinning !== "lbs" ? { skinning: msg.skinning } : {}),
           ...(msg.timeSubdivision !== undefined ? { time_subdivision: msg.timeSubdivision } : {}),
           ...(msg.newtonStrategy !== undefined ? { newton_strategy: msg.newtonStrategy } : {}),
-          ...(msg.integrator !== undefined ? { integrator: msg.integrator } : {}) } } : {}) };
+          ...(msg.integrator !== undefined ? { integrator: msg.integrator } : {}),
+          ...(msg.schedule !== undefined ? msg.schedule : {}) } } : {}) };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
     if (pending?.id !== id) return;
@@ -7082,6 +7229,14 @@ for (const id of ["guidedScenarioSubdivision", "guidedScenarioSubdivisionHalving
   };
   $(id).addEventListener("change", changed);
   if (id !== "guidedScenarioSubdivision") $(id).addEventListener("input", changed);
+}
+for (const id of ["guidedScenarioNewtonStrategy", "guidedScenarioIntegrator", "guidedScenarioRhoInf"]) {
+  const changed = () => {
+    if (id !== "guidedScenarioRhoInf" || $("guidedScenarioIntegrator").value === "generalized_alpha") changedGuidedScenarioDraft();
+    else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (id === "guidedScenarioRhoInf") $(id).addEventListener("input", changed);
 }
 $("addScenarioCase").onclick = () => freezeGuidedScenarioCase();
 $("clearScenarioCases").onclick = () => { guidedScenarioDrafts.length = 0; changedGuidedScenarioDrafts(); };
@@ -7859,6 +8014,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"],
   drapeNewtonStrategy:["fold","heat","vaporSurface","coverage"], drapeIntegrator:["fold","heat","vaporSurface","coverage"], drapeRhoInf:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
   splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
+  customDrapeSchedule:["fold","heat","vaporSurface","coverage"], drapeStepS:["fold","heat","vaporSurface","coverage"], drapeSewSteps:["fold","heat","vaporSurface","coverage"], drapeDrapeSteps:["fold","heat","vaporSurface","coverage"], drapeNewtonTol:["fold","heat","vaporSurface","coverage"],
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"], microclimateRequest:["microclimate"], viscoRequest:["lowerVisco"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], cylinderExperimentRequest:["cylinderExperiment"], vaporSurfaceConditions:["vaporSurface"],
@@ -7883,7 +8039,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
     if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps",
-      "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"].includes(id)) {
+      "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
     }
@@ -7892,12 +8048,12 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
       "sewOptions", "sewOptimize", "quotes", "market"].includes(id);
     invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 ||
       id === "treatmentRequest" ||
-      (studyBodyMode() === "preview" && ["drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id)) ||
+      (["preview", "accepted"].includes(studyBodyMode()) && ["drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id)) ||
       ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions", "vaporSurfaceConditions"].includes(id));
     return scenarioCasesLoading;
   });
 }
-for (const id of ["drapeLegFraction", "drapeRhoInf", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials"]) {
+for (const id of ["drapeLegFraction", "drapeRhoInf", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) {
   $(id).addEventListener("input", () => {
     ++roundRead; roundToken = null; window.opener = null;
     invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
@@ -8031,6 +8187,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       checkedTimeSubdivision(settings?.time_subdivision);
       checkedNewtonStrategy(settings?.newton_strategy);
       checkedIntegrator(settings?.integrator);
+      checkedDrapeSchedule(settings);
       const hasArm = settings !== undefined && Object.hasOwn(settings, "arm_abduction_deg");
       if (hasArm && (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180)) {
         throw Error("Received drape arm angle must be from 0 to 180 degrees.");
@@ -8080,6 +8237,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         setTimeSubdivision(settings.time_subdivision);
         setNewtonStrategy(settings.newton_strategy);
         setIntegrator(settings.integrator);
+        setDrapeSchedule(settings);
       }
       $("supplementalConsent").checked = false;
       $("bodyFitConsent").checked = false; showReceivedBody();

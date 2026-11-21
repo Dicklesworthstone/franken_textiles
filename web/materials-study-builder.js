@@ -986,7 +986,7 @@ export function buildMaterialScenarioRequest(state) {
     sourceObject(state.fitSpec, "Fit contract"); fitSpec = state.fitSpec;
   } else if (!state.allowNoFit) throw Error("Choose a fit contract or explicitly allow a numerical-only study without one.");
   const fields = ["spacing", "sew_steps", "drape_steps", "step", "max_settle_steps"];
-  const options = object(state.options, [...fields, "self_contact", "time_subdivision"], fields, "Drape options");
+  const options = object(state.options, [...fields, "self_contact", "time_subdivision", "newton_strategy", "integrator"], fields, "Drape options");
   for (const key of ["spacing", "step"]) {
     if (typeof options[key] !== "number" || !Number.isFinite(options[key]) || options[key] <= 0) {
       throw Error("Drape " + key + " must be finite and positive.");
@@ -1016,6 +1016,47 @@ export function buildMaterialScenarioRequest(state) {
     }
     // Rust reserves this complete allowance using the actual mesh bound for each alternative.
     // A quiet settling tail can finish early, so it need not receive a separate minimum here.
+  }
+  if (own(options, "newton_strategy")) {
+    const strategy = options.newton_strategy;
+    if (!strategy || typeof strategy !== "object" || Array.isArray(strategy)) {
+      throw Error("Newton strategy must be a valid tagged solver object.");
+    }
+    const keys = Object.keys(strategy);
+    if (strategy.kind === "projected_newton" && keys.length === 1) {
+      // Admitted explicit default.
+    } else if (strategy.kind === "adaptive_ilu" && keys.length === 3 &&
+        keys.every(key => ["kind", "pcg_iters", "max_shifts"].includes(key)) &&
+        Number.isSafeInteger(strategy.pcg_iters) && strategy.pcg_iters >= 1 && strategy.pcg_iters <= 256 &&
+        Number.isSafeInteger(strategy.max_shifts) && strategy.max_shifts >= 0 && strategy.max_shifts <= 16) {
+      // Admitted bounded Adaptive ILU-PCG strategy.
+    } else if (strategy.kind === "trust_region_steihaug" && keys.length === 5 &&
+        keys.every(key => ["kind", "initial_radius", "max_radius", "min_radius", "cg_iters"].includes(key)) &&
+        typeof strategy.min_radius === "number" && typeof strategy.initial_radius === "number" && typeof strategy.max_radius === "number" &&
+        Number.isFinite(strategy.min_radius) && Number.isFinite(strategy.initial_radius) && Number.isFinite(strategy.max_radius) &&
+        strategy.min_radius > 0 && strategy.initial_radius >= strategy.min_radius && strategy.max_radius >= strategy.initial_radius &&
+        Number.isSafeInteger(strategy.cg_iters) && strategy.cg_iters >= 0 && strategy.cg_iters <= 4096) {
+      // Admitted bounded Trust-region Steihaug strategy.
+    } else {
+      throw Error("Newton strategy must be projected_newton, adaptive_ilu (pcg_iters 1–256, max_shifts 0–16), or trust_region_steihaug (0 < min <= init <= max, cg_iters 0–4096).");
+    }
+  }
+  if (own(options, "integrator")) {
+    const integrator = options.integrator;
+    if (!integrator || typeof integrator !== "object" || Array.isArray(integrator)) {
+      throw Error("Time integrator must be a valid tagged object.");
+    }
+    const keys = Object.keys(integrator);
+    if (integrator.kind === "implicit_euler" && keys.length === 1) {
+      // Admitted explicit default.
+    } else if (integrator.kind === "generalized_alpha" && keys.length === 2 &&
+        keys.every(key => ["kind", "rho_inf"].includes(key)) &&
+        typeof integrator.rho_inf === "number" && Number.isFinite(integrator.rho_inf) &&
+        integrator.rho_inf >= 0 && integrator.rho_inf <= 1) {
+      // Admitted Generalized-alpha integrator.
+    } else {
+      throw Error("Time integrator must be implicit_euler or generalized_alpha with finite rho_inf in [0, 1].");
+    }
   }
   if (own(options, "self_contact") && options.self_contact !== null) {
     const keys = ["dhat", "thickness", "kappa", "mu", "eps_v"];
@@ -1922,7 +1963,7 @@ function workbenchStudyBundle(value) {
   if (value.schema !== "ftx-workbench-study/1") throw Error("Choose an ftx-workbench-study/1 saved study.");
   const request = object(value.request, ["type", "pattern", "studyRequest", "onBody", "scenarioRequest",
     "measurements", "measurementSources", "measurementConsent", "measurementPrimary", "measurementAcceptedFit",
-    "measurementArmDeg", "measurementPose", "outfit"], ["type", "pattern", "studyRequest"], "Saved study request");
+    "measurementArmDeg", "measurementAcceptedPose", "measurementPose", "outfit"], ["type", "pattern", "studyRequest"], "Saved study request");
   if (!["study", "scenario"].includes(request.type)) throw Error("Saved inputs must describe a manufacturing or scenario study.");
   if (own(request, "onBody") && (request.type !== "study" || typeof request.onBody !== "boolean")) {
     throw Error("Only manufacturing studies declare onBody, as a boolean.");
@@ -1972,7 +2013,18 @@ function workbenchStudyBundle(value) {
         || request.measurementArmDeg < 0 || request.measurementArmDeg > 180) {
         throw Error("Supplemental accepted-fit replay requires original primary measurements and a valid arm angle.");
       }
-    } else if (own(request, "measurementArmDeg")) throw Error("Supplemental arm metadata requires an accepted body-fit source.");
+      if (own(request, "measurementAcceptedPose")) {
+        const pose = object(request.measurementAcceptedPose, ["legs", "leg_fraction", "skinning"], [], "Supplemental accepted-fit pose");
+        if (!Object.keys(pose).length
+          || (own(pose, "legs") && !["standing", "seated", "squat"].includes(pose.legs))
+          || (own(pose, "leg_fraction") && (!Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1))
+          || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))) {
+          throw Error("Supplemental accepted-fit pose needs valid leg and skinning settings.");
+        }
+      }
+    } else if (own(request, "measurementArmDeg") || own(request, "measurementAcceptedPose")) {
+      throw Error("Supplemental accepted-fit pose metadata requires an accepted body-fit source.");
+    }
     if (own(request, "measurementPose")) {
       const pose = object(request.measurementPose, ["arm_abduction_deg", "legs", "leg_fraction", "skinning"],
         ["arm_abduction_deg", "legs", "leg_fraction"], "Supplemental preview pose");
@@ -1984,7 +2036,7 @@ function workbenchStudyBundle(value) {
         throw Error("Supplemental preview pose needs original primary measurements, valid arm, leg and skinning settings, and no accepted fit.");
       }
     }
-  } else if (["measurementConsent", "measurementPrimary", "measurementAcceptedFit", "measurementArmDeg", "measurementPose"].some(key => own(request, key))) {
+  } else if (["measurementConsent", "measurementPrimary", "measurementAcceptedFit", "measurementArmDeg", "measurementAcceptedPose", "measurementPose"].some(key => own(request, key))) {
     throw Error("Supplemental replay metadata requires original additional measurement sources.");
   }
   if (own(request, "outfit")) {
@@ -1993,6 +2045,7 @@ function workbenchStudyBundle(value) {
   }
   const frozenRequest = { ...request };
   if (request.measurementPose) frozenRequest.measurementPose = Object.freeze({ ...request.measurementPose });
+  if (request.measurementAcceptedPose) frozenRequest.measurementAcceptedPose = Object.freeze({ ...request.measurementAcceptedPose });
   if (request.outfit) frozenRequest.outfit = Object.freeze({ ...request.outfit });
   return Object.freeze({ schema: value.schema, request: Object.freeze(frozenRequest),
     ...(onBody ? { body_model: Object.freeze({ ...value.body_model }) } : {}) });

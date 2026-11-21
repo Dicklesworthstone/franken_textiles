@@ -326,6 +326,11 @@ Omitted settings mean 2 mm self-contact, one start, 35° arms, standing legs, fu
 and no additional settling. Set `step_s`, `sew_steps`, `drape_steps` and `newton_tol_m_s`
 to reproduce a specific integration schedule and correction tolerance. Each sewing path has a
 512-step limit across sewing, gravity and extra settling, including the optional 18-step comparison.
+Both browser fold forms expose an opt-in custom schedule toggle (defaulting to `DrapeOptions::default()`
+when enabled, omitted completely when disabled), validated by both workers and preserved across
+pattern/material round handoffs. Guided material scenarios also expose opt-in `newton_strategy`
+(`projected_newton` default omitted, `adaptive_ilu`, `trust_region_steihaug`) and `integrator`
+(`implicit_euler` default omitted, `generalized_alpha` with `rho_inf` in `[0, 1]`).
 Unknown fields and invalid values refuse. Imported body reports remain
 exact source text; the configured arm angle must agree with `BodyFitSource.arm_deg` in Rust calls.
 Tape fitting and nappy calibration keep their reference pose; requested poses change only garment

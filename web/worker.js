@@ -217,10 +217,53 @@ onmessage = async (ev) => {
           throw Error("Time integrator must be implicit_euler or generalized_alpha with finite rho_inf in [0, 1].");
         }
       }
+      if (msg.schedule !== undefined) {
+        const value = msg.schedule;
+        const allowed = ["step_s", "sew_steps", "drape_steps", "newton_tol_m_s"];
+        if (!value || typeof value !== "object" || Array.isArray(value) ||
+            !Object.keys(value).length || Object.keys(value).some(key => !allowed.includes(key) || value[key] === undefined)) {
+          throw Error("Custom integration schedule must specify only step_s, sew_steps, drape_steps, or newton_tol_m_s.");
+        }
+        if (value.step_s !== undefined) {
+          if (typeof value.step_s !== "number" || !Number.isFinite(value.step_s) || value.step_s <= 0) {
+            throw Error("Custom time step step_s must be finite and positive.");
+          }
+          settings.step_s = value.step_s;
+        }
+        if (value.sew_steps !== undefined) {
+          if (!Number.isSafeInteger(value.sew_steps) || value.sew_steps < 0 || value.sew_steps > 512) {
+            throw Error("Custom sewing step count must be a whole number from 0 to 512.");
+          }
+          settings.sew_steps = value.sew_steps;
+        }
+        if (value.drape_steps !== undefined) {
+          if (!Number.isSafeInteger(value.drape_steps) || value.drape_steps < 0 || value.drape_steps > 512) {
+            throw Error("Custom gravity step count must be a whole number from 0 to 512.");
+          }
+          settings.drape_steps = value.drape_steps;
+        }
+        if (value.newton_tol_m_s !== undefined) {
+          if (typeof value.newton_tol_m_s !== "number" || !Number.isFinite(value.newton_tol_m_s) || value.newton_tol_m_s <= 0) {
+            throw Error("Custom Newton tolerance newton_tol_m_s must be finite and positive.");
+          }
+          settings.newton_tol_m_s = value.newton_tol_m_s;
+        }
+        const effSew = settings.sew_steps ?? 12;
+        const effDrape = settings.drape_steps ?? 36;
+        if (effSew + effDrape < 6) {
+          throw Error("Custom schedule needs at least 6 combined sewing and gravity steps.");
+        }
+        const longestSew = settings.two_start ? Math.max(effSew, 18) : effSew;
+        if (longestSew + effDrape + settings.max_settle_steps > 512) {
+          throw Error("Configured fold exceeds the 512-step browser work budget per sewing path (sew + drape + settle).");
+        }
+      }
       const configured = (!imported && armDeg !== 35) ||
         settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
         settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
-        settings.newton_strategy !== undefined || settings.integrator !== undefined;
+        settings.newton_strategy !== undefined || settings.integrator !== undefined ||
+        settings.step_s !== undefined || settings.sew_steps !== undefined ||
+        settings.drape_steps !== undefined || settings.newton_tol_m_s !== undefined;
       if (configured && typeof ftx.fold_up_configured !== "function") {
         throw new Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
       }

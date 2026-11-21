@@ -1422,7 +1422,9 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
+  e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
   e.guidedScenarioSubdivisionHalvings.value='8';e.guidedScenarioSubdivisionTrials.value='4096';
+  e.guidedScenarioNewtonStrategy.value='projected';e.guidedScenarioIntegrator.value='implicit_euler';e.guidedScenarioRhoInf.value='0';
   for(const axis of ['X','Y','Z'])e['guidedMotionRoot'+axis].value='0';
   e.screenMode.value='guided';e.guidedScreenProperty.value='areal_density';
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
@@ -5673,6 +5675,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
+  e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
       const a=previous?.(...args),b=fn(...args);return Promise.all([a,b]);};};
@@ -23224,4 +23227,255 @@ test('opt-in Newton strategy, Generalized-alpha integrator, microclimate and low
     }
   } });
   assert.match(revBad.e.traceImportText.textContent, /refused/);
+});
+
+test('opt-in custom drape schedule and guided scenario solver/integrator wire fail-closed across both workbenches and workers', async () => {
+  // 1. Custom schedule on materials.html: disabled by default, enabled sends schedule, invalidates stale fold, refuses out-of-budget.
+  const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  p.e.body.files = [new Blob([new Uint8Array([1])])];
+  assert.equal(p.e.drapeStepS.disabled, true);
+  assert.equal(p.e.drapeSewSteps.disabled, true);
+  assert.equal(p.e.drapeDrapeSteps.disabled, true);
+  assert.equal(p.e.drapeNewtonTol.disabled, true);
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.at(-1).schedule, undefined);
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  p.e.customDrapeSchedule.checked = true; p.e.customDrapeSchedule.handlers.change();
+  assert.equal(p.e.drapeStepS.disabled, false);
+  p.e.drapeStepS.value = '0.01'; p.e.drapeSewSteps.value = '16'; p.e.drapeDrapeSteps.value = '48'; p.e.drapeNewtonTol.value = '0.0005';
+  await p.e.fold.onclick();
+  assert.deepEqual(plain(p.current().messages.at(-1).schedule), { step_s: 0.01, sew_steps: 16, drape_steps: 48, newton_tol_m_s: 0.0005 });
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  const s = section(p, 'fold');
+  assert.equal(s.hidden, false);
+  p.e.drapeStepS.value = '0.008'; p.e.drapeStepS.handlers.input();
+  assert.equal(s.hidden, true, 'editing step_s must invalidate prior fold results');
+  // Exceeding 512 steps (with twoStart active -> max(sew, 18) + drape + settle > 512) refuses fail-closed before dispatch.
+  p.e.twoStart.checked = true; p.e.drapeSewSteps.value = '12'; p.e.drapeDrapeSteps.value = '495';
+  const beforeOver = p.current().messages.length;
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.length, beforeOver);
+  assert.match(p.e.error.textContent, /512-step/);
+
+  // 2. Workers route custom schedule to fold_up_configured and refuse malformed or >512-step schedules.
+  const workerCalls = [];
+  const mw = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    WebBody: class { free() {} },
+    fold_up: () => { workerCalls.push({ path: 'legacy' }); return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      workerCalls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} };
+    }
+  } });
+  const baseFold = { type: 'fold', request: 1, bytes: new Uint8Array([1]).buffer, pattern: '{}', measurements: '{}', fit: '{}', selfContactMm: 2, twoStart: false, armDeg: 35 };
+  assert.equal((await mw.send({ ...baseFold, schedule: { step_s: 0.01, sew_steps: 16, drape_steps: 48, newton_tol_m_s: 5e-4 } })).type, 'result');
+  assert.equal(workerCalls.at(-1).path, 'configured');
+  assert.equal(workerCalls.at(-1).settings.step_s, 0.01);
+  assert.equal(workerCalls.at(-1).settings.sew_steps, 16);
+  assert.equal(workerCalls.at(-1).settings.drape_steps, 48);
+  assert.equal(workerCalls.at(-1).settings.newton_tol_m_s, 5e-4);
+  assert.equal((await mw.send({ ...baseFold, request: 2, bytes: new Uint8Array([1]).buffer, schedule: { step_s: 0 } })).type, 'error');
+  assert.equal((await mw.send({ ...baseFold, request: 3, bytes: new Uint8Array([1]).buffer, schedule: { sew_steps: 2, drape_steps: 2 } })).type, 'error');
+  assert.equal((await mw.send({ ...baseFold, request: 4, bytes: new Uint8Array([1]).buffer, twoStart: true, schedule: { sew_steps: 10, drape_steps: 500 } })).type, 'error');
+
+  // 3. index.html custom schedule + bidirectional handoffs preserve schedule and refuse out-of-budget.
+  const idx = draftingPage();
+  idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  idx.e.bodyFile.files = [new Blob([new Uint8Array([1])])];
+  await idx.e.bodyFile.handlers.change();
+  const bodyReq = idx.messages.findLast(m => m.type === 'body').request;
+  idx.worker.onmessage({ data: { type: 'bodyReady', request: bodyReq } });
+  await idx.e.go.handlers.click();
+  const runReq = idx.messages.findLast(m => m.type === 'run').request;
+  idx.worker.onmessage({ data: { type: 'result', request: runReq, res: { title: 'Bolero', status: 'CONVERGED', basis: {}, zip: 'r.zip' }, blobs: {}, foldable: true, bodyCheckable: true,
+    roundSources: { pattern: '{}', measurements: '{}', fit: '{}' } } });
+  idx.e.customDrapeSchedule.checked = true; idx.e.customDrapeSchedule.handlers.change();
+  assert.equal(idx.e.drapeStepS.disabled, false);
+  idx.e.drapeStepS.value = '0.01'; idx.e.drapeSewSteps.value = '20'; idx.e.drapeDrapeSteps.value = '60'; idx.e.drapeNewtonTol.value = '0.0002';
+  idx.e.foldGo.handlers.click();
+  assert.deepEqual(plain(idx.messages.findLast(m => m.type === 'fold').schedule), { step_s: 0.01, sew_steps: 20, drape_steps: 60, newton_tol_m_s: 0.0002 });
+
+  const hToken = 'd'.repeat(32);
+  const hq = await pageModule({ roundToken: hToken });
+  const hFiles = { pattern: new Blob(['{"pieces":[{"id":"front"}]}']), measurements: new Blob(['{}']), fit: new Blob(['{}']) };
+  await hq.windowEvents.message({ origin: 'https://unit.invalid', source: hq.opener, data: { type: 'ftx-round-sources', token: hToken, files: hFiles,
+    bodySource: { model: new Blob([new Uint8Array([1])]) },
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+      step_s: 0.01, sew_steps: 20, drape_steps: 60, newton_tol_m_s: 0.0002 } } });
+  assert.equal(hq.e.customDrapeSchedule.checked, true);
+  assert.equal(hq.e.drapeStepS.value, '0.01');
+  assert.equal(hq.e.drapeSewSteps.value, '20');
+  assert.equal(hq.e.drapeDrapeSteps.value, '60');
+  assert.equal(hq.e.drapeNewtonTol.value, '0.0002');
+  assert.equal(hq.e.drapeStepS.disabled, false);
+
+  const revSchedToken = 'e'.repeat(32);
+  const revS = draftingPage({ materialToken: revSchedToken });
+  revS.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await revS.windowEvents.message({ origin: 'https://unit.invalid', source: revS.opener, data: {
+    type: 'ftx-material-pattern', token: revSchedToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '2'.repeat(64),
+    evaluatedInputs: {
+      fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        step_s: 0.015, sew_steps: 14, drape_steps: 42, newton_tol_m_s: 0.0005 }
+    }
+  } });
+  assert.equal(revS.e.customDrapeSchedule.checked, true);
+  assert.equal(revS.e.drapeStepS.value, '0.015');
+  assert.equal(revS.e.drapeSewSteps.value, '14');
+  assert.equal(revS.e.drapeDrapeSteps.value, '42');
+  assert.equal(revS.e.drapeNewtonTol.value, '0.0005');
+
+  // 4. Guided material scenario newton_strategy + integrator: defaults omitted, opt-in dispatched, named cases preserve & summarize, invalid refuses.
+  const { p: gs } = await guidedScenarioSetup(true);
+  assert.equal(gs.e.guidedScenarioRhoInf.disabled, true);
+  await gs.e.scenario.onclick();
+  let sent = gs.current().messages.at(-1), parsed = JSON.parse(sent.scenarioRequest);
+  assert.equal(Object.hasOwn(parsed.options, 'newton_strategy'), false);
+  assert.equal(Object.hasOwn(parsed.options, 'integrator'), false);
+  gs.emit(scenarioReport());
+  const out = section(gs, 'Fresh drape and heat alternatives');
+  gs.e.guidedScenarioRhoInf.value = '999'; gs.e.guidedScenarioRhoInf.handlers.input();
+  assert.equal(out.hidden, false, 'inactive rho_inf edits must not withdraw an Implicit Euler scenario');
+  gs.e.guidedScenarioNewtonStrategy.value = 'adaptive_ilu'; gs.e.guidedScenarioNewtonStrategy.handlers.change();
+  assert.equal(out.hidden, true);
+  gs.e.guidedScenarioIntegrator.value = 'generalized_alpha'; gs.e.guidedScenarioIntegrator.handlers.change();
+  assert.equal(gs.e.guidedScenarioRhoInf.disabled, false);
+  // Out-of-range rho_inf refuses fail-closed before dispatch.
+  const beforeBadScen = gs.current().messages.length;
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeBadScen);
+  assert.equal(gs.e.error.hidden, false);
+  gs.e.guidedScenarioRhoInf.value = '0.5'; gs.e.guidedScenarioRhoInf.handlers.input();
+  await gs.e.scenario.onclick();
+  sent = gs.current().messages.at(-1); parsed = JSON.parse(sent.scenarioRequest);
+  assert.deepEqual(parsed.options.newton_strategy, { kind: 'adaptive_ilu', pcg_iters: 64, max_shifts: 4 });
+  assert.deepEqual(parsed.options.integrator, { kind: 'generalized_alpha', rho_inf: 0.5 });
+  gs.emit(scenarioReport());
+  // Named cases freeze distinct solver/integrator configurations independently.
+  const { p: gm } = await guidedScenarioSetup(); guidedNamedCases(gm);
+  await saveGuidedCase(gm, 'baseline_euler');
+  gm.e.guidedScenarioNewtonStrategy.value = 'trust_region'; gm.e.guidedScenarioNewtonStrategy.handlers.change();
+  gm.e.guidedScenarioIntegrator.value = 'generalized_alpha'; gm.e.guidedScenarioIntegrator.handlers.change();
+  gm.e.guidedScenarioRhoInf.value = '0.8'; gm.e.guidedScenarioRhoInf.handlers.input();
+  await saveGuidedCase(gm, 'tr_ga08');
+  assert.match(descendants(gm.e.guidedScenarioCases).map(n => n.textContent).join(' '), /Newton solver trust_region_steihaug; integrator generalized_alpha \(ρ∞=0\.8\)/);
+  await gm.e.scenario.onclick();
+  const matReq = JSON.parse(gm.current().messages.at(-1).scenarioRequest);
+  assert.equal(Object.hasOwn(matReq.cases[0].scenario.options, 'newton_strategy'), false);
+  assert.equal(Object.hasOwn(matReq.cases[0].scenario.options, 'integrator'), false);
+  assert.deepEqual(matReq.cases[1].scenario.options.newton_strategy, { kind: 'trust_region_steihaug', initial_radius: 0.05, max_radius: 0.5, min_radius: 1e-12, cg_iters: 0 });
+  assert.deepEqual(matReq.cases[1].scenario.options.integrator, { kind: 'generalized_alpha', rho_inf: 0.8 });
+});
+
+test('accepted-fit study body preserves default wire JSON, forwards non-default leg/skinning pose and cancels stale runs', async () => {
+  const { p } = await guidedDesignSetup(workbenchSavedPattern);
+  const fit = ' {"schema":"ftx-body-fit/1","probe":-0.0}\n';
+  const primary = '{"schema":"fabric-measurements/1","records":[]}';
+  const extra = '{"schema":"fabric-measurements/1","records":[{"name":"chest"}]}';
+  p.select('measurements', primary); p.e.measurements.handlers.change();
+  p.e.bodyFitFile.files = [new Blob([fit])]; p.e.bodyFitFile.handlers.change();
+  p.e.bodyFitConsent.checked = true; p.e.bodyFitConsent.handlers.change();
+  p.e.studyBodySource.value = 'accepted'; p.e.studyBodySource.handlers.change();
+  p.e.bodyArmDeg.value = '40'; p.e.bodyArmDeg.handlers.input();
+
+  // Default standing / 1 / lbs retains legacy accepted JSON without extra keys.
+  await p.e.study.onclick();
+  assert.equal(p.current().messages.at(-1).measurements,
+    '{"schema":"ftx-scenario-body/1","measurements":' + primary + ',"accepted_body_fit":' + fit + ',"arm_abduction_deg":40}');
+  p.emit({ alternatives: [] }, [{ name: 'body-input.json', text: '{}' }]);
+  assert.equal(p.live.size, 1);
+
+  // Changing drapeLegs / drapeLegFraction / drapeSkinning withdraws stale accepted-fit study results and forwards non-default pose.
+  p.e.drapeLegs.value = 'seated'; p.e.drapeLegs.handlers.change();
+  assert.equal(p.live.size, 0, 'changing drapeLegs must invalidate accepted-fit study results');
+  p.e.drapeLegFraction.value = '0.5'; p.e.drapeLegFraction.handlers.input();
+  p.e.drapeSkinning.value = 'dqs'; p.e.drapeSkinning.handlers.change();
+  await p.e.study.onclick();
+  const nonDefaultMsg = p.current().messages.at(-1);
+  assert.equal(nonDefaultMsg.measurements,
+    '{"schema":"ftx-scenario-body/1","measurements":' + primary + ',"accepted_body_fit":' + fit +
+    ',"arm_abduction_deg":40,"legs":"seated","leg_fraction":0.5,"skinning":"dqs"}');
+  const inFlight = p.current();
+  p.e.drapeSkinning.value = 'lbs'; p.e.drapeSkinning.handlers.change();
+  assert.equal(inFlight.dead, true, 'changing drapeSkinning must cancel in-flight accepted-fit study worker');
+  p.ready();
+
+  // Supplemental fusion + saved study bundle preserve measurementAcceptedPose and feed exact JSON to WASM.
+  p.e.drapeSkinning.value = 'dqs'; p.e.drapeSkinning.handlers.change();
+  p.e.supplementalFiles.files = [new Blob([extra])]; p.e.supplementalFiles.handlers.change();
+  p.e.supplementalConsent.checked = true; p.e.supplementalConsent.handlers.change();
+  p.e.bodyFitConsent.checked = true; p.e.bodyFitConsent.handlers.change();
+  const { bundle } = await savedStudyDownload(p);
+  assert.deepEqual(bundle.request.measurementAcceptedPose, { legs: 'seated', leg_fraction: 0.5, skinning: 'dqs' });
+
+  const calls = [], merged = '{"schema":"fabric-measurements/1","fused":{"chest":{"value_mm":540}}}';
+  const w = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    measurement_file: () => merged,
+    WebBody: class { free() {} },
+    material_study_on_body: (_body, _pat, _req, bodyInput) => { calls.push(bodyInput); return '{"alternatives":[]}'; },
+  } });
+  const ok = await w.send({ ...bundle.request, request: 701, bytes: new ArrayBuffer(8) });
+  assert.equal(ok.type, 'result', ok.message);
+  assert.equal(calls.at(-1),
+    '{"schema":"ftx-scenario-body/1","measurements":' + merged + ',"accepted_body_fit":' + fit +
+    ',"arm_abduction_deg":40,"legs":"seated","leg_fraction":0.5,"skinning":"dqs"}');
+  const bad = await w.send({ ...bundle.request, request: 702, bytes: new ArrayBuffer(8), measurementAcceptedPose: { skinning: 'bogus' } });
+  assert.equal(bad.type, 'error');
+  assert.match(bad.message, /accepted-fit pose/i);
+});
+
+test('microclimate renders prepared exterior and radiosity enclosure tables, and lowerVisco renders Prony branches and replay ledger', async () => {
+  const p = await pageModule();
+  p.select('microclimateRequest', '{"schema":"ftx-microclimate/1"}');
+  p.e.microclimateRequest.handlers.change();
+  await p.e.microclimate.onclick();
+  p.emit({
+    schema: 'ftx-microclimate-report/1',
+    air: { temperature_c: 20, pressure_pa: 101325, relative_humidity: 0.5, water_mole_fraction: 0.011,
+      density_kg_m3: 1.2, specific_heat_cp_j_kg_k: 1005, thermal_conductivity_w_m_k: 0.0257, prandtl: 0.713 },
+    convection: {
+      name: 'convection.churchill-bernstein-cylinder', citation: 'Churchill & Bernstein (1977)',
+      nu: 48.2, h_w_m2_k: 6.2, discrepancy_rel: 0.25, groups: { Pr: 0.713, Re: 12000 },
+      exterior: { air_c: 20, convection_w_m2_k: 6.2, surface_temperature_range_c: [15, 40],
+        convection_evidence: 'estimate', allow_estimates: true, convection_source: { reference: 'Churchill & Bernstein (1977)' } }
+    },
+    enclosure: {
+      enclosure_energy_closure_w: 1e-13, linear_residual_max_w_m2: 2e-14, max_reciprocity_residual: 0,
+      radiosity_w_m2: [450.1, 410.2], irradiation_w_m2: [410.2, 450.1],
+      net_outward_flux_w_m2: [39.9, -39.9], net_outward_heat_w: [39.9, -39.9]
+    },
+    no_claim: 'Model estimates only; enclosure radiosity check.'
+  }, [{ name: 'microclimate-report.json', text: '{}', mime: 'application/json' }]);
+  const micro = section(p, 'Microclimate air, convection and radiosity');
+  const microDump = JSON.stringify(micro);
+  assert.match(microDump, /Prepared constant exterior boundary record/);
+  assert.match(microDump, /15 to 40/);
+  assert.match(microDump, /Gray-diffuse radiative enclosure closure/);
+  assert.match(microDump, /Enclosure surface radiosity exchange/);
+  assert.match(microDump, /450\.1/);
+
+  p.select('viscoRequest', '{"schema":"ftx-fractional-zener-lowering/1"}');
+  p.e.viscoRequest.handlers.change();
+  await p.e.lowerVisco.onclick();
+  p.emit({
+    schema: 'ftx-fractional-zener-lowering-report/1',
+    e_eq: 200,
+    band_hz: [0.01, 100],
+    sup_rel_err: 0.0085,
+    verification_points: 512,
+    terms: [{ modulus: 42.5, tau_s: 0.25 }, { modulus: 18.0, tau_s: 3.5 }],
+    replay: { final_time_s: 1.0, final_strain: 0.0, final_stress: 1.25, work: 0.4, stored: 0.05, dissipated: 0.35, steps: [{}, {}, {}] },
+    no_claim: 'Certified in-band NNLS Prony approximation only.'
+  }, [{ name: 'viscoelastic-lowering-report.json', text: '{}', mime: 'application/json' }]);
+  const visco = section(p, 'Fractional viscoelastic Prony lowering');
+  const viscoDump = JSON.stringify(visco);
+  assert.match(viscoDump, /Certified fractional-Zener Prony lowering/);
+  assert.match(viscoDump, /Lowered Maxwell–Prony branches/);
+  assert.match(viscoDump, /42\.5/);
+  assert.match(viscoDump, /Exact-exponential strain replay ledger/);
+  assert.match(viscoDump, /Viscous dissipation/);
+  assert.match(viscoDump, /Certified in-band NNLS Prony approximation only/);
 });

@@ -263,7 +263,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <p class="row"><label><input type="checkbox" id="splitTimeSteps"> Split stalled time steps</label>
         <label>Maximum halvings <input id="timeMaxHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
         <label>Maximum step trials <input id="timeMaxTrials" type="number" min="1" max="65535" step="1" value="4096" disabled></label></p>
-      <p class="mut">Projected Newton with Implicit Euler is the default solver. Opt-in Generalized-α (ρ<sub>∞</sub> ∈ [0, 1]; 0 strongest high-frequency damping, 1 zero numerical dissipation) refuses history-dependent materials and may require smaller steps on stiff contact transitions.</p>
+      <p class="row"><label><input type="checkbox" id="customDrapeSchedule"> Custom step size, step counts and Newton tolerance</label>
+        <label>Step size (s) <input id="drapeStepS" type="number" min="0" step="any" value="0.041666666666666664" disabled></label>
+        <label>Sewing steps <input id="drapeSewSteps" type="number" min="0" max="512" step="1" value="12" disabled></label>
+        <label>Gravity steps <input id="drapeDrapeSteps" type="number" min="0" max="512" step="1" value="36" disabled></label>
+        <label>Newton tol (m/s) <input id="drapeNewtonTol" type="number" min="0" step="any" value="0.001" disabled></label></p>
+      <p class="mut">Projected Newton with Implicit Euler is the default solver. Opt-in Generalized-α (ρ<sub>∞</sub> ∈ [0, 1]; 0 strongest high-frequency damping, 1 zero numerical dissipation) refuses history-dependent materials and may require smaller steps on stiff contact transitions. Custom schedule overrides stay within the 512-step browser budget per sewing path (sew + gravity + settling).</p>
       <p class="mut">Retries a stalled step as smaller steps without extending simulated time. The trial limit covers sewing, draping and settling, separately for each start. Exhausting the limits refuses the run.</p>
       <p class="mut">Arm angle applies to tape-fitted or accepted shapes; the default is 35°.
         Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
@@ -582,6 +587,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("bodyFile").disabled = !ready || dead;
     $("draftFromBody").disabled = !ready || dead;
     for (const id of ["timeMaxHalvings", "timeMaxTrials"]) $(id).disabled = !$("splitTimeSteps").checked;
+    for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = !$("customDrapeSchedule").checked;
     $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
     const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
       && (bodyFitText === null || $("bodyFitConsent").checked);
@@ -708,6 +714,58 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("drapeRhoInf").value = String(integrator?.rho_inf ?? 0);
     $("drapeRhoInf").disabled = integrator === undefined;
   }
+  function checkedDrapeSchedule(settings) {
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return undefined;
+    const keys = ["step_s", "sew_steps", "drape_steps", "newton_tol_m_s"];
+    if (!keys.some(key => settings[key] !== undefined)) return undefined;
+    if (settings.step_s !== undefined && (typeof settings.step_s !== "number" || !Number.isFinite(settings.step_s) || settings.step_s <= 0)) {
+      throw Error("Custom time step step_s must be finite and positive.");
+    }
+    if (settings.sew_steps !== undefined && (!Number.isSafeInteger(settings.sew_steps) || settings.sew_steps < 0 || settings.sew_steps > 512)) {
+      throw Error("Custom sewing step count must be a whole number from 0 to 512.");
+    }
+    if (settings.drape_steps !== undefined && (!Number.isSafeInteger(settings.drape_steps) || settings.drape_steps < 0 || settings.drape_steps > 512)) {
+      throw Error("Custom gravity step count must be a whole number from 0 to 512.");
+    }
+    if (settings.newton_tol_m_s !== undefined && (typeof settings.newton_tol_m_s !== "number" || !Number.isFinite(settings.newton_tol_m_s) || settings.newton_tol_m_s <= 0)) {
+      throw Error("Custom Newton tolerance newton_tol_m_s must be finite and positive.");
+    }
+    const schedule = {
+      step_s: settings.step_s ?? (1 / 24),
+      sew_steps: settings.sew_steps ?? 12,
+      drape_steps: settings.drape_steps ?? 36,
+      newton_tol_m_s: settings.newton_tol_m_s ?? 1e-3,
+    };
+    if (schedule.sew_steps + schedule.drape_steps < 6) {
+      throw Error("Custom schedule needs at least 6 combined sewing and gravity steps.");
+    }
+    const longestSew = settings.two_start ? Math.max(schedule.sew_steps, 18) : schedule.sew_steps;
+    if (longestSew + schedule.drape_steps + (settings.max_settle_steps ?? 0) > 512) {
+      throw Error("Configured fold exceeds the 512-step browser work budget per sewing path (sew + drape + settle).");
+    }
+    return schedule;
+  }
+  function drapeSchedule(twoStart, maxSettle) {
+    if (!$("customDrapeSchedule").checked) return undefined;
+    const stepRaw = $("drapeStepS").value.trim(), sewRaw = $("drapeSewSteps").value.trim(),
+      drapeRaw = $("drapeDrapeSteps").value.trim(), tolRaw = $("drapeNewtonTol").value.trim();
+    if (!stepRaw || !sewRaw || !drapeRaw || !tolRaw) {
+      throw Error("Supply finite step size, sewing steps, gravity steps and Newton tolerance.");
+    }
+    return checkedDrapeSchedule({
+      step_s: Number(stepRaw), sew_steps: Number(sewRaw), drape_steps: Number(drapeRaw),
+      newton_tol_m_s: Number(tolRaw), two_start: twoStart, max_settle_steps: maxSettle
+    });
+  }
+  function setDrapeSchedule(settings) {
+    const schedule = checkedDrapeSchedule(settings);
+    $("customDrapeSchedule").checked = schedule !== undefined;
+    $("drapeStepS").value = String(schedule?.step_s ?? (1 / 24));
+    $("drapeSewSteps").value = String(schedule?.sew_steps ?? 12);
+    $("drapeDrapeSteps").value = String(schedule?.drape_steps ?? 36);
+    $("drapeNewtonTol").value = String(schedule?.newton_tol_m_s ?? 0.001);
+    for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = schedule === undefined;
+  }
   let foldUrls = [];
   let materialSources = null, materialTransfer = null;
   const materialOrigin = new URL(location.href).origin;
@@ -746,6 +804,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (newtonStrategy !== undefined) drapeSettings.newton_strategy = newtonStrategy;
       const integrator = drapeIntegrator();
       if (integrator !== undefined) drapeSettings.integrator = integrator;
+      const schedule = drapeSchedule(drapeSettings.two_start, drapeSettings.max_settle_steps);
+      if (schedule !== undefined) Object.assign(drapeSettings, schedule);
     } catch (error) { status(error.message); return; }
     const bodySource = model || imported ? { model: model || null,
       fit: imported ? new Blob([bodyFitText], { type: "application/json" }) : null,
@@ -1125,7 +1185,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("resetStyle").addEventListener("click", () => {
@@ -1272,11 +1332,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (!["lbs", "dqs"].includes(skinning)) {
       showError("Choose lbs or dqs skinning."); return;
     }
-    let timeSubdivision, newtonStrategy, integrator;
+    let timeSubdivision, newtonStrategy, integrator, schedule;
     try {
       timeSubdivision = drapeTimeSubdivision();
       newtonStrategy = drapeNewtonStrategy();
       integrator = drapeIntegrator();
+      schedule = drapeSchedule($("twoStart").checked, Number($("maxSettleSteps").value));
     }
     catch (error) { showError(error.message); return; }
     foldRequest = ++nextRequest;
@@ -1290,7 +1351,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       legFraction: Number($("drapeLegFraction").value), skinning, maxSettleSteps: Number($("maxSettleSteps").value),
       ...(timeSubdivision !== undefined ? { timeSubdivision } : {}),
       ...(newtonStrategy !== undefined ? { newtonStrategy } : {}),
-      ...(integrator !== undefined ? { integrator } : {}) });
+      ...(integrator !== undefined ? { integrator } : {}),
+      ...(schedule !== undefined ? { schedule } : {}) });
   });
   const traceOrigin=new URL(location.href).origin;
   if(bodyFitToken && !traceToken && !photoToken && /^[0-9a-f]{32}$/.test(bodyFitToken) && traceOrigin!=="null" && window.opener) {
@@ -1373,6 +1435,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             checkedTimeSubdivision(settings.time_subdivision);
             checkedNewtonStrategy(settings.newton_strategy);
             checkedIntegrator(settings.integrator);
+            checkedDrapeSchedule(settings);
             if(context.bodyFit !== null && context.bodyFit !== undefined) {
               if(!(context.bodyFit instanceof Blob) || !context.bodyFit.size || context.bodyFit.size>16*1024*1024)throw Error("Accepted body report exceeds 16 MiB.");
               bodyFit=await readJson({files:[context.bodyFit]},"body-fit-report.json");
@@ -1395,6 +1458,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             setTimeSubdivision(settings.time_subdivision);
             setNewtonStrategy(settings.newton_strategy);
             setIntegrator(settings.integrator);
+            setDrapeSchedule(settings);
             showBodyImport();worker.postMessage({type:"clearBody"});worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
           }
           materialImportBusy=false;showMaterialInputs();renderPrograms();onProgram(true);

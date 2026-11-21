@@ -462,6 +462,12 @@ studies below use their separately selected body source.</p>
 <label>Maximum halvings <input id="timeMaxHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
 <label>Maximum step trials <input id="timeMaxTrials" type="number" min="1" max="65535" step="1" value="4096" disabled></label>
 <p class="note">Retries a stalled step as smaller steps without extending simulated time. The trial limit covers sewing, draping and settling, separately for each start. Exhausting the limits refuses the run.</p>
+<label><input id="customDrapeSchedule" type="checkbox"> Custom step size, step counts and Newton tolerance</label>
+<label>Step size (s) <input id="drapeStepS" type="number" min="0" step="any" value="0.041666666666666664" disabled></label>
+<label>Sewing steps <input id="drapeSewSteps" type="number" min="0" max="512" step="1" value="12" disabled></label>
+<label>Gravity steps <input id="drapeDrapeSteps" type="number" min="0" max="512" step="1" value="36" disabled></label>
+<label>Newton tolerance (m/s) <input id="drapeNewtonTol" type="number" min="0" step="any" value="0.001" disabled></label>
+<p class="note">Defaults match <code>DrapeOptions::default()</code> (1/24 s, 12 sewing steps, 36 gravity steps, 1e-3 m/s). Custom overrides stay within the 512-step browser budget per sewing path (including the 18-step comparison when enabled) and allow smaller steps for stiff Generalized-α contact runs.</p>
 <label><input id="twoStart" type="checkbox"> Compare a second sewing path (18 versus 12 sewing steps; runs a second full solve)</label>
 <p class="note">Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
 Extra settling continues the sewn garment until its quiet window or the step limit; 0 keeps the fixed schedule.
@@ -1118,8 +1124,8 @@ Up to eight groups may target disjoint source pieces, with at most one default g
 <option value="accepted">Reuse the accepted shape and pose selected above</option>
 <option value="request">Use the separate body-source request below</option>
 </select></label>
-<p class="note">Preview-pose tape fitting uses the arm angle, leg posture and fraction in section 3, including after additional measurement fusion.
-It fits the current measurements and does not use a selected accepted-fit report. Study solver settings and authored motion remain in the study request.</p>
+<p class="note">Preview-pose tape fitting and accepted-shape reuse use the arm angle, leg posture, fraction and skinning in section 3, including after additional measurement fusion.
+Preview-pose mode fits the current measurements and does not use a selected accepted-fit report. Study solver settings and authored motion remain in the study request.</p>
 <label><input id="studyOnBody" type="checkbox"> Constrain an advanced manufacturing study to the selected body</label>
 <p class="note">Guided linked alterations use this body source automatically. An advanced study requires <code>design_fit</code>
   in its request, the section-3 local model and the selected body source.
@@ -1239,6 +1245,13 @@ section-3 contract for their separate design-fit screening even when this scenar
 <label>Maximum halvings per drape interval <input id="guidedScenarioSubdivisionHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
 <label>Total drape attempts per alternative <input id="guidedScenarioSubdivisionTrials" type="number" min="1" max="65535" step="1" value="4096" disabled></label>
 </div>
+<div class="study-fields">
+<label>Newton solver <select id="guidedScenarioNewtonStrategy"><option value="projected">Projected Newton (default)</option><option value="adaptive_ilu">Adaptive ILU-PCG</option><option value="trust_region">Trust-region Steihaug</option></select></label>
+<label>Time integrator <select id="guidedScenarioIntegrator"><option value="implicit_euler">Implicit Euler (default)</option><option value="generalized_alpha">Generalized-α</option></select></label>
+<label>Spectral radius ρ<sub>∞</sub> (0–1) <input id="guidedScenarioRhoInf" type="number" min="0" max="1" step="0.05" value="0" disabled></label>
+</div>
+<p class="note">Projected Newton with Implicit Euler is the default scenario solver and is omitted from the serialized request when selected.
+Opt-in Generalized-α (ρ<sub>∞</sub> ∈ [0, 1]; 0 strongest high-frequency damping, 1 zero numerical dissipation) refuses history-dependent materials and may require smaller time steps or bounded subdivision on stiff contact transitions.</p>
 <p class="note">The attempt allowance includes failed retries and is shared across sewing, gravity and extra settling.
 The engine reserves the full allowance within the case's vertex-frame budget for every alternative and adaptive probe;
 larger allowances can leave fewer alternatives evaluable. Nominal frame times and convergence tolerances stay unchanged.

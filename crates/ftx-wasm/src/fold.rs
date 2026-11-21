@@ -223,7 +223,7 @@ pub struct FoldSettings {
     pub skinning: SkinningMode,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
     pub max_settle_steps: usize,
-    /// Optional nominal step duration in seconds (omitted when using the default `0.01 s`).
+    /// Optional nominal step duration in seconds (omitted when using the default `1/24 s`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_s: Option<f64>,
     /// Optional explicit sewing step count (omitted when using the default).

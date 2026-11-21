@@ -151,6 +151,16 @@ const parse = JSON.parse;
   assert.equal(sent.at(-1).type, 'error');
   await context.self.onmessage({data:{type:'fold',bytes:new ArrayBuffer(8),pattern:JSON.stringify(original),measurements:'{}',fit:'{}'}});
   assert.equal(sent.at(-1).type,'error');
+  // Verify worker + compiled WASM reject invalid custom schedule / integrator settings fail-closed.
+  await context.self.onmessage({data:{type:'fold',request:sent.length+1,bytes:new ArrayBuffer(8),pattern:JSON.stringify(original),measurements:'{}',fit:'{}',
+    schedule:{step_s:-0.01,sew_steps:12,drape_steps:36,newton_tol_m_s:0.001}}});
+  assert.equal(sent.at(-1).type,'error');
+  assert.match(sent.at(-1).message,/step_s/);
+  await context.self.onmessage({data:{type:'fold',request:sent.length+1,bytes:new ArrayBuffer(8),pattern:JSON.stringify(original),measurements:'{}',fit:'{}',
+    twoStart:true,maxSettleSteps:0,schedule:{step_s:0.01,sew_steps:12,drape_steps:500,newton_tol_m_s:0.001}}});
+  assert.equal(sent.at(-1).type,'error');
+  assert.match(sent.at(-1).message,/512-step/);
+  assert.equal(typeof ftx.fold_up_configured,'function');
   console.log('PASS: compiled WASM + actual worker/native equality for binding, permanent membrane law selection, stock, SVG, sewing, purchasing, frozen thermal surface/coverage, microclimate and viscoelastic lowering; automatic asymmetric optical faces, material-driven changes and malformed/out-of-domain refusals.');
   console.log('Browser navigation and successful model-backed drape NOT asserted. Test outputs:',work);
 })().catch(e=>{console.error(e);process.exitCode=1;});

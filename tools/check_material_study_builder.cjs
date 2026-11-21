@@ -814,6 +814,43 @@ test('guided drape subdivision refuses malformed policies and undersized mandato
   }
 });
 
+test('guided drape newton_strategy and integrator are opt-in, preserved in matrices, and refuse invalid bounds', async () => {
+  const {buildMaterialScenarioRequest:build,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const ordinary=scenarioState(), original=build(ordinary);
+  assert.equal(Object.hasOwn(JSON.parse(original).options,'newton_strategy'),false);
+  assert.equal(Object.hasOwn(JSON.parse(original).options,'integrator'),false);
+  const ilu={kind:'adaptive_ilu',pcg_iters:64,max_shifts:4};
+  const tr={kind:'trust_region_steihaug',initial_radius:0.05,max_radius:0.5,min_radius:1e-12,cg_iters:0};
+  const ga={kind:'generalized_alpha',rho_inf:0.5};
+  const rawIlu=build({...ordinary,maxVertexFrames:32000000,options:{...ordinary.options,newton_strategy:ilu,integrator:ga}});
+  const rawTr=build({...ordinary,maxVertexFrames:32000000,options:{...ordinary.options,newton_strategy:tr}});
+  assert.deepEqual(JSON.parse(rawIlu).options.newton_strategy,ilu);
+  assert.deepEqual(JSON.parse(rawIlu).options.integrator,ga);
+  assert.deepEqual(JSON.parse(rawTr).options.newton_strategy,tr);
+  assert.equal(Object.hasOwn(JSON.parse(rawTr).options,'integrator'),false);
+  const rawMat=matrix({maxEvaluations:4,cases:[{key:'ilu_ga',scenario:rawIlu},{key:'tr',scenario:rawTr}]});
+  assert.deepEqual(JSON.parse(rawMat).cases[0].scenario.options.newton_strategy,ilu);
+  assert.deepEqual(JSON.parse(rawMat).cases[0].scenario.options.integrator,ga);
+  assert.deepEqual(JSON.parse(rawMat).cases[1].scenario.options.newton_strategy,tr);
+  assert.equal(build(ordinary),original);
+  for(const bad of [null,[],{},{kind:'unknown'},{kind:'projected_newton',extra:1},
+    {kind:'adaptive_ilu',pcg_iters:0,max_shifts:4},{kind:'adaptive_ilu',pcg_iters:257,max_shifts:4},
+    {kind:'adaptive_ilu',pcg_iters:64,max_shifts:17},{kind:'adaptive_ilu',pcg_iters:64,max_shifts:4,extra:1},
+    {kind:'trust_region_steihaug',initial_radius:0.05,max_radius:0.5,min_radius:0,cg_iters:0},
+    {kind:'trust_region_steihaug',initial_radius:0.6,max_radius:0.5,min_radius:1e-12,cg_iters:0},
+    {kind:'trust_region_steihaug',initial_radius:0.05,max_radius:0.5,min_radius:1e-12,cg_iters:4097}]) {
+    const input=scenarioState();input.options.newton_strategy=bad;
+    assert.throws(()=>build(input),/Newton strategy/);
+  }
+  for(const bad of [null,[],{},{kind:'unknown'},{kind:'implicit_euler',extra:1},
+    {kind:'generalized_alpha',rho_inf:-0.01},{kind:'generalized_alpha',rho_inf:1.01},
+    {kind:'generalized_alpha',rho_inf:NaN},{kind:'generalized_alpha',rho_inf:'0.5'},
+    {kind:'generalized_alpha',rho_inf:0.5,extra:1}]) {
+    const input=scenarioState();input.options.integrator=bad;
+    assert.throws(()=>build(input),/Time integrator/);
+  }
+});
+
 test('guided motion preserves ordered absolute endpoints and original scenario sources', async () => {
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:build}=await modulePromise;
   const request={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:25,leg_pose:{posture:'seated',fraction:0.5}},
@@ -4604,4 +4641,29 @@ test('regional contact loads reject ambiguous schemas and malformed declarations
   assert.deepEqual(JSON.parse(build({...policy,regions:[region,distinct]})).regions,[region,distinct],
     'Only the native retained mesh can decide whether individually valid polygons select overlapping triangles');
   assert.deepEqual(JSON.parse(build(contactPolicy({instances:['front.R']}))),contactPolicy({instances:['front.R']}));
+});
+
+test('saved study accepted-fit pose metadata validates, freezes and refuses invalid combinations', async () => {
+  const {buildWorkbenchStudyBundle:build,parseWorkbenchStudyBundle:parse}=await modulePromise;
+  const extra=' {"schema":"fabric-measurements/1","source":{"value":1.0}}\n';
+  const accepted=' {"schema":"ftx-body-fit/1","source":{"scale":1.0}}\n';
+  const base={...workbenchRequest(),onBody:true,measurements:workbenchBody,measurementSources:JSON.stringify([extra]),
+    measurementConsent:true,measurementPrimary:workbenchBody,measurementAcceptedFit:accepted,measurementArmDeg:45};
+  const acceptedPose={legs:'seated',leg_fraction:0.5,skinning:'dqs'};
+  const saved=parse(build({...base,measurementAcceptedPose:acceptedPose},workbenchModel()));
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.request.measurementAcceptedPose)),acceptedPose);
+  assert.equal(Object.isFrozen(saved.request.measurementAcceptedPose),true);
+  acceptedPose.legs='squat';
+  assert.equal(saved.request.measurementAcceptedPose.legs,'seated');
+  for(const bad of [
+    {...base,measurementAcceptedPose:{}},
+    {...base,measurementAcceptedPose:{legs:'kneeling'}},
+    {...base,measurementAcceptedPose:{leg_fraction:1.5}},
+    {...base,measurementAcceptedPose:{skinning:'hybrid'}},
+    {...base,measurementAcceptedPose:{legs:'seated',arm_abduction_deg:35}},
+    {...base,measurementAcceptedPose:{skinning:'dqs'},measurementPose:{arm_abduction_deg:35,legs:'seated',leg_fraction:0.5}},
+  ]) assert.throws(()=>build(bad,workbenchModel()));
+  const noFit={...base,measurementAcceptedPose:{skinning:'dqs'}};
+  delete noFit.measurementAcceptedFit;delete noFit.measurementArmDeg;
+  assert.throws(()=>build(noFit,workbenchModel()),/accepted body-fit source/i);
 });
