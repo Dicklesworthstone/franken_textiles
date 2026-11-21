@@ -1670,6 +1670,7 @@ fn microclimate_exterior_optical_protocols_follow_surface_columns_and_coverage_s
         }
     }
     // Convection-only microclimate_exterior consumes no emissivity protocol.
+    a.frozen_changes.as_mut().unwrap().pieces.clear();
     d["scenario"]["surface"] = json!({"microclimate_exterior":[{}]});
     let conv_only = optical_protocol(&a, &d, &s, &m, surface_metric);
     let mut changed = raw.clone();
