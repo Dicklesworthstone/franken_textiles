@@ -1684,8 +1684,8 @@ impl Solver {
             };
             // Exact Hessian first (quadratic convergence near a minimum); element blocks projected to
             // PSD only when the factorization reports negative inertia (plan §11.2).
-            let (mut g, mut p) = if projecting {
-                (Vec::new(), None)
+            let (mut g, mut a_mat, mut p, mut used_lin_tol) = if projecting {
+                (Vec::new(), None, None, base_linear_tol)
             } else {
                 let (g, a) = self.assemble_ctx(&self.x, ctx, false, true);
                 let lin_tol = next_lin_tol(&g);
@@ -1698,7 +1698,7 @@ impl Solver {
                     adaptive_ilu,
                     &mut rep,
                 )?;
-                (g, p)
+                (g, Some(a), p, lin_tol)
             };
             let mut newton_correction = true;
             if p.is_none() {
@@ -1707,6 +1707,7 @@ impl Solver {
                 let (g2, a2) = self.assemble_ctx(&self.x, ctx, true, true);
                 g = g2;
                 let lin_tol = next_lin_tol(&g);
+                used_lin_tol = lin_tol;
                 p = self.solve_newton_linear(
                     &a2,
                     &g,
@@ -1722,6 +1723,7 @@ impl Solver {
                         p = self.static_search_direction(&a2, &g, &mut rep)?;
                     }
                 }
+                a_mat = Some(a2);
             }
             // If neither bounded linear path succeeds, retain steepest descent.
             let mut p = p.unwrap_or_else(|| g.iter().map(|v| -v).collect());
@@ -1737,10 +1739,71 @@ impl Solver {
                 p = g.iter().map(|v| -v).collect();
                 slope = -g.iter().map(|v| v * v).sum::<f64>();
             }
-            let step = p.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            let mut step = p.iter().fold(0.0f64, |m, v| m.max(v.abs()));
             rep.iterations = it + 1;
             rep.last_step = step;
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            // An inexact Eisenstat–Walker solve (used_lin_tol > base_linear_tol) is valid for
+            // descent far from equilibrium, but cannot certify displacement convergence: stiff
+            // membrane components can dominate ‖g‖₂ while leaving soft bending modes unsolved.
+            // Re-solve at `base_linear_tol` before accepting convergence.
+            if newton_correction
+                && rep.residual > 0.0
+                && step / scale < self.tol
+                && used_lin_tol > base_linear_tol
+                && let Some(a_cur) = a_mat.take()
+            {
+                ew_eta = base_linear_tol;
+                let mut p_tight = self.solve_newton_linear(
+                    &a_cur,
+                    &g,
+                    projecting,
+                    base_linear_tol,
+                    base_linear_tol,
+                    adaptive_ilu,
+                    &mut rep,
+                )?;
+                if p_tight.is_none() && !projecting {
+                    projecting = true;
+                    rep.projected_iterations += 1;
+                    let (g2, a2) = self.assemble_ctx(&self.x, ctx, true, true);
+                    g = g2;
+                    rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                    p_tight = self.solve_newton_linear(
+                        &a2,
+                        &g,
+                        true,
+                        base_linear_tol,
+                        base_linear_tol,
+                        adaptive_ilu,
+                        &mut rep,
+                    )?;
+                }
+                if let Some(p_new) = p_tight {
+                    if g.iter().chain(&p_new).any(|v| !v.is_finite()) {
+                        return Err(Refusal::new(
+                            RefusalCode::NonFinite,
+                            "Newton gradient or direction is non-finite",
+                        ));
+                    }
+                    let slope_new: f64 = g.iter().zip(&p_new).map(|(a, b)| a * b).sum();
+                    if slope_new.is_finite() && slope_new < 0.0 {
+                        p = p_new;
+                        slope = slope_new;
+                    } else {
+                        newton_correction = false;
+                        p = g.iter().map(|v| -v).collect();
+                        slope = -g.iter().map(|v| v * v).sum::<f64>();
+                    }
+                } else {
+                    newton_correction = false;
+                    p = g.iter().map(|v| -v).collect();
+                    slope = -g.iter().map(|v| v * v).sum::<f64>();
+                }
+                step = p.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                rep.last_step = step;
+            }
+            drop(a_mat);
             // A gradient fallback can descend, but its norm is not a displacement error bound.
             // Exact zero gradient still certifies stationarity when the Hessian is singular.
             if (newton_correction || rep.residual == 0.0) && step / scale < self.tol {
@@ -2032,14 +2095,6 @@ impl Solver {
                 self.x = trial;
                 energy = trial_energy;
                 rep.roundoff_steps += usize::from(precision_step);
-                if precision_step
-                    && !out.hit_boundary
-                    && !out.negative_curvature
-                    && step_inf / scale < self.tol
-                {
-                    rep.converged = true;
-                    break;
-                }
             } else if delta < min_radius {
                 rep.line_search_failures += 1;
                 break;
@@ -3538,5 +3593,61 @@ mod strategy_and_integrator_tests {
         let err = tr_refuse.step(0.01).unwrap_err();
         assert_eq!(err.code, RefusalCode::NotConverged);
         assert!(!err.repairs.is_empty());
+    }
+
+    #[test]
+    fn adaptive_ilu_verifies_convergence_at_tight_tolerance_and_tr_refuses_truncated_cg() {
+        // Stiff-membrane / soft-gravity triangle: initial membrane stretch makes in-plane forces
+        // dominate ‖g‖₂ by >1e3 over gravity, so a loose 1e-2 Eisenstat–Walker solve must re-verify
+        // at PCG_TOL before certifying convergence.
+        let rest = vec![Vec2::ZERO, Vec2::new(0.1, 0.0), Vec2::new(0.0, 0.1)];
+        let x0 = vec![
+            Vec3::ZERO,
+            Vec3::new(0.1, 0.0, 0.0),
+            Vec3::new(0.0, 0.100_005, 0.0),
+        ];
+        let fixed = [[true; 3], [true; 3], [false; 3]];
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(1.0e6, 1.0e6, 0.2, 2.0e5, 0.1),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let mut pn = Solver::new(
+            model.clone(),
+            x0.clone(),
+            &fixed,
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        pn.tol = 1e-10;
+        pn.step(0.01).unwrap();
+
+        let mut ilu = Solver::new(model, x0, &fixed, Vec3::new(0.0, 0.0, -9.81));
+        ilu.tol = 1e-10;
+        ilu.newton_strategy = NewtonStrategy::adaptive_ilu_default();
+        let rep = ilu.step(0.01).unwrap();
+        assert!(rep.converged, "{rep:?}");
+        assert!(
+            (pn.x[2] - ilu.x[2]).norm() < 1e-9,
+            "AdaptiveIlu stopped prematurely on soft mode: pn={:?}, ilu={:?}",
+            pn.x[2],
+            ilu.x[2]
+        );
+
+        // Trust-region Steihaug with cg_iters = 1 on a coupled sheet must not falsely certify
+        // convergence when CG stops short of solving the Newton system.
+        let mut tr = hanging_sheet();
+        tr.tol = 1e-12;
+        tr.max_newton = 3;
+        tr.newton_strategy = NewtonStrategy::TrustRegionSteihaug {
+            initial_radius: 0.05,
+            max_radius: 0.5,
+            min_radius: 1e-12,
+            cg_iters: 1,
+        };
+        let err = tr.step(0.01).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NotConverged);
     }
 }
