@@ -11,8 +11,8 @@ use super::{AXES, ELASTIC, MODEL, PlasticMembrane};
 use crate::material_calibration::{Partition, Quality, fitted_domain};
 use crate::material_catalog::normalize;
 use crate::material_relaxation::{
-    CompiledRelaxation, Initialization as RelaxationInitialization, MaxwellBranch, Relaxation,
-    parallel,
+    CompiledRelaxation, Initialization as RelaxationInitialization, IntegrationScheme,
+    MaxwellBranch, Relaxation, parallel,
 };
 use crate::material_response::StrainDomain;
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
@@ -83,7 +83,7 @@ pub struct Parameters {
 pub struct RelaxationParameters {
     /// Positive multiplier of the independently characterized equilibrium tensor.
     pub stiffness_ratio: f64,
-    /// Positive canonical backward-Euler recovery time, seconds.
+    /// Positive recovery time, seconds.
     pub relaxation_time_seconds: f64,
 }
 
@@ -104,6 +104,10 @@ pub struct JointRelaxation {
     pub initialization: RelaxationInitialization,
     /// Source/method/specimen/conditioning for this exact network, domain and initialization.
     pub network: parallel::ParallelPlasticity,
+    /// Optional time integration scheme for the jointly identified Maxwell branch.
+    /// Defaults to backward Euler and is omitted from serialization when default.
+    #[serde(default, skip_serializing_if = "IntegrationScheme::is_default")]
+    pub integration: IntegrationScheme,
 }
 
 /// Original source-bearing problem. The six domain quantities remain properties of `material`.
@@ -468,7 +472,7 @@ fn joint_template(input: &Input, material: &Material) -> Result<Option<Material>
         method: joint.network.method.clone(),
         conditions: joint.network.conditions.clone(),
         parallel_plasticity: Some(joint.network.clone()),
-        integration: Default::default(),
+        integration: joint.integration,
     });
     Ok(Some(template))
 }
@@ -1295,6 +1299,15 @@ fn fitted_material(
             .as_mut()
             .expect("joint publication")
             .branches[0];
+        let recovery_scheme = if input
+            .joint_relaxation
+            .as_ref()
+            .is_some_and(|joint| joint.integration == IntegrationScheme::ExactExponential)
+        {
+            "exact-exponential"
+        } else {
+            "canonical backward-Euler"
+        };
         for (quantity, value) in [
             (&mut branch.stiffness_ratio, recovery.stiffness_ratio),
             (
@@ -1304,7 +1317,9 @@ fn fitted_material(
         ] {
             quantity.value = value;
             quantity.source = source.clone();
-            quantity.method = "Bounded joint FIT-only identification with the six permanent coefficients through recorded-node return mapping and canonical backward-Euler recovery; not a measured coefficient or confidence bound".into();
+            quantity.method = format!(
+                "Bounded joint FIT-only identification with the six permanent coefficients through recorded-node return mapping and {recovery_scheme} recovery; not a measured coefficient or confidence bound"
+            );
             quantity.conditions = input.conditions.clone();
         }
         material.sources.get_mut(&source).expect("fit source").note = format!(

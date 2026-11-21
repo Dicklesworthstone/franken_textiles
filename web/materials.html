@@ -267,7 +267,8 @@ search ranges. FIT chooses the coefficients before held-out CHECK replay. Unexci
 searches and failed checks retain a report without an assignable selection.</p>
 <p class="note">To identify both permanent stretch and delayed recovery from the same histories, include
 <code>joint_relaxation</code> with one proportional Maxwell branch, positive stiffness-ratio and recovery-time
-search bounds, a source-qualified network declaration and its strain domain. No provisional recovery
+search bounds, a source-qualified network declaration and its strain domain. Optional
+<code>joint_relaxation.integration: "exact_exponential"</code> identifies and publishes step-size-invariant exact piecewise-linear Prony recovery (omitted for default backward Euler). No provisional recovery
 coefficients are required. The shared fitter checks excitation of all eight unknowns and replays every
 recorded strain/time node. The result distinguishes jointly identified recovery from an independently
 supplied spectrum that stays fixed. Fitted coefficients remain estimates.</p>

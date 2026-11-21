@@ -6,6 +6,7 @@ use ftx_pattern::{
         AXES, MODEL,
         calibration::{Input, Sample, Status, calibrate},
     },
+    material_relaxation::IntegrationScheme,
     materials::Evidence,
 };
 use serde_json::json;
@@ -1208,5 +1209,142 @@ fn fixed_parallel_cache_and_final_replays_share_the_existing_bounded_work_budget
         assert_eq!(incomplete.diagnostics.evaluations, limit);
         assert!(incomplete.diagnostics.history_steps <= incomplete.diagnostics.history_step_limit);
         assert_eq!(incomplete.parameters, complete.parameters);
+    }
+}
+
+#[test]
+fn joint_relaxation_opt_in_exact_exponential_identifies_and_publishes_scheme() {
+    // Default joint request omits `integration` from both input and published material JSON.
+    let default_source = identify_both_input();
+    let default_json = serde_json::to_value(&default_source).unwrap();
+    assert!(
+        default_json["joint_relaxation"]
+            .get("integration")
+            .is_none(),
+        "default backward_euler must be omitted on JointRelaxation"
+    );
+    let default_report = calibrate(&default_source).unwrap();
+    assert_eq!(default_report.status, Status::Accepted);
+    let default_mat_json = serde_json::to_value(default_report.material.as_ref().unwrap()).unwrap();
+    assert!(
+        default_mat_json["membrane_relaxation"]
+            .get("integration")
+            .is_none(),
+        "default backward_euler must be omitted on published membrane_relaxation"
+    );
+
+    // Build synthetic ground truth from the exact closed-form piecewise-linear Prony recurrence
+    // (q_n = exp(-h/tau)*q_{n-1} + ((1 - exp(-h/tau))/(h/tau)) * (e_n - e_{n-1})) independently
+    // of the production compiler.
+    let mut exact_source = input();
+    let known = joint_input();
+    exact_source
+        .material
+        .sources
+        .insert("network".into(), known.material.sources["network"].clone());
+    exact_source.joint_relaxation = Some(
+        serde_json::from_value(json!({
+            "branch_id": "identified-arm",
+            "stiffness_ratio_bounds": [0.1, 0.9],
+            "relaxation_time_bounds_seconds": [0.1, 1.2],
+            "strain_range": [[-0.2, 0.2], [-0.2, 0.2], [-0.2, 0.2]],
+            "initialization": "stress_free_reference",
+            "integration": "exact_exponential",
+            "network": {
+                "model": "parallel_green_maxwell_plastic/1",
+                "source": "network", "evidence": "estimate",
+                "method": "Synthetic single proportional recovery arm with exact-exponential Prony integration plus plastic equilibrium",
+                "conditions": exact_source.conditions
+            }
+        }))
+        .unwrap(),
+    );
+    let mut dwell = exact_source.experiments[0].samples[3].clone();
+    dwell.time_seconds = 3.25;
+    exact_source.experiments[0].samples.insert(4, dwell.clone());
+    dwell.time_seconds = 3.75;
+    exact_source.experiments[0].samples.insert(5, dwell);
+    let tau = 0.5_f64;
+    for experiment in &mut exact_source.experiments {
+        let mut q = [0.0_f64; 3];
+        let mut prev_t = 0.0_f64;
+        let mut prev_e = [0.0_f64; 3];
+        for (idx, sample) in experiment.samples.iter_mut().enumerate() {
+            if idx > 0 {
+                let h = sample.time_seconds - prev_t;
+                let x = h / tau;
+                let a = (-x).exp();
+                let b = (1.0 - a) / x;
+                for axis in 0..3 {
+                    let de = sample.green_strain[axis] - prev_e[axis];
+                    q[axis] = a * q[axis] + b * de;
+                }
+            }
+            for axis in 0..3 {
+                if let Some(force) = &mut sample.second_piola_n_m[axis] {
+                    *force += 0.5 * [1000.0, 500.0, 250.0][axis] * q[axis];
+                }
+            }
+            prev_t = sample.time_seconds;
+            prev_e = sample.green_strain;
+        }
+    }
+
+    let report = calibrate(&exact_source).unwrap();
+    assert_eq!(report.status, Status::Accepted, "{report:#?}");
+    assert_eq!(report.check_status, "ACCEPTED");
+    let params = report.parameters.as_ref().unwrap();
+    for i in 0..3 {
+        near(params.yield_n_m[i], [10.0, 8.0, 5.0][i], 1e-6);
+        near(params.hardening_n_m[i], [100.0, 50.0, 25.0][i], 1e-6);
+    }
+    let recovery = params.relaxation.as_ref().unwrap();
+    near(recovery.stiffness_ratio, 0.5, 1e-6);
+    near(recovery.relaxation_time_seconds, 0.5, 1e-6);
+
+    let material = report.material.as_ref().unwrap();
+    let relaxation = material.membrane_relaxation.as_ref().unwrap();
+    assert_eq!(relaxation.integration, IntegrationScheme::ExactExponential);
+    assert!(
+        relaxation.branches[0]
+            .relaxation_time
+            .method
+            .contains("exact-exponential")
+    );
+    let mat_json = serde_json::to_value(material).unwrap();
+    assert_eq!(
+        mat_json["membrane_relaxation"]["integration"],
+        json!("exact_exponential")
+    );
+    // Compiled parallel law preserves ExactExponential integration.
+    let compiled_plastic = material
+        .compiled_membrane_plasticity(true)
+        .unwrap()
+        .unwrap();
+    let compiled_relax = material
+        .compiled_membrane_relaxation(true)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        compiled_relax.integration(),
+        IntegrationScheme::ExactExponential
+    );
+    assert!(compiled_plastic.accepts_parallel(&compiled_relax));
+
+    // Re-running the exact-exponential observations under default backward Euler yields a
+    // distinct recovery time (scheme is genuinely active during joint calibration, not a no-op).
+    let mut mis_scheme = exact_source;
+    mis_scheme.joint_relaxation.as_mut().unwrap().integration = IntegrationScheme::BackwardEuler;
+    let be_report = calibrate(&mis_scheme).unwrap();
+    if let Some(be_rec) = be_report
+        .parameters
+        .as_ref()
+        .and_then(|p| p.relaxation.as_ref())
+    {
+        assert!(
+            (be_rec.relaxation_time_seconds - 0.5).abs() > 1e-2
+                || be_report.status != Status::Accepted,
+            "backward Euler should not identically match coarse exact-exponential synthetic data: {be_rec:?}"
+        );
     }
 }
