@@ -27,6 +27,10 @@ A Next.js sewing studio that runs FrankenTextiles on the visitor's device.
   inspect piece and grain placement, and download the full-scale SVG marker.
 - **Stitch.** Follow a Tajima DST needle path, pause at the braid placement stop, switch panels,
   and download the machine file being replayed.
+- **Repair a seam.** At `/sections/repair/`, introduce a mismatch at the bolero's side seam and
+  correct it with `true-seam`. Compare the sewing lengths and download the repaired A4 PDF or master SVG.
+- **Compare heat flow.** At `/experiments/thermal/`, stack measured neoprene and leather, set the
+  temperature and interface resistance, and inspect the steady heat flux. Download the request for native replay.
 - **Drape.** Orbit two native synthetic garment runs in WebGL. Follow a single panel from its
   flat outline to its place in the sewn garment, or inspect a seam and its endpoint strain.
 - **Trace.** Reveal the Rust tracer's review of a synthetic bolero sheet, then open the same PNG
