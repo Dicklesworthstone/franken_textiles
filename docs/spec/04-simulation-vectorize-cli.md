@@ -257,6 +257,24 @@ retain the reference's right-then-reflect path above. Independent synthetic asym
 regions test this selection through the ordinary placement and roll APIs; the anatomical
 landmark heuristics and empirical fit remain unqualified.
 
+**Native extension: authored rigid frame adjustments.** Optional
+`placement.frame_offset_mm: [front, lat, up]` translates the wrap axis in the original
+selected part frame. Optional `placement.frame_rotation: {"axis": [front, lat, up],
+"angle_deg": angle}` rotates it by the right-hand rule about the centerline point at
+`y0_landmark`. The angle is in `[-180, 180]` degrees; the finite nonzero local axis is
+normalized before use. Rotation applies first, then the offset in the original axes.
+The rotation object contains exactly `axis` and `angle_deg`. Present nulls, malformed
+vectors, nonnumeric/nonfinite values, zero axes and unrepresentable results refuse.
+
+This transforms only the existing part frame. The flat coordinates, rest lengths, grain,
+seams, `x0`, scaled `y0`, wrap radius and original section-radius queries remain unchanged.
+The same transformed frame drives wrap and partial roll. Generated pairs are adjusted on
+the right and then reflected as above; explicit physical panels use their selected side.
+The leg midline rule still applies after the completed wrap and can therefore clip a rigid
+adjustment. Omitted adjustments and explicit zero adjustments retain the original frame
+without extra floating-point arithmetic. These controls do not infer clearance, modify a
+collider or establish that the pre-sewn or dynamically evolved garment is admissible.
+
 ### 3.5 Inferred placement (pieces without one; traced sheets)
 
 The round step (§11.5) runs this for every piece without a placement whose `sim` is not false, unless the pattern is

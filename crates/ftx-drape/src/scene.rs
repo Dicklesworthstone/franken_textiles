@@ -60,9 +60,137 @@ fn bad(m: String) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, m)
 }
 
+fn placement_vector(value: &Value, key: &str, id: &str) -> Result<Vec3, Refusal> {
+    let components = value
+        .as_array()
+        .filter(|v| v.len() == 3)
+        .ok_or_else(|| bad(format!("{id}: placement {key} must be [front, lat, up]")))?;
+    let mut vector = [0.; 3];
+    for (output, input) in vector.iter_mut().zip(components) {
+        *output = input
+            .as_f64()
+            .ok_or_else(|| bad(format!("{id}: placement {key} components must be numbers")))?;
+        if !output.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("{id}: placement {key} components must be finite"),
+            ));
+        }
+    }
+    Ok(vector.into())
+}
+
+/// Rigid authored placement is about the selected landmark's centerline, not the world origin or
+/// the cloth's anchor surface. Translation uses the original part axes, after the rotation.
+fn adjusted_frame(
+    frame: PartFrame,
+    landmark_h: f64,
+    placement: &Value,
+    id: &str,
+) -> Result<PartFrame, Refusal> {
+    let offset = placement
+        .get("frame_offset_mm")
+        .map(|value| placement_vector(value, "frame_offset_mm", id))
+        .transpose()?
+        .unwrap_or(Vec3::ZERO);
+    let rotation = placement
+        .get("frame_rotation")
+        .map(|value| {
+            let fields = value.as_object().ok_or_else(|| {
+                bad(format!(
+                    "{id}: placement frame_rotation must contain axis and angle_deg"
+                ))
+            })?;
+            if fields.len() != 2 || !fields.contains_key("axis") || !fields.contains_key("angle_deg")
+            {
+                return Err(bad(format!(
+                    "{id}: placement frame_rotation must contain only axis and angle_deg"
+                )));
+            }
+            let axis = placement_vector(&fields["axis"], "frame_rotation.axis", id)?;
+            // Scaling before normalization admits arbitrary finite direction magnitudes without
+            // overflow or underflow in the squared norm; the zero direction remains a refusal.
+            let scale = axis.x.abs().max(axis.y.abs()).max(axis.z.abs());
+            if scale == 0. {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("{id}: placement frame_rotation.axis must be nonzero"),
+                ));
+            }
+            let scaled = axis / scale;
+            let axis = scaled / scaled.norm();
+            let angle = fields["angle_deg"].as_f64().ok_or_else(|| {
+                bad(format!(
+                    "{id}: placement frame_rotation.angle_deg must be a number"
+                ))
+            })?;
+            if !angle.is_finite() || !(-180. ..=180.).contains(&angle) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "{id}: placement frame_rotation.angle_deg must be within -180 to 180 degrees"
+                    ),
+                ));
+            }
+            Ok((axis, angle))
+        })
+        .transpose()?;
+    if offset == Vec3::ZERO && rotation.is_none_or(|(_, angle)| angle == 0.) {
+        // Preserve the reference's exact arithmetic, including signed zeros, for absent and
+        // explicit identity transforms. Malformed declarations above never become defaults.
+        return Ok(frame);
+    }
+    let axes = [frame.front, frame.lat, frame.up];
+    if !frame.origin.is_finite()
+        || !landmark_h.is_finite()
+        || axes
+            .iter()
+            .any(|axis| !axis.is_finite() || (axis.norm2() - 1.).abs() > 1e-10)
+        || frame.front.dot(frame.lat).abs() > 1e-10
+        || frame.front.dot(frame.up).abs() > 1e-10
+        || frame.lat.dot(frame.up).abs() > 1e-10
+        || (frame.up.cross(frame.front) - frame.lat).norm() > 1e-10
+    {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            format!(
+                "{id}: a rigid placement requires a finite, right-handed orthonormal body frame"
+            ),
+        ));
+    }
+    let local_vector = |v: Vec3| frame.front * v.x + frame.lat * v.y + frame.up * v.z;
+    let mut result = frame;
+    if let Some((axis, angle)) = rotation.filter(|(_, angle)| *angle != 0.) {
+        let axis = local_vector(axis).normalized();
+        let rotate = ftx_core::Mat3::rotation(axis, angle.to_radians());
+        result.front = rotate.mul_vec(frame.front);
+        result.lat = rotate.mul_vec(frame.lat);
+        result.up = rotate.mul_vec(frame.up);
+        // origin + up*h is the pivot. This equivalent form avoids subtracting two translated
+        // positions and keeps a small adjustment accurate on a distant part-frame origin.
+        result.origin = frame.origin + (frame.up - result.up) * landmark_h;
+    }
+    if offset != Vec3::ZERO {
+        result.origin += local_vector(offset);
+    }
+    if !result.origin.is_finite()
+        || !result.front.is_finite()
+        || !result.lat.is_finite()
+        || !result.up.is_finite()
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("{id}: placement frame adjustment is not representable"),
+        )
+        .repair("Use frame offsets and rotations representable at the selected landmark."));
+    }
+    Ok(result)
+}
+
 /// The wrap placement of each simulated instance (spec 04 §3.1–3.4) from its piece's `placement` and
 /// the body's frames: anchor height `landmark_h − y0`, radius `radius_mm` or the largest section radius
-/// over nine heights of the piece plus `clearance_mm` (25).
+/// over nine heights of the piece plus `clearance_mm` (25). Optional local rigid frame adjustments
+/// move that same wrap and roll without changing the flat rest geometry or inferred radius.
 ///
 /// # Errors
 /// [`RefusalCode::InvalidDocument`] for a missing or malformed placement, an unknown part or landmark.
@@ -110,10 +238,10 @@ pub fn placements(
             .get("y0_landmark")
             .and_then(Value::as_str)
             .unwrap_or("waist");
-        let h0 = frames
+        let landmark_h = frames
             .landmark_h(&key, landmark)
-            .ok_or_else(|| bad(format!("{id}: no landmark {landmark} on {key}")))?
-            - y0;
+            .ok_or_else(|| bad(format!("{id}: no landmark {landmark} on {key}")))?;
+        let h0 = landmark_h - y0;
         let radius = if let Some(r) = num("radius_mm")? {
             r
         } else {
@@ -141,7 +269,7 @@ pub fn placements(
             ));
         }
         out.push(WrapPlacement {
-            frame,
+            frame: adjusted_frame(frame, landmark_h, pl, id)?,
             h0,
             radius,
             theta_deg: num("theta_deg")?.unwrap_or(0.0),
@@ -2185,6 +2313,231 @@ mod grain_tests {
             }
             assert_eq!(roll_points(&points, p, 1.), wrap_points(&points, p));
         }
+    }
+
+    #[test]
+    fn placement_frame_adjustments_preserve_flat_lengths_and_every_roll_stage() {
+        for side in ["R", "L"] {
+            let mut piece = physical_panel("sleeve", "arm", Some(side));
+            piece["sim_scale"] = json!([1.5, 0.75]);
+            let original = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+                "pieces":[piece.clone()],"seams":[]}));
+            piece["placement"]["frame_offset_mm"] = json!([11., 23., -7.]);
+            piece["placement"]["frame_rotation"] = json!({"axis":[0.,2.,0.],"angle_deg":90.});
+            let adjusted = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+                "pieces":[piece],"seams":[]}));
+            let mesh = build_garment(&original, 12.).unwrap();
+            let adjusted_mesh = build_garment(&adjusted, 12.).unwrap();
+            assert_eq!(mesh.verts2d, adjusted_mesh.verts2d);
+            assert_eq!(mesh.faces, adjusted_mesh.faces);
+            assert_eq!(
+                grain_rest(&original, &mesh, true).unwrap(),
+                grain_rest(&adjusted, &adjusted_mesh, true).unwrap()
+            );
+            let base = placements(&original, &mesh, &AsymmetricFrames).unwrap()[0];
+            let moved = placements(&adjusted, &adjusted_mesh, &AsymmetricFrames).unwrap()[0];
+            assert_eq!(base.h0, moved.h0);
+            assert_eq!(base.x0, moved.x0);
+            assert_eq!(base.radius, moved.radius);
+            assert_eq!(base.theta_deg, moved.theta_deg);
+            let landmark = if side == "R" { 110. } else { 155. };
+            let pivot = base.frame.origin + base.frame.up * landmark;
+            let translation = base.frame.front * 11. + base.frame.lat * 23. - base.frame.up * 7.;
+            assert!(
+                (moved.frame.origin + moved.frame.up * landmark - pivot - translation).norm()
+                    < 1e-12
+            );
+            assert!((moved.frame.up - base.frame.front).norm() < 1e-14);
+            assert!((moved.frame.front + base.frame.up).norm() < 1e-14);
+            assert!((moved.frame.lat - base.frame.lat).norm() < 1e-14);
+            assert!((moved.frame.up.cross(moved.frame.front) - moved.frame.lat).norm() < 1e-14);
+            for progress in [0., 0.35, 0.9, 1.] {
+                let before = roll_points(&mesh.verts2d, &base, progress);
+                let after = roll_points(&adjusted_mesh.verts2d, &moved, progress);
+                for (point, placed) in before.iter().zip(&after) {
+                    // Independent 90-degree rotation about the original local lateral axis:
+                    // front -> -up, up -> front, with the landmark centerline fixed.
+                    let d = *point / MM - pivot;
+                    let expected = (pivot
+                        + base.frame.front * d.dot(base.frame.up)
+                        + base.frame.lat * d.dot(base.frame.lat)
+                        - base.frame.up * d.dot(base.frame.front)
+                        + translation)
+                        * MM;
+                    assert!((*placed - expected).norm() < 1e-14, "{side}, {progress}");
+                }
+                for (a, b) in crate::start::face_edges(&mesh.faces) {
+                    assert!(
+                        ((after[b] - after[a]).norm() - (before[b] - before[a]).norm()).abs()
+                            < 1e-14
+                    );
+                }
+            }
+            assert_eq!(
+                roll_points(&mesh.verts2d, &moved, 1.),
+                wrap_points(&mesh.verts2d, &moved)
+            );
+        }
+    }
+
+    #[test]
+    fn placement_frame_identity_and_legacy_mirror_are_exact() {
+        let mut piece = physical_panel("sleeve", "arm", None);
+        piece["cut"]["qty"] = json!(2);
+        let original = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[piece.clone()],"seams":[]}));
+        let mesh = build_garment(&original, 12.).unwrap();
+        let base = placements(&original, &mesh, &AsymmetricFrames).unwrap();
+        piece["placement"]["frame_offset_mm"] = json!([-0., 0., -0.]);
+        piece["placement"]["frame_rotation"] = json!({"axis":[1e308,1e308,1e308],"angle_deg":-0.});
+        let identity = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[piece.clone()],"seams":[]}));
+        let same = placements(&identity, &mesh, &AsymmetricFrames).unwrap();
+        assert_eq!(base, same);
+        for (before, after) in wrapped_positions(&mesh, &base)
+            .iter()
+            .zip(wrapped_positions(&mesh, &same))
+        {
+            assert_eq!(
+                [before.x.to_bits(), before.y.to_bits(), before.z.to_bits()],
+                [after.x.to_bits(), after.y.to_bits(), after.z.to_bits()]
+            );
+        }
+        piece["placement"]["frame_offset_mm"] = json!([5., 8., -12.]);
+        piece["placement"]["frame_rotation"] = json!({"axis":[2.,3.,4.],"angle_deg":-37.});
+        let adjusted = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[piece],"seams":[]}));
+        let moved = placements(&adjusted, &mesh, &AsymmetricFrames).unwrap();
+        assert_eq!(moved[0].frame, moved[1].frame);
+        assert!(!moved[0].mirrored && moved[1].mirrored);
+        for progress in [0., 0.6, 1.] {
+            let right = roll_points(&[Vec2::new(23., 7.)], &moved[0], progress)[0];
+            let left = roll_points(&[Vec2::new(-23., 7.)], &moved[1], progress)[0];
+            assert_eq!(left, Vec3::new(-right.x, right.y, right.z));
+        }
+    }
+
+    #[test]
+    fn placement_frame_axis_direction_is_scale_independent() {
+        let frame = AsymmetricFrames.frame("arm_L").unwrap();
+        for angle in [-180., 180., 43.] {
+            let expected = adjusted_frame(
+                frame,
+                155.,
+                &json!({"frame_rotation":{"axis":[1.,-1.,1.],"angle_deg":angle}}),
+                "left",
+            )
+            .unwrap();
+            for scale in [f64::MAX, f64::MIN_POSITIVE, f64::from_bits(1)] {
+                let scaled = adjusted_frame(
+                    frame,
+                    155.,
+                    &json!({"frame_rotation":{"axis":[scale,-scale,scale],"angle_deg":angle}}),
+                    "left",
+                )
+                .unwrap();
+                assert_eq!(expected, scaled);
+            }
+        }
+    }
+
+    #[test]
+    fn placement_frame_adjustments_refuse_malformed_and_unrepresentable_values() {
+        let piece = physical_panel("sleeve", "arm", Some("R"));
+        let source = json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[piece],"seams":[]});
+        let mesh = build_garment(&Pattern::new(source.clone()), 12.).unwrap();
+        for (key, value) in [
+            ("frame_offset_mm", json!(null)),
+            ("frame_offset_mm", json!(30.)),
+            ("frame_offset_mm", json!([1., 2.])),
+            ("frame_offset_mm", json!([1., 2., 3., 4.])),
+            ("frame_offset_mm", json!([1., "2", 3.])),
+            ("frame_rotation", json!(null)),
+            ("frame_rotation", json!([0., 0., 90.])),
+            ("frame_rotation", json!({"axis":[0.,1.,0.]})),
+            ("frame_rotation", json!({"angle_deg":90.})),
+            (
+                "frame_rotation",
+                json!({"axis":[0.,1.,0.],"angle_deg":90.,"pivot":"origin"}),
+            ),
+            ("frame_rotation", json!({"axis":[0.,0.,0.],"angle_deg":0.})),
+            ("frame_rotation", json!({"axis":[0.,1.],"angle_deg":90.})),
+            (
+                "frame_rotation",
+                json!({"axis":[0.,1.,0.],"angle_deg":"90"}),
+            ),
+            (
+                "frame_rotation",
+                json!({"axis":[0.,1.,0.],"angle_deg":180.001}),
+            ),
+            (
+                "frame_rotation",
+                json!({"axis":[0.,1.,0.],"angle_deg":-180.001}),
+            ),
+        ] {
+            let mut invalid = source.clone();
+            invalid["pieces"][0]["placement"][key] = value;
+            let refusal = placements(&Pattern::new(invalid), &mesh, &AsymmetricFrames).unwrap_err();
+            assert!(refusal.message.contains("sleeve"));
+            assert!(refusal.message.contains(key));
+        }
+        let mut frame = AsymmetricFrames.frame("arm_R").unwrap();
+        frame.origin.x = f64::MAX;
+        let refusal = adjusted_frame(
+            frame,
+            110.,
+            &json!({"frame_offset_mm":[0.,f64::MAX,0.]}),
+            "sleeve",
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::OutOfRange);
+        assert!(refusal.message.contains("not representable"));
+        frame.up = frame.front;
+        let refusal = adjusted_frame(
+            frame,
+            110.,
+            &json!({"frame_offset_mm":[0.,1.,0.]}),
+            "sleeve",
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::DegenerateGeometry);
+    }
+
+    #[test]
+    fn placement_frame_offset_clears_a_displayed_obstacle_with_the_same_flat_cut() {
+        let mut piece = physical_panel("sleeve", "arm", Some("R"));
+        piece["placement"]["radius_mm"] = json!(40.);
+        let original = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[piece.clone()],"seams":[]}));
+        let mesh = build_garment(&original, 8.).unwrap();
+        let base = placements(&original, &mesh, &AsymmetricFrames).unwrap();
+        // A synthetic protrusion crosses the original wrap. This exercises the actual displayed-
+        // surface checker without inferring anatomical hand dimensions or a successful drape.
+        let obstacle = [
+            Vec3::new(-0.150, -0.1, 0.35),
+            Vec3::new(-0.150, 0.1, 0.35),
+            Vec3::new(-0.150, 0., 0.5),
+        ];
+        let mut contact = crate::animation::ReplayContact::new(&obstacle, &[[0, 1, 2]]).unwrap();
+        let refusal = contact
+            .check(&wrapped_positions(&mesh, &base), &mesh.faces, 0)
+            .unwrap_err();
+        assert!(refusal.message.contains("displayed body triangle"));
+        piece["placement"]["frame_offset_mm"] = json!([0., 60., 0.]);
+        let adjusted = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[piece],"seams":[]}));
+        let adjusted_mesh = build_garment(&adjusted, 8.).unwrap();
+        assert_eq!(mesh.verts2d, adjusted_mesh.verts2d);
+        assert_eq!(mesh.faces, adjusted_mesh.faces);
+        let moved = placements(&adjusted, &adjusted_mesh, &AsymmetricFrames).unwrap();
+        contact
+            .check(
+                &wrapped_positions(&adjusted_mesh, &moved),
+                &adjusted_mesh.faces,
+                0,
+            )
+            .unwrap();
     }
 
     #[test]

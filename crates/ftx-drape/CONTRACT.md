@@ -543,6 +543,19 @@ exercise unequal left/right angles, positions, lengths and radii through the ord
 placement and roll, plus a symmetric case and unchanged generated-pair output. These establish
 geometric side selection, not anatomical landmark, convergence or physical-fit qualification.
 
+**Authored wrap-axis adjustments** (native extension to spec 04 §3.4).
+`placement.frame_offset_mm: [front, lat, up]` and
+`placement.frame_rotation: {"axis": [front, lat, up], "angle_deg": angle}` explicitly
+translate and tilt the existing cylinder without changing the flat garment. Rotation uses
+the normalized nonzero axis, a signed angle in `[-180, 180]`, and the centerline at the
+selected `y0_landmark` as its pivot. Translation follows in the original part axes.
+Both wrap and partial roll use the resolved frame; original radius queries, anchors,
+mirroring, physical sides and leg midline constraints retain their existing rules.
+Malformed/nonfinite requests, unsupported rotation fields and unrepresentable frames refuse.
+Omitted or zero adjustments preserve the original arithmetic. Direct scene tests establish
+rigid geometry, anchoring, mirroring and synthetic obstacle clearance; they do not establish
+full-model sleeve convergence, anatomical accuracy or physical fit.
+
 **Scene** (`scene.rs`; plan §11.3–11.4). A pattern meshed, placed with a body's part frames (any
 `PartFrames`; `ftx_body::BodyFrames` reads them off a posed Anny body), started (wrap, pre-sew, relax
 against the drape body), welded, untangled and handed to the solver with contact over the body:
