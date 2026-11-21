@@ -13,6 +13,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     page("/get-started/", .9),
     page("/wardrobe/sundress/", .8),
     page("/wardrobe/hussar/", .8),
+    page("/wardrobe/hussar/embroidery/", .7),
     page("/studies/trousers/", .8),
     page("/studies/skirt/", .9),
     page("/studies/tiling/", .7),

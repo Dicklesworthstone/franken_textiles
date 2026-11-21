@@ -11,6 +11,7 @@ export const exhibits: SiteLink[] = [
   { href: "/studies/trousers/", label: "Trouser study", note: "Bend knees, test elastic grip, and slice through sewn folds" },
   { href: "/#visual-fitting", label: "Visual fitting", note: "Trace rendered pixels back to flat pattern edges" },
   { href: "/#wardrobe", label: "Wardrobe", note: "A sundress and Swedish hussars of 1761 and 1765" },
+  { href: "/wardrobe/hussar/embroidery/", label: "Hussar embroidery trace", note: "Trace registered Tajima DST stitches onto the solved 3D dolman chest" },
   { href: "/#studio", label: "Studios", note: "Draft a pattern, lay it on the roll, follow the needle, or repair a seam" },
   { href: "/studies/tiling/", label: "A4 tile assembly", note: "Assemble a real tiled A4 PDF on a virtual floor with alignment diamonds" },
   { href: "/studies/sewing/", label: "Jacket sewing order", note: "Play all ten native sewing operations across the flat cut and 3D bolero" },

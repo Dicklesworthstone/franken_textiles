@@ -14,7 +14,11 @@ function current(pathname: string, href: string, inSheet = false) {
     const anchor = href.slice(2);
     // In the full menu sheet, Skirt atelier, Trouser study, A4 tile assembly, Jacket sewing order and Drape gallery each have their own exact entries.
     if (anchor === "drape-room") return !inSheet && pathname !== "/studies/tiling/" && pathname !== "/studies/sewing/" && (pathname.startsWith("/studies/") || pathname === "/sections/studies/");
-    if (anchor === "wardrobe") return pathname.startsWith("/wardrobe/") || pathname === "/sections/wardrobe/";
+    if (anchor === "wardrobe") {
+      return inSheet
+        ? pathname === "/sections/wardrobe/" || pathname === "/wardrobe/sundress/" || pathname === "/wardrobe/hussar/"
+        : pathname.startsWith("/wardrobe/") || pathname === "/sections/wardrobe/";
+    }
     if (anchor === "materials") {
       return inSheet
         ? pathname === "/sections/materials/" || pathname === "/experiments/strip/" || pathname === "/experiments/cylinder/"
