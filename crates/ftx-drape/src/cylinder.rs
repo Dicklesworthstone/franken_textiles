@@ -404,6 +404,10 @@ pub struct State {
     pub maxwell_dissipation_j: f64,
     /// Cumulative permanent membrane-strain dissipation (J).
     pub membrane_plastic_dissipation_j: f64,
+    /// Cumulative accepted membrane stiffness-degradation dissipation (J); present only when
+    /// `isotropic_accumulated_damage/1` is opted in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membrane_damage_dissipation_j: Option<f64>,
     /// Cumulative permanent bending-curvature dissipation (J).
     pub bending_plastic_dissipation_j: f64,
     /// Solver vertex positions `[x, y, z]` (m) in row-major `(j, i)` order (`n_theta * (n_z + 1)` vertices).
@@ -463,6 +467,7 @@ pub struct Report {
 }
 
 const MODEL_SCOPE: &str = "3D cylindrical-holder shell forward experiment on an isometric chord-radius welded mesh: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit tare subtraction, grain-rotated orthotropic/nonlinear membrane, interior panel-bending tensor (or scalar hinges; longitudinal weld seam uses scalar bending_rigidity), optional Maxwell/membrane-plastic/bending-plastic histories, optional unloaded-thickness cloth self-contact, and explicit clamp-slip offset/limit auditing. Zero gravity. Excludes inside-clamp frictional pull-out mechanics, clamped-overlap double-layer stiffness, moisture/thermal coupling, parameter identification, automatic garment readiness promotion and physical garment fit.";
+const DAMAGE_MODEL_SCOPE: &str = "3D cylindrical-holder shell forward experiment on an isometric chord-radius welded mesh: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit tare subtraction, grain-rotated orthotropic/nonlinear membrane, interior panel-bending tensor (or scalar hinges; longitudinal weld seam uses scalar bending_rigidity), permanent membrane plasticity with opt-in accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1; plastic and damage dissipation kept separate), optional bending-plastic history, optional unloaded-thickness cloth self-contact, and explicit clamp-slip offset/limit auditing. Zero gravity. Excludes rupture, monolithic softening/localization, inside-clamp frictional pull-out mechanics, clamped-overlap double-layer stiffness, moisture/thermal coupling, parameter identification, automatic garment readiness promotion and physical garment fit.";
 
 struct CylinderMesh {
     n_verts: usize,
@@ -966,6 +971,24 @@ fn record_state(
     let membrane_plastic_dissipation_j = solver
         .membrane_plastic_dissipation_j()?
         .map_or(0.0, |v| v.iter().sum());
+    let membrane_plasticity = solver.membrane_plasticity_report()?;
+    let membrane_damage_dissipation_j = if membrane_plasticity
+        .as_ref()
+        .is_some_and(|report| report.get("damage_model").is_some())
+    {
+        let damage: f64 = solver
+            .membrane_damage_dissipation_j()?
+            .map_or(0.0, |v| v.iter().sum());
+        if !damage.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "cylinder energy or dissipation is non-finite",
+            ));
+        }
+        Some(damage)
+    } else {
+        None
+    };
     let bending_plastic_dissipation_j = solver
         .bending_plastic_dissipation_j()?
         .map_or(0.0, |v| v.iter().sum());
@@ -1014,11 +1037,12 @@ fn record_state(
         free_kinetic_energy_j: kinetic_j,
         maxwell_dissipation_j,
         membrane_plastic_dissipation_j,
+        membrane_damage_dissipation_j,
         bending_plastic_dissipation_j,
         positions_m: solver.x.iter().copied().map(vec3_array).collect(),
         velocities_m_s: solver.v.iter().copied().map(vec3_array).collect(),
         relaxation: solver.relaxation_report()?,
-        membrane_plasticity: solver.membrane_plasticity_report()?,
+        membrane_plasticity,
         bending_plasticity: solver.bending_plasticity_report()?,
         solve,
     })
@@ -1241,6 +1265,9 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
 
     let relaxation = resolved.membrane_relaxation()?;
     let membrane_plasticity = resolved.membrane_plasticity()?;
+    let has_membrane_damage = membrane_plasticity
+        .as_ref()
+        .is_some_and(|law| law.damage().is_some());
     let panel_bending = resolved.bending_response()?;
     let bending_plasticity = resolved.bending_plasticity()?;
     let bending_nm = if material.properties.contains_key("bending_rigidity") {
@@ -1421,7 +1448,12 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         protocol_audit,
         states,
         newton_iterations,
-        model_scope: MODEL_SCOPE.into(),
+        model_scope: if has_membrane_damage {
+            DAMAGE_MODEL_SCOPE
+        } else {
+            MODEL_SCOPE
+        }
+        .into(),
         mechanics_readiness_promoted: false,
         fit_claim: false,
         empirical_validation_claim: false,
@@ -2080,6 +2112,126 @@ mod tests {
         let replayed = evaluate(&replay_req).unwrap();
         assert_eq!(
             serde_json::to_string(&report).unwrap(),
+            serde_json::to_string(&replayed).unwrap()
+        );
+    }
+
+    #[test]
+    fn damaged_membrane_plasticity_cylinder_reports_damage_dissipation_and_degrades_reloading() {
+        let control_sel: Selection = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-membrane-plasticity.json"
+        ))
+        .unwrap();
+        let mut damaged_sel = control_sel.clone();
+        {
+            let record = damaged_sel.record.as_mut().unwrap();
+            record.structure.insert(
+                "membrane_damage_model".into(),
+                ftx_pattern::material_membrane_plasticity::DAMAGE_MODEL.into(),
+            );
+            let template = record.properties["membrane_yield_warp"].clone();
+            for (key, value) in [
+                ("membrane_damage_threshold", 0.005),
+                ("membrane_damage_rate", 25.0),
+                ("membrane_damage_limit", 0.45),
+            ] {
+                let mut q = template.clone();
+                q.value = value;
+                q.unit = "1".into();
+                q.method = "Synthetic scalar membrane stiffness-degradation parameter".into();
+                record.properties.insert(key.into(), q);
+            }
+        }
+
+        let make_req = |material: Selection| Request {
+            schema: REQUEST_SCHEMA.into(),
+            material,
+            fixture: Fixture {
+                pretension_displacement_m: 0.0,
+                self_contact: false,
+                ..fabric101_fixture([0.0, 1.0], 8, 2)
+            },
+            loading: vec![
+                Waypoint {
+                    time_s: 0.0,
+                    axial_displacement_m: 0.0,
+                    rotation_deg: 0.0,
+                    clamp_slip_m: 0.0,
+                },
+                Waypoint {
+                    time_s: 0.2,
+                    axial_displacement_m: 0.002,
+                    rotation_deg: 0.0,
+                    clamp_slip_m: 0.0,
+                },
+                Waypoint {
+                    time_s: 0.4,
+                    axial_displacement_m: 0.001,
+                    rotation_deg: 0.0,
+                    clamp_slip_m: 0.0,
+                },
+                Waypoint {
+                    time_s: 0.6,
+                    axial_displacement_m: 0.002,
+                    rotation_deg: 0.0,
+                    clamp_slip_m: 0.0,
+                },
+            ],
+            nominal_protocol: None,
+            controls: Controls {
+                max_step_s: 0.1,
+                max_steps: 16,
+                ..Controls::default()
+            },
+        };
+
+        let undamaged = evaluate(&make_req(control_sel)).unwrap();
+        assert_eq!(undamaged.model_scope, MODEL_SCOPE);
+        assert!(
+            undamaged
+                .states
+                .iter()
+                .all(|s| s.membrane_damage_dissipation_j.is_none())
+        );
+        assert!(
+            !serde_json::to_string(&undamaged)
+                .unwrap()
+                .contains("membrane_damage_dissipation_j")
+        );
+
+        let damaged = evaluate(&make_req(damaged_sel)).unwrap();
+        assert_eq!(damaged.model_scope, DAMAGE_MODEL_SCOPE);
+        assert_eq!(damaged.states[0].membrane_damage_dissipation_j, Some(0.0));
+        let mut prev = 0.0;
+        for st in &damaged.states {
+            let dmg = st.membrane_damage_dissipation_j.unwrap();
+            assert!(dmg >= prev, "damage dissipation decreased: {dmg} < {prev}");
+            let reported = st.membrane_plasticity.as_ref().unwrap()["damage_dissipation_j"]
+                .as_f64()
+                .unwrap();
+            assert!(
+                (dmg - reported).abs() <= 1e-12,
+                "{dmg} differs from {reported}"
+            );
+            prev = dmg;
+        }
+        let last_damaged = damaged.states.last().unwrap();
+        let last_undamaged = undamaged.states.last().unwrap();
+        assert!(
+            last_damaged.membrane_damage_dissipation_j.unwrap() > 0.0,
+            "expected positive membrane damage dissipation"
+        );
+        assert!(
+            last_damaged.upper_force_n < last_undamaged.upper_force_n,
+            "expected degraded reloading force: damaged={} >= undamaged={}",
+            last_damaged.upper_force_n,
+            last_undamaged.upper_force_n
+        );
+
+        let replay_req: Request = serde_json::from_str(&damaged.replay_request_json).unwrap();
+        let replayed = evaluate(&replay_req).unwrap();
+        assert_eq!(
+            serde_json::to_string(&damaged).unwrap(),
             serde_json::to_string(&replayed).unwrap()
         );
     }

@@ -1386,10 +1386,12 @@ boundaries. Case environments and motion paths are explicit sensitivity inputs, 
 distribution or a claim about untested operating conditions. The native/file-free adapters retain
 identical descriptors and independent consumer refusals; existing single-case behavior is preserved.
 
-**Opt-in membrane stiffness degradation** (`cloth::membrane_plasticity`, `ftx-ps1`). When any bound
+**Opt-in membrane stiffness degradation** (`cloth::membrane_plasticity`, `strip::history`, `cylinder`, `ftx-ps1`). When any bound
 `PlasticMembrane` opts into `isotropic_accumulated_damage/1`, accepted steps transactionally accumulate
 per-triangle `damage_dissipated_j` alongside `plastic_dissipation_j` (rolling back atomically on failed
-steps), expose `Solver::membrane_damage_dissipation_j()`, and emit `damage_model`,
+steps), expose `Solver::membrane_damage_dissipation_j()`, emit `damage_model`,
 `damage_dissipation_j`, and per-element `damage` / `stiffness_factor` / `damage_dissipation_j` in
-`Solver::membrane_plasticity_report()`. Undamaged laws omit these fields and keep identical wire output.
-Tests: `tests/membrane_plasticity.rs`.
+`Solver::membrane_plasticity_report()`, and record opt-in `strip::history::State::damage_dissipation_j`
+and `cylinder::State::membrane_damage_dissipation_j` with matching degradation scope text. Undamaged
+laws omit these fields and keep identical wire output.
+Tests: `tests/membrane_plasticity.rs`, `tests/strip_history.rs`, `cylinder::tests`.

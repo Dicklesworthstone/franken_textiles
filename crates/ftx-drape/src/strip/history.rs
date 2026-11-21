@@ -99,6 +99,10 @@ pub struct State {
     pub maxwell_dissipation_j: f64,
     /// Cumulative irreversible permanent-strain work; zero when no plastic law is selected.
     pub plastic_dissipation_j: f64,
+    /// Cumulative accepted stiffness-degradation dissipation, J; present only when
+    /// `isotropic_accumulated_damage/1` is opted in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damage_dissipation_j: Option<f64>,
     /// Actual elementwise raw [E11,E22,2E12] bounds, not grip-extension conversions.
     pub green_strain_range: [[f64; 2]; 3],
     /// Current planar positions in fixture coordinates, m.
@@ -143,6 +147,7 @@ pub struct Report {
 
 const SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation; backward-Euler integration preserves the selected Maxwell or permanent-strain history. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, joint Maxwell/plastic laws, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 const PARALLEL_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation. The explicitly qualified parallel network drives plastic flow with only equilibrium-branch stress; every Maxwell branch sees total physical Green strain and retains its own viscous strain. Stored energies and plastic/viscous dissipation remain separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, same-branch viscoplasticity, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
+const DAMAGE_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation; backward-Euler integration preserves permanent-strain history and explicit accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1), keeping plastic and damage dissipation separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, rupture, monolithic softening/localization, thermal feedback, joint Maxwell/plastic laws, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 
 fn vector(v: Vec3) -> [f64; 3] {
     [v.x, v.y, v.z]
@@ -281,6 +286,21 @@ impl Recorder<'_> {
         let plastic = solver
             .membrane_plastic_dissipation_j()?
             .map_or(0.0, |v| v.iter().sum());
+        let plasticity = solver.membrane_plasticity_report()?;
+        let damage_dissipation_j = if plasticity
+            .as_ref()
+            .is_some_and(|report| report.get("damage_model").is_some())
+        {
+            let damage: f64 = solver
+                .membrane_damage_dissipation_j()?
+                .map_or(0.0, |v| v.iter().sum());
+            if !damage.is_finite() {
+                return Err(invalid("strip history energy is not representable"));
+            }
+            Some(damage)
+        } else {
+            None
+        };
         let stored = solver.membrane_energy()?;
         if [kinetic, maxwell, plastic, stored]
             .iter()
@@ -307,11 +327,12 @@ impl Recorder<'_> {
             free_kinetic_energy_j: kinetic,
             maxwell_dissipation_j: maxwell,
             plastic_dissipation_j: plastic,
+            damage_dissipation_j,
             green_strain_range: ranges,
             positions_m: solver.x.iter().copied().map(vector).collect(),
             velocities_m_s: solver.v.iter().copied().map(vector).collect(),
             relaxation: solver.relaxation_report()?,
-            plasticity: solver.membrane_plasticity_report()?,
+            plasticity,
             solve,
         })
     }
@@ -348,13 +369,22 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
     membrane.validate()?;
     let relaxation = resolved.membrane_relaxation()?;
     let plasticity = resolved.membrane_plasticity()?;
+    let has_damage = plasticity
+        .as_ref()
+        .is_some_and(|law| law.damage().is_some());
     let parallel = relaxation
         .as_ref()
         .is_some_and(|law| law.parallel_material_sha256().is_some());
     let [nx, ny] = input.fixture.cells;
     let history_scalars = material.membrane_relaxation.as_ref().map_or(0, |law| {
         4 + 3 * (law.branches.len() + law.orthotropic_branches.len())
-    }) + if plasticity.is_some() { 18 } else { 0 };
+    }) + if has_damage {
+        21
+    } else if plasticity.is_some() {
+        18
+    } else {
+        0
+    };
     let states = counts.iter().sum::<usize>() + 1;
     let retained_scalars = states * (6 * (nx + 1) * (ny + 1) + 2 * nx * ny * history_scalars);
     if retained_scalars > 2_097_152 {
@@ -462,6 +492,13 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         retained_liquid: material.retained_liquid_mass(resolved.allows_estimates())?,
         states,
         newton_iterations: iterations,
-        model_scope: if parallel { PARALLEL_SCOPE } else { SCOPE }.into(),
+        model_scope: if parallel {
+            PARALLEL_SCOPE
+        } else if has_damage {
+            DAMAGE_SCOPE
+        } else {
+            SCOPE
+        }
+        .into(),
     })
 }

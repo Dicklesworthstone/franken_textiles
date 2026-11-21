@@ -512,3 +512,83 @@ fn membrane_only_maxwell_compilation_preserves_the_full_mechanics_tensor_and_rej
         .value = -1.;
     assert!(db.resolve(&partial).unwrap().membrane_relaxation().is_err());
 }
+
+#[test]
+fn damaged_membrane_plasticity_strip_records_damage_dissipation_and_degrades_reloading() {
+    let mut control_req = request(true);
+    control_req.loading = [(0.0, 0.0), (0.04, 0.02), (0.08, 0.01), (0.12, 0.02)]
+        .into_iter()
+        .map(|(time_s, extension_fraction)| Loading {
+            time_s,
+            extension_fraction,
+        })
+        .collect();
+    control_req.controls.max_step_s = 0.02;
+
+    let undamaged = evaluate(&control_req).unwrap();
+    assert!(
+        undamaged
+            .states
+            .iter()
+            .all(|s| s.damage_dissipation_j.is_none())
+    );
+    assert!(
+        !serde_json::to_string(&undamaged)
+            .unwrap()
+            .contains("damage_dissipation_j")
+    );
+
+    let mut damaged_req = control_req;
+    {
+        let record = damaged_req.material.record.as_mut().unwrap();
+        record.structure.insert(
+            "membrane_damage_model".into(),
+            ftx_pattern::material_membrane_plasticity::DAMAGE_MODEL.into(),
+        );
+        let template = record.properties["membrane_yield_warp"].clone();
+        for (key, value) in [
+            ("membrane_damage_threshold", 0.005),
+            ("membrane_damage_rate", 25.0),
+            ("membrane_damage_limit", 0.45),
+        ] {
+            let mut q = template.clone();
+            q.value = value;
+            q.unit = "1".into();
+            q.method = "Synthetic scalar membrane stiffness-degradation parameter".into();
+            record.properties.insert(key.into(), q);
+        }
+    }
+
+    let damaged = evaluate(&damaged_req).unwrap();
+    assert!(
+        damaged
+            .model_scope
+            .contains("isotropic scalar stiffness degradation")
+    );
+    assert_eq!(damaged.states[0].damage_dissipation_j, Some(0.0));
+    let mut prev = 0.0;
+    for state in &damaged.states {
+        let dmg = state.damage_dissipation_j.unwrap();
+        assert!(dmg >= prev, "damage dissipation regressed: {dmg} < {prev}");
+        let reported = state.plasticity.as_ref().unwrap()["damage_dissipation_j"]
+            .as_f64()
+            .unwrap();
+        near(dmg, reported, 1e-12);
+        prev = dmg;
+    }
+    let last_damaged = damaged.states.last().unwrap();
+    let last_undamaged = undamaged.states.last().unwrap();
+    assert!(last_damaged.damage_dissipation_j.unwrap() > 0.0);
+    assert!(
+        last_damaged.force_n < last_undamaged.force_n,
+        "expected degraded reloading force: damaged={} >= undamaged={}",
+        last_damaged.force_n,
+        last_undamaged.force_n
+    );
+
+    let replay: Request = serde_json::from_str(&damaged.replay_request_json).unwrap();
+    assert_eq!(
+        serde_json::to_value(&damaged).unwrap(),
+        serde_json::to_value(evaluate(&replay).unwrap()).unwrap()
+    );
+}
