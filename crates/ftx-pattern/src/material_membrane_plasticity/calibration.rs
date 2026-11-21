@@ -204,7 +204,8 @@ pub struct ParallelHistory {
     pub maxwell_second_piola_n_m: [f64; 3],
     /// Actual accepted Maxwell spring storage, J/m²; excludes numerical/physical dissipation.
     pub maxwell_stored_j_m2: f64,
-    /// Cumulative physical dashpot work under the canonical backward-Euler quadrature, J/m².
+    /// Cumulative physical dashpot work under the active relaxation integration scheme
+    /// (canonical backward-Euler quadrature by default, or opt-in exact exponential), J/m².
     /// No thermal conversion or numerical integration loss is inferred.
     pub maxwell_dissipation_j_m2: f64,
     /// Accepted viscous [E11,E22,2E12] per branch, in the original material's authored order.
