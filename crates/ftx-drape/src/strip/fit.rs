@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::{Refusal, RefusalCode, linalg::lstsq, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, Vec3, linalg::lstsq, receipt::sha256_hex};
 use ftx_pattern::{
     material_calibration::{Partition, fitted_domain},
     material_catalog::Selection,
@@ -13,9 +13,11 @@ use ftx_pattern::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::experiment::{Controls, Fixture, SCOPE, State, invalid, solve_law};
+use super::experiment::{
+    Controls, Fixture, SCOPE, State, invalid, solve_law, solve_law_with_solver,
+};
 use super::measurement::{self, Extensometer, ExtensometerPrediction};
-use crate::Membrane;
+use crate::{Membrane, Solver};
 
 /// Caller-declared nonlinear shapes identified through the same bounded strip experiment.
 pub mod family;
@@ -83,6 +85,30 @@ pub struct Experiment {
     pub observations: Vec<Observation>,
 }
 
+/// Jacobian differentiation method used during FIT search and excitation certification.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SensitivityMode {
+    /// Central finite differences via additional forward equilibrium solves (default).
+    #[default]
+    FiniteDifference,
+    /// Exact implicit-function-theorem (IFT) adjoint pullback reusing the converged static LDLᵀ
+    /// factor. Supported for homogeneous scalar orthotropic identification only; refuses
+    /// fail-closed for nonlinear, declared-shape or area-response models.
+    Adjoint,
+}
+
+impl SensitivityMode {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    const fn is_default(&self) -> bool {
+        matches!(self, Self::FiniteDifference)
+    }
+}
+
+const fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
 /// Numerical and model-acceptance policy, separate from source evidence.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,6 +125,9 @@ pub struct Policy {
     pub max_iterations: usize,
     /// Aggregate independent forward solves, including rejected trials, sensitivities and checks.
     pub max_forward_solves: usize,
+    /// Parameter-sensitivity differentiation method; omitted when default `finite_difference`.
+    #[serde(default, skip_serializing_if = "SensitivityMode::is_default")]
+    pub sensitivity: SensitivityMode,
 }
 
 /// Reproducible limited-model identification. Published coefficients remain model estimates.
@@ -242,6 +271,9 @@ pub struct Report {
     pub excitation_pivot: f64,
     /// All attempted equilibrium solves across the complete operation.
     pub forward_solves: usize,
+    /// Total IFT adjoint linear solves executed (omitted when zero under default finite differences).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub adjoint_solves: usize,
     /// Present only when a numerical FIT probe was refused. These counts do not relax any
     /// stationarity, excitation, held-out, source-domain or publication requirement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -269,6 +301,7 @@ pub struct Report {
 
 struct Budget<'a> {
     used: usize,
+    adjoint_solves: usize,
     limit: usize,
     // Replacing coefficients does not erase the original specimen's characterized support.
     inherited_domain: Option<StrainDomain>,
@@ -336,6 +369,17 @@ impl Budget<'_> {
         extension: f64,
         controls: &Controls,
     ) -> Result<State, ForwardFailure> {
+        self.trial_with_solver(fixture, parameters, extension, controls)
+            .map(|(state, _)| state)
+    }
+
+    fn trial_with_solver(
+        &mut self,
+        fixture: &Fixture,
+        parameters: &[f64],
+        extension: f64,
+        controls: &Controls,
+    ) -> Result<(State, Solver), ForwardFailure> {
         self.admit()?;
         let base = base_parameters(self.input, parameters);
         let mut response = if let Some(family) = &self.family {
@@ -400,7 +444,7 @@ impl Budget<'_> {
         let membrane = Membrane::orthotropic(warp, weft, nu, shear, 1.0);
         // In particular, an unrepresentable tensor must not become an admissibility retry.
         membrane.validate()?;
-        let state = solve_law(
+        let result = solve_law_with_solver(
             fixture,
             membrane,
             response.as_ref(),
@@ -408,7 +452,7 @@ impl Budget<'_> {
             extension,
             controls,
         );
-        state.map_err(|mut refusal| {
+        result.map_err(|mut refusal| {
             if self.input.area_response.is_some() {
                 refusal.message = format!(
                     "area-strip solve {} at extension {extension}, cells {:?}, warp axis {:?}: {}",
@@ -593,6 +637,15 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             "invalid strip residual, refinement, sensitivity or bounded-work policy",
         ));
     }
+    if policy.sensitivity == SensitivityMode::Adjoint
+        && (input.response_family.is_some()
+            || input.nonlinear.is_some()
+            || input.area_response.is_some())
+    {
+        return Err(invalid(
+            "adjoint strip sensitivity supports homogeneous scalar orthotropic identification only; nonlinear, response_family and area_response models require finite_difference sensitivity",
+        ));
+    }
     if let Some(model) = &input.nonlinear {
         if !input.parameter_bounds.is_empty() {
             return Err(invalid(
@@ -750,6 +803,7 @@ fn validate(input: &Input) -> Result<(), Refusal> {
 struct Evaluation {
     residuals: Vec<f64>,
     sse: f64,
+    adjoint_states: Vec<(State, Solver)>,
 }
 
 fn observe_area(range: &mut Option<[f64; 2]>, state: &State) {
@@ -791,6 +845,8 @@ fn evaluate<const N: usize>(
     budget: &mut Budget<'_>,
 ) -> Result<Evaluation, ForwardFailure> {
     let mut residuals = Vec::new();
+    let keep_solvers = input.policy.sensitivity == SensitivityMode::Adjoint;
+    let mut adjoint_states = Vec::new();
     let parameters = physical(input, p);
     for experiment in input
         .experiments
@@ -798,18 +854,34 @@ fn evaluate<const N: usize>(
         .filter(|e| e.partition == Partition::Fit)
     {
         for point in &experiment.observations {
-            let state = match budget.trial(
-                &experiment.fixture,
-                &parameters,
-                point.extension_fraction,
-                &input.controls,
-            ) {
-                Ok(state) => state,
-                Err(failure @ ForwardFailure::Trial(_)) => {
-                    budget.recovery.refused_forward_solves += 1;
-                    return Err(failure);
+            let (state, solver) = if keep_solvers {
+                match budget.trial_with_solver(
+                    &experiment.fixture,
+                    &parameters,
+                    point.extension_fraction,
+                    &input.controls,
+                ) {
+                    Ok((state, solver)) => (state, Some(solver)),
+                    Err(failure @ ForwardFailure::Trial(_)) => {
+                        budget.recovery.refused_forward_solves += 1;
+                        return Err(failure);
+                    }
+                    Err(failure) => return Err(failure),
                 }
-                Err(failure) => return Err(failure),
+            } else {
+                match budget.trial(
+                    &experiment.fixture,
+                    &parameters,
+                    point.extension_fraction,
+                    &input.controls,
+                ) {
+                    Ok(state) => (state, None),
+                    Err(failure @ ForwardFailure::Trial(_)) => {
+                        budget.recovery.refused_forward_solves += 1;
+                        return Err(failure);
+                    }
+                    Err(failure) => return Err(failure),
+                }
             };
             residuals.push((state.force_n - point.force_n) / point.scale_n);
             if let Some(width) = &point.mid_width {
@@ -820,13 +892,108 @@ fn evaluate<const N: usize>(
                     measurement::evaluate(&channel.operator, &experiment.fixture, &state)?;
                 residuals.push((predicted - channel.value_m) / channel.scale_m);
             }
+            if let Some(solver) = solver {
+                adjoint_states.push((state, solver));
+            }
         }
     }
     let sse = residuals.iter().map(|v| v * v).sum::<f64>();
     if !sse.is_finite() {
         return Err(invalid("strip objective overflow").into());
     }
-    Ok(Evaluation { residuals, sse })
+    Ok(Evaluation {
+        residuals,
+        sse,
+        adjoint_states,
+    })
+}
+
+fn adjoint_jacobian<const N: usize>(
+    input: &Input,
+    p: [f64; N],
+    budget: &mut Budget<'_>,
+    eval: &mut Evaluation,
+) -> Result<Vec<[f64; N]>, Refusal> {
+    if N != 4
+        || input.response_family.is_some()
+        || input.nonlinear.is_some()
+        || input.area_response.is_some()
+    {
+        return Err(invalid(
+            "adjoint strip Jacobian requires homogeneous scalar orthotropic identification",
+        ));
+    }
+    let phys = physical(input, p);
+    let [e1, e2, nu12, g12] = four(&phys)?;
+    let param_bounds = bounds(input);
+    let widths = [
+        param_bounds[0][1] - param_bounds[0][0],
+        param_bounds[1][1] - param_bounds[1][0],
+        param_bounds[2][1] - param_bounds[2][0],
+        param_bounds[3][1] - param_bounds[3][0],
+    ];
+    let mut rows = Vec::with_capacity(eval.residuals.len());
+    let mut solved = eval.adjoint_states.iter_mut();
+    let scaled_row = |dq: [f64; 4], scale: f64| -> Result<[f64; N], Refusal> {
+        let d_ortho = crate::adjoint::orthotropic_chain_rule(e1, e2, nu12, g12, dq)?;
+        let row = std::array::from_fn(|k| d_ortho[k] * widths[k] / scale);
+        if row.iter().any(|v| !v.is_finite()) {
+            return Err(invalid("strip adjoint sensitivity overflow"));
+        }
+        Ok(row)
+    };
+    for experiment in input
+        .experiments
+        .iter()
+        .filter(|e| e.partition == Partition::Fit)
+    {
+        let [nx, ny] = experiment.fixture.cells;
+        let n_verts = (nx + 1) * (ny + 1);
+        let mut upper_weights = vec![Vec3::ZERO; n_verts];
+        for (i, w) in upper_weights.iter_mut().enumerate() {
+            if i / (nx + 1) == ny {
+                *w = Vec3::new(0.0, 1.0, 0.0);
+            }
+        }
+        for point in &experiment.observations {
+            let (state, solver) = solved.next().ok_or_else(|| {
+                invalid("missing converged strip solver state for adjoint sensitivity")
+            })?;
+            let grad_force = solver.reaction_gradient(&upper_weights)?;
+            budget.adjoint_solves += 1;
+            rows.push(scaled_row(grad_force.dq, point.scale_n)?);
+
+            if let Some(width) = &point.mid_width {
+                let mid = (ny / 2) * (nx + 1);
+                let chord = solver.x[mid + nx] - solver.x[mid];
+                let dist = chord.norm();
+                if !dist.is_finite() || dist <= 0.0 {
+                    return Err(invalid("strip mid-width degenerate in adjoint sensitivity"));
+                }
+                let unit = chord / dist;
+                let mut dj_dx = vec![Vec3::ZERO; n_verts];
+                dj_dx[mid + nx] = unit;
+                dj_dx[mid] = -unit;
+                let grad_width = solver.constitutive_gradient(&dj_dx, [0.0; 4], 0.0)?;
+                budget.adjoint_solves += 1;
+                rows.push(scaled_row(grad_width.dq, width.scale_m)?);
+            }
+
+            for channel in &point.extensometers {
+                let dj_dx =
+                    measurement::gradient_dx(&channel.operator, &experiment.fixture, state)?;
+                let grad_ext = solver.constitutive_gradient(&dj_dx, [0.0; 4], 0.0)?;
+                budget.adjoint_solves += 1;
+                rows.push(scaled_row(grad_ext.dq, channel.scale_m)?);
+            }
+        }
+    }
+    if solved.next().is_some() || rows.len() != eval.residuals.len() {
+        return Err(invalid(
+            "strip adjoint Jacobian row count does not match FIT residual count",
+        ));
+    }
+    Ok(rows)
 }
 
 fn jacobian<const N: usize>(
@@ -970,7 +1137,7 @@ fn search<const N: usize>(
     input: &Input,
     initial: f64,
     budget: &mut Budget<'_>,
-) -> Result<(Start, [f64; N]), Refusal> {
+) -> Result<(Start, [f64; N], Evaluation), Refusal> {
     let mut p = [initial; N];
     let mut e = evaluate(input, p, budget).map_err(ForwardFailure::refusal)?;
     let mut lambda = 1e-3_f64;
@@ -978,7 +1145,10 @@ fn search<const N: usize>(
     let mut iterations = 0;
     for _ in 0..input.policy.max_iterations {
         iterations += 1;
-        let j = jacobian(input, p, budget, Some(&e))?;
+        let j = match input.policy.sensitivity {
+            SensitivityMode::FiniteDifference => jacobian(input, p, budget, Some(&e))?,
+            SensitivityMode::Adjoint => adjoint_jacobian(input, p, budget, &mut e)?,
+        };
         if gradient(&j, &e) < 1e-6 {
             converged = true;
             break;
@@ -1041,6 +1211,7 @@ fn search<const N: usize>(
             iterations,
         },
         p,
+        e,
     ))
 }
 
@@ -1132,6 +1303,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     }
     let mut budget = Budget {
         used: 0,
+        adjoint_solves: 0,
         limit: input.policy.max_forward_solves,
         inherited_domain,
         family,
@@ -1140,17 +1312,24 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     };
     let mut starts = Vec::new();
     let mut coordinates = Vec::new();
+    let mut evaluations = Vec::new();
     for initial in [0.25, 0.5, 0.75] {
-        let (start, p) = search::<N>(input, initial, &mut budget)?;
+        let (start, p, eval) = search::<N>(input, initial, &mut budget)?;
         starts.push(start);
         coordinates.push(p);
+        evaluations.push(eval);
     }
     let best = (0..starts.len())
         .min_by(|&a, &b| starts[a].fit_sse.total_cmp(&starts[b].fit_sse))
         .unwrap_or(0);
     let p = coordinates[best];
     let parameters = starts[best].parameters.clone();
-    let j = jacobian(input, p, &mut budget, None)?;
+    let j = match input.policy.sensitivity {
+        SensitivityMode::FiniteDifference => jacobian(input, p, &mut budget, None)?,
+        SensitivityMode::Adjoint => {
+            adjoint_jacobian(input, p, &mut budget, &mut evaluations[best])?
+        }
+    };
     let pivot = excitation(&j);
     let mut reasons = Vec::new();
     if starts.iter().any(|s| !s.converged) {
@@ -1540,6 +1719,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         starts,
         excitation_pivot: pivot,
         forward_solves: budget.used,
+        adjoint_solves: budget.adjoint_solves,
         search_recovery: (budget.recovery.refused_forward_solves > 0)
             .then(|| budget.recovery.clone()),
         fit,
@@ -1663,4 +1843,182 @@ fn publish(
     }
     material.validate()?;
     Ok(material)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::strip::experiment::solve;
+    use crate::strip::measurement::{Extensometer, Operator};
+
+    #[test]
+    fn adjoint_jacobian_matches_central_finite_difference_across_all_channels() {
+        let bias = std::f64::consts::FRAC_1_SQRT_2;
+        let truth = [310.0, 190.0, 0.22, 68.0];
+        let controls = Controls {
+            tolerance_m: 1e-12,
+            force_tolerance_n: 1e-8,
+            max_newton: 100,
+        };
+        let mut sources = BTreeMap::new();
+        let mut experiments = Vec::new();
+        let ops = [
+            (
+                "edge-chord",
+                Operator::EdgeChord {
+                    station_fraction: 0.35,
+                },
+            ),
+            (
+                "edge-proj",
+                Operator::EdgeProjection {
+                    station_fraction: 0.65,
+                    axis: [0.8, 0.6],
+                },
+            ),
+            (
+                "mat-chord",
+                Operator::MaterialChord {
+                    start_fraction: [0.15, 0.2],
+                    end_fraction: [0.85, 0.78],
+                },
+            ),
+            (
+                "mat-proj",
+                Operator::MaterialProjection {
+                    start_fraction: [0.25, 0.3],
+                    end_fraction: [0.72, 0.82],
+                    axis: [-0.6, 0.8],
+                },
+            ),
+        ];
+        for (id, axis) in [
+            ("fit-warp", [0.0, 1.0]),
+            ("fit-weft", [1.0, 0.0]),
+            ("fit-bias", [bias, bias]),
+        ] {
+            let fixture = Fixture {
+                gauge_length_m: 0.1,
+                width_m: 0.06,
+                warp_axis: axis,
+                cells: [4, 4],
+            };
+            let state = solve(&fixture, truth, 0.07, &controls).unwrap();
+            let extensometers = ops
+                .iter()
+                .map(|(name, op)| Extensometer {
+                    id: format!("{id}-{name}"),
+                    operator: op.clone(),
+                    value_m: measurement::evaluate(op, &fixture, &state).unwrap(),
+                    scale_m: 0.001,
+                })
+                .collect();
+            sources.insert(
+                id.into(),
+                Source {
+                    reference: format!("test:adjoint-jacobian/{id}"),
+                    accessed_on: "2026-11-20".into(),
+                    note: "Synthetic unit fixture comparing exact IFT adjoint against central FD"
+                        .into(),
+                },
+            );
+            experiments.push(Experiment {
+                id: id.into(),
+                fixture,
+                source: id.into(),
+                evidence: Evidence::Estimate,
+                partition: Partition::Fit,
+                observations: vec![Observation {
+                    id: format!("{id}-0"),
+                    extension_fraction: 0.07,
+                    force_n: state.force_n,
+                    scale_n: 0.1,
+                    mid_width: Some(Width {
+                        value_m: state.mid_width_m,
+                        scale_m: 0.001,
+                    }),
+                    extensometers,
+                }],
+            });
+        }
+        let mut input = Input {
+            schema: "ftx-strip-calibration/1".into(),
+            material: Material {
+                id: "synthetic-adjoint-check".into(),
+                name: "Synthetic adjoint Jacobian fixture".into(),
+                form: Form::Woven,
+                composition: vec![],
+                composition_complete: false,
+                structure: BTreeMap::new(),
+                properties: BTreeMap::new(),
+                membrane_response: None,
+                membrane_relaxation: None,
+                thermal_response: None,
+                optical_faces: None,
+                sources,
+            },
+            method: "Synthetic planar grip fixture".into(),
+            conditions: BTreeMap::new(),
+            fitted_on: "2026-11-20".into(),
+            experiments,
+            parameter_bounds: vec![[200.0, 420.0], [100.0, 280.0], [0.05, 0.35], [40.0, 110.0]],
+            response_family: None,
+            nonlinear: None,
+            area_response: None,
+            admit_planar_elastic_model: true,
+            allow_estimated_observations: true,
+            replace_existing: false,
+            allow_estimates: true,
+            controls,
+            policy: Policy {
+                max_rms_scaled: 1.0,
+                max_peak_scaled: 1.0,
+                max_mesh_scaled: 1.0,
+                min_excitation_pivot: 1e-4,
+                max_iterations: 40,
+                max_forward_solves: 1000,
+                sensitivity: SensitivityMode::Adjoint,
+            },
+        };
+        let p = [0.37, 0.61, 0.43, 0.52];
+        let mut adj_budget = Budget {
+            used: 0,
+            adjoint_solves: 0,
+            limit: 1000,
+            inherited_domain: None,
+            family: None,
+            input: &input,
+            recovery: SearchRecovery::default(),
+        };
+        let mut eval = evaluate(&input, p, &mut adj_budget)
+            .map_err(ForwardFailure::refusal)
+            .unwrap();
+        let j_adj = adjoint_jacobian(&input, p, &mut adj_budget, &mut eval).unwrap();
+        assert_eq!(adj_budget.used, 3);
+        assert_eq!(adj_budget.adjoint_solves, 18); // 3 strips * (1 force + 1 width + 4 extensometers)
+
+        input.policy.sensitivity = SensitivityMode::FiniteDifference;
+        let mut fd_budget = Budget {
+            used: 0,
+            adjoint_solves: 0,
+            limit: 1000,
+            inherited_domain: None,
+            family: None,
+            input: &input,
+            recovery: SearchRecovery::default(),
+        };
+        let j_fd = jacobian(&input, p, &mut fd_budget, None).unwrap();
+        assert_eq!(fd_budget.used, 24); // 2 * 4 params * 3 strips
+        assert_eq!(j_adj.len(), j_fd.len());
+        for (row_idx, (a_row, f_row)) in j_adj.iter().zip(&j_fd).enumerate() {
+            for col_idx in 0..4 {
+                let a = a_row[col_idx];
+                let f = f_row[col_idx];
+                assert!(
+                    (a - f).abs() <= 1e-6 * (1.0 + f.abs()),
+                    "row={row_idx} col={col_idx}: adjoint={a} fd={f}"
+                );
+            }
+        }
+    }
 }

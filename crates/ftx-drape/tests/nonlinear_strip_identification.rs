@@ -103,6 +103,7 @@ fn input() -> Input {
         min_excitation_pivot: 1e-7,
         max_iterations: 40,
         max_forward_solves: 32768,
+        sensitivity: Default::default(),
     };
     input.experiments.clear();
     let bias = std::f64::consts::FRAC_1_SQRT_2;

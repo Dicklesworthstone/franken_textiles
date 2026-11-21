@@ -33,7 +33,11 @@ pinned `kat` / `kat_contact` digests:
   `Solver::constitutive_gradient_with_reactions` (exact `d/d[Q11, Q22, Q12, Q33]` and `d/dB` for
   both free-DOF geometry objectives and fixed-DOF Dirichlet reaction forces/torques including
   compression softening, refusing heterogeneous or history-bearing models fail-closed),
-  `orthotropic_chain_rule`, and fail-closed `verify_gradient`.
+  `orthotropic_chain_rule`, and fail-closed `verify_gradient`. Wired into `strip::fit` via
+  opt-in `Policy::sensitivity = SensitivityMode::Adjoint` (omitted when default `FiniteDifference`,
+  preserving legacy reports) together with `strip::measurement::gradient_dx` across `force_n`,
+  `mid_width`, and all four extensometer operators, refusing nonlinear/family/area models
+  fail-closed and reporting `Report::adjoint_solves`.
 - `thermal::microclimate`: USSA-1976 dry air / NIST water-vapor `MoistAirState` (Buck 1996
   saturation), 12 validity-gated Nusselt correlations with `NusseltResult::to_exterior` producing
   explicit `Evidence::Estimate` records (never promoted to measured film data), N-patch

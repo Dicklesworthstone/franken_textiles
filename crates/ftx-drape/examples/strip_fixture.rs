@@ -106,6 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             min_excitation_pivot: 1e-4,
             max_iterations: 40,
             max_forward_solves: 8000,
+            sensitivity: Default::default(),
         },
     };
     println!("{}", serde_json::to_string_pretty(&input)?);

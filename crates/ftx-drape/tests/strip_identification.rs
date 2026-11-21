@@ -6,7 +6,8 @@ use std::{collections::BTreeMap, sync::OnceLock};
 use ftx_core::RefusalCode;
 use ftx_drape::strip::{
     Controls, Fixture, Request, evaluate,
-    fit::{Experiment, Input, Observation, Policy, Report, Width, calibrate},
+    fit::{Experiment, Input, Observation, Policy, Report, SensitivityMode, Width, calibrate},
+    measurement::{self, Extensometer, Operator},
     solve,
 };
 use ftx_pattern::{
@@ -109,6 +110,7 @@ fn input() -> Input {
             min_excitation_pivot: 1e-4,
             max_iterations: 40,
             max_forward_solves: 8000,
+            sensitivity: SensitivityMode::FiniteDifference,
         },
     }
 }
@@ -280,4 +282,158 @@ fn malformed_evidence_and_aggregate_work_refuse_before_publication() {
         point.extension_fraction = if i == 0 { 0.0 } else { -0.0 };
     }
     assert!(calibrate(&raw).is_err());
+}
+
+#[test]
+fn adjoint_calibration_matches_finite_difference_with_far_fewer_solves() {
+    let fd = baseline();
+    assert_eq!(fd.adjoint_solves, 0);
+    let fd_json = serde_json::to_string(fd).unwrap();
+    assert!(
+        !fd_json.contains("\"adjoint_solves\"") && !fd_json.contains("\"sensitivity\""),
+        "default finite-difference reports must omit opt-in adjoint fields"
+    );
+
+    let mut adj_input = input();
+    adj_input.policy.sensitivity = SensitivityMode::Adjoint;
+    let adj = calibrate(&adj_input).unwrap();
+    assert!(adj.accepted, "{:#?}", adj.reasons);
+    assert!(adj.domain_replay_verified);
+    assert!(adj.starts.iter().all(|s| s.converged));
+    assert!(adj.adjoint_solves > 0);
+    assert!(
+        adj.forward_solves * 3 < fd.forward_solves,
+        "adjoint mode should avoid FD perturbation solves: adjoint={} vs fd={}",
+        adj.forward_solves,
+        fd.forward_solves
+    );
+    for (actual, expected) in adj.parameters.iter().zip(PARAMETERS) {
+        assert!(
+            (actual - expected).abs() < 1e-3 * expected,
+            "{actual} != {expected}"
+        );
+    }
+    for (a, f) in adj.parameters.iter().zip(&fd.parameters) {
+        assert!(
+            (a - f).abs() <= 1e-4 * (1.0 + f.abs()),
+            "adjoint={a} diverged from fd={f}"
+        );
+    }
+    assert!(
+        (adj.excitation_pivot - fd.excitation_pivot).abs()
+            <= 1e-3 * (1.0 + fd.excitation_pivot.abs()),
+        "excitation pivot mismatch: adjoint={} fd={}",
+        adj.excitation_pivot,
+        fd.excitation_pivot
+    );
+}
+
+#[test]
+fn adjoint_calibration_supports_all_four_extensometer_operators() {
+    let mut base = input();
+    let ops = [
+        (
+            "ec",
+            Operator::EdgeChord {
+                station_fraction: 0.35,
+            },
+        ),
+        (
+            "ep",
+            Operator::EdgeProjection {
+                station_fraction: 0.65,
+                axis: [0.8, 0.6],
+            },
+        ),
+        (
+            "mc",
+            Operator::MaterialChord {
+                start_fraction: [0.2, 0.25],
+                end_fraction: [0.8, 0.75],
+            },
+        ),
+        (
+            "mp",
+            Operator::MaterialProjection {
+                start_fraction: [0.15, 0.3],
+                end_fraction: [0.85, 0.7],
+                axis: [-0.6, 0.8],
+            },
+        ),
+    ];
+    for exp in &mut base.experiments {
+        for obs in &mut exp.observations {
+            let state = solve(
+                &exp.fixture,
+                PARAMETERS,
+                obs.extension_fraction,
+                &controls(),
+            )
+            .unwrap();
+            obs.extensometers = ops
+                .iter()
+                .map(|(tag, op)| Extensometer {
+                    id: format!("{}-{tag}", obs.id),
+                    operator: op.clone(),
+                    value_m: measurement::evaluate(op, &exp.fixture, &state).unwrap(),
+                    scale_m: 0.001,
+                })
+                .collect();
+        }
+    }
+    let fd = calibrate(&base).unwrap();
+    assert!(fd.accepted, "{:#?}", fd.reasons);
+    let mut adj_in = base;
+    adj_in.policy.sensitivity = SensitivityMode::Adjoint;
+    let adj = calibrate(&adj_in).unwrap();
+    assert!(adj.accepted, "{:#?}", adj.reasons);
+    assert!(adj.adjoint_solves > 0);
+    assert!(adj.forward_solves * 3 < fd.forward_solves);
+    for (a, f) in adj.parameters.iter().zip(&fd.parameters) {
+        assert!(
+            (a - f).abs() <= 1e-4 * (1.0 + f.abs()),
+            "extensometer adjoint={a} != fd={f}"
+        );
+    }
+    assert!(
+        (adj.excitation_pivot - fd.excitation_pivot).abs()
+            <= 1e-3 * (1.0 + fd.excitation_pivot.abs()),
+        "extensometer excitation mismatch: adjoint={} fd={}",
+        adj.excitation_pivot,
+        fd.excitation_pivot
+    );
+}
+
+#[test]
+fn adjoint_sensitivity_refuses_nonlinear_family_and_area_models_fail_closed() {
+    let mut nonlinear = input();
+    nonlinear.policy.sensitivity = SensitivityMode::Adjoint;
+    nonlinear.parameter_bounds.clear();
+    nonlinear.nonlinear = Some(ftx_drape::strip::fit::nonlinear::Nonlinear {
+        strain_knots: [
+            vec![-0.2, 0.0, 0.25],
+            vec![-0.2, 0.0, 0.25],
+            vec![-0.3, 0.0, 0.3],
+        ],
+        tangent_bounds: [
+            vec![[200.0, 400.0], [200.0, 400.0]],
+            vec![[100.0, 260.0], [100.0, 260.0]],
+            vec![[40.0, 100.0], [40.0, 100.0]],
+        ],
+        coupling_bounds: [10.0, 60.0],
+    });
+    let err = calibrate(&nonlinear).unwrap_err();
+    assert_eq!(err.code, RefusalCode::InvalidDocument);
+    assert!(err.message.contains("adjoint strip sensitivity"), "{err}");
+
+    let mut with_area = input();
+    with_area.policy.sensitivity = SensitivityMode::Adjoint;
+    with_area.area_response = Some(ftx_drape::strip::fit::area::Area::Identify {
+        strain_range: [[-0.2, 0.25], [-0.2, 0.25], [-0.3, 0.3]],
+        area_ratio_knots: vec![0.7, 1.0, 1.3],
+        slope_bounds: vec![[10.0, 200.0], [10.0, 200.0]],
+    });
+    let err = calibrate(&with_area).unwrap_err();
+    assert_eq!(err.code, RefusalCode::InvalidDocument);
+    assert!(err.message.contains("adjoint strip sensitivity"), "{err}");
 }

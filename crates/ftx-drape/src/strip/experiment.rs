@@ -186,6 +186,18 @@ pub(super) fn solve_law(
     extension: f64,
     controls: &Controls,
 ) -> Result<State, Refusal> {
+    solve_law_with_solver(fixture, membrane, response, domain, extension, controls)
+        .map(|(state, _)| state)
+}
+
+pub(super) fn solve_law_with_solver(
+    fixture: &Fixture,
+    membrane: Membrane,
+    response: Option<&CompiledMembrane>,
+    domain: Option<StrainDomain>,
+    extension: f64,
+    controls: &Controls,
+) -> Result<(State, Solver), Refusal> {
     fixture.validate()?;
     controls.validate()?;
     membrane.validate()?;
@@ -274,19 +286,22 @@ pub(super) fn solve_law(
     if !width.is_finite() || !energy.is_finite() || !upper.y.is_finite() {
         return Err(invalid("nonfinite strip reaction, width or energy"));
     }
-    Ok(State {
-        extension_fraction: extension,
-        force_n: upper.y,
-        fixed_grip_force_n: lower.y,
-        free_force_residual_n: residual,
-        grip_balance_residual_n: balance,
-        mid_width_m: width,
-        energy_j: energy,
-        green_strain_range: ranges,
-        area_ratio_range: area_range,
-        positions_m: solver.x.iter().map(|p| [p.x, p.y, p.z]).collect(),
-        newton_iterations: numerical.iterations,
-    })
+    Ok((
+        State {
+            extension_fraction: extension,
+            force_n: upper.y,
+            fixed_grip_force_n: lower.y,
+            free_force_residual_n: residual,
+            grip_balance_residual_n: balance,
+            mid_width_m: width,
+            energy_j: energy,
+            green_strain_range: ranges,
+            area_ratio_range: area_range,
+            positions_m: solver.x.iter().map(|p| [p.x, p.y, p.z]).collect(),
+            newton_iterations: numerical.iterations,
+        },
+        solver,
+    ))
 }
 
 /// Evaluate a frozen source-bearing membrane through ideal clamped-strip equilibria.

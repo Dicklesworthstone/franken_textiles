@@ -190,6 +190,140 @@ pub fn evaluate(operator: &Operator, fixture: &Fixture, state: &State) -> Result
     Ok(value)
 }
 
+/// Exact vertex-position gradient `∂(operator)/∂x` on the production displacement field, matching
+/// [`evaluate`] on every edge station and interior alternating-diagonal triangle.
+///
+/// # Errors
+/// Invalid fixture/operator, mismatched mesh, nonfinite positions, degenerate chord or nonfinite
+/// gradient.
+pub fn gradient_dx(
+    operator: &Operator,
+    fixture: &Fixture,
+    state: &State,
+) -> Result<Vec<Vec3>, Refusal> {
+    fixture.validate()?;
+    operator.validate()?;
+    let [nx, ny] = fixture.cells;
+    let n_verts = (nx + 1) * (ny + 1);
+    if state.positions_m.len() != n_verts
+        || state.positions_m.iter().flatten().any(|v| !v.is_finite())
+        || state.positions_m.iter().any(|p| p[2] != 0.0)
+    {
+        return Err(invalid(
+            "strip extensometer requires the matching finite planar production mesh",
+        ));
+    }
+    let (start_weights, end_weights) = match operator {
+        Operator::EdgeChord { station_fraction }
+        | Operator::EdgeProjection {
+            station_fraction, ..
+        } => {
+            let coordinate = station_fraction * ny as f64;
+            let row = coordinate.floor() as usize;
+            let fraction = coordinate - row as f64;
+            let edge = |column: usize| {
+                let mut out = Vec::with_capacity(2);
+                let a = row * (nx + 1) + column;
+                if fraction == 0.0 {
+                    out.push((a, 1.0));
+                } else {
+                    out.push((a, 1.0 - fraction));
+                    out.push(((row + 1) * (nx + 1) + column, fraction));
+                }
+                out
+            };
+            (edge(0), edge(nx))
+        }
+        Operator::MaterialChord {
+            start_fraction,
+            end_fraction,
+        }
+        | Operator::MaterialProjection {
+            start_fraction,
+            end_fraction,
+            ..
+        } => (
+            material_point_weights(*start_fraction, fixture),
+            material_point_weights(*end_fraction, fixture),
+        ),
+    };
+    let point_from = |weights: &[(usize, f64)]| {
+        weights.iter().fold(Vec3::ZERO, |acc, &(idx, w)| {
+            let p = state.positions_m[idx];
+            acc + Vec3::new(p[0], p[1], p[2]) * w
+        })
+    };
+    let chord = point_from(&end_weights) - point_from(&start_weights);
+    let direction = match operator {
+        Operator::EdgeChord { .. } | Operator::MaterialChord { .. } => {
+            let len = chord.norm();
+            if !len.is_finite() || len <= 0.0 {
+                return Err(invalid(
+                    "strip extensometer produced an invalid chord or projected value",
+                ));
+            }
+            chord / len
+        }
+        Operator::EdgeProjection { axis, .. } | Operator::MaterialProjection { axis, .. } => {
+            let value = chord.x * axis[0] + chord.y * axis[1];
+            if !value.is_finite() {
+                return Err(invalid(
+                    "strip extensometer produced an invalid chord or projected value",
+                ));
+            }
+            Vec3::new(axis[0], axis[1], 0.0)
+        }
+    };
+    let mut grad = vec![Vec3::ZERO; n_verts];
+    for &(idx, w) in &end_weights {
+        grad[idx] += direction * w;
+    }
+    for &(idx, w) in &start_weights {
+        grad[idx] -= direction * w;
+    }
+    if grad.iter().any(|g| !g.is_finite()) {
+        return Err(invalid("strip extensometer gradient overflow"));
+    }
+    Ok(grad)
+}
+
+/// Exact barycentric weights of [`material_point`] on the alternating-diagonal `cloth::grid`.
+fn material_point_weights(reference: [f64; 2], fixture: &Fixture) -> Vec<(usize, f64)> {
+    let [nx, ny] = fixture.cells;
+    let x = reference[0] * nx as f64;
+    let y = reference[1] * ny as f64;
+    let column = x.floor() as usize;
+    let row = y.floor() as usize;
+    let u = x - column as f64;
+    let v = y - row as f64;
+    let idx = |c: usize, r: usize| r * (nx + 1) + c;
+    let a = idx(column, row);
+    if u == 0.0 {
+        return if v == 0.0 {
+            vec![(a, 1.0)]
+        } else {
+            vec![(a, 1.0 - v), (idx(column, row + 1), v)]
+        };
+    }
+    let b = idx(column + 1, row);
+    if v == 0.0 {
+        return vec![(a, 1.0 - u), (b, u)];
+    }
+    let c = idx(column + 1, row + 1);
+    let d = idx(column, row + 1);
+    if (column + row).is_multiple_of(2) {
+        if v <= u {
+            vec![(a, 1.0 - u), (b, u - v), (c, v)]
+        } else {
+            vec![(a, 1.0 - v), (c, u), (d, v - u)]
+        }
+    } else if u + v <= 1.0 {
+        vec![(a, 1.0 - u - v), (b, u), (d, v)]
+    } else {
+        vec![(c, u + v - 1.0), (b, 1.0 - v), (d, 1.0 - u)]
+    }
+}
+
 /// Barycentric interpolation on the exact alternating diagonals emitted by `cloth::grid`.
 /// Validation has established the finite matching mesh and bounded reference coordinates.
 fn material_point(reference: [f64; 2], fixture: &Fixture, state: &State) -> Vec3 {
@@ -229,5 +363,78 @@ fn material_point(reference: [f64; 2], fixture: &Fixture, state: &State) -> Vec3
         a + (b - a) * u + (d - a) * v
     } else {
         c + (b - c) * (1.0 - v) + (d - c) * (1.0 - u)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::strip::experiment::{Controls, solve};
+
+    #[test]
+    fn gradient_dx_matches_central_fd_across_all_operators_and_diagonals() {
+        let fixture = Fixture {
+            gauge_length_m: 0.10,
+            width_m: 0.06,
+            warp_axis: [
+                std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ],
+            cells: [4, 4],
+        };
+        let state = solve(
+            &fixture,
+            [300.0, 180.0, 0.2, 70.0],
+            0.08,
+            &Controls::default(),
+        )
+        .unwrap();
+        let operators = [
+            Operator::EdgeChord {
+                station_fraction: 0.37,
+            },
+            Operator::EdgeChord {
+                station_fraction: 0.5,
+            },
+            Operator::EdgeProjection {
+                station_fraction: 0.63,
+                axis: [0.8, 0.6],
+            },
+            Operator::MaterialChord {
+                start_fraction: [0.12, 0.08], // even cell, v <= u
+                end_fraction: [0.82, 0.91],   // even cell, v > u
+            },
+            Operator::MaterialChord {
+                start_fraction: [0.31, 0.14], // odd cell, u + v <= 1
+                end_fraction: [0.46, 0.69],   // odd cell, u + v > 1
+            },
+            Operator::MaterialProjection {
+                start_fraction: [0.0, 0.25], // left edge u == 0
+                end_fraction: [0.75, 1.0],   // top edge v == 0 at row == ny
+                axis: [-0.6, 0.8],
+            },
+        ];
+        let eps = 1e-7;
+        for op in &operators {
+            let grad = gradient_dx(op, &fixture, &state).unwrap();
+            assert_eq!(grad.len(), state.positions_m.len());
+            for v in 0..state.positions_m.len() {
+                for axis in 0..2 {
+                    let mut plus = state.clone();
+                    plus.positions_m[v][axis] += eps;
+                    let mut minus = state.clone();
+                    minus.positions_m[v][axis] -= eps;
+                    let fd = (evaluate(op, &fixture, &plus).unwrap()
+                        - evaluate(op, &fixture, &minus).unwrap())
+                        / (2.0 * eps);
+                    let analytic = grad[v][axis];
+                    assert!(
+                        (analytic - fd).abs() <= 1e-9 * (1.0 + fd.abs()),
+                        "op={op:?} v={v} axis={axis}: analytic={analytic} fd={fd}"
+                    );
+                }
+                assert_eq!(grad[v].z, 0.0);
+            }
+        }
     }
 }
