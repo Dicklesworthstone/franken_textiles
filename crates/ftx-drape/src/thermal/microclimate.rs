@@ -1634,7 +1634,7 @@ mod tests {
         // Overflow in T^4 or A_i * q_i must refuse cleanly with NonFinite.
         let err_t4 = enc.solve(&[1e100, 300.0]).unwrap_err();
         assert_eq!(err_t4.code, ftx_core::RefusalCode::NonFinite);
-        let huge_vf = ViewFactorMatrix::infinite_parallel_plates(1e305).unwrap();
+        let huge_vf = ViewFactorMatrix::infinite_parallel_plates(1e306).unwrap();
         let huge_enc = GrayDiffuseEnclosure::new(vec![0.9, 0.8], huge_vf).unwrap();
         let err_area = huge_enc.solve(&[400.0, 300.0]).unwrap_err();
         assert_eq!(err_area.code, ftx_core::RefusalCode::NonFinite);
