@@ -771,4 +771,64 @@ mod tests {
         );
         assert_eq!(verdict.informative_directions, dirs.len());
     }
+
+    #[test]
+    fn adjoint_refuses_active_friction_and_mismatched_compression_lengths() {
+        let (rest, tris) = grid(0.06, 0.06, 2, 2, Vec2::ZERO);
+        let x: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let fixed: Vec<[bool; 3]> = rest
+            .iter()
+            .map(|p| {
+                if p.x == 0.0 {
+                    [true, true, true]
+                } else {
+                    [false, false, false]
+                }
+            })
+            .collect();
+        let make_contact = |mu: f64| {
+            let body = crate::contact::Body::new(
+                vec![
+                    Vec3::new(-0.05, -0.05, -0.02),
+                    Vec3::new(0.12, -0.05, -0.02),
+                    Vec3::new(-0.05, 0.12, -0.02),
+                ],
+                vec![[0, 1, 2]],
+                0.01,
+            )
+            .unwrap();
+            let params = crate::contact::ContactParams {
+                dhat: 1e-3,
+                thickness: 2e-4,
+                kappa: 50.0,
+                mu,
+                eps_v: 1e-3,
+            };
+            let mat = Membrane::orthotropic(200.0, 200.0, 0.2, 40.0, 0.15);
+            let model = ClothModel::new(rest.clone(), &tris, mat, 1e-4, 0.2).unwrap();
+            let mut s = Solver::new(model, x.clone(), &fixed, Vec3::new(0.0, 0.0, -9.81))
+                .with_contact(body, params)
+                .unwrap();
+            s.tol = 1e-12;
+            s
+        };
+        let dl_dx = vec![Vec3::new(0.0, 0.0, 1.0); rest.len()];
+
+        // Active Coulomb friction (mu > 0) violates homogeneous-elastic conservative adjoint scope.
+        let mut with_friction = make_contact(0.25);
+        with_friction.static_solve().unwrap();
+        let err = with_friction.constitutive_gradient(&dl_dx).unwrap_err();
+        assert_eq!(err.code, ftx_core::RefusalCode::OutOfRange);
+        assert!(err.message.contains("friction"), "{err}");
+
+        // Frictionless barrier contact (mu == 0) remains conservative and admitted.
+        let mut frictionless = make_contact(0.0);
+        frictionless.static_solve().unwrap();
+        assert!(frictionless.constitutive_gradient(&dl_dx).is_ok());
+
+        // Mismatched compression table length must refuse cleanly rather than panic.
+        frictionless.model.compression.push(1.0);
+        let err = frictionless.equilibrium_adjoint(&dl_dx).unwrap_err();
+        assert_eq!(err.code, ftx_core::RefusalCode::OutOfRange);
+    }
 }

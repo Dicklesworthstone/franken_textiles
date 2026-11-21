@@ -3458,6 +3458,15 @@ mod strategy_and_integrator_tests {
         assert_eq!(s.x, x);
         assert_eq!(s.a, vec![Vec3::ZERO; 3]);
 
+        // Subnormal time step overflowing Generalized-alpha mass coefficient (1/(beta*h^2))
+        // must refuse cleanly and transactionally without initializing acceleration.
+        s.max_newton = 30;
+        let err_h = s.step(1e-200).unwrap_err();
+        assert_eq!(err_h.code, RefusalCode::OutOfRange);
+        assert!(!s.accel_initialized);
+        assert_eq!(s.x, x);
+        assert_eq!(s.a, vec![Vec3::ZERO; 3]);
+
         // Trust-region static solve matches ProjectedNewton to tight static residual tolerance,
         // and trust-region refusal attaches structured repair hints.
         let mut tr_static = Solver::new(
