@@ -403,7 +403,7 @@ impl Solver {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "constitutive_gradient requires a homogeneous memoryless elastic cloth model \
-                 (no per-element overrides, nonlinear membrane laws, panel bending, or material history)",
+                 (no per-element overrides, nonlinear membrane laws, panel bending, material history, or active friction)",
             ));
         }
 
