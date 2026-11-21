@@ -8,6 +8,45 @@ export function filmFile(id: string, ext: "mp4" | "jpg" = "mp4") {
   return revisions[name] ? `/media/${name}?v=${revisions[name]}` : `/media/${name}`;
 }
 
+// A 3840×2160 film at 60 frames a second is H.264 High at level 5.2. Many phones and older laptops decode
+// no further than 1080p60 or 2160p30, so every film also ships as <id>-1080.mp4 at 1920×1080 and 60 fps.
+const UHD = {contentType:'video/mp4; codecs="avc1.640034"', width:3840, height:2160, bitrate:9_000_000, framerate:60};
+const REMEMBERED = "ftx-film-1080";
+let uhd: Promise<boolean> | undefined;
+function playsUhd() {
+  return uhd ??= (async () => {
+    try { if (sessionStorage.getItem(REMEMBERED)) return false; } catch {}
+    if ((navigator as Navigator & {connection?: {saveData?:boolean}}).connection?.saveData) return false;
+    try {
+      const info = await navigator.mediaCapabilities.decodingInfo({type:"file", video:UHD});
+      // A phone that has to decode this in software drops frames and drains the battery.
+      return info.supported && info.smooth && (info.powerEfficient || !matchMedia("(pointer: coarse)").matches);
+    } catch { return true; } // No answer: try the 4K film. watchFilm steps down if it fails or stutters.
+  })();
+}
+/** The film to play here: the 4K one where the device decodes it smoothly, otherwise the 1080p copy. */
+export async function filmSource(id: string) {
+  return filmFile(await playsUhd() ? id : id+"-1080");
+}
+/** Step a playing 4K film down to its 1080p copy if it cannot be decoded, or if a third of its frames are dropped. */
+export function watchFilm(el: HTMLVideoElement, id: string) {
+  const small = filmFile(id+"-1080");
+  function stepDown() {
+    if (el.getAttribute("src") === small || !el.getAttribute("src")) return;
+    uhd = Promise.resolve(false);
+    try { sessionStorage.setItem(REMEMBERED, "1"); } catch {}
+    const at = el.currentTime, playing = !el.paused;
+    el.src = small; el.currentTime = at; // Before metadata arrives this sets where playback starts.
+    if (playing) void el.play().catch(()=>{});
+  }
+  const onProgress = () => {
+    const quality = el.getVideoPlaybackQuality?.();
+    if (quality && quality.totalVideoFrames >= 120 && quality.droppedVideoFrames > quality.totalVideoFrames/3) stepDown();
+  };
+  el.addEventListener("error", stepDown); el.addEventListener("timeupdate", onProgress);
+  return () => { el.removeEventListener("error", stepDown); el.removeEventListener("timeupdate", onProgress); };
+}
+
 export function PlaybackMark({playing=false}: {playing?:boolean}) {
   return <span aria-hidden="true" className={playing ? "playback-mark is-playing" : "playback-mark"}/>;
 }
@@ -28,12 +67,19 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
     const reduced = matchMedia("(prefers-reduced-motion: reduce)");
     const saveData = (navigator as Navigator & {connection?: {saveData?:boolean}}).connection?.saveData;
     let visible = false, manual: boolean | undefined = requested || undefined, automaticPause = false;
-    const path = filmFile(id);
+    let path: string | undefined, live = true;
+    void filmSource(id).then(source => { if (!live) return; path=source; arm(); sync(); });
+    const unwatch = watchFilm(el, id);
     function pause() {
       if (el.paused) return;
       automaticPause=true; el.pause();
     }
+    // With native controls the film needs its source as soon as it is in view, before anything plays.
+    function arm() {
+      if (path && visible && controls && !el.getAttribute("src")) el.src=path;
+    }
     function play() {
+      if (!path) return;
       if (!el.getAttribute("src")) el.src=path;
       void el.play().catch(()=>{});
     }
@@ -46,13 +92,14 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
     toggle.current = () => {manual = el.paused; if(manual) play(); else pause();};
     const observer=new IntersectionObserver(([entry])=>{
       visible=entry.isIntersecting && entry.intersectionRatio>=.2;
-      if (visible && controls && !el.getAttribute("src")) el.src=path;
+      arm();
       sync();
     },{threshold:[0,.2]});
     el.muted=true; observer.observe(el);
     el.addEventListener("play",onPlay);el.addEventListener("pause",onPause);
     reduced.addEventListener("change",sync);document.addEventListener("visibilitychange",sync);
     return ()=>{
+      live=false;unwatch();
       observer.disconnect();reduced.removeEventListener("change",sync);document.removeEventListener("visibilitychange",sync);
       el.removeEventListener("play",onPlay);el.removeEventListener("pause",onPause);el.pause();
     };

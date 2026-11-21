@@ -1,7 +1,7 @@
 "use client";
 
 import {useEffect, useId, useRef, useState} from "react";
-import {filmFile, PlaybackMark} from "../InlineFilm";
+import {filmFile, filmSource, PlaybackMark, watchFilm} from "../InlineFilm";
 import "./construction.css";
 
 const studies = {
@@ -30,19 +30,25 @@ export function ConstructionMotion({garment, hero=false}:{garment:Garment;hero?:
   const imageFile=(index:number)=>filmFile(index===2?base:base+"-"+chapters[index].image,"jpg");
   const video=useRef<HTMLVideoElement>(null);
   const manual=useRef<boolean|undefined>(undefined), wantTime=useRef<number|null>(null);
+  // The 4K film or its 1080p copy, once the device has said which it can decode.
+  const source=useRef<string|undefined>(undefined);
   const [playing,setPlaying]=useState(false),[chapter,setChapter]=useState(0),[still,setStill]=useState<number|null>(0);
   useEffect(()=>{
     const el=video.current!, reduced=matchMedia("(prefers-reduced-motion: reduce)");
     const save=(navigator as Navigator & {connection?:{saveData?:boolean}}).connection?.saveData;
-    let visible=false;
+    let visible=false, live=true;
+    source.current=undefined;
+    void filmSource(base).then(path=>{if(live){source.current=path;sync();}});
+    const unwatch=watchFilm(el,base);
     function sync(){
       if(!visible||document.hidden||!(manual.current??(!reduced.matches&&!save))){el.pause();return;}
-      if(!el.src)el.src=filmFile(base);
+      if(!source.current)return;
+      if(!el.src)el.src=source.current;
       void el.play().catch(()=>{});
     }
     const observer=new IntersectionObserver(([entry])=>{visible=entry.intersectionRatio>=.32;sync();},{threshold:[0,.32]});
     observer.observe(el);document.addEventListener("visibilitychange",sync);reduced.addEventListener("change",sync);
-    return ()=>{observer.disconnect();document.removeEventListener("visibilitychange",sync);reduced.removeEventListener("change",sync);el.pause();};
+    return ()=>{live=false;unwatch();observer.disconnect();document.removeEventListener("visibilitychange",sync);reduced.removeEventListener("change",sync);el.pause();};
   },[base]);
   function pick(n:number){
     const el=video.current!;manual.current=false;el.pause();setChapter(n);setStill(n);
@@ -54,7 +60,9 @@ export function ConstructionMotion({garment, hero=false}:{garment:Garment;hero?:
     if(!el.paused){manual.current=false;el.pause();return;}
     manual.current=true;
     if(chapter===2){wantTime.current=0;if(el.readyState>=1){el.currentTime=0;wantTime.current=null;}}
-    if(!el.src)el.src=filmFile(base);
+    // Before the source is known, `manual` is enough: the effect starts the film as soon as it is.
+    if(!source.current)return;
+    if(!el.src)el.src=source.current;
     void el.play().catch(()=>{});
   }
   return <div className="construction-motion" data-garment={garment}>
