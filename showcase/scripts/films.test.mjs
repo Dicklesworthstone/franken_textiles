@@ -45,7 +45,13 @@ function probe(file) {
 
 test("the site has films and each has its stills", () => {
   assert.ok(films.length >= 24, `${films.length} films`);
-  for (const film of films) assert.ok(existsSync(media + film.replace(/\.mp4$/, ".jpg")), film + " has no poster");
+  for (const film of films) {
+    const base = media + film.replace(/\.mp4$/, "");
+    assert.ok(existsSync(base + ".jpg"), film + " has no poster");
+    // A construction study also shows a still for each of its first two chapters (ConstructionStudy.tsx).
+    if (film.startsWith("construction-")) for (const chapter of ["cut", "join"])
+      assert.ok(existsSync(`${base}-${chapter}.jpg`), `${film} has no ${chapter} still`);
+  }
 });
 
 test("a truncated master cannot replace the previous 1080p rendition", () => {
