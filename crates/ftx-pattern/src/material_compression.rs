@@ -572,6 +572,13 @@ pub fn condition(input: &Input) -> Result<Report, Refusal> {
             properties.remove(&format!("{family}_{axis}"));
         }
     }
+    for key in [
+        "membrane_damage_threshold",
+        "membrane_damage_rate",
+        "membrane_damage_limit",
+    ] {
+        properties.remove(key);
+    }
     let discarded_properties = input
         .material
         .properties

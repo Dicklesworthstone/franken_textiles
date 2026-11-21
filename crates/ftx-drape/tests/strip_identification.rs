@@ -388,6 +388,17 @@ fn adjoint_calibration_supports_all_four_extensometer_operators() {
     let adj = calibrate(&adj_in).unwrap();
     assert!(adj.accepted, "{:#?}", adj.reasons);
     assert!(adj.adjoint_solves > 0);
+    // Every converged start caches its final adjoint Jacobian, so calibrate_n() performs zero
+    // redundant final adjoint solves (strictly 1 adjoint pass per LM iteration across all 3 starts).
+    let fit_channels: usize = adj_in
+        .experiments
+        .iter()
+        .filter(|e| e.partition == Partition::Fit)
+        .flat_map(|e| &e.observations)
+        .map(|o| 1 + usize::from(o.mid_width.is_some()) + o.extensometers.len())
+        .sum();
+    let total_iters: usize = adj.starts.iter().map(|s| s.iterations).sum();
+    assert_eq!(adj.adjoint_solves, total_iters * fit_channels);
     assert!(adj.forward_solves * 3 < fd.forward_solves);
     for (a, f) in adj.parameters.iter().zip(&fd.parameters) {
         assert!(
@@ -436,4 +447,54 @@ fn adjoint_sensitivity_refuses_nonlinear_family_and_area_models_fail_closed() {
     let err = calibrate(&with_area).unwrap_err();
     assert_eq!(err.code, RefusalCode::InvalidDocument);
     assert!(err.message.contains("adjoint strip sensitivity"), "{err}");
+
+    // Orphan membrane_damage_model without membrane_plasticity_model fails closed in strip fit
+    // and strip experiment.
+    let mut orphan_damage = input();
+    orphan_damage.material.structure.insert(
+        "membrane_damage_model".into(),
+        ftx_pattern::material_membrane_plasticity::DAMAGE_MODEL.into(),
+    );
+    assert_eq!(
+        calibrate(&orphan_damage).unwrap_err().code,
+        RefusalCode::InvalidDocument
+    );
+    let mut exp_material = orphan_damage.material.clone();
+    for (k, v) in [
+        ("warp_stiffness", 300.0),
+        ("weft_stiffness", 180.0),
+        ("poisson_warp_weft", 0.2),
+        ("shear_stiffness", 70.0),
+    ] {
+        exp_material.properties.insert(
+            k.into(),
+            ftx_pattern::materials::Quantity {
+                value: v,
+                unit: if k == "poisson_warp_weft" { "1" } else { "N/m" }.into(),
+                source: exp_material.sources.keys().next().unwrap().clone(),
+                evidence: ftx_pattern::materials::Evidence::Estimate,
+                method: "test".into(),
+                conditions: std::collections::BTreeMap::new(),
+                bounds: None,
+            },
+        );
+    }
+    let exp_req = ftx_drape::strip::experiment::Request {
+        schema: "ftx-strip-experiment/1".into(),
+        material: ftx_pattern::material_catalog::Selection {
+            id: exp_material.id.clone(),
+            record: Some(exp_material),
+            allow_estimates: true,
+            ..Default::default()
+        },
+        fixture: orphan_damage.experiments[0].fixture.clone(),
+        extensions: vec![0.05],
+        controls: controls(),
+    };
+    assert_eq!(
+        ftx_drape::strip::experiment::evaluate(&exp_req)
+            .unwrap_err()
+            .code,
+        RefusalCode::InvalidDocument
+    );
 }

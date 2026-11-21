@@ -792,3 +792,60 @@ fn damaged_plastic_triangle_degrades_unloading_stiffness_matches_fd_and_rolls_ba
     bad_step.x[1].x = solver.x[1].x;
     assert_eq!(history(&bad_step), snapshot);
 }
+
+#[test]
+fn mixed_parallel_and_damaged_panels_report_honest_noncontradictory_scope() {
+    let selected: Selection = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
+    ))
+    .unwrap();
+    let parallel_mat = Catalog {
+        schema: ftx_pattern::materials::CATALOG_SCHEMA.into(),
+        materials: Vec::new(),
+    }
+    .resolve(&selected)
+    .unwrap();
+    let parallel_relax = parallel_mat.membrane_relaxation().unwrap().unwrap();
+    let parallel_plastic = parallel_mat.membrane_plasticity().unwrap().unwrap();
+    let damaged_plastic = law(membrane())
+        .with_damage(IsotropicDamage::new(0.01, 20.0, 0.45).unwrap())
+        .unwrap();
+
+    let model = ClothModel::new(
+        vec![
+            Vec2::ZERO,
+            Vec2::new(LENGTH, 0.0),
+            Vec2::new(0.0, LENGTH),
+            Vec2::new(LENGTH, LENGTH),
+        ],
+        &[[0, 1, 2], [1, 3, 2]],
+        membrane(),
+        0.0,
+        0.2,
+    )
+    .unwrap();
+    let x = vec![
+        Vec3::ZERO,
+        Vec3::new(LENGTH * (1.0_f64 + 2.0 * LOAD).sqrt(), 0.0, 0.0),
+        Vec3::new(0.0, LENGTH, 0.0),
+        Vec3::new(LENGTH * (1.0_f64 + 2.0 * LOAD).sqrt(), LENGTH, 0.0),
+    ];
+    let mut solver = Solver::new(model, x, &[[true; 3]; 4], Vec3::ZERO)
+        .with_membrane_histories(
+            &[Some(parallel_relax), None],
+            &[Some(parallel_plastic), Some(damaged_plastic)],
+        )
+        .unwrap();
+    assert!(solver.step(0.005).unwrap().converged);
+    let report = history(&solver);
+    assert_eq!(report["damage_model"], DAMAGE_MODEL);
+    assert!(report["damage_dissipation_j"].as_f64().unwrap() > 0.0);
+    assert!(report["elements"][0].get("parallel_network").is_some());
+    assert!(report["elements"][0].get("damage").is_none());
+    assert!(report["elements"][1].get("parallel_network").is_none());
+    assert!(report["elements"][1]["damage"].as_f64().unwrap() > 0.0);
+    let scope = report["scope"].as_str().unwrap();
+    assert!(scope.contains("Maxwell branches in parallel where marked"));
+    assert!(scope.contains("isotropic scalar stiffness degradation"));
+    assert!(!scope.contains("Excludes same-branch viscoplasticity, damage,"));
+}

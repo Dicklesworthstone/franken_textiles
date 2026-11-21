@@ -849,3 +849,104 @@ fn isotropic_damage_source_compilation_refuses_missing_mismatched_and_unsupporte
     assert!(resolved.membrane_plasticity().is_err());
     assert!(resolved.mechanics().is_err());
 }
+
+#[test]
+fn orphan_membrane_damage_model_is_refused_by_elastic_and_relaxation_calibrations() {
+    use std::collections::BTreeMap;
+
+    use ftx_pattern::{
+        material_calibration, material_linearization, material_relaxation::calibration as relax_cal,
+    };
+    let mut base: Selection = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-membrane-plasticity.json"
+    ))
+    .unwrap();
+    let mut record = base.record.take().unwrap();
+    record.structure.remove("membrane_plasticity_model");
+    record
+        .structure
+        .insert("membrane_damage_model".into(), DAMAGE_MODEL.into());
+
+    // 1. Linear elastic swatch calibration refuses orphan membrane_damage_model.
+    let cal_in = material_calibration::Input {
+        schema: material_calibration::SCHEMA.into(),
+        material: record.clone(),
+        method: "orphan damage refusal check".into(),
+        fitted_on: "2026-11-20".into(),
+        conditions: BTreeMap::new(),
+        allow_estimated_observations: true,
+        replace_existing: true,
+        max_rms_scaled: 1.0,
+        max_peak_scaled: 1.0,
+        samples: Vec::new(),
+    };
+    assert!(material_calibration::calibrate(&cal_in).is_err());
+
+    // 2. Nonlinear elastic swatch calibration refuses orphan membrane_damage_model.
+    let nl_in = material_calibration::nonlinear::Input {
+        schema: material_calibration::nonlinear::SCHEMA.into(),
+        material: record.clone(),
+        method: "orphan damage refusal check".into(),
+        fitted_on: "2026-11-20".into(),
+        conditions: BTreeMap::new(),
+        allow_estimated_observations: true,
+        replace_existing: true,
+        max_rms_scaled: 1.0,
+        max_peak_scaled: 1.0,
+        warp_knots: vec![-0.1, 0.0, 0.1],
+        weft_knots: vec![-0.1, 0.0, 0.1],
+        shear_knots: vec![-0.1, 0.0, 0.1],
+        area_response: None,
+        samples: Vec::new(),
+    };
+    assert!(material_calibration::nonlinear::calibrate(&nl_in).is_err());
+
+    // 3. Standalone relaxation calibration refuses orphan membrane_damage_model.
+    let rel_in = relax_cal::Input {
+        schema: relax_cal::SCHEMA.into(),
+        material: record.clone(),
+        equilibrium_is_long_time: true,
+        allow_estimated_equilibrium: true,
+        allow_estimated_observations: true,
+        replace_existing: true,
+        plastic_equilibrium: None,
+        method: "orphan damage refusal check".into(),
+        conditions: BTreeMap::new(),
+        domain_source: record.sources.keys().next().unwrap().clone(),
+        strain_range: [[-0.2, 0.2]; 3],
+        initialization: ftx_pattern::material_relaxation::Initialization::StressFreeReference,
+        integration: ftx_pattern::material_relaxation::IntegrationScheme::BackwardEuler,
+        fitted_on: "2026-11-20".into(),
+        time_bounds_seconds: vec![[0.01, 1.0]],
+        orthotropic: None,
+        experiments: Vec::new(),
+        max_rms_scaled: 1.0,
+        max_peak_scaled: 1.0,
+    };
+    assert!(relax_cal::calibrate(&rel_in).is_err());
+
+    // 4. Origin linearization refuses orphan membrane_damage_model.
+    let mut lin_record = record;
+    for key in [
+        "warp_stiffness",
+        "weft_stiffness",
+        "poisson_warp_weft",
+        "shear_stiffness",
+    ] {
+        lin_record.properties.remove(key);
+    }
+    let lin_in = material_linearization::Input {
+        schema: material_linearization::SCHEMA.into(),
+        material: Selection {
+            id: lin_record.id.clone(),
+            record: Some(lin_record),
+            allow_estimates: true,
+            ..Selection::default()
+        },
+        source_reference: "local:test/orphan-damage".into(),
+        accessed_on: "2026-11-20".into(),
+        rationale: "verify orphan membrane_damage_model fails closed".into(),
+        method: "test".into(),
+    };
+    assert!(material_linearization::approximate(&lin_in).is_err());
+}

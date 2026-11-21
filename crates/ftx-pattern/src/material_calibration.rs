@@ -407,6 +407,10 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         .material
         .structure
         .contains_key("membrane_plasticity_model")
+        || input
+            .material
+            .structure
+            .contains_key("membrane_damage_model")
     {
         return Err(invalid(
             "elastic swatch calibration does not identify permanent membrane history; recharacterize the cyclic law before replacing its elastic tensor",

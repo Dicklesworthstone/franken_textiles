@@ -185,6 +185,7 @@ pub fn simulate(
     if matches!(m.form, Form::Fiber | Form::Yarn | Form::Fill)
         || m.membrane_relaxation.is_some()
         || m.structure.contains_key("membrane_plasticity_model")
+        || m.structure.contains_key("membrane_damage_model")
         || m.structure.contains_key("bending_plasticity_model")
     {
         return Err(invalid(

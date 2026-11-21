@@ -231,6 +231,97 @@ fn prescribed_pressure_discards_a_permanent_membrane_law_even_with_scalar_invari
 }
 
 #[test]
+fn prescribed_pressure_discards_membrane_damage_model_and_properties_even_with_invariants() {
+    use ftx_pattern::material_membrane_plasticity::{
+        AXES, DAMAGE_MODEL, DAMAGE_PROPERTIES, PROPERTY_FAMILIES,
+    };
+    let mut input = fixture();
+    let selected: Selection = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-membrane-plasticity.json"
+    ))
+    .unwrap();
+    let material = selected.record.unwrap();
+    input.material.sources.extend(material.sources);
+    input.material.structure.insert(
+        "membrane_plasticity_model".into(),
+        material.structure["membrane_plasticity_model"].clone(),
+    );
+    input
+        .material
+        .structure
+        .insert("membrane_damage_model".into(), DAMAGE_MODEL.into());
+    let mut conditions = input.material.properties["warp_stiffness"]
+        .conditions
+        .clone();
+    conditions.insert("specimen_id".into(), input.specimen.clone());
+    for key in [
+        "warp_stiffness",
+        "weft_stiffness",
+        "poisson_warp_weft",
+        "shear_stiffness",
+    ] {
+        input.material.properties.get_mut(key).unwrap().conditions = conditions.clone();
+        input.invariants.get_mut(key).unwrap().conditions = conditions.clone();
+    }
+    for (family, _) in PROPERTY_FAMILIES {
+        for axis in AXES {
+            let key = format!("{family}_{axis}");
+            let mut quantity = material.properties[&key].clone();
+            quantity.conditions = conditions.clone();
+            input.material.properties.insert(key.clone(), quantity);
+            let mut declaration = input.invariants["specific_heat"].clone();
+            declaration.conditions = conditions.clone();
+            input.invariants.insert(key, declaration);
+        }
+    }
+    let sample_source = input.material.properties["warp_stiffness"].source.clone();
+    for ((key, unit), value) in DAMAGE_PROPERTIES.iter().zip([0.01, 15.0, 0.4]) {
+        input.material.properties.insert(
+            (*key).into(),
+            ftx_pattern::materials::Quantity {
+                value,
+                unit: (*unit).into(),
+                source: sample_source.clone(),
+                evidence: ftx_pattern::materials::Evidence::Estimate,
+                method: "Synthetic pressure-invariance test parameter".into(),
+                conditions: conditions.clone(),
+                bounds: None,
+            },
+        );
+        let mut declaration = input.invariants["specific_heat"].clone();
+        declaration.conditions = conditions.clone();
+        input.invariants.insert((*key).into(), declaration);
+    }
+    assert!(
+        input
+            .material
+            .compiled_membrane_plasticity(true)
+            .unwrap()
+            .unwrap()
+            .damage()
+            .is_some()
+    );
+    let report = condition(&input).unwrap();
+    assert!(
+        report
+            .discarded_structure
+            .contains(&"membrane_damage_model".to_owned())
+    );
+    assert!(
+        report
+            .discarded_structure
+            .contains(&"membrane_plasticity_model".to_owned())
+    );
+    for (key, _) in DAMAGE_PROPERTIES {
+        assert!(!report.material.properties.contains_key(key));
+        assert!(report.discarded_properties.contains(&(*key).to_owned()));
+    }
+    let resolved = catalog().resolve(&report.selection).unwrap();
+    assert!(resolved.membrane_plasticity().unwrap().is_none());
+    assert!(resolved.mechanics().is_ok());
+}
+
+#[test]
 fn nonlinear_thermal_and_history_models_cannot_silently_survive_scalar_conditioning() {
     let mut input = fixture();
     let nonlinear: Selection = serde_json::from_str(include_str!(

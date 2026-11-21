@@ -604,6 +604,10 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             .material
             .structure
             .contains_key("membrane_plasticity_model")
+        || input
+            .material
+            .structure
+            .contains_key("membrane_damage_model")
     {
         return Err(invalid(
             "strip calibration needs its schema, explicit planar elastic model consent, sheet specimen, protocol/date and 1..16 experiments; history laws cannot be erased and nonlinear replacement needs a declared response family",
@@ -1137,12 +1141,13 @@ fn search<const N: usize>(
     input: &Input,
     initial: f64,
     budget: &mut Budget<'_>,
-) -> Result<(Start, [f64; N], Evaluation), Refusal> {
+) -> Result<(Start, [f64; N], Evaluation, Option<Vec<[f64; N]>>), Refusal> {
     let mut p = [initial; N];
     let mut e = evaluate(input, p, budget).map_err(ForwardFailure::refusal)?;
     let mut lambda = 1e-3_f64;
     let mut converged = false;
     let mut iterations = 0;
+    let mut cached_adjoint_j = None;
     for _ in 0..input.policy.max_iterations {
         iterations += 1;
         let j = match input.policy.sensitivity {
@@ -1151,10 +1156,16 @@ fn search<const N: usize>(
         };
         if gradient(&j, &e) < 1e-6 {
             converged = true;
+            if input.policy.sensitivity == SensitivityMode::Adjoint {
+                cached_adjoint_j = Some(j);
+            }
             break;
         }
         let scales = norms(&j);
         if scales.iter().any(|s| *s <= 1e-10) {
+            if input.policy.sensitivity == SensitivityMode::Adjoint {
+                cached_adjoint_j = Some(j);
+            }
             break;
         }
         let mut accepted = false;
@@ -1199,6 +1210,9 @@ fn search<const N: usize>(
             lambda *= 10.0;
         }
         if !accepted {
+            if input.policy.sensitivity == SensitivityMode::Adjoint {
+                cached_adjoint_j = Some(j);
+            }
             break;
         }
     }
@@ -1212,6 +1226,7 @@ fn search<const N: usize>(
         },
         p,
         e,
+        cached_adjoint_j,
     ))
 }
 
@@ -1313,11 +1328,13 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     let mut starts = Vec::new();
     let mut coordinates = Vec::new();
     let mut evaluations = Vec::new();
+    let mut cached_jacobians = Vec::new();
     for initial in [0.25, 0.5, 0.75] {
-        let (start, p, eval) = search::<N>(input, initial, &mut budget)?;
+        let (start, p, eval, cached_j) = search::<N>(input, initial, &mut budget)?;
         starts.push(start);
         coordinates.push(p);
         evaluations.push(eval);
+        cached_jacobians.push(cached_j);
     }
     let best = (0..starts.len())
         .min_by(|&a, &b| starts[a].fit_sse.total_cmp(&starts[b].fit_sse))
@@ -1326,9 +1343,10 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     let parameters = starts[best].parameters.clone();
     let j = match input.policy.sensitivity {
         SensitivityMode::FiniteDifference => jacobian(input, p, &mut budget, None)?,
-        SensitivityMode::Adjoint => {
-            adjoint_jacobian(input, p, &mut budget, &mut evaluations[best])?
-        }
+        SensitivityMode::Adjoint => match cached_jacobians[best].take() {
+            Some(j) => j,
+            None => adjoint_jacobian(input, p, &mut budget, &mut evaluations[best])?,
+        },
     };
     let pivot = excitation(&j);
     let mut reasons = Vec::new();

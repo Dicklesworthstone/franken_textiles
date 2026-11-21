@@ -707,6 +707,10 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         || input
             .material
             .structure
+            .contains_key("membrane_damage_model")
+        || input
+            .material
+            .structure
             .contains_key("bending_plasticity_model")
     {
         return Err(invalid(

@@ -342,10 +342,14 @@ fn compile_law(
 
 fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
     input.material.validate()?;
-    if input
+    if (input
         .material
         .structure
         .contains_key("membrane_plasticity_model")
+        || input
+            .material
+            .structure
+            .contains_key("membrane_damage_model"))
         && input.plastic_equilibrium.is_none()
     {
         return Err(bad(

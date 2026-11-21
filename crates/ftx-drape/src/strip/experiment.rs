@@ -329,6 +329,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
     }
     if material.membrane_relaxation.is_some()
         || material.structure.contains_key("membrane_plasticity_model")
+        || material.structure.contains_key("membrane_damage_model")
     {
         return Err(invalid(
             "quasistatic elastic strip experiments cannot choose a duration or erase irreversible material history",

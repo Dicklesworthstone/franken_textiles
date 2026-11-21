@@ -413,17 +413,24 @@ impl Solver {
         if !stored.is_finite() {
             return Err(bad("plastic membrane storage overflows"));
         }
-        let scope = if field
+        let has_parallel = field
             .entries
             .iter()
             .flatten()
-            .any(|b| b.law.parallel_material_sha256().is_some())
-        {
-            "Rate-independent orthotropic equilibrium-branch yield and hardening in physical Green strain, with source-qualified Maxwell branches in parallel where marked. Yield excludes Maxwell stress. Excludes same-branch viscoplasticity, damage, rupture, nonlinear equilibrium curves, gather softening, remeshing and thermal feedback"
-        } else if has_damage {
-            "Rate-independent orthotropic yield and directional isotropic hardening in physical Green strain with opt-in accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1); plastic and damage dissipation are reported separately. Excludes rupture, monolithic softening/localization, simultaneous Maxwell/nonlinear membrane response, gather softening, remeshing and thermal feedback"
-        } else {
-            "Rate-independent orthotropic yield and directional isotropic hardening in physical Green strain; excludes damage, rupture, simultaneous Maxwell/nonlinear membrane response, gather softening, remeshing and thermal feedback"
+            .any(|b| b.law.parallel_material_sha256().is_some());
+        let scope = match (has_parallel, has_damage) {
+            (true, true) => {
+                "Rate-independent orthotropic equilibrium-branch yield and hardening in physical Green strain, with source-qualified Maxwell branches in parallel where marked and opt-in accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1) on separate panels where marked; plastic and damage dissipation are reported separately. Yield excludes Maxwell stress. Excludes combined parallel Maxwell + damage on the same material, same-branch viscoplasticity, rupture, monolithic softening/localization, nonlinear equilibrium curves, gather softening, remeshing and thermal feedback"
+            }
+            (true, false) => {
+                "Rate-independent orthotropic equilibrium-branch yield and hardening in physical Green strain, with source-qualified Maxwell branches in parallel where marked. Yield excludes Maxwell stress. Excludes same-branch viscoplasticity, damage, rupture, nonlinear equilibrium curves, gather softening, remeshing and thermal feedback"
+            }
+            (false, true) => {
+                "Rate-independent orthotropic yield and directional isotropic hardening in physical Green strain with opt-in accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1); plastic and damage dissipation are reported separately. Excludes rupture, monolithic softening/localization, simultaneous Maxwell/nonlinear membrane response, gather softening, remeshing and thermal feedback"
+            }
+            (false, false) => {
+                "Rate-independent orthotropic yield and directional isotropic hardening in physical Green strain; excludes damage, rupture, simultaneous Maxwell/nonlinear membrane response, gather softening, remeshing and thermal feedback"
+            }
         };
         let mut report = json!({"schema":"ftx-membrane-plasticity-history/1","model":MODEL,
             "initialization":"pristine_relative_to_authored_reference_metric",
