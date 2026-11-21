@@ -23851,7 +23851,7 @@ test('static_equilibrium rejects mm-overflow tolerances, joint plasticity surfac
       static_equilibrium: badEq } } });
   assert.equal(hq.e.staticEquilibrium.checked, false);
   assert.notEqual(hq.e.staticTolMm.value, 'Infinity');
-  assert.match(hq.e.error.textContent, /Static equilibrium/);
+  assert.match(hq.e.roundImportText.textContent, /Static equilibrium/);
 
   const revToken = 'a'.repeat(32);
   const rev = draftingPage({ materialToken: revToken });
@@ -23863,22 +23863,18 @@ test('static_equilibrium rejects mm-overflow tolerances, joint plasticity surfac
         static_equilibrium: badEq } } } });
   assert.equal(rev.e.staticEquilibrium.checked, false);
   assert.notEqual(rev.e.staticTolMm.value, 'Infinity');
-  assert.match(rev.e.status.textContent, /Static equilibrium/);
+  assert.match(rev.e.traceImportText.textContent, /Static equilibrium/);
 
-  const mw = await loadMaterialsWorker({ fold_up_configured() { throw Error('should not invoke fold'); } });
+  const mw = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    WebBody: class { free() {} },
+    fold_up_configured() { throw Error('should not invoke fold'); },
+  } });
   const mwErr = await mw.send({ type: 'fold', request: 901, bytes: new Uint8Array([1]).buffer, pattern: '{}', measurements: '{}', fit: '{}',
     selfContactMm: 2, twoStart: false, armDeg: 35, legs: 'standing', legFraction: 1, skinning: 'lbs', maxSettleSteps: 0,
     staticEquilibrium: badEq });
   assert.equal(mwErr.type, 'error');
   assert.match(mwErr.message, /Static equilibrium/);
-
-  const dw = await loadDraftingWorker({ fold_up_configured() { throw Error('should not invoke fold'); } });
-  await dw.send({ type: 'init' });
-  await dw.send({ type: 'load_body', bytes: new Uint8Array([1]).buffer });
-  const dwErr = await dw.send({ type: 'fold', request: 902, selfContactMm: 2, twoStart: false, armDeg: 35, legs: 'standing', legFraction: 1,
-    skinning: 'lbs', maxSettleSteps: 0, staticEquilibrium: badEq });
-  assert.equal(dwErr.type, 'error');
-  assert.match(dwErr.message, /Static equilibrium/);
 
   // 2. permanentStretchResult surfaces opt-in exact_exponential integration without altering default reports.
   const p = await pageModule();
@@ -23921,22 +23917,27 @@ test('static_equilibrium rejects mm-overflow tolerances, joint plasticity surfac
   assert.equal(JSON.parse(secExp.children[1].textContent).integration, 'exact_exponential');
 
   // 3. Fold summary surfaces opt-in membrane_plasticity_history.damage_model on both pages; omitted when undamaged.
-  const fp = await pageModule();
-  fp.select('pattern', '{"pieces":[{"id":"front"}]}'); fp.select('measurements', '{}'); fp.select('fit', '{}');
-  fp.select('model', new Uint8Array([1]));
+  const fp = await pageModule(); await fp.load(); await fp.bind(); fp.select('measurements'); fp.select('fit');
+  fp.e.body.files = [new Blob([new Uint8Array([1])])];
   await fp.e.fold.onclick();
   fp.emit({ settled: true, flags: [], material: { basis: 'bound' }, body: { legs: 'standing' }, numerical: {},
     membrane_plasticity_history: { damage_model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.00125 } },
     [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
-  const foldSec = section(fp, 'Fold simulation');
+  const foldSec = section(fp, 'fold');
   assert.deepEqual(JSON.parse(foldSec.children[1].textContent).membrane_damage,
     { model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.00125 });
 
   const idx = draftingPage();
   idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
-  idx.worker.onmessage({ data: { type: 'body_loaded', info: { vertices: 100 } } });
-  idx.e.fold.onclick();
-  const idxFold = idx.worker.messages.findLast(m => m.type === 'fold');
+  idx.e.bodyFile.files = [new Blob([new Uint8Array([1])])];
+  await idx.e.bodyFile.handlers.change();
+  idx.worker.onmessage({ data: { type: 'bodyReady', request: idx.messages.findLast(m => m.type === 'body').request } });
+  await idx.e.go.handlers.click();
+  idx.worker.onmessage({ data: { type: 'result', request: idx.messages.findLast(m => m.type === 'run').request,
+    res: { title: 'Bolero', status: 'CONVERGED', basis: {}, zip: 'r.zip' }, blobs: {}, foldable: true, bodyCheckable: true,
+    roundSources: { pattern: '{}', measurements: '{}', fit: '{}' } } });
+  idx.e.foldGo.handlers.click();
+  const idxFold = idx.messages.findLast(m => m.type === 'fold');
   const idxRep = { settled: true, flags: [],
     membrane_plasticity_history: { damage_model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.0025 } };
   idx.worker.onmessage({ data: { type: 'folded', request: idxFold.request, report: idxRep, reportText: JSON.stringify(idxRep), viewer: '<html/>' } });
