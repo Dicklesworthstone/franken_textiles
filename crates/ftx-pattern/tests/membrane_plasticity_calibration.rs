@@ -1316,15 +1316,17 @@ fn joint_relaxation_opt_in_exact_exponential_identifies_and_publishes_scheme() {
         mat_json["membrane_relaxation"]["integration"],
         json!("exact_exponential")
     );
-    // Compiled parallel law preserves ExactExponential integration.
-    let compiled_plastic = material
-        .compiled_membrane_plasticity(true)
-        .unwrap()
-        .unwrap();
-    let compiled_relax = material
-        .compiled_membrane_relaxation(true)
-        .unwrap()
-        .unwrap();
+    // Compiled parallel law through ResolvedMaterial preserves ExactExponential integration.
+    use ftx_pattern::{material_catalog::Selection, materials::Catalog};
+    let selection = Selection {
+        id: material.id.clone(),
+        record: Some(material.clone()),
+        allow_estimates: true,
+        ..Selection::default()
+    };
+    let resolved = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+    let compiled_plastic = resolved.membrane_plasticity().unwrap().unwrap();
+    let compiled_relax = resolved.membrane_relaxation().unwrap().unwrap();
     assert_eq!(
         compiled_relax.integration(),
         IntegrationScheme::ExactExponential
