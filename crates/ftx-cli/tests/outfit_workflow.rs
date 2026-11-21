@@ -365,3 +365,46 @@ fn invalid_hat_patterns_do_not_publish_partial_reviews() {
         assert!(!dir.join("nope").exists());
     }
 }
+
+#[test]
+fn hat_recomputes_record_bearing_measurements_ignoring_stale_or_missing_fused_cache() {
+    let dir = setup();
+    let fresh = ftx_measure::reference_wearer(1000.0, Some(30.0), Some("F"), None).unwrap();
+    let hat = ftx_pattern::draft::fez::fez(&fresh, None).unwrap().0;
+    save(&dir.join("hat.json"), &hat);
+
+    let rebind = |doc: &Value| {
+        save(&dir.join("measurements.json"), doc);
+        let hash = sha256_hex(&std::fs::read(dir.join("measurements.json")).unwrap());
+        for garment in ["jacket", "trousers"] {
+            let path = dir.join(garment).join("sim_report.json");
+            let mut report = read(&path);
+            report["measurements_sha256"] = json!(hash);
+            save(&path, &report);
+        }
+    };
+
+    rebind(&fresh);
+    let expected = run(&dir, &["--out", "fresh", "--hat", "hat.json"], 0)["result"].clone();
+
+    let mut poisoned = fresh.clone();
+    poisoned["fused"]["stature"]["value_mm"] = json!(650.0);
+    poisoned["fused"]["head"]["value_mm"] = json!(320.0);
+    rebind(&poisoned);
+    let from_poisoned = run(&dir, &["--out", "poisoned", "--hat", "hat.json"], 0)["result"].clone();
+    assert_eq!(from_poisoned["hat"], expected["hat"]);
+    assert_ne!(
+        from_poisoned["measurements_sha256"],
+        expected["measurements_sha256"]
+    );
+    assert_eq!(
+        std::fs::read(dir.join("poisoned/outfit_front.png")).unwrap(),
+        std::fs::read(dir.join("fresh/outfit_front.png")).unwrap()
+    );
+
+    let mut unfused = fresh;
+    unfused.as_object_mut().unwrap().remove("fused");
+    rebind(&unfused);
+    let from_unfused = run(&dir, &["--out", "unfused", "--hat", "hat.json"], 0)["result"].clone();
+    assert_eq!(from_unfused["hat"], expected["hat"]);
+}

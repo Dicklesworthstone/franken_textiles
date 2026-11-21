@@ -426,14 +426,14 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let evidence = read_bytes(Path::new(required(args, "measurements")?))?;
     let raw: Value =
         serde_json::from_slice(&evidence).map_err(|e| bad_input(format!("measurements: {e}")))?;
-    crate::round::measurements(&raw)?;
+    let fused = crate::round::measurements(&raw)?;
     let mut outfit = assemble(
         &args.values,
         sha256_hex(&evidence),
         args.options.contains_key("seams"),
     )?;
     if let Some(path) = args.options.get("hat") {
-        add_hat(&mut outfit, Path::new(path), &raw)?;
+        add_hat(&mut outfit, Path::new(path), &fused)?;
     }
     let images = shots(&outfit, width, height);
     let mut report = json!({"schema":"ftx-outfit/1","status":if outfit.flagged {"VISUALIZATION_WITH_FLAGS"}else{"VISUALIZATION_ONLY"},

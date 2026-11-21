@@ -116,6 +116,7 @@ pub(super) fn sim_points(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ));
     }
     let (measurements, raw_measurements) = document(Path::new(required(args, "measurements")?))?;
+    let measurements = crate::current_measurements(measurements)?;
     let levels = landmarks(Meas(&measurements))?;
     let (map, _) = document(&dir.join("mesh_map.json"))?;
     let raw = bytes(&dir.join("fold.pc2"), MAX_CACHE_BYTES)?;

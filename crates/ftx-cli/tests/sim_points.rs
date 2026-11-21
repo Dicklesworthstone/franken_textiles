@@ -329,3 +329,26 @@ fn viewer_checks_cloth_crossings_even_in_frames_it_would_drop() {
     let unprotected: Value = serde_json::from_slice(&contact_only().stdout).unwrap();
     assert_eq!(unprotected["refusal"]["code"], "invalid_document");
 }
+
+#[test]
+fn sim_points_recomputes_record_bearing_measurements_ignoring_stale_or_missing_fused_cache() {
+    let dir = setup();
+    let expected = run(&dir, &[], 0)["result"].clone();
+    let fresh: Value = serde_json::from_slice(&std::fs::read(dir.join("m.json")).unwrap()).unwrap();
+
+    let mut poisoned = fresh.clone();
+    poisoned["fused"]["waist_height"]["value_mm"] = json!(123.0);
+    save(&dir.join("m.json"), &poisoned);
+    let from_poisoned = run(&dir, &[], 0)["result"].clone();
+    assert_eq!(from_poisoned["rows"], expected["rows"]);
+    assert_ne!(
+        from_poisoned["measurements_sha256"],
+        expected["measurements_sha256"]
+    );
+
+    let mut unfused = fresh;
+    unfused.as_object_mut().unwrap().remove("fused");
+    save(&dir.join("m.json"), &unfused);
+    let from_unfused = run(&dir, &[], 0)["result"].clone();
+    assert_eq!(from_unfused["rows"], expected["rows"]);
+}
