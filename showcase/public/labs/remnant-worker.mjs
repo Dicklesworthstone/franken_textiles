@@ -8,6 +8,8 @@ const TODAY = "2026-10-12";
 const CREATED = "2026-10-12T00:00:00Z";
 const DEFAULT_MATERIAL = "dharma/cotton-muslin-3.5oz";
 const SHEET_WIDTH_MM = 1143; // 45 in bolt width matching dharma/cotton-muslin-3.5oz
+// Candidate grid only. The native planner still checks the full cut polygons and clearances.
+const SEARCH_STEP_MM = 30;
 
 export const REMNANT_PRESETS = {
   bolero_fez: {
@@ -55,7 +57,7 @@ export const initialRemnant = {
   sheetId: "muslin-sheet-01",
   sheetLengthMm: 720,
   material: DEFAULT_MATERIAL,
-  stepMm: 15,
+  stepMm: SEARCH_STEP_MM,
 };
 
 const draftedCache = new Map();
@@ -89,7 +91,7 @@ export function buildSheetRequest({
   copies = 1,
   gapMm = 4,
   boundaryMarginMm = 10,
-  stepMm = 15,
+  stepMm = SEARCH_STEP_MM,
   workLimit = 5000000,
 }) {
   return {
@@ -277,6 +279,7 @@ export function planRemnant(ftx, params = {}) {
       utilization: roll2.utilization,
     },
     job2: job2Result,
+    job2RequestJson: req2Json,
     job2Refusal,
   };
 }

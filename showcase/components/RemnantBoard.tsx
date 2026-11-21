@@ -70,6 +70,7 @@ export type RemnantPlan = {
     svg: string | null;
     residualJson: string;
   } | null;
+  job2RequestJson: string;
   job2Refusal: string | null;
 };
 
@@ -289,6 +290,12 @@ export default function RemnantBoard() {
   const [loadError, setLoadError] = useState("");
   const [solverError, setSolverError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [downloads, setDownloads] = useState<{
+    plan: RemnantPlan;
+    svgUrl: string | null;
+    residualUrl: string;
+    replayUrl: string;
+  }>();
   const workerRef = useRef<Worker | null>(null);
   const serial = useRef(0);
 
@@ -380,22 +387,22 @@ export default function RemnantBoard() {
     !loadError &&
     !solverError;
 
-  const downloads = useMemo(() => {
-    if (!ready || !plan) return null;
+  useEffect(() => {
+    if (!ready || !plan) return;
     const svgText = plan.job2?.svg ?? plan.job1.svg;
-    return {
+    const urls = {
+      plan,
       svgUrl: svgText ? URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml" })) : null,
-      residualUrl: URL.createObjectURL(new Blob([plan.job1.residualJson], { type: "application/json" })),
+      residualUrl: URL.createObjectURL(new Blob([plan.job2?.residualJson ?? plan.job1.residualJson], { type: "application/json" })),
+      replayUrl: URL.createObjectURL(new Blob([plan.job2RequestJson], { type: "application/json" })),
+    };
+    setDownloads(urls);
+    return () => {
+      if (urls.svgUrl) URL.revokeObjectURL(urls.svgUrl);
+      URL.revokeObjectURL(urls.residualUrl);
+      URL.revokeObjectURL(urls.replayUrl);
     };
   }, [ready, plan]);
-
-  useEffect(() => {
-    if (!downloads) return;
-    return () => {
-      if (downloads.svgUrl) URL.revokeObjectURL(downloads.svgUrl);
-      URL.revokeObjectURL(downloads.residualUrl);
-    };
-  }, [downloads]);
 
   const inspectOptions = useMemo(() => {
     if (!plan) return [];
@@ -575,7 +582,7 @@ export default function RemnantBoard() {
           </div>
         )}
 
-        {ready && plan && downloads && (
+        {ready && plan && downloads?.plan === plan && (
           <div className="remnant-downloads">
             {downloads.svgUrl && (
               <a
@@ -592,7 +599,14 @@ export default function RemnantBoard() {
               href={downloads.residualUrl}
               download={`${plan.stock.id}-residual-request.json`}
             >
-              Download residual-request.json <span aria-hidden="true">↓</span>
+              Download updated remnant <span aria-hidden="true">↓</span>
+            </a>
+            <a
+              className="cut-save remnant-save-secondary"
+              href={downloads.replayUrl}
+              download={`${plan.stock.id}-job2-request.json`}
+            >
+              Download Job 2 request <span aria-hidden="true">↓</span>
             </a>
           </div>
         )}
