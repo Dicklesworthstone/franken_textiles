@@ -581,3 +581,80 @@ fn known_plastic_equilibrium_calibrates_and_runs_a_locked_parallel_strip() {
         assert!(!output.status.success());
     }
 }
+
+#[test]
+fn exact_exponential_calibration_propagates_and_matches_time_integration_across_cli_and_wasm() {
+    let w = Workspace::new();
+    let default_input = fixture();
+    w.write("default.json", &default_input);
+    let default_cli = w.ok(&["calibrate-relaxation", "default.json", "--allow-estimates"]);
+    let default_wasm: Value = serde_json::from_str(
+        &ftx_wasm::materials::calibrate_relaxation(&default_input.to_string(), true).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        default_cli["selection"]["record"]["membrane_relaxation"]
+            .get("integration")
+            .is_none()
+    );
+    assert_eq!(
+        default_cli["time_integration"],
+        default_wasm["time_integration"]
+    );
+    assert!(
+        default_cli["time_integration"]
+            .as_str()
+            .unwrap()
+            .contains("backward Euler")
+    );
+
+    let mut exact_input = default_input;
+    exact_input["integration"] = json!("exact_exponential");
+    w.write("exact.json", &exact_input);
+    let exact_cli = w.ok(&["calibrate-relaxation", "exact.json", "--allow-estimates"]);
+    let exact_primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&w.0)
+        .args([
+            "materials",
+            "calibrate-relaxation",
+            "exact.json",
+            "--allow-estimates",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        exact_primary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exact_primary.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&exact_primary.stdout).unwrap()["result"],
+        exact_cli
+    );
+    let exact_wasm: Value = serde_json::from_str(
+        &ftx_wasm::materials::calibrate_relaxation(&exact_input.to_string(), true).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        exact_cli["selection"]["record"]["membrane_relaxation"]["integration"],
+        json!("exact_exponential")
+    );
+    assert_eq!(exact_cli["selection_json"], exact_wasm["selection_json"]);
+    assert_eq!(
+        exact_cli["time_integration"],
+        exact_wasm["time_integration"]
+    );
+    assert!(
+        exact_cli["time_integration"]
+            .as_str()
+            .unwrap()
+            .contains("exact piecewise-linear exponential integration")
+    );
+    assert!(
+        !exact_cli["time_integration"]
+            .as_str()
+            .unwrap()
+            .contains("backward Euler")
+    );
+}

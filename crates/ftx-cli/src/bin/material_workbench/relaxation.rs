@@ -59,11 +59,7 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     let selection = material.frozen_selection();
     let selection_json = serde_json::to_string(&selection)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
-    let time_integration = if report.input.plastic_equilibrium.is_some() {
-        "Maxwell calibration analytically integrates piecewise-linear total Green strain; the independently characterized plastic equilibrium advances at every recorded node, including unobserved loads. This is not a continuous-path plasticity solution. The drape solver uses backward Euler and requires time-step refinement."
-    } else {
-        "Calibration analytically integrates piecewise-linear Green strain; the drape solver uses backward Euler and requires time-step refinement."
-    };
+    let time_integration = report.time_integration_note();
     let mut output = json!({"calibration":report,"selection":selection,"selection_json":selection_json,
         "simulation_ready":readiness.is_ok(),"mechanics_refusal":readiness.err(),
         "empirical_validation_claim":false,"fit_claim":false,

@@ -203,6 +203,32 @@ pub struct Report {
     pub missing_mechanics: Vec<String>,
 }
 
+impl Report {
+    /// Canonical description of the calibration and drape time-integration basis for native and
+    /// browser adapters. Default backward-Euler strings stay byte-identical; opt-in
+    /// [`IntegrationScheme::ExactExponential`] states its exact piecewise-linear Maxwell scope.
+    #[must_use]
+    pub const fn time_integration_note(&self) -> &'static str {
+        match (
+            self.input.integration,
+            self.input.plastic_equilibrium.is_some(),
+        ) {
+            (IntegrationScheme::BackwardEuler, true) => {
+                "Maxwell calibration analytically integrates piecewise-linear total Green strain; the independently characterized plastic equilibrium advances at every recorded node, including unobserved loads. This is not a continuous-path plasticity solution. The drape solver uses backward Euler and requires time-step refinement."
+            }
+            (IntegrationScheme::BackwardEuler, false) => {
+                "Calibration analytically integrates piecewise-linear Green strain; the drape solver uses backward Euler and requires time-step refinement."
+            }
+            (IntegrationScheme::ExactExponential, true) => {
+                "Maxwell calibration analytically integrates piecewise-linear total Green strain, and the fitted Maxwell branches use exact piecewise-linear exponential integration in the drape solver; the independently characterized plastic equilibrium advances at every recorded node and uses the drape return map, which is not a continuous-path plasticity solution and still requires time-step refinement."
+            }
+            (IntegrationScheme::ExactExponential, false) => {
+                "Calibration analytically integrates piecewise-linear Green strain, and the fitted Maxwell branches use exact piecewise-linear exponential integration in the drape solver (step-size invariant on constant-strain holds and constant-rate ramps; mechanical equilibrium and contact dynamics still require time-step refinement)."
+            }
+        }
+    }
+}
+
 fn bad(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }

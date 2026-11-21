@@ -833,14 +833,29 @@ fn opt_in_exact_exponential_integration_propagates_to_calibrated_proportional_an
 
     // Default calibration omits `integration` on both Input and published Relaxation.
     let base = input(&[(1.4, 0.7)], true);
-    assert!(serde_json::to_value(&base).unwrap().get("integration").is_none());
+    assert!(
+        serde_json::to_value(&base)
+            .unwrap()
+            .get("integration")
+            .is_none()
+    );
     let base_report = calibrate(&base).unwrap();
     let base_law = base_report.material.membrane_relaxation.as_ref().unwrap();
     assert_eq!(base_law.integration, IntegrationScheme::BackwardEuler);
-    assert!(serde_json::to_value(base_law).unwrap().get("integration").is_none());
+    assert!(
+        serde_json::to_value(base_law)
+            .unwrap()
+            .get("integration")
+            .is_none()
+    );
+    assert!(
+        base_report
+            .time_integration_note()
+            .contains("backward Euler")
+    );
 
     // Opt-in ExactExponential propagates on proportional calibration and yields step-size-invariant holds.
-    let mut exact = base.clone();
+    let mut exact = base;
     exact.integration = IntegrationScheme::ExactExponential;
     let exact_report = calibrate(&exact).unwrap();
     let exact_law = exact_report.material.membrane_relaxation.as_ref().unwrap();
@@ -849,20 +864,30 @@ fn opt_in_exact_exponential_integration_propagates_to_calibrated_proportional_an
         serde_json::to_value(exact_law).unwrap()["integration"],
         serde_json::json!("exact_exponential")
     );
+    assert!(
+        exact_report
+            .time_integration_note()
+            .contains("exact piecewise-linear exponential integration")
+    );
+    assert!(
+        !exact_report
+            .time_integration_note()
+            .contains("backward Euler")
+    );
     let q = ftx_pattern::material_catalog::normalize(&exact_report.material)
         .unwrap()
         .mechanics(true)
         .unwrap()
         .origin_tangent();
     let compiled = exact_law
-        .compile(q, &exact_report.material.sources, true)
+        .compile(&exact_report.material.sources, true, q)
         .unwrap();
     assert_eq!(compiled.integration(), IntegrationScheme::ExactExponential);
     let hold_strain = [0.04, -0.01, 0.02];
-    let mut coarse = compiled.memory(hold_strain).unwrap();
+    let mut coarse = compiled.initialize(hold_strain).unwrap();
     let upd_coarse = coarse.advance(hold_strain, 0.4).unwrap();
     coarse = upd_coarse.memory;
-    let mut fine = compiled.memory(hold_strain).unwrap();
+    let mut fine = compiled.initialize(hold_strain).unwrap();
     let mut fine_diss = 0.0;
     for _ in 0..20 {
         let upd = fine.advance(hold_strain, 0.02).unwrap();
@@ -880,16 +905,35 @@ fn opt_in_exact_exponential_integration_propagates_to_calibrated_proportional_an
         assert!((s_coarse[k] - s_fine[k]).abs() < 1e-12);
     }
 
-    // Opt-in ExactExponential also propagates on orthotropic calibration.
-    let mut ortho = base;
+    // Opt-in ExactExponential also propagates on orthotropic and parallel-plastic calibration
+    // and updates the canonical time_integration_note() accurately for both.
+    let plastic_default = calibrate(&plastic_input()).unwrap();
+    assert!(
+        plastic_default
+            .time_integration_note()
+            .contains("drape solver uses backward Euler")
+    );
+    let mut ortho = plastic_input();
     ortho.time_bounds_seconds.clear();
-    ortho.orthotropic = Some(ftx_pattern::material_relaxation::calibration::OrthotropicInput {
-        times_seconds: vec![0.7],
-        time_bounds_seconds: Vec::new(),
-        zero_threshold_n_m: 0.0,
-    });
+    ortho.orthotropic = Some(
+        ftx_pattern::material_relaxation::calibration::OrthotropicInput {
+            times_seconds: vec![0.7],
+            time_bounds_seconds: Vec::new(),
+            zero_threshold_n_m: 1e-7,
+        },
+    );
     ortho.integration = IntegrationScheme::ExactExponential;
     let ortho_report = calibrate(&ortho).unwrap();
     let ortho_law = ortho_report.material.membrane_relaxation.as_ref().unwrap();
     assert_eq!(ortho_law.integration, IntegrationScheme::ExactExponential);
+    assert!(
+        ortho_report
+            .time_integration_note()
+            .contains("exact piecewise-linear exponential integration")
+    );
+    assert!(
+        ortho_report
+            .time_integration_note()
+            .contains("plastic equilibrium")
+    );
 }
