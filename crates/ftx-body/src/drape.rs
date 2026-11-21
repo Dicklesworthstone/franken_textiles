@@ -1001,10 +1001,11 @@ pub fn clothing_skin(model: &AnnyModel, vertices: &[Vec3]) -> Result<SkinMesh, R
 /// beyond the kept part is not resolved by contact and a sleeve that covers the fingers still crosses
 /// them in the displayed body.
 ///
-/// `Full` keeps the whole hand, so the collider and the displayed body are the same surface there. It is
-/// for a sleeve that covers the hand from outside. The fingers of the drape pose are open, and each is
-/// narrower than the spacing of an ordinary garment mesh, so cloth cannot pass between them: a start that
-/// leaves cloth there is refused or does not converge. No finger is a measured shape; they are the model's.
+/// `Full` keeps the whole hand, so the collider and the displayed body are the same surface there. The
+/// fingers of the drape pose are open. A sleeve that ends at the wrist drapes with it. A sleeve whose end
+/// lies across the open fingers has not been made to start: the one drape tried was refused at its start,
+/// and `ftx place` showed cloth vertices inside the hand in every other placement looked at (spec 05 has
+/// the cases). No finger is a measured shape; they are the model's.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandCollider {

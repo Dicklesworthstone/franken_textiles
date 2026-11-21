@@ -860,10 +860,16 @@ synthetic geometry and grant no anatomical or fit claim about the hand.
 `Full` cuts nothing of the hand, so the collider and the display skin are the same surface there and
 have no hand cap. Measured on 2026-11-21 on the admitted model: 11026 collider vertices and 22048
 triangles, passing the solver's surface audit (143769 to 145077 overlapping pairs tested) for the 92 cm
-public-prior toddler at 20°, 45° and 75° of arm abduction and for two fitted adults. The fingers of the
-drape pose are open and thinner than an ordinary garment mesh is fine, so cloth cannot pass between them:
-a start that leaves cloth there is refused or does not converge. The fingers are the model's shape, not a
-measured hand, and grant no fit claim.
+public-prior toddler at 20°, 45° and 75° of arm abduction and for two fitted adults. A sleeve that ends at
+the wrist drapes with it (the 92 cm bolero's 335 mm sleeve: converged, no gating flags). The fingers of
+the drape pose are open, and a sleeve whose end lies across them has not been made to start. On that
+wearer, a 385 mm sleeve with a 207.7 mm cuff on its drafted 34.7 mm cylinder at 12 mm spacing was refused
+(`intersecting_start`, crossings left after 50 untangling rounds). `ftx place` on the same cut showed
+cloth vertices inside the hand at 34.7 mm with 8 mm spacing (2), at 45 mm with 12, 8 and 6 mm spacing
+(2, 4 and 3) and at 55 mm with 12 mm spacing (1, with 5 cloth-on-cloth crossing pairs); at 65 mm no
+vertex was inside but the sleeve crossed itself in 213 pairs. Those five were looked at, not draped. Why
+the start procedure does not clear the fingers has not been established. The fingers are the model's
+shape, not a measured hand, and grant no fit claim.
 
 ## Appendix A. Local-change labels (index j; blend-shape rows 624 + 2j and 625 + 2j)
 

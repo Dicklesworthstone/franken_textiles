@@ -226,7 +226,7 @@ pub struct FoldSettings {
     /// Skinning operator (`"lbs"` default; `"dqs"` opt-in dual-quaternion linear blending).
     #[serde(default, skip_serializing_if = "skinning_is_lbs")]
     pub skinning: SkinningMode,
-    /// Hand collider cut (`"wrist"` default reference cap; `"palm"` or `"knuckle"` opt-in sleeve colliders).
+    /// Hand collider cut (`"wrist"` default reference cap; `"palm"`, `"knuckle"`, or `"full"` opt-in sleeve colliders).
     #[serde(default, skip_serializing_if = "hand_collider_is_wrist")]
     pub hand_collider: HandCollider,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
@@ -656,6 +656,7 @@ mod tests {
         for (label, expected) in [
             ("palm", HandCollider::Palm),
             ("knuckle", HandCollider::Knuckle),
+            ("full", HandCollider::Full),
         ] {
             let mut configured = default.clone();
             configured["hand_collider"] = json!(label);

@@ -4699,6 +4699,10 @@ test('saved study accepted-fit pose metadata validates, freezes and refuses inva
   delete previewBase.measurementAcceptedFit;delete previewBase.measurementArmDeg;
   const previewSaved=parse(build({...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,hand_collider:'palm'}},workbenchModel()));
   assert.equal(previewSaved.request.measurementPose.hand_collider,'palm');
+  const fullAccepted=parse(build({...base,measurementAcceptedPose:{hand_collider:'full'}},workbenchModel()));
+  assert.equal(fullAccepted.request.measurementAcceptedPose.hand_collider,'full');
+  const fullPreview=parse(build({...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,hand_collider:'full'}},workbenchModel()));
+  assert.equal(fullPreview.request.measurementPose.hand_collider,'full');
   for(const bad of [
     {...base,measurementAcceptedPose:{}},
     {...base,measurementAcceptedPose:{legs:'kneeling'}},

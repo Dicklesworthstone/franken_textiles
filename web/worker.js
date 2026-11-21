@@ -157,8 +157,8 @@ onmessage = async (ev) => {
         throw new Error("Choose lbs or dqs skinning.");
       }
       const handCollider = msg.handCollider ?? "wrist";
-      if (!["wrist", "palm", "knuckle"].includes(handCollider)) {
-        throw new Error("Choose wrist, palm or knuckle hand collider.");
+      if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) {
+        throw new Error("Choose wrist, palm, knuckle or full hand collider.");
       }
       const settings = { self_contact_mm: msg.selfContactMm ?? 2, two_start: !!msg.twoStart,
         arm_abduction_deg: armDeg, legs: msg.legs ?? "standing",

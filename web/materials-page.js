@@ -5690,7 +5690,7 @@ function section3Pose() {
   const fraction = $("drapeLegFraction").value.trim(), skinning = $("drapeSkinning").value;
   const handCollider = $("drapeHands").value;
   if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
-  if (!["wrist", "palm", "knuckle"].includes(handCollider)) throw Error("Choose wrist, palm or knuckle hand collider.");
+  if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) throw Error("Choose wrist, palm, knuckle or full hand collider.");
   const pose = { arm_abduction_deg: angle, legs: $("drapeLegs").value, leg_fraction: Number(fraction),
     ...(skinning !== "lbs" ? { skinning } : {}),
     ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}) };
@@ -7141,7 +7141,7 @@ async function execute(op, studio = null) {
         const skinning = $("drapeSkinning").value;
         if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
         const handCollider = $("drapeHands").value;
-        if (!["wrist", "palm", "knuckle"].includes(handCollider)) throw Error("Choose wrist, palm or knuckle hand collider.");
+        if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) throw Error("Choose wrist, palm, knuckle or full hand collider.");
         msg.legs = $("drapeLegs").value;
         msg.legFraction = Number($("drapeLegFraction").value);
         msg.skinning = skinning;
@@ -8475,7 +8475,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
           !["standing", "seated", "squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
           settings.leg_fraction < 0 || settings.leg_fraction > 1 ||
           (settings.skinning !== undefined && !["lbs", "dqs"].includes(settings.skinning)) ||
-          (settings.hand_collider !== undefined && !["wrist", "palm", "knuckle"].includes(settings.hand_collider)) ||
+          (settings.hand_collider !== undefined && !["wrist", "palm", "knuckle", "full"].includes(settings.hand_collider)) ||
           !Number.isSafeInteger(settings.max_settle_steps) ||
           settings.max_settle_steps < 0 || settings.max_settle_steps > 256)) throw Error("Received drape settings are incomplete or outside the supported controls.");
       checkedTimeSubdivision(settings?.time_subdivision);

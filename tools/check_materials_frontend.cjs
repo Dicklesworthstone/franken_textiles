@@ -24039,8 +24039,8 @@ test('static_equilibrium rejects mm-overflow tolerances, joint plasticity surfac
   assert.match(idx.e.foldSummary.innerHTML, /Membrane stiffness degradation \(isotropic_accumulated_damage\/1\): damage dissipation 2\.500e-3 J/);
 });
 
-test('opt-in hand_collider (wrist/palm/knuckle) wires fail-closed across both workbenches, workers and handoffs', async () => {
-  // 1. Material workbench: wrist omits handCollider & hand_collider; palm/knuckle dispatch, render, invalidate, refuse invalid.
+test('opt-in hand_collider wires fail-closed across both workbenches, workers and handoffs', async () => {
+  // 1. Material workbench: wrist omits both keys. Opt-in colliders dispatch, render and invalidate.
   const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
   p.e.body.files = [new Blob([new Uint8Array([1])])];
   await p.e.fold.onclick();
@@ -24056,6 +24056,13 @@ test('opt-in hand_collider (wrist/palm/knuckle) wires fail-closed across both wo
   p.emit({ settled: true, hand_collider: 'knuckle', body: { legs: 'standing', leg_fraction: 1 } },
     [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
   assert.equal(JSON.parse(fSec.children[1].textContent).hand_collider, 'knuckle');
+
+  p.e.drapeHands.value = 'full'; p.e.drapeHands.handlers.change();
+  assert.equal(fSec.hidden, true);
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.at(-1).handCollider, 'full', p.e.error.textContent);
+  p.emit({ settled: true, hand_collider: 'full' }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.equal(JSON.parse(fSec.children[1].textContent).hand_collider, 'full');
 
   p.e.drapeHands.value = 'mitten';
   const beforeBad = p.current().messages.length;
@@ -24080,6 +24087,9 @@ test('opt-in hand_collider (wrist/palm/knuckle) wires fail-closed across both wo
   assert.equal((await mw.send({ ...baseFold, request: 2, bytes: new Uint8Array([1]).buffer, handCollider: 'palm' })).type, 'result');
   assert.equal(calls.at(-1).path, 'configured');
   assert.equal(calls.at(-1).settings.hand_collider, 'palm');
+  const fullRes = await mw.send({ ...baseFold, request: 4, bytes: new Uint8Array([1]).buffer, handCollider: 'full' });
+  assert.equal(fullRes.type, 'result', fullRes.message);
+  assert.equal(calls.at(-1).settings.hand_collider, 'full');
   const badRes = await mw.send({ ...baseFold, request: 3, bytes: new Uint8Array([1]).buffer, handCollider: 'mitten' });
   assert.equal(badRes.type, 'error');
   assert.match(badRes.message, /hand collider/i);
@@ -24101,17 +24111,20 @@ test('opt-in hand_collider (wrist/palm/knuckle) wires fail-closed across both wo
   const palmRep = { settled: true, flags: [], hand_collider: 'palm' };
   idx.worker.onmessage({ data: { type: 'folded', request: foldMsg.request, report: palmRep, reportText: JSON.stringify(palmRep), viewer: '<html/>' } });
   assert.match(idx.e.foldSummary.innerHTML, /Hand collider: palm/);
+  idx.e.drapeHands.value = 'full'; idx.e.drapeHands.handlers.change();
+  idx.e.foldGo.handlers.click();
+  assert.equal(idx.messages.findLast(m => m.type === 'fold').handCollider, 'full');
   idx.e.drapeHands.value = 'wrist'; idx.e.drapeHands.handlers.change();
   assert.equal(idx.e.foldSummary.textContent, '', 'changing drapeHands on index.html must invalidate prior fold');
 
-  // Bidirectional handoffs preserve palm/knuckle and refuse invalid values.
+  // Bidirectional handoffs preserve the whole-hand selection and refuse unknown values.
   const hToken = 'b'.repeat(32);
   const hq = await pageModule({ roundToken: hToken });
   const hFiles = { pattern: new Blob(['{"pieces":[{"id":"front"}]}']), measurements: new Blob(['{}']), fit: new Blob(['{}']) };
   await hq.windowEvents.message({ origin: 'https://unit.invalid', source: hq.opener, data: {
     type: 'ftx-round-sources', token: hToken, files: hFiles, bodySource: { model: new Blob([new Uint8Array([1])]) },
-    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, hand_collider: 'knuckle' } } });
-  assert.equal(hq.e.drapeHands.value, 'knuckle');
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, hand_collider: 'full' } } });
+  assert.equal(hq.e.drapeHands.value, 'full');
 
   const revToken = 'c'.repeat(32);
   const rev = draftingPage({ materialToken: revToken });
@@ -24119,8 +24132,8 @@ test('opt-in hand_collider (wrist/palm/knuckle) wires fail-closed across both wo
   await rev.windowEvents.message({ origin: 'https://unit.invalid', source: rev.opener, data: {
     type: 'ftx-material-pattern', token: revToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '5'.repeat(64),
     evaluatedInputs: { fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
-      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, hand_collider: 'palm' } } } });
-  assert.equal(rev.e.drapeHands.value, 'palm');
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, hand_collider: 'full' } } } });
+  assert.equal(rev.e.drapeHands.value, 'full');
 
   const badRevToken = 'd'.repeat(32);
   const badRev = draftingPage({ materialToken: badRevToken });
@@ -24161,8 +24174,8 @@ test('study body source forwards opt-in hand_collider in preview and accepted mo
   assert.equal(p.current().messages.length, beforeBad);
   assert.match(p.e.error.textContent, /hand collider/i);
 
-  // Accepted-fit study body omits default wrist and forwards palm + supplemental accepted pose.
-  p.e.drapeHands.value = 'palm'; p.e.drapeHands.handlers.change();
+  // Accepted-fit study body forwards the whole-hand choice with supplemental measurements.
+  p.e.drapeHands.value = 'full'; p.e.drapeHands.handlers.change();
   p.e.studyBodySource.value = 'accepted'; p.e.studyBodySource.handlers.change();
   p.e.bodyFitFile.files = [new Blob(['{"schema":"ftx-body-fit/1","status":"ACCEPTED"}'])];
   p.e.bodyFitFile.handlers.change();
@@ -24173,7 +24186,7 @@ test('study body source forwards opt-in hand_collider in preview and accepted mo
   await p.e.scenario.onclick();
   assert.equal(p.e.error.hidden, true);
   const supMsg = p.current().messages.at(-1);
-  assert.deepEqual(plain(supMsg.measurementAcceptedPose), { hand_collider: 'palm' });
+  assert.deepEqual(plain(supMsg.measurementAcceptedPose), { hand_collider: 'full' });
 
   // Worker accepts valid hand_collider on both measurementPose and measurementAcceptedPose, and refuses mitten.
   const calls = [], merged = '{"schema":"fabric-measurements/1","fused":{"chest":{"value_mm":540}}}';
@@ -24195,13 +24208,13 @@ test('study body source forwards opt-in hand_collider in preview and accepted mo
     measurementAcceptedPose: { hand_collider: 'mitten' } });
   assert.equal(badAcc.type, 'error');
   assert.match(badAcc.message, /hand-collider/i);
-  const okPrev = await w.send({ ...baseBody, measurementPose: { arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, hand_collider: 'knuckle' } });
+  const okPrev = await w.send({ ...baseBody, measurementPose: { arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, hand_collider: 'full' } });
   assert.equal(okPrev.type, 'result', okPrev.message);
-  assert.equal(JSON.parse(calls.at(-1)).hand_collider, 'knuckle');
+  assert.equal(JSON.parse(calls.at(-1)).hand_collider, 'full');
   const okAcc = await w.send({ ...baseBody, measurementAcceptedFit: '{"schema":"ftx-body-fit/1"}', measurementArmDeg: 40,
-    measurementAcceptedPose: { hand_collider: 'palm' } });
+    measurementAcceptedPose: { hand_collider: 'full' } });
   assert.equal(okAcc.type, 'result', okAcc.message);
-  assert.equal(JSON.parse(calls.at(-1)).hand_collider, 'palm');
+  assert.equal(JSON.parse(calls.at(-1)).hand_collider, 'full');
 });
 
 test('strip history, cylinder experiment and fold summaries surface opt-in exact_exponential relaxation without altering defaults', async () => {

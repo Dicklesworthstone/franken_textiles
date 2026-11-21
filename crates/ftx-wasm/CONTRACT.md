@@ -3,8 +3,8 @@
 **Opt-in drape solver strategies, Generalized-α, hand colliders, microclimate, and viscoelastic lowering.**
 `fold::FoldSettings` carries opt-in `hand_collider` (`"wrist"` default reference cap omitted from
 JSON; `"palm"`, `"knuckle"` and `"full"` native sleeve colliders forwarding into `clothing_skin_with_hands`
-and recorded on `sim_report.json["hand_collider"]` only when non-default; the pages' own validation
-still offers only wrist, palm and knuckle), `newton_strategy`
+and recorded on `sim_report.json["hand_collider"]` only when non-default, wired across both browser
+workbenches, workers and round handoffs), `newton_strategy`
 (`ProjectedNewton` default omitted from JSON;
 `AdaptiveIlu` and `TrustRegionSteihaug`), `integrator` (`ImplicitEuler` default omitted from
 JSON; `GeneralizedAlpha { rho_inf }`), and schedule/tolerance overrides (`step_s`, `sew_steps`,

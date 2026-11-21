@@ -144,7 +144,7 @@ self.onmessage = async ({ data: msg }) => {
           !["standing", "seated", "squat"].includes(pose.legs) || !Number.isFinite(pose.leg_fraction) ||
           pose.leg_fraction < 0 || pose.leg_fraction > 1 ||
           (Object.hasOwn(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning)) ||
-          (Object.hasOwn(pose, "hand_collider") && !["wrist", "palm", "knuckle"].includes(pose.hand_collider)) ||
+          (Object.hasOwn(pose, "hand_collider") && !["wrist", "palm", "knuckle", "full"].includes(pose.hand_collider)) ||
           msg.measurementAcceptedFit !== undefined)) {
         throw Error("Supplemental tape-fit preview pose must contain valid arm, leg, skinning and hand-collider settings without an accepted-fit source.");
       }
@@ -160,7 +160,7 @@ self.onmessage = async ({ data: msg }) => {
             (Object.hasOwn(acceptedPose, "legs") && !["standing", "seated", "squat"].includes(acceptedPose.legs)) ||
             (Object.hasOwn(acceptedPose, "leg_fraction") && (!Number.isFinite(acceptedPose.leg_fraction) || acceptedPose.leg_fraction < 0 || acceptedPose.leg_fraction > 1)) ||
             (Object.hasOwn(acceptedPose, "skinning") && !["lbs", "dqs"].includes(acceptedPose.skinning)) ||
-            (Object.hasOwn(acceptedPose, "hand_collider") && !["wrist", "palm", "knuckle"].includes(acceptedPose.hand_collider))) {
+            (Object.hasOwn(acceptedPose, "hand_collider") && !["wrist", "palm", "knuckle", "full"].includes(acceptedPose.hand_collider))) {
           throw Error("Supplemental accepted-fit pose requires an accepted body-fit source and valid leg, skinning and hand-collider settings.");
         }
       }
@@ -513,7 +513,7 @@ self.onmessage = async ({ data: msg }) => {
         const skinning = msg.skinning ?? "lbs";
         if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
         const handCollider = msg.handCollider ?? "wrist";
-        if (!["wrist", "palm", "knuckle"].includes(handCollider)) throw Error("Choose wrist, palm or knuckle hand collider.");
+        if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) throw Error("Choose wrist, palm, knuckle or full hand collider.");
         const settings = { self_contact_mm: msg.selfContactMm ?? 0, two_start: msg.twoStart ?? false,
           arm_abduction_deg: !imported && msg.armDeg === undefined ? 35 : msg.armDeg, legs: msg.legs ?? "standing",
           leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0,

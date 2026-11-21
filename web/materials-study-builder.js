@@ -2074,7 +2074,7 @@ function workbenchStudyBundle(value) {
           || (own(pose, "legs") && !["standing", "seated", "squat"].includes(pose.legs))
           || (own(pose, "leg_fraction") && (!Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1))
           || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))
-          || (own(pose, "hand_collider") && !["wrist", "palm", "knuckle"].includes(pose.hand_collider))) {
+          || (own(pose, "hand_collider") && !["wrist", "palm", "knuckle", "full"].includes(pose.hand_collider))) {
           throw Error("Supplemental accepted-fit pose needs valid leg, skinning and hand-collider settings.");
         }
       }
@@ -2089,7 +2089,7 @@ function workbenchStudyBundle(value) {
         || !["standing", "seated", "squat"].includes(pose.legs) || !Number.isFinite(pose.leg_fraction)
         || pose.leg_fraction < 0 || pose.leg_fraction > 1
         || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))
-        || (own(pose, "hand_collider") && !["wrist", "palm", "knuckle"].includes(pose.hand_collider))) {
+        || (own(pose, "hand_collider") && !["wrist", "palm", "knuckle", "full"].includes(pose.hand_collider))) {
         throw Error("Supplemental preview pose needs original primary measurements, valid arm, leg, skinning and hand-collider settings, and no accepted fit.");
       }
     }

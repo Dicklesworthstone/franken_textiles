@@ -2071,6 +2071,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(path.sha256(), expected.sha256());
+
+        req.arm_abduction_deg = 35.0;
+        req.hand_collider = HandCollider::Full;
+        let full_body = FittedBody::prepare(&finger_model, &hash, &req).unwrap();
+        assert_eq!(
+            full_body.report["shape_sha256"],
+            finger_wrist.report["shape_sha256"]
+        );
+        assert_eq!(full_body.report["pose"]["hand_collider"], "full");
+        let full_path = full_body
+            .motion_path(&finger_model, &hash, &motion)
+            .unwrap();
+        req.arm_abduction_deg = 36.0;
+        let full_end = FittedBody::prepare(&finger_model, &hash, &req).unwrap();
+        let expected_full = motion::Path::new(
+            &motion,
+            full_body.body().collision,
+            vec![full_end.collision.vertices],
+        )
+        .unwrap();
+        assert_eq!(full_path.sha256(), expected_full.sha256());
     }
 
     #[test]
@@ -2164,6 +2185,7 @@ mod tests {
         for (label, expected) in [
             ("palm", HandCollider::Palm),
             ("knuckle", HandCollider::Knuckle),
+            ("full", HandCollider::Full),
         ] {
             let mut configured = base.clone();
             configured["hand_collider"] = json!(label);

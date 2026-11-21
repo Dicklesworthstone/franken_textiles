@@ -256,7 +256,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
         <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
         <label>Skinning <select id="drapeSkinning"><option value="lbs">LBS (Anny default)</option><option value="dqs">DQS (dual-quaternion)</option></select></label>
-        <label>Hand collider <select id="drapeHands"><option value="wrist">Wrist cap (reference default)</option><option value="palm">Palm (wrist + metacarpals)</option><option value="knuckle">Knuckle (+ first finger bone)</option></select></label>
+        <label>Hand collider <select id="drapeHands"><option value="wrist">Wrist cap (reference default)</option><option value="palm">Palm (wrist + metacarpals)</option><option value="knuckle">Knuckle (+ first finger bone)</option><option value="full">Full hand (whole hand)</option></select></label>
         <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label></p>
       <p class="row"><label>Newton solver <select id="drapeNewtonStrategy"><option value="projected">Projected Newton (default)</option><option value="adaptive_ilu">Adaptive ILU-PCG</option><option value="trust_region">Trust-region Steihaug</option></select></label>
         <label>Integrator <select id="drapeIntegrator"><option value="implicit_euler">Implicit Euler (default)</option><option value="generalized_alpha">Generalized-α</option></select></label>
@@ -827,7 +827,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       ...(skinning !== "lbs" ? { skinning } : {}),
       ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}) };
     if (!fraction || !["standing", "seated", "squat"].includes(drapeSettings.legs) || !["lbs", "dqs"].includes(skinning) ||
-        !["wrist", "palm", "knuckle"].includes(handCollider) ||
+        !["wrist", "palm", "knuckle", "full"].includes(handCollider) ||
         !Number.isFinite(drapeSettings.leg_fraction) || drapeSettings.leg_fraction < 0 || drapeSettings.leg_fraction > 1 ||
         !settling || !Number.isSafeInteger(drapeSettings.max_settle_steps) || drapeSettings.max_settle_steps < 0 || drapeSettings.max_settle_steps > 256) {
       status("Choose a valid drape leg posture, fraction from 0 to 1, skinning mode, hand collider and whole settling limit from 0 to 256 before opening materials."); return;
@@ -1391,8 +1391,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       showError("Choose lbs or dqs skinning."); return;
     }
     const handCollider = $("drapeHands").value;
-    if (!["wrist", "palm", "knuckle"].includes(handCollider)) {
-      showError("Choose wrist, palm or knuckle hand collider."); return;
+    if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) {
+      showError("Choose wrist, palm, knuckle or full hand collider."); return;
     }
     let timeSubdivision, newtonStrategy, integrator, schedule, staticEquilibrium;
     try {
@@ -1495,7 +1495,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
                 !["standing","seated","squat"].includes(settings.legs) || !Number.isFinite(settings.leg_fraction) ||
                 settings.leg_fraction<0 || settings.leg_fraction>1 ||
                 (settings.skinning !== undefined && !["lbs","dqs"].includes(settings.skinning)) ||
-                (settings.hand_collider !== undefined && !["wrist","palm","knuckle"].includes(settings.hand_collider)) ||
+                (settings.hand_collider !== undefined && !["wrist","palm","knuckle","full"].includes(settings.hand_collider)) ||
                 !Number.isSafeInteger(settings.max_settle_steps) ||
                 settings.max_settle_steps<0 || settings.max_settle_steps>256)throw Error("Checked drape model or settings are incomplete.");
             checkedTimeSubdivision(settings.time_subdivision);
