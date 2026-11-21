@@ -394,10 +394,29 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
             out.push_str(&crate::two_start::review_html(sim));
             let _ = write!(
                 out,
-                "<h3>Drape prediction</h3><p>Settled: {}. Self-contact enabled: {}.</p>",
+                "<h3>Drape prediction</h3><p>Settled: {}. Self-contact enabled: {}.",
                 cell(&sim["settled"]),
                 cell(&sim["self_contact"]["enabled"])
             );
+            if let Some(skinning) = sim["body"]["skinning"].as_str() {
+                let _ = write!(out, " Skinning: {}.", xml_escape(skinning));
+            }
+            if let Some(kind) = sim["numerical"]["newton_strategy"]["kind"].as_str() {
+                let _ = write!(out, " Newton solver: {}.", xml_escape(kind));
+            }
+            if let Some(ig) = sim["numerical"]["integrator"].as_object()
+                && let Some(kind) = ig.get("kind").and_then(Value::as_str)
+            {
+                let _ = write!(out, " Integrator: {}", xml_escape(kind));
+                if let Some(rho) = ig.get("rho_inf") {
+                    let rho_text = rho
+                        .as_f64()
+                        .map_or_else(|| cell(rho), |v| xml_escape(&v.to_string()));
+                    let _ = write!(out, " (ρ∞ = {rho_text})");
+                }
+                out.push('.');
+            }
+            out.push_str("</p>");
             out.push_str("<strong>Gating flags</strong>");
             list(&mut out, &sim["gating"]);
             out.push_str("<strong>Advisory flags</strong>");
@@ -625,5 +644,39 @@ mod tests {
         // Only what was written is linked.
         assert!(!html.contains("refused/wrap/still_front.png"));
         assert!(!html.contains("refused/start/still_back.png"));
+    }
+
+    #[test]
+    fn drape_summary_shows_opt_in_skinning_and_solver_controls_without_changing_defaults() {
+        let default_entry = json!({
+            "round": 0,
+            "sim": {"settled": true, "self_contact": {"enabled": true}, "gating": [], "advisory": []}
+        });
+        let default_html = render(Path::new("."), &[default_entry]).unwrap();
+        assert!(default_html.contains(
+            "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true.</p>"
+        ));
+        assert!(!default_html.contains("Skinning:"));
+        assert!(!default_html.contains("Newton solver:"));
+        assert!(!default_html.contains("Integrator:"));
+
+        let opt_in_entry = json!({
+            "round": 1,
+            "sim": {
+                "settled": true,
+                "self_contact": {"enabled": true},
+                "body": {"skinning": "dqs"},
+                "numerical": {
+                    "newton_strategy": {"kind": "adaptive_ilu"},
+                    "integrator": {"kind": "generalized_alpha", "rho_inf": 0.75}
+                },
+                "gating": [],
+                "advisory": []
+            }
+        });
+        let opt_in_html = render(Path::new("."), &[opt_in_entry]).unwrap();
+        assert!(opt_in_html.contains(
+            "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true. Skinning: dqs. Newton solver: adaptive_ilu. Integrator: generalized_alpha (ρ∞ = 0.75).</p>"
+        ));
     }
 }
