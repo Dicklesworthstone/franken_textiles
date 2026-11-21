@@ -94,7 +94,6 @@ function fmt(n: number, digits = 2): string {
 function IsometricStack({
   layerIds,
   result,
-  refusal,
   insideC,
   outsideC,
   hasInterface,
@@ -103,7 +102,6 @@ function IsometricStack({
 }: {
   layerIds: string[];
   result?: SteadyResult;
-  refusal?: string;
   insideC: number;
   outsideC: number;
   hasInterface: boolean;
@@ -259,7 +257,7 @@ function IsometricStack({
       })()}
 
       {/* Heat flux direction arrow */}
-      {!refusal && result && Math.abs(result.state.flux_w_m2) > 1e-6 && (
+      {result && Math.abs(result.state.flux_w_m2) > 1e-6 && (
         <g>
           <line
             x1="44"
@@ -288,10 +286,12 @@ function IsometricStack({
 
 function TemperatureProfile({
   result,
+  pending,
   insideC,
   outsideC,
 }: {
   result?: SteadyResult;
+  pending: boolean;
   insideC: number;
   outsideC: number;
 }) {
@@ -300,7 +300,7 @@ function TemperatureProfile({
       <div className="th-profile-wrap">
         <h2>Steady temperature profile</h2>
         <p className="th-profile-note">
-          No profile is plotted while the request is refused. Supply an explicit interface resistance to solve a layered stack.
+          {pending ? "Waiting for the current solve…" : "No temperature profile is available for this request."}
         </p>
       </div>
     );
@@ -401,15 +401,13 @@ export default function ThermalSandwich() {
       outside_resistance_m2_k_w: R_OUT,
     };
   }, [layer1, layer2, hasInterface, interfaceR, insideC, outsideC]);
-  const [reply, setReply] = useState<{
-    request: typeof request;
-    source: "starter" | "wasm";
-    result?: SteadyResult;
-    refusal?: string;
-  }>();
+  const [reply, setReply] = useState<(
+    | { source: "starter" | "wasm"; result: SteadyResult }
+    | { source: "refusal" | "unavailable"; error: string }
+  ) & { request: typeof request }>();
   const active = reply?.request === request ? reply : undefined;
-  const result = active?.result;
-  const refusal = active?.refusal ?? "";
+  const result = active && "result" in active ? active.result : undefined;
+  const error = active && "error" in active ? active.error : undefined;
   const sourceTag = active?.source ?? "loading";
   const [downloads, setDownloads] = useState<{ result: SteadyResult; requestUrl: string; reportUrl: string }>();
 
@@ -440,10 +438,14 @@ export default function ThermalSandwich() {
     function dispatchWasm() {
       try {
         worker.current ??= new Worker("/labs/thermal-worker.mjs", { type: "module" });
-        worker.current.onmessage = ({ data }: MessageEvent<{ id: number; result?: SteadyResult; error?: string }>) => {
+        worker.current.onmessage = ({ data }: MessageEvent<{
+          id: number; result?: SteadyResult; error?: string; loadError?: string;
+        }>) => {
           if (data.id !== serial.current) return;
-          if (data.error) {
-            setReply({ request, refusal: data.error, source: "wasm" });
+          if (data.loadError) {
+            setReply({ request, error: data.loadError, source: "unavailable" });
+          } else if (data.error) {
+            setReply({ request, error: data.error, source: "refusal" });
           } else if (data.result) {
             setReply({ request, result: data.result, source: "wasm" });
           }
@@ -452,13 +454,13 @@ export default function ThermalSandwich() {
           worker.current?.terminate();
           worker.current = null;
           if (id === serial.current) {
-            setReply({ request, refusal: "The local thermal WASM engine could not load.", source: "wasm" });
+            setReply({ request, error: "The local thermal WASM engine could not load.", source: "unavailable" });
           }
         };
         worker.current.postMessage({ id, request });
       } catch (err) {
         if (id === serial.current) {
-          setReply({ request, refusal: err instanceof Error ? err.message : String(err), source: "wasm" });
+          setReply({ request, error: err instanceof Error ? err.message : String(err), source: "unavailable" });
         }
       }
     }
@@ -531,9 +533,11 @@ ftx materials thermal-steady stack-request.json --json`;
                     ? "Verified native fixture · measured-neoprene-steady.json"
                     : sourceTag === "loading"
                       ? "Solving in local Rust WASM…"
-                      : refusal
+                      : sourceTag === "refusal"
                         ? "Native Rust WASM · Refused"
-                        : "Solved live in local Rust WASM"}
+                        : sourceTag === "unavailable"
+                          ? "Local Rust WASM unavailable"
+                          : "Solved live in local Rust WASM"}
                   {" · "}
                   <strong>{activeLayerIds.length} {activeLayerIds.length === 1 ? "layer" : "layers"}</strong>
                 </span>
@@ -556,7 +560,6 @@ ftx materials thermal-steady stack-request.json --json`;
                   <IsometricStack
                     layerIds={activeLayerIds}
                     result={result}
-                    refusal={refusal}
                     insideC={insideC}
                     outsideC={outsideC}
                     hasInterface={hasInterface}
@@ -564,17 +567,17 @@ ftx materials thermal-steady stack-request.json --json`;
                     explode={explode}
                   />
                 </div>
-                <TemperatureProfile result={result} insideC={insideC} outsideC={outsideC} />
+                <TemperatureProfile result={result} pending={sourceTag === "loading"} insideC={insideC} outsideC={outsideC} />
               </div>
 
-              {refusal ? (
+              {error ? (
                 <div className="th-refusal-banner" role="alert">
-                  <span className="mono">Structured solver refusal · zero invented numbers</span>
-                  <h3>Layered solve blocked without explicit interface resistance.</h3>
+                  <h3>{sourceTag === "unavailable" ? "The local solver could not start" : "The solver refused this stack"}</h3>
                   <p>
-                    Rust engine returned: <code>{refusal}</code>. Adding a second layer requires one explicit nonnegative{" "}
-                    <code>interface_resistance_m2_k_w</code> entry per adjacent pair — FrankenTextiles refuses rather
-                    than silently inventing zero contact resistance or a guessed air gap.
+                    <code>{error}</code>
+                    {sourceTag === "refusal" && layer2 !== "none" && !hasInterface && (
+                      <> Supply one explicit nonnegative <code>interface_resistance_m2_k_w</code> entry per adjacent pair.</>
+                    )}
                   </p>
                 </div>
               ) : (

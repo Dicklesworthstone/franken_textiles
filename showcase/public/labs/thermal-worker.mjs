@@ -10,9 +10,14 @@ if (typeof DedicatedWorkerGlobalScope !== "undefined" && self instanceof Dedicat
   let latest;
   self.onmessage = async ({ data }) => {
     latest = data.id;
+    const ftx = await getStudioEngine().catch(error => {
+      if (latest === data.id) {
+        self.postMessage({ id: data.id, loadError: error instanceof Error ? error.message : String(error) });
+      }
+      return null;
+    });
+    if (!ftx || latest !== data.id) return;
     try {
-      const ftx = await getStudioEngine();
-      if (latest !== data.id) return;
       const result = solveThermalSteady(ftx, data.request);
       if (latest === data.id) self.postMessage({ id: data.id, result });
     } catch (error) {

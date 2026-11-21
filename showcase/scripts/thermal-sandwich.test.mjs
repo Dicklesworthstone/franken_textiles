@@ -99,6 +99,7 @@ test("thermal sandwich matches native steady conduction for 1 layer, 2 layers, r
     const loadingWorker = page.waitForRequest("**/labs/thermal-worker.mjs");
     await page.getByRole("button", { name: "Two-sheet sandwich" }).click();
     await loadingWorker;
+    assert.match(await page.locator(".th-profile-note").innerText(), /Waiting for the current solve/);
     assert.doesNotMatch(await page.locator('[data-metric="flux"]').innerText(), /W\/m²/);
     assert.equal(await page.locator(".th-downloads a").count(), 0);
     releaseWorker();
@@ -140,6 +141,27 @@ test("thermal sandwich matches native steady conduction for 1 layer, 2 layers, r
     assert.deepEqual(errors, []);
   } finally {
     releaseWorker();
+    await page.close();
+  }
+});
+
+test("thermal sandwich reports an engine download failure and recovers on a new solve", async () => {
+  const page = await browser.newPage({ ...opts, reducedMotion: "reduce" });
+  let blockEngine = true;
+  await page.route(/\/workbench\/pkg\/ftx_wasm_bg\.wasm(?:\.gz)?$/, route =>
+    blockEngine ? route.abort() : route.continue());
+  try {
+    await page.goto(new URL("/experiments/thermal/", site).href, { waitUntil: "domcontentloaded" });
+    await page.locator(".th-downloads a").first().waitFor();
+    await page.getByRole("button", { name: "Two-sheet sandwich" }).click();
+    await page.getByRole("heading", { name: "The local solver could not start" }).waitFor();
+    assert.equal(await page.locator(".th-downloads a").count(), 0);
+
+    blockEngine = false;
+    await page.getByLabel("Inside reservoir temperature in degrees Celsius").press("ArrowRight");
+    await page.locator('[data-metric="flux"]').filter({ hasText: /W\/m²/ }).waitFor();
+    assert.equal(await page.locator(".th-refusal-banner").count(), 0);
+  } finally {
     await page.close();
   }
 });
