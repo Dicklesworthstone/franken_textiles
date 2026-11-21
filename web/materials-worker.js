@@ -138,14 +138,15 @@ self.onmessage = async ({ data: msg }) => {
       if (typeof ftx.measurement_file !== "function") throw Error("Rebuild web/pkg: missing shared measurement fusion.");
       const pose = msg.measurementPose;
       if (pose !== undefined && (!pose || typeof pose !== "object" || Array.isArray(pose) ||
-          Object.keys(pose).some(key => !["arm_abduction_deg", "legs", "leg_fraction", "skinning"].includes(key)) ||
+          Object.keys(pose).some(key => !["arm_abduction_deg", "legs", "leg_fraction", "skinning", "hand_collider"].includes(key)) ||
           !["arm_abduction_deg", "legs", "leg_fraction"].every(key => Object.hasOwn(pose, key)) ||
           !Number.isFinite(pose.arm_abduction_deg) || pose.arm_abduction_deg < 0 || pose.arm_abduction_deg > 180 ||
           !["standing", "seated", "squat"].includes(pose.legs) || !Number.isFinite(pose.leg_fraction) ||
           pose.leg_fraction < 0 || pose.leg_fraction > 1 ||
           (Object.hasOwn(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning)) ||
+          (Object.hasOwn(pose, "hand_collider") && !["wrist", "palm", "knuckle"].includes(pose.hand_collider)) ||
           msg.measurementAcceptedFit !== undefined)) {
-        throw Error("Supplemental tape-fit preview pose must contain valid arm, leg and skinning settings without an accepted-fit source.");
+        throw Error("Supplemental tape-fit preview pose must contain valid arm, leg, skinning and hand-collider settings without an accepted-fit source.");
       }
       if (msg.measurementAcceptedFit !== undefined &&
           (!Number.isFinite(msg.measurementArmDeg) || msg.measurementArmDeg < 0 || msg.measurementArmDeg > 180)) {
@@ -154,12 +155,13 @@ self.onmessage = async ({ data: msg }) => {
       const acceptedPose = msg.measurementAcceptedPose;
       if (acceptedPose !== undefined) {
         const keys = acceptedPose && typeof acceptedPose === "object" && !Array.isArray(acceptedPose) ? Object.keys(acceptedPose) : null;
-        if (!keys || !keys.length || keys.some(key => !["legs", "leg_fraction", "skinning"].includes(key)) ||
+        if (!keys || !keys.length || keys.some(key => !["legs", "leg_fraction", "skinning", "hand_collider"].includes(key)) ||
             msg.measurementAcceptedFit === undefined || pose !== undefined ||
             (Object.hasOwn(acceptedPose, "legs") && !["standing", "seated", "squat"].includes(acceptedPose.legs)) ||
             (Object.hasOwn(acceptedPose, "leg_fraction") && (!Number.isFinite(acceptedPose.leg_fraction) || acceptedPose.leg_fraction < 0 || acceptedPose.leg_fraction > 1)) ||
-            (Object.hasOwn(acceptedPose, "skinning") && !["lbs", "dqs"].includes(acceptedPose.skinning))) {
-          throw Error("Supplemental accepted-fit pose requires an accepted body-fit source and valid leg/skinning settings.");
+            (Object.hasOwn(acceptedPose, "skinning") && !["lbs", "dqs"].includes(acceptedPose.skinning)) ||
+            (Object.hasOwn(acceptedPose, "hand_collider") && !["wrist", "palm", "knuckle"].includes(acceptedPose.hand_collider))) {
+          throw Error("Supplemental accepted-fit pose requires an accepted body-fit source and valid leg, skinning and hand-collider settings.");
         }
       }
       const primary = msg.measurementPrimary ?? msg.measurements;

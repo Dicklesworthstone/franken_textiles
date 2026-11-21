@@ -263,8 +263,8 @@ function bodyDependentStudies(id) {
   const mode = studyBodyMode();
   const used = id === "body" || (id === "scenarioBody" && mode === "request") ||
     (id === "measurements" && ["measurements", "accepted", "preview"].includes(mode)) ||
-    (["bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id) && mode === "preview") ||
-    (["bodyFitFile", "bodyFitConsent", "bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id) && mode === "accepted");
+    (["bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands"].includes(id) && mode === "preview") ||
+    (["bodyFitFile", "bodyFitConsent", "bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands"].includes(id) && mode === "accepted");
   return used ? ["scenario", ...(studyUsesBody() || (id === "body" && savedStudy?.request.onBody) ? ["study"] : [])] : [];
 }
 function guidedSourceStudies(id) {
@@ -5582,9 +5582,12 @@ async function measurementInput(msg) {
 function section3Pose() {
   const angle = drapeArmAngle();
   const fraction = $("drapeLegFraction").value.trim(), skinning = $("drapeSkinning").value;
+  const handCollider = $("drapeHands").value;
   if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
+  if (!["wrist", "palm", "knuckle"].includes(handCollider)) throw Error("Choose wrist, palm or knuckle hand collider.");
   const pose = { arm_abduction_deg: angle, legs: $("drapeLegs").value, leg_fraction: Number(fraction),
-    ...(skinning !== "lbs" ? { skinning } : {}) };
+    ...(skinning !== "lbs" ? { skinning } : {}),
+    ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}) };
   if (!fraction || !["standing", "seated", "squat"].includes(pose.legs) ||
       !Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1) {
     throw Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
@@ -5609,6 +5612,7 @@ async function studyBodyInput(msg) {
     ...(pose.legs !== "standing" ? { legs: pose.legs } : {}),
     ...(pose.leg_fraction !== 1 ? { leg_fraction: pose.leg_fraction } : {}),
     ...(pose.skinning ? { skinning: pose.skinning } : {}),
+    ...(pose.hand_collider ? { hand_collider: pose.hand_collider } : {}),
   };
   const hasExtra = Object.keys(extra).length > 0;
   const measurements = has("measurements") ? await measurementInput(msg) : "{}";
@@ -8231,7 +8235,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
       "sewOptions", "sewOptimize", "quotes", "market"].includes(id);
     invalidate([...keys, ...bodyDependentStudies(id), ...guidedKeys], guidedProcessSource || guidedKeys.length > 0 ||
       id === "treatmentRequest" ||
-      (["preview", "accepted"].includes(studyBodyMode()) && ["drapeLegs", "drapeLegFraction", "drapeSkinning"].includes(id)) ||
+      (["preview", "accepted"].includes(studyBodyMode()) && ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands"].includes(id)) ||
       ["measurements", "fit", "body", "selfContact", "scenarioBody", "heatConditions", "vaporSurfaceConditions"].includes(id));
     return scenarioCasesLoading;
   });

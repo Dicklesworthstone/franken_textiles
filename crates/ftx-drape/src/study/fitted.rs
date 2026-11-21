@@ -2,9 +2,10 @@
 use std::collections::BTreeMap;
 
 use ftx_body::{
-    Affine, AnnyModel, BodyFrames, BodyParams, Legs, NappyOccupancy, Pose, RestBody, SkinMesh,
-    SkinningMode, TAPE_FIELDS, Wearer, accepted_shape::AcceptedShape, clothing_skin, fit_tape,
-    joint_rotations, partial_tape_readings, pose_deltas, skin_mesh, tape_targets,
+    Affine, AnnyModel, BodyFrames, BodyParams, HandCollider, Legs, NappyOccupancy, Pose, RestBody,
+    SkinMesh, SkinningMode, TAPE_FIELDS, Wearer, accepted_shape::AcceptedShape,
+    clothing_skin_with_hands, fit_tape, joint_rotations, partial_tape_readings, pose_deltas,
+    skin_mesh, tape_targets,
 };
 use ftx_core::{Mat3, Refusal, Vec3, det};
 use ftx_pattern::{instance::PyError, validate::BodyMeasure};
@@ -42,6 +43,9 @@ pub struct BodyRequest {
     /// Skinning operator (`"lbs"` default; `"dqs"` opt-in dual-quaternion linear blending).
     #[serde(default, skip_serializing_if = "skinning_is_lbs")]
     pub skinning: SkinningMode,
+    /// Hand collider cut (`"wrist"` default reference cap; `"palm"` or `"knuckle"` opt-in sleeve colliders).
+    #[serde(default, skip_serializing_if = "hand_collider_is_wrist")]
+    pub hand_collider: HandCollider,
 }
 
 fn empty_measurements() -> Value {
@@ -58,6 +62,9 @@ fn is_full_leg_fraction(fraction: &f64) -> bool {
 }
 fn skinning_is_lbs(mode: &SkinningMode) -> bool {
     mode.is_lbs()
+}
+fn hand_collider_is_wrist(hands: &HandCollider) -> bool {
+    hands.is_wrist()
 }
 
 impl BodyRequest {
@@ -86,6 +93,7 @@ impl BodyRequest {
                     "legs",
                     "leg_fraction",
                     "skinning",
+                    "hand_collider",
                 ]
                 .iter()
                 .any(|k| input.get(k).is_some())
@@ -103,6 +111,7 @@ impl BodyRequest {
                     legs: Legs::Standing,
                     leg_fraction: 1.0,
                     skinning: SkinningMode::LinearBlend,
+                    hand_collider: HandCollider::Wrist,
                 }
             }
             _ => {
@@ -189,9 +198,10 @@ pub struct FittedBody {
     collision: SkinMesh,
     display: SkinMesh,
     arm_deg: f64,
-    // Motion begins at this exact selected pose and skinning operator; public report edits cannot alter them.
+    // Motion begins at this exact selected pose, skinning operator and hand collider; public report edits cannot alter them.
     initial_pose: Pose,
     skinning: SkinningMode,
+    hand_collider: HandCollider,
     measurement_pose: Pose,
     params: BodyParams,
     // This geometric proxy never replaces the source shape or inherits edits to the public report.
@@ -304,6 +314,7 @@ impl FittedBody {
             legs: Legs::Standing,
             leg_fraction: 1.0,
             skinning: SkinningMode::LinearBlend,
+            hand_collider: HandCollider::Wrist,
         };
         Self::prepare(model, "", &request)
     }
@@ -334,13 +345,14 @@ impl FittedBody {
         pose.legs = request.legs;
         pose.leg_fraction = request.leg_fraction;
         let rest = model.rest(occupied_params)?;
-        let rest_collision = clothing_skin(model, &rest.vertices)?;
+        let rest_collision =
+            clothing_skin_with_hands(model, &rest.vertices, request.hand_collider)?;
         let posed = model.pose_with_skinning(
             &rest,
             &pose_deltas(model, &rest, &pose, 1.0)?,
             request.skinning,
         )?;
-        let collision = clothing_skin(model, &posed.vertices)?;
+        let collision = clothing_skin_with_hands(model, &posed.vertices, request.hand_collider)?;
         let display = skin_mesh(&posed.vertices, &model.data().faces)?;
         let frames = BodyFrames::new(model, &posed)?;
         report["measurements_sha256"] = json!(hash(&request.measurements)?);
@@ -364,6 +376,9 @@ impl FittedBody {
         if !request.skinning.is_lbs() {
             report["pose"]["skinning"] = json!(request.skinning);
         }
+        if !request.hand_collider.is_wrist() {
+            report["pose"]["hand_collider"] = json!(request.hand_collider);
+        }
         report["body_provenance"] = json!("MODEL_FIT");
         report["body_contact_proxy"] =
             collision.contact_proxy_basis_with_rest_and_skinning(&rest_collision, request.skinning);
@@ -377,6 +392,7 @@ impl FittedBody {
             arm_deg: request.arm_abduction_deg,
             initial_pose: pose,
             skinning: request.skinning,
+            hand_collider: request.hand_collider,
             measurement_pose,
             params,
             nappy_occupancy: occupancy,
@@ -561,7 +577,7 @@ impl FittedBody {
                         *vertex += displacement;
                     }
                 }
-                let skin = clothing_skin(model, &posed.vertices)?;
+                let skin = clothing_skin_with_hands(model, &posed.vertices, self.hand_collider)?;
                 if skin.triangles != self.collision.triangles
                     || skin.source_vertex != self.collision.source_vertex
                 {
@@ -794,6 +810,7 @@ fn accepted_shape(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftx_body::clothing_skin;
     use ftx_body::{AnnyData, Phenotype};
     use ftx_core::{Mat3, Vec3};
 
@@ -1943,6 +1960,120 @@ mod tests {
     }
 
     #[test]
+    fn opt_in_hand_collider_prepares_and_moves_consistently_without_changing_default_wrist() {
+        assert!(
+            BodyRequest::read(&json!({
+                "schema": "fabric-measurements/1",
+                "hand_collider": "palm"
+            }))
+            .is_err()
+        );
+        assert!(
+            BodyRequest::read(&json!({
+                "schema": "ftx-scenario-body/1",
+                "hand_collider": "mitten"
+            }))
+            .is_err()
+        );
+        let default_req = BodyRequest::read(&json!({"schema": "ftx-scenario-body/1"})).unwrap();
+        assert_eq!(default_req.hand_collider, HandCollider::Wrist);
+        assert!(
+            serde_json::to_value(&default_req)
+                .unwrap()
+                .get("hand_collider")
+                .is_none()
+        );
+        let knuckle = BodyRequest::read(&json!({
+            "schema": "ftx-scenario-body/1",
+            "hand_collider": "knuckle"
+        }))
+        .unwrap();
+        assert_eq!(knuckle.hand_collider, HandCollider::Knuckle);
+        assert_eq!(
+            serde_json::to_value(&knuckle).unwrap()["hand_collider"],
+            "knuckle"
+        );
+
+        let model = model();
+        let hash = "a".repeat(64);
+        let mut req = request();
+        let wrist_body = FittedBody::prepare(&model, &hash, &req).unwrap();
+        assert!(wrist_body.report["pose"].get("hand_collider").is_none());
+
+        // A model lacking finger bones must refuse palm/knuckle fail-closed rather than
+        // silently falling back to the wrist cap.
+        req.hand_collider = HandCollider::Knuckle;
+        let Err(missing_bone) = FittedBody::prepare(&model, &hash, &req) else {
+            panic!("expected missing finger bone refusal");
+        };
+        assert_eq!(missing_bone.code, ftx_core::RefusalCode::InvalidDocument);
+        assert!(
+            missing_bone.message.contains("finger1-2.R"),
+            "{missing_bone:?}"
+        );
+
+        // With finger bones present, prepare and motion_path preserve the opt-in hand collider
+        // and shape identity while keeping default wrist output unchanged.
+        let mut data = model.data().clone();
+        let wrist_r = model.bone_index("wrist.R").unwrap() as i64;
+        let wrist_l = model.bone_index("wrist.L").unwrap() as i64;
+        for (side, parent_wrist, sign) in [("R", wrist_r, 1.0), ("L", wrist_l, -1.0)] {
+            for finger in 1..=5 {
+                let first_idx = data.header.labels.bones.len() as i64;
+                let h1 = Vec3::new(sign * 0.32, (finger as f64 - 3.0) * 0.01, 0.90);
+                let t1 = h1 + Vec3::new(sign * 0.02, 0.0, -0.02);
+                let t2 = t1 + Vec3::new(sign * 0.02, 0.0, -0.02);
+                for (name, parent, head, tail) in [
+                    (format!("finger{finger}-1.{side}"), parent_wrist, h1, t1),
+                    (format!("finger{finger}-2.{side}"), first_idx, t1, t2),
+                ] {
+                    data.header.labels.bones.push(name);
+                    data.header.labels.bone_parents.push(parent);
+                    data.template_bone_heads.push(head);
+                    data.template_bone_tails.push(tail);
+                    data.bone_heads_blendshapes
+                        .push(Vec3::new(0.0, 0.0, 0.5 * head.z));
+                    data.bone_tails_blendshapes
+                        .push(Vec3::new(0.0, 0.0, 0.5 * tail.z));
+                    data.bone_rolls.push(Mat3::IDENTITY);
+                }
+            }
+        }
+        data.header.counts.bones = data.header.labels.bones.len();
+        let finger_model = AnnyModel::from_data(data).unwrap();
+        req.hand_collider = HandCollider::Wrist;
+        let finger_wrist = FittedBody::prepare(&finger_model, &hash, &req).unwrap();
+        assert!(finger_wrist.report["pose"].get("hand_collider").is_none());
+
+        req.hand_collider = HandCollider::Knuckle;
+        let knuckle_body = FittedBody::prepare(&finger_model, &hash, &req).unwrap();
+        assert_eq!(
+            knuckle_body.report["shape_sha256"],
+            finger_wrist.report["shape_sha256"]
+        );
+        assert_eq!(knuckle_body.report["pose"]["hand_collider"], "knuckle");
+
+        let motion: motion::Request = serde_json::from_value(json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [{"time_s": 0.01, "arm_abduction_deg": 36.0}],
+            "max_step_s": 0.01, "max_trials": 16, "max_pairs": 10000, "max_sample_vertices": 10000
+        }))
+        .unwrap();
+        let path = knuckle_body
+            .motion_path(&finger_model, &hash, &motion)
+            .unwrap();
+        req.arm_abduction_deg = 36.0;
+        let end = FittedBody::prepare(&finger_model, &hash, &req).unwrap();
+        let expected = motion::Path::new(
+            &motion,
+            knuckle_body.body().collision,
+            vec![end.collision.vertices],
+        )
+        .unwrap();
+        assert_eq!(path.sha256(), expected.sha256());
+    }
+
+    #[test]
     fn accepted_body_runs_the_actual_drape_and_heat_consumers_with_fresh_pose_identity() {
         use crate::study::{Scenario, Session};
         use ftx_pattern::Pattern;
@@ -2011,5 +2142,45 @@ mod tests {
         assert_ne!(first["scenario_sha256"], second["scenario_sha256"]);
         assert_eq!(a.report["shape_sha256"], b.report["shape_sha256"]);
         assert_eq!(first, session.evaluate(&pattern, |_| {}).unwrap());
+    }
+
+    #[test]
+    fn body_request_retains_opt_in_hand_collider_and_omits_default_wrist() {
+        let base = json!({"schema": "ftx-scenario-body/1", "measurements": {}});
+        let parsed_default = BodyRequest::read(&base).unwrap();
+        assert_eq!(parsed_default.hand_collider, HandCollider::Wrist);
+        let encoded_default = serde_json::to_value(&parsed_default).unwrap();
+        assert!(encoded_default.get("hand_collider").is_none());
+
+        let mut explicit_wrist = base.clone();
+        explicit_wrist["hand_collider"] = json!("wrist");
+        let parsed_wrist = BodyRequest::read(&explicit_wrist).unwrap();
+        assert_eq!(parsed_wrist.hand_collider, HandCollider::Wrist);
+        assert_eq!(
+            serde_json::to_value(&parsed_wrist).unwrap(),
+            encoded_default
+        );
+
+        for (label, expected) in [
+            ("palm", HandCollider::Palm),
+            ("knuckle", HandCollider::Knuckle),
+        ] {
+            let mut configured = base.clone();
+            configured["hand_collider"] = json!(label);
+            let parsed = BodyRequest::read(&configured).unwrap();
+            assert_eq!(parsed.hand_collider, expected);
+            assert_eq!(
+                serde_json::to_value(&parsed).unwrap()["hand_collider"],
+                json!(label)
+            );
+        }
+
+        let mut invalid = base;
+        invalid["hand_collider"] = json!("mitten");
+        assert!(BodyRequest::read(&invalid).is_err());
+
+        // Legacy fabric-measurements/1 documents must reject hand_collider upfront.
+        let legacy = json!({"schema": "fabric-measurements/1", "hand_collider": "palm"});
+        assert!(BodyRequest::read(&legacy).is_err());
     }
 }

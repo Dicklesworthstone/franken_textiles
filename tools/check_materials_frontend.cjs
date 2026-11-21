@@ -24037,3 +24037,74 @@ test('opt-in hand_collider (wrist/palm/knuckle) wires fail-closed across both wo
   assert.equal(badRev.e.drapeHands.value, 'wrist');
   assert.match(badRev.e.traceImportText.textContent, /incomplete/i);
 });
+
+test('study body source forwards opt-in hand_collider in preview and accepted modes, validates supplemental poses, and invalidates on change', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  p.e.studyBodySource.value = 'preview'; p.e.studyBodySource.handlers.change();
+
+  // Default wrist keeps hand_collider off the wire.
+  await p.e.scenario.onclick();
+  let bodyReq = JSON.parse(p.current().messages.at(-1).measurements);
+  assert.equal(bodyReq.schema, 'ftx-scenario-body/1');
+  assert.equal(Object.hasOwn(bodyReq, 'hand_collider'), false);
+  p.emit(scenarioReport());
+  const scenSection = section(p, 'Fresh drape and heat alternatives');
+  assert.equal(scenSection.hidden, false);
+
+  // Switching to knuckle invalidates the previous scenario and forwards hand_collider.
+  p.e.drapeHands.value = 'knuckle'; p.e.drapeHands.handlers.change();
+  assert.equal(scenSection.hidden, true);
+  await p.e.scenario.onclick();
+  bodyReq = JSON.parse(p.current().messages.at(-1).measurements);
+  assert.equal(bodyReq.hand_collider, 'knuckle');
+  p.emit(scenarioReport());
+
+  // Invalid hand_collider refuses before dispatch.
+  p.e.drapeHands.value = 'mitten';
+  const beforeBad = p.current().messages.length;
+  await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length, beforeBad);
+  assert.match(p.e.error.textContent, /hand collider/i);
+
+  // Accepted-fit study body omits default wrist and forwards palm + supplemental accepted pose.
+  p.e.drapeHands.value = 'palm'; p.e.drapeHands.handlers.change();
+  p.e.studyBodySource.value = 'accepted'; p.e.studyBodySource.handlers.change();
+  p.e.bodyFitFile.files = [new Blob(['{"schema":"ftx-body-fit/1","status":"ACCEPTED"}'])];
+  p.e.bodyFitFile.handlers.change();
+  p.e.supplementalFiles.files = [new Blob(['{"schema":"fabric-measurements/1","records":[{"name":"chest"}]}'])];
+  p.e.supplementalFiles.handlers.change();
+  p.e.supplementalConsent.checked = true; p.e.supplementalConsent.handlers.change();
+  p.e.bodyFitConsent.checked = true; p.e.bodyFitConsent.handlers.change();
+  await p.e.scenario.onclick();
+  assert.equal(p.e.error.hidden, true);
+  const supMsg = p.current().messages.at(-1);
+  assert.deepEqual(plain(supMsg.measurementAcceptedPose), { hand_collider: 'palm' });
+
+  // Worker accepts valid hand_collider on both measurementPose and measurementAcceptedPose, and refuses mitten.
+  const calls = [], merged = '{"schema":"fabric-measurements/1","fused":{"chest":{"value_mm":540}}}';
+  const w = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    measurement_file: () => merged,
+    WebBody: class { free() {} },
+    material_scenario_study: (_body, _pat, _req, _scen, bodyInput) => { calls.push(bodyInput); return '{"simulations":[]}'; },
+  } });
+  const baseBody = { type: 'scenario', request: 901, pattern: '{"pieces":[]}', studyRequest: '{"schema":"ftx-material-study/1"}',
+    scenarioRequest: '{"schema":"ftx-drape-scenario/1"}', bytes: new ArrayBuffer(8),
+    measurements: '{"schema":"fabric-measurements/1"}',
+    measurementSources: '["{\\"schema\\":\\"fabric-measurements/1\\"}"]', measurementConsent: true,
+    measurementPrimary: '{"schema":"fabric-measurements/1"}' };
+  const badPrev = await w.send({ ...baseBody, measurementPose: { arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, hand_collider: 'mitten' } });
+  assert.equal(badPrev.type, 'error');
+  assert.match(badPrev.message, /hand-collider/i);
+  const badAcc = await w.send({ ...baseBody, measurementAcceptedFit: '{"schema":"ftx-body-fit/1"}', measurementArmDeg: 35,
+    measurementAcceptedPose: { hand_collider: 'mitten' } });
+  assert.equal(badAcc.type, 'error');
+  assert.match(badAcc.message, /hand-collider/i);
+  const okPrev = await w.send({ ...baseBody, measurementPose: { arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, hand_collider: 'knuckle' } });
+  assert.equal(okPrev.type, 'result', okPrev.message);
+  assert.equal(JSON.parse(calls.at(-1)).hand_collider, 'knuckle');
+  const okAcc = await w.send({ ...baseBody, measurementAcceptedFit: '{"schema":"ftx-body-fit/1"}', measurementArmDeg: 40,
+    measurementAcceptedPose: { hand_collider: 'palm' } });
+  assert.equal(okAcc.type, 'result', okAcc.message);
+  assert.equal(JSON.parse(calls.at(-1)).hand_collider, 'palm');
+});

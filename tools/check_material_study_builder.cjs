@@ -4689,17 +4689,23 @@ test('saved study accepted-fit pose metadata validates, freezes and refuses inva
   const accepted=' {"schema":"ftx-body-fit/1","source":{"scale":1.0}}\n';
   const base={...workbenchRequest(),onBody:true,measurements:workbenchBody,measurementSources:JSON.stringify([extra]),
     measurementConsent:true,measurementPrimary:workbenchBody,measurementAcceptedFit:accepted,measurementArmDeg:45};
-  const acceptedPose={legs:'seated',leg_fraction:0.5,skinning:'dqs'};
+  const acceptedPose={legs:'seated',leg_fraction:0.5,skinning:'dqs',hand_collider:'knuckle'};
   const saved=parse(build({...base,measurementAcceptedPose:acceptedPose},workbenchModel()));
   assert.deepEqual(JSON.parse(JSON.stringify(saved.request.measurementAcceptedPose)),acceptedPose);
   assert.equal(Object.isFrozen(saved.request.measurementAcceptedPose),true);
   acceptedPose.legs='squat';
   assert.equal(saved.request.measurementAcceptedPose.legs,'seated');
+  const previewBase={...base};
+  delete previewBase.measurementAcceptedFit;delete previewBase.measurementArmDeg;
+  const previewSaved=parse(build({...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,hand_collider:'palm'}},workbenchModel()));
+  assert.equal(previewSaved.request.measurementPose.hand_collider,'palm');
   for(const bad of [
     {...base,measurementAcceptedPose:{}},
     {...base,measurementAcceptedPose:{legs:'kneeling'}},
     {...base,measurementAcceptedPose:{leg_fraction:1.5}},
     {...base,measurementAcceptedPose:{skinning:'hybrid'}},
+    {...base,measurementAcceptedPose:{hand_collider:'mitten'}},
+    {...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,hand_collider:'mitten'}},
     {...base,measurementAcceptedPose:{legs:'seated',arm_abduction_deg:35}},
     {...base,measurementAcceptedPose:{skinning:'dqs'},measurementPose:{arm_abduction_deg:35,legs:'seated',leg_fraction:0.5}},
   ]) assert.throws(()=>build(bad,workbenchModel()));

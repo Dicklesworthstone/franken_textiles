@@ -2069,26 +2069,28 @@ function workbenchStudyBundle(value) {
         throw Error("Supplemental accepted-fit replay requires original primary measurements and a valid arm angle.");
       }
       if (own(request, "measurementAcceptedPose")) {
-        const pose = object(request.measurementAcceptedPose, ["legs", "leg_fraction", "skinning"], [], "Supplemental accepted-fit pose");
+        const pose = object(request.measurementAcceptedPose, ["legs", "leg_fraction", "skinning", "hand_collider"], [], "Supplemental accepted-fit pose");
         if (!Object.keys(pose).length
           || (own(pose, "legs") && !["standing", "seated", "squat"].includes(pose.legs))
           || (own(pose, "leg_fraction") && (!Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1))
-          || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))) {
-          throw Error("Supplemental accepted-fit pose needs valid leg and skinning settings.");
+          || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))
+          || (own(pose, "hand_collider") && !["wrist", "palm", "knuckle"].includes(pose.hand_collider))) {
+          throw Error("Supplemental accepted-fit pose needs valid leg, skinning and hand-collider settings.");
         }
       }
     } else if (own(request, "measurementArmDeg") || own(request, "measurementAcceptedPose")) {
       throw Error("Supplemental accepted-fit pose metadata requires an accepted body-fit source.");
     }
     if (own(request, "measurementPose")) {
-      const pose = object(request.measurementPose, ["arm_abduction_deg", "legs", "leg_fraction", "skinning"],
+      const pose = object(request.measurementPose, ["arm_abduction_deg", "legs", "leg_fraction", "skinning", "hand_collider"],
         ["arm_abduction_deg", "legs", "leg_fraction"], "Supplemental preview pose");
       if (!own(request, "measurementPrimary") || own(request, "measurementAcceptedFit")
         || !Number.isFinite(pose.arm_abduction_deg) || pose.arm_abduction_deg < 0 || pose.arm_abduction_deg > 180
         || !["standing", "seated", "squat"].includes(pose.legs) || !Number.isFinite(pose.leg_fraction)
         || pose.leg_fraction < 0 || pose.leg_fraction > 1
-        || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))) {
-        throw Error("Supplemental preview pose needs original primary measurements, valid arm, leg and skinning settings, and no accepted fit.");
+        || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))
+        || (own(pose, "hand_collider") && !["wrist", "palm", "knuckle"].includes(pose.hand_collider))) {
+        throw Error("Supplemental preview pose needs original primary measurements, valid arm, leg, skinning and hand-collider settings, and no accepted fit.");
       }
     }
   } else if (["measurementConsent", "measurementPrimary", "measurementAcceptedFit", "measurementArmDeg", "measurementAcceptedPose", "measurementPose"].some(key => own(request, key))) {
