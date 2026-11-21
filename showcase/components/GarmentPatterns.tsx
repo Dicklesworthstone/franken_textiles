@@ -17,7 +17,7 @@ const exhibits: Record<string, (keyof typeof patterns)[]> = {
   bolero: ["bolero"], construction: ["bolero"], trousers: ["trousers"], fez: ["fez"],
   sundress: ["dress"], "sundress-cuts": ["dress","eased"], hussar: ["blue", "yellow"],
   "wardrobe-sundress": ["dress"], "wardrobe-hussar": ["blue", "yellow"],
-  "studio-tour": ["bolero"], "wardrobe-reel": ["dress", "blue", "yellow", "bolero"],
+  "studio-tour": ["bolero"], "wardrobe-reel": ["dress", "blue", "yellow", "flare", "bolero"],
 };
 
 export default function GarmentPatterns({exhibit}: {exhibit: string}) {
