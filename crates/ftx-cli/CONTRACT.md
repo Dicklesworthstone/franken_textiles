@@ -270,6 +270,11 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
 - `ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]`: rebuilds `fold_viewer.html` from an existing
   simulation directory (`fold.pc2`, `mesh_map.json`, `body.obj`, `sim_report.json`) without re-running
   the cloth solver.
+- `ftx viewer SIMDIR --check-contact [--view VIEW] [--json]` checks all recorded physical frames
+  against the full displayed body and cloth. When given a native still view, it first checks
+  that the saved garment coordinates round to the final PC2 frame. Strain views also require the
+  same positions and faces as the plain garment. A successful JSON check reports `endpoint_view`
+  when this endpoint check ran.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N] [--model PATH]
   [--arm-deg DEG] [--skinning lbs|dqs] [--self-contact-mm MM] [--self-mu MU] [--compression F] [--two-start-sew N] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does).
@@ -413,6 +418,8 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   It keeps the original scene files and writes `before.png` and `after.png` in the new directory.
   The report indicates whether the posed bodies have equal vertices and faces. Use the
   original view for pixel inspection and to check any geometry outside the baseline framing.
+  Strain comparisons use the saved strain colours and require the plain and strain meshes to
+  have the same geometry.
 - `ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM]
   [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--res WxH] [--json]`: where a pattern
   starts on the body, for a person or an agent authoring placements and judging a cut by eye. It runs the

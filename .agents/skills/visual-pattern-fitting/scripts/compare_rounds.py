@@ -3,6 +3,7 @@
 import argparse
 import base64
 import json
+import os
 import re
 import struct
 import subprocess
@@ -111,20 +112,25 @@ def common_view(rows, view, out, ftx):
     return aligned, f"Shared baseline camera · {body}"
 
 
-def contact_status(row, ftx):
+def contact_status(row, view, ftx):
     if row.title != "Drape":
         return "Diagnostic state"
-    command = [ftx, "viewer", str(row.scene), "--check-contact", "--json"]
+    command = [ftx, "viewer", str(row.scene), "--check-contact", "--view", view, "--json"]
     process = subprocess.run(command, stdout=subprocess.PIPE, check=False)
     try:
         reply = json.loads(process.stdout)
     except ValueError:
         return "Full-body contact check unavailable"
-    if process.returncode == 0 and reply.get("ok") is True:
-        count = reply["result"]["checked_frames"]
-        if type(count) is int and count > 0:
+    if not isinstance(reply, dict):
+        return "Full-body contact check unavailable"
+    result = reply.get("result")
+    if process.returncode == 0 and reply.get("ok") is True and isinstance(result, dict):
+        count = result.get("checked_frames")
+        if result.get("endpoint_view") == view and type(count) is int and count > 0:
             return f"Full-body contact clear · {count} recorded frames"
-    if (reply.get("refusal") or {}).get("code") == "intersecting_trajectory":
+    refusal = reply.get("refusal")
+    if (process.returncode == 3 and isinstance(refusal, dict)
+            and refusal.get("code") == "intersecting_trajectory"):
         return "Full-body contact · crossing detected"
     return "Full-body contact check unavailable"
 
@@ -170,7 +176,7 @@ def compare(before, after, view, instance, crop, views_dir=None, ftx="ftx"):
         report_title = "Saved solver report" if framing and not refused else title
         label(x, 391, f'{report_title} · {state}', 15)
         if framing:
-            contact = contact_status(rows[i], ftx)
+            contact = contact_status(rows[i], view, ftx)
             label(x, 415, contact, 15, "#9a3229" if "crossing" in contact else "#293934")
         coords = " ".join(f"{1053+x*scale:.2f},{56+y*scale:.2f}" for x,y in outline)
         dash = ' stroke-dasharray="6 4"' if i == 0 else ''
@@ -212,7 +218,7 @@ if __name__ == "__main__":
                        'const png=await sharp(Buffer.concat(chunks),{density:120}).png().toBuffer(); process.stdout.write(png);')
             data = subprocess.run(["node", "--input-type=module", "-e", convert], input=data,
                                   stdout=subprocess.PIPE, check=True, cwd=Path(__file__).resolve().parents[4]/"showcase").stdout
-        with args.out.open("xb") as file:
+        with open(args.out, "xb", opener=lambda path, flags: os.open(path, flags, 0o600)) as file:
             file.write(data)
     except (KeyError, OSError, ValueError, ElementTree.ParseError, struct.error, subprocess.CalledProcessError) as error:
         parser.exit(1, f"compare_rounds: {error}\n")

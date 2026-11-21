@@ -60,11 +60,7 @@ fn compare(
     if crate::round::regular(out, true)? {
         return Err(bad_input("the comparison output directory must be new"));
     }
-    let cloth_file = match view {
-        "front" | "side" | "back" | "three_quarter" => "garment.obj",
-        "strain_front" | "strain_back" => "garment_strain.obj",
-        _ => return Err(bad_input("unknown native still view")),
-    };
+    let strain = strain_view(view)?;
     let mesh = |dir: &Path, name: &str| {
         crate::round::regular(dir, true)?;
         crate::round::regular(&dir.join(name), false)?;
@@ -73,14 +69,17 @@ fn compare(
     let before_body = mesh(baseline, "body.obj")?;
     let after_body = mesh(revised, "body.obj")?;
     let baseline_cloth = mesh(baseline, "garment.obj")?;
+    let revised_cloth = mesh(revised, "garment.obj")?;
     let camera = still_camera(&before_body, &baseline_cloth, view)
         .ok_or_else(|| bad_input("unknown native still view"))?;
-    let before_cloth = if cloth_file == "garment.obj" {
-        baseline_cloth
+    let (before_cloth, after_cloth) = if strain {
+        (
+            checked_strain(baseline, &baseline_cloth)?,
+            checked_strain(revised, &revised_cloth)?,
+        )
     } else {
-        mesh(baseline, cloth_file)?
+        (baseline_cloth, revised_cloth)
     };
-    let after_cloth = mesh(revised, cloth_file)?;
     let same_body = before_body.vertices == after_body.vertices
         && before_body.triangles == after_body.triangles;
     let draw = |body, cloth| {
@@ -100,6 +99,26 @@ fn compare(
     let report = json!({"view":view, "width":width, "height":height, "camera":"baseline",
         "same_body_geometry":same_body, "before":before_path, "after":after_path});
     Ok((report.clone(), 0, report.to_string()))
+}
+
+pub(super) fn strain_view(view: &str) -> Result<bool, Refusal> {
+    match view {
+        "front" | "side" | "back" | "three_quarter" => Ok(false),
+        "strain_front" | "strain_back" => Ok(true),
+        _ => Err(bad_input("unknown native still view")),
+    }
+}
+
+pub(super) fn checked_strain(dir: &Path, garment: &ColouredMesh) -> Result<ColouredMesh, Refusal> {
+    let path = dir.join("garment_strain.obj");
+    crate::round::regular(&path, false)?;
+    let strain = crate::fold::mesh(&path)?;
+    if strain.vertices != garment.vertices || strain.triangles != garment.triangles {
+        return Err(bad_input(
+            "garment_strain.obj does not match garment.obj geometry",
+        ));
+    }
+    Ok(strain)
 }
 
 /// Shared preflight: bad dimensions fail before reading a body or reserving a round.

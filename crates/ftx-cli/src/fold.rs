@@ -231,16 +231,21 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     use ftx_drape::animation::viewer_html;
     use std::path::PathBuf;
 
-    known_options(args, "viewer", &["out", "pattern", "check-contact"])?;
+    known_options(args, "viewer", &["out", "pattern", "check-contact", "view"])?;
     if args.positional.len() != 2 {
         return Err(bad_input("ftx viewer needs exactly one SIMDIR"));
     }
     let check_only = args.options.contains_key("check-contact");
+    let view = args.options.get("view").map(String::as_str);
+    if view.is_some() && !check_only {
+        return Err(bad_input("--view requires --check-contact"));
+    }
     if check_only && (args.options.contains_key("out") || args.options.contains_key("pattern")) {
         return Err(bad_input(
-            "--check-contact takes only the simulation directory",
+            "--check-contact takes the simulation directory and an optional --view",
         ));
     }
+    let strain = view.map(crate::render::strain_view).transpose()?;
     let dir = Path::new(&args.positional[1]);
     let (report, _) = document(&dir.join("sim_report.json"))?;
     let (map, _) = document(&dir.join("mesh_map.json"))?;
@@ -275,6 +280,23 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "the reported first physical frame disagrees with the contact replay",
         ));
     }
+    if let Some(strain) = strain {
+        if strain {
+            crate::render::checked_strain(dir, &garment)?;
+        }
+        let endpoint = cache.frame(n - 1)?;
+        // Native OBJ retains f64 coordinates. The replay stores the same positions in f32.
+        for (saved, recorded) in garment.vertices.iter().zip(&endpoint) {
+            if [saved.x, saved.y, saved.z].map(|v| f64::from(v as f32))
+                != [recorded.x, recorded.y, recorded.z]
+            {
+                return Err(bad_input(
+                    "garment.obj positions do not match the last recorded PC2 frame",
+                )
+                .repair("use the body, garment and point cache from the same saved drape"));
+            }
+        }
+    }
     if contact {
         let mut display =
             ftx_drape::animation::ReplayContact::new(&body.vertices, &body.triangles)?;
@@ -284,8 +306,12 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     if check_only {
         let checked = n - physical_start;
+        let mut result = json!({"source_frames":n, "first_physical_frame":physical_start, "checked_frames":checked});
+        if let Some(view) = view {
+            result["endpoint_view"] = json!(view);
+        }
         return Ok((
-            json!({"source_frames":n, "first_physical_frame":physical_start, "checked_frames":checked}),
+            result,
             0,
             format!("checked {checked} recorded physical frames against the full body and cloth"),
         ));

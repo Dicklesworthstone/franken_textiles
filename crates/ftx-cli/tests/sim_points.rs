@@ -312,10 +312,53 @@ fn viewer_checks_cloth_crossings_even_in_frames_it_would_drop() {
     assert_eq!(result["result"]["checked_frames"], 126);
     assert!(!dir.join("fold_viewer.html").exists());
     assert!(viewer("clear.html").status.success());
+    let check_view = |view: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args(["viewer", ".", "--check-contact", "--view", view, "--json"])
+            .output()
+            .unwrap();
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()
+    };
+    let mismatched = check_view("front");
+    assert_eq!(mismatched["refusal"]["code"], "invalid_document");
+    assert!(
+        mismatched["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("last recorded PC2 frame")
+    );
+    // The same saved coordinates compare across native OBJ f64 and PC2 f32.
+    let positions = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0.2 0.2 1\nv 0.4 0.2 1\nv 0.2 0.4 1\n";
+    let faces = "f 1 2 3\nf 4 5 6\n";
+    std::fs::write(dir.join("garment.obj"), format!("{positions}{faces}")).unwrap();
+    assert_eq!(check_view("front")["result"]["endpoint_view"], "front");
+    std::fs::write(
+        dir.join("garment_strain.obj"),
+        format!("{positions}f 1 3 2\nf 4 5 6\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        check_view("strain_front")["refusal"]["code"],
+        "invalid_document"
+    );
+    std::fs::write(
+        dir.join("garment_strain.obj"),
+        format!("{positions}{faces}"),
+    )
+    .unwrap();
+    assert_eq!(
+        check_view("strain_front")["result"]["endpoint_view"],
+        "strain_front"
+    );
     // At 60 display samples from 130 source frames, frame 30 lies between 28 and 31.
     frames[30][3].z = -1.;
     std::fs::write(dir.join("fold.pc2"), pc2(&frames)).unwrap();
     assert!(!contact_only().status.success());
+    assert_eq!(
+        check_view("front")["refusal"]["code"],
+        "intersecting_trajectory"
+    );
     let output = viewer("crossing.html");
     assert!(!output.status.success());
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();

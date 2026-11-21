@@ -95,8 +95,9 @@ extends beyond the frame. Leave off `--shared-camera` to read an archive that on
 stills. Use the original PNGs for `inspect-pixel` on each round.
 
 Shared-camera comparisons check the recorded frames of completed drapes against the displayed
-body and cloth. Treat a crossing as a failed contact check even if the archived solver report
-shows no gating flags. Missing or unsupported recordings show the check as unavailable.
+body and cloth. The displayed garment must match the last recorded frame at PC2 precision.
+Treat a crossing as a failed contact check even if the archived solver report shows no gating
+flags. Missing, mismatched or unsupported recordings show the check as unavailable.
 
 Each side is labelled with the evidence it shows. “Refused start”
 shows the pre-sewn placement before dynamics. “Refused pose” shows the state recorded by a failed
