@@ -396,16 +396,29 @@ pub fn lambda_max_estimate(a: &Csr, iters: usize, safety: f64) -> f64 {
 }
 
 /// Conservative spectral ceiling: max of power estimate and outward-rounded infinity norm.
+/// Propagates non-finite entries as `NaN` rather than absorbing them via `f64::max`.
 fn lambda_max_ceiling(a: &Csr, iters: usize, safety: f64) -> f64 {
-    let row_bound = (0..a.nrows())
-        .map(|i| {
-            a.row(i)
-                .1
-                .iter()
-                .fold(0.0f64, |sum, value| (sum + value.abs()).next_up())
-        })
-        .fold(0.0f64, f64::max);
-    lambda_max_estimate(a, iters, safety).max(row_bound)
+    let mut row_bound = 0.0f64;
+    for i in 0..a.nrows() {
+        let mut sum = 0.0f64;
+        for &value in a.row(i).1 {
+            if !value.is_finite() {
+                return f64::NAN;
+            }
+            sum = (sum + value.abs()).next_up();
+        }
+        if !sum.is_finite() {
+            return f64::NAN;
+        }
+        if sum > row_bound {
+            row_bound = sum;
+        }
+    }
+    let est = lambda_max_estimate(a, iters, safety);
+    if !est.is_finite() {
+        return f64::NAN;
+    }
+    est.max(row_bound)
 }
 
 /// Degree-`k` Chebyshev polynomial smoother targeting `[λ_max / α, λ_max]` via pure SpMV chains.
@@ -1069,7 +1082,7 @@ pub fn pminres<P: Precond>(
             vz.sqrt()
         };
         let delta = c_km1 * alpha - c_km2 * s_km1 * beta;
-        let rho1 = (delta * delta + beta_next * beta_next).sqrt();
+        let rho1 = det::hypot(delta, beta_next);
         if !(rho1.is_finite() && rho1 > 0.0) {
             return Err(PminresError::Breakdown { iteration: it + 1 });
         }
@@ -1138,15 +1151,22 @@ pub fn eisenstat_walker(
     gamma: f64,
     alpha: f64,
 ) -> f64 {
+    let fallback_max = if eta_max.is_finite() && eta_max > 0.0 {
+        eta_max
+    } else {
+        0.5
+    };
     if !(eta_min.is_finite()
+        && eta_min >= 0.0
         && eta_max.is_finite()
+        && eta_max > 0.0
         && eta_min <= eta_max
         && gamma.is_finite()
         && gamma > 0.0
         && alpha.is_finite()
         && alpha > 0.0)
     {
-        return eta_max;
+        return fallback_max;
     }
     if !(prev_grad_norm.is_finite()
         && curr_grad_norm.is_finite()
@@ -1330,12 +1350,22 @@ pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
         }
     }
 
-    // Recompute exact model decrease m(0) - m(p) = -g^T p - 1/2 p^T H p.
+    // Recompute exact model decrease m(0) - m(p) = -g^T p - 1/2 p^T H p and verify the true
+    // residual ‖H p + g‖₂ before certifying interior convergence (checked-CG gate, zero extra SpMV).
     a.spmv(&p, &mut hd);
     matvecs += 1;
     let gp = dot64(g, &p);
     let php = dot64(&p, &hd);
     let model_decrease = -gp - 0.5 * php;
+    if interior_converged {
+        let mut true_rr = 0.0f64;
+        for i in 0..n {
+            let ri = hd[i] + g[i];
+            true_rr += ri * ri;
+        }
+        let true_r_norm = true_rr.sqrt();
+        interior_converged = true_r_norm.is_finite() && true_r_norm <= target;
+    }
 
     SteihaugOutcome {
         step: p,
@@ -1635,5 +1665,34 @@ mod tests {
         assert!(out_tiny.hit_boundary);
         assert!(out_tiny.step.iter().all(|v| v.is_finite()));
         assert!((norm2(&out_tiny.step) - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn chebyshev_refuses_nan_pminres_handles_large_givens_and_ew_guards_negative_bounds() {
+        // NaN in one row must not be swallowed by f64::max against another finite positive row.
+        let mut coo_nan = Coo::new(2, 2);
+        coo_nan.push(0, 0, f64::NAN);
+        coo_nan.push(1, 1, 2.0);
+        let a_nan = coo_nan.assemble();
+        let err = Chebyshev::new(&a_nan, 3, 10.0).unwrap_err();
+        assert_eq!(err.code, RefusalCode::OutOfRange);
+
+        // Large-scale symmetric indefinite system where delta^2 would overflow f64 without hypot.
+        let mut coo_big = Coo::new(2, 2);
+        coo_big.push(0, 0, 2.0e160);
+        coo_big.push(1, 1, -2.0e160);
+        let a_big = coo_big.assemble();
+        let (x_big, rep_big) = pminres(&a_big, &IdentityPrecond, &[1.0, 0.0], 1e-12, 10).unwrap();
+        assert!(rep_big.converged_true, "{rep_big:?}");
+        assert!((x_big[0] - 0.5e-160).abs() <= 1e-172);
+        assert_eq!(x_big[1], 0.0);
+
+        // Negative eta_min or non-positive/non-finite eta_max must never produce negative or NaN.
+        let eta_neg_min = eisenstat_walker(1.0, 0.0, 0.1, -1.0, 0.5, 0.9, 2.0);
+        assert_eq!(eta_neg_min, 0.5);
+        for bad_max in [-0.25, 0.0, f64::NAN, f64::INFINITY] {
+            let eta = eisenstat_walker(1.0, 0.1, 0.1, 1e-8, bad_max, 0.9, 2.0);
+            assert!(eta.is_finite() && eta > 0.0, "bad_max={bad_max} -> {eta}");
+        }
     }
 }
