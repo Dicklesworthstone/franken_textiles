@@ -856,11 +856,8 @@ fn locate_next(
                     continue;
                 }
                 let mut free = true;
-                for ((defect, &db), dbvh) in stock
-                    .defects_mm
-                    .iter()
-                    .zip(&defect_boxes)
-                    .zip(defect_bvhs)
+                for ((defect, &db), dbvh) in
+                    stock.defects_mm.iter().zip(&defect_boxes).zip(defect_bvhs)
                 {
                     if !checked(clear_bvh(
                         &ring,
@@ -887,15 +884,7 @@ fn locate_next(
                     .zip(occupied_bvhs)
                 {
                     if !checked(clear_bvh(
-                        &ring,
-                        shape_bvh,
-                        offset,
-                        rb,
-                        occupied,
-                        obvh,
-                        ob,
-                        o.gap_mm,
-                        work,
+                        &ring, shape_bvh, offset, rb, occupied, obvh, ob, o.gap_mm, work,
                     ))? {
                         free = false;
                         break;

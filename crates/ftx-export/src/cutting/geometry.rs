@@ -559,7 +559,15 @@ pub(crate) fn enclosed_bvh(
     if !inside_bvh(inner[0], outer, outer_bvh, Vec2::ZERO, work)? {
         return Some(false);
     }
-    boundaries_clear_bvh(inner, inner_bvh, inner_offset, outer, outer_bvh, margin, work)
+    boundaries_clear_bvh(
+        inner,
+        inner_bvh,
+        inner_offset,
+        outer,
+        outer_bvh,
+        margin,
+        work,
+    )
 }
 // Budgeted simplicity check for authored stock. Consecutive collinear edges may continue, not retrace.
 pub(crate) fn simple(ring: &[Vec2], work: &mut Work) -> Option<bool> {
@@ -958,15 +966,16 @@ mod tests {
             true
         }
         // Build two dense 80-vertex wavy/concave rings approximating drafted garment outlines.
-        let wavy = |cx: f64, cy: f64, rx: f64, ry: f64, amp: f64, phase: f64, n: usize| -> Vec<Vec2> {
-            (0..n)
-                .map(|i| {
-                    let t = std::f64::consts::TAU * (i as f64) / (n as f64);
-                    let r = 1.0 + amp * (3.0 * t + phase).sin();
-                    Vec2::new(cx + rx * r * t.cos(), cy + ry * r * t.sin())
-                })
-                .collect()
-        };
+        let wavy =
+            |cx: f64, cy: f64, rx: f64, ry: f64, amp: f64, phase: f64, n: usize| -> Vec<Vec2> {
+                (0..n)
+                    .map(|i| {
+                        let t = std::f64::consts::TAU * (i as f64) / (n as f64);
+                        let r = 1.0 + amp * (3.0 * t + phase).sin();
+                        Vec2::new(cx + rx * r * t.cos(), cy + ry * r * t.sin())
+                    })
+                    .collect()
+            };
         let a = wavy(100.0, 100.0, 45.0, 35.0, 0.22, 0.0, 80);
         let b_base = wavy(0.0, 0.0, 30.0, 40.0, 0.18, 0.7, 72);
         let sheet = poly(&[[0.0, 0.0], [300.0, 0.0], [300.0, 260.0], [0.0, 260.0]]);
@@ -988,7 +997,10 @@ mod tests {
                     let got_bvh =
                         boundaries_clear_bvh(&b_shifted, &b_bvh, offset, &a, &a_bvh, gap, &mut w2)
                             .unwrap();
-                    assert_eq!(got_direct, expected, "direct mismatch at ({dx},{dy}) gap={gap}");
+                    assert_eq!(
+                        got_direct, expected,
+                        "direct mismatch at ({dx},{dy}) gap={gap}"
+                    );
                     assert_eq!(got_bvh, expected, "bvh mismatch at ({dx},{dy}) gap={gap}");
                     assert!(
                         w2.used < a.len() * b_base.len() / 2,
@@ -1003,16 +1015,13 @@ mod tests {
                     let exp_encl = exp_inside && brute_boundaries_clear(&b_shifted, &sheet, margin);
                     let mut w3 = Work::new(1_000_000);
                     let got_encl = enclosed_bvh(
-                        &b_shifted,
-                        &b_bvh,
-                        offset,
-                        &sheet,
-                        &sheet_bvh,
-                        margin,
-                        &mut w3,
+                        &b_shifted, &b_bvh, offset, &sheet, &sheet_bvh, margin, &mut w3,
                     )
                     .unwrap();
-                    assert_eq!(got_encl, exp_encl, "enclosed mismatch at ({dx},{dy}) m={margin}");
+                    assert_eq!(
+                        got_encl, exp_encl,
+                        "enclosed mismatch at ({dx},{dy}) m={margin}"
+                    );
                 }
             }
         }
@@ -1041,19 +1050,19 @@ mod tests {
         );
 
         // Simplicity equivalence: valid dense curve, self-crossing pinched curve, and touching vertex.
-        assert_eq!(brute_simple(&a), true);
+        assert!(brute_simple(&a));
         let mut ws = Work::new(100_000);
         assert_eq!(simple(&a, &mut ws), Some(true));
         assert!(ws.used < a.len() * a.len() / 2);
 
         let mut pinched = a.clone();
         pinched[40] = pinched[0] + Vec2::new(5.0, 0.0);
-        assert_eq!(brute_simple(&pinched), false);
+        assert!(!brute_simple(&pinched));
         assert_eq!(simple(&pinched, &mut Work::new(100_000)), Some(false));
 
         let mut vertex_touch = a.clone();
         vertex_touch[40] = vertex_touch[10];
-        assert_eq!(brute_simple(&vertex_touch), false);
+        assert!(!brute_simple(&vertex_touch));
         assert_eq!(simple(&vertex_touch, &mut Work::new(100_000)), Some(false));
     }
 }
