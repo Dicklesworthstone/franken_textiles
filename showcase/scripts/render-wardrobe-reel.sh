@@ -5,7 +5,7 @@ media="${FTX_FILM_SOURCE_DIR:-$(CDPATH='' cd -- "$(dirname -- "$0")/../public/me
 dest="${1:-$media}"
 mkdir -p "$dest"
 for title in construction-sundress construction-blue construction-yellow construction-flare bolero; do
-  probe="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,avg_frame_rate -of csv=p=0 "$media/$title.mp4")"
+  probe="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,avg_frame_rate -of csv=p=0 "$media/$title.mp4" | sed 's/,$//')"
   if [ "$probe" != "3840,2160,60/1" ]; then
     echo "Render $title.mp4 in 4K60 before assembling the reel." >&2
     exit 1
