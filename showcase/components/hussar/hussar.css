@@ -10,6 +10,9 @@
 /* Before the dolman replay loads, the figure already has the height of its stage, timeline, flat pattern and
    camera bar, so the page below does not jump. Not for the recorded-film fallback, which is shorter. */
 .hu-figure:not(:has(.hu-fallback)){min-height:calc(clamp(440px,46vw,660px) + 308px)}
+/* The camera bar is the figure's last row from the first paint: pinned to the bottom of the reserved column,
+   it stays where it is when the stage and its timeline arrive above it. */
+.hu-figure{display:flex;flex-direction:column}.hu-figure>.hu-cam{margin-top:auto}
 @media(max-width:760px){.hu-figure:not(:has(.hu-fallback)){min-height:calc(clamp(390px,108vw,540px) + 286px)}}
 .hu-compare-link,.hu-pattern-links a{text-decoration:underline;text-underline-offset:3px}
 .hu-pattern-links{display:grid;gap:7px;margin-top:14px;font-size:13px;font-weight:600}
