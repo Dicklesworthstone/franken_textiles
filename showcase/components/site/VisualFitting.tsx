@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import CodeBlock from "./CodeBlock";
 import { repo } from "./links";
 
@@ -58,18 +58,19 @@ ftx viewer work/rounds/001/sim --check-contact --json`,
     alt: "Two back views of the raised-arm bolero: round 000 refused at start with a yellow cloth-crossing mark at the right shoulder, round 001 settled after shifting starting placement axes by 30 mm, beside coinciding flat back outlines.",
     caption: "Round 000 refused at placement (intersecting_start, yellow crossing mark at right armhole) vs round 001 settled after a 30 mm wrap-axis shift with identical cutting lines.",
     metrics: [
+      ["Pixel query", "532, 219 → back / armhole.R (8.3 mm)"],
       ["Refusal code", "intersecting_start (6 crossing pairs)"],
-      ["Placement fix", "+30 mm along wrap axes (0 mm cut change)"],
-      ["Settled report", "28 mm ride-up · 1.6% mean chest strain"],
+      ["Placement fix", "+30 mm wrap axes · 28 mm ride-up · 1.6% strain"],
     ],
-    commandTitle: "Preview placements before running the solver",
+    commandTitle: "Preview placements & trace the refused start pixel",
     command: `# render wrap & pre-sewn start stills in seconds, no solver
 ftx place bolero.json --measurements chest-540.json \\
   --arm-deg 90 --out start-check
 
-# inspect the yellow crossing pixel on the refused start still
+# trace the yellow crossing pixel on the refused back still
 ftx inspect-pixel work/rounds/000 \\
-  --view back --pixel 642,218 --json`,
+  --view back --pixel 532,219 --json
+> hit.instance = "back"  hit.nearest_edge = "armhole.R"`,
     links: [
       { href: "/sections/studies/?chest=54&arm=90&surface=cloth#drape-room", label: "Turn the raised-arm bolero in 3D ↗", download: false },
       { href: "/exhibits/poses/bolero-start.json", label: "Download revised placements ↓", download: true },
@@ -87,6 +88,7 @@ const loop = [
 
 export default function VisualFitting() {
   const [selected, setSelected] = useState<(typeof cases)[number]["id"]>("sleeve");
+  const tabs = useRef<(HTMLButtonElement | null)[]>([]);
   const current = cases.find(c => c.id === selected) ?? cases[0];
   return <section className="ft-fitting" id="visual-fitting" aria-labelledby="fitting-title"><div className="wrap">
     <div className="ft-section-top">
@@ -102,9 +104,17 @@ export default function VisualFitting() {
     </ol>
 
     <div className="ft-case-tabs" role="tablist" aria-label="Visual fitting case studies">
-      {cases.map(item => <button key={item.id} type="button" role="tab" id={`fit-tab-${item.id}`}
+      {cases.map((item, idx) => <button key={item.id} type="button" role="tab" id={`fit-tab-${item.id}`}
+        ref={el => { tabs.current[idx] = el; }}
+        tabIndex={current.id === item.id ? 0 : -1}
         aria-selected={current.id === item.id} aria-controls="fit-case-panel"
-        onClick={() => setSelected(item.id)}>
+        onClick={() => setSelected(item.id)}
+        onKeyDown={e => {
+          const next = e.key === "ArrowRight" ? (idx + 1) % cases.length :
+            e.key === "ArrowLeft" ? (idx + cases.length - 1) % cases.length :
+            e.key === "Home" ? 0 : e.key === "End" ? cases.length - 1 : undefined;
+          if (next !== undefined) { e.preventDefault(); setSelected(cases[next].id); tabs.current[next]?.focus(); }
+        }}>
         <span className="mono">{item.kicker}</span>
         <strong>{item.tab}</strong>
         <small>{item.summary}</small>

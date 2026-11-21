@@ -42,7 +42,7 @@ const materialsDemo = `
 ftx materials list --json
 
 # run the self-contained synthetic transient exterior heat example
-cargo run -p ftx-cli --bin ftx-materials -- thermal-transient \\
+ftx materials thermal-transient \\
   tests/fixtures/materials/synthetic-transient-exterior.json
 `;
 const commands = [
@@ -57,7 +57,7 @@ const commands = [
   ["ftx inspect-pixel", "Map any rendered PNG pixel deterministically back to its physical panel and nearest flat pattern edge."],
   ["ftx viewer", "Build an offline 3D fold-up HTML page or audit every recorded frame with --check-contact."],
   ["ftx qualify", "Run three chest qualification bands (−20 / 0 / +20 mm) around a fitted torso collider."],
-  ["ftx export", "Write tiled PDFs, copy-shop & projector PDFs, SVG, DXF, HPGL, cutter, GarmentCode and DST + 51 checks."],
+  ["ftx export", "Write tiled PDFs, copy-shop & projector PDFs, SVG, DXF, HPGL, cutter, GarmentCode and DST + 51 check rules."],
   ["ftx round", "Run the measurement gate, flat checks, drape/stills and exports in one immutable numbered directory."],
   ["ftx measure", "Manage measurements, generate ChArUco sheets, calibrate lenses, scale photos and fit bodies from frames."],
   ["ftx materials / ftx-materials", "Inspect 449 sourced fabrics, apply wash shrinkage, run thermal/strip/cylinder physics and plan production."],

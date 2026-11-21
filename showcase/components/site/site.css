@@ -194,9 +194,9 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 .ft-knuckle-card img{width:min(32vw,132px);height:auto;flex-shrink:0;border-radius:2px;border:1px solid #c8c0af}
 .ft-knuckle-card figcaption{font-size:14.5px;line-height:1.58;color:#394644}
 .ft-dag{display:grid;gap:10px;margin:0 0 24px;padding:18px 20px;background:var(--paper-2);border:1px solid var(--rule-paper);border-radius:4px}
-.ft-dag-row{display:grid;grid-template-columns:156px minmax(0,1fr);gap:8px 16px;align-items:center;padding-top:10px;border-top:1px dashed #c8c0af}
+.ft-dag-row{display:grid;grid-template-columns:minmax(188px,max-content) minmax(0,1fr);gap:8px 18px;align-items:center;padding-top:10px;border-top:1px dashed #c8c0af}
 .ft-dag-row:first-child{padding-top:0;border-top:0}
-.ft-dag-row>span{color:var(--rust);letter-spacing:.11em}
+.ft-dag-row>span{color:var(--rust);letter-spacing:.11em;white-space:nowrap}
 .ft-dag-chips{display:flex;flex-wrap:wrap;gap:6px}
 .ft-dag-chips code{background:#fffdf7;border:1px solid #ccc4b4;padding:4px 9px;border-radius:3px;font:500 12px var(--mono);color:var(--ink)}
 @media(max-width:560px){.ft-knuckle-card{flex-direction:column;align-items:flex-start}.ft-dag-row{grid-template-columns:1fr}}
