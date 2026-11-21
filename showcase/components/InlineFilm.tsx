@@ -29,7 +29,7 @@ export async function filmSource(id: string) {
   const smaller = id+"-1080";
   return filmFile(revisions[`${smaller}.mp4`] && !await playsUhd() ? smaller : id);
 }
-/** Step a playing 4K film down to its 1080p copy if it cannot be decoded, or if a third of its frames are dropped. */
+/** Step a playing 4K film down to its 1080p copy if it cannot be decoded, or if it keeps dropping a third of its frames. */
 export function watchFilm(el: HTMLVideoElement, id: string, resume = () => { void el.play().catch(()=>{}); }) {
   if (!revisions[`${id}-1080.mp4`]) return () => {};
   const small = filmFile(id+"-1080");
@@ -52,9 +52,20 @@ export function watchFilm(el: HTMLVideoElement, id: string, resume = () => { voi
       if (wasPlaying) resume();
     });
   }
+  // Dropped frames are judged over windows of at least 120 frames (two seconds), and only two bad windows in a
+  // row step down. A single bad window is what a busy page load looks like on a device that plays 4K60 well,
+  // and a step down is remembered for the whole session.
+  let counted = {total:0, dropped:0}, badWindows = 0;
   const onProgress = () => {
     const quality = el.getVideoPlaybackQuality?.();
-    if (quality && quality.totalVideoFrames >= 120 && quality.droppedVideoFrames > quality.totalVideoFrames/3) stepDown();
+    if (!quality) return;
+    const total = quality.totalVideoFrames-counted.total, dropped = quality.droppedVideoFrames-counted.dropped;
+    // A new source starts the element's counters again.
+    if (total < 0 || dropped < 0) { counted = {total:0, dropped:0}; badWindows = 0; return; }
+    if (total < 120) return;
+    counted = {total:quality.totalVideoFrames, dropped:quality.droppedVideoFrames};
+    badWindows = dropped > total/3 ? badWindows+1 : 0;
+    if (badWindows >= 2) stepDown();
   };
   el.addEventListener("play", onPlay); el.addEventListener("pause", onPause);
   el.addEventListener("error", stepDown); el.addEventListener("timeupdate", onProgress);

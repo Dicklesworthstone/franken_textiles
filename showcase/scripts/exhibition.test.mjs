@@ -277,11 +277,20 @@ test("a stuttering 4K film keeps its playhead in 1080p", async () => {
       return video?.videoWidth===3840 && video.currentTime>1;
     });
     const film=page.locator("dialog[open] video");
-    const at=await film.evaluate(video=>{
+    // One window with 70 of 180 frames dropped: a busy page can do that to a device that plays 4K60 well.
+    await film.evaluate(video=>{
       video.addEventListener("playing",()=>{
         if (video.videoWidth===1920 && video.dataset.resumedAt===undefined) video.dataset.resumedAt=String(video.currentTime);
       });
-      video.getVideoPlaybackQuality=()=>({totalVideoFrames:180,droppedVideoFrames:70});
+      window.__filmQuality={totalVideoFrames:180,droppedVideoFrames:70};
+      video.getVideoPlaybackQuality=()=>window.__filmQuality;
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    await page.waitForTimeout(600);
+    assert.deepEqual(await film.evaluate(video=>[video.videoWidth,new URL(video.currentSrc).pathname]),[3840,"/media/bolero.mp4"]);
+    // A second such window in a row is a device that cannot keep up.
+    const at=await film.evaluate(video=>{
+      window.__filmQuality={totalVideoFrames:360,droppedVideoFrames:140};
       video.dispatchEvent(new Event("timeupdate"));
       return video.currentTime;
     });
