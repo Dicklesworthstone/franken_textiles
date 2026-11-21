@@ -52,6 +52,7 @@ const SIM_OPTIONS: &[&str] = &[
     "legs",
     "leg-fraction",
     "skinning",
+    "hands",
     "two-start-sew",
     "spread-vertex-mm",
     "spread-hem-mm",
@@ -379,6 +380,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "legs",
             "leg-fraction",
             "skinning",
+            "hands",
             "two-start-sew",
             "spread-vertex-mm",
             "spread-hem-mm",
@@ -406,6 +408,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         super::two_start::options(args, &run_options)?;
         super::drape_pose(args)?;
         super::parse_skinning(args)?;
+        super::parse_hands(args)?;
     } else if let Some(key) = SIM_OPTIONS
         .iter()
         .find(|&&k| !matches!(k, "model" | "body-fit") && args.options.contains_key(k))

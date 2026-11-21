@@ -987,7 +987,87 @@ pub fn trimmed_skin(
 /// # Errors
 /// As [`trimmed_skin`]; a cap is not guaranteed to produce an admissible collider.
 pub fn clothing_skin(model: &AnnyModel, vertices: &[Vec3]) -> Result<SkinMesh, Refusal> {
-    let mut roots = vec!["wrist.R", "wrist.L", "foot.R", "foot.L"];
+    clothing_skin_with_hands(model, vertices, HandCollider::Wrist)
+}
+
+/// How much of each hand the clothing collider keeps.
+///
+/// The reference caps the body at the wrists, so no hand takes part in contact and a sleeve that reaches
+/// the hand passes through it. `Palm` is a native extension with no reference counterpart: the wrist and
+/// the metacarpal region stay in the collider and each of the five fingers is capped at its base. The
+/// fingers are still left out (a coarse garment mesh cannot clear them), so cloth over the fingers is not
+/// resolved by contact either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HandCollider {
+    /// Capped at the wrists (the reference collider).
+    #[default]
+    Wrist,
+    /// Wrists and palms kept; fingers capped at their bases.
+    Palm,
+}
+
+impl HandCollider {
+    /// Returns `true` for the reference collider, capped at the wrists.
+    #[must_use]
+    pub const fn is_wrist(self) -> bool {
+        matches!(self, Self::Wrist)
+    }
+
+    /// Stable CLI/report identifier (`"wrist"` or `"palm"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Wrist => "wrist",
+            Self::Palm => "palm",
+        }
+    }
+
+    /// Parses `"wrist"` or `"palm"`.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "wrist" => Some(Self::Wrist),
+            "palm" => Some(Self::Palm),
+            _ => None,
+        }
+    }
+
+    /// The bones whose regions are cut away from each hand, right then left.
+    const fn roots(self) -> &'static [&'static str] {
+        match self {
+            Self::Wrist => &["wrist.R", "wrist.L"],
+            Self::Palm => &[
+                "finger1-1.R",
+                "finger2-1.R",
+                "finger3-1.R",
+                "finger4-1.R",
+                "finger5-1.R",
+                "finger1-1.L",
+                "finger2-1.L",
+                "finger3-1.L",
+                "finger4-1.L",
+                "finger5-1.L",
+            ],
+        }
+    }
+}
+
+/// [`clothing_skin`] with a choice of hand collider. [`HandCollider::Wrist`] is exactly `clothing_skin`.
+///
+/// The feet and the paired levator05 regions are capped as before. Source vertices are never moved; the
+/// cap centres (one per wrist, or one per finger base) are synthetic. Not an anatomical claim about the
+/// hand, and the consumer must still admit the result through its ordinary intersection audit.
+///
+/// # Errors
+/// As [`trimmed_skin`]: an unknown finger bone in a rig without one, or an opening that is not a simple
+/// loop.
+pub fn clothing_skin_with_hands(
+    model: &AnnyModel,
+    vertices: &[Vec3],
+    hands: HandCollider,
+) -> Result<SkinMesh, Refusal> {
+    let mut roots = hands.roots().to_vec();
+    roots.extend(["foot.R", "foot.L"]);
     roots.extend(
         ["levator05.R", "levator05.L"]
             .into_iter()

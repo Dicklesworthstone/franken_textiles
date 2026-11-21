@@ -14,7 +14,9 @@
 
 use std::path::{Path, PathBuf};
 
-use ftx_body::{BodyFrames, SkinningMode, clothing_skin, pose_deltas, skin_mesh};
+use ftx_body::{
+    BodyFrames, HandCollider, SkinningMode, clothing_skin_with_hands, pose_deltas, skin_mesh,
+};
 use ftx_core::intersection::{indexed_triangle_pair, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_drape::scene::{
@@ -641,11 +643,13 @@ pub(super) struct Staging<'a> {
     /// Elastic stiffness EA (N), which sets a casing's cut length.
     pub elastic_ea: f64,
     pub frames: &'a dyn PartFrames,
-    /// The collision body's vertices (m) and triangles: hands and feet left out.
+    /// The collision body's vertices (m) and triangles: feet left out, and hands as `hands` says.
     pub collision: (&'a [Vec3], &'a [[usize; 3]]),
     /// The whole displayed body surface, drawn behind the cloth.
     pub display: (&'a [Vec3], &'a [[usize; 3]]),
     pub skinning: SkinningMode,
+    /// Which hand collider `collision` was built with; reported when it is not the reference's.
+    pub hands: HandCollider,
 }
 
 /// Writes `out/wrap`, `out/start` and `out/placement.json` into the existing, empty directory `out`, with
@@ -664,6 +668,7 @@ fn stages(
         collision: skin,
         display: full,
         skinning,
+        hands,
     } = *staging;
     // The same scope rule as a drape: an unplaced attachment refuses instead of vanishing.
     let scope = ftx_drape::garment::simulation_scope(source)?;
@@ -798,6 +803,9 @@ fn stages(
     if !skinning.is_lbs() {
         report["skinning"] = json!(skinning.as_str());
     }
+    if !hands.is_wrist() {
+        report["hand_collider"] = json!(hands.as_str());
+    }
     workspace::write_json(&out.join("placement.json"), &report)?;
     Ok((report, mesh))
 }
@@ -816,12 +824,14 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "legs",
             "leg-fraction",
             "skinning",
+            "hands",
             "res",
         ],
     )?;
     let opts = super::drape_options(args)?;
     let pose = super::drape_pose(args)?;
     let skinning = super::parse_skinning(args)?;
+    let hands = super::parse_hands(args)?;
     let pattern_path = args
         .positional
         .get(1)
@@ -843,7 +853,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let rest = model.rest(&params)?;
     let posed =
         model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
-    let skin = clothing_skin(&model, &posed.vertices)?;
+    let skin = clothing_skin_with_hands(&model, &posed.vertices, hands)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
     let (report, _) = stages(
@@ -856,6 +866,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             collision: (&skin.vertices, &skin.triangles),
             display: (&full.vertices, &full.triangles),
             skinning,
+            hands,
         },
         size,
         &out,
@@ -1107,6 +1118,7 @@ mod tests {
             collision: (&vertices, &triangles),
             display: (&vertices, &triangles),
             skinning: ftx_body::SkinningMode::LinearBlend,
+            hands: ftx_body::HandCollider::Palm,
         };
         let refusal = || {
             Refusal::new(
@@ -1160,6 +1172,8 @@ mod tests {
         );
         assert_eq!(placement["body_surface"]["admitted"], true);
         assert!(placement.get("skinning").is_none());
+        // A collider that is not the reference's is named; this staging said its palms were kept.
+        assert_eq!(placement["hand_collider"], "palm");
         for name in [
             "wrap/garment.obj",
             "wrap/still_front.png",
