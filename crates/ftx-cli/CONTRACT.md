@@ -285,7 +285,12 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   averaged), fitted on the drape pose to whichever of the 21 tape measurements of
   `ftx_body::TAPE_FIELDS` the file has fused values for (the stature from `wearer.stature_mm` first) and
   to `wearer.weight_kg` or `wearer.bmi` when given (`ftx_body::fit_tape`; `Pose::drape`, hands and feet
-  left out of contact), then
+  left out of contact). `--hands wrist|palm|knuckle|full` (also on `place`, `round` and `qualify`;
+  native, default `wrist`, the reference's collider) chooses how much of each hand the clothing collider
+  keeps: `palm` to the finger bases, `knuckle` to the second finger joints, `full` the whole hand. The
+  word is validated before any file is read, the report records `hand_collider` when it is not `wrist`,
+  and the report's `pose` line says what the chosen collider leaves out of contact
+  (`ftx_body::HandCollider`; `ftx-body/CONTRACT.md` and spec 05 have the geometry and its limits). Then
   `ftx_drape::run::drape`, writing `sim_report.json` (the metrics and flags plus run fields: pattern path
   as given, measurements SHA-256, wall time, and `body` with the fit's target and body value per
   measurement, its free parameters, every available tape reading and the body's mass; with `wearer.weight_kg` or
@@ -325,7 +330,9 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   admitted for cloth contact (the progress line says the same); and each instance at least 2 % of whose
   vertices have a mean edge strain of 15 % or more, with the pattern edge nearest that stretch. The
   threshold is measured on one garment (the comment on `TIGHT_START_PCT` gives the numbers), not a
-  validated limit. `ftx place` applies the same measure to the start it draws, prints such instances as
+  validated limit. When the start's relaxation stopped above its target without being a checkpoint (seen
+  at 6 mm spacing, p95 0.194 against 0.12), the repair and the `TIGHT START` line add that stretch next
+  to a seam can then be unfinished relaxation and not a piece that is too small. `ftx place` applies the same measure to the start it draws, prints such instances as
   `TIGHT START` and records `stretched_past_ramp_pct` and `stretched_nearest_edge` in each instance's
   `start_edge_strain`. It draws the fully relaxed start, so it does not flag a garment whose fully relaxed
   start is loose but is not admitted for cloth contact: there only the drape's refusal names the stretched
