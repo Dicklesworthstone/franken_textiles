@@ -235,7 +235,7 @@ mesh refinement and replay inside the fitted strain domain. An optional <code>re
 source-qualified warp, weft and shear curve shapes; identification then fits their three dimensionless scales and signed normal coupling.
 Curve shapes and strain knots are supplied assumptions, not learned from these strip observations.
 Estimated shapes require <code>response_family.allow_estimated_shapes</code> independently of observation and fitted-output consent.
-Both scalar and nonlinear laws are reversible;
+Both scalar and nonlinear laws are reversible; optional <code>policy.sensitivity: "adjoint"</code> computes exact implicit-function-theorem sensitivities (omitted for default finite differences);
 failed acceptance gates retain diagnostics without an assignable selection.</p>
 <p class="note">To identify physical-area response jointly with the directional law, add
 <code>area_response: {"mode":"identify","parameter_bounds":[[10,50],[5,35]],"area_ratio_range":[0.65,1.45]}</code>.
@@ -250,6 +250,7 @@ A timed request declares its independent equilibrium response. Directional recov
 <code>orthotropic.times_seconds</code> or 1–3 nonoverlapping <code>orthotropic.time_bounds_seconds</code> windows
 within which times are identified. Supply only one of these; the report distinguishes fixed times from a bounded search.
 Proportional recovery uses its separate top-level time bounds.
+Optional <code>integration: "exact_exponential"</code> publishes step-size-invariant exact piecewise-linear Prony integration on the fitted law (omitted for default backward Euler).
 Estimated input observations and replacement of an existing law
 require separate consent in the file. The checkbox only admits the fitted output estimates; missing mass, bending or contact data stay missing.</p>
 <p class="note">A timed calibration may supply <code>plastic_equilibrium</code> with

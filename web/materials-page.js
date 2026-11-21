@@ -4604,6 +4604,13 @@ function calibrationResult(parent, r) {
     parent.append(scope);
     detail(parent, "Unconstrained, physically constrained and published candidate tensors (display only)", c.orthotropic_fit);
   }
+  const integration = !nonlinear ? c.material?.membrane_relaxation?.integration : null;
+  if (integration && integration !== "backward_euler") {
+    const scheme = document.createElement("p");
+    scheme.textContent = `Time integration scheme: ${integration}.` +
+      (typeof r.time_integration === "string" && r.time_integration ? ` ${r.time_integration}` : "");
+    parent.append(scheme);
+  }
   const note = document.createElement("p");
   note.textContent = "Scaled errors use the input's declared force scales; they are not confidence intervals. " +
     "An absent held-out partition is not a passed check. Fitted coefficients remain estimates, and coefficient availability does not establish a successful garment simulation or measured fit.";
@@ -4612,6 +4619,7 @@ function calibrationResult(parent, r) {
     c.material.membrane_relaxation || { response: "Supplied equilibrium only; no active recovery branches." });
   detail(parent, "Complete observations, predictions, residuals and identification diagnostics (display only)", c);
   return { response: method, material_id: r.selection.id, allow_estimates: r.selection.allow_estimates,
+    ...(integration && integration !== "backward_euler" ? { integration } : {}),
     mechanical_coefficients_available: r.material.capabilities.mechanical_coefficients?.ready === true,
     mechanics_refusal: r.material.capabilities.mechanical_coefficients?.refusal,
     missing_mechanics: c.missing_mechanics, input_sha256: c.input_sha256,

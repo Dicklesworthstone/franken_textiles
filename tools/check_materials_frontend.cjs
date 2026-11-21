@@ -23668,3 +23668,29 @@ test('opt-in static_equilibrium comparison and guided fractional-Zener form wire
   assert.equal(vp.e.viscoMode.value, 'file');
   assert.equal(vp.e.viscoForm.hidden, true);
 });
+
+test('relaxation calibration surfaces opt-in exact_exponential integration without altering default backward_euler reports', async () => {
+  const p = await pageModule();
+  p.e.calibrationMode.value = 'relaxation'; p.e.calibrationMode.handlers.change();
+  p.select('calibrationRequest', '{"schema":"ftx-relaxation-calibration/1"}');
+  p.e.calibrationRequest.handlers.change();
+  await p.e.calibrate.onclick();
+  const base = calibrationReport('relaxation', true);
+  p.emit(base, [{ name: 'relaxation-report.json', text: '{}', mime: 'application/json' }]);
+  const secDefault = section(p, 'Identified material behavior');
+  assert.ok(secDefault);
+  assert.doesNotMatch(JSON.stringify(secDefault), /Time integration scheme:/);
+  assert.equal(Object.hasOwn(JSON.parse(secDefault.children[1].textContent), 'integration'), false);
+
+  await p.e.calibrate.onclick();
+  const exact = calibrationReport('relaxation', true);
+  exact.calibration.material.membrane_relaxation.integration = 'exact_exponential';
+  exact.time_integration = 'Calibration analytically integrates piecewise-linear Green strain, and the fitted Maxwell branches use exact piecewise-linear exponential integration in the drape solver.';
+  p.emit(exact, [{ name: 'relaxation-report.json', text: '{}', mime: 'application/json' }]);
+  const secExact = section(p, 'Identified material behavior');
+  assert.ok(secExact);
+  const dump = JSON.stringify(secExact);
+  assert.match(dump, /Time integration scheme: exact_exponential\./);
+  assert.match(dump, /exact piecewise-linear exponential integration/);
+  assert.equal(JSON.parse(secExact.children[1].textContent).integration, 'exact_exponential');
+});
