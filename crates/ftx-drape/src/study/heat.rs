@@ -13,6 +13,7 @@ use crate::{
     run::DrapeRun,
     thermal::{
         Boundary,
+        microclimate::MicroclimateExterior,
         steady::{exterior::Exterior, request::Film},
         surface::{PatchHeat, Surface, SurfaceExteriorExchange, SurfaceState},
     },
@@ -74,6 +75,10 @@ pub struct SurfaceRequest {
     /// environment per keyframe interval; each sheet supplies its own exposed-face emissivity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exterior_exchange: Option<Vec<Exterior>>,
+    /// Optional validity-gated moist-air Nusselt correlation replacement of each interval's
+    /// outside film (`Evidence::Estimate`; mutually exclusive with `exterior_exchange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microclimate_exterior: Option<Vec<MicroclimateExterior>>,
     /// Optional source-qualified pressure or clearance, one control per keyframe interval and
     /// exact retained instance. Changes dry thermal transport while preserving reference mass and
     /// temperature cells; normal work is separate from heat and never inferred from contact.
@@ -292,12 +297,38 @@ impl SurfaceRequest {
         Ok(history)
     }
 
+    fn resolve_exteriors(&self) -> Result<(Option<Vec<Exterior>>, Option<Vec<Value>>), Refusal> {
+        if self.exterior_exchange.is_some() && self.microclimate_exterior.is_some() {
+            return Err(invalid(
+                "supply either exterior_exchange or microclimate_exterior, not both",
+            ));
+        }
+        if let Some(exteriors) = &self.exterior_exchange {
+            return Ok((Some(exteriors.clone()), None));
+        }
+        if let Some(microclimates) = &self.microclimate_exterior {
+            let mut exteriors = Vec::with_capacity(microclimates.len());
+            let mut receipts = Vec::with_capacity(microclimates.len());
+            for mc in microclimates {
+                let resolved = mc.resolve()?;
+                exteriors.push(resolved.exterior);
+                receipts.push(resolved.receipt);
+            }
+            return Ok((Some(exteriors), Some(receipts)));
+        }
+        Ok((None, None))
+    }
+
     fn validate(&self, intervals: usize) -> Result<(), Refusal> {
         if self.schema != "ftx-motion-surface-heat/1"
             || !(1..=16).contains(&intervals)
             || self.boundaries.len() != intervals
             || self
                 .exterior_exchange
+                .as_ref()
+                .is_some_and(|e| e.len() != intervals)
+            || self
+                .microclimate_exterior
                 .as_ref()
                 .is_some_and(|e| e.len() != intervals)
             || !(1..=64).contains(&self.cells_per_layer)
@@ -341,6 +372,7 @@ impl SurfaceRequest {
         for &film in &self.boundaries {
             boundary(film)?;
         }
+        let (resolved_exteriors, _) = self.resolve_exteriors()?;
         if let Some(compression) = &self.prescribed_compression {
             compression.validate(intervals)?;
             if self.plastic_dissipation_heat.is_some()
@@ -355,11 +387,11 @@ impl SurfaceRequest {
                     "prescribed compression requires independent dry films or qualified exterior exchange; combined water and dissipation heating qualifications are not supplied",
                 ));
             }
-            for exterior in self.exterior_exchange.iter().flatten() {
+            for exterior in resolved_exteriors.iter().flatten() {
                 compression::validate_exterior(exterior)?;
             }
         }
-        if let Some(exteriors) = &self.exterior_exchange {
+        if let Some(exteriors) = &resolved_exteriors {
             for (film, exterior) in self.boundaries.iter().zip(exteriors) {
                 if film.outside_resistance_m2_k_w != 0. || film.outside_c != exterior.air_c {
                     return Err(invalid(
@@ -531,6 +563,7 @@ pub(super) struct SurfaceHistory {
     water_selection: Option<Value>,
     coupled_water_index: Option<usize>,
     mechanical_coupling: Option<Value>,
+    microclimate_resolved: Option<(Vec<Exterior>, Vec<Value>)>,
 }
 
 #[derive(Clone)]
@@ -561,8 +594,17 @@ impl SurfaceHistory {
                 "motion heat initial cells exceed the whole-history budget",
             ));
         }
+        let (resolved_exteriors, receipts) = request.resolve_exteriors()?;
+        let microclimate_resolved = receipts.map(|receipts| {
+            (
+                resolved_exteriors
+                    .clone()
+                    .expect("resolved microclimate exteriors"),
+                receipts,
+            )
+        });
         if request.prescribed_compression.is_some() {
-            for exterior in request.exterior_exchange.iter().flatten() {
+            for exterior in resolved_exteriors.iter().flatten() {
                 model.validate_exterior_sources(exterior)?;
             }
         }
@@ -690,7 +732,15 @@ impl SurfaceHistory {
             water_selection: None,
             coupled_water_index: None,
             mechanical_coupling: None,
+            microclimate_resolved,
         })
+    }
+
+    fn active_exteriors(&self) -> Option<&[Exterior]> {
+        self.request
+            .exterior_exchange
+            .as_deref()
+            .or_else(|| self.microclimate_resolved.as_ref().map(|(e, _)| e.as_slice()))
     }
 
     pub(super) fn dissipation_capture(&self) -> crate::motion::DissipationCapture {
@@ -904,8 +954,13 @@ impl SurfaceHistory {
                 "motion heat needs increasing accepted sample times and at most 512 samples",
             ));
         }
-        if let Some(compression) = &mut self.compression
-            && let Some((model, state)) = compression.condition(
+        if self.request.exterior_exchange.is_some() && self.request.microclimate_exterior.is_some() {
+            return Err(invalid(
+                "supply either exterior_exchange or microclimate_exterior, not both",
+            ));
+        }
+        let conditioned = if let Some(compression) = &mut self.compression {
+            compression.condition(
                 &self.model,
                 &self.state,
                 positions,
@@ -913,9 +968,14 @@ impl SurfaceHistory {
                 sample_index,
                 self.time_s,
             )?
-        {
-            for exterior in self.request.exterior_exchange.iter().flatten() {
-                model.validate_exterior_sources(exterior)?;
+        } else {
+            None
+        };
+        if let Some((model, state)) = conditioned {
+            if let Some(exteriors) = self.active_exteriors() {
+                for exterior in exteriors {
+                    model.validate_exterior_sources(exterior)?;
+                }
             }
             self.model = model;
             self.state = state;
@@ -927,9 +987,7 @@ impl SurfaceHistory {
             .ok_or_else(|| invalid("motion heat has no boundary for this interval"))?;
         let boundaries = vec![boundary(film)?; self.model.column_count()];
         let exteriors = self
-            .request
-            .exterior_exchange
-            .as_ref()
+            .active_exteriors()
             .map(|e| {
                 e.get(interval)
                     .map(|e| vec![e.clone(); self.model.column_count()])
@@ -1232,6 +1290,12 @@ impl SurfaceHistory {
             sample["exterior_exchange"] = json!({"convective_heat_w":e.convective_heat_w,
                 "radiative_heat_w":e.radiative_heat_w,"balance_residual_w":e.balance_residual_w,
                 "convective_energy_j":self.convective_j,"radiative_energy_j":self.radiative_j});
+            if self.request.exterior_exchange.is_none()
+                && let Some((_, receipts)) = &self.microclimate_resolved
+                && let Some(receipt) = receipts.get(interval)
+            {
+                sample["microclimate_convection"] = receipt.clone();
+            }
         }
         self.trace.push(sample);
         Ok(())
@@ -1291,9 +1355,17 @@ impl SurfaceHistory {
                 "Independent-sheet backward Euler on accepted moving geometry with source-qualified prescribed compression changing dry thickness and transport by keyframe interval. Temperature cells and reference mass remain unchanged across pressure transitions. Normal branch work uses current accepted area and is kept separate from heat. No inferred contact pressure or contact area, geometry feedback, layer overlap, body heat loss, wet coupling, work-to-heat conversion, comfort or empirical garment claim."
             );
         }
-        if self.request.exterior_exchange.is_some() {
+        if self.active_exteriors().is_some() {
             result["exterior_exchange"] = json!({"convective_energy_j":self.convective_j,
                 "radiative_energy_j":self.radiative_j});
+        }
+        if self.request.exterior_exchange.is_none()
+            && let Some((_, receipts)) = self.microclimate_resolved
+        {
+            result["microclimate_convection"] = json!(receipts);
+            result["exterior_model"] = json!(
+                "validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film"
+            );
         }
         if let Some(heating) = &self.plastic {
             result["plastic_dissipation_heat"] = heating.snapshot(true);
@@ -1897,5 +1969,118 @@ mod tests {
         let mut unqualified = SurfaceHistory::new(request, model()).unwrap();
         assert!(unqualified.advance(&x, 1., 0, 0, None, None, None).is_err());
         assert!(unqualified.finish("path", "initial", 1.).is_err());
+    }
+
+    #[test]
+    fn microclimate_exterior_motion_matches_prescribed_exterior_and_enforces_guards() {
+        let mc0: MicroclimateExterior = serde_json::from_value(json!({
+            "air": {"temperature_c": 5.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+            "correlation": "churchill_bernstein_cylinder",
+            "characteristic_length_m": 0.25,
+            "wind_speed_m_s": 2.0,
+            "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true
+        }))
+        .unwrap();
+        let mc1: MicroclimateExterior = serde_json::from_value(json!({
+            "air": {"temperature_c": 20.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+            "correlation": "churchill_chu_vertical_plate",
+            "characteristic_length_m": 0.30,
+            "delta_t_k": 10.0,
+            "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true
+        }))
+        .unwrap();
+        let resolved0 = mc0.resolve().unwrap();
+        let resolved1 = mc1.resolve().unwrap();
+
+        let mut mc_req = policy();
+        mc_req.boundaries[0].outside_c = 5.0;
+        mc_req.boundaries[0].outside_resistance_m2_k_w = 0.0;
+        mc_req.boundaries.push(Film {
+            outside_c: 20.0,
+            ..mc_req.boundaries[0]
+        });
+        mc_req.microclimate_exterior = Some(vec![mc0.clone(), mc1]);
+        mc_req.validate(2).unwrap();
+
+        let mut ext_req = mc_req.clone();
+        ext_req.microclimate_exterior = None;
+        ext_req.exterior_exchange = Some(vec![resolved0.exterior.clone(), resolved1.exterior]);
+        ext_req.validate(2).unwrap();
+
+        let mut mc_history = SurfaceHistory::new(mc_req.clone(), model()).unwrap();
+        let mut ext_history = SurfaceHistory::new(ext_req, model()).unwrap();
+        for (interval, area) in [0.5, 1.0].into_iter().enumerate() {
+            let x = [
+                Vec3::ZERO,
+                Vec3::new(2.0 * area, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ];
+            mc_history
+                .advance(&x, (interval + 1) as f64, interval, interval, None, None, None)
+                .unwrap();
+            ext_history
+                .advance(&x, (interval + 1) as f64, interval, interval, None, None, None)
+                .unwrap();
+        }
+        let mc_out = mc_history.finish("path", "initial", 2.0).unwrap();
+        let ext_out = ext_history.finish("path", "initial", 2.0).unwrap();
+
+        // Exact numerical parity against pre-resolved Exterior environments.
+        assert_eq!(mc_out["inside_energy_j"], ext_out["inside_energy_j"]);
+        assert_eq!(mc_out["outside_energy_j"], ext_out["outside_energy_j"]);
+        assert_eq!(mc_out["stored_change_j"], ext_out["stored_change_j"]);
+        assert_eq!(mc_out["exterior_exchange"], ext_out["exterior_exchange"]);
+        assert_eq!(mc_out["final"], ext_out["final"]);
+        assert!(mc_out["balance_error_j"].as_f64().unwrap().abs() < 1e-10);
+
+        // Microclimate receipts and honest exterior_model appear only when microclimate is active.
+        assert_eq!(
+            mc_out["microclimate_convection"][0]["correlation"],
+            "churchill_bernstein_cylinder"
+        );
+        assert_eq!(
+            mc_out["microclimate_convection"][1]["correlation"],
+            "churchill_chu_vertical_plate"
+        );
+        assert_eq!(
+            mc_out["trace"][0]["microclimate_convection"]["correlation"],
+            "churchill_bernstein_cylinder"
+        );
+        assert_eq!(
+            mc_out["trace"][1]["microclimate_convection"]["correlation"],
+            "churchill_chu_vertical_plate"
+        );
+        assert!(
+            mc_out["exterior_model"]
+                .as_str()
+                .unwrap()
+                .contains("Nusselt")
+        );
+        assert!(ext_out.get("microclimate_convection").is_none());
+        assert!(ext_out.get("exterior_model").is_none());
+        assert!(ext_out["trace"][0].get("microclimate_convection").is_none());
+
+        // Fail-closed guards:
+        let mut both = mc_req.clone();
+        both.exterior_exchange = Some(vec![resolved0.exterior.clone(), resolved0.exterior]);
+        assert!(both.validate(2).unwrap_err().message.contains("not both"));
+
+        let mut wrong_len = mc_req.clone();
+        wrong_len.microclimate_exterior = Some(vec![mc0]);
+        assert!(wrong_len.validate(2).is_err());
+
+        let mut denied = mc_req.clone();
+        denied.microclimate_exterior.as_mut().unwrap()[0].allow_estimates = false;
+        assert!(denied.validate(2).is_err());
+
+        let mut bad_air = mc_req.clone();
+        bad_air.boundaries[0].outside_c = 6.0;
+        assert!(bad_air.validate(2).is_err());
+
+        let mut bad_film = mc_req;
+        bad_film.boundaries[0].outside_resistance_m2_k_w = 0.1;
+        assert!(bad_film.validate(2).is_err());
     }
 }
