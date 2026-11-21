@@ -2,7 +2,7 @@
 //! Trial Newton/contact iterations read history; only a converged, audited physical step advances it.
 
 use ftx_core::{Refusal, RefusalCode, Vec3};
-use ftx_pattern::material_relaxation::{CompiledRelaxation, Memory};
+use ftx_pattern::material_relaxation::{CompiledRelaxation, IntegrationScheme, Memory};
 use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
 use serde_json::{Value, json};
 
@@ -319,12 +319,20 @@ impl Solver {
         };
         field.check(&self.model, &self.x)?;
         let mut elements = Vec::new();
+        let mut has_exact_exp = false;
+        let mut all_exact_exp = true;
         for (i, b) in field.entries.iter().enumerate() {
             if let Some(b) = b {
                 let response = b.memory.response(b.effective_strain(&self.x)?, None)?;
                 let mut element = json!({"triangle":i,"law_sha256":b.law.fingerprint(),
                     "viscous_green_strain":b.memory.viscous_strains(),
                     "effective_transient_stress_n_m":response.stress});
+                if b.law.integration() == IntegrationScheme::ExactExponential {
+                    has_exact_exp = true;
+                    element["integration"] = json!("exact_exponential");
+                } else {
+                    all_exact_exp = false;
+                }
                 if let Some(identity) = b.law.parallel_material_sha256() {
                     element["parallel_network"] = json!({"model":ftx_pattern::material_relaxation::parallel::MODEL,
                         "material_sha256":identity,"strain_basis":"total_physical_green_strain"});
@@ -332,30 +340,49 @@ impl Solver {
                 elements.push(element);
             }
         }
-        let scope = if field
+        let has_parallel = field
             .entries
             .iter()
             .flatten()
-            .any(|b| b.law.parallel_material_sha256().is_some())
-        {
-            "Source-qualified Maxwell branch tensors; marked parallel networks use TOTAL physical Green strain and add transient stress independently of equilibrium-branch plastic flow. Excludes same-branch viscoplasticity, numerical dissipation, damage and thermal feedback"
-        } else if field
+            .any(|b| b.law.parallel_material_sha256().is_some());
+        let has_orthotropic = field
             .entries
             .iter()
             .flatten()
-            .any(|b| b.law.has_orthotropic_branches())
-        {
-            "Constant source-qualified proportional and orthotropic branch tensors in effective Green strain; excludes numerical dissipation, plastic damage and thermal feedback"
-        } else {
-            "Constant proportional branch tensors in effective Green strain; excludes numerical dissipation, plastic damage and thermal feedback"
+            .any(|b| b.law.has_orthotropic_branches());
+        let scope = match (has_exact_exp, has_parallel, has_orthotropic) {
+            (false, true, _) => {
+                "Source-qualified Maxwell branch tensors; marked parallel networks use TOTAL physical Green strain and add transient stress independently of equilibrium-branch plastic flow. Excludes same-branch viscoplasticity, numerical dissipation, damage and thermal feedback"
+            }
+            (false, false, true) => {
+                "Constant source-qualified proportional and orthotropic branch tensors in effective Green strain; excludes numerical dissipation, plastic damage and thermal feedback"
+            }
+            (false, false, false) => {
+                "Constant proportional branch tensors in effective Green strain; excludes numerical dissipation, plastic damage and thermal feedback"
+            }
+            (true, true, _) => {
+                "Source-qualified Maxwell branch tensors with opt-in exact piecewise-linear exponential integration where marked; marked parallel networks use TOTAL physical Green strain and add transient stress independently of equilibrium-branch plastic flow. Excludes same-branch viscoplasticity, backward-Euler numerical dissipation where applicable, damage and thermal feedback"
+            }
+            (true, false, true) => {
+                "Constant source-qualified proportional and orthotropic branch tensors in effective Green strain with opt-in exact piecewise-linear exponential integration where marked; excludes backward-Euler numerical dissipation where applicable, plastic damage and thermal feedback"
+            }
+            (true, false, false) => {
+                "Constant proportional branch tensors in effective Green strain with opt-in exact piecewise-linear exponential integration where marked; excludes backward-Euler numerical dissipation where applicable, plastic damage and thermal feedback"
+            }
         };
-        Ok(Some(
-            json!({"schema":"ftx-membrane-history/1", "model":"green_maxwell/1",
+        let mut report = json!({"schema":"ftx-membrane-history/1", "model":"green_maxwell/1",
             "time_seconds":field.time_seconds,"accepted_steps":field.steps,
             "stored_branch_energy_j":field.energy(&self.x,None)?,
             "viscous_step_work_j":field.dissipated_j,"elements":elements,
             "scope":scope,
-            "stress_equilibrium_claim":false,"empirical_validation_claim":false}),
-        ))
+            "stress_equilibrium_claim":false,"empirical_validation_claim":false});
+        if has_exact_exp {
+            report["integration"] = json!(if all_exact_exp {
+                "exact_exponential"
+            } else {
+                "per_element"
+            });
+        }
+        Ok(Some(report))
     }
 }

@@ -521,4 +521,34 @@ fn exact_exponential_potential_gradient_tangent_and_extreme_ratios_are_exact() {
         assert!(up.stored_j_m2.is_finite() && up.stored_j_m2 >= 0.0);
         assert!(up.dissipated_j_m2.is_finite() && up.dissipated_j_m2 >= 0.0);
     }
+
+    // Verify smooth machine-precision continuity of exact_exp dissipation across the r = 0.2
+    // Maclaurin-to-closed-form crossover on a pure ramp from relaxed zero state.
+    let single_law = {
+        let mut l = law();
+        l.integration = IntegrationScheme::ExactExponential;
+        l.branches[0].relaxation_time.value = 1.0;
+        l.compile(&source(), true, Q).unwrap()
+    };
+    let zero = single_law.initialize([0.0; 3]).unwrap();
+    let e_ramp = [0.1, -0.04, 0.05];
+    let q_e = [
+        Q[0][0] * e_ramp[0] + Q[0][1] * e_ramp[1],
+        Q[1][0] * e_ramp[0] + Q[1][1] * e_ramp[1],
+        Q[2][2] * e_ramp[2],
+    ];
+    let scale = 0.5 * (e_ramp[0] * q_e[0] + e_ramp[1] * q_e[1] + e_ramp[2] * q_e[2]);
+    let mut prev_c = 0.0;
+    for r in [1e-6, 1e-3, 0.01, 0.199_999, 0.2, 0.200_001, 1.0, 10.0] {
+        let up = zero.advance(e_ramp, r).unwrap();
+        // Continuous ramp external work W = e^T Q_branch e * (1 - b) / r = stored + dissipated.
+        let b = -(-r).exp_m1() / r;
+        let expected_work = scale * (1.0 - b) / r;
+        near(up.stored_j_m2 + up.dissipated_j_m2, expected_work, 1e-13);
+        let c_ee = up.dissipated_j_m2 / scale;
+        if r == 0.2 {
+            assert!((c_ee - prev_c).abs() < 1e-6, "jump at r=0.2 crossover");
+        }
+        prev_c = c_ee;
+    }
 }

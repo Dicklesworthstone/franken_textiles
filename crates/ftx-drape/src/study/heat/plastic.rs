@@ -39,6 +39,8 @@ pub(super) struct Heating {
     dissipated_j: f64,
     supplied_j: f64,
     materials: Vec<Value>,
+    exact_exponential_relaxation: bool,
+    backward_euler_relaxation: bool,
 }
 
 impl Heating {
@@ -87,8 +89,10 @@ impl Heating {
         }
         let mut fractions = Vec::with_capacity(records.len());
         let mut laws = Vec::with_capacity(records.len());
+        let mut relaxation_schemes = Vec::with_capacity(records.len());
         let mut materials = Vec::with_capacity(records.len());
         for record in &records {
+            let mut scheme = None;
             let (fraction, law, property) = match kind {
                 Kind::Plastic => (
                     record
@@ -100,18 +104,20 @@ impl Heating {
                     record.membrane_plasticity()?.map(|law| law.fingerprint()),
                     "membrane_plastic_heat_fraction",
                 ),
-                Kind::Relaxation => (
-                    record
-                        .membrane_relaxation_heat_fraction()?
-                        .map(|f| Conversion {
-                            fraction: f.fraction,
-                            temperature_range_c: f.temperature_range_c,
-                        }),
-                    record
-                        .membrane_relaxation()?
-                        .map(|law| law.fingerprint().to_owned()),
-                    "membrane_relaxation_heat_fraction",
-                ),
+                Kind::Relaxation => {
+                    let compiled = record.membrane_relaxation()?;
+                    scheme = compiled.as_ref().map(|law| law.integration());
+                    (
+                        record
+                            .membrane_relaxation_heat_fraction()?
+                            .map(|f| Conversion {
+                                fraction: f.fraction,
+                                temperature_range_c: f.temperature_range_c,
+                            }),
+                        compiled.map(|law| law.fingerprint().to_owned()),
+                        "membrane_relaxation_heat_fraction",
+                    )
+                }
                 Kind::Bending => (
                     record.bending_plastic_heat_fraction()?.map(|f| Conversion {
                         fraction: f.fraction,
@@ -129,6 +135,7 @@ impl Heating {
             }
             fractions.push(fraction);
             laws.push(law);
+            relaxation_schemes.push(scheme);
         }
         let mut actual_laws = vec![None; previous_j.len()];
         let entries = if matches!(kind, Kind::Bending) {
@@ -158,6 +165,8 @@ impl Heating {
             );
         }
         let mut selected = Vec::with_capacity(assignment.len());
+        let mut exact_exponential_relaxation = false;
+        let mut backward_euler_relaxation = false;
         for (i, material) in assignment.into_iter().enumerate() {
             if actual_laws[i] != laws[material]
                 || (fractions[material].is_none() && previous_j[i] != 0.)
@@ -165,6 +174,16 @@ impl Heating {
                 return Err(invalid(
                     "dissipation heat material/law mapping differs from accepted mechanics",
                 ));
+            }
+            if let Some(scheme) = relaxation_schemes[material] {
+                match scheme {
+                    ftx_pattern::material_relaxation::IntegrationScheme::ExactExponential => {
+                        exact_exponential_relaxation = true;
+                    }
+                    ftx_pattern::material_relaxation::IntegrationScheme::BackwardEuler => {
+                        backward_euler_relaxation = true;
+                    }
+                }
             }
             selected.push(fractions[material]);
         }
@@ -182,6 +201,8 @@ impl Heating {
             dissipated_j: 0.,
             supplied_j: 0.,
             materials,
+            exact_exponential_relaxation,
+            backward_euler_relaxation,
         };
         for (&temperature, fraction) in temperatures_c.iter().zip(&result.fractions) {
             if let Some(fraction) = fraction {
@@ -278,9 +299,20 @@ impl Heating {
             object.remove("initial_plastic_dissipation_j");
             result["viscous_dissipation_j"] = json!(self.dissipated_j);
             result["initial_viscous_dissipation_j"] = json!(self.initial_j);
-            result["scope"] = json!(
-                "Only accepted Maxwell dashpot endpoint-quadrature dissipation after motion time zero is converted. Initial drape work, reversible spring storage, backward-Euler numerical loss, plastic yield, bending and contact friction are excluded. Unconverted dissipation is not assigned another destination; temperature does not feed back into mechanics."
-            );
+            result["scope"] = json!(match (
+                self.exact_exponential_relaxation,
+                self.backward_euler_relaxation,
+            ) {
+                (true, false) => {
+                    "Only accepted Maxwell dashpot continuous piecewise-linear exact-exponential dissipation after motion time zero is converted. Initial drape work, reversible spring storage, plastic yield, bending and contact friction are excluded. Unconverted dissipation is not assigned another destination; temperature does not feed back into mechanics."
+                }
+                (true, true) => {
+                    "Only accepted Maxwell dashpot dissipation after motion time zero is converted (using continuous piecewise-linear exact-exponential integration where marked exact_exponential and backward-Euler endpoint quadrature elsewhere). Initial drape work, reversible spring storage, backward-Euler numerical loss on backward-Euler panels, plastic yield, bending and contact friction are excluded. Unconverted dissipation is not assigned another destination; temperature does not feed back into mechanics."
+                }
+                (false, _) => {
+                    "Only accepted Maxwell dashpot endpoint-quadrature dissipation after motion time zero is converted. Initial drape work, reversible spring storage, backward-Euler numerical loss, plastic yield, bending and contact friction are excluded. Unconverted dissipation is not assigned another destination; temperature does not feed back into mechanics."
+                }
+            });
         }
         if let Kind::Bending = self.kind {
             result["scope"] = json!(

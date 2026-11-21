@@ -777,6 +777,20 @@ fn exact_exponential_clamped_triangle_is_step_size_invariant_and_matches_analyti
 
     let r_coarse = coarse.relaxation_report().unwrap().unwrap();
     let r_fine = fine.relaxation_report().unwrap().unwrap();
+    assert_eq!(r_coarse["integration"], "exact_exponential");
+    assert_eq!(r_fine["integration"], "exact_exponential");
+    assert_eq!(r_coarse["elements"][0]["integration"], "exact_exponential");
+    assert!(
+        r_coarse["scope"]
+            .as_str()
+            .unwrap()
+            .contains("exact piecewise-linear exponential integration")
+    );
+    // Backward-Euler default keeps wire output free of the optional integration key.
+    let be_report = solver(true, true).relaxation_report().unwrap().unwrap();
+    assert!(be_report.get("integration").is_none());
+    assert!(be_report["elements"][0].get("integration").is_none());
+
     near(
         r_coarse["stored_branch_energy_j"].as_f64().unwrap(),
         r_fine["stored_branch_energy_j"].as_f64().unwrap(),
