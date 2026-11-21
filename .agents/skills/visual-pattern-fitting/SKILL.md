@@ -25,10 +25,21 @@ inspectable pictures. Read its `basis`, `sim.gating`, `sim.advisory` and `render
 For a refused solve with saved diagnostics, open `sim/refused/still_front.png` and read
 `sim.refusal`. The image shows the state associated with the failure. Use the same `inspect-pixel`
 command below on that image to trace an edge. The result retains the refusal, phase and accepted
-step count when recorded. Older archives can still be compared visually. With a convergence
-refusal, try a smaller `--time-step-s` from the start and increase `--sew` and `--drape`
-proportionally to preserve the physical durations. For a tighter dynamic solve, lower
-`--newton-tol-m-s` and compare the reported force residuals as well as the images.
+step count when recorded. Older archives can still be compared visually.
+
+Read `sim.refusal.repairs` in order before changing any solver option. When the solve stopped
+before its first sewing step and the start is at fault, the second repair begins "This start is
+the relaxation checkpoint" or "Before any sewing step this start was already strained". It says
+whether the drape began from an earlier, more strained checkpoint (the fully relaxed start had
+cloth layers crossing or touching), and which pieces are stretched 15 % or more, each with its
+nearest pattern edge, for example `sleeve.L (3.3 % of it, nearest its edge hem)`. That is a cut
+or pose problem. Open `sim/refused/still_strain_front.png`, find the red region, and shorten or
+widen the piece at that edge. A time step or iteration budget does not change the start.
+
+Only for a convergence refusal with no such repair, try a smaller `--time-step-s` from the start
+and increase `--sew` and `--drape` proportionally to preserve the physical durations. For a
+tighter dynamic solve, lower `--newton-tol-m-s` and compare the reported force residuals as well
+as the images.
 
 A solve refused at its start (`intersecting_start`) has no cloth state. It leaves the views of
 `ftx place` instead. Open `sim/refused/start/still_back.png` and `still_front.png`: cloth inside the
@@ -134,4 +145,8 @@ ftx viewer "$work/rounds/001/sim" --check-contact --view front --json
 The original archive failed the flat sleeve-length check at 385 mm. Full-body replay checks find
 crossings in both archived wrist-collider runs at frame 87. A fresh 335 mm run with
 `--hands knuckle` passed the flat check and all 49 recorded physical frames. It has its own
-posed body file. Use its still to assess the simulated cuff. The 385 mm cut remains unresolved.
+posed body file. Use its still to assess the simulated cuff. The 385 mm cut remains unresolved:
+its cuff is 170 mm round and ends over the open hand, which is 174 to 180 mm round at the thumb
+and knuckles, so with `--hands knuckle` its refusal names both sleeves as stretched at the cuff
+end (nearest edges `hem` and `under_f`) and the start as a fallback checkpoint. Shortening the
+sleeve, as above, is the repair.

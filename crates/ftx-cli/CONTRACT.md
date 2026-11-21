@@ -276,7 +276,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   same positions and faces as the plain garment. A successful JSON check reports `endpoint_view`
   when this endpoint check ran.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N] [--model PATH]
-  [--arm-deg DEG] [--skinning lbs|dqs] [--self-contact-mm MM] [--self-mu MU] [--compression F] [--two-start-sew N] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
+  [--arm-deg DEG] [--skinning lbs|dqs] [--self-contact-mm MM] [--self-mu MU] [--compression F] [--two-start-sew N] [--res WxH] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does).
   `--elastic-hold-steps N` reports casing displacement during the last N accepted gravity steps;
   it adds no steps and changes no physics. Zero requests no window; N above `--drape` refuses.
@@ -323,11 +323,13 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   the second repair says what the run knows about that start, because no solver budget changes it: that
   it is an earlier relaxation checkpoint, with both iteration counts, when the fully relaxed start was not
   admitted for cloth contact (the progress line says the same); and each instance at least 2 % of whose
-  vertices are stretched 15 % or more, with the pattern edge nearest that stretch. The threshold is
-  measured on one garment (the comment on `TIGHT_START_PCT` gives the numbers), not a validated limit.
-  `ftx place` prints the same instances as `TIGHT START` and records `stretched_past_ramp_pct` and
-  `stretched_nearest_edge` in each instance's `start_edge_strain`; it draws the fully relaxed start, which
-  is not the start a cloth-contact drape uses when that one is not admitted.
+  vertices have a mean edge strain of 15 % or more, with the pattern edge nearest that stretch. The
+  threshold is measured on one garment (the comment on `TIGHT_START_PCT` gives the numbers), not a
+  validated limit. `ftx place` applies the same measure to the start it draws, prints such instances as
+  `TIGHT START` and records `stretched_past_ramp_pct` and `stretched_nearest_edge` in each instance's
+  `start_edge_strain`. It draws the fully relaxed start, so it does not flag a garment whose fully relaxed
+  start is loose but is not admitted for cloth contact: there only the drape's refusal names the stretched
+  checkpoint.
   Numerical options are
   validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
   with a repair message. Both `sim_report.json` and the CLI result contain a
