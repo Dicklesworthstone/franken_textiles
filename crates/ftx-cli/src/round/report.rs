@@ -61,25 +61,27 @@ fn static_equilibrium(out: &mut String, eq: &Value) {
         "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: {}",
         xml_escape(status)
     );
-    if status == "available"
-        && let Some(res) = eq["result"].as_object()
-    {
-        if let Some(iters) = res.get("solve").and_then(|s| s["iterations"].as_u64()) {
-            let _ = write!(out, ". Newton iterations: {iters}");
-        }
-        if let Some(max_m) = res
-            .get("max_displacement_m")
-            .and_then(Value::as_f64)
-            .filter(|v| v.is_finite())
-        {
-            let _ = write!(out, ". Max displacement: {} mm", fnum(max_m * 1000.0, 2));
-        }
-        if let Some(rms_m) = res
-            .get("rms_displacement_m")
-            .and_then(Value::as_f64)
-            .filter(|v| v.is_finite())
-        {
-            let _ = write!(out, ". RMS displacement: {} mm", fnum(rms_m * 1000.0, 2));
+    if status == "available" {
+        if let Some(res) = eq["result"].as_object() {
+            if let Some(iters) = res.get("solve").and_then(|s| s["iterations"].as_u64()) {
+                let _ = write!(out, ". Newton iterations: {iters}");
+            }
+            if let Some(max_mm) = res
+                .get("max_displacement_m")
+                .and_then(Value::as_f64)
+                .map(|v| v * 1000.0)
+                .filter(|v| v.is_finite())
+            {
+                let _ = write!(out, ". Max displacement: {} mm", fnum(max_mm, 3));
+            }
+            if let Some(rms_mm) = res
+                .get("rms_displacement_m")
+                .and_then(Value::as_f64)
+                .map(|v| v * 1000.0)
+                .filter(|v| v.is_finite())
+            {
+                let _ = write!(out, ". RMS displacement: {} mm", fnum(rms_mm, 3));
+            }
         }
         out.push_str(".</p>");
         if let Some(no_claim) = eq["no_claim"].as_str() {
@@ -445,6 +447,9 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
             if let Some(skinning) = sim["body"]["skinning"].as_str() {
                 let _ = write!(out, " Skinning: {}.", xml_escape(skinning));
             }
+            if let Some(hands) = sim["hand_collider"].as_str() {
+                let _ = write!(out, " Hand collider: {}.", xml_escape(hands));
+            }
             if let Some(kind) = sim["numerical"]["newton_strategy"]["kind"].as_str() {
                 let _ = write!(out, " Newton solver: {}.", xml_escape(kind));
             }
@@ -728,6 +733,7 @@ mod tests {
             "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true.</p>"
         ));
         assert!(!default_html.contains("Skinning:"));
+        assert!(!default_html.contains("Hand collider:"));
         assert!(!default_html.contains("Newton solver:"));
         assert!(!default_html.contains("Integrator:"));
 
@@ -737,6 +743,7 @@ mod tests {
                 "settled": true,
                 "self_contact": {"enabled": true},
                 "body": {"skinning": "dqs"},
+                "hand_collider": "palm",
                 "numerical": {
                     "newton_strategy": {"kind": "adaptive_ilu"},
                     "integrator": {"kind": "generalized_alpha", "rho_inf": 0.75}
@@ -747,7 +754,7 @@ mod tests {
         });
         let opt_in_html = render(Path::new("."), &[opt_in_entry]).unwrap();
         assert!(opt_in_html.contains(
-            "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true. Skinning: dqs. Newton solver: adaptive_ilu. Integrator: generalized_alpha (ρ∞ = 0.75).</p>"
+            "<h3>Drape prediction</h3><p>Settled: true. Self-contact enabled: true. Skinning: dqs. Hand collider: palm. Newton solver: adaptive_ilu. Integrator: generalized_alpha (ρ∞ = 0.75).</p>"
         ));
         assert!(!default_html.contains("Extra settling:"));
         assert!(!default_html.contains("Time subdivision:"));
@@ -758,6 +765,7 @@ mod tests {
             "sim": {
                 "settled": true,
                 "self_contact": {"enabled": true},
+                "hand_collider": "knuckle",
                 "numerical": {
                     "settling": {"steps": 4, "max_steps": 12, "stop_reason": "quiet_window"},
                     "time_subdivision": {
@@ -772,7 +780,7 @@ mod tests {
                     "result": {
                         "solve": {"iterations": 9},
                         "max_displacement_m": 0.00425,
-                        "rms_displacement_m": 0.0015
+                        "rms_displacement_m": 0.000001
                     },
                     "no_claim": "Frictionless comparison only; <not> fit."
                 },
@@ -781,18 +789,37 @@ mod tests {
             }
         });
         let ext_html = render(Path::new("."), &[extended]).unwrap();
+        assert!(ext_html.contains("Hand collider: knuckle."));
         assert!(ext_html.contains("Extra settling: 4/12 steps (quiet_window)."));
         assert!(
             ext_html
                 .contains("Time subdivision: 2/48 intervals subdivided (52 substeps, 56 trials).")
         );
         assert!(ext_html.contains(
-            "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: available. Newton iterations: 9. Max displacement: 4.25 mm. RMS displacement: 1.5 mm.</p>"
+            "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: available. Newton iterations: 9. Max displacement: 4.25 mm. RMS displacement: 0.001 mm.</p>"
         ));
         assert!(ext_html.contains("Frictionless comparison only; &lt;not&gt; fit."));
 
-        let refused_eq = json!({
+        let available_no_result = json!({
             "round": 3,
+            "sim": {
+                "settled": true,
+                "self_contact": {"enabled": true},
+                "static_equilibrium": {
+                    "status": "available",
+                    "no_claim": "Still not fit."
+                },
+                "gating": [],
+                "advisory": []
+            }
+        });
+        let avail_html = render(Path::new("."), &[available_no_result]).unwrap();
+        assert!(avail_html.contains(
+            "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: available.</p><p class=\"muted\">Still not fit.</p>"
+        ));
+
+        let refused_eq = json!({
+            "round": 4,
             "sim": {
                 "settled": true,
                 "self_contact": {"enabled": true},

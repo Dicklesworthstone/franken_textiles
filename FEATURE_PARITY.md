@@ -115,7 +115,14 @@ byte-for-byte (`8de9ffcd00a5c0d5075cbb59e40f5121d1e8f9a85c56ff5c4c2c9651582f661e
 92 cm bolero currently refuses at `physical frame 87` (`cloth triangle 1976 crosses displayed body
 triangle 7014`, where the relaxed pre-sewn right sleeve cuff grazes the displayed hand omitted from
 `clothing_skin`); neither `ReplayContact::check` nor the oracle-frozen bolero draft has been weakened
-to mask it.
+to mask it. The default is unchanged and still refuses. The native, opt-in `--hands knuckle` collider
+(05 "Clothing collider"; `ftx-udlj`) keeps each hand up to the first finger joints: with it, on
+2026-11-21, the same 92 cm draft with 15 mm of extra sleeve (`ftx round --stills --self-contact-mm 2`)
+converged with no gating flags and six stills, the cuffs at the wrists. `--hands palm` did not help
+(the crossing triangle is on the thumb base, `finger1-1`, which that variant cuts). With 65 mm of
+extra sleeve the cuff starts through the kept hand and the first sewing step does not converge, with or
+without `--time-subdivision`: a sleeve that covers the hand is still refused, now with a picture of
+where.
 
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native

@@ -836,6 +836,25 @@ anatomical, facial-contact or empirical fit claim. The original elastic ladder, 
 wedge, two-start and fitted digest assertions pass unchanged with this proxy. Reports retain the
 selected roots and synthetic cap count; a failed cap remains a refusal.
 
+**Hand colliders (native, opt-in).** The default collider is capped at `wrist.R/L`, so no hand takes
+part in contact, while the full-body trajectory check (04 §9.1) tests cloth against the complete display
+skin. A sleeve cuff that reaches the hand therefore passes through it and is refused. Two opt-in
+variants keep part of each hand, by the same dominant-bone trim and centroid caps and with every kept
+source vertex unmoved:
+
+| `HandCollider` | Trim roots (each side) | Kept beyond the wrist |
+|---|---|---|
+| `Wrist` (default, reference) | `wrist` | nothing |
+| `Palm` | `finger1-1` … `finger5-1` | the wrist and the four metacarpals; the whole thumb is cut, because the rig hangs its metacarpal on `finger1-1` |
+| `Knuckle` | `finger1-2` … `finger5-2` | as `Palm`, plus the thumb's first bone and each finger's first phalanx |
+
+The outer finger joints are left out of every variant: cloth beyond the kept part is still not resolved
+by contact, and the full-body check still refuses it. On the admitted model, in the drape pose, both
+variants trim to simple loops and pass the solver's surface audit for the fitted 92 cm public-prior
+toddler and a 178 cm adult (7824 collider vertices at the wrist caps, 8278 for `Palm`, 9052 for
+`Knuckle`). Capped finger stubs are synthetic geometry and grant no anatomical or fit claim about the
+hand.
+
 ## Appendix A. Local-change labels (index j; blend-shape rows 624 + 2j and 625 + 2j)
 
 Labels are listed in index order within each region; the regions are contiguous.
