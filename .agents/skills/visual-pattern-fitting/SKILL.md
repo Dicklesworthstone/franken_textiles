@@ -150,3 +150,8 @@ its cuff is 170 mm round and ends over the open hand, which is 174 to 180 mm rou
 and knuckles, so with `--hands knuckle` its refusal names both sleeves as stretched at the cuff
 end (nearest edges `hem` and `under_f`) and the start as a fallback checkpoint. Shortening the
 sleeve, as above, is the repair.
+
+`--hands full` keeps the whole hand in the collider, so the collider and the displayed hand are
+one surface. The 335 mm sleeve drapes with it as it does with `knuckle`. It does not rescue the
+long sleeve: a 385 mm sleeve widened to a 207.7 mm cuff is refused at its start with it, because
+the sleeve end lies across the open fingers and `ftx place` shows sleeve vertices inside the hand.
