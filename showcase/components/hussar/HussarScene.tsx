@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { capturePixelRatio } from "../atelier3d/capture-resolution";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -17,7 +18,7 @@ export default function HussarScene({regiment,layer,framing,section,layout,onFai
     const capture=new URLSearchParams(location.search).has("costumeCapture");
     try {renderer=new T.WebGLRenderer({alpha:true,antialias:true,powerPreference:"low-power",preserveDrawingBuffer:capture});}
     catch {onFailure();return;}
-    renderer.setPixelRatio(Math.min(2,devicePixelRatio));renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=.99;
+    renderer.setPixelRatio(capturePixelRatio(2));renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=.99;
     renderer.shadowMap.enabled=true;
     renderer.shadowMap.type=T.PCFSoftShadowMap;
     renderer.shadowMap.autoUpdate=false;

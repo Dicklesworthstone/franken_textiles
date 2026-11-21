@@ -20,8 +20,9 @@ import numpy as np
 from mathutils import Vector
 
 PUBLIC = Path(__file__).resolve().parents[1] / "public"
-FPS = 16
-COUNT = 96
+FPS = 60
+COUNT = 6 * FPS
+FRAME_WIDTH, FRAME_HEIGHT = 3840, 2160
 LANDMARKS = (0, 53, 90)
 
 
@@ -219,10 +220,12 @@ def render(args):
     frames,ids,tri,panels,body,body_tri,layout,phases=load(args.garment,args.native)
     name=args.garment; final=frames[-1]; initial=frames[0]
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    scene=bpy.context.scene;scene.render.engine="CYCLES";scene.cycles.samples=args.samples
+    scene=bpy.context.scene;scene.render.engine=args.engine;scene.cycles.samples=args.samples
     scene.cycles.use_denoising=True;scene.cycles.max_bounces=3;scene.cycles.transparent_max_bounces=2
+    if args.engine == "BLENDER_EEVEE":
+        scene.eevee.taa_render_samples=args.samples
     scene.render.use_persistent_data=True
-    scene.render.resolution_x=800;scene.render.resolution_y=540;scene.render.resolution_percentage=100
+    scene.render.resolution_x=FRAME_WIDTH;scene.render.resolution_y=FRAME_HEIGHT;scene.render.resolution_percentage=100
     scene.render.image_settings.file_format="JPEG";scene.render.image_settings.quality=93
     scene.world=bpy.data.worlds.new("Studio skylight");scene.world.use_nodes=True
     scene.world.node_tree.nodes["Background"].inputs[0].default_value=(.72,.77,.85,1)
@@ -320,7 +323,7 @@ def render(args):
         if len(a)<6:continue
         for t in (.25,.7):pairs.append([a[round(t*(len(a)-1))],b[round(t*(len(b)-1))]])
     thread=curves("Matching edges",pairs,material("Basting thread",(.85,.56,.21)),size*.001) if pairs else None
-    def compose(i):
+    def compose(i, destination):
         xyz,staging=film_pose(i,name,frames,ids,phases,panels,gap,final_mid[2])
         cloth.data.vertices.foreach_set("co",xyz.astype("f").ravel())
         cloth.data.polygons.foreach_set("material_index",np.ones(len(tri),dtype=np.int32) if i<=12 else mask[tri[:,0]])
@@ -341,14 +344,25 @@ def render(args):
         u=xyz@right;v=xyz@up;mid=(xyz.min(0)+xyz.max(0))/2
         mid+=right*((u.max()+u.min())*.5-mid@right)+up*((v.max()+v.min())*.5-mid@up)
         cam.location=Vector(mid)+direction*max(3,size*4);cam.rotation_euler=rot.to_euler()
-        cam.data.ortho_scale=max(np.ptp(u)*1.22,np.ptp(v)*800/540*1.20)
-        scene.render.filepath=str(args.out/f"{i:03}.jpg");bpy.ops.render.render(write_still=True)
-    for i in LANDMARKS if args.proof else range(COUNT):
-        dest=args.out/f"{i:03}.jpg"
+        cam.data.ortho_scale=max(np.ptp(u)*1.22,np.ptp(v)*FRAME_WIDTH/FRAME_HEIGHT*1.20)
+        scene.render.filepath=str(destination);bpy.ops.render.render(write_still=True)
+    if args.proof:
+        for i in LANDMARKS:
+            dest=args.out/f"{i:03}.jpg"
+            if not dest.is_file():
+                compose(i,dest)
+        return
+    for frame in range(args.start_frame,args.end_frame):
+        dest=args.out/f"{frame:03}.jpg"
         if dest.is_file():continue
-        if 0<i<=12:os.link(args.out/"000.jpg",dest)
-        else:compose(i)
-    if not args.proof:
+        # Retain the published six-second edit. Sample camera motion at 60 Hz while
+        # snapping cloth geometry to the original recorded states in film_pose.
+        i=frame*16/FPS
+        if 0<i<=12 and (args.out/"000.jpg").is_file():
+            os.link(args.out/"000.jpg",dest)
+        else:
+            compose(min(i,95),dest)
+    if args.start_frame == 0 and args.end_frame == COUNT:
         if name=="fez":
             source="flat pattern "+hashlib.sha256((PUBLIC/"patterns/fez.json").read_bytes()).hexdigest()
         elif args.native:
@@ -356,7 +370,8 @@ def render(args):
         else:
             source="fold.pc2 "+layout["sourcePc2Sha256"]
         subprocess.run(["ffmpeg","-v","error","-n","-framerate",str(FPS),"-i",str(args.out/"%03d.jpg"),
-            "-c:v","libx264","-crf","18","-pix_fmt","yuv420p","-metadata","comment=FrankenTextiles "+source,
+            "-c:v","libx264","-threads","4","-preset","veryfast","-crf","17","-maxrate","9M","-bufsize","9M",
+            "-profile:v","high","-level:v","5.2","-pix_fmt","yuv420p","-metadata","comment=FrankenTextiles "+source,
             "-movflags","+faststart",str(args.out/(name+".mp4"))],check=True)
 
 
@@ -365,4 +380,10 @@ if __name__=="__main__":
     p.add_argument("garment",choices=["sundress","eased","blue","yellow","bolero","trousers","column","flare","ensemble","fez"])
     p.add_argument("out",type=Path);p.add_argument("native",type=Path,nargs="?");p.add_argument("--proof",action="store_true")
     p.add_argument("--samples",type=int,default=5)
-    args=p.parse_args(sys.argv[sys.argv.index("--")+1:]);args.out.mkdir(exist_ok=True,parents=True);render(args)
+    p.add_argument("--engine",choices=["CYCLES","BLENDER_EEVEE"],default="CYCLES")
+    p.add_argument("--start-frame",type=int,default=0)
+    p.add_argument("--end-frame",type=int,default=COUNT)
+    args=p.parse_args(sys.argv[sys.argv.index("--")+1:])
+    if not 0<=args.start_frame<args.end_frame<=COUNT:
+        p.error(f"choose a nonempty frame interval within 0 through {COUNT}")
+    args.out.mkdir(exist_ok=True,parents=True);render(args)

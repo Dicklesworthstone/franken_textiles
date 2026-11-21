@@ -5,14 +5,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright-core";
 import sharp from "sharp";
+import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
 
 const destination=resolve(process.argv[2]);
 await mkdir(destination);
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||chromium.executablePath(),
   args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
 try {
-  const page=await browser.newPage({viewport:{width:960,height:540},reducedMotion:"reduce",
-    userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
+  const page=await browser.newPage(captureOptions({width:960,height:540}));
+  await enableFilmResolution(page);
   const origin=process.env.FTX_STUDIO_URL||"http://127.0.0.1:3000";
   await page.goto(new URL("/?capture=pose-room",origin).href);
   await page.locator('canvas[data-run="520-35"]').waitFor();
@@ -33,23 +34,24 @@ try {
     document.querySelector(".dr-stage").appendChild(slate);
   });
   const stage=page.locator(".dr-stage");
-  const encoder=spawn("ffmpeg",["-v","error","-f","image2pipe","-framerate","20","-i","pipe:0","-an","-c:v","libx264","-crf","19","-pix_fmt","yuv420p","-movflags","+faststart",resolve(destination,"drape-room.mp4")],
+  const encoder=spawn("ffmpeg",filmArgs(resolve(destination,"drape-room.mp4")),
     {stdio:["pipe","ignore","inherit"]});
   const finished=once(encoder,"close");
   try {
-    for(let f=0;f<160;f++){
-      const angle=f<60?35:75, contact=f>=112;
-      if(f===60)await page.getByRole("button",{name:"75 degree arm pose"}).evaluate(b=>b.click());
-      if(f===112)await page.locator(".dr-modes button").filter({hasText:"Contact"}).evaluate(b=>b.click());
+    const frames=8*fps, poseChange=3*fps, contactChange=Math.round(5.6*fps);
+    for(let f=0;f<frames;f++){
+      const angle=f<poseChange?35:75, contact=f>=contactChange;
+      if(f===poseChange)await page.getByRole("button",{name:"75 degree arm pose"}).evaluate(b=>b.click());
+      if(f===contactChange)await page.locator(".dr-modes button").filter({hasText:"Contact"}).evaluate(b=>b.click());
       await page.locator(`canvas[data-run="520-${angle}"][data-mode="${contact?"contact":"cloth"}"]`).waitFor();
-      await page.evaluate(({angle,contact,f})=>{
+      await page.evaluate(({angle,contact,progress})=>{
         const readings=document.querySelectorAll(".dr-readings strong");
         document.querySelector(".film-slate p").textContent=angle+"° arm pose · 52 cm chest";
         document.querySelector(".film-slate span").textContent=contact?"Peak contact force "+readings[2].textContent:"Mean chest gap "+readings[1].textContent;
-        window.ftxPoseCamera(.24+.49*Math.sin(f/159*Math.PI),.17,.36,.067);
-      },{angle,contact,f});
+        window.ftxPoseCamera(.24+.49*Math.sin(progress*Math.PI),.17,.36,.067);
+      },{angle,contact,progress:f/(frames-1)});
       const image=await stage.screenshot({type:"jpeg",quality:92});
-      if(f===32)await writeFile(resolve(destination,"drape-room.jpg"),image,{flag:"wx"});
+      if(f===Math.round(1.6*fps))await writeFile(resolve(destination,"drape-room.jpg"),image,{flag:"wx"});
       if(!encoder.stdin.write(image))await once(encoder.stdin,"drain");
     }
   } finally {encoder.stdin.end();}

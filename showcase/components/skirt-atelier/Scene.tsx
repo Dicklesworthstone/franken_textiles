@@ -1,6 +1,7 @@
 "use client";
 
 import { publishedGeometry } from "../replayAsset";
+import { capturePixelRatio } from "../atelier3d/capture-resolution";
 import {useEffect,useRef} from "react";
 import * as T from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
@@ -41,7 +42,7 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
     const el=host.current!,key=cut+"-"+waist,abort=new AbortController();
     let renderer:T.WebGLRenderer;
     try{renderer=new T.WebGLRenderer({alpha:true,antialias:true,powerPreference:"low-power"});}catch{fail(key);return;}
-    renderer.setPixelRatio(Math.min(devicePixelRatio,1.65));renderer.setClearColor(0,0);
+    renderer.setPixelRatio(capturePixelRatio(1.65));renderer.setClearColor(0,0);
     renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
     renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFSoftShadowMap;
     const canvas=renderer.domElement;el.append(canvas);canvas.tabIndex=0;

@@ -5,19 +5,20 @@ import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
 
 const base = process.argv[2] || "http://localhost:3000";
 const dest = path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/", import.meta.url)));
 const kinds = process.argv[4] ? [process.argv[4]] : ["cylinder","strip"];
-const ua = "OpenAI File Downloader, XaiImageApiFetch/1.0";
-const fps = 16, frames = fps * 7;
+const frames = fps * 7;
 await mkdir(dest,{recursive:true});
 const browser = await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(),
   args:["--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
 try {
   for(const kind of kinds) {
     if(!["cylinder","strip"].includes(kind)) throw Error("Choose cylinder or strip.");
-    const page = await browser.newPage({viewport:{width:1280,height:720},reducedMotion:"reduce",userAgent:ua});
+    const page = await browser.newPage(captureOptions({width:1280,height:720}));
+    await enableFilmResolution(page);
     await page.goto(new URL(`/experiments/${kind}/?capture=1`,base).href);
     await page.waitForFunction(()=>typeof window.ftxRigView==="function" && document.querySelector("canvas[data-step]"));
     await page.evaluate(()=>document.fonts.ready);
@@ -41,7 +42,7 @@ try {
       const name=document.createElement("strong");name.style.cssText="font:400 30px Georgia,serif";name.textContent=document.querySelector('h1').textContent;
       const value=document.createElement("span");plate.append(name,value);document.body.append(plate);
     });
-    const encoder=spawn("ffmpeg",["-v","error","-n","-f","image2pipe","-framerate",String(fps),"-i","pipe:0","-an","-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-movflags","+faststart",path.join(dest,`rig-${kind}.mp4`)],{stdio:["pipe","ignore","inherit"]});
+    const encoder=spawn("ffmpeg",filmArgs(path.join(dest,`rig-${kind}.mp4`)),{stdio:["pipe","ignore","inherit"]});
     const done=once(encoder,"close");encoder.stdin.on("error",()=>{});
     try {
       for(let k=0;k<frames;k++){

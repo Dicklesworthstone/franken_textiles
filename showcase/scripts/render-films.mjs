@@ -5,6 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
 
 const base = new URL(process.argv[2] || "http://localhost:3000");
 const target = path.resolve(process.argv[3] || fileURLToPath(new URL("../public/media/", import.meta.url)));
@@ -15,12 +16,10 @@ const studies = [
 ].filter(study => !process.argv[4] || study.id === process.argv[4]);
 if (studies.length === 0) throw new Error("Choose bolero, trousers or construction.");
 
-const fps = 24;
 const duration = 8;
 const movie = { width: 1280, height: 720 };
 const ease = t => t * t * (3 - 2 * t);
 const unit = t => Math.max(0, Math.min(1, t));
-const ua = "OpenAI File Downloader, XaiImageApiFetch/1.0";
 
 async function draw(page, progress, yaw) {
   await page.evaluate(async ([position, angle]) => {
@@ -99,11 +98,7 @@ async function encode(page, study) {
     };
   }, study);
   const output = path.join(target, study.id + ".mp4");
-  const ffmpeg = spawn("ffmpeg", [
-    "-hide_banner", "-loglevel", "error", "-n", "-f", "image2pipe", "-framerate", String(fps),
-    "-i", "pipe:0", "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "19",
-    "-pix_fmt", "yuv420p", "-movflags", "+faststart", output,
-  ], { stdio: ["pipe", "ignore", "inherit"] });
+  const ffmpeg = spawn("ffmpeg", filmArgs(output), { stdio: ["pipe", "ignore", "inherit"] });
   const finished = once(ffmpeg, "close");
   ffmpeg.stdin.on("error", () => {}); // The exit status reports a rejected input or output.
   try {
@@ -132,7 +127,8 @@ const browser = await chromium.launch({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--disable-dev-shm-usage"],
 });
 try {
-  const context = await browser.newContext({ viewport: movie, deviceScaleFactor: 1, userAgent: ua, reducedMotion: "reduce" });
+  const context = await browser.newContext(captureOptions(movie));
+  await enableFilmResolution(context);
   const page = await context.newPage();
   async function openStudy(study) {
     const url = new URL(base);

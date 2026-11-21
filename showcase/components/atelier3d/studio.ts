@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { capturePixelRatio } from "./capture-resolution";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { weaveMaps } from "./weave";
 
@@ -6,7 +7,7 @@ import { weaveMaps } from "./weave";
 // that casts the fold shadows, and a cool rim light that separates the figure from the backdrop.
 
 export function prepareRenderer(renderer: THREE.WebGLRenderer) {
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(capturePixelRatio(2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.02;

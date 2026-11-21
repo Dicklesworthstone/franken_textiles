@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { capturePixelRatio } from "../atelier3d/capture-resolution";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { buildDress } from "./model";
@@ -49,7 +50,7 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
     let renderer:T.WebGLRenderer;
     try{renderer=new T.WebGLRenderer({antialias:true,alpha:true,powerPreference:"low-power",preserveDrawingBuffer:false});}
     catch{latest.current.onError();return;}
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.65));renderer.outputColorSpace=T.SRGBColorSpace;
+    renderer.setPixelRatio(capturePixelRatio(1.65));renderer.outputColorSpace=T.SRGBColorSpace;
     renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=.94;
     renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFShadowMap;
     const el=renderer.domElement;surface.appendChild(el);el.tabIndex=0;

@@ -4,14 +4,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
+import { captureOptions, enableFilmResolution, filmArgs, fps } from "./film-capture.mjs";
 
 const [base="http://localhost:3000",output="public/media",art]=process.argv.slice(2);
 await mkdir(output,{recursive:true});
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||chromium.executablePath(),
   args:["--no-sandbox","--use-angle=swiftshader","--enable-unsafe-swiftshader","--disable-dev-shm-usage"]});
 try {
-  const page=await browser.newPage({viewport:{width:1120,height:630},deviceScaleFactor:1,reducedMotion:"reduce",
-    userAgent:"OpenAI File Downloader, XaiImageApiFetch/1.0"});
+  const page=await browser.newPage(captureOptions({width:1120,height:630}));
+  await enableFilmResolution(page);
   await page.goto(new URL("/wardrobe/sundress/?capture=1",base).href);
   await page.waitForFunction(()=>!!window.ftxDressFrame);
   if(art){
@@ -49,8 +50,8 @@ try {
   }
   const poster=await expose(.13);
   await writeFile(path.join(output,"wardrobe-sundress.jpg"),poster,{flag:"wx"});
-  const fps=20,frames=fps*7;
-  const encoder=spawn("ffmpeg",["-hide_banner","-loglevel","error","-n","-f","image2pipe","-framerate",String(fps),"-i","pipe:0","-an","-c:v","libx264","-crf","19","-preset","medium","-pix_fmt","yuv420p","-movflags","+faststart",path.join(output,"wardrobe-sundress.mp4")],{stdio:["pipe","ignore","inherit"]});
+  const frames=fps*7;
+  const encoder=spawn("ffmpeg",filmArgs(path.join(output,"wardrobe-sundress.mp4")),{stdio:["pipe","ignore","inherit"]});
   const ended=once(encoder,"close");encoder.stdin.on("error",()=>{});
   try{for(let i=0;i<frames;i++){const jpeg=await expose(i/frames);await new Promise((resolve,reject)=>encoder.stdin.write(jpeg,error=>error?reject(error):resolve()));}}
   finally{encoder.stdin.end();const [code]=await ended;if(code)throw Error("FFmpeg exited with "+code);}

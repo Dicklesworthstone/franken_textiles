@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { capturePixelRatio } from "./atelier3d/capture-resolution";
 import { PlaybackMark } from "./InlineFilm";
 import "./stitch-lab.css";
 
@@ -81,7 +82,7 @@ function draw(canvas: HTMLCanvasElement, design: Design, position: number, view:
   if (!ctx) return;
   const { width, height } = canvas.getBoundingClientRect();
   if (!width || !height) return;
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const ratio = capturePixelRatio(2);
   const pixelWidth = Math.round(width * ratio), pixelHeight = Math.round(height * ratio);
   if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
     canvas.width = pixelWidth; canvas.height = pixelHeight;

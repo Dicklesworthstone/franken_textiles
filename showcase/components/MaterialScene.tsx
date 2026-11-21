@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { capturePixelRatio } from "./atelier3d/capture-resolution";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -136,7 +137,7 @@ export default function MaterialScene({ data, step, mesh, focus, camera, onFailu
     try { renderer = new T.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "low-power" }); }
     catch { onFailure(); return; }
     const tubular = data.kind === "cylinder";
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setPixelRatio(capturePixelRatio(2));
     renderer.toneMapping = T.ACESFilmicToneMapping;
     renderer.toneMappingExposure = .98;
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFShadowMap;
