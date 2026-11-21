@@ -393,6 +393,7 @@ fn evaluate_with_loader(input: Input, load: DocumentLoader<'_>) -> Result<Value,
     let mut trace_bytes = 0usize;
     let mut final_field = Value::Null;
     let mut any_microclimate = false;
+    let mut any_prescribed = false;
     for (i, f) in input.frames.iter().enumerate() {
         let dt = (f.time_seconds - previous) / f.steps as f64;
         if f.time_seconds <= previous || !dt.is_finite() || dt <= 0. {
@@ -442,7 +443,6 @@ fn evaluate_with_loader(input: Input, load: DocumentLoader<'_>) -> Result<Value,
             (Some(exterior_environments(e, &boundaries)?), None)
         } else if let Some(mc) = f.microclimate_exterior.as_deref() {
             let (env, receipts) = resolve_microclimate_environments(mc, &boundaries)?;
-            any_microclimate = true;
             (Some(env), Some(receipts))
         } else {
             (None, None)
@@ -491,7 +491,6 @@ fn evaluate_with_loader(input: Input, load: DocumentLoader<'_>) -> Result<Value,
                         .as_deref()
                         .expect("validated exposed conditions"),
                 )?;
-                any_microclimate = true;
                 (Some(env), Some(receipts))
             } else {
                 (None, None)
@@ -586,18 +585,24 @@ fn evaluate_with_loader(input: Input, load: DocumentLoader<'_>) -> Result<Value,
                         "radiative_heat_w":e.radiative_heat_w,"balance_residual_w":e.balance_residual_w,
                         "convective_energy_j":covered_energy.convective_energy_j,
                         "radiative_energy_j":covered_energy.radiative_energy_j});
+                    if let Some(receipts) = &covered_microclimate {
+                        entry["microclimate_convection"] = receipts.clone();
+                        any_microclimate = true;
+                    } else {
+                        any_prescribed = true;
+                    }
                 }
                 if let Some(e) = step.exposed_exterior_exchange() {
                     entry["exposed_exterior_exchange"] = json!({"convective_heat_w":e.convective_heat_w,
                         "radiative_heat_w":e.radiative_heat_w,"balance_residual_w":e.balance_residual_w,
                         "convective_energy_j":exposed_energy.convective_energy_j,
                         "radiative_energy_j":exposed_energy.radiative_energy_j});
-                }
-                if let Some(receipts) = &covered_microclimate {
-                    entry["microclimate_convection"] = receipts.clone();
-                }
-                if let Some(receipts) = &exposed_microclimate {
-                    entry["exposed_microclimate_convection"] = receipts.clone();
+                    if let Some(receipts) = &exposed_microclimate {
+                        entry["exposed_microclimate_convection"] = receipts.clone();
+                        any_microclimate = true;
+                    } else {
+                        any_prescribed = true;
+                    }
                 }
                 trace_bytes = trace_bytes
                     .checked_add(
@@ -648,9 +653,11 @@ fn evaluate_with_loader(input: Input, load: DocumentLoader<'_>) -> Result<Value,
             json!("interlayer or finite-view-factor radiation"),
             json!("solar/spectral irradiation"),
         ]);
-        body["exterior_model"] = json!(
+        body["exterior_model"] = json!(if any_prescribed {
+            "mixed prescribed and validity-gated moist-air Nusselt correlation convection (microclimate entries are Evidence::Estimate with model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film"
+        } else {
             "validity-gated moist-air Nusselt correlation convection (Evidence::Estimate; model-form discrepancy allowance retained); optional source-qualified opaque-gray large-isothermal-enclosure radiation; not a measured garment film"
-        );
+        });
     }
     let out = seal(body)?;
     if serde_json::to_vec_pretty(&out)
@@ -999,5 +1006,156 @@ mod tests {
                 .message
                 .contains("outside_c equal to air_c")
         );
+    }
+
+    #[test]
+    fn mixed_prescribed_and_microclimate_motion_reports_mixed_exterior_model() {
+        let (report, mapping) = two_triangle_report_and_mapping();
+        let report_hash = sha256_hex(&serde_json::to_vec(&report).unwrap());
+        let map_hash = sha256_hex(&serde_json::to_vec(&mapping).unwrap());
+        let run_in_memory = |raw: Value| -> Result<Value, Refusal> {
+            let input: Input = serde_json::from_value(raw).map_err(|e| invalid(e.to_string()))?;
+            evaluate_with_loader(input, &mut |name| match name {
+                "drape.json" => Ok((report.clone(), report_hash.clone())),
+                "map.json" => Ok((mapping.clone(), map_hash.clone())),
+                other => Err(invalid(format!("unexpected fixture path {other}"))),
+            })
+        };
+
+        let forced_mc = json!({
+            "air": {"temperature_c": 18.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+            "correlation": "churchill_bernstein_cylinder",
+            "characteristic_length_m": 0.25,
+            "wind_speed_m_s": 2.0,
+            "surface_temperature_range_c": [-50.0, 100.0],
+            "allow_estimates": true
+        });
+        let prescribed = serde_json::from_value::<MicroclimateExterior>(forced_mc.clone())
+            .unwrap()
+            .resolve()
+            .unwrap()
+            .exterior;
+
+        // 1. Multi-frame sequence mixing prescribed frame 0 and microclimate frame 1.
+        let multi_frame = json!({
+            "schema": "ftx-thermal-motion/1",
+            "initial": {
+                "kind": "uniform",
+                "time_seconds": 0.0,
+                "drape_report": "drape.json",
+                "coverage": "map.json",
+                "temperature_c": 26.0
+            },
+            "frames": [
+                {
+                    "time_seconds": 5.0,
+                    "drape_report": "drape.json",
+                    "coverage": "map.json",
+                    "boundaries": [{
+                        "inside_c": 34.0,
+                        "outside_c": 18.0,
+                        "inside_resistance_m2_k_w": 0.05,
+                        "outside_resistance_m2_k_w": 0.0
+                    }],
+                    "exterior_exchange": [prescribed.clone()],
+                    "bare_boundaries": [{
+                        "inside_c": 34.0,
+                        "outside_c": 18.0,
+                        "inside_resistance_m2_k_w": 0.05,
+                        "outside_resistance_m2_k_w": 0.10
+                    }],
+                    "steps": 2
+                },
+                {
+                    "time_seconds": 10.0,
+                    "drape_report": "drape.json",
+                    "coverage": "map.json",
+                    "boundaries": [{
+                        "inside_c": 34.0,
+                        "outside_c": 18.0,
+                        "inside_resistance_m2_k_w": 0.05,
+                        "outside_resistance_m2_k_w": 0.0
+                    }],
+                    "microclimate_exterior": [forced_mc.clone()],
+                    "bare_boundaries": [{
+                        "inside_c": 34.0,
+                        "outside_c": 18.0,
+                        "inside_resistance_m2_k_w": 0.05,
+                        "outside_resistance_m2_k_w": 0.10
+                    }],
+                    "steps": 2
+                }
+            ]
+        });
+        let out = run_in_memory(multi_frame).unwrap();
+        verify_seal(&out).unwrap();
+        assert!(out["trace"][0].get("microclimate_convection").is_none());
+        assert_eq!(
+            out["trace"][1]["microclimate_convection"][0]["correlation"],
+            "churchill_bernstein_cylinder"
+        );
+        assert!(
+            out["exterior_model"]
+                .as_str()
+                .unwrap()
+                .starts_with("mixed prescribed and validity-gated moist-air Nusselt")
+        );
+        assert!(out["heat_balance_error_j"].as_f64().unwrap().abs() < 1e-11);
+
+        // 2. Single frame mixing prescribed covered exchange and microclimate exposed exchange.
+        let mixed_paths = json!({
+            "schema": "ftx-thermal-motion/1",
+            "initial": {
+                "kind": "uniform",
+                "time_seconds": 0.0,
+                "drape_report": "drape.json",
+                "coverage": "map.json",
+                "temperature_c": 26.0
+            },
+            "frames": [{
+                "time_seconds": 10.0,
+                "drape_report": "drape.json",
+                "coverage": "map.json",
+                "boundaries": [{
+                    "inside_c": 34.0,
+                    "outside_c": 18.0,
+                    "inside_resistance_m2_k_w": 0.05,
+                    "outside_resistance_m2_k_w": 0.0
+                }],
+                "exterior_exchange": [prescribed],
+                "bare_boundaries": [{
+                    "inside_c": 34.0,
+                    "outside_c": 18.0,
+                    "inside_resistance_m2_k_w": 0.05,
+                    "outside_resistance_m2_k_w": 0.10
+                }],
+                "exposed_boundaries": [{
+                    "inside_c": 18.0,
+                    "outside_c": 18.0,
+                    "inside_resistance_m2_k_w": 0.10,
+                    "outside_resistance_m2_k_w": 0.0
+                }],
+                "exposed_microclimate_exterior": [forced_mc],
+                "steps": 4
+            }]
+        });
+        let mixed_out = run_in_memory(mixed_paths).unwrap();
+        verify_seal(&mixed_out).unwrap();
+        assert!(
+            mixed_out["trace"][0]
+                .get("microclimate_convection")
+                .is_none()
+        );
+        assert_eq!(
+            mixed_out["trace"][0]["exposed_microclimate_convection"][0]["correlation"],
+            "churchill_bernstein_cylinder"
+        );
+        assert!(
+            mixed_out["exterior_model"]
+                .as_str()
+                .unwrap()
+                .starts_with("mixed prescribed and validity-gated moist-air Nusselt")
+        );
+        assert!(mixed_out["heat_balance_error_j"].as_f64().unwrap().abs() < 1e-11);
     }
 }
