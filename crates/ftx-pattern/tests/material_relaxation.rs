@@ -537,17 +537,38 @@ fn exact_exponential_potential_gradient_tangent_and_extreme_ratios_are_exact() {
         Q[1][0] * e_ramp[0] + Q[1][1] * e_ramp[1],
         Q[2][2] * e_ramp[2],
     ];
-    let scale = 0.5 * (e_ramp[0] * q_e[0] + e_ramp[1] * q_e[1] + e_ramp[2] * q_e[2]);
+    let scale = 2.0 * (e_ramp[0] * q_e[0] + e_ramp[1] * q_e[1] + e_ramp[2] * q_e[2]);
     let mut prev_c = 0.0;
-    for r in [1e-6, 1e-3, 0.01, 0.199_999, 0.2, 0.200_001, 1.0, 10.0] {
+    for r in [
+        1e-6,
+        1e-3,
+        0.01,
+        0.199_999_999,
+        0.2,
+        0.200_000_001,
+        1.0,
+        10.0,
+    ] {
         let up = zero.advance(e_ramp, r).unwrap();
         // Continuous ramp external work W = e^T Q_branch e * (1 - b) / r = stored + dissipated.
-        let b = -(-r).exp_m1() / r;
-        let expected_work = scale * (1.0 - b) / r;
+        let work_factor = if r < 0.1 {
+            0.5 + r
+                * (-1.0 / 6.0
+                    + r * (1.0 / 24.0
+                        + r * (-1.0 / 120.0
+                            + r * (1.0 / 720.0
+                                + r * (-1.0 / 5040.0
+                                    + r * (1.0 / 40_320.0
+                                        + r * (-1.0 / 362_880.0 + r / 3_628_800.0)))))))
+        } else {
+            let b = -(-r).exp_m1() / r;
+            (1.0 - b) / r
+        };
+        let expected_work = scale * work_factor;
         near(up.stored_j_m2 + up.dissipated_j_m2, expected_work, 1e-13);
         let c_ee = up.dissipated_j_m2 / scale;
         if r == 0.2 {
-            assert!((c_ee - prev_c).abs() < 1e-6, "jump at r=0.2 crossover");
+            assert!((c_ee - prev_c).abs() < 1e-9, "jump at r=0.2 crossover");
         }
         prev_c = c_ee;
     }

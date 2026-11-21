@@ -880,7 +880,11 @@ fn orphan_membrane_damage_model_is_refused_by_elastic_and_relaxation_calibration
         max_peak_scaled: 1.0,
         samples: Vec::new(),
     };
-    assert!(material_calibration::calibrate(&cal_in).is_err());
+    let err = material_calibration::calibrate(&cal_in).unwrap_err();
+    assert!(
+        err.message.contains("permanent membrane history"),
+        "unexpected refusal: {err}"
+    );
 
     // 2. Nonlinear elastic swatch calibration refuses orphan membrane_damage_model.
     let nl_in = material_calibration::nonlinear::Input {
@@ -893,13 +897,15 @@ fn orphan_membrane_damage_model_is_refused_by_elastic_and_relaxation_calibration
         replace_existing: true,
         max_rms_scaled: 1.0,
         max_peak_scaled: 1.0,
-        warp_knots: vec![-0.1, 0.0, 0.1],
-        weft_knots: vec![-0.1, 0.0, 0.1],
-        shear_knots: vec![-0.1, 0.0, 0.1],
+        interior_knots: [vec![0.0], vec![0.0], vec![0.0]],
         area_response: None,
         samples: Vec::new(),
     };
-    assert!(material_calibration::nonlinear::calibrate(&nl_in).is_err());
+    let err = material_calibration::nonlinear::calibrate(&nl_in).unwrap_err();
+    assert!(
+        err.message.contains("permanent membrane history"),
+        "unexpected refusal: {err}"
+    );
 
     // 3. Standalone relaxation calibration refuses orphan membrane_damage_model.
     let rel_in = relax_cal::Input {
@@ -923,7 +929,11 @@ fn orphan_membrane_damage_model_is_refused_by_elastic_and_relaxation_calibration
         max_rms_scaled: 1.0,
         max_peak_scaled: 1.0,
     };
-    assert!(relax_cal::calibrate(&rel_in).is_err());
+    let err = relax_cal::calibrate(&rel_in).unwrap_err();
+    assert!(
+        err.message.contains("permanent membrane history"),
+        "unexpected refusal: {err}"
+    );
 
     // 4. Origin linearization refuses orphan membrane_damage_model.
     let mut lin_record = record;
@@ -936,17 +946,23 @@ fn orphan_membrane_damage_model_is_refused_by_elastic_and_relaxation_calibration
         lin_record.properties.remove(key);
     }
     let lin_in = material_linearization::Input {
-        schema: material_linearization::SCHEMA.into(),
+        schema: "ftx-wang2011-linearization/1".into(),
         material: Selection {
             id: lin_record.id.clone(),
             record: Some(lin_record),
             allow_estimates: true,
             ..Selection::default()
         },
-        source_reference: "local:test/orphan-damage".into(),
-        accessed_on: "2026-11-20".into(),
-        rationale: "verify orphan membrane_damage_model fails closed".into(),
-        method: "test".into(),
+        green_strain_domain: [[-0.1, 0.1]; 3],
+        approximation_source: ftx_pattern::materials::Source {
+            reference: "local:test/orphan-damage".into(),
+            accessed_on: "2026-11-20".into(),
+            note: "verify orphan membrane_damage_model fails closed".into(),
+        },
     };
-    assert!(material_linearization::approximate(&lin_in).is_err());
+    let err = material_linearization::linearize(&lin_in).unwrap_err();
+    assert!(
+        err.message.contains("existing membrane law or history"),
+        "unexpected refusal: {err}"
+    );
 }
