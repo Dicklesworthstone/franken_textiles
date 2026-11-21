@@ -564,6 +564,9 @@ fn write_refused_map(
 /// `size` is the width and height in pixels the run's own stills were asked for, so a pixel read off one
 /// of these pictures names the same place as in the stills of a round that completes.
 ///
+/// When that state is the start itself (no sewing step accepted), a second repair says what the run knows
+/// is wrong with the start: see [`start_condition`].
+///
 /// No claim: it is not a drape or a fit. Inside-body marking needs the collision body and is not drawn. If
 /// the pictures cannot be written the refusal is returned unchanged: its pictures never replace or delay a
 /// refusal.
@@ -1081,9 +1084,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     );
     if !tight.is_empty() {
         text.push_str(&format!(
-            "  TIGHT START: stretched 15 % or more (red in start/still_strain_*) in {}. Where that cloth \
-             passes round a wider part of the body a drape cannot begin: end the piece short of that part \
-             or widen it at that edge.\n",
+            "  TIGHT START: stretched 15 % or more (red in start/still_strain_*) in {}. If that cloth has to \
+             pass round a wider part of the body there, a drape may not be able to begin: end the piece \
+             short of that part or widen it at that edge.\n",
             tight.join("; ")
         ));
     }
@@ -1609,5 +1612,33 @@ mod tests {
         assert_eq!(slots, [(0, false), (0, true), (1, false), (2, false)]);
         let (right, left) = (slot_colour(slots[0]), slot_colour(slots[1]));
         assert!(left.iter().zip(right).all(|(l, r)| *l > r));
+    }
+
+    #[test]
+    fn start_condition_names_the_checkpoint_on_fallback_and_keeps_it_without_fallback() {
+        assert!(start_condition(None, &[]).is_none());
+
+        let tight = vec!["sleeve.R (22 % of it, nearest its edge cuff)".to_string()];
+        let no_fb = start_condition(None, &tight).unwrap();
+        assert!(no_fb.contains("Before any sewing step this start was already strained."));
+        assert!(no_fb.contains("It is stretched 15 % or more"));
+        assert!(!no_fb.contains("The checkpoint is stretched"));
+        assert!(!no_fb.contains("ftx place draws the fully relaxed start"));
+
+        let fb_only = start_condition(Some((200, 800)), &[]).unwrap();
+        assert!(
+            fb_only.contains("checkpoint at 200 iterations, not the fully relaxed start at 800")
+        );
+        assert!(!fb_only.contains("is stretched 15 % or more"));
+        assert!(fb_only.contains("ftx place draws the fully relaxed start"));
+
+        let fb_tight = start_condition(Some((200, 800)), &tight).unwrap();
+        assert!(fb_tight.contains("The checkpoint is stretched 15 % or more"));
+        assert!(!fb_tight.contains("It is stretched 15 % or more"));
+        let stretch_pos = fb_tight.find("The checkpoint is stretched").unwrap();
+        let place_pos = fb_tight
+            .find("ftx place draws the fully relaxed start")
+            .unwrap();
+        assert!(stretch_pos < place_pos);
     }
 }
