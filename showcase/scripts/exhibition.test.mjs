@@ -213,6 +213,27 @@ test("reduced motion leaves the film paused until requested", async () => {
   } finally {await p.close();}
 });
 
+test("native Play on the skirt film survives scrolling away under reduced motion", async () => {
+  const page=await browser.newPage({...opts,reducedMotion:"reduce"});
+  try {
+    await page.goto(new URL("/studies/skirt/#skirt-film",site).href,{waitUntil:"domcontentloaded"});
+    const film=page.locator("#skirt-film video");
+    await film.scrollIntoViewIfNeeded();
+    await page.locator("#skirt-film video[src]").waitFor();
+    assert.ok(await film.evaluate(video=>video.controls && video.paused));
+    // The play event comes from the video element, as it does with the browser's controls.
+    await film.evaluate(video=>video.play());
+    await page.evaluate(()=>window.scrollTo({top:0,behavior:"instant"}));
+    await page.waitForFunction(()=>document.querySelector("#skirt-film video")?.paused);
+    const at=await film.evaluate(video=>video.currentTime);
+    await film.scrollIntoViewIfNeeded();
+    await page.waitForFunction(time=>{
+      const video=document.querySelector("#skirt-film video");
+      return video && !video.paused && video.currentTime>time+.1;
+    },at,{timeout:5000});
+  } finally {await page.close();}
+});
+
 test("a failed 4K film request resumes in 1080p", async () => {
   const page=await browser.newPage({...opts,reducedMotion:"reduce"});
   try {

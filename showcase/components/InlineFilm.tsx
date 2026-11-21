@@ -30,7 +30,7 @@ export async function filmSource(id: string) {
   return filmFile(revisions[`${smaller}.mp4`] && !await playsUhd() ? smaller : id);
 }
 /** Step a playing 4K film down to its 1080p copy if it cannot be decoded, or if a third of its frames are dropped. */
-export function watchFilm(el: HTMLVideoElement, id: string) {
+export function watchFilm(el: HTMLVideoElement, id: string, resume = () => { void el.play().catch(()=>{}); }) {
   if (!revisions[`${id}-1080.mp4`]) return () => {};
   const small = filmFile(id+"-1080");
   let pending: number | undefined;
@@ -49,7 +49,7 @@ export function watchFilm(el: HTMLVideoElement, id: string) {
       try { sessionStorage.setItem(REMEMBERED, "1"); } catch {}
       el.src = small;
       if (at > 0) el.currentTime = at;
-      if (wasPlaying) void el.play().catch(()=>{});
+      if (wasPlaying) resume();
     });
   }
   const onProgress = () => {
@@ -86,8 +86,10 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
     const saveData = (navigator as Navigator & {connection?: {saveData?:boolean}}).connection?.saveData;
     let visible = false, manual: boolean | undefined = requested || undefined, automaticPause = false;
     let path: string | undefined, live = true;
+    let pendingPlay: Promise<void> | undefined;
+    let playingSource: string | null = null;
     void filmSource(id).then(source => { if (!live) return; path=source; arm(); sync(); });
-    const unwatch = watchFilm(el, id);
+    const unwatch = watchFilm(el, id, sync);
     function pause() {
       if (el.paused) return;
       automaticPause=true; el.pause();
@@ -97,16 +99,26 @@ export default function InlineFilm({ id, title, controls = false, requested = fa
       if (path && visible && controls && !el.getAttribute("src")) el.src=path;
     }
     function play() {
-      if (!path) return;
+      if (!path || !el.paused) return;
       if (!el.getAttribute("src")) el.src=path;
-      void el.play().catch(()=>{});
+      const request = pendingPlay = el.play();
+      void request.catch(() => { if (pendingPlay === request) pendingPlay = undefined; });
     }
     function sync() {
       if (!visible || document.hidden || !(manual ?? (!reduced.matches && !saveData))) pause();
       else play();
     }
-    const onPlay = () => {setPlaying(true);};
-    const onPause = () => {setPlaying(false);if(!automaticPause && visible && !el.error) manual=false;automaticPause=false;};
+    const onPlay = () => {
+      if (!pendingPlay) manual = true; // Native video controls start playback outside our play function.
+      pendingPlay = undefined;
+      playingSource = el.getAttribute("src");
+      setPlaying(true);
+    };
+    const onPause = () => {
+      if (!automaticPause && visible && !el.error && el.getAttribute("src") === playingSource) manual = false;
+      automaticPause = false;
+      setPlaying(false);
+    };
     toggle.current = () => {manual = el.paused; if(manual) play(); else pause();};
     const observer=new IntersectionObserver(([entry])=>{
       visible=entry.isIntersecting && entry.intersectionRatio>=.2;
