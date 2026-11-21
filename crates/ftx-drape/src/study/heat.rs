@@ -1322,6 +1322,7 @@ impl SurfaceHistory {
             .water
             .as_ref()
             .is_some_and(surface_water::Water::has_drainage);
+        let has_exterior = self.active_exteriors().is_some();
         let f = self
             .final_field
             .ok_or_else(|| invalid("missing final heat field"))?;
@@ -1355,7 +1356,7 @@ impl SurfaceHistory {
                 "Independent-sheet backward Euler on accepted moving geometry with source-qualified prescribed compression changing dry thickness and transport by keyframe interval. Temperature cells and reference mass remain unchanged across pressure transitions. Normal branch work uses current accepted area and is kept separate from heat. No inferred contact pressure or contact area, geometry feedback, layer overlap, body heat loss, wet coupling, work-to-heat conversion, comfort or empirical garment claim."
             );
         }
-        if self.active_exteriors().is_some() {
+        if has_exterior {
             result["exterior_exchange"] = json!({"convective_energy_j":self.convective_j,
                 "radiative_energy_j":self.radiative_j});
         }
