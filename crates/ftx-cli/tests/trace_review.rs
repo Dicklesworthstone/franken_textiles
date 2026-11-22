@@ -251,3 +251,68 @@ fn output_links_cannot_replace_the_source_or_reuse_stale_labels() {
     );
     assert!(!dir.join("linked/mask.png").exists());
 }
+
+#[test]
+fn trace_commands_refuse_extra_positionals_nonfinite_numbers_and_premature_px_out() {
+    let dir = scratch();
+    // Extra positional arguments refuse fail-closed across trace, annotate, scale-fit, and audit.
+    for argv in [
+        vec!["trace", "sheet.png", "extra.png", "--out", "extra-trace"],
+        vec![
+            "annotate", "a.json", "b.json", "--names", "n.json", "--out", "out.json",
+        ],
+        vec![
+            "scale-fit",
+            "a.json",
+            "b.json",
+            "--target",
+            "p1:width=100mm",
+            "--out",
+            "out.json",
+        ],
+        vec!["audit", "a.json", "b.json", "--out", "extra-audit"],
+    ] {
+        let r = run(&dir, &argv, 3);
+        assert_eq!(r["refusal"]["code"], "invalid_document", "{argv:?}");
+    }
+
+    // Non-finite numeric trace options refuse before opening or publishing anything.
+    for (flag, val) in [
+        ("--crop", "NaN,0,10,10"),
+        ("--bg", "inf,0,0"),
+        ("--smooth", "NaN"),
+        ("--corner-deg", "inf"),
+        ("--min-area-frac", "NaN"),
+    ] {
+        let r = run(
+            &dir,
+            &["trace", "sheet.png", "--out", "bad-opt", flag, val],
+            3,
+        );
+        assert_eq!(r["refusal"]["code"], "invalid_document", "{flag}={val}");
+        assert!(!dir.join("bad-opt").exists());
+    }
+
+    // A refused publish must not write `--px-out` beforehand.
+    std::fs::create_dir(dir.join("occupied")).unwrap();
+    std::fs::write(dir.join("occupied/overlay.png"), b"existing").unwrap();
+    let r = run(
+        &dir,
+        &[
+            "trace",
+            "sheet.png",
+            "--channel",
+            "dark",
+            "--out",
+            "occupied",
+            "--px-out",
+            "external_px.json",
+        ],
+        3,
+    );
+    assert_eq!(r["refusal"]["code"], "invalid_document");
+    assert!(
+        !dir.join("external_px.json").exists(),
+        "--px-out must not be written when publish refuses"
+    );
+}

@@ -80,10 +80,14 @@ fn write_text(path: &Path, text: &str) -> Result<(), Refusal> {
 }
 
 fn input<'a>(args: &'a Args, command: &str, what: &str) -> Result<&'a str, Refusal> {
-    args.positional
-        .get(1)
-        .map(String::as_str)
-        .ok_or_else(|| bad_input(format!("ftx {command} needs {what}")))
+    match args.positional.as_slice() {
+        [_, only] => Ok(only.as_str()),
+        [_] | [] => Err(bad_input(format!("ftx {command} needs {what}"))),
+        _ => Err(bad_input(format!(
+            "ftx {command} needs exactly one input ({what}), got {}",
+            args.positional.len() - 1
+        ))),
+    }
 }
 
 /// `ftx annotate DRAFT --names N --out P`: `names.json` applied to a traced draft; the result passes the
@@ -308,12 +312,36 @@ fn numbers<const N: usize>(key: &str, s: &str) -> Result<[f64; N], Refusal> {
                 py::repr_str(s)
             ))
         })?;
+    if !v.iter().all(|x| x.is_finite()) {
+        return Err(bad_input(format!(
+            "--{key} takes {N} finite comma-separated numbers, got {}",
+            py::repr_str(s)
+        )));
+    }
     v.try_into().map_err(|_| {
         bad_input(format!(
             "--{key} takes {N} comma-separated numbers, got {}",
             py::repr_str(s)
         ))
     })
+}
+
+fn finite_number(args: &Args, key: &str) -> Result<Option<f64>, Refusal> {
+    args.options
+        .get(key)
+        .map(|v| {
+            let parsed = v
+                .parse::<f64>()
+                .map_err(|_| bad_input(format!("--{key}: invalid value {}", py::repr_str(v))))?;
+            if !parsed.is_finite() {
+                return Err(bad_input(format!(
+                    "--{key}: must be a finite number, got {}",
+                    py::repr_str(v)
+                )));
+            }
+            Ok(parsed)
+        })
+        .transpose()
 }
 
 fn number<T: std::str::FromStr>(args: &Args, key: &str) -> Result<Option<T>, Refusal> {
@@ -375,7 +403,7 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .get("crop")
             .map(|s| numbers::<4>("crop", s))
             .transpose()?,
-        min_area_frac: number(args, "min-area-frac")?.unwrap_or(d.min_area_frac),
+        min_area_frac: finite_number(args, "min-area-frac")?.unwrap_or(d.min_area_frac),
         channel: args.options.get("channel").cloned().unwrap_or(d.channel),
         invert: if args.options.contains_key("invert") {
             Some(true)
@@ -394,13 +422,13 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .get("bg")
             .map(|s| numbers::<3>("bg", s))
             .transpose()?,
-        stroke: number(args, "stroke")?,
+        stroke: finite_number(args, "stroke")?,
         close_px: number(args, "close")?.unwrap_or(d.close_px),
         open_px: number(args, "open")?,
-        corner_deg: number(args, "corner-deg")?.unwrap_or(d.corner_deg),
-        soft_deg: number(args, "soft-deg")?.unwrap_or(d.soft_deg),
-        simplify_frac: number(args, "simplify-frac")?.unwrap_or(d.simplify_frac),
-        smooth_px: number(args, "smooth")?.unwrap_or(d.smooth_px),
+        corner_deg: finite_number(args, "corner-deg")?.unwrap_or(d.corner_deg),
+        soft_deg: finite_number(args, "soft-deg")?.unwrap_or(d.soft_deg),
+        simplify_frac: finite_number(args, "simplify-frac")?.unwrap_or(d.simplify_frac),
+        smooth_px: finite_number(args, "smooth")?.unwrap_or(d.smooth_px),
         erase: args
             .options
             .get("erase")
@@ -454,11 +482,22 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ),
     ];
     let px_bytes = (px_doc.to_string() + "\n").into_bytes();
-    // `--px-out FILE` keeps the polygons out of DIR (the skill's wrapper, whose DIR matches vectorize.py's)
-    match args.options.get("px-out") {
-        Some(file) => std::fs::write(file, &px_bytes)
-            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{file}: {e}")))?,
-        None => artifacts.push(("trace_px.json".into(), px_bytes)),
+    // `--px-out FILE` keeps the polygons out of DIR (the skill's wrapper, whose DIR matches vectorize.py's).
+    // Never write `--px-out` before `publish(out, &artifacts)` succeeds, and never follow a symlink there.
+    let px_external = args.options.get("px-out").map(Path::new);
+    if let Some(file) = px_external {
+        match std::fs::symlink_metadata(file) {
+            Ok(m) if !m.is_file() => {
+                return Err(bad_input(
+                    "--px-out must name a regular file, not a directory or symlink",
+                ));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(workspace::io_error(file, e)),
+        }
+    } else {
+        artifacts.push(("trace_px.json".into(), px_bytes.clone()));
     }
     for (i, label) in ftx_trace::review::label_crops(&traced, &img)?
         .into_iter()
@@ -516,6 +555,13 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
         (traced.pattern.dumps(Some(1)) + "\n").into_bytes(),
     ));
     publish(out, &artifacts)?;
+    if let Some(file) = px_external {
+        if let Some(parent) = file.parent().filter(|p| !p.as_os_str().is_empty()) {
+            make_dir(parent)?;
+        }
+        std::fs::write(file, &px_bytes)
+            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", file.display())))?;
+    }
     let files = json!({"draft": draft.display().to_string(), "mask": mask.display().to_string(),
                        "polygons": px.display().to_string(),"overlay":overlay.display().to_string(),"labels":label_dir.display().to_string()});
     let text = format!(
