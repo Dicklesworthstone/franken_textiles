@@ -2,8 +2,10 @@
 //! Tajima DST with a placement run on the sew line, a stop to lay the braid, and a straight stitch down the braid's
 //! centre along every braid line; plus a README. Units 0.1 mm, y up, the design centred on the hoop.
 
+use std::collections::BTreeMap;
+
 use ftx_core::polyline::{at_fractions, polyline_length};
-use ftx_core::{Refusal, Vec2, det, np, py};
+use ftx_core::{Refusal, RefusalCode, Vec2, det, np, py};
 
 use crate::ctx::Ctx;
 use crate::pyjson::PyJson;
@@ -379,6 +381,7 @@ pub struct DstFile {
 /// As [`Ctx::geom`] and [`dst_record`].
 pub fn export_embroidery(ctx: &Ctx) -> Result<(Vec<DstFile>, Option<Readme>), Refusal> {
     let mut out = Vec::new();
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
     let mut rows = Vec::new();
     for g in ctx.instance_geoms(6.0)? {
         let braid: Vec<&crate::geom::Decor> =
@@ -413,6 +416,18 @@ pub fn export_embroidery(ctx: &Ctx) -> Result<(Vec<DstFile>, Option<Readme>), Re
             safe_name(&g.iid.replace('.', "_"), 40),
             safe_name(&ctx.size, 20)
         );
+        if let Some(prev) = seen.insert(name.clone(), g.iid.clone()) {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "DST file name collision: {prev} and {} both map to {name}",
+                    g.iid
+                ),
+            )
+            .repair(
+                "rename one of the colliding pieces so each soutache instance writes its own DST file",
+            ));
+        }
         let label = format!(
             "{} {}",
             ctx.style.chars().take(8).collect::<String>(),
@@ -517,5 +532,54 @@ mod tests {
         }
         assert_eq!(dst_decode(DST_END), (0, 0, "end"));
         assert!(dst_record(122, 0, 0).is_err());
+    }
+
+    #[test]
+    fn embroidery_refuses_colliding_instance_filenames_per_spec_q11() {
+        let raw = r#"{
+          "schema":"fabric-pattern/1","style":"COLLIDE","units":"mm",
+          "meta":{"size_label":"2T","sa_mm":10,"round":0,"created":"2026-10-11T12:00"},
+          "fabric":{"name":"linen","width_mm":1500},
+          "pieces":[
+            {
+              "id":"front","name":"Front",
+              "vertices":{"a":[0,0],"b":[100,0],"c":[100,120],"d":[0,120]},
+              "edges":[
+                {"id":"e0","from":"a","to":"b"},
+                {"id":"e1","from":"b","to":"c"},
+                {"id":"e2","from":"c","to":"d"},
+                {"id":"e3","from":"d","to":"a"}
+              ],
+              "internal_lines":[
+                {"id":"braid","kind":"soutache","pts":[[15,15],[85,15],[85,105]]}
+              ],
+              "cut":{"qty":2,"mirror_pair":true,"material":"linen"}
+            },
+            {
+              "id":"front_R","name":"Front Right Extra",
+              "vertices":{"a":[0,0],"b":[80,0],"c":[80,90],"d":[0,90]},
+              "edges":[
+                {"id":"e0","from":"a","to":"b"},
+                {"id":"e1","from":"b","to":"c"},
+                {"id":"e2","from":"c","to":"d"},
+                {"id":"e3","from":"d","to":"a"}
+              ],
+              "internal_lines":[
+                {"id":"braid","kind":"soutache","pts":[[10,10],[70,10],[70,80]]}
+              ],
+              "cut":{"qty":1,"material":"linen"}
+            }
+          ]
+        }"#;
+        let pattern = ftx_pattern::Pattern::new(serde_json::from_str(raw).unwrap());
+        let ctx = Ctx::new(&pattern, crate::ExportOptions::default()).unwrap();
+        let err = export_embroidery(&ctx).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(
+            err.message.contains("collision")
+                && err.message.contains("front.R")
+                && err.message.contains("front_R"),
+            "unexpected refusal: {err:?}"
+        );
     }
 }

@@ -1,7 +1,9 @@
 //! Cutter SVGs and their report (`docs/spec/03` §7.10): one file per instance for a rotary-blade cutting
 //! machine, grain vertical, notches as small outward triangles, with whether it fits a 12 × 12 or 12 × 24 in mat.
 
-use ftx_core::{Refusal, Vec2, py};
+use std::collections::BTreeMap;
+
+use ftx_core::{Refusal, RefusalCode, Vec2, py};
 
 use crate::ctx::Ctx;
 use crate::geom::{Geom, grain_vertical_rotation};
@@ -53,6 +55,7 @@ pub fn cutter_ring(g: &Geom) -> Result<Vec<Vec2>, Refusal> {
 pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJson), Refusal> {
     let dir = format!("{}_cutter", ctx.style);
     let mut files = Vec::new();
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
     let mut report = Vec::new();
     let mut too_large = Vec::new();
     for g in ctx.instance_geoms(6.0)? {
@@ -83,6 +86,19 @@ pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJs
             safe_name(&g.iid.replace('.', "_"), 40),
             safe_name(&ctx.size, 20)
         );
+        let path = format!("{dir}/{fname}");
+        if let Some(prev) = seen.insert(path.clone(), g.iid.clone()) {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "cutter file name collision: {prev} and {} both map to {path}",
+                    g.iid
+                ),
+            )
+            .repair(
+                "rename one of the colliding pieces so each cut instance writes its own cutter SVG",
+            ));
+        }
         let text = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}mm\" \
              height=\"{h}mm\" viewBox=\"0 0 {w} {h}\">\n<title>{} {} size {}: cut line incl. seam allowance, grain \
@@ -99,7 +115,7 @@ pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJs
         let fits_sq = bw <= MAT_W && bh <= MAT_W;
         let fits_cross = bh <= MAT_W && bw <= MAT_LONG;
         let mut rec = vec![
-            ("file", PyJson::str(format!("{dir}/{fname}"))),
+            ("file", PyJson::str(&path)),
             ("instance", PyJson::str(&g.iid)),
             ("width_mm", PyJson::Float(py::round(bw, 1))),
             ("height_mm", PyJson::Float(py::round(bh, 1))),
@@ -127,10 +143,7 @@ pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJs
             too_large.push(PyJson::str(&g.iid));
         }
         report.push(PyJson::dict(rec));
-        files.push(CutterFile {
-            path: format!("{dir}/{fname}"),
-            text,
-        });
+        files.push(CutterFile { path, text });
     }
     let report_path = format!("{dir}/cutter_report.json");
     let report_text = PyJson::dict(vec![
@@ -145,4 +158,56 @@ pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJs
         ("too_large", PyJson::List(too_large)),
     ]);
     Ok((files, report_path, report_text, entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExportOptions;
+    use ftx_pattern::Pattern;
+
+    #[test]
+    fn cutter_refuses_colliding_instance_filenames_per_spec_q11() {
+        // Piece `front` (qty 2 -> front.R, front.L) and piece `front_R` (qty 1 -> front_R) both map to
+        // `front_R` once `.` is replaced with `_` (spec 03 Q11).
+        let raw = r#"{
+          "schema":"fabric-pattern/1","style":"COLLIDE","units":"mm",
+          "meta":{"size_label":"2T","sa_mm":10,"round":0,"created":"2026-10-11T12:00"},
+          "fabric":{"name":"linen","width_mm":1500},
+          "pieces":[
+            {
+              "id":"front","name":"Front",
+              "vertices":{"a":[0,0],"b":[100,0],"c":[100,120],"d":[0,120]},
+              "edges":[
+                {"id":"e0","from":"a","to":"b"},
+                {"id":"e1","from":"b","to":"c"},
+                {"id":"e2","from":"c","to":"d"},
+                {"id":"e3","from":"d","to":"a"}
+              ],
+              "cut":{"qty":2,"mirror_pair":true,"material":"linen"}
+            },
+            {
+              "id":"front_R","name":"Front Right Extra",
+              "vertices":{"a":[0,0],"b":[80,0],"c":[80,90],"d":[0,90]},
+              "edges":[
+                {"id":"e0","from":"a","to":"b"},
+                {"id":"e1","from":"b","to":"c"},
+                {"id":"e2","from":"c","to":"d"},
+                {"id":"e3","from":"d","to":"a"}
+              ],
+              "cut":{"qty":1,"material":"linen"}
+            }
+          ]
+        }"#;
+        let pattern = Pattern::new(serde_json::from_str(raw).unwrap());
+        let ctx = Ctx::new(&pattern, ExportOptions::default()).unwrap();
+        let err = export_cutter(&ctx).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(
+            err.message.contains("collision")
+                && err.message.contains("front.R")
+                && err.message.contains("front_R"),
+            "unexpected refusal: {err:?}"
+        );
+    }
 }
