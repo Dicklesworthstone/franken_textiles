@@ -56,6 +56,12 @@ function Arrow({ diagonal = false }: { diagonal?: boolean }) {
   return <span aria-hidden="true" className={diagonal ? "arrow arrow-diagonal" : "arrow"}/>;
 }
 
+// The still on a lab exhibit's card: that exhibit's own stage at its defaults, captured by
+// scripts/render-exhibit-cards.mjs. The card's heading names the exhibit, so the picture carries no text.
+function CalloutStill({ name }: { name: string }) {
+  return <span className="callout-still"><img src={`/media/cards/${name}.webp`} alt="" width={840} height={560} loading="lazy" decoding="async"/></span>;
+}
+
 function Capture({ study }: { study: Study }) {
   const [pose, setPose] = useState({ frame: 1, yaw: 0.32 });
   const [ready, setReady] = useState(false);
@@ -242,8 +248,8 @@ export default function Exhibition({section}: {section?: string}) {
       {section==="studies"&&<ConstructionStudy choices={["bolero","trousers","ensemble"]}/>}
       {show("studies") && <DrapeRoom/>}
       {!section && <section className="dr-index" aria-label="Explore more of the studio"><div className="wrap">
-        <a href="/studies/trousers/?bench=posture&amp;run=squat-25"><img src="/media/trouser-posture.jpg" alt=""/><div><small>Body &amp; cloth</small><strong>Bend the knees in trousers</strong></div><Arrow diagonal/></a>
-        <a href="/experiments/strip/"><img src="/media/rig-strip.jpg" alt=""/><div><small>Textile mechanics</small><strong>Pull cloth on the bias</strong></div><Arrow diagonal/></a>
+        <a href="/studies/trousers/?bench=posture&amp;run=squat-25"><img src="/media/cards/strip-trouser-posture.webp" alt="" loading="lazy" decoding="async"/><div><small>Body &amp; cloth</small><strong>Bend the knees in trousers</strong></div><Arrow diagonal/></a>
+        <a href="/experiments/strip/"><img src="/media/cards/strip-rig.webp" alt="" loading="lazy" decoding="async"/><div><small>Textile mechanics</small><strong>Pull cloth on the bias</strong></div><Arrow diagonal/></a>
         <div className="dr-reel"><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/></div></figure>
           <button onClick={()=>setItem({reel:true})}><span><small>Studio film</small><strong>Inside the wardrobe</strong></span><Arrow diagonal/></button></div>
       </div></section>}
@@ -259,6 +265,7 @@ export default function Exhibition({section}: {section?: string}) {
         </article>)}</div>
         <div className="material-callouts" data-reveal>
           <a className="thermal-callout" href="/wardrobe/waistcoat/">
+            <CalloutStill name="waistcoat"/>
             <div>
               <span className="mono">V&amp;A 256-1880 · 1780s reconstruction</span>
               <h3>1780s waistcoat &amp; welt pockets</h3>
@@ -267,6 +274,7 @@ export default function Exhibition({section}: {section?: string}) {
             <span className="thermal-callout-cta">Inspect cut &amp; welt steps <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/wardrobe/waistcoat/inside-out/">
+            <CalloutStill name="inside-out"/>
             <div>
               <span className="mono">3D layers · Invariant seam indices</span>
               <h3>Turn a lined garment inside out</h3>
@@ -275,6 +283,7 @@ export default function Exhibition({section}: {section?: string}) {
             <span className="thermal-callout-cta">Open 3D layer view <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/wardrobe/sundress/compare/">
+            <CalloutStill name="sundress-compare"/>
             <div>
               <span className="mono">Synchronized camera · 1:1 m world scale</span>
               <h3>Compare two native dress drapes</h3>
@@ -295,6 +304,7 @@ export default function Exhibition({section}: {section?: string}) {
         </article>)}</div>
         <div className="material-callouts" data-reveal>
           <a className="thermal-callout" href="/experiments/thermal/">
+            <CalloutStill name="thermal"/>
             <div>
               <span className="mono">Live WASM · Measured neoprene &amp; leather</span>
               <h3>Thermal sandwich</h3>
@@ -303,6 +313,7 @@ export default function Exhibition({section}: {section?: string}) {
             <span className="thermal-callout-cta">Build a layer stack <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/experiments/wash/">
+            <CalloutStill name="wash"/>
             <div>
               <span className="mono">Live WASM · Kanat &amp; Ozdil 2026 denim</span>
               <h3>Wash, shrink &amp; recut</h3>
@@ -311,6 +322,7 @@ export default function Exhibition({section}: {section?: string}) {
             <span className="thermal-callout-cta">Compare wash shrinkage <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/experiments/friction/">
+            <CalloutStill name="friction"/>
             <div>
               <span className="mono">Native contact · Live WASM calibration</span>
               <h3>Friction sled</h3>
@@ -333,6 +345,7 @@ export default function Exhibition({section}: {section?: string}) {
           </article>)}</div>
         <div className="material-callouts" data-reveal>
           <a className="thermal-callout" href="/studies/wrap-skirt/">
+            <CalloutStill name="wrap-skirt"/>
             <div>
               <span className="mono">Fixed pattern · Neutral vs seated slices</span>
               <h3>Adjustable-overlap wrap skirt</h3>
@@ -341,6 +354,7 @@ export default function Exhibition({section}: {section?: string}) {
             <span className="thermal-callout-cta">Check wrap overlap <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/studies/tiling/">
+            <CalloutStill name="tiling"/>
             <div>
               <span className="mono">Home printing · A4 tiled PDF</span>
               <h3>Assemble an A4 pattern floor</h3>
@@ -349,6 +363,7 @@ export default function Exhibition({section}: {section?: string}) {
             <span className="thermal-callout-cta">Open tile floor <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/studies/sewing/">
+            <CalloutStill name="sewing"/>
             <div>
               <span className="mono">Native planner · 10 operations</span>
               <h3>Jacket sewing order</h3>
