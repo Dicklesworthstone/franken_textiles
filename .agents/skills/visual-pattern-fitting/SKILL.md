@@ -41,17 +41,20 @@ and increase `--sew` and `--drape` proportionally to preserve the physical durat
 tighter dynamic solve, lower `--newton-tol-m-s` and compare the reported force residuals as well
 as the images.
 
-A solve refused at its start (`intersecting_start`) has no cloth state. It leaves the views of
-`ftx place` instead. Open `sim/refused/start/still_back.png` and `still_front.png`: cloth inside the
-body is magenta and cloth crossing cloth is yellow. The first repair in `sim.refusal` names the
-piece pairs that cross, and `sim/refused/placement.json` gives each piece's angles, heights and
-radius. Layers that only touch or cloth inside the clearance distance can leave both colours absent.
-Read the refusal message. If the posed body failed admission, change the pose first.
-Use `inspect-pixel` on the start PNG to identify its panel and nearest authored edge. The result
-records the placement phase and zero accepted steps. Older starts without a map support body and
-background picks. While you adjust placements, `ftx place pattern.json --measurements measurements.json
---out NEW_DIR` writes the same views in seconds without the solver. A joint outfit leaves them
-too, with each piece named `garment::piece`.
+For `intersecting_start`, follow the first repair to the stills it names. If cloth crosses cloth
+at contact admission, `sim/refused/still_front.png` shows the rejected untangled start. Yellow
+marks the area around the first pair of crossing faces. The repair names the panel instances,
+and `inspect-pixel` on that PNG reports phase `start`, zero accepted steps, and the two source
+face indices in `refused_pose.crossing_faces`.
+
+Earlier failures can leave the placement preview in `sim/refused/start/`. Cloth inside the body
+is magenta and cloth crossing cloth is yellow. `sim/refused/placement.json` gives each piece's
+angles, heights and radius. Layers that only touch or cloth inside the clearance distance can
+leave both colours absent. If the posed body failed admission, change the pose first. A pixel hit
+in the preview reports phase `placement` and zero accepted steps. Older starts without a map
+support body and background picks. While you adjust placements, `ftx place pattern.json
+--measurements measurements.json --out NEW_DIR` writes the preview without running the solve.
+A joint outfit uses the same paths and names each piece `garment::piece`.
 
 For a completed solve, open the current round's `sim/still_front.png`
 as an image, then a second angle or strain view as the question requires. `preview.svg` shows
