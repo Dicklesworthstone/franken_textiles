@@ -1586,7 +1586,7 @@ impl Contact {
         (c * f0, g, h)
     }
 
-    /// The largest fraction α ∈ (0, 1] of the step `p` that keeps every pair's gap positive (additive
+    /// The largest fraction α ∈ [0, 1] of the step `p` that keeps every pair's gap positive (additive
     /// CCD: no gap closes below a tenth of its current value).
     pub(crate) fn step_bound(&self, x: &[Vec3], p: &[Vec3]) -> f64 {
         let mut alpha: f64 = 1.0;
@@ -1596,22 +1596,26 @@ impl Contact {
         for pair in self.candidates(x, Some(p), thickness) {
             let st = stencil(pair, x, &self.body, &self.cloth);
             let dp: [Vec3; 4] = std::array::from_fn(|i| st.cloth[i].map_or(Vec3::ZERO, |v| p[v]));
-            alpha = alpha.min(accd(
-                pair,
-                st.pts,
-                dp,
-                self.pair_params(pair).thickness,
-                alpha,
-            ));
+            let bound = accd(pair, st.pts, dp, self.pair_params(pair).thickness, alpha);
+            if !bound.is_finite() || bound <= 0.0 {
+                return 0.0;
+            }
+            alpha = alpha.min(bound);
         }
         alpha
     }
 }
 
-/// Additive CCD (Li et al. 2021, Algorithm 1, s = 0.1): a time t ∈ (0, t_max] before which the pair's
+/// Additive CCD (Li et al. 2021, Algorithm 1, s = 0.1): a time t ∈ [0, t_max] before which the pair's
 /// gap stays above 10 % of its start value along the linear motion `pts + t·dp`, or `t_max` if it does.
+/// Returns `0.0` when the starting gap is non-positive or when inputs/motion are invalid.
 #[must_use]
 pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f64 {
+    if !(xi.is_finite() && xi >= 0.0 && t_max.is_finite() && t_max >= 0.0)
+        || pts.iter().chain(&dp).any(|v| !v.is_finite())
+    {
+        return 0.0;
+    }
     let s = 0.1; // C-IPC's choice: a step may close a gap to 10 % of its start value
     let mean = dp.iter().fold(Vec3::ZERO, |a, b| a + *b) / 4.0;
     let rel: [Vec3; 4] = dp.map(|d| d - mean);
@@ -1623,32 +1627,56 @@ pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f
     };
     let lp = ga.iter().map(|v| v.norm()).fold(0.0, f64::max)
         + gb.iter().map(|v| v.norm()).fold(0.0, f64::max);
-    if lp == 0.0 {
-        return t_max;
+    if !lp.is_finite() {
+        return 0.0;
     }
     let dist2 = |q: &[Vec3; 4]| -> f64 {
         let (kind, _) = classify(pair, q);
         squared_distance_f64(*q, kind)
     };
-    let gap_of = |d2: f64| (d2 - xi * xi) / (d2.sqrt() + xi);
+    let gap_of = |d2: f64| -> f64 {
+        if !(d2.is_finite() && d2 >= 0.0) {
+            return f64::NAN;
+        }
+        let denom = d2.sqrt() + xi;
+        if denom == 0.0 {
+            0.0
+        } else {
+            (d2 - xi * xi) / denom
+        }
+    };
     let mut q = pts;
     let mut d2 = dist2(&q);
-    let target = s * gap_of(d2);
+    let gap0 = gap_of(d2);
+    if !(gap0.is_finite() && gap0 > 0.0) {
+        return 0.0;
+    }
+    if lp == 0.0 || t_max == 0.0 {
+        return t_max;
+    }
+    let target = s * gap0;
     let mut t = 0.0;
-    let mut tl = (1.0 - s) * gap_of(d2) / lp;
+    let mut tl = (1.0 - s) * gap0 / lp;
     for _ in 0..10_000 {
+        if !(tl.is_finite() && tl > 0.0) {
+            return t;
+        }
         for (qi, ri) in q.iter_mut().zip(&rel) {
             *qi += *ri * tl;
         }
         d2 = dist2(&q);
-        if t > 0.0 && gap_of(d2) < target {
+        let gap = gap_of(d2);
+        if !gap.is_finite() || gap <= 0.0 {
+            return t;
+        }
+        if t > 0.0 && gap < target {
             return t;
         }
         t += tl;
         if t > t_max {
             return t_max;
         }
-        tl = 0.9 * gap_of(d2) / lp;
+        tl = 0.9 * gap / lp;
     }
     t
 }
@@ -2168,6 +2196,39 @@ mod tests {
             1.0,
         );
         assert_eq!(t, 1.0);
+    }
+
+    #[test]
+    fn accd_fails_closed_on_touching_penetrating_and_non_finite_inputs() {
+        let tri = [
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        ];
+        let pair = Pair::VertexTri { cv: 0, bt: 0 };
+        let down = [
+            Vec3::new(0.0, 0.0, -0.02),
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+        ];
+        // Exact touching at xi = 0 must return 0.0, never 0.0 / 0.0 = NaN.
+        let touching = [Vec3::ZERO, tri[0], tri[1], tri[2]];
+        assert_eq!(accd(pair, touching, down, 0.0, 1.0), 0.0);
+        // Already inside thickness offset must return 0.0, never walk backwards to a negative bound.
+        let penetrating = [Vec3::new(0.0, 0.0, 0.0005), tri[0], tri[1], tri[2]];
+        assert_eq!(accd(pair, penetrating, down, 0.001, 1.0), 0.0);
+        // Overflowing displacement norm or non-finite inputs must return 0.0 immediately.
+        let clear = [Vec3::new(0.0, 0.0, 0.01), tri[0], tri[1], tri[2]];
+        let huge = [
+            Vec3::new(0.0, 0.0, -1e308),
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+        ];
+        assert_eq!(accd(pair, clear, huge, 1e-3, 1.0), 0.0);
+        assert_eq!(accd(pair, clear, down, -1e-3, 1.0), 0.0);
+        assert_eq!(accd(pair, clear, down, 1e-3, f64::NAN), 0.0);
     }
 
     fn layers(z: f64) -> Vec<Vec3> {
