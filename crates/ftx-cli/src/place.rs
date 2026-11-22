@@ -1305,8 +1305,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     {
         text.push_str(
             "    This preview is not untangled: a drape first pushes its start out of the collision body, so \
-             a start that crosses here can still drape. It cannot where the part crossed is left out of \
-             the collider (fingers beyond the --hands cap; --hands full keeps the whole hand).\n",
+             a start that crosses here can still drape. Where the part crossed is left out of the \
+             collider (fingers beyond the --hands cap), a drape can only begin from an earlier relaxation \
+             checkpoint that does not cross it; --hands full keeps the whole hand.\n",
         );
     }
     for i in report["instances"].as_array().into_iter().flatten() {

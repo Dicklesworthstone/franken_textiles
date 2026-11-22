@@ -41,7 +41,8 @@ A clear preview means only that these two drawn stages have no proper triangle c
 it does not establish thickness clearance or validate intervening motion. A crossing in the
 `start` preview is not a refusal either: a drape first pushes its start out of the collision
 body, and the 92 cm bolero's 350 to 360 mm sleeves cross the hand here and drape with
-`--hands full`. It is one where the part crossed is left out of the collider. A drape may choose
+`--hands full`. Where the part crossed is left out of the collider, pushing out cannot help
+and the drape can only begin from an earlier checkpoint that clears it. A drape may choose
 an earlier contact-admitted relaxation checkpoint than the fully relaxed start drawn here.
 When self-contact is enabled, that checkpoint must also clear the full displayed-body audit.
 The same bounded search now runs when a finger omitted from the proxy crosses the fully relaxed

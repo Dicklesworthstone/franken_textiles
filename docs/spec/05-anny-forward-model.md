@@ -873,9 +873,12 @@ placements were looked at, not draped. Why the start procedure does not clear th
 established. The fingers are the model's shape, not a measured hand, and grant no fit claim.
 
 How far a sleeve reaches before the hand stops it was measured on 2026-11-22 on the same wearer and pose
-(drafted 169.8 mm cuff, 2 mm cloth offset, one `ftx drape` per length, a build of the tree at `ca662505`).
+(drafted 169.8 mm cuff, 2 mm cloth offset, one `ftx drape` per length, a build of the tree at `ca662505`;
+the lengths either side of each boundary were draped again on a build of `bf5240ee`, which adds
+display-clear checkpoint recovery, with the same outcomes).
 With `Full`, every length tried from 335 to 360 mm converged with no gating flags (335, 340 to 345 in
-1 mm steps, 350, 355 and 360 mm; the last ends 41 mm beyond the wrist landmark), and every one from
+1 mm steps, 350, 355 and 360 mm; the last ends 41 mm beyond the wrist landmark and, at 12 mm spacing,
+began from the relaxation checkpoint at 250 iterations, which is an advisory flag), and every one from
 361 mm was refused at its start (361 to 365 in 1 mm steps, 370, 375 and 380 mm): the start still crossed
 the body after 50 untangling rounds, or the untangled cloth crossed itself. An 8 mm mesh gave the same
 boundary (355 and 360 mm drape, 361 and 365 mm are refused). With `Knuckle`, 335, 340, 341 and 342 mm
