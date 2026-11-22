@@ -873,7 +873,7 @@ fn reserve_ws_qualification(ws: &Path) -> Result<PathBuf, Refusal> {
 /// `ftx qualify`: run the three known-answer chest bands (`-20`, `0`, `+20` mm ease) at zero
 /// gravity (`--sew 70 --drape 0`) and write `qualify.json` (`fabric-qualify/1`, spec 04 §7.1).
 pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    use ftx_body::{BodyFrames, Pose, clothing_skin_with_hands, pose_deltas, skin_mesh};
+    use ftx_body::{BodyFrames, Pose, clothing_skin_with_hands, skin_mesh};
     use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
     use ftx_drape::qualify::{
         DEFAULT_BAND_HEIGHT_MM, QUALIFY_DRAPE_STEPS, QUALIFY_EASES, QUALIFY_SEW_STEPS,
@@ -893,6 +893,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             "model",
             "body-fit",
             "arm-deg",
+            "thumb-pose",
             "legs",
             "leg-fraction",
             "skinning",
@@ -910,30 +911,30 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         .or_else(|| args.positional.get(1))
         .map(PathBuf::from);
     let pose = super::drape_pose(args)?;
+    let thumbs = super::parse_thumb_pose(args)?;
     let skinning = super::parse_skinning(args)?;
     let hands = super::parse_hands(args)?;
     let fabric_override = super::fabric::load(args)?;
 
-    let (data, meas_bytes, mut pat, out, _ws_lock) = if let Some(ws) = ws_arg {
+    let (data, meas_bytes, mut pat, out, _ws_lock) = if let Some(ws) = ws_arg.as_deref() {
         if args.options.contains_key("out") {
             return Err(bad_input(
                 "--out cannot be combined with a workspace (workspace qualification writes to WS/qualification)",
             ));
         }
-        let lock = super::workspace::Workspace::open(&ws)?;
+        let lock = super::workspace::Workspace::open(ws)?;
         let meas_path = match args.options.get("measurements") {
             Some(m) => PathBuf::from(m),
             None => ws.join("measurements.json"),
         };
         let (raw_m, meas_bytes) = read_json(&meas_path.to_string_lossy())?;
         let data = measurements(&raw_m)?;
-        let (_, prev_pat) = inventory(&ws)?;
+        let (_, prev_pat) = inventory(ws)?;
         let pat = match args.options.get("pattern").map(PathBuf::from).or(prev_pat) {
             Some(p) => read_json(&p.to_string_lossy())?.0,
             None => json!({}),
         };
-        let out = reserve_ws_qualification(&ws)?;
-        (data, meas_bytes, pat, out, Some(lock))
+        (data, meas_bytes, pat, ws.join("qualification"), Some(lock))
     } else {
         let meas_path = super::required(args, "measurements")?;
         let out = PathBuf::from(super::required(args, "out")?);
@@ -969,9 +970,10 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     } = super::body_source::prepare(args, Some(&data))?;
     let rest = model.rest(&params)?;
     let rest_skin = clothing_skin_with_hands(&model, &rest.vertices, hands)?;
-    let posed =
-        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
+    let posed = super::pose_fitted_body(&model, &rest, &pose, skinning, thumbs)?;
     let skin = clothing_skin_with_hands(&model, &posed.vertices, hands)?;
+    let authored_hand_surface =
+        super::audit_authored_hands(&model, &posed, &skin, hands, thumbs).transpose()?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
     let torso = frames.torso.origin / 1000.0;
@@ -1003,6 +1005,21 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
+    let out = ws_arg
+        .as_deref()
+        .map(reserve_ws_qualification)
+        .transpose()?
+        .unwrap_or(out);
+    let mut authored_pose = serde_json::Map::new();
+    if let Some(thumbs) = thumbs {
+        authored_pose.insert("thumb_pose".into(), json!(thumbs));
+    }
+    if let Some(audit) = authored_hand_surface {
+        authored_pose.insert(
+            "authored_hand_surface_pairs_tested".into(),
+            json!(audit.pairs_tested),
+        );
+    }
     // spec 04 §7.1: the measurements file's sha256 (what a round compares, whichever engine runs it)
     let meas_sha = ftx_core::receipt::sha256_hex(&meas_bytes);
     let spec = band_fit_spec();
@@ -1061,6 +1078,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
                 if !skinning.is_lbs() {
                     b.insert("skinning".into(), json!(skinning.as_str()));
                 }
+                b.extend(authored_pose.clone());
                 o.insert("body".into(), Value::Object(b));
             }
             let html = viewer(&run, &pattern, &body, super::VIEWER_TEMPLATE).map_err(bad_input)?;
@@ -1187,6 +1205,9 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     }
     if !hands.is_wrist() {
         rec["hand_collider"] = json!(hands.as_str());
+    }
+    if !authored_pose.is_empty() {
+        rec["body"] = Value::Object(authored_pose);
     }
     write_json(&out.join("qualify.json"), &rec)?;
     // spec 04 §7.1's printout: a line per band, then the verdict

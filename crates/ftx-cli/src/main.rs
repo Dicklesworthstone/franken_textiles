@@ -80,7 +80,7 @@ const USAGE: &str = "usage:
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
-              [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--json]
+              [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
@@ -1857,6 +1857,11 @@ mod tests {
                 parse(&["drape", "absent.json", "--thumb-pose", input].map(String::from)).unwrap();
             let refusal = cmd_drape(&args).unwrap_err();
             assert!(refusal.message.contains("--thumb-pose"), "{refusal:?}");
+            let qualify =
+                parse(&["qualify", "no-such-ws", "--thumb-pose", input].map(String::from)).unwrap();
+            let qualifying_refusal = round::cmd_qualify(&qualify).unwrap_err();
+            assert_eq!(qualifying_refusal.code, refusal.code);
+            assert_eq!(qualifying_refusal.message, refusal.message);
         }
         let outside = r#"{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[2,2,2]}"#;
         let args =
