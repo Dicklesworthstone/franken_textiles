@@ -61,8 +61,15 @@ pub(super) fn on_body(m: &dyn DraftBody, style: Option<&Value>) -> Result<(Value
         return Err(out_of_range("head_ease must be in [-10, 40] mm"));
     }
     let head = m.get("head")?;
+    if !head.is_finite() || head <= 0.0 {
+        return Err(out_of_range("head girth must be finite and positive"));
+    }
+    let base_girth = head + head_ease;
+    if !base_girth.is_finite() || base_girth <= 0.0 {
+        return Err(out_of_range("head + head_ease must be finite and positive"));
+    }
     let d_head = head / PI;
-    let r_base = (head + head_ease) / (2.0 * PI);
+    let r_base = base_girth / (2.0 * PI);
     let r_top = top_frac * r_base;
     let height = height_frac * d_head;
     let slant = ftx_core::det::hypot(height, r_base - r_top);
@@ -70,7 +77,7 @@ pub(super) fn on_body(m: &dyn DraftBody, style: Option<&Value>) -> Result<(Value
     let rho_t = rho_b - slant;
     let phi = 2.0 * PI * r_base / rho_b;
     let n: usize = if phi <= PI { 2 } else { 4 };
-    if phi > 2.0 * PI * 0.9 {
+    if !phi.is_finite() || phi <= 0.0 || phi > 2.0 * PI * 0.9 {
         return Err(out_of_range(
             "taper too strong for a one-piece crown: raise top_frac or the height",
         ));

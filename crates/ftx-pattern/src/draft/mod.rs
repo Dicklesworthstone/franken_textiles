@@ -389,6 +389,33 @@ mod tests {
         assert!(draft_on_body("fez", &body, None).is_err());
         body.values.insert("head", 0.0);
         assert!(draft_on_body("fez", &body, None).is_err());
+        body.values.insert("head", 10.0);
+        assert_eq!(
+            draft_on_body("fez", &body, Some(&json!({"head_ease": -10.0})))
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            draft("fez", &json!({"head": 0.0}), None).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            draft("fez", &json!({"head": -50.0}), None)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            draft(
+                "fez",
+                &json!({"head": 8.0}),
+                Some(&json!({"head_ease": -10.0}))
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::OutOfRange
+        );
 
         let mut body = selected();
         body.landmarks.insert("torso/chest", f64::INFINITY);
