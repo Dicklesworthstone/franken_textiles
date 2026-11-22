@@ -444,7 +444,9 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 /* ---------- home: a tailor's tape down the margin ---------- */
 .ft-rail{display:none}
 @media(min-width:1280px) and (hover:hover){
-  .ft-rail{display:block;position:fixed;z-index:30;top:50%;left:max(16px,calc(50vw - 766px));translate:0 -50%;color:#d5cfc2;mix-blend-mode:difference}
+  /* It keeps to the window's edge on every width: the opening and the drape room run full bleed, so a rail
+     set against the centred column would land on their copy on a very wide screen. */
+  .ft-rail{display:block;position:fixed;z-index:30;top:50%;left:clamp(16px,1.1vw,28px);translate:0 -50%;color:#d5cfc2;mix-blend-mode:difference}
   .ft-rail ol{list-style:none;margin:0;padding:4px 0;border-left:1.5px solid currentColor;transition:background-color .2s}
   .ft-rail a{display:flex;align-items:center;gap:10px;height:21px;color:inherit}
   /* Each mark sits in a box of one width, so the labels beside them line up. */
