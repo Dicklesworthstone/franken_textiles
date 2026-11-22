@@ -474,6 +474,31 @@ impl Request {
                     "coverage compression requires independent dry films or qualified exterior exchange and constant storage; dissipation and bridge combinations need joint qualification",
                 ));
             }
+            if self
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.len() != intervals)
+                || self
+                    .microclimate_exterior
+                    .as_ref()
+                    .is_some_and(|v| v.len() != intervals)
+                || self
+                    .exposed_exterior_exchange
+                    .as_ref()
+                    .is_some_and(|v| v.len() != intervals)
+                || self
+                    .exposed_microclimate_exterior
+                    .as_ref()
+                    .is_some_and(|v| v.len() != intervals)
+                || self
+                    .bare_boundaries
+                    .as_ref()
+                    .is_some_and(|v| v.len() != intervals)
+            {
+                return Err(invalid(
+                    "compression exterior schedules must match the motion interval count",
+                ));
+            }
             let (covered, _) = resolve_optional_exteriors(
                 &self.exterior_exchange,
                 &self.microclimate_exterior,
@@ -875,9 +900,21 @@ impl History {
             ));
         }
         let (exterior, covered_receipt) = if let Some(v) = &self.request.exterior_exchange {
-            (v[interval].clone(), None)
+            (
+                v.get(interval)
+                    .ok_or_else(|| invalid("missing motion coverage exterior interval"))?
+                    .clone(),
+                None,
+            )
         } else if let Some((e, r)) = &self.covered_microclimate {
-            (e[interval].clone(), r[interval].clone())
+            (
+                e.get(interval)
+                    .ok_or_else(|| invalid("missing motion coverage microclimate interval"))?
+                    .clone(),
+                r.get(interval)
+                    .ok_or_else(|| invalid("missing motion coverage microclimate receipt"))?
+                    .clone(),
+            )
         } else {
             (None, None)
         };
@@ -885,12 +922,30 @@ impl History {
             .request
             .bare_boundaries
             .as_ref()
-            .and_then(|v| v[interval]);
+            .map(|v| {
+                v.get(interval)
+                    .copied()
+                    .ok_or_else(|| invalid("missing motion coverage bare-boundary interval"))
+            })
+            .transpose()?
+            .flatten();
         let (exposed_exterior, exposed_receipt) =
             if let Some(v) = &self.request.exposed_exterior_exchange {
-                (v[interval].clone(), None)
+                (
+                    v.get(interval)
+                        .ok_or_else(|| invalid("missing exposed exterior interval"))?
+                        .clone(),
+                    None,
+                )
             } else if let Some((e, r)) = &self.exposed_microclimate {
-                (e[interval].clone(), r[interval].clone())
+                (
+                    e.get(interval)
+                        .ok_or_else(|| invalid("missing exposed microclimate interval"))?
+                        .clone(),
+                    r.get(interval)
+                        .ok_or_else(|| invalid("missing exposed microclimate receipt"))?
+                        .clone(),
+                )
             } else {
                 (None, None)
             };

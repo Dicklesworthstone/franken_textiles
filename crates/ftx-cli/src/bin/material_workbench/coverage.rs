@@ -125,6 +125,27 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
             "unknown thermal coverage mapping or conditions schema",
         ));
     }
+    if input.boundaries.is_empty()
+        || input.boundaries.len() > 65_536
+        || input.bare_boundaries.len() > 65_536
+        || input
+            .exterior_exchange
+            .as_ref()
+            .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+        || input
+            .microclimate_exterior
+            .as_ref()
+            .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+    {
+        return Err(invalid(
+            "invalid thermal coverage boundary or exterior count",
+        ));
+    }
+    if input.exterior_exchange.is_some() && input.microclimate_exterior.is_some() {
+        return Err(invalid(
+            "supply either exterior_exchange or microclimate_exterior, not both",
+        ));
+    }
     // Verify the material, topology AND final position receipt before interpreting any triangle ID.
     let (source, cloth) = Surface::from_drape_report(report)?;
     if report["thermal_surface"]["sha256"].as_str() != Some(&map.drape_thermal_frame_sha256) {
@@ -158,20 +179,6 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
             "provide one uniform boundary or one per coverage body triangle",
         ));
     };
-    if input.exterior_exchange.is_some() && input.microclimate_exterior.is_some() {
-        return Err(invalid(
-            "supply either exterior_exchange or microclimate_exterior, not both",
-        ));
-    }
-    if input
-        .microclimate_exterior
-        .as_ref()
-        .is_some_and(|v| v.is_empty() || v.len() > 65_536)
-    {
-        return Err(invalid(
-            "provide one exterior environment or one per coverage body triangle",
-        ));
-    }
     let (environments, microclimate) = if let Some(values) = &input.exterior_exchange {
         let expanded = if values.len() == 1 {
             vec![values[0].clone(); count]
@@ -609,12 +616,22 @@ mod tests {
         assert!(evaluate(&report, &mapping, &denied).is_err());
 
         let mut both = uniform.clone();
-        both["exterior_exchange"] = json!([{
-            "air_c": 18.0, "convection_w_m2_k": 10.0, "surface_temperature_range_c": [-50.0, 100.0],
-            "allow_estimates": true, "evidence": "estimate", "source": "synthetic",
-            "method": "synthetic", "conditions": {}
-        }]);
-        assert!(evaluate(&report, &mapping, &both).is_err());
+        let resolved_forced = serde_json::from_value::<MicroclimateExterior>(forced.clone())
+            .unwrap()
+            .resolve()
+            .unwrap()
+            .exterior;
+        both["exterior_exchange"] = json!([resolved_forced]);
+        assert!(
+            evaluate(&report, &mapping, &both)
+                .unwrap_err()
+                .message
+                .contains("not both")
+        );
+
+        let mut empty_mc = uniform.clone();
+        empty_mc["microclimate_exterior"] = json!([]);
+        assert!(evaluate(&report, &mapping, &empty_mc).is_err());
 
         let mut wrong_count = uniform.clone();
         wrong_count["microclimate_exterior"] = json!([forced, forced, forced]);

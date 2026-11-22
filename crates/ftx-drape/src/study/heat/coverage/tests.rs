@@ -2065,6 +2065,19 @@ fn microclimate_exterior_coverage_motion_matches_prescribed_and_enforces_guards(
     assert!(denied.validate_and_resolve(2).is_err());
 
     let mut wrong_len = base;
-    wrong_len.microclimate_exterior = Some(vec![Some(forced_mc)]);
+    wrong_len.microclimate_exterior = Some(vec![Some(forced_mc.clone())]);
     assert!(wrong_len.validate_and_resolve(2).is_err());
+
+    // Compressed coverage validates microclimate schedule lengths before resolving entries.
+    let (comp_history, _) = convection_compression_history(2);
+    let mut bad_comp = comp_history.request;
+    bad_comp.exterior_exchange = None;
+    bad_comp.microclimate_exterior = Some(vec![Some(forced_mc)]);
+    assert!(
+        bad_comp
+            .validate_compression(3)
+            .unwrap_err()
+            .message
+            .contains("interval count")
+    );
 }

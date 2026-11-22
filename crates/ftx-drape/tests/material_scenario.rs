@@ -2160,3 +2160,207 @@ fn coverage_exterior_schedule_and_optical_refusals_preserve_other_motion_consume
         assert!(heat["final_field"].get(field).is_none());
     }
 }
+
+#[test]
+fn moving_surface_and_coverage_microclimate_exterior_match_prescribed_through_session() {
+    use ftx_drape::thermal::microclimate::MicroclimateExterior;
+
+    let mut s_ext = coverage_exterior_scenario();
+    let p = coverage_exterior_pattern(0.8);
+
+    let cold_rad = s_ext
+        .motion
+        .as_ref()
+        .unwrap()
+        .transient_coverage
+        .as_ref()
+        .unwrap()
+        .exterior_exchange
+        .as_ref()
+        .unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .radiation
+        .clone()
+        .unwrap();
+    let warm_rad = s_ext
+        .motion
+        .as_ref()
+        .unwrap()
+        .transient_coverage
+        .as_ref()
+        .unwrap()
+        .exterior_exchange
+        .as_ref()
+        .unwrap()[1]
+        .as_ref()
+        .unwrap()
+        .radiation
+        .clone()
+        .unwrap();
+
+    let cold_mc: MicroclimateExterior = serde_json::from_value(json!({
+        "air": {"temperature_c": 5.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+        "correlation": "churchill_bernstein_cylinder",
+        "characteristic_length_m": 0.25,
+        "wind_speed_m_s": 2.0,
+        "surface_temperature_range_c": [-50.0, 100.0],
+        "allow_estimates": true,
+        "radiation": cold_rad
+    }))
+    .unwrap();
+    let warm_mc: MicroclimateExterior = serde_json::from_value(json!({
+        "air": {"temperature_c": 40.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+        "correlation": "churchill_chu_vertical_plate",
+        "characteristic_length_m": 0.30,
+        "delta_t_k": 10.0,
+        "surface_temperature_range_c": [-50.0, 100.0],
+        "allow_estimates": true,
+        "radiation": warm_rad
+    }))
+    .unwrap();
+    let resolved_cold = cold_mc.resolve().unwrap().exterior;
+    let resolved_warm = warm_mc.resolve().unwrap().exterior;
+
+    // Configure both transient_surface (all-microclimate) and transient_coverage (sparse covered +
+    // full exposed microclimate) with matching boundaries and zero outside film where active.
+    let motion_ext = s_ext.motion.as_mut().unwrap();
+    let surf_ext = motion_ext.transient_surface.as_mut().unwrap();
+    surf_ext.boundaries[0].outside_c = 5.0;
+    surf_ext.boundaries[0].outside_resistance_m2_k_w = 0.0;
+    surf_ext.boundaries[1].outside_c = 40.0;
+    surf_ext.boundaries[1].outside_resistance_m2_k_w = 0.0;
+    surf_ext.exterior_exchange = Some(vec![resolved_cold.clone(), resolved_warm.clone()]);
+
+    let cov_ext = motion_ext.transient_coverage.as_mut().unwrap();
+    cov_ext.boundaries[0].outside_c = 5.0;
+    cov_ext.boundaries[0].outside_resistance_m2_k_w = 0.0;
+    cov_ext.boundaries[1].outside_c = 40.0;
+    cov_ext.boundaries[1].outside_resistance_m2_k_w = 0.2; // film-only covered interval 1
+    cov_ext.bare_boundaries.as_mut().unwrap()[1] = None;
+    cov_ext.exterior_exchange = Some(vec![Some(resolved_cold.clone()), None]);
+    cov_ext.exposed_boundaries[0].as_mut().unwrap().outside_c = 40.0;
+    cov_ext.exposed_boundaries[1].as_mut().unwrap().outside_c = 5.0;
+    cov_ext.exposed_exterior_exchange = Some(vec![Some(resolved_warm), Some(resolved_cold)]);
+
+    let mut s_mc = s_ext.clone();
+    let motion_mc = s_mc.motion.as_mut().unwrap();
+    let surf_mc = motion_mc.transient_surface.as_mut().unwrap();
+    surf_mc.exterior_exchange = None;
+    surf_mc.microclimate_exterior = Some(vec![cold_mc.clone(), warm_mc.clone()]);
+    let cov_mc = motion_mc.transient_coverage.as_mut().unwrap();
+    cov_mc.exterior_exchange = None;
+    cov_mc.microclimate_exterior = Some(vec![Some(cold_mc.clone()), None]);
+    cov_mc.exposed_exterior_exchange = None;
+    cov_mc.exposed_microclimate_exterior = Some(vec![Some(warm_mc), Some(cold_mc)]);
+
+    let out_ext = moving(&s_ext, &p);
+    let out_mc = moving(&s_mc, &p);
+    let m_ext = &out_ext["motion"]["result"];
+    let m_mc = &out_mc["motion"]["result"];
+    assert_eq!(m_mc["transient_surface"]["status"], "available", "{m_mc:#}");
+    assert_eq!(
+        m_mc["transient_coverage"]["status"], "available",
+        "{m_mc:#}"
+    );
+    assert_eq!(m_mc["samples"], m_ext["samples"]);
+
+    let sh_mc = &m_mc["transient_surface"]["result"];
+    let sh_ext = &m_ext["transient_surface"]["result"];
+    assert_eq!(sh_mc["inside_energy_j"], sh_ext["inside_energy_j"]);
+    assert_eq!(sh_mc["outside_energy_j"], sh_ext["outside_energy_j"]);
+    assert_eq!(sh_mc["stored_change_j"], sh_ext["stored_change_j"]);
+    assert_eq!(sh_mc["exterior_exchange"], sh_ext["exterior_exchange"]);
+    assert_eq!(sh_mc["final"], sh_ext["final"]);
+    assert_eq!(
+        sh_mc["microclimate_convection"][0]["correlation"],
+        "churchill_bernstein_cylinder"
+    );
+    assert_eq!(
+        sh_mc["microclimate_convection"][1]["correlation"],
+        "churchill_chu_vertical_plate"
+    );
+    assert!(
+        sh_mc["exterior_model"]
+            .as_str()
+            .unwrap()
+            .contains("Nusselt")
+    );
+    assert!(sh_ext.get("microclimate_convection").is_none());
+    assert!(sh_ext.get("exterior_model").is_none());
+
+    let ch_mc = &m_mc["transient_coverage"]["result"];
+    let ch_ext = &m_ext["transient_coverage"]["result"];
+    assert_eq!(ch_mc["inside_energy_j"], ch_ext["inside_energy_j"]);
+    assert_eq!(ch_mc["outside_energy_j"], ch_ext["outside_energy_j"]);
+    assert_eq!(
+        ch_mc["physical_stored_change_j"],
+        ch_ext["physical_stored_change_j"]
+    );
+    assert_eq!(ch_mc["exterior_exchange"], ch_ext["exterior_exchange"]);
+    assert_eq!(
+        ch_mc["exposed_exterior_exchange"],
+        ch_ext["exposed_exterior_exchange"]
+    );
+    assert_eq!(ch_mc["final_field"], ch_ext["final_field"]);
+    assert_eq!(
+        ch_mc["microclimate_convection"][0]["correlation"],
+        "churchill_bernstein_cylinder"
+    );
+    assert!(ch_mc["microclimate_convection"][1].is_null());
+    assert_eq!(
+        ch_mc["exposed_microclimate_convection"][0]["correlation"],
+        "churchill_chu_vertical_plate"
+    );
+    assert_eq!(
+        ch_mc["exposed_microclimate_convection"][1]["correlation"],
+        "churchill_bernstein_cylinder"
+    );
+    assert!(
+        ch_mc["exterior_model"]
+            .as_str()
+            .unwrap()
+            .contains("Nusselt")
+    );
+    assert!(ch_ext.get("microclimate_convection").is_none());
+    assert!(ch_ext.get("exposed_microclimate_convection").is_none());
+
+    // Changing material optical finish changes radiative exchange on both moving microclimate
+    // histories without altering the accepted mechanical path.
+    let low_e = moving(&s_mc, &coverage_exterior_pattern(0.2));
+    assert_eq!(low_e["motion"]["result"]["samples"], m_mc["samples"]);
+    assert_ne!(
+        low_e["motion"]["result"]["transient_surface"]["result"]["exterior_exchange"]["radiative_energy_j"],
+        sh_mc["exterior_exchange"]["radiative_energy_j"]
+    );
+    assert_ne!(
+        low_e["motion"]["result"]["transient_coverage"]["result"]["exposed_exterior_exchange"]["radiative_energy_j"],
+        ch_mc["exposed_exterior_exchange"]["radiative_energy_j"]
+    );
+
+    // Denying estimate consent on transient_coverage refuses it while preserving motion and surface.
+    let mut denied = s_mc;
+    denied
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap()
+        .microclimate_exterior
+        .as_mut()
+        .unwrap()[0]
+        .as_mut()
+        .unwrap()
+        .allow_estimates = false;
+    let refused = moving(&denied, &p);
+    assert_eq!(refused["motion"]["status"], "available");
+    assert_eq!(
+        refused["motion"]["result"]["transient_surface"]["status"],
+        "available"
+    );
+    assert_eq!(
+        refused["motion"]["result"]["transient_coverage"]["status"],
+        "refused"
+    );
+}

@@ -1698,6 +1698,46 @@ fn microclimate_exterior_optical_protocols_follow_surface_columns_and_coverage_s
         a.frozen_changes.as_mut().unwrap().default =
             Some(serde_json::from_value(raw.clone()).unwrap());
     }
+
+    // Moving transient_surface radiative microclimate_exterior uses only the positive face.
+    d["scenario"]["motion"] = json!({"transient_surface":{
+        "microclimate_exterior":[{"radiation":{"automatic_material_face":true}}]
+    }});
+    let move_surf_metric = "transient_surface_inside_energy_j";
+    let move_surf_orig = optical_protocol(&a, &d, &s, &m, move_surf_metric);
+    for (property, used) in [("emissivity_public", true), ("emissivity_reverse", false)] {
+        let mut changed = raw.clone();
+        changed["record"]["properties"][property]["method"] =
+            json!("Different moving sheet method");
+        a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(changed).unwrap());
+        assert_eq!(
+            move_surf_orig != optical_protocol(&a, &d, &s, &m, move_surf_metric),
+            used,
+            "moving microclimate surface: {property}"
+        );
+        a.frozen_changes.as_mut().unwrap().default =
+            Some(serde_json::from_value(raw.clone()).unwrap());
+    }
+
+    // Moving transient_coverage sparse exposed_microclimate_exterior retains both mapped side protocols.
+    d["scenario"]["motion"] = json!({"transient_coverage":{
+        "exposed_microclimate_exterior":[null, {"radiation":{"automatic_material_face":true}}]
+    }});
+    let move_cov_metric = "transient_coverage_inside_energy_j";
+    let move_cov_orig = optical_protocol(&a, &d, &s, &m, move_cov_metric);
+    for property in ["emissivity_public", "emissivity_reverse"] {
+        let mut changed = raw.clone();
+        changed["record"]["properties"][property]["method"] =
+            json!("Different moving exposed method");
+        a.frozen_changes.as_mut().unwrap().default = Some(serde_json::from_value(changed).unwrap());
+        assert_ne!(
+            move_cov_orig,
+            optical_protocol(&a, &d, &s, &m, move_cov_metric),
+            "moving exposed microclimate coverage: {property}"
+        );
+        a.frozen_changes.as_mut().unwrap().default =
+            Some(serde_json::from_value(raw.clone()).unwrap());
+    }
 }
 
 #[test]

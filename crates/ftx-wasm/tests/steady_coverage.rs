@@ -250,3 +250,78 @@ fn closed_seam_loop_includes_the_closing_edge_and_replays_without_backtracking()
         json!([0.1, 3.0]);
     assert!(evaluate(&too_long).is_err());
 }
+
+#[test]
+fn browser_steady_coverage_microclimate_exterior_matches_native_and_withholds_conduction_bounds() {
+    use ftx_drape::thermal::microclimate::MicroclimateExterior;
+
+    let mut input = request();
+    input["map"]["body_positions_m"][1][0] = json!(2.);
+    input["map"]["body_positions_m"][3][0] = json!(2.);
+    input["conditions"]["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.);
+    input["conditions"]["bare_boundaries"] = json!([{
+        "inside_c": 30.,
+        "outside_c": 0.,
+        "inside_resistance_m2_k_w": 0.2,
+        "outside_resistance_m2_k_w": 0.4
+    }]);
+    let mc = json!({
+        "air": {"temperature_c": 0.0, "pressure_pa": 101_325.0, "relative_humidity": 0.5},
+        "correlation": "churchill_bernstein_cylinder",
+        "characteristic_length_m": 0.25,
+        "wind_speed_m_s": 2.0,
+        "surface_temperature_range_c": [-20.0, 60.0],
+        "allow_estimates": true
+    });
+    input["conditions"]["microclimate_exterior"] = json!([mc.clone()]);
+
+    let browser = evaluate(&input).unwrap();
+    let native: Request = serde_json::from_value(input.clone()).unwrap();
+    assert_eq!(browser, native.evaluate().unwrap());
+    assert_eq!(browser, evaluate(&browser["request"]).unwrap());
+    assert_eq!(
+        browser["microclimate_convection"][0]["correlation"],
+        "churchill_bernstein_cylinder"
+    );
+    assert!(
+        browser["exterior_model"]
+            .as_str()
+            .unwrap()
+            .contains("Nusselt")
+    );
+    assert!(browser["steady"]["reported_bounds"].is_null());
+    assert!(
+        browser["steady"]["bounds_unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap_or("").contains("microclimate convection"))
+    );
+
+    // Exact nominal power parity against pre-resolved Exterior.
+    let resolved = serde_json::from_value::<MicroclimateExterior>(mc)
+        .unwrap()
+        .resolve()
+        .unwrap();
+    let mut prescribed = input.clone();
+    prescribed["conditions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("microclimate_exterior");
+    prescribed["conditions"]["exterior_exchange"] = json!([resolved.exterior]);
+    let prescribed_out = evaluate(&prescribed).unwrap();
+    assert_eq!(
+        browser["steady"]["power_w"],
+        prescribed_out["steady"]["power_w"]
+    );
+    assert!(prescribed_out.get("microclimate_convection").is_none());
+
+    // Fail-closed guards: denied estimate consent and mutual exclusion.
+    let mut denied = input.clone();
+    denied["conditions"]["microclimate_exterior"][0]["allow_estimates"] = json!(false);
+    assert!(evaluate(&denied).is_err());
+
+    let mut both = input;
+    both["conditions"]["exterior_exchange"] = json!([resolved.exterior]);
+    assert!(evaluate(&both).is_err());
+}
