@@ -4,25 +4,13 @@
 // and join codes solely from the actual PDF bytes — fails closed rather than falling back to defaults.
 
 async function inflateStream(bytes, pageLabel) {
-  const ds = new DecompressionStream("deflate");
-  const writer = ds.writable.getWriter();
-  const reading = new Response(ds.readable).arrayBuffer();
-  const writing = (async () => {
-    try {
-      await writer.write(bytes);
-      await writer.close();
-    } catch (err) {
-      await writer.abort(err).catch(() => {});
-      throw err;
-    }
-  })();
-  const [readResult, writeResult] = await Promise.allSettled([reading, writing]);
-  if (readResult.status === "rejected" || writeResult.status === "rejected") {
-    const reason = readResult.status === "rejected" ? readResult.reason : writeResult.reason;
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate"));
+  try {
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch (reason) {
     const detail = reason instanceof Error ? reason.message : String(reason);
-    throw new Error(`Damaged ${pageLabel} deflate stream: ${detail}`);
+    throw new Error(`Damaged ${pageLabel} deflate stream: ${detail}`, { cause: reason });
   }
-  return new Uint8Array(readResult.value);
 }
 
 function decodeLatin1(bytes) {
@@ -130,40 +118,31 @@ function parseIndirectObjects(bytes, raw) {
           throw new Error(`Malformed PDF stream header in object ${objNum}.`);
         }
 
-        let streamBytes;
-        let afterEndstream;
-        const lenMatch = dict.match(/\/Length\s+(\d+)(?!\s+\d+\s+R)\b/);
-        if (lenMatch) {
-          const declaredLen = Number(lenMatch[1]);
-          if (!Number.isSafeInteger(declaredLen) || declaredLen < 0 || dataStart + declaredLen > bytes.length) {
-            throw new Error(
-              `Truncated PDF stream in object ${objNum}: declared /Length ${declaredLen} exceeds file bounds.`,
-            );
-          }
-          const afterData = dataStart + declaredLen;
-          let endstreamPos = afterData;
-          if (raw.startsWith("\r\n", afterData)) {
-            endstreamPos = afterData + 2;
-          } else if (raw[afterData] === "\n" || raw[afterData] === "\r") {
-            endstreamPos = afterData + 1;
-          }
-          if (!raw.startsWith("endstream", endstreamPos)) {
-            throw new Error(
-              `Damaged or truncated PDF stream in object ${objNum}: missing endstream at declared /Length ${declaredLen}.`,
-            );
-          }
-          streamBytes = bytes.subarray(dataStart, afterData);
-          afterEndstream = skipWsAndComments(raw, endstreamPos + 9);
-        } else {
-          const endRe = /(?:\r?\n)?endstream\b/g;
-          endRe.lastIndex = dataStart;
-          const endMatch = endRe.exec(raw);
-          if (!endMatch) {
-            throw new Error(`Truncated PDF stream in object ${objNum}: missing endstream.`);
-          }
-          streamBytes = bytes.subarray(dataStart, endMatch.index);
-          afterEndstream = skipWsAndComments(raw, endMatch.index + endMatch[0].length);
+        // The export writes a direct byte length. A delimiter alone could occur in compressed data.
+        const lenMatch = dict.match(/\/Length\s+(\d+)\s*(?=\/|>>)/);
+        if (!lenMatch) {
+          throw new Error(`PDF stream in object ${objNum} is missing a direct /Length.`);
         }
+        const declaredLen = Number(lenMatch[1]);
+        const afterData = dataStart + declaredLen;
+        if (!Number.isSafeInteger(afterData) || afterData > bytes.length) {
+          throw new Error(
+            `Truncated PDF stream in object ${objNum}: declared /Length ${declaredLen} exceeds file bounds.`,
+          );
+        }
+        let endstreamPos = afterData;
+        if (raw.startsWith("\r\n", afterData)) {
+          endstreamPos = afterData + 2;
+        } else if (raw[afterData] === "\n" || raw[afterData] === "\r") {
+          endstreamPos = afterData + 1;
+        }
+        if (!raw.startsWith("endstream", endstreamPos)) {
+          throw new Error(
+            `Damaged or truncated PDF stream in object ${objNum}: missing endstream at declared /Length ${declaredLen}.`,
+          );
+        }
+        const streamBytes = bytes.subarray(dataStart, afterData);
+        const afterEndstream = skipWsAndComments(raw, endstreamPos + 9);
 
         if (!raw.startsWith("endobj", afterEndstream)) {
           throw new Error(`Truncated PDF object ${objNum}: missing endobj after endstream.`);

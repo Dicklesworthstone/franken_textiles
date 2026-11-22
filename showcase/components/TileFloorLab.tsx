@@ -444,6 +444,7 @@ export default function TileFloorLab({ draft }: { draft?: DraftTiles }) {
 
   useEffect(() => {
     const controller = new AbortController();
+    setLoaded(undefined);
     setError("");
 
     Promise.all([
@@ -485,7 +486,9 @@ export default function TileFloorLab({ draft }: { draft?: DraftTiles }) {
                 <span>
                   {pdf
                     ? `${pdf.totalPages} pages · ${pdf.printedTileCount} printed tiles (${pdf.cols}×${pdf.rows} A4 grid)`
-                    : "Reading exported A4 PDF streams…"}
+                    : error
+                      ? "Assembly preview unavailable"
+                      : "Reading exported A4 PDF streams…"}
                 </span>
                 <label className="tf-assemble-bar">
                   {assembled >= 0.98 ? "Taped flush" : assembled <= 0.02 ? "Loose sheets" : "Tape sheets"}
