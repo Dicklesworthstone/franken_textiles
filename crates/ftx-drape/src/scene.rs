@@ -653,7 +653,20 @@ fn elastic_ring(
             casing.instance
         )));
     }
-    let scale = casing.length / segments.iter().map(|s| s.2).sum::<f64>();
+    let total_length: f64 = segments.iter().map(|s| s.2).sum();
+    if !total_length.is_finite() || total_length <= 0.0 {
+        return Err(bad(format!(
+            "the casing {}'s {what} has zero or non-finite perimeter",
+            casing.instance
+        )));
+    }
+    let scale = casing.length / total_length;
+    if !scale.is_finite() {
+        return Err(bad(format!(
+            "the casing {}'s {what} elastic length scale overflows",
+            casing.instance
+        )));
+    }
     Ok(segments
         .into_iter()
         .map(|(a, b, l)| ElasticSegment {
@@ -3063,5 +3076,32 @@ mod grain_tests {
         assert_eq!(pl.len(), 2);
         assert!((pl[0].radius - 100.0).abs() < 1e-12);
         assert!((pl[1].radius - 38.95).abs() < 1e-12);
+    }
+
+    #[test]
+    fn elastic_ring_refuses_zero_perimeter_degenerate_ring_instead_of_nan() {
+        let mesh = GarmentMesh {
+            instances: vec!["band".into()],
+            verts2d: vec![Vec2::ZERO; 3],
+            faces: Vec::new(),
+            owner: vec![0, 0, 0],
+            inst_range: vec![(0, 3)],
+            pairs: Vec::new(),
+            seams: Vec::new(),
+            corner: BTreeMap::new(),
+            index: BTreeMap::new(),
+        };
+        let weld = vec![0, 1, 2];
+        let casing = ElasticCasing {
+            instance: "band".into(),
+            length: 0.4,
+            ea: ELASTIC_EA,
+            material: None,
+            load_instances: vec!["band".into()],
+        };
+        let path = vec![0, 1, 2, 0];
+        let err = elastic_ring(&mesh, &weld, &casing, "top edge", &[&path]).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("zero or non-finite perimeter"));
     }
 }
