@@ -596,7 +596,7 @@ impl Pattern {
                 } else {
                     n.s
                 };
-                if total == 0.0 {
+                if !total.is_finite() || total <= 0.0 {
                     return Err(PyError::Value(format!(
                         "seam side {} has zero length",
                         py::repr_str(r)
@@ -619,6 +619,12 @@ impl Pattern {
     /// # Errors
     /// A side that does not resolve; implausible side lengths (not in (0, 1e5) mm).
     pub fn seam_pairs(&self, seam: &Seam, spacing: f64) -> Result<SeamPairs, PyError> {
+        if !spacing.is_finite() || spacing <= 0.0 {
+            return Err(PyError::Value(format!(
+                "seam {}: spacing must be finite and positive",
+                seam.id_text()
+            )));
+        }
         let side_ref = |k: &str| seam.side_ref(k).ok_or_else(|| PyError::Key(k.to_string()));
         let (ra, rb) = (side_ref("a")?, side_ref("b")?);
         let (a_pts, a_j) = self.side_polyline(ra)?;
@@ -670,7 +676,15 @@ impl Pattern {
         for w in brk.windows(2) {
             let (u0, u1) = (w[0], w[1]);
             let span = ((u1 - u0) * la).max((to_b(u1) - to_b(u0)) * lb);
-            let n = ((span / spacing).ceil() as usize).max(1);
+            let steps = (span / spacing).ceil();
+            if !steps.is_finite() || steps > 1_000_000.0 {
+                return Err(PyError::Value(format!(
+                    "seam {}: spacing {} produces too many samples",
+                    seam.id_text(),
+                    spacing
+                )));
+            }
+            let n = (steps as usize).max(1);
             let us = np::linspace(u0, u1, n + 1);
             for &u in &us[1..] {
                 fa.push(u);
@@ -696,5 +710,53 @@ impl Pattern {
     #[must_use]
     pub fn to_value(&self) -> Option<Value> {
         self.doc.as_ref().and_then(|d| serde_json::to_value(d).ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn seam_pairs_refuses_non_positive_or_non_finite_spacing() {
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [
+                {
+                    "id": "a", "cut": {"qty": 1},
+                    "vertices": {"v0": [0, 0], "v1": [100, 0], "v2": [100, 80], "v3": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "v0", "to": "v1"},
+                        {"id": "e1", "from": "v1", "to": "v2"},
+                        {"id": "e2", "from": "v2", "to": "v3"},
+                        {"id": "e3", "from": "v3", "to": "v0"}
+                    ]
+                },
+                {
+                    "id": "b", "cut": {"qty": 1},
+                    "vertices": {"v0": [0, 0], "v1": [100, 0], "v2": [100, 80], "v3": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "v0", "to": "v1"},
+                        {"id": "e1", "from": "v1", "to": "v2"},
+                        {"id": "e2", "from": "v2", "to": "v3"},
+                        {"id": "e3", "from": "v3", "to": "v0"}
+                    ]
+                }
+            ],
+            "seams": [{"id": "s1", "a": "a/e0", "b": "b/e0"}]
+        }));
+        let seam = &pat.seams()[0];
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let err = pat.seam_pairs(seam, bad).unwrap_err().to_string();
+            assert!(
+                err.contains("spacing must be finite and positive"),
+                "bad={bad}: {err}"
+            );
+        }
+        let err = pat.seam_pairs(seam, 1e-300).unwrap_err().to_string();
+        assert!(err.contains("too many samples"), "{err}");
+        assert!(pat.seam_pairs(seam, 5.0).is_ok());
     }
 }
