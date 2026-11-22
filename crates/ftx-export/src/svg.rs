@@ -1,7 +1,7 @@
 //! The master SVG (`docs/spec/03` §7.1): every piece at 1 unit = 1 mm, with its cut and sew lines, notches,
 //! grainline, fold marks, internal lines, drills, labels and braid, as one group per piece.
 
-use ftx_core::{Refusal, Vec2, py};
+use ftx_core::{Refusal, RefusalCode, Vec2, py};
 use serde_json::{Value, json};
 
 use crate::ctx::Ctx;
@@ -228,6 +228,12 @@ pub fn master_svg(ctx: &Ctx) -> Result<(String, Value), Refusal> {
             bb[3].max(p.y),
         ];
     }
+    if !bb.iter().all(|v| v.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "master SVG layout has no cut geometry",
+        ));
+    }
     let file = format!("{}_master_mm.svg", ctx.style);
     let entry = json!({
         "file": file,
@@ -237,4 +243,25 @@ pub fn master_svg(ctx: &Ctx) -> Result<(String, Value), Refusal> {
         "fold_mode": fold_mode,
     });
     Ok((out.join("\n") + "\n", entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExportOptions;
+    use ftx_pattern::Pattern;
+
+    #[test]
+    fn master_svg_refuses_empty_pattern_instead_of_emitting_null_cut_bbox() {
+        let empty = json!({
+            "schema": "fabric-pattern/1",
+            "style": "EMPTY",
+            "units": "mm",
+            "pieces": []
+        });
+        let pat = Pattern::new(empty);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let err = master_svg(&ctx).unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+    }
 }

@@ -162,6 +162,9 @@ fn split_side(segs: &mut Segs, eids: &[String], fr: &[f64], ids: &mut Ids) -> Ve
         .flat_map(|e| segs[e].iter().map(move |s| (e.clone(), s.clone())))
         .collect();
     let tot: f64 = flat.iter().map(|(_, s)| s.length).sum();
+    if !tot.is_finite() || tot <= 0.0 {
+        return flat.into_iter().map(|(_, s)| s).collect();
+    }
     let mut acc = 0.0;
     let mut new: BTreeMap<String, Vec<Seg>> =
         eids.iter().map(|e| (e.clone(), Vec::new())).collect();
@@ -266,6 +269,9 @@ pub fn export_garmentcode(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal
                 .flat_map(|e| segs[iid][e].iter().map(|s| s.length))
                 .collect();
             let tot: f64 = ls.iter().sum();
+            if !tot.is_finite() || tot <= 0.0 {
+                return (Vec::new(), 0.0);
+            }
             let cs = np::cumsum(&ls);
             (
                 cs[..cs.len().saturating_sub(1)]
@@ -276,7 +282,11 @@ pub fn export_garmentcode(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal
             )
         };
         let (ba, la) = bounds(&ia.id, &ea);
-        let (bb_own, _lb) = bounds(&ib.id, &eb);
+        let (bb_own, lb) = bounds(&ib.id, &eb);
+        if la <= 0.0 || lb <= 0.0 {
+            warnings.push(format!("seam {sid}: zero-length side"));
+            continue;
+        }
         let rev = seam.get("reverse").is_none_or(ftx_pattern::doc::truthy);
         let na = pat.notch_fractions(a_ref).unwrap_or_default();
         let mut nb = pat.notch_fractions(b_ref).unwrap_or_default();
@@ -578,4 +588,62 @@ pub fn export_garmentcode(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal
         ("warnings", PyJson::Int(n_warnings as i64)),
     ]);
     Ok((name, spec.dumps(Some(1)) + "\n", entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExportOptions;
+    use ftx_pattern::Pattern;
+
+    #[test]
+    fn export_garmentcode_warns_on_zero_length_seam_side_instead_of_emitting_nan() {
+        let doc = serde_json::json!({
+            "schema": "fabric-pattern/1",
+            "style": "ZEROSEAM",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 10},
+            "pieces": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "vertices": {"v0": [0, 0], "v1": [0, 0], "v2": [100, 0], "v3": [100, 100]},
+                    "edges": [
+                        {"id": "e0", "from": "v0", "to": "v1"},
+                        {"id": "e1", "from": "v1", "to": "v2"},
+                        {"id": "e2", "from": "v2", "to": "v3"},
+                        {"id": "e3", "from": "v3", "to": "v0"}
+                    ],
+                    "cut": {"qty": 1}
+                },
+                {
+                    "id": "b",
+                    "name": "B",
+                    "vertices": {"v0": [0, 0], "v1": [100, 0], "v2": [100, 100], "v3": [0, 100]},
+                    "edges": [
+                        {"id": "e0", "from": "v0", "to": "v1"},
+                        {"id": "e1", "from": "v1", "to": "v2"},
+                        {"id": "e2", "from": "v2", "to": "v3"},
+                        {"id": "e3", "from": "v3", "to": "v0"}
+                    ],
+                    "cut": {"qty": 1}
+                }
+            ],
+            "seams": [{"id": "s_zero", "a": "a/e0", "b": "b/e0"}]
+        });
+        let pat = Pattern::new(doc);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let (_name, text, entry) = export_garmentcode(&ctx).unwrap();
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        let warns = parsed["fabric_pattern_export"]["warnings"]
+            .as_array()
+            .unwrap();
+        assert!(
+            warns
+                .iter()
+                .any(|w| w.as_str().is_some_and(|s| s.contains("zero-length"))),
+            "expected zero-length warning, got {warns:?}"
+        );
+        assert_eq!(entry.get("stitches"), Some(&PyJson::Int(0)));
+    }
 }

@@ -149,6 +149,15 @@ pub fn write_dst(label: &str, blocks: &[Block]) -> Result<(Vec<u8>, DstInfo), Re
      -> Result<(), Refusal> {
         let (dx, dy) = (target.0 - pos.0, target.1 - pos.1);
         let n = ((dx.abs().max(dy.abs()) as f64 / MAX_STEPS as f64).ceil() as i64).max(1);
+        if recs.len().saturating_add(n as usize) > MAX_RECORDS {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "DST record count {} exceeds 7-digit header limit ({MAX_RECORDS})",
+                    recs.len().saturating_add(n as usize)
+                ),
+            ));
+        }
         for k in 1..=n {
             let step = |d: i64| {
                 round_i(d as f64 * k as f64 / n as f64)

@@ -5,7 +5,7 @@
 
 use std::fmt::Write as _;
 
-use ftx_core::{Refusal, Vec2, det, py};
+use ftx_core::{Refusal, RefusalCode, Vec2, det, py};
 
 use crate::ctx::{Ctx, primary_instance};
 use crate::geom::{CAP, Geom, Source, grain_marks, label_texts};
@@ -105,8 +105,10 @@ pub fn turn_and_curve_points(
         if total <= 0.0 {
             continue;
         }
-        for s in ftx_core::np::arange(spacing, total - spacing * 0.5, spacing) {
-            curves.push(ftx_core::polyline::at_fractions(&run, &[s / total])[0]);
+        if spacing.is_finite() && spacing > 0.0 {
+            for s in ftx_core::np::arange(spacing, total - spacing * 0.5, spacing) {
+                curves.push(ftx_core::polyline::at_fractions(&run, &[s / total])[0]);
+            }
         }
         let (a, b) = (run[0], run[run.len() - 1]);
         let d = b - a;
@@ -196,8 +198,23 @@ pub fn export_dxf_astm(
     })?;
     let names: Vec<String> = match pieces {
         PyJson::Dict(items) => items.iter().map(|(k, _)| k.clone()).collect(),
-        _ => Vec::new(),
+        _ => {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "DXF piece reference must be a JSON object",
+            ));
+        }
     };
+    if names.len() != doc.pieces.len() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!(
+                "DXF piece reference has {} entries for {} pattern pieces",
+                names.len(),
+                doc.pieces.len()
+            ),
+        ));
+    }
     let mut layers: Vec<&str> = vec!["1", "2", "3", "4", "7", "8", "11", "13", "14"];
     if astm {
         layers.extend(["15", "80", "81", "82", "83", "84", "87"]);
@@ -321,7 +338,13 @@ pub fn export_dxf_astm(
         if let Some(m) = g.meta.material.as_ref().filter(|m| !m.is_empty()) {
             ptext.push(format!("Material:{}", safe_name(m, 40)));
         }
-        let lp = g.labels[0].p;
+        let lp = g.labels.first().map_or_else(
+            || {
+                let (x0, y0, x1, y1) = g.bbox();
+                Vec2::new(0.5 * (x0 + x1), 0.5 * (y0 + y1))
+            },
+            |l| l.p,
+        );
         for (i, s) in ptext.iter().enumerate() {
             r12_text(
                 b,
@@ -333,7 +356,12 @@ pub fn export_dxf_astm(
         }
         if astm {
             let mut notes = vec![ascii_text(&g.name)];
-            notes.extend(g.labels[0].lines.get(2).map(|(t, _, _)| ascii_text(t)));
+            notes.extend(
+                g.labels
+                    .first()
+                    .and_then(|l| l.lines.get(2))
+                    .map(|(t, _, _)| ascii_text(t)),
+            );
             for d in &g.decor {
                 notes.push(format!(
                     "{} {} mm centre line (layer 8)",
@@ -346,7 +374,9 @@ pub fn export_dxf_astm(
                 r12_text(b, "15", s, (py::round(lp.x, 2), py::round(y, 2)), 5.0);
             }
             for lb in g.labels.iter().skip(1).filter(|l| l.kind == "internal") {
-                r12_text(b, "15", &ascii_text(&lb.lines[0].0), r2(lb.p), 3.5);
+                if let Some((text, _, _)) = lb.lines.first() {
+                    r12_text(b, "15", &ascii_text(text), r2(lb.p), 3.5);
+                }
             }
         }
         b.pair(0, "ENDBLK");
@@ -564,6 +594,12 @@ pub fn export_flat_dxf(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal> {
             bb[2].max(p.x),
             bb[3].max(p.y),
         ];
+    }
+    if !bb.iter().all(|v| v.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "flat DXF layout has no cut geometry",
+        ));
     }
     let mut d = Dxf::default();
     let table =
@@ -797,4 +833,61 @@ pub fn export_flat_dxf(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal> {
         ("pieces", PyJson::Int(lay.items.len() as i64)),
     ]);
     Ok((name, d.out, entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExportOptions;
+    use ftx_pattern::Pattern;
+
+    #[test]
+    fn dxf_helpers_and_exporters_refuse_invalid_inputs_without_panicking() {
+        let ring = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(50.0, 0.0),
+            Vec2::new(100.0, 10.0),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(0.0, 100.0),
+        ];
+        for bad_spacing in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let (turns, curves) = turn_and_curve_points(&ring, true, 15.0, bad_spacing);
+            assert!(!turns.is_empty());
+            assert!(curves.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+        }
+
+        let empty = serde_json::json!({
+            "schema": "fabric-pattern/1",
+            "style": "EMPTY",
+            "units": "mm",
+            "pieces": []
+        });
+        let pat = Pattern::new(empty);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let err = export_flat_dxf(&ctx).unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+
+        let one_piece = serde_json::json!({
+            "schema": "fabric-pattern/1",
+            "style": "ONE",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 10},
+            "pieces": [{
+                "id": "p1",
+                "name": "P1",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "cut": {"qty": 1}
+            }]
+        });
+        let pat = Pattern::new(one_piece);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let err = export_dxf_astm(&ctx, &PyJson::Dict(Vec::new()), true).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+    }
 }

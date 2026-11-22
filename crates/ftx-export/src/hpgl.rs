@@ -1,7 +1,7 @@
 //! HPGL for plotters and plotter-cutters (`docs/spec/03` §7.9): the master layout at 40 units per mm, drawing
 //! (pen 1) before cutting (pen 2) per piece.
 
-use ftx_core::{Refusal, Vec2, py};
+use ftx_core::{Refusal, RefusalCode, Vec2, py};
 
 use crate::ctx::Ctx;
 use crate::geom::{CAP, grain_marks, label_texts};
@@ -44,6 +44,9 @@ pub fn export_hpgl(
         }
     };
     let poly = |out: &mut Vec<String>, pts: &[Vec2], closed: bool| {
+        if pts.is_empty() {
+            return;
+        }
         let mut q: Vec<(i64, i64)> = pts.iter().map(|&p| map(p)).collect();
         if closed {
             q.push(q[0]);
@@ -111,6 +114,12 @@ pub fn export_hpgl(
             bb[3].max(p.y),
         ];
     }
+    if !bb.iter().all(|v| v.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "HPGL layout has no cut geometry",
+        ));
+    }
     let entry = PyJson::dict(vec![
         ("file", PyJson::str(&name)),
         ("units_per_mm", PyJson::Int(40)),
@@ -123,4 +132,50 @@ pub fn export_hpgl(
         ("cut_bbox", PyJson::floats(&bb.map(|v| py::round(v, 3)))),
     ]);
     Ok((name, out.join("\n") + "\n", entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExportOptions;
+    use ftx_pattern::Pattern;
+
+    #[test]
+    fn export_hpgl_refuses_empty_pattern_and_handles_empty_decor_without_panicking() {
+        let empty = serde_json::json!({
+            "schema": "fabric-pattern/1",
+            "style": "EMPTY",
+            "units": "mm",
+            "pieces": []
+        });
+        let pat = Pattern::new(empty);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let err = export_hpgl(&ctx, false, false).unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+
+        let with_empty_decor = serde_json::json!({
+            "schema": "fabric-pattern/1",
+            "style": "DECOR",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 10},
+            "pieces": [{
+                "id": "p1",
+                "name": "P1",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "decor": [{"kind": "soutache", "pts": [], "width_mm": 3.0, "closed": false}],
+                "cut": {"qty": 1}
+            }]
+        });
+        let pat = Pattern::new(with_empty_decor);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let (_name, text, entry) = export_hpgl(&ctx, false, false).unwrap();
+        assert!(text.contains("SP2;"));
+        assert!(entry.get("cut_bbox").is_some());
+    }
 }
