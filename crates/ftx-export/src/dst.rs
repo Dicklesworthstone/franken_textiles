@@ -550,8 +550,8 @@ mod tests {
                 {"id":"e2","from":"c","to":"d"},
                 {"id":"e3","from":"d","to":"a"}
               ],
-              "internal_lines":[
-                {"id":"braid","kind":"soutache","pts":[[15,15],[85,15],[85,105]]}
+              "decor":[
+                {"kind":"soutache","pts":[[15,15],[85,15],[85,105]],"width_mm":3.0,"closed":false}
               ],
               "cut":{"qty":2,"mirror_pair":true,"material":"linen"}
             },
@@ -564,8 +564,8 @@ mod tests {
                 {"id":"e2","from":"c","to":"d"},
                 {"id":"e3","from":"d","to":"a"}
               ],
-              "internal_lines":[
-                {"id":"braid","kind":"soutache","pts":[[10,10],[70,10],[70,80]]}
+              "decor":[
+                {"kind":"soutache","pts":[[10,10],[70,10],[70,80]],"width_mm":3.0,"closed":false}
               ],
               "cut":{"qty":1,"material":"linen"}
             }
