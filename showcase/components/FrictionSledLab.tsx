@@ -259,12 +259,22 @@ function SledPathSvg({
       <circle cx={curX} cy={curY} r="4.2" fill="#172328" stroke="#fffef8" strokeWidth="1.5" />
 
       {/* Pull direction indicator */}
-      <text x={geom.minX + 10} y={geom.minY + 18} fill="#1f3035" fontSize="10" fontWeight="700" fontFamily="var(--mono)">
-        SWATCH A ON B · 100×100 MM · PULL {history.pull_direction_label}
-      </text>
-      <text x={geom.minX + 10} y={geom.maxY - 10} fill="#465558" fontSize="9.5" fontFamily="var(--mono)">
-        NORMAL {sample.retained_normal_n.toFixed(3)} N · GAP {sample.min_gap_mm.toFixed(3)} MM · DIR ({dxDir.toFixed(2)}, {dyDir.toFixed(2)})
-      </text>
+      {(() => {
+        const midX = (geom.minX + geom.maxX) / 2;
+        const spanW = geom.maxX - geom.minX;
+        const fsTop = Math.max(7.0, Math.min(9.0, spanW * 0.026));
+        const fsBot = Math.max(6.8, Math.min(8.4, spanW * 0.024));
+        return (
+          <>
+            <text x={midX} y={geom.minY + 16} textAnchor="middle" fill="#1f3035" fontSize={fsTop.toFixed(1)} fontWeight="700" fontFamily="var(--mono)">
+              SWATCH A ON B · 100×100 MM · PULL {history.pull_direction_label}
+            </text>
+            <text x={midX} y={geom.maxY - 9} textAnchor="middle" fill="#465558" fontSize={fsBot.toFixed(1)} fontFamily="var(--mono)">
+              F_N {sample.retained_normal_n.toFixed(3)} N · GAP {sample.min_gap_mm.toFixed(3)} MM · DIR ({dxDir.toFixed(2)}, {dyDir.toFixed(2)})
+            </text>
+          </>
+        );
+      })()}
     </svg>
   );
 }

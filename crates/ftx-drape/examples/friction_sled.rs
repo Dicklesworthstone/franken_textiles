@@ -72,7 +72,9 @@ fn scaled_sliding_input(base: &Input, target_mu: f64) -> Input {
         );
         for exp in &mut out.experiments {
             for sample in &mut exp.samples {
-                sample.pull_n = sample.pull_n.map(|opt| opt.map(|v| (v * ratio * 1e6).round() / 1e6));
+                sample.pull_n = sample
+                    .pull_n
+                    .map(|opt| opt.map(|v| (v * ratio * 1e6).round() / 1e6));
             }
         }
     }
@@ -91,7 +93,10 @@ fn run_sled_history(spec: &HistorySpec) -> Result<Value, Box<dyn Error>> {
         2,
         Vec2::new(-SLED_SIDE_M / 2.0, -SLED_SIDE_M / 2.0),
     );
-    let tri_rest: Vec<[Vec2; 3]> = tris.iter().map(|&[a, b, c]| [rest[a], rest[b], rest[c]]).collect();
+    let tri_rest: Vec<[Vec2; 3]> = tris
+        .iter()
+        .map(|&[a, b, c]| [rest[a], rest[b], rest[c]])
+        .collect();
     let model = ClothModel::from_triangles(
         rest.len(),
         &tris,
@@ -110,8 +115,8 @@ fn run_sled_history(spec: &HistorySpec) -> Result<Value, Box<dyn Error>> {
     //    so normal contact equilibrium is established before any tangential pull begins.
     let fixed_xy = vec![[true, true, false]; rest.len()];
     let g_normal = Vec3::new(0.0, 0.0, -spec.normal_n / total_mass);
-    let mut settle = Solver::new(model.clone(), x0, &fixed_xy, g_normal)
-        .with_contact(body.clone(), p_zero)?;
+    let mut settle =
+        Solver::new(model.clone(), x0, &fixed_xy, g_normal).with_contact(body.clone(), p_zero)?;
     settle.tol = 1e-10;
     settle.max_newton = 200;
     let settle_rep = settle.static_solve()?;
@@ -123,8 +128,8 @@ fn run_sled_history(spec: &HistorySpec) -> Result<Value, Box<dyn Error>> {
     // 2. Release x,y DOFs with the calibrated Coulomb coefficient mu and ramp tangential force.
     let free = vec![[false, false, false]; rest.len()];
     let params = contact_params(spec.mu);
-    let mut solver = Solver::new(model, settled_x.clone(), &free, g_normal)
-        .with_contact(body, params)?;
+    let mut solver =
+        Solver::new(model, settled_x.clone(), &free, g_normal).with_contact(body, params)?;
     solver.tol = 1e-9;
     solver.max_newton = 300;
     solver.friction_rounds = 4;
@@ -158,7 +163,9 @@ fn run_sled_history(spec: &HistorySpec) -> Result<Value, Box<dyn Error>> {
         let rmap = contact.reaction_map(&solver.x)?;
         let forces: Vec<Vec3> = serde_json::from_value(rmap["body_force_on_cloth_n"].clone())?;
         let fn_z: f64 = forces.iter().map(|f| f.z).sum();
-        let min_gap_m = contact.min_gap(&solver.x, 0.01).ok_or("no active contact gap")?;
+        let min_gap_m = contact
+            .min_gap(&solver.x, 0.01)
+            .ok_or("no active contact gap")?;
         samples.push(json!({
             "step": 0,
             "time_s": 0.0,
@@ -185,7 +192,11 @@ fn run_sled_history(spec: &HistorySpec) -> Result<Value, Box<dyn Error>> {
         let pull_mag = spec.pull_max_n * frac;
         let pull_x = pull_mag * dir[0];
         let pull_y = pull_mag * dir[1];
-        solver.gravity = Vec3::new(pull_x / total_mass, pull_y / total_mass, -spec.normal_n / total_mass);
+        solver.gravity = Vec3::new(
+            pull_x / total_mass,
+            pull_y / total_mass,
+            -spec.normal_n / total_mass,
+        );
 
         let rep = solver.step(DT_S)?;
         if !rep.converged {
@@ -196,7 +207,9 @@ fn run_sled_history(spec: &HistorySpec) -> Result<Value, Box<dyn Error>> {
         let rmap = contact.reaction_map(&solver.x)?;
         let forces: Vec<Vec3> = serde_json::from_value(rmap["body_force_on_cloth_n"].clone())?;
         let fn_z: f64 = forces.iter().map(|f| f.z).sum();
-        let min_gap_m = contact.min_gap(&solver.x, 0.01).ok_or("no active contact gap")?;
+        let min_gap_m = contact
+            .min_gap(&solver.x, 0.01)
+            .ok_or("no active contact gap")?;
         if min_gap_m <= 0.0 {
             return Err(format!("penetrating contact gap at step {k} for {}", spec.id).into());
         }

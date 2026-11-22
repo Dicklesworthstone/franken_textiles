@@ -460,7 +460,8 @@
   border-radius: 4px;
   background: #172328;
   color: #e9e4d5;
-  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font: 400 11.5px/1.45 var(--mono, monospace);
 }
 

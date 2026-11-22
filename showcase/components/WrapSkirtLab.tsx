@@ -72,9 +72,9 @@ function WrapCrossSectionSvg({
   const overlapB = sliceLevel === "waist" ? evalB.waistOverlapMm : sliceLevel === "hip" ? evalB.hipOverlapMm : evalB.lapOverlapMm;
   const perim = sliceLevel === "waist" ? evalA.bodyWaistMm : sliceLevel === "hip" ? evalA.hipSlicePerimMm : evalA.lapSlicePerimMm;
 
-  const { vb, bodyPath, cx, cy, rx, ry } = useMemo(() => {
+  const { vb, bodyPath, cx, cy, rx, ry, spanX } = useMemo(() => {
     if (!hull.length) {
-      return { vb: "-260 -260 520 520", bodyPath: "", cx: 0, cy: 0, rx: 140, ry: 110 };
+      return { vb: "-260 -260 520 520", bodyPath: "", cx: 0, cy: 0, rx: 140, ry: 110, spanX: 520 };
     }
     // Native Anny body faces -y; render wearer facing DOWN (+y in SVG) so front wrap sits clearly at bottom!
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -90,15 +90,16 @@ function WrapCrossSectionSvg({
     const rx0 = (maxX - minX) / 2;
     const ry0 = (maxY - minY) / 2;
     const pad = 74;
-    const spanX = Math.max(maxX - minX + pad * 2, 460);
-    const spanY = Math.max(maxY - minY + pad * 2, 420);
+    const spanX0 = Math.max(maxX - minX + pad * 2, 460);
+    const spanY0 = Math.max(maxY - minY + pad * 2, 420);
     return {
-      vb: `${(cx0 - spanX / 2).toFixed(1)} ${(cy0 - spanY / 2).toFixed(1)} ${spanX.toFixed(1)} ${spanY.toFixed(1)}`,
+      vb: `${(cx0 - spanX0 / 2).toFixed(1)} ${(cy0 - spanY0 / 2).toFixed(1)} ${spanX0.toFixed(1)} ${spanY0.toFixed(1)}`,
       bodyPath: pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ") + " Z",
       cx: cx0,
       cy: cy0,
       rx: rx0,
       ry: ry0,
+      spanX: Math.max(spanX0, spanY0),
     };
   }, [hull]);
 
@@ -197,10 +198,10 @@ function WrapCrossSectionSvg({
       )}
 
       {/* Orientation labels */}
-      <text x={cx} y={cy - ry - 36} textAnchor="middle" fill="#465558" fontSize="11" fontWeight="700" fontFamily="var(--mono)">
+      <text x={cx} y={cy - ry - 36} textAnchor="middle" fill="#465558" fontSize={Math.max(11, spanX * 0.023).toFixed(1)} fontWeight="700" fontFamily="var(--mono)">
         BACK · ANNY 0.6.1 ({evalA.posture.toUpperCase()} POSE)
       </text>
-      <text x={cx} y={cy + ry + 54} textAnchor="middle" fill={overlapA < 0 ? "#a92914" : "#1c2e34"} fontSize="11.5" fontWeight="700" fontFamily="var(--mono)">
+      <text x={cx} y={cy + ry + 54} textAnchor="middle" fill={overlapA < 0 ? "#a92914" : "#1c2e34"} fontSize={Math.max(11.5, spanX * 0.024).toFixed(1)} fontWeight="700" fontFamily="var(--mono)">
         {overlapA >= 0
           ? `FRONT OVERLAP · A: ${overlapA.toFixed(0)} MM · B: ${overlapB.toFixed(0)} MM`
           : `FRONT PARTS BY ${Math.abs(overlapA).toFixed(0)} MM (LAP EXCEEDS FIXED SWEEP)`}
@@ -222,14 +223,14 @@ function FlatPatternPreviewSvg({
       className="ws-flat-svg"
       role="img"
       aria-label="Actual flat wrap skirt outline showing back skirt, wrap front panels, 1020 mm waistband with requested tie slot stations, and 780 mm waist ties"
-      viewBox="-320 -95 1680 910"
+      viewBox="-320 -95 1680 930"
     >
-      <rect x="-320" y="-95" width="1680" height="910" fill="#f5f1e4" />
+      <rect x="-320" y="-95" width="1680" height="930" fill="#f5f1e4" />
 
-      {/* Back skirt (360 waist, 580 hem, 600 long) */}
+      {/* Back skirt (360 waist, 580 hem, 600 long, trued perpendicular at waist & hem) */}
       <g transform="translate(0, 620)">
         <path
-          d="M -290,0 L 290,0 C 266,-186 224,-416 180,-600 L -180,-600 C -224,-416 -266,-186 -290,0 Z"
+          d="M -290,0 L 290,0 C 290,-360 180,-530 180,-600 L -180,-600 C -180,-530 -290,-360 -290,0 Z"
           fill="#264352"
           fillOpacity="0.14"
           stroke="#1c3542"
@@ -246,7 +247,7 @@ function FlatPatternPreviewSvg({
       {/* Wrap front panel (cut 2: 330 waist, 480 hem, 601.3 wrap edge) */}
       <g transform="translate(450, 620)">
         <path
-          d="M -110,0 L 370,0 L 330,-600 L 0,-600 C -44,-416 -86,-186 -110,0 Z"
+          d="M -110,0 L 370,0 L 330,-600 L 0,-600 C 0,-530 -110,-360 -110,0 Z"
           fill="#b84724"
           fillOpacity="0.14"
           stroke="#9e391b"
@@ -263,7 +264,7 @@ function FlatPatternPreviewSvg({
       </g>
 
       {/* Waistband (1020 x 70 mm) with exact divisions + Setting A & B pass-through slot markers */}
-      <g transform="translate(-260, 690)">
+      <g transform="translate(-260, 706)">
         <rect x="0" y="0" width="1020" height="70" fill="#1c685a" fillOpacity="0.14" stroke="#155449" strokeWidth="3" />
         <line x1="330" y1="0" x2="330" y2="70" stroke="#155449" strokeWidth="2" strokeDasharray="6 5" />
         <line x1="690" y1="0" x2="690" y2="70" stroke="#155449" strokeWidth="2" strokeDasharray="6 5" />
@@ -282,19 +283,31 @@ function FlatPatternPreviewSvg({
             </text>
           </>
         )}
-        <text x="510" y="25" textAnchor="middle" fill="#17332e" fontSize="18" fontWeight="700" fontFamily="var(--mono)">
+        <text
+          x="330"
+          y="58"
+          textAnchor="middle"
+          fill="#17332e"
+          stroke="#f5f1e4"
+          strokeWidth="6"
+          paintOrder="stroke"
+          fontSize="18"
+          fontWeight="700"
+          fontFamily="var(--mono)"
+        >
           WAISTBAND · 330 (L) + 360 (BACK) + 330 (R) = 1020 MM
         </text>
       </g>
 
-      {/* Waist tie strap (780 x 35 mm, cut 2) */}
+      {/* Waist tie strap (780 x 70 mm folded to 35 mm, cut 2) */}
       <g transform="translate(880, 120)">
-        <rect x="0" y="0" width="420" height="40" fill="#c78b22" fillOpacity="0.2" stroke="#8f5f10" strokeWidth="3" />
+        <rect x="0" y="0" width="420" height="70" fill="#c78b22" fillOpacity="0.2" stroke="#8f5f10" strokeWidth="3" />
+        <line x1="0" y1="35" x2="420" y2="35" stroke="#8f5f10" strokeWidth="1.6" strokeDasharray="10 6" />
         <text x="210" y="-16" textAnchor="middle" fill="#1b2d34" fontSize="20" fontWeight="700" fontFamily="var(--mono)">
-          WAIST TIE ×2 (780 × 35 MM)
+          WAIST TIE ×2 (780 × 70 MM FOLD)
         </text>
-        <text x="210" y="72" textAnchor="middle" fill="#465659" fontSize="17" fontFamily="var(--mono)">
-          Joins waistband ends (35 mm seam)
+        <text x="210" y="102" textAnchor="middle" fill="#465659" fontSize="17" fontFamily="var(--mono)">
+          Joins waistband ends (70 mm seam)
         </text>
       </g>
     </svg>
@@ -467,7 +480,7 @@ export default function WrapSkirtLab() {
 
                 <section className="ws-card" aria-label="Actual fixed wrap skirt flat pattern">
                   <div className="ws-card-head">
-                    <span>FIXED FLAT PATTERN · 7/7 SEAMS PASS</span>
+                    <span>FIXED FLAT PATTERN · 7/7 SEAMS · 4/4 TRUING</span>
                     <span>1,020 MM WAIST · 780 MM TIES</span>
                   </div>
                   <div className="ws-svg-wrap">

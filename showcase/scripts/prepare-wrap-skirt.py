@@ -15,15 +15,49 @@ from pathlib import Path
 import numpy as np
 
 
+def cubic_controls(a, b, p, q):
+    """Convert absolute cubic Bezier handles p, q into fabric-pattern/1 chord-relative (u, v)."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    l2 = dx * dx + dy * dy
+    return {
+        "type": "cubic",
+        "c": [
+            [
+                round(((x - a[0]) * dx + (y - a[1]) * dy) / l2, 6),
+                round(((y - a[1]) * dx - (x - a[0]) * dy) / l2, 6),
+            ]
+            for x, y in (p, q)
+        ],
+    }
+
+
+def eval_cubic_x_at_y(p0, p1, p2, p3, target_y):
+    """Evaluate x(t) along a monotone cubic Bezier at y(t) == target_y."""
+    lo, hi = 0.0, 1.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        u = 1.0 - mid
+        y = u**3 * p0[1] + 3 * u**2 * mid * p1[1] + 3 * u * mid**2 * p2[1] + mid**3 * p3[1]
+        if (y < target_y) == (p0[1] < p3[1]):
+            lo = mid
+        else:
+            hi = mid
+    t = 0.5 * (lo + hi)
+    u = 1.0 - t
+    return u**3 * p0[0] + 3 * u**2 * t * p1[0] + 3 * u * t**2 * p2[0] + t**3 * p3[0]
+
+
 def wrap_skirt_pattern():
     # Exact flat dimensions (mm):
     # - Back waist: 360 mm, each overlapping front waist: 330 mm -> total flat waist sweep = 1020 mm
     # - Skirt length: 600 mm (waist y=0 down to hem y=-600)
-    # - Side seam hip flare: 110 mm per side -> back hem = 580 mm, each front hem = 480 mm (total 1540 mm)
-    # - Waistband: 1020 mm x 70 mm (folded to 35 mm finished height), tie attachment on lower 35 mm end
-    # - Ties (cut 2): 780 mm x 35 mm each (1560 mm combined tie length)
-    hip_curve_up = {"type": "cubic", "c": [[0.32, -0.018], [0.70, -0.032]]}
-    hip_curve_dn = {"type": "cubic", "c": [[0.30, -0.032], [0.68, -0.018]]}
+    # - Side seam hip flare: 110 mm per side, trued perpendicular (90°) to both hem and waist
+    #   so joined corners run straight through at 180.0° -> back hem = 580 mm, each front hem = 480 mm (total 1540 mm)
+    # - Waistband: 1020 mm x 70 mm (folded lengthwise to 35 mm finished height)
+    # - Ties (cut 2): 780 mm x 70 mm (folded lengthwise to 35 mm finished strap, joining full 70 mm waistband ends)
+    side_r_curve = cubic_controls((290, -600), (180, 0), (290, -240), (180, -70))
+    side_l_curve = cubic_controls((-180, 0), (-290, -600), (-180, -70), (-290, -240))
+    front_side_curve = cubic_controls((0, 0), (-110, -600), (0, -70), (-110, -240))
 
     pieces = [
         {
@@ -38,9 +72,9 @@ def wrap_skirt_pattern():
             },
             "edges": [
                 {"id": "hem", "from": "hl", "to": "hr"},
-                {"id": "side_R", "from": "hr", "to": "wr", "curve": hip_curve_up},
+                {"id": "side_R", "from": "hr", "to": "wr", "curve": side_r_curve},
                 {"id": "waist", "from": "wr", "to": "wl"},
-                {"id": "side_L", "from": "wl", "to": "hl", "curve": hip_curve_dn},
+                {"id": "side_L", "from": "wl", "to": "hl", "curve": side_l_curve},
             ],
             "grain": [[0, -520], [0, -80]],
             "notches": [{"id": "cb_waist", "edge": "waist", "s": 0.5, "type": "double"}],
@@ -60,7 +94,7 @@ def wrap_skirt_pattern():
                 {"id": "hem", "from": "h_side", "to": "h_wrap"},
                 {"id": "wrap_edge", "from": "h_wrap", "to": "w_wrap"},
                 {"id": "waist", "from": "w_wrap", "to": "w_side"},
-                {"id": "side", "from": "w_side", "to": "h_side", "curve": hip_curve_dn},
+                {"id": "side", "from": "w_side", "to": "h_side", "curve": front_side_curve},
             ],
             "grain": [[140, -520], [140, -80]],
             "internal": [
@@ -79,20 +113,16 @@ def wrap_skirt_pattern():
                 "b1": [330, 0],
                 "b2": [690, 0],
                 "b3": [1020, 0],
-                "r_mid": [1020, 35],
                 "r_top": [1020, 70],
                 "l_top": [0, 70],
-                "l_mid": [0, 35],
             },
             "edges": [
                 {"id": "front_L", "from": "b0", "to": "b1"},
                 {"id": "back", "from": "b1", "to": "b2"},
                 {"id": "front_R", "from": "b2", "to": "b3"},
-                {"id": "end_R_tie", "from": "b3", "to": "r_mid"},
-                {"id": "end_R_upper", "from": "r_mid", "to": "r_top"},
+                {"id": "end_R", "from": "b3", "to": "r_top"},
                 {"id": "top", "from": "r_top", "to": "l_top"},
-                {"id": "end_L_upper", "from": "l_top", "to": "l_mid"},
-                {"id": "end_L_tie", "from": "l_mid", "to": "b0"},
+                {"id": "end_L", "from": "l_top", "to": "b0"},
             ],
             "grain": [[60, 35], [960, 35]],
             "internal": [
@@ -108,13 +138,13 @@ def wrap_skirt_pattern():
         },
         {
             "id": "waist_tie",
-            "name": "Waist tie strap",
+            "name": "Waist tie strap (fold)",
             "cut": {"qty": 2},
             "vertices": {
                 "a0": [0, 0],
                 "a1": [780, 0],
-                "a2": [780, 35],
-                "a3": [0, 35],
+                "a2": [780, 70],
+                "a3": [0, 70],
             },
             "edges": [
                 {"id": "bottom", "from": "a0", "to": "a1"},
@@ -122,8 +152,11 @@ def wrap_skirt_pattern():
                 {"id": "top", "from": "a2", "to": "a3"},
                 {"id": "attach", "from": "a3", "to": "a0"},
             ],
-            "grain": [[40, 17.5], [740, 17.5]],
-            "note": "Cut two 780 mm ties. Press into finished narrow straps and insert into the folded waistband ends.",
+            "grain": [[40, 35], [740, 35]],
+            "internal": [
+                {"kind": "fold", "label": "Tie strap lengthwise fold", "pts": [[0, 35], [780, 35]]},
+            ],
+            "note": "Cut two 780 x 70 mm ties, seam to waistband ends, fold lengthwise to 35 mm finished strap, and topstitch.",
         },
     ]
 
@@ -133,8 +166,8 @@ def wrap_skirt_pattern():
         {"id": "band_back", "a": "waistband/back", "b": "skirt_back/waist", "reverse": True},
         {"id": "band_front_R", "a": "waistband/front_R", "b": "skirt_front.R/waist", "reverse": True},
         {"id": "band_front_L", "a": "waistband/front_L", "b": "skirt_front.L/waist", "reverse": True},
-        {"id": "tie_R", "a": "waist_tie.R/attach", "b": "waistband/end_R_tie", "reverse": True},
-        {"id": "tie_L", "a": "waist_tie.L/attach", "b": "waistband/end_L_tie", "reverse": True},
+        {"id": "tie_R", "a": "waist_tie.R/attach", "b": "waistband/end_R", "reverse": True},
+        {"id": "tie_L", "a": "waist_tie.L/attach", "b": "waistband/end_L", "reverse": True},
     ]
 
     return {
@@ -335,9 +368,11 @@ def main():
                 capture_output=True,
                 text=True,
             )
-            if proc.returncode not in (0, 2):
+            if proc.returncode != 0:
                 raise RuntimeError(f"ftx validate failed ({proc.returncode}): {proc.stdout or proc.stderr}")
             val = json.loads(proc.stdout)
+            if not val.get("ok") or val["result"]["status"] != "CONVERGED":
+                raise RuntimeError(f"Pattern not CONVERGED for {fid}: {val}")
             seams = val["result"]["seams"]
             bad = [s for s in seams if s["status"] != "PASS"]
             if bad:
@@ -369,6 +404,13 @@ def main():
             src, = d.glob("*" + suffix)
             (out / dest_name).write_bytes(src.read_bytes())
 
+    # Exact horizontal flat sweep at hip (-180 mm) and lower thigh (-310 mm) from the trued cubic side seam:
+    # Back spans [-x_side(y), +x_side(y)], each front spans [-(x_side(y) - 180), 330 + 40 * (-y / 600)].
+    def sweep_at_y(y_mm):
+        x_back = eval_cubic_x_at_y((290, -600), (290, -240), (180, -70), (180, 0), y_mm)
+        x_wrap = 330.0 + 40.0 * (-y_mm / 600.0)
+        return round(2.0 * x_back + 2.0 * (x_wrap + (x_back - 180.0)), 1)
+
     summary = {
         "schema": "ftx-wrap-skirt-exhibit/1",
         "scope": "Native flat pattern validation (fabric-pattern/1) paired with horizontal slices of the fitted Anny 0.6.1 neutral (rest) and seated meshes. No 3D dynamic seated cloth drape is simulated; physical coverage and tie comfort must be checked in a sewn muslin.",
@@ -376,8 +418,8 @@ def main():
             "back_waist_mm": 360.0,
             "front_each_waist_mm": 330.0,
             "total_waist_sweep_mm": 1020.0,
-            "hip_sweep_180mm_below_waist_mm": 1176.0,
-            "lap_sweep_310mm_below_waist_mm": 1289.0,
+            "hip_sweep_180mm_below_waist_mm": sweep_at_y(-180.0),
+            "lap_sweep_310mm_below_waist_mm": sweep_at_y(-310.0),
             "total_hem_sweep_mm": 1540.0,
             "skirt_length_mm": 600.0,
             "tie_each_length_mm": 780.0,

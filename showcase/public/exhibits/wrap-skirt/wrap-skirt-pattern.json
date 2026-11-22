@@ -48,12 +48,12 @@
             "type": "cubic",
             "c": [
               [
-                0.32,
-                -0.018
+                0.580489,
+                -0.106423
               ],
               [
-                0.7,
-                -0.032
+                0.887127,
+                0.020693
               ]
             ]
           }
@@ -71,12 +71,12 @@
             "type": "cubic",
             "c": [
               [
-                0.3,
-                -0.032
+                0.112873,
+                0.020693
               ],
               [
-                0.68,
-                -0.018
+                0.419511,
+                -0.106423
               ]
             ]
           }
@@ -150,12 +150,12 @@
             "type": "cubic",
             "c": [
               [
-                0.3,
-                -0.032
+                0.112873,
+                0.020693
               ],
               [
-                0.68,
-                -0.018
+                0.419511,
+                -0.106423
               ]
             ]
           }
@@ -234,10 +234,6 @@
           1020,
           0
         ],
-        "r_mid": [
-          1020,
-          35
-        ],
         "r_top": [
           1020,
           70
@@ -245,10 +241,6 @@
         "l_top": [
           0,
           70
-        ],
-        "l_mid": [
-          0,
-          35
         ]
       },
       "edges": [
@@ -268,13 +260,8 @@
           "to": "b3"
         },
         {
-          "id": "end_R_tie",
+          "id": "end_R",
           "from": "b3",
-          "to": "r_mid"
-        },
-        {
-          "id": "end_R_upper",
-          "from": "r_mid",
           "to": "r_top"
         },
         {
@@ -283,13 +270,8 @@
           "to": "l_top"
         },
         {
-          "id": "end_L_upper",
+          "id": "end_L",
           "from": "l_top",
-          "to": "l_mid"
-        },
-        {
-          "id": "end_L_tie",
-          "from": "l_mid",
           "to": "b0"
         }
       ],
@@ -357,7 +339,7 @@
     },
     {
       "id": "waist_tie",
-      "name": "Waist tie strap",
+      "name": "Waist tie strap (fold)",
       "cut": {
         "qty": 2
       },
@@ -372,11 +354,11 @@
         ],
         "a2": [
           780,
-          35
+          70
         ],
         "a3": [
           0,
-          35
+          70
         ]
       },
       "edges": [
@@ -404,14 +386,30 @@
       "grain": [
         [
           40,
-          17.5
+          35
         ],
         [
           740,
-          17.5
+          35
         ]
       ],
-      "note": "Cut two 780 mm ties. Press into finished narrow straps and insert into the folded waistband ends."
+      "internal": [
+        {
+          "kind": "fold",
+          "label": "Tie strap lengthwise fold",
+          "pts": [
+            [
+              0,
+              35
+            ],
+            [
+              780,
+              35
+            ]
+          ]
+        }
+      ],
+      "note": "Cut two 780 x 70 mm ties, seam to waistband ends, fold lengthwise to 35 mm finished strap, and topstitch."
     }
   ],
   "seams": [
@@ -448,13 +446,13 @@
     {
       "id": "tie_R",
       "a": "waist_tie.R/attach",
-      "b": "waistband/end_R_tie",
+      "b": "waistband/end_R",
       "reverse": true
     },
     {
       "id": "tie_L",
       "a": "waist_tie.L/attach",
-      "b": "waistband/end_L_tie",
+      "b": "waistband/end_L",
       "reverse": true
     }
   ]

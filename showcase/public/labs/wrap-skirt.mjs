@@ -23,11 +23,11 @@ export function evaluateWrapSetting(exhibit, { formId, posture = "rest", easeMm 
   if (!poseData) throw new Error(`Missing ${posture} pose slice for ${formId}`);
 
   const flat = exhibit.flat_geometry;
-  const totalWaistMm = flat.total_waist_sweep_mm; // 1020 mm
-  const hipSweepMm = flat.hip_sweep_180mm_below_waist_mm; // 1176 mm
-  const lapSweepMm = flat.lap_sweep_310mm_below_waist_mm; // 1289 mm
-  const tieLenMm = flat.tie_each_length_mm; // 780 mm
-  const baseSlotMm = flat.slot_station_from_left_end_mm; // 690 mm (at right side seam)
+  const totalWaistMm = flat.total_waist_sweep_mm;
+  const hipSweepMm = flat.hip_sweep_180mm_below_waist_mm;
+  const lapSweepMm = flat.lap_sweep_310mm_below_waist_mm;
+  const tieLenMm = flat.tie_each_length_mm;
+  const baseSlotMm = flat.slot_station_from_left_end_mm;
 
   // Check requested tie pass-through placement against the flat 1020 mm waistband length.
   const requestedSlotMm = baseSlotMm + Number(slotShiftMm);
@@ -42,11 +42,11 @@ export function evaluateWrapSetting(exhibit, { formId, posture = "rest", easeMm 
   const overlapHalfMm = Number((waistOverlapMm / 2).toFixed(1));
 
   // Neutral vs Seated horizontal Anny slice perimeter comparison at hip (-180 mm) and lap (-310 mm).
+  // Loosening the waist tie by +easeMm shifts the two front wrap edges apart by easeMm down the skirt opening.
   const hipSlicePerimMm = poseData.sections.hip.perimeter_mm;
   const lapSlicePerimMm = poseData.sections.lap.perimeter_mm;
-  // When seated, legs project forward so lap perimeter grows dramatically while fixed skirt sweep stays 1289 mm.
-  const hipOverlapMm = Number((hipSweepMm - hipSlicePerimMm - Number(easeMm) * 0.5).toFixed(1));
-  const lapOverlapMm = Number((lapSweepMm - lapSlicePerimMm).toFixed(1));
+  const hipOverlapMm = Number((hipSweepMm - hipSlicePerimMm - Number(easeMm)).toFixed(1));
+  const lapOverlapMm = Number((lapSweepMm - lapSlicePerimMm - Number(easeMm)).toFixed(1));
 
   // Tie reach check against flat 780 mm tie straps:
   // Outer tie runs from right wrap tip around the front/left side to knot at left side (~half waist minus overlap margin).
