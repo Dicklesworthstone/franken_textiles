@@ -644,7 +644,27 @@ pub(super) fn refused_stills(
     let dir = out.join("refused");
     let slots = piece_slots(&state.mesh.instances);
     let n = state.positions.len();
-    let pieces = piece_colours(&state.mesh, &slots, &vec![0.0; n], &vec![false; n]);
+    // A full-display refusal names its cloth by triangle index, which tells a reader nothing: mark that
+    // cloth in the pictures and say whose it is.
+    let named = if refusal.code == RefusalCode::IntersectingTrajectory {
+        named_cloth_triangles(&refusal.message, state.mesh.faces.len())
+    } else {
+        Vec::new()
+    };
+    let mut marked = vec![false; n];
+    for &triangle in &named {
+        for vertex in state.mesh.faces[triangle] {
+            marked[vertex] = true;
+        }
+    }
+    let named_in = (!named.is_empty()).then(|| {
+        format!(
+            "the cloth triangle{} the refusal names, in {}",
+            if named.len() == 1 { "" } else { "s" },
+            triangle_instances(&state.mesh, &named).join(" and ")
+        )
+    });
+    let pieces = piece_colours(&state.mesh, &slots, &vec![0.0; n], &marked);
     let (strain, summaries) = start_strain(&state.mesh, &state.positions);
     match write_stage(
         &dir,
@@ -669,10 +689,14 @@ pub(super) fn refused_stills(
                 format!(
                     "Look at {}/still_*.png: the cloth after {} accepted {} step(s), the state this refusal \
                      is about. It is not a drape or a fit; still_strain_* shows edge strain from blue (15 % \
-                     short) through white to red (15 % stretched).",
+                     short) through white to red (15 % stretched).{}",
                     dir.display(),
                     state.accepted_steps,
-                    state.phase
+                    state.phase,
+                    named_in.as_ref().map_or(String::new(), |named_in| format!(
+                        " Yellow marks {named_in}; the check stops at the first crossing it finds, so \
+                         there can be others."
+                    ))
                 ),
             );
         }
@@ -682,8 +706,13 @@ pub(super) fn refused_stills(
             0,
             format!(
                 "The pictures of the state this refusal is about (the cloth after {} accepted {} step(s)) \
-                 could not be written: {}.",
-                state.accepted_steps, state.phase, error.message
+                 could not be written: {}.{}",
+                state.accepted_steps,
+                state.phase,
+                error.message,
+                named_in.as_ref().map_or(String::new(), |named_in| format!(
+                    " They would have marked {named_in}."
+                ))
             ),
         ),
     }
@@ -775,6 +804,56 @@ fn start_condition(
     }
     text.push_str(" No solver budget changes the start.");
     Some(text)
+}
+
+/// The cloth triangles a full-display refusal names, as indices into the garment's faces: its message is
+/// "... cloth triangle A crosses displayed body triangle B" or "... cloth triangle A crosses cloth triangle
+/// B" (`ftx_drape::animation::ReplayContact::check`, whose `faces` are the garment's). Empty for any other
+/// message, and an index outside this garment is dropped. That check stops at its first crossing, so these
+/// are one place where cloth crosses, not every place.
+fn named_cloth_triangles(message: &str, faces: usize) -> Vec<usize> {
+    const KEY: &str = "cloth triangle ";
+    let mut found = Vec::new();
+    let mut rest = message;
+    while let Some(at) = rest.find(KEY) {
+        rest = &rest[at + KEY.len()..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if let Ok(triangle) = rest[..digits].parse::<usize>()
+            && triangle < faces
+            && !found.contains(&triangle)
+        {
+            found.push(triangle);
+        }
+    }
+    found
+}
+
+/// The piece instances that own `triangles`, in their order and without repeats: what a reader can act on
+/// where a refusal gives only a triangle index.
+fn triangle_instances<'a>(mesh: &'a GarmentMesh, triangles: &[usize]) -> Vec<&'a str> {
+    let mut names: Vec<&str> = Vec::new();
+    for &triangle in triangles {
+        let name = mesh.instances[mesh.owner[mesh.faces[triangle][0]]].as_str();
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// Adds to each crossing stage of a [`display_contact_report`] the piece instances that own the cloth
+/// triangles its message names, as `cloth_instances`.
+fn with_crossing_pieces(mut contact: Value, mesh: &GarmentMesh) -> Value {
+    for stage in ["wrap", "start"] {
+        let named = contact[stage]["refusal"]["message"]
+            .as_str()
+            .map(|message| named_cloth_triangles(message, mesh.faces.len()))
+            .unwrap_or_default();
+        if !named.is_empty() {
+            contact[stage]["cloth_instances"] = json!(triangle_instances(mesh, &named));
+        }
+    }
+    contact
 }
 
 /// The instances of a start that are tight, as its reader needs them named: the instance, the share of
@@ -1039,7 +1118,10 @@ fn stages(
         "wrap": {"vertices_inside_body": inside(&wrap_depth)},
         "body_surface": body_surface,
         "cloth_contact": cloth_contact,
-        "display_contact": display_contact_report(full, &mesh.faces, &wrapped, &start.relaxed),
+        "display_contact": with_crossing_pieces(
+            display_contact_report(full, &mesh.faces, &wrapped, &start.relaxed),
+            &mesh,
+        ),
         "body": body_report(frames),
         "views": {
             "wrap": "pieces on their cylinders; still_front/side/back/three_quarter coloured by piece, still_strain_* by the distance each seam vertex travels to its partner (green 0 mm to red 150 mm, grey unsewn)",
@@ -1169,7 +1251,20 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     for stage in ["wrap", "start"] {
         let check = &report["display_contact"][stage];
         if let Some(message) = check["refusal"]["message"].as_str() {
-            text.push_str(&format!("  FULL DISPLAY CROSSING in {stage}: {message}\n"));
+            let pieces: Vec<&str> = check["cloth_instances"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            let pieces = if pieces.is_empty() {
+                String::new()
+            } else {
+                format!(" (cloth of {})", pieces.join(" and "))
+            };
+            text.push_str(&format!(
+                "  FULL DISPLAY CROSSING in {stage}: {message}{pieces}\n"
+            ));
         } else if let Some(message) = check["unavailable"]["message"].as_str() {
             text.push_str(&format!(
                 "  full display check unavailable in {stage}: {message}\n"
@@ -1249,7 +1344,8 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cloth_crossings, deepest_mm, mean_strain, piece_slots, slot_colour, start_condition,
+        cloth_crossings, deepest_mm, mean_strain, named_cloth_triangles, piece_slots, slot_colour,
+        start_condition,
     };
     use ftx_core::Vec3;
 
@@ -1471,6 +1567,77 @@ mod tests {
                 file.display()
             );
         }
+
+        // A full-display refusal names its cloth by triangle index. The pictures mark that triangle and
+        // the first repair says whose it is, so a reader need not know the mesh.
+        let crossing_message =
+            "physical frame 87: cloth triangle 1 crosses displayed body triangle 0";
+        let crossing_out = out.join("crossing");
+        std::fs::create_dir_all(&crossing_out).unwrap();
+        let crossing = super::refused_stills(
+            Refusal::new(RefusalCode::IntersectingTrajectory, crossing_message)
+                .repair("move the hand or foot away from the garment"),
+            Some(&state),
+            &crossing_out,
+            body,
+            size,
+        );
+        assert_eq!(crossing.repairs.len(), 2, "{:?}", crossing.repairs);
+        assert!(
+            crossing.repairs[0].ends_with(
+                " Yellow marks the cloth triangle the refusal names, in panel; the check stops at the \
+                 first crossing it finds, so there can be others."
+            ),
+            "{}",
+            crossing.repairs[0]
+        );
+        let yellow = |file: &std::path::Path| -> Vec<usize> {
+            std::fs::read_to_string(file)
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with("v "))
+                .enumerate()
+                .filter(|(_, line)| line.ends_with(" 1 0.86 0"))
+                .map(|(vertex, _)| vertex)
+                .collect()
+        };
+        let mut named = state.mesh.faces[1].to_vec();
+        named.sort_unstable();
+        assert_eq!(yellow(&crossing_out.join("refused/garment.obj")), named);
+        // The ordinary refusal above marked nothing.
+        assert!(yellow(&out.join("refused/garment.obj")).is_empty());
+        // With nowhere to write, the piece is still named.
+        let unwritten = super::refused_stills(
+            Refusal::new(RefusalCode::IntersectingTrajectory, crossing_message),
+            Some(&state),
+            &crossing_out,
+            body,
+            size,
+        );
+        assert!(
+            unwritten.repairs[0].ends_with(
+                " They would have marked the cloth triangle the refusal names, in panel."
+            ),
+            "{}",
+            unwritten.repairs[0]
+        );
+        // `ftx place` puts the same owner beside its own display check, per stage.
+        let contact = super::with_crossing_pieces(
+            json!({
+                "start": {"crossing_free": false, "refusal": {"message": crossing_message}},
+                "wrap": {"crossing_free": true},
+            }),
+            &state.mesh,
+        );
+        assert_eq!(contact["start"]["cloth_instances"], json!(["panel"]));
+        assert!(contact["wrap"].get("cloth_instances").is_none());
+        assert_eq!(
+            super::with_crossing_pieces(
+                json!({"unavailable": {"message": "bad mesh"}}),
+                &state.mesh
+            ),
+            json!({"unavailable": {"message": "bad mesh"}})
+        );
 
         // Nothing to show: the refusal comes back exactly as it was.
         assert_eq!(
@@ -1892,6 +2059,26 @@ mod tests {
         assert_eq!(slots, [(0, false), (0, true), (1, false), (2, false)]);
         let (right, left) = (slot_colour(slots[0]), slot_colour(slots[1]));
         assert!(left.iter().zip(right).all(|(l, r)| *l > r));
+    }
+
+    #[test]
+    fn a_crossing_refusal_names_its_cloth_triangles() {
+        let body = "physical frame 87: cloth triangle 7867 crosses displayed body triangle 4360";
+        assert_eq!(named_cloth_triangles(body, 8000), [7867]);
+        // An index outside this garment names nothing here, so nothing is marked.
+        assert!(named_cloth_triangles(body, 7867).is_empty());
+        let cloth = "physical frame 69: cloth triangle 45 crosses cloth triangle 11649";
+        assert_eq!(named_cloth_triangles(cloth, 12000), [45, 11649]);
+        assert_eq!(named_cloth_triangles(cloth, 100), [45]);
+        // One triangle named twice is one triangle; any other message names none.
+        assert_eq!(
+            named_cloth_triangles("cloth triangle 3 crosses cloth triangle 3", 9),
+            [3]
+        );
+        assert!(
+            named_cloth_triangles("Newton did not converge after 300 iterations", 9).is_empty()
+        );
+        assert!(named_cloth_triangles("cloth triangle crosses the body", 9).is_empty());
     }
 
     #[test]

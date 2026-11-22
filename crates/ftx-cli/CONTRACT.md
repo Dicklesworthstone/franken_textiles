@@ -324,7 +324,11 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   refusal leaves `DIR` empty. Every refusal picture is `--res WxH` pixels (default 960x540, the limits of
   `ftx render`); `ftx round --stills --res` hands the drape its own size, so a pixel names the same place
   in a refused round's pictures as in a completed round's stills, and `refused_pose.width`/`height` in the
-  map beside them say that size. When the refused state is the start itself (no sewing step accepted),
+  map beside them say that size. A refusal for cloth crossing the displayed body or other cloth
+  (`intersecting_trajectory`) names its cloth only by triangle index, so its pictures paint that triangle
+  yellow and the first repair names the piece instance or instances that own it; the check stops at its
+  first crossing, so one place is marked, not every place (unit-tested; not yet seen from a built binary).
+  When the refused state is the start itself (no sewing step accepted),
   the second repair says what the run knows about that start, because no solver budget changes it: that
   it is an earlier relaxation checkpoint, with both iteration counts, when the fully relaxed start was not
   admitted for cloth contact (the progress line says the same); and each instance at least 2 % of whose
@@ -486,7 +490,9 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   the actual wrap, including tilted mirror pairs. The separately reported body frames remain
   the original anatomical reference, not the adjusted cloth frame. `display_contact` checks
   the wrap and fully relaxed start against the full displayed body and the cloth itself with
-  the replay audit's f32 rounding and proper-crossing rule. A malformed mesh yields an
+  the replay audit's f32 rounding and proper-crossing rule. A crossing stage also carries
+  `cloth_instances`, the piece instances that own the cloth triangles its message names, and the
+  `FULL DISPLAY CROSSING` line prints them. A malformed mesh yields an
   `unavailable` result, never a clear verdict. This preview does not check thickness or later
   dynamics, and does not replace the contact-admitted checkpoint selected by a drape.
 - `ftx alter OP PATTERN --out OUT [...]` with OP `slash-spread` (`--piece --axis x|y --at --add`), `move`
