@@ -358,9 +358,13 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   not the sleeves, so the instance list is not to be trusted on a mesh finer than the 12 mm it was
   measured on. The second could not write its pictures and came back with no diagnosis, which is what the
   sentence before this paragraph now prevents. A later build printed the checkpoint warning on the same
-  sleeve at 12 mm, where the list named both sleeves (3 and 3.3 %, at their cuff edges). Still not
-  printed by any built binary: the capped-start sentence of a drape and the unwritable-pictures repair;
-  both are unit-tested. `ftx place` applies the same measure to the start it draws, prints such instances as
+  sleeve at 12 mm, where the list named both sleeves (3 and 3.3 %, at their cuff edges). Since
+  `7b4450e5` the diagnosis is also given for a start rejected at cloth contact admission (`phase`
+  `start`): a build of `47790278` printed it for the 385 mm sleeve with `--hands knuckle` (sleeve.R,
+  5.1 %, edge `under_f`) and for a 361 mm sleeve with `--hands full` (sleeve.R 2.3 % and sleeve.L 6.8 %,
+  edge `hem`), figures that match a count of the saturated vertices in those runs' own strain files.
+  Still not printed by any built binary: the capped-start sentence of a drape and the
+  unwritable-pictures repair; both are unit-tested. `ftx place` applies the same measure to the start it draws, prints such instances as
   `TIGHT START` and records `stretched_past_ramp_pct` and `stretched_nearest_edge` in each instance's
   `start_edge_strain`. It draws the fully relaxed start, so it does not flag a garment whose fully relaxed
   start is loose but is not admitted for cloth contact: there only the drape's refusal names the stretched

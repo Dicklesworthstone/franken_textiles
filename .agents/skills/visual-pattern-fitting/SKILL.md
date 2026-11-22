@@ -150,9 +150,11 @@ crossings in both archived wrist-collider runs at frame 87. A fresh 335 mm run w
 `--hands knuckle` passed the flat check and all 49 recorded physical frames. It has its own
 posed body file. Use its still to assess the simulated cuff. The 385 mm cut remains unresolved:
 its cuff is 170 mm round and ends over the open hand, which is 174 to 180 mm round at the thumb
-and knuckles, so with `--hands knuckle` its refusal names both sleeves as stretched at the cuff
-end (nearest edges `hem` and `under_f`) and the start as a fallback checkpoint. Shortening the
-sleeve, as above, is the repair.
+and knuckles. With `--hands knuckle` it is refused at its start (`intersecting_start`, cloth
+crossing cloth). The pictures under `sim/refused/` are the untangled start that was rejected, with
+the crossing cloth marked yellow at the right cuff, and the second repair names `sleeve.R` as
+stretched there (5.1 % of it, nearest its edge `under_f`). Shortening the sleeve, as above, is
+the repair.
 
 `--hands full` keeps the whole hand in the collider, so the collider and the displayed hand are
 one surface. The 335 mm sleeve drapes with it as it does with `knuckle`. It does not rescue the
