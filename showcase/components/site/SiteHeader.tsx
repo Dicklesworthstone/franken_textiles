@@ -96,7 +96,10 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
       </nav>}
       <div className="wrap ft-sheet-body">
         <section aria-labelledby="sheet-exhibits"><h2 id="sheet-exhibits" className="mono">The exhibition</h2>
-          <ul>{exhibits.map(item => <li key={item.href}><a href={item.href} aria-current={mark(item.href, true)}><strong>{item.label}</strong><small>{item.note}</small></a></li>)}</ul>
+          {/* Each still is fetched only once the sheet is shown: a closed dialog is not rendered. */}
+          <ul>{exhibits.map(item => <li key={item.href}><a href={item.href} aria-current={mark(item.href, true)}>
+            {item.thumb && <img src={`/media/index/${item.thumb}.webp`} alt="" width={330} height={220} loading="lazy" decoding="async"/>}
+            <strong>{item.label}</strong><small>{item.note}</small></a></li>)}</ul>
         </section>
         <section aria-labelledby="sheet-tools"><h2 id="sheet-tools" className="mono">Workbenches · run on your device</h2>
           <ul>{workbenches.map(item => <li key={item.href}><a href={item.href}><strong>{item.label}</strong><small>{item.note}</small></a></li>)}</ul>

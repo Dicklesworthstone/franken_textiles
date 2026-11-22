@@ -441,6 +441,29 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 /* Where the rail is drawn it already does this job. */
 @media(min-width:1280px) and (hover:hover){.ft-sheet-here{display:none}}
 
+/* ---------- the index, with a still for every exhibit ----------
+   Narrow: the list keeps its notes and gains a thumbnail at the left of each entry. */
+.ft-sheet-body>section:first-child li a{grid-template-columns:84px minmax(0,1fr);column-gap:14px}
+.ft-sheet-body>section:first-child li a>img{display:block;grid-column:1;grid-row:1/span 3;align-self:start;width:84px;height:auto;aspect-ratio:3/2;object-fit:cover;margin-top:3px;
+  border:1px solid #3b4a52;border-radius:3px;background:#17252c;transition:filter .25s,transform .4s var(--ease-out)}
+.ft-sheet-body>section:first-child li a::before,.ft-sheet-body>section:first-child li a>strong,.ft-sheet-body>section:first-child li a>small{grid-column:2}
+.ft-sheet li a[aria-current]>img{outline:2px solid var(--peach);outline-offset:2px}
+.ft-sheet li a:hover>img{filter:brightness(1.1)}
+@media(max-width:1080px){.ft-sheet-body>section:first-child li strong{font-size:25px}}
+@media(min-width:1081px){
+  /* Wide: a contact sheet. Each picture carries its number and name; the one-line note is kept for screen
+     readers and shown in the list on narrower screens. */
+  .ft-sheet-body>section:first-child ul{columns:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:20px 14px;margin-top:10px}
+  .ft-sheet-body>section:first-child li a{position:relative;grid-template-columns:minmax(0,1fr);gap:0;padding:0;border:0}
+  .ft-sheet-body>section:first-child li a>img{grid-column:1;grid-row:1;width:100%;margin:0 0 8px}
+  .ft-sheet-body>section:first-child li a::before{grid-column:1;grid-row:2}
+  .ft-sheet-body>section:first-child li a>strong{grid-column:1;grid-row:3;font-size:19px;line-height:1.12;letter-spacing:-.02em}
+  .ft-sheet-body>section:first-child li a>small{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .ft-sheet-body>section:first-child li a:hover{padding-left:0}
+  .ft-sheet-body>section:first-child li a:hover>img{transform:translateY(-3px)}
+}
+@media(prefers-reduced-motion:reduce){.ft-sheet li a>img{transition:none}.ft-sheet-body>section:first-child li a:hover>img{transform:none}}
+
 /* ---------- footer: the exhibition in columns ---------- */
 .ft-foot-nav{font-size:15px}
 .ft-foot-index ul{display:block;columns:2;column-gap:clamp(18px,2.4vw,36px)}

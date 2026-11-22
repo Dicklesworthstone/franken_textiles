@@ -23,7 +23,7 @@ export const captures = [
   ["wrap-skirt", "/studies/wrap-skirt/", ".ws-svg", 1, "centre", true],
   ["tiling", "/studies/tiling/", ".tf-svg", .78, "centre", true],
   ["sewing", "/studies/sewing/", ".so-flat-svg", 1, "centre", true],
-  ["drape-room", "/sections/studies/", ".dr-canvas canvas", 1, "centre", false],
+  ["drape-room", "/sections/studies/", ".dr-canvas canvas", .8, "centre", false],
   ["redraft", "/wardrobe/sundress/redraft/", ".sr-svg", 1, "centre", false],
   ["embroidery", "/wardrobe/hussar/embroidery/", "main canvas", 1, "centre", false],
   ["tracing", "/sections/tracing/", "main figure", 1, "centre", false],
