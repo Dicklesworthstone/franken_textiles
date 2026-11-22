@@ -244,16 +244,19 @@ impl Heap {
 /// the left end of a wide rectangle's plateau and the top end of a tall one's, like GEOS).
 fn convex_small_centre(ring: &[Vec2]) -> Option<Vec2> {
     let n = ring.len();
-    if !(3..=4).contains(&n) {
+    if !(3..=4).contains(&n) || ring.iter().any(|p| !p.is_finite()) {
         return None;
     }
     let area = crate::polyline::signed_area(ring);
+    if !area.is_finite() || area == 0.0 {
+        return None;
+    }
     let sgn = if area > 0.0 { 1.0 } else { -1.0 };
     let turns = (0..n).map(|i| {
         let (a, b, c) = (ring[i], ring[(i + 1) % n], ring[(i + 2) % n]);
         sgn * ((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x))
     });
-    if turns.clone().any(|t| t <= 0.0) {
+    if turns.clone().any(|t| !t.is_finite() || t <= 0.0) {
         return None;
     }
     // inward unit normal and offset of each edge line: n·p ≥ d inside
@@ -262,10 +265,14 @@ fn convex_small_centre(ring: &[Vec2]) -> Option<Vec2> {
             let (a, b) = (ring[i], ring[(i + 1) % n]);
             let d = b - a;
             let len = (d.x * d.x + d.y * d.y).sqrt();
+            if !len.is_finite() || len <= 0.0 {
+                return None;
+            }
             let nrm = Vec2::new(-d.y / len * sgn, d.x / len * sgn);
-            (nrm, nrm.x * a.x + nrm.y * a.y)
+            let off = nrm.x * a.x + nrm.y * a.y;
+            (nrm.is_finite() && off.is_finite()).then_some((nrm, off))
         })
-        .collect();
+        .collect::<Option<Vec<_>>>()?;
     let mut best: Option<(f64, Vec2)> = None;
     for i in 0..n {
         for j in i + 1..n {
@@ -279,7 +286,7 @@ fn convex_small_centre(ring: &[Vec2]) -> Option<Vec2> {
                 };
                 let m = [[ni.x, ni.y, -1.0], [nj.x, nj.y, -1.0], [nk.x, nk.y, -1.0]];
                 let det = det3(m);
-                if det.abs() < 1e-12 {
+                if !det.is_finite() || det.abs() < 1e-12 {
                     continue;
                 }
                 let rhs = [di, dj, dk];
@@ -291,14 +298,14 @@ fn convex_small_centre(ring: &[Vec2]) -> Option<Vec2> {
                     det3(mm) / det
                 };
                 let (cx, cy, r) = (col(0), col(1), col(2));
-                if r <= 0.0 {
+                if !cx.is_finite() || !cy.is_finite() || !r.is_finite() || r <= 0.0 {
                     continue;
                 }
                 let tol = 1e-9 * r.max(1.0);
-                if lines
-                    .iter()
-                    .any(|&(nm, dm)| nm.x * cx + nm.y * cy - dm < r - tol)
-                {
+                if lines.iter().any(|&(nm, dm)| {
+                    let d = nm.x * cx + nm.y * cy - dm;
+                    !d.is_finite() || d < r - tol
+                }) {
                     continue;
                 }
                 if best.is_none_or(|(br, _)| r >= br - tol) {
@@ -314,6 +321,9 @@ fn convex_small_centre(ring: &[Vec2]) -> Option<Vec2> {
 /// `MaximumInscribedCircle::getCenter`; exact for a convex triangle or quadrilateral).
 #[must_use]
 pub fn pole_of_inaccessibility(rings: Rings, tolerance: f64) -> Vec2 {
+    if rings.iter().any(|r| r.iter().any(|p| !p.is_finite())) {
+        return Vec2::ZERO;
+    }
     if rings.len() == 1
         && let Some(c) = convex_small_centre(rings[0])
     {
@@ -382,5 +392,20 @@ mod tests {
         // Extreme diameter/tolerance ratio overflowing f64 must not overflow max_iter.
         let p = pole_of_inaccessibility(&[&l_shape], 1e-320);
         assert!(p.is_finite());
+
+        // Non-finite vertices in 3- or 4-vertex rings must not leak NaN through convex_small_centre.
+        let nan_quad = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(f64::NAN, 10.0),
+        ];
+        assert_eq!(pole_of_inaccessibility(&[&nan_quad], 1.0), Vec2::ZERO);
+        let inf_tri = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(f64::INFINITY, 0.0),
+            Vec2::new(0.0, 10.0),
+        ];
+        assert_eq!(pole_of_inaccessibility(&[&inf_tri], 1.0), Vec2::ZERO);
     }
 }
