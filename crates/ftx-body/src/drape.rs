@@ -99,6 +99,56 @@ impl ArmPose {
     }
 }
 
+/// Authored rotations of the two thumb roots in their source bones' rest frames.
+///
+/// Each vector is an axis multiplied by an angle in radians, with magnitude at most π.
+/// These controls move the existing `finger1-1.L/R` joints and their descendants; they neither
+/// trim the hand nor establish a measured or anatomically qualified hand pose.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThumbPose {
+    /// Left thumb's source-local rotation vector, in radians.
+    pub left_rotation_vector_rad: [f64; 3],
+    /// Right thumb's source-local rotation vector, in radians.
+    pub right_rotation_vector_rad: [f64; 3],
+}
+
+impl ThumbPose {
+    /// Check both source-local vectors before evaluating a model.
+    ///
+    /// # Errors
+    /// Non-finite components or a vector whose magnitude exceeds π radians.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        checked_thumb_rotation("left", self.left_rotation_vector_rad)?;
+        checked_thumb_rotation("right", self.right_rotation_vector_rad)?;
+        Ok(())
+    }
+}
+
+fn checked_thumb_rotation(side: &str, values: [f64; 3]) -> Result<(Vec3, f64), Refusal> {
+    if values.iter().any(|v| !v.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            format!("{side} thumb rotation vector must contain only finite radians"),
+        ));
+    }
+    // Scaling avoids overflowing large finite inputs or losing nonzero subnormal rotations.
+    let scale = values.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+    let angle = if scale == 0.0 {
+        0.0
+    } else {
+        let [x, y, z] = values.map(|v| v / scale);
+        scale * (x * x + y * y + z * z).sqrt()
+    };
+    if angle > std::f64::consts::PI {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("{side} thumb rotation magnitude {angle} exceeds pi radians"),
+        ));
+    }
+    Ok((Vec3::new(values[0], values[1], values[2]), angle))
+}
+
 /// A drape pose.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pose {
@@ -313,6 +363,167 @@ pub fn joint_rotations(
     Ok(out)
 }
 
+#[derive(Clone, Copy)]
+struct ThumbRotation {
+    bone: usize,
+    vector: Vec3,
+    angle: f64,
+}
+
+fn thumb_local_rotations(
+    model: &AnnyModel,
+    rest: &RestBody,
+    thumbs: &ThumbPose,
+) -> Result<Vec<ThumbRotation>, Refusal> {
+    let rotations = [
+        (
+            "finger1-1.L",
+            checked_thumb_rotation("left", thumbs.left_rotation_vector_rad)?,
+        ),
+        (
+            "finger1-1.R",
+            checked_thumb_rotation("right", thumbs.right_rotation_vector_rad)?,
+        ),
+    ];
+    let count = model.data().header.counts.bones;
+    if rest.bone_frames.len() != count || model.data().header.labels.bones.len() != count {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "rest bone frames and model bone labels must match the model's bone count",
+        ));
+    }
+    if rest
+        .bone_frames
+        .iter()
+        .any(|f| !f.t.is_finite() || f.m.rows.iter().flatten().any(|v| !v.is_finite()))
+    {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "a rest bone frame holds a non-finite number",
+        ));
+    }
+    let mut out = Vec::with_capacity(2);
+    for (label, (vector, angle)) in rotations {
+        if angle != 0.0 {
+            out.push(ThumbRotation {
+                bone: bone(model, label)?,
+                vector,
+                angle,
+            });
+        }
+    }
+    Ok(out)
+}
+
+fn local_joint_vector(rest: &RestBody, joint: JointRotation, t: f64) -> Vec3 {
+    let axis = rest.bone_frames[joint.bone].m.transpose().mul_vec(joint.axis);
+    axis * (joint.angle * t)
+}
+
+/// The existing pose's joints followed by nonzero left/right thumb-root rotations.
+///
+/// Thumb axes are expressed in the rest pose's world frame for inspection. Use
+/// [`pose_rotation_vectors_with_thumbs`] for source-local vectors: the admitted rest frames
+/// have float32 roll roundoff, so transposing a reported axis is not an exact inverse.
+///
+/// # Errors
+/// As [`joint_rotations`] and [`ThumbPose::validate`]; malformed rest-frame dimensions,
+/// non-finite rest frames, missing requested thumb bones or a degenerate transformed axis.
+pub fn joint_rotations_with_thumbs(
+    model: &AnnyModel,
+    rest: &RestBody,
+    pose: &Pose,
+    thumbs: &ThumbPose,
+) -> Result<Vec<JointRotation>, Refusal> {
+    let thumbs = thumb_local_rotations(model, rest, thumbs)?;
+    let mut out = joint_rotations(model, rest, pose)?;
+    for thumb in thumbs {
+        let r = thumb.vector;
+        let local_axis = Vec3::new(r.x / thumb.angle, r.y / thumb.angle, r.z / thumb.angle);
+        let world_axis = rest.bone_frames[thumb.bone].m.mul_vec(local_axis);
+        let norm = world_axis.norm();
+        if !(norm.is_finite() && norm > 0.0) {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "a thumb's rest frame does not define a finite rotation axis",
+            ));
+        }
+        out.push(JointRotation {
+            bone: thumb.bone,
+            axis: world_axis / norm,
+            angle: thumb.angle,
+        });
+    }
+    Ok(out)
+}
+
+// None preserves an untouched identity delta, including its signed-zero representation.
+// Existing joints keep axis_local * (angle * t); authored thumb vectors scale directly in
+// their source-local frame. Neither route round-trips thumb vectors through R_restᵀ R_rest.
+fn source_pose_vectors_with_thumbs(
+    model: &AnnyModel,
+    rest: &RestBody,
+    pose: &Pose,
+    t: f64,
+    thumbs: &ThumbPose,
+) -> Result<Vec<Option<Vec3>>, Refusal> {
+    let thumbs = thumb_local_rotations(model, rest, thumbs)?;
+    let mut out = vec![None; rest.bone_frames.len()];
+    for joint in joint_rotations(model, rest, pose)? {
+        out[joint.bone] = Some(local_joint_vector(rest, joint, t));
+    }
+    for thumb in thumbs {
+        out[thumb.bone] = Some(thumb.vector * t);
+    }
+    Ok(out)
+}
+
+/// Full-pose source-local rotation vectors, one per bone; untouched bones contain zero.
+///
+/// The vectors can be retained as source coordinates for continuous pose interpolation.
+/// Thumb vectors are the authored values, without a world-axis round trip.
+///
+/// # Errors
+/// As [`joint_rotations`] and [`ThumbPose::validate`]; malformed rest-frame dimensions,
+/// non-finite rest frames or a missing requested thumb bone.
+pub fn pose_rotation_vectors_with_thumbs(
+    model: &AnnyModel,
+    rest: &RestBody,
+    pose: &Pose,
+    thumbs: &ThumbPose,
+) -> Result<Vec<Vec3>, Refusal> {
+    Ok(source_pose_vectors_with_thumbs(model, rest, pose, 1.0, thumbs)?
+        .into_iter()
+        .map(|v| v.unwrap_or(Vec3::ZERO))
+        .collect())
+}
+
+/// Local-bone deltas with authored thumb-root rotations, ramped from rest by `t`.
+///
+/// All-zero thumb controls preserve [`pose_deltas`] exactly. Other joints retain the same
+/// arithmetic and untouched bones retain identity; descendants follow ordinary forward kinematics.
+///
+/// # Errors
+/// As [`pose_rotation_vectors_with_thumbs`]; [`RefusalCode::OutOfRange`] for `t` outside 0–1.
+pub fn pose_deltas_with_thumbs(
+    model: &AnnyModel,
+    rest: &RestBody,
+    pose: &Pose,
+    t: f64,
+    thumbs: &ThumbPose,
+) -> Result<Vec<Affine>, Refusal> {
+    if !(0.0..=1.0).contains(&t) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("pose ramp fraction {t} is outside 0–1"),
+        ));
+    }
+    Ok(source_pose_vectors_with_thumbs(model, rest, pose, t, thumbs)?
+        .into_iter()
+        .map(|v| v.map_or(Affine::IDENTITY, |r| Affine::from_rotvec(r, Vec3::ZERO)))
+        .collect())
+}
+
 /// Local-bone deltas for [`AnnyModel::pose`]: `pose` reached a fraction `t` of the way from rest.
 ///
 /// # Errors
@@ -331,7 +542,7 @@ pub fn pose_deltas(
     }
     let mut deltas = vec![Affine::IDENTITY; rest.bone_frames.len()];
     for j in joint_rotations(model, rest, pose)? {
-        let r = rest.bone_frames[j.bone].m.transpose().mul_vec(j.axis) * (j.angle * t);
+        let r = local_joint_vector(rest, j, t);
         deltas[j.bone] = Affine::from_rotvec(r, Vec3::ZERO);
     }
     Ok(deltas)
@@ -1256,6 +1467,282 @@ pub fn body_pose_geometry_json_with_skinning(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A source-labelled arm rig with one vertex per bone. Thumb frames are rotated relative
+    /// to world axes; the children and unrelated index fingers expose FK/skin propagation.
+    fn thumb_fixture() -> (AnnyModel, RestBody) {
+        use crate::data::AnnyData;
+        use ftx_core::Mat3;
+
+        let labels = [
+            "root",
+            "upperarm01.L",
+            "upperarm02.L",
+            "lowerarm01.L",
+            "wrist.L",
+            "finger1-1.L",
+            "finger1-2.L",
+            "finger2-1.L",
+            "upperarm01.R",
+            "upperarm02.R",
+            "lowerarm01.R",
+            "wrist.R",
+            "finger1-1.R",
+            "finger1-2.R",
+            "finger2-1.R",
+        ];
+        let parents = [-1, 0, 1, 2, 3, 4, 5, 4, 0, 8, 9, 10, 11, 12, 11];
+        let n = labels.len();
+        let mut frames: Vec<Affine> = (0..n)
+            .map(|i| Affine {
+                m: Mat3::IDENTITY,
+                t: Vec3::new(i as f64 * 0.1, i as f64 * 0.02, 0.1),
+            })
+            .collect();
+        for i in [5, 6] {
+            frames[i].m = Mat3::from_rows([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+        }
+        for i in [12, 13] {
+            frames[i].m = Mat3::from_rows([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]]);
+        }
+        let heads: Vec<Vec3> = frames.iter().map(|f| f.t).collect();
+        let tails: Vec<Vec3> = frames.iter().map(|f| f.t + f.m.col(1)).collect();
+        let vertices: Vec<Vec3> = heads
+            .iter()
+            .map(|h| *h + Vec3::new(0.03, 0.05, 0.07))
+            .collect();
+        let header = serde_json::from_value(serde_json::json!({
+            "schema": "ftxbody/1", "model": "synthetic", "anny_version": "test",
+            "configuration": "thumb FK control", "licence": "synthetic", "package_sha256": {},
+            "counts": {
+                "vertices": n, "faces": 0, "bones": n, "blendshapes": 0,
+                "phenotype_blendshapes": 0, "local_changes": 0, "influences": 1
+            },
+            "phenotype": {
+                "features": [], "components": [], "anchors": {}, "exposed": [], "fixed_value": 0.5
+            },
+            "y_axis": [0.0, 1.0, 0.0],
+            "degenerate_rotation": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            "labels": {
+                "blendshapes": [], "bones": labels, "bone_parents": parents, "local_changes": []
+            },
+            "waist_loop_final": [], "arrays": {}
+        }))
+        .unwrap();
+        let model = AnnyModel::from_data(AnnyData {
+            header,
+            template_vertices: vertices.clone(),
+            faces: Vec::new(),
+            blendshape_row_ptr: vec![0],
+            blendshape_vertex: Vec::new(),
+            blendshape_delta: Vec::new(),
+            phenotype_mask: Vec::new(),
+            template_bone_heads: heads.clone(),
+            template_bone_tails: tails.clone(),
+            bone_heads_blendshapes: Vec::new(),
+            bone_tails_blendshapes: Vec::new(),
+            bone_rolls: vec![Mat3::IDENTITY; n],
+            vertex_bone_indices: (0..n as u32).collect(),
+            vertex_bone_weights: vec![1.0; n],
+            base_mesh_vertex_indices: (0..n as u32).collect(),
+        })
+        .unwrap();
+        let rest = RestBody {
+            vertices,
+            bone_heads: heads,
+            bone_tails: tails,
+            bone_frames: frames,
+        };
+        (model, rest)
+    }
+
+    fn assert_delta_bits(got: &[Affine], expected: &[Affine]) {
+        assert_eq!(got.len(), expected.len());
+        for (a, b) in got.iter().zip(expected) {
+            assert_eq!(
+                a.to_rows4().map(|row| row.map(f64::to_bits)),
+                b.to_rows4().map(|row| row.map(f64::to_bits))
+            );
+        }
+    }
+
+    #[test]
+    fn zero_thumb_controls_preserve_existing_pose_bits() {
+        let (model, rest) = thumb_fixture();
+        let thumbs = ThumbPose::default();
+        for pose in [Pose::rest(), Pose::a_pose(35.0), Pose::drape()] {
+            assert_eq!(
+                joint_rotations_with_thumbs(&model, &rest, &pose, &thumbs).unwrap(),
+                joint_rotations(&model, &rest, &pose).unwrap()
+            );
+            for t in [0.0, 0.37, 0.5, 1.0] {
+                assert_delta_bits(
+                    &pose_deltas_with_thumbs(&model, &rest, &pose, t, &thumbs).unwrap(),
+                    &pose_deltas(&model, &rest, &pose, t).unwrap(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn thumb_vectors_remain_source_local_through_world_reporting_and_ramps() {
+        let (model, mut rest) = thumb_fixture();
+        let thumbs = ThumbPose {
+            left_rotation_vector_rad: [0.4, -0.3, 0.2],
+            right_rotation_vector_rad: [-0.2, 0.1, -0.5],
+        };
+        let left = Vec3::new(0.4, -0.3, 0.2);
+        let right = Vec3::new(-0.2, 0.1, -0.5);
+        let joints = joint_rotations_with_thumbs(&model, &rest, &Pose::rest(), &thumbs).unwrap();
+        assert_eq!(joints.len(), 2);
+        assert_eq!((joints[0].bone, joints[1].bone), (5, 12));
+        assert!((joints[0].axis - Vec3::new(0.3, 0.4, 0.2).normalized()).norm() < 1e-15);
+        assert!((joints[1].axis - Vec3::new(-0.5, 0.1, 0.2).normalized()).norm() < 1e-15);
+
+        // The admitted Anny roll matrices are float32-derived, not exactly orthonormal.
+        // A world-axis round trip would change the authored values in this control.
+        rest.bone_frames[5].m.rows[0][1] += 1e-7;
+        let vectors =
+            pose_rotation_vectors_with_thumbs(&model, &rest, &Pose::drape(), &thumbs).unwrap();
+        assert_eq!(vectors[5], left);
+        assert_eq!(vectors[12], right);
+        for t in [0.0, 0.37, 0.5, 1.0] {
+            let mut expected = pose_deltas(&model, &rest, &Pose::drape(), t).unwrap();
+            expected[5] = Affine::from_rotvec(left * t, Vec3::ZERO);
+            expected[12] = Affine::from_rotvec(right * t, Vec3::ZERO);
+            assert_delta_bits(
+                &pose_deltas_with_thumbs(&model, &rest, &Pose::drape(), t, &thumbs).unwrap(),
+                &expected,
+            );
+        }
+    }
+
+    #[test]
+    fn thumb_rotation_moves_descendants_without_removing_or_moving_other_skin() {
+        let (model, rest) = thumb_fixture();
+        let thumbs = ThumbPose {
+            left_rotation_vector_rad: [0.0, 0.0, std::f64::consts::FRAC_PI_2],
+            ..ThumbPose::default()
+        };
+        let deltas = pose_deltas_with_thumbs(&model, &rest, &Pose::rest(), 1.0, &thumbs).unwrap();
+        let pivot = rest.bone_frames[5].t;
+        let root = rest.bone_frames[0].t;
+        let turn = Affine::from_rotvec(
+            Vec3::new(0.0, 0.0, std::f64::consts::FRAC_PI_2),
+            Vec3::ZERO,
+        );
+        for mode in [
+            crate::SkinningMode::LinearBlend,
+            crate::SkinningMode::DualQuaternion,
+        ] {
+            let posed = model.pose_with_skinning(&rest, &deltas, mode).unwrap();
+            assert_eq!(posed.vertices.len(), rest.vertices.len());
+            for (i, (&got, &source)) in posed.vertices.iter().zip(&rest.vertices).enumerate() {
+                let expected = if i == 5 || i == 6 {
+                    pivot + turn.apply(source - pivot) - root
+                } else {
+                    source - root
+                };
+                assert!((got - expected).norm() < 1e-14, "{mode:?} vertex {i}");
+            }
+            let child_head = pivot + turn.apply(rest.bone_frames[6].t - pivot) - root;
+            assert!((posed.bone_poses[6].t - child_head).norm() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn thumb_controls_refuse_invalid_vectors_and_ramps() {
+        let (model, rest) = thumb_fixture();
+        for (value, code) in [
+            ([f64::NAN, 0.0, 0.0], RefusalCode::NonFinite),
+            ([0.0, f64::INFINITY, 0.0], RefusalCode::NonFinite),
+            ([0.0, 0.0, f64::NEG_INFINITY], RefusalCode::NonFinite),
+            (
+                [std::f64::consts::PI + 1e-12, 0.0, 0.0],
+                RefusalCode::OutOfRange,
+            ),
+            (
+                [std::f64::consts::PI, std::f64::consts::PI, 0.0],
+                RefusalCode::OutOfRange,
+            ),
+            ([f64::MAX; 3], RefusalCode::OutOfRange),
+        ] {
+            for left in [true, false] {
+                let mut thumbs = ThumbPose::default();
+                if left {
+                    thumbs.left_rotation_vector_rad = value;
+                } else {
+                    thumbs.right_rotation_vector_rad = value;
+                }
+                assert_eq!(thumbs.validate().unwrap_err().code, code);
+                assert_eq!(
+                    pose_deltas_with_thumbs(&model, &rest, &Pose::rest(), 0.0, &thumbs)
+                        .unwrap_err().code,
+                    code
+                );
+            }
+        }
+        let thumbs = ThumbPose {
+            left_rotation_vector_rad: [std::f64::consts::PI, 0.0, 0.0],
+            right_rotation_vector_rad: [f64::from_bits(1), 0.0, 0.0],
+        };
+        thumbs.validate().unwrap();
+        let vectors =
+            pose_rotation_vectors_with_thumbs(&model, &rest, &Pose::rest(), &thumbs).unwrap();
+        assert_eq!(vectors[12].x.to_bits(), 1);
+        for t in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                pose_deltas_with_thumbs(&model, &rest, &Pose::rest(), t, &thumbs).unwrap_err().code,
+                RefusalCode::OutOfRange
+            );
+        }
+        let json = serde_json::to_value(thumbs).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ThumbPose>(json.clone()).unwrap(),
+            thumbs
+        );
+        let mut unknown = json;
+        unknown["left_angle_deg"] = serde_json::json!(30.0);
+        assert!(serde_json::from_value::<ThumbPose>(unknown).is_err());
+        assert!(serde_json::from_str::<ThumbPose>("{}").is_err());
+    }
+
+    #[test]
+    fn thumb_pose_refuses_missing_bones_and_malformed_rest_frames() {
+        let (model, rest) = thumb_fixture();
+        let mut data = model.data().clone();
+        data.header.labels.bones[5] = "other.L".into();
+        let no_left_thumb = AnnyModel::from_data(data).unwrap();
+        let mut thumbs = ThumbPose::default();
+        assert_delta_bits(
+            &pose_deltas_with_thumbs(&no_left_thumb, &rest, &Pose::rest(), 1.0, &thumbs).unwrap(),
+            &pose_deltas(&no_left_thumb, &rest, &Pose::rest(), 1.0).unwrap(),
+        );
+        thumbs.left_rotation_vector_rad[0] = 0.2;
+        let missing = pose_deltas_with_thumbs(&no_left_thumb, &rest, &Pose::rest(), 1.0, &thumbs)
+            .unwrap_err();
+        assert_eq!(missing.code, RefusalCode::InvalidDocument);
+        for extra in [false, true] {
+            let mut malformed = rest.clone();
+            if extra {
+                malformed.bone_frames.push(Affine::IDENTITY);
+            } else {
+                malformed.bone_frames.pop();
+            }
+            assert_eq!(
+                pose_deltas_with_thumbs(&model, &malformed, &Pose::drape(), 1.0, &thumbs)
+                    .unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
+        }
+        let mut malformed = rest;
+        malformed.bone_frames[5].m.rows[0][0] = f64::NAN;
+        assert_eq!(
+            joint_rotations_with_thumbs(&model, &malformed, &Pose::rest(), &thumbs)
+                .unwrap_err().code,
+            RefusalCode::NonFinite
+        );
+    }
 
     /// A unit cube (outward) at `o` with side `s`, as 12 triangles.
     fn cube(o: Vec3, s: f64, base: u32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
