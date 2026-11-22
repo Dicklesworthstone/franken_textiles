@@ -46,9 +46,123 @@ test("PDF stream parser derives exact page counts, frame insets, 5 mm overlap, 1
   assert.equal(fez.printedTileCount, 4);
   assert.equal(fez.blankTileCount, 2);
 
+  // Verify every known-good exported tiled PDF decodes cleanly.
+  for (const [file, pages, printed, blank] of [
+    ["../public/patterns/bolero.pdf", 8, 7, 2],
+    ["../public/patterns/trousers.pdf", 13, 12, 0],
+    ["../public/patterns/fez.pdf", 5, 4, 2],
+    ["../public/patterns/hussar-blue.pdf", 86, 85, 5],
+    ["../public/patterns/hussar-yellow.pdf", 90, 89, 1],
+  ]) {
+    const parsed = await parseTiledPdf(await readFile(new URL(file, import.meta.url)));
+    assert.equal(parsed.totalPages, pages);
+    assert.equal(parsed.printedTileCount, printed);
+    assert.equal(parsed.blankTileCount, blank);
+  }
+
   // Fail closed on non-PDF or truncated PDF bytes (never fall back to hardcoded defaults).
   await assert.rejects(() => parseTiledPdf(new TextEncoder().encode("not a pdf")), /not a valid PDF/i);
   await assert.rejects(() => parseTiledPdf(new TextEncoder().encode("%PDF-1.4\n/Type /Page\n")), /cover \+ tile pages/i);
+});
+
+test("PDF stream parser rejects corrupt and truncated page streams through one error path with zero unhandled rejections", async () => {
+  const boleroBytes = new Uint8Array(
+    await readFile(new URL("../public/patterns/chart-zouave_bolero.pdf", import.meta.url)),
+  );
+  const boleroRaw = Buffer.from(boleroBytes).toString("latin1");
+
+  // Locate each stream payload in document order (page 1 = cover, page 2 = A1, page 3 = B1, ...).
+  const streamSpans = [];
+  for (const m of boleroRaw.matchAll(/<<\s*\/Length\s+(\d+)\s+\/Filter\s+\/FlateDecode\s*>>\nstream\n/g)) {
+    const start = m.index + m[0].length;
+    const len = Number(m[1]);
+    streamSpans.push({ dictStart: m.index, start, len, end: start + len });
+  }
+  assert.equal(streamSpans.length, 7);
+
+  const unhandled = [];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    // 1. Corrupt bytes inside page 3 (B1) deflate payload — must reject cleanly, never emit partial map.
+    const corruptPage3 = boleroBytes.slice();
+    const p3 = streamSpans[2];
+    for (let i = 0; i < 12; i++) corruptPage3[p3.start + Math.min(i + 4, p3.len - 1)] ^= 0xff;
+    await assert.rejects(() => parseTiledPdf(corruptPage3), /Damaged page 3 deflate stream/i);
+
+    // 2. Corrupt zlib header on cover page (page 1).
+    const corruptCover = boleroBytes.slice();
+    corruptCover[streamSpans[0].start] ^= 0xff;
+    corruptCover[streamSpans[0].start + 1] ^= 0xff;
+    await assert.rejects(() => parseTiledPdf(corruptCover), /Damaged page 1 deflate stream/i);
+
+    // 3. Corrupt Adler-32 checksum at the end of page 3 deflate payload.
+    const corruptAdler = boleroBytes.slice();
+    corruptAdler[p3.end - 1] ^= 0xff;
+    await assert.rejects(() => parseTiledPdf(corruptAdler), /Damaged page 3 deflate stream/i);
+
+    // 4. Truncated page 3 deflate payload WITH updated /Length (short valid-looking stream object, incomplete zlib).
+    const truncatedLen = Math.max(8, Math.floor(p3.len / 2));
+    const beforeDict = boleroRaw.slice(0, p3.dictStart);
+    const updatedHeader = `<< /Length ${truncatedLen} /Filter /FlateDecode >>\nstream\n`;
+    const truncatedPayload = boleroBytes.subarray(p3.start, p3.start + truncatedLen);
+    const afterPayload = boleroBytes.subarray(p3.end);
+    const truncatedStream = Buffer.concat([
+      Buffer.from(beforeDict + updatedHeader, "latin1"),
+      Buffer.from(truncatedPayload),
+      Buffer.from(afterPayload),
+    ]);
+    await assert.rejects(() => parseTiledPdf(truncatedStream), /Damaged page 3 deflate stream/i);
+
+    // 5. Truncated stream payload WITHOUT updating /Length (missing endstream at declared /Length).
+    const mismatchLen = Buffer.concat([
+      Buffer.from(boleroBytes.subarray(0, p3.start + truncatedLen)),
+      Buffer.from(boleroBytes.subarray(p3.end)),
+    ]);
+    await assert.rejects(() => parseTiledPdf(mismatchLen), /missing endstream at declared \/Length/i);
+
+    // 6. Truncated PDF file mid-stream (EOF before endstream) and mid-tail (missing %%EOF).
+    await assert.rejects(
+      () => parseTiledPdf(boleroBytes.subarray(0, p3.start + truncatedLen)),
+      /Truncated PDF stream/i,
+    );
+    const eofIdx = boleroRaw.lastIndexOf("%%EOF");
+    await assert.rejects(
+      () => parseTiledPdf(boleroBytes.subarray(0, eofIdx)),
+      /missing %%EOF/i,
+    );
+
+    // Allow any stray async writer rejections a tick to surface.
+    await new Promise(resolve => setTimeout(resolve, 25));
+    assert.deepEqual(unhandled, [], "corrupt/truncated stream rejection must leave zero unhandled rejections");
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("a damaged later PDF page refuses the preview with a single error", async () => {
+  const original = await readFile(new URL("../public/patterns/chart-zouave_bolero.pdf", import.meta.url));
+  const stream = [...original.toString("latin1").matchAll(/^<< \/Length \d+ \/Filter \/FlateDecode >>\nstream\n/gm)][2];
+  assert.ok(stream, "the native export must include a third page stream");
+  const start = stream.index + stream[0].length;
+  const damaged = Buffer.from(original);
+  damaged[start] = 0;
+  await assert.rejects(() => parseTiledPdf(damaged), /could not decode exported PDF page 3/i);
+  await assert.rejects(() => parseTiledPdf(original.subarray(0, start + 12)), /page 3.*truncated/i);
+
+  const page = await browser.newPage({ userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0" });
+  try {
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.route("**/patterns/chart-zouave_bolero.pdf", route =>
+      route.fulfill({ contentType: "application/pdf", body: damaged }));
+    await page.goto(new URL("/studies/tiling/", site).href, { waitUntil: "domcontentloaded" });
+    await page.getByRole("status").filter({ hasText: "Could not decode exported PDF page 3." }).waitFor();
+    assert.equal(await page.locator(".tf-svg").count(), 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
 });
 
 test("A4 tile assembly floor toggles alignment crosses, compares master & scale bar, serves exact PDF, and fits mobile", async () => {
@@ -189,6 +303,44 @@ test("the drafting studio assembles the current draft’s exact A4 PDF and maste
     assert.match(await floor.locator(".tf-master-overlay").textContent(), /1:1 MATCH/);
     await drafting.getByRole("button", { name: "Hide A4 tile preview" }).click();
     assert.equal(await page.locator(".tf-svg").count(), 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("TileFloorLab rejects a corrupted bolero page 3 stream in Chromium without rendering a partial map or throwing page errors", async () => {
+  const boleroBytes = new Uint8Array(
+    await readFile(new URL("../public/patterns/chart-zouave_bolero.pdf", import.meta.url)),
+  );
+  const boleroRaw = Buffer.from(boleroBytes).toString("latin1");
+  const streams = [...boleroRaw.matchAll(/<<\s*\/Length\s+(\d+)\s+\/Filter\s+\/FlateDecode\s*>>\nstream\n/g)];
+  assert.equal(streams.length, 7);
+  const p3Start = streams[2].index + streams[2][0].length;
+  const p3Len = Number(streams[2][1]);
+  const damaged = boleroBytes.slice();
+  for (let i = 0; i < 12; i++) damaged[p3Start + Math.min(i + 4, p3Len - 1)] ^= 0xff;
+
+  const page = await browser.newPage({
+    viewport: { width: 1120, height: 820 },
+    reducedMotion: "reduce",
+    userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
+  });
+  const pageErrors = [];
+  page.on("pageerror", err => pageErrors.push(err.message));
+  try {
+    await page.route("**/patterns/chart-zouave_bolero.pdf*", route =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/pdf",
+        body: Buffer.from(damaged),
+      }),
+    );
+    await page.goto(new URL("/studies/tiling/", site).href, { waitUntil: "domcontentloaded" });
+    await page.locator(".tf-status").filter({ hasText: /Damaged page 3 deflate stream/i }).waitFor({ timeout: 15000 });
+    assert.equal(await page.locator(".tf-svg").count(), 0, "must not render a partial cover map after page 3 fails");
+    assert.equal(await page.locator(".tf-tile").count(), 0);
+    assert.match(await page.locator(".tf-stage-head").innerText(), /could not be decoded/i);
+    assert.deepEqual(pageErrors, [], "damaged stream must not produce unhandled browser rejections");
   } finally {
     await page.close();
   }
