@@ -71,21 +71,27 @@ pub(crate) fn truthy(v: &Value) -> bool {
     }
 }
 
-/// Python `float(x)` of a JSON number or numeric string.
+/// Python `float(x)` of a JSON number or numeric string, refusing non-finite values.
 fn number(v: &PyJson) -> Result<f64, String> {
-    match v {
-        PyJson::Int(i) => Ok(*i as f64),
-        PyJson::UInt(i) => Ok(*i as f64),
-        PyJson::Float(f) => Ok(*f),
+    let value = match v {
+        PyJson::Int(i) => *i as f64,
+        PyJson::UInt(i) => *i as f64,
+        PyJson::Float(f) => *f,
         PyJson::Str(s) => s
             .trim()
             .parse::<f64>()
-            .map_err(|_| format!("could not convert string to float: {}", py::repr_str(s))),
-        PyJson::Bool(b) => Ok(f64::from(u8::from(*b))),
-        _ => Err(format!(
-            "float() argument must be a string or a real number, not {v:?}"
-        )),
+            .map_err(|_| format!("could not convert string to float: {}", py::repr_str(s)))?,
+        PyJson::Bool(b) => f64::from(u8::from(*b)),
+        _ => {
+            return Err(format!(
+                "float() argument must be a string or a real number, not {v:?}"
+            ));
+        }
+    };
+    if !value.is_finite() {
+        return Err(format!("non-finite number: {}", py_str(v)));
     }
+    Ok(value)
 }
 
 /// Python `str(x)` of a JSON scalar.
@@ -372,7 +378,7 @@ fn base_body_file(body: &PyJson, today: &str) -> Result<Value, String> {
             } else {
                 number(value)? * 10.0
             };
-            if v <= 0.0 {
+            if !v.is_finite() || v <= 0.0 {
                 return Err(format!("{name}: {} is not a measurement", py_str(value)));
             }
             let s = sigma(&name).filter(|&s| s != 0.0).unwrap_or(10.0);
@@ -792,6 +798,24 @@ mod tests {
             (2_500_000.0, "2.5e+06"),
         ] {
             assert_eq!(py_g(x), s);
+        }
+    }
+
+    #[test]
+    fn body_file_refuses_non_finite_numeric_strings() {
+        use super::{PyJson, body_file};
+        for raw in [
+            r#"{"mode":"tape","stature_cm":"NaN","tape":{}}"#,
+            r#"{"mode":"tape","stature_cm":92,"age_months":"NaN","tape":{}}"#,
+            r#"{"mode":"tape","stature_cm":92,"tape":{"chest":"NaN"}}"#,
+            r#"{"mode":"tape","stature_cm":92,"tape":{"chest":"Infinity"}}"#,
+        ] {
+            let body = PyJson::parse(raw).unwrap();
+            let err = body_file(&body, "2026-10-13").unwrap_err();
+            assert!(
+                err.contains("non-finite") || err.contains("not a measurement"),
+                "{raw} -> {err}"
+            );
         }
     }
 }
