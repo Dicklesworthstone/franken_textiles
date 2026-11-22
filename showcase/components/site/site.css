@@ -430,6 +430,16 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 /* Three columns of seven hold the whole catalogue on one screen. */
 @media(min-width:1280px){.ft-sheet-body>section:first-child ul{columns:3}}
 @media(prefers-reduced-motion:reduce){.ft-sheet li a,.ft-rail i,.primary,.primary .arrow{transition:none}.ft-sheet li a:hover{padding-left:0}}
+/* On the home page the sheet opens with that page's own sections, as a compact numbered list. */
+.ft-sheet-here{padding-top:24px}
+.ft-sheet-here ol{list-style:none;margin:8px 0 0;padding:0 0 18px;border-bottom:1px dashed #44535c;columns:2;column-gap:22px;counter-reset:here}
+.ft-sheet-here li{break-inside:avoid;counter-increment:here}
+.ft-sheet .ft-sheet-here li a{display:flex;align-items:baseline;gap:10px;min-height:40px;padding:9px 0;border:0;font-size:15.5px;line-height:1.3;color:#e9e4d6}
+.ft-sheet-here li a::before{content:counter(here,decimal-leading-zero);flex:none;font:500 11px/1 var(--mono);letter-spacing:.1em;color:#ffbd95}
+.ft-sheet-here li a:hover{color:var(--peach)}
+@media(min-width:700px){.ft-sheet-here ol{columns:4}}
+/* Where the rail is drawn it already does this job. */
+@media(min-width:1280px) and (hover:hover){.ft-sheet-here{display:none}}
 
 /* ---------- footer: the exhibition in columns ---------- */
 .ft-foot-nav{font-size:15px}

@@ -1,29 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { homeSections as stops } from "./links";
 import "./site.css";
 
 // The home page runs to about eighteen screens. This is a tailor's tape down its left margin: one mark for
 // each named section and a longer one for the section being read. Under the pointer or the keyboard it
-// opens into a short table of contents. It is drawn only on a wide screen with a pointer; the header's
-// index serves every other visitor, so nothing here is the only way to reach a section.
-const stops = [
-  ["construction", "From cut to cloth"],
-  ["drape-room", "Drape room"],
-  ["visual-fitting", "Visual fitting"],
-  ["how", "How a pattern is made"],
-  ["wardrobe", "Wardrobe"],
-  ["studio", "Studios"],
-  ["materials", "Materials"],
-  ["studies", "Drape gallery"],
-  ["tracing", "Tracing"],
-  ["capabilities", "Capabilities"],
-  ["films", "Films"],
-  ["files", "Files"],
-  ["workbenches", "Workbenches"],
-  ["claims", "Four claims"],
-] as const;
-
+// opens into a short table of contents. It is drawn only on a wide screen with a pointer; everywhere else
+// the menu lists the same sections under "On this page", so nothing here is the only way to reach one.
 const number = (index: number) => String(index + 1).padStart(2, "0");
 
 export default function SectionRail() {

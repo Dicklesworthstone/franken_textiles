@@ -47,5 +47,24 @@ export const project: SiteLink[] = [
   { href: "/get-started/", label: "Get started", note: "Open a workbench or build the command-line tool" },
 ];
 
+// The named sections of the home page, in reading order: `id` is the section's anchor there. The page rail
+// (wide pointer screens) and the menu's "On this page" list (everywhere else) are both drawn from this.
+export const homeSections = [
+  ["construction", "From cut to cloth"],
+  ["drape-room", "Drape room"],
+  ["visual-fitting", "Visual fitting"],
+  ["how", "How a pattern is made"],
+  ["wardrobe", "Wardrobe"],
+  ["studio", "Studios"],
+  ["materials", "Materials"],
+  ["studies", "Drape gallery"],
+  ["tracing", "Tracing"],
+  ["capabilities", "Capabilities"],
+  ["films", "Films"],
+  ["files", "Files"],
+  ["workbenches", "Workbenches"],
+  ["claims", "Four claims"],
+] as const;
+
 // Header shows the five core destinations; the full exhibition index lives in the menu and the footer.
 export const primary = exhibits.filter(item => ["Drape room", "Wardrobe", "Studios", "Materials", "Films"].includes(item.label));

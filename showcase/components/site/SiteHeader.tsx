@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { exhibits, primary, project, repo, workbenches } from "./links";
+import { exhibits, homeSections, primary, project, repo, workbenches } from "./links";
 import "./site.css";
 
 export function Mark() {
@@ -81,12 +81,19 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
       </div>
       <span className="ft-thread" aria-hidden="true"/>
     </header>
+    {/* A link's label is a child element, so the click usually lands on that child, not on the anchor. An entry
+        that points into the page being read does not leave it, so the sheet has to be closed here. */}
     <dialog ref={sheet} className="ft-sheet" aria-label="Site menu" onClose={() => setOpen(false)}
-      onClick={event => { if (event.target instanceof HTMLAnchorElement) setOpen(false); }}>
+      onClick={event => { if (event.target instanceof Element && event.target.closest("a")) setOpen(false); }}>
       <div className="ft-sheet-top wrap">
         <a className="wordmark" href="/"><Mark/>Franken<span>Textiles</span></a>
         <button type="button" className="ft-close" onClick={() => setOpen(false)}>Close <span aria-hidden="true">×</span></button>
       </div>
+      {/* The home page is long. Where the page rail is not drawn, its sections are listed here first. */}
+      {pathname === "/" && <nav className="wrap ft-sheet-here" aria-labelledby="sheet-here">
+        <h2 id="sheet-here" className="mono">On this page</h2>
+        <ol>{homeSections.map(([id, label]) => <li key={id}><a href={`#${id}`}>{label}</a></li>)}</ol>
+      </nav>}
       <div className="wrap ft-sheet-body">
         <section aria-labelledby="sheet-exhibits"><h2 id="sheet-exhibits" className="mono">The exhibition</h2>
           <ul>{exhibits.map(item => <li key={item.href}><a href={item.href} aria-current={mark(item.href, true)}><strong>{item.label}</strong><small>{item.note}</small></a></li>)}</ul>
