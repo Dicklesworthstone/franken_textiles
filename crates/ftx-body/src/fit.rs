@@ -71,15 +71,18 @@ impl Wearer {
     /// `wearer.weight_kg` or else `wearer.bmi` × stature².
     ///
     /// # Errors
-    /// [`RefusalCode::InvalidDocument`] without an age or a stature, or with a weight or BMI that is not
-    /// a positive number.
+    /// [`RefusalCode::InvalidDocument`] without a non-negative age or a positive stature, or with a
+    /// weight or BMI that is not a positive number.
     pub fn from_measurements(meas: &Value) -> Result<Self, Refusal> {
         let bad = |m: &str| Refusal::new(RefusalCode::InvalidDocument, m);
         let w = &meas["wearer"];
-        let months = w["age_months"].as_f64().ok_or_else(|| {
-            bad("the measurement file has no wearer.age_months")
-                .repair("add the wearer's age in months")
-        })?;
+        let months = w["age_months"]
+            .as_f64()
+            .filter(|x| x.is_finite() && *x >= 0.0)
+            .ok_or_else(|| {
+                bad("wearer.age_months must be a non-negative number")
+                    .repair("add the wearer's age in months")
+            })?;
         let positive = |key: &str| -> Result<Option<f64>, Refusal> {
             match &w[key] {
                 Value::Null => Ok(None),
@@ -128,47 +131,70 @@ impl Wearer {
 /// Missing uncertainty retains the fitter's documented per-functional tolerance.
 ///
 /// # Errors
-/// [`RefusalCode::InvalidDocument`] if a selected fused target declares a `sigma_mm` that is not finite
-/// and positive. An absent sigma is supported; an explicit null or malformed sigma is not absence.
+/// [`RefusalCode::InvalidDocument`] if an explicit `wearer.stature_mm`, a selected fused `value_mm`,
+/// or a selected fused `sigma_mm` is not finite and positive. An absent sigma is supported; an
+/// explicit null or malformed sigma is not absence.
 pub fn tape_targets(meas: &Value) -> Result<Vec<TapeTarget>, Refusal> {
-    TAPE_FIELDS
-        .iter()
-        .filter_map(|&name| {
-            let fused = meas["fused"][name]["value_mm"].as_f64();
-            let override_value = if name == "stature" {
-                meas["wearer"]["stature_mm"].as_f64()
-            } else {
-                None
+    let mut out = Vec::new();
+    for name in TAPE_FIELDS {
+        let override_value = if name == "stature" {
+            match meas["wearer"].get("stature_mm") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_f64()
+                        .filter(|x| x.is_finite() && *x > 0.0)
+                        .ok_or_else(|| {
+                            Refusal::new(
+                                RefusalCode::InvalidDocument,
+                                "wearer.stature_mm must be finite and positive",
+                            )
+                        })?,
+                ),
+            }
+        } else {
+            None
+        };
+        let (value, sigma_mm) = if let Some(value) = override_value {
+            (value, None)
+        } else {
+            let entry = &meas["fused"][name];
+            let Some(value) = (match entry.get("value_mm") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_f64()
+                        .filter(|x| x.is_finite() && *x > 0.0)
+                        .ok_or_else(|| {
+                            Refusal::new(
+                                RefusalCode::InvalidDocument,
+                                format!("fused {name}.value_mm must be finite and positive"),
+                            )
+                        })?,
+                ),
+            }) else {
+                continue;
             };
-            let value = override_value.or(fused)?;
-            Some((|| {
-                let sigma_mm = if override_value.is_some() {
-                    None
-                } else {
-                    meas["fused"][name]
-                        .get("sigma_mm")
-                        .map(|v| {
-                            v.as_f64()
-                                .filter(|s| s.is_finite() && *s > 0.0)
-                                .ok_or_else(|| {
-                                    Refusal::new(
-                                        RefusalCode::InvalidDocument,
-                                        format!(
-                                            "fused {name}.sigma_mm must be finite and positive"
-                                        ),
-                                    )
-                                })
+            let sigma_mm = entry
+                .get("sigma_mm")
+                .map(|v| {
+                    v.as_f64()
+                        .filter(|s| s.is_finite() && *s > 0.0)
+                        .ok_or_else(|| {
+                            Refusal::new(
+                                RefusalCode::InvalidDocument,
+                                format!("fused {name}.sigma_mm must be finite and positive"),
+                            )
                         })
-                        .transpose()?
-                };
-                Ok(TapeTarget {
-                    name: name.to_string(),
-                    value_mm: value,
-                    sigma_mm,
                 })
-            })())
-        })
-        .collect()
+                .transpose()?;
+            (value, sigma_mm)
+        };
+        out.push(TapeTarget {
+            name: name.to_string(),
+            value_mm: value,
+            sigma_mm,
+        });
+    }
+    Ok(out)
 }
 
 /// The body parameters for `wearer` and the stature reached (mm, within 0.01 mm).
@@ -1377,6 +1403,54 @@ mod tests {
             "fused": {"stature": {"value_mm": 920.0}}
         });
         assert!(Wearer::from_measurements(&malformed_stature).is_err());
+        // Newborn 0.0 months is valid; negative or non-numeric age_months refuses.
+        assert_eq!(
+            Wearer::from_measurements(&serde_json::json!({
+                "wearer": {"age_months": 0.0, "stature_mm": 500.0}
+            }))
+            .unwrap()
+            .years,
+            0.0
+        );
+        for bad_age in [serde_json::json!(-1.0), serde_json::json!("30")] {
+            assert!(
+                Wearer::from_measurements(&serde_json::json!({
+                    "wearer": {"age_months": bad_age, "stature_mm": 920.0}
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_target_values_refuse_fail_closed() {
+        for bad_stature in [
+            serde_json::json!("tall"),
+            serde_json::json!(0.0),
+            serde_json::json!(-10.0),
+            serde_json::json!(true),
+        ] {
+            let m = serde_json::json!({
+                "wearer": {"age_months": 30.0, "stature_mm": bad_stature},
+                "fused": {"stature": {"value_mm": 920.0}}
+            });
+            let err = tape_targets(&m).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument);
+            assert!(err.message.contains("wearer.stature_mm"));
+        }
+        for bad_waist in [
+            serde_json::json!("530"),
+            serde_json::json!(0.0),
+            serde_json::json!(-50.0),
+            serde_json::json!([]),
+        ] {
+            let m = serde_json::json!({
+                "fused": {"waist": {"value_mm": bad_waist}}
+            });
+            let err = tape_targets(&m).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument);
+            assert!(err.message.contains("waist.value_mm"));
+        }
     }
 
     #[test]
