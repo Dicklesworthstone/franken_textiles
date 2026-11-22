@@ -1,0 +1,1438 @@
+{
+  "schema": "fabric-pattern/1",
+  "units": "mm",
+  "style": "WAISTCOAT_1780S_VAM_256_1880",
+  "meta": {
+    "title": "1780s Men's Waistcoat (after V&A 256-1880)",
+    "size_label": "Chest 107.5 cm \u00b7 Front 69 cm \u00b7 Back 67 cm",
+    "sa_mm": 10,
+    "origin": "VECTOR_EDIT",
+    "note": "Reconstructed from Victoria and Albert Museum 256-1880 (O112019, 1780s). Separate ivory silk fronts, plain silk facings, linen back and body lining, stand collar, and slit welt pockets. Check cut in a toile."
+  },
+  "pieces": [
+    {
+      "id": "wc_front",
+      "name": "Waistcoat front (shell)",
+      "cut": {
+        "qty": 2,
+        "material": "ivory striped silk satin"
+      },
+      "vertices": {
+        "cf_hem": [
+          0,
+          0
+        ],
+        "hem_split": [
+          82,
+          0
+        ],
+        "side_hem": [
+          275,
+          0
+        ],
+        "side_arm": [
+          275,
+          435
+        ],
+        "sh_tip": [
+          212,
+          646
+        ],
+        "snp": [
+          82,
+          690
+        ],
+        "cf_neck": [
+          0,
+          582
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem_facing",
+          "from": "cf_hem",
+          "to": "hem_split"
+        },
+        {
+          "id": "hem_lining",
+          "from": "hem_split",
+          "to": "side_hem"
+        },
+        {
+          "id": "side",
+          "from": "side_hem",
+          "to": "side_arm"
+        },
+        {
+          "id": "armscye",
+          "from": "side_arm",
+          "to": "sh_tip",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.097443,
+                0.326356
+              ],
+              [
+                0.759162,
+                0.170671
+              ]
+            ]
+          }
+        },
+        {
+          "id": "shoulder",
+          "from": "sh_tip",
+          "to": "snp"
+        },
+        {
+          "id": "neck",
+          "from": "snp",
+          "to": "cf_neck",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.25175,
+                0.084278
+              ],
+              [
+                0.830542,
+                0.223189
+              ]
+            ]
+          }
+        },
+        {
+          "id": "cf_edge",
+          "from": "cf_neck",
+          "to": "cf_hem"
+        }
+      ],
+      "grain": [
+        [
+          145,
+          220
+        ],
+        [
+          145,
+          560
+        ]
+      ],
+      "internal": [
+        {
+          "kind": "mark",
+          "label": "Pocket welt slash (136 mm cut line)",
+          "pts": [
+            [
+              96,
+              152
+            ],
+            [
+              232,
+              152
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Pocket welt upper stitch line (12 mm above slash)",
+          "pts": [
+            [
+              96,
+              164
+            ],
+            [
+              232,
+              164
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Pocket welt lower stitch line (12 mm below slash)",
+          "pts": [
+            [
+              96,
+              140
+            ],
+            [
+              232,
+              140
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Pocket left corner clip triangle",
+          "pts": [
+            [
+              108,
+              164
+            ],
+            [
+              96,
+              152
+            ],
+            [
+              108,
+              140
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Pocket right corner clip triangle",
+          "pts": [
+            [
+              220,
+              164
+            ],
+            [
+              232,
+              152
+            ],
+            [
+              220,
+              140
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Facing-to-lining inner seam reference (x = 82 mm)",
+          "pts": [
+            [
+              82,
+              0
+            ],
+            [
+              82,
+              690
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #1",
+          "pts": [
+            [
+              14,
+              36.0
+            ],
+            [
+              30,
+              36.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #2",
+          "pts": [
+            [
+              14,
+              84.0
+            ],
+            [
+              30,
+              84.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #3",
+          "pts": [
+            [
+              14,
+              132.0
+            ],
+            [
+              30,
+              132.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #4",
+          "pts": [
+            [
+              14,
+              180.0
+            ],
+            [
+              30,
+              180.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #5",
+          "pts": [
+            [
+              14,
+              228.0
+            ],
+            [
+              30,
+              228.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #6",
+          "pts": [
+            [
+              14,
+              276.0
+            ],
+            [
+              30,
+              276.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #7",
+          "pts": [
+            [
+              14,
+              324.0
+            ],
+            [
+              30,
+              324.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #8",
+          "pts": [
+            [
+              14,
+              372.0
+            ],
+            [
+              30,
+              372.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #9",
+          "pts": [
+            [
+              14,
+              420.0
+            ],
+            [
+              30,
+              420.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #10",
+          "pts": [
+            [
+              14,
+              468.0
+            ],
+            [
+              30,
+              468.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #11",
+          "pts": [
+            [
+              14,
+              516.0
+            ],
+            [
+              30,
+              516.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Button / buttonhole #12",
+          "pts": [
+            [
+              14,
+              564.0
+            ],
+            [
+              30,
+              564.0
+            ]
+          ]
+        }
+      ],
+      "notches": [
+        {
+          "id": "pocket_level",
+          "edge": "side",
+          "s": 0.3494,
+          "type": "V"
+        },
+        {
+          "id": "waist_level",
+          "edge": "side",
+          "s": 0.5517,
+          "type": "V"
+        }
+      ],
+      "note": "Shell front (V&A 256-1880). Slash 136 mm pocket welt opening and clip corners cleanly to stitch line before turning pocket bags inside."
+    },
+    {
+      "id": "wc_facing",
+      "name": "Front facing (silk satin)",
+      "cut": {
+        "qty": 2,
+        "material": "plain ivory silk satin"
+      },
+      "vertices": {
+        "cf_hem": [
+          0,
+          0
+        ],
+        "inner_hem": [
+          82,
+          0
+        ],
+        "snp": [
+          82,
+          690
+        ],
+        "cf_neck": [
+          0,
+          582
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "cf_hem",
+          "to": "inner_hem"
+        },
+        {
+          "id": "lining_join",
+          "from": "inner_hem",
+          "to": "snp"
+        },
+        {
+          "id": "neck",
+          "from": "snp",
+          "to": "cf_neck",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.25175,
+                0.084278
+              ],
+              [
+                0.830542,
+                0.223189
+              ]
+            ]
+          }
+        },
+        {
+          "id": "cf_edge",
+          "from": "cf_neck",
+          "to": "cf_hem"
+        }
+      ],
+      "grain": [
+        [
+          41,
+          140
+        ],
+        [
+          41,
+          500
+        ]
+      ],
+      "notches": [
+        {
+          "id": "facing_mid",
+          "edge": "lining_join",
+          "s": 0.5,
+          "type": "V"
+        }
+      ],
+      "note": "Plain ivory silk satin inside front facing. Joins shell at CF, neck, and lower hem, and joins linen front lining along inner edge."
+    },
+    {
+      "id": "wc_front_lining",
+      "name": "Front body lining (linen)",
+      "cut": {
+        "qty": 2,
+        "material": "unbleached linen"
+      },
+      "vertices": {
+        "inner_hem": [
+          82,
+          0
+        ],
+        "side_hem": [
+          275,
+          0
+        ],
+        "side_arm": [
+          275,
+          435
+        ],
+        "sh_tip": [
+          212,
+          646
+        ],
+        "snp": [
+          82,
+          690
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "inner_hem",
+          "to": "side_hem"
+        },
+        {
+          "id": "side",
+          "from": "side_hem",
+          "to": "side_arm"
+        },
+        {
+          "id": "armscye",
+          "from": "side_arm",
+          "to": "sh_tip",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.097443,
+                0.326356
+              ],
+              [
+                0.759162,
+                0.170671
+              ]
+            ]
+          }
+        },
+        {
+          "id": "shoulder",
+          "from": "sh_tip",
+          "to": "snp"
+        },
+        {
+          "id": "facing_join",
+          "from": "snp",
+          "to": "inner_hem"
+        }
+      ],
+      "grain": [
+        [
+          175,
+          160
+        ],
+        [
+          175,
+          520
+        ]
+      ],
+      "notches": [
+        {
+          "id": "facing_mid",
+          "edge": "facing_join",
+          "s": 0.5,
+          "type": "V"
+        },
+        {
+          "id": "waist_level",
+          "edge": "side",
+          "s": 0.5517,
+          "type": "V"
+        }
+      ],
+      "note": "Unbleached linen front lining. Sits directly behind the pocket bag assembly and joins plain silk facing along x = 82 mm."
+    },
+    {
+      "id": "wc_back",
+      "name": "Waistcoat back (linen outer)",
+      "cut": {
+        "qty": 2,
+        "material": "unbleached linen"
+      },
+      "vertices": {
+        "side_hem": [
+          -262.5,
+          0
+        ],
+        "cb_hem": [
+          -16,
+          0
+        ],
+        "cb_vent_in": [
+          -16,
+          120
+        ],
+        "cb_vent_top": [
+          0,
+          120
+        ],
+        "cb_neck": [
+          0,
+          670
+        ],
+        "snp": [
+          -82,
+          690
+        ],
+        "sh_tip": [
+          -212,
+          646
+        ],
+        "side_arm": [
+          -262.5,
+          435
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "side_hem",
+          "to": "cb_hem"
+        },
+        {
+          "id": "cb_vent_edge",
+          "from": "cb_hem",
+          "to": "cb_vent_in"
+        },
+        {
+          "id": "cb_vent_step",
+          "from": "cb_vent_in",
+          "to": "cb_vent_top"
+        },
+        {
+          "id": "cb_upper",
+          "from": "cb_vent_top",
+          "to": "cb_neck"
+        },
+        {
+          "id": "neck",
+          "from": "cb_neck",
+          "to": "snp",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.414374,
+                0.101067
+              ],
+              [
+                0.885711,
+                0.18005
+              ]
+            ]
+          }
+        },
+        {
+          "id": "shoulder",
+          "from": "snp",
+          "to": "sh_tip"
+        },
+        {
+          "id": "armscye",
+          "from": "sh_tip",
+          "to": "side_arm",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.253631,
+                0.159465
+              ],
+              [
+                0.928656,
+                0.298091
+              ]
+            ]
+          }
+        },
+        {
+          "id": "side",
+          "from": "side_arm",
+          "to": "side_hem"
+        }
+      ],
+      "grain": [
+        [
+          -130,
+          140
+        ],
+        [
+          -130,
+          560
+        ]
+      ],
+      "internal": [
+        {
+          "kind": "mark",
+          "label": "Upper waist-adjustment tape station",
+          "pts": [
+            [
+              -45,
+              270
+            ],
+            [
+              0,
+              270
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Middle waist-adjustment tape station",
+          "pts": [
+            [
+              -45,
+              210
+            ],
+            [
+              0,
+              210
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Lower waist-adjustment tape station",
+          "pts": [
+            [
+              -45,
+              150
+            ],
+            [
+              0,
+              150
+            ]
+          ]
+        }
+      ],
+      "notches": [
+        {
+          "id": "waist_level",
+          "edge": "side",
+          "s": 0.4483,
+          "type": "V"
+        },
+        {
+          "id": "pocket_level",
+          "edge": "side",
+          "s": 0.6506,
+          "type": "V"
+        },
+        {
+          "id": "cb_mid",
+          "edge": "cb_upper",
+          "s": 0.5,
+          "type": "double"
+        }
+      ],
+      "note": "Linen back (670 mm CB length). Seam upper CB above y = 120 mm; leave lower 120 mm notched vent open and attach three pairs of linen adjustment tapes."
+    },
+    {
+      "id": "wc_back_lining",
+      "name": "Back body lining (linen)",
+      "cut": {
+        "qty": 2,
+        "material": "unbleached linen"
+      },
+      "vertices": {
+        "side_hem": [
+          -262.5,
+          0
+        ],
+        "cb_hem": [
+          -16,
+          0
+        ],
+        "cb_vent_in": [
+          -16,
+          120
+        ],
+        "cb_vent_top": [
+          0,
+          120
+        ],
+        "cb_neck": [
+          0,
+          670
+        ],
+        "snp": [
+          -82,
+          690
+        ],
+        "sh_tip": [
+          -212,
+          646
+        ],
+        "side_arm": [
+          -262.5,
+          435
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "side_hem",
+          "to": "cb_hem"
+        },
+        {
+          "id": "cb_vent_edge",
+          "from": "cb_hem",
+          "to": "cb_vent_in"
+        },
+        {
+          "id": "cb_vent_step",
+          "from": "cb_vent_in",
+          "to": "cb_vent_top"
+        },
+        {
+          "id": "cb_upper",
+          "from": "cb_vent_top",
+          "to": "cb_neck"
+        },
+        {
+          "id": "neck",
+          "from": "cb_neck",
+          "to": "snp",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.414374,
+                0.101067
+              ],
+              [
+                0.885711,
+                0.18005
+              ]
+            ]
+          }
+        },
+        {
+          "id": "shoulder",
+          "from": "snp",
+          "to": "sh_tip"
+        },
+        {
+          "id": "armscye",
+          "from": "sh_tip",
+          "to": "side_arm",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.253631,
+                0.159465
+              ],
+              [
+                0.928656,
+                0.298091
+              ]
+            ]
+          }
+        },
+        {
+          "id": "side",
+          "from": "side_arm",
+          "to": "side_hem"
+        }
+      ],
+      "grain": [
+        [
+          -130,
+          140
+        ],
+        [
+          -130,
+          560
+        ]
+      ],
+      "notches": [
+        {
+          "id": "waist_level",
+          "edge": "side",
+          "s": 0.4483,
+          "type": "V"
+        },
+        {
+          "id": "cb_mid",
+          "edge": "cb_upper",
+          "s": 0.5,
+          "type": "double"
+        }
+      ],
+      "note": "Unbleached linen back lining. Bags armscye and lower hem cleanly with back outer, leaving lower 120 mm CB vent open."
+    },
+    {
+      "id": "wc_collar",
+      "name": "Stand collar (outer shell)",
+      "cut": {
+        "qty": 1,
+        "material": "ivory striped silk / plain silk satin"
+      },
+      "vertices": {
+        "fl": [
+          -229.81,
+          0
+        ],
+        "sl": [
+          -87.87,
+          0
+        ],
+        "cb": [
+          0,
+          0
+        ],
+        "sr": [
+          87.87,
+          0
+        ],
+        "fr": [
+          229.81,
+          0
+        ],
+        "fr_t": [
+          229.81,
+          48.0
+        ],
+        "fl_t": [
+          -229.81,
+          48.0
+        ]
+      },
+      "edges": [
+        {
+          "id": "front_L",
+          "from": "fl",
+          "to": "sl"
+        },
+        {
+          "id": "back_L",
+          "from": "sl",
+          "to": "cb"
+        },
+        {
+          "id": "back_R",
+          "from": "cb",
+          "to": "sr"
+        },
+        {
+          "id": "front_R",
+          "from": "sr",
+          "to": "fr"
+        },
+        {
+          "id": "end_R",
+          "from": "fr",
+          "to": "fr_t"
+        },
+        {
+          "id": "top",
+          "from": "fr_t",
+          "to": "fl_t"
+        },
+        {
+          "id": "end_L",
+          "from": "fl_t",
+          "to": "fl"
+        }
+      ],
+      "grain": [
+        [
+          -160.867,
+          24.0
+        ],
+        [
+          160.867,
+          24.0
+        ]
+      ],
+      "internal": [
+        {
+          "kind": "mark",
+          "label": "Centre-back collar station",
+          "pts": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              48.0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Left shoulder-neck station",
+          "pts": [
+            [
+              -87.87,
+              0
+            ],
+            [
+              -87.87,
+              14
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Right shoulder-neck station",
+          "pts": [
+            [
+              87.87,
+              0
+            ],
+            [
+              87.87,
+              14
+            ]
+          ]
+        }
+      ],
+      "note": "1780s 48 mm standing collar. No separate undercollar canvas/interlining piece is drafted in this pattern (surfaced explicitly as missing collar lining)."
+    },
+    {
+      "id": "wc_welt",
+      "name": "Pocket welt strip (fold)",
+      "cut": {
+        "qty": 2,
+        "material": "ivory silk satin"
+      },
+      "vertices": {
+        "w0": [
+          0,
+          0
+        ],
+        "w1": [
+          136,
+          0
+        ],
+        "w2": [
+          136,
+          48
+        ],
+        "w3": [
+          0,
+          48
+        ]
+      },
+      "edges": [
+        {
+          "id": "bag_join",
+          "from": "w0",
+          "to": "w1"
+        },
+        {
+          "id": "end_R",
+          "from": "w1",
+          "to": "w2"
+        },
+        {
+          "id": "slit_attach",
+          "from": "w2",
+          "to": "w3"
+        },
+        {
+          "id": "end_L",
+          "from": "w3",
+          "to": "w0"
+        }
+      ],
+      "grain": [
+        [
+          16,
+          24
+        ],
+        [
+          120,
+          24
+        ]
+      ],
+      "internal": [
+        {
+          "kind": "fold",
+          "label": "Welt lengthwise fold (finished lip 24 mm)",
+          "pts": [
+            [
+              0,
+              24
+            ],
+            [
+              136,
+              24
+            ]
+          ]
+        }
+      ],
+      "note": "Cut 136 x 48 mm, fold lengthwise to 24 mm lip, stitch along lower welt line of the 136 mm front slash, turn inside, and catch ends cleanly to clipped corners."
+    },
+    {
+      "id": "wc_pocket_outer",
+      "name": "Pocket bag (lower / welt side)",
+      "cut": {
+        "qty": 2,
+        "material": "unbleached linen"
+      },
+      "vertices": {
+        "p0": [
+          0,
+          0
+        ],
+        "p1": [
+          136,
+          0
+        ],
+        "p2": [
+          136,
+          156
+        ],
+        "p3": [
+          0,
+          156
+        ]
+      },
+      "edges": [
+        {
+          "id": "bottom",
+          "from": "p0",
+          "to": "p1"
+        },
+        {
+          "id": "right",
+          "from": "p1",
+          "to": "p2"
+        },
+        {
+          "id": "top",
+          "from": "p2",
+          "to": "p3"
+        },
+        {
+          "id": "left",
+          "from": "p3",
+          "to": "p0"
+        }
+      ],
+      "grain": [
+        [
+          68,
+          24
+        ],
+        [
+          68,
+          132
+        ]
+      ],
+      "note": "Lower linen pocket bag. Joins pocket welt along top edge (136 mm) and closes around left, bottom, and right edges with upper pocket bag."
+    },
+    {
+      "id": "wc_pocket_inner",
+      "name": "Pocket bag (upper / body side)",
+      "cut": {
+        "qty": 2,
+        "material": "unbleached linen"
+      },
+      "vertices": {
+        "p0": [
+          0,
+          0
+        ],
+        "p1": [
+          136,
+          0
+        ],
+        "p2": [
+          136,
+          156
+        ],
+        "p3": [
+          0,
+          156
+        ]
+      },
+      "edges": [
+        {
+          "id": "bottom",
+          "from": "p0",
+          "to": "p1"
+        },
+        {
+          "id": "right",
+          "from": "p1",
+          "to": "p2"
+        },
+        {
+          "id": "slit_top",
+          "from": "p2",
+          "to": "p3"
+        },
+        {
+          "id": "left",
+          "from": "p3",
+          "to": "p0"
+        }
+      ],
+      "grain": [
+        [
+          68,
+          24
+        ],
+        [
+          68,
+          132
+        ]
+      ],
+      "note": "Upper linen pocket bag. Top 136 mm edge stitches directly to upper seam allowance of the 136 mm internal slash on waistcoat front; perimeter closes to lower bag."
+    }
+  ],
+  "seams": [
+    {
+      "id": "shell_side_R",
+      "a": "wc_front.R/side",
+      "b": "wc_back.R/side",
+      "reverse": true
+    },
+    {
+      "id": "shell_side_L",
+      "a": "wc_front.L/side",
+      "b": "wc_back.L/side",
+      "reverse": true
+    },
+    {
+      "id": "shell_shoulder_R",
+      "a": "wc_front.R/shoulder",
+      "b": "wc_back.R/shoulder",
+      "reverse": true
+    },
+    {
+      "id": "shell_shoulder_L",
+      "a": "wc_front.L/shoulder",
+      "b": "wc_back.L/shoulder",
+      "reverse": true
+    },
+    {
+      "id": "shell_cb_upper",
+      "a": "wc_back.R/cb_upper",
+      "b": "wc_back.L/cb_upper",
+      "reverse": true
+    },
+    {
+      "id": "collar_front_R",
+      "a": "wc_collar/front_R",
+      "b": "wc_front.R/neck",
+      "reverse": false
+    },
+    {
+      "id": "collar_back_R",
+      "a": "wc_collar/back_R",
+      "b": "wc_back.R/neck",
+      "reverse": false
+    },
+    {
+      "id": "collar_back_L",
+      "a": "wc_collar/back_L",
+      "b": "wc_back.L/neck",
+      "reverse": true
+    },
+    {
+      "id": "collar_front_L",
+      "a": "wc_collar/front_L",
+      "b": "wc_front.L/neck",
+      "reverse": true
+    },
+    {
+      "id": "facing_cf_R",
+      "a": "wc_front.R/cf_edge",
+      "b": "wc_facing.R/cf_edge",
+      "reverse": true
+    },
+    {
+      "id": "facing_cf_L",
+      "a": "wc_front.L/cf_edge",
+      "b": "wc_facing.L/cf_edge",
+      "reverse": true
+    },
+    {
+      "id": "facing_hem_R",
+      "a": "wc_front.R/hem_facing",
+      "b": "wc_facing.R/hem",
+      "reverse": true
+    },
+    {
+      "id": "facing_hem_L",
+      "a": "wc_front.L/hem_facing",
+      "b": "wc_facing.L/hem",
+      "reverse": true
+    },
+    {
+      "id": "facing_to_lining_R",
+      "a": "wc_facing.R/lining_join",
+      "b": "wc_front_lining.R/facing_join",
+      "reverse": true
+    },
+    {
+      "id": "facing_to_lining_L",
+      "a": "wc_facing.L/lining_join",
+      "b": "wc_front_lining.L/facing_join",
+      "reverse": true
+    },
+    {
+      "id": "lining_side_R",
+      "a": "wc_front_lining.R/side",
+      "b": "wc_back_lining.R/side",
+      "reverse": true
+    },
+    {
+      "id": "lining_side_L",
+      "a": "wc_front_lining.L/side",
+      "b": "wc_back_lining.L/side",
+      "reverse": true
+    },
+    {
+      "id": "lining_shoulder_R",
+      "a": "wc_front_lining.R/shoulder",
+      "b": "wc_back_lining.R/shoulder",
+      "reverse": true
+    },
+    {
+      "id": "lining_shoulder_L",
+      "a": "wc_front_lining.L/shoulder",
+      "b": "wc_back_lining.L/shoulder",
+      "reverse": true
+    },
+    {
+      "id": "lining_cb_upper",
+      "a": "wc_back_lining.R/cb_upper",
+      "b": "wc_back_lining.L/cb_upper",
+      "reverse": true
+    },
+    {
+      "id": "bag_hem_front_R",
+      "a": "wc_front.R/hem_lining",
+      "b": "wc_front_lining.R/hem",
+      "reverse": true
+    },
+    {
+      "id": "bag_hem_front_L",
+      "a": "wc_front.L/hem_lining",
+      "b": "wc_front_lining.L/hem",
+      "reverse": true
+    },
+    {
+      "id": "bag_hem_back_R",
+      "a": "wc_back.R/hem",
+      "b": "wc_back_lining.R/hem",
+      "reverse": true
+    },
+    {
+      "id": "bag_hem_back_L",
+      "a": "wc_back.L/hem",
+      "b": "wc_back_lining.L/hem",
+      "reverse": true
+    },
+    {
+      "id": "bag_armscye_front_R",
+      "a": "wc_front.R/armscye",
+      "b": "wc_front_lining.R/armscye",
+      "reverse": true
+    },
+    {
+      "id": "bag_armscye_front_L",
+      "a": "wc_front.L/armscye",
+      "b": "wc_front_lining.L/armscye",
+      "reverse": true
+    },
+    {
+      "id": "bag_armscye_back_R",
+      "a": "wc_back.R/armscye",
+      "b": "wc_back_lining.R/armscye",
+      "reverse": true
+    },
+    {
+      "id": "bag_armscye_back_L",
+      "a": "wc_back.L/armscye",
+      "b": "wc_back_lining.L/armscye",
+      "reverse": true
+    },
+    {
+      "id": "welt_to_bag_R",
+      "a": "wc_welt.R/bag_join",
+      "b": "wc_pocket_outer.R/top",
+      "reverse": true
+    },
+    {
+      "id": "welt_to_bag_L",
+      "a": "wc_welt.L/bag_join",
+      "b": "wc_pocket_outer.L/top",
+      "reverse": true
+    },
+    {
+      "id": "pocket_left_R",
+      "a": "wc_pocket_outer.R/left",
+      "b": "wc_pocket_inner.R/left",
+      "reverse": true
+    },
+    {
+      "id": "pocket_left_L",
+      "a": "wc_pocket_outer.L/left",
+      "b": "wc_pocket_inner.L/left",
+      "reverse": true
+    },
+    {
+      "id": "pocket_bottom_R",
+      "a": "wc_pocket_outer.R/bottom",
+      "b": "wc_pocket_inner.R/bottom",
+      "reverse": true
+    },
+    {
+      "id": "pocket_bottom_L",
+      "a": "wc_pocket_outer.L/bottom",
+      "b": "wc_pocket_inner.L/bottom",
+      "reverse": true
+    },
+    {
+      "id": "pocket_right_R",
+      "a": "wc_pocket_outer.R/right",
+      "b": "wc_pocket_inner.R/right",
+      "reverse": true
+    },
+    {
+      "id": "pocket_right_L",
+      "a": "wc_pocket_outer.L/right",
+      "b": "wc_pocket_inner.L/right",
+      "reverse": true
+    }
+  ]
+}

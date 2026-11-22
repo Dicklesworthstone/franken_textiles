@@ -1,0 +1,27 @@
+{
+  "schema": "fabric-fit/1",
+  "garment": "1780s Men's Waistcoat (after V&A 256-1880)",
+  "points": [
+    {
+      "id": "chest_shell",
+      "label": "Finished waistcoat chest girth (V&A 256-1880: 1075 mm)",
+      "kind": "path",
+      "refs": [
+        "wc_front.R/hem_facing",
+        "wc_front.R/hem_lining",
+        "wc_back.R/hem",
+        "wc_back.R/cb_vent_step",
+        "wc_back.L/cb_vent_step",
+        "wc_back.L/hem",
+        "wc_front.L/hem_lining",
+        "wc_front.L/hem_facing"
+      ],
+      "body": "chest",
+      "target_mm": [
+        55,
+        75,
+        105
+      ]
+    }
+  ]
+}
