@@ -370,18 +370,20 @@ fn add_simulation_scope(report: &mut Value, scope: Value) {
 }
 
 /// The cloth state a refusal is about, enough to draw it: the last accepted state when sewing, draping or
-/// settling refuses, or the recorded frame that crosses the displayed wearer when the full-body check
-/// refuses. It is not a drape, a fit or a result.
+/// settling refuses, the untangled start rejected by the self-contact audit, or the recorded
+/// frame that crosses the displayed wearer. It is not a drape, a fit or a result.
 #[derive(Clone, Debug)]
 pub struct RefusedRun {
     /// The garment mesh (faces, instances, flat coordinates).
     pub mesh: GarmentMesh,
     /// The positions of that state, one per mesh vertex, metres.
     pub positions: Vec<Vec3>,
-    /// The phase the state belongs to: `sew`, `drape` or `settle`.
+    /// The phase the state belongs to: `start`, `sew`, `drape` or `settle`.
     pub phase: &'static str,
     /// Nominal steps of that phase accepted when the state was reached.
     pub accepted_steps: usize,
+    /// The first rejected pair at start admission, as source garment face indices before welding.
+    pub start_crossing_faces: Option<[usize; 2]>,
     /// Set when the run began from an earlier relaxation checkpoint because its fully relaxed start
     /// failed cloth contact or displayed-surface admission: the relaxation iterations of the checkpoint
     /// used, then of the start that was not admitted. The checkpoint is the more strained.
@@ -407,6 +409,7 @@ fn refused_run(
         positions: positions.clone(),
         phase,
         accepted_steps: frames.len() - frames_before_phase,
+        start_crossing_faces: None,
         start_fallback: scene
             .start_backtracked_from
             .map(|rejected| (scene.start.relax_iterations, rejected)),
@@ -436,8 +439,8 @@ pub fn drape(
 /// [`drape`], and when it refuses once the start state has been admitted, `refused` receives the mesh and
 /// the positions the refusal is about so that the caller can show them: the last accepted state when
 /// sewing, draping or settling refuses (the admitted start if the first sewing step does), or the frame
-/// that crosses a surface in the replay. An earlier refusal clears `refused`; [`crate::start_state`]
-/// describes failures during placement and the start audit.
+/// that crosses a surface in the replay. It also retains the exact untangled start for a
+/// self-contact refusal at admission. Other early refusals leave `refused` empty.
 ///
 /// # Errors
 /// As [`drape`]. The refusal is the same with or without an observer.
@@ -485,7 +488,35 @@ pub fn drape_observed(
         display_contact.as_mut(),
     )?;
     if let Some(p) = opts.self_contact {
-        scene.solver = scene.solver.with_self_contact(p)?;
+        let mut crossing = None;
+        if let Err(refusal) = scene.solver.enable_self_contact_observed(p, &mut crossing) {
+            if refusal.code == RefusalCode::IntersectingStart {
+                let crossing_faces = crossing.and_then(|[a, b]| {
+                    // The solver retains the source face order after removing collapsed welds.
+                    let source_faces: Vec<_> = scene
+                        .mesh
+                        .faces
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(face, vertices)| {
+                            let [i, j, k] = vertices.map(|v| scene.weld[v]);
+                            (i != j && j != k && k != i).then_some(face)
+                        })
+                        .collect();
+                    Some([*source_faces.get(a)?, *source_faces.get(b)?])
+                });
+                *refused = Some(RefusedRun {
+                    positions: scene.positions(),
+                    mesh: scene.mesh,
+                    phase: "start",
+                    accepted_steps: 0,
+                    start_crossing_faces: crossing_faces,
+                    start_fallback: None,
+                    start_unrelaxed_p95: None,
+                });
+            }
+            return Err(refusal);
+        }
         progress("self-contact: start audit passed; cloth–cloth contact enabled");
     }
     scene.solver.tol = opts.tol;

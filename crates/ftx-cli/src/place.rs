@@ -610,10 +610,14 @@ fn write_refused_map(
     mesh: &GarmentMesh,
     phase: &str,
     accepted_steps: usize,
+    crossing_faces: Option<[usize; 2]>,
     (width, height): (usize, usize),
 ) {
     let mut map = ftx_drape::animation::pattern_mesh_map(mesh);
     map["refused_pose"] = json!({ "phase": phase, "accepted_steps": accepted_steps, "width": width, "height": height });
+    if let Some(faces) = crossing_faces {
+        map["refused_pose"]["crossing_faces"] = json!(faces);
+    }
     if let Err(error) = workspace::write_json(&dir.join("mesh_map.json"), &map) {
         refusal.repairs.push(format!(
             "The diagnostic source-edge map could not be saved: {}",
@@ -622,10 +626,11 @@ fn write_refused_map(
     }
 }
 
-/// When a drape refuses once its start has been admitted: draws the cloth state the refusal is about under
+/// When a drape retains a rejected start or trajectory state: draws that cloth under
 /// `OUT/refused` (the files and stills of a `place` stage: coloured by piece, and by edge strain on the
 /// start-state ramp) and puts where to look first among the refusal's repairs. That state is the last
-/// accepted one when a step refuses, or the recorded frame that crosses the displayed wearer.
+/// accepted one when a step refuses, the untangled cloth start that failed contact admission,
+/// or the recorded frame that crosses the displayed wearer.
 ///
 /// `size` is the width and height in pixels the run's own stills were asked for, so a pixel read off one
 /// of these pictures names the same place as in the stills of a round that completes.
@@ -650,7 +655,9 @@ pub(super) fn refused_stills(
     let n = state.positions.len();
     // A full-display refusal names its cloth by triangle index, which tells a reader nothing: mark that
     // cloth in the pictures and say whose it is.
-    let named = if refusal.code == RefusalCode::IntersectingTrajectory {
+    let named = if let Some(faces) = state.start_crossing_faces {
+        faces.to_vec()
+    } else if refusal.code == RefusalCode::IntersectingTrajectory {
         named_cloth_triangles(&refusal.message, state.mesh.faces.len())
     } else {
         Vec::new()
@@ -688,6 +695,14 @@ pub(super) fn refused_stills(
     let crossing: Vec<bool> = near.iter().map(|&mark| mark && !on_body).collect();
     let pieces = piece_colours(&state.mesh, &slots, &depth, &crossing);
     let (strain, summaries) = start_strain(&state.mesh, &state.positions);
+    let description = if state.phase == "start" {
+        "the untangled start rejected at cloth contact admission".to_string()
+    } else {
+        format!(
+            "the cloth after {} accepted {} step(s)",
+            state.accepted_steps, state.phase
+        )
+    };
     match write_stage(
         &dir,
         body_obj,
@@ -704,17 +719,16 @@ pub(super) fn refused_stills(
                 &state.mesh,
                 state.phase,
                 state.accepted_steps,
+                state.start_crossing_faces,
                 size,
             );
             refusal.repairs.insert(
                 0,
                 format!(
-                    "Look at {}/still_*.png: the cloth after {} accepted {} step(s), the state this refusal \
+                    "Look at {}/still_*.png: {description}, the state this refusal \
                      is about. It is not a drape or a fit; still_strain_* shows edge strain from blue (15 % \
                      short) through white to red (15 % stretched).{}",
                     dir.display(),
-                    state.accepted_steps,
-                    state.phase,
                     named_in.as_ref().map_or(String::new(), |named_in| format!(
                         " {} marks {named_in}; the check stops at the first crossing it finds, so \
                          there can be others.",
@@ -728,10 +742,8 @@ pub(super) fn refused_stills(
         Err(error) => refusal.repairs.insert(
             0,
             format!(
-                "The pictures of the state this refusal is about (the cloth after {} accepted {} step(s)) \
+                "The pictures of the state this refusal is about ({description}) \
                  could not be written: {}.{}",
-                state.accepted_steps,
-                state.phase,
                 error.message,
                 named_in.as_ref().map_or(String::new(), |named_in| format!(
                     " They would have marked {named_in}."
@@ -876,6 +888,17 @@ fn with_crossing_pieces(mut contact: Value, mesh: &GarmentMesh) -> Value {
             contact[stage]["cloth_instances"] = json!(triangle_instances(mesh, &named));
         }
     }
+    if contact["start"]["refusal"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("displayed body triangle"))
+    {
+        contact["start"]["note"] = json!(
+            "This preview is not untangled: a drape first pushes its start out of the collision body, so \
+             a start that crosses here can still drape. Where the part crossed is left out of the \
+             collider (fingers beyond the --hands cap), a drape can only begin from an earlier relaxation \
+             checkpoint that does not cross it; --hands full keeps the whole hand."
+        );
+    }
     contact
 }
 
@@ -973,6 +996,7 @@ pub(super) fn start_stills(
             &mesh,
             "placement",
             0,
+            None,
             size,
         );
         refusal.repairs.insert(0, start_repair(&dir, &placement));
@@ -1297,18 +1321,8 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if let Some(message) = report["display_contact"]["unavailable"]["message"].as_str() {
         text.push_str(&format!("  full display check unavailable: {message}\n"));
     }
-    // Measured: the 92 cm bolero's 350 to 360 mm sleeves cross the hand in this preview's start and
-    // drape with --hands full, no gating flags; from 361 mm the drape's own untangling fails.
-    if report["display_contact"]["start"]["refusal"]["message"]
-        .as_str()
-        .is_some_and(|message| message.contains("displayed body triangle"))
-    {
-        text.push_str(
-            "    This preview is not untangled: a drape first pushes its start out of the collision body, so \
-             a start that crosses here can still drape. Where the part crossed is left out of the \
-             collider (fingers beyond the --hands cap), a drape can only begin from an earlier relaxation \
-             checkpoint that does not cross it; --hands full keeps the whole hand.\n",
-        );
+    if let Some(note) = report["display_contact"]["start"]["note"].as_str() {
+        text.push_str(&format!("    {note}\n"));
     }
     for i in report["instances"].as_array().into_iter().flatten() {
         text.push_str(&format!(
@@ -1553,6 +1567,7 @@ mod tests {
             positions,
             phase: "sew",
             accepted_steps: 2,
+            start_crossing_faces: None,
             start_fallback: None,
             start_unrelaxed_p95: None,
         };
@@ -1708,6 +1723,12 @@ mod tests {
             &state.mesh,
         );
         assert_eq!(contact["start"]["cloth_instances"], json!(["panel"]));
+        assert!(
+            contact["start"]["note"]
+                .as_str()
+                .unwrap()
+                .contains("not untangled")
+        );
         assert!(contact["wrap"].get("cloth_instances").is_none());
         assert_eq!(
             super::with_crossing_pieces(
@@ -1809,6 +1830,7 @@ mod tests {
                 positions: standing(widen),
                 phase: "sew",
                 accepted_steps,
+                start_crossing_faces: None,
                 start_fallback,
                 // The relaxation reached its target, so the diagnosis carries no caveat about it.
                 start_unrelaxed_p95: None,

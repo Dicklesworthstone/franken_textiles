@@ -912,18 +912,28 @@ impl Solver {
         if self.contact.is_none() {
             self = self.with_contact(Body::empty(), params)?;
         }
+        self.enable_self_contact_observed(params, &mut None)?;
+        Ok(self)
+    }
+
+    // When scene admission fails, keep the rejected positions for diagnostic rendering.
+    pub(crate) fn enable_self_contact_observed(
+        &mut self,
+        params: ContactParams,
+        crossing: &mut Option<[usize; 2]>,
+    ) -> Result<(), Refusal> {
         let contact = self.contact.take().ok_or_else(|| {
             Refusal::new(
                 RefusalCode::InvalidDocument,
                 "missing cloth contact topology",
             )
         })?;
-        self.contact = Some(contact.with_self_contact(&self.x, params)?);
+        self.contact = Some(contact.with_self_contact_observed(&self.x, params, crossing)?);
         self.symbolic = None;
         self.pattern = None;
         self.precond = None;
         self.element_pattern = Some(self.element_blocks_pattern());
-        Ok(self)
+        Ok(())
     }
 
     fn dynamic_contact(&self) -> bool {

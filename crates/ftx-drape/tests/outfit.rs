@@ -309,10 +309,29 @@ fn coincident_garment_starts_refuse_instead_of_inventing_layer_offsets() {
     input.garments[1].pattern = input.garments[0].pattern.clone();
     let prepared = prepare(&input, &options()).unwrap();
     let skin = skin();
+    let mut refusal_state = None;
+    let refusal = prepared
+        .drape_observed(
+            &json!({}),
+            &body(&skin),
+            &options(),
+            |_| {},
+            &mut refusal_state,
+        )
+        .err()
+        .expect("coincident starts must refuse");
+    assert_eq!(refusal.code, ftx_core::RefusalCode::IntersectingStart);
+    let state = refusal_state.expect("the rejected cloth pose must be inspectable");
+    assert_eq!((state.phase, state.accepted_steps), ("start", 0));
+    let [a, b] = state
+        .start_crossing_faces
+        .unwrap()
+        .map(|i| state.mesh.faces[i]);
+    let name = |face: [usize; 3]| state.mesh.instances[state.mesh.owner[face[0]]].as_str();
+    assert_eq!([name(a), name(b)], ["inner::panel", "outer::panel"]);
     assert!(
-        prepared
-            .drape(&json!({}), &body(&skin), &options(), |_| {})
-            .is_err()
+        ftx_core::intersection::indexed_triangle_pair(&state.positions, a, b).is_some(),
+        "the exported state must contain the indexed crossing reported by the solver"
     );
 }
 

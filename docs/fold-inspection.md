@@ -50,6 +50,10 @@ start. The drape reports the chosen iteration count and its actual strain; if no
 passes, the original refusal is retained.
 Run the revised pattern through the ordinary drape, with the same body and collider options,
 to test its actual contact and convergence.
+If the cloth crosses itself at start admission, `refused/still_*.png` shows the actual
+start after the body push-out. Yellow marks the first reported crossing, and the repair
+names the involved pattern instances. Use those stills with the refused round's pixel
+inspector to locate the source pattern edges.
 No particular adjustment here qualifies the 385 mm sleeve or establishes physical fit.
 Tried on 2026-11-22 without success: a 3.08 degree tilt about `[19, -6, 0]`, which centres the
 cylinder on the hand at the thumb, with cylinders of 40 to 55 mm and cuffs of 201.7 and 230.0 mm

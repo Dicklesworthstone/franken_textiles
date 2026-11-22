@@ -306,14 +306,16 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   coarse to form a fold lets the cloth shorten there, which stands for folds finer than the mesh without
   resolving them. The factor is authored, has no measured source, and is recorded as `compression_factor`
   in `sim_report.json` whenever it is not 1. When an ordinary drape (not `--two-start-sew`, not an outfit;
-  `ftx round --sim` runs this same command) refuses once its start has been admitted, it writes the cloth
+  `ftx round --sim` runs this same command) retains a refused pose, it writes the cloth
   state the refusal is about under `DIR/refused/`: `body.obj`, `garment.obj` coloured by piece,
   `garment_strain.obj` and the six stills, as a `ftx place` stage does, and names that directory in the
   refusal's first repair. The state is the last accepted one when sewing, draping or settling refuses (the
   admitted start if the first sewing step does), or the recorded frame that crosses the displayed wearer when
-  the full-body check refuses. It is not a drape or a fit. A refusal of the start itself
-  (`intersecting_start`: a posed body the surface audit does not admit, cloth inside or too near the
-  body, cloth layers crossing or touching) has no solver state, so the command draws the two `ftx place`
+  the full-body check refuses. A self-contact refusal after untangling retains that exact start, with
+  `refused_pose.phase` set to `start` and zero accepted steps. For a cloth–cloth crossing, the
+  `mesh_map.json` also records the two source garment faces in `refused_pose.crossing_faces`. Yellow
+  marks the cloth within 30 mm of the reported pair, and the first repair names its pattern instances.
+  Earlier start refusals draw the two `ftx place`
   stages from the pattern and body the solver was given (an outfit merged, a `--fabric` or `--elastic-ea`
   override applied; both members of `--two-start-sew` share this start) and leaves them under
   `DIR/refused/` (`start/`, `wrap/`, `placement.json`). The first repair names them, quotes the body

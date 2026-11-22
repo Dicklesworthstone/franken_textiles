@@ -1070,7 +1070,17 @@ impl Contact {
     /// # Errors
     /// Invalid parameters or geometry, non-finite positions, or [`RefusalCode::IntersectingStart`]
     /// for crossing or touching layers. An intersecting start is refused, never pushed apart silently.
-    pub fn with_self_contact(mut self, x: &[Vec3], params: ContactParams) -> Result<Self, Refusal> {
+    pub fn with_self_contact(self, x: &[Vec3], params: ContactParams) -> Result<Self, Refusal> {
+        self.with_self_contact_observed(x, params, &mut None)
+    }
+
+    pub(crate) fn with_self_contact_observed(
+        mut self,
+        x: &[Vec3],
+        params: ContactParams,
+        crossing: &mut Option<[usize; 2]>,
+    ) -> Result<Self, Refusal> {
+        *crossing = None;
         params.validate()?;
         let params = self.material_self_params(params)?;
         self.self_params = Some(params);
@@ -1078,7 +1088,7 @@ impl Contact {
         // the creases' search reads every triangle, so the mesh is checked first
         self.check_cloth(x)?;
         self.creases = self.find_start_creases(x, &params);
-        self.audit_self_contact(x)?;
+        self.audit_self_contact_observed(x, crossing)?;
         Ok(self)
     }
 
@@ -1155,6 +1165,14 @@ impl Contact {
     /// [`RefusalCode::NonFinite`], [`RefusalCode::DegenerateGeometry`] or
     /// [`RefusalCode::IntersectingStart`]. With self-contact disabled there is nothing to audit.
     pub fn audit_self_contact(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        self.audit_self_contact_observed(x, &mut None)
+    }
+
+    fn audit_self_contact_observed(
+        &self,
+        x: &[Vec3],
+        crossing: &mut Option<[usize; 2]>,
+    ) -> Result<(), Refusal> {
         if let Some(f) = &self.surface_materials {
             f.validate_topology(&self.cloth, x.len())?;
         }
@@ -1167,6 +1185,7 @@ impl Contact {
         for (a, b) in box_self_pairs(&tris, 0.0) {
             if indexed_triangle_pair(x, self.cloth.triangles[a], self.cloth.triangles[b]).is_some()
             {
+                *crossing = Some([a, b]);
                 return Err(Refusal::new(
                     RefusalCode::IntersectingStart,
                     format!(
@@ -2417,9 +2436,13 @@ mod tests {
             Vec3::new(0.0, -0.01, 0.02),
             Vec3::new(0.0, 0.03, 0.02),
         ];
-        let err = self_layers(&x).with_self_contact(&x, params()).unwrap_err();
+        let mut observed = None;
+        let err = self_layers(&x)
+            .with_self_contact_observed(&x, params(), &mut observed)
+            .unwrap_err();
         assert_eq!(err.code, RefusalCode::IntersectingStart);
         assert!(err.message.contains("triangles 0 and 1"), "{err}");
+        assert_eq!(observed, Some([0, 1]));
         let x = layers(0.002);
         for bad in [
             ContactParams {
