@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use ftx_core::{Refusal, RefusalCode};
-use ftx_drape::render::{ColouredMesh, png, read_obj, render, still_camera, stills};
+use ftx_drape::render::{ColouredMesh, png, render, still_camera, stills};
 use serde_json::{Value, json};
 
 use super::{Args, bad_input, known_options, required};
@@ -155,30 +155,16 @@ pub(super) fn images(
     width: usize,
     height: usize,
 ) -> Result<Vec<(String, Vec<u8>)>, Refusal> {
-    let (body, garment, strain) = (
-        read_mesh(dir, "body.obj")?,
-        read_mesh(dir, "garment.obj")?,
-        read_mesh(dir, "garment_strain.obj")?,
-    );
+    let body = read_mesh(dir, "body.obj")?;
+    let garment = read_mesh(dir, "garment.obj")?;
+    let strain = checked_strain(dir, &garment)?;
     Ok(stills(&body, &garment, &strain, width, height))
 }
 
 fn read_mesh(dir: &Path, name: &str) -> Result<ColouredMesh, Refusal> {
     let path = dir.join(name);
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))?;
-    let mesh = read_obj(&text).map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
-    if mesh.vertices.is_empty()
-        || mesh.triangles.is_empty()
-        || mesh.vertices.iter().any(|v| !v.is_finite())
-        || mesh.colours.iter().flatten().any(|v| !v.is_finite())
-    {
-        return Err(bad_input(format!(
-            "{}: rendering needs a nonempty finite triangle mesh",
-            path.display()
-        )));
-    }
-    Ok(mesh)
+    crate::round::regular(&path, false)?;
+    crate::fold::mesh(&path)
 }
 
 #[cfg(test)]
@@ -228,5 +214,36 @@ mod tests {
         );
         assert!(compare(&before, &after, "front", &out, 16, 16).is_err());
         assert_eq!(fs::read(out.join("after.png")).unwrap(), rendered_after);
+    }
+
+    #[test]
+    fn images_refuse_mismatched_strain_geometry_and_out_of_range_colours() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ftx-render-strain-check-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let body = "v -0.3 0 0\nv 0.3 0 0\nv -0.3 0 1.5\nf 1 2 3\n";
+        let garment = "v -0.3 -0.1 0.2 0.5 0.5 0.5\nv 0.3 -0.1 0.2 0.5 0.5 0.5\nv -0.3 -0.1 1.2 0.5 0.5 0.5\nf 1 2 3\n";
+        let mismatched = "v -0.3 -0.1 0.2 0.5 0.5 0.5\nv 0.3 -0.1 0.2 0.5 0.5 0.5\nv -0.3 -0.1 1.2 0.5 0.5 0.5\nf 1 3 2\n";
+        fs::write(dir.join("body.obj"), body).unwrap();
+        fs::write(dir.join("garment.obj"), garment).unwrap();
+        fs::write(dir.join("garment_strain.obj"), mismatched).unwrap();
+        let err = images(&dir, 40, 32).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("garment_strain.obj"));
+
+        let bad_colour = "v -0.3 -0.1 0.2 1.5 0.5 0.5\nv 0.3 -0.1 0.2 0.5 0.5 0.5\nv -0.3 -0.1 1.2 0.5 0.5 0.5\nf 1 2 3\n";
+        fs::write(dir.join("garment_strain.obj"), bad_colour).unwrap();
+        let err = images(&dir, 40, 32).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("valid colours"));
+
+        fs::write(dir.join("garment_strain.obj"), garment).unwrap();
+        assert_eq!(images(&dir, 40, 32).unwrap().len(), 6);
     }
 }

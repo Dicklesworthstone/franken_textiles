@@ -395,3 +395,68 @@ fn sim_points_recomputes_record_bearing_measurements_ignoring_stale_or_missing_f
     let from_unfused = run(&dir, &[], 0)["result"].clone();
     assert_eq!(from_unfused["rows"], expected["rows"]);
 }
+
+#[test]
+fn viewer_refuses_corrupted_or_mismatched_strain_obj_while_allowing_absent_strain_obj() {
+    let dir = setup();
+    let sim = dir.join("sim");
+    save(
+        &sim.join("sim_report.json"),
+        &json!({
+            "settled": true,
+            "gating": [],
+            "advisory": [],
+            "arm_deg": 35.0
+        }),
+    );
+    let mut garment_obj = String::new();
+    for i in 0..12 {
+        garment_obj.push_str(&format!("v {} -0.1 0.1 0.55 0.06 0.06\n", i as f64 * 0.01));
+    }
+    garment_obj.push_str("f 1 2 3\nf 5 6 7\nf 9 10 11\n");
+    std::fs::write(sim.join("garment.obj"), &garment_obj).unwrap();
+
+    // Absent garment_strain.obj remains supported for legacy directories.
+    let absent = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["viewer", "sim", "--out", "absent.html", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(absent.status.code(), Some(0));
+    assert!(dir.join("absent.html").exists());
+
+    // Present but corrupted garment_strain.obj must fail closed instead of silently dropping strain.
+    std::fs::write(
+        sim.join("garment_strain.obj"),
+        "v not_a_number 0 0\nf 1 2 3\n",
+    )
+    .unwrap();
+    let corrupt = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["viewer", "sim", "--out", "corrupt.html", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(corrupt.status.code(), Some(3));
+    let body: Value = serde_json::from_slice(&corrupt.stdout).unwrap();
+    assert_eq!(body["refusal"]["code"], "invalid_document");
+    assert!(!dir.join("corrupt.html").exists());
+
+    // Present garment_strain.obj with matching vertex count but different triangle topology must refuse.
+    let mismatched = garment_obj.replace("f 1 2 3", "f 1 3 2");
+    std::fs::write(sim.join("garment_strain.obj"), &mismatched).unwrap();
+    let wrong_faces = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["viewer", "sim", "--out", "mismatch.html", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(wrong_faces.status.code(), Some(3));
+    let body: Value = serde_json::from_slice(&wrong_faces.stdout).unwrap();
+    assert_eq!(body["refusal"]["code"], "invalid_document");
+    assert!(
+        body["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("garment_strain.obj does not match garment.obj geometry")
+    );
+    assert!(!dir.join("mismatch.html").exists());
+}

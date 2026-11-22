@@ -317,14 +317,11 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ));
     }
     let stations = marker.is_some();
-    let strain = match mesh(&dir.join("garment_strain.obj")) {
-        Ok(m) if m.vertices.len() == cache.points() => Some(m),
-        Ok(_) => {
-            return Err(bad_input(
-                "garment_strain.obj vertex count does not match fold.pc2",
-            ));
-        }
-        Err(_) => None,
+    let strain_path = dir.join("garment_strain.obj");
+    let strain = if crate::round::regular(&strain_path, false)? {
+        Some(crate::render::checked_strain(dir, &garment)?)
+    } else {
+        None
     };
     let pat_doc = if let Some(explicit) = args.options.get("pattern") {
         let (doc, _) = document(Path::new(explicit))?;
