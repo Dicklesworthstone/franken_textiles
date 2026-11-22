@@ -107,19 +107,44 @@ impl FractionalZener {
         })
     }
 
-    /// Storage and loss moduli `(E′, E″)` at angular frequency `omega > 0` [rad/s].
+    /// Dimensionless complex relaxation transition `h(ω) = (iωτ)^α / (1 + (iωτ)^α)` computed without
+    /// overflow at large `ωτ` or cancellation when `E_∞ ≈ E_0`.
+    fn normalized_response(&self, omega: f64) -> (f64, f64) {
+        if omega.is_nan() || omega < 0.0 {
+            return (f64::NAN, f64::NAN);
+        }
+        if omega == 0.0 {
+            return (0.0, 0.0);
+        }
+        let wt = omega * self.tau;
+        let x = if wt.is_infinite() {
+            f64::INFINITY
+        } else {
+            det::exp(self.alpha * det::ln(wt))
+        };
+        let (s, c) = det::sin_cos(self.alpha * FRAC_PI_2);
+        if x <= 1.0 {
+            let xr = x * c;
+            let xi = x * s;
+            let dr = 1.0 + xr;
+            let den = dr * dr + xi * xi;
+            ((xr + x * x) / den, xi / den)
+        } else {
+            let y = 1.0 / x;
+            let yr = y * c;
+            let yi = y * s;
+            let dr = 1.0 + yr;
+            let den = dr * dr + yi * yi;
+            (dr / den, yi / den)
+        }
+    }
+
+    /// Storage and loss moduli `(E′, E″)` at angular frequency `omega ≥ 0` [rad/s].
     #[must_use]
     pub fn modulus(&self, omega: f64) -> (f64, f64) {
-        let x = det::exp(self.alpha * det::ln(omega * self.tau));
-        let ang = self.alpha * FRAC_PI_2;
-        let xr = x * det::cos(ang);
-        let xi = x * det::sin(ang);
-        let nr = self.e0 + self.e_inf * xr;
-        let ni = self.e_inf * xi;
-        let dr = 1.0 + xr;
-        let di = xi;
-        let den = dr * dr + di * di;
-        ((nr * dr + ni * di) / den, (ni * dr - nr * di) / den)
+        let (h_re, h_im) = self.normalized_response(omega);
+        let delta_e = self.e_inf - self.e0;
+        (self.e0 + delta_e * h_re, delta_e * h_im)
     }
 
     /// Loss factor `η(ω) = E″ / E′`.
@@ -338,8 +363,8 @@ pub fn sup_rel_modulus_error(
         let w = det::exp(log_lo + t * (log_hi - log_lo));
         let (fe, fi) = fz.modulus(w);
         let (ge, gi) = gm.modulus(w);
-        let num = ((ge - fe) * (ge - fe) + (gi - fi) * (gi - fi)).sqrt();
-        let den = (fe * fe + fi * fi).sqrt();
+        let num = det::hypot(ge - fe, gi - fi);
+        let den = det::hypot(fe, fi);
         worst = worst.max(num / den);
     }
     worst
@@ -417,13 +442,19 @@ pub fn lower_to_prony(
             det::exp(log_w_lo + t * (log_w_hi - log_w_lo))
         })
         .collect();
+    let delta_e = fz.e_inf - fz.e0;
     let rows = 2 * m_samples;
     let mut a = vec![0.0f64; rows * n_terms];
     let mut rhs = vec![0.0f64; rows];
+    // Solve in dimensionless branch weights `c_j = E_j / (E_inf - E_0)` with O(1) weights
+    // `E_0 / |E*(w)|` so the NNLS optimality threshold and normal equations are invariant across
+    // arbitrary modulus units (from sub-N/m fabrics to GPa fibers) and tiny relaxation ratios.
     for (i, &w) in omegas.iter().enumerate() {
-        let (fe, fi) = fz.modulus(w);
-        let mag = (fe * fe + fi * fi).sqrt();
-        let weight = 1.0 / mag;
+        let (h_re, h_im) = fz.normalized_response(w);
+        let fe = fz.e0 + delta_e * h_re;
+        let fi = delta_e * h_im;
+        let mag = det::hypot(fe, fi);
+        let weight = fz.e0 / mag;
         if !(fe.is_finite()
             && fi.is_finite()
             && mag.is_finite()
@@ -435,8 +466,8 @@ pub fn lower_to_prony(
                 "complex modulus evaluation overflowed or underflowed during Prony lowering",
             ));
         }
-        rhs[i] = (fe - fz.e0) * weight;
-        rhs[m_samples + i] = fi * weight;
+        rhs[i] = h_re * weight;
+        rhs[m_samples + i] = h_im * weight;
         for (j, &tau) in taus.iter().enumerate() {
             let (storage, loss) = prony_basis(w * tau);
             a[i * n_terms + j] = storage * weight;
@@ -444,12 +475,19 @@ pub fn lower_to_prony(
         }
     }
     let coeffs = nnls(&a, &rhs, rows, n_terms);
-    let terms: Vec<(f64, f64)> = coeffs
-        .iter()
-        .zip(&taus)
-        .filter(|(c, _)| **c > 0.0)
-        .map(|(&e, &tau)| (e, tau))
-        .collect();
+    let mut terms = Vec::new();
+    for (&c, &tau) in coeffs.iter().zip(&taus) {
+        if c > 0.0 {
+            let e = c * delta_e;
+            if !(e.is_finite() && e > 0.0) {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "Prony branch modulus overflowed during rescaling",
+                ));
+            }
+            terms.push((e, tau));
+        }
+    }
     let model = ExactPronyModel::new(fz.e0, terms)?;
     let verification_points = 512;
     let sup_rel_err = sup_rel_modulus_error(fz, &model, w_lo, w_hi, verification_points);
@@ -470,6 +508,9 @@ pub fn lower_to_prony(
 fn nnls(a: &[f64], b: &[f64], rows: usize, cols: usize) -> Vec<f64> {
     let mut passive = vec![false; cols];
     let mut x = vec![0.0f64; cols];
+    let a_scale = a.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let b_scale = b.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let grad_tol = 1e-12 * (a_scale * b_scale).max(f64::MIN_POSITIVE);
     for _ in 0..(2 * cols + 4) {
         let mut r = b.to_vec();
         for (i, ri) in r.iter_mut().enumerate() {
@@ -478,7 +519,7 @@ fn nnls(a: &[f64], b: &[f64], rows: usize, cols: usize) -> Vec<f64> {
             }
         }
         let mut best = usize::MAX;
-        let mut best_w = 1e-12;
+        let mut best_w = grad_tol;
         for j in 0..cols {
             if !passive[j] {
                 let mut wj = 0.0;
@@ -518,23 +559,29 @@ fn nnls(a: &[f64], b: &[f64], rows: usize, cols: usize) -> Vec<f64> {
             let mut drop_j = usize::MAX;
             for (k, &j) in idx.iter().enumerate() {
                 if z[k] <= 0.0 {
-                    let denom = x[j] - z[k];
-                    if denom > 0.0 {
-                        let step = x[j] / denom;
-                        if step < alpha {
-                            alpha = step;
-                            drop_j = j;
-                        }
+                    let step = if x[j] <= 0.0 {
+                        0.0
+                    } else {
+                        x[j] / (x[j] - z[k])
+                    };
+                    if step < alpha || (step == alpha && drop_j == usize::MAX) {
+                        alpha = step;
+                        drop_j = j;
                     }
                 }
             }
             for (k, &j) in idx.iter().enumerate() {
                 x[j] += alpha * (z[k] - x[j]);
             }
-            if drop_j != usize::MAX {
-                passive[drop_j] = false;
-                x[drop_j] = 0.0;
-            } else {
+            let mut dropped = false;
+            for &j in &idx {
+                if x[j] <= 0.0 || j == drop_j {
+                    passive[j] = false;
+                    x[j] = 0.0;
+                    dropped = true;
+                }
+            }
+            if !dropped {
                 break;
             }
         }
@@ -839,5 +886,47 @@ mod tests {
         let (ep, epp) = model.modulus(1e200);
         assert!(ep.is_finite() && (ep - 140.0).abs() < 1e-12);
         assert!(epp.is_finite() && (0.0..1e-190).contains(&epp));
+    }
+
+    #[test]
+    fn fractional_zener_lowering_is_scale_invariant_and_overflow_free() {
+        // Real polymeric/cellulosic fibers span Pa to GPa (1e9–1e12 Pa). Dimensionless NNLS
+        // normalization must yield identical relative accuracy across 15+ decades of modulus scale.
+        let baseline = FractionalZener::new(200.0, 500.0, 0.35, 1.0).unwrap();
+        let base_low = lower_to_prony(&baseline, 0.01, 100.0, 14, 0.02).unwrap();
+        for scale in [1e-6_f64, 1.0, 1e7, 1e10, 1e12] {
+            let fz = FractionalZener::new(200.0 * scale, 500.0 * scale, 0.35, 1.0).unwrap();
+            let low = lower_to_prony(&fz, 0.01, 100.0, 14, 0.02).unwrap();
+            assert!(
+                low.sup_rel_err <= 0.02,
+                "scale={scale:.1e} err={:.3e}",
+                low.sup_rel_err
+            );
+            assert!(
+                (low.sup_rel_err - base_low.sup_rel_err).abs() < 1e-12,
+                "scale={scale:.1e} drifted from baseline: {} vs {}",
+                low.sup_rel_err,
+                base_low.sup_rel_err
+            );
+            assert_eq!(low.model.terms.len(), base_low.model.terms.len());
+        }
+
+        // Extreme frequency (omega * tau = 1e200) must converge smoothly to (E_inf, 0) without NaN,
+        // omega = 0 gives (E_0, 0), and tiny relaxation ratio keeps nonnegative accurate loss E''.
+        let (hi_re, hi_im) = baseline.modulus(1e200);
+        assert_eq!(hi_re, 500.0);
+        assert!(hi_im.is_finite() && hi_im >= 0.0 && hi_im < 1e-60);
+        assert_eq!(baseline.modulus(0.0), (200.0, 0.0));
+
+        let tiny = FractionalZener::new(1e10, 1e10 * (1.0 + 1e-10), 0.5, 1.0).unwrap();
+        let (re, im) = tiny.modulus(1.0);
+        // At omega * tau = 1, alpha = 0.5: h_im = sin(pi/4) / (2 + 2 cos(pi/4)) = sqrt(2)/(4 + 2 sqrt(2)).
+        let want_im = (tiny.e_inf - tiny.e0) * (std::f64::consts::FRAC_1_SQRT_2)
+            / (2.0 + 2.0 * std::f64::consts::FRAC_1_SQRT_2);
+        assert!(re >= tiny.e0 && re <= tiny.e_inf);
+        assert!(
+            im > 0.0 && (im - want_im).abs() <= 1e-12 * want_im,
+            "im={im:.12e} want={want_im:.12e}"
+        );
     }
 }
