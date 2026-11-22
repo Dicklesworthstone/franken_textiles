@@ -49,5 +49,7 @@
   Cache-Control: public, max-age=0, must-revalidate, no-transform
 /:group/:page/
   Cache-Control: public, max-age=0, must-revalidate, no-transform
+/:group/:page/:detail/
+  Cache-Control: public, max-age=0, must-revalidate, no-transform
 /workbench/:page
   Cache-Control: public, max-age=0, must-revalidate, no-transform

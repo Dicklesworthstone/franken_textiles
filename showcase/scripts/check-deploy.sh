@@ -23,6 +23,11 @@ check "www redirects to the bare domain" "$site/get-started/" "$(curl -s -o /dev
 check "films answer byte-range requests (needed by Safari)" 206 "$(code -H 'Range: bytes=0-99' "$site/media/bolero.mp4")"
 check "wasm content type" "application/wasm" "$(header content-type "$site/workbench/pkg/ftx_wasm_bg.wasm")"
 case "$(header content-security-policy "$site/")" in *"default-src 'self'"*) echo "ok    content security policy";; *) echo "FAIL  content security policy missing"; failed=1;; esac
+# Without no-transform the edge appends its analytics tag to the page, which the policy above then refuses.
+# One page at each depth of path, because the header rules are written per depth.
+for path in / /how-it-works/ /wardrobe/sundress/ /wardrobe/waistcoat/inside-out/; do
+  case "$(header cache-control "$site$path")" in *no-transform*) echo "ok    no-transform on $path";; *) echo "FAIL  no-transform missing on $path (the edge may inject a script)"; failed=1;; esac
+done
 chunk="$(curl -s -A "$agent" -m 30 "$site/" | grep -o '/_next/static/chunks/[A-Za-z0-9_.-]*\.js' | head -1)"
 case "$(header cache-control "$site$chunk")" in *immutable*) echo "ok    hashed assets cached immutably";; *) echo "FAIL  hashed assets not immutable ($chunk)"; failed=1;; esac
 case "$(curl -s -A "$agent" -m 30 "$site/")" in *"rel=\"canonical\" href=\"$site/\""*) echo "ok    canonical names $site";; *) echo "FAIL  canonical does not name $site"; failed=1;; esac
