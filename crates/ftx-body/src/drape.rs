@@ -416,7 +416,10 @@ fn thumb_local_rotations(
 }
 
 fn local_joint_vector(rest: &RestBody, joint: JointRotation, t: f64) -> Vec3 {
-    let axis = rest.bone_frames[joint.bone].m.transpose().mul_vec(joint.axis);
+    let axis = rest.bone_frames[joint.bone]
+        .m
+        .transpose()
+        .mul_vec(joint.axis);
     axis * (joint.angle * t)
 }
 
@@ -492,10 +495,12 @@ pub fn pose_rotation_vectors_with_thumbs(
     pose: &Pose,
     thumbs: &ThumbPose,
 ) -> Result<Vec<Vec3>, Refusal> {
-    Ok(source_pose_vectors_with_thumbs(model, rest, pose, 1.0, thumbs)?
-        .into_iter()
-        .map(|v| v.unwrap_or(Vec3::ZERO))
-        .collect())
+    Ok(
+        source_pose_vectors_with_thumbs(model, rest, pose, 1.0, thumbs)?
+            .into_iter()
+            .map(|v| v.unwrap_or(Vec3::ZERO))
+            .collect(),
+    )
 }
 
 /// Local-bone deltas with authored thumb-root rotations, ramped from rest by `t`.
@@ -518,10 +523,12 @@ pub fn pose_deltas_with_thumbs(
             format!("pose ramp fraction {t} is outside 0–1"),
         ));
     }
-    Ok(source_pose_vectors_with_thumbs(model, rest, pose, t, thumbs)?
-        .into_iter()
-        .map(|v| v.map_or(Affine::IDENTITY, |r| Affine::from_rotvec(r, Vec3::ZERO)))
-        .collect())
+    Ok(
+        source_pose_vectors_with_thumbs(model, rest, pose, t, thumbs)?
+            .into_iter()
+            .map(|v| v.map_or(Affine::IDENTITY, |r| Affine::from_rotvec(r, Vec3::ZERO)))
+            .collect(),
+    )
 }
 
 /// Local-bone deltas for [`AnnyModel::pose`]: `pose` reached a fraction `t` of the way from rest.
@@ -1627,10 +1634,8 @@ mod tests {
         let deltas = pose_deltas_with_thumbs(&model, &rest, &Pose::rest(), 1.0, &thumbs).unwrap();
         let pivot = rest.bone_frames[5].t;
         let root = rest.bone_frames[0].t;
-        let turn = Affine::from_rotvec(
-            Vec3::new(0.0, 0.0, std::f64::consts::FRAC_PI_2),
-            Vec3::ZERO,
-        );
+        let turn =
+            Affine::from_rotvec(Vec3::new(0.0, 0.0, std::f64::consts::FRAC_PI_2), Vec3::ZERO);
         for mode in [
             crate::SkinningMode::LinearBlend,
             crate::SkinningMode::DualQuaternion,
@@ -1677,7 +1682,8 @@ mod tests {
                 assert_eq!(thumbs.validate().unwrap_err().code, code);
                 assert_eq!(
                     pose_deltas_with_thumbs(&model, &rest, &Pose::rest(), 0.0, &thumbs)
-                        .unwrap_err().code,
+                        .unwrap_err()
+                        .code,
                     code
                 );
             }
@@ -1692,7 +1698,9 @@ mod tests {
         assert_eq!(vectors[12].x.to_bits(), 1);
         for t in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
             assert_eq!(
-                pose_deltas_with_thumbs(&model, &rest, &Pose::rest(), t, &thumbs).unwrap_err().code,
+                pose_deltas_with_thumbs(&model, &rest, &Pose::rest(), t, &thumbs)
+                    .unwrap_err()
+                    .code,
                 RefusalCode::OutOfRange
             );
         }
@@ -1731,7 +1739,8 @@ mod tests {
             }
             assert_eq!(
                 pose_deltas_with_thumbs(&model, &malformed, &Pose::drape(), 1.0, &thumbs)
-                    .unwrap_err().code,
+                    .unwrap_err()
+                    .code,
                 RefusalCode::InvalidDocument
             );
         }
@@ -1739,7 +1748,8 @@ mod tests {
         malformed.bone_frames[5].m.rows[0][0] = f64::NAN;
         assert_eq!(
             joint_rotations_with_thumbs(&model, &malformed, &Pose::rest(), &thumbs)
-                .unwrap_err().code,
+                .unwrap_err()
+                .code,
             RefusalCode::NonFinite
         );
     }
