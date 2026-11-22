@@ -38,7 +38,7 @@ fn point_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 #[must_use]
 pub fn simplify(pts: &[Vec2], tol: f64) -> Vec<Vec2> {
     fn section(pts: &[Vec2], keep: &mut [bool], i: usize, j: usize, tol: f64) {
-        if i + 1 == j {
+        if j <= i + 1 {
             return;
         }
         let mut max_distance = -1.0;
@@ -52,13 +52,13 @@ pub fn simplify(pts: &[Vec2], tol: f64) -> Vec<Vec2> {
         }
         if max_distance <= tol {
             keep[i + 1..j].iter_mut().for_each(|k| *k = false);
-        } else {
+        } else if max_index > i && max_index < j {
             section(pts, keep, i, max_index, tol);
             section(pts, keep, max_index, j, tol);
         }
     }
-    if pts.is_empty() {
-        return Vec::new();
+    if pts.len() <= 2 {
+        return pts.to_vec();
     }
     let mut keep = vec![true; pts.len()];
     section(pts, &mut keep, 0, pts.len() - 1, tol);
@@ -109,6 +109,9 @@ fn ring_dist2(ring: &[Vec2], p: Vec2) -> f64 {
 /// largest distance from a vertex of either to the other's boundary.
 #[must_use]
 pub fn hausdorff(a: &[Vec2], b: &[Vec2]) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return f64::NAN;
+    }
     let close = |r: &[Vec2]| -> Vec<Vec2> {
         let mut v = r.to_vec();
         if v.first() != v.last() {
@@ -162,5 +165,23 @@ mod tests {
             ]
         };
         assert!((hausdorff(&sq(0.0), &sq(0.25)) - 0.25).abs() < 1e-15);
+        assert!(hausdorff(&[], &sq(0.0)).is_nan());
+        assert!(hausdorff(&sq(0.0), &[]).is_nan());
+        assert_eq!(
+            simplify(&[Vec2::new(1.0, 2.0)], 0.1),
+            vec![Vec2::new(1.0, 2.0)]
+        );
+        assert_eq!(
+            simplify(
+                &[
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(f64::NAN, 0.0),
+                    Vec2::new(2.0, 0.0)
+                ],
+                f64::NAN
+            )
+            .len(),
+            3
+        );
     }
 }
