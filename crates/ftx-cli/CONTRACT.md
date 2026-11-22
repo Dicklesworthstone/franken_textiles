@@ -330,7 +330,9 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   the first repair names the piece instance or instances that own it; the check stops at its first
   crossing, so one place is marked, not every place. Run on a build of `298a7a17`, the 385 mm sleeve with
   `--hands knuckle` was refused at frame 87 and named `sleeve.R`; that build painted the one triangle only,
-  which was 3 to 4 pixels wide in an 840 by 620 still and went unseen, hence the 30 mm.
+  which was 3 to 4 pixels wide in an 840 by 620 still and went unseen, hence the 30 mm. On a build with
+  the 30 mm mark the same run paints 31 vertices at the right cuff and the patch is plain in that still;
+  `ftx place` on the same cut printed `(cloth of sleeve.R)` for both stages.
   When the refused state is the start itself (no sewing step accepted),
   the second repair says what the run knows about that start, because no solver budget changes it: that
   it is an earlier relaxation checkpoint, with both iteration counts, when the fully relaxed start was not
@@ -353,9 +355,10 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   1225 and 250 iterations. The first named the back and both fronts by their shoulder and neck seams and
   not the sleeves, so the instance list is not to be trusted on a mesh finer than the 12 mm it was
   measured on. The second could not write its pictures and came back with no diagnosis, which is what the
-  sentence before this paragraph now prevents. Still not printed by any built binary: the capped-start
-  sentence of a drape, the checkpoint warning and the unwritable-pictures repair, which postdate that
-  build; all three are unit-tested. `ftx place` applies the same measure to the start it draws, prints such instances as
+  sentence before this paragraph now prevents. A later build printed the checkpoint warning on the same
+  sleeve at 12 mm, where the list named both sleeves (3 and 3.3 %, at their cuff edges). Still not
+  printed by any built binary: the capped-start sentence of a drape and the unwritable-pictures repair;
+  both are unit-tested. `ftx place` applies the same measure to the start it draws, prints such instances as
   `TIGHT START` and records `stretched_past_ramp_pct` and `stretched_nearest_edge` in each instance's
   `start_edge_strain`. It draws the fully relaxed start, so it does not flag a garment whose fully relaxed
   start is loose but is not admitted for cloth contact: there only the drape's refusal names the stretched
