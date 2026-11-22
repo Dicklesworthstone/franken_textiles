@@ -101,19 +101,19 @@ pub struct CoverageSolution {
 
 impl CoverageSolution {
     pub(super) fn exclude_total_reported_bounds(&mut self, reason: &str) {
-        self.ranges = PowerRange::unavailable(reason);
+        self.ranges.exclude(reason);
         for field in &mut self.body {
-            field.ranges = PowerRange::unavailable(reason);
+            field.ranges.exclude(reason);
         }
     }
 
     pub(super) fn exclude_reported_bounds(&mut self, reasons: &[&str]) {
-        self.ranges = PowerRange::unavailable_with(reasons);
+        self.ranges.exclude_all(reasons);
         for field in &mut self.body {
-            field.ranges = PowerRange::unavailable_with(reasons);
+            field.ranges.exclude_all(reasons);
         }
         for region in &mut self.regions {
-            region.ranges = PowerRange::unavailable_with(reasons);
+            region.ranges.exclude_all(reasons);
             region.conduction.exclude_reported_bounds_with(reasons);
         }
     }

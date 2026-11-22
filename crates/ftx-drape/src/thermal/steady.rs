@@ -72,10 +72,19 @@ impl PowerRange {
         }
     }
 
-    pub(super) fn unavailable_with(reasons: &[&str]) -> Self {
-        Self {
-            reported_bounds: None,
-            bounds_unavailable: reasons.iter().map(|r| (*r).into()).collect(),
+    pub(super) fn exclude(&mut self, reason: &str) {
+        self.reported_bounds = None;
+        if !self.bounds_unavailable.iter().any(|r| r == reason) {
+            self.bounds_unavailable.push(reason.into());
+        }
+    }
+
+    pub(super) fn exclude_all(&mut self, reasons: &[&str]) {
+        self.reported_bounds = None;
+        for &reason in reasons {
+            if !self.bounds_unavailable.iter().any(|r| r == reason) {
+                self.bounds_unavailable.push(reason.into());
+            }
         }
     }
 
@@ -115,12 +124,18 @@ impl SteadyState {
 
     pub(super) fn exclude_reported_bounds(&mut self, reason: &str) {
         self.reported_bounds = None;
-        self.bounds_unavailable = vec![reason.into()];
+        if !self.bounds_unavailable.iter().any(|r| r == reason) {
+            self.bounds_unavailable.push(reason.into());
+        }
     }
 
     pub(super) fn exclude_reported_bounds_with(&mut self, reasons: &[&str]) {
         self.reported_bounds = None;
-        self.bounds_unavailable = reasons.iter().map(|r| (*r).into()).collect();
+        for &reason in reasons {
+            if !self.bounds_unavailable.iter().any(|r| r == reason) {
+                self.bounds_unavailable.push(reason.into());
+            }
+        }
     }
 }
 

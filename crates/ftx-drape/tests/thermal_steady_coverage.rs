@@ -932,6 +932,43 @@ fn only_consumed_thickness_dependent_gaps_disable_reported_coverage_ranges() {
             .contains("stagnant-gap")
     );
     assert_eq!(bridge_evaluate(&consumed["request"]).unwrap(), consumed);
+    // Combining consumed stagnant-gap interfaces with thermal bridges must preserve BOTH
+    // exclusion reasons on total and body bounds rather than clobbering the gap reason.
+    let mut gap_and_bridge = with_bridge(input.clone(), &[0, 1], 0.2);
+    gap_and_bridge["thermal_bridges"]["paths"][0]["instance"] = json!("front");
+    let combined = bridge_evaluate(&gap_and_bridge).unwrap();
+    assert!(combined["steady"]["reported_bounds"].is_null());
+    let total_reasons: Vec<&str> = combined["steady"]["bounds_unavailable"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        total_reasons.iter().any(|r| r.contains("stagnant-gap")),
+        "expected stagnant-gap reason preserved, got {total_reasons:?}"
+    );
+    assert!(
+        total_reasons.iter().any(|r| r.contains("thermal-bridge")),
+        "expected thermal-bridge reason appended, got {total_reasons:?}"
+    );
+    let body_reasons: Vec<&str> = combined["steady"]["body"][0]["bounds_unavailable"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(body_reasons.iter().any(|r| r.contains("stagnant-gap")));
+    assert!(body_reasons.iter().any(|r| r.contains("thermal-bridge")));
+    let region_reasons: Vec<&str> = combined["steady"]["regions"][0]["bounds_unavailable"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(region_reasons.iter().any(|r| r.contains("stagnant-gap")));
+    assert!(!region_reasons.iter().any(|r| r.contains("thermal-bridge")));
+    assert_eq!(bridge_evaluate(&combined["request"]).unwrap(), combined);
     input["conditions"]["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.);
     input["conditions"]["exterior_exchange"] = json!([environment(false)]);
     let exterior = bridge_evaluate(&input).unwrap();

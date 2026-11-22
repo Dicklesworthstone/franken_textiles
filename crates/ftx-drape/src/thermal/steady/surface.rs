@@ -58,9 +58,9 @@ pub struct SurfaceSolution {
 
 impl SurfaceSolution {
     pub(super) fn exclude_reported_bounds(&mut self, reason: &str) {
-        self.ranges = PowerRange::unavailable(reason);
+        self.ranges.exclude(reason);
         for patch in &mut self.patches {
-            patch.ranges = PowerRange::unavailable(reason);
+            patch.ranges.exclude(reason);
         }
         for column in &mut self.columns {
             column.exclude_reported_bounds(reason);
