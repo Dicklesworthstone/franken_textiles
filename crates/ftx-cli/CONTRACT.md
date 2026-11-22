@@ -63,9 +63,11 @@ Leg posture is independent of `--arm-deg`; fitting and nappy calibration retain 
 for example `'{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[0,0,0]}'`.
 Each vector is expressed in that thumb root's source-local axes, with magnitude at most π radians.
 This is an authored rotation. The tape fit stays in its reference pose. For a nonzero thumb vector,
-the solver audits the full displayed body surface before advancing, including hands omitted from a
-collision proxy. `ftx place` reports this audit as `display_body_surface` alongside its start
-diagnostics. The chosen vectors appear under `body.thumb_pose` in the placement or simulation report.
+the solver checks the clothing collider with both complete hands before advancing, even when
+the selected collision proxy trims the hands. The full-hand check retains the standard foot and
+pelvic caps. The separate cloth contact audit still checks the complete displayed body.
+`ftx place` records the full-hand check as `authored_hand_surface`. The chosen vectors appear under
+`body.thumb_pose` in the placement or simulation report.
 Extra settling continues the same sewn cloth at the original time step until the shared numerical
 quiet window or the declared cap. Reports and animations retain all accepted steps and actual
 duration, including both starts when requested. Invalid settings refuse before file I/O. History

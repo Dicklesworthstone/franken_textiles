@@ -20,6 +20,7 @@ use ftx_body::{
 };
 use ftx_core::intersection::{indexed_triangle_pair, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
+use ftx_drape::collider::SurfaceAudit;
 use ftx_drape::scene::{
     PartFrames, casings_at_cut_length, elastic_casings, placements, wrapped_positions,
 };
@@ -1035,6 +1036,7 @@ pub(super) struct Staging<'a> {
     /// Which hand collider `collision` was built with; reported when it is not the reference's.
     pub hands: HandCollider,
     pub thumbs: Option<ThumbPose>,
+    pub thumb_audit: Option<&'a Result<SurfaceAudit, Refusal>>,
 }
 
 fn body_surface_report(surface: (&[Vec3], &[[usize; 3]])) -> Value {
@@ -1062,6 +1064,7 @@ fn stages(
         skinning,
         hands,
         thumbs,
+        thumb_audit,
     } = *staging;
     // The same scope rule as a drape: an unplaced attachment refuses instead of vanishing.
     let scope = ftx_drape::garment::simulation_scope(source)?;
@@ -1203,9 +1206,12 @@ fn stages(
     }
     if let Some(thumbs) = thumbs {
         report["body"]["thumb_pose"] = json!(thumbs);
-        if thumbs != ThumbPose::default() {
-            report["display_body_surface"] = body_surface_report(full);
-        }
+    }
+    if let Some(audit) = thumb_audit {
+        report["authored_hand_surface"] = match audit {
+            Ok(audit) => json!({"admitted": true, "pairs_tested": audit.pairs_tested}),
+            Err(refusal) => json!({"admitted": false, "refusal": refusal}),
+        };
     }
     workspace::write_json(&out.join("placement.json"), &report)?;
     Ok((report, mesh))
@@ -1257,6 +1263,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let posed = super::pose_fitted_body(&model, &rest, &pose, skinning, thumbs)?;
     let skin = clothing_skin_with_hands(&model, &posed.vertices, hands)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
+    let thumb_audit = super::audit_authored_hands(&model, &posed, &skin, hands, thumbs);
     let frames = BodyFrames::new(&model, &posed)?;
     let (report, _) = stages(
         &Staging {
@@ -1270,6 +1277,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             skinning,
             hands,
             thumbs,
+            thumb_audit: thumb_audit.as_ref(),
         },
         size,
         &out,
@@ -1300,9 +1308,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "  BODY POSE NOT ADMITTED by the drape's surface audit: {message}\n"
         ));
     }
-    if let Some(message) = report["display_body_surface"]["refusal"]["message"].as_str() {
+    if let Some(message) = report["authored_hand_surface"]["refusal"]["message"].as_str() {
         text.push_str(&format!(
-            "  FULL DISPLAY BODY POSE NOT ADMITTED: {message}\n"
+            "  AUTHORED FULL-HAND POSE NOT ADMITTED: {message}\n"
         ));
     }
     if let Some(pairs) = report["cloth_contact"]["crossing_triangle_pairs"].as_u64() {
@@ -2154,6 +2162,7 @@ mod tests {
             skinning: ftx_body::SkinningMode::LinearBlend,
             hands: ftx_body::HandCollider::Palm,
             thumbs: None,
+            thumb_audit: None,
         };
         let refusal = || {
             Refusal::new(

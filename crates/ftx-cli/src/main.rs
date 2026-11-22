@@ -40,14 +40,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, FREE, HandCollider, Legs, Pose, PosedBody, RestBody, SkinningMode,
-    TAPE_FIELDS, TapeFit, ThumbPose, Wearer, clothing_skin_with_hands, default_model_path,
-    fit_tape, pose_deltas, pose_deltas_with_thumbs, skin_mesh, tape_targets,
+    AnnyModel, BodyFrames, FREE, HandCollider, Legs, Pose, PosedBody, RestBody, SkinMesh,
+    SkinningMode, TAPE_FIELDS, TapeFit, ThumbPose, Wearer, clothing_skin_with_hands,
+    default_model_path, fit_tape, pose_deltas, pose_deltas_with_thumbs, skin_mesh, tape_targets,
 };
 use ftx_core::Vec3;
 use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
+use ftx_drape::collider::{SurfaceAudit, audit_surface};
 use ftx_drape::run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape_observed, viewer};
 use ftx_drape::stepping::SubdivisionOptions;
 use ftx_drape::{NewtonStrategy, TimeIntegrator};
@@ -989,6 +990,26 @@ fn pose_fitted_body(
     model.pose_with_skinning(rest, &deltas, skinning)
 }
 
+fn audit_authored_hands(
+    model: &AnnyModel,
+    posed: &PosedBody,
+    skin: &SkinMesh,
+    hands: HandCollider,
+    thumbs: Option<ThumbPose>,
+) -> Option<Result<SurfaceAudit, Refusal>> {
+    thumbs.filter(|pose| *pose != ThumbPose::default())?;
+    let audit =
+        |skin: &SkinMesh| audit_surface(&skin.vertices, &skin.triangles, place::BODY_AUDIT_PAIRS);
+    // Audit every displayed hand vertex, keeping the standard pelvic and foot caps of the
+    // clothing collider. Cloth still receives its separate audit against the exact display mesh.
+    Some(if hands == HandCollider::Full {
+        audit(skin)
+    } else {
+        clothing_skin_with_hands(model, &posed.vertices, HandCollider::Full)
+            .and_then(|full_hands| audit(&full_hands))
+    })
+}
+
 /// Claim a fresh destination before fitting/solving. A failed retry must not leave a previous
 /// successful run at the path the caller will inspect for its new result.
 fn reserve_drape_output(out: &std::path::Path) -> Result<(), Refusal> {
@@ -1132,22 +1153,12 @@ fn cmd_drape_bound(
     let posed = pose_fitted_body(&model, &rest, &pose, skinning, thumbs)?;
     let skin = clothing_skin_with_hands(&model, &posed.vertices, hands)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
-    let display_body_surface = if thumbs.is_some_and(|pose| pose != ThumbPose::default()) {
-        Some(
-            ftx_drape::collider::audit_surface(
-                &full.vertices,
-                &full.triangles,
-                place::BODY_AUDIT_PAIRS,
-            )
-            .map_err(|refusal| {
-                refusal.repair(
-                    "Check the full displayed body with ftx place, then revise --thumb-pose.",
-                )
-            })?,
-        )
-    } else {
-        None
-    };
+    let authored_hand_surface = audit_authored_hands(&model, &posed, &skin, hands, thumbs)
+        .transpose()
+        .map_err(|refusal| {
+            refusal.repair("Check the full-hand collider with ftx place, then revise --thumb-pose.")
+        })?;
+    let thumb_audit = authored_hand_surface.map(Ok);
     let frames = BodyFrames::new(&model, &posed)?;
     let pattern = Pattern::new(pat);
     let body = DrapeBody {
@@ -1208,6 +1219,7 @@ fn cmd_drape_bound(
                 skinning,
                 hands,
                 thumbs,
+                thumb_audit: thumb_audit.as_ref(),
             },
             &out,
             refusal_size,
@@ -1249,9 +1261,9 @@ fn cmd_drape_bound(
         if let Some(thumbs) = thumbs {
             b.insert("thumb_pose".into(), json!(thumbs));
         }
-        if let Some(audit) = display_body_surface {
+        if let Some(audit) = authored_hand_surface {
             b.insert(
-                "display_surface_pairs_tested".into(),
+                "authored_hand_surface_pairs_tested".into(),
                 json!(audit.pairs_tested),
             );
         }
