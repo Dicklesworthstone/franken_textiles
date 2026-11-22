@@ -51,7 +51,7 @@ def check(path):
 if __name__ == "__main__":
     origin = sys.argv[1]
     paths = ["/", "/how-it-works/", "/get-started/", "/wardrobe/sundress/", "/wardrobe/hussar/", "/experiments/strip/", "/experiments/cylinder/", "/experiments/thermal/", "/studies/trousers/", "/studies/skirt/"]
-    paths += ["/wardrobe/hussar/embroidery/", "/studies/tiling/", "/studies/sewing/", "/experiments/wash/"]
+    paths += ["/wardrobe/sundress/redraft/", "/wardrobe/hussar/embroidery/", "/studies/tiling/", "/studies/sewing/", "/experiments/wash/"]
     paths += ["/sections/" + s + "/" for s in ("wardrobe","studio","draft","cut","stitch","repair","materials","studies","tracing","films","tools")]
     paths += ["/workbench/" + s for s in ("index.html","trace.html","materials.html","photo.html")]
     with ThreadPoolExecutor(max_workers=4) as workers:

@@ -64,7 +64,8 @@ export default function SundressLab(){
             dress.bust-body.bust<dress.bustBand[0]||dress.waist-body.waist<dress.waistBand[0]?"Room falls below the flat pattern’s minimum ease target.":
             dress.bust-body.bust>dress.bustBand[2]||dress.waist-body.waist>dress.waistBand[2]?"Room exceeds this pattern’s ease band.":"Both girths are within this pattern’s ease band."}</p>
           <details><summary>Compare cross-sections</summary>{body&&<><div className="sd-cross"><EaseSection name="bust" girth={body.bust}/><EaseSection name="waist" girth={body.waist}/></div>
-            <p>Solid ellipses represent the model tapes. Dashed lines represent the fixed garment girths at the same scale.</p></>}</details></>}
+            <p>Solid ellipses represent the model tapes. Dashed lines represent the fixed garment girths at the same scale.</p></>}</details>
+          <p><a href="/wardrobe/sundress/redraft/">Redraft bodice &amp; waist for this ease →</a></p></>}
         </div>
         <div className="sd-section"><h2>Arm pose</h2></div><div className="sd-poses">{([["At rest",14,19],["Reach",83,29],["Raised",115,106]] as const).map(([name,left,right])=>
           <button key={name} disabled={failed} aria-pressed={form.left===left&&form.right===right} onClick={()=>setForm(p=>({...p,left,right}))}>{name}</button>)}</div>
