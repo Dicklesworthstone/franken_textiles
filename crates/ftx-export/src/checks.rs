@@ -49,16 +49,21 @@ pub fn check_svg(text: &str, file: &str, cutter: bool) -> Vec<CheckItem> {
         !text.contains("transform"),
         "",
     )];
-    let root = parse(text).unwrap_or_default();
-    let attr = |k: &str| root.get(k).unwrap_or("").to_string();
+    let parsed = parse(text);
+    let root = parsed.as_ref();
+    let attr = |k: &str| root.and_then(|r| r.get(k)).unwrap_or("").to_string();
     let (w, h, vb) = (attr("width"), attr("height"), attr("viewBox"));
-    let mut ok = w.ends_with("mm") && h.ends_with("mm");
+    let mut ok = root.is_some() && w.ends_with("mm") && h.ends_with("mm");
     if ok {
         let v: Option<Vec<f64>> = vb.split_whitespace().map(|q| q.parse().ok()).collect();
         let num = |s: &str| s[..s.len() - 2].trim().parse::<f64>().ok();
         ok = match (v, num(&w), num(&h)) {
             (Some(v), Some(wv), Some(hv)) => {
                 v.len() == 4
+                    && wv.is_finite()
+                    && hv.is_finite()
+                    && wv > 0.0
+                    && hv > 0.0
                     && v[0] == 0.0
                     && v[1] == 0.0
                     && (v[2] - wv).abs() < 1e-6
@@ -75,14 +80,19 @@ pub fn check_svg(text: &str, file: &str, cutter: bool) -> Vec<CheckItem> {
     ));
     if cutter {
         let paths: Vec<_> = root
-            .descendants()
-            .into_iter()
-            .filter(|e| e.name == "path")
-            .collect();
+            .map(|r| {
+                r.descendants()
+                    .into_iter()
+                    .filter(|e| e.name == "path")
+                    .collect()
+            })
+            .unwrap_or_default();
         out.push(CheckItem::new(
             "cutter.single_closed_path",
             file,
-            paths.len() == 1 && paths[0].get("d").unwrap_or("").trim_end().ends_with('Z'),
+            root.is_some()
+                && paths.len() == 1
+                && paths[0].get("d").unwrap_or("").trim_end().ends_with('Z'),
             "",
         ));
     } else {
@@ -98,27 +108,35 @@ pub fn check_svg(text: &str, file: &str, cutter: bool) -> Vec<CheckItem> {
             "labels",
             "decor-soutache",
         ];
-        let bad: Vec<String> = root
-            .children
-            .iter()
-            .filter(|g| g.name == "g" && g.get("id").unwrap_or("").starts_with("piece-"))
-            .filter(|g| {
-                let have: Vec<&str> = g
+        let (sub_ok, detail) = match root {
+            None => (false, "unparseable svg".to_string()),
+            Some(root) => {
+                let pieces: Vec<_> = root
                     .children
                     .iter()
-                    .filter(|c| c.name == "g")
-                    .filter_map(|c| c.get("class"))
+                    .filter(|g| g.name == "g" && g.get("id").unwrap_or("").starts_with("piece-"))
                     .collect();
-                !NEED.iter().all(|n| have.contains(n))
-            })
-            .map(|g| g.get("id").unwrap_or("").to_string())
-            .collect();
-        out.push(CheckItem::new(
-            "svg.piece_subgroups",
-            file,
-            bad.is_empty(),
-            bad.join(", "),
-        ));
+                if pieces.is_empty() {
+                    (false, "no piece groups".to_string())
+                } else {
+                    let bad: Vec<String> = pieces
+                        .into_iter()
+                        .filter(|g| {
+                            let have: Vec<&str> = g
+                                .children
+                                .iter()
+                                .filter(|c| c.name == "g")
+                                .filter_map(|c| c.get("class"))
+                                .collect();
+                            !NEED.iter().all(|n| have.contains(n))
+                        })
+                        .map(|g| g.get("id").unwrap_or("").to_string())
+                        .collect();
+                    (bad.is_empty(), bad.join(", "))
+                }
+            }
+        };
+        out.push(CheckItem::new("svg.piece_subgroups", file, sub_ok, detail));
     }
     out
 }
@@ -527,8 +545,15 @@ pub fn check_pdf(
     let declared_pages: Option<usize> = heads
         .iter()
         .find(|(_, h, _)| h.contains("/Type /Pages"))
-        .and_then(|(_, h, _)| text_after(h, "/Count ", ' '))
-        .and_then(|s| s.trim_end_matches('>').trim().parse().ok());
+        .and_then(|(_, h, _)| {
+            let i = h.find("/Count ")? + 7;
+            let digits: String = h[i..]
+                .trim_start()
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
+        });
     let mut props = BTreeSet::new();
     let (mut mb_ok, mut sq_pages, mut tiles_info, mut fonts_all) =
         (true, Vec::new(), Vec::new(), Vec::new());
@@ -659,7 +684,7 @@ pub fn check_pdf(
             out.push(CheckItem::new(
                 "pdf.test_squares_every_sheet",
                 file,
-                n == sq_pages.len(),
+                !sq_pages.is_empty() && n == sq_pages.len(),
                 format!("{n}/{}", sq_pages.len()),
             ));
         }
@@ -756,11 +781,16 @@ pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) 
             nums(&hpgl["sheet_mm"]).get(1).copied().unwrap_or(0.0),
         ),
         Some(m) => {
-            let ok = hpgl.get("cut_bbox").is_none()
-                || nums(&hpgl["cut_bbox"])
-                    .iter()
-                    .zip(nums(&m["cut_bbox"]))
-                    .all(|(a, b)| (a - b).abs() <= 0.01);
+            let ok = match hpgl.get("cut_bbox") {
+                None => true,
+                Some(v) => {
+                    let got = nums(v);
+                    let want = nums(&m["cut_bbox"]);
+                    got.len() == 4
+                        && want.len() == 4
+                        && got.iter().zip(&want).all(|(a, b)| (a - b).abs() <= 0.01)
+                }
+            };
             out.push(CheckItem::new("hpgl.same_layout_as_master", file, ok, ""));
             (nums(&m["cut_bbox"]), m["height_mm"].as_f64().unwrap_or(0.0))
         }
@@ -779,7 +809,7 @@ pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) 
             ys.extend(v.iter().skip(1).step_by(2).copied());
         }
     }
-    if xs.is_empty() || bbox.len() < 4 {
+    if xs.is_empty() || ys.is_empty() || bbox.len() != 4 {
         out.push(CheckItem::new(
             "hpgl.bbox",
             file,
@@ -1181,54 +1211,70 @@ pub fn check_flat_dxf(text: &str, file: &str) -> Vec<CheckItem> {
 /// panel edges, none twice.
 #[must_use]
 pub fn check_garmentcode(text: &str, file: &str) -> Vec<CheckItem> {
-    let spec: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-    let props = &spec["properties"];
-    let mut out = vec![CheckItem::new(
-        "gc.units_cm_relative",
-        file,
-        props["units_in_meter"].as_i64() == Some(100) && props["curvature_coords"] == "relative",
-        "",
-    )];
-    let empty = serde_json::Map::new();
-    let panels = spec["pattern"]["panels"].as_object().unwrap_or(&empty);
-    let closed = panels.values().all(|p| {
-        let e = p["edges"].as_array().map(Vec::as_slice).unwrap_or_default();
-        (0..e.len()).all(|i| e[i]["endpoints"][1] == e[(i + 1) % e.len()]["endpoints"][0])
+    let spec: Option<Value> = serde_json::from_str(text).ok();
+    let units_ok = spec.as_ref().is_some_and(|s| {
+        let props = &s["properties"];
+        props["units_in_meter"].as_i64() == Some(100) && props["curvature_coords"] == "relative"
+    });
+    let mut out = vec![CheckItem::new("gc.units_cm_relative", file, units_ok, "")];
+    let panels = spec
+        .as_ref()
+        .and_then(|s| s["pattern"]["panels"].as_object());
+    let closed = panels.is_some_and(|panels| {
+        panels.values().all(|p| {
+            let Some(e) = p["edges"].as_array().filter(|e| !e.is_empty()) else {
+                return false;
+            };
+            let endpoint = |edge: &Value, idx: usize| {
+                edge["endpoints"]
+                    .as_array()
+                    .filter(|ep| ep.len() == 2)
+                    .and_then(|ep| ep[idx].as_u64())
+            };
+            (0..e.len()).all(
+                |i| match (endpoint(&e[i], 1), endpoint(&e[(i + 1) % e.len()], 0)) {
+                    (Some(end), Some(next_start)) => {
+                        endpoint(&e[i], 0).is_some() && end == next_start
+                    }
+                    _ => false,
+                },
+            )
+        })
     });
     out.push(CheckItem::new("gc.edge_loops_closed", file, closed, ""));
-    let stitches = spec["pattern"]["stitches"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let stitches = spec
+        .as_ref()
+        .and_then(|s| s["pattern"]["stitches"].as_array());
     let mut used = BTreeSet::new();
-    let mut ok = true;
-    for st in stitches {
-        for side in st
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
-            .take(2)
-        {
-            let (p, e) = (
-                side["panel"].as_str().unwrap_or(""),
-                side["edge"].as_i64().unwrap_or(-1),
-            );
-            let n = panels
-                .get(p)
-                .and_then(|q| q["edges"].as_array())
-                .map_or(0, Vec::len) as i64;
-            ok &= panels.contains_key(p)
-                && (0..n).contains(&e)
-                && !used.contains(&(p.to_string(), e));
-            used.insert((p.to_string(), e));
+    let mut ok = panels.is_some() && stitches.is_some();
+    let stitch_slice = stitches.map(Vec::as_slice).unwrap_or_default();
+    if let Some(panels) = panels {
+        for st in stitch_slice {
+            let Some(sides) = st.as_array().filter(|a| a.len() >= 2) else {
+                ok = false;
+                continue;
+            };
+            for side in sides.iter().take(2) {
+                let (p, e) = (
+                    side["panel"].as_str().unwrap_or(""),
+                    side["edge"].as_i64().unwrap_or(-1),
+                );
+                let n = panels
+                    .get(p)
+                    .and_then(|q| q["edges"].as_array())
+                    .map_or(0, Vec::len) as i64;
+                ok &= panels.contains_key(p)
+                    && (0..n).contains(&e)
+                    && !used.contains(&(p.to_string(), e));
+                used.insert((p.to_string(), e));
+            }
         }
     }
     out.push(CheckItem::new(
         "gc.stitches_valid_unique",
         file,
         ok,
-        format!("{} stitches", stitches.len()),
+        format!("{} stitches", stitch_slice.len()),
     ));
     out
 }
@@ -1403,7 +1449,10 @@ pub fn check_dst(
     if let Some(braid) = braid {
         let c = info["centre_mm"]
             .as_array()
-            .map(|a| (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)))
+            .and_then(|a| match a.as_slice() {
+                [x, y, ..] => Some((x.as_f64().unwrap_or(0.0), y.as_f64().unwrap_or(0.0))),
+                _ => None,
+            })
             .unwrap_or((0.0, 0.0));
         let lines: Vec<Vec<(f64, f64)>> = braid
             .iter()
@@ -1531,5 +1580,213 @@ mod tests {
                 .any(|c| c.check == "pdf.page_count_matches_tree" && !c.ok),
             "truncated PDF must fail pdf.page_count_matches_tree, got {trunc_checks:?}"
         );
+    }
+
+    #[test]
+    fn check_svg_rejects_unparseable_empty_and_zero_dimension_svgs() {
+        let broken =
+            "<svg width=\"100mm\" height=\"100mm\" viewBox=\"0 0 100 100\"><g id=\"piece-p\"";
+        let broken_master = check_svg(broken, "broken.svg", false);
+        assert!(
+            broken_master
+                .iter()
+                .any(|c| c.check == "svg.mm_units_viewbox" && !c.ok)
+        );
+        assert!(
+            broken_master
+                .iter()
+                .any(|c| c.check == "svg.piece_subgroups"
+                    && !c.ok
+                    && c.detail == "unparseable svg")
+        );
+        let broken_cutter = check_svg(broken, "broken.svg", true);
+        assert!(
+            broken_cutter
+                .iter()
+                .any(|c| c.check == "cutter.single_closed_path" && !c.ok)
+        );
+
+        let empty_svg = "<svg width=\"100mm\" height=\"100mm\" viewBox=\"0 0 100 100\"></svg>";
+        let empty_master = check_svg(empty_svg, "empty.svg", false);
+        assert!(
+            empty_master.iter().any(|c| c.check == "svg.piece_subgroups"
+                && !c.ok
+                && c.detail == "no piece groups")
+        );
+
+        let zero_svg = "<svg width=\"0mm\" height=\"0mm\" viewBox=\"0 0 0 0\"></svg>";
+        let zero_master = check_svg(zero_svg, "zero.svg", false);
+        assert!(
+            zero_master
+                .iter()
+                .any(|c| c.check == "svg.mm_units_viewbox" && !c.ok)
+        );
+    }
+
+    #[test]
+    fn check_pdf_copyshop_rejects_empty_and_parses_tight_count_delimiter() {
+        let empty = check_pdf(b"", "empty.pdf", [841.0, 1189.0], "copyshop", None);
+        assert!(
+            empty
+                .iter()
+                .any(|c| c.check == "pdf.test_squares_every_sheet" && !c.ok),
+            "0-page copyshop PDF must not vacuously pass: {empty:?}"
+        );
+
+        let tight = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /PrintScaling /None >>\nendobj\n\
+2 0 obj\n<< /Type /Pages /Count 2>>\nendobj\n\
+3 0 obj\n<< /Type /Page /MediaBox [0 0 595.2756 841.8898] /Contents 4 0 R >>\nendobj\n\
+4 0 obj\n<< /Length 0 >>\nstream\n\nendstream\nendobj\n";
+        let checks = check_pdf(tight, "tight.pdf", [210.0, 297.0], "tiled", None);
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.check == "pdf.page_count_matches_tree" && !c.ok),
+            "tight /Count 2>> with 1 page must fail page count check: {checks:?}"
+        );
+    }
+
+    #[test]
+    fn check_hpgl_rejects_malformed_cut_bbox_and_odd_sp2_coords() {
+        let master = json!({"cut_bbox": [0.0, 0.0, 100.0, 50.0], "height_mm": 100.0});
+        for bad_bbox in [json!([]), json!([0.0, 0.0]), json!("bad"), json!(null)] {
+            let hpgl = json!({"cut_bbox": bad_bbox});
+            let items = check_hpgl(
+                "IN;SP2;PU0,2000;PD4000,4000;",
+                "bad.plt",
+                Some(&master),
+                &hpgl,
+            );
+            assert!(
+                items
+                    .iter()
+                    .any(|c| c.check == "hpgl.same_layout_as_master" && !c.ok),
+                "malformed cut_bbox {bad_bbox} must fail hpgl.same_layout_as_master: {items:?}"
+            );
+        }
+        let odd = check_hpgl("IN;SP2;PU100;", "odd.plt", Some(&master), &json!({}));
+        assert!(
+            odd.iter().any(|c| c.check == "hpgl.bbox" && !c.ok),
+            "odd SP2 coordinate with missing y must fail hpgl.bbox: {odd:?}"
+        );
+    }
+
+    #[test]
+    fn check_garmentcode_rejects_corrupt_empty_null_endpoints_and_short_stitches() {
+        let corrupt = check_garmentcode("{bad", "bad.json");
+        assert!(
+            corrupt.iter().all(|c| !c.ok),
+            "invalid JSON must fail all GarmentCode checks: {corrupt:?}"
+        );
+
+        // Missing panels object fails; an explicit empty panels object (all sim:false, e.g. fez) passes.
+        let missing_panels = json!({
+            "properties": {"units_in_meter": 100, "curvature_coords": "relative"},
+            "pattern": {"stitches": []}
+        })
+        .to_string();
+        assert!(
+            check_garmentcode(&missing_panels, "missing.json")
+                .iter()
+                .any(|c| c.check == "gc.edge_loops_closed" && !c.ok)
+        );
+        let empty_panels = json!({
+            "properties": {"units_in_meter": 100, "curvature_coords": "relative"},
+            "pattern": {"panels": {}, "stitches": []}
+        })
+        .to_string();
+        assert!(
+            check_garmentcode(&empty_panels, "empty.json")
+                .iter()
+                .all(|c| c.ok)
+        );
+
+        let empty_edges = json!({
+            "properties": {"units_in_meter": 100, "curvature_coords": "relative"},
+            "pattern": {"panels": {"p": {"edges": []}}, "stitches": []}
+        })
+        .to_string();
+        assert!(
+            check_garmentcode(&empty_edges, "empty_edges.json")
+                .iter()
+                .any(|c| c.check == "gc.edge_loops_closed" && !c.ok)
+        );
+
+        let null_endpoints = json!({
+            "properties": {"units_in_meter": 100, "curvature_coords": "relative"},
+            "pattern": {"panels": {"p": {"edges": [{}, {}]}}, "stitches": []}
+        })
+        .to_string();
+        assert!(
+            check_garmentcode(&null_endpoints, "null_ep.json")
+                .iter()
+                .any(|c| c.check == "gc.edge_loops_closed" && !c.ok)
+        );
+
+        for bad_stitch in [
+            json!([]),
+            json!([{"panel": "p", "edge": 0}]),
+            json!("garbage"),
+        ] {
+            let gc = json!({
+                "properties": {"units_in_meter": 100, "curvature_coords": "relative"},
+                "pattern": {
+                    "panels": {"p": {"edges": [{"endpoints": [0, 1]}, {"endpoints": [1, 0]}]}},
+                    "stitches": [bad_stitch]
+                }
+            })
+            .to_string();
+            assert!(
+                check_garmentcode(&gc, "bad_stitch.json")
+                    .iter()
+                    .any(|c| c.check == "gc.stitches_valid_unique" && !c.ok),
+                "malformed stitch {bad_stitch} must fail gc.stitches_valid_unique"
+            );
+        }
+
+        // Valid 0-stitch and valid 3-element right_wrong stitch both pass.
+        let zero_stitches = json!({
+            "properties": {"units_in_meter": 100, "curvature_coords": "relative"},
+            "pattern": {
+                "panels": {"p": {"edges": [{"endpoints": [0, 1]}, {"endpoints": [1, 0]}]}},
+                "stitches": []
+            }
+        })
+        .to_string();
+        assert!(
+            check_garmentcode(&zero_stitches, "ok0.json")
+                .iter()
+                .all(|c| c.ok)
+        );
+        let right_wrong = json!({
+            "properties": {"units_in_meter": 100, "curvature_coords": "relative"},
+            "pattern": {
+                "panels": {
+                    "a": {"edges": [{"endpoints": [0, 1]}, {"endpoints": [1, 0]}]},
+                    "b": {"edges": [{"endpoints": [0, 1]}, {"endpoints": [1, 0]}]}
+                },
+                "stitches": [[{"panel": "a", "edge": 0}, {"panel": "b", "edge": 0}, "right_wrong"]]
+            }
+        })
+        .to_string();
+        assert!(
+            check_garmentcode(&right_wrong, "ok_rw.json")
+                .iter()
+                .all(|c| c.ok)
+        );
+    }
+
+    #[test]
+    fn check_dst_handles_short_centre_mm_without_panicking() {
+        let braid = [vec![(0.0, 0.0), (10.0, 0.0)]];
+        for centre in [json!([]), json!([5.0]), json!("bad")] {
+            let items = check_dst(b"", "bad.dst", &json!({"centre_mm": centre}), Some(&braid));
+            assert!(items.iter().any(|c| c.check == "dst.header" && !c.ok));
+            assert!(
+                items
+                    .iter()
+                    .any(|c| c.check == "dst.on_braid_lines" && !c.ok)
+            );
+        }
     }
 }
