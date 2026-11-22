@@ -312,10 +312,10 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   refusal's first repair. The state is the last accepted one when sewing, draping or settling refuses (the
   admitted start if the first sewing step does), or the recorded frame that crosses the displayed wearer when
   the full-body check refuses. A self-contact refusal after untangling retains that exact start, with
-  `refused_pose.phase` set to `start` and zero accepted steps. For a cloth–cloth crossing, the
-  `mesh_map.json` also records the two source garment faces in `refused_pose.crossing_faces`. Yellow
-  marks the cloth within 30 mm of the reported pair, and the first repair names its pattern instances.
-  Earlier start refusals draw the two `ftx place`
+  `refused_pose.phase` set to `start` and zero accepted steps. For a cloth–cloth crossing or thickness-gap
+  touch/overlap, `mesh_map.json` also records the two source garment faces in
+  `refused_pose.crossing_faces`. Yellow marks the cloth within 30 mm of the reported pair, and the refusal
+  repairs name its pattern instances. Earlier start refusals draw the two `ftx place`
   stages from the pattern and body the solver was given (an outfit merged, a `--fabric` or `--elastic-ea`
   override applied; both members of `--two-start-sew` share this start) and leaves them under
   `DIR/refused/` (`start/`, `wrap/`, `placement.json`). The first repair names them, quotes the body

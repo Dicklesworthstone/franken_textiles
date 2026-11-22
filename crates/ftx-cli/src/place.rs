@@ -1780,6 +1780,171 @@ mod tests {
     }
 
     #[test]
+    fn a_start_self_contact_refusal_marks_untangled_pair_touch_and_start_condition() {
+        use ftx_core::{Refusal, RefusalCode};
+        use serde_json::json;
+
+        let pattern = ftx_pattern::Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm",
+            "pieces": [{
+                "id": "panel", "cut": {"qty": 1}, "grain": [[10, 10], [10, 40]],
+                "vertices": {"a": [0, 0], "b": [120, 0], "c": [120, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"}, {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"}, {"id": "left", "from": "d", "to": "a"}
+                ],
+                "placement": {"part": "torso"}
+            }],
+            "seams": []
+        }));
+        let mesh = ftx_drape::build_garment(&pattern, 20.0).unwrap();
+        // Stretched slightly in x so `start_condition` fires on an unrelaxed `"start"` refusal.
+        let positions: Vec<Vec3> = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * 0.001 * 1.4, -0.2, 1.0 + p.y * 0.001))
+            .collect();
+        let body = b"v -0.2 0 0.8\nv 0.3 0 0.8\nv 0.05 0 1.3\nf 1 2 3\n";
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let out = std::env::temp_dir().join(format!("ftx-start-sc-{}-{time}", std::process::id()));
+        let size = (320, 200);
+        let coloured = |file: &std::path::Path, colour: &str| -> Vec<usize> {
+            std::fs::read_to_string(file)
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with("v "))
+                .enumerate()
+                .filter(|(_, line)| line.ends_with(colour))
+                .map(|(vertex, _)| vertex)
+                .collect()
+        };
+        let (magenta, yellow) = (" 1 0 1", " 1 0.86 0");
+
+        // 1. Triangle-crossing start refusal: raw welded indices (1991, 2111) in the message are
+        // ignored in favour of source `start_crossing_faces`, yellow marks the pair, and an
+        // unrelaxed start still emits its start-condition repair.
+        let cross_dir = out.join("cross");
+        std::fs::create_dir_all(&cross_dir).unwrap();
+        let state = ftx_drape::run::RefusedRun {
+            mesh: mesh.clone(),
+            positions: positions.clone(),
+            phase: "start",
+            accepted_steps: 0,
+            start_crossing_faces: Some([0, 1]),
+            start_fallback: None,
+            start_unrelaxed_p95: Some(0.08),
+        };
+        let shown = super::refused_stills(
+            Refusal::new(
+                RefusalCode::IntersectingStart,
+                "cloth triangles 1991 and 2111 intersect beyond their shared mesh feature",
+            )
+            .repair("separate the overlapping cloth layers before enabling self-contact"),
+            Some(&state),
+            &cross_dir,
+            body,
+            size,
+        );
+        assert_eq!(shown.repairs.len(), 3, "{:?}", shown.repairs);
+        assert!(
+            shown.repairs[0].contains("the untangled start rejected at cloth contact admission")
+                && shown.repairs[0].contains(
+                    "Yellow marks the cloth within 30 mm of the cloth triangles the refusal names, \
+                     which are in panel;"
+                ),
+            "{}",
+            shown.repairs[0]
+        );
+        assert!(
+            shown.repairs[1].contains("Before any sewing step this start was already strained")
+                && shown.repairs[1].contains("panel"),
+            "{}",
+            shown.repairs[1]
+        );
+        let (map, _) = crate::fold::document(&cross_dir.join("refused/mesh_map.json")).unwrap();
+        assert_eq!(
+            map["refused_pose"],
+            json!({
+                "phase": "start",
+                "accepted_steps": 0,
+                "width": 320,
+                "height": 200,
+                "crossing_faces": [0, 1]
+            })
+        );
+        let marked = coloured(&cross_dir.join("refused/garment.obj"), yellow);
+        for corners in [mesh.faces[0], mesh.faces[1]] {
+            assert!(corners.iter().all(|c| marked.contains(c)));
+        }
+        assert!(coloured(&cross_dir.join("refused/garment.obj"), magenta).is_empty());
+
+        // 2. Thickness-gap touch/overlap start refusal: honest touch/overlap wording and yellow mark.
+        let touch_dir = out.join("touch");
+        std::fs::create_dir_all(&touch_dir).unwrap();
+        let touch_state = ftx_drape::run::RefusedRun {
+            mesh: mesh.clone(),
+            positions: positions.clone(),
+            phase: "start",
+            accepted_steps: 0,
+            start_crossing_faces: Some([1, 0]),
+            start_fallback: None,
+            start_unrelaxed_p95: None,
+        };
+        let touched = super::refused_stills(
+            Refusal::new(
+                RefusalCode::IntersectingStart,
+                "cloth layers touch or overlap at SelfVertexTri { cv: 4, ct: 0 } (gap -0.0005 m)",
+            ),
+            Some(&touch_state),
+            &touch_dir,
+            body,
+            size,
+        );
+        assert!(
+            touched.repairs[0].contains(
+                "Yellow marks the cloth within 30 mm of the touching or overlapping cloth the \
+                 refusal names, which is in panel;"
+            ),
+            "{}",
+            touched.repairs[0]
+        );
+        assert!(!coloured(&touch_dir.join("refused/garment.obj"), yellow).is_empty());
+
+        // 3. Out-of-bounds `start_crossing_faces` never panics and is omitted from mesh_map.json.
+        let oob_dir = out.join("oob");
+        std::fs::create_dir_all(&oob_dir).unwrap();
+        let oob_state = ftx_drape::run::RefusedRun {
+            mesh,
+            positions,
+            phase: "start",
+            accepted_steps: 0,
+            start_crossing_faces: Some([9999, 9998]),
+            start_fallback: None,
+            start_unrelaxed_p95: None,
+        };
+        let oob = super::refused_stills(
+            Refusal::new(
+                RefusalCode::IntersectingStart,
+                "cloth triangles 9999 and 9998",
+            ),
+            Some(&oob_state),
+            &oob_dir,
+            body,
+            size,
+        );
+        assert!(
+            !oob.repairs[0].contains("Yellow marks"),
+            "{}",
+            oob.repairs[0]
+        );
+        let (oob_map, _) = crate::fold::document(&oob_dir.join("refused/mesh_map.json")).unwrap();
+        assert!(oob_map["refused_pose"].get("crossing_faces").is_none());
+    }
+
+    #[test]
     fn a_start_stretched_along_one_edge_is_named_by_piece_and_pattern_edge() {
         use ftx_core::{Refusal, RefusalCode};
         use serde_json::json;
