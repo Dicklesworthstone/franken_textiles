@@ -13,6 +13,7 @@ export const exhibits: SiteLink[] = [
   { href: "/#visual-fitting", label: "Visual fitting", note: "Trace rendered pixels back to flat pattern edges" },
   { href: "/#wardrobe", label: "Wardrobe", note: "A sundress and Swedish hussars of 1761 and 1765" },
   { href: "/wardrobe/sundress/redraft/", label: "Sundress ease redraft", note: "Redraft the sundress after a bust or waist ease warning and pin both outlines" },
+  { href: "/wardrobe/sundress/compare/", label: "Compare two dress drapes", note: "Compare two independently accepted native drapes of one fixed sundress under one camera and scale" },
   { href: "/wardrobe/hussar/embroidery/", label: "Hussar embroidery trace", note: "Trace registered Tajima DST stitches onto the solved 3D dolman chest" },
   { href: "/wardrobe/waistcoat/", label: "1780s waistcoat", note: "Separate silk fronts, linen lining, and welt pockets from V&A 256-1880" },
   { href: "/wardrobe/waistcoat/inside-out/", label: "Lined garment inside out", note: "Rotate shell, facing, and lining together with invariant native seam indices" },

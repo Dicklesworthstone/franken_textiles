@@ -1,0 +1,38 @@
+{
+ "schema": "fabric-fit/1",
+ "garment": "Garden sundress",
+ "points": [
+  {
+   "id": "bust",
+   "label": "Finished bodice bust",
+   "kind": "girth",
+   "instances": [
+    "bodice_front",
+    "bodice_back"
+   ],
+   "landmark": "waist",
+   "dy": 200,
+   "body": "chest",
+   "target_mm": [
+    20,
+    40,
+    65
+   ]
+  },
+  {
+   "id": "waist",
+   "label": "Finished waist",
+   "kind": "path",
+   "refs": [
+    "bodice_front/waist",
+    "bodice_back/waist"
+   ],
+   "body": "waist",
+   "target_mm": [
+    25,
+    60,
+    90
+   ]
+  }
+ ]
+}

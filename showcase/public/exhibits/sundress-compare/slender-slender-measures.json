@@ -1,0 +1,56 @@
+{
+  "schema": "fabric-measurements/1",
+  "wearer": {
+    "label": "Synthetic petite adult (162 cm / 84-66-90)",
+    "stature_mm": 1620,
+    "sex": "female",
+    "age_months": 360
+  },
+  "fused": {
+    "stature": {
+      "value_mm": 1620
+    },
+    "chest": {
+      "value_mm": 840
+    },
+    "waist": {
+      "value_mm": 660
+    },
+    "hip": {
+      "value_mm": 900
+    },
+    "waist_height": {
+      "value_mm": 974
+    },
+    "back_neck_to_waist": {
+      "value_mm": 410
+    },
+    "shoulder_slope_deg": {
+      "value_deg": 15
+    },
+    "neck_base": {
+      "value_mm": 340
+    },
+    "shoulder_length": {
+      "value_mm": 122
+    },
+    "armscye_depth": {
+      "value_mm": 215
+    },
+    "crotch_height": {
+      "value_mm": 742
+    },
+    "head": {
+      "value_mm": 550
+    },
+    "knee_height": {
+      "value_mm": 453
+    },
+    "arm_length": {
+      "value_mm": 545
+    },
+    "hip_width": {
+      "value_mm": 324
+    }
+  }
+}

@@ -12,7 +12,7 @@ check() { # description, expected, actual
 code() { curl -s -o /dev/null -A "$agent" -m 30 -w '%{http_code}' "$@"; }
 header() { curl -s -D - -o /dev/null -A "$agent" -m 30 "$2" | tr -d '\r' | awk -F': ' -v h="$1" 'tolower($1)==h{print $2; exit}'; }
 
-for path in / /how-it-works/ /get-started/ /wardrobe/sundress/ /wardrobe/sundress/redraft/ /wardrobe/hussar/ /studies/trousers/ /experiments/strip/ \
+for path in / /how-it-works/ /get-started/ /wardrobe/sundress/ /wardrobe/sundress/redraft/ /wardrobe/sundress/compare/ /wardrobe/hussar/ /studies/trousers/ /experiments/strip/ \
   /wardrobe/hussar/embroidery/ /wardrobe/waistcoat/ /wardrobe/waistcoat/inside-out/ /studies/tiling/ /studies/sewing/ /studies/wrap-skirt/ /experiments/wash/ /experiments/thermal/ /experiments/friction/ \
   /sections/repair/ /workbench/ /workbench/trace /robots.txt /sitemap.xml /manifest.webmanifest /favicon.ico; do
   check "200 $path" 200 "$(code "$site$path")"

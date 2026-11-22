@@ -1,0 +1,222 @@
+{
+ "vertices": 3458,
+ "triangles": 6448,
+ "frames": 37,
+ "phases": {
+  "drape": 150,
+  "fold": 70,
+  "sew": 12,
+  "zip": 18
+ },
+ "cords": 0,
+ "buttons": 0,
+ "instances": [
+  "bodice_back",
+  "bodice_front",
+  "skirt_back",
+  "skirt_front"
+ ],
+ "sourcePc2Sha256": "672e7d2d8b9b4b5bcbfed752b23b60149985f068c3e8245af0f5cb8c238ec0aa",
+ "layoutIntegrity": "sha256-0u3w7gF1XJ76++pNThrtsF85gR0TxRGpaTTTl0s7NNQ=",
+ "geometryIntegrity": "sha256-4okaWtCsn4yNmMWjbPivfVx46uQnKmOyJfiwubrdY2o=",
+ "style": "GARDEN_SUNDRESS",
+ "spacingMm": 20.0,
+ "solverArguments": [
+  "--spacing-mm",
+  "20",
+  "--time-subdivision",
+  "--arm-deg",
+  "22",
+  "--drape",
+  "150",
+  "--max-settle-steps",
+  "256",
+  "--self-contact-mm",
+  "1"
+ ],
+ "armDeg": 22.0,
+ "settled": true,
+ "gating": [],
+ "flags": [
+  "skirt_front came down 153 mm after gravity as the band of pleats below its gathered seam closed; its least-moved corner stayed within 1 mm, so it is held and did not slide",
+  "skirt_back came down 153 mm after gravity as the band of pleats below its gathered seam closed; its least-moved corner stayed within 1 mm, so it is held and did not slide",
+  "the body rides up 48 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
+  "start restored to an earlier self-contact-clear relaxation block"
+ ],
+ "edgeStrainPercent": {
+  "max": 2.47,
+  "min": -23.74,
+  "p95": 0.1
+ },
+ "massKg": 0.22079033603815004,
+ "areaM2": 1.104,
+ "sewingPairs": 154,
+ "selfContact": true,
+ "scope": {
+  "basis": "complete_pattern",
+  "excluded_instances": [],
+  "excluded_seams": [],
+  "simulated_instances": [
+   "bodice_front",
+   "skirt_front",
+   "bodice_back",
+   "skirt_back"
+  ],
+  "simulated_seams": [
+   {
+    "id": "bodice_side_R",
+    "index": 0
+   },
+   {
+    "id": "shoulder_R",
+    "index": 1
+   },
+   {
+    "id": "skirt_side_R",
+    "index": 2
+   },
+   {
+    "id": "bodice_side_L",
+    "index": 3
+   },
+   {
+    "id": "shoulder_L",
+    "index": 4
+   },
+   {
+    "id": "skirt_side_L",
+    "index": 5
+   },
+   {
+    "id": "gather_front",
+    "index": 6
+   },
+   {
+    "id": "gather_back",
+    "index": 7
+   }
+  ]
+ },
+ "fabric": {
+  "areal_kg_m2": 0.2,
+  "bending_Nm": 3e-05,
+  "tensile_N_m": 8000.0
+ },
+ "bodyFit": {
+  "arm_length": {
+   "body_mm": 544.9,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": -0.02807325804570837,
+   "residual_mm": -0.05614651609141674,
+   "sigma_mm": null,
+   "target_mm": 545.0
+  },
+  "back_neck_to_waist": {
+   "body_mm": 410.7,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 0.35959871219426986,
+   "residual_mm": 0.7191974243885397,
+   "sigma_mm": null,
+   "target_mm": 410.0
+  },
+  "chest": {
+   "body_mm": 839.8,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": -0.06919280815759521,
+   "residual_mm": -0.20757842447278563,
+   "sigma_mm": null,
+   "target_mm": 840.0
+  },
+  "crotch_height": {
+   "body_mm": 742.0,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": -0.018536691347947,
+   "residual_mm": -0.037073382695894,
+   "sigma_mm": null,
+   "target_mm": 742.0
+  },
+  "head": {
+   "body_mm": 550.0,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": -0.0013714708765822554,
+   "residual_mm": -0.0041144126297467665,
+   "sigma_mm": null,
+   "target_mm": 550.0
+  },
+  "hip": {
+   "body_mm": 899.9,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": -0.01974357865484914,
+   "residual_mm": -0.05923073596454742,
+   "sigma_mm": null,
+   "target_mm": 900.0
+  },
+  "knee_height": {
+   "body_mm": 453.1,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 0.04918003598587006,
+   "residual_mm": 0.09836007197174013,
+   "sigma_mm": null,
+   "target_mm": 453.0
+  },
+  "neck_base": {
+   "body_mm": 341.7,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": 0.555366529011413,
+   "residual_mm": 1.666099587034239,
+   "sigma_mm": null,
+   "target_mm": 340.0
+  },
+  "shoulder_length": {
+   "body_mm": 121.2,
+   "effective_sigma_mm": 5.0,
+   "normalized_residual": -0.15980760538775202,
+   "residual_mm": -0.79903802693876,
+   "sigma_mm": null,
+   "target_mm": 122.0
+  },
+  "stature": {
+   "body_mm": 1619.4,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": -0.3076792660283445,
+   "residual_mm": -0.615358532056689,
+   "sigma_mm": null,
+   "target_mm": 1620.0
+  },
+  "waist": {
+   "body_mm": 659.9,
+   "effective_sigma_mm": 3.0,
+   "normalized_residual": -0.023144848214201375,
+   "residual_mm": -0.06943454464260412,
+   "sigma_mm": null,
+   "target_mm": 660.0
+  },
+  "waist_height": {
+   "body_mm": 974.7,
+   "effective_sigma_mm": 2.0,
+   "normalized_residual": 0.32751917087739457,
+   "residual_mm": 0.6550383417547891,
+   "sigma_mm": null,
+   "target_mm": 974.0
+  }
+ },
+ "wallSeconds": 826.7,
+ "gatherRelief": [
+  {
+   "compression": 0.002,
+   "relief_mm": 120.0,
+   "seam": "gather_front"
+  },
+  {
+   "compression": 0.002,
+   "relief_mm": 120.0,
+   "seam": "gather_back"
+  }
+ ],
+ "bodyOffsetMm": {
+  "target": 1.5,
+  "achieved": 1.5
+ },
+ "finalResidualN": 0.04522358250610031,
+ "solverRevision": "07bddd3d1aafc81962ac9805edc013a26e593601"
+}
