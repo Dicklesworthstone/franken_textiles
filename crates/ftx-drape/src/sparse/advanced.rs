@@ -63,12 +63,14 @@ fn norm2(v: &[f64]) -> f64 {
 
 #[inline]
 fn inf_norm(v: &[f64]) -> f64 {
-    v.iter().fold(
-        0.0f64,
-        |m, &x| {
-            if x.is_nan() { f64::NAN } else { m.max(x.abs()) }
-        },
-    )
+    let mut m = 0.0f64;
+    for &x in v {
+        if x.is_nan() {
+            return f64::NAN;
+        }
+        m = m.max(x.abs());
+    }
+    m
 }
 
 /// Normwise backward error (Rigal–Gaches):
@@ -82,19 +84,22 @@ pub fn rigal_gaches_backward_error(a: &Csr, b: &[f64], x: &[f64]) -> f64 {
     }
     let mut ax = vec![0.0f64; b.len()];
     a.spmv(x, &mut ax);
-    let r_inf = b
-        .iter()
-        .zip(&ax)
-        .map(|(&bi, &ai)| bi - ai)
-        .fold(
-            0.0f64,
-            |m, v| {
-                if v.is_nan() { f64::NAN } else { m.max(v.abs()) }
-            },
-        );
-    let a_inf = (0..a.nrows())
-        .map(|r| a.row(r).1.iter().fold(0.0f64, |s, &v| s + v.abs()))
-        .fold(0.0f64, |m, v| if v.is_nan() { f64::NAN } else { m.max(v) });
+    let mut r_inf = 0.0f64;
+    for (&bi, &ai) in b.iter().zip(&ax) {
+        let v = bi - ai;
+        if v.is_nan() {
+            return f64::NAN;
+        }
+        r_inf = r_inf.max(v.abs());
+    }
+    let mut a_inf = 0.0f64;
+    for r in 0..a.nrows() {
+        let row_sum = a.row(r).1.iter().fold(0.0f64, |s, &v| s + v.abs());
+        if row_sum.is_nan() {
+            return f64::NAN;
+        }
+        a_inf = a_inf.max(row_sum);
+    }
     let x_inf = inf_norm(x);
     let b_inf = inf_norm(b);
     let denom = a_inf * x_inf + b_inf;
@@ -885,7 +890,8 @@ pub fn mixed_cg_refine(
     assert_eq!(a32.nrows, n, "mixed_cg_refine: f32 matrix row mismatch");
     assert_eq!(a32.ncols, n, "mixed_cg_refine: f32 matrix col mismatch");
     assert_eq!(x.len(), n, "mixed_cg_refine: solution length mismatch");
-    if !(tol.is_finite() && tol > 0.0) {
+    let bnorm_raw = norm2(b);
+    if !(tol.is_finite() && tol > 0.0 && bnorm_raw.is_finite()) {
         return MixedReport {
             refine_steps: 0,
             inner_iters: 0,
@@ -896,7 +902,7 @@ pub fn mixed_cg_refine(
             escalate: true,
         };
     }
-    let bnorm = norm2(b).max(f64::MIN_POSITIVE);
+    let bnorm = bnorm_raw.max(f64::MIN_POSITIVE);
     let mut history = Vec::new();
     let mut inner_total = 0usize;
     let mut ax = vec![0.0f64; n];
@@ -1051,13 +1057,26 @@ pub fn pminres<P: Precond>(
             },
         ));
     }
-    if b.iter().any(|v| !v.is_finite()) {
+    let b_max = inf_norm(b);
+    if !b_max.is_finite() {
         return Err(PminresError::InvalidInput);
     }
+    // Scale extreme RHS vectors internally so the initial inner product `bᵀMb` neither overflows
+    // nor underflows; normal RHS magnitudes stay at scale 1.0 for bit-identical trajectories.
+    let b_scale = if b_max > 0.0 && !(1e-60..=1e60).contains(&b_max) {
+        b_max
+    } else {
+        1.0
+    };
+    let b_work: Vec<f64> = if b_scale == 1.0 {
+        b.to_vec()
+    } else {
+        b.iter().map(|&bi| bi / b_scale).collect()
+    };
     let mut z = vec![0.0f64; n];
-    m.apply(b, &mut z);
-    let bz = dot64(b, &z);
-    let b_norm = norm2(b);
+    m.apply(&b_work, &mut z);
+    let bz = dot64(&b_work, &z);
+    let b_norm = norm2(&b_work);
     let z_norm = norm2(&z);
     let init_floor = 4.0 * f64::EPSILON * b_norm * z_norm;
     if !(bz.is_finite() && bz > init_floor) {
@@ -1069,7 +1088,7 @@ pub fn pminres<P: Precond>(
     let mut beta = bz.sqrt();
     let bnorm_m = beta;
     let mut v_prev = vec![0.0f64; n];
-    let mut v: Vec<f64> = b.iter().map(|&bi| bi / beta).collect();
+    let mut v: Vec<f64> = b_work.iter().map(|&bi| bi / beta).collect();
     for zi in &mut z {
         *zi /= beta;
     }
@@ -1144,6 +1163,11 @@ pub fn pminres<P: Precond>(
             v_prev[i] = v[i];
             v[i] = p[i] / beta_next;
             z[i] = z_next[i] / beta_next;
+        }
+    }
+    if b_scale != 1.0 {
+        for xi in &mut x {
+            *xi *= b_scale;
         }
     }
     if x.iter().any(|v| !v.is_finite()) {
@@ -1863,5 +1887,39 @@ mod tests {
         let mut z = [0.0; 2];
         cheb_huge.apply(&[huge, huge], &mut z);
         assert!(z.iter().all(|v| v.is_finite() && *v > 0.0), "z={z:?}");
+
+        // pminres handles extreme RHS magnitudes without overflowing/underflowing bᵀMb,
+        // and non-last NaN entries are never absorbed by f64::max in inf_norm / backward error.
+        let mut coo_indef = Coo::new(2, 2);
+        coo_indef.push(0, 0, 2.0);
+        coo_indef.push(1, 1, -2.0);
+        let a_indef = coo_indef.assemble();
+        assert!(matches!(
+            pminres(&a_indef, &IdentityPrecond, &[f64::NAN, 1.0], 1e-12, 10),
+            Err(PminresError::InvalidInput)
+        ));
+        assert!(rigal_gaches_backward_error(&a_indef, &[f64::NAN, 1.0], &[0.0, 0.0]).is_nan());
+        assert!(true_relative_residual(&a_indef, &[f64::NAN, 1.0], &[0.0, 0.0]).is_nan());
+        let mut coo_nan_row0 = Coo::new(2, 2);
+        coo_nan_row0.push(0, 0, f64::NAN);
+        coo_nan_row0.push(1, 1, 2.0);
+        let a_nan_row0 = coo_nan_row0.assemble();
+        assert!(rigal_gaches_backward_error(&a_nan_row0, &[1.0, 2.0], &[0.0, 1.0]).is_nan());
+        for scale in [1e-160_f64, 1e160_f64] {
+            let (xs, rep) = pminres(
+                &a_indef,
+                &IdentityPrecond,
+                &[2.0 * scale, -4.0 * scale],
+                1e-12,
+                10,
+            )
+            .unwrap();
+            assert!(rep.converged_true, "scale={scale:e}: {rep:?}");
+            assert!(
+                ((xs[0] - scale).abs() / scale) < 1e-12
+                    && ((xs[1] - 2.0 * scale).abs() / (2.0 * scale)) < 1e-12,
+                "scale={scale:e}: xs={xs:?}"
+            );
+        }
     }
 }
