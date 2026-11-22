@@ -371,7 +371,7 @@ impl Precond for Jacobi {
 #[must_use]
 pub fn lambda_max_estimate(a: &Csr, iters: usize, safety: f64) -> f64 {
     let n = a.nrows();
-    if n == 0 || iters == 0 {
+    if n == 0 || a.ncols() != n || iters == 0 {
         return 0.0;
     }
     let mut v: Vec<f64> = (0..n)
@@ -638,20 +638,28 @@ fn ilu0_shifted_impl(
     let mut diag_slots = Vec::with_capacity(n);
     let mut offset = 0usize;
     let mut max_diag = 0.0f64;
+    let mut max_abs = 0.0f64;
     for i in 0..n {
         let (cols, vals) = a.row(i);
         let Ok(pos) = cols.binary_search(&i) else {
             return Err(IluBreakdown { row: i });
         };
-        let d = vals[pos].abs();
-        if !d.is_finite() {
-            return Err(IluBreakdown { row: i });
+        for &v in vals {
+            let av = v.abs();
+            if !av.is_finite() {
+                return Err(IluBreakdown { row: i });
+            }
+            max_abs = max_abs.max(av);
         }
-        max_diag = max_diag.max(d);
+        max_diag = max_diag.max(vals[pos].abs());
         diag_slots.push(offset + pos);
         offset += cols.len();
     }
-    let scale = max_diag.max(1.0);
+    let scale = if max_diag > 0.0 {
+        max_diag
+    } else {
+        max_abs.max(1.0)
+    };
     let mut last_err = IluBreakdown { row: 0 };
     let mut factor = 1e-8f64;
     for _ in 0..max_shifts {
@@ -851,6 +859,9 @@ pub fn mixed_cg_refine(
 ) -> MixedReport {
     let n = b.len();
     assert_eq!(a64.nrows(), n, "mixed_cg_refine: matrix/rhs size mismatch");
+    assert_eq!(a64.ncols(), n, "mixed_cg_refine: matrix must be square");
+    assert_eq!(a32.nrows, n, "mixed_cg_refine: f32 matrix row mismatch");
+    assert_eq!(a32.ncols, n, "mixed_cg_refine: f32 matrix col mismatch");
     assert_eq!(x.len(), n, "mixed_cg_refine: solution length mismatch");
     if !(tol.is_finite() && tol > 0.0) {
         return MixedReport {
@@ -1507,6 +1518,24 @@ mod tests {
         let (spd_ilu, spd_shift) = ilu0_spd_shifted(&neg_piv, 6).unwrap();
         assert!(spd_shift > 0.0);
         assert!(spd_ilu.min_pivot() > 0.0);
+
+        // Small-magnitude positive-semidefinite matrix (max_diag = 4e-6, zero pivot at row 1) must
+        // scale its diagonal shift proportionally (`1e-8 * 4e-6 = 4e-14`) instead of clamping
+        // `scale >= 1.0` and injecting an O(1e-8) shift.
+        let mut coo_small = Coo::new(3, 3);
+        coo_small.push(0, 0, 4e-6);
+        coo_small.push(0, 1, -2e-6);
+        coo_small.push(1, 0, -2e-6);
+        coo_small.push(1, 1, 1e-6); // u_11 = 1e-6 - (-2e-6)^2 / 4e-6 = 0
+        coo_small.push(2, 2, 4e-6);
+        let small_sing = coo_small.assemble();
+        assert_eq!(ilu0(&small_sing).unwrap_err(), IluBreakdown { row: 1 });
+        let (small_ilu, small_shift) = ilu0_spd_shifted(&small_sing, 6).unwrap();
+        assert!(small_ilu.min_pivot() > 0.0);
+        assert!(
+            small_shift > 0.0 && (small_shift - 4e-14).abs() < 1e-20,
+            "small-scale ILU shift must equal 1e-8 * max_diag (4e-14), got {small_shift:.3e}"
+        );
 
         // Chebyshev smoother damps high-frequency error and never panics.
         let cheb = Chebyshev::new(&a, 4, 20.0).unwrap();
