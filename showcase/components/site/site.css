@@ -476,6 +476,14 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
   .ft-rail:hover .ft-rail-now,.ft-rail:focus-within .ft-rail-now{visibility:hidden}
 }
 
+/* ---------- pipeline: a toile on the closing card ----------
+   In the three-column layout the "Make a muslin" card is as tall as the step beside it and its lower half
+   was empty. A bodice front is chalked there: cut line, stitch line, grain arrow, a dart and two notches. */
+@media(min-width:1000px){
+  .ft-steps>.ft-step-last{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 190 230' fill='none' stroke='%23efcfae' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M30 46Q34 18 70 12L128 28Q112 70 158 96L150 206Q90 216 30 208Z' stroke-width='1.6' opacity='.5'/%3E%3Cpath d='M30 46Q34 18 70 12L128 28Q112 70 158 96L150 206Q90 216 30 208Z' transform='translate(9.4 11.6) scale(.9)' stroke-width='1.2' stroke-dasharray='5 5' opacity='.4'/%3E%3Cpath d='M70 72V168M65 80l5-8 5 8M65 160l5 8 5-8' stroke-width='1.2' opacity='.45'/%3E%3Cpath d='M82 210L92 150 102 209' stroke-width='1.2' stroke-dasharray='5 5' opacity='.4'/%3E%3Cpath d='M152 150h9M136 62l7-5' stroke-width='1.6' opacity='.55'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right clamp(14px,1.8vw,26px) bottom 18px;background-size:auto min(46%,190px)}
+}
+
 /* ---------- touch: exhibit controls a fingertip tall ----------
    On a phone the exhibits' option buttons and selects measured 22 to 38 px tall. Under a coarse pointer the
    groups named here get a 40 px floor. The list is explicit so that a round icon button or a pill elsewhere is

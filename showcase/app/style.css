@@ -32,6 +32,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,canvas:focus-visible{ou
 .playback-mark{display:inline-block;width:0;height:0;border-block:5px solid transparent;border-left:8px solid currentColor}
 .playback-mark.is-playing{border:solid currentColor;border-width:0 3px;width:8px;height:11px}
 .workbench-library{padding-block:clamp(44px,6vw,92px)}
+/* The intro beside this heading had no measure of its own, ran the full row and squeezed the heading onto two lines. */
+.workbench-library .section-top>p{max-width:44ch;font-size:15px;line-height:1.55;margin:0;color:#58605b}
+.workbench-library .section-top>div{flex:none}
 .workbench-shelves{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:clamp(12px,1.9vw,24px)}
 .workbench-shelves>a{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;align-content:start;align-items:start;padding:12px 12px 16px;background:#fffdf7;border:1px solid #d6d0c2;border-radius:4px;transition:border-color .2s,transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s}
 .workbench-shelves>a:hover{border-color:var(--ink);transform:translateY(-3px);box-shadow:0 16px 30px -24px #16232b99}
