@@ -93,6 +93,12 @@ fn dense_n(p0: Vec2, p1: Vec2, e: &InstEdge) -> Result<usize, Refusal> {
     let mut ctrl = vec![p0];
     ctrl.extend(curve.controls().iter().map(|&th| rel_to_abs(p0, p1, th)));
     ctrl.push(p1);
+    if ctrl.iter().any(|p| !p.is_finite()) {
+        return Err(invalid(format!(
+            "edge {} has non-finite curve control",
+            e.id
+        )));
+    }
     let est: f64 = ctrl
         .windows(2)
         .map(|w| {
@@ -100,11 +106,17 @@ fn dense_n(p0: Vec2, p1: Vec2, e: &InstEdge) -> Result<usize, Refusal> {
             (d.x * d.x + d.y * d.y).sqrt()
         })
         .sum();
+    if !est.is_finite() {
+        return Err(invalid(format!("edge {} control polygon overflows", e.id)));
+    }
     Ok(((est / 1.0).ceil() as usize).clamp(24, 800))
 }
 
 /// Consecutive points closer than 1e-7 dropped; if all collapse, the first and last kept.
 fn dedupe(pts: &[Vec2]) -> Vec<Vec2> {
+    if pts.is_empty() {
+        return Vec::new();
+    }
     let mut keep = vec![pts[0]];
     for &p in &pts[1..] {
         let d = p - keep[keep.len() - 1];
@@ -129,8 +141,20 @@ pub fn edge_points(inst: &Instance, e: &InstEdge) -> Result<Vec<Vec2>, Refusal> 
             .ok_or_else(|| invalid(format!("{}: no vertex {v}", inst.id)))
     };
     let (p0, p1) = (get(&e.from)?, get(&e.to)?);
+    if !p0.is_finite() || !p1.is_finite() {
+        return Err(invalid(format!(
+            "{}: edge {} has non-finite endpoint",
+            inst.id, e.id
+        )));
+    }
     let n = dense_n(p0, p1, e)?;
     let pts = curve_points(p0, p1, e.curve.as_ref(), n).map_err(|x| invalid(x.to_string()))?;
+    if pts.iter().any(|p| !p.is_finite()) {
+        return Err(invalid(format!(
+            "{}: edge {} produced non-finite curve points",
+            inst.id, e.id
+        )));
+    }
     Ok(dedupe(&pts))
 }
 
@@ -145,6 +169,12 @@ pub fn edge_loops(
     fold: Option<&str>,
     sa_default: f64,
 ) -> Result<Vec<EdgeLoop>, Refusal> {
+    if !sa_default.is_finite() || sa_default < 0.0 {
+        return Err(invalid(format!(
+            "{}: default seam allowance must be finite and >= 0",
+            inst.id
+        )));
+    }
     inst.edges
         .iter()
         .map(|e| {
@@ -153,6 +183,12 @@ pub fn edge_loops(
             } else {
                 edge_sa(piece, e.source, sa_default)
             };
+            if !sa.is_finite() || sa < 0.0 {
+                return Err(invalid(format!(
+                    "{}: edge {} seam allowance must be finite and >= 0",
+                    inst.id, e.id
+                )));
+            }
             Ok(EdgeLoop {
                 id: e.id.clone(),
                 pts: edge_points(inst, e)?,
@@ -167,7 +203,7 @@ pub fn edge_loops(
 pub fn sew_ring(loops: &[EdgeLoop]) -> Vec<Vec2> {
     loops
         .iter()
-        .flat_map(|l| l.pts[..l.pts.len() - 1].iter().copied())
+        .flat_map(|l| l.pts[..l.pts.len().saturating_sub(1)].iter().copied())
         .collect()
 }
 
@@ -178,7 +214,7 @@ pub fn sew_breaks(loops: &[EdgeLoop]) -> Vec<usize> {
     let mut k = 0;
     for l in loops {
         out.push(k);
-        k += l.pts.len() - 1;
+        k += l.pts.len().saturating_sub(1);
     }
     out
 }
@@ -202,6 +238,9 @@ pub(crate) fn seg_frames(pts: &[Vec2]) -> Vec<(Vec2, Vec2)> {
         .map(|w| {
             let d = w[1] - w[0];
             let n = norm(d);
+            if !n.is_finite() || n == 0.0 {
+                return (Vec2::ZERO, Vec2::ZERO);
+            }
             let t = Vec2::new(d.x / n, d.y / n);
             (t, Vec2::new(t.y, -t.x))
         })
@@ -216,18 +255,18 @@ fn solve2(m: [[f64; 2]; 2], r: Vec2) -> Option<(f64, f64)> {
         m.swap(0, 1);
         r.swap(0, 1);
     }
-    if m[0][0] == 0.0 {
+    if !m[0][0].is_finite() || m[0][0] == 0.0 {
         return None;
     }
     let l = m[1][0] * (1.0 / m[0][0]);
     let u11 = m[1][1] - l * m[0][1];
-    if u11 == 0.0 {
+    if !u11.is_finite() || u11 == 0.0 {
         return None;
     }
     let y1 = r[1] - l * r[0];
     let x1 = y1 / u11;
     let x0 = (r[0] - x1 * m[0][1]) / m[0][0];
-    Some((x0, x1))
+    (x0.is_finite() && x1.is_finite()).then_some((x0, x1))
 }
 
 /// Outer corner points between two offset edges at a convex corner: the mitre point, or two points
@@ -243,8 +282,11 @@ pub(crate) fn corner(
     sa_j: f64,
     limit: f64,
 ) -> Option<Vec<Vec2>> {
+    if !limit.is_finite() || limit <= 0.0 || !sa_i.is_finite() || !sa_j.is_finite() {
+        return None;
+    }
     let cr = t_in.x * t_out.y - t_in.y * t_out.x;
-    if cr <= 1e-9 {
+    if !cr.is_finite() || cr <= 1e-9 {
         return None;
     }
     let a1 = v + n_in * sa_i;
@@ -252,10 +294,10 @@ pub(crate) fn corner(
     let (s, _) = solve2([[t_in.x, -t_out.x], [t_in.y, -t_out.y]], a2 - a1)?;
     let mp = a1 + t_in * s;
     let big = sa_i.max(sa_j);
-    if big <= 0.0 {
+    let lim = limit * big;
+    if !mp.is_finite() || !big.is_finite() || big <= 0.0 || !lim.is_finite() {
         return None;
     }
-    let lim = limit * big;
     if norm(mp - v) <= lim {
         return Some(vec![mp]);
     }
@@ -278,10 +320,19 @@ pub(crate) fn corner(
 }
 
 fn direct_offset(loops: &[EdgeLoop], limit: f64) -> Option<Vec<Vec2>> {
+    if loops.is_empty() || !limit.is_finite() || limit <= 0.0 {
+        return None;
+    }
     let mut ring = Vec::new();
     let n = loops.len();
     for (i, l) in loops.iter().enumerate() {
+        if l.pts.len() < 2 || !l.sa.is_finite() || l.sa < 0.0 {
+            return None;
+        }
         let fr = seg_frames(&l.pts);
+        if fr.is_empty() || fr.iter().any(|&(t, _)| !t.is_finite() || t == Vec2::ZERO) {
+            return None;
+        }
         let (sa, pts) = (l.sa, &l.pts);
         let mut off = pts.clone();
         off[0] = pts[0] + fr[0].1 * sa;
@@ -290,7 +341,7 @@ fn direct_offset(loops: &[EdgeLoop], limit: f64) -> Option<Vec<Vec2>> {
         for k in 1..last {
             let (na, nb) = (fr[k - 1].1, fr[k].1);
             let den = 1.0 + (na.x * nb.x + na.y * nb.y);
-            if den < 0.2 {
+            if !den.is_finite() || den < 0.2 {
                 return None;
             }
             let s = na + nb;
@@ -298,7 +349,13 @@ fn direct_offset(loops: &[EdgeLoop], limit: f64) -> Option<Vec<Vec2>> {
         }
         ring.extend(off);
         let next = &loops[(i + 1) % n];
+        if next.pts.len() < 2 {
+            return None;
+        }
         let fr2 = seg_frames(&next.pts);
+        if fr2.is_empty() || !fr2[0].0.is_finite() || fr2[0].0 == Vec2::ZERO {
+            return None;
+        }
         let (t, nrm) = fr[fr.len() - 1];
         if let Some(c) = corner(pts[last], t, nrm, sa, fr2[0].0, fr2[0].1, next.sa, limit) {
             ring.extend(c);
@@ -337,6 +394,9 @@ pub(crate) fn segments_touch(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> bool {
 /// distinct points, no two non-adjacent segments touching, no adjacent segments folding back.
 #[must_use]
 pub fn ring_is_simple(ring: &[Vec2]) -> bool {
+    if ring.iter().any(|p| !p.is_finite()) {
+        return false;
+    }
     let mut pts: Vec<Vec2> = Vec::with_capacity(ring.len());
     for &p in ring {
         if pts.last() != Some(&p) {
@@ -425,6 +485,12 @@ pub fn cut_outline(
     sa_default: f64,
     mitre_limit: f64,
 ) -> Result<(Vec<Vec2>, Method), Refusal> {
+    if !mitre_limit.is_finite() || mitre_limit <= 0.0 {
+        return Err(invalid(format!(
+            "{}: mitre limit must be finite and > 0",
+            inst.id
+        )));
+    }
     let loops = edge_loops(inst, piece, fold, sa_default)?;
     let sew_area = signed_area(&sew_ring(&loops));
     let direct = direct_offset(&loops, mitre_limit)
@@ -434,6 +500,9 @@ pub fn cut_outline(
         None => (union_offset(&loops, mitre_limit)?, Method::Union),
     };
     let mut ring = clean_ring(&ring);
+    if ring.len() < 3 || ring.iter().any(|p| !p.is_finite()) {
+        return Err(invalid("the seam allowance outline has no area"));
+    }
     if signed_area(&ring) < 0.0 {
         ring.reverse();
     }
@@ -449,7 +518,13 @@ const BUFFER_MITRE_LIMIT: f64 = 10.0;
 /// `sa`) by a closing segment through the midpoints towards the vertex. The ring may overlap itself; the
 /// union counts its area by depth, as GEOS does.
 fn single_sided(pts: &[Vec2], sa: f64) -> Vec<Vec2> {
+    if pts.len() < 2 || !sa.is_finite() || sa <= 0.0 {
+        return Vec::new();
+    }
     let fr = seg_frames(pts);
+    if fr.is_empty() || fr.iter().any(|&(t, _)| !t.is_finite() || t == Vec2::ZERO) {
+        return Vec::new();
+    }
     let m = pts.len() - 1;
     let off = |k: usize, end: usize| pts[end] + fr[k].1 * sa;
     let mut offset = vec![off(0, 0)];
@@ -482,32 +557,127 @@ fn cross(u: Vec2, v: Vec2) -> f64 {
 fn segment_crossing(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<Vec2> {
     let (r, s) = (b - a, d - c);
     let den = cross(r, s);
-    if den == 0.0 {
+    if !den.is_finite() || den == 0.0 {
         return None;
     }
     let t = cross(c - a, s) / den;
     let u = cross(c - a, r) / den;
-    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then(|| a + r * t)
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u))
+        .then(|| a + r * t)
+        .filter(|p| p.is_finite())
 }
 
 fn union_offset(loops: &[EdgeLoop], limit: f64) -> Result<Vec<Vec2>, Refusal> {
+    if loops.is_empty() || !limit.is_finite() || limit <= 0.0 {
+        return Err(invalid("the seam allowance outline has no area"));
+    }
     let mut polys = vec![sew_ring(loops)];
-    let n = loops.len();
-    for (i, l) in loops.iter().enumerate() {
+    let active: Vec<(&EdgeLoop, Vec<(Vec2, Vec2)>)> = loops
+        .iter()
+        .filter_map(|l| {
+            let fr = seg_frames(&l.pts);
+            (!fr.is_empty() && fr.iter().all(|&(t, _)| t.is_finite() && t != Vec2::ZERO))
+                .then_some((l, fr))
+        })
+        .collect();
+    let n = active.len();
+    for (i, (l, fr)) in active.iter().enumerate() {
         if l.sa > 0.0 {
-            polys.push(single_sided(&l.pts, l.sa));
+            let buf = single_sided(&l.pts, l.sa);
+            if buf.len() >= 3 {
+                polys.push(buf);
+            }
         }
-        let next = &loops[(i + 1) % n];
-        let fr = seg_frames(&l.pts);
-        let fr2 = seg_frames(&next.pts);
-        let v = l.pts[l.pts.len() - 1];
+        let (next, fr2) = &active[(i + 1) % n];
         let (t, nrm) = fr[fr.len() - 1];
-        if let Some(c) = corner(v, t, nrm, l.sa, fr2[0].0, fr2[0].1, next.sa, limit) {
+        let (t2, nrm2) = fr2[0];
+        let v = l.pts[l.pts.len() - 1];
+        if let Some(c) = corner(v, t, nrm, l.sa, t2, nrm2, next.sa, limit) {
             let mut w = vec![v, v + nrm * l.sa];
             w.extend(c);
-            w.push(v + fr2[0].1 * next.sa);
+            w.push(v + nrm2 * next.sa);
             polys.push(w);
         }
     }
     union_exterior(&polys).ok_or_else(|| invalid("the seam allowance outline has no area"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftx_pattern::Pattern;
+    use serde_json::json;
+
+    #[test]
+    fn ring_is_simple_rejects_non_finite_and_cut_outline_guards_degenerate_inputs() {
+        let nan_quad = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(f64::NAN, 10.0),
+        ];
+        assert!(!ring_is_simple(&nan_quad));
+        assert!(!ring_is_simple(&[
+            Vec2::new(0.0, 0.0),
+            Vec2::new(f64::INFINITY, 0.0),
+            Vec2::new(0.0, 10.0),
+        ]));
+
+        // Empty loops in sew helpers must not underflow.
+        let empty = [EdgeLoop {
+            id: "e0".into(),
+            pts: Vec::new(),
+            sa: 10.0,
+        }];
+        assert!(sew_ring(&empty).is_empty());
+        assert_eq!(sew_breaks(&empty), vec![0]);
+
+        // Negative edge seam allowance and bad mitre limits must refuse.
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "BADSA",
+            "units": "mm",
+            "pieces": [{
+                "id": "p1",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b", "sa": -5.0},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "cut": {"qty": 1}
+            }]
+        }));
+        let piece = &pat.doc.as_ref().unwrap().pieces[0];
+        let inst = drafted_instance(piece, 0);
+        assert!(cut_outline(&inst, piece, None, 10.0, 4.0).is_err());
+        assert!(cut_outline(&inst, piece, None, 10.0, 0.0).is_err());
+        assert!(cut_outline(&inst, piece, None, 10.0, f64::NAN).is_err());
+
+        // A zero-length edge inside a valid loop must fall back cleanly instead of producing NaN.
+        let zero_edge = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "ZEROEDGE",
+            "units": "mm",
+            "pieces": [{
+                "id": "p1",
+                "vertices": {"a": [0, 0], "b": [0, 0], "c": [100, 0], "d": [100, 80], "e": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "e"},
+                    {"id": "e4", "from": "e", "to": "a"}
+                ],
+                "cut": {"qty": 1}
+            }]
+        }));
+        let zpiece = &zero_edge.doc.as_ref().unwrap().pieces[0];
+        let zinst = drafted_instance(zpiece, 0);
+        let (ring, method) = cut_outline(&zinst, zpiece, None, 10.0, 4.0).unwrap();
+        assert_eq!(method, Method::Union);
+        assert!(ring.len() >= 4 && ring.iter().all(|p| p.is_finite()));
+        assert!((signed_area(&ring) - 12_000.0).abs() < 1e-6, "{ring:?}");
+    }
 }
