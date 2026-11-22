@@ -872,6 +872,33 @@ crossing pairs. At 65 mm no vertex was inside but the sleeve crossed itself in 2
 placements were looked at, not draped. Why the start procedure does not clear the fingers has not been
 established. The fingers are the model's shape, not a measured hand, and grant no fit claim.
 
+How far a sleeve reaches before the hand stops it was measured on 2026-11-22 on the same wearer and pose
+(drafted 169.8 mm cuff, 2 mm cloth offset, one `ftx drape` per length, a build of the tree at `ca662505`).
+With `Full`, every length tried from 335 to 360 mm converged with no gating flags (335, 340 to 345 in
+1 mm steps, 350, 355 and 360 mm; the last ends 41 mm beyond the wrist landmark), and every one from
+361 mm was refused at its start (361 to 365 in 1 mm steps, 370, 375 and 380 mm): the start still crossed
+the body after 50 untangling rounds, or the untangled cloth crossed itself. An 8 mm mesh gave the same
+boundary (355 and 360 mm drape, 361 and 365 mm are refused). With `Knuckle`, 335, 340, 341 and 342 mm
+drape, and 343, 344, 345, 350, 355, 360, 365 and 370 mm are refused, at the start or by the display audit
+at frame 87 or 88. The displayed hand accounts for the place. In the arm's wrap frame it stays within
+26 mm of the arm axis up to 10 mm beyond the wrist landmark, then reaches 33 mm (10 to 20 mm beyond),
+40 mm (20 to 30), 50 mm (30 to 40) and 59 mm (40 to 60), where the thumb stands out to the front and
+towards the side on which the underarm seam closes. The sleeve's wrap cylinder is 34.7 mm, and a circle
+centred on the middle of that slice of the hand still needs 42 mm.
+
+Authored wrap-axis adjustments (`frame_rotation`, `radius_mm`; `docs/fold-inspection.md`) did not give the
+385 mm sleeve a start. A tilt of 3.08° about [19, −6, 0] (front, lateral, up) puts the centre of a 45 mm
+cylinder on the hand at the thumb. With a 201.7 mm cuff no cloth vertex is then inside the hand in the
+wrap stage, against five as drafted, but closing the underarm seam puts the thumb through the cloth
+again: one vertex is inside the relaxed start at 12 mm spacing, three at 8 mm and two at 6 mm. Fourteen
+drapes were refused. Twelve used `Full`, with cuffs of 201.7 and 230.0 mm, as drafted and on tilted
+cylinders of 40, 42.5, 45, 50 and 55 mm: all `intersecting_start`, and with the 230.0 mm cuff as drafted
+and at 42.5 and 45 mm the body crossings were untangled and the cloth then crossed itself. Two used
+`Knuckle` on the 45 mm tilt, one per cuff, and failed the display audit at frame 87. What stops the long
+sleeve is therefore the start procedure at an open hand with its thumb out, not where the wrap is placed.
+A hand pose with the thumb in, a convex stand-in for the hand in the collider, and a start that closes
+the cuff under contact are untried.
+
 ## Appendix A. Local-change labels (index j; blend-shape rows 624 + 2j and 625 + 2j)
 
 Labels are listed in index order within each region; the regions are contiguous.

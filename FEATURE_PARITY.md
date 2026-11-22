@@ -153,8 +153,13 @@ that covers an open hand a clear start. A hand pose with the fingers together do
 `939366c3` a piece's wrap axis can be shifted and tilted by hand (`placement.frame_offset_mm`,
 `frame_rotation`; `docs/fold-inspection.md`), and since `d7ec61b0` `ftx place` checks both preview stages
 against the full displayed body. On a build of that tree the check ran on the 45 mm, 6 mm placement
-above and reported the start crossing the displayed body, as the three vertices inside it imply. No
-adjustment that puts this sleeve's end outside the fingers has been found or tried.
+above and reported the start crossing the displayed body, as the three vertices inside it imply.
+Measured on 2026-11-22 (05 "Clothing collider" lists every case): with `--hands full` the drafted-cuff
+sleeve drapes with no gating flags up to 360 mm, 41 mm beyond the wrist landmark, and is refused at its
+start from 361 mm, at 12 and at 8 mm mesh spacing; with `--hands knuckle` it drapes up to 342 mm.
+Tilting the wrap axis onto the hand and widening the cylinder clears the hand in the wrap stage but not
+in the start: fourteen drapes of the 385 mm sleeve, with 201.7 and 230.0 mm cuffs, were refused. The
+thumb of the open hand, 59 mm from the arm axis, is what the start procedure cannot get the cloth round.
 
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native

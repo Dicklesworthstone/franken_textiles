@@ -155,3 +155,11 @@ sleeve, as above, is the repair.
 one surface. The 335 mm sleeve drapes with it as it does with `knuckle`. It does not rescue the
 long sleeve: a 385 mm sleeve widened to a 207.7 mm cuff is refused at its start with it, because
 the sleeve end lies across the open fingers and `ftx place` shows sleeve vertices inside the hand.
+
+How long this sleeve can be is measured on this wearer. With `--hands full` it drapes up to 360 mm,
+41 mm beyond the wrist landmark and short of the thumb's tip, and is refused at its start from
+361 mm. With `--hands knuckle` it drapes up to 342 mm. `ftx place` reports the 350 to 360 mm
+sleeves as crossing the displayed hand in its start preview, and they drape: that preview is not
+untangled, so treat a crossing there as a reason to drape, not as a refusal. Tilting the wrap axis
+toward the hand (`frame_rotation`) or widening its cylinder did not start the 385 mm sleeve, with
+a 201.7 mm or a 230 mm cuff.

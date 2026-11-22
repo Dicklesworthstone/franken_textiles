@@ -38,11 +38,17 @@ frames. Its `display_contact` section checks both stages against the full displa
 including fingers omitted from a trimmed collision proxy, and against the cloth itself.
 `FULL DISPLAY CROSSING` identifies an intersecting stage in the human-readable output.
 A clear preview means only that these two drawn stages have no proper triangle crossings;
-it does not establish thickness clearance or validate intervening motion. A drape may choose
+it does not establish thickness clearance or validate intervening motion. A crossing in the
+`start` preview is not a refusal either: a drape first pushes its start out of the collision
+body, and the 92 cm bolero's 350 to 360 mm sleeves cross the hand here and drape with
+`--hands full`. It is one where the part crossed is left out of the collider. A drape may choose
 an earlier contact-admitted relaxation checkpoint than the fully relaxed start drawn here.
 Run the revised pattern through the ordinary drape, with the same body and collider options,
 to test its actual contact and convergence.
 No particular adjustment here qualifies the 385 mm sleeve or establishes physical fit.
+Tried on 2026-11-22 without success: a 3.08 degree tilt about `[19, -6, 0]`, which centres the
+cylinder on the hand at the thumb, with cylinders of 40 to 55 mm and cuffs of 201.7 and 230.0 mm
+(spec 05, "Clothing collider", has each case).
 
 ## Optional static-equilibrium comparison
 
