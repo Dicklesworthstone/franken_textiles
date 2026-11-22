@@ -1645,21 +1645,7 @@ pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
 
     let report = json!({
         "schema": MICROCLIMATE_REPORT_SCHEMA,
-        "air": {
-            "temperature_c": req.air.temperature_c,
-            "temperature_k": air.temperature_k,
-            "pressure_pa": air.pressure_pa,
-            "relative_humidity": req.air.relative_humidity,
-            "water_mole_fraction": air.water_mole_fraction,
-            "density_kg_m3": air.density,
-            "sound_speed_m_s": air.sound_speed,
-            "dynamic_viscosity_pa_s": air.dynamic_viscosity,
-            "kinematic_viscosity_m2_s": air.kinematic_viscosity,
-            "thermal_conductivity_w_m_k": air.thermal_conductivity,
-            "thermal_diffusivity_m2_s": air.thermal_diffusivity,
-            "specific_heat_cp_j_kg_k": air.specific_heat_cp,
-            "prandtl": air.prandtl,
-        },
+        "air": air_receipt(req.air, &air),
         "convection": convection,
         "enclosure": enclosure,
         "no_claim": "First-principles ideal moist-air thermophysics, validity-gated convection correlations (Evidence::Estimate), and gray-diffuse enclosure radiosity; not measured garment film coefficients, whole-wearer comfort, or physical fit."
