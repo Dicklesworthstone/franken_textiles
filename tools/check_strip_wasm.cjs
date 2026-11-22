@@ -27,11 +27,13 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
     assert.equal(typeof ftx[name], 'function', `Rebuild web/pkg: missing ${name}`);
   }
   const sent = [];
-  const context = vm.createContext({Uint8Array, TextEncoder, WebAssembly, JSON, Error, self: {}, postMessage: message => sent.push(message)});
+  const context = vm.createContext({Uint8Array, TextEncoder, WebAssembly, JSON, Error, URL, self: {}, postMessage: message => sent.push(message)});
   const imports = new vm.SyntheticModule(Object.keys(ftx), function () {
     for (const [name, value] of Object.entries(ftx)) this.setExport(name, value);
   }, {context});
-  const worker = new vm.SourceTextModule(fs.readFileSync(path.join(root, 'web/materials-worker.js'), 'utf8'), {context});
+  const worker = new vm.SourceTextModule(fs.readFileSync(path.join(root, 'web/materials-worker.js'), 'utf8'), {
+    context, initializeImportMeta: meta => { meta.url = 'https://unit.invalid/materials-worker.js'; },
+  });
   await worker.link(() => imports);
   await worker.evaluate();
   let sequence = 0;

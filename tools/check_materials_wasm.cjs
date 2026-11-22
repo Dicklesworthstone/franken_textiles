@@ -17,11 +17,13 @@ const parse = JSON.parse;
 (async () => {
   const ftx = await import(pathToFileURL(path.join(root,'web/pkg/ftx_wasm.js')).href);
   ftx.initSync({module:fs.readFileSync(path.join(root,'web/pkg/ftx_wasm_bg.wasm'))});
-  const sent = [], context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error, self:{}, postMessage:m=>sent.push(m) });
+  const sent = [], context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error, URL, self:{}, postMessage:m=>sent.push(m) });
   const imports = new vm.SyntheticModule(Object.keys(ftx), function () {
     for (const [name,value] of Object.entries(ftx)) this.setExport(name,value);
   },{context});
-  const worker = new vm.SourceTextModule(fs.readFileSync(path.join(root,'web/materials-worker.js'),'utf8'),{context});
+  const worker = new vm.SourceTextModule(fs.readFileSync(path.join(root,'web/materials-worker.js'),'utf8'),{
+    context, initializeImportMeta: meta => { meta.url = 'https://unit.invalid/materials-worker.js'; },
+  });
   await worker.link(()=>imports); await worker.evaluate();
   const send = async (type,inputs={}) => {
     await context.self.onmessage({data:{type,request:sent.length+1,...inputs}});

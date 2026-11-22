@@ -14,12 +14,14 @@ test('compiled WASM retains signed Pareto tradeoffs under independent case guard
     const dir = path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY, 'guarded');
     const read = name => fs.readFileSync(path.join(dir, name), 'utf8');
     const bytes = fs.readFileSync(path.join(dir, 'model.ftxbody'));
-    const sent = [], context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error,
+    const sent = [], context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error, URL,
       self: {}, postMessage: message => sent.push(message) });
     const bindings = new vm.SyntheticModule(Object.keys(ftx), function () {
       for (const [name, value] of Object.entries(ftx)) this.setExport(name, value);
     }, { context });
-    const worker = new vm.SourceTextModule(fs.readFileSync(path.join(__dirname, '../web/materials-worker.js'), 'utf8'), { context });
+    const worker = new vm.SourceTextModule(fs.readFileSync(path.join(__dirname, '../web/materials-worker.js'), 'utf8'), {
+      context, initializeImportMeta: meta => { meta.url = 'https://unit.invalid/materials-worker.js'; },
+    });
     await worker.link(() => bindings); await worker.evaluate();
     const previous = globalThis.ftxProgress;
     globalThis.ftxProgress = () => {};
@@ -259,11 +261,13 @@ test('compiled WASM Pareto mass and cooling tradeoffs replay native results thro
     ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
     const input=name=>fs.readFileSync(path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY,name),'utf8');
     const bytes=fs.readFileSync(path.join(process.env.FTX_CONSUMER_ADAPTIVE_REPLAY,'model.ftxbody'));
-    const sent=[],context=vm.createContext({Uint8Array,TextEncoder,WebAssembly,JSON,Error,self:{},postMessage:message=>sent.push(message)});
+    const sent=[],context=vm.createContext({Uint8Array,TextEncoder,WebAssembly,JSON,Error,URL,self:{},postMessage:message=>sent.push(message)});
     const bindings=new vm.SyntheticModule(Object.keys(ftx),function(){
       for(const [name,value] of Object.entries(ftx))this.setExport(name,value);
     },{context});
-    const worker=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../web/materials-worker.js'),'utf8'),{context});
+    const worker=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../web/materials-worker.js'),'utf8'),{
+      context,initializeImportMeta:meta=>{meta.url='https://unit.invalid/materials-worker.js';},
+    });
     await worker.link(()=>bindings);await worker.evaluate();
     const previous=globalThis.ftxProgress;
     globalThis.ftxProgress=line=>context.self.ftxProgress(line);
