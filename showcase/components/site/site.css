@@ -456,6 +456,21 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
   .ft-rail:hover .ft-rail-now,.ft-rail:focus-within .ft-rail-now{visibility:hidden}
 }
 
+/* ---------- touch: exhibit controls a fingertip tall ----------
+   On a phone the exhibits' option buttons and selects measured 22 to 38 px tall. Under a coarse pointer the
+   groups named here get a 40 px floor. The list is explicit so that a round icon button or a pill elsewhere is
+   never stretched into an oval; a group that is not named simply keeps its own size. */
+@media(pointer:coarse){
+  main :is(.cut-mode-bar,.cut-quantity,.dl-compare,.dl-garments,.dl-pieces,.dr-options,.filters,.fs-group,.fs-step-pair,.fs-transport,
+    .hs-3d-controls,.hs-cam-bar,.hs-source-group,.hs-step-pair,.hs-transport,.io-cam-pills,.io-quick-actions,.io-toggles,.is-done,.is-now,
+    .regimental-items,.rig-console,.rig-presets,.rl-offset-row,.sa-view-controls,.sc-btn-group,.sc-swap-actions,.sd-poses,.sd-toile-sheet,
+    .so-3d-tools,.so-cli-head,.so-dep-chips,.so-transport-btns,.sr-action-row,.sr-group,.sr-piece-tabs,.stitch-buttons,.stitch-field,
+    .tf-field,.tf-quick-snap,.th-field,.th-presets,.ts-cameras,.ts-options,.ts-tabs,.wc-side-group,.wc-stage-pills,.wc-welt-shortcuts,
+    .ws-field,.ws-group,.ws-piece-pick,.ws-preset-row,.ws-presets,.ws-slice-tabs)>:is(button,select){min-height:40px}
+  main .film-filters>button{min-height:40px;border-radius:20px;padding-inline:14px}
+  main .ft-copy{min-height:36px;padding-inline:12px}
+}
+
 /* ---------- home: the opening settles into place ---------- */
 @media(prefers-reduced-motion:no-preference){
   .construction-hero .construction-copy>*{animation:ft-settle .75s var(--ease-out) backwards}
