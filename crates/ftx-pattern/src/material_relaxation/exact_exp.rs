@@ -915,7 +915,7 @@ mod tests {
         // omega = 0 gives (E_0, 0), and tiny relaxation ratio keeps nonnegative accurate loss E''.
         let (hi_re, hi_im) = baseline.modulus(1e200);
         assert_eq!(hi_re, 500.0);
-        assert!(hi_im.is_finite() && hi_im >= 0.0 && hi_im < 1e-60);
+        assert!((0.0..1e-60).contains(&hi_im));
         assert_eq!(baseline.modulus(0.0), (200.0, 0.0));
 
         let tiny = FractionalZener::new(1e10, 1e10 * (1.0 + 1e-10), 0.5, 1.0).unwrap();
