@@ -935,7 +935,12 @@ fn only_consumed_thickness_dependent_gaps_disable_reported_coverage_ranges() {
     // Combining consumed stagnant-gap interfaces with thermal bridges must preserve BOTH
     // exclusion reasons on total and body bounds rather than clobbering the gap reason.
     let mut gap_and_bridge = with_bridge(input.clone(), &[0, 1], 0.2);
-    gap_and_bridge["thermal_bridges"]["paths"][0]["instance"] = json!("front");
+    let mat_hash = input["report"]["material"]["instances"][0]["record_sha256"].clone();
+    let qual = &mut gap_and_bridge["thermal_bridges"]["paths"][0]["qualifications"][0];
+    qual["material_sha256"] = json!([mat_hash, mat_hash]);
+    qual["interface_resistance_m2_k_w"] =
+        consumed["projection"]["layout"]["regions"][0]["interface_resistance_m2_k_w"].clone();
+    qual["layer_area_ratio_ranges"] = json!([[0.5, 2.0], [0.5, 2.0]]);
     let combined = bridge_evaluate(&gap_and_bridge).unwrap();
     assert!(combined["steady"]["reported_bounds"].is_null());
     let total_reasons: Vec<&str> = combined["steady"]["bounds_unavailable"]
