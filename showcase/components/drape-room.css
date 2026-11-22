@@ -93,3 +93,13 @@
  .dr-index a>img,.dr-reel .hero-screen{width:61px;height:42px}.dr-index a>.arrow,.dr-reel button>.arrow{display:block}.dr-index strong{font-size:23px}
 }
 @media(max-width:365px){.dr-intro{grid-template-columns:.85fr 1.15fr;gap:7px}.dr-deck{font-size:12px}.dr-options button{font-size:13px}}
+/* A phone in portrait: beside the title the copy ran four words to a line at 13 px, and the three sewing
+   stages shared half a row. The title goes on one line with its copy beneath, and the stages take a full row. */
+@media(max-width:480px){
+ .dr-intro{grid-template-columns:1fr;row-gap:10px;align-items:start}
+ .dr-intro h1,.dr-intro h2{font-size:clamp(40px,12.4vw,54px);line-height:.95}.dr-intro h1 br,.dr-intro h2 br{display:none}
+ .dr-intro h1 em::before,.dr-intro h2 em::before{content:" "}
+ .dr-deck{font-size:15px;line-height:1.5;max-width:36ch}
+ .dr-settings>.dr-next-study,.dr-settings>fieldset:last-of-type{grid-column:1/-1}
+ .dr-settings>.dr-next-study{justify-self:start;margin:4px 0 6px}
+}
