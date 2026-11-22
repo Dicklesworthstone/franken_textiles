@@ -27,17 +27,29 @@ pub fn fit_scale(
     let pattern = Pattern::from_doc(doc.clone());
     let mut rows = Vec::new();
     for (r, mm) in targets {
-        if *mm <= 0.0 {
+        if !mm.is_finite() || *mm <= 0.0 {
             return Err(PyError::Value(format!(
                 "target {}: length must be positive",
                 py::repr_str(r)
             )));
         }
-        rows.push((r.clone(), *mm, measure_ref(&pattern, r)?));
+        let measured = measure_ref(&pattern, r)?;
+        if !measured.is_finite() || measured <= 0.0 {
+            return Err(PyError::Value(format!(
+                "target {}: reference length must be positive",
+                py::repr_str(r)
+            )));
+        }
+        rows.push((r.clone(), *mm, measured));
     }
     let a: Vec<f64> = rows.iter().map(|(_, t, l)| l / t).collect();
     let sq: Vec<f64> = a.iter().map(|x| x * x).collect();
     let k = np::pairwise_sum(&a) / np::pairwise_sum(&sq);
+    if !k.is_finite() || k <= 0.0 {
+        return Err(PyError::Value(
+            "scale-fit produced a non-positive or non-finite scale".into(),
+        ));
+    }
     let r4 = |p: Vec2| Vec2::new(py::round(p.x * k, 4), py::round(p.y * k, 4));
     for p in &mut data.pieces {
         for (_, v) in &mut p.vertices.0 {
@@ -108,4 +120,60 @@ pub fn fit_scale(
     });
     meta.insert("scale_fit".into(), report.clone());
     Ok((data, report))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect_doc() -> PatternDoc {
+        serde_json::from_value(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "meta": {"scale_status": "UNSCALED", "px_per_unit": 1.0},
+            "pieces": [{
+                "id": "p1",
+                "vertices": {
+                    "c1": [0.0, 0.0],
+                    "c2": [100.0, 0.0],
+                    "c3": [100.0, 50.0],
+                    "c4": [0.0, 50.0]
+                },
+                "edges": [
+                    {"id": "e1", "from": "c1", "to": "c2"},
+                    {"id": "e2", "from": "c2", "to": "c3"},
+                    {"id": "e3", "from": "c3", "to": "c4"},
+                    {"id": "e4", "from": "c4", "to": "c1"}
+                ]
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn fit_scale_refuses_non_finite_targets_and_zero_length_references() {
+        let doc = rect_doc();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -10.0] {
+            let err = fit_scale(&doc, &[("p1/e1".into(), bad)])
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("positive"), "bad={bad}: {err}");
+        }
+        // Horizontal edge projected onto y measures 0.0; previously gave k = 0/0 = NaN.
+        let err = fit_scale(&doc, &[("p1:c1-c2:y".into(), 100.0)])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("reference length must be positive"), "{err}");
+
+        // Extreme target causing k underflow/overflow must also refuse cleanly.
+        let err = fit_scale(&doc, &[("p1/e1".into(), 1e308)])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-positive or non-finite scale"), "{err}");
+
+        // Valid target still scales cleanly.
+        let (scaled, report) = fit_scale(&doc, &[("p1/e1".into(), 200.0)]).unwrap();
+        assert!((report["k"].as_f64().unwrap() - 2.0).abs() < 1e-12);
+        assert_eq!(scaled.pieces[0].vertices.0[1].1, Vec2::new(200.0, 0.0));
+    }
 }
